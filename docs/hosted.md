@@ -46,6 +46,13 @@ Speech and perception have their own overrides — `stt_base_url`, `tts_base_url
 and `DL_BACKEND_URL` for the perception service — so a robot with all four set
 talks to nothing of ours.
 
+The backend channel is separate too. By default the status `/ping` (which also
+delivers MQTT endpoint updates) and ops `/alert` go to `llm_base_url` with
+`llm_api_key`, so pointing the brain at Ollama silently drops them. To keep them
+on the Autonomous backend while the brain runs locally, set `backend_base_url`
+(for example the shipped value, kept in `autonomous_defaults.base_url`) and
+`backend_api_key`. Leave both empty to keep the old one-endpoint behavior.
+
 **Verified in unit tests, not yet on a robot against a local Ollama.** If you
 run one, say what happened in
 [Discussions](https://github.com/autonomous-ai/autonomous-os/discussions).

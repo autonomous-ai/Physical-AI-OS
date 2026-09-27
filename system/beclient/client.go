@@ -170,14 +170,14 @@ func slackAuthTest(httpClient *http.Client, botToken string) (string, error) {
 	return out.TeamID, nil
 }
 
-// Ping notifies the backend. Uses LLM API key as Bearer token. Returns the backend response if available.
+// Ping notifies the backend at config.BackendBase(). Callers pass config.BackendKey() as the Bearer token. Returns the backend response if available.
 // Appends ?mqtt=true when MQTT is not yet configured, signaling the backend to include MQTT config in the response.
 func (c *Client) Ping(token string, payload PingPayload) (*PingResponse, error) {
-	base := strings.TrimSuffix(strings.TrimSpace(c.config.LLMBaseURL), "/")
+	base := strings.TrimSuffix(c.config.BackendBase(), "/")
 	if base == "" || token == "" {
 		return nil, nil
 	}
-	// LLMBaseURL is configured with a trailing /v1 for OpenAI-compat LLM calls
+	// The base (LLMBaseURL unless BackendBaseURL overrides it) carries a trailing /v1 for OpenAI-compat LLM calls
 	// (e.g. {base}/chat/completions). The autonomous /ping endpoint lives one
 	// level above that — POST /api/v1/ai/ping (per docs/mqtt_specs_autonomous.md).
 	// Strip a single trailing /v1 so we hit the correct route.
