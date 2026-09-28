@@ -3,14 +3,13 @@
 Replays the green-lamp log of 2026-09-16 11:23 tick by tick through
 `FacePerception._check_impl` with the recognizer stubbed: momo alone (greeted),
 momo + an unsure box (the recognizer corroborating), momo + stranger_2 (minted).
-The enter event for stranger_2 must list momo as already present — and must
-NOT when the two boxes have not coexisted for FACE_COPRESENCE_MIN_TICKS ticks.
+The enter event for stranger_2 must list momo as already present whenever both
+are matched in the same frame.
 """
 
 import numpy as np
 import pytest
 
-import hal.config as config
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
 from hal.drivers.sensing.perceptions.processors.faceid import perception as perception_mod
 from hal.drivers.sensing.perceptions.processors.faceid.perception import FacePerception
@@ -40,7 +39,6 @@ def perception(monkeypatch, tmp_path):
     monkeypatch.setattr(FacePerception, "_track_stranger_visits", lambda self, ids: set())
     monkeypatch.setattr(FacePerception, "_annotate_frame", lambda self, frame, faces: frame)
     monkeypatch.setattr(perception_mod, "USERS_DIR", tmp_path / "users")
-    monkeypatch.setattr(config, "FACE_COPRESENCE_MIN_TICKS", 2)
 
     events: list[tuple[str, str]] = []
 
@@ -78,13 +76,15 @@ def test_stranger_joining_momo_lists_momo_as_already_present(perception, monkeyp
     ]
 
 
-def test_without_a_corroborating_tick_momo_is_not_listed(perception, monkeypatch):
-    """One frame with two boxes is not enough for the "with you" phrasing."""
+def test_known_stranger_next_to_momo_lists_momo(perception, monkeypatch):
+    """#531: a stranger re-matched as a known stranger_N on its first tick has
+    no `unsure` tick before it. Matched in the same frame as momo is enough."""
     _tick(perception, [MOMO], monkeypatch)
     _tick(perception, [MOMO, STRANGER], monkeypatch)
 
     assert _enters(perception)[-1] == (
-        "Person detected — new: stranger (stranger_2); faces in frame: 2 (momo, stranger_2)"
+        "Person detected — new: stranger (stranger_2); "
+        "already present: momo (friend); faces in frame: 2 (momo, stranger_2)"
     )
 
 
@@ -110,13 +110,6 @@ def test_a_new_friend_lists_a_present_friend_without_the_guard(perception, monke
         "Person detected — new: friend (leo); already present: momo (friend); "
         "faces in frame: 2 (momo, leo)"
     )
-
-
-def test_copresence_counter_resets_when_the_frame_empties(perception, monkeypatch):
-    _tick(perception, [MOMO, UNSURE], monkeypatch)
-    assert perception._copresence_ticks == 1
-    _tick(perception, [], monkeypatch)
-    assert perception._copresence_ticks == 0
 
 
 def test_delayed_flush_describes_the_buffered_snapshot_not_the_flush_tick(perception, monkeypatch):

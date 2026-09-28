@@ -247,19 +247,6 @@ FACE_STRANGER_MIN_TICKS = int(os.environ.get("HAL_FACE_STRANGER_MIN_TICKS", "2")
 FACE_STRANGER_CORROBORATION_S = float(
     os.environ.get("HAL_FACE_STRANGER_CORROBORATION_S", "6.0")
 )
-# A stranger-only presence.enter lists the friends boxed in the same frame
-# ("already present: momo (friend)") so the agent talks to the user instead of
-# greeting the visitor over the user's shoulder (#426). Friend and non-friend
-# boxes must have coexisted for this many consecutive sensing ticks first: a
-# face on a monitor, a reflection or a one-tick glitch next to the user must
-# not turn "hello" into "looks like you've got company". 2 lines up with
-# FACE_STRANGER_MIN_TICKS — the unknown face is held as unsure for that long
-# before it mints, those ticks count, so a real visitor is listed on the very
-# enter that announces them. A friend arriving is a positive match and is
-# never gated by this. Strictly consecutive, no gap tolerance — unlike
-# FACE_STRANGER_CORROBORATION_S — so a tick where the friend blurs to unsure
-# resets it; that fails safe (plain stranger greeting), never the other way.
-FACE_COPRESENCE_MIN_TICKS = int(os.environ.get("HAL_FACE_COPRESENCE_MIN_TICKS", "2"))
 # Similarity a live face must reach against a user's ENROLLED UPLOADS to be
 # that user. The uploads are a phone photo matched against the device camera —
 # different sensor, lighting, distance — so the same person scores lower here

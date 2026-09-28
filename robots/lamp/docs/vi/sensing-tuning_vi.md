@@ -127,7 +127,6 @@ FACE_MAX_TRUNCATION = 0.05          # Bỏ qua mặt bị cắt >5% bbox ra ngo�
 FACE_MIN_SHARPNESS = 100.0          # Bỏ qua mặt nhoè quá mức, không nhận diện được
 FACE_STRANGER_MIN_TICKS = 2         # Số lần thấy trước khi cấp id cho mặt lạ
 FACE_STRANGER_CORROBORATION_S = 6.0 # Ứng viên chờ được tính trong bao lâu
-FACE_COPRESENCE_MIN_TICKS = 2       # Số nhịp box chủ nhà + box lạ phải cùng frame trước khi ghi "already present"
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Bỏ qua crop mà face mesh không chắc
 FACE_MATCH_THRESHOLD = 0.40         # Ngưỡng cho match do ảnh upload đã enroll gánh
 FACE_EXTENDED_THRESHOLD = 0.45      # Ngưỡng cho match do RIÊNG bank extended gánh
@@ -235,8 +234,6 @@ Cái giá đã biết của cổng này: một người khách quay lại ở g�
 
 Một người khách thật không bị ảnh hưởng quá một nhịp: 2 giây sau họ vẫn ở đó và được cấp id ngay lúc ấy. Cửa sổ cố tình đặt ~3 nhịp sensing thay vì bắt buộc liền kề tuyệt đối, để một frame bị rớt hoặc bị nhoè ở giữa không reset số đếm của một người khách thật.
 
-**Ghi user là "already present" cũng cần xác nhận như vậy.** Khi một người lạ vào trong lúc chủ nhà đang có box trong cùng frame, `presence.enter` thêm `already present: <tên> (friend)` để agent nói với user thay vì chào người khách (#426). Đoạn đó chỉ được ghi khi một box chủ nhà và một box không-phải-chủ-nhà đã cùng frame `FACE_COPRESENCE_MIN_TICKS` (2) nhịp liên tiếp — box `unsure` cũng tính, nên nhịp recognizer dùng để xác nhận người lạ là nhịp đầu trong hai nhịp, và một người khách thật được liệt kê ngay ở event enter báo về họ. Đặt `HAL_FACE_STRANGER_MIN_TICKS=1` thì bộ đếm chỉ bằng 1 ở nhịp cấp id, nên đoạn này chỉ xuất hiện khi lần flush người lạ tình cờ rơi vào nhịp sau; tăng `HAL_FACE_COPRESENCE_MIN_TICKS` nếu màn hình hay poster sau lưng user cứ bị báo là "có bạn tới".
-
 **Điều chỉnh (Tuning):**
 
 | Triệu chứng | Cách chỉnh |
@@ -256,7 +253,6 @@ Một người khách thật không bị ảnh hưởng quá một nhịp: 2 gi�
 | Lamp cấp `stranger_N` cho chính chủ trong lúc đang quay | Nhoè do chuyển động — đó là thứ `FACE_MIN_SHARPNESS` lọc ra; xem thư mục `FAIL-blurred` để biết độ nét thực tế |
 | Khách lạ mất quá lâu mới được ghi nhận | Giảm `FACE_STRANGER_MIN_TICKS` xuống 1 để cấp id ngay từ một frame (hành vi cũ) |
 | Vẫn xuất hiện id `stranger_N` giả | Tăng `FACE_STRANGER_MIN_TICKS` lên 3; mỗi bậc khiến khách thật chậm thêm một nhịp sensing |
-| Lamp bảo user "có bạn tới" khi sau lưng là poster hoặc màn hình | Tăng `FACE_COPRESENCE_MIN_TICKS` (2 → 3); khách thật chờ thêm một nhịp trước khi user được gọi tên |
 | Khách bị chào trong lúc user đang ngồi đó, `already present` không bao giờ xuất hiện | Kiểm tra `FACE_STRANGER_MIN_TICKS` ≥ 2 (nhịp xác nhận của nó nuôi bộ đếm); với 1 thì bộ đếm không thể chạm 2 khi cấp id |
 | Nhận diện chết hẳn trong phòng tối sau khi cập nhật | Phương sai Laplacian giảm theo ánh sáng; giảm `FACE_MIN_SHARPNESS` (100 → 70) rồi kiểm tra lại `FAIL-blurred` |
 | Lamp cấp id `stranger_N` cho chính chủ ở cự ly gần | Detector đang bắt trúng vành tai hoặc tương tự — đó là thứ `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 lọc ra |

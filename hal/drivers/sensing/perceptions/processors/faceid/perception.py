@@ -39,7 +39,6 @@ from .constants import (
 from .enter_message import (
     FrameFacts,
     build_enter_message,
-    copresence_ticks,
     frame_labels,
 )
 from .recognizer import FaceRecognizer
@@ -126,9 +125,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         self._people_data_dict: dict[str, PersonData] = {}
         self._last_stranger_enter_ts: float = 0.0
         self._last_presence_save_ts: float = 0.0
-        # Consecutive ticks a friend and a non-friend box shared the frame —
-        # the guard on the "already present" segment of presence.enter.
-        self._copresence_ticks: int = 0
         self._load_presence_state()
         self._owners: set[str] = set()
         self._strangers: set[str] = set()
@@ -438,7 +434,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                 logger.debug("[face] no faces detected")
                 self._face_present = False
                 self._faces_n = 0
-                self._copresence_ticks = 0
                 self._check_leaves(cur_ts)
                 return
             else:
@@ -456,8 +451,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             logger.info(
                 f"Detected friends={list(owners_seen)} and strangers={list(strangers_seen)}"
             )
-
-            self._copresence_ticks = copresence_ticks(self._copresence_ticks, faces)
 
             new_owners: set[str] = set()
             new_strangers: set[str] = set()
@@ -1006,21 +999,15 @@ class FacePerception(Perception[cv2.typing.MatLike]):
     ) -> FrameFacts:
         """Labels of every box in this frame plus the friends already present.
 
-        ``present_friends`` are friends boxed in THIS frame who did not just
-        arrive — the co-presence signal the sensing skill keys on. A
-        stranger-only enter waits until friend and non-friend boxes have
-        coexisted for FACE_COPRESENCE_MIN_TICKS ticks; a new friend is a
-        positive match and needs no such corroboration. Never derived from
-        current_user(): that is presence-window state and reads the same
-        whether momo is sitting here or left two minutes ago.
+        ``present_friends`` are friends matched in THIS frame who did not just
+        arrive — the co-presence signal the sensing skill keys on. Never
+        derived from current_user(): that is presence-window state and reads
+        the same whether momo is sitting here or left two minutes ago.
         """
-        present_friends = sorted(owners_seen - new_owners)
-        if (
-            not new_owners
-            and self._copresence_ticks < config.FACE_COPRESENCE_MIN_TICKS
-        ):
-            present_friends = []
-        return FrameFacts(labels=frame_labels(faces), present_friends=present_friends)
+        return FrameFacts(
+            labels=frame_labels(faces),
+            present_friends=sorted(owners_seen - new_owners),
+        )
 
     def _flush_stranger_buffer(
         self, cur_ts: float
