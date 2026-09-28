@@ -75,3 +75,17 @@ def test_manual_disable_during_snapshot_discards_frame(monkeypatch):
         camera.camera_snapshot(width=None, height=None, quality=85)
     assert error.value.status_code == 409
     camera.cv2.imencode.assert_not_called()
+
+
+def test_disable_auto_paused_camera_persists_manual_override(monkeypatch):
+    monkeypatch.setattr(state, '_camera_disabled', True)
+    persist = mock.Mock()
+    monkeypatch.setattr(state, '_persist_camera_state', persist)
+    assert camera.disable_camera() == {'status': 'already_disabled'}
+    assert state._camera_disabled and state._camera_manual_override
+    persist.assert_called_once_with()
+    with pytest.raises(HTTPException) as error:
+        camera.camera_snapshot()
+    assert error.value.status_code == 409
+    state.camera_capture.start.assert_not_called()
+    state.camera_capture.stop.assert_not_called()

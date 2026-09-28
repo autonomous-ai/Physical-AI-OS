@@ -94,6 +94,9 @@ def disable_camera():
         state._persist_camera_state()
         return {"status": "already_disabled"}
     if state._camera_disabled:
+        # An explicit disable must claim manual ownership even after an auto-pause.
+        state._camera_manual_override = True
+        state._persist_camera_state()
         return {"status": "already_disabled"}
     state._camera_disabled = True
     state._camera_manual_override = True
