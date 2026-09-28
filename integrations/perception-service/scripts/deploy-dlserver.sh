@@ -73,13 +73,23 @@ log "=== deploy $(git rev-parse --short HEAD 2>/dev/null): active=$active idle=$
 
 # --- preflight: refuse before touching anything --------------------------------
 [ -n "$(lb_pid)" ] || abort "nothing listens on :$LBSERVER_PORT (lbserver down)"
-acked || abort "lbserver (pid $(lb_pid)) has not acked $STATE: it predates the switch or runs without LB__STATE_FILE; restart it with make start-runpod-lbserver"
+acked_on "$active" || abort "lbserver (pid $(lb_pid)) has not acked $STATE, or its ack does not name slot $active: it predates the switch or runs without LB__STATE_FILE; restart it with make start-runpod-lbserver"
 [ -n "$(listener "$active")" ] || abort "active slot $active is not running"
 [ -z "$(listener "$idle")" ] || abort "idle port $idle is in use; stop it first: make stop-runpod-dlserver DLSERVER_PORT=$idle"
 rev=$(cat "$(rev_file "$active")" 2>/dev/null)
 [ -n "$rev" ] || abort "no $(rev_file "$active"): unknown commit on slot $active; do one in-place restart (make start-runpod-master) first"
-git diff --quiet "$rev" HEAD -- pyproject.toml 2>/dev/null \
-    || abort "pyproject.toml changed since slot $active started ($rev): use the in-place restart (make start-runpod-master)"
+# Compare against the working tree, not HEAD: HEAD only sees committed edits,
+# so an uncommitted pyproject.toml change would sail through and rewrite the
+# venv the old slot serves from mid-deploy. Distinguish "changed" (exit 1)
+# from a git failure (any other exit): swallowing the latter behind the same
+# message would refuse a healthy deploy without saying why.
+git diff --quiet "$rev" -- pyproject.toml 2>/dev/null
+diff_rc=$?
+if [ "$diff_rc" = 1 ]; then
+    abort "pyproject.toml changed since slot $active started ($rev): use the in-place restart (make start-runpod-master)"
+elif [ "$diff_rc" != 0 ]; then
+    abort "cannot compare pyproject.toml with $rev (git exit $diff_rc)"
+fi
 free=$(nvidia-smi --query-gpu=memory.free --format=csv,noheader,nounits 2>/dev/null | head -1 | tr -d ' ')
 if [ -z "$free" ]; then
     log "WARNING: nvidia-smi unavailable, skipping the GPU memory check"

@@ -190,12 +190,14 @@ What it does:
 1. Refuses, without touching anything, if: another deploy runs (`flock` on
    `/tmp/dlserver-deploy.lock`; the lock is released when this script exits, so
    the long-lived daemons `make` starts don't hold it open); lbserver is not
-   listening on its port; lbserver has not acked `/tmp/dlserver-active` (it
-   predates this feature or runs without `LB__STATE_FILE`); the active slot is not
-   running; the idle port is in use; the active slot's commit is unknown (no
-   `dlserver*.rev`, e.g. it predates this feature); `pyproject.toml` changed since
-   the active slot started; free GPU memory is below `DEPLOY_MIN_FREE_GPU_MB`
-   (12000).
+   listening on its port; lbserver has not acked `/tmp/dlserver-active`, or its
+   ack does not name the active slot (it predates this feature or runs without
+   `LB__STATE_FILE`); the active slot is not running; the idle port is in use;
+   the active slot's commit is unknown (no `dlserver*.rev`, e.g. it predates
+   this feature); `pyproject.toml` changed in the working tree (committed or
+   not) since the active slot started; free GPU memory is below
+   `DEPLOY_MIN_FREE_GPU_MB` (12000); or `/hal/api/dl/health` on the active slot
+   cannot be read.
 2. Starts the idle slot **without** `make install`, and waits (up to
    `DEPLOY_READY_TIMEOUT`, 900 s) until its `/hal/api/dl/health` reports every model
    the active slot reports. A missing model aborts and stops the new slot.
@@ -230,7 +232,10 @@ it (only one slot runs between deploys).
 Rollback: deploy the previous commit (`git checkout <sha> && make deploy-dlserver`).
 To turn the feature off, stop slot B if it runs
 (`make stop-runpod-dlserver DLSERVER_PORT=8002`), `rm /tmp/dlserver-active*`, and
-`make start-runpod-master`.
+`make start-runpod-master`. The Makefile always passes `LB__STATE_FILE` to
+lbserver, so this does not unset it: with the state file gone, lbserver falls
+back to serving from `LB__BACKENDS` directly, which is the two-slot deploy
+effectively off, not the env var unset.
 
 ### Testing
 
