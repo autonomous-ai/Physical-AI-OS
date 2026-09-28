@@ -60,7 +60,7 @@ def test_ids_are_sorted_so_the_text_is_deterministic():
 
 
 def test_face_count_is_the_frame_not_the_arrivals():
-    """Flushed stranger ids may come from an earlier frame; the count is not theirs."""
+    """Stranger ids (arrivals) need not match the frame's face count."""
     msg = build_enter_message(set(), {"stranger_2", "stranger_3"}, [], ["momo"])
     assert msg.endswith("faces in frame: 1 (momo)")
     assert "already present" not in msg

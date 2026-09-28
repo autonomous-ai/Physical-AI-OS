@@ -64,7 +64,7 @@ _DEBUG_KIND_COLOR: dict[PersonKind, tuple[int, int, int]] = {
 
 
 def _flat_kps(kps: Any) -> list[float] | None:
-    """SCRFD's (5, 2) keypoint array as the flat list Face.kps carries."""
+    """The (5, 2) alignment-point array as the flat list Face.kps carries."""
     if kps is None:
         return None
     return [float(v) for v in np.asarray(kps).reshape(-1)]

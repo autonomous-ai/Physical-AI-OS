@@ -199,7 +199,7 @@ def test_the_stranger_bar_is_read_from_the_constructor(rec):
 
 
 def test_face_carries_the_five_keypoints_flat(rec):
-    """#531: the stranger greeting measures head yaw from SCRFD's 5 points."""
+    """#531: the stranger greeting measures head yaw from the 5 alignment points."""
     r, basis = rec
     kps = np.array(
         [[150, 150], [250, 150], [200, 200], [160, 260], [240, 260]], dtype=np.float32

@@ -225,6 +225,17 @@ def test_stranger_new_with_a_friend_rides_the_friend_enter_ungated(perception, m
     ]
 
 
+def test_company_stranger_looking_away_is_not_announced(perception, monkeypatch):
+    """A stranger beside the user is still a stranger: no gaze, no enter."""
+    _tick(perception, [MOMO], monkeypatch)
+    for _ in range(3):
+        _tick(perception, [MOMO, STRANGER_AWAY], monkeypatch)
+
+    assert _enters(perception) == [
+        "Person detected — new: friend (momo); faces in frame: 1 (momo)"
+    ]
+
+
 def test_familiar_hint_rides_the_gaze_greeting(perception, monkeypatch):
     monkeypatch.setattr(
         FacePerception, "_track_stranger_visits", lambda self, ids: set(ids)

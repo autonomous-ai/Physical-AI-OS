@@ -340,6 +340,8 @@ the honest outcome, and it beats being absorbed into somebody else's.
 
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
+The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
+
 **Tuning:**
 
 | Symptom | Fix |
