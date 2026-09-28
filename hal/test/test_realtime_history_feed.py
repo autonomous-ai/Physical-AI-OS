@@ -66,3 +66,12 @@ def test_empty_text_reaches_neither_sink():
     assert not service.feed_realtime_history("", spoken=False)
     assert realtime.fragments == []
     assert realtime.sent == []
+
+
+def test_partial_reply_does_not_claim_full_text_was_heard():
+    service, realtime = _service()
+    service.feed_realtime_history("The airplane is black.", spoken=False, interrupted=True)
+    assert realtime.fragments == ["The airplane is black."]
+    assert realtime.sent == [
+        "[TTS HISTORY, interrupted; only part may have been heard] The airplane is black."
+    ]

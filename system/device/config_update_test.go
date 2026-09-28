@@ -375,13 +375,13 @@ func TestCaptureSkipsADeviceWithNoCredentials(t *testing.T) {
 func TestApplyUpdateTTSSpeed(t *testing.T) {
 	t.Setenv("HAL_TTS_SPEED", "")
 	c := baseConfig()
-	speed := 1.2
+	speed := 1.5
 	ch := applyUpdate(c, domain.UpdateConfigRequest{TTSSpeed: &speed}, "")
-	if c.GetTTSSpeed() != 1.2 || !ch.tts || ch.halBoot || ch.lang {
+	if c.GetTTSSpeed() != 1.5 || !ch.tts || ch.halBoot || ch.lang {
 		t.Fatalf("speed update: %v %+v", c.GetTTSSpeed(), ch)
 	}
 	ch = applyUpdate(c, domain.UpdateConfigRequest{}, "")
-	if c.GetTTSSpeed() != 1.2 || ch.tts {
+	if c.GetTTSSpeed() != 1.5 || ch.tts {
 		t.Fatal("omitted speed changed state")
 	}
 	ch = applyUpdate(c, domain.UpdateConfigRequest{TTSSpeed: &speed}, "")
@@ -409,7 +409,7 @@ func TestTTSSpeedRejectsBeforeMutation(t *testing.T) {
 	if c.TTSVoice != "alloy" || c.TTSProvider != "openai" || c.STTLanguage != "en" || c.TTSSpeed != nil {
 		t.Fatal("invalid speed partially mutated config")
 	}
-	if got := s.GetPublicConfig().TTSSpeed; got != 1.3 {
+	if got := s.GetPublicConfig().TTSSpeed; got != 1.2 {
 		t.Fatalf("public default %v", got)
 	}
 }

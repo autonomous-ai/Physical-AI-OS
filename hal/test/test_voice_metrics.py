@@ -334,9 +334,8 @@ def test_excluded_inputs_are_reported_with_a_reason(kpi, reason):
     assert p["exclusion_reason"] == reason
 
 
-def test_muted_speech_is_excluded_when_it_is_refused(kpi):
-    """The speaker refuses the reply: that is a muted device, not a missed
-    response."""
+def test_muted_speech_records_audio_refusal_without_excluding_task(kpi):
+    """Mute is audio evidence, not an exclusion from task acceptance."""
     iid = voice_metrics.speech_end("silence_clock")
     voice_metrics.bind_run(iid, "run-m")
     kpi.clock.advance(700)
@@ -344,11 +343,12 @@ def test_muted_speech_is_excluded_when_it_is_refused(kpi):
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
-    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
-    assert p["eligible"] is False
+    assert p["exclusion_reason"] == ""
+    assert p["speaker_muted"] is True
+    assert p["eligible"] is True
 
 
-def test_unmuting_before_scoring_does_not_resurrect_the_turn(kpi):
+def test_unmuting_before_scoring_preserves_observed_mute(kpi):
     """Regression (device-observed 08/09/2026): the mute flag was sampled when
     the verdict was written, 10s later. Someone unmuting in between made a
     muted turn look like one the device simply never answered."""
@@ -360,8 +360,9 @@ def test_unmuting_before_scoring_does_not_resurrect_the_turn(kpi):
     kpi.close_all()
 
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
-    assert p["outcome"] == voice_metrics.OUTCOME_EXCLUDED
-    assert p["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+    assert p["outcome"] == voice_metrics.OUTCOME_NO_ACK
+    assert p["exclusion_reason"] == ""
+    assert p["speaker_muted"] is True
 
 
 def test_a_late_mute_amends_a_reported_verdict(kpi):
@@ -372,7 +373,8 @@ def test_a_late_mute_amends_a_reported_verdict(kpi):
     rows = kpi.of(voice_metrics.EVENT_INTERACTION)
     assert len(rows) == 2
     assert rows[1]["params"]["amendment_reason"] == "late_mute"
-    assert rows[1]["params"]["exclusion_reason"] == voice_metrics.EXCL_SPEAKER_MUTED
+    assert rows[1]["params"]["exclusion_reason"] == ""
+    assert rows[1]["params"]["speaker_muted"] is True
 
 
 def test_mute_after_the_user_already_heard_something_changes_nothing(kpi):
@@ -724,3 +726,35 @@ def test_system_audio_is_not_an_answer(kpi):
     p = kpi.one(voice_metrics.EVENT_INTERACTION)
     assert p["ack_modality"] == "acknowledgement_audio"
     assert p["answer_latency_ms"] is None
+
+
+# --- Explicit stop refuses late audio at admission ---------------------------
+
+def test_explicit_stop_suppresses_late_audio_of_covered_turns_only(kpi):
+    """Device-observed 2026-09-17: a Harness reply spoke 27 s after the click
+    and a realtime wait filler 12 s after it. The boundary must gate TTS
+    admission for every turn it covered, and only those."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    kpi.clock.advance(500)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
+
+    assert voice_metrics.is_suppressed("run:run-old") is True
+    assert voice_metrics.is_suppressed(f"interaction:{old}") is True
+    assert voice_metrics.is_suppressed("") is False
+    assert voice_metrics.is_suppressed("run:never-seen") is False
+
+    kpi.clock.advance(1000)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(new, "run-new")
+    assert voice_metrics.is_suppressed("run:run-new") is False
+
+
+def test_auto_supersede_does_not_gate_admission(kpi):
+    """Automatic supersession is os-server's watermark; HAL only measures it."""
+    old = voice_metrics.speech_end("silence_clock")
+    voice_metrics.bind_run(old, "run-old")
+    kpi.clock.advance(1000)
+    new = voice_metrics.speech_end("silence_clock")
+    voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
+    assert voice_metrics.is_suppressed("run:run-old") is False

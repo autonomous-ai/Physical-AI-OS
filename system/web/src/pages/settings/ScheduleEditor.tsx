@@ -113,7 +113,7 @@ export function ScheduleEditor({
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <label style={labelStyle}>When it runs, the device will</label>
+        <label style={labelStyle}>When it runs, the robot will</label>
         <select
           style={inputStyle}
           value={draft.kind}

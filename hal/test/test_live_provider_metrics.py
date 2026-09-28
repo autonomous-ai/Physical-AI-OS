@@ -45,6 +45,7 @@ def _gemini(messages):
             yield message
 
     agent._session = NS(receive=receive)
+    agent._pending_tool_calls = set()
     agent._last_audio_sent_at = None
     agent._activity_end_sent_at = None
     asyncio.run(agent._async_receive_turn())
@@ -124,7 +125,7 @@ def test_gemini_vad_enriches_same_input_key(monkeypatch):
     assert speeches[0].turn_id == speeches[1].turn_id
     assert speeches[0].endpoint_at is None
     assert speeches[1].endpoint_at == 42.0
-    assert speeches[1].method == "server_vad"
+    assert speeches[1].method == "server_vad_receive"
     assert events[-1].user_turn_id == speeches[0].turn_id
 
 
@@ -166,6 +167,7 @@ def test_gemini_late_playback_terminal_cannot_complete_new_input():
             yield message
 
     agent._session = NS(receive=receive)
+    agent._pending_tool_calls = set()
     asyncio.run(agent._async_receive_turn())
     first = _drain(agent)
     asyncio.run(agent._async_receive_turn())
@@ -249,6 +251,7 @@ def test_gemini_dropped_terminal_is_metadata_not_an_extra_receive_boundary():
         yield _gemini_message(interrupted=True, done=True)
 
     agent._session = NS(receive=receive)
+    agent._pending_tool_calls = set()
     asyncio.run(agent._async_receive_turn())
     events = _drain(agent)
     preserved = next(event for event in events if isinstance(event, ExecutionOutput))

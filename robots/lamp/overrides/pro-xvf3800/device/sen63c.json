@@ -1,0 +1,15 @@
+{
+  "boards": {
+    "orangepi_sun60": {
+      "enabled": true,
+      "bus": 0,
+      "sda_pin": null,
+      "scl_pin": null,
+      "poll_interval_s": 1.0,
+      "retry_interval_s": 5.0,
+      "stale_after_s": 5.0,
+      "no_data_timeout_s": 30.0,
+      "automatic_self_calibration": null
+    }
+  }
+}

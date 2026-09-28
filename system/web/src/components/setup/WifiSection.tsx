@@ -120,7 +120,7 @@ export function WifiSection({
       title={showAdminPassword ? "Setting up" : "Wi-Fi"}
       icon={showAdminPassword ? <Settings size={17} /> : <Wifi size={17} />}
       description={showConnected
-        ? "Your device is connected to Wi-Fi."
+        ? "Your robot is connected to Wi-Fi."
         : "Choose your Wi-Fi and enter its password."}
     >
       {/* Device admin password — kept mounted but hidden so its state (empty)
@@ -133,7 +133,7 @@ export function WifiSection({
       {showAdminPassword && (
         <>
           <div style={{ display: "none" }}>
-            <GroupLabel first>Device password</GroupLabel>
+            <GroupLabel first>Robot password</GroupLabel>
             <div style={{ marginBottom: FIELD_GAP }}>
               <div style={{ position: "relative" }}>
               <input
@@ -156,7 +156,7 @@ export function WifiSection({
               </button>
             </div>
               <div style={{ marginTop: 6, fontSize: 12, color: C.textDim, lineHeight: 1.5 }}>
-                Keeps your device private and lets you sign in later. Don't lose it.
+                Keeps your robot private and lets you sign in later. Don't lose it.
               </div>
             </div>
           </div>
@@ -214,7 +214,7 @@ export function WifiSection({
             }}>
               <Check size={15} style={{ color: C.green, flexShrink: 0 }} />
               <span>
-                This device is already online without Wi-Fi — usually an ethernet
+                This robot is already online without Wi-Fi — usually an ethernet
                 cable. Leave this empty to keep that connection, or pick a network
                 to add Wi-Fi.
               </span>

@@ -155,6 +155,8 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
         state._thinking_cue_active = False
     if was_sleeping and not state._sleeping:
         state._wake_sleepy_peripherals()
+        # Every wake restarts the presence countdown, not only a face on camera.
+        state.note_presence_wake()
 
     # Any emotion cancels a pending still-emotion idle resume: either it plays
     # a recording (which clears the halt itself) or it is another still

@@ -23,7 +23,7 @@ export async function fetchEnvironmentStatus(signal: AbortSignal): Promise<Envir
   const response = await fetch(`${HW}/environment/status`, { signal });
   if (!response.ok) {
     throw new Error(response.status === 404
-      ? "Environment API unavailable on this device."
+      ? "Environment API unavailable on this robot."
       : `Unable to read sensor status (HTTP ${response.status}).`);
   }
   const result: EnvironmentStatus = await response.json();

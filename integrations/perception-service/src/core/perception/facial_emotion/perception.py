@@ -134,8 +134,12 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
     def _label_thresholds(self) -> dict[str, float] | None:
         return self._default_config.label_thresholds if self._default_config else None
 
-    async def predict_face(self, face_crop: cv2t.MatLike) -> Emotion | None:
-        """Classify emotion from a single pre-cropped face image."""
+    async def predict_face(self, face_crop: cv2t.MatLike, *, gate: bool = True) -> Emotion | None:
+        """Classify emotion from a single pre-cropped face image.
+
+        ``gate=False`` skips the per-label gate and returns the raw argmax, for
+        clients (HAL) that apply their own gate from ``probabilities``.
+        """
         if self._emotion_batcher is None:
             raise RuntimeError("EmotionPerception not started")
 
@@ -144,18 +148,27 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
         futures = await self._emotion_batcher.submit([face_crop])
         raw: RawEmotionDetection = await futures[0]
 
-        resolved = resolve_label(
-            raw.expression_probs, recognizer.class_names, self._label_thresholds
-        )
+        probabilities: dict[str, float] = {
+            name: float(p) for name, p in zip(recognizer.class_names, raw.expression_probs)
+        }
+        if gate:
+            resolved = resolve_label(
+                raw.expression_probs, recognizer.class_names, self._label_thresholds
+            )
+            label, confidence = resolved.label, resolved.confidence
+        else:
+            idx = int(np.argmax(raw.expression_probs))
+            label, confidence = recognizer.class_names[idx], float(raw.expression_probs[idx])
         H, W = face_crop.shape[:2]
 
         return Emotion(
-            emotion=resolved.label,
-            confidence=resolved.confidence,
+            emotion=label,
+            confidence=confidence,
             face_confidence=1.0,
             bbox=[0, 0, W, H],
             valence=raw.valence,
             arousal=raw.arousal,
+            probabilities=probabilities,
         )
 
     async def predict_image(self, frame: npt.NDArray[np.uint8]) -> EmotionDetection:

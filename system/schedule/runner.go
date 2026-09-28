@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -24,13 +25,42 @@ const (
 	runnerCatchUpWindow = 30 * time.Minute
 )
 
+const (
+	// RunStatusSkipped is the RunReport.Status (and Schedule.LastRunStatus) of
+	// an occurrence the device deliberately did not run because a connector in
+	// Schedule.Requires is not installed. Exact string per the schedule.run
+	// wire contract ("success" | "failure" | "skipped") — the backend and the
+	// web app match it verbatim.
+	RunStatusSkipped = "skipped"
+
+	// missingConnectorSummaryPrefix starts a skipped run's Summary, followed
+	// by the missing codes in Requires order joined by ", " — e.g.
+	// "missing connector: gmail, slack". The format is part of the wire
+	// contract: the web parses the codes back out to render labels.
+	missingConnectorSummaryPrefix = "missing connector: "
+)
+
 // RunReport is handed to the report callback after every fire attempt
-// (success or failure), whether it came from the ticker or from a manual
+// (success, failure or skip), whether it came from the ticker or from a manual
 // "Run now". The MQTT layer (schedule_sync_handler.go / schedule_run_handler.go)
 // turns this into the fd_channel schedule.run ack; the Runner itself knows
 // nothing about MQTT.
 type RunReport struct {
 	ScheduleID string
+	// Name is the schedule's name at the moment it ran, in EVERY outcome.
+	// Summary cannot stand in for it: Summary is the name only on success —
+	// it is the error text on a failure and the missing connectors on a skip —
+	// and everything downstream of the report callback (the ops alert in
+	// particular: "❌ Schedule run failed: <name>") must still say WHICH task
+	// it was. Carried here rather than re-read from the store by the callback,
+	// so it is exactly the name that ran, with no extra disk read on the tick.
+	Name string
+	// Manual is true when the run came from RunNow (the "Run now" button, via
+	// MQTT schedule.run or the local HTTP endpoint) and false for the ticker's
+	// own fires. The report callback is shared by both paths and has no other
+	// way to tell them apart; the ops alert uses it for its "(run now)" suffix.
+	// Not on the schedule.run wire — the ack is identical either way.
+	Manual bool
 	// RunID is the run id domain.AgentGateway.SendSystemChatMessage itself
 	// returned — empty on a failed send, since no run ever started. This is
 	// deliberately NOT a locally fabricated id: SendSystemChatMessage is
@@ -41,8 +71,9 @@ type RunReport struct {
 	//
 	// ALWAYS EMPTY for a KindSpeak schedule, success included: speaking runs no
 	// agent turn, so there is no run to correlate with and nothing honest to
-	// put here. Consumers must not read an empty RunID as failure — read
-	// Status.
+	// put here. Likewise empty for a skipped run, which never reached the
+	// gateway at all. Consumers must not read an empty RunID as failure —
+	// read Status.
 	RunID     string
 	StartedAt time.Time
 	// SendLatency is how long the call to hand the message to the runtime
@@ -54,8 +85,9 @@ type RunReport struct {
 	// how long the resulting speech lasted — /voice/speak returns on accept.
 	SendLatency time.Duration
 
-	// Status is "success" | "failure", and what it certifies differs by kind —
-	// in BOTH cases it is weaker than "the user got their task":
+	// Status is "success" | "failure" | "skipped". What a "success" certifies
+	// differs by kind — in BOTH cases it is weaker than "the user got their
+	// task":
 	//
 	//   KindAgent — the runtime accepted the message and returned a run id. The
 	//     turn itself runs asynchronously afterwards, so a "success" says
@@ -69,12 +101,23 @@ type RunReport struct {
 	//
 	// A "failure" is meaningful in both cases: the device genuinely could not
 	// hand the task off, and it will be retried within the catch-up window.
-	Status  string
-	Summary string // the schedule's Name on success; the error text on failure
+	//
+	// "skipped" (RunStatusSkipped) means the device deliberately did NOT run
+	// the task because a connector in Schedule.Requires is not installed. It
+	// is not a failure: nothing is retried, nothing may treat it as one (the
+	// ops alert reports it as a skip, never as a failed run), and the
+	// occurrence is consumed exactly like a success (NextRunAt advances).
+	// The gateway is never called, for either kind.
+	Status string
+	// Summary is the schedule's Name on success; the error text on failure;
+	// "missing connector: <code>[, <code>…]" when skipped (the missing codes
+	// in Requires order — see missingConnectorSummaryPrefix).
+	Summary string
 	// NextRunAt is the freshly computed next occurrence, set by fire() right
-	// after it persists the same value via RecordRunResult (zero value
-	// otherwise: a failed fire never advances NextRunAt, see fire()'s I5
-	// comment, and RunNow deliberately never touches it either).
+	// after it persists the same value via RecordRunResult — on a success or
+	// a skip (zero value otherwise: a failed fire never advances NextRunAt,
+	// see fire()'s I5 comment, and RunNow deliberately never touches it
+	// either).
 	//
 	// CRITICAL FIX (final review): before this field existed, the schedule.run
 	// ack never carried the device's newly computed next-fire time at all —
@@ -99,7 +142,45 @@ type Runner struct {
 	gw       domain.AgentGateway
 	deviceID string
 	report   func(RunReport)
+
+	// connectors answers "is connector <code> installed on this device?" for
+	// the Schedule.Requires guard. nil means NO guard: every requirement
+	// counts as met and every task runs exactly as it did before the field
+	// existed — the zero configuration every existing NewRunner caller (and
+	// test) gets. See SetConnectorChecker.
+	connectors ConnectorChecker
 }
+
+// ConnectorChecker reports whether a connector code (a catalog code, exactly
+// as in connector.set.<code>) currently has credentials on this device.
+//
+// Defined here, next to its one consumer, rather than in the MQTT package that
+// implements it: the Runner must stay testable against a fake, and it has no
+// business knowing WHERE connector credentials live on disk (that is the
+// connector writers' concern — see mqtthandler's connectorInstalled).
+//
+// Implementations should answer false ONLY on positive evidence that the
+// connector is absent. When the answer is genuinely unknown (a store that
+// could not be read), true is the safe answer: it degrades to running the
+// task the way it ran before this guard existed, whereas a wrong false tells
+// the user to reconnect something that may be connected and silently drops
+// their task.
+type ConnectorChecker interface {
+	Installed(code string) bool
+}
+
+// ConnectorCheckerFunc adapts a plain function to ConnectorChecker, the way
+// http.HandlerFunc adapts one to http.Handler.
+type ConnectorCheckerFunc func(code string) bool
+
+// Installed calls f(code).
+func (f ConnectorCheckerFunc) Installed(code string) bool { return f(code) }
+
+// SetConnectorChecker enables the Schedule.Requires guard. A setter rather
+// than a NewRunner parameter so the zero configuration stays "no guard" for
+// every caller that has no notion of connectors. Call it once, right after
+// NewRunner and before Start — it is not synchronized against a running tick.
+func (r *Runner) SetConnectorChecker(c ConnectorChecker) { r.connectors = c }
 
 // NewRunner builds a Runner. deviceID is threaded in explicitly (rather than
 // read from config inside this package) purely so NextRun's jitter has
@@ -146,6 +227,14 @@ func (r *Runner) safeTick(now time.Time) {
 // second schedule due in the very same tick is deferred rather than firing on
 // top of it. It stays due and gets its turn on a later tick once the agent
 // frees up (see the SingleFlight test).
+//
+// EXCEPT a skip: the connector guard (Schedule.Requires) is evaluated BEFORE
+// the busy check, and a task that is going to be skipped fires regardless of
+// IsBusy(). Single-flight exists to keep two agent turns (or two voices)
+// apart, and a skip starts neither — it never touches the gateway. Deferring
+// it would buy nothing and could cost the report entirely: a skip deferred
+// behind a turn longer than the catch-up window would be re-anchored forward
+// silently, and the user would never learn why their task did not run.
 func (r *Runner) tick(now time.Time) {
 	schedules, err := r.store.Load()
 	if err != nil {
@@ -164,14 +253,73 @@ func (r *Runner) tick(now time.Time) {
 			continue
 		}
 
-		if r.gw.IsBusy() {
+		missing := r.missingConnectors(sch)
+		if len(missing) == 0 && r.gw.IsBusy() {
 			// Defer, don't interrupt: NextRunAt is left untouched so this same
 			// schedule is re-evaluated (and, catch-up window permitting, fired)
-			// on the next tick.
+			// on the next tick. Only a task that will actually reach the
+			// gateway waits — see the doc comment on skips.
 			continue
 		}
 
-		r.fire(sch, tz)
+		r.fire(sch, tz, missing)
+	}
+}
+
+// missingConnectors returns the codes in sch.Requires that are not installed
+// on this device, in Requires order — the order the skip summary reports
+// them in. Empty means "run it": no requirements, every requirement met, or no
+// checker configured (nil checker = no guard, see Runner.connectors).
+//
+// Blank entries and repeats are ignored rather than trusted: the backend
+// dedupes before sending, but a malformed list must not turn into a skip
+// summary like "missing connector: , gmail, gmail", nor ask the checker the
+// same question twice.
+func (r *Runner) missingConnectors(sch Schedule) []string {
+	if r.connectors == nil || len(sch.Requires) == 0 {
+		return nil
+	}
+	var missing []string
+	seen := make(map[string]bool, len(sch.Requires))
+	for _, code := range sch.Requires {
+		code = strings.TrimSpace(code)
+		if code == "" || seen[code] {
+			continue
+		}
+		seen[code] = true
+		if !r.connectors.Installed(code) {
+			missing = append(missing, code)
+		}
+	}
+	return missing
+}
+
+// attempt produces the outcome of one fire attempt: a skip report when a
+// required connector is missing (the gateway is NOT called), otherwise the
+// real gateway send. Shared by fire() and RunNow() so the guard can never be
+// applied on one path and forgotten on the other.
+func (r *Runner) attempt(sch Schedule, missing []string, attemptID string) RunReport {
+	if len(missing) > 0 {
+		return r.skip(sch, missing)
+	}
+	return r.send(sch, attemptID)
+}
+
+// skip builds the report for a run the device deliberately did not perform.
+// Like send(), it neither persists nor reports — its callers decide that.
+//
+// Logged at Info, not Warn/Error: this is the guard working as designed on
+// a device whose owner has not connected a service, and a daily task would
+// otherwise put a warning in the log every single day until they do.
+func (r *Runner) skip(sch Schedule, missing []string) RunReport {
+	slog.Info("schedule: skipped, required connector not installed", "component", "schedule",
+		"schedule_id", sch.ID, "missing", missing)
+	return RunReport{
+		ScheduleID: sch.ID,
+		Name:       sch.Name,
+		StartedAt:  time.Now(),
+		Status:     RunStatusSkipped,
+		Summary:    missingConnectorSummaryPrefix + strings.Join(missing, ", "),
 	}
 }
 
@@ -213,11 +361,23 @@ func (r *Runner) reanchor(sch Schedule, now time.Time, tz *time.Location) {
 // LastFailedOccurrence — see its doc comment); a SUCCESS always acks,
 // including a success that follows earlier suppressed failures in the same
 // occurrence, since that is the outcome the backend actually needs to hear.
-func (r *Runner) fire(sch Schedule, tz *time.Location) {
+//
+// A SKIP (missing is non-empty: a connector in Schedule.Requires is not
+// installed — see attempt()) takes the SUCCESS path, not the failure one, on
+// purpose: the occurrence was deliberately resolved, not lost. Retrying it
+// every tick would change nothing (connecting a service goes through the
+// backend, not through this loop) and would only re-skip, so NextRunAt
+// advances and the skip is always acked — once per occurrence, since the
+// advance itself is what stops a second attempt. The branch below therefore
+// tests for "failure" explicitly rather than "anything but success": the
+// latter would have routed a skip into I5's retry and its ack suppression,
+// which could swallow the skip entirely when a failure of the same
+// occurrence had already been acked.
+func (r *Runner) fire(sch Schedule, tz *time.Location, missing []string) {
 	attemptID := fmt.Sprintf("sched-%s-%d", sch.ID, time.Now().UnixMilli())
-	rr := r.send(sch, attemptID)
+	rr := r.attempt(sch, missing, attemptID)
 
-	if rr.Status != "success" {
+	if rr.Status == "failure" {
 		alreadyAckedThisOccurrence := sch.LastRunStatus == "failure" && sch.LastFailedOccurrence.Equal(sch.NextRunAt)
 
 		// I5: a send failure must NOT burn the occurrence by advancing
@@ -227,7 +387,7 @@ func (r *Runner) fire(sch Schedule, tz *time.Location) {
 		// re-anchors forward instead of calling fire() at all). Advancing
 		// NextRunAt here would mean e.g. a WS reconnect exactly at 08:00
 		// permanently loses that day's run instead of retrying moments later.
-		if err := r.store.SetLastFailedRun(sch.ID, rr.StartedAt, sch.NextRunAt); err != nil {
+		if err := r.store.SetLastFailedRun(sch.ID, rr.StartedAt, rr.Summary, sch.NextRunAt); err != nil {
 			slog.Error("schedule: persist failed run failed", "component", "schedule", "schedule_id", sch.ID, "error", err)
 		}
 		if !alreadyAckedThisOccurrence && r.report != nil {
@@ -241,14 +401,14 @@ func (r *Runner) fire(sch Schedule, tz *time.Location) {
 	if !ok {
 		next = time.Time{}
 	}
-	if err := r.store.RecordRunResult(sch.ID, rr.StartedAt, rr.Status, next); err != nil {
+	if err := r.store.RecordRunResult(sch.ID, rr.StartedAt, rr.Status, rr.Summary, next); err != nil {
 		slog.Error("schedule: persist run result failed", "component", "schedule", "schedule_id", sch.ID, "error", err)
 	}
 	// Forward the same occurrence onto the ack (see RunReport.NextRunAt's doc
 	// comment) — the backend has no other reliable way to learn it.
 	rr.NextRunAt = next
 	if r.report != nil {
-		r.report(rr) // always ack a success, even after earlier suppressed failures this occurrence
+		r.report(rr) // always ack a success or skip, even after earlier suppressed failures this occurrence
 	}
 }
 
@@ -260,13 +420,22 @@ func (r *Runner) fire(sch Schedule, tz *time.Location) {
 // ok=false means the run was deferred (the agent is busy) rather than
 // attempted at all — the same single-flight rule the ticker follows applies
 // here too, so a manual trigger can never barge in on an active turn.
+//
+// The connector guard (Schedule.Requires) applies here exactly as it does on
+// the ticker, and is likewise checked BEFORE the busy check: a skip never
+// touches the gateway, so it answers straight away with the real reason
+// ("missing connector: gmail") instead of "agent busy, try again", which
+// would only lead to the same skip on the retry. A skip is a completed run
+// (ok=true), recorded via SetLastRun like any other manual outcome.
 func (r *Runner) RunNow(sch Schedule) (report RunReport, ok bool) {
-	if r.gw.IsBusy() {
+	missing := r.missingConnectors(sch)
+	if len(missing) == 0 && r.gw.IsBusy() {
 		return RunReport{}, false
 	}
 	attemptID := fmt.Sprintf("sched-run-%s-%d", sch.ID, time.Now().UnixMilli())
-	rr := r.send(sch, attemptID)
-	if err := r.store.SetLastRun(sch.ID, rr.StartedAt, rr.Status); err != nil {
+	rr := r.attempt(sch, missing, attemptID)
+	rr.Manual = true // before the callback sees it — see RunReport.Manual
+	if err := r.store.SetLastRun(sch.ID, rr.StartedAt, rr.Status, rr.Summary); err != nil {
 		slog.Error("schedule: persist manual run failed", "component", "schedule", "schedule_id", sch.ID, "error", err)
 	}
 	// A manual "Run now" always acks — there is no retry/suppression concept
@@ -285,7 +454,8 @@ func (r *Runner) RunNow(sch Schedule) (report RunReport, ok bool) {
 //
 // THIS IS THE ONE PLACE THE TWO KINDS DIVERGE. Everything around it — when a
 // task is due, the catch-up window, single-flight, I5's retry, failure-ack
-// suppression, next-occurrence math, the ack payload — is deliberately shared,
+// suppression, the connector guard (attempt() never even calls this for a
+// skip), next-occurrence math, the ack payload — is deliberately shared,
 // because none of it depends on what firing actually does. A "speak" task is a
 // scheduled task in every respect except which gateway method delivers it.
 //
@@ -334,5 +504,5 @@ func (r *Runner) send(sch Schedule, attemptID string) RunReport {
 			"schedule_id", sch.ID, "kind", kind, "error", err)
 	}
 
-	return RunReport{ScheduleID: sch.ID, RunID: runID, StartedAt: started, SendLatency: latency, Status: status, Summary: summary}
+	return RunReport{ScheduleID: sch.ID, Name: sch.Name, RunID: runID, StartedAt: started, SendLatency: latency, Status: status, Summary: summary}
 }

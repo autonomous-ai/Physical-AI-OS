@@ -169,7 +169,7 @@ export function VoiceSection({
             : !voiceLabel.trim() ? C.textMuted : C.green,
         }}
       >
-        {voicePhase === "idle" && <><Mic size={15} />{`Start Recording (${VOICE_DURATION_SEC}s on device)`}</>}
+        {voicePhase === "idle" && <><Mic size={15} />{`Start Recording (${VOICE_DURATION_SEC}s on robot)`}</>}
         {voicePhase === "countdown" && `Get ready... ${voiceCountdown}`}
         {voicePhase === "recording" && (
           <>
@@ -177,7 +177,7 @@ export function VoiceSection({
               width: 9, height: 9, borderRadius: 999, background: C.red,
               boxShadow: "0 0 6px var(--lm-red-glow)", animation: "lm-pulse-dot 1s ease-in-out infinite",
             }} />
-            {`Recording on device — read aloud (${voiceCountdown}s)`}
+            {`Recording on robot — read aloud (${voiceCountdown}s)`}
           </>
         )}
         {voicePhase === "processing" && <><Loader2 size={15} className="lm-spin-ico" />Processing…</>}

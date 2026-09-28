@@ -32,7 +32,7 @@ hal_dependency_extra() {
   if [ -z "$device_type" ]; then
     device_type="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null || true)"
   fi
-  # Match the Reachy installer; other devices retain hardware + aec.
+  # Match the Reachy installer; other devices select aec plus shared Pipecat.
   case "$device_type" in
     reachy-mini) printf '%s\n' reachy ;;
     *) printf '%s\n' aec ;;
@@ -94,6 +94,15 @@ ensure_openclaw_node() {
     return 1
   }
   ensure_node_engine "$engine" "openclaw@$version"
+}
+
+# cli_semver: print the FIRST x.y.z[suffix] found on stdin (a `--version`
+# output), or nothing. It must be the first: Hermes 0.21+ prints
+# "Hermes Agent v0.21.1 (2026.9.7) · upstream …", and a greedy `sed 's/.*(…)/'`
+# grabbed the last match — even a fragment of it ("6.9.7") — so a correct
+# install failed its version check and skipped the gateway/os-server restarts.
+cli_semver() {
+  grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?' | head -1
 }
 
 update_hermes_package() {
@@ -681,7 +690,7 @@ if [ "$APP" = "rollback" ]; then
   esac
   BACKUP="/root/bootstrap/rollback/${ROLLBACK_TARGET}.previous"
   [ -x "$BACKUP" ] || { echo "No rollback backup for $ROLLBACK_TARGET"; exit 1; }
-  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  BLOCKED_VERSION=$("$DEST" --version 2>/dev/null | cli_semver)
   if [ -z "$BLOCKED_VERSION" ] && [ -f /root/bootstrap/state.json ]; then
     BLOCKED_VERSION=$(jq -r --arg key "$ROLLBACK_TARGET" '.components[$key] // empty' /root/bootstrap/state.json 2>/dev/null || true)
   fi
@@ -927,7 +936,7 @@ elif [ "$APP" = "hermes" ]; then
     echo "[software-update] metadata has no hermes.commit — unpinned: hermes update to upstream HEAD"
     update_hermes_package || { echo "hermes update failed"; exit 1; }
   fi
-  HERMES_NOW=$(hermes --version 2>/dev/null | sed -nE 's/.*([0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?).*/\1/p' | head -1)
+  HERMES_NOW=$(hermes --version 2>/dev/null | cli_semver)
   [ -n "$HERMES_NOW" ] || { echo "hermes not runnable after update"; exit 1; }
   if [ "$HERMES_NOW" != "$VERSION" ]; then
     if [ -n "$HERMES_COMMIT" ]; then
@@ -1023,6 +1032,12 @@ elif [ "$APP" = "hal" ]; then
   download_verified "$URL" "$ZIP_TMP" "$SHA256" || { echo "Failed checksum verification for hal"; exit 1; }
   UV_BIN="$(find_hal_uv)" || exit 1
   HAL_EXTRA="$(hal_dependency_extra)"
+  HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+  # Smart Turn is shared by non-Live voice backends on lamp images. Reachy's
+  # SDK requires a different ONNX version and cannot install Pipecat.
+  if [ "$HAL_EXTRA" != "reachy" ]; then
+    HAL_EXTRA_ARGS+=(--extra pipecat)
+  fi
   save_hal_service_state
   arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
@@ -1066,7 +1081,11 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA" || exit 1
+    # New archives carry the validated lock. Preserve legacy archive support,
+    # but never silently re-resolve a release that includes one.
+    HAL_LOCK_ARGS=()
+    [ ! -f uv.lock ] || HAL_LOCK_ARGS+=(--locked)
+    "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}" "${HAL_LOCK_ARGS[@]}" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /

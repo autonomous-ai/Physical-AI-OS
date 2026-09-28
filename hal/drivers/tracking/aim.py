@@ -24,6 +24,7 @@ stretches the move rather than being bypassed to hit the deadline.
 from __future__ import annotations
 
 import contextlib
+from contextvars import ContextVar
 import logging
 import threading
 import time
@@ -35,6 +36,17 @@ from hal.safety.policy import min_move_duration
 from hal.drivers.tracking import body, look_debug
 
 logger = logging.getLogger(__name__)
+_filler_interaction = ContextVar("look_filler_interaction", default="")
+
+
+@contextlib.contextmanager
+def filler_ownership(interaction_id: str):
+    """Pin metric ownership to the look request, including delayed fillers."""
+    token = _filler_interaction.set(interaction_id)
+    try:
+        yield
+    finally:
+        _filler_interaction.reset(token)
 
 # How close to frame centre counts as "aimed", as a fraction of frame width.
 # Wide enough that the lamp does not hunt for a perfect centre it cannot hold.
@@ -478,10 +490,8 @@ def _say(pool: str) -> None:
     try:
         import requests
 
-        from hal.telemetry import voice_metrics
-
         payload = {"pool": pool}
-        owner = voice_metrics.current_interaction()
+        owner = _filler_interaction.get()
         if owner:
             payload["owner"] = owner
         requests.post(config.OS_SENSING_FILLER_URL, json=payload, timeout=1.0)

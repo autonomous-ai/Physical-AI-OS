@@ -282,25 +282,26 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         if any(e.get("evidence") == "harness_delegated" for e in candidates):
             candidates = [e for e in candidates if e.get("evidence") in {
                 "harness_delegated", "harness_turn_done", "harness_turn_summary",
-                "harness_turn_error", "harness_question_open", "dispatch_error",
+                "harness_turn_error", "harness_correlated_summary", "harness_question_open", "dispatch_error",
                 "execution_observation_lost"}]
             if any(e.get("evidence") != "harness_delegated" for e in candidates):
                 candidates = [e for e in candidates
                               if e.get("evidence") != "harness_delegated"]
         # Losing transport is absence of observation, not a terminal outcome.
         # A racing disconnect snapshot must not erase a real terminal event.
-        if any(e.get("outcome") in ("completed", "failed") for e in candidates):
+        if any(e.get("outcome") in ("completed", "failed", "cancelled") for e in candidates):
             candidates = [e for e in candidates
                           if e.get("evidence") != "execution_observation_lost"]
-        priority = {"unknown": 0, "completed": 1, "failed": 2}
+        priority = {"unknown": 0, "completed": 1, "cancelled": 2, "failed": 3}
         selected = max(candidates, key=lambda e: (
             e.get("execution_at_ms") or 0, priority.get(e.get("outcome"), 0),
             e["_event_id"]), default={})
         # A cleanup end is not proof that an earlier terminal failure was
         # repaired. A recovered error has outcome unknown, not failed.
         outcome = ("failed" if any(e.get("outcome") == "failed" for e in candidates)
+                   else "cancelled" if any(e.get("outcome") == "cancelled" for e in candidates)
                    else selected.get("outcome", "incomplete"))
-        if outcome not in ("completed", "failed", "unknown", "incomplete"):
+        if outcome not in ("completed", "failed", "cancelled", "unknown", "incomplete"):
             outcome = "unknown"
         # A terminal completion proves that dispatch landed, even when transport
         # acknowledgement was lost. Without it dispatch failure counts as failed.
@@ -311,7 +312,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
 
     def summarize(counts):
         result = dict(counts)
-        for key in ("eligible_mature_turns", "completed_turns", "failed_turns", "unknown_turns",
+        for key in ("eligible_mature_turns", "completed_turns", "failed_turns", "cancelled_turns", "unknown_turns",
                     "incomplete_turns", "fresh_pending_turns", "ineligible_turns",
                     "legacy_turns_excluded", "versioned_turns", "eligibility_unknown_turns",
                     "missing_start_time_turns_excluded", *LOSS_COUNTERS):

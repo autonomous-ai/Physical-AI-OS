@@ -6,17 +6,19 @@ import (
 )
 
 func TestSoulNameIgnoresManagedInstructions(t *testing.T) {
-	// Use the real injected block that triggered the bogus wake words.
-	if got := parseSoulName(soulSkillPriorityBlock); got != "" {
+	// The real injected block that triggered the bogus wake words. It now lives in
+	// AGENTS.md, but it carries a `**Name:**` line of its own, so the SOUL.md name
+	// parser must stay immune to it wherever it turns up.
+	if got := parseSoulName(agentsMDBlock); got != "" {
 		t.Fatalf("instructions parsed as name: %q", got)
 	}
 	for _, card := range []string{"", "\n## Your identity card\n\n- **Name:** Noah\n"} {
-		input := soulSkillPriorityBlock + card
+		input := agentsMDBlock + card
 		if card != "" && parseSoulName(input) != "Noah" {
 			t.Fatal("instructions shadowed real identity card")
 		}
 		updated := rewriteSoulName(input, "Ngân")
-		if !strings.HasPrefix(updated, soulSkillPriorityBlock) {
+		if !strings.HasPrefix(updated, agentsMDBlock) {
 			t.Fatal("rename modified managed instructions")
 		}
 		if got := parseSoulName(updated); got != "Ngân" {

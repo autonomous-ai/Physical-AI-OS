@@ -270,12 +270,37 @@ cả ngày vì không có gì cho thấy turn đó chạy với memory nào. Hai
   `execute` (false ở chế độ chỉ quan sát, `agent.memory_guard=false`),
   `trigger` (`startup` | `watch` | `rescan`).
 
-Footer của turn card hiện fingerprint theo thứ tự cố định `USER 2.1k MEMORY
-0.4k KNOWLEDGE 1.0k`; khi trong turn có event `memory_changed` thì nối thêm
-`✎ memory changed` (màu amber), và `· N quarantined` màu đỏ chỉ khi guard thật
-sự đã gỡ gì đó (`execute` true). Ở chế độ chỉ quan sát badge vẫn amber và ghi
-`· would quarantine N`. Hover để xem size (bytes) / hash từng file và reasons.
-So `sha8` giữa hai turn cho biết memory có thay đổi giữa hai turn đó hay không.
+Footer của turn card gate badge theo state (#463) — `flow` là section public và
+debug chỉ là toggle trên header, không phải URL param ẩn:
+
+| State | Nghĩa | Chế độ thường | Chế độ debug |
+|---|---|---|---|
+| xám | turn chỉ đọc memory | ẩn | `USER.md 251B · MEMORY.md 1.2kB` |
+| amber | agent có ghi, guard chấp nhận | ẩn | `… ✎ memory changed` |
+| đỏ | guard đã gỡ block | `✎ memory updated · 1 entry removed in hermes` | như trên, thêm size phía trước |
+
+Xám hiện size của một file mà chủ máy không mở được, trên mọi turn; amber sáng
+ở mọi lần ghi thành công sẽ tập cho người dùng bỏ qua dòng này, và rồi đỏ cũng
+không còn được chú ý — nên cả hai là công cụ debug. Đỏ thì luôn hiện: đây là
+chỗ duy nhất trong sản phẩm mà chủ máy thấy được OS đã xoá thứ agent viết ra
+(phần còn lại của việc gỡ là atomic rename, file `.quarantine.txt` và
+`.bak-<nano>`, chỉ xem được qua SSH, và endpoint reset của #421 ship mà không
+có UI). Chữ dùng là "entry removed", không phải "quarantined" — từ nội bộ này
+đọc lên giống một sự cố bảo mật — và badge nêu luôn `runtime` lấy từ
+`memory_changed`: guard quét cả sáu runtime tree trong khi size bên cạnh là của
+runtime **đang active**, nên nếu không nêu tên thì một lần gỡ ở runtime không
+active sẽ làm card đỏ lên cạnh size của file chẳng liên quan.
+
+Size là byte với đơn vị dính liền số (`251B`, `1.2kB`) — không dùng `k` cơ số
+1000 như các số token LLM cùng hàng. Tên file giữ nguyên đuôi `.md` và ngăn
+nhau bằng dấu chấm giữa, để dòng này đọc ra hai file hai size chứ không phải
+một nhãn dính liền. Ở chế độ chỉ quan sát (`agent.memory_guard=false`) badge
+vẫn amber và ghi `· would remove 1 entry`; chưa gỡ gì cả, file vẫn còn block đó.
+Hover để xem số byte chính xác, `sha8`, runtime và reasons. So `sha8` giữa hai
+turn cho biết memory có thay đổi giữa hai turn đó hay không.
+
+Logic của badge nằm ở `system/web/src/pages/monitor/FlowSection/memory.ts` và có
+unit test: `cd system/web && node --test tests/memory.test.mjs`.
 
 ## Issue đang mở
 
@@ -306,3 +331,34 @@ Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `de
 ### Nhãn voice command và follow-up
 
 `sensing_input` và `realtime_response` có thể mang `data.voice_turn_type` (`voice`, `voice_command`, hoặc `voice_followup`). Flow Monitor ghép trường này với loại event handled: wake command do realtime xử lý hiện `VOICE_COMMAND_HANDLED`, follow-up hiện `VOICE_FOLLOWUP_HANDLED`, lượt handled thường hoặc cũ giữ `VOICE_AGENT_HANDLED`. Badge, bộ lọc subtype và search dùng cùng nhãn; search cũng nhận loại event gốc. Bộ lọc loại trừ đã lưu được mở rộng sang các subtype mới. Đây chỉ là thay đổi hiển thị; loại event, gom run, đường realtime/main, queue và cancel giữ nguyên. LIVE ON/OFF dùng cùng bộ phân loại wake phrase của HAL. Follow-up LIVE đã được cho phép giữ phân loại wake focus dù window hết trước khi provider trả lời. Reply realtime vẫn giữ `voice_agent_handled` để đồng bộ history im lặng. Row cũ thiếu metadata giữ nhãn cũ; history sync không lấy phân loại từ lượt voice bên cạnh.
+
+## Tiến độ Harness Store
+
+Snapshot quan sát được từ `agent.prepare` / `operation.get` ghi `harness_store_progress` với run ID local, operation ID, state, phase và nội dung hiển thị có giới hạn. Khi lượt main-agent còn active, luồng `assistant_delta` hiện có hiển thị các quan sát; preparation không chặn phản hồi main hay bật TTS. Khi delivery task đã sở hữu phản hồi, progress preparation đến muộn không được thay thế. Đây là dữ kiện từ polling, không phải protocol event Harness mới. `ready` chỉ nghĩa chuẩn bị agent, không hoàn thành task người dùng. Main vẫn nhận guidance/lỗi cần thao tác. Không thêm card frontend hoặc polling nền tự động; xem [Harness Store](harness-store_vi.md).
+
+### Hết hạn chờ preparation Harness
+
+`harness_preparation_wait_expired` ghi deadline lượt phản hồi local, với `task_dispatched:false`; không phải lỗi operation từ xa hay kết quả task. Native Hermes kết thúc đúng owner qua `lifecycle_error` sau hủy có giới hạn. Lỗi có prefix `OS_RUN_EXPIRED:` bỏ qua recovery câu trả lời dở để không biến lượt chờ hết hạn thành thành công được khôi phục. Progress preparation bỏ snapshot liên tiếp trùng theo run/operation active và ngăn các thông báo thay đổi bằng đoạn mới.
+
+### Log đo thời gian TTS của main agent
+
+Log dịch vụ OS-server có các mốc `[tts-timing]` cho câu trả lời streaming và gửi TTS cuối turn. Đây là log chẩn đoán, không phải event Flow Monitor hay endpoint KPI acknowledge mới:
+
+- `sentence_ready`: `first_delta_to_ready_ms` đo từ assistant delta không rỗng đầu tiên OS-server nhận được đến khi có câu đầu đủ điều kiện đọc. Bao gồm thời gian gom câu và các gate an toàn hiện có, không bao gồm thời gian model trước delta đầu.
+- `sentence_dispatch`: `ready_to_dispatch_ms` bao gồm gọi hardware ở đầu câu và hủy filler trước khi gửi TTS.
+- `delivery_start` / `delivery_complete`: `dispatch_to_send_ms`, `send_ms`, `dispatch_to_complete_ms` tách thời gian chờ goroutine khỏi lời gọi gửi qua runtime.
+- `hal_post_start` / `hal_post_complete`: `http_ms` đo HTTP request tới HAL đến khi đọc response. `success` nghĩa là lời gọi không trả lỗi (bao gồm kiểm tra response muted hiện có), không chứng minh loa đã phát tiếng.
+
+Các mốc có `run_id` và `text_key` là 12 ký tự hex đầu SHA-256, không lặp lại nội dung câu hay credential. Hash ở handler dùng text trước bước làm sạch của runtime; hash HAL POST dùng payload cuối và nối được với HAL `queue_requested` khi text không đổi. Nếu runtime bỏ markdown/tag, dùng hash POST cuối để đối chiếu. Lời nói không gắn turn theo đường cũ có thể có run ID rỗng. Không có mốc câu đầu nếu streaming không đủ điều kiện hoặc chưa có câu hoàn chỉnh an toàn trước final flush. Không thay đổi gate ownership/silence hay cách buffer TTS.
+
+`assistant_end` và event `agent_last_token` hiện có bổ sung `first_delta_to_end_ms` khi biết thời điểm delta đầu. Mốc này bao phủ câu trả lời chỉ phát lúc cuối và đo toàn bộ khoảng xuất assistant text kể cả khi câu đầu đã streaming. `final_dispatch` ghi `end_to_buffer_ready_ms`, `buffer_ready_to_dispatch_ms`; `streamed_len` cho biết có phải phần còn lại hay không. “Buffer ready” là lúc lấy text cuối từ assistant buffer; khoảng sau đó bao gồm làm sạch text, gọi hardware và kiểm tra routing. Chỉ ghi dispatch khi thực sự đi vào đường gửi TTS, không ghi cho câu bị suppress hoặc rỗng. Nếu không có thời điểm delta đầu thì bỏ trường đo, không thay bằng số 0.
+
+
+### Nhãn kết quả chung Harness
+
+Flow card gắn nhãn `Harness` cho kết quả và `Shared result` cho tham chiếu từ các
+input còn lại; tooltip tham chiếu có run ID nhận kết quả đầy đủ. `harness_response`
+là giao kết quả, không phải bằng chứng đã phát TTS. Nội dung tham chiếu vẫn đóng
+đúng turn pending và khôi phục qua JSONL/SSE; chỉ input mới nhất trong nhóm hiển
+thị toàn bộ câu trả lời. Kết quả chung được gửi TTS một lần theo input mới nhất,
+tuân thủ điều kiện voice và cancellation. Các nhãn không khẳng định đã nghe âm thanh.

@@ -90,7 +90,7 @@ func (s *ClaudeCodeService) sendChat(message string, imagesBase64 []string, fixe
 	// Build the outbound frame. Image attachments are best-effort: the text
 	// content is always sent so the turn proceeds even if Claude Code ignores the
 	// attachment shape.
-	payload := map[string]any{"content": wsMessage}
+	payload := map[string]any{"content": wsMessage, "source": sourceType}
 	// One attachment entry per image: the frame already carries a LIST, so a
 	// chat client that attached several photos sends them in a single turn.
 	hasImage := len(imagesBase64) > 0

@@ -24,12 +24,47 @@ func (hermesAdapter) read(opts Options) (*PersonaBundle, error) {
 	soul := string(rawSoul)
 
 	return &PersonaBundle{
-		Soul:     stripIdentityCard(soul), // persona body; card → Identity
+		Soul:     stripIdentityCard(stripHermesOSBlock(soul)), // persona body; card → Identity
 		Identity: identityCardFields(soul),
 		Memory:   parseEntries(filepath.Join(mem, "MEMORY.md")),
 		User:     parseEntries(filepath.Join(mem, "USER.md")),
 		// Knowledge / Daily: Hermes has no such slots → nil.
 	}, nil
+}
+
+// hermesOSBlockMarker delimits the OS-managed skill-priority block Hermes keeps
+// at the end of SOUL.md (soulSkillPriorityMarker in runtimes/hermes/onboarding.go —
+// kept as a literal here because this package deliberately imports no runtime).
+//
+// It carries Hermes-specific instructions, not persona, and every destination
+// runtime injects its own equivalent — so it must not ride along in the bundle.
+// It wears a Hermes-only marker, which means the destination's own strip (keyed
+// on `<!-- OS DO NOT REMOVE -->`) will not clear it for us.
+const hermesOSBlockMarker = "<!-- OS HERMES SKILL PRIORITY -->"
+
+// stripHermesOSBlock removes that block, from its marker line to the next `---`.
+func stripHermesOSBlock(soul string) string {
+	if !strings.Contains(soul, hermesOSBlockMarker) {
+		return soul
+	}
+	lines := strings.Split(soul, "\n")
+	var cleaned []string
+	skip := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		if trimmed == hermesOSBlockMarker {
+			skip = true
+			continue
+		}
+		if skip {
+			if trimmed == "---" {
+				skip = false
+			}
+			continue
+		}
+		cleaned = append(cleaned, line)
+	}
+	return strings.TrimRight(strings.Join(cleaned, "\n"), " \t\r\n") + "\n"
 }
 
 func (hermesAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) error {

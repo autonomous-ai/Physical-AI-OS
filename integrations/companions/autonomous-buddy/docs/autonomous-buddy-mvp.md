@@ -137,7 +137,7 @@ Each phase is independently shippable and reviewable.
 
 ### Phase 1E — Command executors (buddy side)
 
-**Status:** ✓ Done — 16 executors (the MVP set above plus `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` via Accessibility, `cursor_pos`, `list_displays`). The vision-shaped executors land here ahead of the formal vision phase so the bash+curl reference skill (`computer-use/reference/vision.md`) can use them today.
+**Status:** ✓ Done — 16 executors (the MVP set above plus `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` via Accessibility, `cursor_pos`, `list_displays`). The vision-shaped executors land here ahead of the formal vision phase so the bash+curl reference skill (`computer-use/references/vision.md`) can use them today.
 
 **Files:**
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Commands/Command.swift` (types)
@@ -176,7 +176,7 @@ Each phase is independently shippable and reviewable.
 
 ### Phase 1G — OpenClaw skill
 
-**Status:** ✓ Done — English-only `SKILL.md` following the led-control / scene style, intent-based fire-and-forget HW markers (`[HW:/buddy/exec/<action>:{...}]`). Plus an opt-in `reference/vision.md` for tasks that genuinely require seeing the screen (bash + curl loop against `/api/buddy/command`). The vision reference was tuned with Anthropic Computer Use prompting guidance (anchor screenshots at ~1280px wide, evaluate after every step, prefer keyboard shortcuts when coord clicks are risky).
+**Status:** ✓ Done — English-only `SKILL.md` following the led-control / scene style, intent-based fire-and-forget HW markers (`[HW:/buddy/exec/<action>:{...}]`). Plus an opt-in `references/vision.md` for tasks that genuinely require seeing the screen (bash + curl loop against `/api/buddy/command`). The vision reference was tuned with Anthropic Computer Use prompting guidance (anchor screenshots at ~1280px wide, evaluate after every step, prefer keyboard shortcuts when coord clicks are risky).
 
 **Files (location depends on OpenClaw skill conventions):**
 - `computer-use/SKILL.md`

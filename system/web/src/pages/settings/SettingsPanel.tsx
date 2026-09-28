@@ -109,7 +109,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [ttsProvider, setTtsProvider] = useState("elevenlabs");
   const [ttsProviders, setTtsProviders] = useState<string[]>([]);
   const [ttsVoice, setTtsVoice] = useState("Rachel");
-  const [ttsSpeed, setTtsSpeed] = useState(1.3);
+  const [ttsSpeed, setTtsSpeed] = useState(1.2);
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
   const [wakeWord, setWakeWord] = useState(false);
@@ -120,6 +120,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [realtimeReasoning, setRealtimeReasoning] = useState("MINIMAL");
   const [realtimeApiKey, setRealtimeApiKey] = useState("");
   const [realtimeBaseUrl, setRealtimeBaseUrl] = useState("");
+  // pipecat_v1 only: the in-session `web_search` tool. Default on (HAL's).
+  const [realtimeWebSearch, setRealtimeWebSearch] = useState(true);
   const [channel, setChannel] = useState<ChannelType>("telegram");
   const [teleToken, setTeleToken] = useState("");
   const [teleUserId, setTeleUserId] = useState("");
@@ -186,6 +188,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeVoice: string;
     realtimeReasoning: string;
     realtimeBaseUrl: string;
+    realtimeWebSearch: boolean;
   };
   // Held as state, not a ref: the Save button's disabled/enabled rendering is
   // derived from it, and React 19 requires render-relevant values to be state.
@@ -237,7 +240,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setTtsBaseUrl((cfg.tts_base_url ?? "") || llmUrlInit);
         setTtsProvider(cfg.tts_provider || "elevenlabs");
         setTtsVoice(cfg.tts_voice || "Rachel");
-        setTtsSpeed(cfg.tts_speed ?? 1.3);
+        setTtsSpeed(cfg.tts_speed ?? 1.2);
         setWakeWord(cfg.wakeword ?? false);
         setAgentName(cfg.agent_name ?? "");
         setWakePhrases(cfg.wake_phrases ?? []);
@@ -247,6 +250,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           if (cfg.realtime.voice) setRealtimeVoice(cfg.realtime.voice);
           if (cfg.realtime.reasoning) setRealtimeReasoning(cfg.realtime.reasoning);
           setRealtimeBaseUrl(cfg.realtime.base_url ?? "");
+          setRealtimeWebSearch(cfg.realtime.web_search ?? true);
           setRealtimeLoaded({ apiKey: !!cfg.realtime.has_api_key });
         }
         setChannel((cfg.channel as ChannelType) || "telegram");
@@ -320,7 +324,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           ttsBaseUrl: (cfg.tts_base_url ?? "") || llmUrlInit,
           ttsProvider: cfg.tts_provider || "elevenlabs",
           ttsVoice: cfg.tts_voice || "Rachel",
-          ttsSpeed: cfg.tts_speed ?? 1.3,
+          ttsSpeed: cfg.tts_speed ?? 1.2,
           wakeWord: cfg.wakeword ?? false,
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",
@@ -341,6 +345,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           realtimeVoice: cfg.realtime?.voice || "Kore",
           realtimeReasoning: cfg.realtime?.reasoning || "MINIMAL",
           realtimeBaseUrl: cfg.realtime?.base_url ?? "",
+          realtimeWebSearch: cfg.realtime?.web_search ?? true,
         });
       })
       .catch((err: Error) => setError(err.message))
@@ -440,6 +445,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeVoice !== baseline.realtimeVoice ||
     realtimeReasoning !== baseline.realtimeReasoning ||
     realtimeBaseUrl !== baseline.realtimeBaseUrl ||
+    realtimeWebSearch !== baseline.realtimeWebSearch ||
     !!password || !!adminPassword || !!llmApiKey || !!ttsApiKey ||
     !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
     !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken ||
@@ -493,6 +499,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       // Realtime block — server applies + restarts hal. api_key only when typed.
       const realtime: Record<string, unknown> = { enabled: realtimeEnabled, provider: realtimeProvider };
       if (realtimeProvider !== "none") { realtime.voice = realtimeVoice; realtime.reasoning = realtimeReasoning; }
+      // The server rejects web_search for any other provider, so send it only
+      // where the knob exists.
+      if (realtimeProvider === "pipecat_v1") realtime.web_search = realtimeWebSearch;
       if (realtimeBaseUrl) realtime.base_url = realtimeBaseUrl;
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
       body.realtime = realtime;
@@ -541,7 +550,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         baseUrl: !!ttsBaseUrl,
         choice: ttsChoiceToSave,
       });
-      toast.success("Config saved — restart your device for changes to take effect.");
+      toast.success("Config saved — restart your robot for changes to take effect.");
       // Reset baseline so Save button goes back to disabled until next edit.
       // Non-secret fields adopt their current values as the new baseline.
       setBaseline({
@@ -556,7 +565,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         mqttEndpoint, mqttPort, mqttUsername,
         faChannel, fdChannel,
         realtimeEnabled, realtimeProvider, realtimeVoice,
-        realtimeReasoning, realtimeBaseUrl,
+        realtimeReasoning, realtimeBaseUrl, realtimeWebSearch,
       });
       // Clear typed secrets so their non-empty state no longer marks the form
       // dirty. Their persisted values live server-side; has_* flags surface
@@ -579,6 +588,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
     realtimeEnabled, wakeWord, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
+    realtimeWebSearch,
   ]);
 
   // Save is hidden for sections that aren't part of the form's PUT flow: Face/My
@@ -717,6 +727,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               reasoning={realtimeReasoning} setReasoning={setRealtimeReasoning}
               apiKey={realtimeApiKey} setApiKey={setRealtimeApiKey}
               baseUrl={realtimeBaseUrl} setBaseUrl={setRealtimeBaseUrl}
+              webSearch={realtimeWebSearch} setWebSearch={setRealtimeWebSearch}
             />
             {activeSection === "realtime" && hasDefaults && (
               <RestoreDefaultsButton section="realtime" />

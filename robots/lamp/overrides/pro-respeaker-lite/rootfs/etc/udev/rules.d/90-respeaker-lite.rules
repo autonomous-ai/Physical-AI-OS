@@ -1,0 +1,3 @@
+# Seeed ReSpeaker Lite (XMOS XU316) USB audio: when its ALSA card shows up,
+# start the oneshot that creates the softvol "Speaker" control (see /etc/asound.conf).
+SUBSYSTEM=="sound", ACTION=="add", KERNEL=="controlC*", ATTRS{idVendor}=="2886", ATTRS{idProduct}=="0019", TAG+="systemd", ENV{SYSTEMD_WANTS}+="respeaker-lite-softvol.service"

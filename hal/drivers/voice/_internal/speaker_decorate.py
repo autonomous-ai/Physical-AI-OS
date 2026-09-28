@@ -525,6 +525,12 @@ class SpeakerDecorator:
         if not audio_buffer:
             return None
         duration_s = sum(len(b) for b in audio_buffer) / (STT_RATE * 2)
+        # SPEAKER_MIN_AUDIO_S (0.8s) is INERT on the SER path: SpeechEmotionService
+        # .submit() applies its own SPEECH_EMOTION_MIN_AUDIO_S (3.0s) floor, and
+        # only the larger of the two can bind. Raising or lowering the speaker knob
+        # looks like it should change what SER sees, and does not — tune
+        # HAL_SPEECH_EMOTION_MIN_AUDIO_S for that. Kept rather than deleted because
+        # this helper's floor is correct for the speaker path it is named after.
         if duration_s < SPEAKER_MIN_AUDIO_S:
             return None
         try:

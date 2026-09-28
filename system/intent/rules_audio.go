@@ -3,25 +3,58 @@ package intent
 
 import (
 	"fmt"
+	"log/slog"
+	"sync"
 
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/lib/hal"
 )
 
-// volumeStep returns the volume (%) a "louder"/"quieter" command should set,
-// as a fraction of the device's real usable range.
-//
-// The range is the SAFETY.md `audio.max_volume` ceiling when one is declared,
-// else the full scale. Without this, the steps are fractions of 100 on a device
-// whose ceiling is far below it — on Lamp (ceiling 40) a fixed "quieter" of 30
-// lands within a few percent of "louder", so the two commands stop being
-// distinguishable. HAL clamps regardless; this only keeps the steps meaningful.
-func volumeStep(fraction float64) int {
-	top := 100
-	if ceiling, ok := hal.MaxVolume(); ok {
-		top = ceiling
+// Serialize intent read-modify-write pairs so simultaneous requests do not lose a step.
+var volumeAdjustmentMu sync.Mutex
+
+func adjustVolume(increase bool) *Result {
+	if !volumeAdjustmentMu.TryLock() {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't change that setting because another adjustment is in progress. Please try again."}
 	}
-	return int(float64(top) * fraction)
+	defer volumeAdjustmentMu.Unlock()
+	result := &Result{Actions: []string{"GET /audio/volume"}}
+	current, ceiling, err := hal.GetVolume()
+	if err != nil {
+		slog.Warn("intent volume read failed", "error", err)
+		result.ExecutionFailed = true
+		result.TTSText = "I couldn't read the speaker volume. Please try again."
+		return result
+	}
+	next := current / 2
+	result.TTSText = "Volume down!"
+	if increase {
+		step := max(1, ceiling/10)
+		next = min(ceiling, current+step)
+		result.TTSText = "Volume up!"
+		if current >= ceiling {
+			result.TTSText = "The speaker is already at its allowed maximum volume."
+			return result
+		}
+	} else if current == 0 {
+		result.TTSText = "The speaker volume is already zero."
+		return result
+	}
+	body := fmt.Sprintf(`{"volume":%d}`, next)
+	result.Actions = append(result.Actions, "POST /audio/volume "+body)
+	if err := post("/audio/volume", body); err != nil {
+		result.ExecutionFailed = true
+		result.TTSText = "I couldn't change the speaker volume. Please try again."
+		return result
+	}
+	result.Actions = append(result.Actions, "GET /audio/volume")
+	applied, _, err := hal.GetVolume()
+	if err != nil || applied != next {
+		slog.Warn("intent volume verification failed", "expected", next, "actual", applied, "error", err)
+		result.ExecutionFailed = true
+		result.TTSText = "I couldn't confirm the speaker volume changed. Please try again."
+	}
+	return result
 }
 
 var audioRules = []rule{
@@ -30,23 +63,13 @@ var audioRules = []rule{
 		name:       "volume_up",
 		capability: device.CapAudio,
 		match:      anyOf("volume up", "louder"),
-		exec: func(string) *Result {
-			vol := volumeStep(1.0) // as loud as this device is allowed to go
-			body := fmt.Sprintf(`{"volume":%d}`, vol)
-			executionFailed := post("/audio/volume", body) != nil
-			return &Result{ExecutionFailed: executionFailed, TTSText: "Volume up!", Actions: []string{"POST /audio/volume " + body}}
-		},
+		exec:       func(string) *Result { return adjustVolume(true) },
 	},
 	{
 		name:       "volume_down",
 		capability: device.CapAudio,
 		match:      anyOf("volume down", "quieter"),
-		exec: func(string) *Result {
-			vol := volumeStep(0.3) // same 30% of the usable range as before
-			body := fmt.Sprintf(`{"volume":%d}`, vol)
-			executionFailed := post("/audio/volume", body) != nil
-			return &Result{ExecutionFailed: executionFailed, TTSText: "Volume down!", Actions: []string{"POST /audio/volume " + body}}
-		},
+		exec:       func(string) *Result { return adjustVolume(false) },
 	},
 	// unmute before mute: belt-and-braces ordering on top of the
 	// word-boundary match (containsPhrase) that already keeps "unmute

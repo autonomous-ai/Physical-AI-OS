@@ -176,7 +176,7 @@ export function FaceOwnersSection() {
                 <div style={{ fontSize: 12, color: "var(--lm-text-dim)", marginTop: 2 }}>
                   {error
                     ? <span style={{ color: "var(--lm-red)" }}>User recognizer unavailable</span>
-                    : "Enrolled people, unknown voices & faces seen by the device"}
+                    : "Enrolled people, unknown voices & faces seen by the robot"}
                 </div>
               </div>
             </div>

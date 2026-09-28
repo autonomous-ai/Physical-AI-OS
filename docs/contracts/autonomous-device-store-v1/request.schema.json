@@ -1,0 +1,172 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "oneOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "store.list"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "query": {
+          "type": "string",
+          "maxLength": 200
+        },
+        "offset": {
+          "default": 0,
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 25000
+        },
+        "limit": {
+          "default": 10,
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 10
+        }
+      },
+      "required": [
+        "type",
+        "requestId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "store.inspect"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "packageId": {
+          "type": "string",
+          "maxLength": 129,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}\\/[a-z0-9][a-z0-9-]{0,63}$"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "packageId"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.prepare"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "machineId": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "packageId": {
+          "type": "string",
+          "maxLength": 129,
+          "pattern": "^[a-z0-9][a-z0-9-]{0,63}\\/[a-z0-9][a-z0-9-]{0,63}$"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "workspace": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "new"
+                },
+                "name": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 100,
+                  "pattern": "^[a-zA-Z0-9][a-zA-Z0-9_-]*$"
+                }
+              },
+              "required": [
+                "kind"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "kind": {
+                  "type": "string",
+                  "const": "existing"
+                },
+                "path": {
+                  "type": "string",
+                  "minLength": 1,
+                  "maxLength": 4096,
+                  "allOf": [
+                    {
+                      "pattern": "^[^\\x00-\\x1f\\x7f]+$"
+                    },
+                    {
+                      "pattern": "^\\/"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "kind",
+                "path"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "machineId",
+        "packageId",
+        "idempotencyKey",
+        "workspace"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "operation.get"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "operationId": {
+          "type": "string",
+          "pattern": "^[a-f0-9]{64}$"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "operationId"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

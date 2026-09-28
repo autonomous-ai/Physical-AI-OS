@@ -1,4 +1,5 @@
 import logging
+from collections.abc import Sequence
 from pathlib import Path
 
 import numpy as np
@@ -13,14 +14,15 @@ logger = logging.getLogger(__name__)
 def prepare_ort_session(
     model_path: Path,
     *,
-    warmup_inputs: dict[str, np.ndarray] | None = None,
+    warmup_inputs: dict[str, np.ndarray] | Sequence[dict[str, np.ndarray]] | None = None,
 ) -> ort.InferenceSession:
     """Create an ONNX Runtime session with TensorRT > CUDA > CPU fallback.
 
     Args:
         model_path: Path to the ONNX model file.
-        warmup_inputs: If provided, run a single forward pass after creation
-            to pre-allocate workspace buffers at peak size.
+        warmup_inputs: If provided, run forward passes after creation to
+            pre-allocate workspace buffers at peak size. One input dict, or
+            several (each run n_warmup times).
     """
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 0
@@ -80,10 +82,17 @@ def prepare_ort_session(
         )
 
         if warmup_inputs is not None:
+            shapes = [warmup_inputs] if isinstance(warmup_inputs, dict) else list(warmup_inputs)
             n_warmup = 3
-            logger.info("Warming up ONNX session for %s (%d runs)", model_path.name, n_warmup)
-            for _ in range(n_warmup):
-                session.run(None, warmup_inputs)
+            logger.info(
+                "Warming up ONNX session for %s (%d shape(s) x %d runs)",
+                model_path.name,
+                len(shapes),
+                n_warmup,
+            )
+            for inputs in shapes:
+                for _ in range(n_warmup):
+                    session.run(None, inputs)
             logger.info("Warmup complete for %s", model_path.name)
 
     return session

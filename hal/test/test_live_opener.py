@@ -241,12 +241,15 @@ def test_real_live_session_keeps_mic_streaming_during_opener_reply(monkeypatch, 
         def set_live_active(self, value):
             calls.append(("live", value))
 
+        def end_live_audio(self):
+            calls.append("audio_end")
+
         def append_audio(self, frame):
             calls.append(("audio", frame))
             if len([c for c in calls if isinstance(c, tuple) and c[0] == "audio"]) == 2:
                 ready.set()
 
-        def stream_output(self):
+        def stream_output(self, *, stop_event=None):
             assert ready.wait(2), "pre-roll never reached provider"
             yield UserSpeechOutput(turn_id="u1", transcript="Hello Lamp")
             yield TextOutput(text="Yes, I hear you.", user_turn_id="u1")

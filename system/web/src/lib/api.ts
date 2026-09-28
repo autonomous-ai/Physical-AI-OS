@@ -369,6 +369,7 @@ export interface DeviceConfig {
     reasoning?: string;
     base_url?: string;
     has_api_key?: boolean;
+    web_search?: boolean; // resolved; present only for pipecat_v1
   };
   device_id: string;
   mac: string;
@@ -491,6 +492,8 @@ export async function setTimezone(timezone: string): Promise<boolean> {
 }
 
 export interface TestTTSOptions {
+  /** Per-preview speed override; does not change the saved setting. */
+  speed?: number;
   text?: string;
   /** BCP-47 stt_language code; picks a friendly demo phrase in that language. */
   lang?: string;
@@ -529,6 +532,7 @@ export async function testTTSVoice(voice: string, opts: TestTTSOptions = {}): Pr
       provider: opts.provider || undefined,
       base_url: opts.baseUrl || undefined,
       api_key: opts.apiKey || undefined,
+      speed: opts.speed,
     }),
   });
 }
@@ -716,6 +720,13 @@ export function resolveCadenceTimes(c: ScheduleCadence | undefined): string[] {
   return c.time ? [c.time] : [];
 }
 
+/** A run's outcome, exactly as the device's runner reports it
+ *  (system/schedule/runner.go RunReport.Status). "skipped" means the device
+ *  deliberately did not run a template task because a connector it requires is
+ *  not installed — not a failure; render it via describeLastRun
+ *  (pages/settings/scheduleRunStatus.ts), never in the failure style. */
+export type ScheduleRunStatus = "success" | "failure" | "skipped";
+
 export interface ScheduleItem {
   id: string;
   name: string;
@@ -727,7 +738,10 @@ export interface ScheduleItem {
   end_at?: string;
   next_run_at?: string; // absent = not currently due (paused, manual, or a spent "once")
   last_run_at?: string; // absent = never run — render as "Never", not a date
-  last_run_status?: "success" | "failure";
+  last_run_status?: ScheduleRunStatus;
+  /** The last run's summary: the task name on success, the error on failure,
+   *  "missing connector: <codes>" when skipped. Absent = never run. */
+  last_run_summary?: string;
 
   /** Backend revision of this row. Quoted back as base_rev when editing, which
    *  is how the backend compare-and-swaps a device edit against a concurrent
@@ -780,7 +794,7 @@ export interface ScheduleRunResult {
   id: string;
   run_id: string;
   started_at: string;
-  status: "success" | "failure";
+  status: ScheduleRunStatus;
   summary: string;
 }
 

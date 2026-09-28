@@ -3,6 +3,7 @@ package http
 import (
 	"log/slog"
 	"strings"
+	"time"
 )
 
 // accumulateAssistantDelta appends a delta to the buffer for the given runId.
@@ -18,7 +19,7 @@ func (h *AgentHandler) accumulateAssistantDelta(runID, delta string) {
 		h.assistantBuf[runID] = buf
 	}
 	buf.WriteString(delta)
-	slog.Info("assistant delta buffered (TTS waits for lifecycle:end)",
+	slog.Info("assistant delta buffered (first-sentence streaming checked separately; remainder at lifecycle:end)",
 		"component", "agent",
 		"run_id", runID,
 		"delta", delta,
@@ -365,6 +366,9 @@ func (h *AgentHandler) recordAssistantDelta(runID, delta string) (isFirst bool) 
 		h.streamStats[runID] = s
 	}
 	isFirst = !s.assistantFirstSeen
+	if isFirst {
+		s.assistantFirstAt = time.Now()
+	}
 	s.assistantFirstSeen = true
 	s.assistantChunks++
 	s.assistantChars += len(delta)
@@ -449,4 +453,22 @@ func (h *AgentHandler) mapRunID(openclawID, deviceID string) {
 			break
 		}
 	}
+}
+
+// assistantFirstDeltaAt observes timing without consuming streaming state.
+func (h *AgentHandler) assistantFirstDeltaAt(runID string) time.Time {
+	h.streamStatsMu.Lock()
+	defer h.streamStatsMu.Unlock()
+	if s := h.streamStats[runID]; s != nil {
+		return s.assistantFirstAt
+	}
+	return time.Time{}
+}
+
+// assistantElapsedMs omits unknown timing rather than inventing a first token.
+func (s *runStreamStats) assistantElapsedMs(at time.Time) (int64, bool) {
+	if s == nil || s.assistantFirstAt.IsZero() || at.Before(s.assistantFirstAt) {
+		return 0, false
+	}
+	return at.Sub(s.assistantFirstAt).Milliseconds(), true
 }

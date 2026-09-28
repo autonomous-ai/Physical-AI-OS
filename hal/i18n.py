@@ -9,6 +9,7 @@ Pools live here:
 - Head-pat persona responses
 - Backchannel fillers (active-listening cues during STT)
 - Music pre-play backchannel pools (plain + ElevenLabs audio-tag variants)
+- Known provider error apologies to suppress (matching only, never spoken)
 
 Add new languages by adding a key to every dict — missing keys fall back
 to DEFAULT_LANG at lookup time, so a partial translation is safe.

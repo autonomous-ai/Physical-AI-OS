@@ -68,3 +68,20 @@ def test_word_cap_never_splits_inside_a_tag(monkeypatch):
     monkeypatch.setattr(hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 20)
     text = "[speaking softly and very warmly] Hello there"
     assert split_first_chunk(text) == ("", text)
+
+
+@pytest.mark.parametrize('text,head,tail', [
+    ('I am here. Let me', 'I am here.', ' Let me'),
+    ('First! Second? Third', 'First! Second?', ' Third'),
+    ('[warmly] I am here. Let me', '[warmly] I am here.', ' Let me'),
+    ('Xin chào。 Tôi đang', 'Xin chào。', ' Tôi đang'),
+    ('Ask Dr. Smith', '', 'Ask Dr. Smith'),
+    ('The amount is 3. 14 dollars', '', 'The amount is 3. 14 dollars'),
+    ('I am here. [warm', '', 'I am here. [warm'),
+    ('[tag. inside] Not finished', '', '[tag. inside] Not finished'),
+    ('Check example.com now', '', 'Check example.com now'),
+])
+def test_completed_prefix_preserves_pending_text(text, head, tail):
+    from hal.drivers.voice._internal.realtime_turn import split_completed_prefix
+    assert split_completed_prefix(text) == (head, tail)
+    assert head + tail == text

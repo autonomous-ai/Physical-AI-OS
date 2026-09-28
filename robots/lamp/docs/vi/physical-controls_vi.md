@@ -8,7 +8,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 |---|---|---|
 | **Nút GPIO** | Nút cơ chính cho click và giữ, thêm nút reset riêng trên OrangePi. Action giữ destructive chỉ thực hiện khi nhả. | Pi 4/5 và OrangePi sun60 |
 | **Touchpad cảm ứng TTP223** | Hai pad chạm xếp như "đầu cún" để vuốt ve + stop/unmute nhẹ. Không có destructive gesture vì FastMode của IC không cho detect giữ lâu tin cậy. | Chỉ OrangePi sun60 (4 Pro / A733) |
-| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm reboot và shutdown. Không bao giờ factory-reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
+| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm shutdown. Reboot bằng chạm 3 lần đã bị vô hiệu hóa. Không bao giờ factory-reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
 
 ## Wiring
 
@@ -122,6 +122,11 @@ Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 37 
 Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. MPR121 dừng ở shutdown: không có mức factory-reset, nên giữ 10 s+ trên touch vẫn chỉ shutdown (`hold_release_action(..., factory_reset=False)`). Chỉ nút GPIO mới factory-reset.
 
 ## Cắt Lamp giữa câu (barge-in)
+
+Ở chế độ hands-free LIVE OFF, cue listening đến trễ bị bỏ nếu capture mic đã
+bắt đầu. Retry cũng hết hiệu lực khi capture bắt đầu trong lúc chờ, kể cả nếu
+capture đã kết thúc trước lần thử tiếp theo. Nhờ vậy cue không cắt câu user;
+cú click vẫn dừng speech và cấp wake focus như trước.
 
 Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của Lamp: trước hết nó dừng mọi session object tracking đang chạy; sau đó chạm đỉnh Lamp (touchpad) hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để cue và câu trả lời nghe lại được. Dừng tracking vẫn hoạt động khi hardware mic kill switch đang tắt; nó không wake hoặc unmute mic. Cue "Nghe đây" (theo ngôn ngữ) chỉ phát khi switch cho phép action voice.
 
@@ -268,8 +273,8 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -278,12 +283,32 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
+`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
+`mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
 debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắp và nhiễu
 motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
+
+Driver đặt bộ lọc baseline chiều xuống (`0x2F`–`0x32`) thành
+`MHDF=1, NHDF=1, NCLF=255, FDLF=2`, theo
+[giá trị quick-start NXP AN3944](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
+Thiết lập này làm chậm baseline khi giảm để tránh bám nhanh theo ngón tay
+đang tiếp cận. Bộ lọc baseline chiều lên và khi đang chạm giữ nguyên.
+`CONFIG2` (`0x5D`) là `0x30`: thời gian nạp 0,5 µs, bộ lọc cấp hai 10 mẫu
+(`SFI=2`) và chu kỳ lấy mẫu 1 ms, nên dữ liệu electrode cập nhật mỗi ~10 ms,
+khớp với chu kỳ poll 10 ms. Bộ lọc 10 mẫu giảm nửa nhiễu nền so với mặc định
+4 mẫu (đo trên `lamp-52e6`: 2 → 1 count). Debounce trên chip (`0x5B`) giữ 0:
+debounce contact (30 ms) và footprint vuốt (5 ms) làm ở phần mềm, còn debounce
+trên chip sẽ làm mọi footprint trễ hai mẫu. HAL đặt các register này, không
+cấu hình qua `mpr121.json`; chỉ đổi ngưỡng chạm không làm thay đổi bộ lọc.
+Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
+các pad đã lắp; `robots/lamp/hardware/touch-cap/mpr121_opi_test.py` nạp chip
+giống HAL khi chạy với `--debounce 0 --sfi 2 --esi 0` (`calibrate` đo nhiễu
+nền và đề xuất ngưỡng, `test --verbose` in thời gian giữ từng lần chạm,
+`trace` in filtered/baseline từng mẫu). Dừng HAL trước; HAL giữ bus.
 
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
@@ -303,7 +328,7 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 |---|---|
 | Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
 | 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
-| Đúng 3 tap ngắn, rồi yên 0.4 s | `triple_click_action` reboot thay vì phát cue nghe. |
+| Đúng 3 tap ngắn, rồi yên 0.4 s | Reboot bị vô hiệu hóa tại wrapper MPR121; không có action bổ sung hoặc cue nghe. Action single-click ở tap đầu vẫn chạy. |
 | Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
 | Giữ ≥5 s rồi nhả | `hold_release_action` shutdown. MPR121 không bao giờ factory reset. |
 | Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
@@ -400,7 +425,7 @@ Sau khi session kết thúc:
 
 **Mặc định bật** từ 2026-08-27, sau khi kiểm chứng trực tiếp trên orange-lamp với tap, double tap nhanh và chậm, pet và swipe. Đặt `HAL_TOUCH_SWIPE=false` sẽ khôi phục hành vi hai-cử-chỉ trong một bước và không cần deploy lại — đó là đường lùi nếu một máy ngoài thực địa hành xử sai.
 
-Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên TTP223 không kích hoạt reboot / shutdown / factory-reset; reboot / shutdown có trên nút cơ và MPR121; factory-reset chỉ có trên nút GPIO.
+Bật nó lên nghĩa là một cú double tap sẽ toggle **microphone** và một cú swipe sẽ đưa thiết bị vào **giấc ngủ**. Cả hai đều đảo ngược được (double tap lần nữa; một cú tap là thức dậy), và không có hành động phá hủy nào với tới được từ đây — FastMode không đo được thao tác giữ, nên TTP223 không kích hoạt reboot / shutdown / factory-reset; reboot có trên nút cơ; shutdown có trên nút cơ và MPR121; factory-reset chỉ có trên nút GPIO.
 
 **Tín hiệu nằm ở *thời điểm* các pad bắn, không phải pad nào.** Đo trên orange-lamp ngày 2026-08-27 — khoảng cách giữa các pad bên trong một lần tiếp xúc:
 

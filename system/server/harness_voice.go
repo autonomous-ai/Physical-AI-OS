@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/safego"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/server/serializers"
@@ -24,7 +25,10 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	s.harnessVoiceCtx = ctx
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
-			OnDispatch: func(agentID, runID string) { s.registerHarnessReply(agentID, runID, false, false) },
+			SupportsMode: hal.SupportsHarnessVoiceMode,
+			OnDispatchRequest: func(agentID, runID string, frame harness.Frame) {
+				s.registerHarnessDispatch(agentID, runID, false, false, frame)
+			},
 			OnResponse: s.deliverHarnessVoiceQuestion,
 		})
 		s.harnessVoice.Start(ctx)
@@ -37,7 +41,7 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	group.POST("voice-mode/focus", localOnlyMiddleware(), s.handleHarnessVoiceFocusGesture)
 	group.GET("voice-mode", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.State()))
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.SupportState(c.Request.Context())))
 	})
 	group.PUT("voice-mode", adminAuthMiddleware(s.config), func(c *gin.Context) {
 		var req struct {
@@ -202,7 +206,11 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		agentID = "harness-voice"
 	}
 	if !s.hasHarnessReply(agentID, runID) {
-		s.registerHarnessReply(agentID, runID, false, false)
+		// A preflight failure is a local notice, not another remote task.
+		s.registerHarnessRoute(agentID, runID, false, false, "", true)
+	}
+	if s.agentHandler != nil {
+		s.agentHandler.MarkHarnessLocalResponseRun(runID, false)
 	}
 	s.deliverHarnessFinal(agentID, runID, text)
 }

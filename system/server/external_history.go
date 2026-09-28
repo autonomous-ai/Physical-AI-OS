@@ -79,10 +79,36 @@ func (s *Server) restoreHarnessHistoryReplies() {
 	if s.externalHistory == nil || s.harnessService == nil {
 		return
 	}
+	reserved := map[string]harness.ResultInput{}
+	answers := map[string]bool{}
+	if s.harnessResults != nil {
+		for _, in := range s.harnessResults.Inputs() {
+			reserved[in.RunID] = in
+		}
+	}
+	if s.harnessResults != nil {
+		for _, answer := range s.harnessResults.Answers() {
+			reserved[answer.Input.RunID] = answer.Input
+			answers[answer.Input.RunID] = true
+		}
+	}
 	status := s.harnessService.Status()
 	for _, r := range s.externalHistory.Records() {
 		if r.Source == "harness" && r.State == externalhistory.StateWaiting &&
 			r.AgentID != "" && status.Paired && r.MachineID == status.MachineID {
+			if in, exists := reserved[r.OriginRunID]; exists {
+				if in.Owner == s.harnessService.ResultOwner() {
+					s.restoreHarnessResultRoute(in)
+					if answers[in.RunID] {
+						s.harnessRepliesMu.Lock()
+						route := s.harnessReplies[in.RunID]
+						route.answer = true
+						s.harnessReplies[in.RunID] = route
+						s.harnessRepliesMu.Unlock()
+					}
+				}
+				continue
+			}
 			s.registerHarnessReply(r.AgentID, r.OriginRunID, false, false)
 		}
 	}

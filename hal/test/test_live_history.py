@@ -113,3 +113,37 @@ def test_history_reset_and_discard_keep_concurrent_turns_separate():
     assert "Old" not in sender.calls[0][0]
     assert "Draft" not in sender.calls[0][0]
     assert sender.calls[0][1]["interaction_id"] == "new-iid"
+
+
+@pytest.mark.parametrize("chunks", [["{pause}"], ["{", "pa", "use", "}"], ["{ PAUSE }"]])
+@pytest.mark.parametrize("answer", ["", "Mình nghe rõ."])
+def test_pause_marker_does_not_become_tts_or_main_context(monkeypatch, kpi, chunks, answer):
+    from hal.drivers.voice.voice_service import VoiceService
+
+    sender = Sender()
+    outputs = [UserSpeechOutput(turn_id="pause-turn", transcript="với")]
+    outputs.extend(TextOutput(text=text, user_turn_id="pause-turn") for text in chunks)
+    if answer:
+        outputs.append(TextOutput(text=answer, user_turn_id="pause-turn"))
+    spoken = _pump(monkeypatch, kpi, [(outputs, "pause-turn", True)], sender=sender,
+                   strip_markers=VoiceService.strip_rt_markers)
+    assert [text for text, _ in spoken] == ([answer] if answer else [])
+    if answer:
+        assert sender.sent.wait(2)
+        assert len(sender.calls) == 1
+        assert sender.calls[0][0].endswith("[REPLY] " + answer)
+    else:
+        assert sender.calls == []
+
+
+def test_pause_marker_split_across_receive_timeout_stays_silent(monkeypatch, kpi):
+    from hal.drivers.voice.voice_service import VoiceService
+
+    sender = Sender()
+    spoken = _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id="u", transcript="với"),
+        TextOutput(text="{pau", user_turn_id="u"),
+    ], "", False), ([TextOutput(text="se}", user_turn_id="u")], "u", True)],
+        sender=sender, strip_markers=VoiceService.strip_rt_markers)
+    assert spoken == []
+    assert sender.calls == []

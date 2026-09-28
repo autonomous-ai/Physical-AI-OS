@@ -134,3 +134,39 @@ def test_failed_resume_reports_unavailable(monkeypatch):
     o.prepare_turn()
     assert o.available is False
     assert o._idle_parked is True, "stay parked so the next turn retries the resume"
+
+
+def test_prewarm_resumes_in_background_and_prepare_turn_joins(monkeypatch):
+    """Speech start resumes a parked session off-thread; prepare_turn() after the
+    STT final must join that resume, not fall back or connect a second time."""
+    o = _orch(monkeypatch, idle_s=90)
+    o._maybe_park_idle_session()
+    o._skip_post_idle_recycle = False
+    reasons = []
+
+    def slow_rebuild(reason, discard_old_on_failure=False, cancel_event=None):
+        try:
+            reasons.append(reason)
+            time.sleep(0.2)
+            o._agent = _Agent()
+            o._idle_parked = False
+            return True
+        finally:
+            o._finish_rebuild()
+
+    o._rebuild_locked = slow_rebuild
+    o._rebuild_now = lambda reason, **kw: (reasons.append(reason), True)[1]
+    assert o.prewarm() is True
+    assert o.rebuilding is True
+    assert o.prewarm() is False, "second prewarm must not start another rebuild"
+    o.prepare_turn()
+    assert reasons == ["idle-park-prewarm"], "prepare_turn must join, not reconnect"
+    assert o._idle_parked is False
+    assert o._skip_post_idle_recycle is True
+    assert o.available is True
+
+
+def test_prewarm_noop_when_not_parked(monkeypatch):
+    o = _orch(monkeypatch, idle_s=10)
+    assert o.prewarm() is False
+    assert o.rebuilding is False

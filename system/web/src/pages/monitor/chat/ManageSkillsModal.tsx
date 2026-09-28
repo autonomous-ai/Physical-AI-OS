@@ -312,7 +312,7 @@ const skillGridCols: CSSProperties = {
 function StoreAvailability({ availability }: { availability?: InstalledSkill["store_availability"] }) {
   const labels = {
     in_store: { text: "In store", color: "var(--lm-green)" },
-    device_only: { text: "Device only", color: "var(--lm-text-muted)" },
+    device_only: { text: "Robot only", color: "var(--lm-text-muted)" },
     unknown: { text: "Unknown", color: "var(--lm-amber)" },
   } as const;
   const label = availability ? labels[availability] : labels.unknown;

@@ -1,0 +1,29 @@
+{
+  "type": "event",
+  "kind": "turn.summary",
+  "agentId": "agent-fixture",
+  "serverInstanceId": "transport-instance",
+  "eventId": 42,
+  "machineId": "machine-fixture",
+  "payload": {
+    "serverInstanceId": "originating-instance",
+    "resultId": "stable-result-id",
+    "correlation": {
+      "scope": "group",
+      "inputs": [
+        {
+          "deliveryId": "delivery-A",
+          "idempotencyKey": "key-A"
+        },
+        {
+          "deliveryId": "delivery-B",
+          "idempotencyKey": "key-B"
+        }
+      ]
+    },
+    "outcome": "completed",
+    "fullText": "Finished: two red planes and two blue planes.",
+    "kind": "summary",
+    "text": "Finished: two red planes and two blue planes."
+  }
+}

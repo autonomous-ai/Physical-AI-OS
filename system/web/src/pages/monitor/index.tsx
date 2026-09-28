@@ -32,7 +32,7 @@ import type { LucideIcon } from "lucide-react";
 import { S } from "./styles";
 import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
 import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
-import { OverviewSection } from "./OverviewSection";
+import { OverviewSection, type OverviewCache } from "./OverviewSection";
 import { PairingSection } from "./PairingSection";
 import { SystemSection } from "./SystemSection";
 import { FlowSection } from "./FlowSection";
@@ -449,6 +449,7 @@ export default function Monitor() {
     return `${areaPath(a)}${location.search}#${sectionToHash(id, a)}`;
   };
 
+  const [overviewCache] = useState<OverviewCache>(() => ({}));
   const [sys, setSys] = useState<SystemInfo | null>(null);
   const [net, setNet] = useState<NetworkInfo | null>(null);
   const [hw, setHw] = useState<HWHealth | null>(null);
@@ -533,7 +534,11 @@ export default function Monitor() {
   // chain off it; system/info, network, presence and scene run in parallel.
   usePolling(async (signal) => {
     const s = sectionRef.current;
-    const json = (r: Response) => r.json();
+    const json = async (r: Response) => {
+      const data = await r.json();
+      signal.throwIfAborted();
+      return data;
+    };
     const tasks: Promise<unknown>[] = [];
 
     if (s === "overview" || s === "system") {
@@ -583,7 +588,7 @@ export default function Monitor() {
     }
 
     await Promise.all(tasks);
-  }, 5_000, { timeoutMs: 8000 });
+  }, 5_000, { timeoutMs: 8000, refreshKey: section });
 
   // Flow SSE: only open when flow or chat section is active. useEventSource
   // auto-closes the stream on tab-hidden / unmount, freeing its connection
@@ -733,7 +738,7 @@ export default function Monitor() {
           <button
             onClick={() => setShowLogoutConfirm(true)}
             className="lm-logout-btn"
-            title="Log out of this device"
+            title="Log out of this robot"
           >
             <LogOut size={15} strokeWidth={1.9} />
             Logout
@@ -810,6 +815,7 @@ export default function Monitor() {
           <div key={section === "chat" ? "_keep" : section} className={section === "chat" ? undefined : "lm-fade-in"} style={{ display: "contents" }}>
           {section === "overview" && (
             <OverviewSection
+              cache={overviewCache}
               sys={sys}
               net={net}
               hw={hw}
@@ -900,7 +906,7 @@ export default function Monitor() {
               ramHistory={ramHistory}
             />
           )}
-          {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} />}
+          {section === "flow"      && <FlowSection events={events} onClearEvents={clearFlowEvents} isDebug={isDebug} />}
           {section === "camera"    && <CameraSection displayTs={displayTs} />}
           {section === "sensing"   && <SensingSection hasVision={caps?.has(Cap.Vision) ?? false} hasEnvironment={caps?.has(Cap.Environment) ?? false} />}
           {section === "servo"     && <ServoSection />}
@@ -947,7 +953,7 @@ export default function Monitor() {
       {showLogoutConfirm && (
         <ConfirmDialog
           title="Log out?"
-          message="You'll need to sign in again with the admin password to access this device."
+          message="You'll need to sign in again with the admin password to access this robot."
           confirmLabel="Logout"
           destructive
           onConfirm={() => { setShowLogoutConfirm(false); handleLogout(); }}

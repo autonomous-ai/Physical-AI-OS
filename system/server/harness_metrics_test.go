@@ -74,13 +74,13 @@ func (h *harnessMetricCapture) executions() []map[string]any {
 	return result
 }
 
-func TestHarnessExecutionUsesLifecycleNotDeliveryText(t *testing.T) {
+func TestHarnessExecutionRequiresResultNotBareLifecycle(t *testing.T) {
 	for _, tc := range []struct {
 		kind              string
 		payload           map[string]any
 		outcome, evidence string
 	}{
-		{"turn.done", nil, "completed", "harness_turn_done"},
+		{"turn.done", nil, "", ""},
 		{"turn.summary", map[string]any{"fullText": "result"}, "completed", "harness_turn_summary"},
 		{"turn.summary", map[string]any{}, "", ""},
 		{"turn.error", nil, "failed", "harness_turn_error"},
@@ -138,7 +138,7 @@ func TestHarnessMetricRejectsAmbiguousOrMismatchedRoute(t *testing.T) {
 				r.created = time.Now().Add(-16 * time.Minute)
 				s.harnessReplies["first"] = r
 			}
-			s.observeHarnessExecution("agent", "turn.done", harness.Frame{"runId": tc.eventRun})
+			s.observeHarnessExecution("agent", "turn.summary", harness.Frame{"runId": tc.eventRun, "payload": map[string]any{"fullText": "result"}})
 			if rows := capture.executions(); len(rows) != tc.want {
 				t.Fatalf("executions: %v", rows)
 			}
@@ -175,7 +175,7 @@ func (f *harnessAnswerMetricTransport) Request(ctx context.Context, frame harnes
 	case "status":
 		return harness.Frame{"openQuestion": map[string]any{"requestId": "q1", "questions": []any{map[string]any{"key": "choice", "q": "Choose"}}}}, nil
 	case "question.answer":
-		f.server.forwardHarnessEvent(harness.Frame{"agentId": "mike", "runId": f.runID, "kind": "turn.done"})
+		f.server.forwardHarnessEvent(harness.Frame{"agentId": "mike", "runId": f.runID, "kind": "turn.summary", "payload": map[string]any{"fullText": "answer result"}})
 		return harness.Frame{"receipt": map[string]any{"state": "queued"}}, nil
 	default:
 		return f.voiceRouteTransport.Request(ctx, frame)
@@ -185,8 +185,11 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 	capture := captureHarnessMetrics(t)
 	s := &Server{config: &config.Config{LLMAPIKey: "owner"}, agentHandler: &agenthttp.AgentHandler{}}
 	transport := &harnessAnswerMetricTransport{server: s}
-	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{
-		OnDispatch: func(agentID, runID string) { transport.runID = runID; s.registerHarnessReply(agentID, runID, true, false) },
+	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil },
+		OnDispatch: func(agentID, runID string) {
+			transport.runID = runID
+			s.registerHarnessReply(agentID, runID, true, false)
+		},
 	})
 	if err := s.harnessVoice.RefreshFocus(context.Background()); err != nil {
 		t.Fatal(err)
@@ -217,7 +220,7 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 				t.Fatal("start run mismatch")
 			}
 		}
-		if row.params["evidence"] == "harness_turn_done" {
+		if row.params["evidence"] == "harness_turn_summary" {
 			doneIndex = i
 			if row.params["run_id"] != transport.runID {
 				t.Fatal("terminal run mismatch")

@@ -9,6 +9,17 @@ import type { ScheduleCadence, ScheduleItem } from "@/lib/api";
 import { ScheduleEditor } from "./ScheduleEditor";
 import { bodyFromDraft, draftFromSchedule } from "./scheduleDraft";
 import type { ScheduleDraft } from "./scheduleDraft";
+import { describeLastRun, skippedRunMessage } from "./scheduleRunStatus";
+import type { LastRunTone } from "./scheduleRunStatus";
+
+// A skipped run is neutral amber, never the red failure colour: the device
+// chose not to run the task because a connector is missing — see
+// scheduleRunStatus.ts.
+const LAST_RUN_TONE_COLOR: Record<LastRunTone, string> = {
+  success: C.green,
+  failure: C.red,
+  neutral: C.amber,
+};
 
 // Scheduled tasks on the device itself — list, create, edit, pause, delete,
 // plus a local "Run now" per row.
@@ -293,10 +304,13 @@ export function ScheduledSection({ active }: { active: boolean }) {
       // next_run_at, see Runner.RunNow's doc comment on the device), so this
       // is a complete, precise update, not an approximation.
       setSchedules((prev) => prev.map((s) => s.id === sch.id
-        ? { ...s, last_run_at: result.started_at, last_run_status: result.status }
+        ? { ...s, last_run_at: result.started_at, last_run_status: result.status, last_run_summary: result.summary }
         : s));
       if (result.status === "success") {
         toast.success(`Ran "${sch.name}".`);
+      } else if (result.status === "skipped") {
+        // Not an error: the task needs a connector this device doesn't have.
+        toast.warning(skippedRunMessage(sch.name, result.summary));
       } else {
         toast.error(`"${sch.name}" failed: ${result.summary}`);
       }
@@ -370,6 +384,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
             );
           }
           const lastRun = formatDeviceTime(sch.last_run_at, timezone) ?? "Never";
+          const lastRunView = describeLastRun(sch.last_run_status, sch.last_run_summary);
           // A pending CREATE has no next run to show: the device deliberately
           // does not arm a task the backend has not confirmed, so "Not
           // scheduled" would be misleading and a countdown would be a lie.
@@ -484,9 +499,9 @@ export function ScheduledSection({ active }: { active: boolean }) {
                 <span>Next run: <span style={{ color: C.text }}>{nextRun}</span></span>
                 <span>
                   Last run: <span style={{ color: C.text }}>{lastRun}</span>
-                  {sch.last_run_status && (
-                    <span style={{ color: sch.last_run_status === "success" ? C.green : C.red, marginLeft: 6 }}>
-                      {sch.last_run_status === "success" ? "Succeeded" : "Failed"}
+                  {lastRunView && (
+                    <span style={{ color: LAST_RUN_TONE_COLOR[lastRunView.tone], marginLeft: 6 }}>
+                      {lastRunView.label}
                     </span>
                   )}
                 </span>

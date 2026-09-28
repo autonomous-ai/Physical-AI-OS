@@ -7,20 +7,30 @@ import (
 	"testing"
 )
 
-// legacySkillPriorityBlock is how the block looked on devices that ran an
-// os-server before it got its own delimiter: same body, wrapped in soulOSMarker.
-func legacySkillPriorityBlock() string {
+// legacySoulRuleBlock is how the OS rule block looked on devices that ran an
+// os-server from before it moved to AGENTS.md: same body, inside SOUL.md, under
+// the shared marker.
+func legacySoulRuleBlock() string {
 	return soulOSMarker + "\n" + soulSkillPrioritySentinel + " old wording\n---\n"
 }
 
-func TestUpsertSoulSkillPriorityBlock_AppendsBelowPersona(t *testing.T) {
-	in := "# Soul\n\nYou are Lamp.\n"
-	got := upsertSoulSkillPriorityBlock(in)
-	if !strings.HasPrefix(got, "# Soul\n\nYou are Lamp.\n") {
-		t.Fatalf("persona content not preserved at top:\n%q", got)
+// ownMarkerSoulRuleBlock is the intermediate shape: still in SOUL.md, but under
+// the Hermes-only marker.
+func ownMarkerSoulRuleBlock() string {
+	return soulSkillPriorityMarker + "\n" + soulSkillPrioritySentinel + " old wording\n---\n"
+}
+
+const testPersona = "# Lamp\n\n## Skill-driven turns (Non-Negotiable)\n- `[sensing:*]` → `skills/sensing/SKILL.md`."
+
+// --- AGENTS.md: the OS rule block ------------------------------------------
+
+func TestUpsertAgentsMDBlock_SeedsEmptyFile(t *testing.T) {
+	got := upsertAgentsMDBlock("")
+	if !strings.HasPrefix(got, soulOSMarker) {
+		t.Fatalf("block missing from a fresh AGENTS.md:\n%q", got)
 	}
-	if !strings.Contains(got, soulSkillPriorityMarker) {
-		t.Fatalf("marker missing:\n%q", got)
+	if !strings.Contains(got, soulSkillPrioritySentinel) {
+		t.Fatalf("skill-priority rule missing:\n%q", got)
 	}
 	if !strings.Contains(got, "`connectors` skill") {
 		t.Fatalf("connectors rule missing:\n%q", got)
@@ -28,96 +38,78 @@ func TestUpsertSoulSkillPriorityBlock_AppendsBelowPersona(t *testing.T) {
 	if !strings.HasSuffix(got, "---\n") {
 		t.Fatalf("block must close with --- separator:\n%q", got)
 	}
-}
-
-func TestUpsertSoulSkillPriorityBlock_Idempotent(t *testing.T) {
-	once := upsertSoulSkillPriorityBlock("# Soul\n\npersona\n")
-	twice := upsertSoulSkillPriorityBlock(once)
-	if once != twice {
-		t.Fatalf("not idempotent:\n once=%q\ntwice=%q", once, twice)
+	if upsertAgentsMDBlock(got) != got {
+		t.Fatal("not idempotent on a freshly seeded file")
 	}
 }
 
-func TestUpsertSoulSkillPriorityBlock_ReplacesStaleBlock(t *testing.T) {
-	stale := "# Soul\n\npersona\n\n" + soulSkillPriorityMarker + "\n" +
-		soulSkillPrioritySentinel + " OLD RULE\n---\n"
-	got := upsertSoulSkillPriorityBlock(stale)
-	if strings.Contains(got, "OLD RULE") {
-		t.Fatalf("stale block content survived:\n%q", got)
+func TestUpsertAgentsMDBlock_KeepsOwnerContent(t *testing.T) {
+	got := upsertAgentsMDBlock("## Notes\n\nowner notes\n")
+	if !strings.HasPrefix(got, soulOSMarker) {
+		t.Fatalf("block must sit at the top:\n%q", got)
 	}
-	if n := strings.Count(got, soulSkillPriorityMarker); n != 1 {
-		t.Fatalf("want exactly one marker block, got %d:\n%q", n, got)
-	}
-	if !strings.Contains(got, "persona") {
+	if !strings.Contains(got, "owner notes") {
 		t.Fatalf("owner content lost:\n%q", got)
 	}
 }
 
-// A device updating from an older os-server carries the block under the shared
-// marker. It must be replaced in place, not left behind as a second copy.
-func TestUpsertSoulSkillPriorityBlock_ReplacesLegacyMarkerBlock(t *testing.T) {
-	got := upsertSoulSkillPriorityBlock("# Soul\n\npersona\n\n" + legacySkillPriorityBlock())
+// An OTA ships new wording: replace in place, never stack a second copy.
+func TestUpsertAgentsMDBlock_RefreshesWithoutDuplicating(t *testing.T) {
+	stale := soulOSMarker + "\n" + soulSkillPrioritySentinel + " old wording\n---\n\nowner notes\n"
+	got := upsertAgentsMDBlock(stale)
+
 	if strings.Contains(got, "old wording") {
-		t.Fatalf("legacy block survived:\n%q", got)
+		t.Fatalf("stale block survived:\n%q", got)
 	}
-	if strings.Contains(got, soulOSMarker) {
-		t.Fatalf("legacy marker left behind:\n%q", got)
-	}
-	if n := strings.Count(got, soulSkillPrioritySentinel); n != 1 {
-		t.Fatalf("want exactly one skill-priority body, got %d:\n%q", n, got)
-	}
-}
-
-// The regression this whole split exists for: a migrated SOUL.md opens with the
-// persona wrapped in soulOSMarker (openclaw's ensureSoulMDBlock shape). Sharing
-// one marker made the upsert strip it on the next boot.
-func TestUpsertSoulSkillPriorityBlock_KeepsMarkedPersonaBlock(t *testing.T) {
-	persona := soulOSMarker + "\n# Lamp\n\n## Skill-driven turns (Non-Negotiable)\n" +
-		"- `[sensing:*]` → `skills/sensing/SKILL.md`.\n---\n"
-	got := upsertSoulSkillPriorityBlock(persona + "\nowner notes\n")
-
-	if !strings.Contains(got, "Skill-driven turns") {
-		t.Fatalf("persona deleted:\n%q", got)
-	}
-	if !strings.Contains(got, "`[sensing:*]`") {
-		t.Fatalf("sensing routing rule deleted:\n%q", got)
+	if n := strings.Count(got, soulOSMarker); n != 1 {
+		t.Fatalf("want exactly one block, got %d:\n%q", n, got)
 	}
 	if !strings.Contains(got, "owner notes") {
-		t.Fatalf("owner content deleted:\n%q", got)
+		t.Fatalf("owner content lost:\n%q", got)
+	}
+}
+
+// --- SOUL.md: the rule block must be cleaned out of it ----------------------
+
+// The regression this split exists for: a persona block wears the same marker as
+// the rule block once did, so the prune must never mistake one for the other.
+func TestStripSoulOSRuleBlock_KeepsMarkedPersona(t *testing.T) {
+	soul := soulOSMarker + "\n" + testPersona + "\n---\n\nowner notes\n"
+	got := stripSoulOSRuleBlock(soul)
+
+	for _, want := range []string{"Skill-driven turns", "`[sensing:*]`", "owner notes"} {
+		if !strings.Contains(got, want) {
+			t.Errorf("%q deleted from the persona:\n%q", want, got)
+		}
 	}
 	if !strings.HasPrefix(got, soulOSMarker) {
-		t.Fatalf("persona block must stay at the top:\n%q", got)
-	}
-	if upsertSoulSkillPriorityBlock(got) != got {
-		t.Fatalf("not idempotent with a persona block present")
+		t.Errorf("persona block must stay at the top:\n%q", got)
 	}
 }
 
-func TestUpsertSoulSkillPriorityBlock_EmptySoul(t *testing.T) {
-	got := upsertSoulSkillPriorityBlock("")
-	if !strings.HasPrefix(got, soulSkillPriorityMarker) {
-		t.Fatalf("empty soul should become just the block:\n%q", got)
-	}
-	if upsertSoulSkillPriorityBlock(got) != got {
-		t.Fatalf("not idempotent on block-only soul")
-	}
-}
-
-func TestUpsertSoulSkillPriorityBlock_PreservesIdentityCard(t *testing.T) {
-	// The identity card (identity.go / persona migration) must survive the
-	// strip+re-append — only the marker-delimited block is managed.
-	in := "# Soul\n\n## Your identity card\n\n- **Name:** Ngân\n\n" +
-		soulSkillPriorityMarker + "\n" + soulSkillPrioritySentinel + " old\n---\n"
-	got := upsertSoulSkillPriorityBlock(in)
-	if !strings.Contains(got, "- **Name:** Ngân") {
-		t.Fatalf("identity card lost:\n%q", got)
-	}
-	if idx := strings.Index(got, soulSkillPriorityMarker); idx < strings.Index(got, "identity card") {
-		t.Fatalf("block should sit below the identity card:\n%q", got)
+func TestStripSoulOSRuleBlock_RemovesBothShapes(t *testing.T) {
+	persona := soulOSMarker + "\n" + testPersona + "\n---\n\nowner notes\n\n"
+	for name, soul := range map[string]string{
+		"own marker": persona + ownMarkerSoulRuleBlock(),
+		"legacy":     persona + legacySoulRuleBlock(),
+	} {
+		got := stripSoulOSRuleBlock(soul)
+		if strings.Contains(got, "old wording") {
+			t.Errorf("%s: rule block survived in SOUL.md:\n%q", name, got)
+		}
+		if !strings.Contains(got, "owner notes") {
+			t.Errorf("%s: owner content lost:\n%q", name, got)
+		}
+		if !strings.Contains(got, "Skill-driven turns") {
+			t.Errorf("%s: persona lost:\n%q", name, got)
+		}
+		if stripSoulOSRuleBlock(got) != got {
+			t.Errorf("%s: not idempotent", name)
+		}
 	}
 }
 
-const testPersona = "# Lamp\n\n## Skill-driven turns (Non-Negotiable)\n- `[sensing:*]` → `skills/sensing/SKILL.md`."
+// --- persona block ----------------------------------------------------------
 
 func TestUpsertSoulPersonaBlock_SeedsEmptySoul(t *testing.T) {
 	got := upsertSoulPersonaBlock("", testPersona)
@@ -127,7 +119,6 @@ func TestUpsertSoulPersonaBlock_SeedsEmptySoul(t *testing.T) {
 	if !strings.Contains(got, "\n---\n") {
 		t.Fatalf("block must close with --- separator:\n%q", got)
 	}
-	// Same owner-editable section every other runtime seeds on a first install.
 	if !strings.Contains(got, soulPersonalHeading) {
 		t.Fatalf("owner-editable section missing:\n%q", got)
 	}
@@ -136,9 +127,31 @@ func TestUpsertSoulPersonaBlock_SeedsEmptySoul(t *testing.T) {
 	}
 }
 
-// A managed default soul below the block is a second, competing persona — the
-// duplication bug openclaw/picoclaw guard against. Hermes gets its own default
-// from hermesSoulFallback on a factory reset before a soul_ref is declared.
+func TestUpsertSoulPersonaBlock_KeepsOwnerContent(t *testing.T) {
+	got := upsertSoulPersonaBlock("## Personal\n\nowner notes\n", testPersona)
+	if !strings.HasPrefix(got, soulOSMarker) {
+		t.Fatalf("persona must sit at the top:\n%q", got)
+	}
+	if !strings.Contains(got, "owner notes") {
+		t.Fatalf("owner content lost:\n%q", got)
+	}
+}
+
+func TestUpsertSoulPersonaBlock_RefreshesWithoutDuplicating(t *testing.T) {
+	first := upsertSoulPersonaBlock("", testPersona)
+	got := upsertSoulPersonaBlock(first, "# Lamp v2\n\nnew wording")
+
+	if strings.Contains(got, "Skill-driven turns") {
+		t.Fatalf("stale persona survived:\n%q", got)
+	}
+	if n := strings.Count(got, soulOSMarker); n != 1 {
+		t.Fatalf("want exactly one persona block, got %d:\n%q", n, got)
+	}
+	if !strings.Contains(got, "new wording") {
+		t.Fatalf("new persona missing:\n%q", got)
+	}
+}
+
 func TestUpsertSoulPersonaBlock_DropsManagedDefaultSoul(t *testing.T) {
 	for name, stale := range map[string]string{
 		"hermes fallback":  hermesSoulFallback,
@@ -160,8 +173,6 @@ func TestUpsertSoulPersonaBlock_DropsManagedDefaultSoul(t *testing.T) {
 	}
 }
 
-// Owner edits under `## Personal` survive even when a managed default sits above
-// them — only the default itself is discarded.
 func TestUpsertSoulPersonaBlock_KeepsPersonalSectionUnderDefault(t *testing.T) {
 	stale := "# Soul\n\nold template\n\n" + soulPersonalHeading + "\n\nI drink tea at 3pm.\n"
 	got := upsertSoulPersonaBlock(stale, testPersona)
@@ -174,90 +185,53 @@ func TestUpsertSoulPersonaBlock_KeepsPersonalSectionUnderDefault(t *testing.T) {
 	}
 }
 
-func TestUpsertSoulPersonaBlock_KeepsOwnerContent(t *testing.T) {
-	got := upsertSoulPersonaBlock("## Personal\n\nowner notes\n", testPersona)
-	if !strings.HasPrefix(got, soulOSMarker) {
-		t.Fatalf("persona must sit at the top:\n%q", got)
+// --- both files together, as EnsureOnboarding drives them -------------------
+
+// Every boot runs the persona upsert, the SOUL prune and the AGENTS.md upsert.
+// Both files must settle after the first pass and never grow again.
+func TestPromptFiles_StableAcrossBoots(t *testing.T) {
+	boot := func(soul, agents string) (string, string) {
+		return stripSoulOSRuleBlock(upsertSoulPersonaBlock(soul, testPersona)), upsertAgentsMDBlock(agents)
 	}
-	if !strings.Contains(got, "owner notes") {
-		t.Fatalf("owner content lost:\n%q", got)
+
+	soul1, agents1 := boot("", "")
+	soul2, agents2 := boot(soul1, agents1)
+	if soul1 != soul2 {
+		t.Fatalf("second boot rewrote SOUL.md:\n first=%q\nsecond=%q", soul1, soul2)
+	}
+	if agents1 != agents2 {
+		t.Fatalf("second boot rewrote AGENTS.md:\n first=%q\nsecond=%q", agents1, agents2)
+	}
+	if !strings.Contains(soul2, "`[sensing:*]`") {
+		t.Fatalf("sensing routing rule missing from SOUL.md:\n%q", soul2)
+	}
+	if strings.Contains(soul2, soulSkillPrioritySentinel) {
+		t.Fatalf("rule block leaked into SOUL.md:\n%q", soul2)
+	}
+	if !strings.Contains(agents2, soulSkillPrioritySentinel) {
+		t.Fatalf("rule block missing from AGENTS.md:\n%q", agents2)
 	}
 }
 
-// An OTA ships new persona wording: the old block is replaced, not stacked.
-func TestUpsertSoulPersonaBlock_RefreshesWithoutDuplicating(t *testing.T) {
-	first := upsertSoulPersonaBlock("", testPersona)
-	got := upsertSoulPersonaBlock(first, "# Lamp v2\n\nnew wording")
+// A device updating from an older os-server carries the rule block inside
+// SOUL.md. One boot must move it out and leave everything else intact.
+func TestPromptFiles_MigratesRuleBlockOutOfSoul(t *testing.T) {
+	soul := soulOSMarker + "\n" + testPersona + "\n---\n\n## Personal\n\nowner notes\n\n" +
+		"## Your identity card\n\n- **Name:** Ngan\n\n" + legacySoulRuleBlock()
 
-	if strings.Contains(got, "Skill-driven turns") {
-		t.Fatalf("stale persona survived:\n%q", got)
-	}
-	if n := strings.Count(got, soulOSMarker); n != 1 {
-		t.Fatalf("want exactly one persona block, got %d:\n%q", n, got)
-	}
-	if !strings.Contains(got, "new wording") {
-		t.Fatalf("new persona missing:\n%q", got)
-	}
-}
+	gotSoul := stripSoulOSRuleBlock(upsertSoulPersonaBlock(soul, testPersona))
+	gotAgents := upsertAgentsMDBlock("")
 
-// The skill-priority block is not a persona — the persona upsert must leave it
-// alone, whether it wears the current marker or the legacy shared one.
-func TestUpsertSoulPersonaBlock_LeavesSkillPriorityBlockAlone(t *testing.T) {
-	for name, soul := range map[string]string{
-		"current": upsertSoulSkillPriorityBlock(""),
-		"legacy":  legacySkillPriorityBlock(),
-	} {
-		got := upsertSoulPersonaBlock(soul, testPersona)
-		if !strings.Contains(got, soulSkillPrioritySentinel) {
-			t.Fatalf("%s: skill-priority block deleted:\n%q", name, got)
+	if strings.Contains(gotSoul, "old wording") {
+		t.Errorf("rule block still in SOUL.md:\n%q", gotSoul)
+	}
+	for _, want := range []string{"Skill-driven turns", "owner notes", "- **Name:** Ngan"} {
+		if !strings.Contains(gotSoul, want) {
+			t.Errorf("%q lost from SOUL.md:\n%q", want, gotSoul)
 		}
 	}
-}
-
-// Both blocks run back to back on every boot, in the order EnsureOnboarding
-// calls them. The file must settle after the first pass and never grow again.
-func TestSoulBlocks_StableAcrossBoots(t *testing.T) {
-	boot := func(soul string) string {
-		return upsertSoulSkillPriorityBlock(upsertSoulPersonaBlock(soul, testPersona))
-	}
-
-	first := boot("")
-	second := boot(first)
-	if first != second {
-		t.Fatalf("second boot rewrote SOUL.md:\n first=%q\nsecond=%q", first, second)
-	}
-	if n := strings.Count(second, soulOSMarker); n != 1 {
-		t.Fatalf("want one persona block, got %d", n)
-	}
-	if n := strings.Count(second, soulSkillPriorityMarker); n != 1 {
-		t.Fatalf("want one skill-priority block, got %d", n)
-	}
-	if !strings.Contains(second, "`[sensing:*]`") {
-		t.Fatalf("sensing routing rule missing after two boots:\n%q", second)
-	}
-	if strings.Index(second, soulOSMarker) > strings.Index(second, soulSkillPriorityMarker) {
-		t.Fatalf("persona must precede the skill-priority block:\n%q", second)
-	}
-}
-
-// A device migrated from OpenClaw arrives with the persona in a marked block and
-// owner content plus the inlined identity card below it (see
-// system/agent/migrate_persona). Two boots later all of it must still be there,
-// exactly once.
-func TestSoulBlocks_MigratedDeviceKeepsPersonaAndOwnerContent(t *testing.T) {
-	migrated := soulOSMarker + "\n" + testPersona + "\n---\n\n## Personal\n\nowner notes\n" +
-		"\n## Your identity card\n\n- **Name:** Ngân\n"
-
-	got := upsertSoulSkillPriorityBlock(upsertSoulPersonaBlock(migrated, testPersona))
-	got = upsertSoulSkillPriorityBlock(upsertSoulPersonaBlock(got, testPersona))
-
-	for _, want := range []string{"Skill-driven turns", "owner notes", "- **Name:** Ngân", soulSkillPrioritySentinel} {
-		if !strings.Contains(got, want) {
-			t.Fatalf("%q lost:\n%q", want, got)
-		}
-	}
-	if n := strings.Count(got, "owner notes"); n != 1 {
-		t.Fatalf("owner content duplicated %d times", n)
+	if !strings.Contains(gotAgents, soulSkillPrioritySentinel) {
+		t.Errorf("rule block missing from AGENTS.md:\n%q", gotAgents)
 	}
 }
 

@@ -101,7 +101,7 @@ func TestQueueSerializesDirectAndBufferedTurnsThroughAllTerminalCallbacks(t *tes
 	s.translateFrame([]byte(`{"type":"message.create","payload":{"content":"answer one"}}`), callback)
 	f := nextQueuedFrame(t, frames, "req-2")
 	payload := f["payload"].(map[string]any)
-	if payload["content"] != "second\n[harness-reply run_id=run-2 channel=web]" || len(payload["attachments"].([]any)) != 1 {
+	if payload["content"] != "second\n[harness-reply run_id=run-2 channel=web]"+"\n"+sensingmsg.HarnessConnectedContext || len(payload["attachments"].([]any)) != 1 {
 		t.Fatalf("queued chat changed: %v", f)
 	}
 	s.SetBusy(false) // A repeated idle from the old consumer cannot drain turn 3.

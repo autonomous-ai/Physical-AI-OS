@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 import time
 from typing import Any, List, Union
 from ..base import ServiceBase
@@ -194,6 +195,7 @@ class RGBService(ServiceBase):
         super().__init__("rgb")
         self.led_count = led_count
         self._driver = None
+        self._driver_lock = threading.RLock()
         # SAFETY.md brightness ceiling (None = no bound → pass-through). Every
         # pixel write — routes AND effects — funnels through _handle_solid /
         # _handle_paint, so clamping here is the single, bypass-proof gate.
@@ -265,8 +267,10 @@ class RGBService(ServiceBase):
             self.logger.error(f"Invalid color format: {color_code}")
             return
         color = clamp_color(self._safety, color)  # safety gate (brightness ceiling)
-        self._driver.fill(color, self.led_count)
-        self._driver.show()
+        with self._driver_lock:
+            self._driver.fill(color, self.led_count)
+            self._driver.show()
+
         self.logger.debug(f"Applied solid color: {color_code}")
 
     def _handle_paint(self, colors: List[Union[int, tuple]]):
@@ -276,15 +280,17 @@ class RGBService(ServiceBase):
         if not isinstance(colors, list):
             self.logger.error(f"Paint payload must be a list, got: {type(colors)}")
             return
-        max_pixels = min(len(colors), self.led_count)
-        for i in range(max_pixels):
-            color = _color_tuple(colors[i])
-            if color is None:
-                self.logger.warning(f"Invalid color at index {i}: {colors[i]}")
-                continue
-            color = clamp_color(self._safety, color)  # safety gate (brightness ceiling)
-            self._driver.setPixelColor(i, color)
-        self._driver.show()
+        with self._driver_lock:
+            max_pixels = min(len(colors), self.led_count)
+            for i in range(max_pixels):
+                color = _color_tuple(colors[i])
+                if color is None:
+                    self.logger.warning(f"Invalid color at index {i}: {colors[i]}")
+                    continue
+                color = clamp_color(self._safety, color)  # safety gate (brightness ceiling)
+                self._driver.setPixelColor(i, color)
+            self._driver.show()
+
         self.logger.debug(f"Applied paint pattern with {max_pixels} colors")
 
     def clear(self):
@@ -298,30 +304,32 @@ class RGBService(ServiceBase):
         # POST /led/off four times in a row left the ring lit at [0,2,2] for
         # minutes, with no SPI write error anywhere in the log, and it has not
         # reproduced since. `after` is the driver's own read-back, so a line
-        # showing a non-black `after` means the write path never ran; a black
-        # `after` with the lamp still lit means the wire, not the buffer.
-        before = self._read_brightest_pixel()
-        self._driver.fill((0, 0, 0), self.led_count)
-        self._driver.show()
-        time.sleep(0.01)
-        self._driver.show()
-        time.sleep(0.01)
-        spi = getattr(self._driver, "_spi", None)
-        if spi is not None:
-            try:
-                spi.xfer2([0x00] * 100)
-            except Exception:
-                pass
-        after = self._read_brightest_pixel()
-        if after is None:
-            return  # driver has no read-back — nothing to compare, nothing to say
-        if after != (0, 0, 0):
-            self.logger.error(
-                "LED clear did NOT take: brightest pixel %s -> %s (driver buffer still lit)",
-                before, after,
-            )
-        elif before != (0, 0, 0):
-            self.logger.info("LED cleared: brightest pixel %s -> (0, 0, 0)", before)
+        # showing a non-black `after` means the buffer failed to clear. Hold
+        # the driver lock through both shows and read-back so another frame
+        # cannot repaint it mid-check. Black read-back does not verify hardware.
+        with self._driver_lock:
+            before = self._read_brightest_pixel()
+            self._driver.fill((0, 0, 0), self.led_count)
+            self._driver.show()
+            time.sleep(0.01)
+            self._driver.show()
+            time.sleep(0.01)
+            spi = getattr(self._driver, "_spi", None)
+            if spi is not None:
+                try:
+                    spi.xfer2([0x00] * 100)
+                except Exception:
+                    pass
+            after = self._read_brightest_pixel()
+            if after is None:
+                return  # driver has no read-back — nothing to compare, nothing to say
+            if after != (0, 0, 0):
+                self.logger.error(
+                    "LED clear did NOT take: brightest pixel %s -> %s (driver buffer still lit)",
+                    before, after,
+                )
+            elif before != (0, 0, 0):
+                self.logger.info("LED cleared: brightest pixel %s -> (0, 0, 0)", before)
 
     def _read_brightest_pixel(self):
         """The lit-most pixel on the strip, or None when it cannot be read.

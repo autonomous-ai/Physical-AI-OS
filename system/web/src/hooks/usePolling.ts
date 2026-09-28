@@ -12,12 +12,14 @@ import { useEffect, useRef } from "react";
 //      `timeoutMs` instead of hanging forever in "pending".
 //   3. Visibility pause. When the tab is backgrounded the timer stops, so a
 //      hidden tab doesn't keep hammering the Pi.
+// An optional refreshKey restarts polling immediately when a section changes;
+// cleanup aborts the previous request before the new section starts.
 export function usePolling(
   fetcher: (signal: AbortSignal) => Promise<void>,
   intervalMs: number,
-  opts: { timeoutMs?: number; enabled?: boolean } = {},
+  opts: { timeoutMs?: number; enabled?: boolean; refreshKey?: string } = {},
 ) {
-  const { timeoutMs = 4000, enabled = true } = opts;
+  const { timeoutMs = 4000, enabled = true, refreshKey } = opts;
   const fetcherRef = useRef(fetcher);
   fetcherRef.current = fetcher;
 
@@ -25,12 +27,14 @@ export function usePolling(
     if (!enabled) return;
 
     let inFlight = false;
+    let activeController: AbortController | null = null;
     let timer: ReturnType<typeof setInterval> | null = null;
 
     const runOnce = async () => {
       if (inFlight) return;
       inFlight = true;
       const ac = new AbortController();
+      activeController = ac;
       const t = setTimeout(() => ac.abort(), timeoutMs);
       try {
         await fetcherRef.current(ac.signal);
@@ -38,6 +42,7 @@ export function usePolling(
         // Callers handle their own errors; swallow abort + network here.
       } finally {
         clearTimeout(t);
+        activeController = null;
         inFlight = false;
       }
     };
@@ -63,6 +68,7 @@ export function usePolling(
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
       stop();
+      activeController?.abort();
     };
-  }, [intervalMs, timeoutMs, enabled]);
+  }, [intervalMs, timeoutMs, enabled, refreshKey]);
 }

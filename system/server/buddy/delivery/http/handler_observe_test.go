@@ -174,3 +174,46 @@ func TestObserveHTTPRejectsInvalidRequestsBeforeUsingService(t *testing.T) {
 		}
 	}
 }
+
+func TestWindowObservationRequiresTargetedCapture(t *testing.T) {
+	app, windowID := "Calendar", uint32(42)
+	for _, scoped := range []bool{false, true} {
+		described := false
+		result, err := executeObservation(context.Background(), observationRequest{Question: "Read events", App: &app, WindowID: &windowID},
+			func(ctx context.Context, cmd buddy.Command) (json.RawMessage, error) {
+				if cmd.Params["app"] != app || cmd.Params["window_id"] != windowID || cmd.Params["display_id"] != nil || cmd.Params["scale"] != float64(1) {
+					t.Fatalf("wrong target: %+v", cmd.Params)
+				}
+				return captureResponse(t, cmd.ID, func(r map[string]any) {
+					if scoped {
+						m := r["result"].(map[string]any)
+						m["capture_scope"] = "window"
+						m["window_id"] = 42
+						m["window_bounds"] = map[string]any{"x": -100, "y": 0, "width": 8, "height": 6}
+					}
+				}), nil
+			}, func(context.Context, string, string) (string, error) { described = true; return "Events", nil })
+		if !scoped {
+			if err == nil || described {
+				t.Fatal("untargeted capture reached model")
+			}
+			continue
+		}
+		if err != nil || !described || result.Screenshot["window_id"] != float64(42) || result.Screenshot["window_bounds"] == nil {
+			t.Fatalf("lost window metadata: %+v %v", result, err)
+		}
+	}
+}
+
+func TestWindowObservationRejectsAmbiguousTargetParams(t *testing.T) {
+	app, blank, longApp := "Calendar", " ", strings.Repeat("a", 257)
+	id, zero := uint32(42), uint32(0)
+	for _, req := range []observationRequest{
+		{Question: "Read", WindowID: &id}, {Question: "Read", App: &blank}, {Question: "Read", App: &longApp},
+		{Question: "Read", App: &app, WindowID: &zero}, {Question: "Read", App: &app, DisplayID: &id},
+	} {
+		if req.validate() == nil {
+			t.Fatalf("invalid target accepted: %+v", req)
+		}
+	}
+}

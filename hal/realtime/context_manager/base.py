@@ -119,6 +119,7 @@ class ContextManagerBase(ABC):
         "openai": RESOURCES_DIR / "system_prompt_openai.md",
         "gemini": RESOURCES_DIR / "system_prompt_gemini.md",
         "gptlive": RESOURCES_DIR / "system_prompt_gptlive.md",
+        "pipecat_v1": RESOURCES_DIR / "system_prompt_pipecat.md",
     }
 
     LANGUAGE_NAMES: dict[str, str] = {
@@ -172,6 +173,28 @@ class ContextManagerBase(ABC):
         # Lock for concurrent access to memory files
         self._realtime_memory_lock: threading.Lock = threading.Lock()
         self._realtime_summarize_lock: threading.Lock = threading.Lock()
+
+    # Subclasses declare where their runtime stores the explicit identity card.
+    IDENTITY_NAME_FILE: str = "IDENTITY.md"
+
+    @classmethod
+    def read_agent_name(cls, workspace_dir: str) -> str:
+        """Read only an explicit name field; never infer it from persona prose.
+
+        Read afresh on each voice start so HAL restart needs no rename event.
+        Return empty on missing identity and let the caller select its fallback.
+        """
+        try:
+            content = (Path(workspace_dir) / cls.IDENTITY_NAME_FILE).read_text(encoding="utf-8")
+        except (OSError, UnicodeError):
+            return ""
+        for line in content.splitlines():
+            field = re.match(r"^\s*(?:[-*]\s+)?\*\*name:\*\*\s*(.*)$", line, re.I)
+            if field:
+                name = re.split(r"[—|\-]", field.group(1), maxsplit=1)[0].strip()
+                if name:
+                    return name.lower()
+        return ""
 
     # --- Abstract methods (subclasses implement) ---
 
@@ -280,16 +303,12 @@ class ContextManagerBase(ABC):
         add("prompt", self._load_system_prompt())
 
         identity: str = self.load_device_context()
-        # Name-precedence rule: SOUL.md describes the KIND of being (its species
-        # is often name-like, e.g. "you are Lamp"), while the user-given name
-        # lives in IDENTITY.md's **Name:** card and renames land ONLY there —
-        # without this rule the model reads the species as its name and argues
-        # with a rename (device-observed 2026-07-08: SOUL said "Lamp", IDENTITY
-        # said "Linh", the agent kept calling itself Lamp).
+        # Persona prose must not override the explicit name card. The source
+        # file is declared by the runtime, matching voice-start wake aliases.
         identity_rules: str = (
             "(Reading rules: SOUL.md describes WHAT you are — your kind and "
             "character; kind words there may look like names. Your actual "
-            "given name is the **Name:** value in IDENTITY.md — it is "
+            f"given name is the **Name:** value in {self.IDENTITY_NAME_FILE} — it is "
             "authoritative, overrides any name-like word elsewhere in this "
             "section, and is where renames land.)"
         )
@@ -306,6 +325,13 @@ class ContextManagerBase(ABC):
 
         rt_mem: list[str] = self.load_realtime_memory()
         add("realtime_mem", "# REALTIME MEMORY\n\n" + "\n\n".join(rt_mem) if rt_mem else "")
+
+        if self._provider == "gemini":
+            # Recent memory contains spoken receipts, not proof of tool execution.
+            # Restate routing after that context so Gemini does not imitate a
+            # promise-only answer instead of making the required function call.
+            add("routing", (RESOURCES_DIR / "routing_prompt_gemini.md").read_text(
+                encoding="utf-8").strip())
 
         result: str = "\n\n".join(sections)
         total: int = len(result)

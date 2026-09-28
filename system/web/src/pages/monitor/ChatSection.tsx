@@ -1398,7 +1398,7 @@ export function ChatSection({ events, isActive }: Props) {
         prev.map((c) =>
           c.id === convo.id
             ? { ...c, messages: c.messages.map((m) => stranded.has(m.id)
-                ? { ...m, text: "⏹ interrupted — the page reloaded before the device answered", pending: false, error: true }
+                ? { ...m, text: "⏹ interrupted — the page reloaded before the robot answered", pending: false, error: true }
                 : m) }
             : c,
         ),

@@ -4,9 +4,10 @@ import threading
 import errno
 import time
 import unittest
+from pathlib import Path
 from unittest import mock
 
-from hal.board.mpr121 import MPR121Config
+from hal.board.mpr121 import MPR121Config, load_mpr121_config
 from hal.drivers.mpr121 import I2CBus, MPR121Handler, _GestureRecognizer, _GestureEvent
 
 
@@ -169,10 +170,23 @@ class TestMPR121(unittest.TestCase):
         for electrode in range(12):
             self.assertIn(mock.call(0x5A, 0x41 + electrode * 2, 2), calls)
             self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 1), calls)
-        for register, value in ((0x5B, 0), (0x5C, 0x10), (0x5D, 0x20),
+        for register, value in ((0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
+                                (0x33, 0), (0x34, 0), (0x35, 0),
+                                (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
                                 (0x7D, 200), (0x7F, 180), (0x7E, 130), (0x7B, 0x0B)):
             self.assertIn(mock.call(0x5A, register, value), calls)
         self.assertEqual(calls[-1], mock.call(0x5A, 0x5E, 0x8F))
+
+    def test_lamp_thresholds_are_loaded_and_written_to_chip(self):
+        device_dir = Path(__file__).resolve().parents[2] / "robots" / "lamp"
+        config = load_mpr121_config(device_dir, "orangepi_sun60")
+        handler = MPR121Handler(config)
+        handler._bus = bus = mock.Mock()
+        bus.read_regs.return_value = b'\x24'
+        handler._initialize()
+        for electrode in range(12):
+            self.assertIn(mock.call(0x5A, 0x41 + electrode * 2, 6), bus.write_reg.call_args_list)
+            self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 3), bus.write_reg.call_args_list)
 
     def test_autoconfig_disabled(self):
         handler = self.make_handler(autoconfig=False)

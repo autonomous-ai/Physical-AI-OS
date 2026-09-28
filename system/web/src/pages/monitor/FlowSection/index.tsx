@@ -60,9 +60,15 @@ const FAKE_EVENTS: { label: string; type: string; message: string; color: string
 export function FlowSection({
   events,
   onClearEvents,
+  isDebug,
 }: {
   events: DisplayEvent[];
   onClearEvents: () => void;
+  // Debug mode is a header toggle (`?debug=true`), not a hidden URL param, so
+  // "debug-only" means one click away. Passed down from Monitor rather than
+  // re-parsed per turn card: window.location is not reactive, and a card must
+  // re-render the moment the toggle flips (#463).
+  isDebug: boolean;
 }) {
   const [showCanvas, setShowCanvas] = useState(false);
   const [showCompaction, setShowCompaction] = useState(false);
@@ -664,8 +670,8 @@ export function FlowSection({
                 <span
                   title={
                     isUnknown
-                      ? "Device knows someone is here but not who (stranger / unrecognized voice)"
-                      : `Device's current user: ${currentUser}` +
+                      ? "Robot knows someone is here but not who (stranger / unrecognized voice)"
+                      : `Robot's current user: ${currentUser}` +
                         (currentUserSource === "voice"
                           ? " (heard — recognized by voice)"
                           : currentUserSource === "face"
@@ -744,7 +750,7 @@ export function FlowSection({
         <div style={{ ...S.card, padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
             <span style={S.cardLabel}>Simulate Event</span>
-            <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>dev only · fires POST /sensing/event on device</span>
+            <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>dev only · fires POST /sensing/event on robot</span>
           </div>
           <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 6 }}>
             {FAKE_EVENTS.map((ev) => (
@@ -930,6 +936,7 @@ export function FlowSection({
                       turn={turn}
                       pairTint={pairTintMap.get(turn.id)}
                       userPhotos={userPhotos}
+                      isDebug={isDebug}
                       onViewPipeline={() => {
                         setSelectedTurnId(turn.id);
                         setMobilePipelineOpen(true);

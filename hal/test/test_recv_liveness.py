@@ -74,3 +74,77 @@ def test_zero_cap_restores_the_plain_gap_watchdog(monkeypatch):
     agent = _Agent()
     agent.note_server_activity()
     assert list(agent.receive()) == []
+
+
+def test_progress_watchdog_does_not_treat_heartbeat_as_work(monkeypatch):
+    _fast_watchdog(monkeypatch, gap=0.05)
+    agent = _Agent()
+    agent._progress_watchdog_enabled = True
+    agent.note_server_activity()
+    started = time.monotonic()
+    assert list(agent.receive()) == []
+    assert time.monotonic() - started < 0.2
+
+
+def test_verified_work_survives_gap_then_delivers_answer(monkeypatch):
+    from hal.realtime.models import TurnDoneEvent
+
+    _fast_watchdog(monkeypatch, gap=0.05)
+    agent = _Agent()
+    agent._progress_watchdog_enabled = True
+    agent.allow_progress_until(time.monotonic() + 0.5)
+
+    def answer():
+        time.sleep(0.15)
+        agent._recv_queue.put(OutputEvent(output=TextOutput(text="search result")))
+        agent._recv_queue.put(TurnDoneEvent(execution_completed=True))
+
+    worker = threading.Thread(target=answer)
+    worker.start()
+    assert [o.text for o in agent.receive()] == ["search result"]
+    worker.join()
+    assert agent._progress_deadline_at == 0
+
+
+def test_verified_work_deadline_is_not_renewed_by_heartbeat(monkeypatch):
+    _fast_watchdog(monkeypatch, gap=0.05)
+    agent = _Agent()
+    agent._progress_watchdog_enabled = True
+    agent.allow_progress_until(time.monotonic() + 0.15)
+    agent.note_server_activity()
+    started = time.monotonic()
+    assert list(agent.receive()) == []
+    elapsed = time.monotonic() - started
+    assert 0.14 <= elapsed < 0.4
+
+
+def test_actual_buffered_output_survives_work_deadline(monkeypatch):
+    from hal.realtime.models import TurnDoneEvent
+
+    _fast_watchdog(monkeypatch, gap=0.05)
+    agent = _Agent()
+    agent._progress_watchdog_enabled = True
+    agent.allow_progress_until(time.monotonic() + 0.03)
+    agent.allow_output_until(time.monotonic() + 0.3)
+
+    def answer():
+        time.sleep(0.12)
+        agent._recv_queue.put(OutputEvent(output=TextOutput(text="confirmed continuation")))
+        agent._recv_queue.put(TurnDoneEvent(execution_completed=True))
+
+    worker = threading.Thread(target=answer)
+    worker.start()
+    assert [o.text for o in agent.receive()] == ["confirmed continuation"]
+    worker.join()
+    assert agent._output_deadline_at == 0
+
+
+def test_commit_resets_prior_turn_deadlines():
+    agent = _Agent()
+    agent._connected.set()
+    agent.allow_progress_until(time.monotonic() + 100)
+    agent.allow_output_until(time.monotonic() + 100)
+    agent.commit_audio()
+    assert agent._committed_at > 0
+    assert agent._progress_deadline_at == 0
+    assert agent._output_deadline_at == 0

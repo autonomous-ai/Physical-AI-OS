@@ -4,6 +4,7 @@ import { execFileSync } from 'node:child_process'
 import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { verifyBundledCua } from './cua-driver.mjs'
 import { releaseVersion } from './update-feed.mjs'
 import { verifyUpdateOwnerWritable } from './update-permissions.mjs'
 
@@ -20,6 +21,7 @@ let mounted = false
 
 function verifyApp(app) {
   verifyUpdateOwnerWritable(app)
+  verifyBundledCua(app)
   const plist = join(app, 'Contents/Info.plist')
   for (const key of ['CFBundleShortVersionString', 'CFBundleVersion']) {
     if (run('/usr/libexec/PlistBuddy', ['-c', `Print :${key}`, plist]).trim() !== version)

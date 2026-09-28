@@ -272,3 +272,66 @@ def test_cached_cue_stop_discards_audio_after_current_slice(monkeypatch, tmp_pat
     service._play_wav_inline(_wav(tmp_path, seconds=1.0, rate=44100))
 
     assert writes == [1764]
+
+
+def _history_service(tmp_path):
+    service = _playback_service(tmp_path, [], [])
+    service._native_mode = False
+    service._realtime_feedback = True
+    service._last_spoken_text = "The airplane is black."
+    service._begin_playback("run:reply")
+    return service
+
+
+def test_history_zero_write_cancel_is_not_spoken(tmp_path):
+    service = _history_service(tmp_path)
+    service._stop_event.set()
+    assert service.history_completion() == ("The airplane is black.", False, False)
+
+
+def test_history_real_write_and_partial_cancel(tmp_path):
+    service = _history_service(tmp_path)
+    service._play_wav_inline(_wav(tmp_path))
+    assert service.history_completion() == ("The airplane is black.", True, False)
+    service._stop_event.set()
+    assert service.history_completion() == ("The airplane is black.", False, True)
+
+
+def test_history_cue_only_is_not_speech(tmp_path):
+    service = _history_service(tmp_path)
+    _tapped(service, []).write(np.zeros((20, 1), dtype=np.float32), track_playback=False)
+    assert service.history_completion() == ("The airplane is black.", False, False)
+
+
+def test_history_snapshot_survives_new_owner_and_does_not_reuse_old_audio(tmp_path):
+    service = _history_service(tmp_path)
+    service._note_audio_written()
+    previous = service.history_completion()
+    service._begin_playback("run:new")
+    service._last_spoken_text = "The house is blue."
+    assert previous == ("The airplane is black.", True, False)
+    assert service.history_completion() == ("The house is blue.", False, False)
+
+
+def test_history_excludes_native_and_non_feedback_speech(tmp_path):
+    service = _history_service(tmp_path)
+    service._native_mode = True
+    assert service.history_completion() is None
+    service._native_mode = False
+    service._realtime_feedback = False
+    assert service.history_completion() is None
+
+
+def test_busy_rejected_reply_does_not_replace_active_history(tmp_path):
+    service = _history_service(tmp_path)
+    service._backend = SimpleNamespace(available=True)
+    service._speaker_muted = lambda: False
+    service._lock = threading.Lock()
+    service._lock.acquire()
+    service._interruptible = False
+    service._note_audio_written()
+    try:
+        assert not service.speak("Rejected new reply", realtime_feedback=True, harness_result=True)
+        assert service.history_completion() == ("The airplane is black.", True, False)
+    finally:
+        service._lock.release()

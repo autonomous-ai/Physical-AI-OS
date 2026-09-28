@@ -102,7 +102,7 @@ func TestStore_SetLastRunLeavesNextRunAtUntouched(t *testing.T) {
 	}
 
 	ranAt := time.Date(2026, 8, 26, 8, 0, 0, 0, time.UTC)
-	if err := store.SetLastRun("a", ranAt, "success"); err != nil {
+	if err := store.SetLastRun("a", ranAt, "success", "Daily briefing"); err != nil {
 		t.Fatalf("SetLastRun: %v", err)
 	}
 
@@ -124,7 +124,7 @@ func TestStore_RecordRunResultUpdatesBothFieldsTogether(t *testing.T) {
 
 	ranAt := time.Date(2026, 8, 26, 8, 0, 0, 0, time.UTC)
 	next := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
-	if err := store.RecordRunResult("a", ranAt, "success", next); err != nil {
+	if err := store.RecordRunResult("a", ranAt, "success", "Daily briefing", next); err != nil {
 		t.Fatalf("RecordRunResult: %v", err)
 	}
 

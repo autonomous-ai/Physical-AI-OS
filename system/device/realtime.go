@@ -26,6 +26,15 @@ func (s *Service) validateRealtimeSet(d domain.RealtimeSetData) error {
 			return err
 		}
 	}
+	if d.WebSearch != nil {
+		target := strings.ToLower(strings.TrimSpace(d.Provider))
+		if target == "" {
+			target = s.config.RealtimeProvider()
+		}
+		if target != "pipecat_v1" {
+			return fmt.Errorf("web_search is a pipecat_v1 knob, got provider %q", target)
+		}
+	}
 	return nil
 }
 
@@ -56,7 +65,7 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if d.BaseURL != "" {
 		rt.BaseURL = d.BaseURL
 	}
-	if d.Model == "" && d.Voice == "" && d.Reasoning == "" {
+	if d.Model == "" && d.Voice == "" && d.Reasoning == "" && d.WebSearch == nil {
 		return
 	}
 	switch strings.ToLower(strings.TrimSpace(rt.Provider)) {
@@ -97,6 +106,18 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 			rt.GPTLive.Voice = d.Voice
 		}
 		// no reasoning knob — validateRealtimeSet already rejected it
+	case "pipecat_v1":
+		if rt.PipecatV1 == nil {
+			rt.PipecatV1 = &config.PipecatV1Realtime{}
+		}
+		if d.Model != "" {
+			rt.PipecatV1.Model = d.Model
+		}
+		if d.WebSearch != nil {
+			v := *d.WebSearch
+			rt.PipecatV1.WebSearch = &v
+		}
+		// no voice, no reasoning — validateRealtimeSet already rejected them
 	}
 }
 

@@ -131,11 +131,11 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
-hiển thị khoảng theo provider (`0.7–1.2×` cho ElevenLabs, `0.25–4.0×` cho
-provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
-`PUT /api/device/config`; hãy lưu trước khi **Test Voice**. Giá trị đã lưu
-ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.3`); ElevenLabs giới hạn tốc độ gửi
-đi trong `0.7–1.2`.
+hiển thị khoảng có thể chọn (`0.5–2.0×` cho mọi provider), bước `0.05`. **Save Changes** lưu tốc độ qua
+`PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần
+lưu; tốc độ thử chỉ áp dụng cho câu preview. Giá trị đã lưu
+ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
+các model ElevenLabs khác giới hạn tốc độ gửi đi trong `0.7–1.2`.
 
 **Mirror key/URL từ AI Brain.** Panel tự điền ô TTS hoặc STT còn trống bằng key
 và base URL của AI Brain, để lần setup đầu chỉ phải nhập một bộ. Riêng phần key
@@ -149,7 +149,8 @@ key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 **Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
 luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
 `Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
-`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`) — ô chọn vendor
+của nó có OpenAI, ElevenLabs và Gemini; `Piper` không cần
 key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
 JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
 sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:
@@ -209,7 +210,9 @@ Nhóm Settings có thể thu gọn nằm trong `NAV` của sidebar dùng chung (
 
 Các mục Monitor được serialize thành id thuần, ví dụ `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Mặc định: `/monitor` không có hash / hash không hợp lệ → `overview`; `/setting` không có hash / hash không hợp lệ → `general` (URL được chuẩn hóa thành `/setting#general`). Deep-link (ví dụ `/setting#wifi`) và nút back/forward của trình duyệt được tôn trọng qua một effect dựa trên `useLocation`. Người dùng không-debug chỉ thấy các mục trong `PUBLIC_SECTIONS` (gồm Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, và các mục Settings công khai General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth vẫn truy cập được bằng URL trực tiếp nhưng bị ẩn khỏi navigation. `?debug=true` mở khóa phần còn lại (Analytics, Servo, API Docs, Agent gateway, và các mục Settings sâu hơn AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Bấm `update` là nút đổi ngay thành `updating…` — nút KHÔNG bao giờ báo "OK", vì chữ đó đọc như "xong rồi" trong khi request mới chỉ KHỞI ĐỘNG việc cài (và với component chạy vài giây thì nó còn hiện trước cả lúc dòng kịp báo tiến trình). Khi lỗi thì hiện đúng lý do server trả về (`rate-limited, retry in 8s`, `bootstrap unreachable`) thay vì chữ "Failed" trống rỗng. Trong lúc đang cài, dòng đó hiện `updating…` thay cho nút (một lần cài mất vài chục giây — component dừng, build lại, khởi động lại — và một dòng đứng im khiến người dùng bấm lần hai, chính là cách một máy từng mất sạch HAL runtime). Các nút `update` trong card **Versions** ở Overview (dòng Web / OS / HAL / Agent, cộng Bootstrap và Device ở debug) cũng bị chặn theo cách này — người xem thường không có nút kích OTA một chạm. Toggle **Debug** trên top bar, ngay cạnh nút Dark/Light, bật/tắt query parameter này nhưng vẫn giữ hash của mục đang mở và các query parameter khác; màu amber cho biết debug mode đang bật.
 
-Card **Versions** ở Overview có cột thao tác thứ năm với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ năm cột.
+Card **Versions** ở Overview có cột thao tác với nút `restart` cho OS Server và HAL, kể cả ngoài debug. Mỗi nút gọi `POST /api/system/restart/:target` có bảo vệ admin (`os-server` hoặc `hal`). Server hẹn restart sau 2 giây và trả HTTP 202. Nút hiện `queued`, khóa bấm lại trong 15 giây; trạng thái này chỉ xác nhận đã lên lịch, chưa xác nhận service phục hồi. Polling sẵn có của monitor cập nhật trạng thái/uptime sau khi kết nối lại. Lỗi được giữ hiển thị cạnh nút. Restart bị vô hiệu hóa khi biết dòng đó đang cập nhật; hoạt động OTA được poll cả ở chế độ thường. Card hẹp cuộn ngang để truy cập đủ sáu cột.
+
+Card Versions hiển thị **Current** và **Latest** cạnh nhau. Latest lấy từ `target` của từng component trong `/api/system/ota-versions`, gồm runtime đang dùng qua alias `agent`; đây là bản được publish trong OTA feed của thiết bị, không phải tra release upstream. Metadata được tải ở cả chế độ thường và debug, rồi làm mới sau cập nhật. Target thiếu hoặc rỗng, gồm Host, hiện `—`; component đã ở bản hiện tại vẫn hiển thị target đã publish. Hai hàng Bootstrap, Device và nút update vẫn chỉ hiện trong debug.
 
 **Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
 
@@ -353,6 +356,8 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 
 ### 5.1 Overview Section
 
+Khi quay lại Overview, dữ liệu được refresh ngay thay vì chờ nhịp poll 5 giây; dữ liệu card đã có vẫn hiển thị trong lúc tải. Monitor giữ snapshot phiên bản OTA và emotion preset tải thành công qua các lần đổi tab, hiển thị ngay khi quay lại rồi cập nhật nền. Cache chỉ nằm trong bộ nhớ và mất khi monitor unmount. Đổi section sẽ hủy poll của section cũ; không giữ stream của section đang ẩn.
+
 Gồm các card:
 
 **OpenClaw AI**
@@ -449,6 +454,8 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
 - Thu hồi ghép đôi yêu cầu xác nhận và gọi `DELETE /api/buddy`.
 
 **Ghép đôi Harness**
+- Nhãn kết nối chỉ hiển thị **CONNECTED** khi đọc được trạng thái kết nối sống, **OFFLINE** khi còn pairing nhưng không có kết nối, và **STATUS UNAVAILABLE** khi đọc trạng thái lỗi. Pairing đã lưu được giải thích riêng, không đồng nghĩa máy đang online. Hướng dẫn offline cho biết yêu cầu mới chưa thể tới máy và không cần ghép đôi lại chỉ vì offline.
+
 - **Generate pairing code** gọi `POST /api/harness/pair` có xác thực admin, không cần
   chọn máy tính. OS tạo mã sáu ký tự có hiệu lực 60 giây.
 - Trên cùng mạng nội bộ, mở Harness Desktop → Settings → Devices, chọn thiết bị
@@ -465,6 +472,9 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
 **Giọng nói Harness-only**
+
+Trang Pairing chỉ hiện công tắc Harness-only voice và mô tả khi OS trả `supported:true` (board hiện tại có cấu hình MPR121). Thiếu metadata hỗ trợ thì ẩn công tắc. Pairing và thông tin agent đang focus vẫn hiển thị; API/MQTT cũng chặn bật nếu không đáp ứng phần cứng.
+
 
 - Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
 - Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.
@@ -748,8 +758,12 @@ với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample ho�
 sample là `null` sẽ hiện trạng thái chờ, không hiển thị ngày epoch. Giải thích về
 gas index chỉ xuất hiện khi VOC hoặc NOx có nguồn được khai báo hoặc giá trị đo.
 
-Lamp vẫn để `environment` được comment trong `ROBOT.md` và SEN55/SCD41 tắt trong
-file JSON tương ứng, nên card này ẩn cho đến khi capability được khai báo. Xem
+Chỉ hardware profile `pro`, `pro-respeaker-lite` và `pro-xvf3800` của Lamp khai báo `environment`
+tùy chọn (`required: false`) và bật SEN63C trên `orangepi_sun60`, bus `0`.
+Standard hiện `N/A` mà không polling vì không có capability này. SEN55/SCD41
+và board thiếu entry tương ứng vẫn tắt, ngay cả trên Pro. Trên Pro, thiếu
+SEN63C thì hiện lỗi và `N/A` trong khi HAL thử lại, không chặn khởi động.
+Tắt SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem
 [tài liệu cảm biến môi trường của Lamp](../../robots/lamp/docs/vi/environment-sensing_vi.md)
 về đấu dây, bật cảm biến và contract dữ liệu HAL.
 

@@ -6,6 +6,7 @@ class DelegateSignal(BaseModel):
 
     message: str = ""
     transcript: str = ""
+    handoff_context: str = ""
     user_turn_id: str = ""
 
 

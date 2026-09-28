@@ -26,6 +26,7 @@ from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 from hal.drivers.sensing.presence_service import PresenceState, PresenseService
 
 from .base import Perception
+from .emotion_gating import gate_reading, load_label_thresholds
 
 logger = logging.getLogger(__name__)
 
@@ -298,6 +299,7 @@ class RemoteEmotionRecognizer:
         threshold: float = config.EMOTION_CONFIDENCE_THRESHOLD,
         timeout: float = 10.0,
         debug_logger: "EmotionDebugLogger | None" = None,
+        label_thresholds: dict[str, float] | None = None,
     ):
         self._url: str = (
             base_url.rstrip("/") + "/" + config.DL_EMOTION_RECOGNIZE_ENDPOINT.strip("/")
@@ -306,6 +308,12 @@ class RemoteEmotionRecognizer:
         )
         self._api_key: str = api_key
         self._threshold: float = threshold
+        # Per-label bars applied here when the server returns raw probabilities.
+        self._label_thresholds: dict[str, float] = (
+            label_thresholds
+            if label_thresholds is not None
+            else load_label_thresholds(config.EMOTION_LABEL_THRESHOLDS_JSON)
+        )
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
         self._debug: EmotionDebugLogger | None = debug_logger
@@ -335,8 +343,13 @@ class RemoteEmotionRecognizer:
     def recognize(self, face_crop: cv2.typing.MatLike) -> dict[str, Any] | None:
         """Send a face crop to the emotion-recognize endpoint.
 
-        Returns dict with keys: emotion, confidence, valence, arousal.
-        Returns None if unavailable or no detection above threshold.
+        Returns dict with keys: emotion, confidence, valence, arousal,
+        probabilities (when the server sent per-class probabilities, i.e. a
+        raw-mode response), all_detections (the full candidate list from the
+        server), and gate ("hal" when this method applied the device-side
+        gate, "server" when an older server already gated before responding).
+        Returns None if unavailable, no detection was returned, or the
+        reading failed the device gate.
         """
         if not self._url:
             return None
@@ -347,6 +360,9 @@ class RemoteEmotionRecognizer:
             plain_body = json.dumps({
                 "image_b64": self._img2b64(face_crop),
                 "threshold": self._threshold,
+                # A supporting server skips its own gate and returns every class
+                # probability; an older one ignores this and gates as before.
+                "raw": True,
             }).encode()
 
             if self._crypto is not None:
@@ -400,8 +416,11 @@ class RemoteEmotionRecognizer:
             else:
                 detections = resp.json().get("detections", [])
             if not detections:
-                # Endpoint applies the threshold server-side; empty here means
-                # no face detection cleared the confidence bar (a "fail").
+                # Empty here means the model returned nothing for this crop.
+                # A non-raw server would additionally drop a below-threshold
+                # detection here, but with raw: true the server skips its own
+                # gate and hands back everything the model produced — an empty
+                # list only happens when there was no detection to return.
                 if self._debug is not None:
                     _ = self._debug.save_failure(
                         "no-detection",
@@ -420,6 +439,32 @@ class RemoteEmotionRecognizer:
             top = max(detections, key=lambda d: d["confidence"])
             result = dict(top)
             result["all_detections"] = detections
+
+            probabilities = top.get("probabilities")
+            if not probabilities:
+                # Older server: it already gated with its own map.
+                result["gate"] = "server"
+                return result
+
+            gated = gate_reading(probabilities, self._label_thresholds, self._threshold)
+            if gated is None:
+                # Same outcome as the old server's empty response: the caller
+                # records no reading, which counts against the label in the vote.
+                if self._debug is not None:
+                    _ = self._debug.save_failure(
+                        "gated",
+                        face_crop=face_crop,
+                        threshold=self._threshold,
+                        label_thresholds=self._label_thresholds,
+                        probabilities=probabilities,
+                        gate="hal",
+                        detail=f"{top['emotion']} {top['confidence']:.2f} failed the device gate",
+                    )
+                return None
+
+            result["emotion"] = gated.label
+            result["confidence"] = gated.confidence
+            result["gate"] = "hal"
             return result
         except requests.RequestException as e:
             logger.warning("[activity.emotion] request failed: %s", e)
@@ -567,10 +612,12 @@ class EmotionPerception(Perception[FaceDetectionData]):
         if result is None:
             # A failure folder (http error / no-detection / request error) was
             # already written inside recognize() with the precise reason.
-            # An empty response is NOT evidence of Neutral — the service gates
-            # the argmax per label and falls back to Neutral's own (low)
-            # probability, so this is "no confirmed reading", and it counts
-            # against any label trying to claim the window.
+            # An empty response is NOT evidence of Neutral — the gate that
+            # rejected the argmax was either ours (emotion_gating, against a
+            # raw-mode server) or the server's own (an older server that
+            # ignores raw and gates before responding), so this is "no
+            # confirmed reading", and it counts against any label trying to
+            # claim the window.
             self._record_attempt(face.person_id, _NO_READING)
             return
 
@@ -626,6 +673,7 @@ class EmotionPerception(Perception[FaceDetectionData]):
             valence=result.get("valence"),
             arousal=result.get("arousal"),
             all_detections=result.get("all_detections"),
+            gate=result.get("gate"),
         )
 
         logger.debug(

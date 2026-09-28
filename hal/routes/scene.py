@@ -60,6 +60,14 @@ def restore_persisted_scene() -> None:
         if not scene or data.get("boot_id") != _boot_id() or scene not in SCENE_PRESETS:
             _SCENE_STATE_PATH.unlink(missing_ok=True)
             return
+        if state._sleeping:
+            # Sleep owns the hardware across a restart. Keep scene identity so
+            # the normal wake path can clear it, without repainting LEDs,
+            # moving servos, or reopening the camera/mic/speaker. The saved
+            # user LED state is already loaded by app_state at import time.
+            state._active_scene = scene
+            state.logger.info("Scene restore: retained '%s' while asleep (hardware unchanged)", scene)
+            return
         activate_scene(SceneRequest(scene=scene))
         state.logger.info("Scene restore: re-activated '%s' after service restart", scene)
     except Exception as e:

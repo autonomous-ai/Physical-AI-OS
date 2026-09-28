@@ -7,9 +7,9 @@ States:
   AWAY     — no motion for config.AWAY_TIMEOUT_S, lights off
 
 Transitions:
-  motion detected → PRESENT (turn on / restore)
-  no motion for config.IDLE_TIMEOUT_S → IDLE (dim)
-  no motion for config.AWAY_TIMEOUT_S → AWAY (off)
+  motion detected or user activity (voice turn, button/touch) → PRESENT (turn on / restore)
+  neither for config.IDLE_TIMEOUT_S → IDLE (dim)
+  neither for config.AWAY_TIMEOUT_S → AWAY (off)
 
 Calls HAL LED endpoints directly (same process, via rgb_service reference).
 """
@@ -39,9 +39,10 @@ class PresenseService:
     def __init__(self, rgb_service=None, send_event=None, auto_enabled: bool = True):
         self._rgb_service = rgb_service
         self._send_event = send_event
-        # The idle→away→sleep state machine is driven ONLY by on_motion(), which
-        # is fed exclusively by the people-perception processors (face / motion /
-        # emotion) gated on the `presence` capability. A device that doesn't
+        # The idle→away→sleep state machine is driven by on_motion(), fed by the
+        # people-perception processors (face / motion / emotion) gated on the
+        # `presence` capability, and by on_activity() (voice turns, gestures),
+        # which only refreshes a machine that is already enabled. A device that doesn't
         # declare `presence` has no motion source, so leaving auto-control on
         # would make it falsely transition to AWAY (lights off + sleep announce)
         # after the timeout despite being unable to sense anyone. Start disabled
@@ -82,6 +83,35 @@ class PresenseService:
 
     def on_motion(self):
         """Called by SensingService when motion is detected."""
+        self._mark_present("motion detected")
+
+    def on_activity(self, source: str):
+        """Called on direct user interaction: a voice turn or a physical gesture.
+
+        The camera alone cannot prove absence. A user talking to the device with
+        the camera off (privacy / manual) or sitting outside the frame is still
+        here, yet the timer only saw faces, so the device dimmed, went AWAY and
+        announced sleep mid-conversation. Interaction resets the same clock.
+        """
+        self._mark_present(f"user activity: {source}")
+
+    def on_wake(self):
+        """Sleep ended: start a fresh idle→away countdown from now.
+
+        Only a face used to reset the clock, so a wake that nobody stood in
+        front of (web UI, API, an agent reply to a chat) kept the pre-sleep
+        timestamp: already past AWAY_TIMEOUT_S it announced sleep again right
+        after waking, and a machine left AWAY never timed out again.
+        The light is left alone — the wake emotion owns the strip.
+        """
+        if not self._enabled:
+            return
+        self._last_motion_time = time.time()
+        if self._state != PresenceState.PRESENT:
+            logger.info("Presence: %s → PRESENT (woke from sleep)", self._state)
+        self._state = PresenceState.PRESENT
+
+    def _mark_present(self, reason: str):
         if not self._enabled:
             return
 
@@ -91,7 +121,7 @@ class PresenseService:
         if prev_state in (PresenceState.IDLE, PresenceState.AWAY):
             self._state = PresenceState.PRESENT
             logger.info(
-                "Presence: %s → PRESENT (motion detected, restoring light)", prev_state
+                "Presence: %s → PRESENT (%s, restoring light)", prev_state, reason
             )
             self._restore_light()
 
@@ -114,6 +144,13 @@ class PresenseService:
         if not self._enabled or self._state == PresenceState.DISABLED:
             return
 
+        # Asleep: sleep already owns the light and the speaker, and the camera
+        # is off so nothing can reset the clock. Counting on would dim a
+        # sleeping lamp back to 20% of the user's colour and leave the machine
+        # AWAY for the wake to inherit. on_wake() restarts the countdown.
+        if self._is_sleeping():
+            return
+
         # Guard mode: never transition to IDLE or AWAY — the device must stay alert.
         if self._is_guard_mode():
             return
@@ -130,6 +167,18 @@ class PresenseService:
             logger.info("Presence: IDLE → AWAY (no motion for %ds)", int(elapsed))
             self._turn_off_light()
             self._notify_away(int(elapsed))
+
+    @staticmethod
+    def _is_sleeping() -> bool:
+        """Sleep owns the strip; presence must not relight a sleeping device.
+        A gesture reaches on_activity() BEFORE its wake runs (single click),
+        and the camera can stay on while asleep under a manual override."""
+        try:
+            from hal import app_state
+
+            return bool(app_state._sleeping)
+        except Exception:
+            return False
 
     @staticmethod
     def _light_is_off() -> bool:
@@ -157,7 +206,9 @@ class PresenseService:
         if not self._rgb_service:
             logger.warning("Presence: cannot restore light — rgb_service not available")
             return
-        if self._light_is_off():
+        if self._is_sleeping():
+            logger.info("Presence: light restore skipped — device is sleeping")
+        elif self._light_is_off():
             logger.info("Presence: light restore skipped — strip is off/resting dark")
         else:
             try:

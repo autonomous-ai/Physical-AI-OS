@@ -695,3 +695,14 @@ Nếu bridge đang kết nối bị rớt khi turn còn active, client phát lif
 có tương quan (`codex gateway restarted; turn cancelled`) trước khi xoá tương
 quan cục bộ. Nhờ vậy Monitor và web chat không hiện turn active vĩnh viễn; task
 không tự gửi lại vì có thể đã tạo side effect.
+
+
+## Nạp trước skill bằng Jev trong bridge được OS quản lý
+
+Bridge runtime Codex dùng Jev chọn tối đa một skill đủ điều kiện trước khi chuyển yêu cầu người dùng chỉ có văn bản. Bridge đọc thư mục skill native do OS cài, `$CODEX_HOME/skills`, và thêm toàn bộ skill cùng đường dẫn thư mục vào yêu cầu đó. Đây là adapter của runtime, không phải bộ định tuyến intent phần cứng hay plugin được cài vào CLI upstream độc lập. Voice, Web/MQTT chat và hội thoại thông thường trên các kênh nhắn tin do OS quản lý cùng đi qua bridge này. CLI độc lập và chế độ coding-session trên Telegram chạy ngoài bridge, tiếp tục tìm skill theo cơ chế native.
+
+Adapter dùng chung mã `system/lib/jevskills`, giới hạn ba giây và tiếp tục bình thường khi Jev không chọn, thiếu thông tin xác thực, trả kết quả không hợp lệ hoặc không đọc được skill. Tin hệ thống, slash command và attachments bỏ qua bước nạp trước. Khi chạy CLI, nếu toàn bộ preload cộng yêu cầu đạt giới hạn 128 KiB cho một đối số trên Linux, bridge bỏ preload, log `reason=argument_budget` rồi gửi yêu cầu gốc; không cắt bớt skill. Yêu cầu đã chuẩn bị dùng lại context khi retry do phiên cũ không còn; không ghi context vào AGENTS.md hay system prompt toàn cục. Runtime upstream có thể giữ lượt này trong lịch sử hội thoại thông thường; nội dung nạp trước ghi rõ chỉ áp dụng cho yêu cầu hiện tại.
+
+**Jev mặc định tắt** cho runtime này trong khi chờ kiểm chứng native. Cờ build `const jevEnabled = false` nằm trong `runtimes/codex/gatewayd/jev.go`. Muốn bật sau kiểm chứng, đổi cờ Go rồi build và restart bằng luồng quản lý runtime; biến môi trường không bật được Jev. `JEV_CONFIG_PATH` mặc định là `/root/config/config.json`; thông tin xác thực được đọc từ file, không đưa vào context. Skill có metadata thực thi chưa hỗ trợ bị loại. Cấu hình native sai định dạng, cú pháp JSONC chưa hỗ trợ, biến môi trường đổi thư mục cấu hình và thư mục skill riêng của project cũng khiến adapter bỏ qua nạp trước. Adapter kiểm tra cấu hình ở thư mục cha để giữ chính sách kế thừa và thứ tự ưu tiên skill. Khi cấu hình native có điều khiển skill hoặc quyền tùy chỉnh, adapter nhường cho bộ nạp native thay vì bỏ qua chính sách đó. Việc chọn skill không cấp quyền thực thi hay thay đổi cơ chế phê duyệt tool hiện có.
+
+Kiểm chứng local bao gồm cách ly yêu cầu, bỏ qua nguồn không phải người dùng và attachments, nhường khi có chính sách native, cùng dữ liệu gửi vào tiến trình runtime. Test dùng selector mock và tiến trình giả; Jev thật, hành vi model native và delivery trên thiết bị cần kiểm thử tích hợp riêng.

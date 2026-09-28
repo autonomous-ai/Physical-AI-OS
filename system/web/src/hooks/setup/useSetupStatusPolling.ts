@@ -200,7 +200,7 @@ export function useSetupStatusPolling({
     if (elapsed < JOIN_TIMEOUT_SEC) return;
     console.warn(`[setup] no verdict after ${elapsed}s with AP unreachable — declaring join failed`);
     setSetupErrorMsg(
-      "The device couldn't be reached after joining Wi-Fi. This usually means " +
+      "The robot couldn't be reached after joining Wi-Fi. This usually means " +
       "the Wi-Fi password was wrong, or the network is 5GHz-only.",
     );
     setSetupPhase("failed");

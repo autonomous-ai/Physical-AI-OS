@@ -132,11 +132,11 @@ Defined at `.lm-root` in `index.css`:
 ### 3.4 Settings (`/setting`) — shared shell
 
 **Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
-shows the provider range (`0.7–1.2×` for ElevenLabs, `0.25–4.0×` otherwise)
-in `0.05` steps. **Save Changes** persists speed through
-`PUT /api/device/config`; save before using **Test Voice**. Saved speed takes
-precedence over `HAL_TTS_SPEED` (default `1.3`); ElevenLabs clamps the outgoing
-speed to `0.7–1.2`.
+shows the selectable range (`0.5–2.0×` for every provider) in `0.05` steps. **Save Changes** persists speed through
+`PUT /api/device/config`. **Test Voice** sends the current slider speed immediately
+without saving; the override applies only to the preview utterance. Saved speed takes
+precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
+`1.0`; other ElevenLabs models clamp the outgoing speed to `0.7–1.2`.
 
 **AI Brain key/URL mirroring.** The panel fills a blank TTS or STT field from the
 AI Brain's key and base URL, so a first-time setup only asks for one credential.
@@ -151,7 +151,8 @@ autonomous proxy URL, a pairing that cannot work.
 **TTS key ownership.** The device stores exactly one TTS key (`ttsAPIKey`), and
 it always belongs to the provider currently selected in Voice. `Autonomous
 (proxy)` and `Custom (BYO URL)` store nothing and inherit the AI Brain key via
-`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` needs no
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`) — its vendor
+sub-picker offers OpenAI, ElevenLabs and Gemini; `Piper` needs no
 key at all; `OpenAI (direct)` and `ElevenLabs (direct)` **require their own** —
 the inherited Autonomous JWT is rejected with a 401 that HAL retries, abandons,
 and returns as zero samples, i.e. a mute device with no error in this UI.
@@ -213,7 +214,9 @@ The Settings collapsible group lives in the shared sidebar `NAV` (`system/web/sr
 
 Monitor leaves serialize as the plain id, e.g. `/monitor#overview`, `/monitor#pairing`, `/monitor#system`, `/monitor#flow`. Defaults: `/monitor` with no/invalid hash → `overview`; `/setting` with no/invalid hash → `general` (URL normalized to `/setting#general`). Deep-links (e.g. `/setting#wifi`) and browser back/forward are honored via a `useLocation`-driven effect. Non-debug users only see the leaves in `PUBLIC_SECTIONS` (which includes Chat, Overview, **Pairing**, Info, Flow, Camera, **Sensing**, Users, **Logs**, **CLI**, and the public Settings leaves General/Wi-Fi/My Voice/Face/MCP Tools/Plugins/Timezone); Bluetooth remains available by direct URL but is hidden from navigation. `?debug=true` reveals the rest (Analytics, Servo, API Docs, Agent gateway, and the deeper Settings leaves AI Brain/Runtime/Language/Voice/Realtime/Channels/MQTT). Pressing `update` swaps the button for `updating…` immediately — the button never says "OK", which would read as "done" for a request that has only STARTED the install (and, for a component that finishes in seconds, arrived before the row could even show progress). Failures show the server's own reason (`rate-limited, retry in 8s`, `bootstrap unreachable`) rather than a bare "Failed". While an install runs, that row shows `updating…` in place of the button (an install takes tens of seconds — the component stops, is rebuilt and restarts — and a row that just sits there invites a second click, which is how a device once lost its HAL runtime). The `update` buttons in the Overview **Versions** card (Web / OS / HAL / Agent rows, plus Bootstrap and Device in debug) are gated the same way — regular viewers get no one-click OTA trigger. The top-bar **Debug** toggle beside the Dark/Light button toggles that query parameter while preserving the active route hash and any other query parameters; its amber state indicates that debug mode is enabled.
 
-The Overview **Versions** card has a fifth action column with `restart` for OS Server and HAL, including outside debug mode. Each button calls the admin-protected `POST /api/system/restart/:target` (`os-server` or `hal`). The server schedules the restart after 2 seconds and returns HTTP 202. The button shows `queued` and disables repeat clicks for 15 seconds; this acknowledges scheduling, not service recovery. Existing monitor polling refreshes status/uptime after reconnection. Errors remain visible beside the button. Restart is disabled while the row is known to be updating; OTA activity is polled in normal mode too. Narrow cards scroll horizontally to keep all five columns accessible.
+The Overview **Versions** card has a restart action column with `restart` for OS Server and HAL, including outside debug mode. Each button calls the admin-protected `POST /api/system/restart/:target` (`os-server` or `hal`). The server schedules the restart after 2 seconds and returns HTTP 202. The button shows `queued` and disables repeat clicks for 15 seconds; this acknowledges scheduling, not service recovery. Existing monitor polling refreshes status/uptime after reconnection. Errors remain visible beside the button. Restart is disabled while the row is known to be updating; OTA activity is polled in normal mode too. Narrow cards scroll horizontally to keep all six columns accessible.
+
+The Versions card shows **Current** and **Latest** side by side. Latest comes from each component's `target` in `/api/system/ota-versions`, including the active runtime via `agent`; it is the version published in the device's OTA feed, not an upstream release lookup. Metadata loads in normal and debug mode and refreshes after updates. Missing or empty targets, including Host, display `—`; an already-current component still shows its published target. Bootstrap and Device rows and update buttons remain debug-only.
 
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
@@ -364,6 +367,8 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 
 ### 5.1 Overview Section
 
+Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.
+
 Cards included:
 
 **OpenClaw AI**
@@ -465,6 +470,8 @@ one column below 760px.
 - Revoking a pairing requires confirmation and calls `DELETE /api/buddy`.
 
 **Harness pairing**
+- The connection badge shows **CONNECTED** only for a successful live status read, **OFFLINE** for a saved pairing without a connection, and **STATUS UNAVAILABLE** when polling fails. Saved pairing is explained separately; it does not establish that the computer is online. Offline guidance explains that new requests cannot reach the computer and that offline alone does not require pairing again.
+
 - **Generate pairing code** calls admin-authenticated `POST /api/harness/pair` with no
   computer selection. The OS generates a six-character code valid for 60 seconds.
 - On the same local network, open Harness Desktop → Settings → Devices, select this
@@ -481,6 +488,9 @@ one column below 760px.
   Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
 
 **Harness-only voice**
+
+The Pairing page only shows the Harness-only voice switch and its description when the OS voice-mode response has `supported:true` (MPR121 configured for the active board). Missing support metadata hides the switch. Pairing and focused-agent information remain visible; API/MQTT also enforce the hardware requirement.
+
 
 - A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. **Focused Harness agent** mirrors the agent pane focused in the Harness app, including while voice mode is off. There is no local agent picker; normal `harness-use` conversation targets remain independent.
 - Enable **Harness-only voice** to send spoken requests directly to that focused agent; replies retain device TTS. Text chat keeps its normal behavior. State lives in RAM; restart turns the mode off and focus syncs again after reconnect. Focus changes during capture reject the old capture and require repeating the request. Already-sent work keeps its original response route.
@@ -766,9 +776,12 @@ generic sensor label. A `null` sample or sample timestamp displays a waiting sta
 never an epoch date. The gas-index explanation appears only when VOC or NOx has a
 declared source or a measured value.
 
-Lamp still ships with `environment` commented out in `ROBOT.md` and SEN55/SCD41
-disabled in their respective JSON configurations, so this card remains hidden until the capability is
-declared. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
+Only Lamp hardware profiles `pro`, `pro-respeaker-lite` and `pro-xvf3800` declare optional
+`environment` (`required: false`) and enable SEN63C on `orangepi_sun60`,
+bus `0`. Standard shows `N/A` without polling because its capability is absent.
+SEN55/SCD41 and boards without matching entries remain disabled, even on Pro.
+On Pro, missing SEN63C shows an error and `N/A` while HAL retries, without
+blocking startup. Disable SEN63C before enabling SEN55 + SCD41 instead. See [Lamp environmental sensing](../robots/lamp/docs/environment-sensing.md)
 for wiring, enabling, and the HAL data contract.
 
 ## 6. LED Color API

@@ -89,7 +89,7 @@ export function HarnessCard() {
   };
 
   const handleUnpair = async () => {
-    if (busy || !window.confirm("Disconnect Harness and remove this computer’s pairing from the device?")) return;
+    if (busy || !window.confirm("Disconnect Harness and remove this computer’s pairing from the robot?")) return;
     setBusy(true);
     setError(null);
     try {
@@ -121,8 +121,9 @@ export function HarnessCard() {
   const pairing = status?.pairing === true || pairInfo?.pairing === true;
   const hasTrust = status?.paired === true || Boolean(status?.machine_id);
   const remaining = Math.max(0, Math.ceil(((pairInfo?.expires_at ?? 0) - Date.now()) / 1000));
-  const stateLabel = pairing ? "PAIRING" : status?.connected ? "CONNECTED"
-    : status?.paired ? "PAIRED · OFFLINE" : hasTrust ? "PAIRING INCOMPLETE"
+  const connected = status?.connected === true && !connectionError;
+  const stateLabel = connectionError ? "STATUS UNAVAILABLE" : pairing ? "PAIRING" : connected ? "CONNECTED"
+    : status?.paired ? "OFFLINE" : hasTrust ? "PAIRING INCOMPLETE"
       : status ? "NOT PAIRED" : "LOADING";
 
   return (
@@ -132,7 +133,7 @@ export function HarnessCard() {
           <span className="lm-mon-chip" aria-hidden><Laptop size={13} /></span>
           <span>Harness</span>
         </div>
-        <span role="status" style={{ fontSize: 10, color: status?.connected ? "var(--lm-green)" : "var(--lm-text-muted)" }}>
+        <span role="status" style={{ fontSize: 10, color: connected ? "var(--lm-green)" : "var(--lm-text-muted)" }}>
           {stateLabel}
         </span>
       </div>
@@ -140,9 +141,14 @@ export function HarnessCard() {
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <strong style={{ fontSize: 13 }}>{status.machine_name || "Paired computer"}</strong>
 
-          {!status.connected && <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
-            {status.paired
-              ? "Waiting for the Harness computer to reconnect. The pairing is saved."
+          {status.paired && <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
+            Pairing saved · {connected ? "Connected to this computer." : "Pairing does not mean the computer is online."}
+          </span>}
+          {!connected && <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
+            {connectionError
+              ? "Cannot check the connection right now. Refresh status to try again."
+              : status.paired
+              ? "Harness is offline. New requests cannot reach this computer until it reconnects. Keep Harness running on the same local network; you do not need to pair again just because it is offline."
               : "Pairing has not finished. Wait for the computer to reconnect, or unpair before trying again."}
           </span>}
           <button type="button" disabled={busy} onClick={() => { void handleUnpair(); }} style={buttonStyle}>
@@ -150,11 +156,11 @@ export function HarnessCard() {
           </button>
         </div>
       )}
-      {status?.paired && <HarnessVoiceMode key={status.machine_id} connected={status.connected && !connectionError} />}
+      {status?.paired && <HarnessVoiceMode key={status.machine_id} connected={connected} />}
       {pairing && <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
         <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
           Open Harness Desktop → Settings → Devices on your computer.
-          Select this Autonomous device and enter the code below.
+          Select this Autonomous robot and enter the code below.
         </span>
         <strong aria-label="Pairing code" style={{ fontSize: 24, letterSpacing: "0.18em" }}>
           {remaining > 0 && pairInfo?.code ? pairInfo.code : "Expired"}
@@ -170,7 +176,7 @@ export function HarnessCard() {
         <form onSubmit={handlePair} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
           <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
             Generate a code here, then open Harness Desktop → Settings → Devices on your computer.
-            Select this Autonomous device and enter the code. Keep both on the same local network.
+            Select this Autonomous robot and enter the code. Keep both on the same local network.
           </p>
           <button type="submit" disabled={busy}
             style={{ ...buttonStyle, color: "var(--lm-green)" }}>{busy ? "Preparing…" : "Generate pairing code"}</button>

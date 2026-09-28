@@ -1,4 +1,5 @@
 {
-  "startup_volume": 77,
-  "max_volume": 77
+  "capabilities": {
+    "environment": true
+  }
 }

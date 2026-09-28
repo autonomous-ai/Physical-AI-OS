@@ -198,3 +198,25 @@ func TestHarnessEvidenceOutcomesAreBounded(t *testing.T) {
 		}
 	}
 }
+
+func TestHarnessResultEvidencePreservesAllTerminalOutcomes(t *testing.T) {
+	m := newMock(nil, 3)
+	withPipe(t, m)
+	for _, outcome := range []string{"unknown", "accepted", "delivered", "private result text", ""} {
+		ReportTaskExecution("run", "", outcome, "harness_correlated_summary")
+	}
+	ReportTaskExecution("run", "", "cancelled", "private evidence text")
+	for _, outcome := range []string{"completed", "failed", "cancelled"} {
+		ReportTaskExecution("run-"+outcome, "", outcome, "harness_correlated_summary")
+	}
+	m.wait(t, 3)
+	if len(m.events) != 3 {
+		t.Fatalf("unexpected observations: %+v", m.events)
+	}
+	for i, outcome := range []string{"completed", "failed", "cancelled"} {
+		p := m.events[i].params
+		if p["outcome"] != outcome || p["evidence"] != "harness_correlated_summary" || p["error"] != (outcome != "completed") || p["run_id"] != "run-"+outcome {
+			t.Fatalf("invalid result evidence: %+v", p)
+		}
+	}
+}

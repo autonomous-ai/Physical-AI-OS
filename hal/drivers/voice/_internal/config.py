@@ -86,6 +86,13 @@ ECHO_GATE_WINDOW_S = float(os.environ.get("HAL_ECHO_GATE_WINDOW_S", "0.05"))
 ECHO_SIMILARITY_THRESHOLD = float(os.environ.get("HAL_ECHO_SIMILARITY_THRESHOLD", "0.55"))
 ECHO_RELEVANCE_WINDOW_S = float(os.environ.get("HAL_ECHO_RELEVANCE_WINDOW_S", "15.0"))
 MAX_SESSION_DURATION_S = float(os.environ.get("HAL_MAX_SESSION_DURATION_S", "30"))
+# Hands-free capture with recognized words can outlive the short noise/manual
+# capture ceiling. A hard limit aborts; it is never permission to execute a
+# possibly unfinished request.
+TURN_END_ENABLED = os.environ.get("HAL_TURN_END_ENABLED", "true").lower() == "true"
+TURN_END_FALLBACK_S = float(os.environ.get("HAL_TURN_END_FALLBACK_S", "2.5"))
+TURN_END_MAX_PAUSE_S = float(os.environ.get("HAL_TURN_END_MAX_PAUSE_S", "6.0"))
+TURN_END_MAX_DURATION_S = float(os.environ.get("HAL_TURN_END_MAX_DURATION_S", "180"))
 
 # Warm mic — keep the arecord capture stream OPEN across TTS/music (drain +
 # discard frames) instead of closing it and paying a cold arecord reopen
@@ -107,6 +114,8 @@ WARM_MIC_ECHO_SKIP_MAX_S = float(os.environ.get("HAL_WARM_MIC_ECHO_SKIP_MAX_S", 
 # not a hal dependency — absent, every AEC entry point degrades to a no-op and
 # the voice path behaves exactly as it did before, so defaulting this on cannot
 # break a device that lacks the binding.
+# Hardware-AEC profiles disable this explicitly. With LIVE_MODE enabled,
+# that selects the shared adaptive live path; no hardware name is inspected.
 # ---------------------------------------------------------------------------
 AEC_ENABLED = os.environ.get("HAL_AEC_ENABLED", "true").lower() == "true"
 # Speaker→mic delay hint. AEC3 estimates the real delay itself, but the hint
@@ -149,20 +158,14 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
 # ---------------------------------------------------------------------------
-# Speaker-ID prepass — how long the turn may wait for it before committing
+# Speaker-ID prepass — bounded waits before commit and downstream dispatch
 # ---------------------------------------------------------------------------
-# The prepass is an external embedding call (measured 1.49s on lamp-0c89,
-# 03/09/2026) and it used to run STRICTLY BEFORE the realtime turn opened, so
-# its whole round trip sat in front of the Gemini connect and the audio flush —
-# dead time between the user finishing a sentence and the model hearing it. It
-# now runs on its own thread while that connect happens, and the turn joins it
-# here, just before the point where the speaker's name is actually needed.
-#
-# The wait is a ceiling, not a delay: a prepass that finished during the connect
-# costs nothing. Reaching the ceiling only means this turn's [TURN CONTEXT] goes
-# out with the speaker unresolved — the same thing the always-listening path has
-# always done, and the late-correction path already covers it.
+# Recognition runs in the background. Turn-based realtime gives it only the
+# short COMMIT budget before sending activityEnd; the normal JOIN budget is
+# retained before downstream dispatch and for live/non-realtime paths.
 SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
+# Brief pre-commit opportunity; the remaining identity work overlaps the reply.
+SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_COMMIT_JOIN_S", "0.2"))
 
 # How long a resolved speaker identity is reused instead of re-running the
 # recognizer. The prepass is an external inference call on every turn — a
@@ -235,6 +238,18 @@ ENDPOINT_SILENCE_S = float(os.environ.get("HAL_ENDPOINT_SILENCE_S", "0.8"))
 # knobs below only shape a session once one is open.
 # ---------------------------------------------------------------------------
 LIVE_MODE = _hal_config.LIVE_MODE
+
+# Linear PCM gain while hardware-AEC live playback is temporarily ducked.
+# Keep the demo default until a device-specific value has been measured.
+def _live_duck_gain(value):
+    try:
+        gain = float(value)
+    except (TypeError, ValueError):
+        return 0.12
+    return gain if 0.0 < gain <= 1.0 else 0.12
+
+
+LIVE_DUCK_GAIN = _live_duck_gain(os.environ.get("HAL_LIVE_DUCK_GAIN", "0.12"))
 
 # What goes on the uplink while our own speaker is playing.
 #

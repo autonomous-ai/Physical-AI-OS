@@ -26,6 +26,16 @@ data làm vài pixel chốt nhầm một màu rác (hay gặp nhất là xanh l�
 đầu tiên của mỗi frame WS2812). Không có bước xoá này thì màu rác đó sáng cho tới
 lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
+### Ghi frame đồng thời và chẩn đoán clear
+
+Solid, paint từng pixel và clear dùng chung khóa driver cho toàn bộ thao tác.
+Clear giữ khóa qua hai lần ghi frame đen, hai khoảng chờ 10 ms, SPI idle và
+đọc lại buffer. Animation không thể tô lại buffer giữa chừng khiến
+`LED clear did NOT take` báo nhầm lỗi clear. Frame đến sau vẫn có thể tô màu
+khi clear đã trả về; quản lý và hủy effect vẫn thuộc bên gọi. Chẩn đoán này đọc
+bộ nhớ phần mềm, không phải phản hồi từ LED thật, nên buffer đen không chứng minh
+phần cứng đã tắt.
+
 ## Endpoints
 
 | Method | Endpoint | Mô tả |
@@ -102,6 +112,8 @@ Mỗi scene điều khiển **toàn bộ thiết bị ngoại vi** — không ch
 Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idle, bật lại camera/speaker, nhả servo hold.
 
 Scene đang active **sống sót qua các lần restart HAL service** (OTA, deploy, crash): trạng thái được persist vào sidecar theo phiên boot (`/tmp/hal-scene-state.json`, gắn với `boot_id` của kernel) và tự động kích hoạt lại khi HAL chạy trở lại, nên niềm tin của agent ("focus mode đang bật") luôn đồng bộ. Reboot toàn bộ thiết bị thì chủ đích khởi động không có scene. Các lệnh LED transient (`/led/solid`, `/led/off`, `/led/effect` với `"transient": true`, vd hiệu ứng breathing lúc boot) chỉ overlay lên strip mà không thoát scene đang active; chỉ LED override non-transient mới xoá scene.
+
+Khi HAL restart trong lúc đang ngủ, restore scene chỉ giữ tên scene active, không áp dụng lại LED, servo, camera, mic hoặc loa. Sleep tiếp tục giữ quyền điều khiển phần cứng và các cờ mute. User LED state được load riêng; khi thức dậy bình thường, flow scene-off hiện có sẽ xoá scene đã giữ lại.
 
 | Scene | Sáng | Màu (K) | Servo | Camera | Mic | Speaker |
 |-------|------|---------|-------|--------|-----|---------|
@@ -328,3 +340,16 @@ theo lượt, gồm hành vi LED, màn hình và thân hiện có. Không có l�
 cho LIVE. Emotion cần transcript có chữ và cùng điều kiện hướng tới device;
 tiếng ồn hay mở mic không tự bật emotion. Thinking cần bằng chứng kết thúc
 từ provider, không dùng ước lượng im lặng local. Xem [realtime voice](../../../../docs/vi/realtime-voice_vi.md#phản-hồi-hw-emotion-trong-chế-độ-live) để biết thời điểm gọi và dọn trạng thái.
+
+### Intent giảm sáng tương đối
+
+Action `dim` local/Jev đọc `/led/color`, chia đôi từng kênh RGB, ghi
+`/led/solid` rồi đọc lại kiểm chứng. Gọi tiếp giảm tiếp; đèn tắt giữ nguyên.
+Làm tròn xuống có thể đưa về tắt. Effect/scene chuyển thành màu tĩnh từ màu nền
+hoặc pixel sáng nhất được báo; không giữ pattern.
+
+Voice được local/Jev xử lý (`handledLocally=true`) giải phóng cue thinking
+realtime đang giữ mà không chờ TTS. Phản hồi mute hoặc không có lời nói không
+giữ cue vô hạn. Cleanup giữ emotion mới, khôi phục LED đã lưu (kể cả tắt/dim);
+TTS/nhạc đang phát giữ overlay tới teardown bình thường. Lượt do agent xử lý
+vẫn giữ cue thinking.

@@ -105,6 +105,7 @@ type fillerRun struct {
 	generation     uint64    // invalidates timer callbacks and speech completions after suspension
 	lastSpoken     string    // text of the most recent filler — used to dedup back-to-back picks
 	rearmPending   bool      // tool.end arrived while playing=true; fire() re-arms after speak (otherwise the event would be silently dropped by armLocked's playing guard)
+	armOnTool      bool      // delegated realtime turn: the realtime model already acknowledged the user, so the first filler waits for the first tool.start instead of FillerDelay after lifecycle.start (a NO_REPLY turn then stays silent instead of promising an answer)
 	lastToolName   string    // name of the most recently started tool — drives tool-aware filler pool ("Đang tra mạng" for web_search, "Đang đọc tài liệu" for read, etc.). Empty when no tool has started yet (e.g. first filler before any tool call)
 }
 
@@ -415,6 +416,9 @@ type FillerManager struct {
 	mu        sync.Mutex
 	runs      map[string]*fillerRun
 	voiceRuns map[string]bool
+	// delegated marks voice runs the realtime model handed off after speaking
+	// its own filler — see fillerRun.armOnTool.
+	delegated map[string]bool
 	// interactions maps a run to HAL's voice-metrics interaction id, so a filler
 	// fired later in the turn is attributed the same way the opening one is.
 	interactions map[string]string
@@ -426,6 +430,7 @@ func NewFillerManager() *FillerManager {
 	return &FillerManager{
 		runs:         make(map[string]*fillerRun),
 		voiceRuns:    make(map[string]bool),
+		delegated:    make(map[string]bool),
 		interactions: make(map[string]string),
 	}
 }
@@ -446,6 +451,23 @@ func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 	if interactionID != "" {
 		fm.interactions[runID] = interactionID
 	}
+	fm.mu.Unlock()
+}
+
+// MarkDelegatedVoiceRun is MarkVoiceRun for a turn the realtime model handed
+// off to the main agent (`[voice-instruction]`). The realtime model has
+// already spoken a filler for this utterance, so os-server must not promise
+// an answer a second time: no opening filler, and the first Continuation
+// only arms when a tool starts. A turn the main agent ends with NO_REPLY
+// (the common outcome for an unclear utterance) then produces no os-server
+// filler at all; a turn that runs tools keeps every tool-boundary filler.
+func (fm *FillerManager) MarkDelegatedVoiceRun(runID, interactionID string) {
+	fm.MarkVoiceRun(runID, interactionID)
+	if runID == "" {
+		return
+	}
+	fm.mu.Lock()
+	fm.delegated[runID] = true
 	fm.mu.Unlock()
 }
 
@@ -479,11 +501,17 @@ func (fm *FillerManager) OnTurnStart(runID string) {
 	}
 	delete(fm.voiceRuns, runID)
 	delete(fm.interactions, runID)
+	delegated := fm.delegated[runID]
+	delete(fm.delegated, runID)
 	if _, exists := fm.runs[runID]; exists {
 		return
 	}
-	run := &fillerRun{fired: 1, lastActivityAt: time.Now()}
+	run := &fillerRun{fired: 1, lastActivityAt: time.Now(), armOnTool: delegated}
 	fm.runs[runID] = run
+	if delegated {
+		slog.Info("filler OnTurnStart deferred to first tool (delegated realtime turn)", "component", "sensing", "run_id", runID)
+		return
+	}
 	fm.armLocked(runID, run, FillerDelay)
 }
 
@@ -514,9 +542,13 @@ func (fm *FillerManager) OnToolStart(runID, toolArgs, toolName string) {
 	if !hw {
 		if wasSuspended {
 			fm.armLocked(runID, run, fillerRearmDelay(run))
+		} else if run.armOnTool {
+			fm.armLocked(runID, run, FillerDelay)
 		}
+		run.armOnTool = false
 		return
 	}
+	run.armOnTool = false
 	fm.softCancelLocked(run)
 }
 
@@ -585,6 +617,7 @@ func (fm *FillerManager) Cancel(runID string) {
 	}
 	fm.mu.Lock()
 	delete(fm.voiceRuns, runID)
+	delete(fm.delegated, runID)
 	delete(fm.interactions, runID)
 	run, ok := fm.runs[runID]
 	if !ok {

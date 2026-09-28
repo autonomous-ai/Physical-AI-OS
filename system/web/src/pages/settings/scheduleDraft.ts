@@ -92,7 +92,7 @@ export function bodyFromDraft(d: ScheduleDraft): ScheduleWriteBody {
 export function validateDraft(d: ScheduleDraft): string | null {
   if (!d.name.trim()) return "Give the task a name.";
   if (!d.instructions.trim()) {
-    return d.kind === "speak" ? "Type what the device should say." : "Tell the device what to do.";
+    return d.kind === "speak" ? "Type what the robot should say." : "Tell the robot what to do.";
   }
   // Mirrors ValidateIntentPayload in system/schedule/intent.go, so the form
   // refuses what the device would refuse instead of queueing a doomed intent.

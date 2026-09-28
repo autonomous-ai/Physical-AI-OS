@@ -26,6 +26,16 @@ on the data line leave a few pixels latched to a garbage colour (green shows up
 most, being the leading byte of a WS2812 frame). Without the clear that garbage
 stays lit until the first LED command, which may be minutes after boot.
 
+### Concurrent frame writes and clear diagnostics
+
+Solid, per-pixel paint and clear share a driver lock for the entire operation.
+Clear holds it across both black-frame writes, the two 10 ms waits, SPI idle
+and buffer read-back. An animation cannot repaint the buffer midway and cause
+`LED clear did NOT take` to report a false clear failure. A later frame can
+still paint after clear returns; effect ownership and cancellation remain the
+caller's responsibility. The diagnostic reads software memory, not physical
+LED feedback, so a black buffer does not prove the hardware is dark.
+
 ## Endpoints
 
 | Method | Endpoint | Description |
@@ -102,6 +112,8 @@ Each scene controls **all peripherals** — not just LED, but also camera, mic, 
 Deactivate: `POST /scene/off` — clears active scene, restores idle LED, re-enables camera/speaker, releases servo hold.
 
 The active scene **survives HAL service restarts** (OTA, deploy, crash): it is persisted to a boot-scoped sidecar (`/tmp/hal-scene-state.json`, keyed to the kernel `boot_id`) and re-activated automatically when HAL comes back up, so the agent's belief ("focus mode is on") stays in sync. A full device reboot intentionally starts scene-less. Transient LED calls (`/led/solid`, `/led/off`, `/led/effect` with `"transient": true`, e.g. the boot breathing effect) overlay the strip without exiting the active scene; only non-transient LED overrides clear it.
+
+When HAL restarts while sleeping, scene restoration retains only the active scene identity; it does not reapply LED, servo, camera, mic, or speaker settings. Sleep keeps ownership of the hardware and its mute flags. The saved user LED state is loaded separately; a subsequent normal wake clears the retained scene through the existing scene-off path.
 
 | Scene | Bright | Color (K) | Servo | Camera | Mic | Speaker |
 |-------|--------|-----------|-------|--------|-----|---------|
@@ -328,3 +340,16 @@ as turn-based voice, including their existing LED, display and body behavior.
 It requires recognized input text and the regular addressing gate; noise or
 opening the mic cannot start these emotions. Thinking requires provider end
 evidence, never a local silence estimate. There is no separate LIVE LED overlay. See [realtime voice](../../../docs/realtime-voice.md#hw-emotion-feedback-in-live-mode) for timing and cleanup.
+
+### Relative intent dimming
+
+The local/Jev `dim` action reads `/led/color`, halves each RGB channel, writes
+`/led/solid`, and verifies the readback. Repeated requests dim again; black
+stays black. Integer rounding may reach off. This stops effects and scenes,
+using the reported base color or brightest pixel; it does not preserve patterns.
+
+Local/Jev voice completion (`handledLocally=true`) releases the retained
+realtime thinking cue without waiting for TTS. Muted or silent replies therefore
+do not leave the cue active. Cleanup preserves newer emotions and restores the
+saved LED state (including off/dim); active speech/music retains its overlay
+until normal playback teardown. Agent-owned turns retain their thinking cue.

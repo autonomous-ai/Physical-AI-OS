@@ -505,3 +505,14 @@ auth).
 - **Headless first-run**: presync seeds `~/.claude.json` flags; if the CLI adds
   new interactive gates, the bridge child may exit on start — check
   `journalctl -u claudecode` and `claude` stderr lines in the bridge log.
+
+
+## Jev skill preloading in the managed bridge
+
+The Claude Code runtime bridge selects at most one eligible skill with Jev before forwarding a text-only user request. It reads the OS-installed native skill root, `$HOME/.claude/skills`, and adds the complete selected skill and its directory to that request. This is a runtime adapter, not the hardware intent router and not a plugin installed into a standalone upstream CLI. OS-managed voice, Web/MQTT chat and ordinary messaging-channel conversations share this bridge. Standalone CLI sessions, Telegram coding-session mode and messages received directly by Claude’s native channel plugins run outside it and keep their normal native skill discovery. Only messaging inputs forwarded by OS through `message.send` receive this adapter.
+
+Selection uses the shared `system/lib/jevskills` implementation with a three-second budget and fails open: abstention, missing credentials, invalid responses and load errors preserve the original request. System messages, slash commands and attachments skip preloading. Each prepared request reuses its context on a missing-session retry; no context is written to AGENTS.md or a global system prompt. The upstream runtime may retain the supplied turn in normal conversation history; the preload explicitly applies to the current request only.
+
+**Jev is disabled by default** for this runtime pending native validation. The build switch is `const jevEnabled = false` in `runtimes/claudecode/gatewayd/jev.go`. Enabling it after validation requires changing the Go switch, rebuilding and restarting through runtime management; environment variables cannot enable Jev. `JEV_CONFIG_PATH` defaults to `/root/config/config.json`; credentials are read from that file, never embedded in the preload. Skills with unsupported execution metadata are excluded. Malformed native settings, unsupported JSONC syntax, alternate config-root environment overrides and project skill catalogs also abstain. Ancestor project settings are checked to preserve inherited policies and skill precedence. If native settings contain custom skill or permission controls, the adapter conservatively leaves selection to the native loader rather than bypassing its policy. It does not grant permission to execute a selected skill or change existing tool approvals.
+
+Local verification covers request isolation, non-user and attachment bypass, native-policy abstention and rendered child input. Mock selectors and fake runtime processes are used; live Jev, native model behavior and on-device delivery require separate integration testing.

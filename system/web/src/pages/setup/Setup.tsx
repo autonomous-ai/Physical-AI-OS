@@ -87,7 +87,7 @@ export default function Setup({ mode = "initial" }: SetupProps = {}) {
             they are into the wizard from the sidebar. */}
         <div style={{ padding: "16px 16px 12px" }}>
           <div style={{ fontSize: 14.5, fontWeight: 700, color: C.text, letterSpacing: "0.01em" }}>
-            Device Setup
+            Robot Setup
           </div>
           <div style={{ fontSize: 12, color: C.textMuted, marginTop: 3 }}>
             {doneCount} of {visibleSections.length} done

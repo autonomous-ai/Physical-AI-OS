@@ -11,3 +11,7 @@ class GeminiLiveError(Exception):
 
 class GPTLiveError(Exception):
     """Raised on GPT-Live (OpenAI /v1/live) server `error` events."""
+
+
+class PipecatV1Error(Exception):
+    """Raised when the on-device Pipecat pipeline cannot be built or started."""

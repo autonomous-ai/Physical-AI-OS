@@ -86,6 +86,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 			// URL that breaks HAL's /ws/gemini handshake. See RealtimeBaseURL doc.
 			BaseURL:   s.config.RealtimeBaseURLOverride(),
 			HasAPIKey: s.config.RealtimeHasAPIKey(),
+			WebSearch: s.config.RealtimeWebSearch(),
 		},
 	}
 }

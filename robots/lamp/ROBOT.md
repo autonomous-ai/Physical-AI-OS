@@ -43,7 +43,7 @@ soul_ref:   SOUL.md
 safety_ref: SAFETY.md
 urdf_ref:   urdf/lamp.urdf
 memory:     { backend: local }
-startup_volume: 40
+startup_volume: 75
 ---
 
 # Autonomous Lamp

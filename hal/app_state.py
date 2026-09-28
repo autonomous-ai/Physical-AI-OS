@@ -698,7 +698,7 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         _mic_muted = True
         _sleepy_auto_muted_mic = True
         if voice_service and voice_service.available:
-            threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
+            voice_service.stop(background=True)
 
     if mute_speaker:
         # Music is never an announcement. The speaker goes to the drain, which
@@ -994,6 +994,38 @@ def led_should_stay_dark() -> bool:
     earn their light.
     """
     return _user_led_state is None and ambient_resting_is_dark()
+
+
+def note_user_activity(source: str):
+    """Tell presence the user is here: a voice turn or a physical gesture.
+
+    Presence otherwise only hears the camera, so a user talking with the camera
+    off or outside the frame timed out to AWAY and the device went to sleep
+    mid-conversation. Never raises: presence is a courtesy to the caller.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_activity(source)
+    except Exception as e:
+        logger.warning("Presence activity (%s) failed: %s", source, e)
+
+
+def note_presence_wake():
+    """Restart the presence countdown when the device wakes from sleep.
+
+    Called from the one place every wake converges (express_emotion), so the
+    web UI, API and agent wakes reset it too, not only a face on camera.
+    Never raises: a presence failure must not break the wake.
+    """
+    svc = sensing_service
+    if svc is None:
+        return
+    try:
+        svc.presence.on_wake()
+    except Exception as e:
+        logger.warning("Presence wake reset failed: %s", e)
 
 
 def _get_current_led_color() -> tuple:
@@ -1751,31 +1783,14 @@ def _auto_camera_on(reason: str) -> bool:
 
 
 def _read_agent_name() -> str:
-    """Read agent name from the ACTIVE runtime's IDENTITY.md (a rename lands
-    in the active workspace only — reading a fixed openclaw path returns a
-    stale/template name on other runtimes). Falls back to the device type
-    (lamp/dog/intern) so wake words follow the device class, not a brand."""
-    identity_path = os.path.join(
-        _hal_config.ACTIVE_AGENT_WORKSPACE_DIR, "IDENTITY.md"
-    )
-    try:
-        with open(identity_path) as f:
-            for line in f:
-                lower = line.lower()
-                idx = lower.find("**name:**")
-                if idx >= 0:
-                    name = (
-                        line[idx + len("**name:**") :]
-                        .strip()
-                        .split("\u2014")[0]
-                        .split("-")[0]
-                        .strip()
-                    )
-                    if name:
-                        return name.lower()
-    except Exception:
-        pass
-    # No IDENTITY.md name → use the device type (lamp/dog/intern) so an unnamed
+    """Resolve the active runtime's name through its context manager layout."""
+    from hal.realtime.context_manager import CONTEXT_MANAGERS, OpenClawContextManager
+
+    context_cls = CONTEXT_MANAGERS.get(_hal_config.AGENT_GATEWAY, OpenClawContextManager)
+    name = context_cls.read_agent_name(_hal_config.ACTIVE_AGENT_WORKSPACE_DIR)
+    if name:
+        return name
+    # No explicit identity name → use the device type (lamp/dog/intern) so an unnamed
     # device is addressed by its class instead of a hardcoded "lamp".
     try:
         from hal.config import resolve_device_type

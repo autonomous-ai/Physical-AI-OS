@@ -1,6 +1,6 @@
 ---
 name: wellbeing
-description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, headachy, dizzy, stuffy or unable to focus, or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
+description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, having a headache, dizzy, stuffy or unable to focus (including informal wording such as \"I’m headache, tired, what happen?\"), or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
 ---
 
 # Wellbeing
@@ -23,13 +23,24 @@ That line is the entire reply, not a sentence to append after analysis. Do not p
 
 ## User-reported discomfort
 
-For “I feel tired and have a headache”, dizziness, a stuffy room or difficulty
-concentrating, read [reference/discomfort.md](reference/discomfort.md). Respond
-to what the user says; do not invent an activity event or run the activity/log
-router below. Environmental evidence is optional: if the capability is absent
-or unknown, or readings are unavailable, silently omit that part and continue
-ordinary support. Do not load a missing environment skill, poll hardware, or
-announce sensor setup problems in response to a wellbeing concern.
+A direct report of fatigue, headache, dizziness, stuffiness or difficulty
+concentrating MUST use [reference/discomfort.md](reference/discomfort.md)
+before answering, including informal or ungrammatical reports such as
+“I'm headache, tired, what happen?” or “mệt, đau đầu quá”. Do not wait for
+an activity tag or an explicit request to check the room.
+
+For non-urgent discomfort with a declared `environment` capability, consult
+`skills/environment/SKILL.md` and use a current snapshot or one bounded
+status read before completing the reply. The check is required in that case;
+mentioning a measurement is optional and depends on fresh, relevant evidence.
+Urgent reported symptoms take priority over sensor checks. If capability is
+absent/unknown, the skill is unavailable, or the read fails, continue ordinary
+support without sensor-error commentary or retries. Ordinary room-feeling
+reports/questions use the Environmental care branch below, including its
+unavailable-data reply, rather than this personal-symptom fallback.
+
+Do not invent an activity event, run the activity/log router below, or infer
+screen use, duration, dehydration or a symptom cause from the complaint.
 
 ## Environmental care
 
@@ -46,6 +57,21 @@ do not invent readings or stay silent on a user asking for support. Use whicheve
 metrics are available, regardless of the installed component. Missing or null
 metrics do not invalidate other readings or establish a hardware fault; do not
 require gas indices before giving supported temperature or CO₂ information.
+For ordinary room-feeling reports/questions and their follow-ups, apply
+environment's reference/room-comfort.md: one short casual sentence, no numbers,
+units, sensor names or tags; its fixed unavailable reply takes precedence over
+silent omission for that branch. Explicit numeric requests remain answerable.
+Personal symptoms without a room question keep the discomfort route; urgent
+symptoms/exposure take priority over sensor checks and brevity.
+For other environmental context, follow environment's meaning-first response rule: explain the relevant comfort
+observation or practical implication in plain language. Omit numbers by default;
+include them only when requested or materially useful, with their meaning.
+Never replace missing evidence with a reassuring or alarming air-quality label.
+
+A sustained `comfort` state from environment is a chance to offer one modest
+room adjustment, not to infer illness, fatigue or reduced work performance.
+A `recovered` state does not mean the user recovered. Do not repeat advice just
+because a condition remains high; OS controls new events and repeat suppression.
 
 For an automatic environmental update, use only activity, sleep/busy state and
 preferences already available in context. Respect requests for quiet and avoid
@@ -57,8 +83,8 @@ would be inappropriate.
 
 An initial report (`reason: "initial"`) can offer one brief factual observation
 without a change or advice. During a startup greeting, add at most one sentence
-with one or two supplied readings; preserve the greeting when readings are
-absent. For the separate post-greeting update, do not greet again. Never wait
+based on supplied readings, using plain language rather than a numeric readout;
+preserve the greeting when readings are absent. For the separate post-greeting update, do not greet again. Never wait
 for sensors, fetch data for the greeting, or arrange duplicate follow-ups.
 Quiet/sleep preferences still take precedence. A first snapshot says nothing
 about improvement, health, or whether the room is safe.

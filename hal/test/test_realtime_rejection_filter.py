@@ -207,3 +207,37 @@ def test_disabling_filter_restores_normal_main_agent_fallback(monkeypatch):
             RealtimeTurnResult(route=ROUTE_AI_REJECTED, rejected=True),
         )
     assert sender.sent[0][0] == "you."
+
+
+def test_live_late_reject_cancels_generated_text_without_success(monkeypatch):
+    from hal.realtime.models import TextOutput
+
+    monkeypatch.setattr(hal_config, "LIVE_MODE", True)
+    monkeypatch.setattr(hal_config, "REALTIME_SESSION_MAX_TURNS", 0)
+    orchestrator, agent = _orchestrator_for_reject()
+    text = TextOutput(text="Rất tiếc, đã xảy ra một lỗi hệ thống.", user_turn_id="user-1")
+    agent.receive = lambda **kwargs: iter([
+        text, FunctionCallOutput(name="reject_turn", arguments="{}",
+                                 call_id="reject-1", user_turn_id="user-1"),
+        TextOutput(text="Unwanted acknowledgement.", user_turn_id="user-1"),
+    ])
+    agent.execution_completed = True
+    assert list(orchestrator.stream_output()) == [text, RejectSignal(user_turn_id="user-1")]
+    assert not orchestrator.execution_completed
+    assert agent.end_turn_calls == 1
+    assert agent.sent[0][0].output == '{"result": "turn dropped"}'
+
+
+def test_manual_late_reject_preserves_existing_output_policy(monkeypatch):
+    from hal.realtime.models import TextOutput
+
+    monkeypatch.setattr(hal_config, "LIVE_MODE", False)
+    monkeypatch.setattr(hal_config, "REALTIME_SESSION_MAX_TURNS", 0)
+    orchestrator, agent = _orchestrator_for_reject()
+    text = TextOutput(text="A real answer.")
+    agent.receive = lambda **kwargs: iter([
+        text, FunctionCallOutput(name="reject_turn", arguments="{}", call_id="reject-1"),
+    ])
+    assert list(orchestrator.stream_output()) == [text]
+    assert agent.end_turn_calls == 1
+    assert "error" in agent.sent[0][0].output

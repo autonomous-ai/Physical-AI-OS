@@ -22,6 +22,8 @@ class RealtimeSummarizer:
         api_key: str = app_config.REALTIME_SUMMARIZER_API_KEY,
         base_url: str | None = app_config.REALTIME_SUMMARIZER_BASE_URL or None,
         model: str = app_config.REALTIME_SUMMARIZER_MODEL,
+        system_prompt: str | None = None,
+        max_tokens: int = 4096,
     ) -> None:
         # anthropic imports lazily on first summarize(): the SDK costs ~1.3s of
         # import time on device and every summarize() runs on a background
@@ -33,6 +35,11 @@ class RealtimeSummarizer:
         self._model: str = model
         self._retries: int = app_config.REALTIME_SUMMARIZER_RETRIES
         self._retry_backoff_s: float = app_config.REALTIME_SUMMARIZER_RETRY_BACKOFF_S
+        self._max_tokens: int = max_tokens
+        if system_prompt is not None:
+            # Another task on the same endpoint (e.g. Harness speech rendering).
+            self._system_prompt = system_prompt
+            return
         try:
             self._system_prompt: str = SUMMARIZE_PROMPT_PATH.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
@@ -135,7 +142,7 @@ class RealtimeSummarizer:
                 chunks: list[str] = []
                 with self._get_client().messages.stream(
                     model=self._model,
-                    max_tokens=4096,
+                    max_tokens=getattr(self, "_max_tokens", 4096),
                     system=self._system_prompt,
                     messages=[
                         {"role": "user", "content": user_content},

@@ -1,7 +1,6 @@
 """Voice metrics measurement — observations only, no behaviour change.
 
-Two audio questions, measured on the device because HAL is the only process that
-knows when audio actually reached the speaker:
+Acknowledgement and audio observations, timed on HAL:
 
   the response metric  Was the user's voice command acknowledged within
          ``ACK_DEADLINE_MS`` of the detected end of their speech?
@@ -20,12 +19,10 @@ execution without observed terminal errors, not answer correctness. See
 
 Design rules that decide whether a number is trustworthy:
 
-* **Playback, not acceptance.** The ack signal is the first frame actually
-  written to the audio stream (``TTSService._note_audio_written``), never an
-  HTTP 200, a queued sentence, model output, or ``on_speak_start`` — the
-  cached path fires that one *before* taking the stream lock, so speech that
-  is stopped or fails before its first write would look played. Even the first
-  write is not the acoustic onset: ALSA/Bluetooth buffering sits after it.
+* **Explicit acknowledgement evidence.** Schema 2 accepts either owned audio
+  actually written to the stream or an OS receipt accepting this user task.
+  Queued TTS, a model delegate tool alone and history sync are not receipts.
+  First-audio latency stays separate; a stream write is not acoustic onset.
 * **Explicit ownership.** Every playback carries the owner that claimed the
   speaker (``run:<turn_id>`` or ``interaction:<id>``). Audio with **no** owner
   is recorded as ``unknown`` and never counted as an acknowledgement — a
@@ -42,6 +39,7 @@ Design rules that decide whether a number is trustworthy:
 """
 
 import logging
+import math
 import threading
 import time
 
@@ -79,6 +77,10 @@ EVENT_INTERACTION = "voice_metrics_interaction"
 EVENT_SUPPRESSION = "voice_metrics_suppression"
 
 # --- Playback kinds (what was heard) ---------------------------------------
+ACK_SCHEMA_VERSION = 2
+KIND_DELEGATE_ACCEPTED = "delegate_accepted"
+KIND_LOCAL_ACCEPTED = "local_accepted"
+
 KIND_AGENT_REPLY = "agent_reply"          # main agent's answer, via the TTS queue
 KIND_NATIVE_REALTIME = "native_realtime"  # realtime model's own voice
 KIND_REALTIME_TTS = "realtime_tts"        # realtime text answer synthesized through TTS
@@ -132,15 +134,17 @@ class _Interaction:
         "run_id", "ack_latency_ms", "ack_modality", "ack_kind",
         "exclusion_reason", "failure_reason", "reported", "report_event_id",
         "timer", "life_timer", "closed", "last_activity",
-        "answer_latency_ms", "answer_kind",
+        "answer_latency_ms", "answer_kind", "ack_played_at", "answer_played_at",
         "task_started_at_ms", "task_revision", "task_exclusion_reason",
-        "endpoint_known", "mode",
+        "endpoint_known", "mode", "suppressed", "provider_turn_id",
+        "ack_at", "audio_latency_ms", "audio_kind", "speaker_muted",
     )
 
     def __init__(self, iid: str, speech_end: float, method: str):
         self.id = iid
         self.endpoint_known = True
         self.mode = "turn"
+        self.provider_turn_id = ""
         self.task_started_at_ms = int(time.time() * 1000) - _ms(_now() - speech_end)
         self.task_revision = 0
         self.task_exclusion_reason = ""
@@ -150,6 +154,11 @@ class _Interaction:
         self.route = ""
         self.run_id = ""
         self.ack_latency_ms = None
+        self.ack_played_at = None
+        self.ack_at = None
+        self.audio_latency_ms = None
+        self.audio_kind = ""
+        self.speaker_muted = False
         self.ack_modality = ""
         self.ack_kind = ""
         # When the ANSWER itself was heard, as opposed to the receipt. A
@@ -157,6 +166,7 @@ class _Interaction:
         # docs/voice-metrics.md), so ack_latency_ms alone cannot say how long
         # the user waited for the actual reply — this can.
         self.answer_latency_ms = None
+        self.answer_played_at = None
         self.answer_kind = ""
         self.exclusion_reason = ""
         # A failure that is NOT an exclusion: the request was valid and went
@@ -171,6 +181,11 @@ class _Interaction:
         # main agent is still working on, or a later stop finds nothing to
         # suppress.
         self.closed = False
+        # Set by an explicit stop that covered this turn. Audio owned by a
+        # suppressed turn is refused at TTS admission (see is_suppressed):
+        # the user asked for silence, and a reply or filler that lands tens
+        # of seconds later must not undo that.
+        self.suppressed = False
         self.last_activity = speech_end
 
 
@@ -207,6 +222,9 @@ def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
     ``method``: ``silence_clock``, ``stt_final``, ``tts_started``,
     ``music_started``, ``max_duration``, ``stt_error``.
     """
+    if mode == "live" and not _valid_endpoint(at):
+        endpoint_known = False
+        at = 0.0
     iid = "vi-" + client.new_event_id()[:16]
     with _lock:
         it = _Interaction(iid, at or _now(), method)
@@ -274,6 +292,27 @@ def _retire_interaction(iid: str) -> None:
         it.closed = True
 
 
+def bind_provider_turn(iid: str, provider_turn_id: str) -> None:
+    """Bind an explicit provider key without inferring ownership from recency."""
+    if not iid or not provider_turn_id:
+        return
+    with _lock:
+        it = _interactions.get(iid)
+        if it is not None and not it.provider_turn_id:
+            it.provider_turn_id = provider_turn_id
+
+
+def provider_interaction(provider_turn_id: str) -> str:
+    """Resolve a provider key among the bounded tracked interactions only."""
+    if not provider_turn_id:
+        return ""
+    with _lock:
+        matches = [it.id for it in _interactions.values()
+                   if it.provider_turn_id == provider_turn_id]
+        # A reused provider key is ambiguous, never a reason to pick the newest.
+        return matches[0] if len(matches) == 1 else ""
+
+
 def current_interaction() -> str:
     """The utterance currently being served, or "" if none is open.
 
@@ -305,19 +344,34 @@ def set_route(iid: str, route: str, event_type: str = "") -> None:
         _report_amendment(amendment)
 
 
+def _valid_endpoint(at: float) -> bool:
+    """Only accept finite timestamps already reached by the monotonic clock."""
+    return (
+        isinstance(at, (int, float)) and not isinstance(at, bool)
+        and math.isfinite(at) and 0 < at <= _now()
+    )
+
+
 def set_endpoint(iid: str, method: str, at: float) -> None:
     """Upgrade transcript-only evidence when a real provider endpoint arrives.
 
-    Never turn an endpoint received after playback into a zero/negative latency.
-    Such an observation remains outside KPI-1, but still belongs to the task cohort.
+    Arrival may follow acknowledgement if it carries an earlier real endpoint.
+    An endpoint after first acceptance/audio cannot establish an ack latency.
     """
     with _lock:
         it = _interactions.get(iid)
-        if it is None or it.endpoint_known or it.ack_kind:
+        if (it is None or it.endpoint_known or not _valid_endpoint(at)
+                or (it.ack_at is not None and at > it.ack_at)):
             return
         it.speech_end = at
         it.speech_end_method = method
         it.endpoint_known = True
+        if it.ack_at is not None:
+            it.ack_latency_ms = _ms(it.ack_at - at)
+        if it.ack_played_at is not None:
+            it.audio_latency_ms = _ms(it.ack_played_at - at)
+        if it.answer_played_at is not None:
+            it.answer_latency_ms = _ms(it.answer_played_at - at)
         amendment = _amend_params(it, "late_endpoint") if it.reported else None
     if amendment:
         _report_amendment(amendment)
@@ -335,6 +389,29 @@ def bind_run(iid: str, run_id: str) -> None:
         it.run_id = run_id
         _by_run[run_id] = iid
         amendment = _amend_params(it, "late_run_binding") if it.reported else None
+    if amendment:
+        _report_amendment(amendment)
+
+
+def dispatch_accepted(iid: str, *, local: bool = False) -> None:
+    """Observe confirmed OS admission, not task completion or audio playback.
+
+    Call only for a user-task receipt, never history sync or an unconfirmed POST.
+    Earlier owned audio wins. A late receipt amends the existing verdict.
+    """
+    at = _now()
+    with _lock:
+        it = _interactions.get(iid)
+        if it is None or (it.ack_at is not None and it.ack_at <= at):
+            return
+        it.ack_at = at
+        it.ack_kind = KIND_LOCAL_ACCEPTED if local else KIND_DELEGATE_ACCEPTED
+        it.ack_modality = "processing_accepted"
+        if it.endpoint_known:
+            it.ack_latency_ms = _ms(at - it.speech_end)
+        amendment = _amend_params(it, "late_dispatch_ack") if it.reported else None
+        logger.info("[voice-metrics] ack (interaction=%s kind=%s latency_ms=%s)",
+                    iid, it.ack_kind, it.ack_latency_ms)
     if amendment:
         _report_amendment(amendment)
 
@@ -424,6 +501,7 @@ def playback_audio(owner: str, tts=None) -> None:
     ``unknown`` and NEVER counts as an acknowledgement.
     """
     started = _now()
+    amendment = None
     with _lock:
         iid = _owner_interaction(owner)
         kind = _classify(owner, tts)
@@ -453,7 +531,16 @@ def playback_audio(owner: str, tts=None) -> None:
                 it.last_activity = started
                 it.closed = False
                 _arm_lifetime(it)
-            if it is not None and not it.ack_kind:
+            changed = False
+            if it is not None and it.ack_played_at is None:
+                changed = True
+                it.ack_played_at = started
+                it.audio_kind = kind
+                if it.endpoint_known:
+                    it.audio_latency_ms = _ms(started - it.speech_end)
+            if it is not None and (it.ack_at is None or started < it.ack_at):
+                changed = True
+                it.ack_at = started
                 if it.endpoint_known:
                     it.ack_latency_ms = _ms(started - it.speech_end)
                 it.ack_kind = kind
@@ -463,6 +550,8 @@ def playback_audio(owner: str, tts=None) -> None:
                     iid, kind, it.ack_latency_ms,
                 )
             if it is not None and not it.answer_kind and kind in _ANSWER_KINDS:
+                changed = True
+                it.answer_played_at = started
                 if it.endpoint_known:
                     it.answer_latency_ms = _ms(started - it.speech_end)
                 it.answer_kind = kind
@@ -470,25 +559,27 @@ def playback_audio(owner: str, tts=None) -> None:
                     "[voice-metrics] answer (interaction=%s kind=%s latency_ms=%s)",
                     iid, kind, it.answer_latency_ms,
                 )
+            if it is not None and changed and it.reported:
+                amendment = _amend_params(it, "late_audio")
         _observe_playback(kind, iid, started, None)
+    if amendment:
+        _report_amendment(amendment)
 
 
 def playback_muted(owner: str) -> None:
     """The speaker refused this speech because the device is muted.
 
-    Recorded when it happens. Sampling the mute flag at scoring time instead
-    (what this did until 08/09/2026) mislabelled a muted turn as an unanswered
-    one whenever someone unmuted in between — device-observed on lamp-0c89.
-    An unresolved owner stays unknown; unrelated muted audio must not exclude
-    the newest command from the denominator.
+    Record the observed refusal, not the mute flag at report time. Schema 2
+    keeps valid silent tasks eligible: only accepted dispatch or owned audio
+    acknowledges them. Unowned muted notices cannot mark another interaction.
     """
     with _lock:
         iid = _owner_interaction(owner)
         it = _interactions.get(iid) if iid else None
-        if it is None or it.exclusion_reason or it.ack_latency_ms is not None:
+        if it is None or it.speaker_muted:
             return
-        it.exclusion_reason = EXCL_SPEAKER_MUTED
-        it.closed = True
+        # Mute does not prevent accepting a silent task under ack schema 2.
+        it.speaker_muted = True
         amendment = _amend_params(it, "late_mute") if it.reported else None
     if amendment:
         _report_amendment(amendment)
@@ -526,6 +617,20 @@ def _owner_interaction(owner: str) -> str:
         iid = owner[len("interaction:"):]
         return iid if iid in _interactions else ""
     return ""
+
+
+def is_suppressed(owner: str) -> bool:
+    """True when the owner of a playback is a turn the user explicitly stopped.
+
+    The one admission gate for late audio: os-server mutes replies it can
+    attribute to a cancelled run, but a Harness result or a realtime wait
+    filler reaches the speaker without passing that check. Unowned audio is
+    never suppressed -- guessing would silence the sentence the user just
+    asked for.
+    """
+    with _lock:
+        it = _interactions.get(_owner_interaction(owner))
+        return bool(it is not None and it.suppressed)
 
 
 def _classify(owner: str, tts) -> str:
@@ -583,6 +688,9 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
             # Server interruption identifies the cancelled response, not every
             # input already waiting behind it in the receive queue.
             applicable = target_interaction_ids.intersection(_interactions)
+        if reason == BOUNDARY_EXPLICIT_STOP:
+            for iid in applicable:
+                _interactions[iid].suppressed = True
         playing = dict(_playing) if _playing else None
         state = {
             "reason": reason,
@@ -797,7 +905,11 @@ def _interaction_params(it: "_Interaction") -> dict:
         "exclusion_reason": exclusion_reason,
         # Raw observation, kept whatever the verdict, so the (provisional)
         # threshold can change without re-instrumenting the device.
+        "ack_schema_version": ACK_SCHEMA_VERSION,
         "ack_latency_ms": it.ack_latency_ms,
+        "audio_latency_ms": it.audio_latency_ms,
+        "audio_kind": it.audio_kind,
+        "speaker_muted": it.speaker_muted,
         "ack_modality": it.ack_modality,
         "ack_kind": it.ack_kind,
         # The wait for the real reply, independent of the receipt above. null

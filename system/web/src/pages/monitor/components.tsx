@@ -233,10 +233,10 @@ export function DevicePowerButtons() {
       {message && <div style={{ marginTop: 7, fontSize: 10.5, color: busy ? "var(--lm-text-dim)" : "var(--lm-red)" }}>{message}</div>}
       {confirmAction && (
         <ConfirmDialog
-          title={confirmAction === "shutdown" ? "Shut down device?" : "Restart device?"}
+          title={confirmAction === "shutdown" ? "Shut down robot?" : "Restart robot?"}
           message={confirmAction === "shutdown"
-            ? "The device will announce the shutdown, release its servos, and turn off. You must restore power before it can come back online."
-            : "The device will announce the reboot and be unavailable for about 30 seconds."}
+            ? "The robot will announce the shutdown, release its servos, and turn off. You must restore power before it can come back online."
+            : "The robot will announce the reboot and be unavailable for about 30 seconds."}
           confirmLabel={confirmAction === "shutdown" ? "Shut down" : "Restart"}
           destructive={confirmAction === "shutdown"}
           onCancel={() => setConfirmAction(null)}

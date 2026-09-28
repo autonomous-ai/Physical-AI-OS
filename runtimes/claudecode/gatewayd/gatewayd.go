@@ -54,6 +54,8 @@ const (
 // Config holds every tunable. Main() fills it from environment variables
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
+	JevConfigPath  string
+	JevEnabled     bool
 	Token          string        // CLAUDECODE_WS_TOKEN
 	Port           string        // CLAUDECODE_PORT (Main only; tests inject a Listener)
 	Workspace      string        // CLAUDECODE_WORKSPACE (claude cwd)
@@ -80,6 +82,8 @@ func configFromEnv() Config {
 	// defaults below keep existing .env-based deployments working unchanged.
 	home := envOr("CLAUDECODE_HOME", "/root/.claudecode")
 	return Config{
+		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
+		JevEnabled:    jevEnabled,
 		// Token defaults to runtimes/claudecode/constants.go Token — the two
 		// sides of the socket MUST agree.
 		Token:          envOr("CLAUDECODE_WS_TOKEN", claudecode.Token),
@@ -95,8 +99,10 @@ func configFromEnv() Config {
 
 // Server bridges a single WebSocket client to the persistent claude child.
 type Server struct {
-	cfg Config
-	ln  net.Listener
+	preloadContext  func(context.Context, string) string
+	lifetimeContext context.Context
+	cfg             Config
+	ln              net.Listener
 
 	// stdinMu serializes writes to the child stdin pipe (pending flush on
 	// spawn + message.send lines). It is held ACROSS blocking pipe writes, so
@@ -116,7 +122,7 @@ type Server struct {
 
 // New builds a Server with explicit config and listener (tests use port 0).
 func New(cfg Config, ln net.Listener) *Server {
-	return &Server{cfg: cfg, ln: ln}
+	return &Server{cfg: cfg, ln: ln, preloadContext: newPreloader(cfg), lifetimeContext: context.Background()}
 }
 
 // Serve blocks until ctx is cancelled or the listener fails. It owns the
@@ -125,6 +131,7 @@ func New(cfg Config, ln net.Listener) *Server {
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.lifetimeContext = ctx
 
 	if err := os.MkdirAll(s.cfg.Workspace, 0o755); err != nil {
 		log.Printf("%s mkdir workspace failed: %v", logPrefix, err)

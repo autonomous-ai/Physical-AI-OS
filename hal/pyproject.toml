@@ -4,7 +4,9 @@ version = "0.1.0"
 description = "Add your description here"
 readme = "README.md"
 license = "GPL-3.0-only"
-requires-python = ">=3.12"
+# Device provisioning and native wheels target CPython 3.12. Bound universal
+# resolution too: --python 3.12 alone still resolves newer supported Pythons.
+requires-python = ">=3.12,<3.13"
 dependencies = [
     "deepgram-sdk>=6.0.0",
     "onnxruntime>=1.16.0; sys_platform != 'darwin' or platform_machine != 'x86_64'",
@@ -75,6 +77,13 @@ required-environments = [
     "sys_platform == 'linux' and platform_machine == 'aarch64'",
     "sys_platform == 'darwin' and platform_machine == 'arm64'",
 ]
+# `reachy` (Pollen's SDK) pins onnxruntime==1.27.0; `pipecat` (pipecat-ai)
+# pins ~=1.24. They never share a body — reachy is the Reachy Mini Pi, pipecat
+# the lamp — so tell the resolver they are mutually exclusive instead of
+# letting the lock fail outright.
+conflicts = [
+    [{ extra = "reachy" }, { extra = "pipecat" }],
+]
 
 [tool.uv.sources]
 lerobot = { git = "https://github.com/huggingface/lerobot", rev = "55198de096f46a8e0447a8795129dd9ee84c088c" }
@@ -87,10 +96,9 @@ lerobot = { git = "https://github.com/huggingface/lerobot", rev = "55198de096f46
 # repo is public and a fork can host its own, while gs:// is org-only.
 # The marker is narrow on purpose. linux/aarch64 because the wheel is tagged
 # linux_aarch64 and a dev Mac must not try to install it; python < 3.13 because
-# the wheel is cp312 and `requires-python = ">=3.12"` makes uv resolve 3.13 too
-# — without the bound the lock fails outright. Anything outside the marker falls
-# back to the PyPI sdist and compiles, which is correct: only devices (all
-# CPython 3.12) get the fast path.
+# the wheel is cp312. Keep this explicit even though the project currently
+# targets only CPython 3.12, so a future Python-range expansion cannot select
+# an incompatible wheel. Other platforms compile the PyPI sdist.
 aec-audio-processing = { url = "https://github.com/autonomous-ai/autonomous-os/releases/download/wheels/aec-1.0.1/aec_audio_processing-1.0.1-cp312-cp312-linux_aarch64.whl", marker = "sys_platform == 'linux' and platform_machine == 'aarch64' and python_full_version < '3.13'" }
 
 # Static metadata for sdist-only deps of the `reachy` extra. Without this,
@@ -147,4 +155,18 @@ reachy = [
 # Install on-device with: uv sync --extra aec
 aec = [
     "aec-audio-processing>=1.0.1",
+]
+# On-device Pipecat pipeline — the `pipecat_v1` realtime provider
+# (hal/realtime/voice_agent/pipecat_v1.py, docs/realtime-voice.md). NOT in
+# `dependencies`: pipecat-ai drags numba, resampy, nltk and a pinned
+# onnxruntime (~1.24) that nothing else here needs, and the provider degrades
+# to "unavailable" without it (the orchestrator falls back to the main agent).
+# Silero VAD, Smart Turn v3 and the OpenAI-compatible LLM service ship in the
+# core package; STT is HAL's own provider, so no vendor extra is required.
+# Lamp setup, image builds and non-Reachy OTA select this extra automatically:
+# Smart Turn is shared by all non-Live voice backends, not only pipecat_v1.
+# Kept as an extra because Reachy's SDK has an incompatible ONNX pin.
+# Development hosts can opt in with: uv sync --extra pipecat
+pipecat = [
+    "pipecat-ai>=1.11.0,<2",
 ]

@@ -118,6 +118,18 @@ def setup_logging() -> logging.Logger:
     _usage_gptlive.addHandler(_usage_gptlive_file)
     _usage_gptlive.propagate = False
 
+    # Pipecat v1 twin: per-turn TTFB + LLM token lines ("hal.realtime.usage.pipecat").
+    _usage_pipecat = logging.getLogger("hal.realtime.usage.pipecat")
+    _usage_pipecat.setLevel(logging.DEBUG)
+    _usage_pipecat_file = logging.handlers.RotatingFileHandler(
+        log_dir / "pipecat_usage.log",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=3,
+    )
+    _usage_pipecat_file.setFormatter(logging.Formatter("%(asctime)s %(message)s"))
+    _usage_pipecat.addHandler(_usage_pipecat_file)
+    _usage_pipecat.propagate = False
+
     # GELF handler: send INFO+ logs to centralized Graylog. A simulated body
     # must be fully local — no surprise network traffic while a developer is
     # proving a skill on a laptop.

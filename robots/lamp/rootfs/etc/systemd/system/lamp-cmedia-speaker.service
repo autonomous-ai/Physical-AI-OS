@@ -1,0 +1,13 @@
+[Unit]
+Description=Pin the C-Media hardware speaker level and create the softvol "Speaker" control before HAL restores volume
+# See the device_speaker block in /etc/asound.conf. Pulled in by udev when the
+# C-Media card appears (99-lamp-device.rules); ordered before hal.
+Before=hal.service
+ConditionPathExists=/etc/asound.conf
+
+[Service]
+Type=oneshot
+# Step 6 = -31 dB, the loudness that was the 15%% ceiling before softvol.
+ExecStart=/usr/bin/amixer -q -c device_cmedia sset Speaker 6
+ExecStart=/bin/sh -c 'head -c 64 /dev/zero | aplay -q -D device_speaker -t raw -f S16_LE -c 2 -r 16000 -'
+RemainAfterExit=yes

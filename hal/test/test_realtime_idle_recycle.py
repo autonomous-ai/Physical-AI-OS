@@ -84,3 +84,44 @@ def test_default_threshold_clears_the_observed_failure_floor():
         "default must be below the 86s shortest observed idle death; "
         f"got {hal_config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S}"
     )
+
+
+# Device 2026-09-23 14:09: a privacy-switch unmute restarts realtime on the SAME
+# orchestrator and connects a fresh session, but the idle clock still counted
+# from the last turn (133s ago). prepare_turn() threw the 0s-old session away,
+# the rebuild took 10s, and the turn fell back to the main agent.
+def test_fresh_session_is_not_recycled_for_an_old_last_turn(monkeypatch):
+    o = _orch(monkeypatch, "models/gemini-3.8-live-extended-thinking", idle_s=133)
+    o._session_connected_monotonic = time.monotonic() - 1
+    o.prepare_turn()
+    assert o._rebuilt == []
+    assert o._skip_post_idle_recycle is False
+
+
+def test_session_idle_since_connect_is_still_recycled(monkeypatch):
+    o = _orch(monkeypatch, "models/gemini-3.8-live-extended-thinking", idle_s=133)
+    o._session_connected_monotonic = time.monotonic() - 90
+    o.prepare_turn()
+    assert o._rebuilt == ["gemini-idle-pre-turn"]
+
+
+def test_rebuild_stamps_the_session_connect_time(monkeypatch):
+    import threading
+
+    monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "gemini", raising=False)
+    o = object.__new__(RealtimeOrchestrator)
+    o._agent = None
+    o._context = SimpleNamespace(build_instructions=lambda: "")
+    o._make_agent = lambda provider, instructions: SimpleNamespace(
+        connect=lambda: None, disconnect=lambda: None,
+    )
+    o._lifecycle_lock = threading.Lock()
+    o._started = threading.Event()
+    o._started.set()
+    o._rebuild_lock = threading.Lock()
+    o._rebuild_lock.acquire()
+    o._rebuild_done = threading.Event()
+    o._session_connected_monotonic = 0.0
+    before = time.monotonic()
+    assert o._rebuild_locked("test") is True
+    assert o._session_connected_monotonic >= before

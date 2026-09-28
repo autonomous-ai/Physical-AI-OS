@@ -85,6 +85,37 @@ See `docs/DEV-MULTI-IDE.md` for full conventions.
 - Do not auto-deploy to devices. Default to repo changes plus local verification;
   any on-device SSH/SCP/restart step is opt-in and must be confirmed first.
 
+### Waiting for tools and background jobs
+
+**Avoid model turns that only ask whether a job has finished.**
+
+- Follow the active tool's completion contract. If it explicitly delivers the
+  result automatically, do independent work or use its supported yield/wait
+  mechanism. End a turn to await delivery only when the tool explicitly
+  guarantees that it will resume the task; never assume a wakeup.
+- Do not use shell `sleep` loops, repeated `ps` / `pgrep` / `top`, or repeated
+  log/status reads to wait for a job that already has a completion mechanism.
+  Targeted process/log inspection is still appropriate to diagnose a failure
+  or a suspected stall.
+- Retain the returned handle and use its matching continuation tool. In Codex,
+  an `exec_command` session ID uses `write_stdin`; a yielded `functions.exec`
+  cell ID uses `functions.wait`. For agents/tasks, use the available native
+  wait tool and preserve any returned cursor. These handles are not
+  interchangeable, and receiving one does not mean the job succeeded.
+- For a long-running job, use a bounded wait suited to its expected duration
+  (normally 30-60 seconds, within the active tool and communication limits).
+  Avoid repeated zero/short-timeout checks; read only new output and report
+  meaningful progress instead of narrating unchanged status.
+- When an external job has no notification or native wait support, use a
+  bounded watcher or read-only polling with backoff and an overall deadline.
+  Do not rerun the original operation just to obtain its status.
+- Inspect the final output and exit code or terminal status before claiming
+  completion. A timeout, background handle, or quiet log is not success.
+
+This governs coding-agent orchestration. It does not remove application/API
+polling, test synchronization, or service-readiness checks required by their
+own contracts.
+
 ## Parallel Work / Subagents
 
 When work can be split across independent, file-scoped tasks, use available

@@ -1,0 +1,184 @@
+{
+  "description": "OS receive-side expectations. Input identifiers are example reservations; no new requests are created by events. Schema alone cannot verify ownership or duplicate IDs.",
+  "pending": [
+    {
+      "deliveryId": "delivery-A",
+      "idempotencyKey": "key-A"
+    },
+    {
+      "deliveryId": "delivery-B",
+      "idempotencyKey": "key-B"
+    },
+    {
+      "deliveryId": "delivery-C",
+      "idempotencyKey": "key-C"
+    }
+  ],
+  "originatingServerInstanceId": "originating-instance",
+  "steps": [
+    {
+      "event": {
+        "type": "event",
+        "kind": "turn.summary",
+        "agentId": "agent-fixture",
+        "serverInstanceId": "transport-instance",
+        "eventId": 42,
+        "machineId": "machine-fixture",
+        "payload": {
+          "serverInstanceId": "originating-instance",
+          "resultId": "stable-result-id",
+          "correlation": {
+            "scope": "group",
+            "inputs": [
+              {
+                "deliveryId": "delivery-A",
+                "idempotencyKey": "key-A"
+              },
+              {
+                "deliveryId": "delivery-B",
+                "idempotencyKey": "key-B"
+              }
+            ]
+          },
+          "outcome": "completed",
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
+        }
+      },
+      "expected": {
+        "resolve": [
+          "delivery-A",
+          "delivery-B"
+        ],
+        "pending": [
+          "delivery-C"
+        ],
+        "ttsEnqueueCount": 1
+      }
+    },
+    {
+      "event": {
+        "type": "event",
+        "kind": "turn.summary",
+        "agentId": "agent-fixture",
+        "serverInstanceId": "transport-instance",
+        "eventId": 42,
+        "machineId": "machine-fixture",
+        "payload": {
+          "serverInstanceId": "originating-instance",
+          "resultId": "stable-result-id",
+          "correlation": {
+            "scope": "group",
+            "inputs": [
+              {
+                "deliveryId": "delivery-A",
+                "idempotencyKey": "key-A"
+              },
+              {
+                "deliveryId": "delivery-B",
+                "idempotencyKey": "key-B"
+              }
+            ]
+          },
+          "outcome": "completed",
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
+        }
+      },
+      "expected": {
+        "resolve": [],
+        "pending": [
+          "delivery-C"
+        ],
+        "ttsEnqueueCount": 0
+      }
+    },
+    {
+      "event": {
+        "type": "resync",
+        "reason": "instance_changed",
+        "serverInstanceId": "new-transport-instance",
+        "cursor": 1
+      },
+      "expected": {
+        "resendInput": false
+      }
+    },
+    {
+      "event": {
+        "type": "event",
+        "kind": "turn.summary",
+        "agentId": "agent-fixture",
+        "serverInstanceId": "new-transport-instance",
+        "eventId": 2,
+        "machineId": "machine-fixture",
+        "payload": {
+          "serverInstanceId": "originating-instance",
+          "resultId": "stable-result-id",
+          "correlation": {
+            "scope": "group",
+            "inputs": [
+              {
+                "deliveryId": "delivery-A",
+                "idempotencyKey": "key-A"
+              },
+              {
+                "deliveryId": "delivery-B",
+                "idempotencyKey": "key-B"
+              }
+            ]
+          },
+          "outcome": "completed",
+          "fullText": "Finished: two red planes and two blue planes.",
+          "kind": "summary",
+          "text": "Finished: two red planes and two blue planes."
+        }
+      },
+      "expected": {
+        "resolve": [],
+        "pending": [
+          "delivery-C"
+        ],
+        "ttsEnqueueCount": 0
+      }
+    },
+    {
+      "event": {
+        "type": "event",
+        "kind": "turn.summary",
+        "agentId": "agent-fixture",
+        "serverInstanceId": "new-transport-instance",
+        "eventId": 3,
+        "machineId": "machine-fixture",
+        "payload": {
+          "serverInstanceId": "originating-instance",
+          "resultId": "single-result-C",
+          "correlation": {
+            "scope": "input",
+            "inputs": [
+              {
+                "deliveryId": "delivery-C",
+                "idempotencyKey": "key-C"
+              }
+            ]
+          },
+          "outcome": "completed",
+          "fullText": "C completed separately.",
+          "kind": "summary",
+          "text": "C completed separately.",
+          "idempotencyKey": "key-C",
+          "turnId": "receipt-turn-C"
+        }
+      },
+      "expected": {
+        "resolve": [
+          "delivery-C"
+        ],
+        "pending": [],
+        "ttsEnqueueCount": 1
+      }
+    }
+  ]
+}

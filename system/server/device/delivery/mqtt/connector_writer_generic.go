@@ -269,6 +269,30 @@ func (w *connectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
 	return out
 }
 
+// hasEntry reports whether connector's token file holds an entry for it —
+// the "is it installed?" question the scheduled-task connector guard asks
+// (see connectorInstalled).
+//
+// Deliberately LOCK-FREE, unlike every other method here: Write holds w.mu
+// across WriteMCPEntry, which restarts the openclaw gateway (30-60s on a Pi),
+// and this is asked from the schedule runner's tick and from the schedule.run
+// MQTT handler, neither of which may stall for that long. It is safe without
+// the lock because writeConnectorsFile replaces the file by tmp+rename, so a
+// reader always sees a complete old or new file, and w.dir never changes after
+// construction.
+func (w *connectorWriter) hasEntry(connector string) (bool, error) {
+	path, err := w.pathFor(connector)
+	if err != nil {
+		return false, err
+	}
+	file, err := loadConnectorsFile(path)
+	if err != nil {
+		return false, err
+	}
+	_, ok := file.Connectors[connector]
+	return ok, nil
+}
+
 // loadEntry returns the current on-disk entry for a connector. Satisfies
 // entryLoader so the refresh loop preserves fields the BE refresh response does
 // not re-send (scopes, client_id, and the credentials map — which now carries

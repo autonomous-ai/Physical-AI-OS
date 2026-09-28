@@ -31,8 +31,20 @@ know.**
   fact you report must come from a command you actually ran in this turn.
 - Present a failed or empty call as a result. If the call failed, say it failed.
 
-If the scan shows nothing for a service, it is **not connected**: say so plainly
-(see Errors) and stop — do not attempt the API call anyway to "check".
+For a live service request, **the next tool call after loading this skill is
+Discover**. Resolve any explicit history-only routing tag first; otherwise do
+not insert another skill read (including `input-branching` for an ordinary voice
+request), planning, or an API probe before checking config. Run the discovery
+commands together in one terminal call.
+
+If discovery succeeds and shows no connector for the requested service, give
+one short reply immediately: "Your email isn't connected yet. Link it in the
+Autonomous app so I can check it." Then stop this service task. Do not load
+another skill, repeat the scan, search for a client, or call the API to confirm
+the absence. For a compound request, continue only independent requested tasks.
+If config cannot be read or parsed, report that verification failed instead of
+claiming the service is unconnected; do not treat suppressed command errors as
+proof of absence.
 
 ## ⛔ Confirm every write before you make it
 
@@ -195,8 +207,10 @@ covers, so never turn a `google` provider entry into "Drive is connected" —
 still check the per-connector file before using a service.
 
 Run the same scan for a single service; do not skip it just because the question
-named one connector. **Empty output means nothing is connected — that is a
-valid, final answer**, not a reason to guess.
+named one connector. **Empty output from successfully checked sources means
+nothing is connected — that is a valid, final answer**, not a reason to guess.
+Missing optional files are normal; unreadable files, invalid JSON, or an
+unavailable `jq` are verification failures, even when stderr is suppressed.
 
 When `auth_type` is `"pat"`, the email lives in `credentials.email`; for OAuth, in `user_email`.
 

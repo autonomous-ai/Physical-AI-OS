@@ -37,6 +37,8 @@ type managedTurn struct {
 	terminalData map[string]any
 	stopRunID    string
 	streamed     map[string]string
+	cancel       context.CancelFunc
+	expireReason string
 }
 
 // SupportsNativeSteering is true only after the server advertises /runs control.
@@ -61,6 +63,7 @@ func (s *HermesService) enqueueManagedRun(runID string, body streamRequest, sour
 	s.steeringQueue = append(s.steeringQueue, managedChat{runID, body, source})
 	if s.steeringWake == nil {
 		s.steeringWake = make(chan struct{}, 1)
+		s.runExpiries = make(chan runExpiry)
 		go s.managedLoop()
 	}
 	wake := s.steeringWake
@@ -185,6 +188,9 @@ func managedChildText(text string) string {
 // A final result is emitted once per device request, but only one copy carries
 // hardware markers and only the newest audible request may speak.
 func (s *HermesService) finishManaged(ctx context.Context, active *managedTurn, result streamResult, err error) {
+	if active.expireReason != "" {
+		err = errors.New(active.expireReason)
+	}
 	if err == nil && result.Errored {
 		err = errors.New(result.ErrorText)
 	}
@@ -256,7 +262,7 @@ const managedStopNotice = "[system-routing: The user explicitly stopped the prec
 type managedStopContext struct{ conversation string }
 
 func (state *managedStopContext) observe(active *managedTurn, result streamResult) {
-	if active.stopping && result.Terminal {
+	if active.stopping && active.expireReason == "" && result.Terminal {
 		state.conversation = active.conversation
 	}
 }
@@ -356,12 +362,13 @@ func (s *HermesService) managedLoop() {
 			if carriesStopContext {
 				stopContext.conversation = ""
 			}
-			active = &managedTurn{id: id, requests: []managedChat{request}, owner: request.runID, conversation: request.body.Conversation}
+			readerCtx, readerCancel := context.WithCancel(ctx)
+			active = &managedTurn{cancel: readerCancel, id: id, requests: []managedChat{request}, owner: request.runID, conversation: request.body.Conversation}
 			s.managedLifecycle(ctx, request.runID, "start", "")
 			readerDone = make(chan struct{})
 			go func(id, deviceID string, done chan struct{}) {
 				defer close(done)
-				result, pending, err := s.readManagedRun(ctx, id, deviceID, func(event domain.WSEvent) {
+				result, pending, err := s.readManagedRun(readerCtx, id, deviceID, func(event domain.WSEvent) {
 					select {
 					case events <- managedStreamEvent{event: &event}:
 					case <-ctx.Done():
@@ -401,6 +408,8 @@ func (s *HermesService) managedLoop() {
 				s.failManaged(context.Background(), request, ctx.Err())
 			}
 			return
+		case expiry := <-s.runExpiries:
+			expiry.reply <- expireManagedOwner(active, expiry)
 		case <-s.steeringWake:
 			incoming := s.takeManagedQueue()
 			for _, request := range incoming {
@@ -504,7 +513,9 @@ func (s *HermesService) managedLoop() {
 				}
 				s.steeringMu.Unlock()
 			}
-			if update.pending != "" {
+			// An expired request must never be replayed, even if the remote
+			// terminal reports it as an unconsumed steering suffix.
+			if update.pending != "" && active.expireReason == "" {
 				index := managedPendingSuffix(active.requests, update.pending)
 				if index >= 0 && update.result.Terminal {
 					waiting = append(append([]managedChat{}, active.requests[index:]...), waiting...)
@@ -517,6 +528,7 @@ func (s *HermesService) managedLoop() {
 			}
 			stopContext.observe(active, update.result)
 			s.finishManaged(ctx, active, update.result, update.err)
+			active.cancel()
 			active = nil
 		}
 	}

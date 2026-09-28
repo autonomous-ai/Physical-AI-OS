@@ -4,10 +4,12 @@ package hal
 
 import (
 	"bytes"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/url"
 	"strings"
@@ -178,12 +180,22 @@ func GetColor() ([3]int, error) {
 		return [3]int{}, fmt.Errorf("GET /led/color returned %d", resp.StatusCode)
 	}
 	var result struct {
-		Color [3]int `json:"color"`
+		Color []*int `json:"color"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		return [3]int{}, fmt.Errorf("decode /led/color: %w", err)
 	}
-	return result.Color, nil
+	if len(result.Color) != 3 {
+		return [3]int{}, errors.New("/led/color returned missing or invalid color")
+	}
+	var color [3]int
+	for i, channel := range result.Color {
+		if channel == nil || *channel < 0 || *channel > 255 {
+			return [3]int{}, errors.New("/led/color returned invalid color channel")
+		}
+		color[i] = *channel
+	}
+	return color, nil
 }
 
 // ─── Voice / TTS ────────────────────────────────────────────────────────────
@@ -327,8 +339,12 @@ func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 // the os-server reads the key server-side from config and passes it here. Each arg
 // can be empty: HAL falls back to its own config-loaded defaults when a
 // field is missing, so partial overrides (e.g. just voice) work.
-func SpeakPreview(text, voice, provider, apiKey, baseURL string) error {
+// An optional speed overrides the saved rate for this preview only.
+func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed ...*float64) error {
 	payload := map[string]any{"text": text}
+	if len(speed) > 0 && speed[0] != nil {
+		payload["speed"] = *speed[0]
+	}
 	if voice != "" {
 		payload["voice"] = voice
 	}
@@ -376,6 +392,38 @@ func ShutdownOS() error { return post("/system/shutdown", nil) }
 func SetVolume(pct int) error {
 	body, _ := json.Marshal(map[string]int{"volume": pct})
 	return post("/audio/volume", body)
+}
+
+// GetVolume reads the current speaker volume and its allowed ceiling together.
+// A missing ceiling is compatible with older HAL versions; a missing or invalid
+// current volume must fail rather than accidentally turn a quiet speaker up.
+func GetVolume() (current, ceiling int, err error) {
+	resp, err := doGet("/audio/volume")
+	if err != nil {
+		return 0, 0, fmt.Errorf("GET /audio/volume: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return 0, 0, fmt.Errorf("GET /audio/volume returned %d", resp.StatusCode)
+	}
+	var result struct {
+		Volume    *int `json:"volume"`
+		MaxVolume *int `json:"max_volume"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return 0, 0, fmt.Errorf("decode /audio/volume: %w", err)
+	}
+	if result.Volume == nil || *result.Volume < 0 || *result.Volume > 100 {
+		return 0, 0, errors.New("/audio/volume returned missing or invalid volume")
+	}
+	ceiling = 100
+	if result.MaxVolume != nil {
+		ceiling = *result.MaxVolume
+		if ceiling < 0 || ceiling > 100 {
+			return 0, 0, errors.New("/audio/volume returned invalid max_volume")
+		}
+	}
+	return *result.Volume, ceiling, nil
 }
 
 // MaxVolume returns the speaker ceiling (%) HAL enforces from the device's
@@ -612,12 +660,15 @@ func GetSleeping() (bool, error) {
 		return false, fmt.Errorf("GET /emotion/status returned %d", resp.StatusCode)
 	}
 	var r struct {
-		Sleeping bool `json:"sleeping"`
+		Sleeping *bool `json:"sleeping"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&r); err != nil {
 		return false, fmt.Errorf("decode /emotion/status: %w", err)
 	}
-	return r.Sleeping, nil
+	if r.Sleeping == nil {
+		return false, errors.New("/emotion/status returned missing sleeping state")
+	}
+	return *r.Sleeping, nil
 }
 
 // GetEmotion returns the current emotion reported by HAL's /emotion/status.
@@ -674,7 +725,22 @@ func post(path string, body []byte) error {
 // response body and returns ErrSpeakerMuted when HAL reports the request was
 // suppressed (speaker muted). A malformed/unexpected body is NOT an error —
 // the speak itself succeeded, so decode failures are ignored.
-func postSpeak(path string, body []byte) error {
+func postSpeak(path string, body []byte) (err error) {
+	// Observe the final runtime-sanitized payload without adding wire fields.
+	var timing struct {
+		Text   string `json:"text"`
+		TurnID string `json:"turn_id"`
+	}
+	if json.Unmarshal(body, &timing) == nil && timing.Text != "" {
+		started := time.Now()
+		digest := sha256.Sum256([]byte(timing.Text))
+		textKey := fmt.Sprintf("%x", digest[:6])
+		slog.Info("[tts-timing] hal_post_start", "path", path, "run_id", timing.TurnID, "text_key", textKey)
+		defer func() {
+			slog.Info("[tts-timing] hal_post_complete", "path", path, "run_id", timing.TurnID,
+				"text_key", textKey, "http_ms", time.Since(started).Milliseconds(), "success", err == nil)
+		}()
+	}
 	var reader io.Reader
 	if body != nil {
 		reader = bytes.NewReader(body)

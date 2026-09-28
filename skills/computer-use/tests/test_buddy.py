@@ -57,6 +57,40 @@ class TransportTests(MockServerCase):
     def send(self, action="get_ui_tree", params=None, **kwargs):
         return buddy.command(action, {} if params is None else params, endpoint=self.endpoint, **kwargs)
 
+    def test_observation_bounds_and_unknown_keys_fail_before_network(self):
+        for action in ("get_ui_tree", "cua_observe"):
+            for params in ({"max_elements": 800}, {"max_nodes": 800}, {"max_nodes": True},
+                           {"max_nodes": 0}, {"max_depth": 31}, {"max_depth": 0}, {"max_depth": 1.5}):
+                with self.assertRaisesRegex(buddy.BuddyError, "inspect mode navigation"):
+                    self.send(action, params)
+        self.assertEqual(self.server.requests, [])
+        for action in ("get_ui_tree", "cua_observe"):
+            self.send(action, {"app": "Calendar", "max_nodes": 500, "max_depth": 30})
+        self.assertEqual(len(self.server.requests), 2)
+
+    def test_cua_validation_rejects_trace_mistakes_without_network(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "press_key", "key": "t"}
+        bad = [dict(base, window_id=61920), dict(base, ui_action="hotkey"),
+               dict(base, key=""), dict(base, modifiers="cmd"), dict(base, modifiers=[{}]),
+               dict(base, delivery_mode="automatic"), dict(base, pid=123),
+               {"snapshot_id": "cua-observed", "window_id": 61920, "ui_action": "press_key", "key": "t"},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "type_text", "text": ""},
+               {"snapshot_id": "cua-observed", "element_token": "s1:0", "ui_action": "click", "ax_action": "unknown"}]
+        for params in bad:
+            with self.subTest(params=params), self.assertRaises(buddy.BuddyValidationError):
+                self.send("cua_action", params)
+        self.assertEqual(self.server.requests, [])
+
+    def test_valid_cua_actions_forward_exactly_once_without_rewriting(self):
+        base = {"snapshot_id": "cua-observed", "element_token": "s1:0"}
+        for extra in ({"ui_action": "click", "ax_action": "open"},
+                      {"ui_action": "press_key", "key": "t", "modifiers": ["cmd", "shift"], "delivery_mode": "foreground"},
+                      {"ui_action": "type_text", "text": "Ngày 31/12/2026"}):
+            params = dict(base, **extra)
+            self.send("cua_action", params)
+            self.assertEqual(self.server.requests[-1]["params"], params)
+        self.assertEqual(len(self.server.requests), 3)
+
     def test_command_preserves_unicode_nested_params_and_cancellation_id(self):
         params = {"from": {"x": -20, "y": 7}, "text": "Tiếng Việt `$(private)`\n"}
         response = self.send("drag", params, command_id="known-unique-id", timeout_ms=60000)
@@ -161,6 +195,20 @@ class ScreenshotTests(unittest.TestCase):
             self.assertTrue(Path(json.loads(output.getvalue())["result"]["local_image_path"]).exists())
             self.assertNotIn("image_b64", output.getvalue())
 
+    def test_window_capture_rejects_old_companion_display_response(self):
+        with patch.object(buddy, "command", return_value=self.response()), patch.object(buddy, "save_screenshot") as save, patch("sys.stderr", io.StringIO()):
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar"}']), 1)
+            save.assert_not_called()
+
+    def test_window_capture_keeps_window_metadata(self):
+        data = self.response()
+        data["result"].update(capture_scope="window", window_id=42, pid=123)
+        with tempfile.TemporaryDirectory() as folder, patch.object(buddy, "command", return_value=data), patch("sys.stdout", io.StringIO()) as output:
+            self.assertEqual(buddy.main(["screenshot", "--params", '{"app":"Calendar","window_id":42}', "--output-dir", folder]), 0)
+            capture = json.loads(output.getvalue())["result"]
+            self.assertEqual(capture["capture_scope"], "window")
+            self.assertEqual(capture["window_id"], 42)
+
     def test_cli_failure_exits_nonzero(self):
         output = io.StringIO()
         with patch.object(buddy, "command", side_effect=buddy.BuddyError("paused")), patch("sys.stderr", output):
@@ -200,6 +248,118 @@ class ScreenshotTests(unittest.TestCase):
                 buddy.save_screenshot(self.response(), target)
 
 
+class SuggestTests(MockServerCase):
+    def setUp(self):
+        super().setUp()
+        self.choice = {"snapshot_id": "fresh-snapshot", "ref": "button-1", "ui_action": "press"}
+        self.target = {"role": "AXButton", "title": "Tìm kiếm", "description": "Search the page"}
+        self.server.reply = lambda _: {"status": 1, "data": {"suggestion": self.choice, "target": self.target, "reason": "selected"}}
+
+    def send_suggest(self, goal="Find search", params=None):
+        return buddy.suggest(goal, {} if params is None else params, endpoint=self.endpoint)
+
+    def test_suggestion_is_only_advice_and_preserves_unicode(self):
+        with patch.object(buddy, "command") as command:
+            result = self.send_suggest("Tìm ô tìm kiếm", {"app": "Safari"})
+        self.assertEqual(result, {"ok": True, "suggestion": self.choice, "target": self.target, "reason": "selected"})
+        self.assertEqual(self.server.requests, [{"goal": "Tìm ô tìm kiếm", "app": "Safari"}])
+        command.assert_not_called()
+
+    def test_null_suggestion_is_normal_fallback(self):
+        for reason in ["disabled", "timeout", "uncertain"]:
+            with self.subTest(reason=reason):
+                self.server.reply = lambda _, reason=reason: {"status": 1, "data": {"suggestion": None, "reason": reason}}
+                self.assertEqual(self.send_suggest(), {"ok": True, "suggestion": None, "reason": reason})
+
+    def test_invalid_inputs_do_not_reach_network(self):
+        for goal in [None, True, " ", "x" * 2001]:
+            with self.subTest(goal=goal), self.assertRaises(buddy.BuddyError):
+                self.send_suggest(goal)
+        for params in [[], {"app": None}, {"app": ""}, {"app": " "}, {"app": "x" * 257},
+                       {"snapshot_id": "stale"}, {"ref": "button"}, {"ui_action": "press"}]:
+            with self.subTest(params=params), self.assertRaises(buddy.BuddyError):
+                self.send_suggest(params=params)
+        self.assertEqual(self.server.requests, [])
+
+    def test_unicode_limits_count_characters(self):
+        self.send_suggest("ệ" * 2000, {"app": "ệ" * 256})
+        self.assertEqual(len(self.server.requests), 1)
+
+    def test_invalid_results_are_rejected(self):
+        invalid_data = [{}, {"suggestion": None}, {"suggestion": None, "reason": 1}]
+        for choice in [[], {}, dict(self.choice, snapshot_id=" "), dict(self.choice, ref=1),
+                       dict(self.choice, ui_action="type_text"), dict(self.choice, text="injected")]:
+            invalid_data.append({"suggestion": choice, "target": self.target, "reason": "selected"})
+        for target in [None, {}, [], dict(self.target, title=1), dict(self.target, role="r" * 129),
+                       dict(self.target, title="t" * 2001), dict(self.target, description="d" * 2001),
+                       dict(self.target, text="injected")]:
+            invalid_data.append({"suggestion": self.choice, "target": target, "reason": "selected"})
+        invalid_data.append({"suggestion": self.choice, "reason": "selected"})
+        invalid_data.append({"suggestion": None, "target": self.target, "reason": "disabled"})
+        for data in invalid_data:
+            with self.subTest(data=data):
+                self.server.reply = lambda _, data=data: {"status": 1, "data": data}
+                with self.assertRaises(buddy.BuddyError):
+                    self.send_suggest()
+        for body in [b"not json", [], {"status": True}, {"status": 0, "message": "failed"}]:
+            with self.subTest(body=body):
+                self.server.reply = lambda _, body=body: body
+                with self.assertRaises(buddy.BuddyError):
+                    self.send_suggest()
+
+    def test_http_failure_does_not_retry_or_execute(self):
+        self.server.status_code = 502
+        self.server.reply = lambda _: {"status": 0, "message": "no buddy connected"}
+        with patch.object(buddy, "command") as command, self.assertRaisesRegex(buddy.BuddyError, "no buddy connected"):
+            self.send_suggest()
+        command.assert_not_called()
+        self.assertEqual(len(self.server.requests), 1)
+
+    def test_response_size_is_bounded(self):
+        with patch.object(buddy, "MAX_SUGGEST_RESPONSE_BYTES", 8), self.assertRaisesRegex(buddy.BuddyError, "exceeds"):
+            self.send_suggest()
+
+    def test_timeout_uses_fixed_budget_without_proxy_retry_or_mutation(self):
+        with patch.object(buddy.urllib.request, "build_opener") as build, patch.object(buddy, "command") as command:
+            build.return_value.open.side_effect = TimeoutError("timeout")
+            with self.assertRaisesRegex(buddy.BuddyError, "no action was executed"):
+                buddy.suggest("Find search", {})
+            build.return_value.open.assert_called_once()
+            request = build.return_value.open.call_args.args[0]
+            self.assertEqual(request.full_url, buddy.SUGGEST_ENDPOINT)
+            self.assertEqual(build.return_value.open.call_args.kwargs["timeout"], 15)
+            self.assertEqual(build.call_args.args[0].proxies, {})
+            command.assert_not_called()
+
+    def test_cli_with_mock_http_returns_advice_or_fallback_without_command(self):
+        original = buddy.suggest
+        for choice in [None, self.choice]:
+            with self.subTest(choice=choice), tempfile.TemporaryDirectory() as folder:
+                params = Path(folder) / "params.json"
+                params.write_text('{"app":"Safari"}')
+                self.server.reply = lambda _, choice=choice: {"status": 1, "data": {
+                    "suggestion": choice, "target": self.target if choice else None, "reason": "test"}}
+                output = io.StringIO()
+                with patch.object(buddy, "suggest", side_effect=lambda goal, params: original(goal, params, endpoint=self.endpoint)), \
+                     patch.object(buddy, "command") as command, patch("sys.stdout", output):
+                    self.assertEqual(buddy.main(["suggest", "--goal", "Find search", "--params-file", str(params)]), 0)
+                expected = {"ok": True, "suggestion": choice, "reason": "test"}
+                if choice:
+                    expected["target"] = self.target
+                self.assertEqual(json.loads(output.getvalue()), expected)
+                command.assert_not_called()
+
+    def test_cli_missing_goal_and_incompatible_arguments_fail_without_network(self):
+        for args in [["suggest"], ["suggest", "--goal", "Find", "--id", "id"],
+                     ["suggest", "--goal", "Find", "--question", "other"],
+                     ["suggest", "--goal", "Find", "--timeout-ms", "1000"],
+                     ["get_ui_tree", "--goal", "Find"]]:
+            with self.subTest(args=args), patch("sys.stderr", io.StringIO()), patch.object(buddy, "command") as command:
+                self.assertEqual(buddy.main(args), 1)
+                command.assert_not_called()
+        self.assertEqual(self.server.requests, [])
+
+
 class ObserveTests(MockServerCase):
     def setUp(self):
         super().setUp()
@@ -219,6 +379,13 @@ class ObserveTests(MockServerCase):
         self.assertEqual(result["screenshot"]["image_to_global_points"]["origin_x"], -1920)
         self.assertEqual(self.server.requests, [{"question": "Tìm ô tìm kiếm", "display_id": 123, "scale": 0.5}])
 
+    def test_observe_forwards_window_target(self):
+        self.send_observe(params={"app": "com.apple.iCal", "window_id": 42})
+        self.assertEqual(self.server.requests[0]["app"], "com.apple.iCal")
+        self.assertEqual(self.server.requests[0]["window_id"], 42)
+        self.assertEqual(self.server.requests[0]["scale"], 1)
+        self.assertNotIn("display_id", self.server.requests[0])
+
     def test_observe_missing_description_and_raw_base64_rejected(self):
         for data in [{"screenshot": {}}, {"description": "", "screenshot": {}},
                      {"description": "visible", "screenshot": {"image_b64": "unexpected"}}]:
@@ -232,6 +399,9 @@ class ObserveTests(MockServerCase):
             with self.subTest(question=question), self.assertRaises(buddy.BuddyError):
                 self.send_observe(question)
         for params in [{"display_id": 0}, {"display_id": -1}, {"display_id": True}, {"display_id": 4294967296},
+                       {"app": " "}, {"app": True}, {"app": "a" * 257}, {"window_id": 42},
+                       {"app": "Calendar", "window_id": True}, {"app": "Calendar", "window_id": 0},
+                       {"app": "Calendar", "window_id": 4294967296}, {"app": "Calendar", "display_id": 1},
                        {"scale": 0}, {"scale": 1.1}, {"scale": float("nan")}, {"scale": True}, {"path": "/private/file"}]:
             with self.subTest(params=params), self.assertRaises(buddy.BuddyError):
                 self.send_observe(params=params)

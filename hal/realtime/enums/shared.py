@@ -20,6 +20,7 @@ class InputTypeEnum(StrEnum):
     IMAGE = "image"
     AUDIO = "audio"
     FUNCTION_CALL_RESULT = "function_call_result"
+    ANNOUNCE = "announce"
 
 
 class OutputTypeEnum(StrEnum):
@@ -29,12 +30,14 @@ class OutputTypeEnum(StrEnum):
     INTERRUPTED = "interrupted"
     USER_SPEECH = "user_speech"
     EXECUTION = "execution"
+    MAIN_AGENT_FALLBACK = "main_agent_fallback"
 
 
 class InputEventTypeEnum(StrEnum):
     """Types for the agent send queue."""
     INPUT = "input"
     AUDIO_COMMIT = "audio_commit"
+    AUDIO_STREAM_END = "audio_stream_end"
 
 
 class OutputEventTypeEnum(StrEnum):

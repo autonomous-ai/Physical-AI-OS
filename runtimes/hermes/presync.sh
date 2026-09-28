@@ -104,6 +104,23 @@ yq -i '
   | .agent.image_input_mode = "auto"
 ' "$CONFIG_YAML"
 
+# ── 1b2. TERMINAL CWD (always overwrite) ──────────────────────────────────────
+# Hermes discovers project-context files (AGENTS.md, .cursorrules) by walking up
+# from the CONFIGURED cwd — `resolve_context_cwd` in agent/runtime_cwd.py, which
+# returns None rather than falling back to the launch dir (a guard against an
+# agent self-spawned inside the Hermes source tree swallowing that repo's own
+# AGENTS.md). The stock `terminal.cwd: .` is relative, never bridges to
+# TERMINAL_CWD, and leaves that lookup empty — so an AGENTS.md we write is never
+# read. Pinning the absolute Hermes home is what makes the OS block reachable.
+#
+# The process already runs there (`WorkingDirectory=/root/.hermes` in the unit
+# Hermes installs), so this only states an existing fact; the agent's shell cwd
+# does not move. Verified on-device: with `.` a codeword planted in AGENTS.md was
+# absent from the prompt; with the absolute path the agent returned it.
+log "ensure config.yaml terminal.cwd (makes AGENTS.md discoverable)"
+[ "$(yq '.terminal | tag' "$CONFIG_YAML" 2>/dev/null)" = "!!map" ] || yq -i '.terminal = {}' "$CONFIG_YAML"
+yq -i '.terminal.cwd = "'"$HERMES_DIR"'"' "$CONFIG_YAML"
+
 # ── 1c. APPROVALS OFF (always overwrite) ───────────────────────────────────────
 # The device runs unattended (voice + chat channels) — a "Command Approval
 # Required" card is a dead end for a voice user and stalls the turn, so command

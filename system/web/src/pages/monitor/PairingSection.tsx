@@ -8,10 +8,10 @@ export function PairingSection() {
       <div className="lm-pairing-hero">
         <span className="lm-pairing-hero-icon" aria-hidden><Link2 size={20} /></span>
         <div>
-          <div className="lm-pairing-eyebrow">DEVICE CONNECTIONS</div>
+          <div className="lm-pairing-eyebrow">ROBOT CONNECTIONS</div>
           <h1 className="lm-pairing-title">Pair a computer</h1>
           <p className="lm-pairing-description">
-            Connect a Mac with Autonomous Buddy, or pair Harness to access this device's agents.
+            Connect a Mac with Autonomous Buddy, or pair Harness to access this robot's agents.
           </p>
         </div>
       </div>

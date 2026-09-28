@@ -207,7 +207,12 @@ func envSlice(m map[string]string) []string {
 // stdin line, counts it in flight, and writes it (or queues it while the
 // child is down — flushed on the next spawn).
 func (s *Server) sendUserMessage(payload turnPayload) {
-	blocks := []map[string]any{{"type": "text", "text": payload.Content}}
+	payload = s.prepareSkill(s.lifetimeContext, payload)
+	blocks := []map[string]any{}
+	if payload.preload != "" {
+		blocks = append(blocks, map[string]any{"type": "text", "text": payload.preload})
+	}
+	blocks = append(blocks, map[string]any{"type": "text", "text": payload.Content})
 	for _, att := range payload.Attachments {
 		if !strings.HasPrefix(att.URL, "data:") {
 			continue

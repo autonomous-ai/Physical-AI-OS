@@ -61,9 +61,8 @@ là đã phản hồi** — đoán "interaction mở mới nhất" chính là c�
 tính thành phản hồi cho câu lệnh mới. Số đếm đi kèm mọi dòng interaction ở
 `unknown_owner_playbacks`.
 
-Lần phát bị mute cũng phải có owner resolve được thì mới loại interaction với
-`speaker_muted`. Thông báo bị mute không có owner hoặc thuộc lượt khác không
-được loại lệnh thoại mới nhất. Mỗi đoạn trong hàng đợi mang metadata phân loại
+Ack schema 2 không loại interaction chỉ vì loa mute: tác vụ im lặng đã được
+nhận xử lý vẫn có thể có ack. Mỗi đoạn trong hàng đợi mang metadata phân loại
 riêng (câu trả lời/filler/hệ thống), không kế thừa loại của speech mở stream.
 Snapshot này không thay đổi hành vi feedback hay ngắt phát.
 
@@ -76,17 +75,69 @@ interaction HAL, độc lập với timeout của vòng nhận. Snapshot interac
 xử lý. Delegate mang nguyên interaction ID qua OS; provider từ chối tiếng không
 phải của người dùng thì task đó bị loại.
 
-Event kết thúc tiếng nói thật từ server dùng **thời điểm nhận** trên đồng hồ
-monotonic, với `speech_end_method=server_vad`. Mốc này bao gồm độ trễ trước khi
-HAL nhận event server, không phải điểm kết thúc âm học. Chỉ có transcript Gemini
-vẫn đủ tạo task thực thi hợp lệ, nhưng không đủ xác định điểm kết thúc tiếng nói:
-KPI-1 ghi `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`,
-latency ack/answer là null. Eligibility KPI-3 độc lập với exclusion này.
-Endpoint tới sau playback không được dùng để tạo ngược mẫu latency.
+Gemini `ACTIVITY_END` hiện chuyển **thời điểm nhận** monotonic của HAL cho
+voice cue hiện hữu. Mốc này mang nhãn `server_vad_receive`, **không** là endpoint
+KPI-1: độ trễ mạng và thời gian server xác nhận im lặng sẽ làm latency đo được
+ngắn giả. Không đổi cue hoặc VAD. Chỉ có transcript/thời điểm nhận thì giữ
+`exclusion_reason=speech_endpoint_unavailable`, latency ack/answer null; eligibility
+KPI-3 độc lập. Endpoint thật tới muộn được amendment nếu timestamp trước hoặc
+bằng ack đầu tiên thuộc lượt đó. HAL giữ timestamp nhận xử lý và audio/answer
+độc lập, kể cả filler đúng owner. Timestamp sai, NaN/Inf, tương lai hoặc sau ack không
+được đổi thành latency 0.
+
+Converter google-genai 2.12.1 giữ `voiceActivity` và `audioOffset`; test đi qua
+SDK thật xác minh điều này. [SDK contract](https://googleapis.github.io/python-genai/genai.html#genai.types.VoiceActivity)
+định nghĩa offset trên luồng input audio, không phải đồng hồ monotonic của HAL.
+HAL chưa ánh xạ frame capture vào timeline này: cần xét preroll, prefix phát lại,
+frame không gửi và reconnect. Ghi offset ra log chưa đủ để tính KPI.
+[Live API reference](https://ai.google.dev/api/live) không bảo đảm thứ tự input
+transcription. Không bật `explicit_vad_signal`: đây không phải cấu hình được tài
+liệu xác nhận để xin server gửi endpoint. [Issue SDK đang mở](https://github.com/googleapis/python-genai/issues/2981)
+báo 3.8 thiếu activity event, nhưng không phải bằng chứng cho device của chúng ta
+hay kết luận nguyên nhân đã được Google xác nhận.
+
+`[endpoint-wire]` ghi type/offset trước và sau SDK; `[endpoint-coverage]` ghi bộ
+đếm cộng dồn theo socket, kể cả khi không có activity và có trường legacy.
+Không ghi audio hay thêm nội dung transcript. `[voice-metrics] live ownership`
+liên kết provider key với interaction ID để nối log ack sau playback thật.
+Các trace giúp phân biệt server không gửi với SDK làm mất tín hiệu; không bật
+manual VAD, đổi mic upload, wake gating, cancel, delegation hay LIVE OFF.
+
+**Độ phủ chưa giải quyết:** cohort lamp-0c4e được cung cấp ngày 24/09/2026,
+14:15–15:00 có 87 interaction sau dedup: 44 thiếu endpoint, 13 bị ngắt lời,
+30 noise/rejected/no-transcript; không có mẫu đủ điều kiện. KPI-1 là N/A.
+Patch không tạo endpoint giả cho 44 lượt này. Detector tiếng nói cục bộ chỉ quan
+sát là phương án khác, nhưng cần hiệu chuẩn trên capture có timestamp và ghi rõ
+là ước lượng. RMS/duck hiện tại không phải speech classifier, không phân biệt
+người đang nói với thiết bị trong phòng ồn. Không thay bằng transcript arrival,
+STT close, TTS start hay last-audio-sent.
+
+Kiểm tra chỉ đọc trên device lúc 15:19 xác nhận google-genai 2.12.1 ánh xạ wire
+`voiceActivity.type`/`audioOffset` sang SDK `voice_activity_type`/`audio_offset`.
+Handler đang deploy bỏ qua offset, lấy `time.monotonic()` khi nhận END.
+Server log 14:15–15:00 có 18 dòng ack, tất cả `latency_ms=None`; 77 dòng tạo
+interaction bằng `provider_transcript`, 3 bằng `provider_delegate`. Đây là số
+dòng log thô, không phải cohort 87 dòng sau dedup ở trên. Log cũ chưa trace raw
+activity nên không chứng minh được server đã không gửi END.
+
+Sau khi được phép deploy, thu bộ đếm wire/SDK và interaction của câu nói xác định;
+đối chiếu first write/cancel theo cùng owner. Kiểm tra im lặng/ồn, filler hợp lệ,
+barge-in, suppress trước write, output cũ tới muộn, delegate và LIVE OFF. Báo độ
+phủ thiếu endpoint cùng `no_ack` đủ điều kiện và latency. Test local không chứng
+minh độ phủ hay độ chính xác âm học trên device. Mốc audio vẫn là first successful
+stream write; phần đệm ALSA/loa cần acoustic loopback để đo. Timer báo cáo
+10 giây hiện bắt đầu khi tạo interaction (có thể lúc nhận transcript); amendment
+có thể tới sau, nên không bảo đảm cửa sổ 10 giây sau kết thúc tiếng nói âm học.
 
 Realtime chỉ ghi completed khi nhận terminal thành công của provider gắn đúng
 interaction. Timeout khi nhận, tín hiệu done tự tạo và ngắt lời không phải bằng
 chứng hoàn tất; không có terminal thành công thì task vẫn là incomplete.
+Gemini Extended Thinking dùng `interactionStatus=IDLE` cùng text trả lời được
+chấp nhận, không còn tool cục bộ hoặc continuation bị giữ làm bằng chứng thực
+thi. Không cần verdict từ LLM thứ hai sau terminal này. Output rỗng và công việc
+cục bộ chưa xong vẫn fallback. Session thiếu status giữ xác nhận/kiểm tra outcome
+và grace có giới hạn hiện hữu. Provider kết thúc hoặc classifier xác nhận đều
+không bảo đảm đúng nội dung. Playback KPI-1 và mọi ngưỡng KPI giữ nguyên.
 Ngắt lời thật từ provider tạo biên suppression `server_barge_in`
 chỉ áp dụng cho interaction bị huỷ, giữ grace **2 giây** và cửa sổ quan sát
 **60 giây** hiện có. Audio không có owner không được tính là acknowledgement.
@@ -100,10 +151,10 @@ Khi đóng phiên, `voice_metrics_live_coverage` ghi `observed_interactions`,
 `completed_interactions` cùng các bộ đếm có phát sinh:
 `unkeyed_user_observations`,
 `unowned_output_chunks`, `unowned_completions`,
-`unowned_interruptions`.
+`unowned_interruptions`, `endpoint_receive_only_observations`.
 Đọc chúng cùng kết quả KPI: luồng transcript Gemini không có input ID ổn định,
 nên output tới muộn hoặc không có owner không được gán ngược cho câu nói mới nhất.
-Thiếu endpoint là mất độ phủ, không phải pass hay fail KPI-1. Các hook này giữ
+Filler look LIVE mang binding đúng provider turn, được giữ suốt thao tác aim; owner thiếu/mơ hồ giữ unclaimed. Thiếu endpoint là mất độ phủ, không phải pass hay fail KPI-1. Các hook này giữ
 nguyên định nghĩa đường turn, bộ lọc tiếng ồn và cờ routing.
 Metadata ngắt lời không thêm lệnh dừng playback, bỏ text trong bộ đệm, mở lại
 audio native hay đổi lịch xử lý turn của provider. Lỗi đo lường được bắt để
@@ -113,15 +164,28 @@ nó không đóng audio stream vật lý.
 
 ## Thế nào là "đã phản hồi"
 
-Là frame đầu tiên **thực sự được ghi vào audio stream**
-(`TTSService._note_audio_written`, gọi từ mọi đường ghi thật: synth streaming,
-drain hàng đợi câu, phát WAV cached, và frame native realtime).
+**Ack schema 2** lấy xác nhận sớm nhất sau endpoint lời người dùng: audio đúng
+owner thực sự được ghi, OS xác nhận đã nhận handoff sang main/harness (`run_id`
+kèm `delivered`), hoặc kết quả đã xử lý local được xác nhận. Chỉ chọn route
+delegate, gọi tool, bắt đầu POST hay nhận HTTP 200 chung chung chưa chứng minh
+đã nhận xử lý. History-sync không được tính là ack nhận xử lý. Tác vụ main có
+`NO_REPLY` hợp lệ vẫn có ack mà không cần phát tiếng hoặc hoàn tất execution.
 
-`on_speak_start` **không** phải tín hiệu đó và không dùng cho KPI: đường cached
-gọi nó TRƯỚC khi lấy stream lock và trước khi ghi byte nào, nên speech bị stop
-hoặc lỗi ở giữa vẫn trông như đã phát. HTTP 200 cũng vậy — `speak_queue()` cố
-tình trả `True` cho request nó drop, và `deliverTTS` bên os-server có thể bị
-mute sau khi đã nhận text.
+Nhận xử lý dùng `ack_kind=delegate_accepted` / `local_accepted` và
+`ack_modality=processing_accepted`. Filler/câu trả lời đúng owner phát sớm hơn
+vẫn giữ ack sớm nhất. `audio_latency_ms`/`audio_kind` đo riêng lần ghi audio đúng
+owner đầu tiên; `answer_latency_ms`/`answer_kind` vẫn cần câu trả lời thực sự.
+Hook đo không đổi routing, playback, cancel hay thời điểm main chạy tác vụ.
+
+Với audio, dùng frame đầu tiên **thực sự ghi vào audio stream** qua
+`TTSService._note_audio_written` ở các đường synth streaming, drain queue, WAV
+cached và native realtime. `on_speak_start` và HTTP nhận TTS không chứng minh
+đã phát: queue có thể drop hoặc mute trước khi ghi. Đây khác với xác nhận đã
+nhận tác vụ nêu trên.
+
+**Version 1 chỉ đo audio.** Thiếu `ack_schema_version` nghĩa là 1. Không được
+đổi nghĩa `no_ack` lịch sử thành version 2 khi thiếu bằng chứng nhận xử lý;
+phải báo riêng từng version, kể cả khác biệt eligibility khi mute.
 
 Ngay cả lần ghi đầu **cũng không phải thời điểm âm thanh ra loa**: đệm ALSA (và
 Bluetooth còn hơn) nằm sau đó. Phép đo là "audio đã được giao cho thiết bị",
@@ -140,18 +204,11 @@ Tiếng chime xác nhận cử chỉ vật lý không phải phản hồi cho l�
 Các lần ghi chime bỏ qua hook đo speech: không kế thừa owner của câu trả lời
 đang chờ và không dùng mất hook ghi frame đầu tiên của câu trả lời đó.
 
-**Waiting audio ĐƯỢC tính là phản hồi — đây là quyết định, không phải tình cờ.**
-Chỉ số này trả lời câu *"thiết bị có cho người dùng biết là đã nghe thấy
-không?"*, chứ không phải *"nó có trả lời không?"*. Câu filler ("một giây nhé")
-là một biên nhận thật: người dùng hết phải phân vân không biết đèn có nghe
-mình. Nên lượt nào có tiếng đầu tiên là filler thì tính là đã phản hồi, dù câu
-trả lời thật tới muộn hơn nhiều.
-
-Phải đọc kèm hệ quả: trên lamp hiện tại **mọi** lần phản hồi đo được đều là
-`waiting_audio`, nên chỉ số này đang cho biết đèn nói "tôi nghe rồi" nhanh cỡ
-nào, KHÔNG phải nó trả lời nhanh cỡ nào. `ack_modality` được lưu ở mọi dòng
-chính là để tách hai thứ đó — tách theo nó trước khi trích một con số, và coi
-tỉ lệ `waiting_audio` 100 % là một phát hiện về sản phẩm, không phải điểm tốt.
+**Waiting audio vẫn được tính là ack.** Filler có thể xác nhận trước handoff
+hoặc câu trả lời, nhưng handoff đã được xác nhận không cần filler mới có ack.
+Tách theo `ack_kind` và `ack_modality`: nhận xử lý không chứng minh người dùng
+đã nghe gì. Báo audio latency và answer latency bên cạnh KPI-1 để giữ rõ khác
+biệt UX này.
 
 **Phản hồi bằng hình ảnh KHÔNG được tính.** LED listening đúng là một tín hiệu
 người dùng cảm nhận được, nhưng thời điểm nó thật sự bật chưa được đo ở đây;
@@ -183,10 +240,12 @@ gian phản hồi của thiết bị.
 | `speech_end_method` | Cách phát hiện điểm kết thúc |
 | `eligible` | `false` khi có `exclusion_reason` |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (chỉ KPI-1). `speaker_muted` được ghi đúng lúc loa **từ chối** phát, không phải đọc cờ mute lúc chốt sổ — nếu không, thiết bị được bật tiếng lại trước khi chốt sẽ trông như thiết bị không thèm trả lời |
-| `failure_reason` | `dispatch_failed` — lệnh hợp lệ nhưng **không được phục vụ** (POST không tới nơi). Đây *không* phải exclusion: dòng vẫn eligible và bị tính vào KPI. Lệnh os-server tự trả lời (local intent: âm lượng, LED, giờ) **không** phải lỗi — câu trả lời mang interaction id làm owner và được tính là đã phản hồi. |
-| `ack_latency_ms` | Quan sát thô, giữ nguyên bất kể kết luận (`null` khi không có gì phát hoặc thiếu endpoint) |
-| `ack_modality`, `ack_kind` | Người dùng thực sự nghe thấy cái gì |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `interrupted_by_user`, `speech_endpoint_unavailable` (chỉ KPI-1). Schema 2 không loại chỉ vì mute; schema 1 lịch sử còn dùng `speaker_muted`. |
+| `failure_reason` | `dispatch_failed`: dispatch thất bại vẫn eligible; nếu không có ack hợp lệ khác thì là `no_ack`. Kết quả OS xử lý local được xác nhận có `local_accepted`. |
+| `ack_schema_version` | `2`: audio đúng owner hoặc xác nhận nhận xử lý; thiếu field nghĩa là `1` chỉ đo audio. |
+| `ack_latency_ms` | Từ endpoint tới ack được xác nhận sớm nhất; null khi chưa có bằng chứng ack hoặc thiếu endpoint hợp lệ. |
+| `ack_modality`, `ack_kind` | Loại audio đúng owner, hoặc `processing_accepted` với `delegate_accepted` / `local_accepted`. |
+| `audio_latency_ms`, `audio_kind` | Đo độc lập từ endpoint tới lần ghi audio đúng owner đầu tiên và loại audio; null nếu chưa phát hoặc thiếu endpoint hợp lệ. |
 | `answer_latency_ms`, `answer_kind` | Lúc nghe được **câu trả lời** (`agent_reply` / `native_realtime` / `realtime_tts`), khác với biên nhận. `null` = thiếu endpoint hoặc chưa ghi nhận câu trả lời trong cửa sổ — đó là phát hiện, không phải thiếu dữ liệu |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — ngưỡng (tạm thời) đang áp dụng lúc ghi dòng đó |
 | `unknown_owner_playbacks` | Số lần phát không ai nhận — audio bị loại khỏi quyết định ack |
@@ -242,6 +301,18 @@ mọi biên nên lựa chọn đó luôn kiểm tra được và đổi được
 Cả hai biên đều đóng mốc **ở HAL**, nơi cả hai phát sinh: cử chỉ huỷ là button
 action của HAL, còn `voice_agent_handled` do chính turn dispatcher của HAL gửi đi.
 
+**Biên explicit stop còn được HAL cưỡng chế, không chỉ đo.** Watermark click
+của os-server chỉ tắt được reply mà nó gán được vào run bị huỷ, nhưng có hai
+đường tới loa không qua kiểm tra đó (đo trên thiết bị 17/9/2026,
+`stale_started_after_ms` 12–28 s): kết quả Harness nói thẳng qua
+`hal.SpeakReply`, và filler chờ realtime do HAL tự hẹn giờ. Nay biên đánh dấu
+mọi interaction nó bao phủ là `suppressed`, và `TTSService` từ chối audio thuộc
+turn đó ở mọi cửa vào (`speak`, `speak_queue`, `speak_cached`,
+`native_play_begin`) qua `voice_metrics.is_suppressed(owner)`. Audio không có
+chủ không bao giờ bị từ chối. Đường Harness thêm vào còn đi qua `deliverTTS`
+như mọi reply khác. Auto supersede vẫn chỉ đo; cưỡng chế nó là watermark của
+os-server.
+
 **Chỉ ghi nhận biên khi os-server THẬT SỰ áp dụng.** Response của
 `/api/sensing/event` cho post `voice_agent_handled` mang theo `speechSuppressed`
 — chính câu trả lời của os-server cho "tôi có lấy loa khỏi turn cũ không". Khi
@@ -256,13 +327,14 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
 
 **KPI-1 — phản hồi trong 3 giây**
 
-- Mẫu số: các dòng `voice_metrics_interaction` có `eligible = true`, sau khi áp
-  dụng đính chính (dòng nào có bản `amends_event_id` cho cùng `interaction_id`
-  thì bị bản đính chính thay thế).
+- Mẫu số: verdict cuối của từng `(device, interaction_id, ack_schema_version)`
+  có `eligible = true`, ưu tiên `task_revision` lớn nhất rồi amendment/thời gian.
+  `no_ack` hợp lệ vẫn nằm trong mẫu số. Báo riêng từng schema version.
 - Tử số: trong đó `outcome = 'acknowledged'` và `ack_latency_ms <= 3000`.
 - Loại trừ (vẫn báo cáo, không bao giờ vứt): turn bị noise guard loại, turn
   model từ chối vì không phải người dùng, transcript rỗng, câu không nói với
-  thiết bị (không wake word / ngoài cửa sổ follow-up), và loa đang mute.
+  thiết bị (không wake word / ngoài cửa sổ follow-up), bị user ngắt và thiếu
+  endpoint thật. Schema 2 không loại chỉ vì loa mute.
 - **Lỗi thì GIỮ LẠI.** Lệnh hợp lệ mà thiết bị không phục vụ được (POST sang
   os-server không tới — `failure_reason = 'dispatch_failed'`) vẫn *eligible* và
   tính là `no_ack`. Loại nó ra là thổi phồng tỉ lệ thành công bằng đúng những
@@ -329,7 +401,7 @@ hoặc excluded tương ứng trở thành eligible, nhưng không ghi đè quy 
 | `task_exclusion_reason` | Loại noise, non-user, transcript rỗng hoặc không hướng tới thiết bị; dispatch lỗi vẫn eligible |
 
 `voice_metrics_task_execution` chứa `schema_version=1`, `run_id`,
-`interaction_id`, `outcome` (`completed`, `failed`, `unknown`), `evidence`,
+`interaction_id`, `outcome` (`completed`, `failed`, `unknown`, hoặc `cancelled` của Harness), `evidence`,
 `execution_at_ms` (Unix milliseconds), và boolean `error`. Không chứa nội dung
 lỗi, transcript hay kết quả tool.
 
@@ -343,10 +415,22 @@ lỗi, transcript hay kết quả tool.
 | `chat_final_no_lifecycle` | `completed`: final có nội dung tiêu thụ pending trace mà không có lifecycle (ví dụ OpenClaw `/status`, `/new`); final rỗng không chứng minh completion |
 | `execution_observation_lost` | `unknown`: runtime mất quan sát tác vụ đã gửi nhưng chưa kết thúc khi mất transport hoặc timeout; chưa chứng minh thực thi thất bại |
 | `harness_delegated` | `unknown`: thực thi chuyển sang Harness; lifecycle end của runtime cục bộ không chứng minh tác vụ remote xong |
-| `harness_turn_done`, `harness_turn_summary` | `completed`: completion Harness đã ghép đúng; summary cần nội dung, done không cần recap hay TTS |
+| `harness_turn_summary` | `completed`: summary cuối legacy được ghép an toàn, có nội dung; riêng `turn.done` không hoàn tất task |
+| `harness_correlated_summary` | `completed`, `failed` hoặc `cancelled`: membership summary đã kiểm chứng và áp dụng atomic một lần; giữ outcome chính xác, độc lập với TTS |
 | `harness_turn_error` | `failed`: `turn.error` hoặc `agent.error` Harness đã ghép đúng, kể cả thiếu text |
 | `harness_question_open` | `unknown`: đang chờ trả lời câu hỏi, gồm thu thập câu trả lời từng phần cục bộ |
-| `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled |
+| `realtime_turn_done` | `completed`: terminal thành công của provider gắn đúng lượt hoàn tất turn đã handled; Gemini Extended Thinking dùng `IDLE` cùng text trả lời được chấp nhận và không còn công việc cục bộ chưa xong; session thiếu status giữ xác nhận/kiểm tra outcome, fallback không tính hoàn thành |
+
+Đường `turn.summary` có correlation chỉ phát `harness_correlated_summary` cho result
+mới lưu và đúng các run thành viên; replay không phát lại. `cancelled` giữ riêng và
+có `error=true`, tuyệt đối không đổi thành thành công. Receipt và `turn.done` chỉ
+là lifecycle, không chứng minh kết quả hoàn tất. Summary đơn thiếu metadata vẫn
+qua bộ đối chiếu legacy an toàn; summary mơ hồ không được tính thành công.
+Reporter nhận evidence này trong cohort Harness và đếm riêng `cancelled_turns`,
+vẫn giữ trong mẫu số eligible nhưng không tính completed hay failed. Cancellation
+là terminal: mất quan sát transport hay completion cleanup đến sau không xóa nó.
+Giữ nguyên ưu tiên failure hiện có nếu đồng thời xuất hiện evidence failed mâu thuẫn.
+
 
 Ghép bằng chứng bằng **thiết bị + run_id** hoặc **thiết bị + interaction_id**.
 OS cũng ghi run không phải thoại: không tự đưa chúng vào mẫu số. Với
@@ -568,8 +652,9 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 - **Phát hiện stale ở mức playback, không ở mức mẫu audio.** Nó chấm các khoảng
   phát vượt mốc grace; không nói được còn bao nhiêu mili-giây PCM nằm trong đệm
   phần cứng.
-- **Audio đã giao cho driver, không phải âm trong phòng.** Mốc ack là lần ghi
-  stream đầu tiên; đệm ALSA/Bluetooth sau đó không đo được.
+- **Audio đã giao cho driver, không phải âm trong phòng.** Ack bằng audio và
+  `audio_latency_ms` dùng lần ghi đầu; không đo đệm ALSA/Bluetooth sau đó.
+  Ack nhận xử lý không chứng minh đã phát tiếng hay hoàn tất tác vụ.
 - **Playback không ai nhận thì để không quy chủ, có chủ đích.** Nó được đếm
   (`unknown_owner_playbacks`) và loại khỏi quyết định ack, thay vì đoán.
 - **Cửa sổ 60 giây vẫn có thể hết sớm.** Những dòng đó mang
@@ -642,3 +727,9 @@ Mặc định loại lượt smoke. Binary dự phòng trên device:
 100 lượt / 85 hoàn tất, lượt chỉ có OS, chống đếm trùng HAL/OS. Go integration
 test kiểm tra binding khi queue và lỗi not-ready. Build os-server Linux ARM64
 pass. Không tạo giả AA event cho dữ liệu lịch sử bị thiếu.
+
+Truy vấn KPI-1 trong bản EN trả cùng lúc `observed_interactions`,
+`endpoint_known_interactions`, `endpoint_unknown_interactions`, `endpoint_excluded_interactions`, `eligible_samples`,
+`no_ack` và `kpi1_pct`, tách theo `ack_schema_version` (thiếu field = 1).
+Dedup theo device, interaction và schema; ưu tiên `task_revision` rồi amendment/thời gian;
+`no_ack` hợp lệ vẫn trong mẫu số, không có mẫu hợp lệ trả NULL (N/A).

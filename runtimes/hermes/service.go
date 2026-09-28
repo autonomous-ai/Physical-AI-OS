@@ -72,6 +72,7 @@ type HermesService struct {
 	steeringMu        sync.Mutex
 	steeringQueue     []managedChat
 	steeringWake      chan struct{}
+	runExpiries       chan runExpiry
 	runtimeCtx        context.Context
 	managedSession    string
 	managedSessionSet bool

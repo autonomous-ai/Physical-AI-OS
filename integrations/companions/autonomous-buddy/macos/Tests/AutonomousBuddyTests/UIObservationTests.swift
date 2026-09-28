@@ -4,10 +4,10 @@ import XCTest
 final class UIObservationTests: XCTestCase {
     func testObservationLimitsRejectUnboundedOrNonIntegerInputs() throws {
         for value in [true, false, 0, -1, 501, 2.5, "20", Double.infinity] as [Any] {
-            XCTAssertThrowsError(try UIObservationStore.validatedLimit(["max_nodes": value], "max_nodes", fallback: 150, maximum: 500))
+            XCTAssertThrowsError(try ExecutorParameters.integer(["max_nodes": value], "max_nodes", default: 150, range: 1...500))
         }
-        XCTAssertEqual(try UIObservationStore.validatedLimit([:], "max_nodes", fallback: 150, maximum: 500), 150)
-        XCTAssertEqual(try UIObservationStore.validatedLimit(["max_nodes": 500], "max_nodes", fallback: 150, maximum: 500), 500)
+        XCTAssertEqual(try ExecutorParameters.integer([:], "max_nodes", default: 150, range: 1...500), 150)
+        XCTAssertEqual(try ExecutorParameters.integer(["max_nodes": 500], "max_nodes", default: 150, range: 1...500), 500)
     }
 
     func testReferencesRequireSameSnapshotUnexpiredAndSameForegroundProcess() {

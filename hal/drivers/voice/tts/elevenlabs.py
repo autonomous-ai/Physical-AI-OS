@@ -1,7 +1,10 @@
 """ElevenLabs TTS backend with streaming support."""
 
 import logging
+import hashlib
 import re
+import time
+import uuid
 from typing import Iterator, Optional
 from urllib.parse import urlparse
 
@@ -12,6 +15,7 @@ from hal.drivers.voice.tts.backend import (
     TTSRateLimitError,
 )
 from hal.drivers.voice.tts.openai import _ensure_openai_v1
+from hal.drivers.voice.tts.tempo import change_tempo
 
 logger = logging.getLogger("hal.voice.tts")
 
@@ -24,6 +28,8 @@ class ElevenLabsTTSBackend(TTSBackend):
     """ElevenLabs TTS backend with streaming support."""
 
     DEFAULT_MODEL = "eleven_v3"
+    cache_revision = "local-v3-tempo-v1"
+    supports_synthesis_cancellation = True
     ELEVENLABS_PATH = "/elevenlabs"
 
     # Voice name -> voice_id mapping, grouped by trained language.
@@ -191,6 +197,7 @@ class ElevenLabsTTSBackend(TTSBackend):
         model: str,
         speed: float,
         instructions: Optional[str] = None,
+        cancelled=None,
     ) -> Iterator[bytes]:
         el_model = model if model.startswith("eleven_") else self.DEFAULT_MODEL
         # Resolve voice name to voice_id (pass through if already an ID)
@@ -214,35 +221,93 @@ class ElevenLabsTTSBackend(TTSBackend):
         }
         # Send normal speed explicitly too: omission inherits the voice's
         # stored settings, which may use a different speaking speed.
-        body["voice_settings"] = {"speed": max(0.7, min(1.2, speed))}
+        local_tempo = el_model == "eleven_v3"
+        body["voice_settings"] = {
+            "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
+        }
 
-        with self._client.stream(
-            "POST", url, headers=headers, json=body
-        ) as response:
-            if response.status_code >= 400:
-                # raise_for_status alone swallows the body — log the real reason
-                # + the offending text so the next 400 (other cause) is diagnosable.
-                try:
-                    detail = response.read().decode(errors="replace")[:300]
-                except Exception:
-                    detail = "<unreadable>"
-                logger.error(
-                    "ElevenLabs TTS %d voice=%s model=%s speed=%s text=%r: %s",
-                    response.status_code, voice_id, el_model, speed, text[:80], detail,
-                )
-                # Rate limit (429) or quota exhausted (401/402 with a quota body):
-                # raise a dedicated error so the service announces it to the user
-                # via a prerendered notice instead of retrying pointlessly and
-                # failing silently. 401 alone is usually a bad key, so only treat
-                # it as quota when the body says so.
-                if response.status_code == 429 or (
-                    response.status_code in (401, 402)
-                    and "quota" in detail.lower()
-                ):
-                    raise TTSRateLimitError(
-                        f"ElevenLabs rate limit / quota: {detail}",
-                        status_code=response.status_code,
+        timing_id = uuid.uuid4().hex[:12]
+        text_key = hashlib.sha256(text.encode()).hexdigest()[:12]
+        started_at = time.perf_counter()
+        def fetch_chunks():
+            nonlocal started_at
+            started_at = time.perf_counter()
+            logger.info("[tts-timing] stage=http_start request=%s text_key=%s chars=%d model=%s speed=%.2f",
+                        timing_id, text_key, len(text), el_model, speed)
+            with self._client.stream(
+                "POST", url, headers=headers, json=body
+            ) as response:
+                logger.info("[tts-timing] stage=http_headers request=%s elapsed_ms=%.1f status=%d",
+                            timing_id, (time.perf_counter() - started_at) * 1000, response.status_code)
+                if response.status_code >= 400:
+                    # raise_for_status alone swallows the body — log the real reason
+                    # + the offending text so the next 400 (other cause) is diagnosable.
+                    try:
+                        detail = response.read().decode(errors="replace")[:300]
+                    except Exception:
+                        detail = "<unreadable>"
+                    logger.error(
+                        "ElevenLabs TTS %d voice=%s model=%s speed=%s text=%r: %s",
+                        response.status_code, voice_id, el_model, speed, text[:80], detail,
                     )
-                response.raise_for_status()
-            for chunk in response.iter_bytes(STREAM_CHUNK_SIZE):
+                    # Rate limit (429) or quota exhausted (401/402 with a quota body):
+                    # raise a dedicated error so the service announces it to the user
+                    # via a prerendered notice instead of retrying pointlessly and
+                    # failing silently. 401 alone is usually a bad key, so only treat
+                    # it as quota when the body says so.
+                    if response.status_code == 429 or (
+                        response.status_code in (401, 402)
+                        and "quota" in detail.lower()
+                    ):
+                        raise TTSRateLimitError(
+                            f"ElevenLabs rate limit / quota: {detail}",
+                            status_code=response.status_code,
+                        )
+                    response.raise_for_status()
+                def measured_chunks():
+                    # Preserve the previous 4096-byte output boundaries while observing
+                    # bytes before HTTPX's application-level chunk accumulation.
+                    pending = bytearray()
+                    first_network = True
+                    first_buffered = True
+                    for raw in response.iter_bytes():
+                        if not raw:
+                            continue
+                        if first_network:
+                            first_network = False
+                            logger.info("[tts-timing] stage=http_first_bytes request=%s elapsed_ms=%.1f bytes=%d",
+                                        timing_id, (time.perf_counter() - started_at) * 1000, len(raw))
+                        pending.extend(raw)
+                        while len(pending) >= STREAM_CHUNK_SIZE:
+                            chunk = bytes(pending[:STREAM_CHUNK_SIZE])
+                            del pending[:STREAM_CHUNK_SIZE]
+                            if first_buffered:
+                                first_buffered = False
+                                logger.info("[tts-timing] stage=buffer_first_chunk request=%s elapsed_ms=%.1f bytes=%d",
+                                            timing_id, (time.perf_counter() - started_at) * 1000, len(chunk))
+                            yield chunk
+                    if pending:
+                        if first_buffered:
+                            logger.info("[tts-timing] stage=buffer_first_chunk request=%s elapsed_ms=%.1f bytes=%d",
+                                        timing_id, (time.perf_counter() - started_at) * 1000, len(pending))
+                        yield bytes(pending)
+
+                yield from measured_chunks()
+
+        # Start the filter before the HTTP generator is consumed. ffmpeg startup
+        # overlaps network/provider wait rather than delaying the first PCM bytes.
+        chunks = fetch_chunks()
+        if local_tempo:
+            logger.info("TTS v3 local tempo: speed=%.2f provider_speed=1.00", speed)
+            chunks = change_tempo(chunks, speed, self.sample_rate,
+                                  **({"cancelled": cancelled} if cancelled is not None else {}))
+        try:
+            first_output = True
+            for chunk in chunks:
+                if first_output:
+                    first_output = False
+                    logger.info("[tts-timing] stage=tempo_first_output request=%s elapsed_ms=%.1f bytes=%d",
+                                timing_id, (time.perf_counter() - started_at) * 1000, len(chunk))
                 yield chunk
+        finally:
+            chunks.close()

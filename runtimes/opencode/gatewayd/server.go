@@ -61,10 +61,13 @@ type inboundFrame struct {
 
 // turnPayload is the payload of a message.send frame.
 type turnPayload struct {
-	RequestID   string `json:"-"`
-	RunID       string `json:"-"`
-	Content     string `json:"content"`
-	Attachments []struct {
+	Source         string `json:"source,omitempty"`
+	preload        string
+	preloadChecked bool
+	RequestID      string `json:"-"`
+	RunID          string `json:"-"`
+	Content        string `json:"content"`
+	Attachments    []struct {
 		Type string `json:"type"`
 		URL  string `json:"url"`
 	} `json:"attachments"`

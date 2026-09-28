@@ -31,3 +31,6 @@ SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="3302", ATTRS{idProduct}=
 # playback side is the speaker (alias device_speaker) — both in /etc/asound.conf.
 # A card gets exactly one udev id, so the id is the HARDWARE, aliases are ROLES.
 SUBSYSTEM=="sound", ACTION=="change", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", ATTR{id}="device_cmedia"
+# When its control node appears, pin the hardware level and create the softvol
+# "Speaker" control (see /etc/asound.conf) before hal.service restores volume.
+SUBSYSTEM=="sound", ACTION=="add", KERNEL=="controlC*", ATTRS{idVendor}=="0d8c", ATTRS{idProduct}=="0014", TAG+="systemd", ENV{SYSTEMD_WANTS}+="lamp-cmedia-speaker.service"

@@ -153,11 +153,11 @@ export function FaceSection({
         if (resp.ok) {
           ok++;
         } else {
-          lastErr = data.detail || data.message || "Couldn't reach the camera. Make sure the device is on and connected.";
+          lastErr = data.detail || data.message || "Couldn't reach the camera. Make sure the robot is on and connected.";
         }
       } catch {
         // Network failure / fetch rejected — device unreachable.
-        lastErr = "Couldn't reach the camera. Make sure the device is on and connected.";
+        lastErr = "Couldn't reach the camera. Make sure the robot is on and connected.";
       }
       setUploadProgress((n) => (n ?? 0) + 1);
     }
@@ -186,7 +186,7 @@ export function FaceSection({
       id="face"
       title="Face Enroll (optional)"
       active={active}
-      description="Upload photos of the owner so your device can recognize them."
+      description="Upload photos of the owner so your robot can recognize them."
       icon={<UserCircle size={17} />}
     >
       <Field label="Name" id="face_name" value={faceName} onChange={setFaceName} placeholder="e.g. Leo" />

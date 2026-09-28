@@ -4,7 +4,7 @@ HAL Pydantic request/response models.
 All FastAPI endpoint models live here — import from server.py via `from hal.models import *`.
 """
 
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
@@ -313,17 +313,32 @@ class RealtimeHistoryRequest(BaseModel):
     )
 
 
+class HarnessUpdateRequest(BaseModel):
+    """A Harness result, question or progress line for the announcer to speak.
+
+    os-server posts the raw Harness text; HAL queues it and speaks a rendered
+    version once the device is free (see drivers/harness/announcer.py).
+    """
+
+    kind: Literal["result", "question", "progress"] = Field(..., description="Update type")
+    text: str = Field(..., min_length=1, max_length=20000, description="Raw Harness text")
+    turn_id: str = Field("", max_length=200, description="Device run that owns the speech")
+    outcome: str = Field("", max_length=40, description="Harness outcome, e.g. completed or failed")
+
+
 class SpeakRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Text to speak via TTS"
     )
+    speed: Optional[float] = Field(None, ge=0.25, le=4.0, description="Speed override for this uncached utterance only")
     voice: str = Field("", description="Override TTS voice for this request (e.g. 'Rachel', 'Brian')")
     # When True, this speech can be interrupted by the next speak() call (e.g. dead air filler).
     interruptible: bool = Field(False, description="If True, can be interrupted by next speech")
+    harness_result: bool = Field(False, description="Play a short source cue before a Harness reply")
     # Optional provider override for one-off tests (e.g. web TTS preview before saving config).
     # When set and differs from the running service, the backend is hot-swapped using the
     # supplied credentials so the test does not require restarting /voice/start.
-    provider: Optional[str] = Field(None, description="Override TTS provider: 'openai' or 'elevenlabs'")
+    provider: Optional[str] = Field(None, description="Override TTS provider: 'openai', 'elevenlabs', 'gemini' or 'piper'")
     tts_api_key: Optional[str] = Field(None, description="API key for provider override")
     tts_base_url: Optional[str] = Field(None, description="Base URL for provider override")
     # Cache controls — see tts_service.speak_cached(). Cache key includes
@@ -784,7 +799,7 @@ class VoiceStartRequest(BaseModel):
         "", description="TTS style/vibe instructions (optional, e.g. 'Speak warmly')"
     )
     tts_provider: str = Field(
-        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default) or '{PROVIDER_ELEVENLABS}'"
+        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default), '{PROVIDER_ELEVENLABS}', 'gemini' or 'piper'"
     )
 
 

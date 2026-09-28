@@ -61,9 +61,8 @@ recorded as `unknown` and **never counts as an acknowledgement** — guessing
 command. The count rides on every interaction row as
 `unknown_owner_playbacks`.
 
-A muted playback also needs a resolvable owner to exclude an interaction as
-`speaker_muted`. An unrelated or unowned muted notice cannot exclude the
-newest voice command. Queued segments carry their own classification metadata
+In ack schema 2, speaker mute alone does not exclude an interaction: a silent
+accepted task can still acknowledge processing. Queued segments carry their own classification metadata
 (answer/filler/system), so they do not inherit the kind of the speech that
 opened their shared stream. These snapshots do not change feedback or
 interruption behavior.
@@ -77,18 +76,75 @@ interaction, independently of receive-loop timeouts. Interaction snapshots carry
 coverage by path. Delegation carries the same interaction ID through OS routing;
 provider rejection of non-user speech excludes that task.
 
-A genuine server speech-end event uses its monotonic **receive time** with
-`speech_end_method=server_vad`. This includes the delay before HAL receives the
-server event; it is not the acoustic endpoint. Gemini transcript-only evidence
-can start an eligible execution task, but cannot supply a speech endpoint:
-KPI-1 records `eligible=false`, `exclusion_reason=speech_endpoint_unavailable`
-and null ack/answer latencies. KPI-3 eligibility is independent of that exclusion.
-An endpoint received after playback cannot retroactively create a latency sample.
+Gemini `ACTIVITY_END` currently supplies HAL's monotonic **receive time** to
+existing voice cues. It is labelled `server_vad_receive` and is **not** a KPI-1
+speech endpoint: network delay and server silence confirmation would otherwise
+shorten the measured wait. This change does not alter those cues or VAD.
+Transcript-only and receive-only observations retain
+`exclusion_reason=speech_endpoint_unavailable` with null ack/answer latency.
+KPI-3 eligibility is independent. A real timestamp delivered late can amend a
+missing-endpoint verdict only if it precedes or equals the first acknowledgement;
+HAL retains acceptance and owned audio/answer timestamps independently.
+Invalid, nonfinite, future or after-ack endpoints never become zero latency.
+
+The installed google-genai 2.12.1 converter preserves `voiceActivity` and
+`audioOffset`; a real-SDK regression test covers this. The [SDK contract](https://googleapis.github.io/python-genai/genai.html#genai.types.VoiceActivity)
+defines the offset on the input audio stream, not as a HAL monotonic timestamp.
+HAL does not yet map captured frames to that stream timeline (preroll, gated
+prefix replay, dropped sends and reconnects matter). Logging an offset is not
+sufficient to turn it into a KPI sample. The [Live API reference](https://ai.google.dev/api/live)
+does not guarantee ordering of input transcription. `explicit_vad_signal` is
+not a documented request for server endpoint notifications and is not enabled.
+An [open SDK issue](https://github.com/googleapis/python-genai/issues/2981)
+reports missing activity events on 3.8; it is corroboration, not proof about
+our device or an upstream diagnosis confirmed by Google.
+
+`[endpoint-wire]` logs signal type/offset before and after SDK conversion;
+`[endpoint-coverage]` logs cumulative counts per socket, including zero activity
+signals and legacy fields. Neither logs audio or adds transcript content.
+`[voice-metrics] live ownership` joins the provider key to the interaction ID.
+These observations distinguish absent wire signals from conversion loss, then
+join to the existing actual-playback ack log. They do not request manual VAD,
+change mic uploads, wake gating, cancellation, delegation or LIVE OFF.
+
+**Unresolved measurement coverage:** the reported lamp-0c4e cohort on 2026-09-24
+14:15–15:00 has 87 deduplicated interactions: 44 missing endpoints, 13 interrupted,
+and 30 noise/rejected/no-transcript, with zero eligible samples. KPI-1 is N/A.
+This patch does not manufacture endpoints for those 44 turns. A passive local
+speech detector is a possible alternative, but must be calibrated on timestamped
+capture and explicitly labelled as an estimate; the adaptive RMS/duck gate is
+not a speech classifier and cannot identify the addressed speaker in room noise.
+Do not use transcript arrival, STT close, TTS start or last-audio-sent instead.
+
+Read-only device verification at 15:19 confirmed google-genai 2.12.1 maps wire
+`voiceActivity.type`/`audioOffset` to SDK `voice_activity_type`/`audio_offset`.
+The deployed handler ignores the offset and stamps `time.monotonic()` on END.
+The 14:15–15:00 server log contains 18 ack lines, all `latency_ms=None`, and
+77 `provider_transcript` plus 3 `provider_delegate` interaction creation lines.
+These are raw log counts, not the deduplicated 87-row cohort above. Historical
+logs lack raw activity tracing, so they cannot prove the server omitted END.
+
+After authorized deployment, collect wire/SDK counts and interaction rows for
+known utterances; correlate first writes and cancellations using the same owner.
+Verify idle/noise, valid filler, barge-in, suppressed-before-write, delayed old
+output, delegation and LIVE OFF. Report missing endpoint coverage and eligible
+`no_ack` alongside latency. Local tests cannot establish device endpoint coverage
+or acoustic accuracy. The audio latency point remains the first successful stream write;
+ALSA/speaker buffering requires acoustic loopback to measure. The existing
+10-second reporting timer starts at interaction creation, which can be transcript
+observation; amendments may follow, so it is not a guaranteed 10-second window
+after acoustic speech end.
 
 Realtime execution is completed only by a successful provider terminal correlated
 to that interaction. Receive timeouts, synthetic done signals and interruption
 are not completion evidence; without a successful terminal the task remains
-incomplete. A true provider interruption creates a
+incomplete. Gemini Extended Thinking uses `interactionStatus=IDLE` with accepted
+answer text and no pending local tool or withheld continuation as execution
+evidence. It does not require a second LLM verdict after this terminal. Empty
+output and unresolved local work still fall back. Sessions without this status
+retain the existing outcome confirmation/check and bounded grace. Neither
+provider completion nor a classifier verdict guarantees semantic correctness.
+KPI-1 playback timing and all KPI thresholds stay unchanged. A true provider interruption creates a
 `server_barge_in` suppression boundary targeting only the cancelled interaction,
 with the existing **2 s** grace and **60 s** observation window. Unowned audio
 never earns acknowledgement credit. Starting the next question after the previous
@@ -100,11 +156,11 @@ terminal, even if that terminal arrives after the interruption.
 At session close, `voice_metrics_live_coverage` logs `observed_interactions`,
 `completed_interactions` and any `unkeyed_user_observations`,
 `unowned_output_chunks`, `unowned_completions`,
-`unowned_interruptions` counters.
+`unowned_interruptions`, `endpoint_receive_only_observations` counters.
 Read these alongside KPI results: Gemini's transcript stream has no stable input
 IDs, so late or unowned output is never retrospectively assigned to the newest
 utterance. Missing endpoints are coverage loss, not KPI-1 passes or failures.
-These hooks leave turn-path definitions, noise gates and routing flags unchanged.
+LIVE look fillers carry the exact provider turn binding, pinned for the aim operation; missing/ambiguous ownership remains unclaimed. These hooks leave turn-path definitions, noise gates and routing flags unchanged.
 Interruption metadata does not issue an extra playback stop, discard buffered
 text, reopen native audio, or change provider turn scheduling. Measurement errors
 are caught without interrupting speech or delegation. When queued segments share
@@ -113,17 +169,30 @@ it does not close the physical audio stream.
 
 ## What counts as an acknowledgement
 
-The first frame **actually written to the audio stream**
-(`TTSService._note_audio_written`, called from every real write path: streamed
-synth, the queued-sentence drain, cached WAV playback, and realtime native
-frames).
+**Ack schema 2** measures the earliest confirmed acknowledgement after the
+user's speech endpoint: either owned audio actually written, an OS-confirmed
+accepted main/harness handoff (`run_id` plus `delivered`), or a confirmed locally
+handled result. Merely choosing the delegate route, calling a tool, starting a
+POST, or receiving a generic HTTP 200 does not prove acceptance. History-sync
+notifications never earn acceptance credit. A main task that legitimately uses
+`NO_REPLY` can therefore acknowledge without speaking or completing execution.
 
-`on_speak_start` is **not** that signal and is not used for the KPI: the
-cached path fires it before taking the stream lock and before writing
-anything, so speech that is stopped or fails in between would look played.
-Neither does HTTP acceptance — `speak_queue()` deliberately returns `True` for
-requests it drops (superseded turn), and os-server's `deliverTTS` can be muted
-after accepting text.
+Acceptance records `ack_kind=delegate_accepted` or `local_accepted`, with
+`ack_modality=processing_accepted`. An earlier owned filler or answer keeps its
+ack credit; acceptance does not replace it with a later timestamp. Audio remains
+independent: `audio_latency_ms`/`audio_kind` record the first owned write, while
+`answer_latency_ms`/`answer_kind` require an actual answer. None of these hooks
+changes routing, playback, cancellation, or when the main agent executes.
+
+For audio, the first frame **actually written to the audio stream** is used
+(`TTSService._note_audio_written`, across streamed synth, queued sentences,
+cached WAV and realtime native frames). `on_speak_start` and TTS HTTP acceptance
+are not evidence of playback: queued requests can be dropped or muted before
+writing. This is distinct from confirmed task acceptance above.
+
+**Version 1 was audio-only.** Missing `ack_schema_version` means 1. Its old
+`no_ack` rows cannot be reinterpreted as version 2 without acceptance evidence;
+report versions separately, including their different mute eligibility rules.
 
 Even the first write is **not the acoustic onset**: ALSA (and more so
 Bluetooth) buffering sits between the write and the speaker. The measurement
@@ -142,19 +211,11 @@ The physical-gesture acknowledgement chime is not a voice-command receipt.
 Its writes bypass the speech measurement hook: they neither inherit a pending
 reply's owner nor consume its first-frame hook.
 
-**Waiting audio counts as an acknowledgement — decided, not accidental.**
-The question this metric answers is *"did the device let the user know it
-heard them?"*, not *"did it answer?"*. A filler ("one moment") is a real
-receipt: the user stops wondering whether they were heard. So a turn whose
-first sound is a filler is acknowledged, even if the answer itself arrives
-much later.
-
-The consequence has to be read with it: on lamp today **every** measured
-acknowledgement is `waiting_audio`, so this metric currently reports how fast
-the device says "I heard you", NOT how fast it answers. `ack_modality` is
-stored on every row precisely so the two can be told apart — split by it
-before quoting a number, and treat a 100 % `waiting_audio` split as a finding
-about the product, not as a good score.
+**Waiting audio still counts as an acknowledgement.** A filler can acknowledge
+before a handoff or answer, but a confirmed handoff no longer needs a filler to
+qualify. Split results by `ack_kind` and `ack_modality`: processing acceptance
+is not proof that the user heard anything. Report audio and answer latency
+alongside KPI-1 to retain that UX distinction.
 
 **Visual feedback is not counted.** The listening LED is a real receipt
 signal, but its actual activation is not instrumented here; counting it
@@ -187,10 +248,12 @@ run in between and would otherwise be charged to the device's response time.
 | `speech_end_method` | How the endpoint was detected |
 | `eligible` | `false` when `exclusion_reason` is set |
 | `outcome` | `acknowledged` \| `no_ack` \| `excluded` |
-| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `speaker_muted`, `interrupted_by_user`, `speech_endpoint_unavailable` (KPI-1 only). `speaker_muted` is recorded when the speaker actually **refuses** the speech, not by sampling the mute flag later — otherwise a device unmuted before scoring looks like one that simply never answered |
-| `failure_reason` | `dispatch_failed` — the command was valid and went **unserved** (the POST never landed). This is *not* an exclusion: the row stays eligible and counts against the KPI. A command os-server answered itself (local intent: volume, LED, time) is **not** a failure — its reply carries the interaction id as owner and counts as answered. |
-| `ack_latency_ms` | Raw observation, kept whatever the verdict (`null` when nothing played or the endpoint is unavailable) |
-| `ack_modality`, `ack_kind` | What the user actually heard |
+| `exclusion_reason` | `rejected_noise`, `rejected_non_user`, `no_transcript`, `not_addressed`, `interrupted_by_user`, `speech_endpoint_unavailable` (KPI-1 only). Schema 2 does not exclude speaker mute alone; historical schema 1 also used `speaker_muted`. |
+| `failure_reason` | `dispatch_failed`: failed dispatch stays eligible; without another valid ack it is `no_ack`. A confirmed OS local handled result instead earns `local_accepted`. |
+| `ack_schema_version` | `2`: owned audio or confirmed processing acceptance; missing means legacy audio-only `1`. |
+| `ack_latency_ms` | Endpoint to earliest confirmed acknowledgement; null without ack evidence or a valid endpoint. |
+| `ack_modality`, `ack_kind` | Owned audio classification above, or `processing_accepted` with `delegate_accepted` / `local_accepted`. |
+| `audio_latency_ms`, `audio_kind` | Independent endpoint-to-first-owned-audio timing and kind; null without owned playback or a valid endpoint. |
 | `answer_latency_ms`, `answer_kind` | When the **answer** was heard (`agent_reply` / `native_realtime` / `realtime_tts`), as opposed to the receipt. `null` = endpoint unavailable or no answer observed inside the window — a finding, not missing data |
 | `ack_deadline_ms`, `observe_window_ms` | 3000 / 10000 — the (provisional) thresholds in force when the row was written |
 | `unknown_owner_playbacks` | Playbacks nobody claimed so far — audio excluded from ack decisions |
@@ -250,6 +313,19 @@ Both boundaries are stamped **in HAL**, where both originate: the cancel
 gesture is a HAL button action, and `voice_agent_handled` is emitted by HAL's
 turn dispatcher.
 
+**The explicit stop is also enforced in HAL, not only measured.** os-server's
+click watermark mutes replies it can attribute to a cancelled run, but two
+paths reached the speaker without that check (device-observed 2026-09-17,
+`stale_started_after_ms` 12–28 s): a Harness result spoken straight through
+`hal.SpeakReply`, and the realtime wait filler that HAL arms itself. The
+boundary now marks every covered interaction `suppressed`, and
+`TTSService` refuses audio owned by such a turn at every admission path
+(`speak`, `speak_queue`, `speak_cached`, `native_play_begin`) via
+`voice_metrics.is_suppressed(owner)`. Unowned audio is never refused. The
+Harness path additionally goes through `deliverTTS` like every other reply.
+Automatic supersession stays measurement-only; its enforcement is os-server's
+watermark.
+
 **A boundary is recorded only when os-server actually applied it.** The
 `/api/sensing/event` response to a `voice_agent_handled` post carries
 `speechSuppressed` — os-server's own answer to "did I take the speaker away
@@ -266,14 +342,15 @@ something the boundary had to suppress.
 
 **KPI-1 — acknowledged within 3 s**
 
-- Denominator: `voice_metrics_interaction` rows with `eligible = true`, after
-  applying amendments (a row whose `interaction_id` also has a row with
-  `amends_event_id` set is superseded by that correction).
+- Denominator: one latest verdict per `(device, interaction_id, ack_schema_version)`
+  with `eligible = true`, taking highest `task_revision` then amendment/time.
+  Eligible `no_ack` stays in the denominator. Report schema versions separately.
 - Numerator: those with `outcome = 'acknowledged'` and `ack_latency_ms <= 3000`.
 - Excluded (reported, never dropped): noise-rejected turns, turns the realtime
   model explicitly rejected as non-user, empty transcripts, utterances not
-  addressed to the device (no wake word / outside the follow-up window), and a
-  muted speaker.
+  addressed to the device (no wake word / outside the follow-up window), user
+  interruptions and missing real speech endpoints. Mute alone is not excluded
+  in schema 2.
 - **Failures stay in.** A valid command the device never served (the POST to
   os-server did not land — `failure_reason = 'dispatch_failed'`) is *eligible*
   and counts as `no_ack`. Excluding it would inflate the success rate with
@@ -345,7 +422,7 @@ these independent task fields:
 | `task_exclusion_reason` | Noise, non-user, empty transcript, or not-addressed rejection; dispatch failure stays eligible |
 
 `voice_metrics_task_execution` carries `schema_version=1`, `run_id`,
-`interaction_id`, `outcome` (`completed`, `failed`, `unknown`), `evidence`,
+`interaction_id`, `outcome` (`completed`, `failed`, `unknown`, or Harness `cancelled`), `evidence`,
 `execution_at_ms` (Unix milliseconds), and a boolean `error`. It carries no
 error text, transcript or tool output. Evidence is:
 
@@ -359,10 +436,21 @@ error text, transcript or tool output. Evidence is:
 | `chat_final_no_lifecycle` | `completed`: a nonempty final reply consumes the pending trace without a lifecycle (for example OpenClaw `/status` or `/new`); empty finals are not completion evidence |
 | `execution_observation_lost` | `unknown`: a runtime lost observation of an unfinished sent task on transport loss or timeout; this does not establish execution failure |
 | `harness_delegated` | `unknown`: execution moved to Harness; local runtime lifecycle ends no longer establish remote completion |
-| `harness_turn_done`, `harness_turn_summary` | `completed`: correlated Harness completion; summary requires nonempty content, done does not require recap or TTS |
+| `harness_turn_summary` | `completed`: safely matched legacy final summary with nonempty content; `turn.done` alone does not complete a task |
+| `harness_correlated_summary` | `completed`, `failed` or `cancelled`: verified summary membership atomically applied once; the exact result outcome is preserved, independent of TTS |
 | `harness_turn_error` | `failed`: correlated Harness `turn.error` or `agent.error`, even without display text |
 | `harness_question_open` | `unknown`: waiting for a structured answer, including local partial-answer collection |
-| `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn |
+| `realtime_turn_done` | `completed`: a correlated successful provider terminal completed the handled turn; Gemini Extended Thinking uses `IDLE` with accepted answer text and no unresolved local work; status-less sessions retain outcome confirmation/check, and fallback is not completion |
+
+The correlated `turn.summary` path reports `harness_correlated_summary` only for
+newly persisted results and exactly their member runs; replay does not emit it
+again. `cancelled` stays distinct and has `error=true`, never success. Receipt admission and
+`turn.done` are lifecycle evidence, not result completion. Metadata-free single
+summaries still use the safe legacy matcher; ambiguous summaries do not score. The reporter accepts this evidence in the Harness cohort and counts `cancelled`
+separately as `cancelled_turns`, retaining it in the eligible denominator without
+counting it as completed or failed. Cancellation is terminal: transport observation
+loss and later cleanup completion do not erase it. Existing failure precedence is
+preserved if conflicting failed evidence is also present.
 
 Join execution evidence to the cohort by **device + run_id** or **device +
 interaction_id**. OS observations also include non-voice runs: never put those
@@ -482,9 +570,14 @@ CREATE TEMP FUNCTION param(params ANY TYPE, k STRING) AS (
 -- KPI-1: acknowledged within 3s, with the eligible sample count.
 WITH rows AS (
   SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
     param(data.event_params, 'interaction_id')     AS interaction_id,
     param(data.event_params, 'eligible')           AS eligible,
     param(data.event_params, 'outcome')            AS outcome,
+    param(data.event_params, 'exclusion_reason')   AS exclusion_reason,
+    param(data.event_params, 'speech_endpoint_known') AS endpoint_known,
+    SAFE_CAST(param(data.event_params, 'task_revision') AS INT64) AS revision,
     param(data.event_params, 'amends_event_id')    AS amends,
     SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms,
     event_timestamp
@@ -497,34 +590,56 @@ WITH rows AS (
 i AS (
   SELECT * EXCEPT(rn) FROM (
     SELECT *, ROW_NUMBER() OVER (
-      PARTITION BY interaction_id
-      ORDER BY IF(amends != '', 1, 0) DESC, event_timestamp DESC
+      PARTITION BY device_id, interaction_id, ack_schema_version
+      ORDER BY COALESCE(revision, 0) DESC, IF(amends != '', 1, 0) DESC, event_timestamp DESC
     ) AS rn
     FROM rows
   ) WHERE rn = 1
-),
-eligible AS (SELECT * FROM i WHERE eligible = 'true')
+)
 SELECT
-  COUNT(*) AS eligible_samples,
-  COUNTIF(outcome = 'acknowledged' AND ack_ms <= 3000) AS acknowledged_within_3s,
-  CASE WHEN COUNT(*) = 0 THEN NULL      -- no eligible samples => N/A
-       ELSE ROUND(100 * COUNTIF(outcome = 'acknowledged' AND ack_ms <= 3000) / COUNT(*), 2)
+  ack_schema_version,
+  COUNT(*) AS observed_interactions,
+  COUNTIF(endpoint_known = 'true') AS endpoint_known_interactions,
+  COUNTIF(endpoint_known = 'false') AS endpoint_unknown_interactions,
+  COUNTIF(exclusion_reason = 'speech_endpoint_unavailable') AS endpoint_excluded_interactions,
+  COUNTIF(eligible = 'true') AS eligible_samples,
+  COUNTIF(eligible = 'true' AND outcome = 'no_ack') AS no_ack,
+  COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) AS acknowledged_within_3s,
+  CASE WHEN COUNTIF(eligible = 'true') = 0 THEN NULL      -- no eligible samples => N/A
+       ELSE ROUND(100 * COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) / COUNTIF(eligible = 'true'), 2)
   END AS kpi1_pct
-FROM eligible;
+FROM i
+GROUP BY ack_schema_version;
 ```
 
 ```sql
--- How long users actually wait for the ANSWER, not for the "one moment".
--- Read next to KPI-1: a fast ack with a null answer means the device was
--- polite, not useful.
+-- Actual answer latency, separate from processing acknowledgement.
+-- NO_REPLY tasks can legitimately have no spoken answer.
+WITH latest AS (
+  SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
+    param(data.event_params, 'eligible') AS eligible,
+    SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64) AS answer_ms,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_pseudo_id, param(data.event_params, 'interaction_id'),
+        COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1)
+      ORDER BY COALESCE(SAFE_CAST(param(data.event_params, 'task_revision') AS INT64), 0) DESC,
+        IF(param(data.event_params, 'amends_event_id') != '', 1, 0) DESC, event_timestamp DESC
+    ) AS rn
+  FROM event_tracking
+  WHERE event_name = 'voice_metrics_interaction'
+    AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+)
 SELECT
-  COUNT(*)                                                   AS eligible,
-  COUNTIF(param(data.event_params, 'answer_latency_ms') IS NULL) AS acked_but_never_answered,
-  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(50)] AS median_answer_ms,
-  APPROX_QUANTILES(SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64), 100)[OFFSET(90)] AS p90_answer_ms
-FROM event_tracking
-WHERE event_name = 'voice_metrics_interaction'
-  AND param(data.event_params, 'eligible') = 'true';
+  ack_schema_version,
+  COUNT(*) AS eligible,
+  COUNTIF(answer_ms IS NULL) AS no_observed_answer,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(50)] AS median_answer_ms,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(90)] AS p90_answer_ms
+FROM latest
+WHERE rn = 1 AND eligible = 'true'
+GROUP BY ack_schema_version;
 ```
 
 ```sql
@@ -706,8 +821,9 @@ and `platform` is `device` (see `system/lib/analytics`).
 - **Stale detection is playback-level, not sample-level.** It observes audio
   intervals crossing the grace boundary; it cannot say how many milliseconds
   of PCM were still in the hardware buffer.
-- **Audio handed to the driver, not sound in the room.** The ack point is the
-  first stream write; ALSA/Bluetooth buffering after it is not measured.
+- **Audio handed to the driver, not sound in the room.** Audio-based ack and
+  `audio_latency_ms` use the first write; ALSA/Bluetooth buffering is not measured.
+  Processing acceptance proves neither audio playback nor task completion.
 - **Unclaimed playback is unattributed by design.** It is counted
   (`unknown_owner_playbacks`) and excluded from ack decisions rather than
   guessed at.

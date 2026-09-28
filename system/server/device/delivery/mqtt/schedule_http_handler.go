@@ -46,6 +46,11 @@ type scheduleListItem struct {
 	LastRunAt     *time.Time    `json:"last_run_at,omitempty"`
 	LastRunStatus string        `json:"last_run_status,omitempty"`
 
+	// LastRunSummary is schedule.Schedule.LastRunSummary, echoed so the UI
+	// can say why a run was skipped: "missing connector: gmail" renders as
+	// "Skipped · gmail isn't connected". Omitted for a never-run row.
+	LastRunSummary string `json:"last_run_summary,omitempty"`
+
 	// Rev is the backend revision this row is at, echoed so the UI can show
 	// staleness and so a client can round-trip it if it ever needs to.
 	Rev uint64 `json:"rev,omitempty"`
@@ -77,6 +82,8 @@ func toScheduleListItem(sch schedule.Schedule) scheduleListItem {
 		EndAt:         sch.EndAt,
 		LastRunStatus: sch.LastRunStatus,
 		Rev:           sch.Rev,
+
+		LastRunSummary: sch.LastRunSummary,
 	}
 	if !sch.NextRunAt.IsZero() {
 		nextRunAt := sch.NextRunAt

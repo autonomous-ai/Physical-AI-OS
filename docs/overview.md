@@ -12,6 +12,14 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → H
 | OS Server | Go | 5000 | System (network, OTA, MQTT, reset), sensing event routing, local intent |
 | HAL | Python | 5001 | Hardware drivers (servo, LED, camera, audio, display), FastAPI |
 
+## Computer integration and voice
+
+- **[Harness](https://github.com/autonomous-ai/openharness):** `harness-use` delegates coding and research to agents on a paired computer over a direct authenticated LAN connection. Questions and results return through voice or chat. Harness-only voice routes manual tap-to-record captures to the agent focused in Harness. See [Harness](harness.md).
+- **Mac computer use:** `computer-use` lets the device agent observe, act and verify through Autonomous Buddy, using the bundled Cua Driver and screenshot support. Buddy executes desktop actions; the device agent owns reasoning and completion. Harness and Buddy keep separate pairing and connections. See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use.md).
+- **Jev:** the OS-managed Hermes plugin selects and preloads an installed skill before the first model call, with normal skill discovery as fallback. This plugin is enabled in the current build; the separate voice-intent fallback is on by default, while Buddy's action-suggestion endpoint is enabled but experimental. Selection does not execute actions or grant permission. See [Hermes preloading](agentic/hermes.md#13-optional-jev-skill-preloading), [intent fallback](os-server.md#jev-intent-fallback), and [Buddy suggestions](os-server.md#buddy-computer-use-feedback).
+- **Realtime voice:** HAL supports Gemini Live (default model `gemini-3.8-live`), OpenAI Realtime, GPT-Live and Pipecat v1. Pipecat orchestrates STT → an OpenAI-compatible LLM (default `qwen/qwen3.6-35b-a3b`) → HAL TTS on the device; model calls still use remote services. Normal voice can answer directly or delegate to the main runtime.
+- **Smart Turn:** local ONNX inference supplements silence detection in shared non-Live hands-free capture; Pipecat Live uses its own Silero VAD + Smart Turn pipeline. Silence fallbacks bound the wait when inference is unavailable. Manual Harness capture ends on the user's tap. The optional `pipecat` extra is included in Lamp/Pi/OrangePi setup and excluded from Reachy because of ONNX dependency conflicts. See [Realtime voice](realtime-voice.md).
+
 ## Project Directory
 
 ```
@@ -134,8 +142,8 @@ startup. Restart HAL after changing wiring configuration. The shared
 `hal/drivers/mpr121.py` driver groups selected electrodes into one debounced
 contact. It shares GPIO gesture thresholds in `hal/drivers/button_gestures.py`:
 the first resolved short release calls single-click with `announce=False`;
-a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks or reboot
-for exactly 3. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
+a 0.4 s quiet window produces the listening cue for 1/2/4+ clicks. Exactly
+3 clicks produce no additional action or cue: reboot is disabled in the MPR121 wrapper. Holds commit only on release: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. While held, debounced hold-tier events use the same
 `HoldLEDFeedback` in `hal/drivers/button_actions.py` and `BUTTON_LED_PRESETS`
 as GPIO: purple blinking at 2 Hz for 2–<5 s, red blinking

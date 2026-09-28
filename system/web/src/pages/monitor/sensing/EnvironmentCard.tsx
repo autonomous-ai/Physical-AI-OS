@@ -35,8 +35,8 @@ export function EnvironmentCard({ available }: { available: boolean }) {
       {!error && componentIssues.length > 0 && <p role="status" style={{ color: "var(--lm-amber)" }}>
         {componentIssues.map(([name, status]) => `${name.toUpperCase()}: ${status.last_error || (status.state === "ready" ? "Stale data" : stateLabels[status.state])}`).join(" · ")}
       </p>}
-      {data?.state === "disabled" && <p style={{ color: "var(--lm-text-muted)" }}>Environment sensors are not enabled on this device.</p>}
-      {!available && <p style={{ color: "var(--lm-text-muted)" }}>Environment sensing is not available on this device.</p>}
+      {data?.state === "disabled" && <p style={{ color: "var(--lm-text-muted)" }}>Environment sensors are not enabled on this robot.</p>}
+      {!available && <p style={{ color: "var(--lm-text-muted)" }}>Environment sensing is not available on this robot.</p>}
       <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 18 }}>
         {measurements.map(([key, title, unit]) => {
           const value = data?.sample?.[key];

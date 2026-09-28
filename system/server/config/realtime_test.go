@@ -140,12 +140,12 @@ func TestRealtime_MissingSubAndKeyOverride(t *testing.T) {
 
 // Validation accepts good provider/voice/reasoning and rejects bad ones.
 func TestRealtime_Validate(t *testing.T) {
-	for _, ok := range []string{"gemini", "openai", "gptlive", "none", "off", "", "Gemini", " GPTLive "} {
+	for _, ok := range []string{"gemini", "openai", "gptlive", "pipecat_v1", "none", "off", "", "Gemini", " GPTLive ", " Pipecat_V1 "} {
 		if err := ValidateRealtimeProvider(ok); err != nil {
 			t.Errorf("provider %q should be valid: %v", ok, err)
 		}
 	}
-	for _, bad := range []string{"grok", "qwen", "gpt-live", "openai-live"} {
+	for _, bad := range []string{"grok", "qwen", "gpt-live", "openai-live", "pipecat", "pipecat-v1", "pipecat_v2"} {
 		if ValidateRealtimeProvider(bad) == nil {
 			t.Errorf("provider %q should be rejected", bad)
 		}
@@ -328,7 +328,7 @@ func TestRealtime_GPTLiveResolution(t *testing.T) {
 // reasoning list so the selector is hidden client-side.
 func TestRealtime_OptionsIncludeGPTLive(t *testing.T) {
 	opts := GetRealtimeOptions()
-	want := []string{"gemini", "openai", "gptlive", "none"}
+	want := []string{"gemini", "openai", "gptlive", "pipecat_v1", "none"}
 	if strings.Join(opts.Providers, ",") != strings.Join(want, ",") {
 		t.Errorf("Providers = %v, want %v", opts.Providers, want)
 	}
@@ -381,5 +381,44 @@ func TestRealtime_GPTLiveJSONRoundTrip(t *testing.T) {
 	}
 	if out.Realtime.GPTLive == nil || out.Realtime.GPTLive.APIKey != "sub-key" || out.Realtime.GPTLive.BaseURL != "https://live.example" {
 		t.Errorf("gptlive credential overrides lost: %+v", out.Realtime.GPTLive)
+	}
+}
+
+// pipecat_v1: an on-device text-out pipeline — listed as a provider before
+// none, with EMPTY (present, non-nil) voice and reasoning lists so the web
+// hides both selectors; any voice or reasoning value is rejected for it, the
+// model resolves to the Qwen relay default and is overridable.
+func TestRealtime_PipecatV1(t *testing.T) {
+	opts := GetRealtimeOptions()
+	for _, m := range []map[string][]string{opts.Voices, opts.Reasoning} {
+		got, ok := m["pipecat_v1"]
+		if !ok || got == nil || len(got) != 0 {
+			t.Errorf("pipecat_v1 option list = %v (present=%v), want an empty non-nil list", got, ok)
+		}
+	}
+	if err := ValidateRealtimeKnobs("pipecat_v1", "", ""); err != nil {
+		t.Errorf("empty knobs on pipecat_v1 rejected: %v", err)
+	}
+	if ValidateRealtimeKnobs("pipecat_v1", "alloy", "") == nil {
+		t.Error("a voice on pipecat_v1 should be rejected (HAL's TTS speaks)")
+	}
+	if ValidateRealtimeKnobs("pipecat_v1", "", "low") == nil {
+		t.Error("reasoning on pipecat_v1 should be rejected (no knob)")
+	}
+
+	c := &Config{LLMAPIKey: "llm-key", LLMBaseURL: "https://llm.example", Realtime: &RealtimeConfig{Provider: "pipecat_v1"}}
+	if c.RealtimeProvider() != "pipecat_v1" || c.RealtimeModel() != defaultRealtimePipecatV1Model {
+		t.Errorf("resolution: provider=%q model=%q", c.RealtimeProvider(), c.RealtimeModel())
+	}
+	if c.RealtimeVoice() != "" || c.RealtimeReasoning() != "" {
+		t.Errorf("pipecat_v1 must resolve no voice/reasoning: voice=%q reasoning=%q", c.RealtimeVoice(), c.RealtimeReasoning())
+	}
+	c.Realtime.PipecatV1 = &PipecatV1Realtime{Model: "qwen/other"}
+	if c.RealtimeModel() != "qwen/other" {
+		t.Errorf("model override not applied: %q", c.RealtimeModel())
+	}
+	seed := DefaultRealtimeConfig()
+	if seed.PipecatV1 == nil || seed.PipecatV1.Model != defaultRealtimePipecatV1Model || seed.PipecatV1.APIKey != "" || seed.PipecatV1.BaseURL != "" {
+		t.Errorf("seed pipecat_v1 wrong: %+v", seed.PipecatV1)
 	}
 }

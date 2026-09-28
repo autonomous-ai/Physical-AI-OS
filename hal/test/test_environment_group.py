@@ -3,11 +3,13 @@
 import logging
 import time
 from dataclasses import asdict
+from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
 from hal.board.sen55 import SEN55Timing
+from hal.board.device import load_device
 from hal.drivers.environment.group import EnvironmentGroup, create_environment_group
 from hal.drivers.environment.registry import COMPONENTS, MEASUREMENTS, Component
 from hal.drivers.environment.service import EnvironmentService
@@ -100,6 +102,18 @@ def test_all_disabled_or_stale():
     snap = EnvironmentGroup({"scd41": stale}).snapshot()
     assert snap["stale"] and all(value is None for value in snap["sample"].values())
     assert snap["sources"] == {"co2_ppm": "scd41"}
+
+
+def test_standard_lamp_profile_has_no_environment_acquisition():
+    profiles = Path(__file__).resolve().parents[2] / "robots"
+    device = load_device("lamp", str(profiles))
+    assert "environment" not in device.declared_routes()
+    assert "environment" not in device.capabilities
+    for board in ("orangepi_sun60", "raspberry_pi_4", "raspberry_pi_5", "sim"):
+        other = create_environment_group(str(profiles / "lamp"), board)
+        assert not any(worker.enabled for worker in other.components.values())
+    simulated = create_environment_group(str(profiles / "lamp"), "orangepi_sun60", simulation=True)
+    assert not any(worker.enabled for worker in simulated.components.values())
 
 
 def test_component_configuration_and_simulation(tmp_path):

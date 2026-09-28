@@ -56,37 +56,55 @@ struct ScreenshotExecutor: Executor {
 
     func execute(params: [String: Any]) async throws -> [String: Any] {
         try Task.checkCancellation()
-        let displayID = CGDirectDisplayID(try ExecutorParameters.integer(
-            params, "display_id", default: Int(CGMainDisplayID()), range: 1...Int(UInt32.max)))
         let scale = try ExecutorParameters.number(params, "scale", default: 1, range: 0.01...1)
         let returnFormat = (params["return_format"] as? String) ?? "path"
         guard ["path", "base64", "both"].contains(returnFormat),
               params["return_format"] == nil || params["return_format"] is String else {
             throw ExecutorError.invalidParam("return_format")
         }
-        let displayResult = try await ListDisplaysExecutor().execute(params: [:])
-        guard let displays = displayResult["displays"] as? [[String: Any]],
-              let display = displays.first(where: { ($0["id"] as? Int) == Int(displayID) }),
-              let originX = display["x"] as? Int, let originY = display["y"] as? Int,
-              let pointWidth = display["width"] as? Int, let pointHeight = display["height"] as? Int,
-              pointWidth > 0, pointHeight > 0 else {
-            throw ExecutorError.invalidParam("display_id is not an active display")
-        }
-
-        if !ScreenRecordingCheck.isTrusted() {
-            ScreenRecordingCheck.requestPrompt()
-            throw ExecutorError.permissionDenied("Screen Recording access required — grant in System Settings → Privacy & Security, then re-run")
-        }
-
-        // CGDisplayCreateImage is deprecated in macOS 14.4 in favor of ScreenCaptureKit, but still works.
-        // We accept the deprecation warning for now — ScreenCaptureKit's SCScreenshotManager.captureImage
-        // is macOS 14+ only and our minimum is macOS 13.
-        guard let rawImage = CGDisplayCreateImage(displayID) else {
-            throw ExecutorError.actionFailed("could not capture display \(displayID) — permission granted but capture failed")
+        let app = try CuaWindowCapture.targetApp(params)
+        let rawImage: CGImage
+        let originX: Double, originY: Double, pointWidth: Double, pointHeight: Double, backingScale: Double
+        let metadata: [String: Any]
+        if let app {
+            guard CuaClient.enabled else { throw ExecutorError.actionFailed("Cua is disabled") }
+            let capture = try await CuaWindowCapture.capture(app: app, params: params)
+            rawImage = capture.image
+            backingScale = capture.backingScale
+            originX = capture.bounds.origin.x; originY = capture.bounds.origin.y
+            pointWidth = capture.bounds.width; pointHeight = capture.bounds.height
+            metadata = ["capture_scope": "window", "backend": "cua", "pid": capture.pid,
+                        "window_id": capture.windowID, "window_bounds": ["x": originX, "y": originY,
+                        "width": pointWidth, "height": pointHeight]]
+        } else {
+            let displayID = CGDirectDisplayID(try ExecutorParameters.integer(
+                params, "display_id", default: Int(CGMainDisplayID()), range: 1...Int(UInt32.max)))
+            let displayResult = try await ListDisplaysExecutor().execute(params: [:])
+            guard let displays = displayResult["displays"] as? [[String: Any]],
+                  let display = displays.first(where: { ($0["id"] as? Int) == Int(displayID) }),
+                  let x = display["x"] as? Int, let y = display["y"] as? Int,
+                  let width = display["width"] as? Int, let height = display["height"] as? Int,
+                  width > 0, height > 0 else {
+                throw ExecutorError.invalidParam("display_id is not an active display")
+            }
+            if !ScreenRecordingCheck.isTrusted() {
+                ScreenRecordingCheck.requestPrompt()
+                throw ExecutorError.permissionDenied("Screen Recording access required — grant in System Settings → Privacy & Security, then re-run")
+            }
+            guard let image = CGDisplayCreateImage(displayID) else {
+                throw ExecutorError.actionFailed("could not capture display \(displayID)")
+            }
+            rawImage = image
+            backingScale = Double(image.width) / Double(width)
+            originX = Double(x); originY = Double(y)
+            pointWidth = Double(width); pointHeight = Double(height)
+            metadata = ["capture_scope": "display", "display_id": Int(displayID),
+                        "display_origin_x": x, "display_origin_y": y]
         }
 
         try Task.checkCancellation()
-        let (w, h) = try Self.outputSize(width: rawImage.width, height: rawImage.height, scale: scale)
+        let (w, h) = try Self.captureOutputSize(width: rawImage.width, height: rawImage.height,
+            nativeWidth: pointWidth * backingScale, scale: scale)
         let image: CGImage
         if w != rawImage.width || h != rawImage.height {
             let colorSpace = rawImage.colorSpace ?? CGColorSpaceCreateDeviceRGB()
@@ -120,19 +138,14 @@ struct ScreenshotExecutor: Executor {
         try Task.checkCancellation()
         let saveURL = try await ScreenshotStore.shared.save(data: jpegData as Data)
 
-        let displayScale = Double(rawImage.width) / Double(pointWidth)
-
         var result: [String: Any] = [
             "path": saveURL.path,
             "width": image.width,
             "height": image.height,
-            "display_id": Int(displayID),
-            "display_scale": displayScale,
-            "display_origin_x": originX,
-            "display_origin_y": originY,
+            "display_scale": backingScale,
             "point_width": pointWidth,
             "point_height": pointHeight,
-            "capture_scale": Double(image.width) / Double(rawImage.width),
+            "capture_scale": Double(image.width) / (pointWidth * backingScale),
             "image_to_global_points": Self.imageTransform(
                 originX: Double(originX), originY: Double(originY),
                 pointWidth: Double(pointWidth), pointHeight: Double(pointHeight),
@@ -140,10 +153,23 @@ struct ScreenshotExecutor: Executor {
             "bytes": jpegData.length,
             "mime": "image/jpeg",
         ]
+        result.merge(metadata) { _, new in new }
         if returnFormat == "base64" || returnFormat == "both" {
             result["image_b64"] = (jpegData as Data).base64EncodedString()
         }
         return result
+    }
+
+    // Cua may already cap the PNG size. Apply scale to native pixels only once,
+    // never enlarge a capture that upstream already reduced.
+    static func captureOutputSize(width: Int, height: Int, nativeWidth: Double,
+                                  scale: Double) throws -> (Int, Int) {
+        guard nativeWidth.isFinite, nativeWidth > 0, width > 0,
+              scale.isFinite, (0.01...1).contains(scale) else {
+            throw ExecutorError.invalidParam("screenshot dimensions or scale")
+        }
+        let effective = min(1, nativeWidth / Double(width) * scale)
+        return try outputSize(width: width, height: height, scale: effective)
     }
 
     static func outputSize(width: Int, height: Int, scale: Double) throws -> (Int, Int) {

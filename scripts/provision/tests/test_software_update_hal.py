@@ -89,6 +89,21 @@ class HALUpdateTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), "aec")
 
+    def test_ota_installs_smart_turn_except_on_reachy(self):
+        script = SCRIPT.read_text()
+        start = script.index('  HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")')
+        end = script.index('  save_hal_service_state', start)
+        for extra, expected in (("aec", ["--extra", "aec", "--extra", "pipecat"]),
+                                ("reachy", ["--extra", "reachy"])):
+            with self.subTest(extra=extra):
+                result = subprocess.run(
+                    ["/bin/bash", "-c", script[start:end] + '\nprintf "%s\\n" "${HAL_EXTRA_ARGS[@]}"'],
+                    env={**os.environ, "HAL_EXTRA": extra}, capture_output=True, text=True,
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(result.stdout.splitlines(), expected)
+        self.assertIn('sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}"', script)
+
 
 if __name__ == "__main__":
     unittest.main()

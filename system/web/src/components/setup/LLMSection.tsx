@@ -27,8 +27,8 @@ export function LLMSection({
   return (
     <SectionCard id="llm" title="AI Brain" active={active} icon={<Brain size={17} />}
       description={locked
-        ? "Running on the Autonomous brain your device shipped with. Switch to Custom to use your own provider."
-        : "The LLM that powers your device. Paste the API key and endpoint from your provider."}>
+        ? "Running on the Autonomous brain your robot shipped with. Switch to Custom to use your own provider."
+        : "The LLM that powers your robot. Paste the API key and endpoint from your provider."}>
 
       {mode && onModeChange && (
         <div style={{ marginBottom: 14 }}>

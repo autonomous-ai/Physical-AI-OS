@@ -5,12 +5,13 @@ Public surface:
     create_backend        — factory: provider name → backend instance
     TTSBackend            — backend ABC
     ElevenLabsTTSBackend / OpenAITTSBackend — concrete backends
-    PROVIDER_OPENAI / PROVIDER_ELEVENLABS   — provider id constants
+    PROVIDER_OPENAI / PROVIDER_ELEVENLABS / PROVIDER_GEMINI — provider id constants
     TTS_SAMPLE_RATE / STREAM_CHUNK_SIZE     — audio constants
 """
 
 from hal.drivers.voice.tts.backend import (
     PROVIDER_ELEVENLABS,
+    PROVIDER_GEMINI,
     PROVIDER_OPENAI,
     STREAM_CHUNK_SIZE,
     TTS_SAMPLE_RATE,
@@ -25,6 +26,7 @@ __all__ = [
     "ElevenLabsTTSBackend",
     "OpenAITTSBackend",
     "PROVIDER_ELEVENLABS",
+    "PROVIDER_GEMINI",
     "PROVIDER_OPENAI",
     "STREAM_CHUNK_SIZE",
     "TTS_SAMPLE_RATE",

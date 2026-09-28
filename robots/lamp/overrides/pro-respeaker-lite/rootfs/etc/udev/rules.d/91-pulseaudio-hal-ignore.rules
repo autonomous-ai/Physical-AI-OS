@@ -1,0 +1,11 @@
+# Lamp Pro copy of the base list (overlay files replace, they do not merge) plus
+# the ReSpeaker Lite. Keep PulseAudio away from all lamp audio devices so HAL can
+# own them. Tracked source: robots/lamp/overrides/pro-respeaker-lite/rootfs/etc/udev/rules.d/.
+SUBSYSTEM=="sound", ATTR{id}=="sndi2s4", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_micro2", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_speaker", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_micro3", ENV{PULSE_IGNORE}="1"
+SUBSYSTEM=="sound", ATTR{id}=="device_cmedia", ENV{PULSE_IGNORE}="1"
+# Seeed ReSpeaker Lite USB (2886:0019) -- the voice mic + speaker card behind
+# device_micro2/device_speaker. PA holding hw:Lite,0 blocks HAL dmix/dsnoop.
+SUBSYSTEM=="sound", ATTR{id}=="Lite", ENV{PULSE_IGNORE}="1"

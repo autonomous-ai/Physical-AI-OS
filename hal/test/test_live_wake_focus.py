@@ -49,6 +49,7 @@ def test_duplicate_terminal_does_not_extend_focus_twice(monkeypatch, kpi):
     _pump(monkeypatch, kpi, [([
         UserSpeechOutput(turn_id="u", transcript="hello"),
         ExecutionOutput(user_turn_id="u", execution_completed=True),
+    ], "u", True), ([
         lambda: now.__setitem__(0, 55),
         ExecutionOutput(user_turn_id="u", execution_completed=True),
     ], "u", True)], focus=focus)

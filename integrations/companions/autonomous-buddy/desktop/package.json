@@ -9,7 +9,7 @@
     "start": "electron .",
     "dev": "npm run build && npm start",
     "lint": "eslint . --max-warnings 0",
-    "test": "vitest run",
+    "test": "vitest run tests/*.test.ts && node --test tests/*.test.mjs",
     "test:e2e": "node tests/electron-smoke.mjs && node tests/interactive-electron-smoke.mjs",
     "postinstall": "electron-rebuild -f -w node-pty"
   },

@@ -186,6 +186,19 @@ func (w *mcpConnectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
 	return out
 }
 
+// hasEntry reports whether this writer's token file holds an entry for
+// connector — see connectorWriter.hasEntry for why it is lock-free (Write holds
+// w.mu across the gateway restart) and why that is safe (the file is replaced
+// by tmp+rename, or deleted outright by Remove; w.path never changes).
+func (w *mcpConnectorWriter) hasEntry(connector string) (bool, error) {
+	file, err := loadConnectorsFile(w.path)
+	if err != nil {
+		return false, err
+	}
+	_, ok := file.Connectors[connector]
+	return ok, nil
+}
+
 // loadEntry returns the current on-disk entry for a connector. Satisfies the
 // entryLoader interface used by the refresh loop for full-fidelity token merge.
 func (w *mcpConnectorWriter) loadEntry(connector string) (ConnectorCreds, bool, error) {

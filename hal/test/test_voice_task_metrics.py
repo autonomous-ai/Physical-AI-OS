@@ -10,7 +10,7 @@ def test_mute_does_not_remove_task_from_denominator(kpi):
     vm.playback_muted("interaction:" + iid)
     vm._close_interaction(iid)
     row = kpi.one(vm.EVENT_INTERACTION)
-    assert row["eligible"] is False
+    assert row["eligible"] is True
     assert row["task_eligible"] is True
     assert row["task_eligibility_known"] is True
 

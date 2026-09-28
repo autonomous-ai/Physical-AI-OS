@@ -139,7 +139,7 @@ class TestParsing(unittest.TestCase):
     def test_startup_volume_parsed(self):
         # Real bodies declare their own level; the parser must not flatten them
         # to one number — restoring the speaker after a media handover reads it.
-        self.assertEqual(load_device("lamp", DEVICES_DIR).startup_volume, 40)
+        self.assertEqual(load_device("lamp", DEVICES_DIR).startup_volume, 75)
         self.assertEqual(load_device("reachy-mini", DEVICES_DIR).startup_volume, 100)
 
     def test_startup_volume_defaults_when_absent_or_out_of_range(self):

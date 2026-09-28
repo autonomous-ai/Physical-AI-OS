@@ -29,7 +29,7 @@ export function STTSection({
 }) {
   return (
     <SectionCard id="stt" title="Language" active={active}
-      description="The language your device listens in — and the one it speaks its own notices in, like “Be right back”. It does not change the language the agent replies in; that follows whoever is talking to it.">
+      description="The language your robot listens in — and the one it speaks its own notices in, like “Be right back”. It does not change the language the agent replies in; that follows whoever is talking to it.">
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="stt_language" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
           Language

@@ -12,6 +12,14 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → P
 | OS Server | Go | 5000 | Hệ thống (mạng, OTA, MQTT, reset), sensing event routing, local intent |
 | HAL | Python | 5001 | Hardware drivers (servo, LED, camera, audio, display), FastAPI |
 
+## Tích hợp máy tính và giọng nói
+
+- **[Harness](https://github.com/autonomous-ai/openharness):** `harness-use` giao việc lập trình và nghiên cứu cho agent trên máy tính đã ghép đôi qua kết nối LAN trực tiếp có xác thực. Câu hỏi và kết quả được trả về qua giọng nói hoặc chat. Chế độ Harness-only voice chuyển bản thu tap-to-record thủ công tới agent đang được chọn trong Harness. Xem [Harness](harness_vi.md).
+- **Thao tác Mac:** `computer-use` cho phép agent trên thiết bị quan sát, thao tác và kiểm tra kết quả qua Autonomous Buddy, sử dụng Cua Driver tích hợp cùng hỗ trợ ảnh chụp màn hình. Buddy thực thi thao tác desktop; agent trên thiết bị chịu trách nhiệm suy luận và hoàn thành công việc. Harness và Buddy có ghép đôi và kết nối riêng. Xem [Computer use](../../integrations/companions/autonomous-buddy/docs/vi/computer-use_vi.md).
+- **Jev:** plugin Hermes do OS quản lý chọn và nạp trước một skill đã cài trước lần gọi model đầu tiên; nếu không thành công thì dùng cơ chế tìm skill thông thường. Plugin này được bật trong bản build hiện tại; nhánh dự phòng cho voice intent tách biệt mặc định bật, còn endpoint gợi ý thao tác Buddy được bật nhưng vẫn thử nghiệm. Việc chọn không thực thi thao tác hay cấp quyền. Xem [Nạp trước skill Hermes](agentic/hermes_vi.md), [Intent fallback](os-server_vi.md), và [Gợi ý Buddy](os-server_vi.md).
+- **Realtime voice:** HAL hỗ trợ Gemini Live (model mặc định `gemini-3.8-live`), OpenAI Realtime, GPT-Live và Pipecat v1. Pipecat điều phối STT → LLM tương thích OpenAI (mặc định `qwen/qwen3.6-35b-a3b`) → HAL TTS trên thiết bị; các lời gọi model vẫn dùng dịch vụ từ xa. Giọng nói thông thường có thể trả lời trực tiếp hoặc giao việc cho runtime chính.
+- **Smart Turn:** suy luận ONNX cục bộ bổ sung cho phát hiện khoảng lặng ở đường thu âm rảnh tay non-Live dùng chung; Pipecat Live có pipeline Silero VAD + Smart Turn riêng. Cơ chế dự phòng theo khoảng lặng giới hạn thời gian chờ khi suy luận không khả dụng. Bản thu Harness thủ công kết thúc khi người dùng chạm. Extra `pipecat` được cài trong luồng thiết lập Lamp/Pi/OrangePi và không dùng trên Reachy do xung đột dependency ONNX. Xem [Realtime voice](realtime-voice_vi.md).
+
 ## Thư Mục Dự Án
 
 ```
@@ -129,8 +137,8 @@ startup. Restart HAL sau khi đổi cấu hình wiring. Driver dùng chung
 `hal/drivers/mpr121.py` gom các electrode được chọn thành một phiên chạm rồi
 nhả đã debounce. Ngưỡng cử chỉ dùng chung GPIO trong
 `hal/drivers/button_gestures.py`: lần nhả ngắn đầu tiên được phân giải gọi single-click
-với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe, đúng 3 click
-thì reboot. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
+với `announce=False`; sau 0.4 s yên, 1/2/4+ click phát cue nghe. Đúng 3 click
+không có action bổ sung hoặc cue: reboot đã bị vô hiệu hóa tại wrapper MPR121. Giữ chỉ thực hiện khi nhả: 2–<5 s sleepy, 5–<10 s shutdown,
 ≥10 s factory reset. Khi giữ, event mức giữ đã debounce dùng cùng `HoldLEDFeedback`
 trong `hal/drivers/button_actions.py` và `BUTTON_LED_PRESETS` với GPIO: tím nháy 2 Hz ở 2–<5 s, đỏ nháy 2 Hz ở
 5–<10 s và đỏ đứng từ 10 s. Nhả thì dừng nháy; action shutdown/reset được

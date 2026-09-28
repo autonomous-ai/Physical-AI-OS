@@ -21,6 +21,68 @@ from hal.drivers.voice._internal.config import (
 logger = logging.getLogger("hal.voice")
 
 
+# --- Shared Silero ONNX session ------------------------------------------
+# One session per model path for the whole process. Four callers used to build
+# their own from the same file — three SileroVADFilter slots in voice_service
+# (entry gate, realtime noise guard, silence clock) plus the SER prefilter —
+# and each session costs a model load and tens of MB of arenas.
+#
+# Sharing is safe because `InferenceSession.run()` is thread-safe and Silero's
+# LSTM `state` / 64-sample `context` travel in and out as per-call TENSORS
+# rather than living in the session. Every caller already keeps its own pair,
+# so concurrent callers cannot corrupt each other. Verified against this exact
+# model: 4 threads x 60 chunks produced output bit-identical to running them
+# sequentially.
+#
+# Deliberately NOT guarded by a lock: serializing the session would put the
+# live capture thread behind the SER worker's sweep, which is the one thing
+# this must not do.
+_shared_silero: dict[str, Optional[object]] = {}
+_shared_silero_lock = threading.Lock()
+
+
+def _build_silero_session(model_path: Path) -> Optional[object]:
+    """Construct one Silero session, or None if it cannot be loaded."""
+    if not model_path.exists():
+        logger.info("Silero VAD model not found at %s — disabled", model_path)
+        return None
+    try:
+        import os as _os
+        _os.environ.setdefault("OMP_NUM_THREADS", "1")
+        _os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+        import onnxruntime as ort
+        opts = ort.SessionOptions()
+        opts.intra_op_num_threads = 1
+        opts.inter_op_num_threads = 1
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+        session = ort.InferenceSession(
+            str(model_path),
+            sess_options=opts,
+            providers=["CPUExecutionProvider"],
+        )
+        logger.info("Silero VAD session loaded (shared): %s", model_path)
+        return session
+    except Exception as e:
+        logger.warning("Silero VAD not available — falling back to RMS only: %s", e)
+        return None
+
+
+def shared_silero_session(model_path: Path) -> Optional[object]:
+    """Return the process-wide Silero session for ``model_path``.
+
+    Returns None when the model is missing or onnxruntime cannot load it; every
+    caller then falls back to its own RMS-only path, exactly as before. The
+    None is cached alongside a real session on purpose — the failure belongs to
+    the file and the runtime, not to the caller, so retrying per caller would
+    only re-log the same error two or three more times at boot.
+    """
+    key = str(model_path)
+    with _shared_silero_lock:
+        if key not in _shared_silero:
+            _shared_silero[key] = _build_silero_session(model_path)
+        return _shared_silero[key]
+
+
 class WebRTCVADFilter:
     """Fast C-based VAD (~0.1ms/frame). One instance per aggressiveness level.
 
@@ -94,32 +156,21 @@ class SileroVADFilter:
 
     def __init__(self, model_path: Path, np):
         self._np = np
-        self._session = None
         self._state = None
         self._context = None
+        # Guards THIS instance's `_state` / `_context` only.
+        #
+        # It used to guard the session too, as a side effect of each instance
+        # owning one. The session is now shared process-wide, so this lock no
+        # longer serializes it — which is correct: run() is thread-safe and all
+        # model state is in the per-call tensors this lock protects. Do not
+        # widen it to cover the session; that would block the capture thread
+        # behind the SER worker.
         self._lock = threading.Lock()
-        if not model_path.exists():
-            logger.info("Silero VAD model not found at %s — disabled", model_path)
-            return
-        try:
-            import os as _os
-            _os.environ.setdefault("OMP_NUM_THREADS", "1")
-            _os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
-            import onnxruntime as ort
-            opts = ort.SessionOptions()
-            opts.intra_op_num_threads = 1
-            opts.inter_op_num_threads = 1
-            opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-            self._session = ort.InferenceSession(
-                str(model_path),
-                sess_options=opts,
-                providers=["CPUExecutionProvider"],
-            )
+        self._session = shared_silero_session(model_path)
+        if self._session is not None:
             self.reset_state()
-            logger.info("Silero VAD loaded (threshold=%.2f)", SILERO_VAD_THRESHOLD)
-        except Exception as e:
-            logger.warning("Silero VAD not available — falling back to RMS only: %s", e)
-            self._session = None
+            logger.info("Silero VAD ready (threshold=%.2f)", SILERO_VAD_THRESHOLD)
 
     @property
     def available(self) -> bool:

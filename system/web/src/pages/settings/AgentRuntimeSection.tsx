@@ -29,7 +29,7 @@ const RUNTIME_BLURB: Record<string, string> = {
   codex: "Codex — OpenAI Codex CLI behind the os-server bridge (WebSocket).",
   claudecode: "Claude Code — Anthropic CLI agent behind a local bridge.",
   opencode: "OpenCode — open-source coding agent behind the os-server bridge (WebSocket).",
-  remote: "Remote (Hermes-over-LAN) — the device reuses its Hermes runtime pointing at a Hermes server on another machine (typically your Mac). Requires the target Hermes to bind on 0.0.0.0, not just 127.0.0.1, so the device can reach it.",
+  remote: "Remote (Hermes-over-LAN) — the robot reuses its Hermes runtime pointing at a Hermes server on another machine (typically your Mac). Requires the target Hermes to bind on 0.0.0.0, not just 127.0.0.1, so the robot can reach it.",
 };
 
 // Display labels for the runtime dropdown / status pill. Values on the wire
@@ -129,9 +129,9 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
     if (!window.confirm(
       selected === REMOTE
         ? `Switch to Remote Hermes at ${remoteOpts?.url}?\n\n` +
-          `This restarts os-server — the device will be briefly unavailable while it reconnects to the external Hermes.`
+          `This restarts os-server — the robot will be briefly unavailable while it reconnects to the external Hermes.`
         : `Switch agentic backend to "${displayRuntime(selected)}"?\n\n` +
-          `This stops the other backend and restarts os-server — the device will ` +
+          `This stops the other backend and restarts os-server — the robot will ` +
           `be briefly unavailable while it reconnects.`,
     )) return;
 
@@ -152,7 +152,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       // os-server may restart before the response lands; a dropped connection
       // here usually means the switch WAS accepted — the poll below finds out.
     }
-    toast.message(`Switching to ${displayRuntime(target)} — waiting for the device to confirm…`);
+    toast.message(`Switching to ${displayRuntime(target)} — waiting for the robot to confirm…`);
 
     // config.agent_runtime is only persisted AFTER switch-runtime lands (a failed
     // switch rolls back and keeps the old value), so GET /device/agent-runtime is
@@ -184,7 +184,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       if (lastSeen) { setCurrent(lastSeen); setSelected(lastSeen); }
       toast.error(
         lastSeen && lastSeen !== target
-          ? `Switch to ${displayRuntime(target)} not confirmed — device still reports "${displayRuntime(lastSeen)}" (likely failed and rolled back; check journalctl -u os-runtime-switch).`
+          ? `Switch to ${displayRuntime(target)} not confirmed — robot still reports "${displayRuntime(lastSeen)}" (likely failed and rolled back; check journalctl -u os-runtime-switch).`
           : `Switch to ${displayRuntime(target)} not confirmed within 5 minutes — reload this page to re-check.`,
       );
     }
@@ -198,7 +198,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       ) : (
         <>
           <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
-            The swappable agentic backend that runs the device's brain. Switching
+            The swappable agentic backend that runs the robot's brain. Switching
             stops the other backend and restarts os-server.
           </div>
 
@@ -385,11 +385,11 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
           Get the Hermes URL + API Key
         </div>
         <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 16 }}>
-          Runs on your Mac. Enables Hermes's built-in API server on the LAN so the device can reach it, and prints the two fields to paste back here.
+          Runs on your Mac. Enables Hermes's built-in API server on the LAN so the robot can reach it, and prints the two fields to paste back here.
         </div>
 
         <div style={{ marginBottom: 6, fontSize: 11.5, color: C.textDim }}>
-          1. Open <b>Terminal</b> on your Mac (same Wi-Fi as this device).
+          1. Open <b>Terminal</b> on your Mac (same Wi-Fi as this robot).
         </div>
         <div style={{ marginBottom: 6, fontSize: 11.5, color: C.textDim }}>
           2. Paste this command and press Enter:

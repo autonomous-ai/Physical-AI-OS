@@ -9,8 +9,47 @@ import (
 
 // EnvironmentMetricRule defines a change threshold, not a health limit.
 type EnvironmentMetricRule struct {
-	Delta   float64 `json:"delta"`
-	WarmupS float64 `json:"warmup_s"`
+	Delta            float64                 `json:"delta"`
+	RelativeDeltaPct float64                 `json:"relative_delta_pct"`
+	WarmupS          float64                 `json:"warmup_s"`
+	Comfort          *EnvironmentComfortRule `json:"comfort,omitempty"`
+}
+
+// EnvironmentComfortRule describes a persistent comfort condition, not a
+// health alarm or a time-weighted exposure limit. Bounds are strict on entry.
+type EnvironmentComfortRule struct {
+	Below      *float64 `json:"below,omitempty"`
+	Above      *float64 `json:"above,omitempty"`
+	Hysteresis float64  `json:"hysteresis"`
+	SustainS   float64  `json:"sustain_s"`
+}
+
+func (r *EnvironmentComfortRule) UnmarshalJSON(data []byte) error {
+	type plain EnvironmentComfortRule
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil {
+		return err
+	}
+	for name, raw := range fields {
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return fmt.Errorf("environment comfort.%s cannot be null", name)
+		}
+	}
+	var value plain
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&value); err != nil {
+		return err
+	}
+	*r = EnvironmentComfortRule(value)
+	return nil
+}
+
+// ChangeThreshold returns the fixed floor or a fraction of the acknowledged
+// baseline, whichever is larger. This is a product notification gate, not an
+// uncertainty interval; accuracy does not establish within-device temporal noise.
+func (r EnvironmentMetricRule) ChangeThreshold(baseline float64) float64 {
+	return math.Max(r.Delta, math.Abs(baseline)*(r.RelativeDeltaPct/100))
 }
 
 // EnvironmentConfig controls OS interpretation separately from HAL acquisition.
@@ -26,21 +65,29 @@ type EnvironmentConfig struct {
 }
 
 func DefaultEnvironmentConfig() EnvironmentConfig {
+	bound := func(value float64) *float64 { return &value }
 	return EnvironmentConfig{
-		Enabled: true, InitialReport: true, EvaluateIntervalS: 10, SustainS: 60, CooldownS: 900,
+		Enabled: true, InitialReport: true, EvaluateIntervalS: 10, SustainS: 60, CooldownS: 1800,
 		RetryIntervalS: 60, MaxSampleAgeS: 10,
+		// Provisional notification policy, not sensor accuracy or health limits.
+		// Rationale and field-validation plan: robots/lamp/docs/environment-sensing.md.
 		Metrics: map[string]EnvironmentMetricRule{
-			"pm1_0_ug_m3": {10, 60}, "pm2_5_ug_m3": {10, 60},
-			"pm4_0_ug_m3": {15, 60}, "pm10_ug_m3": {15, 60},
-			"temperature_c": {2, 60}, "humidity_pct": {10, 60},
-			"voc_index": {50, 3600}, "nox_index": {20, 21600},
-			"co2_ppm": {200, 60},
+			"pm1_0_ug_m3":   {Delta: 10, RelativeDeltaPct: 20, WarmupS: 60},
+			"pm2_5_ug_m3":   {Delta: 10, RelativeDeltaPct: 20, WarmupS: 60, Comfort: &EnvironmentComfortRule{Above: bound(35), Hysteresis: 5, SustainS: 300}},
+			"pm4_0_ug_m3":   {Delta: 25, RelativeDeltaPct: 25, WarmupS: 60},
+			"pm10_ug_m3":    {Delta: 25, RelativeDeltaPct: 25, WarmupS: 60},
+			"temperature_c": {Delta: 2, WarmupS: 60, Comfort: &EnvironmentComfortRule{Below: bound(19), Above: bound(27), Hysteresis: 1, SustainS: 300}},
+			"humidity_pct":  {Delta: 10, WarmupS: 60, Comfort: &EnvironmentComfortRule{Below: bound(35), Above: bound(65), Hysteresis: 5, SustainS: 300}},
+			"voc_index":     {Delta: 50, WarmupS: 3600},
+			"nox_index":     {Delta: 20, WarmupS: 21600},
+			"co2_ppm":       {Delta: 200, RelativeDeltaPct: 20, WarmupS: 60, Comfort: &EnvironmentComfortRule{Above: bound(1000), Hysteresis: 150, SustainS: 300}},
 		},
 	}
 }
 
 // UnmarshalJSON fills omitted top-level fields with defaults. A supplied metrics
 // map replaces the default map, allowing an operator to monitor a subset.
+// Supplied rules without relative_delta_pct or comfort retain legacy behavior.
 func (c *EnvironmentConfig) UnmarshalJSON(data []byte) error {
 	type plain EnvironmentConfig
 	v := plain(DefaultEnvironmentConfig())
@@ -69,6 +116,11 @@ func (c *EnvironmentConfig) UnmarshalJSON(data []byte) error {
 		}
 		for key, fields := range rules {
 			rule := DefaultEnvironmentConfig().Metrics[key]
+			// Existing persisted rules must not silently acquire new event gates.
+			rule.Comfort = nil
+			if _, supplied := fields["relative_delta_pct"]; !supplied {
+				rule.RelativeDeltaPct = 0
+			}
 			for name, raw := range fields {
 				if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 					return fmt.Errorf("environment.metrics.%s.%s cannot be null", key, name)
@@ -114,9 +166,33 @@ func (c EnvironmentConfig) Validate() error {
 		if math.IsNaN(rule.Delta) || math.IsInf(rule.Delta, 0) || rule.Delta <= 0 {
 			return fmt.Errorf("environment metric %s delta must be finite and positive", name)
 		}
+		if math.IsNaN(rule.RelativeDeltaPct) || math.IsInf(rule.RelativeDeltaPct, 0) || rule.RelativeDeltaPct < 0 || rule.RelativeDeltaPct > 100 {
+			return fmt.Errorf("environment metric %s relative_delta_pct must be between 0 and 100", name)
+		}
 		if math.IsNaN(rule.WarmupS) || math.IsInf(rule.WarmupS, 0) || rule.WarmupS < 0 || rule.WarmupS > 86400 {
 			return fmt.Errorf("environment metric %s warmup_s must be between 0 and 86400", name)
 		}
+		if rule.Comfort != nil {
+			r := rule.Comfort
+			if r.Below == nil && r.Above == nil {
+				return fmt.Errorf("environment metric %s comfort requires below or above", name)
+			}
+			for _, bound := range []*float64{r.Below, r.Above} {
+				if bound != nil && (math.IsNaN(*bound) || math.IsInf(*bound, 0)) {
+					return fmt.Errorf("environment metric %s comfort bounds must be finite", name)
+				}
+			}
+			if math.IsNaN(r.Hysteresis) || math.IsInf(r.Hysteresis, 0) || r.Hysteresis <= 0 {
+				return fmt.Errorf("environment metric %s comfort hysteresis must be finite and positive", name)
+			}
+			if r.Below != nil && r.Above != nil && (*r.Below >= *r.Above || r.Hysteresis > (*r.Above-*r.Below)/2) {
+				return fmt.Errorf("environment metric %s comfort bounds must be ordered with non-overlapping recovery bands", name)
+			}
+			if math.IsNaN(r.SustainS) || math.IsInf(r.SustainS, 0) || r.SustainS < c.EvaluateIntervalS || r.SustainS > 86400 {
+				return fmt.Errorf("environment metric %s comfort sustain_s must be between evaluate_interval_s and 86400", name)
+			}
+		}
+
 	}
 	return nil
 }
@@ -125,6 +201,18 @@ func (c EnvironmentConfig) Clone() EnvironmentConfig {
 	copy := c
 	copy.Metrics = make(map[string]EnvironmentMetricRule, len(c.Metrics))
 	for key, value := range c.Metrics {
+		if value.Comfort != nil {
+			comfort := *value.Comfort
+			if comfort.Below != nil {
+				bound := *comfort.Below
+				comfort.Below = &bound
+			}
+			if comfort.Above != nil {
+				bound := *comfort.Above
+				comfort.Above = &bound
+			}
+			value.Comfort = &comfort
+		}
 		copy.Metrics[key] = value
 	}
 	return copy

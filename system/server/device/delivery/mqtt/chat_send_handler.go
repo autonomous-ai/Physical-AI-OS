@@ -25,14 +25,14 @@ import (
 // to /api/agent/channel-turn instead of reaching in.
 
 // chatSendTimeout bounds the loopback call. The endpoint returns as soon as the
-// turn is FORWARDED (it answers with a run id, not with the reply), so this only
-// has to cover the describe-first gate on an attached image.
+// agent turn is forwarded, or a local intent has completed. This covers the
+// describe-first gate on an attached image and bounded intent classification.
 const chatSendTimeout = 60 * time.Second
 
 var chatSendClient = &http.Client{Timeout: chatSendTimeout}
 
-// handleChatSend forwards the message and acks with the run id. The reply itself
-// arrives later as a stream of kind chat.event — see chat_stream.go.
+// handleChatSend forwards the message and acks with the run id. Replies use
+// kind chat.event, including synchronous local replies — see chat_stream.go.
 func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 	var data domain.MQTTChatSendData
 	if err := json.Unmarshal(env.Data, &data); err != nil {
@@ -83,12 +83,16 @@ type sensingRequest struct {
 	Files   []domain.InboundFile `json:"files,omitempty"`
 }
 
-// sensingReply is the standard envelope: {"status":1,"data":{"runId":"..."}}.
+// sensingReply accepts both agent runs and synchronous local intent runs.
 type sensingReply struct {
 	Status  int    `json:"status"`
 	Message string `json:"message"`
 	Data    struct {
-		RunID string `json:"runId"`
+		RunID          string `json:"runId"`
+		LocalRunID     string `json:"localRunId"`
+		Handler        string `json:"handler"`
+		HandledLocally string `json:"handledLocally"`
+		Response       string `json:"response"`
 	} `json:"data"`
 }
 
@@ -140,6 +144,20 @@ func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (
 			return "", fmt.Errorf("sensing rejected the turn: %s", reply.Message)
 		}
 		return "", fmt.Errorf("sensing rejected the turn: http %d", resp.StatusCode)
+	}
+	if reply.Data.RunID == "" && reply.Data.Handler == "local" && reply.Data.HandledLocally == "true" {
+		// Local intents finish before this POST returns, without an agent event.
+		reply.Data.RunID = reply.Data.LocalRunID
+		if reply.Data.RunID != "" && h.chatStream != nil {
+			// Capture and replay the final reply with the acknowledged session,
+			// including speak=true requests that entered through the voice path.
+			h.chatStream.handle(domain.MonitorEvent{
+				ID: reply.Data.RunID + "-final", Time: time.Now().UTC().Format(time.RFC3339Nano),
+				Type: "chat_response", RunID: reply.Data.RunID, State: "final",
+				Summary: reply.Data.Response,
+				Detail:  map[string]string{"role": "assistant", "message": reply.Data.Response},
+			})
+		}
 	}
 	if reply.Data.RunID == "" {
 		// Without a run id nothing can be correlated, so this is a failure even

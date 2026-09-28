@@ -51,14 +51,16 @@ var resumeErrHints = []string{"session not found", "no session", "not found", "u
 // Config holds every tunable. Main() fills it from environment variables
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
-	Token       string        // OPENCODE_WS_TOKEN
-	Port        string        // OPENCODE_PORT (Main only; tests inject a Listener)
-	Workspace   string        // OPENCODE_WORKSPACE
-	Bin         string        // OPENCODE_BIN
-	SessionFile string        // OPENCODE_SESSION_FILE
-	AttachDir   string        // OPENCODE_ATTACH_DIR
-	TurnTimeout time.Duration // OPENCODE_TURN_TIMEOUT_S
-	Home        string        // HOME asserted into the subprocess env
+	JevConfigPath string
+	JevEnabled    bool
+	Token         string        // OPENCODE_WS_TOKEN
+	Port          string        // OPENCODE_PORT (Main only; tests inject a Listener)
+	Workspace     string        // OPENCODE_WORKSPACE
+	Bin           string        // OPENCODE_BIN
+	SessionFile   string        // OPENCODE_SESSION_FILE
+	AttachDir     string        // OPENCODE_ATTACH_DIR
+	TurnTimeout   time.Duration // OPENCODE_TURN_TIMEOUT_S
+	Home          string        // HOME asserted into the subprocess env
 }
 
 func envOr(key, def string) string {
@@ -74,19 +76,23 @@ func configFromEnv() Config {
 		timeout = time.Duration(f * float64(time.Second))
 	}
 	return Config{
-		Token:       envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
-		Port:        envOr("OPENCODE_PORT", "18793"),
-		Workspace:   envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),
-		Bin:         envOr("OPENCODE_BIN", "opencode"),
-		SessionFile: envOr("OPENCODE_SESSION_FILE", "/root/.opencode/session.json"),
-		AttachDir:   envOr("OPENCODE_ATTACH_DIR", "/root/.opencode/attachments"),
-		TurnTimeout: timeout,
-		Home:        "/root",
+		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
+		JevEnabled:    jevEnabled,
+		Token:         envOr("OPENCODE_WS_TOKEN", "autonomous_opencode_token"),
+		Port:          envOr("OPENCODE_PORT", "18793"),
+		Workspace:     envOr("OPENCODE_WORKSPACE", "/root/.opencode/workspace"),
+		Bin:           envOr("OPENCODE_BIN", "opencode"),
+		SessionFile:   envOr("OPENCODE_SESSION_FILE", "/root/.opencode/session.json"),
+		AttachDir:     envOr("OPENCODE_ATTACH_DIR", "/root/.opencode/attachments"),
+		TurnTimeout:   timeout,
+		Home:          "/root",
 	}
 }
 
 // Server bridges a single WebSocket client to per-turn opencode subprocesses.
 type Server struct {
+	preloadContext  func(context.Context, string) string
+	lifetimeContext context.Context
 	activeRequestID string // guarded by mu
 	activeRunID     string // guarded by mu
 	cfg             Config
@@ -102,9 +108,11 @@ type Server struct {
 // New builds a Server with explicit config and listener (tests use port 0).
 func New(cfg Config, ln net.Listener) *Server {
 	return &Server{
-		cfg: cfg,
-		ln:  ln,
-		ops: make(chan op, turnQueueCap),
+		preloadContext:  newPreloader(cfg),
+		lifetimeContext: context.Background(),
+		cfg:             cfg,
+		ln:              ln,
+		ops:             make(chan op, turnQueueCap),
 	}
 }
 
@@ -114,6 +122,7 @@ func New(cfg Config, ln net.Listener) *Server {
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.lifetimeContext = ctx
 
 	if err := os.MkdirAll(s.cfg.Workspace, 0o755); err != nil {
 		log.Printf("%s mkdir workspace failed: %v", logPrefix, err)

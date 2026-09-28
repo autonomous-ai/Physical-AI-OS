@@ -12,6 +12,31 @@ The device runs **5 software components** on a supported board (Raspberry Pi 4, 
 | **OpenClaw** | Node.js package | `npm install -g` | `openclaw.service` | Global npm |
 | **HAL** | Python package | Download zip from OTA | `hal.service` | `/opt/hal/` |
 
+HAL supports CPython **3.12.x** (`requires-python = ">=3.12,<3.13"`).
+`uv sync --python 3.12` selects the interpreter but still resolves the project's
+entire supported Python range and optional extras. An unbounded `>=3.12` can
+therefore fail an ARM64 update while resolving Python 3.14 (the pinned LeRobot
+requires Torch <2.8, without compatible wheels for that split). Keep the Python
+range and `hal/uv.lock` aligned; a staging resolution failure restores the old HAL.
+
+HAL release packaging includes `uv.lock` and validates it with
+`uv lock --python 3.12 --check` before bumping the version or uploading. The
+updater uses `uv sync --locked` when the archive contains a lockfile; older
+archives without one retain their legacy resolution path. Excluding the lock
+forced device-side fresh resolution: on uv 0.12.15, HAL 0.1.169 failed on a
+Python >=3.13 ARM64/Reachy split despite a 3.12-only project range; the same
+archive with the validated lock passed a locked install dry-run on the device.
+
+Image builders for OrangePi, Pi 4, and Pi 5 also use `--locked` when the
+downloaded HAL archive contains `uv.lock`. They fetch HAL from the OTA metadata,
+not from the local checkout; rerun the build after publishing the fixed archive.
+
+Lamp setup and Pi/OrangePi images install HAL with `--extra hardware --extra aec
+--extra pipecat`. Non-Reachy OTA selects the same extras, so Smart Turn is
+installed automatically without a separate device command. Reachy retains
+`--extra hardware --extra reachy`: its ONNX runtime requirement conflicts with
+Pipecat. The `pipecat` extra remains optional for bare developer `uv sync`.
+
 ### Architecture Diagram
 
 ```
@@ -310,6 +335,12 @@ The route reuses the existing `/api/` HTTP upstream (`backend` or
 Symlinked sites are updated at their real target, preserving the enabled link.
 The updater validates with `nginx -t` and reloads nginx only after adding a route.
 
+For a manual repair of older images that already have `/api/buddy/ws`, run
+`scripts/maintenance/patch-nginx-harness-ws.sh` as root on the device. It resolves
+symlinked sites before editing, saves a separate copy of the original file under
+`/var/backups/nginx-harness-ws/`, and restores that file if `nginx -t` fails,
+preserving the enabled symlink. An existing Harness route is left unchanged.
+
 Directory installs have the same recovery contract. Before a web update, the
 updater stops nginx, swaps the fully unpacked staged bundle into place, and
 retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
@@ -333,8 +364,8 @@ an operator rollback; the rejected device-profile version is then blocked.
 ### Optional hardware overrides
 
 The OS reads the single-line name in `/etc/autonomous/hardware-profile`.
-Missing, empty or `standard` uses the existing device package unchanged: no new
-USB checks, no changed legacy audio/Live defaults. Other names must match
+Missing, empty or `standard` selects the fresh base device package without
+an override: no new USB checks or changed legacy audio/Live defaults. Other names must match
 `[a-z][a-z0-9_-]{0,63}` and select `overrides/<name>/` inside that device's package.
 The identity file is machine-owned and must not be shipped in an overlay.
 
@@ -342,23 +373,54 @@ The identity file is machine-owned and must not be shipped in an overlay.
 It merges the selected `rootfs/opt/hal/.env` over the shared env, copies other
 selected `rootfs/` files into the staged rootfs, and applies the optional integer
 `startup_volume`/`max_volume` fields from `profile.json` to `ROBOT.md`/`SAFETY.md`.
-Product-specific values live only in the device package. For example:
+Its optional `capabilities` map accepts boolean values and activates or comments
+existing capability entries in `ROBOT.md` frontmatter; it cannot invent a
+capability declaration. Selected `device/*.json` files replace existing
+top-level device JSON files in full, without merging their contents. The
+renderer validates these inputs before writing changes and rejects invalid
+capabilities or replacement files. Product-specific values live only in the
+device package. For example:
 
-```text
-robots/lamp/overrides/pro/
-  profile.json                # startup_volume 77, max_volume 77
-  rootfs/opt/hal/.env          # XMOS AEC: software AEC off, Live on, uplink always
-  rootfs/etc/asound.conf       # reSpeaker mic/speaker routing, processed left input
-```
+| Profile | Voice microphone | Sensing microphone | Speaker | Startup / maximum volume | SEN63C |
+|---|---|---|---|---|---|
+| `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Disabled |
+| `pro` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Enabled on `orangepi_sun60`, bus `0` |
+| `pro-respeaker-lite` | ReSpeaker Lite processed left input | Onboard ES8389 (`sndi2s4`) | ReSpeaker Lite softvol `Speaker` | 35 / 35 | Enabled on `orangepi_sun60`, bus `0` |
+| `pro-xvf3800` | XVF3800 (`Array`) | Onboard ES8389 (`sndi2s4`) | XVF3800 | 77 / 77 | Enabled on `orangepi_sun60`, bus `0` |
 
-The Lamp Pro assembly uses reSpeaker USB stereo 16 kHz with processed audio on
-the left channel; its speaker must be wired through reSpeaker. The tested
-77% tuning is specific to that assembly, not an acoustic equivalence across
-devices. Standard Lamp's existing files, defaults and ceiling remain unchanged.
-The renderer does not detect, flash or retune the attached hardware.
+Each Pro directory contains `profile.json` with
+`capabilities: {"environment": true}`, plus `device/sen63c.json` enabling the
+OrangePi sensor. Only the Lite and XVF3800 variants override volume defaults. The base Standard package comments that capability and
+disables SEN63C, so it does not start acquisition, write the SEN63C bus clock,
+poll the environment UI or qualify for the environment skill. SEN55/SCD41
+and boards without matching entries remain disabled even on Pro.
+
+`pro-respeaker-lite` preserves the former `pro` overlay in full, including its
+ALSA, udev and softvol service files: HAL AEC enabled, Silero threshold `0.10`,
+Live off, and always-on uplink. `pro` is Standard audio plus SEN63C only:
+it has no `rootfs/`, `.env`, ALSA, udev, service or volume override. Its rendered
+ALSA configuration and safety bounds are byte-identical to Standard;
+microphones, speaker, processing and volume defaults all use the base package.
+The common renderer only adds the selected profile's saved-volume namespace
+(`HAL_VOLUME_STATE_PATH=/root/config/.volume-pro`) to the generated HAL environment. `pro-xvf3800` keeps XMOS AEC, software
+AEC off, Live on and always-on uplink.
+
+ReSpeaker Lite (XMOS XU316, USB `2886:0019`, ALSA card `Lite`) uses S16_LE
+2 ch 16 kHz audio. `pro-respeaker-lite` requires its speaker wired through Lite. This card has no ALSA mixer; a udev-triggered oneshot opens
+the PCM before `hal.service` to create the softvol control for boot volume
+restore. The 35% setting was tuned on the Lite assembly, not calibrated as an
+acoustic equivalence across devices. Standard retains its audio defaults and
+ceiling. The renderer does not detect, flash or retune attached hardware.
+
+Existing `pro` machines using the Lite microphone must explicitly select
+`pro-respeaker-lite` before installing the updated device package to preserve
+their full audio configuration. There is no automatic marker migration. Changing the
+marker alone does not replace installed files; reinstall the device package.
 
 Image builders/fresh setup apply a selected override before installing rootfs.
-OTA renders it before stopping services and taking the rootfs snapshot; missing
+OTA starts from the fresh base archive, not an already rendered Pro tree, so
+switching to Standard restores its disabled sensor and capability defaults.
+OTA renders before stopping services and taking the rootfs snapshot; missing
 helper/selected overlay or render failure leaves the installed package running. Copy
 or health failure rolls back the profile and live rootfs together. Rollback does
 not change the machine's hardware-profile selection.
@@ -376,6 +438,13 @@ and uses the unchanged base package. The selection is not baked into the reusabl
 base cache. Nonstandard variants add a suffix to the final image/release filename.
 Unknown variants or packages without the override helper fail the build.
 
+Machines without a hardware-profile marker remain Standard, including machines
+that previously received the global SEN63C default; no automatic Pro migration
+is performed. To retain SEN63C on Pro hardware, explicitly choose `pro`, `pro-respeaker-lite` or
+`pro-xvf3800` and reinstall the device package. Upgrades from older releases
+need both HAL (the I2C clock fix) and the device package (capability and sensor
+configuration). A HAL-only update does not install these profile defaults.
+
 Provision a selected assembly by writing its name before installation. For an
 existing machine, first install the new updater and HAL/os-server, then:
 
@@ -392,8 +461,10 @@ OTA; simply deleting the file does not undo an already rendered overlay. An old
 updater cannot apply overrides: automatic bootstrap refreshes its updater first,
 but manual/failed-refresh deployments must update it before selecting a profile.
 
-Selected profiles save volume separately as `config/.volume-<name>` (HAL and
-os-server agree); absent/standard retains `config/.volume`. This prevents a
+Every selected profile saves volume separately as `config/.volume-<name>`
+(HAL and os-server agree), including the capability/device-JSON-only `pro`
+profile. The common renderer generates `HAL_VOLUME_STATE_PATH` accordingly;
+absent/Standard retains `config/.volume`. This prevents a
 legacy speaker's saved percentage from overriding the new assembly's startup
 level. HAL addresses both `PCM,0` and `PCM,1`, excluding capture controls; mixer
 write failure returns 503 rather than persisting a false success. UI, voice and
@@ -617,7 +688,9 @@ published but `min_version` was not promoted to it — the worker will refuse it
 which is why the web Versions card treats held components as "no update".
 The installed device profile is reported as `device`, resolved from nested
 `metadata.devices.<device_type>` rather than the flat component list.
-os-server proxies this as `GET /api/system/ota-versions`.
+os-server proxies this as `GET /api/system/ota-versions` and, for the cloud, as
+the MQTT `data` kind `system.ota_versions` (both via `system/ota`; the cloud's
+`system.software_update` is the MQTT twin of the Versions card's button).
 
 ### Version Detection Per Component
 
@@ -776,7 +849,7 @@ The updater finds `uv` on `PATH`, then at `/root/.local/bin/uv`, then at
 `/home/pollen/.local/bin/uv` (Reachy's installer location). Before stopping HAL,
 it selects Python extras from `DEVICE_TYPE` in `/opt/hal/.env`, falling back to
 `device_type` in `/root/config/config.json`: `reachy-mini` uses `hardware + reachy`
-to retain the Pollen SDK; every other device keeps `hardware + aec`.
+to retain the Pollen SDK; every other device uses `hardware + aec + pipecat`.
 
 > **The uv cache lives outside the runtime tree** (`/opt/.uv-cache-hal`, next to
 > `/opt/hal` so uv can hardlink into the new venv). It used to sit at
@@ -804,7 +877,11 @@ to retain the Pollen SDK; every other device keeps `hardware + aec`.
     # Build a fresh venv; preserve .env and use the external shared cache.
     unzip -q "$ZIP" -d /opt/.hal.new
     cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware --extra "$HAL_EXTRA")
+    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
+    if [ "$HAL_EXTRA" != "reachy" ]; then
+        HAL_EXTRA_ARGS+=(--extra pipecat)
+    fi
+    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
     mv /opt/.hal.new /opt/hal
 
     systemctl restart hal
@@ -1172,8 +1249,8 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **HAL source**: Mono-repo. Driver code copied from `humancomputerlab/lelamp_runtime` into `hal/`, with LiveKit/OpenAI removed and HTTP API + DisplayService added. Upstream tracked manually via `hal/UPSTREAM.md`.
 - [x] **HAL HTTP port**: `5001` (OS Server is `5000`).
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
-- [x] **Python version**: Pinned to Python 3.12+ (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
-- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
+- [x] **Python version**: Pinned to Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
+- [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec --extra pipecat` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
 - [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 

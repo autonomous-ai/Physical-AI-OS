@@ -3,9 +3,11 @@ package http
 import (
 	"strings"
 	"testing"
+
+	"go.autonomous.ai/os/system/lib/sensingmsg"
 )
 
-func TestHarnessContextAbsentWithoutConnection(t *testing.T) {
+func TestHarnessContextWithoutConnectionOmitsRemoteRouting(t *testing.T) {
 	for _, connected := range []func() bool{nil, func() bool { return false }} {
 		h := &SensingHandler{
 			harnessConnected:       connected,
@@ -14,7 +16,11 @@ func TestHarnessContextAbsentWithoutConnection(t *testing.T) {
 		}
 		for _, channel := range []string{"voice", "web"} {
 			for _, message := range []string{"Find my fan", "Ask Harness to do this", "Is it done?"} {
-				if got := h.harnessRoutingContext(message, "run-1", channel); got != "" {
+				want := ""
+				if connected != nil {
+					want = "\n" + sensingmsg.HarnessDisconnectedContext
+				}
+				if got := h.harnessRoutingContext(message, "run-1", channel); got != want {
 					t.Fatalf("unexpected disconnected context: %q", got)
 				}
 			}
@@ -37,7 +43,7 @@ func TestHarnessContextTracksConnectionAndPreservesConnectedRouting(t *testing.T
 		}
 	}
 	connected = false
-	if got := h.harnessRoutingContext("Is it done?", "run-2", "voice"); got != "" {
+	if got := h.harnessRoutingContext("Is it done?", "run-2", "voice"); got != "\n"+sensingmsg.HarnessDisconnectedContext {
 		t.Fatalf("disconnect retained context: %q", got)
 	}
 	connected = true

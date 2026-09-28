@@ -328,6 +328,37 @@ class GroupReportTests(unittest.TestCase):
                         self.assertEqual(result["eligible_mature_turns"], 1)
                         self.assertEqual(result[outcome + "_turns"], 1)
 
+    def test_harness_grouped_result_preserves_terminal_outcomes(self):
+        for group in ("voice", "chat", "sensing"):
+            for outcome in ("completed", "failed", "cancelled"):
+                with self.subTest(group=group, outcome=outcome):
+                    rows = [self.start(group, "harness"),
+                            execution("harness", outcome="unknown", evidence="harness_delegated",
+                                      execution_at_ms=2000),
+                            execution("harness", outcome=outcome, evidence="harness_correlated_summary",
+                                      execution_at_ms=10000),
+                            execution("harness", evidence="lifecycle_end", execution_at_ms=15000),
+                            execution("harness", outcome="unknown", evidence="execution_observation_lost",
+                                      execution_at_ms=20000)]
+                    rows.append(rows[2])
+                    for order in (rows, list(reversed(rows))):
+                        result = metrics.report(order, 2000000, group=group)["aggregate"]
+                        self.assertEqual(result["eligible_mature_turns"], 1)
+                        self.assertEqual(result[outcome + "_turns"], 1)
+                        self.assertEqual(result["unknown_turns"], 0)
+                        self.assertEqual(result["completion_pct"], 100 if outcome == "completed" else 0)
+                        if outcome == "cancelled":
+                            self.assertEqual(result["failed_turns"], 0)
+
+    def test_cancelled_is_terminal_and_never_cleanup_success(self):
+        rows = [self.start("voice", "cancelled"),
+                execution("cancelled", evidence="harness_correlated_summary", outcome="cancelled"),
+                execution("cancelled", execution_at_ms=100000)]
+        result = metrics.report(rows, 2000000)["aggregate"]
+        self.assertEqual(result["cancelled_turns"], 1)
+        self.assertEqual(result["completed_turns"], 0)
+        self.assertEqual(result["failed_turns"], 0)
+
     def test_harness_marker_does_not_override_remote_terminal_or_gemini(self):
         handoff = execution("v1", outcome="unknown", evidence="harness_delegated",
                             execution_at_ms=100000)

@@ -2077,8 +2077,11 @@ if [ -n "\$HAL_URL" ]; then
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
   rm -rf "\$HAL_DIR/.venv"
   cd "\$HAL_DIR"
-  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec"
-  uv sync --python 3.12 --extra hardware --extra aec 2>&1 || {
+  # Use the release lock when available; keep legacy archives installable.
+  HAL_LOCK_ARG=""
+  [ ! -f uv.lock ] || HAL_LOCK_ARG="--locked"
+  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec --extra pipecat"
+  uv sync --python 3.12 --extra hardware --extra aec --extra pipecat \$HAL_LOCK_ARG 2>&1 || {
     echo "ERROR: uv sync failed (exit code \$?)"
     echo "[overlay] HAL: uv version: \$(uv --version 2>&1 || echo unknown)"
     echo "[overlay] HAL: python check: \$(python3 --version 2>&1 || echo not found)"

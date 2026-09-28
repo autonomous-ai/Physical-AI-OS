@@ -89,10 +89,15 @@ Emo-AffectNet leave them `null`.
 
 ```json
 // request  (EmotionRecognizeRequest)
-{"image_b64": "<base64 face crop>", "threshold": 0.5}
+{"image_b64": "<base64 face crop>", "threshold": 0.5, "raw": false}
 // response (EmotionRecognizeResponse) — same shape as the WS detections array
-{"detections": [{"emotion": "Happy", "confidence": 0.82, "face_confidence": 1.0, "bbox": [0,0,W,H]}]}
+{"detections": [{"emotion": "Happy", "confidence": 0.82, "face_confidence": 1.0, "bbox": [0,0,W,H], "probabilities": null}]}
 ```
+
+`raw: true` skips the per-label gate **and** the `threshold` drop: the response
+always carries the raw argmax plus `probabilities` (every class, keyed by class
+name) so the client can apply its own gate. HAL sends `raw: true` and gates on
+the device. Without `raw` the response is unchanged and `probabilities` is `null`.
 
 **HTTP `GET /hal/api/dl/emotion-labels`** → `{"labels": ["Happy", "Sad", ...]}`
 (label set of the active model).
@@ -119,6 +124,13 @@ GET  /hal/api/dl/ser/labels
 
 `scores` is the full per-label softmax map when `return_scores` is true (default),
 else `null`. `GET /hal/api/dl/ser/labels` → `{"engine": "emotion2vec", "labels": [...]}`.
+
+**Input length:** the server bounds every clip to 2–8 s after resampling. It
+keeps the **last** 8 s of a longer clip and zero-pads a shorter one to 2 s. An
+in-limit clip is never rejected for being too long or too short to fit that
+bound — decoding itself still rejects empty audio or anything over
+`INPUT_LIMITS__MAX_AUDIO_DURATION_S` (default 60 s; see `configuration.md`)
+before the 2–8 s fit ever runs. Clients should send ≤8 s of speech (HAL does).
 
 ---
 

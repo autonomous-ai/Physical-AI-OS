@@ -1,0 +1,5 @@
+name: jev
+version: 0.2.0
+description: Skill selection and native context preloading through the configured proxy
+provides_hooks:
+  - pre_llm_call

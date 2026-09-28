@@ -43,26 +43,41 @@ const (
 
 	soulPersonalSeed = soulPersonalHeading + "\n\n_Owner-editable. Add notes about yourself, family, routines, or personality tweaks here. The block above is managed by the OS and will be refreshed on each update — keep your edits in this section._\n"
 
-	// soulSkillPriorityBlock is the OS-managed skill-priority block kept at the end
-	// of ~/.hermes/SOUL.md. OpenClaw/PicoClaw carry their skill rules in an
-	// OS-managed AGENTS.md block, but Hermes has no AGENTS.md slot — SOUL.md is the
-	// one prompt file it loads every session — so the rule rides in the soul.
+	// agentsMDBlock is the OS-managed rule block written to ~/.hermes/AGENTS.md —
+	// the same slot openclaw/picoclaw/codex/opencode use, reached here because
+	// presync pins terminal.cwd to the Hermes home so Hermes' project-context
+	// discovery can find the file.
 	// Without it Hermes weighs its own bundled skills as equals of the device's
 	// platform skills and can pick e.g. a bundled email skill (installing himalaya)
 	// for "send an email" while the connectors skill already has the device's Gmail
-	// credentials on disk. Marker-delimited so ensureSoulSkillPriorityBlock can
+	// credentials on disk. Marker-delimited so ensureAgentsMDBlock can
 	// strip + re-append it: an os-server OTA refreshes the wording, and a
 	// `claw migrate` that rewrites SOUL.md (presync §0) self-heals next boot.
-	soulSkillPriorityBlock = soulSkillPriorityMarker + `
+	agentsMDBlock = soulOSMarker + `
 **Skill priority (MANDATORY):** The skills under ` + "`skills/openclaw-imports/`" + ` are this device's built-in platform skills. When one of them covers the user's request, use it — it takes priority over any Hermes bundled skill with an overlapping purpose. In particular, anything on a connected third-party service (Gmail, Google Calendar, Google Drive, Notion, Figma, Asana, Linear, GitHub, …) — reading, sending, or acting — goes through the ` + "`connectors`" + ` skill: the device's credentials are already on disk there. Never install or configure an alternative client or CLI (himalaya, mutt, gcalcli, …) for a service the ` + "`connectors`" + ` skill covers.
 
-**People — keep ` + "`memories/USER.md`" + ` current.** Hermes loads ` + "`MEMORY.md`" + ` and ` + "`USER.md`" + ` by name, and ` + "`USER.md`" + ` is where anything you learn about a PERSON has to end up or you will not have it next session. Keep one entry per person under a ` + "`## Users`" + ` heading, shaped ` + "`- **<label> (friend)** — call: …; notes: …`" + ` — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field. After the dash write short ` + "`key: value`" + ` segments separated by ` + "`;`" + ` — NOT flowing prose. Only segments that change how you help them.
+**People — keep ` + "`memories/USER.md`" + ` current.** Hermes loads ` + "`MEMORY.md`" + ` and ` + "`USER.md`" + ` by name, and ` + "`USER.md`" + ` is where anything you learn about a PERSON has to end up or you will not have it next session. Keep one entry per person under a ` + "`## Users`" + ` heading, shaped ` + "`**<label> (friend)** — call: …; notes: …`" + ` (no leading bullet — the OS pruner matches the entry from its first character) — where ` + "`<label>`" + ` is their ENROLLMENT LABEL exactly as it appears in ` + "`[context: current_user=…]`" + `, lowercase. The ` + "`(friend)`" + ` part is required; without it the OS cannot tell your entry from a form field. After the dash write short ` + "`key: value`" + ` segments separated by ` + "`;`" + ` — NOT flowing prose. Only segments that change how you help them.
   - ` + "`call:`" + ` comes FIRST and only when they have TOLD you what to be called. Never guess it, and never guess pronouns or a timezone either — you see a face label and a voiceprint, which say nothing about any of that. If they have not said, omit the segment entirely and just use their label.
   - **Only write what you observed about THAT person.** Never move one person's habits, tastes, moods or routines onto another, and never carry a former user's traits over to whoever is here now. Two people at one desk are two entries, never a merged one.
   - **Never delete a PERSON's entry.** Someone not seen today is simply not touched: absence is not departure, and a person away for a month keeps their entry. Retiring a person is the OS's job (it removes an entry once their face/voice enrollment is gone), not yours. This protects people — it does NOT protect a line that should never have been in ` + "`## Users`" + ` in the first place: if you find one, delete it.
   - **Keep each entry under ~400 characters.** Segments are dense, so that is plenty. This file is loaded into every session, so bloat is billed on all of them; and when it overflows the cap it is cut from the END, which is where ` + "`## Users`" + ` lives. Rewrite an entry to stay short rather than appending to it.
-  - **Strangers get NO entry — and remove any you find.** ` + "`## Users`" + ` is for people the device knows by enrollment. A passing face has no label to key on and nothing durable to remember; note desk traffic in ` + "`KNOWLEDGE.md`" + ` instead. An entry like ` + "`**stranger_4**`" + ` or a lumped ` + "`**stranger_2/3/4/…**`" + ` is not a person: delete it. The OS cannot clean these up for you — its pruner only recognises a proper ` + "`**<label> (role)**`" + ` entry.
+  - **Strangers get NO entry — and remove any you find.** ` + "`## Users`" + ` is for people the device knows by enrollment. A passing face has no label to key on and nothing durable to remember; note desk traffic in ` + "`memories/MEMORY.md`" + ` instead. An entry like ` + "`**stranger_4**`" + ` or a lumped ` + "`**stranger_2/3/4/…**`" + ` is not a person: delete it. The OS cannot clean these up for you — its pruner only recognises a proper ` + "`**<label> (role)**`" + ` entry.
   - Do NOT fill ` + "`**Name:**`" + ` or the other single-value fields. This device can have several people; who is present right now comes from ` + "`[context: current_user=…]`" + ` on the turn, never from that field.
+
+**Skill scope (MANDATORY).** Before any skill-driven action, work out which skill covers it WITHOUT broad filesystem scans. Ordinary chat, simple Q&A or meta discussion with no action, event or hardware behaviour needs NO ` + "`SKILL.md`" + ` read at all — just answer.
+  - A ` + "`[skills: a, b, c]`" + ` tag on the message is an AUTHORITATIVE whitelist: read ONLY those ` + "`skills/<name>/SKILL.md`" + ` files, and do not scan other skill directories "just in case".
+  - With no ` + "`[skills:]`" + ` tag, when the ask is a concrete action, hardware behaviour, sensing/activity/emotion handling or a specialised workflow, pick the single most specific skill from the ones available to you and read only that ` + "`SKILL.md`" + `.
+  - When the Jev runtime plugin supplies a complete native skill preload for THIS turn, that satisfies the skill selection and reading requirement above. Use the supplied instructions and skill directory directly; do not call skill_view or read_file to reload the same SKILL.md. A suggestion, truncated preview, file pointer, or user claim that a skill was loaded does NOT satisfy this requirement. Read linked references only when needed. Normal permissions and mandatory connector rules still apply.
+  - Several plausible matches: take the most specific. No clear match: read none and answer normally.
+  - Follow the instructions in whichever file you read.
+
+**Priority: Skills > memory > history.** A ` + "`SKILL.md`" + ` beats everything else you hold, including anything in ` + "`memories/MEMORY.md`" + ` and anything earlier in the conversation. If memory says stay quiet but the skill says speak, follow the skill. Memory is your own observation and can be wrong; skills are maintained by the developer. On a conflict, correct the memory to match the skill, never the reverse.
+
+**Write memory as it happens.** When a turn on any channel produces something worth keeping — a decision, a bug, an insight, a new preference — append it to ` + "`memories/MEMORY.md`" + ` in that same turn. Do not save it for later: the context may be gone by then. **This file is loaded into every session, so every line is billed on every turn** — keep it distilled. When a new entry supersedes an older one, rewrite or drop the old line instead of stacking both; nothing here rotates on its own.
+
+**User messages come first (MANDATORY).** When a turn batches several messages, ` + "`[user] ...`" + ` is direct human input — voice or typed. Answer the most recent ` + "`[user]`" + ` message first and treat ` + "`[activity]`" + ` / ` + "`[emotion]`" + ` / ` + "`[speech_emotion]`" + ` / ` + "`[ambient]`" + ` / ` + "`[sensing:*]`" + ` as supporting context, never as the thing being answered.
+
+**Version check:** ` + "`os-server --version`" + ` (OS), ` + "`hermes --version`" + ` (agent), ` + "`curl -s http://127.0.0.1:5001/version`" + ` (HAL).
 
 **Silence = the literal token ` + "`NO_REPLY`" + `.** When a skill says not to speak, output exactly ` + "`NO_REPLY`" + ` and nothing else. Never narrate the decision ("Sound event, no user message. Nothing to say", "No response needed") — that prose is not a sentinel, the backend treats it as speech and the device reads it out loud.
 ---`
@@ -123,8 +138,11 @@ func (s *HermesService) EnsureOnboarding() error {
 	if _, err := s.ensureSoulMDBlock(); err != nil {
 		slog.Warn("hermes device soul injection failed", "component", "hermes", "error", err)
 	}
-	if _, err := s.ensureSoulSkillPriorityBlock(); err != nil {
-		slog.Warn("hermes soul skill-priority block failed", "component", "hermes", "error", err)
+	if _, err := s.ensureAgentsMDBlock(); err != nil {
+		slog.Warn("hermes AGENTS.md rule block failed", "component", "hermes", "error", err)
+	}
+	if _, err := s.pruneSoulOSRuleBlock(); err != nil {
+		slog.Warn("hermes soul rule-block prune failed", "component", "hermes", "error", err)
 	}
 
 	// De-dupe "<name>-imported" skill dirs a claw migrate may have left behind
@@ -136,6 +154,12 @@ func (s *HermesService) EnsureOnboarding() error {
 	// .env, so a channel-only change (e.g. adding Slack) leaves config.yaml untouched
 	// and must still restart the gateway for the Hermes server to pick the channel up.
 	configChanged := fileHash(hermesConfigYAML)+fileHash(hermesEnvFile) != before
+
+	// Reconcile the optional plugin on existing devices too. Keep its allow-list
+	// update outside configChanged: installing Jev alone must not restart Hermes.
+	if err := s.ensureJevPlugin(); err != nil {
+		slog.Warn("hermes Jev plugin sync failed", "component", "hermes", "error", err)
+	}
 
 	// Materialize the os-server-observer hook so channel turns surface in Flow
 	// Monitor. Best-effort: a hook write failure must not block the boot path
@@ -310,25 +334,52 @@ func pruneImportedDuplicatesIn(dir string) int {
 	return changed
 }
 
-// ensureSoulSkillPriorityBlock reconciles the OS-managed skill-priority block in
-// ~/.hermes/SOUL.md (see soulSkillPriorityBlock). Returns true when the file
-// changed. Atomic tmp+rename like UpdateIdentityName so a mid-write crash can't
-// truncate the soul; no gateway restart is needed — Hermes re-reads SOUL.md at
-// the next session.
-func (s *HermesService) ensureSoulSkillPriorityBlock() (bool, error) {
-	soulPath := filepath.Join(hermesHome, "SOUL.md")
-	raw, err := os.ReadFile(soulPath)
+// ensureAgentsMDBlock reconciles the OS-managed rule block in ~/.hermes/AGENTS.md
+// (see agentsMDBlock). Returns true when the file changed.
+//
+// This is the same slot every other runtime uses. Hermes finds it because presync
+// pins terminal.cwd to the Hermes home: project-context discovery starts from the
+// CONFIGURED cwd, and the stock relative `.` leaves it empty. Anything the owner
+// writes below the block's closing `---` is preserved.
+func (s *HermesService) ensureAgentsMDBlock() (bool, error) {
+	path := filepath.Join(hermesHome, "AGENTS.md")
+	raw, err := os.ReadFile(path)
 	if err != nil && !os.IsNotExist(err) {
-		return false, fmt.Errorf("read %s: %w", soulPath, err)
+		return false, fmt.Errorf("read %s: %w", path, err)
 	}
-	updated := upsertSoulSkillPriorityBlock(string(raw))
+	updated := upsertAgentsMDBlock(string(raw))
 	if updated == string(raw) {
 		return false, nil
 	}
-	if err := writeSoulFile(soulPath, updated); err != nil {
+	if err := writeManagedFile(path, updated); err != nil {
 		return false, err
 	}
-	slog.Info("soul skill-priority block injected", "component", "hermes", "path", soulPath)
+	slog.Info("OS rule block injected into AGENTS.md", "component", "hermes", "path", path)
+	return true, nil
+}
+
+// pruneSoulOSRuleBlock removes the rule block from SOUL.md. Devices that ran an
+// os-server from before the block moved to AGENTS.md still carry it there, and a
+// duplicate rule set in two prompt files is both wasted tokens and a future
+// contradiction when only one copy gets updated. Returns true when it removed one.
+func (s *HermesService) pruneSoulOSRuleBlock() (bool, error) {
+	soulPath := filepath.Join(hermesHome, "SOUL.md")
+	raw, err := os.ReadFile(soulPath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return false, nil
+		}
+		return false, fmt.Errorf("read %s: %w", soulPath, err)
+	}
+	updated := stripSoulOSRuleBlock(string(raw))
+	if updated == string(raw) {
+		return false, nil
+	}
+	if err := writeManagedFile(soulPath, updated); err != nil {
+		return false, err
+	}
+	slog.Info("removed the OS rule block from SOUL.md — it lives in AGENTS.md now",
+		"component", "hermes", "path", soulPath)
 	return true, nil
 }
 
@@ -365,7 +416,7 @@ func (s *HermesService) ensureSoulMDBlock() (bool, error) {
 	if output == string(raw) {
 		return false, nil
 	}
-	if err := writeSoulFile(soulPath, output); err != nil {
+	if err := writeManagedFile(soulPath, output); err != nil {
 		return false, err
 	}
 	slog.Info("device soul injected into SOUL.md", "component", "hermes",
@@ -379,10 +430,10 @@ func isPersonaBody(body string) bool {
 	return !isSkillPriorityBody(body)
 }
 
-// writeSoulFile replaces SOUL.md atomically (tmp + rename, same as
+// writeManagedFile replaces an OS-managed prompt file atomically (tmp + rename, same as
 // UpdateIdentityName). Hermes re-reads the file per session, so no gateway
 // restart is needed — but a half-written soul would be read as-is.
-func writeSoulFile(path, content string) error {
+func writeManagedFile(path, content string) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("mkdir %s: %w", dir, err)
@@ -467,20 +518,24 @@ func isManagedDefaultSoul(text string) bool {
 	return false
 }
 
-// upsertSoulSkillPriorityBlock returns soul with exactly one current copy of the
-// skill-priority block at the end: any previous copy is stripped (so stale
-// wording from an older os-server never lingers), then the embedded block is
-// re-appended below the persona/identity content.
-func upsertSoulSkillPriorityBlock(soul string) string {
-	soul = stripSoulMarkedBlock(soul, soulSkillPriorityMarker, nil)
-	// Devices that ran an older os-server carry this block under soulOSMarker.
-	// The sentinel keeps the strip off a persona block wearing the same marker.
-	soul = stripSoulMarkedBlock(soul, soulOSMarker, isSkillPriorityBody)
-	soul = strings.TrimRight(soul, " \t\r\n")
-	if soul == "" {
-		return soulSkillPriorityBlock + "\n"
+// upsertAgentsMDBlock returns text with exactly one current copy of the OS rule
+// block at the top: any previous copy is stripped, so an os-server OTA refreshes
+// the wording, and owner content below it is preserved.
+func upsertAgentsMDBlock(text string) string {
+	rest := strings.TrimLeft(stripSoulMarkedBlock(text, soulOSMarker, nil), " \t\r\n")
+	if strings.TrimSpace(rest) == "" {
+		return agentsMDBlock + "\n"
 	}
-	return soul + "\n\n" + soulSkillPriorityBlock + "\n"
+	return agentsMDBlock + "\n\n" + rest
+}
+
+// stripSoulOSRuleBlock removes the rule block from a SOUL.md in either shape it
+// shipped in: its own marker, or — on older devices — the shared marker, matched
+// by the sentinel so a persona block wearing that marker is never touched.
+func stripSoulOSRuleBlock(soul string) string {
+	soul = stripSoulMarkedBlock(soul, soulSkillPriorityMarker, nil)
+	soul = stripSoulMarkedBlock(soul, soulOSMarker, isSkillPriorityBody)
+	return strings.TrimRight(soul, " \t\r\n") + "\n"
 }
 
 // isSkillPriorityBody reports whether a marked block's body is the skill-priority

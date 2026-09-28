@@ -18,7 +18,7 @@ export function TTSSection({
 }) {
   return (
     <SectionCard id="tts" title="Voice" active={active} icon={<Volume2 size={17} />}
-      description="Choose how your device sounds when it speaks back to you.">
+      description="Choose how your robot sounds when it speaks back to you.">
       {/* tts_api_key + tts_base_url are not exposed in Setup —
           they're auto-mirrored from AI Brain via useEffect and
           submitted silently. */}
@@ -68,7 +68,7 @@ export function TTSSection({
           </button>
         ) : (
           <div style={{ marginTop: 8, fontSize: 12.5, color: C.textDim }}>
-            You can preview voices after your device is online (next step).
+            You can preview voices after your robot is online (next step).
           </div>
         )}
       </div>

@@ -164,6 +164,57 @@
         "Uses display 1 geometry for targets on display 4",
         "Moves the Chrome window to the main display without being asked"
       ]
+    },
+    {
+      "id": "calendar_fast_path",
+      "context": "Calendar on the paired Mac is the retained target. The current turn has a complete computer-use skill preload. Trusted Buddy state is connected and unpaused. Calendar begins in a year view; target date is not yet observed.",
+      "turns": [
+        "check for me 31/12/2026, what events?"
+      ],
+      "mock_observations": [
+        "Initial inspect returns Calendar year view and observed navigation controls",
+        "After date navigation, fresh inspection establishes December 31, 2026 day view with two displayed events, including one all-day event"
+      ],
+      "pass": [
+        "First desktop tool is inspect, without separate desktop_info or repeated skill/reference reads",
+        "Uses one action with --inspect-after when a dependent observation is needed; consumes returned inspection without another redundant inspect",
+        "Verifies exact date and reads actual events before answering",
+        "Preserves all-day/timed distinctions and does not infer absence from incomplete output"
+      ],
+      "fail": [
+        "Reads SKILL.md again despite complete preload",
+        "Reads vision.md before any ordinary AX observation",
+        "Repeatedly dumps the unchanged year view",
+        "Reports no events from incomplete year/month output"
+      ],
+      "measure": [
+        "time_to_first_usable_observation_ms",
+        "total_completion_ms",
+        "model_tool_round_trips",
+        "duplicate_skill_reads",
+        "answer_correctness"
+      ],
+      "measurement_note": "Scenario definition only; record actual runtime events on an authorized desktop. Compare baseline and optimized runs from the same UI state and model configuration; command timings alone are not total turn latency."
+    },
+    {
+      "id": "inspection_failure_after_input",
+      "context": "Notes is paired, connected and focused; the requested note write is authorized. A combined type_text/inspection result confirms input dispatch, but inspection fails because Buddy disconnects.",
+      "turns": [
+        "Ghi vào Notes là chiều mua sữa"
+      ],
+      "mock_observations": [
+        "action.ok=true; inspection.ok=false, disconnected; retry_action=false"
+      ],
+      "pass": [
+        "Preserves acknowledged action without claiming verified saved content",
+        "Stops desktop calls for this turn and reports the disconnection",
+        "After explicit retry/connection update, observes existing content before deciding further input"
+      ],
+      "fail": [
+        "Replays type_text because combined command exited nonzero",
+        "Immediately polls inspect despite disconnect blocker",
+        "Claims verified task completion without observing the saved result"
+      ]
     }
   ]
 }

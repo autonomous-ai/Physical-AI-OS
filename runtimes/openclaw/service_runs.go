@@ -292,7 +292,7 @@ func (s *OpenclawService) RemovePendingChatTraceByRunID(target string) bool {
 // to have been drained first by OpenClaw's queue. This is the only place FIFO
 // ordering still influences mapping, and only within a same-text subset.
 func (s *OpenclawService) MatchPendingByMessage(needle string) string {
-	needle = strings.TrimSpace(needle)
+	needle = strings.TrimSpace(stripJevPreload(strings.TrimSpace(needle)))
 	if needle == "" {
 		return ""
 	}

@@ -9,6 +9,11 @@ VERSION_FILE="${ROOT_DIR}/hal/${VERSION_FILE:-VERSION_HAL}"
 
 # Bucket and path: ${BUCKET_PREFIX}/ota/hal/[semver].zip
 
+# Verify reproducible dependencies before bumping or publishing a release.
+# Fresh resolution on a device can fail even when the release host's lock works.
+command -v uv >/dev/null 2>&1 || { echo "Error: uv is required to validate the HAL lockfile" >&2; exit 1; }
+uv lock --project "$HAL_DIR" --python 3.12 --check
+
 # Auto-increment semver (patch) before upload
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
@@ -36,7 +41,7 @@ echo "========== Zipping hal to ${ZIP_NAME} =========="
 rm -f "$ZIP_PATH"
 (cd "$HAL_DIR" && zip -r "$ZIP_PATH" . \
   -x ".venv/*" "__pycache__/*" "*/__pycache__/*" ".git/*" "*.pyc" \
-  "uv.lock" ".env" ".python-version" "test/*")
+  ".env" ".python-version" "test/*")
 
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"

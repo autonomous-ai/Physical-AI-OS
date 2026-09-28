@@ -28,18 +28,34 @@ type scheduleSyncPayload struct {
 // every code path — first sync, resync, deleting the last schedule — identical).
 // Acks with the freshly computed next_run_at per schedule so the backend can
 // render "Next run in 16 hours" without a second round trip.
+//
+// Every outcome raises one ops alert (see schedule_alerts.go): a summary of
+// what the sync created and deleted, or "❌ schedule.sync — FAILED" with the
+// reason. alertScheduleEvent never blocks, so the alert cannot hold up the ack.
 func (h *DeviceMQTTHandler) handleScheduleSync(env domain.MQTTDataCommand) error {
 	var payload scheduleSyncPayload
 	if err := json.Unmarshal(env.Data, &payload); err != nil {
-		return h.publishDataResult(env.Kind, "failure", "invalid schedule.sync data: "+err.Error(), nil)
+		msg := "invalid schedule.sync data: " + err.Error()
+		h.alertScheduleEvent(scheduleSyncFailedTitle, msg)
+		return h.publishDataResult(env.Kind, "failure", msg, nil)
 	}
+
+	// What was on disk BEFORE the replace, read only to diff for the alert's
+	// "created: …; deleted: …". Not atomic with the replace, and it need not
+	// be: the id set changes only through schedule.sync itself (the runner's
+	// writes touch run bookkeeping, never which rows exist), so the worst a
+	// race could do is mis-itemise one alert — never affect the sync.
+	prior, _ := h.scheduleStore.Load()
 
 	applied, nextRunAt, err := applyScheduleSync(h.scheduleStore, payload, h.config.DeviceID, time.Now())
 	if err != nil {
-		return h.publishDataResult(env.Kind, "failure", "store: "+err.Error(), nil)
+		msg := "store: " + err.Error()
+		h.alertScheduleEvent(scheduleSyncFailedTitle, msg)
+		return h.publishDataResult(env.Kind, "failure", msg, nil)
 	}
 
 	slog.Info("schedule.sync: applied", "component", "mqtt", "count", applied)
+	h.alertScheduleEvent(scheduleSyncAlertTitle(applied, prior, payload.Schedules), "")
 	return h.publishDataResult(env.Kind, "success", "", map[string]interface{}{
 		"applied":     applied,
 		"next_run_at": nextRunAt,
@@ -98,20 +114,42 @@ func buildScheduleRunReportData(rr schedule.RunReport) map[string]interface{} {
 	return data
 }
 
+// scheduleRunAckError is the schedule.run ack's top-level "error": the
+// summary of a FAILED run, and empty for anything else.
+//
+// It used to be set for any status other than "success", which was the same
+// thing while "failure" was the only other status. A "skipped" run (a
+// connector in Schedule.Requires is not installed — see
+// schedule.RunStatusSkipped) is deliberately not a failure, so it must not
+// arrive at the backend looking like one: its reason ("missing connector:
+// gmail") travels in data.summary only, and "error" stays empty: the
+// stand-to-earn worker copies it verbatim into RecordScheduleRunRequest.error,
+// where a non-empty value reads as a failure message on the run record.
+func scheduleRunAckError(rr schedule.RunReport) string {
+	if rr.Status == "failure" {
+		return rr.Summary
+	}
+	return ""
+}
+
 // publishScheduleRunReport turns a schedule.Runner outcome into the
 // fd_channel schedule.run ack. Used as the report callback for EVERY fire —
 // both the ticker's automatic ones and a manual "Run now" — so the backend
 // learns the outcome of a scheduled task the same way regardless of what
-// triggered it.
+// triggered it. Status ("success" | "failure" | "skipped") and Summary are
+// forwarded unchanged.
+//
+// It is also the single seam for the run's ops alert (scheduleRunAlert) —
+// deliberately here and not inside the Runner, so system/schedule keeps
+// knowing nothing about MQTT or alerting. The alert is raised AFTER the ack
+// and never blocks (alertScheduleEvent), because this runs on the scheduler
+// tick: a stuck alert endpoint must not delay the next due task.
 func (h *DeviceMQTTHandler) publishScheduleRunReport(rr schedule.RunReport) {
-	errMsg := ""
-	if rr.Status != "success" {
-		errMsg = rr.Summary
-	}
-	if err := h.publishDataResult(domain.KindScheduleRun, rr.Status, errMsg, buildScheduleRunReportData(rr)); err != nil {
+	if err := h.publishDataResult(domain.KindScheduleRun, rr.Status, scheduleRunAckError(rr), buildScheduleRunReportData(rr)); err != nil {
 		slog.Error("schedule.run: report publish failed",
 			"component", "mqtt", "schedule_id", rr.ScheduleID, "error", err)
 	}
+	h.alertScheduleEvent(scheduleRunAlert(rr))
 }
 
 // StartScheduleRunnerLoop runs the scheduler's once-a-minute ticker until ctx

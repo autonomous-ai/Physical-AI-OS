@@ -139,6 +139,11 @@ func (s *OpenclawService) EnsureOnboarding() error {
 	}
 
 	needRestart := false
+	if changed, err := s.ensureJevPlugin(); err != nil {
+		slog.Warn("ensure Jev plugin failed", "component", "onboarding", "error", err)
+	} else if changed {
+		needRestart = true
+	}
 
 	// Inject SOUL.md core block (owner-editable content stays below the block)
 	if modified, err := s.ensureSoulMDBlock(); err != nil {
@@ -459,7 +464,7 @@ func (s *OpenclawService) deviceSoulCore() (content []byte, hasSoul bool, err er
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
-		return nil, false, nil // soulless body (e.g. Intern): no override
+		return nil, false, nil // body without a soul_ref: no override
 	}
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		b, derr := downloadSoul(ref)

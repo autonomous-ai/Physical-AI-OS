@@ -197,7 +197,7 @@ export default function WifiProvision() {
         if (s.phase === "connected") { setPhase("connected"); return; }
         if (s.phase === "failed") {
           setPhase("failed");
-          setError(s.error || "The device could not join that Wi-Fi network.");
+          setError(s.error || "The robot could not join that Wi-Fi network.");
           return;
         }
       } catch {
@@ -235,7 +235,7 @@ export default function WifiProvision() {
       return;
     }
     if (missingLlm) {
-      setError("This device isn't set up yet — enter the LLM API key, base URL, and model so the assistant can chat after connecting.");
+      setError("This robot isn't set up yet — enter the LLM API key, base URL, and model so the assistant can chat after connecting.");
       // Force the fields into view even if the operator collapsed them.
       setShowAdvanced(true);
       return;
@@ -510,7 +510,7 @@ export default function WifiProvision() {
               </SubsectionCard>
 
               <SubsectionCard title="Admin"
-                hint="Optional — the device's hardware suffix on the sticker is the default password">
+                hint="Optional — the robot's hardware suffix on the sticker is the default password">
                 <Field label="Admin password">
                   <PasswordInput value={adminPassword} onChange={setAdminPassword}
                     placeholder="leave blank — hardware-suffix default"
@@ -551,7 +551,7 @@ export default function WifiProvision() {
                 <b style={{ color: C.text }}>Joining {ssid}…</b>
               </div>
               <div style={{ marginBottom: 6, lineHeight: 1.5 }}>
-                We know it worked the moment the device publishes its new home-network IP.
+                We know it worked the moment the robot publishes its new home-network IP.
                 Then the hotspot tears down and this tab loses connection.
               </div>
               {isRealLanIp(lanIp) ? (
@@ -559,7 +559,7 @@ export default function WifiProvision() {
                   ✓ Got IP: <code>{lanIp}</code>&nbsp; — showing you the reconnect options shortly.
                 </div>
               ) : (
-                <div>Waiting for the device to grab an IP from your router…</div>
+                <div>Waiting for the robot to grab an IP from your router…</div>
               )}
             </div>
           )}
@@ -604,7 +604,7 @@ function LastKnownBanner() {
     }}>
       <History size={16} style={{ color: "var(--lm-green, #34d399)", flexShrink: 0 }} />
       <div style={{ flex: 1, minWidth: 0 }}>
-        <div style={{ fontSize: 11, color: C.textDim }}>Last reached this device {ageLabel} at</div>
+        <div style={{ fontSize: 11, color: C.textDim }}>Last reached this robot {ageLabel} at</div>
         <div style={{ fontSize: 13, fontFamily: "ui-monospace, monospace", color: C.text, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
           {last.lanIp}{mdns ? ` · ${mdns}` : ""}
         </div>
@@ -631,7 +631,7 @@ function Header() {
       </div>
       <div>
         <div style={{ fontSize: 18, fontWeight: 700, letterSpacing: "-0.01em" }}>
-          Set up device
+          Set up robot
         </div>
         <div style={{ fontSize: 12.5, color: C.textDim, marginTop: 2 }}>
           Join your Wi-Fi. Optionally override LLM / voice / admin config.
@@ -675,7 +675,7 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
               <CheckCircle2 size={28} />
             </div>
             <div style={{ fontSize: 16, fontWeight: 700, marginBottom: 6 }}>
-              Device is on your Wi-Fi
+              Robot is on your Wi-Fi
             </div>
             <div style={{ fontSize: 12.5, color: C.textDim, marginBottom: 18, lineHeight: 1.55 }}>
               Reconnect your computer to your home network, then use one of the
@@ -699,7 +699,7 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
               </div>
               <LinkCard label="" href={ipHref} text={lanIp} accent="var(--lm-green, #34d399)" />
               <div style={{ fontSize: 11, color: C.textDim, marginTop: 8, lineHeight: 1.5 }}>
-                Works as long as both this browser and the device are on the
+                Works as long as both this browser and the robot are on the
                 same LAN. The IP was saved locally — <code>/wifi</code>
                 remembers it for 7 days.
               </div>
@@ -753,7 +753,7 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
           <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.55, marginBottom: 4 }}>
             Open your router's admin (usually{" "}
             <a href="http://192.168.1.1" style={{ color: "var(--lm-amber, #f5c25a)" }}>192.168.1.1</a>)
-            and look for a device named{" "}
+            and look for a robot named{" "}
             <code style={{ background: C.bg, padding: "1px 5px", borderRadius: 3 }}>
               {mac || "<device-type>-XXXX"}
             </code>{" "}
@@ -765,7 +765,7 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
               ...errorBox, marginTop: 16, background: "rgba(255,190,80,0.08)",
               borderColor: "rgba(255,190,80,0.28)", color: "var(--lm-amber, #f5c25a)",
             }}>
-              <AlertCircle size={14} /> Could not capture the device's new address in
+              <AlertCircle size={14} /> Could not capture the robot's new address in
               time — only the router-admin option will work this run.
             </div>
           )}

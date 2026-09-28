@@ -166,11 +166,7 @@ func (s *OpenCodeService) notifySkillChanges(changedSkills []string) {
 	if len(changedSkills) == 0 {
 		return
 	}
-	list := ""
-	for _, name := range changedSkills {
-		list += fmt.Sprintf("\n- %s/%s/SKILL.md", opencodeSkillsDir, name)
-	}
-	msg := fmt.Sprintf("[system] The following skills have been updated. Re-read them now — files on disk have changed. Follow the updated instructions strictly. Keep your reply under 5 words.%s", list)
+	msg := skills.SkillUpdatePrompt(opencodeSkillsDir, changedSkills)
 	slog.Info("INBOUND from system → agent (skill update)",
 		"component", "skill-watcher", "backend", "OpenCode", "source", "skill_watcher", "changed", changedSkills)
 	if _, err := s.SendSystemChatMessage(msg); err != nil {

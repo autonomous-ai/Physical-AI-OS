@@ -484,3 +484,52 @@ the reset wipes `/root/.picoclaw` **wholesale** and re-onboards a clean baseline
 The gateway is left **stopped + disabled** — the post-reboot setup wizard runs the
 default runtime's `SetupAgent`, mirroring how OpenClaw/Hermes disable their own unit
 in `ResetAgent`.
+
+### Jev skill preloading
+
+When enabled, OS onboarding installs a native `hooks.processes.jev` stdio hook, with
+`intercept: ["before_llm"]`. Asset or registration changes participate in the
+existing onboarding gateway restart; an unchanged reconcile is a no-op.
+**Jev is disabled by default** by `const jevEnabled = false` in `runtimes/picoclaw/jev_hook.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management. The observer still manages the global `hooks.enabled` gate; Jev leaves that gate unchanged.
+The sidecar stores only the absolute OS config path; credentials are read at use.
+
+The hook shares Hermes's selector implementation: at most 32 candidates, a
+3-second total selection/load budget, choice >= 0.70, margin >= 0.20 and
+independent fit >= 0.60. Errors, busy workers, timeout, abstention, slash commands
+and explicit `[skills: ...]` instructions preserve ordinary runtime discovery.
+Only current user text and candidate descriptions reach Jev, never chat history.
+Logs use `[picoclaw-jev]` and omit prompts, credentials and skill contents.
+
+The candidate roster comes from PicoClaw's native system `<skills>` summary,
+restricted to existing files inside `/root/.picoclaw/workspace/skills`. No extra
+filesystem catalog is invented. Missing/unsupported roster shapes fail open.
+The selected complete SKILL.md, absolute path and reference directory are loaded
+as transient current-user-message context, preserving system messages and tools.
+Files larger than 128 KiB, paths escaping that skill root, ambiguous names and
+inline shell templates are rejected; nothing in a skill is executed by preloading.
+A bounded 256-turn in-memory cache remembers only the selected skill and original
+prompt. Every model iteration rechecks the current native roster and safely
+reloads the complete file; removal or load failure invalidates that selection.
+Attachment/content-part, system, sensing and already-handled turns bypass Jev.
+Descriptor-relative no-follow opens reject symlinks and non-regular files; the
+128 KiB limit also applies to the composed context. No persona or conversation-history file is written.
+Unknown turn IDs/iterations and child turns abstain.
+
+This native hook covers the `pico` WebSocket channel (OS voice/Web/MQTT) and
+PicoClaw's own channels such as Telegram; it is not an OS dispatcher interceptor.
+Contract evidence: the Autonomous PicoClaw checkout at
+`3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488`, specifically
+[`hooks.go`](https://github.com/autonomous-ai/picoclaw/blob/3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488/pkg/agent/hooks.go),
+[`hook_process.go`](https://github.com/autonomous-ai/picoclaw/blob/3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488/pkg/agent/hook_process.go),
+`pipeline_llm.go` and `pkg/skills/loader.go`: before-LLM hooks may modify non-system
+messages, while system-message and tool-definition changes are rejected; the
+pipeline uses hook messages for the provider call, separate from stored history.
+Local mocked hook/config tests cover channel independence, turn isolation,
+path/content bounds and opt-outs. No live Jev, native binary, paid task or robot
+integration was run; the installed release still needs a native smoke test.
+
+Bare/context-dependent follow-ups such as “brighter”, “Make it brighter”, “continue”
+and “do it” bypass preloading so the main model can resolve the ongoing task;
+explicit hardware targets and clear new digital requests keep normal selection.
+
+Only the unique anchored `[voice-instruction]` is sent to the selector; a conflicting transcript is excluded. Malformed or empty authoritative envelopes bypass preloading. The original runtime message remains intact.

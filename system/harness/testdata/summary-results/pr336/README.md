@@ -1,0 +1,1 @@
+Fixtures copied unchanged from autonomous-ai/openharness PR #336 at 16ae5b2197a21988c9fcd68a8f8eb32296494a9f, docs/contracts/device-summary-correlation. These are producer fixtures, not a live engine/device test.

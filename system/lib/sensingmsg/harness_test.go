@@ -46,3 +46,22 @@ func TestReplayHarnessRouteChecksCurrentConnection(t *testing.T) {
 		}
 	}
 }
+
+func TestReplayReplacesStaleHarnessAvailability(t *testing.T) {
+	t.Cleanup(func() { SetHarnessConnected(nil) })
+	for _, typ := range []string{"web_chat", "mqtt_chat", "voice_followup"} {
+		connected := true
+		SetHarnessConnected(func() bool { return connected })
+		msg := AppendHarnessReplyRoute("[user] Create a report", typ, "run")
+		connected = false
+		msg = AppendHarnessReplyRoute(msg, typ, "run")
+		if strings.Contains(msg, "[harness-reply ") || strings.Contains(msg, HarnessConnectedContext) || strings.Count(msg, HarnessDisconnectedContext) != 1 {
+			t.Fatalf("%s stale connected route: %s", typ, msg)
+		}
+		connected = true
+		msg = AppendHarnessReplyRoute(msg, typ, "run")
+		if strings.Contains(msg, HarnessDisconnectedContext) || strings.Count(msg, HarnessConnectedContext) != 1 || strings.Count(msg, "[harness-reply ") != 1 {
+			t.Fatalf("%s stale offline guidance after reconnect: %s", typ, msg)
+		}
+	}
+}

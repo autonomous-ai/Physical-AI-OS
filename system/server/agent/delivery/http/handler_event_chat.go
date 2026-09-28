@@ -7,6 +7,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/telemetry"
 )
 
@@ -70,6 +71,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 	// (see handler_error_recovery.go) — covers both the initial incomplete-
 	// turn error and the gateway's ~15s-later retry error.
 	if payload.State == "error" {
+		defer hal.EndVoiceFollowup(flowRunID)
 		errMsg := payload.ErrorMessage
 		if errMsg == "" {
 			errMsg = "unknown error"
@@ -106,6 +108,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		strings.TrimSpace(payload.Message) == "" &&
 		h.agentGateway.RemovePendingChatTraceByRunID(flowRunID)
 	if isEmptyFinalNoLifecycle {
+		defer hal.EndVoiceFollowup(flowRunID)
 		slog.Info("chat final empty, no lifecycle for runId",
 			"component", "agent", "run_id", flowRunID)
 		flow.Log("chat_final_empty", map[string]any{
@@ -146,6 +149,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		strings.TrimSpace(payload.Message) != "" &&
 		h.agentGateway.RemovePendingChatTraceByRunID(flowRunID)
 	if isSlashFinalOk {
+		defer hal.EndVoiceFollowup(flowRunID)
 		slog.Info("chat final ok, no lifecycle for runId (slash dispatcher)",
 			"component", "agent", "run_id", flowRunID)
 		// Include the reply payload (truncated like chat_input) so Flow

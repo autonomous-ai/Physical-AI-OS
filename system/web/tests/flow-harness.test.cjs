@@ -12,7 +12,7 @@ require.extensions['.ts'] = (module, filename) => {
   });
   module._compile(outputText, filename);
 };
-const { groupIntoTurns, turnIO, turnHasOutput, deriveActiveStage, extractNodeInfo } =
+const { groupIntoTurns, turnIO, turnHasOutput, deriveActiveStage, extractNodeInfo, harnessOutputPresentation } =
   require('../src/pages/monitor/FlowSection/helpers.ts');
 
 function event(seq, runId, node, data, type = 'flow_event') {
@@ -242,7 +242,7 @@ test('saved exclusions expand to new visible subtypes', () => {
   assert.deepEqual([...migrateTurnTypeFilters(['__dropped'])], ['__dropped']);
 });
 
-test('rendered realtime command and followup badges include handled', () => {
+test('rendered badges preserve realtime handled labels and distinguish Harness output from TTS', () => {
   const Module = require('node:module');
   const load = Module._load;
   require.extensions['.tsx'] = (module, filename) => {
@@ -268,7 +268,52 @@ test('rendered realtime command and followup badges include handled', () => {
       assert.match(html, /data-turn-type="voice_agent_handled"/);
       assert.ok(html.includes('>Realtime</span>'));
     }
+    for (const reference of [false, true]) {
+      const [turn] = groupIntoTurns([input(1, 'group-member'),
+        event(2, 'group-member', 'harness_response', { text: reference ? 'See the shared reply for these requests.' : 'Clouds are black.', result_reference: reference, result_run_id: 'original' })]);
+      const html = renderToStaticMarkup(React.createElement(TurnBadge, { turn }));
+      assert.ok(html.includes(reference ? 'Shared result</span>' : 'Harness</span>'));
+      assert.doesNotMatch(html, / TTS<\/span>/);
+      if (reference) assert.ok(html.includes('title="Shared reply in run original"'));
+    }
   } finally {
     Module._load = load;
   }
+});
+
+
+test('Harness group output stays DONE with distinct answer and shared-reference labels', () => {
+  const reference = 'See the shared reply for these requests.';
+  const turns = groupIntoTurns([
+    input(1, 'original'), input(2, 'followup'),
+    event(3, 'original', 'harness_response', { text: 'Clouds are black.', result_reference: false, result_run_id: 'original' }),
+    event(4, 'followup', 'harness_response', { text: reference, result_reference: true, result_run_id: 'original' }),
+  ]);
+  const original = turns.find(turn => turn.runId === 'original');
+  const followup = turns.find(turn => turn.runId === 'followup');
+  assert.equal(original.status, 'done');
+  assert.equal(followup.status, 'done');
+  assert.equal(turnIO(original).output, 'Clouds are black.');
+  assert.equal(turnIO(followup).output, reference);
+  assert.equal(turnHasOutput(followup), true);
+  assert.deepEqual(harnessOutputPresentation(original, turnIO(original).output), { label: 'Harness', resultRunId: undefined });
+  assert.deepEqual(harnessOutputPresentation(followup, turnIO(followup).output), { label: 'Shared result', resultRunId: 'original' });
+});
+
+test('Harness output attribution supports live chat and old flat flow records', () => {
+  for (const record of [
+    { ...event(2, 'a', '', {}), type: 'chat_response', state: 'final', detail: { source: 'harness', message: 'Shared.', result_reference: 'true', result_run_id: 'owner' } },
+    { ...event(2, 'a', 'harness_response', {}), detail: { node: 'harness_response', text: 'Shared.', result_reference: true, result_run_id: 'owner' } },
+  ]) {
+    const turn = { runId: 'a', events: [record] };
+    assert.deepEqual(harnessOutputPresentation(turn, 'Shared.'), { label: 'Shared result', resultRunId: 'owner' });
+  }
+});
+
+test('Harness attribution does not relabel a different output, run, or realtime reply', () => {
+  const record = reply(2, 'a', 'Answer.');
+  assert.equal(harnessOutputPresentation({ runId: 'b', events: [record] }, 'Answer.'), null);
+  assert.equal(harnessOutputPresentation({ runId: 'a', events: [record] }, 'Other output.'), null);
+  assert.equal(harnessOutputPresentation({ runId: 'a', events: [event(2, 'a', 'realtime_response', { text: 'Answer.' })] }, 'Answer.'), null);
+  assert.equal(harnessOutputPresentation({ events: [record] }, 'Answer.'), null);
 });

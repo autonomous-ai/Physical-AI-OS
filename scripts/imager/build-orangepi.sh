@@ -1286,7 +1286,10 @@ if [ -n "\$HAL_URL" ]; then
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
   rm -rf "\$HAL_DIR/.venv"
   cd "\$HAL_DIR"
-  retry "uv sync --python 3.12 --extra hardware --extra aec" 3 10
+  # Use the release lock when available; keep legacy archives installable.
+  HAL_LOCK_ARG=""
+  [ ! -f uv.lock ] || HAL_LOCK_ARG="--locked"
+  retry "uv sync --python 3.12 --extra hardware --extra aec --extra pipecat \$HAL_LOCK_ARG" 3 10
   # webrtcvad pkg_resources patch (Py3.12+ killed pkg_resources).
   WEBRTCVAD_PY=\$(find "\$HAL_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
   if [ -n "\$WEBRTCVAD_PY" ] && grep -q "import pkg_resources" "\$WEBRTCVAD_PY"; then

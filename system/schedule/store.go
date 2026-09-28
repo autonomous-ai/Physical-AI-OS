@@ -2,6 +2,8 @@ package schedule
 
 import (
 	"encoding/json"
+	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -74,6 +76,26 @@ type Schedule struct {
 	// changes on upgrade.
 	Kind string `json:"kind,omitempty"`
 
+	// Requires lists the connector codes (catalog codes, exactly as in
+	// connector.set.<code>) this task cannot do its job without — e.g.
+	// ["gmail"] for an inbox digest. The backend resolves it once, when the
+	// task is created from a template, and ships it on schedule.sync; a custom
+	// task, a template with no hard dependency, and every row that predates
+	// the field carry none.
+	//
+	// At fire time the Runner checks each code against what is actually
+	// installed on THIS device (see ConnectorChecker) and, when any is
+	// missing, skips the run instead of handing the agent a task it cannot
+	// complete — reported as status "skipped", see Runner.fire.
+	//
+	// Backend-owned wire data, like Kind: a schedule.sync replaces it wholesale
+	// and carryLocalBookkeeping deliberately does NOT carry it forward, so a
+	// requirement dropped upstream stops applying on the very next sync.
+	// omitempty keeps a row without requirements byte-identical on disk to
+	// what it was before this field existed. Old firmware ignores the key and
+	// runs the task as it always did.
+	Requires []string `json:"requires,omitempty"`
+
 	// Cadence is the wire's nested "schedule" object. Named Cadence (not
 	// Schedule) on the Go side only to avoid a Schedule.Schedule stutter — the
 	// JSON tag still matches the wire contract exactly.
@@ -96,9 +118,21 @@ type Schedule struct {
 	// device restart without re-deriving everything from scratch. Persisted in
 	// the same schedules.json (never config.json — see package doc in
 	// runner.go) because they change together with the schedule they belong to.
+	// LastRunStatus is "success" | "failure" | "skipped" (RunStatusSkipped).
 	NextRunAt     time.Time `json:"next_run_at,omitempty"`
 	LastRunAt     time.Time `json:"last_run_at,omitempty"`
 	LastRunStatus string    `json:"last_run_status,omitempty"`
+
+	// LastRunSummary is the last run's RunReport.Summary, recorded in the same
+	// write as LastRunStatus: the task name on success, the error text on
+	// failure, "missing connector: <codes>" when skipped. It exists so the
+	// device's own Settings page can say WHY a run was skipped ("Skipped ·
+	// gmail isn't connected") — the reason would otherwise reach only the
+	// backend's ack, and a skip recorded by the ticker would render as a bare
+	// status with nothing actionable. Device-local bookkeeping like the fields
+	// above (it mirrors the backend's own last_run_summary, but the wire never
+	// carries it here), so carryLocalBookkeeping keeps it across a sync.
+	LastRunSummary string `json:"last_run_summary,omitempty"`
 
 	// LastFailedOccurrence pins a recorded failure to the SPECIFIC due slot
 	// (the schedule's NextRunAt at the time of that failed attempt) it
@@ -162,17 +196,32 @@ func NewStore(path string) *Store {
 // an error. A corrupt/truncated file (e.g. a power loss that hit a WRITE
 // somehow not covered by the tmp+rename below, or a hand-edited file) degrades
 // the same way rather than panicking — the next schedule.sync from the
-// backend is authoritative and will repair it.
+// backend is authoritative and will repair it. So does a file that exists but
+// cannot be read at all; only LoadChecked tells that case apart.
 func (s *Store) loadFileLocked() storeFile {
+	f, _ := s.readFileLocked()
+	return f
+}
+
+// readFileLocked is loadFileLocked with the one distinction it hides: an
+// error is returned ONLY when the file exists but could not be read (an I/O
+// or permission failure). A missing file and a corrupt one still degrade to an
+// empty struct with no error — both mean "no usable schedules", which is
+// exactly what the runner sees. Keeping the single parse path here means
+// LoadChecked can never disagree with Load about what the rows are.
+func (s *Store) readFileLocked() (storeFile, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
-		return storeFile{}
+		if errors.Is(err, fs.ErrNotExist) {
+			return storeFile{}, nil
+		}
+		return storeFile{}, err
 	}
 	var f storeFile
 	if err := json.Unmarshal(data, &f); err != nil {
-		return storeFile{}
+		return storeFile{}, nil
 	}
-	return f
+	return f, nil
 }
 
 // saveFileLocked writes via a temp file in the SAME directory followed by an
@@ -219,12 +268,34 @@ func (s *Store) Load() ([]Schedule, error) {
 	return s.loadFileLocked().Schedules, nil
 }
 
+// LoadChecked is Load for a caller that must not mistake "could not read the
+// file" for "there are no schedules": the info uplink's schedules digest.
+// Reporting the empty-list digest for a store that merely failed to read
+// would tell the backend the device holds nothing, and it would re-send a
+// schedule.sync that the same broken store could not apply either — on every
+// info uplink, indefinitely. So an unreadable file is an error here, and the
+// caller omits the digest instead.
+//
+// A missing file and a corrupt one are NOT errors: they return the same empty
+// list Load (and so the runner) sees. There the empty digest is the truth,
+// and the re-sync it provokes is precisely the repair those cases need — a
+// factory reset or a lost schedules.json is what the digest exists to catch.
+func (s *Store) LoadChecked() ([]Schedule, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	f, err := s.readFileLocked()
+	if err != nil {
+		return nil, err
+	}
+	return f.Schedules, nil
+}
+
 // carryLocalBookkeeping copies the DEVICE-LOCAL run fields of prior onto next
 // for schedules that survive a replace, keyed by id.
 //
 // WHY THIS EXISTS: a schedule.sync is a full-state replace built from the wire,
 // and the wire carries only what the backend owns — id, name, instructions,
-// enabled, schedule, end_at, rev. LastRunAt, LastRunStatus and
+// enabled, schedule, end_at, rev. LastRunAt, LastRunStatus, LastRunSummary and
 // LastFailedOccurrence are local bookkeeping that has NO wire representation
 // (see their doc comments on Schedule), so they arrive zeroed. Overwriting the
 // on-disk values with those zeros loses real state on every single sync.
@@ -260,6 +331,9 @@ func carryLocalBookkeeping(next []Schedule, prior []Schedule) []Schedule {
 		}
 		if next[i].LastRunStatus == "" {
 			next[i].LastRunStatus = p.LastRunStatus
+		}
+		if next[i].LastRunSummary == "" {
+			next[i].LastRunSummary = p.LastRunSummary
 		}
 		if next[i].LastFailedOccurrence.IsZero() {
 			next[i].LastFailedOccurrence = p.LastFailedOccurrence
@@ -352,10 +426,11 @@ func (s *Store) mutate(id string, fn func(*Schedule)) error {
 // explicit that running now must not perturb the schedule's regular cadence.
 // The ticker's own automatic fires use RecordRunResult instead, which updates
 // last-run bookkeeping AND the next occurrence together in one write.
-func (s *Store) SetLastRun(id string, at time.Time, status string) error {
+func (s *Store) SetLastRun(id string, at time.Time, status, summary string) error {
 	return s.mutate(id, func(sch *Schedule) {
 		sch.LastRunAt = at
 		sch.LastRunStatus = status
+		sch.LastRunSummary = summary
 	})
 }
 
@@ -366,14 +441,15 @@ func (s *Store) SetLastRun(id string, at time.Time, status string) error {
 // versa (looks not-yet-run but its due time has already moved on) if the
 // device lost power between them.
 //
-// Always called with a SUCCESS outcome by the runner (a failure uses
-// SetLastFailedRun instead, which deliberately leaves NextRunAt alone — see
-// its doc comment), so LastFailedOccurrence is cleared here: the occurrence
-// that failure marker pointed at is now resolved.
-func (s *Store) RecordRunResult(id string, at time.Time, status string, nextRunAt time.Time) error {
+// Called by the runner with a SUCCESS or a SKIPPED outcome — both consume the
+// occurrence (a failure uses SetLastFailedRun instead, which deliberately
+// leaves NextRunAt alone — see its doc comment), so LastFailedOccurrence is
+// cleared here: the occurrence that failure marker pointed at is now resolved.
+func (s *Store) RecordRunResult(id string, at time.Time, status, summary string, nextRunAt time.Time) error {
 	return s.mutate(id, func(sch *Schedule) {
 		sch.LastRunAt = at
 		sch.LastRunStatus = status
+		sch.LastRunSummary = summary
 		sch.NextRunAt = nextRunAt
 		sch.LastFailedOccurrence = time.Time{}
 	})
@@ -386,10 +462,11 @@ func (s *Store) RecordRunResult(id string, at time.Time, status string, nextRunA
 // needs the occurrence pin to suppress a repeated failure ack for retries of
 // the SAME occurrence (see runner.fire()); the manual "Run now" path keeps
 // using plain SetLastRun since it has no such retry/suppression concept.
-func (s *Store) SetLastFailedRun(id string, at time.Time, occurrence time.Time) error {
+func (s *Store) SetLastFailedRun(id string, at time.Time, summary string, occurrence time.Time) error {
 	return s.mutate(id, func(sch *Schedule) {
 		sch.LastRunAt = at
 		sch.LastRunStatus = "failure"
+		sch.LastRunSummary = summary
 		sch.LastFailedOccurrence = occurrence
 	})
 }

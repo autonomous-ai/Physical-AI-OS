@@ -1,0 +1,11 @@
+[Unit]
+Description=Create the ReSpeaker Lite softvol "Speaker" control before HAL restores volume
+# The softvol control in /etc/asound.conf only exists after the first PCM
+# open. Pulled in by udev when the Lite card appears; ordered before hal.
+Before=hal.service
+ConditionPathExists=/etc/asound.conf
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh -c 'head -c 64 /dev/zero | aplay -q -D respeaker_playback_vol -t raw -f S16_LE -c 2 -r 16000 -'
+RemainAfterExit=yes

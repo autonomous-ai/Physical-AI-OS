@@ -1,6 +1,7 @@
 package intent
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -40,6 +41,10 @@ func TestExecutionFailurePreservesRemainingActions(t *testing.T) {
 		t.Run("failed="+failedPath, func(t *testing.T) {
 			var paths []string
 			routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/emotion/status" {
+					fmt.Fprint(w, `{"sleeping":false}`)
+					return
+				}
 				paths = append(paths, r.URL.Path)
 				if r.URL.Path == failedPath {
 					w.WriteHeader(http.StatusInternalServerError)
@@ -49,7 +54,7 @@ func TestExecutionFailurePreservesRemainingActions(t *testing.T) {
 			if result == nil || result.ExecutionFailed != (failedPath != "") {
 				t.Fatalf("execution result = %+v, failed path %q", result, failedPath)
 			}
-			if result.TTSText != "Red light on!" || !result.LEDChanged || len(result.Actions) != 2 {
+			if (failedPath == "" && (result.TTSText != "Red light on!" || !result.LEDChanged)) || (failedPath != "" && (result.TTSText == "Red light on!" || result.LEDChanged)) || len(result.Actions) != 2 {
 				t.Fatalf("response/actions changed: %+v", result)
 			}
 			if !reflect.DeepEqual(paths, []string{"/led/effect/stop", "/led/solid"}) {
@@ -62,6 +67,10 @@ func TestExecutionFailurePreservesRemainingActions(t *testing.T) {
 func TestEmotionExecutionFailureAndCapabilitySkip(t *testing.T) {
 	var paths []string
 	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/emotion/status" {
+			fmt.Fprint(w, `{"sleeping":false}`)
+			return
+		}
 		paths = append(paths, r.URL.Path)
 		if r.URL.Path == "/emotion" {
 			w.WriteHeader(http.StatusBadGateway)

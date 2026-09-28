@@ -6,8 +6,9 @@ import (
 )
 
 // This file holds the realtime voice-agent (audio-native brain — Gemini Live /
-// OpenAI Realtime / GPT-Live) config types, defaults, and accessors. The Config.Realtime
-// field that hangs these off the main config lives in config.go.
+// OpenAI Realtime / GPT-Live — or the on-device Pipecat pipeline) config types,
+// defaults, and accessors. The Config.Realtime field that hangs these off the
+// main config lives in config.go.
 
 // RealtimeConfig groups the realtime voice-agent settings under the "realtime"
 // key. Shared fields (enabled/provider/api_key/base_url) sit at the top; the
@@ -26,13 +27,14 @@ import (
 type RealtimeConfig struct {
 	// Enabled toggles the realtime brain. Unset → true (mirrors HAL's
 	// HAL_REALTIME_ENABLED default); set false to disable.
-	Enabled  *bool            `json:"enabled,omitempty" yaml:"enabled"`
-	Provider string           `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|gptlive ("" == none)
-	APIKey   string           `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
-	BaseURL  string           `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
-	Gemini   *GeminiRealtime  `json:"gemini,omitempty" yaml:"gemini"`
-	OpenAI   *OpenAIRealtime  `json:"openai,omitempty" yaml:"openai"`
-	GPTLive  *GPTLiveRealtime `json:"gptlive,omitempty" yaml:"gptlive"`
+	Enabled   *bool              `json:"enabled,omitempty" yaml:"enabled"`
+	Provider  string             `json:"provider,omitempty" yaml:"provider"` // none|gemini|openai|gptlive|pipecat_v1 ("" == none)
+	APIKey    string             `json:"api_key,omitempty" yaml:"apiKey"`    // empty → falls back to LLMAPIKey
+	BaseURL   string             `json:"base_url,omitempty" yaml:"baseURL"`  // empty → falls back to LLMBaseURL
+	Gemini    *GeminiRealtime    `json:"gemini,omitempty" yaml:"gemini"`
+	OpenAI    *OpenAIRealtime    `json:"openai,omitempty" yaml:"openai"`
+	GPTLive   *GPTLiveRealtime   `json:"gptlive,omitempty" yaml:"gptlive"`
+	PipecatV1 *PipecatV1Realtime `json:"pipecat_v1,omitempty" yaml:"pipecatV1"`
 	// Pinned is set the first time an operator edits this block (web UI / MQTT
 	// realtime.set). Until then the block is a fleet default: os-server rewrites
 	// it from DefaultRealtimeConfig on every start, so changing the defaults in
@@ -87,6 +89,29 @@ type GPTLiveRealtime struct {
 	Voice   string `json:"voice,omitempty" yaml:"voice"` // GPT-Live voice set (openai.types.live BuiltInVoice, e.g. marin)
 }
 
+// PipecatV1Realtime holds the on-device Pipecat pipeline's knobs
+// (hal/realtime/voice_agent/pipecat_v1.py): the device's own STT + an
+// OpenAI-compatible chat LLM + the orchestrator's tools, audio in, TEXT out —
+// HAL's TTS speaks the reply, so there is no voice and no reasoning knob.
+//
+// Credentials: HAL resolves the key as HAL_PIPECAT_API_KEY env >
+// realtime.pipecat_v1.api_key > realtime.api_key > llm_api_key, and the chat
+// base URL as HAL_PIPECAT_BASE_URL > realtime.pipecat_v1.base_url > its own
+// default (the campaign-api Qwen relay). The shared realtime.base_url is
+// deliberately NOT consulted: that field carries a WebSocket relay
+// (…/ws/gemini) shape, not a chat-completions endpoint.
+type PipecatV1Realtime struct {
+	APIKey  string `json:"api_key,omitempty" yaml:"apiKey"`
+	BaseURL string `json:"base_url,omitempty" yaml:"baseURL"`
+	Model   string `json:"model,omitempty" yaml:"model"`
+	// WebSearch toggles the client-side `web_search` tool (pipecat_v1-only): the
+	// orchestrator answers public live-fact questions through the campaign-api
+	// Google-Search relay in-session instead of delegating to main. nil → HAL
+	// default (on). Kept here so an operator's explicit override survives config
+	// re-saves instead of being silently dropped on the next marshal.
+	WebSearch *bool `json:"web_search,omitempty" yaml:"webSearch"`
+}
+
 // Realtime per-provider defaults — what os-server resolves (and pushes) when the
 // operator hasn't overridden a knob. Model/voice match HAL's defaults
 // (hal/config.py). The reasoning knobs sit at the cheapest tier each model
@@ -116,6 +141,12 @@ const (
 	// No reasoning default — the Live model exposes no such knob.
 	defaultRealtimeGPTLiveModel = "gpt-live-1"
 	defaultRealtimeGPTLiveVoice = "marin"
+	// Pipecat v1: the low-latency Qwen relay model (hal/config.py). No voice,
+	// no reasoning — the pipeline emits text and HAL's TTS speaks it.
+	defaultRealtimePipecatV1Model = "qwen/qwen3.6-35b-a3b"
+	// Pipecat v1: the client-side `web_search` tool is on unless the operator
+	// turns it off (HAL default, hal/config.py REALTIME_PIPECAT_WEB_SEARCH).
+	defaultRealtimePipecatV1WebSearch = true
 )
 
 // DefaultRealtimeConfig returns the realtime block os-server seeds into
@@ -142,6 +173,9 @@ func DefaultRealtimeConfig() *RealtimeConfig {
 			Model: defaultRealtimeGPTLiveModel,
 			Voice: defaultRealtimeGPTLiveVoice,
 		},
+		PipecatV1: &PipecatV1Realtime{
+			Model: defaultRealtimePipecatV1Model,
+		},
 	}
 }
 
@@ -160,7 +194,7 @@ func (c *Config) RealtimeEnabled() bool {
 	return true
 }
 
-// RealtimeProvider returns the normalized provider ("gemini"/"openai"/"gptlive"), defaulting
+// RealtimeProvider returns the normalized provider ("gemini"/"openai"/"gptlive"/"pipecat_v1"), defaulting
 // to "gemini" (mirrors HAL's HAL_REALTIME_PROVIDER default). An explicit
 // none/off/disabled returns "" — realtime off. Matches the HAL orchestrator's
 // provider vocabulary so the value can be pushed through verbatim.
@@ -243,11 +277,17 @@ func (c *Config) RealtimeModel() string {
 			return c.Realtime.GPTLive.Model
 		}
 		return defaultRealtimeGPTLiveModel
+	case "pipecat_v1":
+		if c.Realtime != nil && c.Realtime.PipecatV1 != nil && c.Realtime.PipecatV1.Model != "" {
+			return c.Realtime.PipecatV1.Model
+		}
+		return defaultRealtimePipecatV1Model
 	}
 	return ""
 }
 
 // RealtimeVoice returns the active provider's voice — override or provider default.
+// Empty for pipecat_v1, which has no voice of its own (HAL's TTS speaks).
 func (c *Config) RealtimeVoice() string {
 	switch c.RealtimeProvider() {
 	case "gemini":
@@ -272,7 +312,7 @@ func (c *Config) RealtimeVoice() string {
 // RealtimeReasoning returns the active provider's reasoning knob — Gemini's
 // thinking_level or OpenAI's reasoning_effort — override or the (cost-lean)
 // provider default. Empty when realtime is off or the provider has no reasoning
-// knob (gptlive).
+// knob (gptlive, pipecat_v1).
 func (c *Config) RealtimeReasoning() string {
 	switch c.RealtimeProvider() {
 	case "gemini":
@@ -286,8 +326,24 @@ func (c *Config) RealtimeReasoning() string {
 		}
 		return defaultRealtimeOpenAIReasoning
 	}
-	// gptlive: no reasoning knob on the Live model.
+	// gptlive / pipecat_v1: no reasoning knob.
 	return ""
+}
+
+// RealtimeWebSearch returns the resolved in-session web-search toggle for the
+// active provider: the operator override when set, else the HAL default (on).
+// nil for every provider but pipecat_v1 — Gemini grounds and GPT-Live's backend
+// searches on their own side, so the knob does not exist there.
+func (c *Config) RealtimeWebSearch() *bool {
+	if c.RealtimeProvider() != "pipecat_v1" {
+		return nil
+	}
+	if c.Realtime != nil && c.Realtime.PipecatV1 != nil && c.Realtime.PipecatV1.WebSearch != nil {
+		v := *c.Realtime.PipecatV1.WebSearch
+		return &v
+	}
+	v := defaultRealtimePipecatV1WebSearch
+	return &v
 }
 
 // --- Validation (for realtime.set MQTT downlinks) ---------------------------
@@ -319,7 +375,7 @@ func stringSet(list []string) map[string]bool {
 // cheapest (the default). Voices match the maps below; KEEP IN SYNC with the HAL
 // enums (hal/realtime/enums).
 var (
-	RealtimeProviders       = []string{"gemini", "openai", "gptlive", "none"}
+	RealtimeProviders       = []string{"gemini", "openai", "gptlive", "pipecat_v1", "none"}
 	RealtimeGeminiVoiceList = []string{"Puck", "Charon", "Kore", "Fenrir", "Aoede"}
 	RealtimeOpenAIVoiceList = []string{"alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"}
 	// GPT-Live voices: the set gpt-live-1 accepts at session.start (BFF GPT-Live
@@ -346,28 +402,30 @@ type RealtimeOptions struct {
 func GetRealtimeOptions() RealtimeOptions {
 	return RealtimeOptions{
 		Providers: RealtimeProviders,
-		Voices:    map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "gptlive": RealtimeGPTLiveVoiceList},
-		// gptlive → empty list: no reasoning knob, so the web hides the selector.
-		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "gptlive": {}},
+		// pipecat_v1 → empty voice list: the pipeline emits text, HAL's TTS speaks.
+		Voices: map[string][]string{"gemini": RealtimeGeminiVoiceList, "openai": RealtimeOpenAIVoiceList, "gptlive": RealtimeGPTLiveVoiceList, "pipecat_v1": {}},
+		// gptlive / pipecat_v1 → empty list: no reasoning knob, so the web hides the selector.
+		Reasoning: map[string][]string{"gemini": RealtimeGeminiThinkingList, "openai": RealtimeOpenAIReasoningList, "gptlive": {}, "pipecat_v1": {}},
 	}
 }
 
 // ValidateRealtimeProvider accepts the provider selector (gemini|openai|gptlive|
-// none and the off-synonyms / empty). Anything else is rejected.
+// pipecat_v1|none and the off-synonyms / empty). Anything else is rejected.
 func ValidateRealtimeProvider(provider string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
-	case "gemini", "openai", "gptlive", "none", "off", "disabled", "":
+	case "gemini", "openai", "gptlive", "pipecat_v1", "none", "off", "disabled", "":
 		return nil
 	default:
-		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|gptlive|none)", provider)
+		return fmt.Errorf("invalid realtime provider %q (want gemini|openai|gptlive|pipecat_v1|none)", provider)
 	}
 }
 
 // ValidateRealtimeKnobs checks voice/reasoning against a CONCRETE provider
-// (gemini|openai|gptlive). Empty voice/reasoning are allowed (means "keep
-// current"). The per-provider knobs (model/voice/reasoning) only make sense for
-// a concrete provider, so anything else is an error. gptlive has no reasoning
-// knob, so any reasoning value is rejected for it.
+// (gemini|openai|gptlive|pipecat_v1). Empty voice/reasoning are allowed (means
+// "keep current"). The per-provider knobs (model/voice/reasoning) only make
+// sense for a concrete provider, so anything else is an error. gptlive has no
+// reasoning knob, pipecat_v1 has neither voice nor reasoning, so those values
+// are rejected for them.
 func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 	switch strings.ToLower(strings.TrimSpace(provider)) {
 	case "gemini":
@@ -391,8 +449,15 @@ func ValidateRealtimeKnobs(provider, voice, reasoning string) error {
 		if reasoning != "" {
 			return fmt.Errorf("gptlive realtime has no reasoning knob, got %q", reasoning)
 		}
+	case "pipecat_v1":
+		if voice != "" {
+			return fmt.Errorf("pipecat_v1 realtime has no voice (HAL's TTS speaks), got %q", voice)
+		}
+		if reasoning != "" {
+			return fmt.Errorf("pipecat_v1 realtime has no reasoning knob, got %q", reasoning)
+		}
 	default:
-		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|gptlive), got %q", provider)
+		return fmt.Errorf("realtime model/voice/reasoning require a concrete provider (gemini|openai|gptlive|pipecat_v1), got %q", provider)
 	}
 	return nil
 }

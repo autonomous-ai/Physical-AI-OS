@@ -46,13 +46,13 @@ export function SetupProgressScreen({
             </span>
           </div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 8 }}>
-            {wired ? "Finishing setup on your wired connection" : "Your device is joining Wi-Fi"}
+            {wired ? "Finishing setup on your wired connection" : "Your robot is joining Wi-Fi"}
             <span className="lm-blink">.</span><span>.</span><span>.</span>
           </div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
             {wired
-              ? "Your device is already online over its cable, so there is no Wi-Fi to join. It's turning off its setup hotspot now."
-              : "Please be patient while your device connects to Wi-Fi. Stay on this network."}
+              ? "Your robot is already online over its cable, so there is no Wi-Fi to join. It's turning off its setup hotspot now."
+              : "Please be patient while your robot connects to Wi-Fi. Stay on this network."}
           </div>
           {/* Indeterminate progress + elapsed counter: the join has no
               knowable %, so a sweeping bar signals "working" while the
@@ -70,7 +70,7 @@ export function SetupProgressScreen({
             <CheckCircle2 size={34} color={C.green} strokeWidth={1.75} aria-hidden />
           </div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 16 }}>
-            Your device is online!
+            Your robot is online!
           </div>
 
           {/* IP path (only path): we redirect to the device's raw LAN
@@ -130,15 +130,15 @@ export function SetupProgressScreen({
                 </div>
                 <CopyAddress url={`http://${setupLanIP}/setup`} />
                 <div style={{ fontSize: 12, color: C.textMuted, marginTop: 8, lineHeight: 1.5 }}>
-                  Can't reach it? Find your device's IP in your router's
+                  Can't reach it? Find your robot's IP in your router's
                   admin page{deviceTypePrefix ? ` (look for "${deviceTypePrefix}")` : ""}.
                 </div>
               </div>
             </>
           ) : (
             <div style={{ fontSize: 13, color: C.textDim, lineHeight: 1.5 }}>
-              Your device is connected. Open your router's admin page to find
-              the device's IP address{deviceTypePrefix ? ` (look for "${deviceTypePrefix}")` : ""}.
+              Your robot is connected. Open your router's admin page to find
+              the robot's IP address{deviceTypePrefix ? ` (look for "${deviceTypePrefix}")` : ""}.
             </div>
           )}
         </>
@@ -154,7 +154,7 @@ export function SetupProgressScreen({
           </div>
           <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
             {setupErrorMsg || (wired
-              ? "The device couldn't reach the internet over its cable."
+              ? "The robot couldn't reach the internet over its cable."
               : "Couldn't connect to the network you chose.")}
           </div>
 
@@ -178,13 +178,13 @@ export function SetupProgressScreen({
               <>
                 <div>• Make sure the ethernet cable is seated at both ends.</div>
                 <div>• Check that the port on your router is live (link light on).</div>
-                <div>• Or pick a Wi-Fi network instead and set the device up that way.</div>
+                <div>• Or pick a Wi-Fi network instead and set the robot up that way.</div>
               </>
             ) : (
               <>
                 <div>• Double-check the Wi-Fi password (it's case-sensitive).</div>
                 <div>• Use a <strong style={{ color: C.text }}>2.4GHz</strong> Wi-Fi network — most devices can't join 5GHz.</div>
-                <div>• Keep the device close to your router during setup.</div>
+                <div>• Keep the robot close to your router during setup.</div>
               </>
             )}
           </div>

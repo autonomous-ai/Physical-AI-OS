@@ -30,7 +30,9 @@ actor CommandDispatcher {
             CursorPosExecutor(),
             ListDisplaysExecutor(),
             GetUITreeExecutor(),
-            PerformUIActionExecutor()
+            PerformUIActionExecutor(),
+            CuaObserveExecutor(),
+            CuaActionExecutor()
         ]
         for executor in defaults + additionalExecutors {
             executors[executor.action] = executor
@@ -62,7 +64,7 @@ actor CommandDispatcher {
                 return await finish(cmd, summary: summary, start: start, error: "missing param: id")
             }
             let cancelled = activeID == targetID
-            if cancelled { cancelActive() }
+            if cancelled { await cancelActive() }
             return await finish(cmd, summary: summary, start: start, result: ["cancel_requested": cancelled, "id": targetID])
         }
 
@@ -89,6 +91,8 @@ actor CommandDispatcher {
         do {
             let observations: Set<String> = ["get_ui_tree", "screenshot", "list_displays", "cursor_pos", "read_clipboard", "ping", "desktop_info", "perform_ui_action"]
             if !observations.contains(cmd.action) { await UIObservationStore.shared.invalidate() }
+            let cuaObservations: Set<String> = ["cua_observe", "cua_action", "desktop_info", "ping"]
+            if !cuaObservations.contains(cmd.action) { await CuaObservationStore.shared.invalidate() }
             try Task.checkCancellation()
             if activeCancelled { throw CancellationError() }
             let task = Task { try await self.runWithTimeout(executor: executor, params: cmd.params, timeoutMs: cmd.timeoutMs) }
@@ -102,6 +106,7 @@ actor CommandDispatcher {
             await recordOnMain(id: cmd.id, action: cmd.action, summary: summary, ok: true)
             return (try? resp.encode()) ?? Data()
         } catch {
+            await CuaObservationStore.shared.invalidate()
             let duration = Int(Date().timeIntervalSince(start) * 1000)
             let msg = error is CancellationError ? "command cancelled" : ((error as? LocalizedError)?.errorDescription ?? error.localizedDescription)
             let resp = CommandResponse(id: cmd.id, ok: false, result: nil, error: msg, durationMs: duration)
@@ -130,9 +135,10 @@ actor CommandDispatcher {
         }
     }
 
-    func cancelActive() {
+    func cancelActive() async {
         activeCancelled = true
         activeTask?.cancel()
+        await CuaObservationStore.shared.invalidate()
     }
 
     private func finish(_ cmd: IncomingCommand, summary: String, start: Date, result: [String: Any]? = nil, error: String? = nil) async -> Data {

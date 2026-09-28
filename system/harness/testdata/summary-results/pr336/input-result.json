@@ -1,0 +1,27 @@
+{
+  "type": "event",
+  "kind": "turn.summary",
+  "agentId": "agent-fixture",
+  "serverInstanceId": "transport-instance",
+  "eventId": 43,
+  "machineId": "machine-fixture",
+  "payload": {
+    "serverInstanceId": "originating-instance",
+    "resultId": "single-result-C",
+    "correlation": {
+      "scope": "input",
+      "inputs": [
+        {
+          "deliveryId": "delivery-C",
+          "idempotencyKey": "key-C"
+        }
+      ]
+    },
+    "outcome": "completed",
+    "fullText": "C completed separately.",
+    "kind": "summary",
+    "text": "C completed separately.",
+    "idempotencyKey": "key-C",
+    "turnId": "receipt-turn-C"
+  }
+}

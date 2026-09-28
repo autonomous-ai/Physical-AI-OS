@@ -285,14 +285,62 @@ trong doc backend (vd `docs/agentic/hermes.md`), không phải đảm bảo chun
   thường là no-op — không churn). Xem §3.
 - **Skill watcher** (auto-update từ CDN, gate theo capability): plumbing generic
   fetch/extract/hash share ở `system/skills/skillzip.go`
-  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Thêm
-  `runtimes/<name>/skill_watcher.go` mỏng song song với
+  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`).
+  Tạo thông báo đọc lại bằng `skills.SkillUpdatePrompt(agentVisibleSkillsDir, changedSkills)`
+  trong `system/skills/skill_update_prompt.go`; cả sáu runtime dùng chung nội dung và
+  định dạng danh sách. Giữ đường dẫn riêng, kiểm tra danh sách rỗng, logging
+  và gửi qua `SendSystemChatMessage` ở từng runtime.
+  Sau khi đọc lại, agent trả đúng `NO_REPLY`; cập nhật nội bộ không cần đọc
+  lời xác nhận cho người dùng. Thêm `runtimes/<name>/skill_watcher.go` mỏng song song với
   `runtimes/openclaw/skill_watcher.go` — chỉ khác **thư mục đích** và **đường
   notify**. Gate bằng `skills.Supported(device.Capabilities(...))`. Chỉ cập nhật
   version đã theo dõi sau khi download và extract thành công, để lỗi tạm thời được
   retry ở poll kế tiếp. Notify agent bằng `SendSystemChatMessage`.
 
 ---
+
+### Nạp trước skill bằng Jev trên các runtime
+
+Bước nạp skill nằm trong hook hoặc bridge do OS quản lý của từng runtime, sau
+routing intent phần cứng. Đây là tích hợp riêng với `jev_intent`: chọn skill
+không thực thi tool và không cấp quyền. Giữ plugin native hiện tại của Hermes
+khi thêm runtime khác; không phân loại cùng lượt thêm lần nữa ở os-server.
+
+- Hermes dùng hook native `pre_llm_call` và loader `skill_view`.
+- PicoClaw dùng process hook native `before_llm` và danh sách skill do system
+  message của runtime công bố. Nó dùng chung bộ chọn Python của Hermes.
+- Codex, Claude Code và OpenCode nạp skill trong bridge do OS quản lý. Các bridge
+  dùng thư viện `system/lib/jevskills`, với adapter và kiểm tra policy riêng từng runtime.
+  Phạm vi gồm chat thông thường qua bridge; CLI độc lập và session Telegram
+  `/coding` giữ cơ chế tìm skill native.
+- Plugin native OpenClaw cùng yêu cầu opt-in/tương thích được mô tả tại
+  [tài liệu Jev OpenClaw](openclaw_vi.md).
+
+Các adapter Go gọi proxy OS đã cấu hình tại `llm_base_url + /jev/decisions`, dùng
+`llm_api_key`; chỉ text yêu cầu hiện tại và tên/mô tả skill rời thiết bị. Nội dung
+skill được đọc local. Với envelope voice đã nhận diện, bộ chọn chỉ phân loại
+instruction có thẩm quyền; bỏ transcript mâu thuẫn và metadata routing/kết quả
+Harness được nối thêm. Envelope rỗng/sai định dạng và câu phụ thuộc ngữ cảnh
+(như “brighter”, “continue”) chuyển cho runtime. Yêu cầu gốc chuyển tiếp không đổi. Không retry, redirect, fallback provider trực tiếp hoặc
+upload lịch sử hội thoại. Tổng ngân sách chọn tối đa 3 giây, cooldown lỗi 30 giây
+và bỏ qua ngay khi bộ chọn đang bận. Ngưỡng xác suất >= 0.70, margin >= 0.20 và
+fit độc lập >= 0.60. Hơn 32 skill đủ điều kiện thì abstain, không cắt danh sách.
+Đây là ngưỡng tìm skill, khác ngưỡng intent phần cứng nghiêm ngặt hơn.
+
+Preload chứa toàn bộ SKILL.md trong giới hạn kích thước và thư mục tuyệt đối.
+Adapter Go chỉ nạp skill tĩnh đơn giản từ thư mục cài đặt của runtime; template
+động, frontmatter điều khiển riêng, thư mục skill project xung đột và policy
+native chưa hỗ trợ đều chuyển về tìm skill native. Sau inference, adapter kiểm
+tra lại điều kiện và nội dung skill. Lượt system/slash/attachments giữ đường cũ.
+Các tích hợp mới ngoài Hermes đều **mặc định tắt** trong khi chờ kiểm chứng native;
+Hermes giữ nguyên. Mỗi runtime mới có cờ build Go `const jevEnabled = false`: bridge dùng `gatewayd/jev.go`, PicoClaw dùng `jev_hook.go`, OpenClaw dùng `jev_plugin.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật phải đổi cờ, build và restart qua luồng quản lý runtime; env/config không thay thế cờ build. `JEV_CONFIG_PATH` chọn file cấu hình OS của bridge.
+
+Gắn kết quả với đúng yêu cầu, giữ source/session và chỉ tái sử dụng khi retry
+chính yêu cầu đó. Không ghi skill đã chọn vào AGENTS.md hay persona. Lịch sử
+native có thể giữ nội dung preload như một lần đọc skill thông thường; điều đó
+không chọn skill cho lượt sau. Test bằng mock các nhánh selected/abstain/error,
+opt-out native, timeout, tool loop, retry, cách ly session và routing theo
+source/attachments trước khi phát hành.
 
 ## 6. Hooks — reimplement phía OS cho Hermes (ví dụ mẫu)
 

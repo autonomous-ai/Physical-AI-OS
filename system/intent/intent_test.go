@@ -1,6 +1,7 @@
 package intent
 
 import (
+	"net/http"
 	"strings"
 	"testing"
 
@@ -241,6 +242,7 @@ const envSentence = "so now i am going to type the word angry on my keyboard. yo
 // depends on the turn's route, not the conversation — so the same sentence must
 // resolve identically in every envelope HAL can emit.
 func TestEnvelopeInvariance(t *testing.T) {
+	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
 	envelopes := map[string]string{
 		"delegated with message": "[voice-instruction] user wants the lamp to watch them type\n[transcript] " + envSentence,
 		"delegated no message":   envSentence,
@@ -260,6 +262,7 @@ func TestEnvelopeInvariance(t *testing.T) {
 // "face" between two non-word characters, and os-server does not strip these
 // markers until handler.go:689 — long after the intent match at handler.go:215.
 func TestSnapshotPathIsNotATarget(t *testing.T) {
+	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
 	for _, msg := range []string{
 		"[voice-instruction] user asked the lamp to track the cup\n[transcript] track the cup\n[snapshot: /var/lib/hal/snapshots/sensing_face/1.jpg]",
 		"[vision-image] /var/lib/hal/snapshots/sensing_face/1.jpg (a photo was just captured)\n[voice-instruction] track the cup\n[transcript] track the cup",
@@ -311,6 +314,7 @@ func TestFieldSeparationDefects(t *testing.T) {
 // "Tracking person." and fired POST /servo/track {"target":["person"]}.
 // See https://github.com/autonomous-ai/autonomous-os/issues/308
 func TestCapturedKeyboardTurns(t *testing.T) {
+	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
 	// 10:42:37 — local-intent-1788838957072
 	// "keyboard" sits 20 chars EARLIER than "me" and still lost, on table
 	// position alone.

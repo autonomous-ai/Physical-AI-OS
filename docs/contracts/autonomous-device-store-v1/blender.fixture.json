@@ -1,0 +1,93 @@
+{
+  "fixtureOnly": true,
+  "deviceIdentity": "lamp-fixture",
+  "steps": [
+    {
+      "request": {
+        "type": "store.list",
+        "requestId": "11111111-1111-4111-8111-111111111111",
+        "query": "Blender",
+        "limit": 5
+      }
+    },
+    {
+      "request": {
+        "type": "store.inspect",
+        "requestId": "22222222-2222-4222-8222-222222222222",
+        "packageId": "autonomous/blender"
+      }
+    },
+    {
+      "request": {
+        "type": "agent.prepare",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "machineId": "mac-example",
+        "packageId": "autonomous/blender",
+        "idempotencyKey": "prepare-airplane-001",
+        "workspace": {
+          "kind": "new",
+          "name": "airplane"
+        }
+      },
+      "response": {
+        "type": "agent.prepare_result",
+        "requestId": "33333333-3333-4333-8333-333333333333",
+        "status": "accepted",
+        "operation": {
+          "operationId": "c733824e9af646c6ff8d0e19f1e2e368d02608b0fe99b1f2936a4d740244829d",
+          "machineId": "mac-example",
+          "packageId": "autonomous/blender",
+          "state": "accepted",
+          "phase": "accepted",
+          "createdAt": 1790000000000,
+          "updatedAt": 1790000000000,
+          "agentId": null,
+          "workspace": null,
+          "error": null,
+          "guidance": null,
+          "doctor": [],
+          "taskDispatched": false,
+          "engineAuthentication": "unknown"
+        }
+      }
+    },
+    {
+      "request": {
+        "type": "operation.get",
+        "requestId": "44444444-4444-4444-8444-444444444444",
+        "operationId": "c733824e9af646c6ff8d0e19f1e2e368d02608b0fe99b1f2936a4d740244829d"
+      },
+      "response": {
+        "type": "operation.get_result",
+        "requestId": "44444444-4444-4444-8444-444444444444",
+        "operation": {
+          "operationId": "c733824e9af646c6ff8d0e19f1e2e368d02608b0fe99b1f2936a4d740244829d",
+          "machineId": "mac-example",
+          "packageId": "autonomous/blender",
+          "state": "ready",
+          "phase": "complete",
+          "createdAt": 1790000000000,
+          "updatedAt": 1790000010000,
+          "agentId": "agent-example",
+          "workspace": "/Users/example/harnesses/airplane",
+          "error": null,
+          "guidance": null,
+          "doctor": [
+            "autonomous/blender: ok blender 4.5",
+            "autonomous/model-viewer: ok viewer"
+          ],
+          "taskDispatched": false,
+          "engineAuthentication": "unknown"
+        }
+      }
+    }
+  ],
+  "taskRequest": {
+    "type": "turn.send",
+    "requestId": "55555555-5555-4555-8555-555555555555",
+    "machineId": "mac-example",
+    "agentId": "agent-example",
+    "idempotencyKey": "task-airplane-001",
+    "text": "Use Blender to draw an airplane for me."
+  }
+}

@@ -19,7 +19,7 @@ export default function GwConfig() {
   // shipping it over the wire is exactly what the audit closed. This page
   // now reads the on-device file via SSH or `cat /root/.openclaw/config/openclaw.json`.
   const raw: string | null = null;
-  const error: string = "GW config is no longer exposed via HTTP. SSH to the device and read /root/.openclaw/config/openclaw.json — or use the Agent → Config view inside Monitor for the redacted summary.";
+  const error: string = "GW config is no longer exposed via HTTP. SSH to the robot and read /root/.openclaw/config/openclaw.json — or use the Agent → Config view inside Monitor for the redacted summary.";
   const loading = false;
 
   return (

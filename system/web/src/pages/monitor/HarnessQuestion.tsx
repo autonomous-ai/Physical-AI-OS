@@ -56,7 +56,7 @@ function QuestionForm({ question, disabled, onAnswer }: {
   return <form onSubmit={event => { event.preventDefault(); if (!disabled && complete) void onAnswer(answers); }}
     style={{ display: "flex", flexDirection: "column", gap: 10 }}>
     <strong>Agent needs your answer</strong>
-    <span>Answer here or speak your response to the device.</span>
+    <span>Answer here or speak your response to the robot.</span>
     {question.questions.map(item => <fieldset key={item.key} disabled={disabled}
       style={{ margin: 0, padding: 10, border: "1px solid var(--lm-border)", display: "flex", flexDirection: "column", gap: 8 }}>
       <legend>{item.q || item.key}{item.multi ? " (select all that apply)" : ""}</legend>

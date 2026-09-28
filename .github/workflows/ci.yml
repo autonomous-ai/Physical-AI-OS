@@ -59,6 +59,10 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - name: syntax check every tracked Python source (including routes)
+        run: python -B scripts/ci/check_python_syntax.py
+      - name: Python syntax gate regression tests
+        run: python -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
       # Catches refactor-leftover broken imports — including a bare `from devices.x`
       # left over after a module moved (e.g. devices/ -> drivers/camera/), which
       # py_compile and the unit subset both miss because they never execute it.
@@ -69,6 +73,17 @@ jobs:
         run: python hal/scripts/lint.py
       - name: unit tests (board + device — no hardware deps)
         run: python -m unittest hal.test.test_board hal.test.test_device hal.test.test_safety -v
+      - name: HAL route contracts (no hardware deps)
+        run: python -B -m unittest hal.test.test_route_contracts -v
+      - name: Hermes Jev plugin tests (mock proxy, no credentials)
+        run: python -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
+      # Go embeds patch scripts as strings: Go build/vet cannot validate the
+      # Python they generate. Run fixture-based patch contracts as well, and
+      # reject newly embedded patches without a discoverable contract suite.
+      - name: Hermes runtime patch contracts (generated Python + idempotence)
+        run: python -B -m unittest discover -s runtimes/hermes -p '*_test.py' -v
+      - name: Buddy helper tests (mock transport, no desktop actions)
+        run: python -B -m unittest discover -s skills/computer-use/tests -p 'test_*.py' -v
       - name: conformance suite (CTS — devices vs COMPATIBILITY.md)
         run: python -m unittest discover -s robots/contract/cts -v
       # Go's TestCatalogMatchesTree only compares the tree against catalog_gen.go.
@@ -76,11 +91,3 @@ jobs:
       # generated into setup.sh, which is what a body seeds from on first boot.
       - name: skill catalog matches the skills/ tree
         run: python3 scripts/skills/gen_catalog.py --check
-      - name: syntax check board + drivers
-        run: |
-          python -m py_compile \
-            hal/board/board.py \
-            hal/board/device.py \
-            hal/drivers/rgb/rgb_service.py \
-            hal/drivers/gpio_button.py \
-            hal/drivers/ttp223.py

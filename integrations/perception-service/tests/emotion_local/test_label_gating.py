@@ -55,10 +55,17 @@ def test_the_anger_gate_is_the_value_the_device_was_tuned_against():
     assert DEFAULT_LABEL_THRESHOLDS["anger"] == 0.8
 
 
-def test_raising_anger_left_the_other_labels_alone():
+def test_the_sad_gate_rejects_a_bowed_head_reading():
+    """Guards a revert to 0.7, where a bowed head with closed eyes spammed Sad."""
+    assert DEFAULT_LABEL_THRESHOLDS["sad"] == 0.8
+    r = resolve_label(_probs(Sad=0.75, Neutral=0.15), CLASSES)
+    assert r.label == "Neutral"
+    assert r.is_fallback is True
+
+
+def test_raising_anger_and_sad_left_the_other_labels_alone():
     assert DEFAULT_LABEL_THRESHOLDS["happy"] == 0.5
     assert DEFAULT_LABEL_THRESHOLDS["surprise"] == 0.6
-    assert DEFAULT_LABEL_THRESHOLDS["sad"] == 0.7
     assert DEFAULT_LABEL_THRESHOLDS["disgust"] == 0.7
     assert DEFAULT_LABEL_THRESHOLDS["fear"] == 0.5
 

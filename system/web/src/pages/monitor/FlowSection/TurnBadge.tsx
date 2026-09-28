@@ -8,7 +8,8 @@ import type { Turn } from "./types";
 import { TYPE_LUCIDE, TURN_INPUT_FALLBACK } from "./types";
 import { HW } from "../types";
 import { useTheme } from "@/lib/useTheme";
-import { turnIO, turnTokenStats, turnMemoryState, orderedMemoryFiles, turnCurrentUser, externalHistory, turnDisplayType } from "./helpers";
+import { turnIO, turnTokenStats, turnCurrentUser, externalHistory, turnDisplayType, harnessOutputPresentation } from "./helpers";
+import { turnMemoryState, memoryBadge } from "./memory";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
@@ -29,10 +30,11 @@ function formatTurnTime(iso: string): string {
   return (m?.[1] ?? iso).trim();
 }
 
-export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
+export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline }: {
   turn: Turn;
   pairTint?: string;
   userPhotos?: Record<string, string>;
+  isDebug: boolean;
   onViewPipeline?: () => void;
 }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
@@ -63,6 +65,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
     : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"                  // button
     : "var(--lm-teal)";
   const { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket } = turnIO(turn);
+  const harnessOutput = harnessOutputPresentation(turn, output);
   // When a motion.activity turn folded in a posture nudge, append the
   // first two worst pose snapshots to the existing strip (capped to 3
   // tiles total including the motion frame). The remaining samples are
@@ -375,7 +378,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
         </div>,
         document.body,
       )}
-      {/* Row 3: output — TTS or no reply */}
+      {/* Row 3: output — source attribution does not imply speech playback. */}
       {output === "[no reply]" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
@@ -389,11 +392,12 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           fontSize: 12, color: "var(--lm-text-dim)", marginBottom: 2,
           overflowWrap: "anywhere" as const, lineHeight: 1.5,
         }}>
-          <span style={{
+          <span title={harnessOutput?.resultRunId ? `Shared reply in run ${harnessOutput.resultRunId}` : undefined} style={{
             color: "var(--lm-purple)", fontWeight: 600, marginRight: 6,
             display: "inline-flex", alignItems: "center", gap: 3, verticalAlign: "text-bottom",
           }}>
-            {history ? <><MessageSquare size={12} strokeWidth={2} /> Context</> : ["telegram","discord","slack","wechat","channel"].includes(turn.type)
+            {history ? <><MessageSquare size={12} strokeWidth={2} /> Context</> : harnessOutput
+              ? <><MessageSquare size={12} strokeWidth={2} /> {harnessOutput.label}</> : ["telegram","discord","slack","wechat","channel"].includes(turn.type)
               ? <MessageSquare size={12} strokeWidth={2} />
               : <><Volume2 size={12} strokeWidth={2} /> TTS</>}
           </span>
@@ -513,36 +517,14 @@ export function TurnBadge({ turn, pairTint, userPhotos, onViewPipeline }: {
           );
         })()}
         {memory && (() => {
-          const files = orderedMemoryFiles(memory.files);
-          // Red only when blocks were really removed. In observe mode the
-          // guard reports what it WOULD remove but the file is untouched, so
-          // that count is a warning, not a removal.
-          const quarantined = memory.changed.reduce((n, c) => n + (c.execute ? c.quarantined : 0), 0);
-          const wouldQuarantine = memory.changed.reduce((n, c) => n + (c.execute ? 0 : c.quarantined), 0);
-          const title = [
-            ...files.map(([name, f]) => `${name} ${f.size} bytes · ${f.sha8}`),
-            ...memory.changed.map((c) => {
-              if (!c.quarantined) return `${c.file} changed`;
-              const verb = c.execute ? "quarantined" : "would quarantine (observe mode)";
-              return `${c.file} changed — ${verb} ${c.quarantined} block(s): ${c.reasons.join(", ")}`;
-            }),
-          ].join("\n") || "memory";
-          // Amber when the agent wrote memory during this turn, red when the
-          // guard had to quarantine part of it — the two states #421 made
-          // invisible for most of a day.
-          const color = quarantined > 0 ? "var(--lm-red)"
-            : memory.changed.length > 0 ? "var(--lm-amber)"
-            : "var(--lm-text-muted)";
-          const suffix = quarantined > 0 ? ` · ${quarantined} quarantined`
-            : wouldQuarantine > 0 ? ` · would quarantine ${wouldQuarantine}`
-            : "";
+          // All the state gating lives in memoryBadge (see memory.ts): gray and
+          // amber are debug-only, red is always shown. Null = render nothing.
+          const badge = memoryBadge(memory, isDebug);
+          if (!badge) return null;
           return (
-            <span title={title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
+            <span title={badge.title} style={{ display: "inline-flex", alignItems: "center", gap: 7 }}>
               <span style={{ opacity: 0.4 }}>·</span>
-              <span style={{ color, fontWeight: 600 }}>
-                {files.map(([name, f]) => `${name.replace(".md", "")} ${fmtToken(f.size)}`).join(" ")}
-                {memory.changed.length > 0 && ` ✎ memory changed${suffix}`}
-              </span>
+              <span style={{ color: badge.color, fontWeight: 600 }}>{badge.text}</span>
             </span>
           );
         })()}

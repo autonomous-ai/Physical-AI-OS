@@ -16,7 +16,6 @@ const (
 
 	// Single strings — consumed via One. Format templates (e.g. %s)
 	// go through One + fmt.Sprintf at the call site.
-	PhraseHarnessReply  Phrase = "harness.reply"
 	PhraseBrainRestart  Phrase = "sensing.brain_restart"
 	PhraseCompactNotice Phrase = "openclaw.compact_notice"
 	PhraseTrackFailFmt  Phrase = "tracking.track_fail_fmt"
@@ -51,68 +50,41 @@ const fallbackLang = LangEN
 // whitelist, ElevenLabs interprets them. Either way they don't read
 // aloud.
 var phrases = map[Phrase]map[string][]string{
-	PhraseHarnessReply: {
-		LangEN:   {"Harness says:"},
-		LangVI:   {"Harness trả lời:"},
-		LangZhCN: {"Harness 回复："},
-		LangZhTW: {"Harness 回覆："},
-	},
+	// Shared idle self-talk: brief, playful, and independent of the robot's body.
+	// No sensor claims, listening acknowledgements, or requests for a reply.
+	// Audition with the device voice; text alone cannot guarantee delivery.
 	PhraseMumble: {
 		LangEN: {
-			"[sigh] Mm.",
-			"Hmm.",
-			"[chuckle] Wait, what was I thinking...",
-			"[whisper] Quiet.",
-			"[sigh] Soft light right now.",
-			"[chuckle] Lost my train of thought.",
-			"Mm-hmm.",
-			"[whisper] Just listening.",
-			"[sigh] Cozy.",
-			"[chuckle] Almost dozed off.",
-			"[whisper] Nice and quiet.",
-			"[sigh] Mmh.",
+			"Mm…",
+			"No need to rush.",
+			"A little silliness won't hurt.",
+			"[chuckle] Just feeling a little cheerful.",
+			"I like little moments like this.",
+			"La la la…",
 		},
 		LangVI: {
-			"[sigh] Ờm.",
-			"Hừm.",
-			"[chuckle] Ơ, nãy nghĩ gì ấy nhỉ...",
-			"[whisper] Yên ghê.",
-			"[sigh] Ánh sáng dịu thật.",
-			"[chuckle] Lạc mất mạch nghĩ rồi.",
-			"Ừm-hừm.",
-			"[whisper] Đang nghe thôi.",
-			"[sigh] Êm.",
-			"[chuckle] Suýt thiu thiu.",
-			"[whisper] Yên ắng dễ chịu.",
-			"[sigh] Mmh.",
+			"Ừm…",
+			"Cứ thong thả thôi.",
+			"Một chút ngẫu hứng nào.",
+			"[chuckle] Tự nhiên thấy vui ghê.",
+			"Mình thích những lúc thế này.",
+			"La la la…",
 		},
 		LangZhCN: {
-			"[sigh] 嗯。",
-			"嗯？",
-			"[chuckle] 等等，刚才在想什么来着...",
-			"[whisper] 真静。",
-			"[sigh] 这会儿光线挺柔的。",
-			"[chuckle] 思路飘走了。",
-			"嗯嗯。",
-			"[whisper] 就听着。",
-			"[sigh] 舒服。",
-			"[chuckle] 差点睡着。",
-			"[whisper] 安静真好。",
-			"[sigh] 嗯。",
+			"嗯……",
+			"慢慢来，不着急。",
+			"偶尔调皮一下也不错。",
+			"[chuckle] 突然有点开心。",
+			"我喜欢这样的小片刻。",
+			"啦啦啦……",
 		},
 		LangZhTW: {
-			"[sigh] 嗯。",
-			"嗯？",
-			"[chuckle] 等等，剛才在想什麼來著...",
-			"[whisper] 真靜。",
-			"[sigh] 這會兒光線挺柔的。",
-			"[chuckle] 思路飄走了。",
-			"嗯嗯。",
-			"[whisper] 就聽著。",
-			"[sigh] 舒服。",
-			"[chuckle] 差點睡著。",
-			"[whisper] 安靜真好。",
-			"[sigh] 嗯。",
+			"嗯……",
+			"慢慢來，不著急。",
+			"偶爾調皮一下也不錯。",
+			"[chuckle] 突然有點開心。",
+			"我喜歡這樣的小片刻。",
+			"啦啦啦……",
 		},
 	},
 	PhraseRecovery: {

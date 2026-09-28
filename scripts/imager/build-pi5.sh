@@ -1033,6 +1033,21 @@ server {
     proxy_send_timeout 86400s;
   }
 
+  # Direct Harness device connection, authenticated by PAKE and pinned E2EE keys.
+  # Must come BEFORE the generic /api/ block so the WebSocket upgrade headers
+  # actually reach os-server.
+  location = /api/harness/ws {
+    proxy_pass http://backend;
+    proxy_http_version 1.1;
+    proxy_set_header Upgrade \$http_upgrade;
+    proxy_set_header Connection "upgrade";
+    proxy_set_header Host \$host;
+    proxy_set_header X-Real-IP \$remote_addr;
+    proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+    proxy_read_timeout 86400s;
+    proxy_send_timeout 86400s;
+  }
+
   # Remote code execution endpoint — local callers only (OpenClaw agent on Pi).
   location = /api/system/exec {
     allow 127.0.0.1;
@@ -2111,8 +2126,11 @@ if [ -n "\$HAL_URL" ]; then
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs -r rm -rf || true
   rm -rf "\$HAL_DIR/.venv"
   cd "\$HAL_DIR"
-  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec"
-  uv sync --python 3.12 --extra hardware --extra aec 2>&1 || {
+  # Use the release lock when available; keep legacy archives installable.
+  HAL_LOCK_ARG=""
+  [ ! -f uv.lock ] || HAL_LOCK_ARG="--locked"
+  echo "[overlay] HAL: running uv sync --python 3.12 --extra hardware --extra aec --extra pipecat"
+  uv sync --python 3.12 --extra hardware --extra aec --extra pipecat \$HAL_LOCK_ARG 2>&1 || {
     echo "ERROR: uv sync failed (exit code \$?)"
     echo "[overlay] HAL: uv version: \$(uv --version 2>&1 || echo unknown)"
     echo "[overlay] HAL: python check: \$(python3 --version 2>&1 || echo not found)"

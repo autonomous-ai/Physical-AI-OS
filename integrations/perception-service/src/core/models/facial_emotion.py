@@ -31,6 +31,8 @@ class Emotion:
     bbox: list[int]
     valence: float | None = None
     arousal: float | None = None
+    probabilities: dict[str, float] | None = None
+    """Every class probability keyed by class name; None when not computed."""
 
 
 @dataclass

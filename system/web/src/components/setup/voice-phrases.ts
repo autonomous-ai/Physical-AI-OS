@@ -27,10 +27,10 @@ export const VOICE_PHRASES_BY_LANG: Record<string, string[]> = {
 };
 
 export const VOICE_INTRO_BY_LANG: Record<string, string> = {
-  en: "Stand near the device. When recording starts, read the 3 sentences in a normal voice. The device's mic captures you — your laptop mic is not used.",
-  vi: "Đứng gần thiết bị. Khi bắt đầu ghi âm, đọc 3 câu sau với giọng bình thường. Mic của thiết bị sẽ thu âm bạn — không dùng mic của máy tính.",
-  "zh-CN": "站在设备附近。开始录音后，用正常语速朗读这 3 句话。设备的麦克风会录下你的声音 — 不使用电脑麦克风。",
-  "zh-TW": "站在裝置附近。開始錄音後，用正常語速朗讀這 3 句話。裝置的麥克風會錄下你的聲音 — 不使用電腦麥克風。",
+  en: "Stand near the robot. When recording starts, read the 3 sentences in a normal voice. The robot's mic captures you — your laptop mic is not used.",
+  vi: "Đứng gần robot. Khi bắt đầu ghi âm, đọc 3 câu sau với giọng bình thường. Mic của robot sẽ thu âm bạn — không dùng mic của máy tính.",
+  "zh-CN": "站在机器人附近。开始录音后，用正常语速朗读这 3 句话。机器人的麦克风会录下你的声音 — 不使用电脑麦克风。",
+  "zh-TW": "站在機器人附近。開始錄音後，用正常語速朗讀這 3 句話。機器人的麥克風會錄下你的聲音 — 不使用電腦麥克風。",
 };
 
 export const VOICE_DURATION_SEC = 15;

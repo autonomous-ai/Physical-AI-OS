@@ -1,0 +1,1063 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "anyOf": [
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "store.list_result"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "packages": {
+          "maxItems": 10,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "packageId": {
+                "type": "string"
+              },
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "category": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "engine": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "installed": {
+                "type": "boolean"
+              },
+              "catalog": {
+                "type": "boolean"
+              },
+              "verified": {
+                "type": "boolean"
+              },
+              "viewerPackageId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "installAllowed": {
+                "type": "boolean"
+              },
+              "version": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "broken": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "capabilities": {
+                "type": "object",
+                "properties": {
+                  "source": {
+                    "type": "string",
+                    "const": "package_metadata"
+                  },
+                  "description": {
+                    "type": "string"
+                  },
+                  "category": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  }
+                },
+                "required": [
+                  "source",
+                  "description",
+                  "category"
+                ],
+                "additionalProperties": false
+              },
+              "requirements": {
+                "type": "object",
+                "properties": {
+                  "engine": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "viewerPackageId": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "applications": {
+                    "type": "null"
+                  },
+                  "note": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "engine",
+                  "viewerPackageId",
+                  "applications",
+                  "note"
+                ],
+                "additionalProperties": false
+              },
+              "installation": {
+                "type": "string",
+                "enum": [
+                  "installing",
+                  "installed",
+                  "not_installed",
+                  "broken"
+                ]
+              },
+              "lastPreparation": {
+                "anyOf": [
+                  {
+                    "type": "object",
+                    "properties": {
+                      "state": {
+                        "type": "string",
+                        "enum": [
+                          "accepted",
+                          "running",
+                          "ready",
+                          "failed",
+                          "needs_user_action"
+                        ]
+                      },
+                      "phase": {
+                        "type": "string",
+                        "enum": [
+                          "accepted",
+                          "install",
+                          "clone",
+                          "setup",
+                          "doctor",
+                          "workspace",
+                          "create",
+                          "launch",
+                          "complete"
+                        ]
+                      },
+                      "error": {
+                        "anyOf": [
+                          {
+                            "type": "object",
+                            "properties": {
+                              "code": {
+                                "type": "string"
+                              },
+                              "message": {
+                                "type": "string"
+                              }
+                            },
+                            "required": [
+                              "code",
+                              "message"
+                            ],
+                            "additionalProperties": false
+                          },
+                          {
+                            "type": "null"
+                          }
+                        ]
+                      },
+                      "updatedAt": {
+                        "type": "number"
+                      }
+                    },
+                    "required": [
+                      "state",
+                      "phase",
+                      "error",
+                      "updatedAt"
+                    ],
+                    "additionalProperties": false
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "readiness": {
+                "type": "object",
+                "properties": {
+                  "state": {
+                    "type": "string",
+                    "enum": [
+                      "unknown",
+                      "not_installed",
+                      "passed",
+                      "failed"
+                    ]
+                  },
+                  "scope": {
+                    "type": "string",
+                    "const": "package_doctor"
+                  },
+                  "engineAuthentication": {
+                    "type": "string",
+                    "const": "unknown"
+                  },
+                  "taskSuccess": {
+                    "type": "string",
+                    "const": "unknown"
+                  },
+                  "checkedAt": {
+                    "type": "number"
+                  },
+                  "version": {
+                    "anyOf": [
+                      {
+                        "type": "string"
+                      },
+                      {
+                        "type": "null"
+                      }
+                    ]
+                  },
+                  "lines": {
+                    "maxItems": 10,
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                },
+                "required": [
+                  "state",
+                  "scope",
+                  "engineAuthentication",
+                  "taskSuccess"
+                ],
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "packageId",
+              "name",
+              "description",
+              "category",
+              "engine",
+              "installed",
+              "catalog",
+              "verified",
+              "viewerPackageId",
+              "installAllowed",
+              "version",
+              "broken",
+              "capabilities",
+              "requirements",
+              "installation",
+              "lastPreparation",
+              "readiness"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "nextOffset": {
+          "anyOf": [
+            {
+              "type": "integer",
+              "minimum": -9007199254740991,
+              "maximum": 9007199254740991
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "machineId",
+        "packages",
+        "nextOffset"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "store.inspect_result"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "machineId": {
+          "type": "string"
+        },
+        "package": {
+          "type": "object",
+          "properties": {
+            "packageId": {
+              "type": "string"
+            },
+            "name": {
+              "type": "string"
+            },
+            "description": {
+              "type": "string"
+            },
+            "category": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "engine": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "installed": {
+              "type": "boolean"
+            },
+            "catalog": {
+              "type": "boolean"
+            },
+            "verified": {
+              "type": "boolean"
+            },
+            "viewerPackageId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "installAllowed": {
+              "type": "boolean"
+            },
+            "version": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "broken": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "capabilities": {
+              "type": "object",
+              "properties": {
+                "source": {
+                  "type": "string",
+                  "const": "package_metadata"
+                },
+                "description": {
+                  "type": "string"
+                },
+                "category": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                }
+              },
+              "required": [
+                "source",
+                "description",
+                "category"
+              ],
+              "additionalProperties": false
+            },
+            "requirements": {
+              "type": "object",
+              "properties": {
+                "engine": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "viewerPackageId": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "applications": {
+                  "type": "null"
+                },
+                "note": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "engine",
+                "viewerPackageId",
+                "applications",
+                "note"
+              ],
+              "additionalProperties": false
+            },
+            "installation": {
+              "type": "string",
+              "enum": [
+                "installing",
+                "installed",
+                "not_installed",
+                "broken"
+              ]
+            },
+            "lastPreparation": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "state": {
+                      "type": "string",
+                      "enum": [
+                        "accepted",
+                        "running",
+                        "ready",
+                        "failed",
+                        "needs_user_action"
+                      ]
+                    },
+                    "phase": {
+                      "type": "string",
+                      "enum": [
+                        "accepted",
+                        "install",
+                        "clone",
+                        "setup",
+                        "doctor",
+                        "workspace",
+                        "create",
+                        "launch",
+                        "complete"
+                      ]
+                    },
+                    "error": {
+                      "anyOf": [
+                        {
+                          "type": "object",
+                          "properties": {
+                            "code": {
+                              "type": "string"
+                            },
+                            "message": {
+                              "type": "string"
+                            }
+                          },
+                          "required": [
+                            "code",
+                            "message"
+                          ],
+                          "additionalProperties": false
+                        },
+                        {
+                          "type": "null"
+                        }
+                      ]
+                    },
+                    "updatedAt": {
+                      "type": "number"
+                    }
+                  },
+                  "required": [
+                    "state",
+                    "phase",
+                    "error",
+                    "updatedAt"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "readiness": {
+              "type": "object",
+              "properties": {
+                "state": {
+                  "type": "string",
+                  "enum": [
+                    "unknown",
+                    "not_installed",
+                    "passed",
+                    "failed"
+                  ]
+                },
+                "scope": {
+                  "type": "string",
+                  "const": "package_doctor"
+                },
+                "engineAuthentication": {
+                  "type": "string",
+                  "const": "unknown"
+                },
+                "taskSuccess": {
+                  "type": "string",
+                  "const": "unknown"
+                },
+                "checkedAt": {
+                  "type": "number"
+                },
+                "version": {
+                  "anyOf": [
+                    {
+                      "type": "string"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "lines": {
+                  "maxItems": 10,
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "state",
+                "scope",
+                "engineAuthentication",
+                "taskSuccess"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "required": [
+            "packageId",
+            "name",
+            "description",
+            "category",
+            "engine",
+            "installed",
+            "catalog",
+            "verified",
+            "viewerPackageId",
+            "installAllowed",
+            "version",
+            "broken",
+            "capabilities",
+            "requirements",
+            "installation",
+            "lastPreparation",
+            "readiness"
+          ],
+          "additionalProperties": false
+        },
+        "candidates": {
+          "maxItems": 5,
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "agentId": {
+                "type": "string"
+              },
+              "machineId": {
+                "type": "string"
+              },
+              "packageId": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "engine": {
+                "type": "string"
+              },
+              "workspace": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              },
+              "state": {
+                "type": "string"
+              },
+              "runtime": {
+                "type": "string",
+                "enum": [
+                  "starting",
+                  "ready",
+                  "unavailable"
+                ]
+              },
+              "error": {
+                "type": "string"
+              }
+            },
+            "required": [
+              "agentId",
+              "machineId",
+              "packageId",
+              "engine",
+              "workspace",
+              "state",
+              "runtime"
+            ],
+            "additionalProperties": false
+          }
+        },
+        "candidatesTruncated": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "machineId",
+        "package",
+        "candidates",
+        "candidatesTruncated"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "agent.prepare_result"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "status": {
+          "type": "string",
+          "enum": [
+            "accepted",
+            "duplicate"
+          ]
+        },
+        "operation": {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "machineId": {
+              "type": "string"
+            },
+            "packageId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "running",
+                "ready",
+                "failed",
+                "needs_user_action"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "install",
+                "clone",
+                "setup",
+                "doctor",
+                "workspace",
+                "create",
+                "launch",
+                "complete"
+              ]
+            },
+            "createdAt": {
+              "type": "number"
+            },
+            "updatedAt": {
+              "type": "number"
+            },
+            "agentId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "guidance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "doctor": {
+              "maxItems": 10,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "taskDispatched": {
+              "type": "boolean",
+              "const": false
+            },
+            "engineAuthentication": {
+              "type": "string",
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "operationId",
+            "machineId",
+            "packageId",
+            "state",
+            "phase",
+            "createdAt",
+            "updatedAt",
+            "agentId",
+            "workspace",
+            "error",
+            "guidance",
+            "doctor",
+            "taskDispatched",
+            "engineAuthentication"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "status",
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "const": "operation.get_result"
+        },
+        "requestId": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-4[0-9a-fA-F]{3}-[89abAB][0-9a-fA-F]{3}-[0-9a-fA-F]{12}$"
+        },
+        "operation": {
+          "type": "object",
+          "properties": {
+            "operationId": {
+              "type": "string",
+              "pattern": "^[a-f0-9]{64}$"
+            },
+            "machineId": {
+              "type": "string"
+            },
+            "packageId": {
+              "type": "string"
+            },
+            "state": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "running",
+                "ready",
+                "failed",
+                "needs_user_action"
+              ]
+            },
+            "phase": {
+              "type": "string",
+              "enum": [
+                "accepted",
+                "install",
+                "clone",
+                "setup",
+                "doctor",
+                "workspace",
+                "create",
+                "launch",
+                "complete"
+              ]
+            },
+            "createdAt": {
+              "type": "number"
+            },
+            "updatedAt": {
+              "type": "number"
+            },
+            "agentId": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "workspace": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "error": {
+              "anyOf": [
+                {
+                  "type": "object",
+                  "properties": {
+                    "code": {
+                      "type": "string"
+                    },
+                    "message": {
+                      "type": "string"
+                    }
+                  },
+                  "required": [
+                    "code",
+                    "message"
+                  ],
+                  "additionalProperties": false
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "guidance": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "doctor": {
+              "maxItems": 10,
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "taskDispatched": {
+              "type": "boolean",
+              "const": false
+            },
+            "engineAuthentication": {
+              "type": "string",
+              "const": "unknown"
+            }
+          },
+          "required": [
+            "operationId",
+            "machineId",
+            "packageId",
+            "state",
+            "phase",
+            "createdAt",
+            "updatedAt",
+            "agentId",
+            "workspace",
+            "error",
+            "guidance",
+            "doctor",
+            "taskDispatched",
+            "engineAuthentication"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "requestId",
+        "operation"
+      ],
+      "additionalProperties": false
+    },
+    {
+      "type": "object",
+      "properties": {
+        "type": {
+          "type": "string",
+          "enum": [
+            "store.list_result",
+            "store.inspect_result",
+            "agent.prepare_result",
+            "operation.get_result"
+          ]
+        },
+        "requestId": {},
+        "error": {
+          "type": "object",
+          "properties": {
+            "code": {
+              "type": "string"
+            },
+            "message": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "code",
+            "message"
+          ],
+          "additionalProperties": false
+        }
+      },
+      "required": [
+        "type",
+        "error"
+      ],
+      "additionalProperties": false
+    }
+  ]
+}

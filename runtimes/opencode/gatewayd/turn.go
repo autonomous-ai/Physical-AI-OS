@@ -69,6 +69,7 @@ func (s *Server) turnWorker(ctx context.Context) {
 // During a resumed attempt, terminal failure frames are held back (see
 // pumpStdout) so a fresh retry does not leave the client's turn already ended.
 func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
+	payload = s.prepareSkill(ctx, payload)
 	images := s.decodeAttachments(payload)
 	s.pruneAttachments()
 
@@ -80,7 +81,7 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	log.Printf("%s turn start thread=%q resumed=%v images=%d",
 		logPrefix, resumeID, resumeID != "", len(images))
 
-	res := s.execTurn(ctx, payload.Content, images, resumeID)
+	res := s.execTurn(ctx, payload.promptWithSkill(), images, resumeID)
 	if resumeID != "" {
 		if resumeFailed(res) {
 			// Drop the held terminal failure frames: forwarding them would end the
@@ -89,7 +90,7 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 			log.Printf("%s resume of thread %s failed (rc=%d) — retrying fresh (%d failure frames dropped)",
 				logPrefix, resumeID, res.rc, len(res.heldFrames))
 			s.clearSession()
-			res = s.execTurn(ctx, payload.Content, images, "")
+			res = s.execTurn(ctx, payload.promptWithSkill(), images, "")
 		} else {
 			// Resumed attempt is terminal (no fresh retry) — release what was held.
 			for _, frame := range res.heldFrames {

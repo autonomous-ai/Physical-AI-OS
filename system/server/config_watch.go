@@ -336,7 +336,7 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			// Prompt is localized by STTLanguage so the very first turn
 			// lands in the owner's language without relying on the agent
 			// to translate the priming message.
-			if gatewayStable {
+			if startupGreetingAllowed(gatewayStable, device.Has(s.config.DeviceTypeOrDefault(), device.CapExpression), hal.GetSleeping) {
 				deviceType := s.config.DeviceTypeOrDefault()
 				slog.Info("INBOUND from system → agent (startup greeting)",
 					"component", "server", "backend", s.agentGateway.Name(),
@@ -358,7 +358,7 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				if s.environmentStartup != nil {
 					s.environmentStartup.FinishGreeting(false)
 				}
-				slog.Warn("startup greeting skipped: agent gateway never reached stable readiness", "component", "server", "backend", s.agentGateway.Name())
+				slog.Warn("startup greeting skipped: gateway not ready, device sleeping, or sleep state unavailable", "component", "server", "backend", s.agentGateway.Name())
 			}
 
 			// Prewarm dead-air filler WAV cache so the first filler fire is

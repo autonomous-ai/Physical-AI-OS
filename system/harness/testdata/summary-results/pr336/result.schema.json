@@ -1,0 +1,182 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "type": {
+      "type": "string",
+      "const": "event"
+    },
+    "kind": {
+      "type": "string",
+      "const": "turn.summary"
+    },
+    "agentId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "serverInstanceId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "machineId": {
+      "type": "string",
+      "minLength": 1
+    },
+    "eventId": {
+      "type": "integer",
+      "exclusiveMinimum": 0,
+      "maximum": 9007199254740991
+    },
+    "payload": {
+      "type": "object",
+      "properties": {
+        "serverInstanceId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "resultId": {
+          "type": "string",
+          "minLength": 1
+        },
+        "correlation": {
+          "oneOf": [
+            {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "const": "input"
+                },
+                "inputs": {
+                  "minItems": 1,
+                  "maxItems": 1,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "deliveryId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "idempotencyKey": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": [
+                      "deliveryId",
+                      "idempotencyKey"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "engineTurnId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "scope",
+                "inputs"
+              ],
+              "additionalProperties": false
+            },
+            {
+              "type": "object",
+              "properties": {
+                "scope": {
+                  "type": "string",
+                  "const": "group"
+                },
+                "inputs": {
+                  "minItems": 2,
+                  "maxItems": 64,
+                  "type": "array",
+                  "items": {
+                    "type": "object",
+                    "properties": {
+                      "deliveryId": {
+                        "type": "string",
+                        "minLength": 1
+                      },
+                      "idempotencyKey": {
+                        "type": "string",
+                        "pattern": "^[A-Za-z0-9_-]{1,64}$"
+                      }
+                    },
+                    "required": [
+                      "deliveryId",
+                      "idempotencyKey"
+                    ],
+                    "additionalProperties": false
+                  }
+                },
+                "engineTurnId": {
+                  "type": "string",
+                  "minLength": 1
+                }
+              },
+              "required": [
+                "scope",
+                "inputs"
+              ],
+              "additionalProperties": false
+            }
+          ]
+        },
+        "outcome": {
+          "type": "string",
+          "enum": [
+            "completed",
+            "failed",
+            "cancelled"
+          ]
+        },
+        "fullText": {
+          "type": "string",
+          "minLength": 1
+        },
+        "kind": {
+          "type": "string",
+          "const": "summary"
+        },
+        "text": {
+          "type": "string"
+        },
+        "recap": {
+          "type": "string"
+        },
+        "idempotencyKey": {
+          "type": "string",
+          "pattern": "^[A-Za-z0-9_-]{1,64}$"
+        },
+        "turnId": {
+          "anyOf": [
+            {
+              "type": "string",
+              "minLength": 1
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "serverInstanceId",
+        "resultId",
+        "correlation",
+        "outcome",
+        "fullText"
+      ],
+      "additionalProperties": false
+    }
+  },
+  "required": [
+    "type",
+    "kind",
+    "agentId",
+    "payload"
+  ],
+  "additionalProperties": false
+}

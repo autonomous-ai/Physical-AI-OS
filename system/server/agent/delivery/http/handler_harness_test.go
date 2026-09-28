@@ -3,6 +3,7 @@ package http
 import (
 	"encoding/json"
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -141,15 +142,11 @@ func TestHarnessFinalSurvivesRuntimeLifecycleOrdering(t *testing.T) {
 	}
 }
 
-func TestHarnessDelegatedResponseAttribution(t *testing.T) {
+func TestHarnessResponsesKeepOriginalText(t *testing.T) {
 	defer i18n.SetConfig(nil)
-	for _, tc := range []struct{ lang, prefix string }{
-		{"en", "Harness says:"}, {"vi", "Harness trả lời:"},
-		{"zh-CN", "Harness 回复："}, {"zh-TW", "Harness 回覆："},
-		{"unknown", "Harness says:"},
-	} {
-		t.Run(tc.lang, func(t *testing.T) {
-			i18n.SetConfig(&config.Config{STTLanguage: tc.lang})
+	for _, lang := range []string{"en", "vi", "zh-CN", "zh-TW", "unknown"} {
+		t.Run(lang, func(t *testing.T) {
+			i18n.SetConfig(&config.Config{STTLanguage: lang})
 			bus := monitor.ProvideBus()
 			events, unsubscribe := bus.Subscribe()
 			defer unsubscribe()
@@ -159,7 +156,6 @@ func TestHarnessDelegatedResponseAttribution(t *testing.T) {
 				want := "Original answer"
 				if delegated {
 					runID = "delegated"
-					want = tc.prefix + " " + want
 				}
 				h.MarkHarnessResponseRun(runID, true, delegated)
 				// Re-registration cannot change the original route's attribution.
@@ -173,5 +169,39 @@ func TestHarnessDelegatedResponseAttribution(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestHarnessVoiceRunLosesSpeakerAfterClick(t *testing.T) {
+	// Harness ids have no creation stamp; registration must date the run so a
+	// click that follows mutes its reply even when that reply is the first
+	// time deliverTTS sees the id.
+	h := &AgentHandler{monitorBus: monitor.ProvideBus()}
+	h.MarkHarnessResponseRun("device-harness-abc", false, false)
+	time.Sleep(2 * time.Millisecond)
+	h.CancelSpeech()
+	if !h.isSpeechCancelled("device-harness-abc") {
+		t.Fatal("Harness run registered before the click still owns the speaker")
+	}
+	// The watermark is inclusive (<=) at millisecond resolution, so a run
+	// registered in the same ms as the click still counts as cancelled.
+	time.Sleep(2 * time.Millisecond)
+	h.MarkHarnessResponseRun("device-harness-later", false, false)
+	if h.isSpeechCancelled("device-harness-later") {
+		t.Fatal("Harness run registered after the click was muted")
+	}
+}
+
+func TestHarnessLocalNoticeDoesNotUseRemoteResultCue(t *testing.T) {
+	h := &AgentHandler{}
+	h.MarkHarnessResponseRun("failed-dispatch", false, true)
+	h.MarkHarnessLocalResponseRun("failed-dispatch", false)
+	h.MarkHarnessResponseRun("failed-dispatch", false, true)
+	if !h.harnessReplies["failed-dispatch"].localOnly {
+		t.Fatal("local dispatch error regained the remote-result cue")
+	}
+	h.MarkHarnessResponseRun("real-result", false, false)
+	if h.harnessReplies["real-result"].localOnly {
+		t.Fatal("Harness-only result lost its cue")
 	}
 }

@@ -41,11 +41,17 @@ class LiveVoiceMetrics:
         """Attach a buffered STT opener without creating a second interaction."""
         if turn_id and interaction_id:
             self.interactions.setdefault(turn_id, interaction_id)
+            voice_metrics.bind_provider_turn(self.interactions[turn_id], turn_id)
             self._seeded.add(turn_id)
             voice_metrics.set_route(interaction_id, "realtime_handled", "voice")
 
     @_observation("")
     def speech(self, turn_id: str, endpoint_at: float | None, method: str) -> str:
+        if method == "server_vad_receive":
+            # Preserve provider/cue behaviour while refusing a network arrival
+            # timestamp as a substitute for the end of captured speech.
+            self.coverage["endpoint_receive_only_observations"] += 1
+            endpoint_at = None
         if not turn_id:
             self.coverage["unkeyed_user_observations"] += 1
             return ""
@@ -59,6 +65,9 @@ class LiveVoiceMetrics:
             endpoint_known=endpoint_at is not None, mode="live",
         )
         self.interactions[turn_id] = iid
+        voice_metrics.bind_provider_turn(iid, turn_id)
+        logger.info("[voice-metrics] live ownership turn=%s interaction=%s endpoint_method=%s",
+                    turn_id, iid, method)
         voice_metrics.set_route(iid, "realtime_handled", "voice")
         return iid
 

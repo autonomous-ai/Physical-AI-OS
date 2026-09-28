@@ -52,13 +52,38 @@ def volume_field(path, pattern, value):
     return "---".join(parts)
 
 
+def capability_fields(text, capabilities):
+    """Toggle declared inline capability maps without rewriting the document."""
+    if not isinstance(capabilities, dict):
+        raise ValueError("capabilities override must be an object")
+    parts = text.split("---", 2)
+    if len(parts) != 3 or parts[0].strip():
+        raise ValueError("ROBOT.md: missing front matter")
+    sections = list(re.finditer(r"^capabilities:[ \t]*$", parts[1], re.MULTILINE))
+    if len(sections) != 1:
+        raise ValueError("ROBOT.md: expected one capabilities section")
+    start = sections[0].end()
+    end_match = re.search(r"^[^\s#]", parts[1][start:], re.MULTILINE)
+    end = start + end_match.start() if end_match else len(parts[1])
+    block = parts[1][start:end]
+    for name, enabled in capabilities.items():
+        if not re.fullmatch(r"[a-z][a-z0-9_-]{0,63}", name) or type(enabled) is not bool:
+            raise ValueError("capability overrides require valid names and boolean values")
+        pattern = rf"^(  )(?:#[ \t]*)?({re.escape(name)}:[ \t]*\{{[^\n]*\}}[^\n]*)$"
+        block, count = re.subn(pattern, lambda m: m.group(1) + ("" if enabled else "# ") + m.group(2), block, flags=re.MULTILINE)
+        if count != 1:
+            raise ValueError(f"ROBOT.md: expected one declaration for capability {name}")
+    parts[1] = parts[1][:start] + block + parts[1][end:]
+    return "---".join(parts)
+
+
 def apply_overrides(profile, root):
     name = selected_profile(root)
     if name is None:
         return None
     overlay = profile / "overrides" / name
     settings = json.loads((overlay / "profile.json").read_text())
-    if not isinstance(settings, dict) or set(settings) - {"startup_volume", "max_volume"}:
+    if not isinstance(settings, dict) or set(settings) - {"startup_volume", "max_volume", "capabilities"}:
         raise ValueError("unknown profile override fields")
     if {"startup_volume", "max_volume"} <= set(settings) and settings["startup_volume"] > settings["max_volume"]:
         raise ValueError("startup volume exceeds ceiling")
@@ -69,6 +94,19 @@ def apply_overrides(profile, root):
     ):
         if key in settings:
             outputs[profile / filename] = volume_field(profile / filename, pattern, settings[key])
+    if "capabilities" in settings:
+        robot = profile / "ROBOT.md"
+        outputs[robot] = capability_fields(outputs.get(robot, robot.read_text()), settings["capabilities"])
+    device = overlay / "device"
+    if device.exists():
+        for source in device.iterdir():
+            target = profile / source.name
+            if source.is_symlink() or not source.is_file() or source.suffix != ".json" or not target.is_file() or target.is_symlink():
+                raise ValueError("device overrides must replace existing top-level JSON files")
+            text = source.read_text()
+            if not isinstance(json.loads(text), dict):
+                raise ValueError(f"{source.name}: device override must be a JSON object")
+            outputs[target] = text
     files = []
     for source in (overlay / "rootfs").rglob("*"):
         if not source.is_file():

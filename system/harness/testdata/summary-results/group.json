@@ -1,0 +1,19 @@
+{
+  "type": "event",
+  "kind": "turn.summary",
+  "agentId": "agent-123",
+  "payload": {
+    "serverInstanceId": "instance-123",
+    "resultId": "result-456",
+    "correlation": {
+      "scope": "group",
+      "inputs": [
+        { "deliveryId": "delivery-A", "idempotencyKey": "original-key-A" },
+        { "deliveryId": "delivery-B", "idempotencyKey": "original-key-B" }
+      ],
+      "engineTurnId": "optional-engine-native-id"
+    },
+    "outcome": "completed",
+    "fullText": "Created the house with a garden and a red roof."
+  }
+}

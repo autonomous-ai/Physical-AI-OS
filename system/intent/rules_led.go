@@ -4,7 +4,10 @@ package intent
 
 import (
 	"fmt"
+	"go.autonomous.ai/os/system/lib/hal"
+	"log/slog"
 	"strings"
+	"sync"
 
 	"go.autonomous.ai/os/system/device"
 )
@@ -102,9 +105,48 @@ var ledRules = []rule{
 		name:       "dim",
 		capability: device.CapLight,
 		match:      anyOf("dim the light", "dimmer", "dim light"),
-		exec: func(string) *Result {
-			executionFailed := post("/led/solid", `{"color":[80,60,40]}`) != nil
-			return &Result{ExecutionFailed: executionFailed, TTSText: "Dimmed.", LEDChanged: true, Actions: []string{`POST /led/solid {"color":[80,60,40]}`}}
-		},
+		exec:       func(string) *Result { return dimCurrentLight() },
 	},
+}
+
+// Serialize dim read/write pairs so simultaneous requests each reduce the level.
+var dimMu sync.Mutex
+
+func dimCurrentLight() *Result {
+	if !dimMu.TryLock() {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't change that setting because another adjustment is in progress. Please try again."}
+	}
+	defer dimMu.Unlock()
+	actions := []string{"GET /led/color"}
+	failure := func() *Result {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't dim the light.", Actions: actions}
+	}
+	color, err := hal.GetColor()
+	if err != nil {
+		slog.Warn("intent dim read failed", "error", err)
+		return failure()
+	}
+	for _, channel := range color {
+		if channel < 0 || channel > 255 {
+			return failure()
+		}
+	}
+	if color == [3]int{} {
+		return &Result{TTSText: "The light is already off.", Actions: actions}
+	}
+	// Scale every channel equally; integer rounding can reach black at low levels.
+	next := [3]int{color[0] / 2, color[1] / 2, color[2] / 2}
+	body := fmt.Sprintf(`{"color":[%d,%d,%d]}`, next[0], next[1], next[2])
+	actions = append(actions, "POST /led/solid "+body)
+	if err := post("/led/solid", body); err != nil {
+		return failure()
+	}
+	actions = append(actions, "GET /led/color")
+	actual, err := hal.GetColor()
+	if err != nil || actual != next {
+		slog.Warn("intent dim verification failed", "expected", next, "actual", actual, "error", err)
+		return failure()
+	}
+	slog.Info("intent dim applied", "before", color, "after", next)
+	return &Result{TTSText: "Dimmed.", LEDChanged: next != [3]int{}, LEDOff: next == [3]int{}, Actions: actions}
 }

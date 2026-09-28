@@ -45,6 +45,10 @@ class EmotionRecognizeRequest(BaseModel):
 
     image_b64: str
     threshold: float = 0.5
+    raw: bool = False
+    """Skip the server's label gate and threshold drop and return every class
+    probability, so the client can gate itself. Old servers ignore this field
+    (no extra="forbid"), which is what lets a new client fall back."""
 
 
 class EmotionItem(BaseModel):
@@ -56,6 +60,7 @@ class EmotionItem(BaseModel):
     bbox: list[int]
     valence: float | None = None
     arousal: float | None = None
+    probabilities: dict[str, float] | None = None
 
 
 class EmotionRecognizeResponse(BaseModel):

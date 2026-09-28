@@ -51,12 +51,25 @@ func (h *DeviceMQTTHandler) queueIntent(in schedule.Intent) error {
 // backend has not confirmed never enters the file the runner reads, so it
 // cannot fire early. The UI still shows it immediately, because ListSchedules
 // overlays the pending queue — visible, but not yet armed.
+//
+// Raises one ops alert per request (schedule_alerts.go): "✅ Schedule
+// created: <name>" once the proposal is durably queued — which is the moment
+// the device has accepted the user's task, even offline — or "❌ Schedule
+// create: <name> — FAILED" with the reason. The backend's confirmation shows
+// up separately, as the next schedule.sync alert's "created: <name>".
 func (h *DeviceMQTTHandler) CreateSchedule(c *gin.Context) {
+	name := "" // unknown until the body parses
+	fail := func(status int, msg string) {
+		h.alertScheduleEvent(scheduleOpFailedTitle("create", name), msg)
+		c.JSON(status, serializers.ResponseError(msg))
+	}
+
 	var req scheduleWriteRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid body: "+err.Error()))
+		fail(http.StatusBadRequest, "invalid body: "+err.Error())
 		return
 	}
+	name = strings.TrimSpace(req.Name)
 
 	enabled := true
 	if req.Enabled != nil {
@@ -73,13 +86,13 @@ func (h *DeviceMQTTHandler) CreateSchedule(c *gin.Context) {
 		Timezone:     h.scheduleStore.Timezone().String(),
 	}
 	if err := schedule.ValidateIntentPayload(payload); err != nil {
-		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		fail(http.StatusBadRequest, err.Error())
 		return
 	}
 
 	intentID, err := schedule.NewIntentID()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 	in := schedule.Intent{
@@ -89,10 +102,12 @@ func (h *DeviceMQTTHandler) CreateSchedule(c *gin.Context) {
 		CreatedAt: time.Now(),
 	}
 	if err := h.queueIntent(in); err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	h.alertScheduleEvent("✅ Schedule created: "+name,
+		"queued for backend confirmation (intent "+intentID+")")
 	c.JSON(http.StatusAccepted, serializers.ResponseSuccess(map[string]any{
 		"intent_id": intentID,
 		"pending":   "create",
@@ -188,17 +203,27 @@ func (h *DeviceMQTTHandler) UpdateSchedule(c *gin.Context) {
 // stays runnable, until the backend confirms the delete and the resulting
 // schedule.sync removes it. That is deliberate: a delete that the backend
 // rejects must not have already stopped the task.
+//
+// Alerts like CreateSchedule: "✅ Schedule deleted: <name>" once the proposal
+// is queued, "❌ Schedule delete: <name or id> — FAILED" otherwise.
 func (h *DeviceMQTTHandler) DeleteSchedule(c *gin.Context) {
 	id := strings.TrimSpace(c.Param("id"))
+	subject := id // the name, once the row is found
+	fail := func(status int, msg string) {
+		h.alertScheduleEvent(scheduleOpFailedTitle("delete", subject), msg)
+		c.JSON(status, serializers.ResponseError(msg))
+	}
+
 	current, ok := h.scheduleStore.Get(id)
 	if !ok {
-		c.JSON(http.StatusNotFound, serializers.ResponseError("unknown schedule id: "+id))
+		fail(http.StatusNotFound, "unknown schedule id: "+id)
 		return
 	}
+	subject = scheduleDisplayName(current.ID, current.Name)
 
 	intentID, err := schedule.NewIntentID()
 	if err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 	in := schedule.Intent{
@@ -209,10 +234,12 @@ func (h *DeviceMQTTHandler) DeleteSchedule(c *gin.Context) {
 		CreatedAt:  time.Now(),
 	}
 	if err := h.queueIntent(in); err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
+		fail(http.StatusInternalServerError, err.Error())
 		return
 	}
 
+	h.alertScheduleEvent("✅ Schedule deleted: "+subject,
+		"queued for backend confirmation (intent "+intentID+")")
 	c.JSON(http.StatusAccepted, serializers.ResponseSuccess(map[string]any{
 		"intent_id": intentID,
 		"pending":   "delete",

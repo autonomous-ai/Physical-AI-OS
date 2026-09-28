@@ -13,21 +13,25 @@ package http
 
 import (
 	"net/http"
+	"sync"
 
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/buddy"
+	buddyjev "go.autonomous.ai/os/system/buddy/jev"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
 // BuddyHandler bundles the buddy-related Gin handlers.
 type BuddyHandler struct {
-	config  *config.Config
-	service *buddy.Service
+	config          *config.Config
+	service         *buddy.Service
+	suggestSelector *buddyjev.Selector
+	suggestGate     *sync.Mutex
 }
 
 func ProvideBuddyHandler(cfg *config.Config, svc *buddy.Service) BuddyHandler {
-	return BuddyHandler{config: cfg, service: svc}
+	return BuddyHandler{config: cfg, service: svc, suggestSelector: buddyjev.New(nil), suggestGate: &sync.Mutex{}}
 }
 
 // Status returns the pairing + connection state.

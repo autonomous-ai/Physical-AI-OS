@@ -108,7 +108,7 @@ export function FacebookSection({ active }: { active: boolean }) {
 
   const onDisconnect = async () => {
     if (!connected) return;
-    if (!window.confirm("Disconnect this Facebook Fan Page? The device will keep the Page ID until you connect again.")) return;
+    if (!window.confirm("Disconnect this Facebook Fan Page? The robot will keep the Page ID until you connect again.")) return;
     setDisconnecting(true);
     try {
       await removeConnector(CONNECTOR_CODE);
@@ -228,7 +228,7 @@ export function FacebookSection({ active }: { active: boolean }) {
             display: "flex", alignItems: "center", gap: 6,
             fontSize: 11, color: C.amber, marginBottom: 16,
           }}>
-            <Lock size={11} /> Stored on your device only. Never uploaded to our servers.
+            <Lock size={11} /> Stored on your robot only. Never uploaded to our servers.
           </div>
 
           {/* Collapsible walkthrough — placed BELOW the form fields (after the
@@ -477,7 +477,7 @@ function ModalHeader({
           Connect Facebook Fan Page
         </div>
         <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.5 }}>
-          Add a Page Access Token so the device can post to your Facebook Page.
+          Add a Page Access Token so the robot can post to your Facebook Page.
         </div>
         {connected && (
           <div style={{ marginTop: 8, fontSize: 11, color: C.green, display: "inline-flex", alignItems: "center", gap: 6 }}>

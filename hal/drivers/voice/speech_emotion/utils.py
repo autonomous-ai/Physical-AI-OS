@@ -157,3 +157,37 @@ def compute_trim_and_voiced(
     span_total_s = span_rms.size * frame_s
     ratio = voiced_s / span_total_s if span_total_s > 0 else 0.0
     return trimmed, voiced_s, ratio
+
+
+def select_voiced_span(
+    samples: npt.NDArray[np.int16],
+    sample_rate: int,
+    voiced_rms: float,
+    frame_ms: int,
+    max_s: float,
+) -> npt.NDArray[np.int16]:
+    """Return the contiguous ``max_s`` span with the most voiced frames.
+
+    Clips no longer than ``max_s`` are returned unchanged. The span is a plain
+    slice — voiced pieces are never stitched together, because cutting gaps
+    out of speech changes what the model hears. Ties go to the latest span
+    (closest to "now").
+    """
+    max_samples = int(sample_rate * max_s)
+    if samples.size <= max_samples:
+        return samples
+    frame_samples = max(1, int(sample_rate * frame_ms / 1000))
+    rms = compute_frame_rms(samples, frame_samples)
+    win = max_samples // frame_samples
+    if win <= 0 or rms.size <= win:
+        return samples[-max_samples:]
+    voiced = (rms >= voiced_rms).astype(np.int64)
+    csum = np.concatenate(([0], np.cumsum(voiced)))
+    counts = csum[win:] - csum[:-win]  # counts[i] = voiced frames in [i, i + win)
+    best = int(counts.size - 1 - np.argmax(counts[::-1]))  # last index of the max
+    if best == counts.size - 1:
+        # The latest span; anchor it to the true end so the partial trailing
+        # frame dropped by compute_frame_rms is kept.
+        return samples[-max_samples:]
+    start = best * frame_samples
+    return samples[start : start + max_samples]

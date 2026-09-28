@@ -8,7 +8,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 |---|---|---|
 | **GPIO button** | A primary mechanical button for click and hold actions, plus a dedicated reset button on OrangePi. Destructive hold actions require release. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
-| **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including reboot and shutdown. Never factory-resets. | Lamp with an explicit I²C configuration in `mpr121.json` |
+| **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including shutdown. Triple-tap reboot is disabled. Never factory-resets. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
 
@@ -129,6 +129,12 @@ The table above covers the primary GPIO button and TTP223. The dedicated reset b
 With Harness OFF, MPR121 also supports release-to-commit holds and the same hold-tier LED feedback, as detailed in its detection section. The sleep and destructive hold tiers **commit on release, not on a timer firing while held**. MPR121 stops at shutdown: it has no factory-reset tier, so a 10 s+ touch hold still shuts down (`hold_release_action(..., factory_reset=False)`). Only the GPIO buttons factory-reset.
 
 ## Interrupting Lamp while it speaks (barge-in)
+
+In hands-free LIVE OFF mode, a delayed listening cue is dropped if microphone
+capture has already started. Its retry also expires when a capture starts during
+backoff, even if that capture finishes before the next attempt. This keeps the
+cue from truncating the user's sentence; the click still stops speech and grants
+wake focus normally.
 
 The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap top of Lamp (touchpad) or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
 
@@ -277,8 +283,8 @@ does not modify boot overlays automatically:
       "address": 90,
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30
@@ -287,12 +293,34 @@ does not modify boot overlays automatically:
 }
 ```
 
-`bus` is required for an enabled entry. The other values above except `swipe_axis` are defaults;
+`bus` is required for an enabled entry. Lamp explicitly sets touch/release
+thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
 debounce accepts 0–1000 ms. Tune thresholds against the installed electrodes
 and motor noise. Configuration is loaded at boot; restart HAL after changes.
+
+The driver sets the falling baseline filter (`0x2F`–`0x32`) to
+`MHDF=1, NHDF=1, NCLF=255, FDLF=2`, following the
+[NXP AN3944 quick-start values](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
+This slows downward baseline tracking so it does not quickly follow an
+approaching finger. Rising and touched baseline filters are unchanged.
+`CONFIG2` (`0x5D`) is `0x30`: 0.5 µs charge time, a 10-sample second-level
+filter (`SFI=2`) and a 1 ms sample interval, so electrode data updates every
+~10 ms, in step with the 10 ms poll. The 10-sample filter halves idle noise
+against the 4-sample default (2 → 1 count measured on `lamp-52e6`). Chip
+debounce (`0x5B`) stays 0: contact (30 ms) and swipe footprint (5 ms)
+debounce happen in software, and a chip-side debounce would delay every
+footprint by two samples. These registers are set by HAL, not exposed in
+`mpr121.json`; changing touch thresholds alone does not change filtering.
+Verify idle stability, tap, hold and swipe on the installed pads when tuning
+thresholds; `robots/lamp/hardware/touch-cap/mpr121_opi_test.py` programs the
+chip like HAL when run with `--debounce 0 --sfi 2 --esi 0` (`calibrate` for
+idle noise and a threshold recommendation, `test --verbose` for per-touch
+hold time, `trace` for filtered/baseline per sample). Stop HAL first; it owns
+the bus.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
@@ -313,7 +341,7 @@ functions **while Harness mode is OFF**. Harness ON uses the separate policy bel
 |---|---|
 | First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
 | 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
-| Exactly 3 short taps, then 0.4 s quiet | `triple_click_action` reboots instead of playing the listening cue. |
+| Exactly 3 short taps, then 0.4 s quiet | Reboot is disabled in the MPR121 wrapper; no additional action or listening cue. The first-tap single-click action still runs. |
 | Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
 | Hold ≥5 s, then release | `hold_release_action` shuts down. MPR121 never factory-resets. |
 | Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
@@ -418,7 +446,7 @@ After a session ends:
 
 **On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
 
-Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so TTP223 cannot trigger reboot / shutdown / factory-reset; reboot / shutdown are on the mechanical button and MPR121; factory-reset is on the GPIO buttons only.
+Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so TTP223 cannot trigger reboot / shutdown / factory-reset; reboot is on the mechanical button; shutdown is on the mechanical button and MPR121; factory-reset is on the GPIO buttons only.
 
 **The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
 

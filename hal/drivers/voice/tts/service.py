@@ -22,6 +22,7 @@ import numpy as np
 
 from hal import config as hal_config
 from hal.drivers.voice import aec
+from hal.drivers.voice._internal import live_playback
 from hal.drivers.voice.tts.resampler import PCMResampler
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
@@ -161,6 +162,8 @@ class _WatchedStream:
                 if track_playback and stop_event is not None and stop_event.is_set():
                     return result
                 chunk = data[off:off + step]
+                if live_playback.ENABLED:
+                    chunk = live_playback.playback(chunk, rate)
                 started = time.monotonic()
                 self._owner._write_started_ts = started
                 try:
@@ -184,6 +187,9 @@ class _WatchedStream:
                     )
                     return result
                 write_end = time.monotonic()
+                if track_playback:
+                    frames_written = len(chunk) // 2 if isinstance(chunk, (bytes, bytearray, memoryview)) else len(chunk)
+                    live_playback.record_written(frames_written, rate)
                 self._owner._write_started_ts = None
                 if underflowed:
                     # PortAudio reports xruns as a boolean, not an exception.
@@ -283,6 +289,9 @@ class TTSService:
         self._speed = max(0.25, min(4.0, speed))
         self._instructions = instructions
         self._lock = threading.Lock()
+        self._input_capture_lock = threading.RLock()
+        self._input_captures: set[object] = set()
+        self._input_capture_generation = 0
         self._speaking = False
         self._interruptible = False
         # Queues the active _speak_sync is draining, so stop() can wake a
@@ -370,13 +379,6 @@ class TTSService:
         self._native_direct: bool = False
         self._native_rs_carry = None
         self._native_rs_pos: float = 0.0
-        # Whether this device accepts a given model rate, keyed (device, rate).
-        # Asking costs a close + reopen of the PERSISTENT stream, which exists
-        # precisely to avoid a multi-second codec warmup — so ask once, not once
-        # per reply. Device-observed 2026-09-07 on intern-v2-6286: the ES8389
-        # refuses 24 kHz with PaErrorCode -9999, and retrying it every reply
-        # churned the stream each time.
-        self._native_direct_cache: dict = {}
 
         # Whether the CURRENT speech should be fed back to the realtime voice
         # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
@@ -685,6 +687,18 @@ class TTSService:
         skips them."""
         return self._realtime_feedback
 
+    def history_completion(self):
+        """Snapshot history before end callbacks can change playback ownership.
+
+        A successful device write is evidence of speech submission, not proof
+        of acoustic playback. Cues use track_playback=False and never count.
+        """
+        if self.native_mode or not self.realtime_feedback or not self.last_spoken_text:
+            return None
+        started = bool(getattr(self, "_audio_written_fired", False))
+        interrupted = started and self._stop_event.is_set()
+        return self.last_spoken_text, started and not interrupted, interrupted
+
     @property
     def realtime_speaking(self) -> bool:
         """The active playback comes from realtime, including native PCM."""
@@ -746,6 +760,22 @@ class TTSService:
             logger.exception("pending speech observation failed")
             return False
 
+    def has_followup_speech(self, owner: str) -> bool:
+        """Include main speech retained across a LIVE playback interruption.
+
+        Unlike suppression measurement, the wake timer must wait for queued
+        audio that will resume after the interrupted native worker exits.
+        """
+        if not owner:
+            return False
+        with self._pending_queue_lock:
+            return bool(
+                any(item.owner == owner for item in self._pending_queue)
+                or (self._speaking and not self._stop_event.is_set() and owner in (
+                    self._playback_owner, getattr(self, "_pending_playback_owner", ""),
+                ))
+            )
+
     @property
     def last_spoken_text(self) -> str:
         """Last text sent to TTS (for echo cancellation transcript filtering)."""
@@ -763,6 +793,7 @@ class TTSService:
         discarded so a stop during sentence-streaming actually silences
         everything the agent had queued ahead, not just the current sentence.
         """
+        self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
         if not hal_config.LIVE_MODE:
             # Preserve the regular turn path's stop/wake/clear ordering.
             if self._speaking:
@@ -777,6 +808,11 @@ class TTSService:
             return
         with self._pending_queue_lock:
             before = len(self._pending_queue)
+            if live_playback.ENABLED:
+                logger.info(
+                    "[live-aec] TTS stop: speaking=%s realtime=%s pending=%d preserve_main=%s",
+                    self._speaking, self.realtime_speaking, before, preserve_main_queue,
+                )
             retained = []
             for item in self._pending_queue:
                 if preserve_main_queue and item.realtime_feedback:
@@ -797,6 +833,43 @@ class TTSService:
                 self._wake_drain_queues()
         if cleared:
             logger.info("TTS stop cleared %d pending queued speech item(s)", cleared)
+
+    def stop_realtime_reply(self, *, turn_id: str = "") -> None:
+        """Cancel LIVE speech even between segments, preserving main speech.
+
+        An interruption can arrive after Gemini finished generating while
+        external TTS is still queued. Queue cleanup must not depend on the
+        provider's current turn or on whether the speaker is active right now.
+        A supplied interaction ID limits rejection to that turn, preserving
+        newer realtime speech as well as main-agent speech.
+        """
+        with self._pending_queue_lock:
+            before = len(self._pending_queue)
+            retained = []
+            for item in self._pending_queue:
+                if item.realtime_reply and (not turn_id or item.owner == "run:" + turn_id):
+                    item.cancelled.set()
+                else:
+                    retained.append(item)
+            self._pending_queue[:] = retained
+            active_realtime = self.realtime_speaking and (
+                not turn_id or self._playback_owner in {"run:" + turn_id, "interaction:" + turn_id}
+            )
+            if active_realtime:
+                self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
+                active = getattr(self, '_active_pending_speech', None)
+                if active is not None and active.realtime_reply:
+                    active.cancelled.set()
+                self._resume_pending_after_stop = bool(retained)
+                self._stop_event.set()
+                self._wake_drain_queues()
+            if live_playback.ENABLED:
+                logger.info(
+                    '[live-aec] TTS stop realtime: speaking=%s active_realtime=%s '
+                    'pending=%d cancelled=%d retained=%d',
+                    self._speaking, active_realtime, before, before - len(retained),
+                    len(retained),
+                )
 
     def _report_unspoken_reply(self, text: str, realtime_feedback: bool) -> None:
         """Hand a dropped agent reply to the unspoken-reply hook.
@@ -917,19 +990,102 @@ class TTSService:
         except Exception:
             return False
 
+    @staticmethod
+    def _owner_suppressed(owner: str) -> bool:
+        """Refuse audio for a turn the user explicitly stopped.
+
+        Checked at every admission path so a late Harness reply or a realtime
+        wait filler cannot speak after the click. voice_metrics owns the
+        boundary; unowned audio is never refused.
+        """
+        if not owner:
+            return False
+        try:
+            from hal.telemetry import voice_metrics
+            return voice_metrics.is_suppressed(owner)
+        except Exception:
+            logger.exception("suppression check failed")
+            return False
+
+    def begin_input_capture(self):
+        """Reserve user input against optional speech, before STT connects."""
+        token = object()
+        with self._input_capture_lock:
+            self._input_captures.add(token)
+            self._input_capture_generation += 1
+        return token
+
+    def end_input_capture(self, token) -> None:
+        """Release a reservation; safe on both endpoint and exception cleanup."""
+        with self._input_capture_lock:
+            self._input_captures.discard(token)
+
+    @property
+    def input_capture_state(self):
+        """Active capture and generation, for dropping delayed gesture cues."""
+        with self._input_capture_lock:
+            return bool(self._input_captures), self._input_capture_generation
+
+    def prepare_listening_cue(self, expected_state) -> bool:
+        """Drop stale cues before they can stop speech for a newer capture."""
+        with self._input_capture_lock:
+            if self.input_capture_state != expected_state or self._input_captures:
+                return False
+            self.stop()
+            return True
+
+    def _claim_speech(self, text, interruptible, realtime_feedback, turn_id, realtime_reply):
+        """Called with the TTS lock held; serialize admission with user capture.
+
+        Optional cues/fillers can be dropped. Answers and realtime-owned audio
+        retain their existing ownership, stop, and echo behavior.
+        """
+        from contextlib import nullcontext
+
+        with getattr(self, "_input_capture_lock", None) or nullcontext():
+            if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
+                self._lock.release()
+                return False
+            self._stop_event.clear()
+            self._speaking = True
+            self._interruptible = interruptible
+            self._last_spoken_text = text
+            self._realtime_feedback = realtime_feedback
+            self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+            return True
+
+    def _optional_speech_blocked(self, text, interruptible, realtime_feedback, realtime_reply):
+        if (interruptible and not realtime_feedback and not realtime_reply
+                and getattr(self, "_input_captures", None)):
+            logger.info("TTS optional speech dropped -- user capture active: %s", text[:50])
+            return True
+        return False
+
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
-              turn_id: str = "", realtime_reply: bool = False) -> bool:
+              turn_id: str = "", realtime_reply: bool = False,
+              speed: Optional[float] = None, harness_result: bool = False,
+              preview: Optional[tuple] = None) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
         (agent replies only — see _realtime_feedback)."""
-        if not self.available:
+        logger.info("[tts-timing] stage=speak_requested text_key=%s owner=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12], turn_id or "unowned")
+        # A preview brings its own (already checked) backend, so it can test a
+        # provider before the saved one works (e.g. no key saved yet).
+        if not (self.available or (preview is not None and self._sd is not None)):
             logger.warning("TTS not available")
+            return False
+        if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
             return False
 
         if self._speaker_muted():
             logger.info("TTS suppressed -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed -- turn stopped by user: %s", text[:50])
+            self._report_unspoken_reply(text, realtime_feedback)
             return False
 
         # Cache-first: an exact-text WAV in the prerender cache plays with NO
@@ -937,7 +1093,9 @@ class TTSService:
         # audible while the TTS provider itself is rate-limited. Dynamic
         # agent replies never match — the cache only ever holds warm-listed
         # fixed phrases. speak_cached mirrors this method's lock semantics.
-        if self._tts_cache_path(text).exists():
+        # Preview speed/backend/voice belong to this utterance, never the shared
+        # service or cache. `preview` is (backend, voice) from /voice/speak.
+        if not harness_result and speed is None and preview is None and self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
@@ -957,20 +1115,15 @@ class TTSService:
                 logger.info("TTS busy, skipping: %s", text[:50])
                 return False
 
-        # Clear any leftover stop signal from a previous stop() call
-        self._stop_event.clear()
-
-        # Mark speaking IMMEDIATELY so VoiceService stops streaming to Deepgram
-        # before TTS API call (which can take 3-5s)
-        self._speaking = True
-        self._interruptible = interruptible
-        self._last_spoken_text = text
-        self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+        if not self._claim_speech(text, interruptible, realtime_feedback, turn_id, realtime_reply):
+            return False
 
         thread = threading.Thread(
             target=self._speak_sync,
             args=(text,),
+            kwargs={**({"speed": speed} if speed is not None else {}),
+                    **({"preview": preview} if preview is not None else {}),
+                    **({"harness_result": True} if harness_result else {})},
             daemon=True,
             name="tts-speak",
         )
@@ -1037,6 +1190,8 @@ class TTSService:
         Returns True if the request was accepted (playing or queued); False
         if TTS is unavailable.
         """
+        logger.info("[tts-timing] stage=queue_requested text_key=%s owner=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12], turn_id or "unowned")
         if not self.available:
             logger.warning("TTS not available")
             return False
@@ -1044,6 +1199,10 @@ class TTSService:
         if self._speaker_muted():
             logger.info("TTS suppressed (queue) -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed (queue) -- turn stopped by user: %s", text[:50])
+            self._report_unspoken_reply(text, realtime_feedback)
             return False
 
         # Serialize the complete arrival path. A newer turn owns the speaker:
@@ -1295,6 +1454,8 @@ class TTSService:
             )
             self._pending_playback_owner = ""
             stream.write(first)
+            logger.info("[tts-timing] stage=queued_first_write_done text_key=%s owner=%s",
+                        hashlib.sha256(item.text.encode()).hexdigest()[:12], item.owner)
             total += len(first)
             while not self._stop_event.is_set():
                 try:
@@ -1321,35 +1482,36 @@ class TTSService:
             logger.info("native audio suppressed -- speaker muted")
             self._note_speech_muted(owner)
             return False
+        if self._owner_suppressed(owner):
+            logger.info("native audio suppressed -- turn stopped by user")
+            return False
         if not self._lock.acquire(blocking=False):
-            logger.info("native audio: speaker busy, skipping")
+            # Match speak(): an answer takes over an interruptible filler.
+            # Otherwise each incoming native frame is discarded until the
+            # filler ends, leaving only the tail of the model's sentence.
+            # An existing native stream is released by its consumer; do not
+            # wait for that same consumer here or stop another native owner.
+            if self._interruptible and not self._native_mode:
+                logger.info("native audio: interrupting filler before playback")
+                self.stop()
+                if not self._lock.acquire(blocking=True, timeout=2.0):
+                    logger.warning("native audio: speaker lock not released after stop")
+                    return False
+            else:
+                logger.info("native audio: speaker busy, skipping")
+                return False
+        # A stop or mute may have arrived while waiting for the filler worker.
+        if self._speaker_muted() or self._owner_suppressed(owner):
+            self._lock.release()
             return False
         self._stop_event.clear()
         self._native_src_rate = src_rate
         self._native_rs_carry = None
         self._native_rs_pos = 0.0
-        # Prefer opening the device AT the model's rate. The alternative is
-        # resampling every chunk that arrives, and a realtime model streams many
-        # small ones — ALSA's converter runs continuously across writes, a
-        # per-chunk one in Python cannot. Falls back to the device rate plus the
-        # streaming resampler below when the device refuses the rate.
+        # Keep the device-rate stream shared with TTS/fillers warm. Switching
+        # to the model rate closes it and can spend seconds reopening ALSA.
+        # The streaming resampler below preserves continuity across chunks.
         self._native_direct = False
-        cache_key = (self._device_key(), src_rate)
-        if self._native_direct_cache.get(cache_key) is False:
-            pass  # known to refuse this rate — go straight to the resampler
-        else:
-            try:
-                with self._stream_lock:
-                    self._ensure_stream(src_rate)
-                self._native_direct = True
-                self._native_direct_cache[cache_key] = True
-            except Exception as e:
-                self._native_direct_cache[cache_key] = False
-                logger.info(
-                    "native audio: device would not open at %d Hz (%s) — "
-                    "resampling to %s Hz for the rest of this run",
-                    src_rate, e, self._device_rate,
-                )
         self._native_mode = True
         # Native playback is the realtime model's OWN voice — never feed it back
         # (the native_mode check in the hook already skips it; clear the flag too
@@ -1577,11 +1739,17 @@ class TTSService:
         return [c for c in chunks if c]
 
     def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None,
-                          cancelled: Optional[Callable[[], bool]] = None):
+                          cancelled: Optional[Callable[[], bool]] = None,
+                          speed: Optional[float] = None, preview: Optional[tuple] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
-        stopped = cancelled if cancelled is not None else self._stop_event.is_set
+        backend, voice = preview if preview is not None else (self._backend, self._voice)
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = cancelled if cancelled is not None else lambda: (
+            self._stop_event.is_set()
+            or generation != getattr(self, "_synthesis_generation", 0)
+        )
         np = self._np
-        src_rate = self._backend.sample_rate
+        src_rate = backend.sample_rate
         # Head, tail and queued pre-synthesis run concurrently. Each iterator
         # owns its sample clock; never share the realtime resampler's state.
         resampler = PCMResampler(src_rate, dst_rate)
@@ -1589,12 +1757,13 @@ class TTSService:
         first_audio_logged = False
         t0 = time.perf_counter()
 
-        for chunk in self._backend.stream_pcm(
+        for chunk in backend.stream_pcm(
             text=text,
-            voice=self._voice,
+            voice=voice,
             model=self._model,
-            speed=self._speed,
+            speed=self._speed if speed is None else speed,
             instructions=self._instructions,
+            **({"cancelled": stopped} if getattr(backend, "supports_synthesis_cancellation", False) else {}),
         ):
             if stopped():
                 return
@@ -1608,7 +1777,7 @@ class TTSService:
                 / 32768.0
             )
             # Apply the provider's gain before resampling, including the EOF tail.
-            samples = np.clip(samples * self._backend.volume_boost, -1.0, 1.0)
+            samples = np.clip(samples * backend.volume_boost, -1.0, 1.0)
             samples = resampler.process(samples)
             if not len(samples):
                 continue
@@ -1685,22 +1854,31 @@ class TTSService:
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
         idx_total: tuple[int, int],
+        speed: Optional[float] = None,
+        preview: Optional[tuple] = None,
     ) -> None:
         """Produce head chunk frames into a queue. Runs in parallel with the
         ALSA OutputStream open call so HTTP TTFB overlaps codec warmup."""
         idx, total = idx_total
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = lambda: self._stop_event.is_set() or generation != getattr(self, "_synthesis_generation", 0)
         attempt = 0
         try:
-            while attempt <= self._max_retries:
+            while attempt <= self._max_retries and not stopped():
                 try:
                     logger.info(
                         "TTS chunk %d/%d: len=%d (attempt=%d, speed=%.2f)",
-                        idx, total, len(text), attempt + 1, self._speed,
+                        idx, total, len(text), attempt + 1, self._speed if speed is None else speed,
                     )
-                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0"):
-                        if self._stop_event.is_set():
+                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed, preview=preview, cancelled=stopped):
+                        if stopped():
                             return
-                        out_q.put(frame)
+                        while not stopped():
+                            try:
+                                out_q.put(frame, timeout=0.05)
+                                break
+                            except queue.Full:
+                                continue
                     return
                 except Exception as e:
                     logger.exception(
@@ -1726,21 +1904,30 @@ class TTSService:
         tail_chunks: list[str],
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
+        speed: Optional[float] = None,
+        preview: Optional[tuple] = None,
     ) -> None:
         """Produce tail frames sequentially into one shared queue."""
         total = len(tail_chunks) + 1
+        generation = getattr(self, "_synthesis_generation", 0)
+        stopped = lambda: self._stop_event.is_set() or generation != getattr(self, "_synthesis_generation", 0)
         try:
             for i, chunk_text in enumerate(tail_chunks, start=2):
-                if self._stop_event.is_set():
+                if stopped():
                     break
                 attempt = 0
-                while attempt <= self._max_retries:
+                while attempt <= self._max_retries and not stopped():
                     try:
                         logger.info("Tail producer start c%d/%d len=%d", i, total, len(chunk_text))
-                        for frame in self._iter_tts_samples(chunk_text, dst_rate):
-                            if self._stop_event.is_set():
+                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed, preview=preview, cancelled=stopped):
+                            if stopped():
                                 return
-                            out_q.put(frame)
+                            while not stopped():
+                                try:
+                                    out_q.put(frame, timeout=0.05)
+                                    break
+                                except queue.Full:
+                                    continue
                         logger.info("Tail producer done  c%d/%d", i, total)
                         break
                     except Exception as e:
@@ -1770,8 +1957,13 @@ class TTSService:
             except Exception:
                 pass
 
-    def _speak_sync(self, text: str):
+    def _speak_sync(self, text: str, speed: Optional[float] = None,
+                    harness_result: bool = False, preview: Optional[tuple] = None):
         """Head chunk direct playback + parallel tail producer queue."""
+        producer_kwargs = {**({"speed": speed} if speed is not None else {}),
+                           **({"preview": preview} if preview is not None else {})}
+        logger.info("[tts-timing] stage=worker_start text_key=%s",
+                    hashlib.sha256(text.encode()).hexdigest()[:12])
         sd = self._sd
         dst_rate = self._device_rate or TTS_SAMPLE_RATE
         chunks = self._split_text_into_growing_sentence_chunks(text)
@@ -1812,17 +2004,21 @@ class TTSService:
         head_thread = threading.Thread(
             target=self._head_producer,
             args=(head_text, dst_rate, head_q, (1, head_total)),
+            kwargs=producer_kwargs,
             daemon=True,
             name="tts-head-producer",
         )
         head_thread.start()
 
+        result_cue_pending = harness_result
         for _play_attempt in range(2):
             try:
                 # Acquire the stream lock for the entire playback so the silence
                 # keepalive thread doesn't interleave zeros with TTS frames.
                 with self._stream_lock:
                     stream = self._ensure_stream(dst_rate)
+                    logger.info("[tts-timing] stage=stream_ready text_key=%s rate=%d",
+                                hashlib.sha256(head_text.encode()).hexdigest()[:12], dst_rate)
                     # Tail producer kicks off the moment stream is ready so its HTTP
                     # TTFB overlaps with head playback.
                     tail_q: Optional["queue.Queue[Optional[np.ndarray]]"] = None
@@ -1833,6 +2029,7 @@ class TTSService:
                         tail_thread = threading.Thread(
                             target=self._tail_producer,
                             args=(tail_chunks, dst_rate, tail_q),
+                            kwargs=producer_kwargs,
                             daemon=True,
                             name="tts-tail-producer",
                         )
@@ -1849,6 +2046,11 @@ class TTSService:
                             continue
                         if item is None:
                             break
+                        if result_cue_pending:
+                            # Mark before playback so a stream retry never repeats the cue.
+                            result_cue_pending = False
+                            if not self._write_harness_result_chime(stream, dst_rate):
+                                break
                         if not self._speak_start_fired and self._on_speak_start:
                             self._speak_start_fired = True
                             try:
@@ -1856,6 +2058,10 @@ class TTSService:
                             except Exception:
                                 logger.exception("on_speak_start callback failed")
                         stream.write(item)
+                        if total_samples == 0:
+                            logger.info("[tts-timing] stage=first_write_done text_key=%s owner=%s",
+                                        hashlib.sha256(head_text.encode()).hexdigest()[:12],
+                                        getattr(self, "_playback_owner", ""))
                         total_samples += len(item)
 
                     # Drain tail queue.
@@ -1869,6 +2075,10 @@ class TTSService:
                                 continue
                             if item is None:
                                 break
+                            if result_cue_pending:
+                                result_cue_pending = False
+                                if not self._write_harness_result_chime(stream, dst_rate):
+                                    break
                             stream.write(item)
                             total_samples += len(item)
                     # speak_queue() may have parked pre-synth'd PCM behind us
@@ -1893,6 +2103,7 @@ class TTSService:
                     head_thread = threading.Thread(
                         target=self._head_producer,
                         args=(head_text, dst_rate, head_q, (1, head_total)),
+                        kwargs=producer_kwargs,
                         daemon=True,
                         name="tts-head-producer-retry",
                     )
@@ -1976,6 +2187,9 @@ class TTSService:
 
     def _tts_cache_key(self, text: str) -> str:
         h = hashlib.sha1()
+        revision = getattr(self._backend, "cache_revision", "")
+        if revision:
+            h.update(revision.encode("utf-8") + b"\x00")
         h.update(self._provider.encode("utf-8"))
         h.update(b"\x00")
         h.update((self._voice or "").encode("utf-8"))
@@ -2041,11 +2255,18 @@ class TTSService:
         if not self.available:
             logger.warning("TTS not available (cached path)")
             return False
+        if not prerender and self._optional_speech_blocked(
+            text, interruptible, realtime_feedback, realtime_reply,
+        ):
+            return False
 
         # Prerender only warms the cache (no playback), so it is NOT muted.
         if not prerender and self._speaker_muted():
             logger.info("TTS suppressed (cached) -- speaker muted: %s", text[:50])
             self._note_speech_muted(f"run:{turn_id}" if turn_id else "")
+            return False
+        if not prerender and turn_id and self._owner_suppressed(f"run:{turn_id}"):
+            logger.info("TTS suppressed (cached) -- turn stopped by user: %s", text[:50])
             return False
 
         cache_path = self._tts_cache_path(text)
@@ -2076,12 +2297,8 @@ class TTSService:
                 logger.info("TTS busy, skipping cached: %s", text[:50])
                 return False
 
-        self._stop_event.clear()
-        self._speaking = True
-        self._interruptible = interruptible
-        self._last_spoken_text = text
-        self._realtime_feedback = realtime_feedback
-        self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+        if not self._claim_speech(text, interruptible, realtime_feedback, turn_id, realtime_reply):
+            return False
 
         threading.Thread(
             target=self._cached_play_thread,
@@ -2212,6 +2429,42 @@ class TTSService:
         notes = [0.28 * envelope * np.sin(2 * np.pi * frequency * t)
                  for frequency in frequencies]
         return np.concatenate((notes[0], np.zeros(int(rate * 0.025)), notes[1])).astype(np.float32).reshape(-1, 1)
+
+    def play_harness_result_chime(self) -> bool:
+        """The Harness result cue on its own, for speech that does not come
+        from speak(harness_result=True) — a realtime-rendered announcement."""
+        return self._play_gesture_chime(
+            lambda rate: self._harness_result_chime_samples(rate, boosted=False)
+        )
+
+    def _harness_result_chime_samples(self, rate: int, *, boosted: bool = True):
+        """Soft 200 ms chord, distinct from capture's rising/falling notes.
+
+        boosted=False leaves the software gain to _play_gesture_chime, which
+        applies it itself.
+        """
+        np = self._np
+        t = np.arange(int(rate * 0.2)) / rate
+        envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
+        samples = 0.14 * envelope * (np.sin(2 * np.pi * 659.25 * t)
+                                    + np.sin(2 * np.pi * 987.77 * t))
+        gain = self._backend.volume_boost if (boosted and self._backend is not None) else 1.0
+        return np.clip(samples * gain, -1.0, 1.0).astype(np.float32).reshape(-1, 1)
+
+    def _write_harness_result_chime(self, stream, rate: int) -> bool:
+        """Write inside the admitted utterance, preserving its cancellation/metrics."""
+        samples = self._harness_result_chime_samples(rate)
+        block = max(1, int(rate * 0.01))
+        for offset in range(0, len(samples), block):
+            if self._stop_event.is_set() or self._speaker_muted():
+                self._stop_event.set()
+                return False
+            # Untracked writes preserve AEC but bypass the stream's speech stop
+            # check, so check cancellation explicitly for every 10 ms slice.
+            stream.write(samples[offset:offset + block], track_playback=False)
+        if self._speaker_muted():
+            self._stop_event.set()
+        return not self._stop_event.is_set()
 
     def _play_gesture_chime(self, samples_for_rate) -> bool:
         """Use existing volume, mute, AEC and untracked playback for gesture tones."""

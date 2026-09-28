@@ -38,3 +38,20 @@ func environmentGreetingGuidance() string {
 		return "The attached environment snapshot passed readiness checks. Follow the environment skill and optionally add at most one brief sentence with one or two useful readings to the greeting. Do not infer trends or safety from one snapshot, read every value aloud, or call tools to wait for sensors."
 	}
 }
+
+// startupGreetingAllowed treats service startup as maintenance, not a wake request.
+// Bodies without expression do not expose /emotion/status.
+func startupGreetingAllowed(gatewayReady, hasExpression bool, getSleeping func() (bool, error)) bool {
+	if !gatewayReady {
+		return false
+	}
+	if !hasExpression {
+		return true
+	}
+	sleeping, err := getSleeping()
+	if err != nil {
+		slog.Warn("startup sleep state unavailable", "component", "server", "error", err)
+		return false
+	}
+	return !sleeping
+}

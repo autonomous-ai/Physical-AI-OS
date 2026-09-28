@@ -22,7 +22,11 @@ import numpy.typing as npt
 DEFAULT_LABEL_THRESHOLDS: dict[str, float] = {
     "happy": 0.5,
     "surprise": 0.6,
-    "sad": 0.7,
+    # 0.7 let a bowed head with closed eyes read as Sad on nearly every frame,
+    # enough to win the HAL occupancy vote and fire repeatedly. On RAF-DB train
+    # (held out from this AffectNet model) 0.8 cuts false Sad from 116 to 44
+    # while per-frame Sad recall drops from 0.50 to 0.37.
+    "sad": 0.8,
     # 0.6 let a non-frontal face read as Anger on 38% of triggers with a median
     # confidence of 0.62 and never once correctly (device session 2026-09-03,
     # 500 triggers). Observed max on that session was 0.91, so 0.8 keeps the

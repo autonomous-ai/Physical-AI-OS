@@ -50,20 +50,28 @@ import (
 type Server struct {
 	externalHistory *externalhistory.Store
 
-	harnessService   *harness.Service
-	harnessVoice     *harness.VoiceController
-	harnessVoiceCtx  context.Context
-	harnessRepliesMu sync.Mutex
+	harnessPreparationMu    sync.Mutex
+	harnessPreparationWaits map[string]*harnessPreparationWait
+	harnessService          *harness.Service
+	harnessResults          *harness.ResultStore
+	harnessResultsMu        sync.Mutex
+	harnessResultWake       chan struct{}
+	harnessResultsPublished map[string]bool
+	harnessSelector         *harnessSelector
+	harnessVoice            *harness.VoiceController
+	harnessVoiceCtx         context.Context
+	harnessRepliesMu        sync.Mutex
 	// harnessReplies is keyed by the local device run ID. A single Harness
 	// agent can work on more than one user request at once, so it cannot be
 	// keyed by agent ID.
-	harnessReplies  map[string]harnessReply
-	harnessFollowup atomic.Int64
-	harnessResultMu sync.RWMutex
-	harnessResult   string
-	harnessResultAt time.Time
-	engine          *gin.Engine
-	config          *config.Config
+	harnessReplies       map[string]harnessReply
+	harnessOverlapAgents map[string]bool
+	harnessFollowup      atomic.Int64
+	harnessResultMu      sync.RWMutex
+	harnessResult        string
+	harnessResultAt      time.Time
+	engine               *gin.Engine
+	config               *config.Config
 
 	environmentStartup *environment.StartupCoordinator
 
@@ -209,6 +217,7 @@ func ProvideServer(
 	sensingH.SetHarnessConnected(harnessConnected)
 	sensingmsg.SetHarnessConnected(harnessConnected)
 	sensingH.SetHarnessFollowup(s.HarnessVoiceFollowup)
+	sensingH.SetHarnessTaskPending(s.HarnessTaskPending)
 	sensingH.SetHarnessFollowupContext(s.HarnessFollowupContext)
 	sensingH.SetHarnessVoice(s.handleHarnessVoice)
 	return s
@@ -300,6 +309,8 @@ func (s *Server) Serve(closeFn func()) error {
 			seedVoice = v
 		} else if effectiveProvider == domain.TTSProviderElevenLabs {
 			seedVoice = domain.DefaultElevenLabsVoiceForLang(s.config.STTLanguage)
+		} else if effectiveProvider == domain.TTSProviderGemini {
+			seedVoice = domain.DefaultGeminiVoice
 		}
 	}
 	if seedProvider != "" || seedVoice != "" {
@@ -349,7 +360,10 @@ func (s *Server) Serve(closeFn func()) error {
 		return err
 	}
 	harnessService, harnessErr := harness.NewService("config", harness.Callbacks{
-		OnEvent: s.forwardHarnessEvent,
+		OnEvent:       s.forwardHarnessEvent,
+		BeforeEvent:   s.captureHarnessResult,
+		BeforeRequest: s.reserveHarnessResult,
+		OnReceipt:     s.bindHarnessResultReceipt,
 		OnRevoked: func() {
 			if s.harnessVoice != nil {
 				_, _ = s.harnessVoice.SetMode(eventCtx, false)
@@ -360,6 +374,10 @@ func (s *Server) Serve(closeFn func()) error {
 		slog.Error("harness service initialization failed", "component", "harness", "error", harnessErr)
 	} else {
 		s.harnessService = harnessService
+		if err := s.initializeHarnessResults("config/harness/results.json"); err != nil {
+			slog.Error("Harness result storage unavailable", "error", err)
+		}
+		go s.watchHarnessResults(eventCtx)
 		s.restoreHarnessHistoryReplies()
 		harnessService.Start(eventCtx)
 		s.deviceMQTTHandler.SetHarnessService(harnessService)
@@ -539,6 +557,7 @@ func (s *Server) Serve(closeFn func()) error {
 	buddy.GET("ws", s.buddyHandler.WS)
 	buddy.POST("command", localOnlyMiddleware(), s.buddyHandler.Command)
 	buddy.POST("observe", localOnlyMiddleware(), s.buddyHandler.Observe)
+	buddy.POST("suggest", localOnlyMiddleware(), s.buddyHandler.Suggest)
 	// /exec/:action is the marker-friendly variant used by OpenClaw skills via
 	// [HW:/buddy/exec/<action>:{...}]. Localhost-only (loopback from agent handler's hwMarker dispatcher).
 	buddy.POST("exec/:action", localOnlyMiddleware(), s.buddyHandler.Exec)

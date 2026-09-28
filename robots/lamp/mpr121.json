@@ -18,8 +18,8 @@
         10,
         11
       ],
-      "touch_threshold": 2,
-      "release_threshold": 1,
+      "touch_threshold": 6,
+      "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,

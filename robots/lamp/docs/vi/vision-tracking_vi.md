@@ -14,6 +14,15 @@ Toàn bộ code tracking nằm trong package `hal/drivers/tracking/`:
 | `filters.py` | `AlphaBetaFilter2D`, `PID`, `smooth_damp`, `soft_deadband` |
 | `frame_utils.py` | `downscale`, `scale_bbox` (map tọa độ) |
 
+## Định tuyến intent giọng nói
+
+Yêu cầu voice không khớp rule local có thể qua nhánh Jev của OS để chọn
+`servo_track` với một trong 23 nhãn mục tiêu chuẩn hóa, hoặc `servo_track_stop`.
+OS kiểm tra mục tiêu và capability motion đã khai báo rồi dùng lại rule tracking
+hiện có; Jev không cấp payload HAL tự do. Mục tiêu thiếu/không hỗ trợ, camera
+bên ngoài và quyết định chưa đủ điểm chuyển main agent, giữ nguyên đường skill
+open-vocabulary. Xem [Định tuyến intent Jev](../../../../docs/vi/os-server_vi.md#fallback-intent-jev).
+
 ## Kiến trúc
 
 ```

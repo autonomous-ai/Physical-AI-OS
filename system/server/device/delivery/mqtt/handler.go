@@ -74,6 +74,13 @@ type DeviceMQTTHandler struct {
 	// yet confirmed is not merely flagged un-runnable, it is absent from the
 	// file the runner reads. See system/schedule/intent.go.
 	scheduleIntents *schedule.IntentStore
+
+	// scheduleAlert, when non-nil, receives every schedule ops alert
+	// (alertScheduleEvent) synchronously INSTEAD of the real transport. Tests
+	// set it to capture exact titles; production leaves it nil, which sends
+	// through alertOps on its own goroutine (see alertScheduleEvent for why
+	// schedule alerts must never run inline). Never mutated after construction.
+	scheduleAlert func(title, detail string)
 }
 
 // SetHarnessService attaches the server-owned Harness service after Wire construction.
@@ -211,9 +218,20 @@ func ProvideDeviceMQTTHandler(cfg *config.Config, mqttFactory *mqtt.Factory, ds 
 	// the caller eventually stores (wire_gen.go copies the return value into
 	// Server.deviceMQTTHandler) — that is safe here because publishDataResult
 	// only ever reads h.config/h.mqttFactory, and both are pointers shared
-	// identically by every copy of this struct. Do not add any other
-	// mutable-by-value state to this closure without re-checking that holds.
+	// identically by every copy of this struct. The run's ops alert
+	// (alertScheduleEvent) adds reads of h.scheduleAlert (nil in production,
+	// never mutated) and, through alertOps, h.config again — the same holds.
+	// Do not add any other mutable-by-value state to this closure without
+	// re-checking that holds.
 	h.scheduleRunner = schedule.NewRunner(scheduleStore, gw, cfg.DeviceID, h.publishScheduleRunReport)
+	// The connector guard for template tasks (schedule.Schedule.Requires):
+	// the runner asks connectorInstalled whether each required code has
+	// credentials on this device, and skips the run — reported as "skipped" —
+	// when one does not. Bound to the local h for the same reason, and just as
+	// safely: connectorInstalled reads only h.config (pointer),
+	// h.connectorWriter (pointer) and h.specialConnectorWriters (map), all set
+	// in the literal above and never mutated afterwards.
+	h.scheduleRunner.SetConnectorChecker(schedule.ConnectorCheckerFunc(h.connectorInstalled))
 	return h
 }
 
@@ -331,6 +349,10 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleSystemReboot(env)
 	case domain.KindSystemShutdown:
 		return h.handleSystemShutdown(env)
+	case domain.KindSystemOTAVersions:
+		return h.handleSystemOTAVersions(env)
+	case domain.KindSystemSoftwareUpdate:
+		return h.handleSystemSoftwareUpdate(env)
 	case domain.KindSkillsInstall:
 		return h.handleSkillsInstall(env)
 	case domain.KindSkillsSave:

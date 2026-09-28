@@ -12,6 +12,7 @@ from fastapi.responses import Response
 
 import hal.app_state as state
 from hal.config import AUDIO_OUTPUT_ALSA, VOLUME_STATE_PATH
+from hal.drivers.voice._internal import live_playback
 from hal.safety.policy import clamp_volume, max_volume_pct
 from hal.models import (
     AudioDevicesResponse,
@@ -191,13 +192,14 @@ def set_volume(req: VolumeRequest):
         value = f"{dac_db:.1f}dB" if ctrl.rsplit(",", 1)[0].upper() in _DAC_CONTROLS else f"{pct}%"
         try:
             # `--` so amixer doesn't parse a leading `-` in negative dB as a flag.
-            subprocess.run(
+            result = subprocess.run(
                 [*cmd_prefix, "sset", ctrl, "--", value],
                 check=True,
                 capture_output=True,
                 text=True,
                 timeout=5,
             )
+            live_playback.observe_mixer(ctrl, result.stdout)
         except (OSError, subprocess.SubprocessError) as exc:
             raise HTTPException(503, f"Audio mixer write failed: {ctrl}") from exc
     _persist_volume(pct)
@@ -259,6 +261,7 @@ def get_volume():
             )
             if result.returncode != 0:
                 continue
+            live_playback.observe_mixer(ctrl, result.stdout)
             if ctrl.rsplit(",", 1)[0].upper() in _DAC_CONTROLS:
                 db_match = re.search(r"\[(-?\d+(?:\.\d+)?)dB\]", result.stdout)
                 if db_match:

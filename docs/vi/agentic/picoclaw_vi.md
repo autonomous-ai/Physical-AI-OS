@@ -465,3 +465,50 @@ nên reset **xóa sạch** `/root/.picoclaw` rồi onboard lại một baseline 
 Gateway được để **stopped + disabled** — wizard setup sau reboot chạy `SetupAgent` của
 runtime mặc định, giống cách OpenClaw/Hermes disable unit của chính mình trong
 `ResetAgent`.
+
+### Nạp skill trước qua Jev
+
+Khi bật, onboarding OS cài hook stdio native `hooks.processes.jev`, với
+`intercept: ["before_llm"]`. Khi asset hoặc đăng ký thay đổi, dùng cơ chế restart
+gateway hiện có của onboarding; reconcile không đổi không restart.
+**Jev mặc định tắt** bằng `const jevEnabled = false` trong `runtimes/picoclaw/jev_hook.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật sau kiểm chứng, đổi cờ Go rồi build và restart qua luồng quản lý runtime. Observer vẫn quản lý global gate `hooks.enabled`; Jev không thay đổi gate đó.
+Sidecar chỉ chứa đường dẫn tuyệt đối tới config OS; credential được đọc khi dùng.
+
+Hook dùng chung selector Hermes: tối đa 32 ứng viên, ngân sách chọn/nạp tổng cộng
+3 giây, choice >= 0.70, margin >= 0.20, fit độc lập >= 0.60. Lỗi, worker bận,
+timeout, abstain, slash command hoặc chỉ dẫn `[skills: ...]` giữ cơ chế tìm skill
+bình thường. Chỉ câu người dùng hiện tại và mô tả ứng viên được gửi tới Jev,
+không gửi lịch sử chat. Log `[picoclaw-jev]` không ghi prompt, credential hay nội
+dung skill.
+
+Danh sách ứng viên lấy từ `<skills>` trong system prompt native của PicoClaw,
+giới hạn ở file tồn tại trong `/root/.picoclaw/workspace/skills`. Không tự tạo
+catalog bằng cách quét thư mục khác. Thiếu roster hoặc sai định dạng thì bỏ qua.
+Toàn bộ SKILL.md được chọn, đường dẫn tuyệt đối và thư mục tham chiếu được nạp
+vào context tạm của user message hiện tại; giữ nguyên system message và tools.
+Từ chối file quá 128 KiB, đường dẫn vượt skill root, tên trùng không rõ ràng và
+inline shell template; preload không thực thi nội dung skill. Cache RAM giới hạn 256 turn chỉ nhớ skill đã chọn và prompt gốc. Mỗi iteration
+kiểm tra lại roster native hiện tại và đọc lại toàn bộ file an toàn; skill bị gỡ
+hoặc lỗi đọc sẽ hủy lựa chọn. Turn có attachment/content-part, system, sensing
+hay đã handled đều bỏ qua Jev. Đọc theo descriptor với no-follow chặn symlink
+và file không phải regular; context sau đóng gói cũng giới hạn 128 KiB. Không ghi persona
+hoặc file lịch sử. Turn thiếu ID/iteration và child turn được bỏ qua.
+
+Hook native bao phủ kênh WebSocket `pico` (voice/Web/MQTT qua OS) lẫn kênh trực
+tiếp của PicoClaw như Telegram; không đặt interceptor tại dispatcher OS.
+Đối chiếu source checkout Autonomous PicoClaw commit
+`3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488`, cụ thể
+[`hooks.go`](https://github.com/autonomous-ai/picoclaw/blob/3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488/pkg/agent/hooks.go),
+[`hook_process.go`](https://github.com/autonomous-ai/picoclaw/blob/3f6a5c9e7d31fde3b5096aa3b37f55b4f6292488/pkg/agent/hook_process.go),
+`pipeline_llm.go` và `pkg/skills/loader.go`: hook before-LLM được sửa message
+không phải system; sửa system message hoặc tool definition bị chặn. Pipeline
+dùng message từ hook cho provider call, tách khỏi lịch sử được lưu.
+Test local/mock kiểm tra độc lập kênh, cô lập turn, giới hạn đường dẫn/nội dung
+và opt-out. Chưa gọi Jev thật, chạy binary native, task trả phí hay test robot;
+release cài trên thiết bị vẫn cần native smoke test.
+
+Follow-up ngắn/phụ thuộc ngữ cảnh như “brighter”, “Make it brighter”, “continue”
+và “do it” bỏ qua preload để main model hiểu task đang tiếp tục; lệnh nhắm rõ
+phần cứng và yêu cầu công việc số mới rõ ràng vẫn dùng chọn skill bình thường.
+
+Chỉ `[voice-instruction]` duy nhất ở đầu envelope được gửi tới selector; transcript mâu thuẫn bị loại khỏi đầu vào chọn skill. Envelope sai hoặc instruction rỗng bỏ qua preload. Message gốc gửi runtime được giữ nguyên.

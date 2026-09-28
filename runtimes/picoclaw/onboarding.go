@@ -186,6 +186,12 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
+	if changed, err := s.ensureJevHook(); err != nil {
+		slog.Error("ensure Jev hook failed", "component", "picoclaw-onboarding", "error", err)
+	} else if changed {
+		needRestart = true
+	}
+
 	// Restart the gateway so it re-reads the changed workspace prompt files
 	// (systemctl restart — see service_gateway.go for why not /reload).
 	if needRestart {

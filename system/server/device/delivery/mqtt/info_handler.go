@@ -6,6 +6,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
+	"go.autonomous.ai/os/system/schedule"
 	agenthttp "go.autonomous.ai/os/system/server/agent/delivery/http"
 )
 
@@ -41,6 +42,20 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 	} else {
 		msg.Skills = domain.SummarizeSkills(list)
 	}
+	// Fingerprint of the scheduled tasks this device holds, for the backend's
+	// drift check (see domain.MQTTInfoResponse.SchedulesDigest). Read from
+	// the same schedules.json the runner fires from — not the pending-intent
+	// queue, whose proposals the backend does not hold yet either. Best-effort
+	// like skills above: a store that can't be read omits the field rather
+	// than failing the uplink, and LoadChecked is used instead of Load so an
+	// unreadable file is never reported as the empty-list digest (which would
+	// make the backend re-send a sync this same store could not apply).
+	if rows, err := h.scheduleStore.LoadChecked(); err != nil {
+		slog.Warn("info: schedules store unreadable, omitting schedules_digest",
+			"component", "mqtt", "error", err)
+	} else {
+		msg.SchedulesDigest = schedule.Digest(rows)
+	}
 	slog.Info("mqtt_handler_info",
 		"id", msg.ID,
 		"version", msg.Version,
@@ -58,6 +73,7 @@ func (h *DeviceMQTTHandler) handleInfo(_ domain.MQTTMessage) error {
 		"stt_language", msg.STTLanguage,
 		"timezone", msg.Timezone,
 		"skills", len(msg.Skills),
+		"schedules_digest", msg.SchedulesDigest,
 	)
 	return h.publish(msg)
 }

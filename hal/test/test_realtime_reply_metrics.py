@@ -169,3 +169,101 @@ def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoke
         assert call.kwargs["turn_id"] == "vi-test"
         assert call.kwargs["realtime_reply"] is True
         assert call.kwargs.get("realtime_feedback", False) is False
+
+
+@pytest.mark.parametrize("chunks,ready,expected", [
+    (["I'm right here! [cheerfully]"], [True], "I'm right here!"),
+    (["I'm right here! [cheer", "fully]"], [False, True], "I'm right here!"),
+    (["I'm right here! [HW:/led/off:{}]"], [True], "I'm right here!"),
+    (["I'm right here! NO_REPLY"], [True], "I'm right here!"),
+    (["I'm right here [cheerfully]"], [False], "I'm right here"),
+    (["[cheerfully]"], [False], None),
+])
+def test_tagged_reply_flushes_before_provider_finishes(monkeypatch, chunks, ready, expected):
+    from hal.drivers.voice.voice_service import VoiceService
+
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 100)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
+    monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
+    realtime, tts = Mock(available=True), Mock()
+    tts.speak.return_value = True
+
+    def outputs():
+        for text, should_speak in zip(chunks, ready):
+            yield TextOutput(text=text)
+            # This runs while the provider is still waiting for tool/routing
+            # completion. No terminal or iterator exhaustion has happened yet.
+            assert tts.speak.called is should_speak
+        if any(ready):
+            tts.speak.assert_called_once_with(expected, turn_id="vi-tag", realtime_reply=True)
+
+    realtime.stream_output.return_value = outputs()
+    realtime_turn.run_realtime_turn(
+        realtime, tts, VoiceService.strip_rt_markers, "Can you hear me over there",
+        [object()], 2.0, interaction_id="vi-tag",
+    )
+    if expected is not None:
+        tts.speak.assert_called_once_with(expected, turn_id="vi-tag", realtime_reply=True)
+    else:
+        tts.speak.assert_not_called()
+    tts.speak_queue.assert_not_called()
+
+
+def test_realtime_turn_reuses_a_filler_armed_before_the_handshake(monkeypatch):
+    """The caller may arm the dead-air filler before the Gemini reconnect and
+    hand it in; the turn must not create a second one (one filler per turn)."""
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
+    factory = Mock()
+    monkeypatch.setattr(realtime_turn, "_WaitFiller", factory)
+    realtime = Mock(available=True)
+    realtime.stream_output.return_value = iter([TextOutput(text="Hello there.")])
+    tts = Mock()
+    tts.speak.return_value = True
+    armed = Mock()
+
+    result = realtime_turn.run_realtime_turn(
+        realtime, tts, lambda text: text, "Can you hear me clearly over there today",
+        [object()], 3.0, interaction_id="vi-test", wait_filler=armed,
+    )
+
+    assert result.handled
+    factory.assert_not_called()
+    armed.arm.assert_called_once()
+    armed.cancel.assert_called()
+
+
+def test_bundled_next_sentence_does_not_hold_completed_reply(monkeypatch):
+    from hal.drivers.voice.voice_service import VoiceService
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")
+    monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_FIRST_CHUNK_MAX_CHARS", 0)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_start", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", lambda: None)
+    monkeypatch.setattr(realtime_turn, "_reply_language_name", lambda: "English")
+    monkeypatch.setattr(realtime_turn, "_WaitFiller", Mock())
+    realtime, tts = Mock(available=True), Mock()
+    tts.speak.return_value = True
+
+    def outputs():
+        yield TextOutput(text="I am right here. Let me")
+        tts.speak.assert_called_once_with("I am right here.", turn_id="vi-prefix", realtime_reply=True)
+        yield TextOutput(text=" help you.")
+        assert tts.speak_queue.call_args.args == ("Let me help you.",)
+
+    realtime.stream_output.return_value = outputs()
+    realtime_turn.run_realtime_turn(
+        realtime, tts, VoiceService.strip_rt_markers, "Can you hear me over there",
+        [object()], 2.0, interaction_id="vi-prefix",
+    )
+    assert tts.speak_queue.call_count == 1

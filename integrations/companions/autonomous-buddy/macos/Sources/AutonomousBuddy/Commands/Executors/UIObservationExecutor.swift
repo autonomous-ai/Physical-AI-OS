@@ -83,22 +83,12 @@ actor UIObservationStore {
         return ["x": point.x, "y": point.y, "width": extent.width, "height": extent.height]
     }
 
-    static func validatedLimit(_ params: [String: Any], _ key: String, fallback: Int, maximum: Int) throws -> Int {
-        guard let value = params[key] else { return fallback }
-        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID(),
-              number.doubleValue.isFinite, number.doubleValue.rounded() == number.doubleValue,
-              number.doubleValue >= 1, number.doubleValue <= Double(maximum) else {
-            throw ExecutorError.invalidParam("\(key) must be an integer between 1 and \(maximum)")
-        }
-        return number.intValue
-    }
-
     func observe(params: [String: Any]) async throws -> [String: Any] {
         guard AccessibilityCheck.isTrusted() else {
             throw ExecutorError.permissionDenied("Enable Accessibility for Autonomous Buddy in macOS System Settings")
         }
-        let maxNodes = try Self.validatedLimit(params, "max_nodes", fallback: 150, maximum: 500)
-        let maxDepth = try Self.validatedLimit(params, "max_depth", fallback: 12, maximum: 30)
+        let maxNodes = try ExecutorParameters.integer(params, "max_nodes", default: 150, range: 1...500)
+        let maxDepth = try ExecutorParameters.integer(params, "max_depth", default: 12, range: 1...30)
         if let value = params["app"], !(value is String) { throw ExecutorError.invalidParam("app") }
         let requestedApp = params["app"] as? String
         let (app, frontmostPID) = await MainActor.run { () -> (NSRunningApplication?, pid_t?) in

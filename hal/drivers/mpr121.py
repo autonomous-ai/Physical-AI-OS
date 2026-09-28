@@ -382,8 +382,11 @@ def announce_listening_cue(*, source):
 
 
 def triple_click_action(*, source):
-    from hal.drivers.button_actions import triple_click_action as action
-    action(source=source)
+    # Disabled for MPR121: accidental triple taps must not reboot the device.
+    # Keep the shared action wiring here so it can be restored deliberately.
+    # from hal.drivers.button_actions import triple_click_action as action
+    # action(source=source)
+    return
 
 
 def hold_release_action(held_s, *, source):
@@ -452,11 +455,17 @@ class MPR121Handler:
         for electrode in range(12):
             write(0x41 + 2 * electrode, config.touch_threshold)
             write(0x42 + 2 * electrode, config.release_threshold)
+        # Slow falling baseline tracking using NXP AN3944 quick-start values
+        # so the baseline does not quickly follow an approaching finger.
         for register, value in (
             (0x2B, 1), (0x2C, 1), (0x2D, 14), (0x2E, 0),
-            (0x2F, 1), (0x30, 5), (0x31, 1), (0x32, 0),
+            (0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
             (0x33, 0), (0x34, 0), (0x35, 0),
-            (0x5B, 0), (0x5C, 0x10), (0x5D, 0x20),
+            # CONFIG2: CDT 0.5 us, SFI 10 samples, ESI 1 ms. The 10-sample
+            # second-level filter halves idle noise versus 4 samples and
+            # updates every ~10 ms, matching the poll period. Chip debounce
+            # stays 0: contact/footprint debounce is done in software.
+            (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
         ):
             write(register, value)
         if config.autoconfig:

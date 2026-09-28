@@ -304,3 +304,36 @@ func TestBuildIdentityBlock_NoFilledFields(t *testing.T) {
 		t.Fatalf("expected empty when no filled fields, got %q", got)
 	}
 }
+
+// Hermes keeps its skill-priority block under a Hermes-only marker, so the
+// destination runtime's own strip (keyed on `<!-- OS DO NOT REMOVE -->`) cannot
+// clear it. Migrating out must drop it here, or those Hermes-specific rules ride
+// into the next runtime's SOUL.md and stay there.
+func TestHermesRead_DropsOSManagedSkillBlock(t *testing.T) {
+	root := t.TempDir()
+	soul := "<!-- OS DO NOT REMOVE -->\n# Lamp persona\n---\n\n" +
+		"## Personal\n\nowner notes\n\n" +
+		hermesOSBlockMarker + "\n" +
+		"**Skill priority (MANDATORY):** device skills beat bundled ones\n" +
+		"**Silence = the literal token `NO_REPLY`.**\n---\n"
+	if err := os.WriteFile(filepath.Join(root, "SOUL.md"), []byte(soul), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	b, err := hermesAdapter{}.read(Options{HermesRoot: root})
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+
+	if strings.Contains(b.Soul, "Skill priority (MANDATORY)") {
+		t.Errorf("OS-managed block leaked into the bundle:\n%s", b.Soul)
+	}
+	if strings.Contains(b.Soul, hermesOSBlockMarker) {
+		t.Errorf("marker left behind:\n%s", b.Soul)
+	}
+	for _, want := range []string{"# Lamp persona", "owner notes"} {
+		if !strings.Contains(b.Soul, want) {
+			t.Errorf("%q lost from the persona:\n%s", want, b.Soul)
+		}
+	}
+}

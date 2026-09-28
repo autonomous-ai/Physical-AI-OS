@@ -73,7 +73,7 @@ System-only skills may be hidden from the default storefront or shown with a
 | `mood` | Health | emotion, user-state, personalization | Lamp, Intern v2, Reachy Mini |
 | `computer-use` | Productivity | macos, browser, desktop, companion | Lamp, Intern v2, Reachy Mini |
 | `claude-buddy` | Productivity | claude-code, approvals, companion, agent | Lamp, Intern v2, Reachy Mini |
-| `harness-use` | Productivity | harness, coding-agent, research, delegation — app: <https://www.autonomous.ai/harness> | Lamp, Intern v2, Reachy Mini |
+| `harness-use` | Productivity | harness, coding-agent, research, delegation — app: <https://github.com/autonomous-ai/openharness> | Lamp, Intern v2, Reachy Mini |
 | `connectors` | Productivity | gmail, calendar, drive, notion, github | Lamp, Intern v2, Reachy Mini |
 | `faq` | Productivity | local-web, dashboard, settings, help | Lamp, Intern v2, Reachy Mini |
 | `input-branching` | Not published | routing, realtime, internal | Lamp, Intern v2, Reachy Mini |

@@ -50,16 +50,18 @@ var resumeErrHints = []string{"no rollout found", "no conversation", "not found"
 // Config holds every tunable. Main() fills it from environment variables
 // (read once at start); tests construct it directly with temp paths.
 type Config struct {
-	Token        string        // CODEX_WS_TOKEN
-	Port         string        // CODEX_PORT (Main only; tests inject a Listener)
-	Workspace    string        // CODEX_WORKSPACE
-	CodexBin     string        // CODEX_BIN
-	CodexHome    string        // CODEX_HOME
-	SessionFile  string        // CODEX_SESSION_FILE
-	AttachDir    string        // CODEX_ATTACH_DIR
-	TurnTimeout  time.Duration // CODEX_TURN_TIMEOUT_S
-	Home         string        // HOME asserted into the subprocess env
-	UseAppServer bool          // false = stable codex exec JSONL path
+	JevConfigPath string
+	JevEnabled    bool
+	Token         string        // CODEX_WS_TOKEN
+	Port          string        // CODEX_PORT (Main only; tests inject a Listener)
+	Workspace     string        // CODEX_WORKSPACE
+	CodexBin      string        // CODEX_BIN
+	CodexHome     string        // CODEX_HOME
+	SessionFile   string        // CODEX_SESSION_FILE
+	AttachDir     string        // CODEX_ATTACH_DIR
+	TurnTimeout   time.Duration // CODEX_TURN_TIMEOUT_S
+	Home          string        // HOME asserted into the subprocess env
+	UseAppServer  bool          // false = stable codex exec JSONL path
 }
 
 func envOr(key, def string) string {
@@ -78,23 +80,27 @@ func configFromEnv() Config {
 	// the whole state dir (the client side resolves the same var via syspath).
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
-		Token:        envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
-		Port:         envOr("CODEX_PORT", "18792"),
-		Workspace:    envOr("CODEX_WORKSPACE", home+"/workspace"),
-		CodexBin:     envOr("CODEX_BIN", "codex"),
-		CodexHome:    home,
-		SessionFile:  envOr("CODEX_SESSION_FILE", home+"/session.json"),
-		AttachDir:    envOr("CODEX_ATTACH_DIR", home+"/attachments"),
-		TurnTimeout:  timeout,
-		Home:         envOr("OS_AGENT_HOME", "/root"),
-		UseAppServer: envOr("CODEX_APP_SERVER", "1") != "0",
+		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
+		JevEnabled:    jevEnabled,
+		Token:         envOr("CODEX_WS_TOKEN", "autonomous_codex_token"),
+		Port:          envOr("CODEX_PORT", "18792"),
+		Workspace:     envOr("CODEX_WORKSPACE", home+"/workspace"),
+		CodexBin:      envOr("CODEX_BIN", "codex"),
+		CodexHome:     home,
+		SessionFile:   envOr("CODEX_SESSION_FILE", home+"/session.json"),
+		AttachDir:     envOr("CODEX_ATTACH_DIR", home+"/attachments"),
+		TurnTimeout:   timeout,
+		Home:          envOr("OS_AGENT_HOME", "/root"),
+		UseAppServer:  envOr("CODEX_APP_SERVER", "1") != "0",
 	}
 }
 
 // Server bridges a single WebSocket client to per-turn codex subprocesses.
 type Server struct {
-	cfg Config
-	ln  net.Listener
+	preloadContext  func(context.Context, string) string
+	lifetimeContext context.Context
+	cfg             Config
+	ln              net.Listener
 
 	mu                sync.Mutex  // guards client, threadID and session-file writes
 	client            *wsClient   // single client; a new connection replaces the old
@@ -119,9 +125,11 @@ type Server struct {
 // New builds a Server with explicit config and listener (tests use port 0).
 func New(cfg Config, ln net.Listener) *Server {
 	return &Server{
-		cfg: cfg,
-		ln:  ln,
-		ops: make(chan op, turnQueueCap),
+		preloadContext:  newPreloader(cfg),
+		lifetimeContext: context.Background(),
+		cfg:             cfg,
+		ln:              ln,
+		ops:             make(chan op, turnQueueCap),
 	}
 }
 
@@ -131,6 +139,7 @@ func New(cfg Config, ln net.Listener) *Server {
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	s.lifetimeContext = ctx
 
 	if err := os.MkdirAll(s.cfg.Workspace, 0o755); err != nil {
 		log.Printf("%s mkdir workspace failed: %v", logPrefix, err)

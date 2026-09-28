@@ -337,6 +337,31 @@ function externalResponseText(ev: DisplayEvent): string {
   return typeof text === "string" ? text.trim() : "";
 }
 
+// A persisted Harness reply proves output, not speaker playback. Keep its
+// presentation separate from turn completion and pending-chat recovery.
+export function harnessOutputPresentation(turn: Turn, output: string): {
+  label: "Harness" | "Shared result";
+  resultRunId?: string;
+} | null {
+  if (!turn.runId || !output) return null;
+  for (const event of [...turn.events].reverse()) {
+    if (extractEventRunId(event) !== turn.runId) continue;
+    const detail = event.detail as FlowEventDetail | undefined;
+    const data = detail?.data ?? detail;
+    const isFlowReply = event.type === "flow_event" && detail?.node === "harness_response";
+    const isChatReply = event.type === "chat_response" && event.state === "final" && data?.source === "harness";
+    if (!isFlowReply && !isChatReply) continue;
+    const text = isFlowReply ? externalResponseText(event) : data?.message ?? event.summary;
+    if (typeof text !== "string" || text.trim() !== output.trim()) continue;
+    const reference = data?.result_reference === true || data?.result_reference === "true";
+    return {
+      label: reference ? "Shared result" : "Harness",
+      resultRunId: reference && typeof data?.result_run_id === "string" ? data.result_run_id : undefined,
+    };
+  }
+  return null;
+}
+
 export function turnHasOutput(turn: Turn): boolean {
   return turn.events.some((ev) =>
     Boolean(externalResponseText(ev)) ||
@@ -1765,58 +1790,6 @@ export function turnTokenStats(turn: Turn): { inTok: number; outTok: number; cac
     total = inTok + outTok + cacheRead + cacheWrite;
   }
   return { inTok, outTok, cacheRead, cacheWrite, total };
-}
-
-export interface TurnMemoryInfo {
-  // Fingerprint attached at lifecycle_start: file → {size, sha8}.
-  files: Record<string, { size: number; sha8: string }>;
-  // memory_changed events that landed inside this turn (the agent wrote memory).
-  // `execute` is the guard's mode: true = the quarantined blocks were really
-  // removed; false = observe-only (`agent.memory_guard=false`), the file still
-  // carries them and `quarantined` is what the guard WOULD have removed.
-  changed: { file: string; quarantined: number; reasons: string[]; execute: boolean }[];
-}
-
-// Fixed display order for the memory fingerprint — the order the runtime loads
-// them in, not Object.entries order, so a glance across turn cards compares
-// like with like.
-export const MEMORY_FILE_ORDER = ["USER.md", "MEMORY.md", "KNOWLEDGE.md"] as const;
-
-export function orderedMemoryFiles(
-  files: TurnMemoryInfo["files"],
-): [string, { size: number; sha8: string }][] {
-  const known = MEMORY_FILE_ORDER.filter((n) => n in files).map((n) => [n, files[n]] as [string, { size: number; sha8: string }]);
-  const rest = Object.entries(files).filter(([n]) => !(MEMORY_FILE_ORDER as readonly string[]).includes(n));
-  return [...known, ...rest];
-}
-
-// Memory the turn ran with, and whether it wrote any. Both come from flow
-// events: `lifecycle_start.data.memory` (published by the OS memory guard) and
-// `memory_changed` (emitted by its fsnotify watch ~2 s after the write, tagged
-// with whatever trace is active then — or trace-less if the turn has already
-// ended). Null when neither is present (older os-server, or no guard yet).
-export function turnMemoryState(turn: Turn): TurnMemoryInfo | null {
-  let files: TurnMemoryInfo["files"] | null = null;
-  const changed: TurnMemoryInfo["changed"] = [];
-  for (const ev of turn.events) {
-    if (ev.type !== "flow_event") continue;
-    const d = ev.detail as FlowEventDetail | undefined;
-    const data = d?.data ?? {};
-    if (d?.node === "lifecycle_start" && data.memory && typeof data.memory === "object") {
-      files = data.memory as TurnMemoryInfo["files"];
-    }
-    if (d?.node === "memory_changed") {
-      changed.push({
-        file: String(data.file ?? ""),
-        quarantined: Number(data.quarantined ?? 0),
-        reasons: Array.isArray(data.reasons) ? data.reasons.map(String) : [],
-        // Missing on an older os-server that always executed: default true.
-        execute: data.execute === undefined ? true : Boolean(data.execute),
-      });
-    }
-  }
-  if (!files && changed.length === 0) return null;
-  return { files: files ?? {}, changed };
 }
 
 // Display/filter names are projections; never change the event's routing type.

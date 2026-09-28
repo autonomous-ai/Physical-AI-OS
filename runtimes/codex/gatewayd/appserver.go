@@ -163,6 +163,7 @@ func (s *Server) startAppTurn(payload turnPayload) {
 		s.sendError("codex app-server unavailable")
 		return
 	}
+	payload = s.prepareSkill(s.lifetimeContext, payload)
 	input := appInput(payload)
 	var startFresh func()
 	start := func(thread string, retryFreshOnMissingThread bool) {
@@ -233,7 +234,11 @@ func missingAppThread(raw json.RawMessage) bool {
 }
 
 func appInput(p turnPayload) []map[string]any {
-	in := []map[string]any{{"type": "text", "text": p.Content}}
+	in := []map[string]any{}
+	if p.preload != "" {
+		in = append(in, map[string]any{"type": "text", "text": p.preload})
+	}
+	in = append(in, map[string]any{"type": "text", "text": p.Content})
 	for _, a := range p.Attachments {
 		if strings.HasPrefix(a.URL, "data:image/") {
 			in = append(in, map[string]any{"type": "image", "url": a.URL})
@@ -245,6 +250,16 @@ func appInput(p turnPayload) []map[string]any {
 func (s *Server) steerAppTurn(p turnPayload) {
 	s.mu.Lock()
 	app, thread, turn := s.app, s.threadID, s.activeTurnID
+	s.mu.Unlock()
+	if app == nil || thread == "" || turn == "" {
+		s.enqueue(op{kind: opTurn, payload: p})
+		return
+	}
+	p = s.prepareSkill(s.lifetimeContext, p)
+	// Selection can take up to three seconds; the previous turn may finish
+	// meanwhile. Recheck ownership before steering so a new request is not lost.
+	s.mu.Lock()
+	app, thread, turn = s.app, s.threadID, s.activeTurnID
 	s.mu.Unlock()
 	if app == nil || thread == "" || turn == "" {
 		s.enqueue(op{kind: opTurn, payload: p})

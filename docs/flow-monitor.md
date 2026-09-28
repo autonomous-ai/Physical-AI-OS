@@ -408,13 +408,38 @@ day because nothing showed which memory a turn ran with. Two additions:
   observe mode, `agent.memory_guard=false`), `trigger`
   (`startup` | `watch` | `rescan`).
 
-The turn card footer shows the fingerprint in fixed order `USER 2.1k MEMORY
-0.4k KNOWLEDGE 1.0k`; when a `memory_changed` event is inside the turn it
-appends `✎ memory changed` (amber), and `· N quarantined` in red only when the
-guard actually removed something (`execute` true). In observe mode the badge
-stays amber and reads `· would quarantine N`. Hover for per-file sizes (bytes)
-/ hashes and reasons. Comparing `sha8` across two turns tells you whether the
-memory changed between them.
+The turn card footer gates the badge by state (#463) — `flow` is a public
+section and debug is a one-click header toggle, not a hidden URL param:
+
+| State | Meaning | Normal mode | Debug mode |
+|---|---|---|---|
+| gray | the turn only read memory | hidden | `USER.md 251B · MEMORY.md 1.2kB` |
+| amber | the agent wrote, the guard accepted | hidden | `… ✎ memory changed` |
+| red | the guard removed blocks | `✎ memory updated · 1 entry removed in hermes` | same, prefixed with the sizes |
+
+Gray reports the size of a file the owner cannot open, on every turn; amber on
+every successful write trains people to ignore the row, and then red does not
+land either — so both are debugging aids. Red is permanent: it is the only
+place in the product where the owner can see that the OS deleted something the
+agent wrote (the rest of the removal is an atomic rename, a `.quarantine.txt`
+sidecar and a `.bak-<nano>`, all SSH-only, and the #421 reset endpoint ships
+without UI). It reads "entry removed", not "quarantined", which sounds like a
+security incident, and it names the `runtime` from `memory_changed`: the guard
+sweeps all six runtime trees while the sizes beside it are the **active**
+runtime's, so without the name a removal in an inactive runtime would turn the
+card red next to unrelated file sizes.
+
+Sizes are bytes with the unit glued to the number (`251B`, `1.2kB`) — never the
+1000-based `k` the LLM token counts on the same row use. Filenames keep their
+`.md` and are separated by a middot, so the row reads as two files with two
+sizes rather than one run-on label. In observe mode
+(`agent.memory_guard=false`) the badge stays amber and reads
+`· would remove 1 entry`; nothing was removed and the file still carries the
+block. Hover for exact bytes, `sha8`, the runtime and the reasons. Comparing
+`sha8` across two turns tells you whether the memory changed between them.
+
+Badge logic lives in `system/web/src/pages/monitor/FlowSection/memory.ts` and is
+unit-tested: `cd system/web && node --test tests/memory.test.mjs`.
 
 ## Known Edge Cases
 
@@ -521,3 +546,35 @@ Realtime handled voice and main-agent history sync use separate IDs: `device-rea
 ### Voice command and follow-up labels
 
 `sensing_input` and `realtime_response` can carry `data.voice_turn_type` (`voice`, `voice_command`, or `voice_followup`). Flow Monitor combines this field with the handled event type: realtime wake commands display `VOICE_COMMAND_HANDLED`, follow-ups display `VOICE_FOLLOWUP_HANDLED`, and ordinary or legacy handled turns retain `VOICE_AGENT_HANDLED`. Badges, subtype filters and search share the same display name; search also accepts the original event type. Saved broad exclusions expand to the new subtypes. This is display-only; event type, run grouping, realtime/main path, queueing and cancellation remain unchanged. A wake phrase uses the same HAL classifier in LIVE ON/OFF. An authorized LIVE follow-up keeps its wake-focus classification even if focus expires before the provider replies. Realtime-handled replies retain `voice_agent_handled` for silent history synchronization. Legacy rows without metadata keep their original label; history sync does not inherit a neighboring voice turn's classification.
+
+## Harness Store progress
+
+Observed `agent.prepare` / `operation.get` snapshots record `harness_store_progress` with the local run ID, operation ID, state, phase and bounded display text. While the main-agent run is active, the existing `assistant_delta` stream displays these observations; preparation neither suppresses the main reply nor starts TTS. Once task delivery owns the response, late preparation progress cannot replace it. This is polled evidence, not a new Harness protocol event. `ready` means agent preparation only and does not complete the user's task. Action-needed/error guidance remains available to main. No new frontend card or automatic background polling is introduced; see [Harness Store](harness-store.md).
+
+### Harness preparation wait expiry
+
+`harness_preparation_wait_expired` records a local response deadline, with `task_dispatched:false`; it is not a remote operation failure or task result. Native Hermes ends the scoped owner through the normal `lifecycle_error` path after bounded cancellation. Errors prefixed `OS_RUN_EXPIRED:` bypass partial-answer recovery so a timed-out wait cannot be displayed as a recovered success. Preparation progress suppresses repeated identical snapshots per active run/operation and separates changed messages with paragraph breaks.
+
+### Main-agent TTS timing diagnostics
+
+OS-server service logs include `[tts-timing]` markers for both progressive replies and final TTS delivery. These are diagnostic logs, not new Flow Monitor events or acknowledgement KPI endpoints:
+
+- `sentence_ready`: `first_delta_to_ready_ms` measures the first non-empty assistant delta received by OS-server to a speakable first sentence. This includes sentence buffering and existing safety gates, not model time before the first delta.
+- `sentence_dispatch`: `ready_to_dispatch_ms` includes leading hardware calls and filler cancellation before TTS dispatch.
+- `delivery_start` / `delivery_complete`: `dispatch_to_send_ms`, `send_ms`, and `dispatch_to_complete_ms` separate background scheduling from the runtime delivery call.
+- `hal_post_start` / `hal_post_complete`: `http_ms` measures the actual HAL HTTP request through response parsing. `success` means the call returned without an error (including the existing muted-response check), not that audio was heard.
+
+Markers contain `run_id` and a 12-hex-character SHA-256 `text_key`, without repeating reply text or credentials. The handler hash identifies text before runtime sanitization; the HAL POST hash identifies the final payload and can be correlated with HAL `queue_requested` for unchanged text. If a runtime strips markdown or tags, use the final POST hash for that correlation. Legacy unowned speech may have an empty run ID. First-sentence timing is absent when streaming is ineligible or no complete safe sentence appears before the final flush. Runtime ownership/silence gates and TTS buffering are unchanged.
+
+`assistant_end` and the existing `agent_last_token` event also carry `first_delta_to_end_ms` when a first-delta timestamp is known. This covers final-only replies and measures the entire assistant output interval even when sentence 1 streamed early. `final_dispatch` records `end_to_buffer_ready_ms` and `buffer_ready_to_dispatch_ms`, with `streamed_len` indicating whether this is the remainder. “Buffer ready” means the raw final assistant buffer was extracted; the following interval includes sanitization, hardware calls and routing checks. The dispatch marker is emitted only on the actual TTS delivery path, never for suppressed or empty replies. Unknown first-delta timing is omitted, not replaced with zero.
+
+
+### Harness shared-result labels
+
+Flow cards label Harness result output as `Harness` and sibling references as
+`Shared result`, with the owning run ID available in the reference tooltip.
+A `harness_response` is result delivery, not evidence of TTS playback. Reference
+text still completes its exact pending turn and survives JSONL/SSE recovery;
+only the newest grouped input displays the full answer. The shared result is
+submitted for speech once under that newest input, subject to voice eligibility
+and cancellation. These display labels do not claim that audio was heard.

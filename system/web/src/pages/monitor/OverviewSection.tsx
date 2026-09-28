@@ -12,7 +12,13 @@ const EMOTION_EMOJI: Record<string, string> = {
   scan: "👀", nod: "👍", headshake: "🙅",
 };
 
-type OtaVersions = Record<string, { current?: string; update_available?: boolean }>;
+type OtaVersions = Record<string, { current?: string; target?: string; update_available?: boolean }>;
+
+// Owned by the monitor, so tab unmounts retain successful metadata snapshots.
+export type OverviewCache = {
+  versions?: OtaVersions;
+  presets?: { emotions: string[]; colors: Record<string, string> };
+};
 
 async function fetchOtaVersions(): Promise<OtaVersions | null> {
   try {
@@ -30,22 +36,27 @@ function rgbToHex(rgb: number[]): string {
   return "#" + rgb.map(c => c.toString(16).padStart(2, "0")).join("");
 }
 
-function useEmotionPresets() {
-  const [emotions, setEmotions] = useState<string[]>([]);
-  const [colors, setColors] = useState<Record<string, string>>({});
+function useEmotionPresets(cache: OverviewCache) {
+  const [emotions, setEmotions] = useState<string[]>(() => cache.presets?.emotions ?? []);
+  const [colors, setColors] = useState<Record<string, string>>(() => cache.presets?.colors ?? {});
   useEffect(() => {
+    let cancelled = false;
     fetch(`${HW}/emotion/presets`)
-      .then(r => r.json())
+      .then(r => { if (!r.ok) throw new Error("Emotion presets unavailable"); return r.json(); })
       .then((data: Record<string, { color: number[]; effect: string; speed: number }>) => {
-        setEmotions(Object.keys(data));
+        if (cancelled) return;
+        const names = Object.keys(data);
         const c: Record<string, string> = {};
         for (const [name, preset] of Object.entries(data)) {
           c[name] = rgbToHex(preset.color);
         }
+        cache.presets = { emotions: names, colors: c };
+        setEmotions(names);
         setColors(c);
       })
       .catch(() => {});
-  }, []);
+    return () => { cancelled = true; };
+  }, [cache]);
   return { emotions, colors };
 }
 import type { SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo } from "./types";
@@ -54,6 +65,7 @@ import { RestartServiceButton } from "./RestartServiceButton";
 import { formatUptime, formatAgo, useCountUp } from "./utils";
 
 export function OverviewSection({
+  cache,
   sys,
   net,
   hw,
@@ -80,6 +92,7 @@ export function OverviewSection({
   onServoPlay,
   onServoRelease,
 }: {
+  cache: OverviewCache;
   sys: SystemInfo | null;
   net: NetworkInfo | null;
   hw: HWHealth | null;
@@ -112,7 +125,7 @@ export function OverviewSection({
   onServoPlay: (recording: string) => void;
   onServoRelease: () => void;
 }) {
-  const { emotions: ALL_EMOTIONS, colors: EMOTION_COLOR } = useEmotionPresets();
+  const { emotions: ALL_EMOTIONS, colors: EMOTION_COLOR } = useEmotionPresets(cache);
   const emotion = oc?.emotion ?? "";
   const emotionColor = EMOTION_COLOR[emotion] ?? "var(--lm-text-muted)";
   const emotionEmoji = EMOTION_EMOJI[emotion] ?? "✦";
@@ -122,25 +135,23 @@ export function OverviewSection({
   // limit + admin auth still apply on the server side either way).
   const isDebug = new URLSearchParams(window.location.search).get("debug") === "true";
 
-  // Which components actually HAVE a newer build. Without this the card showed
-  // an `update` button on every row, and pressing one with nothing to install
-  // looked broken: the worker logs "held by min_version floor" and the button
-  // just says OK. Fetched once per mount (a human opening a page, not a hot
-  // path) and only in debug, where the buttons can appear at all.
-  const [otaVersions, setOtaVersions] = useState<OtaVersions>({});
+  // Show published versions in normal mode; only update actions require debug.
+  const [otaVersions, setOtaVersions] = useState<OtaVersions>(() => cache.versions ?? {});
   const refreshOtaVersions = useCallback(() => {
     void fetchOtaVersions().then((versions) => {
-      if (versions) setOtaVersions(versions);
+      if (versions) { cache.versions = versions; setOtaVersions(versions); }
     });
-  }, []);
+  }, [cache]);
   useEffect(() => {
-    if (!isDebug) return;
     let cancelled = false;
     fetchOtaVersions().then((versions) => {
-      if (!cancelled && versions) setOtaVersions(versions);
+      if (!cancelled && versions) {
+        cache.versions = versions;
+        setOtaVersions(versions);
+      }
     });
     return () => { cancelled = true; };
-  }, [isDebug]);
+  }, [cache]);
   // held_by_floor is deliberately NOT consulted: that floor stages the
   // automatic fleet rollout, while this button installs the published version
   // on this one device — the same thing `software-update <key>` over SSH has
@@ -268,7 +279,7 @@ export function OverviewSection({
             }} aria-hidden><LayoutDashboard size={22} /></div>
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 19, fontWeight: 700, color: "var(--lm-text)", letterSpacing: "-0.3px", lineHeight: 1.2 }}>
-                Device Overview
+                Robot Overview
               </div>
               <div style={{ fontSize: 12, color: "var(--lm-text-dim)", marginTop: 2 }}>
                 Live status across agent, network, presence & hardware
@@ -433,7 +444,7 @@ export function OverviewSection({
                     {audio?.max_volume != null && (
                       <span
                         style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)" }}
-                        title="Speaker ceiling from this device's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
+                        title="Speaker ceiling from this robot's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
                       >
                         ceiling {audio.max_volume}%
                       </span>
@@ -512,7 +523,7 @@ export function OverviewSection({
               </div>
               <div style={{ minWidth: 0 }}>
                 <div style={{ fontSize: 10, color: "var(--lm-text-dim)", marginBottom: 5, textTransform: "uppercase", letterSpacing: "0.08em" }}>
-                  Your device is feeling
+                  Your robot is feeling
                 </div>
                 {/* Keep the state name on the theme's high-contrast text colour.
                     Preset colours can be deliberately dark (e.g. sleepy), so
@@ -597,13 +608,21 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
+            <div style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
+              <span>Service</span>
+              <span>Current</span>
+              <span title="Latest published version in this device's OTA feed">Latest</span>
+              <span style={{ textAlign: "right" }}>Uptime</span>
+              <span />
+              <span />
+            </div>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web"    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="os-server" name="OS"     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="hal" name="HAL"    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="Agent"  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
-            {isDebug && <VersionRow name="Bootstrap" color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
-            {isDebug && <VersionRow name="Device" color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
+            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         </div>
@@ -911,20 +930,20 @@ function MicLevelBar({ muted, onPlayback }: { muted: boolean; onPlayback?: (tts:
           {muted ? (
             <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>muted</span>
           ) : (
-            <span title="live RMS / VAD threshold (speech must pass it to wake the device)"
+            <span title="live RMS / VAD threshold (speech must pass it to wake the robot)"
               style={{ fontSize: 11, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
               <span ref={levelTextRef}>0</span>{threshold != null ? ` / ${threshold}` : ""}
             </span>
           )}
         </div>
         <LevelTrack fillRef={fillRef} dim={muted}
-          tick={muted ? null : threshold} tickTitle="VAD threshold — speech must pass this level to wake the device" />
+          tick={muted ? null : threshold} tickTitle="VAD threshold — speech must pass this level to wake the robot" />
       </div>
       {hasNoiseMic && (
         <div>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
             <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Noise mic</span>
-            <span title="last sample RMS / loud-noise threshold (samples past it startle the device)"
+            <span title="last sample RMS / loud-noise threshold (samples past it startle the robot)"
               style={{ fontSize: 11, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
               <span ref={noiseTextRef}>—</span>{noiseThreshold != null ? ` / ${noiseThreshold}` : ""}
             </span>
@@ -1017,10 +1036,19 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
   );
 }
 
-function VersionRow({ name, color, version, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
+const versionRowLayout = {
+  display: "grid",
+  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 70px 70px 65px",
+  minWidth: 425,
+  alignItems: "center",
+  gap: 8,
+};
+
+function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
   name: string;
   color: string;
   version: string | null;
+  latestVersion?: string;
   uptime: number | null;
   updateTarget: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent" | null;
   restartTarget?: "os-server" | "hal";
@@ -1033,15 +1061,10 @@ function VersionRow({ name, color, version, uptime, updateTarget, updating = fal
 }) {
   // Keep both action columns aligned, with horizontal scrolling on narrow cards.
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "70px minmax(55px, 1fr) 70px 70px 65px",
-      minWidth: 362,
-      alignItems: "center",
-      gap: 8,
-    }}>
+    <div style={versionRowLayout}>
       <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{name}</span>
       <span title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
+      <span title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
       <span style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>

@@ -34,13 +34,25 @@ type Change struct {
 }
 
 type Event struct {
-	Reason           string              `json:"reason,omitempty"`
-	ObservedAt       float64             `json:"observed_at"`
-	Sample           map[string]*float64 `json:"sample"`
-	Changes          map[string]Change   `json:"changes"`
-	SustainedS       float64             `json:"sustained_s"`
-	Sources          map[string]string   `json:"sources,omitempty"`
-	MetricTimestamps map[string]float64  `json:"metric_timestamps,omitempty"`
+	Reason           string                   `json:"reason,omitempty"`
+	ObservedAt       float64                  `json:"observed_at"`
+	Sample           map[string]*float64      `json:"sample"`
+	Changes          map[string]Change        `json:"changes"`
+	Comfort          map[string]ComfortChange `json:"comfort,omitempty"`
+	SustainedS       float64                  `json:"sustained_s"`
+	Sources          map[string]string        `json:"sources,omitempty"`
+	MetricTimestamps map[string]float64       `json:"metric_timestamps,omitempty"`
+}
+
+// ComfortChange reports a sustained product comfort band, not a health alarm.
+type ComfortChange struct {
+	State         string  `json:"state"`
+	PreviousState string  `json:"previous_state"`
+	Current       float64 `json:"current"`
+	CurrentAt     float64 `json:"current_at"`
+	Threshold     float64 `json:"threshold"`
+	SustainedS    float64 `json:"sustained_s"`
+	Source        string  `json:"source,omitempty"`
 }
 
 func (e Event) Message() string {
@@ -49,16 +61,56 @@ func (e Event) Message() string {
 }
 
 type metricState struct {
-	source     string
-	lastSample float64
-	lastFresh  time.Time
-	first      time.Time
-	baseline   *float64
-	baselineAt float64
-	since      time.Time
-	direction  int
-	ready      bool
-	continuous *float64
+	source           string
+	lastSample       float64
+	lastFresh        time.Time
+	first            time.Time
+	baseline         *float64
+	baselineAt       float64
+	since            time.Time
+	direction        int
+	ready            bool
+	continuous       *float64
+	comfortState     string
+	comfortCandidate string
+	comfortSince     time.Time
+}
+
+func (s *metricState) observeComfort(now time.Time, value, stamp float64, rule *config.EnvironmentComfortRule) *ComfortChange {
+	if rule == nil {
+		return nil
+	}
+	if s.comfortState == "" {
+		s.comfortState = "normal"
+	}
+	target := s.comfortState
+	var threshold float64
+	switch {
+	case rule.Above != nil && value > *rule.Above:
+		target, threshold = "high", *rule.Above
+	case rule.Below != nil && value < *rule.Below:
+		target, threshold = "low", *rule.Below
+	case s.comfortState == "high" && rule.Above != nil && value <= *rule.Above-rule.Hysteresis:
+		target, threshold = "normal", *rule.Above-rule.Hysteresis
+	case s.comfortState == "low" && rule.Below != nil && value >= *rule.Below+rule.Hysteresis:
+		target, threshold = "normal", *rule.Below+rule.Hysteresis
+	}
+	if target == s.comfortState {
+		s.comfortCandidate, s.comfortSince = "", time.Time{}
+		return nil
+	}
+	if target != s.comfortCandidate || s.comfortSince.IsZero() {
+		s.comfortCandidate, s.comfortSince = target, now
+		return nil
+	}
+	if now.Sub(s.comfortSince).Seconds() < rule.SustainS {
+		return nil
+	}
+	label := target
+	if target == "normal" {
+		label = "recovered"
+	}
+	return &ComfortChange{State: label, PreviousState: s.comfortState, Current: value, CurrentAt: stamp, Threshold: threshold, SustainedS: now.Sub(s.comfortSince).Seconds(), Source: s.source}
 }
 
 // Detector is owned by one polling goroutine. Baselines change only after the
@@ -165,6 +217,14 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 		if !state.ready {
 			continue
 		}
+		// Comfort also evaluates the first baseline and readings below the delta
+		// gate, so a room that starts and stays uncomfortable is not overlooked.
+		if change := state.observeComfort(now, *value, stamp, rule.Comfort); change != nil {
+			if event.Comfort == nil {
+				event.Comfort = make(map[string]ComfortChange)
+			}
+			event.Comfort[key] = *change
+		}
 		if state.baseline == nil {
 			v := *value
 			state.baseline = &v
@@ -172,7 +232,7 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 			continue
 		}
 		delta := *value - *state.baseline
-		if math.Abs(delta) < rule.Delta {
+		if math.Abs(delta) < rule.ChangeThreshold(*state.baseline) {
 			state.since = time.Time{}
 			state.direction = 0
 			continue
@@ -189,7 +249,7 @@ func (d *Detector) Observe(now time.Time, s Snapshot) *Event {
 			event.Changes[key] = Change{CurrentAt: stamp, Source: source, Previous: *state.baseline, PreviousAt: state.baselineAt, Current: *value, Delta: delta}
 		}
 	}
-	if len(event.Changes) == 0 || (!d.lastAccepted.IsZero() && now.Sub(d.lastAccepted).Seconds() < d.cfg.CooldownS) || (!d.lastAttempt.IsZero() && now.Sub(d.lastAttempt).Seconds() < d.cfg.RetryIntervalS) {
+	if (len(event.Changes) == 0 && len(event.Comfort) == 0) || (!d.lastAccepted.IsZero() && now.Sub(d.lastAccepted).Seconds() < d.cfg.CooldownS) || (!d.lastAttempt.IsZero() && now.Sub(d.lastAttempt).Seconds() < d.cfg.RetryIntervalS) {
 		return nil
 	}
 	return event
@@ -221,5 +281,16 @@ func (d *Detector) Attempted(now time.Time, event *Event, accepted bool) {
 			state.since = time.Time{}
 			state.direction = 0
 		}
+	}
+	for key, change := range event.Comfort {
+		state := d.metrics[key]
+		if state == nil || state.source != change.Source {
+			continue
+		}
+		state.comfortState = change.State
+		if change.State == "recovered" {
+			state.comfortState = "normal"
+		}
+		state.comfortCandidate, state.comfortSince = "", time.Time{}
 	}
 }

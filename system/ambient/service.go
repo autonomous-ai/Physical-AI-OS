@@ -145,9 +145,24 @@ func (s *Service) resume() {
 }
 
 func (s *Service) isPaused() bool {
+	return s.isPausedWithSleep(hal.GetSleeping)
+}
+
+// Consult HAL before ambient output: os-server loses its event-derived sleep
+// state on restart, while HAL retains it. An unavailable HAL is not permission
+// to move or speak. Do not hold mu across the HTTP request.
+func (s *Service) isPausedWithSleep(getSleeping func() (bool, error)) bool {
 	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.paused || s.sleeping
+	paused := s.paused || s.sleeping
+	s.mu.Unlock()
+	if paused {
+		return true
+	}
+	if !device.Has(s.cfg.DeviceTypeOrDefault(), device.CapExpression) {
+		return false
+	}
+	sleeping, err := getSleeping()
+	return err != nil || sleeping
 }
 
 // LockLED marks the LED as explicitly set by the user/agent so the ambient

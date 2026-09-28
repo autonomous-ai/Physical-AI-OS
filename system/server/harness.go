@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -11,15 +12,22 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/server/serializers"
 	"go.autonomous.ai/os/system/telemetry"
 )
 
 type harnessReply struct {
-	agentID string
-	runID   string
-	webChat bool
-	created time.Time
+	answer          bool
+	idempotencyKey  string
+	overlapped      bool
+	localOnly       bool
+	restored        bool
+	completedResult bool
+	agentID         string
+	runID           string
+	webChat         bool
+	created         time.Time
 }
 
 type harnessReplyRequest struct {
@@ -30,6 +38,8 @@ type harnessReplyRequest struct {
 // registerHarnessRoutes exposes management to the owner and commands only to the device runtime.
 func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context) {
 	s.initializeHarnessVoice(ctx)
+	s.harnessSelector = newHarnessSelector()
+	go s.watchHarnessPreparationWaits(ctx)
 	group := api.Group("harness")
 	group.Use(func(c *gin.Context) {
 		if s.harnessService == nil {
@@ -47,6 +57,7 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 	group.GET("voice-followup", localOnlyMiddleware(), func(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"active": s.HarnessVoiceFollowup()}))
 	})
+	s.registerHarnessResultRoutes(group)
 	s.registerHarnessVoiceRoutes(group)
 	// Pairing codes and pinned E2EE identities authenticate the direct socket.
 	group.GET("ws", func(c *gin.Context) {
@@ -82,6 +93,30 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 		}
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"unpaired": true}))
 	})
+	group.POST("select-agent", localOnlyMiddleware(), func(c *gin.Context) {
+		var input struct {
+			MachineID string `json:"machineId"`
+			AgentID   string `json:"agentId"`
+			Text      string `json:"text"`
+		}
+		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
+		if err := c.ShouldBindJSON(&input); err != nil || input.MachineID == "" || input.AgentID == "" || strings.TrimSpace(input.Text) == "" || len(input.Text) > 16384 || len(input.AgentID) > 128 || len(input.MachineID) > 128 {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("Invalid Harness selection request"))
+			return
+		}
+		settings := config.JevIntentSettings{}
+		if s.config != nil {
+			settings = s.config.JevHarnessSettings()
+		}
+		frame := harness.Frame{"machineId": input.MachineID, "agentId": input.AgentID, "text": input.Text}
+		before := s.harnessService.Status()
+		selection := s.harnessSelector.selectAgent(c.Request.Context(), frame, before, settings)
+		after := s.harnessService.Status()
+		if selection.Mode == "jev" && (!after.Connected || before.MachineID != after.MachineID || before.ServerInstanceID != after.ServerInstanceID) {
+			selection.Mode, selection.AgentID, selection.Reason = "fallback", input.AgentID, "connection_changed"
+		}
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(selection))
+	})
 	group.POST("request", localOnlyMiddleware(), func(c *gin.Context) {
 		var frame harness.Frame
 		c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 64*1024)
@@ -98,20 +133,45 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			reply.RunID = canonicalHarnessReplyRunID(reply.RunID)
 		}
 		kind, _ := frame["type"].(string)
+		if err := s.guardHarnessPreparationWait(kind, reply, time.Now()); err != nil {
+			c.JSON(http.StatusConflict, serializers.ResponseError(err.Error()))
+			return
+		}
 		agentID, _ := frame["agentId"].(string)
 		tracksReply := (kind == "turn.send" || kind == "question.answer") && reply != nil
 		// A local Harness agent can complete before Request returns its receipt.
 		// Install the local route first so an immediate terminal event is not lost.
 		if tracksReply {
-			s.registerHarnessReply(agentID, reply.RunID, reply.Channel == "web", true)
+			s.registerHarnessDispatch(agentID, reply.RunID, reply.Channel == "web", true, frame)
 		}
 		requestCtx, cancel := context.WithTimeout(c.Request.Context(), 35*time.Second)
 		defer cancel()
+		requestStatus := s.harnessService.Status()
 		result, err := s.harnessService.Request(requestCtx, frame)
+		if kind == "agents.list" {
+			currentStatus := s.harnessService.Status()
+			if currentStatus.MachineID != requestStatus.MachineID || currentStatus.ServerInstanceID != requestStatus.ServerInstanceID {
+				errSnapshot := errors.New("Harness identity changed during discovery")
+				s.harnessSelector.remember(nil, errSnapshot, currentStatus)
+			} else {
+				s.harnessSelector.remember(result, err, currentStatus)
+			}
+		}
 		if err != nil {
+			var uncertainDispatch *harness.DeliveryUnknownError
+			if tracksReply && !errors.As(err, &uncertainDispatch) {
+				s.releaseHarnessPreparationDispatch(reply)
+			}
 			if tracksReply {
 				reportHarnessDispatchError(reply.RunID, "", err)
-				s.forgetHarnessReply(agentID, reply.RunID)
+				if !errors.As(err, &uncertainDispatch) {
+					s.forgetHarnessReply(agentID, reply.RunID)
+				}
+			}
+			var preparationUnknown *harness.PreparationUnknownError
+			if errors.As(err, &preparationUnknown) {
+				c.JSON(http.StatusBadGateway, serializers.ResponseError("Harness preparation is unknown; retry the same preparation key and parameters or poll operation.get; do not use receipt.get or create a new key"))
+				return
 			}
 			var uncertain *harness.DeliveryUnknownError
 			if errors.As(err, &uncertain) {
@@ -122,8 +182,12 @@ func (s *Server) registerHarnessRoutes(api *gin.RouterGroup, ctx context.Context
 			return
 		}
 		if tracksReply {
+			if result["error"] != nil {
+				s.releaseHarnessPreparationDispatch(reply)
+			}
 			reportHarnessReceipt(reply.RunID, result)
 		}
+		s.observeHarnessPreparation(kind, reply, result)
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(result))
 	})
 }
@@ -196,6 +260,14 @@ func extractHarnessReply(frame harness.Frame) (*harnessReplyRequest, error) {
 }
 
 func (s *Server) registerHarnessReply(agentID, runID string, webChat, delegated bool) {
+	s.registerHarnessRoute(agentID, runID, webChat, delegated, "", false)
+}
+
+func (s *Server) registerHarnessRoute(agentID, runID string, webChat, delegated bool, key string, localOnly bool) {
+	s.registerHarnessRouteWithAnswer(agentID, runID, webChat, delegated, key, localOnly, false)
+}
+
+func (s *Server) registerHarnessRouteWithAnswer(agentID, runID string, webChat, delegated bool, key string, localOnly, answer bool) {
 	if agentID == "" || runID == "" || s.agentHandler == nil {
 		return
 	}
@@ -203,10 +275,25 @@ func (s *Server) registerHarnessReply(agentID, runID string, webChat, delegated 
 	if s.harnessReplies == nil {
 		s.harnessReplies = make(map[string]harnessReply)
 	}
-	s.harnessReplies[runID] = harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now()}
+	if s.harnessOverlapAgents == nil {
+		s.harnessOverlapAgents = make(map[string]bool)
+	}
+	route := harnessReply{agentID: agentID, runID: runID, webChat: webChat, created: time.Now(), overlapped: s.harnessOverlapAgents[agentID], idempotencyKey: key, localOnly: localOnly, answer: answer}
+	for id, other := range s.harnessReplies {
+		if !answer && !other.answer && !localOnly && !other.localOnly && !other.completedResult && id != runID && other.agentID == agentID && time.Since(other.created) <= 15*time.Minute {
+			other.overlapped, route.overlapped = true, true
+			s.harnessOverlapAgents[agentID] = true
+			s.harnessReplies[id] = other
+		}
+	}
+	s.harnessReplies[runID] = route
 	s.harnessRepliesMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
-	s.agentHandler.MarkHarnessResponseRun(runID, webChat, delegated)
+	if localOnly {
+		s.agentHandler.MarkHarnessLocalResponseRun(runID, webChat)
+	} else {
+		s.agentHandler.MarkHarnessResponseRun(runID, webChat, delegated)
+	}
 	telemetry.ReportTaskExecution(runID, "", "unknown", "harness_delegated")
 }
 
@@ -215,8 +302,8 @@ func (s *Server) forgetHarnessReply(agentID, runID string) {
 }
 
 // takeHarnessReply removes one exact route and reports whether this caller won
-// the route. A turn.summary and the turn.done recap fallback may race; only one
-// of them may publish a final result for the original device turn.
+// the route. Replayed summaries may race; only one may publish the final
+// result for the original device turn.
 func (s *Server) takeHarnessReply(agentID, runID string) bool {
 	s.harnessRepliesMu.Lock()
 	defer s.harnessRepliesMu.Unlock()
@@ -248,13 +335,20 @@ func (s *Server) HarnessFollowupContext() string {
 	return s.harnessResult
 }
 
-func (s *Server) rememberHarnessResult(text string) {
+func (s *Server) rememberHarnessResult(agentID, runID, text string) {
 	text = strings.TrimSpace(text)
 	if text == "" {
 		return
 	}
 	s.harnessResultMu.Lock()
-	s.harnessResult = text
+	// Preserve transport-owned provenance alongside untrusted result text. The
+	// next turn must not combine one agent's result with another saved target.
+	payload, _ := json.Marshal(struct {
+		AgentID       string `json:"agentId"`
+		ResponseRunID string `json:"responseRunId"`
+		Text          string `json:"text"`
+	}{agentID, runID, text})
+	s.harnessResult = string(payload)
 	s.harnessResultAt = time.Now()
 	s.harnessResultMu.Unlock()
 	s.harnessFollowup.Store(time.Now().Add(2 * time.Minute).UnixMilli())
@@ -264,6 +358,18 @@ func (s *Server) rememberHarnessResult(text string) {
 // device interaction. The terminal recap is not passed through the device
 // agent, which would otherwise add a slower, altered second answer.
 func (s *Server) forwardHarnessEvent(frame harness.Frame) {
+	if hasHarnessSummaryResult(frame) {
+		// The same summary event is already in the durable result inbox.
+		// Never route its group through the one-input compatibility path.
+		return
+	}
+	if frame["kind"] == "receipt.updated" {
+		if provenance, ok := frame["_osResultContext"].(harness.ResultContext); ok {
+			if payload, ok := frame["payload"].(map[string]any); ok {
+				s.bindHarnessResultReceipt(harness.Frame(payload), provenance)
+			}
+		}
+	}
 	if kind, _ := frame["kind"].(string); kind == "focus.changed" {
 		if s.harnessVoice != nil {
 			s.harnessVoice.NotifyFocusChanged()
@@ -315,76 +421,67 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 			return
 		}
 		s.harnessRepliesMu.Lock()
-		reply, ok := s.harnessReplyForEventLocked(agentID, harnessFrameRunID(frame))
+		reply, ok := s.harnessReplyForFrameLocked(agentID, frame)
 		s.harnessRepliesMu.Unlock()
 		if ok && time.Since(reply.created) <= 15*time.Minute {
 			s.agentHandler.DeliverHarnessTool(reply.runID, toolName, toolArgs)
+			s.agentHandler.AnnounceHarnessProgress(reply.runID, harnessToolProgressText(toolName, toolArgs))
 		}
 		return
 	}
 	text := harnessEventText(kind, frame)
+	if provenance, ok := frame["_osResultContext"].(harness.ResultContext); ok && s.acceptsHarnessResults(provenance) {
+		if progress := harnessInputProgress(frame); progress != "" {
+			text = progress
+		}
+	}
 	if text == "" && kind != "turn.summary" {
 		return
 	}
 	s.harnessRepliesMu.Lock()
-	reply, ok := s.harnessReplyForEventLocked(agentID, harnessFrameRunID(frame))
+	reply, ok := s.harnessReplyForFrameLocked(agentID, frame)
 	terminal := kind == "turn.summary" || kind == "turn.error" || kind == "agent.error" || kind == "question.open"
 	s.harnessRepliesMu.Unlock()
 	if !ok || time.Since(reply.created) > 15*time.Minute {
 		return
 	}
+	if kind == "question.open" {
+		payload, _ := frame["payload"].(map[string]any)
+		questionID, _ := payload["questionRequestId"].(string)
+		s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text)
+		return
+	}
 	if !terminal {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
-		if kind == "turn.done" {
-			// Current Harness clients normally send turn.summary immediately after
-			// turn.done. Some long-running Codex turns persist the recap but omit
-			// that callback. Give the normal callback a short head start, then read
-			// the completed turn's recap only while this exact device route remains
-			// pending. This is never a poll after send: turn.done is the terminal
-			// lifecycle signal from Harness.
-			s.recoverHarnessDoneRecap(agentID, reply)
+		// turn.done lands milliseconds before its result; speaking "finished,
+		// receiving its result" just delays the result itself.
+		if kind != "turn.done" {
+			s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
 		}
 		return
 	}
-	if kind == "turn.summary" {
-		// The event's text is the compact device-card preview. Fetch the
-		// corresponding recap before delivering so Web Chat and TTS receive the
-		// complete user-facing result retained by Harness.
-		text = s.harnessRecapText(agentID, text)
-	}
+	// A legacy single-input summary uses only the event's own text. Neither
+	// turn.done nor latest recap can establish a result's original membership.
+
 	if strings.TrimSpace(text) == "" {
 		slog.Warn("Harness summary has no result yet", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
 		return
 	}
-	// Recap is fetched outside the lock. Do not delete a newer response route
-	// registered while that request was in flight.
+	// Consume only the exact original response route.
 	s.deliverHarnessFinal(agentID, reply.runID, text)
 }
 
-const (
-	harnessDoneRecapDelay = 1500 * time.Millisecond
-	harnessDoneRecapTries = 2
-)
-
-// recoverHarnessDoneRecap closes the compatibility gap for Harness clients
-// which have committed a finished turn but do not emit its turn.summary event.
-func (s *Server) recoverHarnessDoneRecap(agentID string, reply harnessReply) {
-	if s.harnessService == nil || agentID == "" || reply.runID == "" {
-		return
-	}
-	go func() {
-		for attempt := 0; attempt < harnessDoneRecapTries; attempt++ {
-			time.Sleep(harnessDoneRecapDelay)
-			if !s.hasHarnessReply(agentID, reply.runID) {
-				return
-			}
-			if text := s.harnessRecapText(agentID, ""); text != "" {
-				s.deliverHarnessFinal(agentID, reply.runID, text)
-				return
-			}
+// harnessToolProgressText describes a remote tool start for the announcer,
+// which turns it into one spoken sentence at most.
+func harnessToolProgressText(toolName, toolArgs string) string {
+	text := "Harness agent is using the tool " + toolName + "."
+	if args := []rune(strings.TrimSpace(toolArgs)); len(args) > 0 {
+		if len(args) > 300 {
+			args = args[:300]
 		}
-		slog.Warn("Harness done without summary or recap", "component", "harness", "run_id", reply.runID, "agent_id", agentID)
-	}()
+		text += " Arguments: " + string(args)
+	}
+	return text
 }
 
 func (s *Server) hasHarnessReply(agentID, runID string) bool {
@@ -409,34 +506,51 @@ func (s *Server) deliverHarnessFinal(agentID, runID, text string) {
 	if !s.takeHarnessReply(agentID, runID) {
 		return
 	}
-	s.rememberHarnessResult(text)
+	s.rememberHarnessResult(agentID, runID, text)
 	if !s.agentHandler.DeliverHarnessResponse(runID, text) {
 		slog.Warn("Harness result had no pending device turn", "component", "harness", "run_id", runID)
 	}
 }
 
-// harnessReplyForEventLocked resolves an event to its local response route.
-// Callers hold harnessRepliesMu. Current Harness events identify their agent,
-// but older events do not always carry the local device run ID. In that case
-// events for one agent are ordered, so the oldest outstanding route is the
-// only safe compatibility fallback. It prevents a newer request from replacing
-// an earlier request merely because both target the same Harness agent.
+// registerHarnessDispatch installs correlation before the transport can emit events.
+func (s *Server) registerHarnessDispatch(agentID, runID string, webChat, delegated bool, frame harness.Frame) {
+	key, _ := frame["idempotencyKey"].(string)
+	s.registerHarnessRouteWithAnswer(agentID, runID, webChat, delegated, key, false, frame["type"] == "question.answer")
+}
+
+// Explicit but unknown IDs never fall back. Legacy agent-only events are safe
+// only for a single route which has never overlapped another outstanding turn.
 func (s *Server) harnessReplyForEventLocked(agentID, eventRunID string) (harnessReply, bool) {
-	if eventRunID != "" {
-		if reply, ok := s.harnessReplies[eventRunID]; ok && (agentID == "" || reply.agentID == agentID) {
-			return reply, true
+	return s.harnessReplyForFrameLocked(agentID, harness.Frame{"runId": eventRunID})
+}
+func (s *Server) harnessReplyForFrameLocked(agentID string, frame harness.Frame) (harnessReply, bool) {
+	runID := harnessFrameRunID(frame)
+	key, _ := frame["idempotencyKey"].(string)
+	if payload, ok := frame["payload"].(map[string]any); ok && key == "" {
+		key, _ = payload["idempotencyKey"].(string)
+		if receipt, ok := payload["receipt"].(map[string]any); ok && key == "" {
+			key, _ = receipt["idempotencyKey"].(string)
 		}
 	}
 	var selected harnessReply
-	for _, candidate := range s.harnessReplies {
-		if candidate.agentID != agentID {
+	count := 0
+	for _, reply := range s.harnessReplies {
+		if reply.answer || reply.localOnly || reply.completedResult || reply.agentID != agentID || time.Since(reply.created) > 15*time.Minute {
 			continue
 		}
-		if selected.created.IsZero() || candidate.created.Before(selected.created) {
-			selected = candidate
+		if runID != "" && reply.runID != runID {
+			continue
 		}
+		if key != "" && reply.idempotencyKey != key {
+			continue
+		}
+		if runID == "" && key == "" && reply.overlapped {
+			continue
+		}
+		selected = reply
+		count++
 	}
-	return selected, !selected.created.IsZero()
+	return selected, count == 1
 }
 
 func harnessFrameRunID(frame harness.Frame) string {
@@ -480,7 +594,11 @@ func (s *Server) harnessRecapText(agentID, fallback string) string {
 	if machineID == "" {
 		return fallback
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	parent := s.harnessVoiceCtx
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
 	defer cancel()
 	frame, err := s.harnessService.Request(ctx, harness.Frame{
 		"type":      "recap",
@@ -524,8 +642,10 @@ func harnessEventText(kind string, frame harness.Frame) string {
 		receipt, _ := payload["receipt"].(map[string]any)
 		state, _ := receipt["state"].(string)
 		switch state {
-		case "queued", "delivered":
-			return "Harness accepted the request."
+		case "queued":
+			return "Harness queued the request."
+		case "delivered":
+			return "Harness received the request."
 		case "started":
 			return "Harness agent is working."
 		}

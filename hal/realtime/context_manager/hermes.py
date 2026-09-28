@@ -37,6 +37,8 @@ class HermesContextManager(ContextManagerBase):
     and skills/*/SKILL.md for the skill catalog.
     """
 
+    IDENTITY_NAME_FILE = "SOUL.md"
+
     FRONTMATTER_RE: re.Pattern[str] = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
     NAME_RE: re.Pattern[str] = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
     DESC_RE: re.Pattern[str] = re.compile(r"^description:\s*(.+)$", re.MULTILINE)

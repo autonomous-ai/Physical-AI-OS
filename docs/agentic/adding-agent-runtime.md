@@ -293,14 +293,64 @@ in its backend doc (e.g. `docs/agentic/hermes.md`), not a blanket guarantee here
   (so a normal switch is a no-op — no churn). See §3.
 - **Skill watcher** (auto-update from CDN, capability-gated): the generic
   fetch/extract/hash plumbing is shared in `system/skills/skillzip.go`
-  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`). Add a
-  thin `runtimes/<name>/skill_watcher.go` parallel to `runtimes/openclaw/skill_watcher.go`
+  (`FetchSkillVersions`/`DownloadToTempFile`/`FolderHash`/`ExtractSkillZip`).
+  Build the reload message with `skills.SkillUpdatePrompt(agentVisibleSkillsDir, changedSkills)`
+  from `system/skills/skill_update_prompt.go`; all six runtimes share its wording and
+  list formatting. Keep the runtime-specific directory, empty-change guard,
+  logging and `SendSystemChatMessage` delivery in the runtime.
+  After re-reading, the agent must return exactly `NO_REPLY`; maintenance updates
+  do not need a spoken acknowledgment. Add a thin `runtimes/<name>/skill_watcher.go` parallel to `runtimes/openclaw/skill_watcher.go`
   — only the **target dir** and the **notify path** differ. Gate with
   `skills.Supported(device.Capabilities(...))`. Advance a watched version only after
   download and extraction succeed, so a transient failure retries on the next poll.
   Notify the agent with `SendSystemChatMessage`.
 
 ---
+
+### Jev skill preloading across runtimes
+
+Skill preloading belongs to the runtime's hook or managed bridge, after OS
+hardware-intent routing. It is separate from `jev_intent`: selecting a skill
+never executes a tool or grants permission. Keep Hermes's existing native plugin
+when adding another runtime; do not also classify the same turn in os-server.
+
+- Hermes uses its native `pre_llm_call` hook and `skill_view` loader.
+- PicoClaw uses a native `before_llm` process hook and the skill roster advertised
+  in its system messages. It shares Hermes's Python decision implementation.
+- Codex, Claude Code and OpenCode preload in their OS-managed bridges. They share
+  `system/lib/jevskills` as a library, with separate runtime adapters and native policy
+  checks. This covers ordinary chat sent through those bridges; standalone CLI
+  sessions and Telegram `/coding` sessions retain native discovery.
+- OpenClaw's native plugin and its opt-in/compatibility requirements are described
+  in [OpenClaw Jev preloading](openclaw.md).
+
+The Go adapters use the configured OS proxy at `llm_base_url + /jev/decisions`,
+with `llm_api_key`; only current request text and skill names/descriptions leave
+the device. For recognized voice envelopes, only the authoritative instruction
+is classified; contradictory transcripts and appended Harness routing/result
+metadata are excluded. Empty/malformed envelopes and context-dependent fragments
+(such as “brighter” or “continue”) defer to the runtime. The original forwarded
+request remains unchanged. Skill bodies are loaded locally. There are no retries, redirects,
+direct-provider fallbacks or conversation-history uploads. The total selection
+budget is at most 3 seconds, with a 30-second error cooldown and a non-blocking
+busy gate. Selection requires probability >= 0.70, margin >= 0.20 and independent
+fit >= 0.60. More than 32 eligible skills causes abstention, not roster truncation.
+These are skill-discovery thresholds, not the stricter hardware-intent thresholds.
+
+A preload includes the complete bounded SKILL.md and its absolute directory.
+The Go adapters only preload simple static skills from the runtime's installed
+root; dynamic templates, custom frontmatter controls, conflicting project skill
+roots and unsupported native policy settings defer to native discovery. They
+recheck eligibility and content after inference. System/slash/attachment turns
+keep their existing route. All new non-Hermes integrations are **disabled by
+default** pending native validation; Hermes is unchanged. Each new runtime owns a Go build switch `const jevEnabled = false`: bridges use `gatewayd/jev.go`, PicoClaw uses `jev_hook.go`, and OpenClaw uses `jev_plugin.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling requires changing the switch, rebuilding and restarting through runtime management; env/config is not a replacement for the build switch. `JEV_CONFIG_PATH` selects the bridge OS config file.
+
+Bind a result to the originating request, preserve source/session identity, and
+reuse it only for a retry of that same request. Never persist a selected skill
+as an AGENTS.md or persona update. Native history may retain supplied skill text
+like an ordinary skill read; this does not make it selected for subsequent turns.
+Test selected/abstain/error paths, native policy opt-outs, timeout, tool loops,
+retry, session isolation and source/attachment routing with mocks before release.
 
 ## 6. Hooks — OS-side reimplementation for Hermes (a worked example)
 

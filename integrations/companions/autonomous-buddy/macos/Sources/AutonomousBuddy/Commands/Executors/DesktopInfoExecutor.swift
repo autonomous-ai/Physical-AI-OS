@@ -16,6 +16,8 @@ struct DesktopInfoExecutor: Executor {
             let apps = workspace.runningApplications.filter { $0.activationPolicy == .regular }
             var result: [String: Any] = [
                 "protocol_version": 2,
+                "cua": ["installed": CuaClient.available, "enabled": CuaClient.enabled,
+                        "required_version": CuaClient.supportedVersion],
                 "paused": AppState.shared.paused,
                 "accessibility": AccessibilityCheck.isTrusted(),
                 "screen_recording": ScreenRecordingCheck.isTrusted(),
@@ -23,6 +25,9 @@ struct DesktopInfoExecutor: Executor {
                 "apps_truncated": apps.count > 100,
                 "capabilities": ["get_ui_tree", "perform_ui_action", "screenshot", "cancel_command", "open_path", "target_app_input"],
             ]
+            if CuaClient.available && CuaClient.enabled {
+                result["capabilities"] = (result["capabilities"] as? [String] ?? []) + ["cua_observe", "cua_action"]
+            }
             if let frontmost = workspace.frontmostApplication { result["frontmost_app"] = info(frontmost) }
             return result
         }

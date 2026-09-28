@@ -6,7 +6,7 @@ This model shares the SEN6x address but has its own seven-word read command.
 import os
 import time
 
-from hal.drivers.environment.i2c import crc8, decode_words
+from hal.drivers.environment.i2c import crc8, decode_words, limit_sunxi_bus_clock
 
 
 FIELDS = (
@@ -24,6 +24,8 @@ class SEN63C:
         if automatic_self_calibration is not None and type(automatic_self_calibration) is not bool:
             raise ValueError("automatic_self_calibration must be a boolean or null")
         self._automatic_self_calibration = automatic_self_calibration
+        # SEN6x supports standard mode only; Sunxi defaults can be 400 kHz.
+        limit_sunxi_bus_clock(bus, 100_000)
         self._fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR)
         try:
             fcntl.ioctl(self._fd, 0x0703, 0x6B)  # I2C_SLAVE, not FORCE.

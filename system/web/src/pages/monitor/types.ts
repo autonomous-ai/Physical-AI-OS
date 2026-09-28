@@ -286,7 +286,7 @@ export const NAV: NavEntry[] = [
   },
   {
     group: "device",
-    label: "Device",
+    label: "Robot",
     icon: "⎚",
     children: [
       { id: "overview",    label: "Overview",  icon: "⊞" },

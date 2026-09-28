@@ -1,5 +1,7 @@
 # Hermes agent backend
 
+The Jev preload carries the categorized `lookup_name` and instructs reference reads to reuse it exactly (for example `openclaw-imports/computer-use`). A bundled skill with the same bare name can coexist; preload does not delete it or resolve ambiguous bare-name calls on the model’s behalf.
+
 Hermes is one of the **swappable agentic backends** the os-server can run behind
 its agent gateway. The brain is pluggable (CLAUDE.md): os-server talks to
 whatever backend `config.agent_runtime` selects through the single
@@ -658,6 +660,10 @@ during install) and does three things, in order:
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
    - `.agent.image_input_mode = "auto"` — lets the agent decide when to attach images.
+   - `.terminal.cwd = /root/.hermes` (always overwritten) — what makes the OS
+     `AGENTS.md` block reachable: Hermes discovers project-context files from the
+     **configured** cwd, and the stock relative `.` leaves that lookup empty. See
+     *AGENTS.md rule block* below.
    - `.approvals.mode = "off"` — disables Hermes' command-approval prompts (tirith /
      dangerous-command cards) entirely. The device runs unattended on voice + chat
      channels, where an approval card is a dead end that stalls the turn (product
@@ -665,9 +671,11 @@ during install) and does three things, in order:
      (`style="double"`): yq v4 (YAML 1.2) emits a bare `off`, but Hermes parses
      config.yaml with PyYAML (YAML 1.1) where bare `off` is boolean `False` — the
      mode never matches and prompts silently stay on.
-   - Only `.auxiliary.vision`, `.agent.image_input_mode`, and `.approvals.mode` are
-     written; **other keys under `.auxiliary`/`.agent`/`.approvals` are preserved**
-     (each is coerced from a reset-left scalar to a map first, same as `.model`).
+   - Only `.auxiliary.vision`, `.agent.image_input_mode`, `.approvals.mode` and
+     `.terminal.cwd` are written; **other keys under
+     `.auxiliary`/`.agent`/`.approvals`/`.terminal` are preserved**
+     (`.auxiliary`/`.agent`/`.approvals` are each coerced from a reset-left scalar
+     to a map first, same as `.model`).
 3. **Syncs per-device values** from `config.json` (only non-empty fields, so
    unconfigured channels are untouched):
 
@@ -698,12 +706,14 @@ in `robots/<type>/ROBOT.md`, which is the lamp default) ran with **no persona at
 all**, and the routing rules that turn a `[sensing:*]` event into a skill call were
 simply absent.
 
-- `EnsureOnboarding` calls `ensureSoulMDBlock()` (`runtimes/hermes/onboarding.go`)
-  **first**, then `ensureSoulSkillPriorityBlock()`. Order matters: the persona goes
-  in at the top of the file and the skill rules are appended below it. Both run
-  after presync (whose §0 `claw migrate` can rewrite the soul), both are
-  best-effort (`slog.Warn` on failure), and both sit **outside** the gateway-restart
-  decision — SOUL.md is read per session, not at gateway start.
+- `EnsureOnboarding` calls three writers in order (`runtimes/hermes/onboarding.go`):
+  `ensureSoulMDBlock()` (the persona, into SOUL.md), `ensureAgentsMDBlock()` (the OS
+  rule set, into AGENTS.md — next section), then `pruneSoulOSRuleBlock()` (drops the
+  rule block from SOUL.md on a device that carries it from an older os-server). So
+  **SOUL.md now holds the persona only**. All three run after presync (whose §0
+  `claw migrate` can rewrite the soul), all three are best-effort (`slog.Warn` on
+  failure), and all three sit **outside** the gateway-restart decision — both files
+  are read per session, not at gateway start.
 - The text comes from `device.ResolveSoul(deviceType)` (`system/device/soul.go`),
   the runtime-agnostic resolver for the `soul_ref` declared in
   `robots/<type>/ROBOT.md`: **no ref → no-op and no error** (a soulless body keeps
@@ -741,51 +751,89 @@ simply absent.
   openclaw/picoclaw/codex/opencode write, word for word, so the owner has a place
   to write that an OTA will not overwrite.
 
-### SOUL.md skill-priority block (device skills beat Hermes bundled skills)
+### AGENTS.md rule block (device skills beat Hermes bundled skills)
+
+For a live connector request, `skills/connectors/SKILL.md` requires Discover
+in one terminal call immediately after loading the skill, before auxiliary
+skill reads such as `input-branching` for ordinary voice input. A successful
+check with no matching connector ends that service task with a short reply;
+unreadable or invalid config is a verification failure, not proof of absence.
+Explicit history-only routing still takes precedence. This is skill guidance,
+not a runtime latency guarantee.
 
 Hermes ships its own bundled skill catalog, and left alone it weighs those as
 equals of the device's platform skills — so any request both catalogs can serve
 may get routed to a bundled skill instead of the device one. Example: asked to
 "send an email", it can pick a bundled email skill and start installing CLI
 tools (himalaya) while the `connectors` skill already has the device's Gmail
-credentials on disk. OpenClaw and PicoClaw carry their skill-selection rules in
-an OS-managed **AGENTS.md** block, but Hermes loads no AGENTS.md — **SOUL.md is
-the one prompt file it reads every session** — so the rule rides there instead:
+credentials on disk. The rules that prevent this ride in an OS-managed
+**`~/.hermes/AGENTS.md`** block — the same slot openclaw/picoclaw/codex/opencode
+use (claudecode uses `CLAUDE.md`). Hermes reads that file now; why it did not
+before is the `terminal.cwd` bullet below.
 
-- `EnsureOnboarding` calls `ensureSoulSkillPriorityBlock()`
-  (`runtimes/hermes/onboarding.go`) right **after** presync (whose §0
-  `claw migrate` can rewrite the soul), and after the persona block above. It
-  strips any previous `<!-- OS HERMES SKILL PRIORITY -->`…`---` block and
-  re-appends the embedded `soulSkillPriorityBlock` at the end of
-  `~/.hermes/SOUL.md` — so an os-server OTA refreshes the wording, and a factory
-  reset / migrate that drops it self-heals on the next boot.
-- **The two OS-managed blocks wear different markers on purpose.** The persona uses
-  `soulOSMarker` (`<!-- OS DO NOT REMOVE -->`, the shape openclaw/picoclaw also
-  write); the skill rules use `soulSkillPriorityMarker`
-  (`<!-- OS HERMES SKILL PRIORITY -->`). Both used to use `soulOSMarker`, and since
-  the strip removed whichever marked block came first, on a migrated device that was
-  the **persona** — silently deleted on the next boot (issue #403).
-  `stripSoulMarkedBlock(text, marker, match)` now takes the marker plus an optional
-  body predicate and removes only the blocks that predicate accepts, which is what
-  lets both blocks live in one file with each updater touching only its own.
-- **A legacy block is replaced in place, not duplicated.** A device updating from an
-  older os-server still carries its skill-priority block under
-  `<!-- OS DO NOT REMOVE -->`, so `upsertSoulSkillPriorityBlock` runs a second strip
-  over that marker guarded by `isSkillPriorityBody` — which matches on
-  `soulSkillPrioritySentinel`, the block's `**Skill priority (MANDATORY):**` first
-  line. That is what tells a legacy skill-priority block apart from a persona
-  wearing the same marker; `isPersonaBody` is its inverse and guards the persona
-  upsert.
-- The block instructs: skills under `skills/openclaw-imports/` are the device's
-  built-in platform skills and **take priority over any Hermes bundled skill**
-  with an overlapping purpose; anything on a connected third-party service
-  (Gmail/Calendar/Drive/Notion/Figma/Asana/Linear/GitHub, …) goes through the
-  `connectors` skill; never install an alternative client/CLI (himalaya, mutt,
-  gcalcli, …) for a service a connector covers.
-- Atomic tmp+rename via the shared `writeSoulFile` (same as `UpdateIdentityName`),
-  owner content and the inlined identity card are untouched — as is the persona
-  block, which now wears its own marker — and **no gateway restart is needed**:
-  Hermes re-reads SOUL.md at the next session.
+- `EnsureOnboarding` calls `ensureAgentsMDBlock()`
+  (`runtimes/hermes/onboarding.go`) right **after** presync and after the persona
+  block above. `upsertAgentsMDBlock` strips any previous
+  `<!-- OS DO NOT REMOVE -->`…`---` block (`soulOSMarker`, the shared one) and
+  writes the embedded `agentsMDBlock` at the **top** of `~/.hermes/AGENTS.md` — so
+  an os-server OTA refreshes the wording, and a factory reset that drops the file
+  self-heals on the next boot. Owner content below the block's closing `---` is
+  preserved.
+- **Why an `AGENTS.md` works now, and did not before.** Hermes discovers
+  project-context files (`AGENTS.md`, `.cursorrules`) by walking up from the
+  **configured** cwd: `resolve_context_cwd()` (Hermes' `agent/runtime_cwd.py`, used
+  by `agent/system_prompt.py`) returns `None` rather than falling back to the launch
+  directory — a deliberate guard so an agent self-spawned inside the Hermes source
+  tree cannot swallow that repo's own `AGENTS.md`. Hermes ships `terminal.cwd: .`,
+  which is relative and never bridged to `TERMINAL_CWD`, so that lookup was empty
+  and an `AGENTS.md` written there was a file nothing read. `presync.sh` now pins
+  `terminal.cwd` to the Hermes home with `yq` (§1b2 *TERMINAL CWD*, always
+  overwritten). The gateway process already runs there
+  (`WorkingDirectory=/root/.hermes` in the unit Hermes installs), so this only
+  states an existing fact — the agent's shell cwd does not move. Verified on
+  lamp-0c89: with `terminal.cwd: .` a codeword planted in `/root/.hermes/AGENTS.md`
+  was absent from the prompt (the agent answered it had no such codeword); with the
+  absolute path the agent returned the codeword. With the real block shipped, the
+  agent quoted all three version-check commands verbatim — a rule that appears only
+  in AGENTS.md (0 occurrences in SOUL.md).
+- **The old copy is pruned out of SOUL.md.** A device updating from an os-server
+  that predates the move still carries the rule block inside SOUL.md; two copies in
+  two prompt files are wasted tokens on every turn and a future contradiction when
+  only one gets updated. `pruneSoulOSRuleBlock()` removes it every boot, in **either**
+  shape it shipped in — under `soulSkillPriorityMarker`
+  (`<!-- OS HERMES SKILL PRIORITY -->`), or under the shared `soulOSMarker` matched
+  by `soulSkillPrioritySentinel`, the block's `**Skill priority (MANDATORY):**`
+  first line, so a *persona* block wearing that marker is never touched.
+  `stripSoulOSRuleBlock()` is the pure helper; `stripSoulMarkedBlock(text, marker,
+  match)` takes the marker plus an optional body predicate and removes only the
+  blocks that predicate accepts. `isSkillPriorityBody` is that predicate, and its
+  inverse `isPersonaBody` guards the persona upsert — the same mechanism that kept a
+  migrated device's persona from being deleted when both blocks shared one marker
+  in one file (issue #403).
+- The block carries **the OS rule set every runtime gets** — eight rules: skill
+  priority (`skills/openclaw-imports/` beat any overlapping Hermes bundled skill;
+  third-party services go through `connectors`; never install an alternative
+  client/CLI for a service a connector covers), `memories/USER.md` discipline,
+  skill scope before acting — including the four-branch `SKILL.md` selection
+  protocol (a `[skills: a, b, c]` tag is an authoritative whitelist; with no tag
+  pick the single most specific skill; several matches take the most specific; no
+  match reads none), `Skills > memory > history` ordering, writing memory in the
+  same turn it happens (kept distilled — `MEMORY.md` is in every prompt and nothing
+  rotates it, unlike openclaw's daily `memory/*.md`), `[user]` messages answered
+  before `[activity]`/`[emotion]`/`[speech_emotion]`/`[ambient]`/`[sensing:*]`
+  context, the version-check commands, and `NO_REPLY` as the literal silence token.
+- **One rule is deliberately left out**: openclaw's `hooks/` rule, which describes
+  `handler.ts` triggers firing on `message:preprocessed`. Hermes never loads those
+  — its thinking-emotion ack is an os-server-side hook
+  (`runtimes/hermes/emotion_ack.go`), and `~/.hermes/hooks/` holds only
+  `os-server-observer`. Shipping the rule would describe machinery that does not
+  run. Paths are adapted too: Hermes has no `KNOWLEDGE.md` and no daily
+  `memory/*.md`, so both fold into `memories/MEMORY.md`.
+- Both managed files are written atomically (tmp + rename) through the shared
+  `writeManagedFile` — renamed from `writeSoulFile` now that it writes AGENTS.md as
+  well as SOUL.md, same helper `UpdateIdentityName` relies on. Owner content and
+  the inlined identity card in SOUL.md are untouched, as is the persona block, and
+  **no gateway restart is needed**: Hermes re-reads both files at the next session.
 
 ### Channel capability & live add/refresh
 
@@ -890,11 +938,12 @@ Switching openclaw→hermes runs a Go persona migration
   that block; `WatchIdentity` (`runtimes/hermes/identity.go`) polls SOUL.md and, on
   a name change, pushes the new wake words to HAL + `i18n.SetDeviceName` — mirroring
   OpenClaw's `WatchIdentity`, just watching SOUL.md instead of IDENTITY.md. The
-  migration overwrite also drops the OS-managed **skill-priority block**, but
-  `EnsureOnboarding` (which runs after the migration in the startup sequence)
-  re-appends it, and `ensureSoulMDBlock` re-asserts the device persona block at the
-  top of the file (see *Device persona block in SOUL.md* and *SOUL.md skill-priority
-  block* above). A device that never migrates gets its persona from
+  migration overwrites SOUL.md, but `EnsureOnboarding` (which runs after the
+  migration in the startup sequence) re-asserts the device persona block at the top
+  of it via `ensureSoulMDBlock`, and `pruneSoulOSRuleBlock` strips any OS rule block
+  the migrated file dragged along. The rule set itself lives in `AGENTS.md`, which
+  the migration never touches (see *Device persona block in SOUL.md* and *AGENTS.md
+  rule block* above). A device that never migrates gets its persona from
   `ensureSoulMDBlock` alone.
 - **MEMORY.md + daily `memory/*.md` + KNOWLEDGE.md** → merged into
   `memories/MEMORY.md`. Hermes loads only `MEMORY.md` + `USER.md` **by name** (no
@@ -964,3 +1013,208 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 > [`adding-agent-runtime.md`](adding-agent-runtime.md) for the `AgentGateway`
 > contract, the install/presync pattern, migration, skills, hooks, reset, and the
 > full checklist.
+
+## 13. Optional Jev skill preloading
+
+The OS-managed `jev` plugin selects one installed skill before a Hermes user
+turn's first model call through the `pre_llm_call` hook. On an accepted decision,
+it revalidates the skill against the live eligible catalog and loads its content
+through native `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
+The skill is injected into ephemeral context for the current turn, so Hermes
+receives its instructions without first having to choose and call `skill_view`.
+This changes the OS-managed plugin, configuration and instructions, not Hermes
+core. The managed `AGENTS.md` instructions count a complete native Jev preload
+for **this turn** as satisfying the mandatory skill read; Hermes should not
+reread that same `SKILL.md`. A partial preview or a user claim that a skill was
+read does not satisfy this rule. Loading instructions does not
+execute the skill's actions, authorize tools, or bypass mandatory
+connector/platform rules and permission checks.
+
+Preloading fails open to normal Hermes discovery if the selected skill is
+missing or disabled, the native API is unsupported, reading fails, or the native
+JSON result exceeds 128 KiB. The final context must also fit within 131,072
+characters and, when native hook output spilling is enabled, its configured
+`max_chars` threshold (whichever is smaller). Otherwise it fails open rather
+than logging `preloaded` while Hermes replaces the content with a file pointer.
+Older Hermes without the spill API uses the local character cap. Shell
+preprocessing is disabled; skills containing
+dynamic shell snippets (an exclamation mark followed by a backtick-delimited
+command) also fail open. Timeout results cannot be attached to a later turn.
+System notices prefixed with `[system]` bypass routing and preloading.
+
+### Installation on existing devices
+
+`runtimes/hermes/jev_plugin.go` embeds the Python plugin under
+`runtimes/hermes/plugins/jev/` into os-server. `EnsureOnboarding` reconciles it on
+OS startup and setup for a local Hermes installation with an existing
+`/root/.hermes/config.yaml`. Remote Hermes is skipped. Thus an existing device
+receives the plugin with its OS update; rerunning provisioning or installing a
+Python package separately is unnecessary.
+
+Go writes changed assets atomically to `/root/.hermes/plugins/jev/`
+and adds `jev` to `plugins.enabled` in Hermes's `config.yaml`, preserving
+other plugin settings and an explicit `plugins.disabled` entry. The generated
+`os-config-path.json` contains only the absolute path to the OS config, never an
+API key. Unchanged assets are not rewritten.
+
+When Jev is not explicitly disabled, sync also sets
+`hooks.output_spill.max_chars: 131072` **only if unset**. Explicit thresholds and
+the `plugins.disabled` setting are preserved. This raises Hermes's global
+per-hook output threshold from its 10,000-character default so a complete skill
+can stay inline; it does not disable output spilling. The loader respects an
+explicit smaller threshold and falls back if the full context will not fit.
+
+Plugin installation or updates do **not** add a gateway restart reason. os-server
+logs that loading changed plugin code needs the next gateway restart; existing
+restart reasons elsewhere in onboarding remain unchanged. This build enables Jev
+in the embedded plugin. Existing devices need the updated OS to sync the plugin
+and a gateway restart to load its changed code; this update does not add an
+automatic restart. To disable Jev, set `ENABLED = False`, rebuild os-server, sync
+the plugin, and restart Hermes to load it.
+
+### Configuration and proxy contract
+
+The plugin uses hardcoded defaults in `runtimes/hermes/plugins/jev/router.py`:
+
+```python
+ENABLED = True
+TIMEOUT_SECONDS = 3.0
+```
+
+There is no separate Hermes Jev config block or Go config type. These defaults
+are independent of `local_intent` and `jev_intent`. OFF bypasses even config
+reads, catalog lookup, and network requests.
+When enabled, the plugin reuses `llm_base_url` and `llm_api_key` for
+`POST {llm_base_url}/jev/decisions` with bearer authentication. There is no
+separate Jev key in `.env` and no direct-provider fallback. Requests identify the client
+with `User-Agent: AutonomousOS-Jev/0.1`; the proxy edge rejects Python urllib's
+default signature with HTTP 403. HTTP failures log only the status code, never
+credentials or response bodies. HTTPS is required,
+except HTTP on loopback for local tests. BFF must support the compatible
+[Decisions contract](../os-server.md#jev-bff-contract); the plugin sends model
+`typesafe/jev-1.13`, a `skill` choice including `none`, and one `fit_<id>` noul
+question per candidate. The raw response must contain `answers`. Routing
+instructions prioritize the explicitly requested action over small talk,
+question/context modifiers, and proactive or supporting skills. Missing action
+parameters do not prevent routing: the selected skill can resolve them later.
+
+Only the current user message and OS platform skill names/descriptions are
+sent. The roster scans `skills/openclaw-imports` under the active Hermes home,
+using Hermes's native `agent.skill_utils` helpers: `iter_skill_index_files`,
+`parse_frontmatter`, `get_disabled_skill_names`, `skill_matches_platform`, and
+`skill_matches_environment`. This avoids `skills_list()` deduplication by first matching
+name hiding an OS skill behind a bundled skill with the same name. Other bundled,
+authored, and plugin skill categories are excluded. Metadata reads are bounded;
+conversation history and skill bodies are not sent. Each candidate description
+is capped at 500 characters. Native `skill_view` lookups use the qualified
+`openclaw-imports/<relative directory>` path to avoid name collisions.
+
+If there are more than 32 eligible candidates, the router skips Jev entirely
+rather than truncating the catalog. Empty messages, messages over 8,000 UTF-8
+bytes, slash commands, `[system]` notices, and explicit `[skills:...]` selections also bypass the
+router. The catalog worker inherits the current Hermes context so
+session/platform skill filters still apply. This preloading experiment covers
+OS platform skills; normal Hermes discovery continues to handle other skills.
+
+A selection requires choice probability at least 0.70, a margin of at least
+0.20 over the runner-up, and fit at least 0.60. These are provisional thresholds
+for skill preloading, not action authorization; skill and platform
+permission checks still apply. Buddy and OS intent thresholds remain unchanged
+at choice 0.90, margin 0.40, and fit 0.95. Uncertain or invalid decisions leave
+normal Hermes behavior unchanged. The decision wait is temporarily hardcoded to 3 seconds for proxy validation before latency tuning; there are no retries or redirects. An error or timeout starts
+a 30-second cooldown. One worker per router is allowed; a busy router bypasses
+immediately. A timed-out worker may finish its request in the background, but
+its late result cannot inject skill content. HTTP 429 follows the same fallback
+and 30-second cooldown; no provider error body or `Retry-After` diagnostics are
+added by preloading.
+
+Structured logs distinguish accepted selections from valid abstentions and
+failures instead of grouping them as `deferred`:
+
+| Outcome | Meaning / reason |
+|---|---|
+| `preloaded` | A valid decision passed all acceptance thresholds and native skill content was loaded for this turn |
+| `abstained` | A valid decision selected `none` or failed `low_choice`, `low_margin`, or `low_fit` |
+| `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, `config_error`, `skill_unavailable`, `skill_load_failed`, or `preload_timeout` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
+| `timeout` | The decision wait budget expired |
+
+Logs include validated `session_id`, `turn_id` and `task_id` when supplied by
+Hermes, so a slow turn can be correlated without logging its prompt. Accepted
+preloads include `context_chars`. Native preload failures distinguish
+`skill_response_size`, `skill_rejected`, `skill_empty`, `skill_dynamic`, and
+`skill_inline_budget`; other native failures remain `skill_load_failed`.
+Logs include total `decision_ms`, and `catalog_ms`, `request_ms`, and native
+`load_ms` when available;
+`request_ms` measures the full proxy round trip, not model inference alone.
+Valid decisions include numeric `choice_probability`, `margin`, and `fit` where
+applicable. `candidate` records the qualified selected name even when a valid
+decision is rejected, or `none` when no skill was chosen; accepted selections
+also include `skill`. HTTP errors include `http_status`. Logs exclude prompts, credentials,
+response bodies, and exception text.
+
+Local validation uses mocked proxy responses and temporary Hermes homes. Neither
+these tests nor individual synthetic on-device probes establish live routing
+accuracy, coverage, or latency improvements. Compare OFF/ON on representative
+requests using the installed roster and a compatible BFF endpoint; do not treat
+synthetic probes as a benchmark. No device deployment is required by the local
+checks.
+
+Focused local checks (Python plugin tests also run in CI):
+
+```bash
+go test -race -timeout 90s ./runtimes/hermes ./system/server/config ./system/intent/...
+python3 -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
+```
+
+### Reference implementation review (2026-09-21)
+
+Reviewed actual code from the community
+[`typesafe-skill-router`](https://github.com/DECRUX9812/typesafe-skill-router/tree/e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3)
+at the Hermes catalog pin `e6cdac26f9ed588b4a94b8a2f7f9f026e1b9faf3`, and upstream
+`f150284d3da33c85b8adc97e2d326987573b30d3`. This is a community plugin listed by
+Hermes, not Hermes core or a TypeSafe-maintained plugin. Its routing recipe is
+based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookbooks/skill_suggestion).
+
+| Area | Reference plugin | OS plugin |
+|---|---|---|
+| Hook | `pre_llm_call`, returns optional user-message context | Same hook; accepted skill content is loaded natively into ephemeral current-turn context; no system-prompt modification |
+| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Bounded metadata from `openclaw-imports` files with native Hermes eligibility filters, descriptions capped at 500 characters, no body text; qualified skill lookup avoids name collisions |
+| Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
+| Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
+| Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional preloading thresholds, uncalibrated for this workload |
+| Latency | Default hook budget 10 seconds, answer cache and retry-capable client | Temporary 3-second diagnostic budget, no retries/cache, busy bypass and cooldown |
+| Credentials | TypeSafe API with separate key | Shared OS proxy credentials |
+
+The OS implementation is a narrower experiment, not an equivalent implementation
+of the two-stage recipe. Its provisional thresholds and shorter deadline may suppress
+useful selections; mock tests and limited synthetic probes cannot establish
+calibrated routing accuracy or coverage.
+Do not transfer the reference's benchmark results to this plugin. To evaluate
+the enabled experiment, compare both policies on the same representative requests and installed roster,
+including unrelated chat, ambiguous skills, explicit commands, and Vietnamese.
+
+Review fixes preserve Hermes session context in the worker (needed for
+platform-specific disabled-skill filtering) and skip slash commands, as the
+reference hook does. Those review fixes did not change thresholds, the default
+OFF setting at review time, or device state. The current build enables the
+plugin separately as described above.
+
+### OS-owned preparation deadlines
+
+Hermes implements the optional `domain.RunExpirer` interface for native managed
+runs. `ExpireRun(ctx, runID, reason)` accepts cancellation only when `runID` is
+both the active reply owner and the latest admitted request. An old deadline
+cannot stop a newer steered request, including a web request sharing the same
+native run. Unsupported/non-native runs return an error.
+
+The expiry cancels only that run's stream context; the existing reader sends a
+remote stop and checks terminal status, bounded by its 30-second cleanup budget.
+The normal lifecycle reports an error with the OS deadline reason, never a
+successful task completion. A remote `pending_steer` suffix is never replayed
+after expiry. Acceptance is not proof that remote execution has
+stopped. If cleanup cannot confirm a terminal state, existing unknown-ownership
+handling isolates the conversation instead of replaying work. Unrelated queued
+requests retain their existing admission and ownership checks. This is not a
+user `/stop`, does not create a model turn, and does not erase the Harness intent
+journal or dispatch a Harness task.

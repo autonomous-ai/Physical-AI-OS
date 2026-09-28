@@ -143,6 +143,44 @@ class GPTLiveConfig(BaseModel):
     join_timeout_s: float = 5.0
 
 
+class PipecatV1Config(BaseModel):
+    """On-device Pipecat pipeline (voice_agent/pipecat_v1.py). Text out only —
+    no voice field: HAL's TTS speaks the reply."""
+
+    api_key: str = app_config.REALTIME_PIPECAT_API_KEY
+    base_url: str | None = app_config.REALTIME_PIPECAT_BASE_URL or None
+    model: str = app_config.REALTIME_PIPECAT_MODEL
+    instructions: str = ""
+    sample_rate: int = app_config.REALTIME_PIPECAT_SAMPLE_RATE
+    language: str | None = _load_language()
+    temperature: float = app_config.REALTIME_PIPECAT_TEMPERATURE
+    max_tokens: int = app_config.REALTIME_PIPECAT_MAX_TOKENS
+    disable_thinking: bool = app_config.REALTIME_PIPECAT_DISABLE_THINKING
+    # STT fallback credentials (the injected VoiceService provider wins).
+    stt_api_key: str = app_config.REALTIME_PIPECAT_STT_API_KEY
+    stt_base_url: str = app_config.REALTIME_PIPECAT_STT_BASE_URL
+    stt_model: str = app_config.REALTIME_PIPECAT_STT_MODEL
+    # Live-mode turn detection (ignored on the turn-based path, where HAL's
+    # own VAD brackets the utterance and commit ends it).
+    smart_turn: bool = app_config.REALTIME_PIPECAT_SMART_TURN
+    smart_turn_stop_secs: float = app_config.REALTIME_PIPECAT_SMART_TURN_STOP_SECS
+    vad_confidence: float = app_config.REALTIME_PIPECAT_VAD_CONFIDENCE
+    vad_start_secs: float = app_config.REALTIME_PIPECAT_VAD_START_SECS
+    vad_stop_secs: float = app_config.REALTIME_PIPECAT_VAD_STOP_SECS
+    vad_min_volume: float = app_config.REALTIME_PIPECAT_VAD_MIN_VOLUME
+    silence_timeout_s: float = app_config.REALTIME_PIPECAT_SILENCE_TIMEOUT_S
+    min_words: int = app_config.REALTIME_PIPECAT_MIN_WORDS
+    turn_stop_timeout_s: float = app_config.REALTIME_PIPECAT_TURN_STOP_TIMEOUT_S
+    tool_result_timeout_s: float = app_config.REALTIME_PIPECAT_TOOL_RESULT_TIMEOUT_S
+    max_retries: int = 1
+    reconnect_delay_s: float = 2.0
+    queue_poll_s: float = 1.0
+    # Pipeline build + StartFrame must land within this; else "unavailable".
+    # Loading Silero + Smart Turn ONNX took ~12 s on lamp-ee17 (A55) cold.
+    start_timeout_s: float = 60.0
+    join_timeout_s: float = 5.0
+
+
 class GeminiConfig(BaseModel):
     api_key: str = app_config.REALTIME_GEMINI_API_KEY
     base_url: str | None = app_config.REALTIME_GEMINI_BASE_URL or None

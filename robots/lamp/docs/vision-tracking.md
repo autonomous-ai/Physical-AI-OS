@@ -14,6 +14,15 @@ All tracking code lives in the `hal/drivers/tracking/` package:
 | `filters.py` | `AlphaBetaFilter2D`, `PID`, `smooth_damp`, `soft_deadband` |
 | `frame_utils.py` | `downscale`, `scale_bbox` (coordinate mapping) |
 
+## Voice intent routing
+
+Unmatched voice requests can use the OS Jev fallback to select `servo_track`
+with one of 23 canonical target labels, or `servo_track_stop`. The OS validates
+the target and declared motion capability, then reuses the existing tracking
+rule; Jev never supplies a free-form HAL payload. Missing/unsupported targets,
+external cameras and low-confidence decisions defer to the main agent, which
+retains the open-vocabulary skill path. See [Jev intent routing](../../../docs/os-server.md#jev-intent-fallback).
+
 ## Architecture
 
 ```

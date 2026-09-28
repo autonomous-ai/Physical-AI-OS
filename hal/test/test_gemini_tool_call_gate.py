@@ -375,3 +375,167 @@ def test_a_disabled_aim_makes_no_claim_either_way():
     """LOOK_AIM_ENABLED off, or the aim raised — no aim ran, so nothing is
     known about framing and the model should not be told otherwise."""
     assert "found_user" not in _ack_payload(None)
+
+
+@pytest.mark.parametrize("tool_name", ["look", "express_emotion", "delegate_to_main"])
+def test_tool_response_preserves_provider_call_name(tool_name):
+    session = _RecordingSession()
+    agent = _agent(session)
+    message = _tool_call_message("call-named")
+    message.tool_call.function_calls[0].name = tool_name
+    session._messages = [message]
+    agent._recv_queue = queue.Queue()
+    agent._first_audio_received = False
+    asyncio.run(agent._async_receive_turn())
+
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="call-named", output='{"result": "done"}',
+    )))
+
+    response, = session.tool_responses[-1]
+    assert response.id == "call-named"
+    assert response.name == tool_name
+    assert response.response == {"result": "done"}
+    assert not agent._pending_tool_calls
+    assert not agent._pending_tool_names
+
+
+def test_tool_name_survives_failed_ack_and_is_cleared_on_session_reset():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"look-1"}
+    agent._pending_tool_names = {"look-1": "look"}
+    session.fail_tool_response = True
+    with pytest.raises(RuntimeError, match="tool response send failed"):
+        asyncio.run(agent._async_send_input(FunctionCallResultInput(
+            call_id="look-1", output='{"result": "frame incoming"}',
+        )))
+    assert agent._pending_tool_names == {"look-1": "look"}
+    agent._clear_pending_tool_calls()
+    assert agent._pending_tool_names == {}
+
+
+def test_ack_keeps_other_pending_tool_names():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent._pending_tool_calls = {"look-1", "emotion-2"}
+    agent._pending_tool_names = {"look-1": "look", "emotion-2": "express_emotion"}
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="look-1", output='{"result": "frame incoming"}',
+    )))
+    assert agent._pending_tool_calls == {"emotion-2"}
+    assert agent._pending_tool_names == {"emotion-2": "express_emotion"}
+
+
+def test_async_look_frame_waits_for_sibling_tool_ack():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent.supports_look_continuation = True
+    agent._pending_tool_calls = {"emotion"}
+    agent._pending_tool_names = {"emotion": "express_emotion"}
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+    assert session.realtime_inputs == []
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="emotion", output='{"result": "ok"}',
+    )))
+    assert len(session.realtime_inputs) == 1
+    assert session.realtime_inputs[0]["video"].mime_type == "image/jpeg"
+    assert agent._pending_image is None
+
+
+def test_pending_async_image_is_not_reused_after_reset():
+    session = _RecordingSession()
+    agent = _agent(session)
+    agent.supports_look_continuation = True
+    agent._pending_tool_calls = {"old"}
+    asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
+    agent._clear_pending_tool_calls()
+    asyncio.run(agent._finish_tool_ack("old"))
+    assert session.realtime_inputs == []
+
+
+def _look_image_agent():
+    from unittest.mock import AsyncMock
+    session = _RecordingSession()
+    session._ws = SimpleNamespace(send=AsyncMock())
+    agent = _agent(session)
+    agent.supports_look_continuation = True
+    agent._pending_tool_calls = {"look-1", "emotion-1"}
+    agent._pending_tool_names = {"look-1": "look", "emotion-1": "express_emotion"}
+    return agent, session
+
+
+def test_look_image_is_one_multimodal_tool_response():
+    import base64
+    import json
+    import cv2
+    agent, session = _look_image_agent()
+    frame = _frame()
+    frame[:] = (10, 80, 180)
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="look-1", output='{"result":"attached"}', image=frame,
+    )))
+    wire = json.loads(session._ws.send.call_args.args[0])
+    response, = wire["toolResponse"]["functionResponses"]
+    assert response["id"] == "look-1"
+    assert response["name"] == "look"
+    assert response["response"] == {"result": "attached"}
+    data = response["parts"][0]["inlineData"]
+    assert data["mimeType"] == "image/jpeg"
+    decoded = cv2.imdecode(np.frombuffer(base64.b64decode(data["data"]), dtype=np.uint8), cv2.IMREAD_COLOR)
+    assert decoded.shape == frame.shape
+    assert np.max(np.abs(decoded.astype(int) - frame.astype(int))) <= 3
+    assert agent._pending_tool_calls == {"emotion-1"}
+    assert not session.realtime_inputs and not session.client_contents and not session.tool_responses
+
+
+@pytest.mark.parametrize("case", ["cancelled", "reset", "resolved", "wrong_tool", "legacy"])
+def test_stale_or_unsupported_look_result_sends_no_image(case):
+    agent, session = _look_image_agent()
+    if case == "cancelled":
+        agent._invalidate_look_images(["look-1"])
+    elif case == "reset":
+        agent._clear_pending_tool_calls()
+    elif case == "resolved":
+        asyncio.run(agent._finish_tool_ack("look-1"))
+    elif case == "wrong_tool":
+        agent._pending_tool_names["look-1"] = "delegate_to_main"
+    else:
+        agent.supports_look_continuation = False
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="look-1", output='{"result":"attached"}', image=_frame(),
+    )))
+    session._ws.send.assert_not_called()
+    assert not session.tool_responses and not session.realtime_inputs
+
+
+@pytest.mark.parametrize("failure", ["encode", "send"])
+def test_look_image_failure_keeps_call_pending(monkeypatch, failure):
+    agent, session = _look_image_agent()
+    if failure == "encode":
+        monkeypatch.setattr("hal.realtime.voice_agent.gemini_live.cv2.imencode", lambda *_: (False, None))
+    else:
+        session._ws.send.side_effect = RuntimeError("send failed")
+    with pytest.raises((ValueError, RuntimeError)):
+        asyncio.run(agent._async_send_input(FunctionCallResultInput(
+            call_id="look-1", output='{"result":"attached"}', image=_frame(),
+        )))
+    assert "look-1" in agent._pending_tool_calls
+    assert not session.tool_responses
+
+
+def test_look_send_does_not_clear_replacement_session_pending_calls():
+    agent, old_session = _look_image_agent()
+    replacement = _RecordingSession()
+
+    async def reconnect_during_send(payload):
+        agent._session = replacement
+        agent._pending_tool_calls = {"look-1"}
+        agent._pending_tool_names = {"look-1": "look"}
+
+    old_session._ws.send.side_effect = reconnect_during_send
+    asyncio.run(agent._async_send_input(FunctionCallResultInput(
+        call_id="look-1", output='{"result":"attached"}', image=_frame(),
+    )))
+    assert agent._session is replacement
+    assert agent._pending_tool_calls == {"look-1"}

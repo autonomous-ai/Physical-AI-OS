@@ -23,6 +23,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/intent"
+	"go.autonomous.ai/os/system/intent/jev"
 	"go.autonomous.ai/os/system/lib/flow"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/i18n"
@@ -44,12 +45,16 @@ import (
 )
 
 // Explicit Harness/agent wording can select the skill; bare names only warrant discovery.
+// realtimeDelegationPrefix opens the message HAL sends when the realtime
+// model hands a turn to the main agent (hal/drivers/voice/_internal/turn_dispatch.py).
+const realtimeDelegationPrefix = "[voice-instruction]"
+
 var harnessAgentRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|have|message|use|delegate(?:\s+to)?|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu|dùng|dung)\s+(?:(?:the|a|an|một|mot)\s+)?(?:(?:harness|agent)(?:\s|$)|[\p{L}\p{N}_-]+\s+agent(?:\s|$))`)
 var harnessPossibleNamedRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|message|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu)\s+([\p{L}\p{N}_-]+)(?:\s|$)`)
 var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via|nhờ|hỏi|bảo|nho|hoi|bao)\s+(?:the\s+)?buddy)\b`)
 
-const harnessNamedAgentRouting = "[system-routing: For explicit Harness delegation, use harness-use to select an agent for the task. A named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. An explicitly requested agent takes priority over any retained target: list real agents and select the exact requested agent, including when the user changes agents. For a new task without an explicit name, follow the skill task-based selection policy: list agents and use each agent's recap headline as the first evidence of its current project and work; when the headlines do not settle it, read only the newest recap/text pair (recap n:1, turns[0]) of at most two candidates and match the task against that text; choose the agent whose recap matches the task; a missing recap is unknown, not availability; do not assume the retained agent is suitable. Retain a target only for a clear continuation of its task; when several agents could own the referenced task, continue with the one whose recap describes it, otherwise ask. Then send the selected agent the underlying task directly with the harness-reply routing object. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. If a prior delivery blocks this new or corrected task, inspect its receipt once. If it is delivered, started, completed, or rejected, immediately send the user's current task in this same turn; never return NO_REPLY until that new send/answer has a known receipt. If send/answer returns queued, delivered, started, completed, or rejected, it has a known outcome: make no more Harness or shell calls (including receipt, status, recap, list, or another send), and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
-const harnessFollowupRouting = "[system-routing: A Harness task or question may be awaiting a follow-up. An explicit new target, a new Harness task, or a request for Buddy takes priority over this follow-up hint. Use harness-use only when the user's words clearly continue the retained Harness task, answer its currently open question, or ask whether it has finished or for its result. Do not route vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech to Harness; let the main agent handle those normally. When routing, use the retained target and send only the user's current words. Only when the user's words could continue a task of a different Harness agent, compare them with the listed agents' recap headlines: if exactly one listed agent's recap describes that task, continue with that agent instead; if several do, ask which task; a missing recap is unknown, not a reason to switch. Do not use Buddy and do not answer a clear Harness follow-up yourself. Do not read the skill/directory or run harness.py --help. If send/answer returns queued, delivered, started, completed, or rejected, make no more Harness or shell calls (including receipt, status, recap, list, or another send) and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
+const harnessNamedAgentRouting = "[system-routing: For explicit Harness delegation, use harness-use to select an agent for the task. A named Harness agent is the execution target, not a person to contact. Use harness-use only. Do not call agent-management, computer-use, Autonomous Buddy, or /api/buddy. An explicitly requested agent takes priority over any retained target: list real agents and select the exact requested agent, including when the user changes agents. For a new task without an explicit name, follow the skill task-based selection policy (including Store discovery/preparation when a suitable existing agent is unavailable; never replace an unavailable explicit target): list agents and use each agent's recap headline as the first evidence of its current project and work; when the headlines do not settle it, read only the newest recap/text pair (recap n:1, turns[0]) of at most two candidates and match the task against that text; choose the agent whose recap matches the task; a missing recap is unknown, not availability; do not assume the retained agent is suitable. Retain a target only for a clear continuation of its task; when several agents could own the referenced task, continue with the one whose recap describes it, otherwise ask. Then send the selected agent the underlying task directly with an explicit agentId and the harness-reply routing object. Use the stable conversation scope, never the per-turn run_id as conversation_id. When correcting a wrong target, recover the original unfinished user request and transfer it to the right task/workspace; do not turn a complaint about the wrong workspace into a different task or invent replacement work. Remove the leading delegation wording from the task: for example, \"Ask David if there are events in the US\" must be sent to David as \"Find upcoming events in the US\", never as a request to ask or contact David. If a prior delivery blocks this new or corrected task, inspect its receipt once. If it is delivered, started, completed, or rejected, immediately send the user's current task in this same turn; never return NO_REPLY until that new send/answer has a known receipt. If send/answer returns queued, delivered, started, completed, or rejected, it has a known outcome: make no more Harness or shell calls (including receipt, status, recap, list, or another send), and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
+const harnessFollowupRouting = "[system-routing: A Harness task or question may be awaiting a follow-up. An explicit new target, a new Harness task (including digital work delegated by the Lamp persona without naming Harness), or a request for Buddy takes priority over this follow-up hint. For a new task, read harness-use and select a suitable agent or use its negotiated Store preparation flow under the device persona policy instead of inheriting the retained target. A continuation of unfinished Store preparation resumes its saved intent via workflow-status/operation, not a new task send. Use the retained Harness target only when the user's words clearly continue the retained Harness task, answer its currently open question, or ask whether it has finished or for its result. Do not treat vague fragments, acknowledgements, filler, unrelated new requests, or uncertain speech as continuations; let the main agent handle those under its normal persona and skill policy. For a continuation, read harness-use context when the task owner is not explicit in the current conversation, resolve the correct task agent and pass its explicit agentId to send/answer. Never omit agentId to inherit a default target, and never use the per-turn run_id as conversation_id. A correction of the execution target keeps the unfinished original task: select the right task/workspace and send the original requested change there, without attributing another workspace's mistake to it. If an agent reports a missing scene/file, recheck task ownership; do not authorize creating a replacement scene or add fallback work the user did not request. Only when the user's words could continue a task of a different Harness agent, compare them with the listed agents' recap headlines: if exactly one listed agent's recap describes that task, continue with that agent instead; if several do, ask which task; a missing recap is unknown, not a reason to switch. Do not use Buddy and do not answer a clear Harness follow-up yourself. For a clear continuation with the skill already loaded, do not reread the skill/directory or run harness.py --help. If send/answer returns queued, delivered, started, completed, or rejected, make no more Harness or shell calls (including receipt, status, recap, list, or another send) and immediately reply NO_REPLY. Inspect receipt only for DeliveryUnknown/no usable receipt or an explicit user delivery-state request; never resend automatically.]"
 
 const harnessAgentDiscoveryRouting = "[system-routing: The user may be naming an agent or a person. This wording alone does not authorize Harness delegation. If context indicates a Harness agent request, use harness-use to list real agents and resolve the requested name before selecting or sending; an explicit new name overrides the retained target. Otherwise handle the request normally. Do not treat ordinary contact requests as agent tasks.]"
 
@@ -137,6 +142,7 @@ type HarnessVoiceSnapshot struct {
 
 // SensingHandler handles incoming sensing events from HAL and forwards them to the agent.
 type SensingHandler struct {
+	intentResolver   *jev.Resolver
 	agentGateway     domain.AgentGateway
 	monitorBus       *monitor.Bus
 	config           *config.Config
@@ -159,6 +165,7 @@ type SensingHandler struct {
 	realtimeHistory        func(string, string) (string, error)
 	harnessConnected       func() bool
 	harnessFollowup        func() bool
+	harnessTaskPending     func() bool
 	harnessFollowupContext func() string
 	harnessVoice           func(*gin.Context, SensingEventRequest) bool
 }
@@ -202,16 +209,17 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 	// the model. Re-evaluated on every config change (see runConfigChangeListener).
 	intent.SetChitchatEnabled(!cfg.RealtimeEnabled())
 	return &SensingHandler{
-		agentGateway: gw,
-		monitorBus:   bus,
-		config:       cfg,
-		statusLED:    sled,
-		isSleeping:   isSleeping,
+		intentResolver: jev.NewResolver(),
+		agentGateway:   gw,
+		monitorBus:     bus,
+		config:         cfg,
+		statusLED:      sled,
+		isSleeping:     isSleeping,
 	}
 }
 
 // PostEvent receives a sensing event and sends it to the agent as a chat message.
-// Voice events are first checked against local intent rules for instant response.
+// Voice and text-only chat events first try local intent rules and Jev.
 func (h *SensingHandler) PostEvent(c *gin.Context) {
 	var req SensingEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
@@ -259,6 +267,9 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	// User tasks enter the cohort at receipt, including queued chat. Sensor
 	// notifications enter only once routing selects an actual dispatch below.
+	// Only HAL-supplied interaction IDs can own follow-up focus. A telemetry
+	// ID generated locally below has no authorized capture to bind in HAL.
+	followupInteractionID := req.InteractionID
 	taskGroup := telemetry.TaskGroup(req.Type)
 	if taskGroup == "voice" || taskGroup == "chat" {
 		req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, "")
@@ -305,7 +316,27 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// friend on their own timeline, stranger collapsed to "unknown"
 	// timeline) — the handler no longer writes them here. See
 	// faceid/perception.py _post_wellbeing.
-	if req.CurrentUser != "" {
+	// speech_emotion.detected is exempt: SER identifies nobody. Its
+	// current_user is a courier value computed by the voice turn, and five
+	// unrelated situations collapse into the literal string "unknown" —
+	// speaker-ID found no enrolled match, speaker-ID could not run, the turn
+	// had no transcript at all, the wake-word gate rejected it, or the noise
+	// guard dropped it. Letting that write here means one ambient sigh from an
+	// unrecognized voice erases a live face-derived identity.
+	//
+	// Nothing is lost by skipping it. SER inherits its user from speaker-ID
+	// only (never face), and a confident speaker-ID match is already promoted
+	// device-wide by voice_service.py set_voice_user() before the SER event is
+	// even queued — so every other producer (voice turns, sensing) is already
+	// shipping that identity via app_state.resolve_current_user(), where face
+	// outranks voice. SER's copy is at best a duplicate, and always the
+	// latest-arriving one (queue + cloud call + flush window).
+	//
+	// This does NOT change the event's own attribution: the message the agent
+	// sees still carries "[context: current_user=...]" built from
+	// req.CurrentUser below, so stranger mood still logs under "unknown" as
+	// skills/mood/SKILL.md requires.
+	if req.CurrentUser != "" && req.Type != "speech_emotion.detected" {
 		mood.SetCurrentUser(req.CurrentUser)
 	} else if req.Type == "presence.leave" || req.Type == "presence.away" {
 		mood.ClearCurrentUser()
@@ -315,16 +346,22 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		return
 	}
 
-	// Voice commands: try local intent matching first for instant response
-	if (req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup") && h.config.LocalIntentEnabled() {
-		if result := intent.Match(req.Message); result != nil {
+	// Keep attachments on the agent path so intent matching cannot discard them.
+	isVoice := req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup"
+	isChat := sensingmsg.IsChat(req.Type)
+	if (isVoice || isChat) && len(req.Images) == 0 && len(req.Files) == 0 && h.config.LocalIntentEnabled() && !h.deferContextualIntent(req.Message) {
+		if result := h.matchVoiceIntent(c.Request.Context(), req.Message); result != nil {
 			// Generate a dedicated local-intent trace ID so this turn doesn't
 			// share the global trace of an in-flight agent turn.
-			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixMilli())
+			localRunID := fmt.Sprintf("local-intent-%d", time.Now().UnixNano())
 			telemetry.ReportTaskStarted(req.Type, req.InteractionID, localRunID)
 			turnStart := flow.Start("sensing_input", startPayload, localRunID)
-			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions}, localRunID)
-			if result.TTSText != "" {
+			source := "local"
+			if result.Source != "" {
+				source = result.Source
+			}
+			flow.Log("intent_match", map[string]any{"message": req.Message, "tts": result.TTSText, "rule": result.Rule, "actions": result.Actions, "source": source}, localRunID)
+			if result.TTSText != "" && isVoice {
 				owner := req.InteractionID
 				go func() {
 					// Cached path: fixed phrases like "Volume up!" hit the
@@ -350,7 +387,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			}
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "intent_match",
-				Summary: "[local] " + req.Message + " → " + result.TTSText,
+				Summary: "[" + source + "] " + req.Message + " → " + result.TTSText,
 			})
 			flow.End("sensing_input", turnStart, map[string]any{"path": "local"}, localRunID)
 			if result.ExecutionFailed {
@@ -358,12 +395,14 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 			} else {
 				telemetry.ReportTaskExecution(localRunID, req.InteractionID, "completed", "local_intent_returned")
 			}
+			slog.Info("intent handled", "component", "sensing", "type", req.Type, "source", source, "intent", result.Rule, "run_id", localRunID)
+			flow.Log("agent_response", map[string]any{"text": result.TTSText, "source": source}, localRunID)
 			c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]string{
-				"handler":  "local",
-				"response": result.TTSText,
-				// No runId exists for a locally-handled command — say so
-				// explicitly, so HAL records "served here" instead of
-				// mistaking a missing run id for a failed dispatch.
+				"localRunId": localRunID,
+				"handler":    "local",
+				"response":   result.TTSText,
+				// Keep runId absent: web chat renders the immediate response,
+				// while MQTT correlates its final event using localRunId.
 				"handledLocally": "true",
 			}))
 			return
@@ -379,9 +418,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// suppressed) but does NOT trigger physical wake. It counts as passive for
 	// the busy-gate so it queues on agent busy instead of racing the in-flight
 	// turn (agent merges same-session messages).
-	isVoice := req.Type == "voice" || req.Type == "voice_command" || req.Type == "voice_followup"
 	isVoiceCommand := req.Type == "voice_command" || req.Type == "voice_followup"
-	isChat := sensingmsg.IsChat(req.Type)
 	// A realtime-handled turn is user-initiated by definition: the user spoke and
 	// the realtime agent ALREADY replied out loud. That exchange happens entirely
 	// in HAL and never consults this sleep flag, so the device can be "asleep"
@@ -851,12 +888,24 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// to synthesize and play out before the real reply arrives — avoiding
 	// the hal-side speak() lock-timeout=2s race that the timer-based
 	// fire-at-lifecycle.start+FillerDelay path triggers.
+	//
+	// A turn the realtime model delegated (`[voice-instruction]`, see HAL
+	// turn_dispatch) already got a filler from that model. Acknowledging it
+	// again here promises an answer twice — and when the main agent then
+	// decides NO_REPLY (correct for an unclear utterance) the user is left
+	// waiting on a promise nobody keeps. Such turns get no opening filler
+	// and only start filling at the first tool boundary.
 	if isVoice {
-		DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
-		// Owned by the utterance HAL is tracking, not by the run id: this
-		// fires now, while HAL is still waiting for the response that would
-		// tell it which run this turn became.
-		go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+		hal.StartVoiceFollowup(followupInteractionID, runID)
+		if strings.HasPrefix(req.Message, realtimeDelegationPrefix) {
+			DefaultFillerManager.MarkDelegatedVoiceRun(runID, req.InteractionID)
+		} else {
+			DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)
+			// Owned by the utterance HAL is tracking, not by the run id: this
+			// fires now, while HAL is still waiting for the response that would
+			// tell it which run this turn became.
+			go PlayOpeningFillerNow(fillerOwner(req.InteractionID, runID))
+		}
 	}
 
 	var err error
@@ -915,6 +964,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 		}
 		// Forward failed — drop the voice mark so we don't keep state
 		// for a run that will never produce a lifecycle.start.
+		hal.EndVoiceFollowup(runID)
 		DefaultFillerManager.Cancel(runID)
 		slog.Error("failed to send event", "component", "sensing", "error", err)
 		flow.End("sensing_input", turnStart, map[string]any{"error": err.Error()})

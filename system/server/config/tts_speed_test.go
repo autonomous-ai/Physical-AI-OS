@@ -7,8 +7,8 @@ func TestGetTTSSpeedLegacyEnvironment(t *testing.T) {
 		env  string
 		want float64
 	}{
-		{"", 1.3}, {"1.1", 1.1}, {" 1.1 ", 1.1}, {"1.3", 1.3}, {"0.5", 0.5},
-		{"0", 0.25}, {"-1", 0.25}, {"invalid", 1.3}, {"NaN", 1.3}, {"Inf", 1.3}, {"-Inf", 1.3}, {"1e999", 1.3}, {"5", 4},
+		{"", 1.2}, {"1.1", 1.1}, {" 1.1 ", 1.1}, {"1.3", 1.3}, {"0.5", 0.5},
+		{"0", 0.25}, {"-1", 0.25}, {"invalid", 1.2}, {"NaN", 1.2}, {"Inf", 1.2}, {"-Inf", 1.2}, {"1e999", 1.2}, {"5", 4},
 	} {
 		t.Run(tc.env, func(t *testing.T) {
 			t.Setenv("HAL_TTS_SPEED", tc.env)

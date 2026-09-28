@@ -216,6 +216,16 @@ The wrapper now polls `--probe-url` alongside `wait`:
 (08:51 -> 08:53 on the real box). Probing during that window would kill it before
 it ever served a request, and it would never finish booting.
 
+**A boot that (re)builds a TensorRT engine needs more grace than that.** This
+happens when the engine cache under `trt_engines/` is missing or invalidated —
+a new host, a cleared cache, or a TensorRT/ORT upgrade — and the
+emotion2vec-large engine build alone can take 30-70 s on top of the normal
+~2-3 minute model load. `PROBE_GRACE` is a plain env var read by
+`run-with-restart.sh` (`scripts/run-with-restart.sh`, `PROBE_GRACE=${PROBE_GRACE:-180}`),
+so raise it only for that one restart, e.g. `PROBE_GRACE=420 make start-runpod-dlserver`.
+Once the engine is cached under `trt_engines/`, later restarts don't rebuild it
+and the default 180s is enough again.
+
 On `PROBE_FAILURES` consecutive failures the wrapper sends **SIGKILL**, not
 SIGTERM. A hung uvicorn absorbs SIGTERM: its handler only sets `should_exit`, and
 the only thing that can act on that flag is the event loop -- the thing that is

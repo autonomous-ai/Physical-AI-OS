@@ -70,3 +70,30 @@ def test_kpi_is_unavailable_when_only_unresolved_observations_exist():
         "observation_complete": False, "applicable_interactions": 1,
     }
     assert _aggregate([unresolved]) == [("auto_supersede", 0, 0, 1, None)]
+
+
+def _aggregate_ack(rows):
+    doc = Path(__file__).resolve().parents[2] / "docs" / "voice-metrics.md"
+    block = doc.read_text().split("-- KPI-1: acknowledged within 3s", 1)[1]
+    query = "SELECT\n" + block.split("\nSELECT\n", 1)[1].split("```", 1)[0]
+    with sqlite3.connect(":memory:") as db:
+        db.create_aggregate("COUNTIF", 1, _CountIf)
+        db.execute("CREATE TABLE i (eligible TEXT, outcome TEXT, exclusion_reason TEXT, endpoint_known TEXT, ack_ms INTEGER)")
+        db.executemany("INSERT INTO i VALUES (?, ?, ?, ?, ?)", rows)
+        return db.execute(query).fetchone()
+
+
+def test_kpi1_missing_endpoint_cohort_stays_na_with_visible_coverage():
+    rows = [("false", "excluded", "speech_endpoint_unavailable", "false", None)] * 44
+    rows += [("false", "excluded", "interrupted_by_user", "false", None)] * 13
+    rows += [("false", "excluded", "rejected_non_user", "false", None)] * 30
+    assert _aggregate_ack(rows) == (87, 0, 87, 44, 0, 0, 0, None)
+
+
+def test_kpi1_no_ack_remains_in_denominator():
+    rows = [
+        ("true", "acknowledged", "", "true", 300),
+        ("true", "no_ack", "", "true", None),
+        ("false", "excluded", "speech_endpoint_unavailable", "false", None),
+    ]
+    assert _aggregate_ack(rows) == (3, 2, 1, 1, 2, 1, 1, 50.0)

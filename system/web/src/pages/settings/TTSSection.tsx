@@ -25,12 +25,12 @@ export interface TtsLoadedState {
 //
 // Autonomous is special: it's a routing hub whose proxy path decides which
 // vendor the request is billed to. So picking "Autonomous" also asks for a
-// vendor (OpenAI or ElevenLabs) — that vendor becomes `tts_provider` while
+// vendor (OpenAI, ElevenLabs or Gemini) — that vendor becomes `tts_provider` while
 
 // Vendor covers only the choices that have a distinct audio backend on disk.
-// Autonomous supports two vendors; every other choice has exactly one vendor
+// Autonomous supports three vendors; every other choice has exactly one vendor
 // (matching its provider name).
-type Vendor = "openai" | "elevenlabs";
+type Vendor = "openai" | "elevenlabs" | "gemini";
 
 interface ChoiceMeta {
   label: string;
@@ -48,7 +48,7 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
     // successfully, so exposing OpenAI here is required even though a
     // direct probe of POST /audio/speech from the device sometimes returns
     // a chatcmpl-error body (key-tier issue; the endpoint is real).
-    hint: "Routes through Autonomous — supports OpenAI + ElevenLabs voices",
+    hint: "Routes through Autonomous — supports OpenAI, ElevenLabs + Gemini voices",
   },
   openai: {
     label: "OpenAI (direct)",
@@ -66,7 +66,7 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
     // No vendor sub-picker and no key: synthesis happens here, so there is
     // no account to authenticate and no shared quota to share. Voices are
     // the .onnx models installed on the device, listed by HAL.
-    hint: "Runs on the device — no API key, no quota, works offline. Lower quality than a hosted voice.",
+    hint: "Runs on the robot — no API key, no quota, works offline. Lower quality than a hosted voice.",
   },
   custom: {
     label: "Custom (BYO URL)",
@@ -87,7 +87,7 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
 // sttLanguage; no filtering).
 type Lang = "" | "en" | "vi" | "zh-CN" | "zh-TW";
 const LANG_LABEL: Record<Lang, string> = {
-  "":      "Auto (follow device language)",
+  "":      "Auto (follow robot language)",
   "en":    "English",
   "vi":    "Vietnamese",
   "zh-CN": "Chinese (Simplified)",
@@ -111,6 +111,15 @@ function langBucket(lang: Lang): LangBucket {
   return "en";  // "" (auto) resolves via sttLanguage → this default is safe
 }
 const OPENAI_VOICES = ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"];
+// Gemini prebuilt voices are multilingual. Mirrors
+// hal/drivers/voice/tts/gemini.py::GeminiTTSBackend.VOICES.
+const GEMINI_VOICES = [
+  "Kore", "Puck", "Zephyr", "Charon", "Fenrir", "Leda", "Orus", "Aoede",
+  "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba",
+  "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar",
+  "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird",
+  "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat",
+];
 const VOICES: Record<Vendor, Record<LangBucket, string[]>> = {
   elevenlabs: {
     en: [
@@ -125,6 +134,7 @@ const VOICES: Record<Vendor, Record<LangBucket, string[]>> = {
     zh: ["Amy", "Sage", "Xiaoxi", "Yun", "Evan Zhao"],
   },
   openai: { en: OPENAI_VOICES, vi: OPENAI_VOICES, zh: OPENAI_VOICES },
+  gemini: { en: GEMINI_VOICES, vi: GEMINI_VOICES, zh: GEMINI_VOICES },
 };
 
 function voicesFor(vendor: Vendor, lang: Lang, sttLang: string): string[] {
@@ -215,13 +225,15 @@ export function TTSSection({
   // tts_provider (openai / elevenlabs); every other preset pins vendor via
   // meta.vendor; custom asks the operator to choose.
   const vendor: Vendor = meta.vendor
-    ?? (ttsProvider === "openai" || ttsProvider === "elevenlabs"
+    ?? (ttsProvider === "openai" || ttsProvider === "elevenlabs" || ttsProvider === "gemini"
       ? (ttsProvider as Vendor)
       : "elevenlabs");
 
-  const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
-  const speedMax = ttsProvider === "elevenlabs" ? 1.2 : 4.0;
-  // Show the backend's effective rate without changing a saved legacy value
+  // One range for every provider: outside 0.5–2.0 speech stops sounding
+  // natural, and HAL applies tempo locally where the provider has no speed knob.
+  const speedMin = 0.5;
+  const speedMax = 2.0;
+  // Show the selectable rate without changing a saved legacy value
   // when the user edits another setting. Only a slider action changes it.
   const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));
 
@@ -298,10 +310,10 @@ export function TTSSection({
     }
     setTtsBaseUrl(nextMeta.baseUrl);
     if (next === "autonomous") {
-      // Autonomous supports 2 vendors — preserve the current vendor if it's
-      // already OpenAI/ElevenLabs; else default to ElevenLabs (the
+      // Autonomous supports 3 vendors — preserve the current vendor if it's
+      // already OpenAI/ElevenLabs/Gemini; else default to ElevenLabs (the
       // historical default that the proxy has always accepted).
-      if (ttsProvider !== "openai" && ttsProvider !== "elevenlabs") {
+      if (ttsProvider !== "openai" && ttsProvider !== "elevenlabs" && ttsProvider !== "gemini") {
         setTtsProvider("elevenlabs");
         setTtsVoice(voicesFor("elevenlabs", lang, sttLanguage)[0]);
       }
@@ -374,12 +386,13 @@ export function TTSSection({
           <label htmlFor="tts_vendor" style={labelStyle}>Vendor (voices come from here)</label>
           <select
             id="tts_vendor"
-            value={ttsProvider === "openai" ? "openai" : "elevenlabs"}
+            value={ttsProvider === "openai" || ttsProvider === "gemini" ? ttsProvider : "elevenlabs"}
             onChange={(e) => onVendor(e.target.value as Vendor)}
             style={selectStyle}
           >
             <option value="openai">OpenAI</option>
             <option value="elevenlabs">ElevenLabs</option>
+            <option value="gemini">Gemini</option>
           </select>
         </div>
       )}
@@ -479,9 +492,9 @@ export function TTSSection({
             <option key={l || "auto"} value={l}>{LANG_LABEL[l]}</option>
           ))}
         </select>
-        {vendor === "openai" && (
+        {(vendor === "openai" || vendor === "gemini") && (
           <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
-            OpenAI voices are multilingual — the same voice handles any
+            {vendor === "openai" ? "OpenAI" : "Gemini"} voices are multilingual — the same voice handles any
             language. Filter is a no-op here.
           </div>
         )}
@@ -519,7 +532,7 @@ export function TTSSection({
           style={{ width: "100%", accentColor: C.green }}
         />
         <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
-          {speedMin}×–{speedMax}× · 1.0× normal. Save changes before testing speed.
+          {speedMin}×–{speedMax}× · 1.0× normal. Test Voice uses this speed immediately.
         </div>
         <TestVoiceButton
           voice={ttsVoice}
@@ -527,6 +540,7 @@ export function TTSSection({
           provider={ttsProvider}
           baseUrl={ttsBaseUrl}
           apiKey={ttsApiKey}
+          speed={effectiveSpeed}
           blockedReason={
             // Read from what the device has, not from what is selected. The
             // selection can still hold the previous provider's voice ("Rachel"),
@@ -549,7 +563,7 @@ export function TTSSection({
 // ("Playing on device") for ~2.5s → back to idle. Errors flip to a red
 // "Failed" state for the same window. Prior version fired-and-forgot with no
 // visual change — the operator saw nothing happen and clicked again.
-function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason = "" }: {
+function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, speed, blockedReason = "" }: {
   voice: string;
   lang: string;
   provider: string;
@@ -563,6 +577,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
   // Empty strings fall back to saved config server-side.
   baseUrl: string;
   apiKey: string;
+  speed: number;
 }) {
   type Phase = "idle" | "loading" | "ok" | "error";
   const [phase, setPhase] = useState<Phase>("idle");
@@ -574,7 +589,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
     setPhase("loading");
     setErrorMsg("");
     try {
-      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey });
+      await testTTSVoice(voice, { lang, provider, baseUrl, apiKey, speed });
       setPhase("ok");
       window.setTimeout(() => setPhase("idle"), 2500);
     } catch (err) {
@@ -600,8 +615,8 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, blockedReason
     <Volume2 size={14} />;
   const label =
     blocked ? blockedReason :
-    phase === "loading" ? "Sending to device…" :
-    phase === "ok" ? "Playing on device" :
+    phase === "loading" ? "Sending to robot…" :
+    phase === "ok" ? "Playing on robot" :
     phase === "error" ? "Failed" :
     "Test Voice";
 
@@ -711,7 +726,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
         // and a click landing in that window is simply lost. Saying only
         // "reconnecting" would let the operator believe the voice was removed.
         setUnreachable(true);
-        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+        setNotice("Robot was restarting — nothing changed. Try again in a moment.");
       });
   }, [load]);
 
@@ -736,7 +751,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
       })
       .catch(() => {
         setUnreachable(true);
-        setNotice("Device was restarting — nothing changed. Try again in a moment.");
+        setNotice("Robot was restarting — nothing changed. Try again in a moment.");
       })
       .finally(() => setRemoving((cur) => cur.filter((n) => n !== name)));
   }, [load]);
@@ -758,7 +773,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
   if (!st) {
     return (
       <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
-        {unreachable ? "Device is restarting — reconnecting…" : "Checking device…"}
+        {unreachable ? "Robot is restarting — reconnecting…" : "Checking robot…"}
       </div>
     );
   }
@@ -826,7 +841,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
             }} />
           </div>
           <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 5 }}>
-            Running on the device — you can leave this page or reload, it keeps going.
+            Running on the robot — you can leave this page or reload, it keeps going.
           </div>
         </div>
       )}
@@ -836,7 +851,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
       {st.engine_installed && (
         <>
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
-            Voices are downloaded to the device. Each is 63–79 MB and stays offline once installed.
+            Voices are downloaded to the robot. Each is 63–79 MB and stays offline once installed.
           </div>
           {catalog.map((v) => {
             const downloading = busy && job.kind === "voice" && job.target === v.name;
@@ -893,7 +908,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
 
       {unreachable && (
         <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8 }}>
-          Device is restarting — reconnecting…
+          Robot is restarting — reconnecting…
         </div>
       )}
       {notice && (

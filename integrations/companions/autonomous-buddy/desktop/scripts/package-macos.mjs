@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import { accessSync, constants, cpSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { resolve, join } from 'node:path'
 import { discoverSigningIdentity } from './signing-identity.mjs'
+import { prepareCuaDriver, preserveCuaSignature, verifyBundledCua } from './cua-driver.mjs'
 import { releaseVersion } from './update-feed.mjs'
 import { makeUpdateOwnerWritable, verifyUpdateOwnerWritable } from './update-permissions.mjs'
 
@@ -27,6 +28,7 @@ const swiftOutput = execFileSync('swift', [...swiftArgs, '--show-bin-path'], {
 }).trim()
 const helper = join(swiftOutput, 'AutonomousBuddy')
 accessSync(helper, constants.X_OK)
+const cua = prepareCuaDriver(resolve('artifacts/dependencies/cua'))
 const paths = await packager({
   dir: '.',
   name: 'Autonomous Buddy',
@@ -56,6 +58,7 @@ const paths = await packager({
   afterCopy: [
     async ({ buildPath }) => {
       makeUpdateOwnerWritable(buildPath)
+      cua.embed(resolve(buildPath, '..', '..', '..'))
       const packagePath = join(buildPath, 'package.json')
       const manifest = JSON.parse(readFileSync(packagePath, 'utf8'))
       writeFileSync(packagePath, `${JSON.stringify({ ...manifest, version }, null, 2)}\n`)
@@ -91,8 +94,16 @@ const paths = await packager({
       )
     },
   ],
-  ...(identity ? { osxSign: { identity, optionsForFile: () => ({ hardenedRuntime: true }) } } : {}),
-})
+  osxSign: {
+    identity: identity || '-',
+    continueOnError: false,
+    identityValidation: Boolean(identity),
+    preAutoEntitlements: Boolean(identity),
+    preEmbedProvisioningProfile: Boolean(identity),
+    ignore: preserveCuaSignature,
+    optionsForFile: () => ({ hardenedRuntime: Boolean(identity) }),
+  },
+}).finally(() => cua.cleanup())
 for (const directory of paths) {
   const bundle = `${directory}/Autonomous Buddy.app`
   verifyUpdateOwnerWritable(bundle)
@@ -107,7 +118,7 @@ for (const directory of paths) {
   ]) {
     execFileSync('lipo', [`${bundle}/Contents/${binary}`, '-verify_arch', machoArch], { stdio: 'inherit' })
   }
-  if (!identity) execFileSync('codesign', ['--force', '--deep', '--sign', '-', bundle], { stdio: 'inherit' })
+  verifyBundledCua(bundle)
   execFileSync('codesign', ['--verify', '--deep', '--strict', bundle], { stdio: 'inherit' })
   console.log(`Built unified ${identity ? 'Developer ID' : 'ad-hoc'} signed app: ${bundle}`)
 }

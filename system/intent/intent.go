@@ -27,6 +27,8 @@ import (
 
 // Result holds what to do after a match: the HAL action + a TTS reply.
 type Result struct {
+	// Source is "jev" for an optional semantic fallback; empty means local rules.
+	Source string
 	// ExecutionFailed records an error from any attempted HAL action.
 	ExecutionFailed bool
 	// TTSText is spoken back to the user via /voice/speak.
@@ -87,18 +89,58 @@ func match(text string, allowChitchat bool) *Result {
 		}
 	}
 
+	return recognizeCommand(text).execute()
+}
+
+// command separates recognition from side effects. Only code-owned rules and
+// their validated input reach execution; a model never supplies a HAL payload.
+type command struct {
+	rule *rule
+	text string
+}
+
+func (c *command) execute() *Result {
+	if c == nil || !capEnabled(c.rule.capability) {
+		return nil
+	}
+	// HAL silently drops solid LED writes during sleep. Check before writing
+	// so a chat command cannot report success or wake the device as a side effect.
+	if c.rule.name == "led_on" || c.rule.name == "led_color" || c.rule.name == "dim" {
+		sleeping, err := hal.GetSleeping()
+		if err != nil || sleeping {
+			reply := "I couldn't check whether the light is available. Please try again."
+			if sleeping {
+				reply = "The device is asleep. Wake it before changing the light."
+			}
+			return &Result{Rule: c.rule.name, ExecutionFailed: true, TTSText: reply, Actions: []string{"GET /emotion/status"}}
+		}
+	}
+	result := c.rule.exec(c.text)
+	result.Rule = c.rule.name
+	if result.ExecutionFailed {
+		result.LEDChanged = false
+		result.LEDOff = false
+		result.Emotion = ""
+		// Retain specific failure explanations from stateful executors.
+		if !strings.HasPrefix(result.TTSText, "I couldn't") {
+			result.TTSText = "I couldn't complete that action. Please try again."
+		}
+	}
+	return result
+}
+
+func recognizeCommand(text string) *command {
 	// Field order beats rule order: a rule matching the agent's summary wins
 	// over a different rule matching the noisy transcript. Within one field
 	// the table order is unchanged.
 	for _, t := range voiceFields(normalize(text)) {
-		for _, r := range rules {
+		for i := range rules {
+			r := &rules[i]
 			if !capEnabled(r.capability) {
 				continue
 			}
 			if r.match(t) {
-				res := r.exec(t)
-				res.Rule = r.name
-				return res
+				return &command{rule: r, text: t}
 			}
 		}
 	}

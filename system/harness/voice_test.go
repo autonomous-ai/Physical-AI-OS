@@ -60,6 +60,7 @@ func newVoiceFake() *voiceFake {
 }
 func enableVoice(t *testing.T, f *voiceFake, cb VoiceCallbacks) *VoiceController {
 	t.Helper()
+	cb.SupportsMode = func(context.Context) (bool, error) { return true, nil }
 	v := NewVoiceController(f, cb)
 	if e := v.RefreshFocus(context.Background()); e != nil {
 		t.Fatal(e)
@@ -89,7 +90,7 @@ func questionSet(id string, keys ...string) any {
 func TestVoiceDefaultRestartAndStale(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
-	v := NewVoiceController(f, VoiceCallbacks{})
+	v := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	old := v.State()
 	if old.Enabled {
 		t.Fatal("enabled by default")
@@ -113,7 +114,7 @@ func TestVoiceDefaultRestartAndStale(t *testing.T) {
 	if mutationCount(f) != 0 {
 		t.Fatal("stale mutation")
 	}
-	restart := NewVoiceController(f, VoiceCallbacks{}).State()
+	restart := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }}).State()
 	if restart.Enabled || restart.Generation == s.Generation {
 		t.Fatalf("bad restart: %+v", restart)
 	}
@@ -168,6 +169,44 @@ func TestVoiceUnknownReceiptAllowsNewInputWithoutRetry(t *testing.T) {
 	last := f.frames[len(f.frames)-1]
 	if last["text"] != "second" || last["idempotencyKey"] == original.IdempotencyKey {
 		t.Fatal("new input reused old mutation")
+	}
+}
+
+func TestVoiceStartedTurnAllowsFollowupWithDistinctDeliveryCorrelation(t *testing.T) {
+	f := newVoiceFake()
+	f.receiptState = "started"
+	keys := map[string]string{}
+	registered := 0
+	f.beforeMutation = func() {
+		if registered != mutationCount(f) {
+			t.Error("input reached transport before its correlation was registered")
+		}
+	}
+	v := enableVoice(t, f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil },
+		OnDispatch: func(_, _ string) { t.Error("legacy callback also invoked") },
+		OnDispatchRequest: func(agentID, runID string, frame Frame) {
+			registered++
+			key, _ := frame["idempotencyKey"].(string)
+			if key == "" || agentID != "agent" || frame["agentId"] != agentID || frame["machineId"] != "computer" {
+				t.Fatalf("incomplete dispatch correlation: agent=%s run=%s frame=%v", agentID, runID, frame)
+			}
+			keys[runID] = key
+		},
+	})
+	// No terminal event occurs between these inputs: the first task is running.
+	for _, runID := range []string{"first", "second"} {
+		if err := v.Submit(context.Background(), runID, runID, v.State().Generation); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if mutationCount(f) != 2 || len(keys) != 2 || keys["first"] == keys["second"] {
+		t.Fatalf("followup lost or delivery key reused: mutations=%d keys=%v", mutationCount(f), keys)
+	}
+	if err := v.Submit(context.Background(), "second", "second", v.State().Generation); err != nil {
+		t.Fatal(err)
+	}
+	if mutationCount(f) != 2 || registered != 2 {
+		t.Fatal("duplicate input re-registered or resent")
 	}
 }
 
@@ -289,7 +328,7 @@ func TestVoiceOfflineAndMachineChange(t *testing.T) {
 func TestVoiceFocusSyncWhileOffKeepsCaptureGeneration(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
-	v := NewVoiceController(f, VoiceCallbacks{})
+	v := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	generation := v.State().Generation
 	if err := v.RefreshFocus(ctx); err != nil {
 		t.Fatal(err)
@@ -452,9 +491,8 @@ func TestVoiceConcurrentDuplicateAndDisable(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- v.Submit(ctx, "hello", "run", s.Generation) }()
 	<-entered
-	if e := v.Submit(ctx, "hello", "run", s.Generation); e != nil {
-		t.Fatalf("concurrent duplicate returned error: %v", e)
-	}
+	duplicate := make(chan error, 1)
+	go func() { duplicate <- v.Submit(ctx, "hello", "run", s.Generation) }()
 	off, e := v.SetMode(ctx, false)
 	if e != nil || off.Enabled {
 		t.Fatal("disable blocked")
@@ -462,6 +500,9 @@ func TestVoiceConcurrentDuplicateAndDisable(t *testing.T) {
 	close(release)
 	if e := <-done; e != nil {
 		t.Fatal(e)
+	}
+	if err := <-duplicate; err != nil {
+		t.Fatal(err)
 	}
 	if mutationCount(f) != 1 {
 		t.Fatal("duplicate sent")
@@ -476,5 +517,86 @@ func TestVoiceRejectedReceiptReturnsKnownError(t *testing.T) {
 	var unknown *DeliveryUnknownError
 	if e == nil || errors.As(e, &unknown) || v.State().Pending != nil {
 		t.Fatalf("rejection not resolved: %v %+v", e, v.State())
+	}
+}
+
+func TestVoiceCanceledAdmissionCanRetryAndSecondInputDoesNotWaitForCompletion(t *testing.T) {
+	f := newVoiceFake()
+	f.receiptState = "started"
+	entered, release := make(chan struct{}), make(chan struct{})
+	first := true
+	f.beforeMutation = func() {
+		if first {
+			first = false
+			close(entered)
+			<-release
+		}
+	}
+	v := enableVoice(t, f, VoiceCallbacks{})
+	generation := v.State().Generation
+	done := make(chan error, 1)
+	go func() { done <- v.Submit(context.Background(), "A", "A", generation) }()
+	<-entered
+	ctx, cancel := context.WithCancel(context.Background())
+	canceled := make(chan error, 1)
+	go func() { canceled <- v.Submit(ctx, "B", "B", generation) }()
+	cancel()
+	if err := <-canceled; !errors.Is(err, context.Canceled) {
+		t.Fatalf("cancellation: %v", err)
+	}
+	second := make(chan error, 1)
+	go func() { second <- v.Submit(context.Background(), "B", "B", generation) }()
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; err != nil {
+		t.Fatal(err)
+	}
+	if mutationCount(f) != 2 {
+		t.Fatal("second input not sent")
+	}
+}
+
+func TestVoiceUnknownDeliveriesRemainIndividuallyReconcilable(t *testing.T) {
+	f := newVoiceFake()
+	v := enableVoice(t, f, VoiceCallbacks{})
+	ctx := context.Background()
+	generation := v.State().Generation
+	f.receiptState = "unknown"
+	if err := v.Submit(ctx, "A", "A", generation); err == nil {
+		t.Fatal("expected uncertain A")
+	}
+	a := *v.State().Pending
+	f.receiptState = "started"
+	if err := v.Submit(ctx, "B", "B", generation); err != nil {
+		t.Fatal(err)
+	}
+	if p := v.State().Pending; p == nil || *p != a {
+		t.Fatal("known B erased A")
+	}
+	f.receiptState = "unknown"
+	if err := v.Submit(ctx, "C", "C", generation); err == nil {
+		t.Fatal("expected uncertain C")
+	}
+	if p := v.State().Pending; p == nil || *p != a {
+		t.Fatal("unknown C replaced A")
+	}
+	f.receiptState = "completed"
+	if _, err := v.Receipt(ctx); err != nil {
+		t.Fatal(err)
+	}
+	c := v.State().Pending
+	if c == nil || c.RunID != "C" {
+		t.Fatalf("C not retained: %+v", c)
+	}
+	if err := v.Resolve("do_not_retry", a.IdempotencyKey); err == nil {
+		t.Fatal("stale resolution accepted")
+	}
+	if err := v.Resolve("do_not_retry", c.IdempotencyKey); err != nil {
+		t.Fatal(err)
+	}
+	if v.State().Pending != nil || mutationCount(f) != 3 {
+		t.Fatal("reconciliation resent or retained input")
 	}
 }

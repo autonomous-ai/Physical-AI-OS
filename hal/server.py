@@ -12,6 +12,8 @@ import time
 from contextlib import asynccontextmanager
 from pathlib import Path
 
+_startup_started = time.perf_counter()
+
 from dotenv import load_dotenv
 
 # Load .env BEFORE any hal imports so config.py reads correct env vars
@@ -152,18 +154,6 @@ RGBService = None
 sd = None
 np = None
 
-if "servo" in _declared:
-    from hal.drivers.motors.factory import resolve_motion_class
-    _motion_cap = _profile.capabilities.get("motion")
-    AnimationService = resolve_motion_class(
-        _motion_driver,
-        _motion_cap.required if _motion_cap else False,
-    )
-    if AnimationService is None:
-        logger.warning("Servo motion service not available (driver: %s)",
-                       _motion_cap.driver if _motion_cap else None)
-else:
-    logger.info("Servo drivers skipped — 'servo' not declared in ROBOT.md")
 
 if "led" in _declared:
     try:
@@ -295,6 +285,28 @@ if "display" in _declared:
     except ImportError as e:
         logger.warning(f"Display service not available: {e}")
 
+# Join the motion import only after independent driver imports have run.
+# Resolving it immediately after starting the warm thread serializes startup.
+# Resolution still happens before route availability checks and lifespan, so
+# missing required drivers retain the existing fail-loud mount contract.
+_motion_wait_started = time.perf_counter()
+if "servo" in _declared:
+    from hal.drivers.motors.factory import resolve_motion_class
+    _motion_cap = _profile.capabilities.get("motion")
+    AnimationService = resolve_motion_class(
+        _motion_driver,
+        _motion_cap.required if _motion_cap else False,
+    )
+    if AnimationService is None:
+        logger.warning("Servo motion service not available (driver: %s)",
+                       _motion_cap.driver if _motion_cap else None)
+else:
+    logger.info("Servo drivers skipped — 'servo' not declared in ROBOT.md")
+
+logger.info("[startup] driver_imports_complete elapsed_ms=%.0f motion_wait_ms=%.0f",
+            (time.perf_counter() - _startup_started) * 1000,
+            (time.perf_counter() - _motion_wait_started) * 1000)
+
 _gpio_button_handlers = []
 _ttp223_handler = None
 _mpr121_handler = None
@@ -366,6 +378,10 @@ def _sim_audio_probe(sd_module) -> None:
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     global _gpio_button_handlers, _ttp223_handler, _mpr121_handler, _privacy_button_handler
+
+    _lifespan_started = time.perf_counter()
+    logger.info("[startup] lifespan_begin elapsed_ms=%.0f",
+                (_lifespan_started - _startup_started) * 1000)
 
     # Keep privacy-controlled peripherals closed until the GPIO boot sync.
     from hal import privacy
@@ -1028,6 +1044,9 @@ async def lifespan(app: FastAPI):
         state.environment_service = _environment_group
         state.environment_service.start()
 
+    logger.info("[startup] lifespan_ready elapsed_ms=%.0f init_ms=%.0f",
+                (time.perf_counter() - _startup_started) * 1000,
+                (time.perf_counter() - _lifespan_started) * 1000)
     yield
 
     _lifespan_stopping.set()
@@ -1578,6 +1597,8 @@ def device():
         "type": _profile.type,
         "schema": _profile.schema,
         "board": _board_id,
+        # Resolved board wiring, not transient driver health or device type.
+        "inputs": {"mpr121": _mpr121_config is not None},
         "boards": _profile.boards,
         "safety_ref": _profile.safety_ref,
         # Resolved, enforced safety bounds (not just the ref): brightness ceiling +

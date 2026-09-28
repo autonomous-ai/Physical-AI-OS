@@ -7,6 +7,7 @@ import importlib.util
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 from hal import config
 from hal.drivers.voice.voice_service import VoiceService
@@ -19,7 +20,7 @@ from hal.telemetry.live_voice import LiveVoiceMetrics
 from hal.test.test_voice_metrics import FakeTTS, kpi  # noqa: F401 -- fake clock/transport
 
 
-def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None):
+def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_voice=None, sender=None, cues=None, main_reply=False, addressed=True, focus=None, opener=None, tts=None, strip_markers=None, stop_event=None):
     monkeypatch.setattr(config, "REALTIME_NATIVE_AUDIO", native)
     service = object.__new__(VoiceService)
     service._wakeword_focus = focus
@@ -29,7 +30,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
     service._live_emotion_addressed = lambda text, harness: addressed
     service._decorator = SimpleNamespace(classify_wake_word=lambda text: (text, "voice"))
     service._sensing_sender = sender if sender is not None else object()
-    service.strip_rt_markers = lambda text: text
+    service.strip_rt_markers = strip_markers or (lambda text: text)
     spoken = []
     batches = iter(batches)
 
@@ -38,7 +39,7 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
         execution_completed = False
         execution_turn_id = ""
 
-        def stream_output(self):
+        def stream_output(self, *, stop_event=None):
             self.execution_completed = False
             self.execution_turn_id = ""
             batch = next(batches, None)
@@ -78,6 +79,10 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
             kpi.clock.advance(stop_delay_ms)
             voice_metrics.playback_end()
 
+        def stop_realtime_reply(self, *, turn_id=""):
+            # Fake playback is instantaneous; no queued audio to cancel here.
+            pass
+
         def native_play_begin(self, rate, owner=""):
             self.owner = owner
             spoken.append(("native", owner))
@@ -94,8 +99,31 @@ def _pump(monkeypatch, kpi, batches, *, native=False, stop_delay_ms=0, harness_v
 
     service._realtime = Provider()
     service._tts = tts if tts is not None else Speaker()
-    service._live_out_pump(1, harness_voice=harness_voice, cues=cues, **({"opener": opener} if opener is not None else {}))
+    service._live_out_pump(1, harness_voice=harness_voice, cues=cues, stop_event=stop_event, **({"opener": opener} if opener is not None else {}))
     return spoken
+
+
+@pytest.mark.parametrize("chunks", [
+    ["I'm right here! [cheerfully]"],
+    ["I'm right here! [cheer", "fully]"],
+    ["I'm right here! [HW:/led/off:{}]"],
+])
+def test_live_tagged_sentence_speaks_before_terminal(monkeypatch, kpi, chunks):
+    from unittest.mock import Mock
+
+    tts = Mock(speaking=False)
+
+    def check_before_terminal():
+        tts.speak_queue.assert_called_once()
+        assert tts.speak_queue.call_args.args == ("I'm right here!",)
+        assert tts.speak_queue.call_args.kwargs["realtime_reply"] is True
+
+    outputs = [UserSpeechOutput(turn_id="u-tag")]
+    outputs.extend(TextOutput(text=text, user_turn_id="u-tag") for text in chunks)
+    outputs.append(check_before_terminal)
+    _pump(monkeypatch, kpi, [(outputs, "u-tag", True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    tts.speak_queue.assert_called_once()
 
 
 def test_transcript_only_turn_counts_execution_without_fake_latency(monkeypatch, kpi):
@@ -114,6 +142,36 @@ def test_transcript_only_turn_counts_execution_without_fake_latency(monkeypatch,
     terminal = kpi.one("voice_metrics_task_execution")
     assert terminal["interaction_id"] == row["interaction_id"]
     assert terminal["outcome"] == "completed"
+
+
+def test_gemini_receive_time_is_not_speech_end_for_kpi(monkeypatch, kpi):
+    _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id="u1", endpoint_at=kpi.clock(), method="server_vad_receive"),
+        TextOutput(text="Done.", user_turn_id="u1"),
+    ], "u1", True)])
+    kpi.close_all()
+    row = kpi.one(voice_metrics.EVENT_INTERACTION)
+    assert row["ack_kind"] == "realtime_tts"
+    assert row["ack_latency_ms"] is None
+    assert row["exclusion_reason"] == "speech_endpoint_unavailable"
+    coverage = kpi.one("voice_metrics_live_coverage")
+    assert coverage["endpoint_receive_only_observations"] == 1
+
+
+def test_look_filler_pins_old_owner_and_unknown_never_uses_newest(monkeypatch, kpi):
+    from hal.drivers.tracking.aim import _say, filler_ownership
+    import requests
+
+    payloads = []
+    monkeypatch.setattr(requests, "post", lambda *args, **kwargs: payloads.append(kwargs["json"]))
+    metrics = LiveVoiceMetrics()
+    old = metrics.speech("old", kpi.clock(), "local_vad")
+    with filler_ownership(voice_metrics.provider_interaction("old")):
+        new = metrics.speech("new", kpi.clock(), "local_vad")
+        _say("look_searching")
+    _say("look_found")
+    assert payloads == [{"pool": "look_searching", "owner": old}, {"pool": "look_found"}]
+    assert voice_metrics.current_interaction() == new
 
 
 def test_known_endpoint_native_playback_and_duplicate_input_share_one_turn(monkeypatch, kpi):
@@ -355,3 +413,22 @@ def test_pending_audio_ownership_survives_queue_pop_before_first_frame():
     speaker._drain_pending_queue(object())
     assert observed == [True]
     assert not speaker.has_pending_speech("run:waiting")
+
+
+def test_live_bundled_sentence_starts_before_next_delta(monkeypatch, kpi):
+    from unittest.mock import Mock
+    monkeypatch.setattr(config, 'REALTIME_FIRST_CHUNK_MAX_CHARS', 0)
+    tts = Mock(speaking=False)
+
+    def assert_first_already_sent():
+        tts.speak_queue.assert_called_once()
+        assert tts.speak_queue.call_args.args == ('I am right here.',)
+
+    outputs = [UserSpeechOutput(turn_id='u-prefix'),
+               TextOutput(text='I am right here. Let me', user_turn_id='u-prefix'),
+               assert_first_already_sent,
+               TextOutput(text=' help you.', user_turn_id='u-prefix')]
+    _pump(monkeypatch, kpi, [(outputs, 'u-prefix', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    assert [call.args[0] for call in tts.speak_queue.call_args_list] == [
+        'I am right here.', 'Let me help you.']

@@ -10,7 +10,7 @@ export function LanguageSection({
 }) {
   return (
     <SectionCard id="language" title="Language" active={active} icon={<Globe size={17} />}
-      description="Pick the language your device listens for. You can change this anytime from the Edit page.">
+      description="Pick the language your robot listens for. You can change this anytime from the Edit page.">
       <div style={{ marginBottom: 4 }}>
         <label htmlFor="stt_language" style={LABEL_STYLE}>
           Language
