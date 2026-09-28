@@ -170,7 +170,6 @@ FACE_MAX_TRUNCATION = 0.05          # Skip faces with >5% of their bbox off-fram
 FACE_MIN_SHARPNESS = 100.0          # Skip faces too motion-blurred to identify
 FACE_STRANGER_MIN_TICKS = 2         # Sightings before an unknown face earns an id
 FACE_STRANGER_CORROBORATION_S = 6.0 # How long a pending candidate stays countable
-FACE_COPRESENCE_MIN_TICKS = 2       # Ticks friend + non-friend boxes must share a frame before "already present"
 HAL_FACE_LANDMARK_CONF_THRESHOLD = 0.99  # Skip crops the face mesh isn't sure about
 FACE_MATCH_THRESHOLD = 0.40         # Bar for a match carried by the enrolled uploads
 FACE_EXTENDED_THRESHOLD = 0.45      # Bar for a match carried by the extended bank alone
@@ -179,6 +178,9 @@ FACE_EXTEND_MIN_ENROLL_SIM = 0.45   # Bar the uploads must clear to auto-capture
 FACE_COOLDOWN_S = 10.0              # Min seconds between face presence events
 FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without seeing owner
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
+FACE_STRANGER_GAZE_TICKS = 3        # Stranger greeting: face-ID ticks in the gaze vote
+FACE_STRANGER_GAZE_MIN_FACING = 2   # Stranger greeting: ticks facing the lamp needed
+FACE_STRANGER_GAZE_WINDOW_S = 10.0  # Stranger greeting: max age of a gaze vote
 ```
 
 The height ratio threshold filters out faces that are **too small** relative to the frame — typically distant people or false positives where the face crop is too low-resolution for reliable recognition. Faces whose bounding-box height is under the threshold fraction of the frame height are skipped, before classification.
@@ -339,7 +341,7 @@ the honest outcome, and it beats being absorbed into somebody else's.
 
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
-**Listing the user as "already present" needs the same corroboration.** When a stranger enters while a friend is boxed in the same frame, `presence.enter` adds `already present: <name> (friend)` so the agent talks to the user instead of greeting the visitor (#426). That segment is only written once a friend box and a non-friend box have shared the frame for `FACE_COPRESENCE_MIN_TICKS` (2) consecutive ticks — `unsure` boxes count, so the tick the recognizer spends corroborating the stranger is the first of the two, and a real visitor is listed on the very enter that announces them. Set `HAL_FACE_STRANGER_MIN_TICKS=1` and the counter reads 1 on the mint tick, so the segment only appears when the stranger flush happens to land a tick later; raise `HAL_FACE_COPRESENCE_MIN_TICKS` if a monitor or a poster behind the user keeps being announced as company.
+The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
 
 **Tuning:**
 
@@ -360,8 +362,8 @@ A real visitor is unaffected beyond one tick of delay: they are still there 2 s 
 | Lamp mints a `stranger_N` for the enrolled user while it is panning | Motion blur — that is what `FACE_MIN_SHARPNESS` screens out; check `FAIL-blurred` folders for the sharpness actually seen |
 | Unknown visitors take too long to be noticed | Lower `FACE_STRANGER_MIN_TICKS` to 1 to mint from a single frame (the old behaviour) |
 | Spurious `stranger_N` identities still appear | Raise `FACE_STRANGER_MIN_TICKS` to 3; each step costs a visitor one more sensing tick |
-| Lamp tells the user they "have company" when a poster or monitor is behind them | Raise `FACE_COPRESENCE_MIN_TICKS` (2 → 3); a real visitor waits one more tick before the user is named |
-| A visitor is greeted while the user sits there, `already present` never appears | Check `FACE_STRANGER_MIN_TICKS` ≥ 2 (its corroboration ticks feed the counter); with 1 the counter cannot reach 2 by mint time |
+| Lamp never greets a visitor who looked at it | Lower `FACE_STRANGER_GAZE_MIN_FACING` (2 → 1); check `[face] stranger gaze:` in the HAL log |
+| Visitor who looked briefly is not greeted because ticks are slow or skipped | Raise `FACE_STRANGER_GAZE_WINDOW_S` (10 → 15); too large lets glances minutes apart add up |
 | Recognition drops out in a dim room after an update | Laplacian variance falls with light; lower `FACE_MIN_SHARPNESS` (100 → 70) and re-check `FAIL-blurred` |
 | Lamp mints `stranger_N` ids for the enrolled user at close range | The detector is firing on an ear or similar — that is what `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 screens out |
 | Faces that are plainly fine stop being recognized after an update | Lower `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); the default is tuned on one device |

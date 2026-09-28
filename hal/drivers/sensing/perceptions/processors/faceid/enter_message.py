@@ -1,4 +1,4 @@
-"""presence.enter text — the one place its wording is decided and parsed."""
+"""presence.enter text — the one place its wording is decided and parsed (#426)."""
 
 from collections.abc import Iterable
 from typing import NamedTuple
@@ -7,21 +7,10 @@ from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 
 class FrameFacts(NamedTuple):
-    """What one frame says about itself, captured on the tick it was seen."""
+    """What the newest attached frame says about itself: box labels and friends present."""
 
     labels: list[str]
     present_friends: list[str]
-
-
-def copresence_ticks(prev: int, faces: list[Face]) -> int:
-    """Consecutive sensing ticks in which a friend and a non-friend were boxed together.
-
-    Two friends alone do not count; a recognized friend is a positive match and needs no
-    corroboration.
-    """
-    has_friend = any(f.kind == PersonKind.FRIEND for f in faces)
-    has_other = any(f.kind != PersonKind.FRIEND for f in faces)
-    return prev + 1 if (has_friend and has_other) else 0
 
 
 def frame_labels(faces: Iterable[Face]) -> list[str]:

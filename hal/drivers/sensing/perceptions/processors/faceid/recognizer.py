@@ -41,6 +41,13 @@ _DEBUG_KIND_COLOR: dict[PersonKind, tuple[int, int, int]] = {
 }
 
 
+def _flat_kps(kps: Any) -> list[float] | None:
+    """The (5, 2) alignment-point array as the flat list Face.kps carries."""
+    if kps is None:
+        return None
+    return [float(v) for v in np.asarray(kps).reshape(-1)]
+
+
 class FaceRecognizer:
     FRIEND_PREFIX: str = "friend_"
     STRANGER_PREFIX: str = "stranger_"
@@ -1002,6 +1009,7 @@ class FaceRecognizer:
                     # computed during alignment above; reused by the emotion
                     # pipeline so it never re-runs the mesh. None if unavailable.
                     emotion_box=raw_results[i].get("emotion_box"),
+                    kps=_flat_kps(raw_results[i].get("kps")),
                 )
             )
 

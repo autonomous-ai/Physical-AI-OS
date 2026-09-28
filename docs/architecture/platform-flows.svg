@@ -1,0 +1,266 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
+<title id="title">Autonomous OS — one voice, three ways to act</title>
+<desc id="desc">Voice enters HAL realtime. Conversation returns directly as speech. Delegated music requests use music and audio skills for playback and volume, with HAL LED feedback on supported bodies. Delegated computer tasks use harness-use and a paired computer agent; the final result returns through OS to HAL for a short announcement. All routes remain readable without animation.</desc>
+<defs>
+ <linearGradient id="canvas" x2="1" y2="1"><stop stop-color="#152130"/><stop offset="1" stop-color="#090f19"/></linearGradient>
+ <linearGradient id="panel" x2=".3" y2="1"><stop stop-color="#1b2a3a"/><stop offset="1" stop-color="#121d2b"/></linearGradient>
+ <linearGradient id="card" x2=".3" y2="1"><stop stop-color="#293b50"/><stop offset="1" stop-color="#1a293a"/></linearGradient>
+ <linearGradient id="device" x2=".8" y2="1"><stop stop-color="#344c60"/><stop offset="1" stop-color="#121f30"/></linearGradient>
+ <linearGradient id="display" x2="0" y2="1"><stop stop-color="#20334d"/><stop offset="1" stop-color="#0c1624"/></linearGradient>
+ <linearGradient id="input" x2="1" y2="1"><stop stop-color="#263b50"/><stop offset="1" stop-color="#162536"/></linearGradient>
+ <radialGradient id="device-glow"><stop stop-color="#77e2cf" stop-opacity=".21"/><stop offset="1" stop-color="#77e2cf" stop-opacity="0"/></radialGradient>
+ <radialGradient id="light-glow"><stop stop-color="#ffd16e" stop-opacity=".65"/><stop offset="1" stop-color="#ffd16e" stop-opacity="0"/></radialGradient>
+ <filter id="depth" x="-20%" y="-30%" width="140%" height="180%"><feDropShadow dx="0" dy="6" stdDeviation="7" flood-color="#020811" flood-opacity=".28"/></filter>
+
+ <g id="airplane"><path d="M0 -25 Q4 -25 4 -18 L5 -5 28 8 28 13 5 6 4 20 12 25 12 29 0 25 -12 29 -12 25 -4 20 -5 6 -28 13 -28 8 -5 -5 -4 -18 Q-4 -25 0 -25Z"/><path d="M0 -19 V19" fill="none" stroke="#fff0bd" stroke-width="1.5"/></g>
+ <g id="airplane-3d"><polygon points="-13.8,12.5 -6.1,10.2 -6.1,7.2 -13.8,9.5" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-6.1,10.2 1.9,4.0 1.9,1.0 -6.1,7.2" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="1.9,4.0 30.7,4.4 30.7,1.4 1.9,1.0" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="30.7,4.4 33.5,1.9 33.5,-1.1 30.7,1.4" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="33.5,1.9 8.0,-1.5 8.0,-4.5 33.5,-1.1" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="8.0,-1.5 14.8,-8.8 14.8,-11.8 8.0,-4.5" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="14.8,-8.8 25.0,-8.9 25.0,-11.9 14.8,-11.8" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="25.0,-8.9 27.2,-10.9 27.2,-13.9 25.0,-11.9" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="27.2,-10.9 13.8,-12.5 13.8,-15.5 27.2,-13.9" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="13.8,-12.5 4.7,-18.1 4.7,-21.1 13.8,-15.5" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="4.7,-18.1 2.5,-16.1 2.5,-19.1 4.7,-21.1" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="2.5,-16.1 7.2,-11.2 7.2,-14.2 2.5,-19.1" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="7.2,-11.2 -1.4,-4.5 -1.4,-7.5 7.2,-14.2" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-1.4,-4.5 -19.2,-14.9 -19.2,-17.9 -1.4,-7.5" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-19.2,-14.9 -21.9,-12.4 -21.9,-15.4 -19.2,-17.9" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-21.9,-12.4 -7.4,1.0 -7.4,-2.0 -21.9,-15.4" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-7.4,1.0 -13.7,7.8 -13.7,4.8 -7.4,-2.0" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-13.7,7.8 -13.8,12.5 -13.8,9.5 -13.7,4.8" fill="#b98527" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-13.8,9.5 -6.1,7.2 1.9,1.0 30.7,1.4 33.5,-1.1 8.0,-4.5 14.8,-11.8 25.0,-11.9 27.2,-13.9 13.8,-15.5 4.7,-21.1 2.5,-19.1 7.2,-14.2 -1.4,-7.5 -19.2,-17.9 -21.9,-15.4 -7.4,-2.0 -13.7,4.8" fill="#eab744" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-7.4,-2.0 -21.9,-15.4 -19.2,-17.9 -1.4,-7.5" fill="#ffdc79" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="1.9,1.0 30.7,1.4 33.5,-1.1 8.0,-4.5" fill="#d79a30" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-13.8,8.5 -13.7,2.8 7.2,-16.2 13.8,-17.5 10.5,-19.5 -8.8,-2.0" fill="#f9cb61" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-13.8,8.5 -6.1,5.2 14.8,-13.8 13.8,-17.5 10.5,-19.5 -8.8,-2.0" fill="#d6992e" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/><polygon points="-9.9,0.0 -8.5,-4.6 -4.4,-7.0 -4.7,-3.4" fill="#344653" stroke="#61788a" stroke-width=".5" stroke-linejoin="round"/><polygon points="8.2,-16.5 12.7,-16.5 13.8,-31.5 11.6,-31.5" fill="#ffdd78" stroke="#b77e24" stroke-width=".5" stroke-linejoin="round"/></g>
+<clipPath id="blender-viewport"><rect x="878" y="636" width="237" height="119"/></clipPath>
+<pattern id="grid" width="24" height="24" patternUnits="userSpaceOnUse"><circle cx="1" cy="1" r=".7" fill="#263542"/></pattern>
+ <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse"><path d="M0 0 10 5 0 10" fill="none" stroke="#77909c" stroke-width="1.5"/></marker>
+ <style>
+ text { font-family:Arial,Helvetica,sans-serif;fill:#edf4f7 }
+ .muted { fill:#a5b6c5 } .small { font-size:12px } .label { font-size:14px;font-weight:700;letter-spacing:.1px }
+ .mono { font-family:Menlo,Consolas,monospace;font-size:11px;fill:#b4c6d2 }
+ .box { fill:url(#card);stroke:#526a80;stroke-width:1;filter:url(#depth) }
+ .wire {fill:none;stroke:#6c8499;stroke-width:1.5;stroke-linejoin:round;stroke-linecap:round;marker-end:url(#arrow)}
+ .flow {fill:none;stroke-width:3;stroke-dasharray:5 13;stroke-linecap:round;animation:travel 1.3s linear infinite}
+ .chat {stroke:#77e2cf} .body {stroke:#ffd16e} .work {stroke:#b5a7f6}
+ .chapter {animation:chapter 18s ease-in-out infinite}
+ .second {animation-delay:6s} .third {animation-delay:12s}
+ .lift {animation:lift 18s ease-in-out infinite}
+ .light {animation:light 18s ease-in-out infinite}
+ .audio-bar {transform-box:fill-box;transform-origin:center;animation:audio-wave 1.1s ease-in-out infinite alternate}
+ @keyframes audio-wave {from{transform:scaleY(.35);opacity:.55}to{transform:scaleY(1);opacity:1}}
+ @keyframes travel {to {stroke-dashoffset:-36}}
+ @keyframes chapter {0%,30% {opacity:1} 34%,96% {opacity:.22} 100% {opacity:1}}
+ @keyframes lift {0%,70% {transform:translateY(38px)} 84%,97% {transform:translateY(0)} 100% {transform:translateY(38px)}}
+ @keyframes light {0%,35%,67%,100% {opacity:.15} 46%,61% {opacity:.9}}
+ @media (prefers-reduced-motion:reduce) {.flow,.chapter,.lift,.light,.audio-bar {animation:none}.chapter {opacity:1}.light {opacity:.5}}
+ </style>
+</defs>
+<rect width="1200" height="1000" rx="20" fill="url(#canvas)"/><rect width="1200" height="1000" rx="20" fill="url(#grid)" opacity=".3"/>
+<text x="32" y="35" font-size="12" font-weight="700" style="fill:#77e2cf">AUTONOMOUS OS</text>
+<text x="32" y="76" font-size="32" font-weight="700">One voice. A conversation, an action, a finished task.</text>
+<text x="32" y="105" font-size="14" class="muted">Realtime handles the moment. Skills connect the brain to a body — and to your computer.</text>
+<text x="1168" y="116" text-anchor="end" font-size="10" letter-spacing="1.5" class="muted">YOU SAY</text>
+<g>
+<rect x="32" y="126" width="362" height="107" rx="14" fill="url(#input)" stroke="#496178" filter="url(#depth)"/><rect x="32" y="126" width="362" height="107" rx="14" fill="none" stroke="#77e2cf" stroke-width="2" class="chapter "/><text x="50" y="151" font-size="12" font-weight="700" style="fill:#77e2cf">01</text>
+<text x="50" y="182" font-size="21" font-weight="700">“How are you today?”</text>
+<text x="50" y="214" class="small muted">→ A direct spoken answer</text>
+<rect x="411" y="126" width="362" height="107" rx="14" fill="url(#input)" stroke="#496178" filter="url(#depth)"/><rect x="411" y="126" width="362" height="107" rx="14" fill="none" stroke="#ffd16e" stroke-width="2" class="chapter second"/><text x="429" y="151" font-size="12" font-weight="700" style="fill:#ffd16e">02</text>
+<text x="429" y="182" font-size="21" font-weight="700">“Play some jazz</text>
+<text x="429" y="211" font-size="21" font-weight="700">at 30% volume.”</text>
+<rect x="790" y="126" width="378" height="107" rx="14" fill="url(#input)" stroke="#496178" filter="url(#depth)"/><rect x="790" y="126" width="378" height="107" rx="14" fill="none" stroke="#b5a7f6" stroke-width="2" class="chapter third"/><text x="808" y="151" font-size="12" font-weight="700" style="fill:#b5a7f6">03</text>
+<text x="808" y="182" font-size="21" font-weight="700">“Ask my Blender agent</text>
+<text x="808" y="211" font-size="21" font-weight="700">to lift the yellow planes.”</text>
+</g><g transform="translate(0 120)"><text x="32" y="148" class="small muted">VOICE INPUT</text><text x="245" y="148" class="small muted">SHARED OS</text><text x="590" y="148" class="small muted">THREE ROUTES · THREE VISIBLE OUTCOMES</text>
+
+<rect x="572" y="174" width="596" height="150" rx="16" fill="url(#panel)" stroke="#354b62"/>
+<text x="590" y="199" class="mono">01</text>
+<text x="619" y="199" class="label">Talk naturally</text>
+<text x="590" y="223" class="small muted">“How are you today?”</text>
+<rect x="572" y="188" width="3" height="122" rx="1" fill="#77e2cf" class="chapter "/>
+<rect x="572" y="340" width="596" height="192" rx="16" fill="url(#panel)" stroke="#354b62"/>
+<text x="590" y="365" class="mono">02</text>
+<text x="619" y="365" class="label">Act in the physical world</text>
+<text x="590" y="389" class="small muted">“Play some jazz at 30% volume.”</text>
+<rect x="572" y="354" width="3" height="164" rx="1" fill="#ffd16e" class="chapter second"/>
+<rect x="572" y="548" width="596" height="272" rx="16" fill="url(#panel)" stroke="#354b62"/>
+<text x="590" y="573" class="mono">03</text>
+<text x="619" y="573" class="label">Get work done on your computer</text>
+<text x="590" y="597" class="small muted">“Ask my Blender agent to lift the planes.”</text>
+<rect x="572" y="562" width="3" height="164" rx="1" fill="#b5a7f6" class="chapter third"/>
+<rect x="32" y="235" width="170" height="263" rx="14" class="box"/>
+<text x="48" y="262" class="label">Your device</text>
+<ellipse cx="116" cy="344" rx="72" ry="85" fill="url(#device-glow)"/>
+<rect x="68" y="285" width="96" height="112" rx="24" fill="url(#device)" stroke="#728da2" filter="url(#depth)"/>
+<g fill="none" stroke="#9aefdc" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+ <rect x="106" y="310" width="20" height="35" rx="10" fill="#163b42"/>
+ <path d="M98 335 V338 A18 18 0 0 0 134 338 V335 M116 356 V367 M105 367 H127"/>
+</g>
+<path d="M76 425 v10" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.00s"/>
+<path d="M84 420 v20" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.13s"/>
+<path d="M92 414 v32" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.26s"/>
+<path d="M100 421 v18" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.39s"/>
+<path d="M108 407 v46" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.52s"/>
+<path d="M116 413 v34" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.65s"/>
+<path d="M124 420 v20" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.78s"/>
+<path d="M132 408 v44" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-0.91s"/>
+<path d="M140 415 v30" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-1.04s"/>
+<path d="M148 422 v16" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-1.17s"/>
+<path d="M156 426 v8" stroke="#77e2cf" stroke-width="3" stroke-linecap="round" class="audio-bar" style="animation-delay:-1.30s"/>
+<text x="55" y="476" class="small muted">Microphone + speaker</text>
+<rect x="245" y="235" width="265" height="94" rx="14" class="box"/>
+<text x="261" y="262" class="label">HAL · realtime voice</text>
+<text x="261" y="285" class="small muted">Understand the request</text>
+<text x="261" y="304" class="small muted">Answer directly or delegate</text>
+<rect x="245" y="405" width="265" height="117" rx="14" class="box"/>
+<text x="261" y="432" class="label">OS · main runtime</text>
+<text x="261" y="455" class="small muted">Hermes / OpenClaw / …</text>
+<text x="261" y="474" class="small muted">Choose a skill, execute tools</text>
+<text x="261" y="493" class="small muted">Persona + memory + context</text>
+<path d="M202 278 H245" class="wire"/>
+<g class="chapter "><path d="M202 278 H245" class="flow chat"/></g>
+<path d="M377 329 V405" class="wire"/>
+<g class="chapter second"><path d="M377 329 V405" class="flow body"/></g>
+<text x="389" y="371" class="mono">delegate_to_main</text>
+<path d="M510 261 H598" class="wire"/>
+<g class="chapter "><path d="M510 261 H598" class="flow chat"/></g>
+<rect x="600" y="240" width="255" height="66" rx="14" class="box"/>
+<text x="616" y="267" class="label">Realtime reply</text>
+<text x="616" y="290" class="small muted">No main runtime needed</text>
+<path d="M855 273 H890" class="wire"/>
+<g class="chapter "><path d="M855 273 H890" class="flow chat"/></g>
+<text x="912" y="268" class="label">“I’m here.</text>
+<text x="912" y="289" class="label">What’s on your mind?”</text>
+<path d="M510 460 H552 V438 H598" class="wire"/>
+<g class="chapter second"><path d="M510 460 H552 V438 H598" class="flow body"/></g>
+<rect x="600" y="410" width="227" height="72" rx="14" class="box"/>
+<text x="616" y="437" class="label">music + audio skills</text>
+<text x="616" y="460" class="small muted">Playback + volume + emotion</text>
+<path d="M827 446 H881" class="wire"/>
+<g class="chapter second"><path d="M827 446 H881" class="flow body"/></g>
+<!-- Physical speaker plus a compact playback visualization. -->
+<rect x="865" y="404" width="285" height="106" rx="12" fill="url(#display)" stroke="#677e99" filter="url(#depth)"/>
+<ellipse cx="908" cy="501" rx="32" ry="5" fill="#07111b"/>
+<rect x="881" y="415" width="57" height="85" rx="10" fill="url(#device)" stroke="#7e93a8"/>
+<rect x="887" y="421" width="45" height="73" rx="7" fill="#152232" stroke="#30475d"/>
+<circle cx="909" cy="435" r="8" fill="#344b60" stroke="#8297a8"/>
+<circle cx="909" cy="435" r="3" fill="#192b3a"/>
+<circle cx="909" cy="466" r="19" fill="#0b1724" stroke="#72869a"/>
+<circle cx="909" cy="466" r="14" fill="#31485c" stroke="#4c6478"/>
+<circle cx="909" cy="466" r="7" fill="#192d40" stroke="#7a92a7"/>
+<g class="chapter second">
+<path d="M946 447 Q956 459 946 471" fill="none" stroke="#ffd16e" stroke-width="1.5"/>
+<path d="M952 441 Q966 459 952 477" fill="none" stroke="#ffd16e" stroke-width="1" opacity=".5"/>
+</g>
+<text x="975" y="424" font-size="9" letter-spacing="1.2" class="muted">NOW PLAYING</text>
+<text x="975" y="446" font-size="19" font-weight="700">Evening jazz</text>
+<text x="975" y="466" font-size="10" class="muted">Volume 30% · speaker + LEDs</text>
+<g transform="translate(1123 433)"><circle r="16" fill="#0a121d" stroke="#65758b"/><circle r="12" fill="none" stroke="#263749"/><circle r="8" fill="none" stroke="#263749"/><circle r="5" fill="#ffd16e"/><circle r="1.5" fill="#192636"/></g>
+
+<rect x="893" y="487" width="4" height="4" rx="1.5" fill="#77e2cf" class="audio-bar" style="animation-delay:-0.0s"/>
+<rect x="900" y="484" width="4" height="7" rx="1.5" fill="#82b7ff" class="audio-bar" style="animation-delay:-0.17s"/>
+<rect x="907" y="482" width="4" height="9" rx="1.5" fill="#baa2ff" class="audio-bar" style="animation-delay:-0.34s"/>
+<rect x="914" y="485" width="4" height="6" rx="1.5" fill="#efa6d2" class="audio-bar" style="animation-delay:-0.51s"/>
+<rect x="921" y="487" width="4" height="4" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.68s"/>
+<rect x="976" y="484.0" width="3" height="4" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.0s"/>
+<rect x="983" y="482.5" width="3" height="7" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.12s"/>
+<rect x="990" y="480.0" width="3" height="12" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.24s"/>
+<rect x="997" y="482.0" width="3" height="8" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.36s"/>
+<rect x="1004" y="483.5" width="3" height="5" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.48s"/>
+<rect x="1011" y="481.0" width="3" height="10" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.6s"/>
+<rect x="1018" y="479.0" width="3" height="14" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.72s"/>
+<rect x="1025" y="483.0" width="3" height="6" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.84s"/>
+<rect x="1032" y="481.5" width="3" height="9" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-0.96s"/>
+<rect x="1039" y="480.0" width="3" height="12" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.08s"/>
+<rect x="1046" y="483.0" width="3" height="6" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.2s"/>
+<rect x="1053" y="484.0" width="3" height="4" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.3199999999999998s"/>
+<rect x="1060" y="482.5" width="3" height="7" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.44s"/>
+<rect x="1067" y="480.5" width="3" height="11" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.56s"/>
+<rect x="1074" y="483.5" width="3" height="5" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.68s"/>
+<rect x="1081" y="481.5" width="3" height="9" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.7999999999999998s"/>
+<rect x="1088" y="483.0" width="3" height="6" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-1.92s"/>
+<rect x="1095" y="484.0" width="3" height="4" rx="1.5" fill="#ffd16e" class="audio-bar" style="animation-delay:-2.04s"/>
+<text x="975" y="503" font-size="8" class="muted">MUSIC OUTPUT</text>
+<text x="600" y="503" class="mono">OS dispatch / HAL API → drivers</text>
+<text x="600" y="531" class="small muted">Mic input → music output · LED feedback on RGB bodies</text>
+<path d="M510 482 H538 V644 H598" class="wire"/>
+<g class="chapter third"><path d="M510 482 H538 V644 H598" class="flow work"/></g>
+<rect x="600" y="618" width="227" height="68" rx="14" class="box"/>
+<text x="616" y="645" class="label">harness-use</text>
+<text x="616" y="668" class="small muted">Paired computer agent</text>
+<path d="M827 650 H878" class="wire"/>
+<g class="chapter third"><path d="M827 650 H878" class="flow work"/></g>
+<!-- Laptop running an illustrated Blender viewport, with a faceted mesh and perspective floor. -->
+<ellipse cx="1007" cy="792" rx="143" ry="8" fill="#050b12" opacity=".5"/>
+<rect x="865" y="604" width="285" height="164" rx="11" fill="#344358" stroke="#8492a5" filter="url(#depth)"/>
+<rect x="872" y="612" width="271" height="147" rx="5" fill="#182536"/>
+<circle cx="1007" cy="608" r="1.5" fill="#98abc0"/>
+<rect x="872" y="612" width="271" height="21" rx="4" fill="#293a4e"/>
+<circle cx="884" cy="622" r="4" fill="none" stroke="#ef9c4d" stroke-width="2"/>
+<path d="M876 617 L882 619 M877 623 H880" stroke="#ef9c4d" stroke-width="2"/>
+<text x="896" y="626" font-size="9" style="fill:#dbe5f1">Blender</text>
+<text x="949" y="626" font-size="8" class="muted">Layout   Modeling   Shading</text>
+<g clip-path="url(#blender-viewport)">
+<rect x="878" y="636" width="237" height="119" fill="url(#display)"/>
+
+<path d="M1003 644 L820 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L855 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L890 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L925 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L960 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L995 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1030 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1065 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1100 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1135 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1170 754" stroke="#344960" stroke-width=".6"/>
+<path d="M1003 644 L1205 754" stroke="#344960" stroke-width=".6"/>
+<path d="M878 671 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 681 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 695 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 713 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 737 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 754 H1115" stroke="#344960" stroke-width=".6"/>
+<path d="M878 718 H1115" stroke="#976061" stroke-width=".7"/><path d="M1003 644 L986 754" stroke="#4d8275" stroke-width=".7"/>
+<ellipse cx="949" cy="726" rx="27" ry="8" fill="#060e18" opacity=".6"/>
+<use href="#airplane" transform="translate(944 718) matrix(.94 .3 .55 -.5 0 0)" fill="none" stroke="#8c9aad" stroke-width=".6" stroke-dasharray="3 3" opacity=".6"/>
+<ellipse cx="1039" cy="735" rx="27" ry="8" fill="#060e18" opacity=".6"/>
+<use href="#airplane" transform="translate(1034 727) matrix(.94 .3 .55 -.5 0 0)" fill="none" stroke="#8c9aad" stroke-width=".6" stroke-dasharray="3 3" opacity=".6"/>
+<g class="lift">
+<use href="#airplane-3d" transform="translate(944 680)"/>
+<use href="#airplane-3d" transform="translate(1034 689)"/>
+</g>
+<path d="M1098 724 V673 M1093 680 L1098 673 1103 680" fill="none" stroke="#ffcf70" stroke-width="1.8"/>
+<text x="1080" y="663" font-size="8" style="fill:#ffcf70">RAISE Z</text>
+<path d="M891 739 V726 M891 739 L902 743 M891 739 L882 745" fill="none" stroke="#9cafc3" stroke-width="1"/>
+<text x="888" y="723" font-size="7" style="fill:#7daaff">Z</text>
+</g>
+<rect x="1118" y="635" width="25" height="120" fill="#243246"/>
+<text x="1121" y="644" font-size="5.5" class="muted">Scene</text>
+<path d="M1121 651 H1139 M1124 657 H1139 M1124 663 H1139 M1124 669 H1139 M1121 686 H1139 M1121 693 H1139 M1121 700 H1139" stroke="#718299" stroke-width="1"/>
+<path d="M865 767 H1150 L1160 787 Q1007 798 853 787Z" fill="#5b6a7e" stroke="#8290a2" stroke-width=".7"/>
+<path d="M877 771 H1138 L1144 780 H870Z" fill="#263446"/>
+<path d="M883 774 H1133 M879 777 H1137" stroke="#5c6c80" stroke-width=".7"/>
+
+<path d="M891 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M904 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M917 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M930 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M943 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M956 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M969 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M982 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M995 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1008 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1021 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1034 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1047 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1060 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1073 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1086 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1099 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1112 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M1125 772 l-1 7" stroke="#5c6c80" stroke-width=".7"/>
+<path d="M980 782 H1035 L1038 789 H977Z" fill="#435267" stroke="#8794a5" stroke-width=".6"/>
+<text x="616" y="735" class="small muted">YOU HEAR</text>
+<text x="616" y="758" class="label">“Done. The yellow planes</text>
+<text x="616" y="779" class="label">are higher.”</text>
+<text x="600" y="805" class="mono">Final turn.summary → OS → HAL announcer</text>
+<rect x="245" y="604" width="265" height="89" rx="14" class="box"/>
+<text x="261" y="631" class="label">HAL · spoken output</text>
+<text x="261" y="654" class="small muted">Direct reply or short announcement</text>
+<text x="261" y="673" class="small muted">Realtime audio or TTS → speaker</text>
+<path d="M855 305 V332 H528 V590 H377 V604" class="wire"/>
+<g class="chapter "><path d="M855 305 V332 H528 V590 H377 V604" class="flow chat"/></g>
+<path d="M600 806 H530 V674 H510" class="wire"/>
+<g class="chapter third"><path d="M600 806 H530 V674 H510" class="flow work"/></g>
+<path d="M245 647 H218 V514 H116 V498" class="wire"/>
+<g class="chapter "><path d="M245 647 H218 V514 H116 V498" class="flow chat"/></g>
+<text x="32" y="550" class="label">You speak once.</text>
+<text x="32" y="572" class="small muted">The route depends</text>
+<text x="32" y="591" class="small muted">on what you need.</text>
+<text x="32" y="850" class="small muted">Illustrated flows · timing compressed · not a latency benchmark</text>
+<text x="670" y="850" class="small muted">Computer progress stays in the UI; the final result is spoken.</text>
+</g></svg>
