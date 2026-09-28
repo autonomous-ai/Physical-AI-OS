@@ -463,3 +463,53 @@ metadata, and exposes loopback-only `/command`, `/state`, `/pair`, `/stop` route
 It sends no task automatically and stops within twelve minutes. The caller must
 advertise/pair this test client normally and revoke its temporary trust afterward.
 Normal automated tests skip this bridge.
+
+
+### Harness voice playback integration checks
+
+The local bridge defaults to silent web routes. To exercise voice safely, set
+`OS_HARNESS_TEST_HAL_URL` to an explicit ephemeral loopback HAL fixture origin;
+`/command` can then accept test-only `localChannel:"voice"`, and
+`POST /cancel-speech` invokes the actual OS speech cancellation path. The test
+redirects only its process's HAL HTTP client traffic to that fixture. It refuses
+voice without the fixture and does not change product endpoints or settings.
+
+Run the opt-in handler-to-HAL regression with a Python environment containing
+HAL test dependencies:
+
+```sh
+HARNESS_HAL_TEST_PYTHON=/path/to/python go test -race ./system/server/agent/delivery/http -run '^TestHarnessGroupedResultHALPlaybackIntegration$' -count=1 -v
+```
+
+`system/server/testdata/harness_hal_playback.py` uses the real FastAPI
+`/voice/harness/update` route, announcer queue/worker/gate, sanitized fallback,
+TTSService admission/worker, cue, PCM conversion and playback tracking. Cloud
+summarization and realtime rendering are disabled explicitly; synthesis and the
+audio device use deterministic tones and a PCM capture sink by default. Tests
+check that raw fullText/outcome reach the queue under the newest input owner,
+while speech history contains the sanitized opening sentences rather than raw
+markdown. They require nonzero speech PCM, one cue, no replay submission,
+silence after cancellation of the newest input or mute, and deferred playback
+until music stops. HTTP acceptance alone cannot pass. These tests do not verify
+cloud paraphrasing, realtime model audio or a physical speaker.
+
+The live test below predates #520 and verifies the former direct-TTS path, not
+the new announcer. Its cancellation regression was also observed to fail with
+the pre-#517 handler and pass with #517.
+
+On 2026-09-25 a separately paired local client also tested installed OpenHarness
+`0.3.5-dev.d732a2e5` against the existing Blender airplane agent. Read-only input A
+requested scene counts; after A started, OS cancelled speech and submitted B to
+include cloud color. A single group result contained both exact input identities.
+OS cleared both routes and posted the exact fullText once under B's run ID.
+With `HARNESS_TEST_MAC_SAY=1`, the fixture synthesized that actual text using
+macOS `say`: 708,706 speech frames plus 8,820 cue frames at 44.1 kHz, captured as
+16.27 seconds of WAV. Local `afplay` completed successfully and the user confirmed hearing it on the MacBook. This verifies the
+real Harness/E2EE/result ledger/handler/HAL-worker chain with a local synthesis
+provider and captured audio; it does not verify the configured cloud TTS provider,
+realtime microphone routing, OrangePi ALSA or the physical Lamp speaker. No scene
+was changed. Temporary test pairing and listeners were removed afterward.
+
+After syncing #520, all six announcer-to-PCM regression scenarios passed with the
+synthetic provider. The optional macOS `say` run failed: synthesis timed out at
+60 seconds with no PCM. That run does not establish audible speech after #520.

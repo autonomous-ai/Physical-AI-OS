@@ -1354,7 +1354,12 @@ dropdown (`RealtimeSection.tsx`) list the same values, in that order, before
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
 then joins workers; a failed handshake rolls back that loop/thread immediately.
-This prevents a stalled receive from surviving a session rebuild. For the
+This prevents a stalled receive from surviving a session rebuild. Teardown also
+runs queued completion callbacks even when no tasks remain pending, so a receive
+that just finished can deliver its result/error to the waiting thread before
+loop closure. This avoids stranded futures and `Task exception was never retrieved`
+during close/rebuild, including SDK `APIError(1000)` for normal WebSocket closure;
+unexpected receive errors still reach the existing error/reconnect handling. For the
 native-audio family, HAL sends a 20 s websocket ping but sets no ping timeout:
 outbound traffic keeps the proxy path alive without treating its missing pong as
 a client-side failure. HAL also recycles Gemini synchronously before streaming audio when

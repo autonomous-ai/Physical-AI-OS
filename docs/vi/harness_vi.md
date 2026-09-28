@@ -445,3 +445,49 @@ hook và ledger production, ghi metadata điều khiển riêng, cung cấp `/co
 `/state`, `/pair`, `/stop` chỉ qua loopback. Không tự gửi task, dừng trong tối đa
 12 phút. Người chạy cần advertise/pair test client bằng luồng thường và revoke
 trust tạm sau đó. Test tự động thông thường bỏ qua bridge này.
+
+
+### Kiểm tra tích hợp playback voice Harness
+
+Bridge local mặc định dùng route web im lặng. Để kiểm voice, đặt
+`OS_HARNESS_TEST_HAL_URL` trỏ rõ tới origin loopback ở port tạm của HAL fixture;
+`/command` khi đó nhận `localChannel:"voice"` chỉ trong test, và
+`POST /cancel-speech` gọi đường hủy tiếng OS thật. Test chỉ chuyển HTTP HAL trong
+tiến trình của nó sang fixture, từ chối voice nếu thiếu fixture; không đổi endpoint
+hoặc cấu hình production.
+
+Chạy regression handler-to-HAL với Python có các dependency test HAL:
+
+```sh
+HARNESS_HAL_TEST_PYTHON=/path/to/python go test -race ./system/server/agent/delivery/http -run '^TestHarnessGroupedResultHALPlaybackIntegration$' -count=1 -v
+```
+
+`system/server/testdata/harness_hal_playback.py` dùng route FastAPI
+`/voice/harness/update`, queue/worker/gate announcer, fallback bỏ markup,
+admission/worker TTSService, cue, chuyển PCM và playback tracking thật. Tắt rõ
+cloud summarizer và realtime rendering; mặc định thay tổng hợp tiếng bằng tone
+xác định và thiết bị audio bằng đầu ra thu PCM. Test kiểm fullText/outcome gốc
+đến queue với owner input mới nhất, còn history lời nói chứa các câu mở đầu đã
+bỏ markup. Bắt buộc có PCM khác zero, một cue, không gửi lại khi replay, im lặng
+khi hủy input mới nhất hoặc mute, và chờ nhạc dừng mới phát. HTTP accepted chưa
+đủ để pass. Chưa kiểm diễn đạt của model cloud, audio realtime hoặc loa thật.
+
+Bài live dưới đây chạy trước #520, kiểm đường TTS trực tiếp cũ, không phải
+announcer mới. Regression cancellation khi đó cũng được xác minh fail với
+handler trước #517 và pass sau #517.
+
+Ngày 2026-09-25 đã chạy thêm client local ghép cặp riêng với OpenHarness đã cài
+`0.3.5-dev.d732a2e5` và Blender agent máy bay có sẵn. Input A chỉ đọc số lượng
+object; sau khi A chạy, OS hủy tiếng rồi gửi B bổ sung màu mây. Một group result
+chứa đúng cả hai danh tính input. OS đóng hai route và POST fullText đúng một lần
+với run ID của B. Khi đặt `HARNESS_TEST_MAC_SAY=1`, fixture dùng macOS `say` tổng
+hợp đúng nội dung: 708.706 frame lời nói và 8.820 frame cue tại 44,1 kHz, thu WAV
+16,27 giây. Lệnh `afplay` local chạy xong thành công, người dùng xác nhận nghe được trên MacBook. Bài này kiểm chuỗi
+Harness/E2EE/result ledger/handler/HAL worker thật với provider local và audio
+capture; chưa kiểm provider TTS cloud đang cấu hình, routing microphone realtime,
+ALSA OrangePi hay loa Lamp vật lý. Không sửa scene. Pairing và listener test tạm
+đã được dọn sau bài test.
+
+Sau khi sync #520, cả sáu tình huống regression announcer-to-PCM pass với provider
+tone giả lập. Bài tùy chọn dùng macOS `say` fail: tổng hợp tiếng timeout sau 60
+giây, không có PCM. Bài đó chưa xác nhận nghe được giọng nói sau #520.
