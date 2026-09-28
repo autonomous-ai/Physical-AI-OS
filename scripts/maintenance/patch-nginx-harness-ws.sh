@@ -37,11 +37,15 @@ if grep -q "location = /api/harness/ws" "$CONF"; then
   exit 0
 fi
 
+# Work on the real file so backups contain bytes, not a sites-enabled symlink.
+# Editing and restoring this target also preserves the enabled symlink itself.
+CONF="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$CONF")"
+
 # Keep backups OUTSIDE the sites-enabled directory so nginx does not try to
 # parse them and error out with "duplicate upstream".
 BACKUP_DIR="/var/backups/nginx-harness-ws"
 mkdir -p "$BACKUP_DIR"
-BACKUP="${BACKUP_DIR}/$(basename "$CONF").bak.$(date +%s)"
+BACKUP="$(mktemp "${BACKUP_DIR}/$(basename "$CONF").bak.XXXXXX")"
 cp -a "$CONF" "$BACKUP"
 echo "[patch] backup written to $BACKUP"
 

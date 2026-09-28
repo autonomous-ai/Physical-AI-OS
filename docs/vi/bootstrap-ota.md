@@ -331,6 +331,12 @@ không hỗ trợ hoặc có rewrite URI bị từ chối. Site dạng symlink �
 file đích thực, giữ nguyên link enabled. Updater kiểm tra `nginx -t` và chỉ
 reload nginx sau khi thêm route.
 
+Để vá thủ công image cũ đã có `/api/buddy/ws`, chạy
+`scripts/maintenance/patch-nginx-harness-ws.sh` bằng root trên device. Script
+resolve site dạng symlink trước khi sửa, lưu bản sao riêng của file gốc tại
+`/var/backups/nginx-harness-ws/`, và khôi phục file đó nếu `nginx -t` thất bại,
+giữ nguyên symlink enabled. Nếu đã có route Harness thì không thay đổi.
+
 Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trước khi update
 web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
 và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
