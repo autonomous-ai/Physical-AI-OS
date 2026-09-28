@@ -28,7 +28,7 @@ func newFocusStepController(t *testing.T) (*VoiceController, *focusStepTransport
 		f.focusRevision = "rev-2"
 		return Frame{"focus": f.focus, "focusRevision": f.focusRevision}, nil
 	}
-	v := NewVoiceController(f, VoiceCallbacks{})
+	v := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	if err := v.RefreshFocus(context.Background()); err != nil {
 		t.Fatal(err)
 	}

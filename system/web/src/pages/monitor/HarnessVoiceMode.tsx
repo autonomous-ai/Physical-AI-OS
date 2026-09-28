@@ -4,6 +4,7 @@ import { HarnessQuestion } from "./HarnessQuestion";
 import { harnessRequest } from "./harness-api";
 
 interface VoiceMode {
+  supported: boolean;
   enabled: boolean;
   generation: number;
   machineId: string;
@@ -64,16 +65,16 @@ export function HarnessVoiceMode({ connected }: { connected: boolean }) {
 
   const unavailable = busy || !mode || Boolean(pollError);
   return <section aria-label="Harness-only voice" style={{ borderTop: "1px solid var(--lm-border)", marginTop: 14, paddingTop: 14, display: "flex", flexDirection: "column", gap: 10, fontSize: 12 }}>
-    <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
+    {mode?.supported === true && <label style={{ display: "flex", alignItems: "center", gap: 8 }}>
       <input type="checkbox" role="switch" checked={mode?.enabled ?? false}
         disabled={unavailable}
         onChange={event => { void mutate("/voice-mode", { enabled: event.target.checked }, "PUT"); }} />
       <strong>Harness-only voice</strong>
-    </label>
-    <p style={{ margin: 0, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
+    </label>}
+    {mode?.supported === true && <p style={{ margin: 0, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
       Send your spoken requests directly to the agent focused in the Harness app. Replies play on the robot as usual.
       This mode turns off when the robot service restarts. Text chat keeps its normal behavior.
-    </p>
+    </p>}
     <div role="status" style={{ display: "flex", flexDirection: "column", gap: 6 }}>
       <strong>Focused Harness agent</strong>
       {pollError ? <span>Focus status is unavailable. Retrying…</span> : !connected ? <span>

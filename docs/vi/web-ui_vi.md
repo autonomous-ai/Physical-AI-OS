@@ -131,8 +131,7 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
-hiển thị khoảng có thể chọn (`0.7–1.5×` cho ElevenLabs, `0.25–4.0×` cho
-provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
+hiển thị khoảng có thể chọn (`0.5–2.0×` cho mọi provider), bước `0.05`. **Save Changes** lưu tốc độ qua
 `PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần
 lưu; tốc độ thử chỉ áp dụng cho câu preview. Giá trị đã lưu
 ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
@@ -473,6 +472,9 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
 **Giọng nói Harness-only**
+
+Trang Pairing chỉ hiện công tắc Harness-only voice và mô tả khi OS trả `supported:true` (board hiện tại có cấu hình MPR121). Thiếu metadata hỗ trợ thì ẩn công tắc. Pairing và thông tin agent đang focus vẫn hiển thị; API/MQTT cũng chặn bật nếu không đáp ứng phần cứng.
+
 
 - Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
 - Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.
@@ -872,3 +874,7 @@ card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
 không giữ màn hình loading hoặc số liệu cũ.
 
 Cảnh báo delivery Harness không còn chặn câu nói mới hoặc khóa trả lời câu hỏi. Check delivery kiểm receipt pending hiện tại; Dismiss without retrying bỏ cảnh báo mà không hủy hoặc gửi lại task.
+
+### Địa chỉ người vận hành iMessage
+
+Handle trong settings iMessage xác định hội thoại home của người vận hành. Đây không phải cam kết giới hạn người gửi: presync Hermes mặc định nhận tin khách hàng từ địa chỉ khác (`BLUEBUBBLES_ALLOW_ALL_USERS=true` nếu không override rõ ràng).

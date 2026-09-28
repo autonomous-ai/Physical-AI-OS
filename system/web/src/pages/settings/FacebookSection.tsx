@@ -324,7 +324,7 @@ export function FacebookSection({ active }: { active: boolean }) {
                   wrong most often.</b> In the <b>User or Page</b> dropdown
                   (right panel, under Meta App — labelled "Người dùng hoặc Trang"
                   in Vietnamese), change <b>User Token</b> → pick your Page's
-                  name (e.g. "Trâm Anh"). The <b>Access Token</b> box on top{" "}
+                  name (e.g. "Elvis"). The <b>Access Token</b> box on top{" "}
                   <b style={{ color: C.amber }}>auto-switches</b> to the Page
                   Access Token — copy <b>that</b> one. The token shown while the
                   dropdown still says "User Token" is a <b>User Access Token</b>

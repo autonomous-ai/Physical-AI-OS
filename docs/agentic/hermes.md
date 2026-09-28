@@ -1218,3 +1218,7 @@ handling isolates the conversation instead of replaying work. Unrelated queued
 requests retain their existing admission and ownership checks. This is not a
 user `/stop`, does not create a model turn, and does not erase the Harness intent
 journal or dispatch a Harness task.
+
+### BlueBubbles runtime patch validation
+
+BlueBubbles source patches compile their generated Python before replacing the installed module. The webhook subscription patch keeps its marker on a standalone line so inline registration dictionaries retain their closing delimiters. CI fixture suites cover application, compilation, repeated application and rejected source drift for every embedded patch; these checks do not require a device or BlueBubbles server.

@@ -4,6 +4,7 @@ package hal
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
@@ -154,6 +155,32 @@ func SetStatus(stateName string) {
 	postSilent("/led/status", fmt.Sprintf(`{"state":%q}`, stateName))
 }
 
+// SetStatusContext checks HAL's acknowledgement and supports shutdown cancellation.
+func SetStatusContext(ctx context.Context, stateName string) error {
+	req, err := newRequest(http.MethodPost, "/led/status", strings.NewReader(fmt.Sprintf(`{"state":%q}`, stateName)))
+	if err != nil {
+		return err
+	}
+	resp, err := httpClient.Do(req.WithContext(ctx))
+	if err != nil {
+		return fmt.Errorf("POST /led/status: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("POST /led/status returned %d", resp.StatusCode)
+	}
+	var result struct {
+		Status string `json:"status"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return fmt.Errorf("decode /led/status: %w", err)
+	}
+	if result.Status != "ok" {
+		return fmt.Errorf("POST /led/status not acknowledged: %q", result.Status)
+	}
+	return nil
+}
+
 // RestoreLED hands the strip back to the user's saved LED state (or clears it
 // when no user state exists). Use after a transient overlay (statusled flash,
 // OTA progress) finishes so the strip doesn't get stuck on the overlay's
@@ -245,12 +272,6 @@ func SpeakQueue(text string) error {
 // notices) must use plain Speak so it never pollutes the realtime model.
 func SpeakReply(text string) error {
 	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true})
-	return postSpeak("/voice/speak", body)
-}
-
-// SpeakHarnessReply uses the normal voice with a turn-owned result earcon.
-func SpeakHarnessReply(text string) error {
-	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true, "harness_result": true})
 	return postSpeak("/voice/speak", body)
 }
 
@@ -588,7 +609,16 @@ func GetVersion() (string, error) {
 
 // GetHealth returns the current health snapshot from HAL.
 func GetHealth() (*Health, error) {
-	resp, err := doGet("/health")
+	return GetHealthContext(context.Background())
+}
+
+// GetHealthContext allows background readiness checks to stop during shutdown.
+func GetHealthContext(ctx context.Context) (*Health, error) {
+	req, err := newRequest(http.MethodGet, "/health", nil)
+	if err != nil {
+		return nil, err
+	}
+	resp, err := httpClient.Do(req.WithContext(ctx))
 	if err != nil {
 		return nil, err
 	}

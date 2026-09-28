@@ -6,7 +6,7 @@ import logging
 import os
 from typing import Iterator, Optional
 
-from hal.drivers.voice.tts.backend import TTSBackend, TTSRateLimitError
+from hal.drivers.voice.tts.backend import PROVIDER_GEMINI, TTSBackend, TTSRateLimitError
 from hal.drivers.voice.tts.openai import OpenAITTSBackend, _ensure_openai_v1
 from hal.drivers.voice.tts.tempo import change_tempo
 
@@ -118,3 +118,19 @@ class GeminiTTSBackend(TTSBackend):
             yield from chunks
         finally:
             chunks.close()
+
+
+def native_voice(tts) -> Optional[str]:
+    """Voice Gemini Live should speak natively, or None to keep our TTS.
+
+    With Gemini TTS selected and Gemini Live as the realtime provider, both are
+    the same prebuilt voice, so the Live model speaks chit-chat itself in the
+    TTS voice and no TTS call is made. Delegated turns still go through TTS.
+    """
+    import hal.config as hal_config
+    if tts is None or getattr(tts, "_provider", "") != PROVIDER_GEMINI:
+        return None
+    if hal_config.REALTIME_PROVIDER.strip().lower() != "gemini":
+        return None
+    voice = getattr(tts, "_voice", "")
+    return voice if voice in GeminiTTSBackend.VOICES else GeminiTTSBackend.DEFAULT_VOICE

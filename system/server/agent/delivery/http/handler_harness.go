@@ -1,6 +1,8 @@
 package http
 
 import (
+	"errors"
+	"log/slog"
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
@@ -177,13 +179,46 @@ func (h *AgentHandler) DeliverHarnessResponse(runID, text string) bool {
 		// Same gate as every other reply: a run the user cancelled by click
 		// keeps its answer in history but loses the speaker. Harness results
 		// land tens of seconds later, exactly when a bypass is audible.
-		speak := hal.SpeakHarnessReply
+		// Remote results are written for a screen, so HAL's announcer renders
+		// them for speech; device-generated notices are already spoken text.
+		speak := func(text string) error {
+			return hal.AnnounceHarnessUpdate(hal.HarnessUpdateResult, text, runID, "")
+		}
 		if state.localOnly {
 			speak = hal.SpeakReply
 		}
-		h.deliverTTS(speak, text, runID, "speak Harness result")
+		cancelled := h.isHarnessSpeechCancelled
+		if state.localOnly {
+			cancelled = h.isSpeechCancelled
+		}
+		h.deliverTTSUnless(cancelled, speak, text, runID, "speak Harness result")
 	}
 	return true
+}
+
+// AnnounceHarnessProgress offers a Harness lifecycle or tool update to HAL's
+// announcer, which speaks only an occasional one (see HAL
+// HARNESS_PROGRESS_SPEAK_P). DeliverHarnessProgress stays display-only.
+func (h *AgentHandler) AnnounceHarnessProgress(runID, text string) {
+	if runID == "" || text == "" {
+		return
+	}
+	h.harnessRepliesMu.Lock()
+	state, pending := h.harnessReplies[runID]
+	h.harnessRepliesMu.Unlock()
+	if !pending || state.delivered || state.webChat || state.restored || state.localOnly {
+		return
+	}
+	// A progress line is never worth a speech-cancel record or a history feed:
+	// a cancelled run simply stays quiet.
+	if h.isHarnessSpeechCancelled(runID) {
+		return
+	}
+	go func() {
+		if err := hal.AnnounceHarnessUpdate(hal.HarnessUpdateProgress, text, runID, ""); err != nil && !errors.Is(err, hal.ErrSpeakerMuted) {
+			slog.Debug("Harness progress announcement not queued", "component", "agent", "run_id", runID, "error", err)
+		}
+	}()
 }
 
 // MarkHarnessRestoredRun restores a display address without reviving its speaker.

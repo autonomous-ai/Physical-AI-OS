@@ -4,11 +4,9 @@ HAL Pydantic request/response models.
 All FastAPI endpoint models live here — import from server.py via `from hal.models import *`.
 """
 
-from typing import Optional, Union
+from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-
-from hal.drivers.voice.tts import PROVIDER_OPENAI, PROVIDER_ELEVENLABS
 
 
 class ServoRequest(BaseModel):
@@ -311,6 +309,19 @@ class RealtimeHistoryRequest(BaseModel):
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Reply text to record as history"
     )
+
+
+class HarnessUpdateRequest(BaseModel):
+    """A Harness result, question or progress line for the announcer to speak.
+
+    os-server posts the raw Harness text; HAL queues it and speaks a rendered
+    version once the device is free (see drivers/harness/announcer.py).
+    """
+
+    kind: Literal["result", "question", "progress"] = Field(..., description="Update type")
+    text: str = Field(..., min_length=1, max_length=20000, description="Raw Harness text")
+    turn_id: str = Field("", max_length=200, description="Device run that owns the speech")
+    outcome: str = Field("", max_length=40, description="Harness outcome, e.g. completed or failed")
 
 
 class SpeakRequest(BaseModel):
@@ -786,7 +797,7 @@ class VoiceStartRequest(BaseModel):
         "", description="TTS style/vibe instructions (optional, e.g. 'Speak warmly')"
     )
     tts_provider: str = Field(
-        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default), '{PROVIDER_ELEVENLABS}', 'gemini' or 'piper'"
+        "openai", description="TTS provider: 'openai' (default), 'elevenlabs', 'gemini' or 'piper'"
     )
 
 

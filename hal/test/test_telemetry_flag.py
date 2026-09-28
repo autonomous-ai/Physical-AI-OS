@@ -68,7 +68,7 @@ def test_every_tts_construction_site_wires_the_playback_hooks():
     Read as text rather than imported: importing hal.server initialises the
     production logging directory."""
     sites = 0
-    for path in (HAL_ROOT / "server.py", HAL_ROOT / "routes" / "voice.py"):
+    for path in (HAL_ROOT / "runtime.py", HAL_ROOT / "routes" / "voice.py"):
         src = path.read_text()
         # `= TTSService(` only: VirtualTTSService is the simulator and plays
         # no real audio, so it has nothing to report.

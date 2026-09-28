@@ -175,6 +175,17 @@ func (s *HermesService) EnsureOnboarding() error {
 		slog.Warn("hermes cache usage compatibility patch failed", "component", "hermes", "error", err)
 	}
 
+	// Apply the BlueBubbles / iMessage runtime patches. Best-effort: individual
+	// script failures log a warning inside the ensure but never surface here as
+	// an error — voice must stay up even if iMessage patches drift after a
+	// Hermes upgrade. A Hermes package update wipes every patch (it reinstalls
+	// the .py files from the wheel), so this must run on every EnsureOnboarding
+	// pass, not only on config changes.
+	bluebubblesPatchesChanged, err := s.ensureBluebubblesPatches()
+	if err != nil {
+		slog.Warn("hermes bluebubbles patches failed", "component", "hermes", "error", err)
+	}
+
 	// Enable native Runs only when its tool/cache evidence contract is verified.
 	nativeRunsChanged, err := s.ensureNativeRunsPatch()
 	if err != nil {
@@ -199,14 +210,18 @@ func (s *HermesService) EnsureOnboarding() error {
 	gatewayInstalled := s.ensureGatewayUnit()
 	gatewayDown := !gatewayActive()
 
-	if !configChanged && !hookChanged && !cacheUsageChanged && !nativeRunsChanged && !skillsSynced && !skillsDeduped && !gatewayInstalled && !gatewayDown {
+	bluebubblesPatchesApplied := bluebubblesPatchesChanged > 0
+
+	if !configChanged && !hookChanged && !cacheUsageChanged && !bluebubblesPatchesApplied && !nativeRunsChanged && !skillsSynced && !skillsDeduped && !gatewayInstalled && !gatewayDown {
 		slog.Info("hermes onboarding: config + hooks + skills unchanged, gateway up — no restart", "component", "hermes")
 		return nil
 	}
 
 	slog.Info("hermes onboarding: (re)starting gateway",
 		"component", "hermes", "unit", hermesGatewayUnit,
-		"config_changed", configChanged, "hook_changed", hookChanged, "cache_usage_changed", cacheUsageChanged, "native_runs_changed", nativeRunsChanged, "skills_synced", skillsSynced,
+		"config_changed", configChanged, "hook_changed", hookChanged, "cache_usage_changed", cacheUsageChanged,
+		"bluebubbles_patches_changed", bluebubblesPatchesChanged, "native_runs_changed", nativeRunsChanged,
+		"skills_synced", skillsSynced,
 		"skills_deduped", skillsDeduped, "gateway_installed", gatewayInstalled, "gateway_down", gatewayDown)
 	// Re-enable so hermes survives a reboot — factory reset disabled the unit, and a
 	// freshly installed one is not enabled for boot. Best-effort; restart still starts

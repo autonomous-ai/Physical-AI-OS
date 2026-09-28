@@ -19,6 +19,18 @@ class TextInput(InputBase):
     text: str
 
 
+class AnnounceInput(InputBase):
+    """Device-initiated text that must produce a spoken reply.
+
+    Unlike TextInput (silent context), this opens a model response with no user
+    audio behind it: the device has something to tell the user, e.g. a Harness
+    result. Only providers with `supports_announce` accept it.
+    """
+
+    type: InputTypeEnum = InputTypeEnum.ANNOUNCE
+    text: str
+
+
 class AudioInput(InputBase):
     type: InputTypeEnum = InputTypeEnum.AUDIO
     audio: npt.NDArray[np.float32]

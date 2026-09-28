@@ -89,6 +89,68 @@ gravity-rest nhắm yaw 0, pitch -15. Đây chưa là hiệu chuẩn vật lý. 
 [SAFETY.md](../../SAFETY.md) trước khi qualification chuyển động có giám sát.
 Test startup và protocol trên host không xác nhận CTS đầy đủ hay an toàn vật lý.
 
+### Commissioning home tùy chọn
+
+Commissioning home thuộc công cụ thử nghiệm riêng của Stack-chan, không thuộc
+contract motion chung của OS. Entrypoint chuẩn `hal.server:app` không có endpoint
+`/stackchan/*` hoặc `/servo/home*`. Schema HTTP và route thử nghiệm nằm trong
+`robots/_experimental/stackchan/commissioning.py`; driver Stack-chan thực thi
+frame tọa độ và giới hạn commissioning riêng. Route servo, model và contract
+`MotionService` dùng chung được giữ nguyên.
+
+Entrypoint thử nghiệm cung cấp `GET /stackchan/home` để discovery capability thụ
+động và `GET /stackchan/home/position` để đọc pan/tilt đo được trong
+`calibrated_home_deg_v1`; cả hai không acquire motion lease. Chuyển động mặc định
+bị tắt (`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). Khi được bật rõ ràng,
+`POST /stackchan/home/move` yêu cầu capability firmware `motion.home_degrees.v1`,
+frame tọa độ tường minh, chỉ target tilt từ 7 đến 10 độ và duration yêu cầu từ
+2 đến 10 giây. Safety policy có thể kéo dài duration tới 60 giây. Feedback ban
+đầu phải có pan trong ±30 độ và tilt trong [0, 5). Torque yaw tắt trong chuyển
+động chỉ có pitch này. Dưới 5 độ, stop hoặc mất transport có thể khiến torque
+tắt hoặc session lỗi; vẫn cần hỗ trợ cơ khí và giám sát trực tiếp.
+
+Trong mỗi chuyển động, kể cả lần lặp lại tùy chọn, driver đọc feedback sau khoảng
+chờ tối đa 250 ms hoặc nửa TTL của lease, lấy giá trị ngắn hơn. Độ trễ request
+cộng thêm vào khoảng này; command timeout đã cấu hình vẫn áp dụng. Feedback lỗi
+hoặc yaw lệch quá 1 độ sẽ kích hoạt halt mà không đợi hết duration. Giám sát theo
+mẫu không thể phát hiện mọi sai lệch giữa các lần đọc. Khi không tới đích sau
+settling, driver halt và trả các mẫu đo settling nhưng giữ kết nối. Lỗi firmware
+cũng giữ kết nối; command timeout vẫn đóng kết nối, và firmware đang dùng sẽ
+nhả torque rồi reboot khi mất kết nối. Không thể bảo đảm giữ vị trí thành công
+cho mọi lỗi, nhất là dưới ngưỡng giữ của firmware.
+
+Thành công yêu cầu pitch đo được trong sai số 1 độ so với target, ít nhất 6 độ
+và đã tiến dương ít nhất 1 độ. Nếu đầu dừng thiếu nhưng ổn định (các mẫu cuối
+trong 0,2 độ, đã tiến ít nhất 1 độ, đạt ít nhất 6 độ, thiếu hơn 1 nhưng không
+quá 3 độ), driver lặp lại đúng target tối đa một lần. Phản hồi ghi `recommands`.
+Chỉ khi đo được đã tới đích, `lease.release` mới cấp torque lại cho cả hai trục;
+sau đó driver đọc lại vị trí.
+
+Dùng `POST /stackchan/stop` và `POST /stackchan/release` của công cụ để chẩn đoán.
+Lỗi firmware trả 502 với `op`, `code`, `message`; các lỗi nhả lực khác được báo,
+gồm không tới đích và bị hủy, trả 502 với `message`, `errors`. Endpoint nhả lực
+thử nghiệm không báo thành công khi thao tác thất bại. `/servo/stop` và
+`/servo/release` chung giữ hành vi OS hiện có; chỉ phản hồi thành công của
+endpoint release cũ chưa chứng minh torque đã được nhả. Công cụ này không xác
+minh calibration hoặc qualification phần cứng để sử dụng thường xuyên.
+
+Trong phiên thử nghiệm có giám sát, giữ môi trường và env file riêng như phần
+khởi động host ở trên, nhưng thay target Uvicorn bằng factory này:
+
+```bash
+HAL_BOARD=host DEVICE_TYPE=stackchan DEVICES_DIR="$PWD/robots/_experimental" \
+  HAL_SIMULATE=0 HAL_MODE=developer PYTHONPATH=. \
+  hal/.venv/bin/python -m uvicorn \
+    robots._experimental.stackchan.commissioning:create_app --factory \
+    --env-file "$PWD/.local/stackchan/.env" --host 127.0.0.1 --port 5001
+```
+
+Chỉ chạy một process HAL: entrypoint này dùng lại lifecycle và kết nối body của
+HAL, không khởi động bridge thứ hai hoặc đổi entrypoint OS chuẩn. Chỉ đặt
+`STACKCHAN_HOME_COMMISSIONING_ENABLED=1` trong env file riêng cho phiên có giám
+sát, rồi tắt sau đó. Script thử nghiệm dùng `/servo/home*` cần chuyển sang
+`/stackchan/home*`; không có alias trong route chung.
+
 ## Chạy OS trên cùng host
 
 Giữ HAL chạy trong terminal đầu tiên. Trong terminal khác, dùng target phát

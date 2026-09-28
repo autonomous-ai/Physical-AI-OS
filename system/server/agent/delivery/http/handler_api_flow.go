@@ -179,6 +179,16 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 		source, _ := fe.Data["source"].(string)
 		msg, _ := fe.Data["message"].(string)
 		if source == "channel" {
+			// If the flow event names its channel explicitly, honor that —
+			// GetConfiguredChannel is a single-string global fallback, so on a
+			// device with multiple channels enabled (e.g. Telegram token still
+			// present from an earlier setup + BlueBubbles now active) it can
+			// mis-label a BlueBubbles turn as [telegram]. See intern-v2 20.159:
+			// Telegram token remained after adding iMessage, so every iMessage
+			// turn rendered as TELEGRAM in the Flow panel.
+			if perEventChannel, _ := fe.Data["channel"].(string); perEventChannel != "" {
+				channelName = perEventChannel
+			}
 			// Label routing mirrors handler_events.go goroutine:
 			//  1. sender filled → "[telegram:Gray]" (real channel user)
 			//  2. message is device-internal prefix → "[voice]" / "[emotion]"

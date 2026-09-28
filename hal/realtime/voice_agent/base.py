@@ -15,6 +15,7 @@ from hal import config as app_config
 from hal.realtime.models import (
     AgentInputEvent,
     AgentOutputEvent,
+    AnnounceInput,
     AudioCommitEvent,
     AudioInput,
     InputBase,
@@ -219,6 +220,30 @@ class VoiceAgentBase(ABC):
         if self.available:
             for inp in inputs:
                 self._send_queue.put(InputEvent(input=inp))
+
+    @property
+    def supports_announce(self) -> bool:
+        """Whether this provider can speak a device-initiated AnnounceInput.
+
+        False by default: the caller then renders the announcement without the
+        realtime model (text summarizer + TTS). Providers opt in only where a
+        text input can open a response of its own on the current wire.
+        """
+        return False
+
+    def announce(self, text: str) -> bool:
+        """Queue a device-initiated spoken reply; read it with receive().
+
+        Returns False when the provider cannot announce right now. The caller
+        must flush_output() first so receive() reads only this response.
+        """
+        if not self.supports_announce or not self.available:
+            return False
+        self._committed_at = time.monotonic()
+        self._progress_deadline_at = 0.0
+        self._output_deadline_at = 0.0
+        self._send_queue.put(InputEvent(input=AnnounceInput(text=text)))
+        return True
 
     def end_turn(self) -> None:
         """Mark the current turn finished from the consumer's side.

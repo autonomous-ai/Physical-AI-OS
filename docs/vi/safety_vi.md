@@ -221,8 +221,10 @@ thời gian, rồi kết thúc lease bằng cách giữ tại vị trí đo đư
 xác nhận tư thế đó từ phản hồi vị trí đo được trước khi tắt torque. Nếu không tới
 được tư thế nghỉ, driver halt-hold và giữ torque bật. Handshake bắt buộc
 firmware khai `motion.timed_move`, đọc vị trí thật, halt-and-hold và torque
-release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease (hoặc
-xử lý disconnect) rồi giữ tại vị trí đo được; firmware chỉ có tham số spring
+release. Nếu HAL, process hoặc Wi-Fi biến mất, firmware ESP32 hết hạn lease rồi
+dừng và giữ tại vị trí đo được; còn khi WebSocket bị đóng, firmware đang cài sẽ
+nhả torque và khởi động lại, vì vậy HAL giữ kết nối mở khi commissioning không
+đạt target; firmware chỉ có tham số spring
 speed chưa hiệu chuẩn sẽ bị từ chối vì không thể giữ đúng trần độ/giây đã khai.
 Đường này đã có test protocol phía host; fault injection trên Wi-Fi và phần cứng
 thật vẫn là bước qualification trên thiết bị.
@@ -256,6 +258,49 @@ yêu cầu, nên chỉ thời gian trên host không chứng minh chuyển độ
 HAL gia hạn lease trong lúc kiểm tra tới đích (sai số tối đa 1 độ), dùng khoảng
 chờ ổn định 2 giây trước khi halt và báo lỗi thay vì báo thành công. Từng request
 protocol vẫn chịu command timeout đã cấu hình.
+
+Commissioning home thuộc công cụ thử nghiệm riêng của Stack-chan, không thuộc
+contract motion chung của OS. Entrypoint chuẩn `hal.server:app` không có endpoint
+`/stackchan/*` hoặc `/servo/home*`. Schema HTTP và route thử nghiệm nằm trong
+`robots/_experimental/stackchan/commissioning.py`; driver Stack-chan thực thi
+frame tọa độ và giới hạn commissioning riêng. Route servo, model và contract
+`MotionService` dùng chung được giữ nguyên.
+
+Entrypoint thử nghiệm cung cấp `GET /stackchan/home` để discovery capability thụ
+động và `GET /stackchan/home/position` để đọc pan/tilt đo được trong
+`calibrated_home_deg_v1`; cả hai không acquire motion lease. Chuyển động mặc định
+bị tắt (`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). Khi được bật rõ ràng,
+`POST /stackchan/home/move` yêu cầu capability firmware `motion.home_degrees.v1`,
+frame tọa độ tường minh, chỉ target tilt từ 7 đến 10 độ và duration yêu cầu từ
+2 đến 10 giây. Safety policy có thể kéo dài duration tới 60 giây. Feedback ban
+đầu phải có pan trong ±30 độ và tilt trong [0, 5). Torque yaw tắt trong chuyển
+động chỉ có pitch này. Dưới 5 độ, stop hoặc mất transport có thể khiến torque
+tắt hoặc session lỗi; vẫn cần hỗ trợ cơ khí và giám sát trực tiếp.
+
+Trong mỗi chuyển động, kể cả lần lặp lại tùy chọn, driver đọc feedback sau khoảng
+chờ tối đa 250 ms hoặc nửa TTL của lease, lấy giá trị ngắn hơn. Độ trễ request
+cộng thêm vào khoảng này; command timeout đã cấu hình vẫn áp dụng. Feedback lỗi
+hoặc yaw lệch quá 1 độ sẽ kích hoạt halt mà không đợi hết duration. Giám sát theo
+mẫu không thể phát hiện mọi sai lệch giữa các lần đọc. Khi không tới đích sau
+settling, driver halt và trả các mẫu đo settling nhưng giữ kết nối. Lỗi firmware
+cũng giữ kết nối; command timeout vẫn đóng kết nối, và firmware đang dùng sẽ
+nhả torque rồi reboot khi mất kết nối. Không thể bảo đảm giữ vị trí thành công
+cho mọi lỗi, nhất là dưới ngưỡng giữ của firmware.
+
+Thành công yêu cầu pitch đo được trong sai số 1 độ so với target, ít nhất 6 độ
+và đã tiến dương ít nhất 1 độ. Nếu đầu dừng thiếu nhưng ổn định (các mẫu cuối
+trong 0,2 độ, đã tiến ít nhất 1 độ, đạt ít nhất 6 độ, thiếu hơn 1 nhưng không
+quá 3 độ), driver lặp lại đúng target tối đa một lần. Phản hồi ghi `recommands`.
+Chỉ khi đo được đã tới đích, `lease.release` mới cấp torque lại cho cả hai trục;
+sau đó driver đọc lại vị trí.
+
+Dùng `POST /stackchan/stop` và `POST /stackchan/release` của công cụ để chẩn đoán.
+Lỗi firmware trả 502 với `op`, `code`, `message`; các lỗi nhả lực khác được báo,
+gồm không tới đích và bị hủy, trả 502 với `message`, `errors`. Endpoint nhả lực
+thử nghiệm không báo thành công khi thao tác thất bại. `/servo/stop` và
+`/servo/release` chung giữ hành vi OS hiện có; chỉ phản hồi thành công của
+endpoint release cũ chưa chứng minh torque đã được nhả. Công cụ này không xác
+minh calibration hoặc qualification phần cứng để sử dụng thường xuyên.
 
 Driver Stack-chan vẫn ở giai đoạn thử nghiệm. Trước khi qualification thiết bị:
 

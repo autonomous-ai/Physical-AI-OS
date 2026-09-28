@@ -52,6 +52,9 @@ class _FakeStream:
     def __init__(self, parts):
         self.text_stream = iter(parts)
 
+    def get_final_message(self):
+        return mock.Mock(stop_reason="max_tokens", usage=mock.Mock(output_tokens=400))
+
     def __enter__(self):
         return self
 
@@ -136,3 +139,24 @@ def test_a_first_attempt_that_works_is_not_repeated():
     s, client = _retrying_summarizer([_FakeStream(["fine"])])
     assert s.summarize(["user: hi"]) == "fine"
     assert client.messages.stream.call_count == 1
+
+
+def test_empty_success_is_failure_and_returns_promptly_for_caller_fallback(caplog):
+    s, client = _retrying_summarizer([_FakeStream([])], retries=2)
+    s._max_tokens = 400
+    assert s.summarize(["A completed task"]) == ""
+    assert client.messages.stream.call_count == 1
+    assert "Empty summarizer response" in caplog.text
+    assert "stop_reason=max_tokens" in caplog.text
+    assert "output_tokens=400" in caplog.text
+    assert "Summarized" not in caplog.text
+
+
+def test_notification_disables_thinking_without_changing_memory_defaults():
+    s, client = _ready_summarizer(["Done."])
+    s._disable_thinking = True
+    assert s.summarize(["result"]) == "Done."
+    assert client.messages.stream.call_args.kwargs["thinking"] == {"type": "disabled"}
+    memory, memory_client = _ready_summarizer(["Memory."])
+    assert memory.summarize(["history"]) == "Memory."
+    assert "thinking" not in memory_client.messages.stream.call_args.kwargs

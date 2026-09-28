@@ -229,9 +229,10 @@ export function TTSSection({
       ? (ttsProvider as Vendor)
       : "elevenlabs");
 
-  const speedMin = ttsProvider === "elevenlabs" ? 0.7 : 0.25;
-  const speedMax = ttsProvider === "elevenlabs" ? 1.5 : 4.0;
-  // HTTP v3 applies tempo locally, so its slider can exceed the provider cap.
+  // One range for every provider: outside 0.5–2.0 speech stops sounding
+  // natural, and HAL applies tempo locally where the provider has no speed knob.
+  const speedMin = 0.5;
+  const speedMax = 2.0;
   // Show the selectable rate without changing a saved legacy value
   // when the user edits another setting. Only a slider action changes it.
   const effectiveSpeed = Math.max(speedMin, Math.min(speedMax, ttsSpeed));

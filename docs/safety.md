@@ -233,7 +233,9 @@ pose, confirms that pose from measured joint feedback, and only then disables
 torque. If the pose is not reached, it halt-holds with torque enabled. Its
 handshake requires `motion.timed_move`, measured position, halt-and-hold and
 torque-release capabilities. If HAL, its process or Wi-Fi disappears, the ESP32
-firmware expires the lease (or handles disconnect) and holds the measured pose;
+firmware expires the lease and halt-holds the measured pose; on a WebSocket
+close the installed firmware instead releases torque and restarts, which is
+why HAL keeps the transport open on a commissioning miss;
 firmware that only exposes an uncalibrated spring-speed parameter is rejected as
 incompatible because it cannot honor the declared degree-per-second ceiling.
 This path is covered by host protocol tests; physical fault-injection over a
@@ -269,6 +271,51 @@ duration, so elapsed host time alone is not completion. HAL renews the lease
 while checking arrival (within 1 degree), using a 2-second settling window
 before halting and returning an error instead of reporting success. Individual
 protocol requests remain subject to the configured command timeout.
+
+Home commissioning belongs to the experimental Stack-chan bench tool, not the
+shared OS motion contract. The standard `hal.server:app` entrypoint exposes no
+`/stackchan/*` or `/servo/home*` endpoints. The bench HTTP schema and routes live in
+`robots/_experimental/stackchan/commissioning.py`; the Stack-chan driver enforces
+its coordinate frame and commissioning bounds. Shared servo routes, models, and
+the `MotionService` contract remain unchanged.
+
+The explicit bench entrypoint exposes `GET /stackchan/home` for passive capability
+discovery and `GET /stackchan/home/position` for measured pan/tilt in
+`calibrated_home_deg_v1`, both without a motion lease. Motion remains disabled by
+default (`STACKCHAN_HOME_COMMISSIONING_ENABLED=0`). When explicitly enabled,
+`POST /stackchan/home/move` requires firmware capability `motion.home_degrees.v1`,
+an explicit coordinate frame, only a tilt target from 7 to 10 degrees, and a
+requested duration from 2 to 10 seconds. The speed policy may stretch duration
+up to 60 seconds. Starting feedback must show pan within ±30 degrees and tilt
+in [0, 5). Yaw torque is off during this pitch-only move. Below 5 degrees, stop
+or transport loss can leave torque off or the session faulted; mechanical
+support and direct supervision remain required.
+
+During each trajectory, including its optional repeat, the driver reads feedback
+after waits of at most 250 ms or half the lease TTL, whichever is shorter.
+Request latency adds to this interval; configured command timeouts still apply.
+Invalid feedback or yaw drift over 1 degree triggers a halt without waiting for
+the motion duration to end. This sampled check cannot detect every excursion
+between reads. A missed target after settling is halted and reported with measured
+settle samples while preserving the connection. Firmware rejections also keep the
+connection open; command timeouts still close it, and the installed firmware
+releases torque and reboots on disconnect. A successful hold is not guaranteed
+for every failure, particularly below the firmware's hold floor.
+
+Success requires measured pitch within 1 degree of target, at least 6 degrees,
+and at least 1 degree of positive progress. If the head settles short but stable
+(last samples within 0.2 degrees, at least 1 degree of progress, at least 6 degrees,
+and short by more than 1 but no more than 3 degrees), the driver repeats the same
+target at most once. The response reports `recommands`. Only measured arrival
+allows `lease.release` to re-energize both axes; the driver then rechecks position.
+
+Use bench `POST /stackchan/stop` and `POST /stackchan/release` for diagnostics.
+Firmware rejections return 502 with `op`, `code`, and `message`; other reported
+release failures, including missed arrival and cancellation, return 502 with
+`message` and `errors`. A failed release never reports successful torque-off on
+this bench endpoint. Shared `/servo/stop` and `/servo/release` retain their existing
+OS behavior; the latter's legacy success response alone does not prove release.
+This tool does not verify calibration or qualify hardware for routine use.
 
 The Stack-chan driver remains experimental. Before device qualification:
 

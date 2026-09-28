@@ -40,7 +40,7 @@ func (f *gestureTransport) Request(_ context.Context, frame Frame) (Frame, error
 }
 func gestureTestController() (*VoiceController, *gestureTransport) {
 	f := &gestureTransport{caps: []string{"focus.get", "focus.ensure"}}
-	return NewVoiceController(f, VoiceCallbacks{}), f
+	return NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }}), f
 }
 func requireGestureCode(t *testing.T, err error, code string) {
 	t.Helper()

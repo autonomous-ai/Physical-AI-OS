@@ -90,10 +90,26 @@ func (s *HermesService) StartPrimaryModelWatch(ctx context.Context) {
 }
 
 // GetConfiguredChannel — Device config is the source of truth under Hermes.
-// Returns "telegram" when a bot token is set, otherwise the generic label.
+// Returns the primary channel type by priority order; used as a FALLBACK for
+// flow events that do not carry their own `channel` field. The Flow panel
+// per-event handler (handler_api_flow.go) prefers `fe.Data["channel"]` when
+// present, so this only decides how a channel-less event renders.
+//
+// Priority: iMessage > Telegram > Slack > Discord. iMessage wins over Telegram
+// because setups often keep a stale Telegram token from an earlier flow and
+// the operator wants the newer active channel to define the fallback label.
 func (s *HermesService) GetConfiguredChannel() string {
+	if s.config.BluebubblesServerURL != "" && s.config.BluebubblesPassword != "" {
+		return domain.ChannelIMessage
+	}
 	if s.config.TelegramBotToken != "" {
-		return "telegram"
+		return domain.ChannelTelegram
+	}
+	if s.config.SlackBotToken != "" {
+		return domain.ChannelSlack
+	}
+	if s.config.DiscordBotToken != "" {
+		return domain.ChannelDiscord
 	}
 	return "channel"
 }

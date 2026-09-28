@@ -9,7 +9,7 @@ export interface NetworkItem {
   security: string;
 }
 
-export type ChannelType = "telegram" | "slack" | "discord";
+export type ChannelType = "telegram" | "slack" | "discord" | "imessage";
 
 /** Initial setup may defer messaging-channel configuration entirely. */
 export type SetupChannelType = ChannelType | "none";

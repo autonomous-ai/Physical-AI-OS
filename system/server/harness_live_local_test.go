@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -19,11 +20,43 @@ import (
 
 // TestHarnessLiveLocalBridge is explicitly opt-in. It exposes only the existing
 // signed device socket to LAN; test control endpoints require actual loopback.
-// It never sends a task by itself and uses web response routes, so no TTS runs.
+// It never sends a task by itself. Voice routes require an explicit local HAL
+// test fixture so the normal HAL endpoint cannot be contacted accidentally.
+type harnessLiveHALTransport struct {
+	base   http.RoundTripper
+	target *url.URL
+}
+
+func (t harnessLiveHALTransport) RoundTrip(r *http.Request) (*http.Response, error) {
+	if r.URL.Host == "127.0.0.1:5001" {
+		r = r.Clone(r.Context())
+		copyURL := *r.URL
+		r.URL = &copyURL
+		r.URL.Scheme, r.URL.Host = t.target.Scheme, t.target.Host
+		r.Host = t.target.Host
+	}
+	return t.base.RoundTrip(r)
+}
+
 func TestHarnessLiveLocalBridge(t *testing.T) {
 	dir := os.Getenv("OS_HARNESS_LIVE_DIR")
 	if dir == "" {
 		t.Skip("set OS_HARNESS_LIVE_DIR to an isolated private scratch directory")
+	}
+	voiceEnabled := false
+	if endpoint := os.Getenv("OS_HARNESS_TEST_HAL_URL"); endpoint != "" {
+		target, err := url.Parse(endpoint)
+		if err != nil || target.Scheme != "http" || target.User != nil || target.RawQuery != "" || target.Fragment != "" || (target.Path != "" && target.Path != "/") {
+			t.Fatal("HAL test endpoint must be a plain loopback HTTP origin")
+		}
+		ip := net.ParseIP(target.Hostname())
+		if ip == nil || !ip.IsLoopback() || target.Port() == "" || target.Host == "127.0.0.1:5001" {
+			t.Fatal("HAL test endpoint must be an explicit loopback fixture port")
+		}
+		previous := http.DefaultTransport
+		http.DefaultTransport = harnessLiveHALTransport{base: previous, target: target}
+		defer func() { http.DefaultTransport = previous }()
+		voiceEnabled = true
 	}
 	if !filepath.IsAbs(dir) || filepath.Clean(dir) != dir {
 		t.Fatal("live directory must be clean and absolute")
@@ -154,6 +187,16 @@ func TestHarnessLiveLocalBridge(t *testing.T) {
 		}
 		run, _ := frame["localRunId"].(string)
 		delete(frame, "localRunId")
+		channel, _ := frame["localChannel"].(string)
+		delete(frame, "localChannel")
+		if channel != "" && channel != "web" && channel != "voice" {
+			http.Error(w, "invalid local channel", 400)
+			return
+		}
+		if channel == "voice" && !voiceEnabled {
+			http.Error(w, "voice requires OS_HARNESS_TEST_HAL_URL", 400)
+			return
+		}
 		kind, _ := frame["type"].(string)
 		agent, _ := frame["agentId"].(string)
 		if kind == "turn.send" || kind == "question.answer" {
@@ -161,7 +204,7 @@ func TestHarnessLiveLocalBridge(t *testing.T) {
 				http.Error(w, "mutation requires localRunId and agentId", 400)
 				return
 			}
-			s.registerHarnessDispatch(agent, run, true, true, frame)
+			s.registerHarnessDispatch(agent, run, channel != "voice", true, frame)
 		}
 		requestCtx, stop := context.WithTimeout(r.Context(), 30*time.Second)
 		defer stop()
@@ -171,6 +214,14 @@ func TestHarnessLiveLocalBridge(t *testing.T) {
 			return
 		}
 		respond(w, map[string]any{"frame": result})
+	}))
+	mux.HandleFunc("/cancel-speech", local(http.MethodPost, func(w http.ResponseWriter, r *http.Request) {
+		if !voiceEnabled {
+			http.Error(w, "voice test fixture required", 400)
+			return
+		}
+		s.agentHandler.CancelSpeech()
+		respond(w, map[string]any{"cancelledAtMs": time.Now().UnixMilli()})
 	}))
 	stopped := make(chan struct{})
 	var stopOnce sync.Once

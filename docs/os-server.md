@@ -493,6 +493,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 `POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
 to HAL `/voice/speak` for that uncached utterance only. It does not persist the
 rate or change the shared service speed. Omission retains the runtime default.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) on `/voice/speak` are the
+same: HAL builds a preview backend for that utterance and the running service
+keeps its saved provider, backend and voice. They require uncached speech (`400`
+with `cached`/`prerender`). This covers web **Test Voice** and MQTT `tts.preview`.
 
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
@@ -517,6 +521,15 @@ it. Voices are the 30 multilingual Gemini prebuilt voices, so the language
 filter does not apply. Gemini has no speed parameter: HAL applies the saved
 speed locally, like ElevenLabs HTTP v3. Bracket audio tags are stripped. In
 Settings → Voice it is the third vendor under `Autonomous (proxy)`.
+
+When Gemini TTS is selected and the realtime provider is Gemini Live, chit-chat
+the Live model answers itself plays as **native audio in the TTS voice**, with no
+TTS call (`native_voice()` in `hal/drivers/voice/tts/gemini.py`), regardless of
+`HAL_REALTIME_NATIVE_AUDIO`. The Live session is opened with the TTS voice
+instead of `realtime.gemini.voice`; after a voice or provider change the session
+is rebuilt before the next turn (`gemini-voice-change`). Delegated replies are
+still spoken by Gemini TTS. Native audio plays at 1.0×; the saved TTS speed only
+applies to TTS. Any other TTS provider leaves native audio as configured.
 
 ### Piper — on-device TTS
 
@@ -1577,7 +1590,16 @@ Their completed/rejected receipts close only the answer command UI, without TTS.
 The explicit original task binding owns the later summary; receipt reconciliation
 uses the original answer key and never resends the command.
 
+### iMessage configuration updates
+
+For `PUT /api/device/config`, omitted or null `bluebubbles_server_url`, `bluebubbles_user_address`, and `bluebubbles_caller_context` preserve their saved values. An explicit empty string clears only that field. An omitted or empty `bluebubbles_password` preserves the saved secret. Changing unrelated settings must not reset the channel or its caller context.
 
 ### HAL startup timing
+
+`hal.server:app` is the lightweight HTTP entrypoint; `hal/runtime.py` retains the full hardware runtime. Startup validates the device/board and loads safety bounds and LED presets first, then starts one RGB service and exposes the existing `/led/*` routes with the existing HTTP security middleware. Full runtime imports and initialization run in a background thread of the same process. Until that finishes, other HTTP endpoints (including `/health`) return `503` with `Retry-After: 1`. Requests then pass to the full app; it reuses the RGB instance without reopening the strip. There is no new service, port, setup mode or UI flow. Required-runtime startup failure exits the process nonzero so the service supervisor can recover.
+
+Speaker-ID and SER initialization runs in separate background workers and does not gate full HAL readiness or basic voice. Until ready, speaker metadata is omitted and SER skips sessions. See [SER startup](speech-emotion.md) for retries and lifecycle.
+
+The setup-white worker calls `/led/status` directly and retries failures; it does not wait for full `/health`. LED command acknowledgement means the command was accepted; physical timing should also verify strip output. Measure from systemd process start to that acknowledgement, separately from full-health readiness. `[startup] led_ready` marks driver initialization, while `[startup] full HTTP API ready` marks the handoff.
 
 HAL overlaps motion-driver imports with independent audio, camera, sensing and voice imports. It resolves the motion class only after those imports, before route availability checks and lifespan initialization, preserving required-driver failures. Startup logs `[startup] driver_imports_complete` (including `motion_wait_ms`), `lifespan_begin`, and `lifespan_ready` separate module-loading time from device initialization. Elapsed time starts inside `hal.server`, so it excludes interpreter/Uvicorn setup. Background vision warm-up can continue after lifespan readiness; this is not a guarantee that every subsystem or an intentionally muted microphone is ready.

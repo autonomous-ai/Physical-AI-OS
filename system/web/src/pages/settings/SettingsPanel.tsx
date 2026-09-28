@@ -131,6 +131,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [discordBotToken, setDiscordBotToken] = useState("");
   const [discordGuildId, setDiscordGuildId] = useState("");
   const [discordUserId, setDiscordUserId] = useState("");
+  // iMessage / BlueBubbles — see ChannelSection's guide for the operator flow
+  // (Mac install → password → server URL → iMessage handle).
+  const [bluebubblesServerUrl, setBluebubblesServerUrl] = useState("");
+  const [bluebubblesPassword, setBluebubblesPassword] = useState("");
+  const [bluebubblesUserAddress, setBluebubblesUserAddress] = useState("");
+  // Optional plaintext caller-context prompt — see ChannelSection for the
+  // operator-facing textarea. Non-secret, so we hydrate the raw string
+  // from cfg.bluebubbles_caller_context and ship it verbatim on save.
+  const [bluebubblesCallerContext, setBluebubblesCallerContext] = useState("");
   const [mqttEndpoint, setMqttEndpoint] = useState("");
   const [mqttPort, setMqttPort] = useState("");
   const [mqttUsername, setMqttUsername] = useState("");
@@ -149,6 +158,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     teleToken: false, teleUserId: false,
     slackBotToken: false, slackAppToken: false, slackUserId: false,
     discordBotToken: false, discordGuildId: false, discordUserId: false,
+    bluebubblesServerUrl: false, bluebubblesPassword: false, bluebubblesUserAddress: false,
+    bluebubblesCallerContext: false,
   });
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
@@ -178,6 +189,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     channel: ChannelType;
     teleUserId: string; slackUserId: string;
     discordGuildId: string; discordUserId: string;
+    bluebubblesServerUrl: string; bluebubblesUserAddress: string;
+    bluebubblesCallerContext: string;
     mqttEndpoint: string; mqttPort: string; mqttUsername: string;
     faChannel: string; fdChannel: string;
     // Realtime block. Fields tracked here so /setting#realtime edits flip
@@ -280,7 +293,14 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           discordBotToken: cfg.has_discord_bot_token,
           discordGuildId: !!cfg.discord_guild_id,
           discordUserId: !!cfg.discord_user_id,
+          bluebubblesServerUrl: !!cfg.bluebubbles_server_url,
+          bluebubblesPassword: cfg.has_bluebubbles_password,
+          bluebubblesUserAddress: !!cfg.bluebubbles_user_address,
+          bluebubblesCallerContext: !!cfg.bluebubbles_caller_context,
         });
+        setBluebubblesServerUrl(cfg.bluebubbles_server_url ?? "");
+        setBluebubblesUserAddress(cfg.bluebubbles_user_address ?? "");
+        setBluebubblesCallerContext(cfg.bluebubbles_caller_context ?? "");
         setWifiLoaded({
           ssid: !!cfg.network_ssid,
           password: cfg.has_network_password,
@@ -331,6 +351,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           slackUserId: cfg.slack_user_id ?? "",
           discordGuildId: cfg.discord_guild_id ?? "",
           discordUserId: cfg.discord_user_id ?? "",
+          bluebubblesServerUrl: cfg.bluebubbles_server_url ?? "",
+          bluebubblesUserAddress: cfg.bluebubbles_user_address ?? "",
+          bluebubblesCallerContext: cfg.bluebubbles_caller_context ?? "",
           mqttEndpoint: cfg.mqtt_endpoint ?? "",
           mqttPort: cfg.mqtt_port ? String(cfg.mqtt_port) : "",
           mqttUsername: cfg.mqtt_username ?? "",
@@ -449,7 +472,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     !!password || !!adminPassword || !!llmApiKey || !!ttsApiKey ||
     !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
     !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken ||
-    !!realtimeApiKey
+    !!realtimeApiKey ||
+    // iMessage: server URL + handle are plain fields (dirty when changed),
+    // password is a secret (dirty when typed).
+    bluebubblesServerUrl !== baseline.bluebubblesServerUrl ||
+    bluebubblesUserAddress !== baseline.bluebubblesUserAddress ||
+    bluebubblesCallerContext !== baseline.bluebubblesCallerContext ||
+    !!bluebubblesPassword
   );
 
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
@@ -537,10 +566,20 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         body.slack_user_id = slackUserId;
         if (slackBotToken) body.slack_bot_token = slackBotToken;
         if (slackAppToken) body.slack_app_token = slackAppToken;
-      } else {
+      } else if (channel === "discord") {
         body.discord_guild_id = discordGuildId;
         body.discord_user_id = discordUserId;
         if (discordBotToken) body.discord_bot_token = discordBotToken;
+      } else if (channel === "imessage") {
+        // BlueBubbles: server URL + user address are plain (send always so
+        // clearing them works too); password is a secret and only ships on
+        // change so an empty save does not silently wipe the on-disk value.
+        body.bluebubbles_server_url = bluebubblesServerUrl;
+        body.bluebubbles_user_address = bluebubblesUserAddress;
+        if (bluebubblesPassword) body.bluebubbles_password = bluebubblesPassword;
+        // Caller-context is non-secret plaintext; ship every time so an
+        // empty submit clears it (matches server URL / user address).
+        body.bluebubbles_caller_context = bluebubblesCallerContext;
       }
       await updateDeviceConfig(body);
       // Re-baseline the key's presence and owner without a refetch, so the
@@ -562,6 +601,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         channel,
         teleUserId, slackUserId,
         discordGuildId, discordUserId,
+        bluebubblesServerUrl, bluebubblesUserAddress,
+        bluebubblesCallerContext,
         mqttEndpoint, mqttPort, mqttUsername,
         faChannel, fdChannel,
         realtimeEnabled, realtimeProvider, realtimeVoice,
@@ -575,6 +616,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setDeepgramApiKey(""); setMqttPassword("");
       setTeleToken(""); setSlackBotToken(""); setSlackAppToken("");
       setDiscordBotToken("");
+      setBluebubblesPassword("");
       setRealtimeApiKey("");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Save failed.");
@@ -582,7 +624,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     setSaving(false);
   }, [
     channel, teleToken, teleUserId, slackBotToken, slackAppToken, slackUserId,
-    discordBotToken, discordGuildId, discordUserId, ssid, password, adminPassword, llmUrl,
+    discordBotToken, discordGuildId, discordUserId,
+    bluebubblesServerUrl, bluebubblesPassword, bluebubblesUserAddress,
+    bluebubblesCallerContext,
+    ssid, password, adminPassword, llmUrl,
     llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
@@ -756,6 +801,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               discordBotToken={discordBotToken} setDiscordBotToken={setDiscordBotToken}
               discordGuildId={discordGuildId} setDiscordGuildId={setDiscordGuildId}
               discordUserId={discordUserId} setDiscordUserId={setDiscordUserId}
+              bluebubblesServerUrl={bluebubblesServerUrl} setBluebubblesServerUrl={setBluebubblesServerUrl}
+              bluebubblesPassword={bluebubblesPassword} setBluebubblesPassword={setBluebubblesPassword}
+              bluebubblesUserAddress={bluebubblesUserAddress} setBluebubblesUserAddress={setBluebubblesUserAddress}
+              bluebubblesCallerContext={bluebubblesCallerContext} setBluebubblesCallerContext={setBluebubblesCallerContext}
             />
 
             <FacebookSection active={activeSection === "facebook"} />

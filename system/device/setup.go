@@ -334,40 +334,7 @@ func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
 		s.config.AdminPasswordHash = string(hash)
 	}
 
-	// Messaging channel (optional). Channel is applied first so the sub-token
-	// switch below reads the intended target channel — not the on-disk one.
-	// Sub-tokens are ONLY written when they match the (new) channel so an
-	// operator flipping from telegram→discord doesn't leak the old telegram
-	// bot token beside the new discord one.
-	if v := strings.TrimSpace(data.Channel); v != "" {
-		s.config.Channel = v
-	}
-	switch s.config.Channel {
-	case domain.ChannelTelegram, "":
-		if v := strings.TrimSpace(data.TelegramBotToken); v != "" {
-			s.config.TelegramBotToken = v
-		}
-		if v := strings.TrimSpace(data.TelegramUserID); v != "" {
-			s.config.TelegramUserID = v
-		}
-	case domain.ChannelSlack:
-		if v := strings.TrimSpace(data.SlackBotToken); v != "" {
-			s.config.SlackBotToken = v
-		}
-		if v := strings.TrimSpace(data.SlackAppToken); v != "" {
-			s.config.SlackAppToken = v
-		}
-		if v := strings.TrimSpace(data.SlackUserID); v != "" {
-			s.config.SlackUserID = v
-		}
-	case domain.ChannelDiscord:
-		if v := strings.TrimSpace(data.DiscordBotToken); v != "" {
-			s.config.DiscordBotToken = v
-		}
-		if v := strings.TrimSpace(data.DiscordUserID); v != "" {
-			s.config.DiscordUserID = v
-		}
-	}
+	s.applyWifiProvisionChannel(data)
 
 	if err := s.config.Save(); err != nil {
 		slog.Error("wifi reprovision: save config failed", "component", "device", "error", err)
@@ -391,23 +358,7 @@ func (s *Service) ReprovisionWifi(data domain.WifiProvisionRequest) error {
 		// up on the upstream's "Auto-AI" default and chat would fail.
 		operatorModel := strings.TrimSpace(data.LLMModel)
 
-		setupData := domain.SetupRequest{
-			LLMAPIKey:  s.config.LLMAPIKey,
-			LLMBaseURL: s.config.LLMBaseURL,
-			LLMModel:   s.config.LLMModel,
-			DeviceID:   s.config.DeviceID,
-			// Carry channel identity + tokens through so the openclaw
-			// runtime materializes the right plugin (@openclaw/slack etc.)
-			// on the first SetupAgent after a /wifi channel change.
-			Channel:          s.config.Channel,
-			TelegramBotToken: s.config.TelegramBotToken,
-			TelegramUserID:   s.config.TelegramUserID,
-			SlackBotToken:    s.config.SlackBotToken,
-			SlackAppToken:    s.config.SlackAppToken,
-			SlackUserID:      s.config.SlackUserID,
-			DiscordBotToken:  s.config.DiscordBotToken,
-			DiscordUserID:    s.config.DiscordUserID,
-		}
+		setupData := s.wifiProvisionSetupRequest()
 		if err := s.agentGateway.SetupAgent(setupData); err != nil {
 			slog.Warn("wifi reprovision: agent setup failed", "component", "device", "error", err)
 			return nil // Wi-Fi is up; surface the agent failure via /monitor
@@ -481,25 +432,12 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 
 	llmAPIKey := data.LLMAPIKey
 	llmBaseURL := data.LLMBaseURL
-	channel := data.EffectiveChannel()
 
 	s.config.LLMAPIKey = llmAPIKey
 	s.config.LLMBaseURL = llmBaseURL
 	// LLMModel already set above (and possibly overridden by SetupAgent from the
 	// upstream default_model). Do not re-assign it from the raw request here.
-	s.config.Channel = channel
-	switch channel {
-	case "slack":
-		s.config.SlackBotToken = data.SlackBotToken
-		s.config.SlackAppToken = data.SlackAppToken
-		s.config.SlackUserID = data.SlackUserID
-	case "discord":
-		s.config.DiscordBotToken = data.DiscordBotToken
-		s.config.DiscordUserID = data.DiscordUserID
-	default:
-		s.config.TelegramBotToken = data.TelegramBotToken
-		s.config.TelegramUserID = data.TelegramUserID
-	}
+	s.applySetupChannel(data)
 	s.config.DeviceID = data.DeviceID
 	s.config.DeepgramAPIKey = data.DeepgramAPIKey
 	s.config.STTAPIKey = data.STTAPIKey
@@ -545,9 +483,9 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	// popup polls the backend for this IP and redirects the popup when neither
 	// the AP-alive window nor mDNS could deliver it (see docs/setup-flow.md).
 	// Must run after config.Save above: beclient derives the ping URL from the
-	// just-assigned LLMBaseURL.
-	if s.beClient != nil && llmAPIKey != "" {
-		go func() { s.beClient.PingSafe(llmAPIKey, s.buildPingPayload("setting_up")) }()
+	// just-assigned LLMBaseURL (or BackendBaseURL when set).
+	if key := s.config.BackendKey(); s.beClient != nil && key != "" {
+		go func() { s.beClient.PingSafe(key, s.buildPingPayload("setting_up")) }()
 	}
 
 	// SetupAgent runs AFTER config.json is saved: a backend that materializes its
@@ -577,8 +515,101 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	hal.ResetLEDToResting()
 
 	slog.Info("agent gateway is ready", "component", "device")
-	if s.beClient != nil && llmAPIKey != "" {
-		s.beClient.PingSafe(llmAPIKey, s.buildPingPayload("working"))
+	if key := s.config.BackendKey(); s.beClient != nil && key != "" {
+		s.beClient.PingSafe(key, s.buildPingPayload("working"))
 	}
 	return nil
+}
+
+// applySetupChannel stores credentials for the channel selected during full setup.
+func (s *Service) applySetupChannel(data domain.SetupRequest) {
+	s.config.Channel = data.EffectiveChannel()
+	switch s.config.Channel {
+	case "slack":
+		s.config.SlackBotToken = data.SlackBotToken
+		s.config.SlackAppToken = data.SlackAppToken
+		s.config.SlackUserID = data.SlackUserID
+	case "discord":
+		s.config.DiscordBotToken = data.DiscordBotToken
+		s.config.DiscordUserID = data.DiscordUserID
+	case domain.ChannelIMessage:
+		s.config.BluebubblesServerURL = data.BluebubblesServerURL
+		s.config.BluebubblesPassword = data.BluebubblesPassword
+		s.config.BluebubblesUserAddress = data.BluebubblesUserAddress
+	default:
+		s.config.TelegramBotToken = data.TelegramBotToken
+		s.config.TelegramUserID = data.TelegramUserID
+	}
+}
+
+// applyWifiProvisionChannel preserves omitted credentials during Wi-Fi reprovisioning.
+func (s *Service) applyWifiProvisionChannel(data domain.WifiProvisionRequest) {
+	// Messaging channel (optional). Channel is applied first so the sub-token
+	// switch below reads the intended target channel — not the on-disk one.
+	// Sub-tokens are ONLY written when they match the (new) channel so an
+	// operator flipping from telegram→discord doesn't leak the old telegram
+	// bot token beside the new discord one.
+	if v := strings.TrimSpace(data.Channel); v != "" {
+		s.config.Channel = v
+	}
+	switch s.config.Channel {
+	case domain.ChannelTelegram, "":
+		if v := strings.TrimSpace(data.TelegramBotToken); v != "" {
+			s.config.TelegramBotToken = v
+		}
+		if v := strings.TrimSpace(data.TelegramUserID); v != "" {
+			s.config.TelegramUserID = v
+		}
+	case domain.ChannelSlack:
+		if v := strings.TrimSpace(data.SlackBotToken); v != "" {
+			s.config.SlackBotToken = v
+		}
+		if v := strings.TrimSpace(data.SlackAppToken); v != "" {
+			s.config.SlackAppToken = v
+		}
+		if v := strings.TrimSpace(data.SlackUserID); v != "" {
+			s.config.SlackUserID = v
+		}
+	case domain.ChannelDiscord:
+		if v := strings.TrimSpace(data.DiscordBotToken); v != "" {
+			s.config.DiscordBotToken = v
+		}
+		if v := strings.TrimSpace(data.DiscordUserID); v != "" {
+			s.config.DiscordUserID = v
+		}
+	case domain.ChannelIMessage:
+		if v := strings.TrimSpace(data.BluebubblesServerURL); v != "" {
+			s.config.BluebubblesServerURL = v
+		}
+		if v := strings.TrimSpace(data.BluebubblesPassword); v != "" {
+			s.config.BluebubblesPassword = v
+		}
+		if v := strings.TrimSpace(data.BluebubblesUserAddress); v != "" {
+			s.config.BluebubblesUserAddress = v
+		}
+	}
+}
+
+// wifiProvisionSetupRequest forwards persisted settings to the agent runtime.
+func (s *Service) wifiProvisionSetupRequest() domain.SetupRequest {
+	return domain.SetupRequest{
+		LLMAPIKey:  s.config.LLMAPIKey,
+		LLMBaseURL: s.config.LLMBaseURL,
+		LLMModel:   s.config.LLMModel,
+		DeviceID:   s.config.DeviceID,
+		// Carry channel identity + tokens through so the openclaw
+		// runtime materializes the right plugin (@openclaw/slack etc.)
+		// on the first SetupAgent after a /wifi channel change.
+		Channel:                s.config.Channel,
+		TelegramBotToken:       s.config.TelegramBotToken,
+		TelegramUserID:         s.config.TelegramUserID,
+		SlackBotToken:          s.config.SlackBotToken,
+		SlackAppToken:          s.config.SlackAppToken,
+		SlackUserID:            s.config.SlackUserID,
+		DiscordBotToken:        s.config.DiscordBotToken,
+		DiscordUserID:          s.config.DiscordUserID,
+		BluebubblesServerURL:   s.config.BluebubblesServerURL,
+		BluebubblesPassword:    s.config.BluebubblesPassword,
+		BluebubblesUserAddress: s.config.BluebubblesUserAddress,
+	}
 }

@@ -399,7 +399,7 @@ func (s *Server) deliverStoredHarnessResult(peer harness.ResultContext, r harnes
 	if claimed {
 		state := "suppressed"
 		if live && speakerCurrent && s.agentHandler != nil && s.harnessResultDestinationCurrent(peer, r) {
-			err := s.agentHandler.SpeakHarnessGroupedResult(r.Payload.FullText, runIDs)
+			err := s.agentHandler.SpeakHarnessGroupedResult(r.Payload.FullText, r.Payload.Outcome, runIDs)
 			state = "accepted"
 			if errors.Is(err, agenthttp.ErrHarnessResultSpeechSuppressed) {
 				state = "suppressed"

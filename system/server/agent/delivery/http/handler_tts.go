@@ -256,7 +256,24 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 // following turn while the plan stays exhausted) announces at most once per
 // window. Web chat is untouched — it renders the full banner with the link.
 func (h *AgentHandler) deliverTTS(send func(string) error, text, flowRunID, errCtx string) {
-	if h.isSpeechCancelled(flowRunID) {
+	h.deliverTTSUnless(h.isSpeechCancelled, send, text, flowRunID, errCtx)
+}
+
+// isHarnessSpeechCancelled is the cancellation rule for Harness updates, which
+// HAL's announcer queues and speaks only once the conversation is free. The
+// realtime supersede mark exists so a late main-agent answer does not talk
+// over a newer exchange; the announcer already waits that exchange out, and a
+// Harness task routinely runs for minutes while the user chats about something
+// else, so that mark would silently drop almost every result (lamp-ee17,
+// 2026-09-25: one "how is it going?" muted a story finished 3 minutes later).
+// Only the user's own cancel gesture takes the speaker from a Harness update.
+func (h *AgentHandler) isHarnessSpeechCancelled(runID string) bool {
+	return h.olderThanWatermark(runID, h.speechWatermarkMs.Load())
+}
+
+// deliverTTSUnless is deliverTTS with the caller's cancellation rule.
+func (h *AgentHandler) deliverTTSUnless(cancelled func(string) bool, send func(string) error, text, flowRunID, errCtx string) {
+	if cancelled(flowRunID) {
 		source := h.speechCancelSource(flowRunID)
 		slog.Info("TTS dropped -- turn lost the speaker",
 			"component", "agent", "run_id", flowRunID, "source", source,

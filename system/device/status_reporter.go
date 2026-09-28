@@ -122,7 +122,7 @@ func (s *Service) StartStatusReporter(ctx context.Context) {
 			if payload.LocalIP != "" {
 				lastLocalIP = payload.LocalIP
 			}
-			resp := s.beClient.PingSafe(s.config.LLMAPIKey, payload)
+			resp := s.beClient.PingSafe(s.config.BackendKey(), payload)
 			dump, _ := json.Marshal(resp)
 			slog.Debug("received response from backend", "component", "status-reporter", "response", string(dump))
 			if resp == nil {

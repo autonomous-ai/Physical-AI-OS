@@ -55,6 +55,7 @@ from hal.realtime.config import PipecatV1Config
 from hal.realtime.exceptions import PipecatV1Error
 from hal.realtime.models import (
     AgentInputEvent,
+    AnnounceInput,
     AudioCommitEvent,
     AudioInput,
     FunctionCallOutput,
@@ -151,6 +152,12 @@ class PipecatV1Agent(VoiceAgentBase):
     @override
     def sample_rate(self) -> int:
         return self._config.sample_rate
+
+    @property
+    @override
+    def supports_announce(self) -> bool:
+        """Turn-based only: in live mode the live pump owns the output queue."""
+        return not self._live
 
     @property
     def live(self) -> bool:
@@ -338,10 +345,41 @@ class PipecatV1Agent(VoiceAgentBase):
             handle.queue_audio(_float32_to_pcm16(inp.audio))
         elif isinstance(inp, TextInput):
             handle.append_context(inp.text)
+        elif isinstance(inp, AnnounceInput):
+            self._start_announcement(handle, inp.text)
         elif isinstance(inp, FunctionCallResultInput):
             self._resolve_tool_call(inp.call_id, inp.output, inp.trigger_response)
         elif isinstance(inp, ImageInput):
             logger.warning("[realtime] pipecat_v1 has no image input — frame dropped")
+
+    def _start_announcement(self, handle: Any, text: str) -> None:
+        """Open a device-initiated turn: a new generation with no user audio.
+
+        The generation bump matters: end_turn() may have fenced the previous
+        turn's generation, and an announcement carrying it would be dropped by
+        receive() as stale output.
+        """
+        # A committed user turn, its reply or a tool call owns the pipeline;
+        # announcing now would interleave with it. End at once so the caller
+        # falls back. An open but UNcommitted manual turn is not checked: a
+        # capture dropped as noise never commits and leaves it open until the
+        # next real turn, and the orchestrator only announces once no capture
+        # is in flight (turn_in_flight), so that turn is abandoned.
+        if self._turn_awaiting or self._response_open or self._pending_calls:
+            logger.info("[realtime] pipecat_v1 announcement dropped — pipeline busy")
+            self._recv_queue.put(TurnDoneEvent(user_turn_id=self._user_turn_id))
+            return
+        self._gen += 1
+        self._user_turn_id = f"pipecat-announce-{uuid.uuid4().hex[:12]}"
+        self._user_transcript = ""
+        self._emitted_transcript = ""
+        self._reset_pending = False
+        self._pending_calls.clear()
+        self._followup_expected = False
+        self._turn_awaiting = True
+        self._turn_started_at = time.monotonic()
+        self._first_text_at = 0.0
+        handle.run_announcement(text)
 
     def _sync_commit(self) -> None:
         handle = self._handle

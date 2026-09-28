@@ -1118,6 +1118,9 @@ back. It cannot back a chat UI; this pair replaces it for that purpose.
 
 ### `harness.voice-mode.get` / `harness.voice-mode.set` — Harness-only voice
 
+Enabling requires HAL to confirm MPR121 configured for the active board. Missing/false support metadata or a failed HAL lookup returns `status:"failure"` and leaves the mode off. Disabling remains allowed. The snapshot includes `supported`; see [Harness integration](harness.md#harness-only-voice-mode).
+
+
 **Receive on `fa_channel`:**
 ```json
 {"cmd":"data","kind":"harness.voice-mode.get"}
@@ -1135,10 +1138,10 @@ Both commands reply on `fd_channel` with the standard `MQTTDataResponse`
 metadata, `type:"data"`, the request's `kind`, and the same snapshot returned
 by `GET /api/harness/voice-mode` (device metadata omitted here):
 ```json
-{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"supported":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
 ```
 
-The snapshot is `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+The snapshot is `{enabled,supported,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
 An unavailable focus can appear as `focusAvailable:false` with a snapshot
 `error` even when the command succeeds. Invalid input or an unavailable
 controller uses `status:"failure"` with the envelope's `error` field.

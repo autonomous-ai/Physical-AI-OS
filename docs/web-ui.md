@@ -132,8 +132,7 @@ Defined at `.lm-root` in `index.css`:
 ### 3.4 Settings (`/setting`) — shared shell
 
 **Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
-shows the selectable range (`0.7–1.5×` for ElevenLabs, `0.25–4.0×` otherwise)
-in `0.05` steps. **Save Changes** persists speed through
+shows the selectable range (`0.5–2.0×` for every provider) in `0.05` steps. **Save Changes** persists speed through
 `PUT /api/device/config`. **Test Voice** sends the current slider speed immediately
 without saving; the override applies only to the preview utterance. Saved speed takes
 precedence over `HAL_TTS_SPEED` (default `1.2`); ElevenLabs HTTP v3 applies speed locally while requesting provider speed
@@ -489,6 +488,9 @@ one column below 760px.
   Harness uses its original E2EE pairing/session protocol and retains separate keys from Buddy.
 
 **Harness-only voice**
+
+The Pairing page only shows the Harness-only voice switch and its description when the OS voice-mode response has `supported:true` (MPR121 configured for the active board). Missing support metadata hides the switch. Pairing and focused-agent information remain visible; API/MQTT also enforce the hardware requirement.
+
 
 - A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. **Focused Harness agent** mirrors the agent pane focused in the Harness app, including while voice mode is off. There is no local agent picker; normal `harness-use` conversation targets remain independent.
 - Enable **Harness-only voice** to send spoken requests directly to that focused agent; replies retain device TTS. Text chat keeps its normal behavior. State lives in RAM; restart turns the mode off and focus syncs again after reconnect. Focus changes during capture reject the old capture and require repeating the request. Already-sent work keeps its original response route.
@@ -888,3 +890,7 @@ cards do not fetch directly. Both clients use the existing authenticated
 leaving the loading placeholder or old readings on screen.
 
 Harness delivery warnings no longer pause new voice requests or disable question answers. Check delivery inspects the current pending receipt; Dismiss without retrying clears that warning without cancelling or resending its task.
+
+### iMessage operator address
+
+The iMessage settings handle identifies the operator home conversation. It is not a promise of sender isolation: Hermes presync accepts customer messages from other addresses by default (`BLUEBUBBLES_ALLOW_ALL_USERS=true` unless explicitly overridden).

@@ -111,6 +111,24 @@ type Config struct {
 	// persist its tokens here. Empty when no WhatsApp channel is configured.
 	WhatsappUserID string `json:"whatsapp_user_id" yaml:"whatsappUserID"`
 
+	// iMessage via BlueBubbles. Apple has no third-party iMessage API, so the
+	// user brings their own bridge: a Mac (with Messages.app signed in) running
+	// the BlueBubbles server (bluebubbles.app), reachable to the device at
+	// BluebubblesServerURL. Hermes has a native BlueBubbles plugin that reads
+	// these three fields from ~/.hermes/.env (presync maps them to
+	// BLUEBUBBLES_SERVER_URL / _PASSWORD / _ALLOWED_USERS). See ChannelIMessage
+	// in system/domain/device.go for the full architecture.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url" yaml:"bluebubblesServerURL"`
+	BluebubblesPassword    string `json:"bluebubbles_password" yaml:"bluebubblesPassword"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address" yaml:"bluebubblesUserAddress"`
+	// BluebubblesCallerContext is an optional admin-supplied plaintext prompt
+	// that tells the LLM how to treat incoming iMessage traffic (e.g. "treat
+	// callers as customers of my sales business, do not reveal the owner's
+	// personal info"). Non-secret and surfaced verbatim in
+	// ConfigPublicResponse. presync maps it to BLUEBUBBLES_CALLER_CONTEXT in
+	// ~/.hermes/.env; empty means the Hermes plugin uses its default behavior.
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context" yaml:"bluebubblesCallerContext"`
+
 	// ChannelsAppliedRuntime is the agent runtime ChannelReconcile last applied the
 	// configured channels for. When it differs from AgentRuntime on boot, the
 	// reconcile re-applies the channels to the new runtime (and updates this).
@@ -154,6 +172,15 @@ type Config struct {
 	LLMAPIKey  string `json:"llm_api_key" yaml:"llmAPIKey" validate:"required"`
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
+
+	// BackendBaseURL / BackendAPIKey point the Autonomous backend channel —
+	// the /ping status report (which also delivers MQTT endpoint updates) and
+	// ops /alert — somewhere other than the LLM endpoint. Empty = reuse
+	// LLMBaseURL / LLMAPIKey, so one-endpoint configs behave exactly as before.
+	// Set them when llm_base_url points at your own model server (Ollama, vLLM,
+	// LM Studio) but the device should keep reporting to the Autonomous backend.
+	BackendBaseURL string `json:"backend_base_url,omitempty" yaml:"backendBaseURL"`
+	BackendAPIKey  string `json:"backend_api_key,omitempty" yaml:"backendAPIKey"`
 
 	// AutonomousDefaults preserves the credential set the device shipped with —
 	// the Autonomous team's proxy. Captured once, the first time an operator
@@ -397,6 +424,24 @@ func Default() Config {
 
 		notify: make(chan bool, 1),
 	}
+}
+
+// BackendBase returns the base URL for the Autonomous backend channel
+// (/ping, /alert): BackendBaseURL when set, else LLMBaseURL.
+func (c *Config) BackendBase() string {
+	if v := strings.TrimSpace(c.BackendBaseURL); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.LLMBaseURL)
+}
+
+// BackendKey returns the bearer token for the backend channel:
+// BackendAPIKey when set, else LLMAPIKey.
+func (c *Config) BackendKey() string {
+	if v := strings.TrimSpace(c.BackendAPIKey); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.LLMAPIKey)
 }
 
 // WakeWordEnabled reports whether STT must first recognize a wake phrase

@@ -487,6 +487,10 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 `POST /api/voice/preview` nhận `speed` tùy chọn (`0.25–4.0`), chuyển tới HAL
 `/voice/speak` cho riêng câu thử không dùng cache. Không lưu tốc độ hoặc thay
 đổi tốc độ chung của service; bỏ qua field thì dùng tốc độ runtime hiện tại.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) trên `/voice/speak` cũng
+vậy: HAL dựng backend preview cho riêng câu đó, service đang chạy giữ nguyên
+provider, backend và voice đã lưu. Chúng chỉ dùng với câu không cache (`400` nếu
+kèm `cached`/`prerender`). Áp dụng cho **Test Voice** trên web và MQTT `tts.preview`.
 
 `GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
 nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
@@ -511,6 +515,15 @@ voice dựng sẵn đa ngôn ngữ của Gemini nên bộ lọc ngôn ngữ khô
 không có tham số speed: HAL áp dụng tốc độ đã lưu tại chỗ, giống ElevenLabs HTTP
 v3. Audio tag trong ngoặc vuông bị bỏ. Trong Settings → Voice, đây là vendor thứ
 ba dưới `Autonomous (proxy)`.
+
+Khi chọn Gemini TTS và realtime provider là Gemini Live, các câu chit-chat do
+model Live tự trả lời được phát bằng **native audio với đúng voice TTS**, không
+gọi TTS (`native_voice()` trong `hal/drivers/voice/tts/gemini.py`), bất kể
+`HAL_REALTIME_NATIVE_AUDIO`. Session Live mở bằng voice TTS thay vì
+`realtime.gemini.voice`; đổi voice hoặc provider thì session được dựng lại trước
+lượt kế tiếp (`gemini-voice-change`). Câu trả lời delegate vẫn đọc bằng Gemini
+TTS. Native audio phát ở 1.0×; tốc độ TTS đã lưu chỉ áp dụng cho TTS. Provider
+TTS khác thì native audio giữ nguyên như cấu hình.
 
 ### Piper — TTS chạy trên thiết bị
 
@@ -1543,7 +1556,16 @@ Command `question.answer` được lưu riêng với input task. Receipt complet
 chỉ đóng UI của command answer, không TTS. Liên kết task gốc tường minh giữ quyền
 nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không gửi lại command.
 
+### Cập nhật cấu hình iMessage
+
+Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_server_url`, `bluebubbles_user_address`, `bluebubbles_caller_context` sẽ giữ giá trị đã lưu. Chuỗi rỗng được gửi rõ ràng chỉ xoá field đó. Bỏ qua hoặc gửi rỗng `bluebubbles_password` vẫn giữ mật khẩu. Đổi setting không liên quan không được reset channel hoặc caller context.
 
 ### HAL startup timing
+
+`hal.server:app` là entrypoint HTTP nhẹ; `hal/runtime.py` giữ runtime phần cứng đầy đủ. Startup kiểm tra device/board, nạp giới hạn safety và preset LED trước, rồi khởi tạo một RGB service và mở các route `/led/*` hiện có với middleware bảo vệ HTTP như cũ. Import và khởi tạo runtime đầy đủ chạy trong thread nền cùng process. Trước khi xong, các HTTP endpoint khác (gồm `/health`) trả `503` kèm `Retry-After: 1`. Sau đó request chuyển sang app đầy đủ; app dùng lại RGB instance, không mở lại strip. Không thêm service, cổng, chế độ setup hay flow UI. Nếu startup runtime bắt buộc thất bại, process thoát mã khác 0 để service supervisor phục hồi.
+
+Speaker-ID và SER khởi tạo bằng các worker nền độc lập, không chặn HAL sẵn sàng hoặc voice cơ bản. Khi chưa sẵn sàng, transcript không có danh tính người nói và SER bỏ qua phiên. Xem [khởi động SER](speech-emotion_vi.md) về retry và vòng đời.
+
+Worker đèn trắng setup gọi thẳng `/led/status` và retry khi lỗi, không đợi `/health` đầy đủ. Acknowledge LED nghĩa là đã nhận lệnh; khi đo thực tế còn cần kiểm tra đầu ra strip. Đo từ lúc systemd chạy process đến acknowledge, tách riêng với mốc full health. `[startup] led_ready` đánh dấu khởi tạo driver, còn `[startup] full HTTP API ready` đánh dấu chuyển sang app đầy đủ.
 
 HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.
