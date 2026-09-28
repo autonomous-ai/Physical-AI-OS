@@ -90,11 +90,38 @@ want=$(health "$active") || abort "cannot read /hal/api/dl/health on active slot
 
 # --- start the new slot ------------------------------------------------------------
 switched=0
+# 1 from just before the state file first names $idle until the ack confirms it
+# (or a rollback finishes): the window where a signal must undo the switch, not
+# just stop $idle -- lbserver may already be sending it traffic.
+switching=0
 fail() { log "ABORT: $* -- stopping slot $idle, traffic unchanged"; mk stop-runpod-dlserver DLSERVER_PORT="$idle" || log "WARNING: slot $idle did not stop cleanly"; exit 1; }
+
+# Undo a switch to $idle: point the state file back at $active, SIGHUP the current
+# lbserver, and wait for it to ack $active (same protocol as the forward switch).
+# Confirmed -> traffic is really back on $active, so stopping $idle (via fail) is
+# safe. NOT confirmed -> lbserver may still be sending traffic to $idle, so $idle
+# must stay up; report the exact state for a human instead of guessing.
+rollback_switch() {
+    trap '' INT TERM HUP
+    local reason=$1 wrote=1 i
+    printf 'http://127.0.0.1:%s\n' "$active" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE" && wrote=0
+    kill -HUP "$(lb_pid)" 2>/dev/null
+    for i in $(seq 1 20); do acked_on "$active" && break; sleep 0.25; done
+    if [ "$wrote" = 0 ] && acked_on "$active"; then
+        fail "$reason; state file restored to $active"
+    fi
+    log "ABORT: $reason -- rollback NOT confirmed: state file names $(cat "$STATE" 2>/dev/null || echo unreadable), lbserver ack $(cat "$STATE.applied" 2>/dev/null || echo none). lbserver may still be sending traffic to $idle: NOT stopping it. Check by hand which slot ($active or $idle) actually answers, fix the state file if needed (printf 'http://127.0.0.1:<port>\n' >$STATE && kill -HUP <lbserver pid>), then stop the other slot with: make stop-runpod-dlserver DLSERVER_PORT=<port>"
+    exit 1
+}
+
 on_signal() {
+    trap '' INT TERM HUP
     if [ "$switched" = 1 ]; then
         log "interrupted after the switch: traffic is on $idle; stop the old slot with: make stop-runpod-dlserver DLSERVER_PORT=$active"
         exit 1
+    fi
+    if [ "$switching" = 1 ]; then
+        rollback_switch "interrupted during the switch"
     fi
     fail "interrupted"
 }
@@ -117,13 +144,12 @@ done
 log "slot $idle ready gpu=$(gpu)"
 
 # --- switch --------------------------------------------------------------------------
+switching=1
 printf 'http://127.0.0.1:%s\n' "$idle" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE" || fail "cannot write $STATE"
 kill -HUP "$(lb_pid)" 2>/dev/null
 for _ in $(seq 1 20); do acked_on "$idle" && break; sleep 0.25; done
 if ! acked_on "$idle"; then
-    printf 'http://127.0.0.1:%s\n' "$active" >"$STATE.tmp" && mv "$STATE.tmp" "$STATE"
-    kill -HUP "$(lb_pid)" 2>/dev/null
-    fail "lbserver did not confirm the switch; state file restored to $active"
+    rollback_switch "lbserver did not confirm the switch"
 fi
 switched=1
 log "switched lbserver -> $idle; draining ${DRAIN}s"
