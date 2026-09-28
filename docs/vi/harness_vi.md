@@ -118,6 +118,17 @@ Danh tính OS và pin của một máy tính lưu tại `configDir/harness/trust
 
 ## Chế độ giọng nói Harness-only
 
+Harness-only voice yêu cầu MPR121 được khai báo và bật cho board đang chạy.
+HAL `GET /device` trả `inputs.mpr121` từ cấu hình wiring đã resolve, không phải
+kiểm tra sức khỏe driver. OS trả `supported` trong trạng thái voice-mode và kiểm
+tra hỗ trợ trước khi bật qua HTTP, MQTT hoặc gesture local. Thiếu metadata, HAL
+cũ hoặc lỗi đọc đều từ chối bật; vẫn cho phép tắt. Trang Pairing ẩn công tắc nếu
+`supported` không phải true. Pairing, giao việc `harness-use` thông thường và xem
+focus vẫn dùng được khi không có MPR121. Vòng lặp nền refresh hỗ trợ theo ticker
+hai giây; GET/MQTT đọc snapshot cache. Mỗi lần bật kiểm lại HAL với timeout một
+giây. Refresh thất bại cũng tắt mode đang bật. Cần triển khai HAL và OS tương ứng cùng nhau.
+
+
 OS Monitor → Pairing → Harness đồng bộ agent đang focus trong app Harness và cung cấp công tắc **Harness-only voice**. Mở pane agent mong muốn trong Harness; web không có bộ chọn agent riêng. Focus là pane agent được chọn trong app, không phụ thuộc Harness có là cửa sổ macOS phía trước hay không. Pane agent trên máy khác không khả dụng với CLI cục bộ đã ghép đôi và trả lỗi rõ ràng. Focus vẫn đồng bộ khi mode tắt mà không đổi generation định tuyến giọng nói thông thường. OS giữ cờ bật/tắt, focus hiện tại và generation định tuyến trong RAM; khởi động lại service sẽ tắt mode, focus được lấy lại sau khi kết nối. Route này độc lập với target hội thoại mà Python helper `harness-use` lưu trong mode thông thường.
 
 Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (Lamp mặc định E0…E11; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
@@ -144,7 +155,7 @@ Các path dưới đây dùng response envelope chuẩn của OS và không cho 
 
 | Method và path | Xác thực | Hành vi |
 |---|---|---|
-| `GET /api/harness/voice-mode` | Admin hoặc loopback thực sự | Đọc `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
+| `GET /api/harness/voice-mode` | Admin hoặc loopback thực sự | Đọc `{enabled,supported,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
 | `PUT /api/harness/voice-mode` | Admin | Chỉ đặt `{enabled}`. Bật/tắt được khi offline hoặc chưa có focus; delivery giọng nói cần focus mới từ app. Câu nói khi thiếu focus bị từ chối, không xếp hàng chờ agent tương lai. |
 | `POST /api/harness/voice-mode/gesture` | Chỉ loopback thực sự | `{gestureId:"<UUID>",action?:"toggle"\|"disable"}`; bỏ action giữ toggle. `disable` tắt rõ ràng kể cả offline. Thành công trả snapshot mode; lỗi trả `status:0` và `data.code`. Cache RAM 128 kết quả gần nhất chống trùng; lệnh off rõ ràng từ web/MQTT hủy lần bật đang chờ. |
 | `POST /api/harness/voice-mode/focus` | Chỉ loopback thực sự | `{gestureId:"<UUID>",direction:"next"\|"previous",generation:<int>}` chuyển focus app chỉ khi mode bật và generation khớp. Dùng `focus.step` đã thương lượng với `idempotencyKey` và `focusRevision`; thiếu capability trả lỗi rõ ràng. Khi app đã nhận step thì gesture coi là thành công: focus lấy từ `focus`/`focusRevision` trong reply nếu có, không thì (desk chỉ có 1 agent, hoặc step chuyển focus sang tile của máy khác, app trả `focus:null`) thiết bị refresh `focus.get` một lần rồi trả nguyên state đó kèm `error` giải thích vì sao voice không gửi được; step đã commit không bao giờ bị báo là chuyển thất bại. |

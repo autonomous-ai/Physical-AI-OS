@@ -489,6 +489,9 @@ one column below 760px.
 
 **Harness-only voice**
 
+The Pairing page only shows the Harness-only voice switch and its description when the OS voice-mode response has `supported:true` (MPR121 configured for the active board). Missing support metadata hides the switch. Pairing and focused-agent information remain visible; API/MQTT also enforce the hardware requirement.
+
+
 - A paired computer exposes `HarnessVoiceMode.tsx` inside `HarnessCard.tsx`. **Focused Harness agent** mirrors the agent pane focused in the Harness app, including while voice mode is off. There is no local agent picker; normal `harness-use` conversation targets remain independent.
 - Enable **Harness-only voice** to send spoken requests directly to that focused agent; replies retain device TTS. Text chat keeps its normal behavior. State lives in RAM; restart turns the mode off and focus syncs again after reconnect. Focus changes during capture reject the old capture and require repeating the request. Already-sent work keeps its original response route.
 - Mode/focus refresh every 2 seconds through `GET /api/harness/voice-mode`. The switch sends only `{enabled}` by `PUT` and works offline or without focus, but a failed mode lookup disables it until refresh succeeds. Offline, missing focus and unsupported CLI capability states explain why voice delivery is unavailable.

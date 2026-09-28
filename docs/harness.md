@@ -119,6 +119,19 @@ The OS identity and one computer pin are stored in `configDir/harness/trust.json
 
 ## Harness-only voice mode
 
+Harness-only voice requires MPR121 declared and enabled for the active board.
+HAL `GET /device` exposes `inputs.mpr121` from its resolved wiring configuration;
+this is not a driver-health probe. OS exposes `supported` in the voice-mode state
+and validates support before enabling via HTTP, MQTT or a local gesture. Missing
+metadata, an older HAL or a failed lookup fails closed; disabling remains allowed.
+The Pairing page hides the mode switch unless `supported` is true. Pairing,
+ordinary `harness-use` delegation and focus inspection remain available without
+MPR121. Support is refreshed by the background controller loop (two-second ticker);
+GET/MQTT reads use that cached snapshot. Each enable rechecks HAL with a one-second
+timeout. A failed refresh also turns an already-enabled mode off.
+Deploy the matching HAL and OS together.
+
+
 OS Monitor → Pairing → Harness mirrors the agent focused in the Harness app and offers the **Harness-only voice** switch. Open the desired agent pane in Harness; there is no separate web agent picker. Focus means the selected agent pane inside the app, not whether Harness is the foreground macOS window. A pane for an agent on another computer is unavailable to the paired local CLI and produces an explicit error. Focus continues syncing while the mode is off without changing the normal-voice routing generation. OS keeps the enabled flag, current focus and routing generation in RAM; restarting the service turns the mode off and focus is fetched again after reconnect. This route is independent of the conversation target retained by the Python `harness-use` helper in normal mode.
 
 On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
@@ -145,7 +158,7 @@ All paths below use the normal OS response envelope and return non-cacheable res
 
 | Method and path | Authentication | Behavior |
 |---|---|---|
-| `GET /api/harness/voice-mode` | Administrator or strict loopback | Read `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
+| `GET /api/harness/voice-mode` | Administrator or strict loopback | Read `{enabled,supported,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`. |
 | `PUT /api/harness/voice-mode` | Administrator | Set `{enabled}` only. Enabling/disabling works offline or without focus; voice delivery requires fresh app focus. Speech without focus is rejected, never queued for a future agent. |
 | `POST /api/harness/voice-mode/gesture` | Strict loopback only | `{gestureId:"<UUID>",action?:"toggle"\|"disable"}`; omitted action retains toggle. `disable` explicitly turns OFF even offline. Success returns the mode snapshot; errors return `status:0` and `data.code`. The last 128 results are cached in RAM for deduplication; explicit web/MQTT off cancels a pending enable. |
 | `POST /api/harness/voice-mode/focus` | Strict loopback only | `{gestureId:"<UUID>",direction:"next"\|"previous",generation:<int>}` steps app focus only in the matching enabled generation. Uses negotiated `focus.step` with `idempotencyKey` and `focusRevision`; unsupported capability fails explicitly. Once the app accepts the step the gesture succeeds: focus comes from the reply's `focus`/`focusRevision` when present, otherwise (single-agent desk, or the step moved focus to a tile on another computer, reported as `focus:null`) the device refreshes `focus.get` once and returns that state as-is with `error` explaining why voice cannot deliver; a committed step is never reported as a failed switch. |

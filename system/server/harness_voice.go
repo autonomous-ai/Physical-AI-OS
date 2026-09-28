@@ -14,6 +14,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"go.autonomous.ai/os/system/harness"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/safego"
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 	"go.autonomous.ai/os/system/server/serializers"
@@ -24,6 +25,7 @@ func (s *Server) initializeHarnessVoice(ctx context.Context) {
 	s.harnessVoiceCtx = ctx
 	if s.harnessVoice == nil && s.harnessService != nil {
 		s.harnessVoice = harness.NewVoiceController(s.harnessService, harness.VoiceCallbacks{
+			SupportsMode: hal.SupportsHarnessVoiceMode,
 			OnDispatchRequest: func(agentID, runID string, frame harness.Frame) {
 				s.registerHarnessDispatch(agentID, runID, false, false, frame)
 			},

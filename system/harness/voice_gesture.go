@@ -68,6 +68,9 @@ func (v *VoiceController) toggleGesture(ctx context.Context) (VoiceModeState, er
 		return v.State(), nil
 	}
 	v.mu.Unlock()
+	if err := v.RefreshSupport(ctx); err != nil {
+		return v.State(), &VoiceGestureError{Code: "unsupported", Cause: err}
+	}
 	if err := v.prepareGestureFocus(ctx); err != nil {
 		return v.State(), err
 	}
@@ -78,7 +81,7 @@ func (v *VoiceController) toggleGesture(ctx context.Context) (VoiceModeState, er
 		v.mu.Unlock()
 		return v.State(), gestureError("mode_changed", "Voice mode changed while preparing app focus")
 	}
-	if !v.state.FocusAvailable {
+	if !v.state.Supported || !v.state.FocusAvailable {
 		v.mu.Unlock()
 		return v.State(), gestureError("focus_unavailable", "App focus is no longer available")
 	}

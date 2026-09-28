@@ -19,7 +19,9 @@ type VoiceTransport interface {
 	Request(context.Context, Frame) (Frame, error)
 }
 type VoiceCallbacks struct {
-	OnDispatch func(agentID, runID string)
+	// SupportsMode checks the configured physical input; absent callbacks fail closed.
+	SupportsMode func(context.Context) (bool, error)
+	OnDispatch   func(agentID, runID string)
 	// OnDispatchRequest registers delivery correlation before input can reach
 	// the remote engine. When provided it takes precedence over OnDispatch.
 	OnDispatchRequest func(agentID, runID string, frame Frame)
@@ -32,6 +34,7 @@ type VoicePending struct {
 	RunID          string `json:"runId"`
 }
 type VoiceModeState struct {
+	Supported      bool          `json:"supported"`
 	Enabled        bool          `json:"enabled"`
 	Generation     uint64        `json:"generation"`
 	MachineID      string        `json:"machineId"`
@@ -171,6 +174,7 @@ func (v *VoiceController) Start(ctx context.Context) {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {
+				_ = v.RefreshSupport(ctx)
 				_ = v.RefreshFocus(ctx)
 				select {
 				case <-ctx.Done():
@@ -273,8 +277,45 @@ func (v *VoiceController) setFocus(machine, agent, name, revision string, availa
 	}
 	v.mu.Unlock()
 }
-func (v *VoiceController) SetMode(_ context.Context, enabled bool) (VoiceModeState, error) {
+
+// RefreshSupport performs I/O outside the state mutex. State remains a cheap snapshot.
+func (v *VoiceController) RefreshSupport(ctx context.Context) error {
+	supported := false
+	var err error
+	if v.callbacks.SupportsMode != nil {
+		ctx, cancel := context.WithTimeout(ctx, time.Second)
+		defer cancel()
+		supported, err = v.callbacks.SupportsMode(ctx)
+	}
+	supported = supported && err == nil
 	v.mu.Lock()
+	v.state.Supported = supported
+	if !supported && v.state.Enabled {
+		v.setModeLocked(false)
+	}
+	v.mu.Unlock()
+	if err != nil {
+		return fmt.Errorf("Cannot verify MPR121 support: %w", err)
+	}
+	if !supported {
+		return errors.New("Harness-only mode requires an enabled MPR121 input")
+	}
+	return nil
+}
+func (v *VoiceController) SetMode(ctx context.Context, enabled bool) (VoiceModeState, error) {
+	v.mu.Lock()
+	intent := v.modeIntent
+	v.mu.Unlock()
+	if enabled {
+		if err := v.RefreshSupport(ctx); err != nil {
+			return v.State(), err
+		}
+	}
+	v.mu.Lock()
+	if enabled && (v.modeIntent != intent || !v.state.Supported || ctx.Err() != nil) {
+		v.mu.Unlock()
+		return v.State(), errors.New("Voice mode changed while checking MPR121 support")
+	}
 	v.setModeLocked(enabled)
 	v.mu.Unlock()
 	v.NotifyFocusChanged()
