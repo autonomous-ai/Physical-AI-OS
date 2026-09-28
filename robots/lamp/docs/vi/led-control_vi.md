@@ -26,6 +26,16 @@ data làm vài pixel chốt nhầm một màu rác (hay gặp nhất là xanh l�
 đầu tiên của mỗi frame WS2812). Không có bước xoá này thì màu rác đó sáng cho tới
 lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
+### Ghi frame đồng thời và chẩn đoán clear
+
+Solid, paint từng pixel và clear dùng chung khóa driver cho toàn bộ thao tác.
+Clear giữ khóa qua hai lần ghi frame đen, hai khoảng chờ 10 ms, SPI idle và
+đọc lại buffer. Animation không thể tô lại buffer giữa chừng khiến
+`LED clear did NOT take` báo nhầm lỗi clear. Frame đến sau vẫn có thể tô màu
+khi clear đã trả về; quản lý và hủy effect vẫn thuộc bên gọi. Chẩn đoán này đọc
+bộ nhớ phần mềm, không phải phản hồi từ LED thật, nên buffer đen không chứng minh
+phần cứng đã tắt.
+
 ## Endpoints
 
 | Method | Endpoint | Mô tả |

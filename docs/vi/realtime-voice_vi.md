@@ -1308,7 +1308,12 @@ và dựng trong `orchestrator._make_agent`; Go `RealtimeProviders` và dropdown
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
 worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị
-kẹt không sống sót qua session rebuild. Với họ native-audio, HAL gửi websocket
+kẹt không sống sót qua session rebuild. Teardown còn chạy callback hoàn tất đang
+chờ ngay cả khi không còn task pending, để receive vừa kết thúc chuyển kết quả/lỗi
+về thread đang chờ trước khi đóng loop. Điều này tránh future bị bỏ lại và
+`Task exception was never retrieved` khi đóng/rebuild, kể cả SDK `APIError(1000)`
+cho WebSocket đóng bình thường; lỗi receive bất thường vẫn đi qua xử lý lỗi/reconnect
+hiện có. Với họ native-audio, HAL gửi websocket
 ping mỗi 20 giây nhưng không đặt ping timeout: traffic đi ra giữ đường proxy
 sống mà pong bị thiếu không bị hiểu là lỗi client. HAL cũng
 recycle Gemini đồng bộ trước khi stream audio nếu session hiện tại đã idle quá
