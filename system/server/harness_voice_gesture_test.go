@@ -12,7 +12,7 @@ import (
 )
 
 func TestHarnessVoiceGestureLocalAuthAndDeduplication(t *testing.T) {
-	voice := harness.NewVoiceController(&voiceRouteTransport{}, harness.VoiceCallbacks{})
+	voice := harness.NewVoiceController(&voiceRouteTransport{}, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	s := &Server{harnessVoice: voice}
 	router := gin.New()
 	s.registerHarnessVoiceRoutes(router.Group("/api/harness"))
@@ -57,7 +57,7 @@ func TestHarnessVoiceGestureDisableIsIdempotentOffline(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	voice := harness.NewVoiceController(transport, harness.VoiceCallbacks{})
+	voice := harness.NewVoiceController(transport, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	s := &Server{harnessVoice: voice}
 	router := gin.New()
 	s.registerHarnessVoiceRoutes(router.Group("/api/harness"))
@@ -82,7 +82,7 @@ func TestHarnessVoiceGestureDisableIsIdempotentOffline(t *testing.T) {
 }
 
 func TestHarnessVoiceFocusGestureValidationAndAuth(t *testing.T) {
-	voice := harness.NewVoiceController(&voiceRouteTransport{}, harness.VoiceCallbacks{})
+	voice := harness.NewVoiceController(&voiceRouteTransport{}, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	_, _ = voice.SetMode(context.Background(), true)
 	s := &Server{harnessVoice: voice}
 	router := gin.New()
