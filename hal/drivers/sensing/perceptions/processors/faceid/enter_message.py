@@ -14,17 +14,18 @@ Shape (#426):
   presence.enter has always meant: NEWLY visible, not visible.
 - ``already present:`` — friends boxed in the SAME frame whose last_seen was
   still inside the forget window. It is the co-presence signal the sensing
-  skill keys its "looks like you've got company" aside on, so the caller
-  guards it (FacePerception._copresence_ticks) and passes an empty list when
-  the guard fails. Written ``<name> (friend)`` on purpose: ``friend (<name>)``
-  means "a friend just arrived" to ``has_new_friend`` and would open the
-  voice gate for a stranger's arrival.
+  skill keys its "looks like you've got company" aside on. It lists every
+  friend face-ID matched in that frame; the stranger it sits next to is
+  already corroborated (FACE_STRANGER_MIN_TICKS) and the friend is a
+  positive match, so no extra tick guard is needed (#531). Written
+  ``<name> (friend)`` on purpose: ``friend (<name>)`` means "a friend just
+  arrived" to ``has_new_friend`` and would open the voice gate for a
+  stranger's arrival.
 - ``faces in frame:`` — the number of boxes in the frame the snapshot
   shows and their labels in detection order, ``unsure`` for a box without
   an identity yet. Same labels ``_annotate_frame`` draws. It is not the
-  number of arrivals: flushed stranger ids may come from several buffered
-  frames; the count and ``already present:`` describe the newest one, the
-  frame the agent is looking at (``FrameFacts``).
+  number of arrivals; it describes the newest frame attached, the one the
+  agent is looking at.
 """
 
 from collections.abc import Iterable
@@ -34,33 +35,15 @@ from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 
 class FrameFacts(NamedTuple):
-    """What one frame says about itself, captured on the tick it was seen.
+    """What one frame says about itself: its box labels and the friends present.
 
-    A stranger snapshot is buffered on its mint tick and flushed up to
-    FACE_STRANGER_FLUSH_S later; the frame at flush time can look nothing
-    like the one attached (device-observed: friend blurred out for two ticks
-    and the text said ``1 (unsure)`` over a two-box picture). So the facts
-    travel with the snapshot and the message is built from the frame the
-    agent actually sees.
+    Always the newest attached frame — a new friend's current frame, or the
+    tick where a stranger's gaze was confirmed — so the text describes the
+    picture the agent sees.
     """
 
     labels: list[str]
     present_friends: list[str]
-
-
-def copresence_ticks(prev: int, faces: list[Face]) -> int:
-    """Consecutive sensing ticks in which a friend and a non-friend were boxed together.
-
-    ``unsure`` boxes count as the non-friend: the recognizer holds an unknown
-    face as UNSURE for its first FACE_STRANGER_MIN_TICKS-1 ticks before it
-    mints a stranger id, and those are exactly the ticks that prove the second
-    box is persistent. Without them the counter would read 1 on the mint tick
-    — which is the tick presence.enter fires. Two friends alone do not count;
-    a recognized friend is a positive match and needs no corroboration.
-    """
-    has_friend = any(f.kind == PersonKind.FRIEND for f in faces)
-    has_other = any(f.kind != PersonKind.FRIEND for f in faces)
-    return prev + 1 if (has_friend and has_other) else 0
 
 
 def frame_labels(faces: Iterable[Face]) -> list[str]:
