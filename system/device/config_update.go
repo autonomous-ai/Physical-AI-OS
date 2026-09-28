@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -491,14 +492,6 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 // fireConfigSideEffects runs per-cluster follow-ups after a save. config.mu must
 // already be released (gateway calls take their own locks).
 func (s *Service) fireConfigSideEffects(ch updateChanges) {
-	if ch.wifi {
-		go func() {
-			slog.Info("reconnecting to new WiFi", "component", "device", "ssid", ch.newSSID)
-			if _, err := s.networkService.SetupNetwork(ch.newSSID, ch.newPassword); err != nil {
-				slog.Error("WiFi reconnect failed", "component", "device", "error", err)
-			}
-		}()
-	}
 	// The gateway keeps tokens in its own config, so re-run AddChannel.
 	// WhatsApp is excluded: it needs interactive QR pairing.
 	if ch.channel && ch.chanReq.Channel != domain.ChannelWhatsapp {
@@ -530,6 +523,27 @@ func (s *Service) fireConfigSideEffects(ch updateChanges) {
 	case ch.tts:
 		s.applyTTSConfig(s.config)
 	}
+	// Schedule only after synchronous side effects finish, so their latency
+	// cannot consume the response grace period before the HTTP handler returns.
+	if ch.wifi {
+		scheduleConfigWiFiReconnect(ch, s.networkService.SetupNetwork)
+	}
+}
+
+// Give the Settings response time to reach clients before AP/STA teardown.
+// A successful save acknowledges persistence; association still happens later.
+const configWiFiResponseGrace = 2 * time.Second
+
+func scheduleConfigWiFiReconnect(ch updateChanges, reconnect func(string, string) (bool, error)) *time.Timer {
+	if !ch.wifi {
+		return nil
+	}
+	return time.AfterFunc(configWiFiResponseGrace, func() {
+		slog.Info("reconnecting to new WiFi", "component", "device", "ssid", ch.newSSID)
+		if _, err := reconnect(ch.newSSID, ch.newPassword); err != nil {
+			slog.Error("WiFi reconnect failed", "component", "device", "error", err)
+		}
+	})
 }
 
 // syncLLMToGateway pushes model/thinking/baseURL changes into the gateway's

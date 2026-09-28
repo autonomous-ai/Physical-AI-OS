@@ -11,7 +11,6 @@ sitting there or left two minutes ago.
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
 from hal.drivers.sensing.perceptions.processors.faceid.enter_message import (
     build_enter_message,
-    copresence_ticks,
     frame_labels,
     has_new_friend,
 )
@@ -61,7 +60,7 @@ def test_ids_are_sorted_so_the_text_is_deterministic():
 
 
 def test_face_count_is_the_frame_not_the_arrivals():
-    """Flushed stranger ids may come from an earlier frame; the count is not theirs."""
+    """Stranger ids (arrivals) need not match the frame's face count."""
     msg = build_enter_message(set(), {"stranger_2", "stranger_3"}, [], ["momo"])
     assert msg.endswith("faces in frame: 1 (momo)")
     assert "already present" not in msg
@@ -92,32 +91,3 @@ def test_familiar_stranger_hint_does_not_read_as_a_new_friend():
         "to remember this face; image saved at /root/local/strangers/snapshots/x.jpg)"
     )
     assert not has_new_friend(msg)
-
-
-# -- co-presence guard ---------------------------------------------------------
-
-
-def test_ticks_count_only_while_a_friend_and_someone_else_share_the_frame():
-    assert copresence_ticks(0, [FRIEND]) == 0
-    assert copresence_ticks(0, [STRANGER]) == 0
-    assert copresence_ticks(0, [FRIEND, STRANGER]) == 1
-    assert copresence_ticks(1, [FRIEND, STRANGER]) == 2
-
-
-def test_ticks_reset_when_either_box_disappears():
-    assert copresence_ticks(5, [FRIEND]) == 0
-    assert copresence_ticks(5, [STRANGER]) == 0
-    assert copresence_ticks(5, []) == 0
-
-
-def test_two_friends_alone_do_not_count():
-    """Friend-joins-friend is a positive match and is not what the guard is for."""
-    assert copresence_ticks(0, [FRIEND, _face(PersonKind.FRIEND, "leo")]) == 0
-
-
-def test_an_unsure_box_next_to_the_friend_counts():
-    """The recognizer holds a new stranger as `unsure` for FACE_STRANGER_MIN_TICKS-1
-    ticks before minting. Those ticks must count, or the counter reads 1 on the
-    mint tick — which is also the tick presence.enter fires."""
-    assert copresence_ticks(0, [FRIEND, UNSURE]) == 1
-    assert copresence_ticks(1, [FRIEND, STRANGER]) == 2

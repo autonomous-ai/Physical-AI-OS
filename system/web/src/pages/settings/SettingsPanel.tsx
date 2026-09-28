@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
-import { getDeviceConfig, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
+import { getDeviceConfig, getCurrentNetwork, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
 import type { DeviceConfig } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
@@ -22,6 +22,7 @@ import { MqttSection } from "@/pages/settings/MqttSection";
 import { MCPToolsSection } from "@/pages/settings/MCPToolsSection";
 import { PluginsSection } from "@/pages/settings/PluginsSection";
 import { ScheduledSection } from "@/pages/settings/ScheduledSection";
+import { confirmWifiConnection, isWifiHandoffError } from "@/pages/settings/wifiReconnect";
 import { FacebookSection } from "@/pages/settings/FacebookSection";
 
 export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "scheduled" | "facebook";
@@ -66,6 +67,25 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [loadingCfg, setLoadingCfg] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  const [wifiNotice, setWifiNotice] = useState<string | null>(null);
+  const wifiCheck = useRef<AbortController | null>(null);
+  useEffect(() => () => wifiCheck.current?.abort(), []);
+
+  const checkWifi = useCallback(async (target: string, acknowledged: boolean, signal: AbortSignal) => {
+    const saveStatus = acknowledged ? "Config saved." : "Connection interrupted; save result is unknown.";
+    const reconnect = `Connect this phone or computer to “${target}” and reopen this device's address if needed.`;
+    setWifiNotice(`${saveStatus} Waiting to confirm Wi-Fi. ${reconnect}`);
+    const result = await confirmWifiConnection(target, getCurrentNetwork, signal);
+    if (result === "cancelled") return;
+    if (result === "connected") {
+      setWifiNotice(acknowledged
+        ? `Config saved. Device is connected to “${target}”.`
+        : `Device is connected to “${target}”. The save response was lost; reload to confirm your settings before saving again.`);
+    } else {
+      setWifiNotice(`${saveStatus} Could not confirm the Wi-Fi connection. ${reconnect} Reload to check your settings before trying again.`);
+    }
+  }, []);
 
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
@@ -398,6 +418,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
+    setWifiNotice(null);
     // Backend has no min length, so enforce ADMIN_PASSWORD_MIN when rotating.
     if (adminPassword && adminPassword.length < ADMIN_PASSWORD_MIN) {
       setError(`New admin password must be at least ${ADMIN_PASSWORD_MIN} characters.`);
@@ -410,6 +431,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setError(`${ttsChoiceToSave === "openai" ? "OpenAI" : "ElevenLabs"} (direct) needs its own API key — the AI brain key will not work with it.`);
       return;
     }
+    wifiCheck.current?.abort();
+    const controller = new AbortController();
+    wifiCheck.current = controller;
+    const wifiMayReconnect = !!ssid.trim() && (activeSection === "wifi" || ssid !== baseline?.ssid || !!password);
     setSaving(true);
     try {
       // Secrets ship only when typed; blanks would clear the saved value.
@@ -473,7 +498,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         baseUrl: !!ttsBaseUrl,
         choice: ttsChoiceToSave,
       });
-      toast.success("Config saved — restart your robot for changes to take effect.");
+      if (!wifiMayReconnect) toast.success("Config saved — restart your robot for changes to take effect.");
       setBaseline({
         ssid, deviceId,
         llmUrl, llmModel, llmDisableThinking,
@@ -497,11 +522,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setDiscordBotToken("");
       setBluebubblesPassword("");
       setRealtimeApiKey("");
+      if (wifiMayReconnect) await checkWifi(ssid.trim(), true, controller.signal);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Save failed.");
+      if (isWifiHandoffError(err, wifiMayReconnect)) {
+        // No acknowledgement: retain every dirty field, including other settings.
+        await checkWifi(ssid.trim(), false, controller.signal);
+      } else {
+        setError(err instanceof Error ? err.message : "Save failed.");
+      }
     }
     setSaving(false);
   }, [
+    activeSection, baseline, checkWifi,
     channel, teleToken, teleUserId, slackBotToken, slackAppToken, slackUserId,
     discordBotToken, discordGuildId, discordUserId,
     bluebubblesServerUrl, bluebubblesPassword, bluebubblesUserAddress,
@@ -543,10 +575,16 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
                 opacity: saving || loadingCfg || !dirty ? 0.6 : 1,
               }}
             >
-              {saving ? "Saving…" : "Save Changes"}
+              {saving ? (wifiNotice ? "Checking Wi-Fi…" : "Saving…") : "Save Changes"}
             </button>
           )}
         </div>
+
+        {wifiNotice && (
+          <div role="status" style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "10px 14px", fontSize: 12, marginBottom: 16 }}>
+            {wifiNotice}
+          </div>
+        )}
 
         {error && (
           <div style={{

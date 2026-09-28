@@ -1,5 +1,13 @@
 # Tổng Quan Kiến Trúc — Autonomous
 
+README dùng [sơ đồ stack tĩnh nền tối](../architecture/autonomous-stack-dark.svg). Bản này giữ nguyên nhãn, thứ tự tầng và sắc màu riêng của từng tầng trong [sơ đồ gốc](../architecture/autonomous-stack.svg), tăng độ sáng của chữ trên nền tối. Ô nét đứt vẫn chỉ các điểm mở rộng. Không có animation tuần tự: thứ tự các tầng không phải luồng thực thi request. Khi sửa sơ đồ gốc, cập nhật bản trình bày này để mọi nhãn luôn khớp.
+
+### Ba nhánh trên cùng một SVG
+
+[platform-flows.svg](../architecture/platform-flows.svg) dùng chung các khối thiết bị, realtime, runtime chính và đầu ra giọng nói cho ba ví dụ: hội thoại trực tiếp, phát nhạc và chỉnh âm lượng qua music/audio skills → OS dispatch hoặc HAL API → driver, và tác vụ máy tính qua Harness. Kết quả cuối của Harness đi qua OS về HAL, không quay lại runtime chính. Ví dụ âm nhạc dùng `music` để phát và gửi emotion marker, `audio` để chỉnh âm lượng. Mic là đầu vào voice; LED khi phát nhạc là phản ứng của HAL trên body có RGB, còn tùy ưu tiên sleep/TTS, không phải một skill bắt buộc khác. Phần cứng hỗ trợ tùy body; đường tắt local intent và các nhánh định tuyến khác nằm ngoài minh họa này.
+
+SVG độc lập, không có script hay tài nguyên bên ngoài. Vòng CSS dài 18 giây lần lượt nhấn sáng từng nhánh, hiệu ứng LED khi phát nhạc và nâng máy bay khỏi vị trí ban đầu được vẽ nét đứt. Chữ và đường nối vẫn hiện khi không chạy animation; trình xem hỗ trợ reduced-motion sẽ tắt hiệu ứng. GitHub README hiển thị SVG tĩnh; tải file và mở bằng trình duyệt để xem chuyển động. Sửa trực tiếp trong SVG. README giữ sơ đồ stack tĩnh ở dưới. Thời gian chỉ minh họa, không phải số đo.
+
 ## Kiến Trúc 3 Tầng
 
 ```

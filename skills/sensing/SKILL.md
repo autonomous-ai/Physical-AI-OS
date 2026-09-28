@@ -146,11 +146,11 @@ When `new:` names only strangers **and** `already present:` names a friend:
 - Pick the tone from what you see: a colleague at the desk is a shrug, a guest at home is warmer, after ~22:00 shorter and quieter.
 - HW markers: `curious` at 0.6 (lighter than a lone stranger's 0.8 — the user is here, this is company, not an unknown), plus aim and track, exactly as the matrix row shows.
 
-**`current_user` is not enough.** Trigger this ONLY from `already present:`. `[context: current_user=momo]` means momo was seen within the last hour — it reads exactly the same when she left two minutes ago and a lone stranger (who may well be momo mis-recognized at a bad angle) sat down. Saying *"Momo, someone new is near you"* to a user sitting alone is the failure this section exists to prevent. `faces in frame:` naming the friend without `already present:` naming them means HAL's guard did not pass — treat it as a regular stranger enter.
+**`current_user` is not enough.** Trigger this ONLY from `already present:`. `[context: current_user=momo]` means momo was seen within the last hour — it reads exactly the same when she left two minutes ago and a lone stranger (who may well be momo mis-recognized at a bad angle) sat down. Saying *"Momo, someone new is near you"* to a user sitting alone is the failure this section exists to prevent. Only `already present:` counts — never infer company from `current_user`.
 
 **This is not momo returning.** She never left — `already present:` says she is in the frame right now, and the backend does not attach `[presence_context: ...]` to a stranger's arrival. The return-after-long-absence swap applies only when `new:` names a friend. Never answer a stranger's arrival with "been a while".
 
-The backend appends a one-line pointer to this section (`[A stranger joined <name>, who is in frame — speak to <name>, not to the stranger. …]`); the tone, markers and wording rules live here. HAL only writes `already present:` after the friend and the newcomer have been boxed together for a couple of sensing ticks (`FACE_COPRESENCE_MIN_TICKS`), so a single odd frame never reaches you as "company". The usual stranger floor and cooldown still apply.
+The backend appends a one-line pointer to this section (`[A stranger joined <name>, who is in frame — speak to <name>, not to the stranger. …]`); the tone, markers and wording rules live here. HAL writes `already present:` for every friend matched in the same frame as the newcomer. The usual stranger floor and cooldown still apply. A stranger's enter only reaches you once they have looked at the lamp — someone turned away is never announced.
 
 ## Proactive care
 

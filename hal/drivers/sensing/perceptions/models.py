@@ -27,6 +27,12 @@ class Face:
     # recognizer), in which case the emotion pipeline falls back to ``bbox``. Stored
     # as 4 ints (not the full landmark array) to keep the Face lightweight.
     emotion_box: list[int] | None = None
+    # The five alignment points (mesh-derived, in SCRFD order: right eye, left
+    # eye, nose, right mouth, left mouth), flat [x1, y1, ... x5, y5] in frame
+    # pixels — the order gaze.head_yaw_deg reads. Lets the stranger greeting
+    # measure head yaw without a second detector (#531). None when the
+    # pipeline gave none.
+    kps: list[float] | None = None
 
 
 @dataclass

@@ -96,7 +96,15 @@ FACE_OWNER_FORGET_S = float(os.environ.get("HAL_FACE_OWNER_FORGET_S", "3600.0"))
 FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "1800.0"))
 # Floor between stranger-only presence.enter events (embedding flicker mints new ids).
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
-FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
+# Strangers are greeted only after facing the lamp on MIN_FACING of the last TICKS face-ID ticks (#531).
+FACE_STRANGER_GAZE_TICKS = int(os.environ.get("HAL_FACE_STRANGER_GAZE_TICKS", "3"))
+FACE_STRANGER_GAZE_MIN_FACING = int(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_MIN_FACING", "2")
+)
+# Max age of counted ticks: 3 ticks at the 2 s interval plus slack for a skipped tick.
+FACE_STRANGER_GAZE_WINDOW_S = float(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_WINDOW_S", "10.0")
+)
 # Only enrolled faces grant voice focus unless guest-first is opted into.
 PRESENCE_WAKE_STRANGERS: bool = (
     os.environ.get("HAL_PRESENCE_WAKE_STRANGERS", "false").lower()
@@ -116,8 +124,6 @@ FACE_STRANGER_MIN_TICKS = int(os.environ.get("HAL_FACE_STRANGER_MIN_TICKS", "2")
 FACE_STRANGER_CORROBORATION_S = float(
     os.environ.get("HAL_FACE_STRANGER_CORROBORATION_S", "6.0")
 )
-# Consecutive ticks friend and stranger must coexist before a stranger enter lists the friend (#426).
-FACE_COPRESENCE_MIN_TICKS = int(os.environ.get("HAL_FACE_COPRESENCE_MIN_TICKS", "2"))
 # Upload (phone photo) match threshold; sits between the 3/4-pose and frontal clusters (#299).
 FACE_MATCH_THRESHOLD = float(os.environ.get("HAL_FACE_MATCH_THRESHOLD", "0.40"))
 # Higher bar for matches via the auto-captured extended bank (weaker evidence).

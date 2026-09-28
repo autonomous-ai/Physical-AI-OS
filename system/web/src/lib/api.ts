@@ -174,9 +174,9 @@ export interface CurrentNetwork {
   linkRate: number;
 }
 
-/** GET /api/network/current — the SSID the device is presently joined to. */
-export async function getCurrentNetwork(): Promise<CurrentNetwork | null> {
-  return apiRequest<CurrentNetwork | null>(`${API_BASE}/api/network/current`);
+/** GET /api/network/current — the joined SSID, or null when wlan0 isn't associated. */
+export async function getCurrentNetwork(signal?: AbortSignal): Promise<CurrentNetwork | null> {
+  return apiRequest<CurrentNetwork | null>(`${API_BASE}/api/network/current`, { signal, cache: "no-store" });
 }
 
 export async function setupNetwork(ssid: string, password: string): Promise<string> {
