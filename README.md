@@ -100,16 +100,7 @@ A conversation can stay with realtime. A music request can use music and audio s
 
 ![One shared Autonomous OS diagram with three routes: realtime answers conversation directly; the main runtime uses music and audio skills to play jazz at 30% volume with HAL LED feedback; or it uses harness-use to update a Blender scene, whose final result returns through OS to HAL for speech.](docs/architecture/platform-flows.svg)
 
-[Open the animated SVG](docs/architecture/platform-flows.svg) (download and open in a browser to play). All three routes remain readable in GitHub’s static SVG rendering. The timing is illustrative, not a latency benchmark. Supported hardware actions depend on the body’s capabilities; these are example routes, not every routing optimization.
-
-<details>
-<summary>Watch the computer-task example in detail</summary>
-
-![Illustrated Harness task: voice request, realtime delegation, computer agent raises yellow planes in Blender, final result returns, and the device says “Done. The yellow planes are higher.”](docs/architecture/voice-to-result.gif)
-
-[Still image](docs/architecture/voice-to-result-poster.png) · [Harness integration](docs/harness.md). Progress stays in the UI; the final result becomes a short spoken announcement, with full text available in the app.
-
-</details>
+[Download the SVG](docs/architecture/platform-flows.svg) and open it in a browser to see the animation. GitHub shows the static diagram; timing is illustrative.
 
 ### The layers behind it
 
