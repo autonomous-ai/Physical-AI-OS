@@ -106,6 +106,8 @@ type VoiceController struct {
 	pending    []*VoicePending
 	question   *voiceQuestionSet
 	answers    map[string]string
+
+	supportKnown bool
 }
 
 var voiceGeneration atomic.Uint64
@@ -174,7 +176,6 @@ func (v *VoiceController) Start(ctx context.Context) {
 			ticker := time.NewTicker(2 * time.Second)
 			defer ticker.Stop()
 			for {
-				_ = v.RefreshSupport(ctx)
 				_ = v.RefreshFocus(ctx)
 				select {
 				case <-ctx.Done():
@@ -278,7 +279,19 @@ func (v *VoiceController) setFocus(machine, agent, name, revision string, availa
 	v.mu.Unlock()
 }
 
-// RefreshSupport performs I/O outside the state mutex. State remains a cheap snapshot.
+// SupportState loads board support on demand. Successful declarations are cached;
+// unavailable HAL can be retried by a later read without changing the mode.
+func (v *VoiceController) SupportState(ctx context.Context) VoiceModeState {
+	v.mu.Lock()
+	known := v.supportKnown
+	v.mu.Unlock()
+	if !known {
+		_ = v.RefreshSupport(ctx)
+	}
+	return v.State()
+}
+
+// RefreshSupport checks activation eligibility without changing the active mode.
 func (v *VoiceController) RefreshSupport(ctx context.Context) error {
 	supported := false
 	var err error
@@ -289,9 +302,9 @@ func (v *VoiceController) RefreshSupport(ctx context.Context) error {
 	}
 	supported = supported && err == nil
 	v.mu.Lock()
-	v.state.Supported = supported
-	if !supported && v.state.Enabled {
-		v.setModeLocked(false)
+	if err == nil {
+		v.state.Supported = supported
+		v.supportKnown = true
 	}
 	v.mu.Unlock()
 	if err != nil {

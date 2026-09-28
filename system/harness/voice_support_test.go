@@ -30,15 +30,19 @@ func TestVoiceModeSupportGate(t *testing.T) {
 	}
 }
 
-func TestVoiceModeSupportLossAndConcurrentDisable(t *testing.T) {
+func TestVoiceModeSupportReadPreservesModeAndConcurrentDisable(t *testing.T) {
 	supported := true
 	v := NewVoiceController(nil, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return supported, nil }})
 	if _, err := v.SetMode(context.Background(), true); err != nil {
 		t.Fatal(err)
 	}
 	supported = false
-	if err := v.RefreshSupport(context.Background()); err == nil || v.State().Enabled {
-		t.Fatal("unsupported mode stayed enabled")
+	if err := v.RefreshSupport(context.Background()); err == nil || !v.State().Enabled {
+		t.Fatal("support read changed active mode")
+	}
+	v.callbacks.SupportsMode = func(context.Context) (bool, error) { return false, errors.New("HAL unavailable") }
+	if err := v.RefreshSupport(context.Background()); err == nil || !v.State().Enabled {
+		t.Fatal("HAL failure changed active mode")
 	}
 	entered, release := make(chan struct{}), make(chan struct{})
 	v.callbacks.SupportsMode = func(context.Context) (bool, error) { close(entered); <-release; return true, nil }
@@ -53,5 +57,32 @@ func TestVoiceModeSupportLossAndConcurrentDisable(t *testing.T) {
 	close(release)
 	if err := <-done; err == nil || v.State().Enabled {
 		t.Fatal("delayed support check overrode explicit disable")
+	}
+}
+
+func TestVoiceModeSupportReadCachesDeclaration(t *testing.T) {
+	calls := 0
+	v := NewVoiceController(nil, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) {
+		calls++
+		if calls == 1 {
+			return false, errors.New("HAL starting")
+		}
+		return true, nil
+	}})
+	if v.SupportState(context.Background()).Supported {
+		t.Fatal("unavailable HAL authorized mode")
+	}
+	if !v.SupportState(context.Background()).Supported {
+		t.Fatal("read did not recover")
+	}
+	_ = v.SupportState(context.Background())
+	if calls != 2 {
+		t.Fatalf("cached read queried HAL: %d", calls)
+	}
+	if _, err := v.SetMode(context.Background(), true); err != nil {
+		t.Fatal(err)
+	}
+	if calls != 3 {
+		t.Fatal("enable did not check HAL again")
 	}
 }

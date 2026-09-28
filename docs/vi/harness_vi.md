@@ -124,9 +124,10 @@ kiểm tra sức khỏe driver. OS trả `supported` trong trạng thái voice-m
 tra hỗ trợ trước khi bật qua HTTP, MQTT hoặc gesture local. Thiếu metadata, HAL
 cũ hoặc lỗi đọc đều từ chối bật; vẫn cho phép tắt. Trang Pairing ẩn công tắc nếu
 `supported` không phải true. Pairing, giao việc `harness-use` thông thường và xem
-focus vẫn dùng được khi không có MPR121. Vòng lặp nền refresh hỗ trợ theo ticker
-hai giây; GET/MQTT đọc snapshot cache. Mỗi lần bật kiểm lại HAL với timeout một
-giây. Refresh thất bại cũng tắt mode đang bật. Cần triển khai HAL và OS tương ứng cùng nhau.
+focus vẫn dùng được khi không có MPR121. GET/MQTT đọc hỗ trợ lần đầu
+và cache khi HAL trả thành công; lỗi HAL có thể thử lại ở lần đọc sau. Mỗi lần
+bật kiểm lại HAL với timeout một giây. Không poll hỗ trợ nền, lỗi đọc hỗ trợ
+không tự tắt mode đang bật. Cần triển khai HAL và OS tương ứng cùng nhau.
 
 
 OS Monitor → Pairing → Harness đồng bộ agent đang focus trong app Harness và cung cấp công tắc **Harness-only voice**. Mở pane agent mong muốn trong Harness; web không có bộ chọn agent riêng. Focus là pane agent được chọn trong app, không phụ thuộc Harness có là cửa sổ macOS phía trước hay không. Pane agent trên máy khác không khả dụng với CLI cục bộ đã ghép đôi và trả lỗi rõ ràng. Focus vẫn đồng bộ khi mode tắt mà không đổi generation định tuyến giọng nói thông thường. OS giữ cờ bật/tắt, focus hiện tại và generation định tuyến trong RAM; khởi động lại service sẽ tắt mode, focus được lấy lại sau khi kết nối. Route này độc lập với target hội thoại mà Python helper `harness-use` lưu trong mode thông thường.

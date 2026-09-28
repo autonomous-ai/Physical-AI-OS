@@ -126,9 +126,10 @@ and validates support before enabling via HTTP, MQTT or a local gesture. Missing
 metadata, an older HAL or a failed lookup fails closed; disabling remains allowed.
 The Pairing page hides the mode switch unless `supported` is true. Pairing,
 ordinary `harness-use` delegation and focus inspection remain available without
-MPR121. Support is refreshed by the background controller loop (two-second ticker);
-GET/MQTT reads use that cached snapshot. Each enable rechecks HAL with a one-second
-timeout. A failed refresh also turns an already-enabled mode off.
+MPR121. Support is loaded on the first GET/MQTT read and cached after a successful HAL
+lookup; an unavailable HAL can be retried on a later read. Each enable rechecks
+HAL with a one-second timeout. There is no background support polling, and
+support lookup failures never turn off an active mode.
 Deploy the matching HAL and OS together.
 
 

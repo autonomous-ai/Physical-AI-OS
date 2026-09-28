@@ -41,7 +41,7 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 	group.POST("voice-mode/focus", localOnlyMiddleware(), s.handleHarnessVoiceFocusGesture)
 	group.GET("voice-mode", adminOrLoopbackAuth(s.config), func(c *gin.Context) {
 		c.Header("Cache-Control", "no-store")
-		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.State()))
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(s.harnessVoice.SupportState(c.Request.Context())))
 	})
 	group.PUT("voice-mode", adminAuthMiddleware(s.config), func(c *gin.Context) {
 		var req struct {
