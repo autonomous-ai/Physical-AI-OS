@@ -3264,3 +3264,25 @@ searching. Neither stage speaks a wellbeing acknowledgment. It ships with HAL; u
 alone does not update the realtime prompts.
 
 Gemini input transcription language hints are opt-in through the existing `HAL_GEMINI_USE_LANGUAGE_CODES=true` flag. With pinned google-genai 2.12.1, HAL sends `input_audio_transcription.language_hints.language_codes`, not the unsupported Developer API top-level `language_codes`. The hint follows `stt_language` (`vi` becomes `vi-VN`); an empty language or disabled flag retains automatic detection. Output transcription stays unhinted. This biases recognition, not a language lock. The `pro-respeaker-lite` and `pro-xvf3800` profiles enable this flag; other profiles retain the disabled default. On the Lite device with 3.8 extended-thinking, the provider accepted the hint and transcribed the user's gold-price, weather and stop requests in a live test; this is not a general accuracy measurement or XVF3800 acoustic validation.
+
+### Microphone ownership during stop/start
+
+VoiceService serializes start and teardown. Mute and sleep reserve the stop
+before dispatching background cleanup, so an immediate unmute cannot overtake
+it. Stop aborts the active input, including the post-TTS echo gate and the raw
+backend underneath AEC. For `arecord`, abort terminates the child, waits up to
+2 seconds, then kills and waits up to another 2 seconds if needed; context exit
+closes both pipes. This releases ALSA even when capture was blocked in `read()`.
+
+The voice thread is retained after a 5-second join timeout. Realtime teardown
+also retains its worker after the 3-second wait. A requested restart waits for
+both workers to exit before opening a new capture; a later stop cancels that
+pending restart. A permanently stuck worker therefore prevents restart instead
+of creating competing recorders. This fixes the stop/start ownership race that
+can cause repeated `arecord: audio open error: Device or resource busy`; another
+application holding ALSA can still cause the same error.
+
+Regression coverage: `hal/test/test_voice_capture_lifecycle.py` exercises blocked
+subprocess reads, forced kill/reap, rapid mute/unmute, cancelled deferred restart,
+join timeout, stopped capture, and abort through the AEC wrapper. These local
+tests do not replace a microphone test on the device.

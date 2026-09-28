@@ -3170,3 +3170,24 @@ phát lời xác nhận cho handoff wellbeing. Thay đổi đi cùng HAL; chỉ 
 nhật prompt realtime.
 
 Gợi ý ngôn ngữ nhận dạng đầu vào Gemini được bật bằng flag có sẵn `HAL_GEMINI_USE_LANGUAGE_CODES=true`. Với google-genai 2.12.1 đang pin, HAL gửi `input_audio_transcription.language_hints.language_codes`, không dùng `language_codes` cấp trên vốn không được SDK hỗ trợ cho Developer API. Hint lấy từ `stt_language` (`vi` thành `vi-VN`); ngôn ngữ rỗng hoặc tắt flag vẫn tự nhận dạng. Transcript đầu ra không có hint. Đây là gợi ý nhận dạng, không khóa ngôn ngữ. Hai profile `pro-respeaker-lite` và `pro-xvf3800` bật flag này; các profile khác giữ mặc định tắt. Trên device Lite chạy 3.8 extended-thinking, provider đã chấp nhận hint và log ghi đúng các yêu cầu giá vàng, thời tiết và dừng lại trong lượt test người dùng; chưa có phép đo độ chính xác tổng quát hoặc xác nhận trên XVF3800.
+
+### Quyền giữ microphone khi stop/start
+
+VoiceService tuần tự hóa start và teardown. Mute và sleep ghi nhận stop trước
+khi chuyển cleanup sang background, nên unmute ngay sau đó không thể vượt trước
+stop. Stop abort input đang mở, gồm cả echo gate sau TTS và backend gốc bên dưới
+AEC. Với `arecord`, abort terminate tiến trình con, chờ tối đa 2 giây, rồi kill
+và chờ thêm tối đa 2 giây nếu cần; thoát context đóng cả hai pipe. Nhờ đó ALSA
+được giải phóng ngay cả khi capture đang kẹt trong `read()`.
+
+Voice thread được giữ lại nếu join quá 5 giây. Realtime teardown cũng giữ worker
+sau thời gian chờ 3 giây. Yêu cầu restart đợi cả hai worker thoát rồi mới mở
+capture mới; stop tiếp theo hủy restart đang đợi. Worker kẹt vĩnh viễn sẽ chặn
+restart thay vì tạo nhiều recorder tranh mic. Thay đổi này sửa race quyền giữ
+mic khi stop/start gây lặp `arecord: audio open error: Device or resource busy`;
+ứng dụng khác giữ ALSA vẫn có thể gây cùng lỗi.
+
+Regression test: `hal/test/test_voice_capture_lifecycle.py` kiểm tra đọc subprocess
+bị kẹt, kill/reap, mute/unmute nhanh, hủy restart đang đợi, join timeout, capture
+đã stop và abort qua AEC wrapper. Test local không thay thế test microphone
+trên device.
