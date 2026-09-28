@@ -8,8 +8,6 @@ from typing import Literal, Optional, Union
 
 from pydantic import BaseModel, Field
 
-from hal.drivers.voice.tts import PROVIDER_OPENAI, PROVIDER_ELEVENLABS
-
 
 class ServoRequest(BaseModel):
     recording: str
@@ -799,7 +797,7 @@ class VoiceStartRequest(BaseModel):
         "", description="TTS style/vibe instructions (optional, e.g. 'Speak warmly')"
     )
     tts_provider: str = Field(
-        PROVIDER_OPENAI, description=f"TTS provider: '{PROVIDER_OPENAI}' (default), '{PROVIDER_ELEVENLABS}', 'gemini' or 'piper'"
+        "openai", description="TTS provider: 'openai' (default), 'elevenlabs', 'gemini' or 'piper'"
     )
 
 

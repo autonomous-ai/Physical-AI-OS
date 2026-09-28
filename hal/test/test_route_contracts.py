@@ -72,7 +72,7 @@ class DeviceInputManifestTests(unittest.TestCase):
         # Execute the production endpoint with inert dependencies, avoiding HAL
         # startup side effects and physical hardware on the test host.
         from types import SimpleNamespace
-        path = Path(__file__).resolve().parents[1] / "server.py"
+        path = Path(__file__).resolve().parents[1] / "runtime.py"
         node = next(n for n in ast.parse(path.read_text()).body
                     if isinstance(n, ast.FunctionDef) and n.name == "device")
         node.decorator_list = []

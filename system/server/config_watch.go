@@ -112,31 +112,24 @@ func (s *Server) waitAndPaintSetupReady(ctx context.Context) {
 	if !device.Has(s.config.DeviceTypeOrDefault(), device.CapLight) {
 		return
 	}
+	// LED routes can acknowledge requests before the rest of HAL is healthy.
+	// Waiting on /health here would hold the setup cue behind unrelated drivers.
 	retrySetupLED(ctx, func() bool { return s.config.SetUpCompleted },
-		func(ctx context.Context) (bool, error) {
-			h, err := hal.GetHealthContext(ctx)
-			return h != nil && h.LED, err
-		}, func(ctx context.Context) error { return hal.SetStatusContext(ctx, "setup") }, waitSetupLED)
+		func(ctx context.Context) error { return hal.SetStatusContext(ctx, "setup") }, waitSetupLED)
 }
 
 // Callbacks let tests advance a slow boot without wall-clock sleeps or hardware.
-func retrySetupLED(ctx context.Context, completed func() bool, ready func(context.Context) (bool, error), paint func(context.Context) error, wait func(context.Context, time.Duration) bool) {
+func retrySetupLED(ctx context.Context, completed func() bool, paint func(context.Context) error, wait func(context.Context, time.Duration) bool) {
 	delay := time.Second
 	for ctx.Err() == nil && !completed() {
-		ok, err := ready(ctx)
-		// Setup may have finished while the health request was in flight.
-		if ctx.Err() != nil || completed() {
+		if err := paint(ctx); err == nil {
+			slog.Info("setup-needed LED acknowledged by HAL", "component", "server")
 			return
+		} else {
+			slog.Debug("setup-needed LED retry", "component", "server", "error", err)
 		}
-		if err == nil && ok {
-			if err := paint(ctx); err == nil {
-				slog.Info("setup-needed LED acknowledged by HAL", "component", "server")
-				return
-			} else {
-				slog.Debug("setup-needed LED retry", "component", "server", "error", err)
-			}
-		}
-		if !wait(ctx, delay) {
+		// Setup or shutdown may have happened while the request was in flight.
+		if ctx.Err() != nil || completed() || !wait(ctx, delay) {
 			return
 		}
 		delay = min(delay*2, 10*time.Second)

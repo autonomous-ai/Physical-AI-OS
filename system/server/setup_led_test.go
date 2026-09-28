@@ -3,29 +3,44 @@ package server
 import (
 	"context"
 	"errors"
+	"io"
+	"net/http"
+	"strings"
 	"testing"
 	"time"
+
+	"go.autonomous.ai/os/system/lib/hal"
+	"go.autonomous.ai/os/system/server/config"
 )
+
+type setupLEDTransport func(*http.Request) (*http.Response, error)
+
+func (f setupLEDTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 func TestSetupLEDWaitsBeyondSlowBootAndRetriesRejectedPaint(t *testing.T) {
 	var elapsed time.Duration
 	var waits []time.Duration
-	healthCalls, paints := 0, 0
-	retrySetupLED(context.Background(), func() bool { return false }, func(context.Context) (bool, error) {
-		healthCalls++
-		if healthCalls == 1 && elapsed != 0 {
-			t.Fatal("first health check must be immediate")
+	paints := 0
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = setupLEDTransport(func(r *http.Request) (*http.Response, error) {
+		if r.Method != http.MethodPost || r.URL.Path != "/led/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
 		}
-		if elapsed < 45*time.Second {
-			return false, errors.New("HAL starting")
-		}
-		return true, nil
-	}, func(context.Context) error {
 		paints++
-		if paints == 1 {
-			return errors.New("LED temporarily unavailable")
+		if paints == 1 && elapsed != 0 {
+			t.Fatal("first LED request must be immediate")
 		}
-		return nil
+		status, body := http.StatusOK, `{"status":"ok"}`
+		if elapsed < 45*time.Second {
+			status, body = http.StatusServiceUnavailable, `{"detail":"LED starting"}`
+		} else if elapsed == 45*time.Second {
+			body = `{"status":"error"}`
+		}
+		return &http.Response{StatusCode: status, Body: io.NopCloser(strings.NewReader(body))}, nil
+	})
+	retrySetupLED(context.Background(), func() bool { return false }, func(ctx context.Context) error {
+		return hal.SetStatusContext(ctx, "setup")
 	}, func(_ context.Context, delay time.Duration) bool {
 		waits = append(waits, delay)
 		elapsed += delay
@@ -34,8 +49,8 @@ func TestSetupLEDWaitsBeyondSlowBootAndRetriesRejectedPaint(t *testing.T) {
 		}
 		return true
 	})
-	if paints != 2 || elapsed != 55*time.Second {
-		t.Fatalf("paints=%d elapsed=%v; want two attempts at 45s and 55s", paints, elapsed)
+	if paints != 9 || elapsed != 55*time.Second {
+		t.Fatalf("paints=%d elapsed=%v; want nine attempts ending at 55s", paints, elapsed)
 	}
 	for i, delay := range waits {
 		want := min(time.Second*time.Duration(1<<i), 10*time.Second)
@@ -46,39 +61,35 @@ func TestSetupLEDWaitsBeyondSlowBootAndRetriesRejectedPaint(t *testing.T) {
 }
 
 func TestSetupLEDStopsWhenSetupCompletes(t *testing.T) {
-	for _, stage := range []string{"before health", "during health", "during backoff"} {
+	for _, stage := range []string{"before request", "during request", "during backoff"} {
 		t.Run(stage, func(t *testing.T) {
-			completed := stage == "before health"
-			healthCalls := 0
-			retrySetupLED(context.Background(), func() bool { return completed }, func(context.Context) (bool, error) {
-				healthCalls++
-				if stage == "during health" {
+			completed := stage == "before request"
+			paints := 0
+			retrySetupLED(context.Background(), func() bool { return completed }, func(context.Context) error {
+				paints++
+				if stage == "during request" {
 					completed = true
-					return true, nil
 				}
-				return false, nil
-			}, func(context.Context) error {
-				t.Fatal("must not paint after setup completes")
-				return nil
+				return errors.New("LED unavailable")
 			}, func(context.Context, time.Duration) bool {
+				if completed {
+					t.Fatal("must not wait after setup completes")
+				}
 				completed = true
 				return true
 			})
-			if stage == "before health" && healthCalls != 0 || healthCalls > 1 {
-				t.Fatalf("unexpected health calls: %d", healthCalls)
+			if stage == "before request" && paints != 0 || paints > 1 {
+				t.Fatalf("unexpected LED calls: %d", paints)
 			}
 		})
 	}
 }
 
-func TestSetupLEDShutdownCancelsHealthAndBackoff(t *testing.T) {
+func TestSetupLEDShutdownCancelsRequestAndBackoff(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	retrySetupLED(ctx, func() bool { return false }, func(ctx context.Context) (bool, error) {
+	retrySetupLED(ctx, func() bool { return false }, func(ctx context.Context) error {
 		cancel()
-		return true, ctx.Err()
-	}, func(context.Context) error {
-		t.Fatal("must not paint after shutdown")
-		return nil
+		return ctx.Err()
 	}, func(context.Context, time.Duration) bool {
 		t.Fatal("must not wait after shutdown")
 		return false
@@ -86,19 +97,30 @@ func TestSetupLEDShutdownCancelsHealthAndBackoff(t *testing.T) {
 	if waitSetupLED(ctx, time.Hour) {
 		t.Fatal("cancelled wait must exit without another attempt")
 	}
+	retrySetupLED(ctx, func() bool { return false }, func(context.Context) error {
+		t.Fatal("must not paint after shutdown")
+		return nil
+	}, waitSetupLED)
 }
 
-func TestSetupLEDReadyImmediately(t *testing.T) {
+func TestSetupLEDReadyImmediatelyWithoutHealthyHAL(t *testing.T) {
 	paints := 0
-	retrySetupLED(context.Background(), func() bool { return false }, func(context.Context) (bool, error) {
-		return true, nil
-	}, func(context.Context) error {
+	original := http.DefaultTransport
+	t.Cleanup(func() { http.DefaultTransport = original })
+	http.DefaultTransport = setupLEDTransport(func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path == "/health" {
+			t.Fatal("setup LED must not wait for full HAL health")
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/led/status" {
+			t.Fatalf("unexpected request: %s %s", r.Method, r.URL.Path)
+		}
 		paints++
-		return nil
-	}, func(context.Context, time.Duration) bool {
-		t.Fatal("ready HAL must not wait before or after successful paint")
-		return false
+		return &http.Response{StatusCode: http.StatusOK, Body: io.NopCloser(strings.NewReader(`{"status":"ok"}`))}, nil
 	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	s := &Server{config: &config.Config{DeviceType: "lamp"}}
+	s.waitAndPaintSetupReady(ctx)
 	if paints != 1 {
 		t.Fatalf("paints=%d, want one", paints)
 	}

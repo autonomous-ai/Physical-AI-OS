@@ -1562,4 +1562,8 @@ Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_serv
 
 ### HAL startup timing
 
+`hal.server:app` là entrypoint HTTP nhẹ; `hal/runtime.py` giữ runtime phần cứng đầy đủ. Startup kiểm tra device/board, nạp giới hạn safety và preset LED trước, rồi khởi tạo một RGB service và mở các route `/led/*` hiện có với middleware bảo vệ HTTP như cũ. Import và khởi tạo runtime đầy đủ chạy trong thread nền cùng process. Trước khi xong, các HTTP endpoint khác (gồm `/health`) trả `503` kèm `Retry-After: 1`. Sau đó request chuyển sang app đầy đủ; app dùng lại RGB instance, không mở lại strip. Không thêm service, cổng, chế độ setup hay flow UI. Nếu startup runtime bắt buộc thất bại, process thoát mã khác 0 để service supervisor phục hồi.
+
+Worker đèn trắng setup gọi thẳng `/led/status` và retry khi lỗi, không đợi `/health` đầy đủ. Acknowledge LED nghĩa là đã nhận lệnh; khi đo thực tế còn cần kiểm tra đầu ra strip. Đo từ lúc systemd chạy process đến acknowledge, tách riêng với mốc full health. `[startup] led_ready` đánh dấu khởi tạo driver, còn `[startup] full HTTP API ready` đánh dấu chuyển sang app đầy đủ.
+
 HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.
