@@ -228,6 +228,7 @@ Requests exceeding these limits receive HTTP 400 before reaching the GPU.
 | `LB__INTERNAL_PREFIX` | `""` | Path prefix prepended to the upstream URL |
 | `LB__HTTP_TIMEOUT` | `120.0` | Upstream HTTP timeout (s) |
 | `LB__WS_OPEN_TIMEOUT` | `120.0` | Upstream WS handshake timeout (s) |
+| `LB__STATE_FILE` | `""` | Two-slot deploy: file naming the serving local dlserver (`http://127.0.0.1:<port>`); replaces the loopback entry of `LB__BACKENDS` at startup and on `SIGHUP`, acked in `<file>.applied`. Set by `make start-runpod-lbserver`; empty = off |
 
 See [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md) for the proxy/scaling
 topology and [deployment.md](deployment.md) for how to run it.
