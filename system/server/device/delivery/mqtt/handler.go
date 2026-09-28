@@ -367,6 +367,13 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleSkillsUninstall(env)
 	case domain.KindChannelRefreshConfig:
 		return h.handleChannelRefreshConfig(env)
+	case domain.KindAddChannel:
+		// Data-envelope twin of the root cmd:"add_channel" — the same
+		// {channel, config} decoded from env.Data. Kept as a data kind so
+		// the backend can push it via the privacy-typed envelope path,
+		// then privacy_fetch.go re-enters dispatchData with env.Data
+		// populated and the credentials never travel inline over MQTT.
+		return h.handleAddChannelData(env)
 	case domain.KindChatSend:
 		return h.handleChatSend(env)
 	case domain.KindChatFileGet:
@@ -385,7 +392,11 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 
 // HandleMessage processes an incoming MQTT message (called from MQTT subscription callback or GWS HTTP).
 func (h *DeviceMQTTHandler) HandleMessage(topic string, payload []byte) error {
-	slog.Debug("HandleMessage", "component", "mqtt", "topic", topic, "payload", string(payload))
+	// Length only — raw payload can carry credentials (add_channel inline
+	// config, oauth tokens) so we do not want it landing in journalctl.
+	// A per-kind handler downstream logs the safe metadata (kind, channel,
+	// config_keys) for operator visibility.
+	slog.Debug("HandleMessage", "component", "mqtt", "topic", topic, "payload_len", len(payload))
 
 	var cmd domain.MQTTMessage
 	if err := json.Unmarshal(payload, &cmd); err != nil {

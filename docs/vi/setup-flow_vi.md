@@ -706,3 +706,7 @@ listener đầy đủ nằm ở phần header của file `lib/setupBridge.ts`.
 | `system/server/config/config.go` | Config load/save |
 | `scripts/imager/build-orangepi.sh`, `scripts/imager/build.sh`, `scripts/provision/setup.sh` | nginx config bake vào image (gồm CSP `connect-src`) |
 | `scripts/maintenance/patch-security.sh` | Patch bảo mật OTA cho thiết bị đã provision (migrate CSP) |
+
+### Credentials iMessage khi setup
+
+Setup và Wi-Fi provisioning nhận URL server BlueBubbles, mật khẩu và địa chỉ người vận hành khi `channel=imessage`. Credentials phải được lưu trước khi setup runtime; Wi-Fi provisioning chuyển credentials đã lưu vào `SetupAgent`. Hermes đọc config đã lưu qua presync.

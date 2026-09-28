@@ -43,6 +43,9 @@ export function useConfigPrefill(args: {
   setFaChannel: Dispatch<SetStateAction<string>>;
   setFdChannel: Dispatch<SetStateAction<string>>;
   setSttLanguage: Dispatch<SetStateAction<string>>;
+  // Non-secret iMessage caller-context prompt — prefill the textarea from
+  // config on load so returning operators see what they typed last time.
+  setBluebubblesCallerContext: Dispatch<SetStateAction<string>>;
   // Surfaces cfg.has_admin_password so the page can show the admin-password
   // fields only when the device hasn't been set up with one (fresh device or
   // existing device migrating from pre-Login-UI builds).
@@ -64,6 +67,7 @@ export function useConfigPrefill(args: {
     setMqttEndpoint, setMqttPort, setMqttUsername,
     setFaChannel, setFdChannel,
     setSttLanguage,
+    setBluebubblesCallerContext,
     setHasAdminPassword,
     setHasNetworkPassword,
   } = args;
@@ -104,7 +108,17 @@ export function useConfigPrefill(args: {
         discordBotToken: prev.discordBotToken || cfg.has_discord_bot_token,
         discordGuildId: prev.discordGuildId || !!cfg.discord_guild_id,
         discordUserId: prev.discordUserId || !!cfg.discord_user_id,
+        // iMessage / BlueBubbles — same prev-wins pattern as the other
+        // channels so an in-flight edit is not clobbered by a background
+        // refetch (see the file-level comment for the merge semantics).
+        bluebubblesServerUrl: prev.bluebubblesServerUrl || !!cfg.bluebubbles_server_url,
+        bluebubblesPassword: prev.bluebubblesPassword || cfg.has_bluebubbles_password,
+        bluebubblesUserAddress: prev.bluebubblesUserAddress || !!cfg.bluebubbles_user_address,
+        bluebubblesCallerContext: prev.bluebubblesCallerContext || !!cfg.bluebubbles_caller_context,
       }));
+      // Caller-context is non-secret plaintext, so we can hydrate the input
+      // string directly (unlike the tokens that only round-trip has_* flags).
+      setBluebubblesCallerContext((prev) => prev || cfg.bluebubbles_caller_context || "");
       setTeleUserId((prev) => prev || cfg.telegram_user_id || "");
       setSlackUserId((prev) => prev || cfg.slack_user_id || "");
       setDiscordGuildId((prev) => prev || cfg.discord_guild_id || "");

@@ -39,6 +39,9 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		DiscordGuildID:     s.config.DiscordGuildID,
 		DiscordUserID:      s.config.DiscordUserID,
 		WhatsappUserID:     s.config.WhatsappUserID,
+		BluebubblesServerURL:   s.config.BluebubblesServerURL,
+		BluebubblesUserAddress: s.config.BluebubblesUserAddress,
+		BluebubblesCallerContext: s.config.BluebubblesCallerContext,
 		LLMModel:           s.config.LLMModel,
 		LLMBaseURL:         s.config.LLMBaseURL,
 		LLMDisableThinking: disableThinking,
@@ -65,6 +68,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		HasSlackBotToken:         s.config.SlackBotToken != "",
 		HasSlackAppToken:         s.config.SlackAppToken != "",
 		HasDiscordBotToken:       s.config.DiscordBotToken != "",
+		HasBluebubblesPassword:   s.config.BluebubblesPassword != "",
 		HasLLMAPIKey:             s.config.LLMAPIKey != "",
 		HasDeepgramAPIKey:        s.config.DeepgramAPIKey != "",
 		HasSTTAPIKey:             s.config.STTAPIKey != "",
@@ -201,6 +205,15 @@ type channelSnapshot struct {
 	discordBotToken  string
 	discordGuildID   string
 	discordUserID    string
+	// iMessage / BlueBubbles — same before/after semantics: any change here
+	// re-pushes the channel config into the active gateway (Hermes writes them
+	// into ~/.hermes/.env; other runtimes reject the apply).
+	bluebubblesServerURL   string
+	bluebubblesPassword    string
+	bluebubblesUserAddress string
+	// Optional caller-context prompt — a change here still counts as a
+	// channel change so presync re-writes BLUEBUBBLES_CALLER_CONTEXT.
+	bluebubblesCallerContext string
 }
 
 func channelFields(c *config.Config) channelSnapshot {
@@ -214,6 +227,10 @@ func channelFields(c *config.Config) channelSnapshot {
 		discordBotToken:  c.DiscordBotToken,
 		discordGuildID:   c.DiscordGuildID,
 		discordUserID:    c.DiscordUserID,
+		bluebubblesServerURL:   c.BluebubblesServerURL,
+		bluebubblesPassword:    c.BluebubblesPassword,
+		bluebubblesUserAddress: c.BluebubblesUserAddress,
+		bluebubblesCallerContext: c.BluebubblesCallerContext,
 	}
 }
 
@@ -266,6 +283,10 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		TelegramBotToken: c.TelegramBotToken, TelegramUserID: c.TelegramUserID,
 		SlackBotToken: c.SlackBotToken, SlackAppToken: c.SlackAppToken, SlackUserID: c.SlackUserID,
 		DiscordBotToken: c.DiscordBotToken, DiscordGuildID: c.DiscordGuildID, DiscordUserID: c.DiscordUserID,
+		BluebubblesServerURL:   c.BluebubblesServerURL,
+		BluebubblesPassword:    c.BluebubblesPassword,
+		BluebubblesUserAddress: c.BluebubblesUserAddress,
+		BluebubblesCallerContext: c.BluebubblesCallerContext,
 	}
 	return ch
 }
@@ -434,6 +455,21 @@ func applyChannelPatch(c *config.Config, data domain.UpdateConfigRequest) {
 	case domain.ChannelWhatsapp:
 		if data.WhatsappUserID != "" {
 			c.WhatsappUserID = data.WhatsappUserID
+		}
+	case domain.ChannelIMessage:
+		// Omitted plain fields preserve the saved channel; explicit empty
+		// strings clear individual fields without erasing unrelated settings.
+		if data.BluebubblesServerURL != nil {
+			c.BluebubblesServerURL = *data.BluebubblesServerURL
+		}
+		if data.BluebubblesUserAddress != nil {
+			c.BluebubblesUserAddress = *data.BluebubblesUserAddress
+		}
+		if data.BluebubblesPassword != "" {
+			c.BluebubblesPassword = data.BluebubblesPassword
+		}
+		if data.BluebubblesCallerContext != nil {
+			c.BluebubblesCallerContext = *data.BluebubblesCallerContext
 		}
 	default:
 		if data.TelegramBotToken != "" {

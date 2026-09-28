@@ -1208,3 +1208,7 @@ trạng thái kết thúc, cơ chế xử lý ownership không xác định hi�
 thoại thay vì gửi lại công việc. Request khác trong hàng đợi vẫn theo các kiểm
 tra admission và ownership hiện có. Đây không phải `/stop` từ người dùng, không
 tạo lượt model mới, không xóa journal intent Harness và không gửi task Harness.
+
+### Kiểm tra runtime patch BlueBubbles
+
+Các patch source BlueBubbles compile Python sau sửa trước khi thay module đã cài. Patch đăng ký webhook đặt marker trên dòng riêng để giữ dấu đóng của dictionary viết cùng dòng. Suite fixture trong CI kiểm tra áp dụng patch, compile, chạy lại và từ chối source có anchor thay đổi cho từng patch nhúng; không cần device hoặc server BlueBubbles.

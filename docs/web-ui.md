@@ -890,3 +890,7 @@ cards do not fetch directly. Both clients use the existing authenticated
 leaving the loading placeholder or old readings on screen.
 
 Harness delivery warnings no longer pause new voice requests or disable question answers. Check delivery inspects the current pending receipt; Dismiss without retrying clears that warning without cancelling or resending its task.
+
+### iMessage operator address
+
+The iMessage settings handle identifies the operator home conversation. It is not a promise of sender isolation: Hermes presync accepts customer messages from other addresses by default (`BLUEBUBBLES_ALLOW_ALL_USERS=true` unless explicitly overridden).

@@ -212,6 +212,134 @@ sync_env discord_bot_token  DISCORD_BOT_TOKEN
 sync_env discord_guild_id   DISCORD_GUILD_ID
 sync_env discord_user_id    DISCORD_ALLOWED_USERS
 sync_env whatsapp_user_id   WHATSAPP_ALLOWED_USERS
+# iMessage via BlueBubbles — the Hermes BlueBubbles plugin reads these three
+# env vars from ~/.hermes/.env (see hermes-agent/plugins/platforms/bluebubbles).
+# The server URL + password come from the operator's BlueBubbles UI on their
+# Mac; the allowed user address (phone / email) is the iMessage handle the
+# plugin pins its accept-allowlist to.
+sync_env bluebubbles_server_url   BLUEBUBBLES_SERVER_URL
+sync_env bluebubbles_password     BLUEBUBBLES_PASSWORD
+sync_env bluebubbles_user_address BLUEBUBBLES_ALLOWED_USERS
+
+# Optional admin-supplied caller-context prompt (Tier 2). This value is often
+# multi-line (customer-shop personas run 20+ lines), and systemd's
+# EnvironmentFile= does NOT support multi-line values — a `\n` would silently
+# split the file and drop the rest of the value, taking every later var down
+# with it. Route it through a dedicated file instead, chmod 600 so it sits
+# alongside .env at the same trust level. The runtime patch
+# caller_context_file_fallback.py reads exactly this path when
+# BLUEBUBBLES_CALLER_CONTEXT is empty, so presync + patch stay in lockstep.
+BB_CALLER_CTX_FILE="$HERMES_DIR/bluebubbles_caller_context.txt"
+BB_CALLER_CTX_VAL="$(jq -r '.bluebubbles_caller_context // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+if [ -n "$BB_CALLER_CTX_VAL" ]; then
+  # Ensure the parent exists (fresh install / factory reset) then write atomically.
+  mkdir -p "$HERMES_DIR"
+  umask 077
+  printf '%s' "$BB_CALLER_CTX_VAL" >"$BB_CALLER_CTX_FILE"
+  chmod 600 "$BB_CALLER_CTX_FILE"
+  log "bluebubbles_caller_context written to ${BB_CALLER_CTX_FILE}"
+else
+  # Cleared in the UI → remove the file so the runtime patch falls back to
+  # "no persona" instead of serving a stale value. rm -f: absent is fine.
+  rm -f "$BB_CALLER_CTX_FILE"
+  log "bluebubbles_caller_context empty — removed ${BB_CALLER_CTX_FILE} if present"
+fi
+
+# BLUEBUBBLES_WEBHOOK_HOST / _PORT — the plugin defaults to binding the
+# receive listener on 127.0.0.1:8645 and registering that URL with the Mac's
+# BlueBubbles server. The Mac then POSTs incoming messages to `localhost` and
+# gets connection-refused because that loopback is the DEVICE's, not the
+# Mac's. Result: agent never sees any inbound message and looks silent.
+# Fix in code (not per-device): whenever BlueBubbles is configured and the
+# operator has not pinned an override in .env, fill the device's primary LAN
+# IP so the listener binds it and the webhook URL registered with the Mac
+# points at an address the Mac can reach on the LAN (or through the tunnel).
+# Only kicks in when bluebubbles_server_url is set — leaves untouched devices
+# untouched, and never stomps a hand-edited value.
+if [ -n "$(jq -r '.bluebubbles_server_url // empty' "$CONFIG_JSON" 2>/dev/null || true)" ]; then
+  # `ip route get` asks the kernel which src IP it would use to reach the
+  # internet — always the primary LAN interface, dodging Docker/vpn bridges
+  # that `hostname -I` sometimes lists first on multi-interface hosts.
+  LAN_IP="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i=1; i<=NF; i++) if ($i=="src") { print $(i+1); exit }}')"
+  [ -z "$LAN_IP" ] && LAN_IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
+
+  if [ -n "$LAN_IP" ]; then
+    # Decide whether to (over)write WEBHOOK_HOST:
+    # - Empty → first-run seed, write it.
+    # - Bare IPv4 that does NOT match any address currently bound on any
+    #   interface → the value was inherited from a different device / a
+    #   previous DHCP lease / a WiFi hop. Refresh it. Observed: config
+    #   moved between 20.183 → 20.159 kept WEBHOOK_HOST=172.168.20.183,
+    #   Hermes failed to bind and never received a webhook.
+    # - Anything else (hostname, public IP, ngrok/CF Named Tunnel URL,
+    #   0.0.0.0, ::) → treat as intentionally pinned by the operator and
+    #   leave alone. Overwriting a hostname would silently rewrite the
+    #   webhook URL to a bare LAN IP the Mac can no longer route to.
+    # `|| true` matters: `set -euo pipefail` at the top of this script would
+    # otherwise abort on grep's exit 1 when no match is found (first-run,
+    # empty .env), silently skipping the whole WEBHOOK_HOST auto-detect block.
+    CURRENT_HOST="$(grep -E '^BLUEBUBBLES_WEBHOOK_HOST=' "$ENV_FILE" 2>/dev/null | tail -1 | cut -d= -f2- || true)"
+    NEED_REFRESH=false
+    REFRESH_REASON=""
+    if [ -z "$CURRENT_HOST" ]; then
+      NEED_REFRESH=true
+      REFRESH_REASON="unset"
+    elif printf '%s' "$CURRENT_HOST" | grep -qE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$'; then
+      if ! ip -4 -o addr show 2>/dev/null | awk '{print $4}' | cut -d/ -f1 | grep -qFx "$CURRENT_HOST"; then
+        NEED_REFRESH=true
+        REFRESH_REASON="stale ${CURRENT_HOST}"
+      fi
+    fi
+    if $NEED_REFRESH; then
+      sed -i "/^BLUEBUBBLES_WEBHOOK_HOST=/d" "$ENV_FILE"
+      [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
+      echo "BLUEBUBBLES_WEBHOOK_HOST=${LAN_IP}" >>"$ENV_FILE"
+      log "BLUEBUBBLES_WEBHOOK_HOST set to ${LAN_IP} (${REFRESH_REASON})"
+    fi
+  else
+    log "WARN: BlueBubbles configured but no LAN IP detected — webhook will bind loopback and Mac cannot reach it"
+  fi
+
+  if ! grep -q '^BLUEBUBBLES_WEBHOOK_PORT=' "$ENV_FILE" 2>/dev/null; then
+    [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
+    echo "BLUEBUBBLES_WEBHOOK_PORT=8645" >>"$ENV_FILE"
+    log "BLUEBUBBLES_WEBHOOK_PORT defaulted to 8645 (not pinned in .env)"
+  fi
+
+  # BLUEBUBBLES_ALLOW_ALL_USERS — production intent for this channel is
+  # customer-facing: strangers on their own Apple ID message the operator's
+  # Mac and the bot answers on their behalf, so restricting incoming senders
+  # to a fixed whitelist is the WRONG default — every new customer would be
+  # dropped with "Unauthorized user: <handle>". Default true when the plugin
+  # is configured and the operator has not pinned the flag themselves.
+  # Advanced operators who really want a whitelist can set
+  # BLUEBUBBLES_ALLOW_ALL_USERS=false in .env and populate ALLOWED_USERS;
+  # this block leaves them alone.
+  if ! grep -q '^BLUEBUBBLES_ALLOW_ALL_USERS=' "$ENV_FILE" 2>/dev/null; then
+    [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
+    echo "BLUEBUBBLES_ALLOW_ALL_USERS=true" >>"$ENV_FILE"
+    log "BLUEBUBBLES_ALLOW_ALL_USERS defaulted to true (customer-facing default; not pinned in .env)"
+  fi
+
+  # BLUEBUBBLES_HOME_CHANNEL — Hermes's cron / cross-platform relay picks
+  # this chat as the operator's "primary" thread. Without it Hermes leaks a
+  # prompt to every incoming customer message ("📬 No home channel is set
+  # for Bluebubbles … Type /sethome …"), which is exactly the wrong text to
+  # show a stranger buying clothes. Default it to `any;-;<operator handle>`
+  # so cron and follow-ups land in the operator's own iMessage inbox — the
+  # handle is already saved by the setup UI (bluebubbles_user_address).
+  # Leaves any hand-pinned override alone.
+  if ! grep -q '^BLUEBUBBLES_HOME_CHANNEL=' "$ENV_FILE" 2>/dev/null; then
+    OP_HANDLE="$(jq -r '.bluebubbles_user_address // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+    if [ -n "$OP_HANDLE" ]; then
+      [ -s "$ENV_FILE" ] && [ -n "$(tail -c1 "$ENV_FILE")" ] && printf '\n' >>"$ENV_FILE"
+      echo "BLUEBUBBLES_HOME_CHANNEL=any;-;${OP_HANDLE}" >>"$ENV_FILE"
+      log "BLUEBUBBLES_HOME_CHANNEL defaulted to any;-;${OP_HANDLE} (from bluebubbles_user_address)"
+    else
+      log "WARN: BlueBubbles configured but bluebubbles_user_address is empty — HOME_CHANNEL left unset (bot will nag customers with /sethome prompt)"
+    fi
+  fi
+fi
 
 # ── 3. API SERVER KEY (must match constants.go APIKey) ────────────────────────
 # Enforce on every presync so a key bump in os-server self-heals on the next

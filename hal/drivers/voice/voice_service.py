@@ -955,6 +955,21 @@ class VoiceService:
                     time.sleep(0.5)
                 logger.info("Music stopped, resuming mic")
 
+            # Realtime (Gemini Live) holds the ALSA input directly for its
+            # full-duplex uplink, so the turn-based arecord path racing it on
+            # the same USB mic every ~3s would only fail with "audio open
+            # error: Device or resource busy" and spam the log (observed on
+            # intern-v2-d16f: >8 busy errors in 30s while a Live turn was in
+            # flight, and the traditional voice loop never captured a frame).
+            # Hold here until the live session releases the device, matching
+            # the music / TTS pauses above.
+            if self._live_running:
+                logger.info("Live session active — pausing turn-based mic loop")
+                while self._running and self._live_running:
+                    time.sleep(0.5)
+                if self._running:
+                    logger.info("Live session ended — resuming turn-based mic loop")
+
             if manual_capture is not None and (
                 not self._running or manual_capture.cancelled.is_set()
                 or not same_target(manual_capture.snapshot, read_voice_mode())

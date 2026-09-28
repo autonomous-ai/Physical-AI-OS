@@ -91,12 +91,22 @@ func (h *DeviceMQTTHandler) fetchAndDispatchPrivacy(env domain.MQTTDataCommand) 
 	ctx, cancel := context.WithTimeout(context.Background(), privacyFetchTimeout)
 	defer cancel()
 
-	data, err := h.fetchPrivacyData(ctx, env.Kind)
+	slog.Info("privacy envelope: fetching data",
+		"component", "mqtt", "kind", env.Kind, "channel_hint", env.Channel)
+	data, err := h.fetchPrivacyData(ctx, env.Kind, env.Channel)
 	if err != nil {
-		slog.Error("privacy fetch failed", "component", "mqtt", "kind", env.Kind, "error", err)
+		slog.Error("privacy fetch failed", "component", "mqtt", "kind", env.Kind, "channel", env.Channel, "error", err)
 		_ = h.publishDataResult(env.Kind, "failure", "fetch privacy data: "+err.Error(), nil)
 		return
 	}
+
+	// Length only — the fetched blob is the reason we route through the
+	// privacy path in the first place (credentials, OAuth tokens). The
+	// per-kind handler downstream logs safe metadata (channel name,
+	// config_keys) so operators can still see something went through.
+	slog.Info("privacy envelope: data fetched",
+		"component", "mqtt", "kind", env.Kind, "channel_hint", env.Channel,
+		"data_len", len(data))
 
 	// Replace Data with the fetched payload and clear Type so downstream
 	// code paths don't try to re-route this as a privacy envelope.
@@ -113,7 +123,12 @@ func (h *DeviceMQTTHandler) fetchAndDispatchPrivacy(env domain.MQTTDataCommand) 
 // Auth: Authorization: Bearer <LLMAPIKey> + X-Device-ID — same pattern as
 // the oauth/connector refresh paths, so the same per-device credential is
 // reused.
-func (h *DeviceMQTTHandler) fetchPrivacyData(ctx context.Context, kind string) (json.RawMessage, error) {
+//
+// `channel` disambiguates generic kinds ("add_channel", "channel.refresh_config")
+// whose queued data on the backend is per-channel. When empty the URL keeps
+// the legacy ?kind=<k> shape so backends that don't yet key on channel keep
+// working unchanged.
+func (h *DeviceMQTTHandler) fetchPrivacyData(ctx context.Context, kind, channel string) (json.RawMessage, error) {
 	base := strings.TrimRight(strings.TrimSpace(h.config.LLMBaseURL), "/")
 	if base == "" {
 		return nil, errors.New("LLMBaseURL not configured")
@@ -122,6 +137,9 @@ func (h *DeviceMQTTHandler) fetchPrivacyData(ctx context.Context, kind string) (
 	// endpoints sit one level above. Mirror oauth_refresh.requestTokenRefresh.
 	base = strings.TrimSuffix(base, "/v1")
 	endpoint := base + privacyFetchPath + "?kind=" + url.QueryEscape(kind)
+	if channel != "" {
+		endpoint += "&channel=" + url.QueryEscape(channel)
+	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint, nil)
 	if err != nil {

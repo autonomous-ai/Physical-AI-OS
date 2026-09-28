@@ -21,4 +21,13 @@ export interface ChannelLoadedState {
   discordBotToken: boolean;
   discordGuildId: boolean;
   discordUserId: boolean;
+  // iMessage via BlueBubbles. See ChannelSection.tsx for the operator-facing
+  // guide and runtimes/hermes/presync.sh for the env-var mapping.
+  bluebubblesServerUrl: boolean;
+  bluebubblesPassword: boolean;
+  bluebubblesUserAddress: boolean;
+  // Optional caller-context prompt (plaintext). Presence flag so the setup
+  // page can render the textarea in its "already configured" state, matching
+  // the other channel fields.
+  bluebubblesCallerContext: boolean;
 }

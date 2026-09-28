@@ -350,7 +350,7 @@ The user does not connect Facebook from here — they connect from the device's 
    1. Open <https://developers.facebook.com/tools/explorer/> (Graph API Explorer).
    2. In the **Meta App** dropdown pick any Meta app the user owns — the app is only used to mint the token, not to publish. If the user has no app, they can create a bare "Consumer" app in <https://developers.facebook.com/apps/>.
    3. Click **Generate Access Token** → tick these 6 permissions: `pages_show_list`, `pages_manage_posts`, `pages_read_engagement`, `pages_read_user_content`, `pages_manage_engagement`, `read_insights`. Approve the Facebook OAuth prompt. The "Access Token" box now shows a **User Access Token** — this one CANNOT post to a Page.
-   4. **This is the step every operator gets wrong.** In the **User or Page** dropdown on the right — the one labeled *Người dùng hoặc Trang* in Vietnamese — change the selection from **User Token** to the **Page's name** (e.g. "Trâm Anh"). The "Access Token" box on top auto-switches to the **Page Access Token** — copy THAT one. If the dropdown does not list the Page, it means the user did not grant the app access to it in step 3's OAuth dialog: they must click **Generate Access Token** again and tick the Page in the *"which Pages can this app manage"* screen.
+   4. **This is the step every operator gets wrong.** In the **User or Page** dropdown on the right — the one labeled *Người dùng hoặc Trang* in Vietnamese — change the selection from **User Token** to the **Page's name** (e.g. "Elvis"). The "Access Token" box on top auto-switches to the **Page Access Token** — copy THAT one. If the dropdown does not list the Page, it means the user did not grant the app access to it in step 3's OAuth dialog: they must click **Generate Access Token** again and tick the Page in the *"which Pages can this app manage"* screen.
 
    Verification the user can run themselves before pasting: paste the token into <https://developers.facebook.com/tools/debug/accesstoken/> and click **Debug**. The row **Type** must read `PAGE`. If it reads `USER`, they copied from the wrong dropdown state.
 
@@ -375,6 +375,144 @@ Common errors:
 - **190 "Error validating access token"** — token expired or revoked. Short-lived Page Tokens live ~1 hour; ask the user to reconnect through Settings → Facebook (the UI mints a fresh Page Token from a User Token). Do NOT try to refresh silently — Page Tokens do not carry a refresh_token.
 - **200 "(#200) … requires pages_manage_posts …"** — the stored credential is a User Token, not a Page Token (User Tokens fail this way even when scoped correctly). Same reconnect fix. This is the "operator copied the wrong box in Graph Explorer" case above.
 - **100 "The global id X is not allowed for this call"** — `page_id` points at a personal profile, not a Fan Page. Ask the user to save the Fan Page's numeric id (Meta's Graph API cannot publish to personal profiles). To get the id: open the Fanpage on Facebook, click the Page name (or the About tab), the Page transparency panel shows `Page ID`.
+
+**iMessage via BlueBubbles (special case — Hermes runtime only for THIS path):**
+unlike every other entry in this skill, iMessage is NOT a service the agent
+calls out to. It is a *messaging channel* — a two-way pipe the agent RECEIVES
+user turns on and REPLIES through — and the device currently ships ONE bridge
+for it: [BlueBubbles](https://bluebubbles.app), an open-source macOS server
+that talks to Messages.app via AppleScript / Private API. This bridge lives
+inside Hermes's `SupportedChannels()` (`runtimes/hermes/channels.go`); Codex,
+OpenCode and ClaudeCode carry no iMessage plugin at all.
+
+OpenClaw is the one runtime with a caveat: it *does* support iMessage
+upstream, but via a completely different path — the `@openclaw/imessage`
+plugin driving the `imsg` CLI over JSON-RPC stdio (SSH-wrappable, no
+webhook, no port). BlueBubbles was explicitly removed from OpenClaw. This
+device does not wire up the OpenClaw path yet, so in practice "iMessage on
+this device today = Hermes + BlueBubbles". If the user is on OpenClaw and
+asks about iMessage, say that plainly instead of claiming OpenClaw has no
+iMessage support — the imsg route is a real thing, just not integrated
+here. For everyone else on the wrong runtime, the answer stays: "switch
+runtime to Hermes in Settings first".
+
+**Who this channel is for — misconception guard.** This channel is designed
+for OTHER PEOPLE to text the operator's Mac — customers on their own iPhone,
+a client, a friend on any Apple-ID DIFFERENT from the Mac's. Same shape as a
+Telegram or WhatsApp Business bot: external users message the operator's
+public handle, the bot answers on their behalf. It is NOT designed for the
+operator to chat with themselves from their own iPhone. When the operator's
+iPhone shares an Apple ID with the Mac, iMessage tags every message they
+send as `isFromMe:true` and the plugin drops it as a self-echo (line 906 of
+`gateway/platforms/bluebubbles.py`, hard-coded — no env override) to prevent
+the bot from replying to its own outgoing message in an infinite loop.
+When the operator says "the bot ignores half my test messages", the answer
+is almost always "same Apple ID on iPhone + Mac — try from a friend's iPhone
+with a different Apple ID, that's what the channel is designed for". Do not
+attempt to config-away the drop; it is a plugin design choice, not a bug.
+
+Where things live (do not `cat` these files to chat — extract single fields):
+
+- **Device-side config** — `config/config.json` under `channels.imessage` holds
+  three fields: `bluebubbles_server_url` (the Cloudflare / ngrok URL of the
+  Mac-hosted server), `bluebubbles_password` (secret — the password the operator
+  set inside the BlueBubbles Mac app under Settings → Password), and
+  `bluebubbles_user_address` (the phone number or email that identifies the
+  operator's own iMessage account — BlueBubbles filters incoming messages to
+  this one address).
+- **Hermes runtime env** — `~/.hermes/.env`, populated by `runtimes/hermes/presync.sh`
+  on runtime start from the config above, plus two host-derived fields:
+  `BLUEBUBBLES_WEBHOOK_HOST` and `BLUEBUBBLES_WEBHOOK_PORT` (default 8645).
+  Hermes registers its webhook with BlueBubbles at
+  `http://<WEBHOOK_HOST>:<WEBHOOK_PORT>/bluebubbles-webhook?password=<hash>`;
+  BlueBubbles POSTs every incoming iMessage there.
+
+The dataflow:
+
+```
+iPhone/iPad user → iMessage cloud → Mac Messages.app → BlueBubbles server
+  → Cloudflare Quick Tunnel (public URL) → device webhook (Hermes :8645)
+  → agent turn → reply back through the same chain
+```
+
+Every failure this bridge sees is one of these three:
+
+1. **Cloudflare Quick Tunnel URL expired.** `trycloudflare.com` URLs are
+   *ephemeral* — killed when the `cloudflared` process on the Mac exits.
+   Symptom: BlueBubbles server URL returns `NXDOMAIN` from anywhere. Fix: the
+   user restarts the tunnel on their Mac and pastes the new URL into Settings →
+   iMessage → Server URL on the device. For a stable URL, they need a
+   named Cloudflare tunnel (paid feature) or ngrok reserved domain — one-off
+   testing is fine on Quick Tunnels, production is not.
+
+2. **Webhook host set to `localhost`.** If `BLUEBUBBLES_WEBHOOK_HOST` is unset
+   or `127.0.0.1`, BlueBubbles registers `http://localhost:8645/...` — which
+   is the *Mac's* localhost, unreachable from the device. Symptom: incoming
+   messages never reach the agent, but the BlueBubbles server itself is up
+   and Hermes shows no errors. Fix: set `BLUEBUBBLES_WEBHOOK_HOST` to the
+   device's LAN IP (e.g. `172.168.20.183`) in `~/.hermes/.env` and restart
+   Hermes; the webhook is re-registered on boot.
+
+3. **iMessage identity self-loop (the subtle one).** A single Apple ID has
+   multiple *handles* (phone number, one or more emails), and the
+   `BLUEBUBBLES_ALLOWED_USERS` filter matches the sender's *handle*, not the
+   Apple ID. If the operator's iPhone sends with the same handle the Mac
+   uses as its default sending identity, iMessage flags the incoming message
+   as `isFromMe: true` on the Mac and BlueBubbles drops it — because that
+   is exactly what sent messages bounced back through the bridge look like,
+   and forwarding them would create a reply loop.
+
+   The fix takes two settings — one per device — that must **disagree**:
+   - **iPhone**: Settings → Messages → Send & Receive → "Start new
+     conversations from" — pick a handle DIFFERENT from
+     `bluebubbles_user_address` on the device.
+   - **Mac**: Messages.app → Settings → iMessage → "Start new conversations
+     from" — set to the SAME handle as `bluebubbles_user_address` (so iPhone
+     and Mac use opposite sides).
+
+   Prerequisites on the Mac that make this work at all: signed in to the
+   Apple ID with **"Enable Messages in iCloud"** ticked (Messages.app →
+   Settings → iMessage). Without iCloud sync, older threads never appear on
+   the Mac and it can look like a self-loop when it is actually a plain
+   sync failure.
+
+   **10-second visual diagnostic** — do this before any curl. Have the
+   operator send a test message from their iPhone, then open Messages.app on
+   the Mac and look at where the message landed:
+   - **Left column** (like an incoming reply, avatar visible) → external →
+     BlueBubbles will forward → check tunnel / webhook / listener next.
+   - **Right column** (grouped with the operator's own outgoing bubbles) →
+     iMessage marked it self → the two "Start new conversations from"
+     settings match. Swap one and retest.
+
+   For third-party testers (a friend chatting the operator from THEIR own
+   iPhone), this is a non-issue: their Apple ID is different, so `isFromMe`
+   is naturally false. The trap only bites the operator testing against
+   themselves.
+
+Troubleshooting (when the user says "my iMessage bridge isn't working"),
+in the order that resolves the most common cases first — do not skip forward:
+
+1. **Runtime check.** `jq -r '.agent_runtime' /root/.openclaw/workspace/config.json`
+   (or wherever the device's config lives — path varies) → if not `hermes`,
+   stop here and tell the user to switch runtime. No point diagnosing the
+   bridge on a runtime that never opens the port.
+2. **Reachability of the BlueBubbles server URL** — `curl -s -o /dev/null -w '%{http_code}\n' <server_url>/api/v1/server/info?password=<pw>` should return `200`. `000` / NXDOMAIN = tunnel is dead → user restarts `cloudflared` on their Mac. `401` = wrong password. Never write the password onto the command line; put it in the URL only through `printf|curl … --data-urlencode`.
+3. **Webhook registration** — same host, `GET /api/v1/webhook/list?password=<pw>` returns the registered URLs. If the host is `localhost` / `127.0.0.1`, fix `BLUEBUBBLES_WEBHOOK_HOST` (case 2 above). If the port does not match Hermes's actual listener (default `:8645`), fix `BLUEBUBBLES_WEBHOOK_PORT`.
+4. **Hermes listener** — `ss -ltnp | grep 8645` on the device. Must bind on `0.0.0.0:8645` (or the device's LAN IP), not `127.0.0.1:8645` — same reason as (2): a bind to loopback is unreachable from the Mac. If loopback-bound, Hermes read `WEBHOOK_HOST` as empty at start; restart after fixing the env.
+5. **Identity self-loop** — only if 1–4 pass and the operator is testing from their OWN iPhone. Ask them to run the 10-second visual diagnostic from case 3 (send a message from iPhone, look at where it lands in Messages.app on the Mac: left = external / good; right = self / apply case 3's two-setting fix).
+
+There are no writes for this connector — the agent does not "post" through
+this skill; it replies through the normal turn pipeline once Hermes hands the
+inbound message to it. So there is no read-back gate here: the write-confirm
+rules above apply to the *agent's reply content*, which the normal voice /
+chat write-back path already covers, not to any curl in this section.
+
+Credential surface: `bluebubbles_password` is a secret and follows every rule
+in **Credential safety** — never `cat` `config.json`, never echo the env line,
+extract with `jq -r '.channels.imessage.bluebubbles_password'` into a shell
+variable used once. The server URL and user handle are not secrets and can
+appear in reports.
 
 **Gmail app password (special case):** Google's REST API rejects app passwords. Route to IMAP/SMTP instead:
 

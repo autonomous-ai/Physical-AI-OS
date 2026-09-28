@@ -731,3 +731,7 @@ full listener example lives in the file header of `lib/setupBridge.ts`.
 | `system/server/config/config.go` | Config load/save |
 | `scripts/imager/build-orangepi.sh`, `scripts/imager/build.sh`, `scripts/provision/setup.sh` | nginx config baked into the image (incl. `connect-src` CSP) |
 | `scripts/maintenance/patch-security.sh` | OTA security patch for already-provisioned devices (migrates CSP) |
+
+### iMessage setup credentials
+
+Setup and Wi-Fi provisioning accept the BlueBubbles server URL, password, and operator address for `channel=imessage`. These credentials must be persisted before runtime setup; Wi-Fi provisioning forwards the saved credentials into `SetupAgent`. Hermes consumes the saved config through presync.

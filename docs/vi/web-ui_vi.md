@@ -874,3 +874,7 @@ card không trực tiếp fetch. Cả hai dùng reverse proxy có xác thực
 không giữ màn hình loading hoặc số liệu cũ.
 
 Cảnh báo delivery Harness không còn chặn câu nói mới hoặc khóa trả lời câu hỏi. Check delivery kiểm receipt pending hiện tại; Dismiss without retrying bỏ cảnh báo mà không hủy hoặc gửi lại task.
+
+### Địa chỉ người vận hành iMessage
+
+Handle trong settings iMessage xác định hội thoại home của người vận hành. Đây không phải cam kết giới hạn người gửi: presync Hermes mặc định nhận tin khách hàng từ địa chỉ khác (`BLUEBUBBLES_ALLOW_ALL_USERS=true` nếu không override rõ ràng).

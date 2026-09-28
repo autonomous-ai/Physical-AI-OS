@@ -8,16 +8,19 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// SupportedChannels — Hermes Agent (Nous Research) delivers telegram/slack/discord
-// natively inside its own server; a channel is enabled by the presence of its tokens
-// in ~/.hermes/.env (Slack uses Socket Mode → SLACK_APP_TOKEN). os-server's only job
-// is to land creds in .env and bounce the gateway — it runs no channel receive loop
-// of its own. WhatsApp pairing (Baileys) is OpenClaw-only, so it is not listed here.
+// SupportedChannels — Hermes Agent (Nous Research) delivers telegram/slack/discord/
+// imessage natively inside its own server; a channel is enabled by the presence
+// of its tokens in ~/.hermes/.env (Slack uses Socket Mode → SLACK_APP_TOKEN;
+// iMessage rides on the BlueBubbles plugin → BLUEBUBBLES_SERVER_URL etc.).
+// os-server's only job is to land creds in .env and bounce the gateway — it
+// runs no channel receive loop of its own. WhatsApp pairing (Baileys) is
+// OpenClaw-only, so it is not listed here.
 func (s *HermesService) SupportedChannels() []string {
 	return []string{
 		domain.ChannelTelegram,
 		domain.ChannelSlack,
 		domain.ChannelDiscord,
+		domain.ChannelIMessage,
 	}
 }
 

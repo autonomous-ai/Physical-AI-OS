@@ -1556,6 +1556,9 @@ Command `question.answer` được lưu riêng với input task. Receipt complet
 chỉ đóng UI của command answer, không TTS. Liên kết task gốc tường minh giữ quyền
 nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không gửi lại command.
 
+### Cập nhật cấu hình iMessage
+
+Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_server_url`, `bluebubbles_user_address`, `bluebubbles_caller_context` sẽ giữ giá trị đã lưu. Chuỗi rỗng được gửi rõ ràng chỉ xoá field đó. Bỏ qua hoặc gửi rỗng `bluebubbles_password` vẫn giữ mật khẩu. Đổi setting không liên quan không được reset channel hoặc caller context.
 
 ### HAL startup timing
 

@@ -14,10 +14,20 @@ import (
 // because pairing is interactive (QR streaming) and the captive-portal setup
 // path can't carry a live event stream.
 const (
-	ChannelTelegram = "telegram"
-	ChannelSlack    = "slack"
-	ChannelDiscord  = "discord"
-	ChannelWhatsapp = "whatsapp"
+	ChannelTelegram  = "telegram"
+	ChannelSlack     = "slack"
+	ChannelDiscord   = "discord"
+	ChannelWhatsapp  = "whatsapp"
+	// ChannelIMessage — Apple iMessage via BlueBubbles. Apple has no third-party
+	// iMessage API, so the user brings their own bridge: a Mac (with Messages.app
+	// signed in) running the BlueBubbles server (bluebubbles.app), and the device
+	// talks to that server's REST + webhook API. Hermes has a native BlueBubbles
+	// plugin that consumes the credentials from env vars — os-server just lands
+	// them in ~/.hermes/.env and bounces the gateway, no receive loop of its own.
+	// Other runtimes (openclaw/codex/opencode/claudecode) do not have the plugin
+	// yet and return ErrChannelNotSupported for now — Phase 2 will add an OS-
+	// owned webhook receive loop that any runtime can use.
+	ChannelIMessage = "imessage"
 )
 
 type SetupRequest struct {
@@ -47,6 +57,16 @@ type SetupRequest struct {
 	DiscordBotToken string `json:"discord_bot_token"`
 	DiscordGuildID  string `json:"discord_guild_id"`
 	DiscordUserID   string `json:"discord_user_id"`
+
+	// iMessage channel (required when channel is imessage). Server URL is the
+	// BlueBubbles endpoint the user pasted from their Mac's BlueBubbles UI
+	// (e.g. "http://192.168.1.10:1234" for LAN, or an ngrok / Cloudflare tunnel
+	// URL for outside the LAN). Password is the BlueBubbles server password.
+	// UserAddress is the iMessage handle (phone or email) BlueBubbles should
+	// accept messages from — the operator's own iMessage identity.
+	BluebubblesServerURL  string `json:"bluebubbles_server_url"`
+	BluebubblesPassword   string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 
 	// setup custom provider for openclaw
 	LLMBaseURL string `json:"llm_base_url" validate:"required"`
@@ -150,6 +170,11 @@ type WifiProvisionRequest struct {
 	DiscordBotToken  string `json:"discord_bot_token"`
 	DiscordGuildID   string `json:"discord_guild_id"`
 	DiscordUserID    string `json:"discord_user_id"`
+	// iMessage / BlueBubbles (WifiProvisionRequest mirrors SetupRequest so the
+	// AP-portal fast path can carry the same credentials).
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesPassword    string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
 }
 
 // EffectiveChannel returns the resolved channel type, defaulting to "telegram".
@@ -161,6 +186,9 @@ func (r *SetupRequest) EffectiveChannel() string {
 	}
 	if r.Channel == ChannelDiscord {
 		return ChannelDiscord
+	}
+	if r.Channel == ChannelIMessage {
+		return ChannelIMessage
 	}
 	return ChannelTelegram
 }
@@ -184,6 +212,16 @@ func (r *SetupRequest) ValidateChannel() error {
 		}
 		if r.DiscordUserID == "" {
 			return fmt.Errorf("discord_user_id is required for discord channel")
+		}
+	case "imessage":
+		if r.BluebubblesServerURL == "" {
+			return fmt.Errorf("bluebubbles_server_url is required for imessage channel")
+		}
+		if r.BluebubblesPassword == "" {
+			return fmt.Errorf("bluebubbles_password is required for imessage channel")
+		}
+		if r.BluebubblesUserAddress == "" {
+			return fmt.Errorf("bluebubbles_user_address is required for imessage channel")
 		}
 	default:
 		if r.TelegramBotToken == "" {
@@ -227,6 +265,18 @@ type AddChannelRequest struct {
 	// whatsapp — bot login is handled interactively by the Baileys CLI; only
 	// the operator's E.164 phone number (the permitted DM caller) ships here.
 	WhatsappUserID string `json:"whatsapp_user_id"`
+
+	// iMessage via BlueBubbles. See ChannelIMessage docstring for the full
+	// architecture; here the tokens are just plumbed through the same
+	// persist-then-apply loop the other channels use.
+	BluebubblesServerURL   string `json:"bluebubbles_server_url"`
+	BluebubblesPassword    string `json:"bluebubbles_password"`
+	BluebubblesUserAddress string `json:"bluebubbles_user_address"`
+	// Optional plaintext prepended to every incoming iMessage as a system-
+	// context block so the LLM treats callers as customers. Empty = plugin
+	// default. Plumbed straight through persist-then-apply like the other
+	// bluebubbles_* fields.
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
 }
 
 // RefreshChannelRequest carries the credentials needed to re-apply a channel's
@@ -255,6 +305,12 @@ type RefreshChannelRequest struct {
 	DiscordBotToken string
 	DiscordGuildID  string
 	DiscordUserID   string
+
+	// iMessage / BlueBubbles
+	BluebubblesServerURL     string
+	BluebubblesPassword      string
+	BluebubblesUserAddress   string
+	BluebubblesCallerContext string
 }
 
 // EffectiveSlackMode resolves SlackMode, defaulting to "socket" so unset
@@ -275,6 +331,8 @@ func (r *AddChannelRequest) EffectiveChannel() string {
 		return ChannelDiscord
 	case ChannelWhatsapp:
 		return ChannelWhatsapp
+	case ChannelIMessage:
+		return ChannelIMessage
 	}
 	return ChannelTelegram
 }
@@ -310,6 +368,16 @@ func (r *AddChannelRequest) ValidateChannel() error {
 	case ChannelWhatsapp:
 		if r.WhatsappUserID == "" {
 			return fmt.Errorf("whatsapp_user_id is required for whatsapp channel")
+		}
+	case ChannelIMessage:
+		if r.BluebubblesServerURL == "" {
+			return fmt.Errorf("bluebubbles_server_url is required for imessage channel")
+		}
+		if r.BluebubblesPassword == "" {
+			return fmt.Errorf("bluebubbles_password is required for imessage channel")
+		}
+		if r.BluebubblesUserAddress == "" {
+			return fmt.Errorf("bluebubbles_user_address is required for imessage channel")
 		}
 	default:
 		if r.TelegramBotToken == "" {
@@ -523,6 +591,26 @@ const (
 	//                                        | status=failure error=<code>
 	KindChannelRefreshConfig = "channel.refresh_config"
 
+	// KindAddChannel is the data-envelope twin of the legacy root command
+	// `cmd:"add_channel"` (see CommandAddChannel). Same shape decoded from
+	// env.Data as MQTTAddChannelCommand; kept as a data kind so the backend
+	// can push it through the privacy-typed envelope path (env.Type ==
+	// MQTTDataTypePrivacy) — credentials never travel inline over MQTT,
+	// they are fetched over TLS from the backend before dispatchData sees
+	// them. The legacy inline root command still works; both paths share
+	// processAddChannel on the device side.
+	//
+	// Flow (inline):
+	//   server → device : {"cmd":"data","kind":"add_channel","data":{channel,config}}
+	//   device → server : status=success|failure (MQTTAddChannelResponse-shaped ack)
+	//
+	// Flow (privacy):
+	//   server → device : {"cmd":"data","kind":"add_channel","type":"privacy",
+	//                       "privacy":{url,token,...}}
+	//   device fetches  : GET <url> with token → returns {channel, config}
+	//   device dispatches: same as inline path with populated env.Data
+	KindAddChannel = "add_channel"
+
 	// KindChatSend starts an agent turn from the backend — the MQTT twin of the
 	// web monitor's POST /api/sensing/event, forwarded as type "mqtt_chat"
 	// (same gates as the monitor's "web_chat", distinct only so the Monitor's
@@ -645,6 +733,19 @@ type MQTTAddChannelCommand struct {
 	Config  map[string]interface{} `json:"config"`
 }
 
+// firstNonEmptyString reads the first key from cfg whose value is a non-empty
+// string. Lets iMessage accept both the short MQTT payload names ("server_url")
+// and the long device-config names ("bluebubbles_server_url") the FE also
+// sends upstream, without forcing the backend to pick one convention.
+func firstNonEmptyString(cfg map[string]interface{}, keys ...string) string {
+	for _, k := range keys {
+		if v, ok := cfg[k].(string); ok && v != "" {
+			return v
+		}
+	}
+	return ""
+}
+
 func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 	var req AddChannelRequest
 	req.Channel = r.Channel
@@ -664,6 +765,14 @@ func (r *MQTTAddChannelCommand) ToRequest() AddChannelRequest {
 		req.SlackWebhookPath, _ = cfg["webhook_path"].(string)
 	case ChannelWhatsapp:
 		req.WhatsappUserID, _ = cfg["user_id"].(string)
+	case ChannelIMessage:
+		// Accept both the short MQTT names ("server_url") and the long
+		// device-config names ("bluebubbles_server_url") so the backend
+		// can forward the FE payload as-is or shorten it — either works.
+		req.BluebubblesServerURL = firstNonEmptyString(cfg, "server_url", "bluebubbles_server_url")
+		req.BluebubblesPassword = firstNonEmptyString(cfg, "password", "bluebubbles_password")
+		req.BluebubblesUserAddress = firstNonEmptyString(cfg, "user_address", "bluebubbles_user_address")
+		req.BluebubblesCallerContext = firstNonEmptyString(cfg, "caller_context", "bluebubbles_caller_context")
 	default:
 		req.TelegramBotToken, _ = cfg["bot_token"].(string)
 		req.TelegramUserID, _ = cfg["chat_id"].(string)
@@ -829,6 +938,14 @@ type MQTTDataCommand struct {
 	Kind string          `json:"kind"`
 	Type string          `json:"type,omitempty"`
 	Data json.RawMessage `json:"data"`
+	// Channel is an optional disambiguation hint the backend can attach to
+	// generic kinds ("add_channel", "channel.refresh_config") when the queued
+	// data on the backend is channel-keyed. When present the device forwards
+	// it to the privacy fetch endpoint (`?kind=<k>&channel=<c>`) so the
+	// backend can return the specific channel's payload rather than whatever
+	// happens to be cached under just the kind key. Ignored when empty —
+	// legacy MQTT payloads without this field keep the old behaviour.
+	Channel string `json:"channel,omitempty"`
 }
 
 // MQTT data delivery types and statuses for the privacy envelope flow.
@@ -1437,6 +1554,13 @@ type ConfigPublicResponse struct {
 	DiscordGuildID     string   `json:"discord_guild_id"`
 	DiscordUserID      string   `json:"discord_user_id"`
 	WhatsappUserID     string   `json:"whatsapp_user_id"`
+	// iMessage via BlueBubbles — server URL + user handle are non-secret so
+	// they come back verbatim; the server password is surfaced only via
+	// HasBluebubblesPassword below. Caller context is a plaintext prompt the
+	// operator wrote, safe to expose (non-secret).
+	BluebubblesServerURL     string `json:"bluebubbles_server_url"`
+	BluebubblesUserAddress   string `json:"bluebubbles_user_address"`
+	BluebubblesCallerContext string `json:"bluebubbles_caller_context"`
 	LLMModel           string   `json:"llm_model"`
 	LLMBaseURL         string   `json:"llm_base_url"`
 	LLMDisableThinking bool     `json:"llm_disable_thinking"`
@@ -1467,10 +1591,11 @@ type ConfigPublicResponse struct {
 
 	// Presence booleans replace raw secret values. Frontend renders
 	// "configured · update" affordance when true, empty input when false.
-	HasTelegramBotToken bool `json:"has_telegram_bot_token"`
-	HasSlackBotToken    bool `json:"has_slack_bot_token"`
-	HasSlackAppToken    bool `json:"has_slack_app_token"`
-	HasDiscordBotToken  bool `json:"has_discord_bot_token"`
+	HasTelegramBotToken   bool `json:"has_telegram_bot_token"`
+	HasSlackBotToken      bool `json:"has_slack_bot_token"`
+	HasSlackAppToken      bool `json:"has_slack_app_token"`
+	HasDiscordBotToken    bool `json:"has_discord_bot_token"`
+	HasBluebubblesPassword bool `json:"has_bluebubbles_password"`
 	HasLLMAPIKey        bool `json:"has_llm_api_key"`
 	HasDeepgramAPIKey   bool `json:"has_deepgram_api_key"`
 	HasSTTAPIKey        bool `json:"has_stt_api_key"`
@@ -1513,6 +1638,13 @@ type UpdateConfigRequest struct {
 	DiscordUserID   string `json:"discord_user_id"`
 
 	WhatsappUserID string `json:"whatsapp_user_id"`
+
+	// iMessage plain fields distinguish omitted (preserve) from empty (clear).
+	// The password retains the existing empty-means-preserve secret contract.
+	BluebubblesServerURL     *string `json:"bluebubbles_server_url"`
+	BluebubblesPassword      string  `json:"bluebubbles_password"`
+	BluebubblesUserAddress   *string `json:"bluebubbles_user_address"`
+	BluebubblesCallerContext *string `json:"bluebubbles_caller_context"`
 
 	LLMBaseURL         string `json:"llm_base_url"`
 	LLMAPIKey          string `json:"llm_api_key"`

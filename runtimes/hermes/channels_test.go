@@ -10,9 +10,18 @@ import (
 
 func TestHermesSupportedChannels(t *testing.T) {
 	got := (&HermesService{}).SupportedChannels()
-	want := map[string]bool{domain.ChannelTelegram: true, domain.ChannelSlack: true, domain.ChannelDiscord: true}
+	// iMessage rides on the BlueBubbles plugin baked into the Hermes
+	// gateway; the plumbing is Hermes-side even though the bridge itself
+	// runs on the operator's Mac, so it belongs in this list next to the
+	// other three Hermes-native channels.
+	want := map[string]bool{
+		domain.ChannelTelegram: true,
+		domain.ChannelSlack:    true,
+		domain.ChannelDiscord:  true,
+		domain.ChannelIMessage: true,
+	}
 	if len(got) != len(want) {
-		t.Fatalf("SupportedChannels() = %v, want telegram/slack/discord", got)
+		t.Fatalf("SupportedChannels() = %v, want telegram/slack/discord/imessage", got)
 	}
 	for _, c := range got {
 		if !want[c] {
