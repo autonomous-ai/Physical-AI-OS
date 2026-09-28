@@ -172,3 +172,5 @@ using the existing [simulator development instructions](../../../../docs/simulat
 The Stack-chan setup replaces the `make sim` HAL step: do not launch a second
 HAL or the separate bridge on port 5001. No agent runtime or ESP32 firmware is
 installed by this profile.
+
+The opt-in commissioning factory extends `hal.runtime.app` (the full FastAPI application) before startup. It does not attach routes to the early-LED ASGI dispatcher. The normal `hal.server:app` entrypoint and its early readiness behavior remain unchanged.
