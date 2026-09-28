@@ -1315,8 +1315,17 @@ lời nói không cho ngắt vẫn được bảo vệ khi lấy loa. Native dù
 mở ở sample rate thiết bị và resample liên tục, tránh đóng/mở lại giữa audio
 filler cache và Gemini 24 kHz. Log device ngày 2026-09-25 xác nhận chunk native
 bị bỏ với `speaker busy, skipping` suốt filler, rồi stream đổi từ 44.1 sang
-24 kHz; người dùng chỉ nghe đuôi câu. Bản sửa đã có regression test local, chưa
-xác nhận phát tiếng trên device sau sửa.
+24 kHz; người dùng chỉ nghe đuôi câu. Ngày 2026-09-28, test phần cứng có kiểm soát
+trên `172.168.20.207` đưa audio Gemini Live Kore qua consumer native chế độ turn
+đã deploy và loa thật. Phát lại không/có filler cache cho ngắt đều giữ đủ 23 frame
+(184.321 sample nguồn). Lượt thứ hai nhận trực tiếp từ Gemini khi filler đang phát
+giữ đủ 28 frame (164.881 sample). Bản thu mic khớp đầu, giữa và cuối từng câu
+(tương quan waveform chuẩn hóa 0,66–0,81). Test yêu cầu nói bằng session Gemini
+announcement riêng; không kiểm tra đầu vào STT/wake-word qua mic hoặc Live Mode
+trên phần cứng. Lựa chọn ElevenLabs đã lưu được giữ nguyên. HAL được khởi động
+lại sau test; ba lần mute/unmute đều chỉ còn một recorder và không quan sát thấy
+lỗi mic busy. Đây là bằng chứng trong phạm vi test, không khẳng định mọi báo cáo
+mất tiếng đều có cùng nguyên nhân.
 
 Output pump của Live Mode cũng giữ các frame native đầu khi chưa lấy được loa,
 tối đa 30 giây audio nguồn cho mỗi reply. Khi lấy được loa, phát phần đầu đúng

@@ -1363,7 +1363,18 @@ the persistent device-rate stream with continuous resampling, avoiding a close
 and reopen between cached filler audio and Gemini's 24 kHz audio. On 2026-09-25,
 device logs showed native chunks discarded as `speaker busy, skipping` throughout
 a filler, followed by a 44.1-to-24 kHz stream reopen; only the answer tail played.
-The fix is locally regression-tested; no on-device playback validation is implied.
+On 2026-09-28, a controlled hardware test on `172.168.20.207` used Gemini Live
+Kore audio through the deployed turn-mode native consumer and actual speaker.
+Replay without/with a cached interruptible filler preserved all 23 frames
+(184,321 source samples). A second response streamed directly from Gemini while
+the filler was playing preserved all 28 frames (164,881 samples). The microphone
+recordings matched the beginning, middle and end of each response (normalized
+waveform correlation 0.66–0.81). The test requested speech through an isolated
+Gemini announcement session; it did not exercise microphone STT/wake-word entry
+or hardware Live Mode. The saved ElevenLabs selection was retained. HAL was
+restarted after testing; three mute/unmute cycles each left exactly one recorder
+and no capture-busy error was observed. This is bounded test evidence, not a
+claim that every reported truncation has the same cause.
 
 The Live Mode output pump also retains leading native frames while speaker
 admission is busy, up to 30 seconds of source audio per reply. It flushes the
