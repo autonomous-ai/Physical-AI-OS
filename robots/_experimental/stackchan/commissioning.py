@@ -72,8 +72,6 @@ def home_move(req: HomeMoveRequest):
 
 @router.post("/stop")
 def stop():
-    # Reuse the common stop's tracker/policy cleanup, translating only this
-    # driver's exception at the bench boundary. Standard routes stay unchanged.
     from hal.routes.servo import stop_servos
 
     _service()
@@ -86,8 +84,7 @@ def stop():
 @router.post("/release")
 def release():
     svc = _service()
-    # Stop background tracking before moving to rest, just as the common
-    # release route does. A failed tracker stop must not launch bench motion.
+    # A failed tracker stop must not launch bench motion.
     if state.tracker_service and state.tracker_service.is_tracking:
         try:
             state.tracker_service.stop()
@@ -109,7 +106,6 @@ def create_app():
         raise RuntimeError("Commissioning requires DEVICE_TYPE=stackchan and HAL_SIMULATE=0")
     from hal.server import app
 
-    # The standard hal.server:app entrypoint never imports this module.
     if not any(route.path == "/stackchan/home" for route in app.routes):
         app.include_router(router)
     return app

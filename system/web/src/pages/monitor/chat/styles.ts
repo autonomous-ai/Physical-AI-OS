@@ -1,7 +1,6 @@
 import type { CSSProperties } from "react";
 
-// Shared field/button styles for the Skills modals. Kept out of ModalShell.tsx
-// so that file exports components only (react-refresh/only-export-components).
+// Separate module so ModalShell.tsx only exports components (Fast Refresh).
 
 export const fieldLabel: CSSProperties = {
   display: "block", fontSize: 11, fontWeight: 600, letterSpacing: "0.02em",
@@ -17,16 +16,12 @@ export const btnStyle: CSSProperties = {
   padding: "8px 16px", borderRadius: 9, fontSize: 12.5, fontWeight: 600,
 };
 
-// Hover state for the skill cards in Browse skills / Manage skills: an amber
-// wash plus an amber-tinted border. Imperative rather than CSS because the cards
-// are inline-styled — and shared so the two grids can't drift apart.
+// Hover state for the skill cards in Browse skills / Manage skills
 export function applyCardHover(el: HTMLElement, on: boolean) {
   el.style.background = on ? "color-mix(in srgb, var(--lm-amber) 10%, var(--lm-card))" : "var(--lm-card)";
   el.style.borderColor = on ? "color-mix(in srgb, var(--lm-amber) 45%, transparent)" : "var(--lm-border)";
 }
 
-// Dropdown surface shared by the composer's "+" fly-out and the "New" menu in
-// the Manage skills header. The anchor (top/bottom/left/right) is the caller's.
 export const menuPanel: CSSProperties = {
   position: "absolute",
   background: "var(--lm-surface)",

@@ -14,28 +14,16 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// hermesHome is the Hermes data dir (matches runtimes/hermes/install.sh HERMES_DIR
-// and the persona-migration target). SOUL.md — the file Hermes loads as its
-// identity prompt — lives at its root.
+// hermesHome is the Hermes data dir (matches runtimes/hermes/install.sh HERMES_DIR and the persona-migration target).
 const hermesHome = "/root/.hermes"
 
-// identitySoulHeading marks the identity block the openclaw→hermes migration
-// inlines into SOUL.md (see system/agent/migrate_persona). UpdateIdentityName
-// appends one with this heading when the soul has no name line yet — keep the text
-// identical to that migration so the two paths stay consistent.
+// identitySoulHeading marks the identity block the openclaw→hermes migration inlines into SOUL.md (see system/agent/migrate_persona).
 const identitySoulHeading = "## Your identity card"
 
 // Match an actual name field, never inline examples in SOUL instructions.
 var soulNameLine = regexp.MustCompile(`(?i)^(\s*(?:[-*]\s+)?)\*\*name:\*\*\s*(.*)$`)
 
-// UpdateIdentityName rewrites the agent's name under Hermes by editing the
-// `**Name:**` line in <hermes>/SOUL.md — the file Hermes loads as its identity.
-// Hermes has no separate IDENTITY.md slot (its own claw-migrate archives that
-// file; the openclaw→hermes migration inlines the name into SOUL under an
-// identity-card block instead). Replaces the existing name in place, or appends a
-// fresh identity-card block when none exists. Atomic tmp+rename so a mid-write
-// crash can't truncate the soul. Takes effect on the next Hermes session (no
-// gateway restart is forced).
+// UpdateIdentityName rewrites the agent's name under Hermes by editing the `**Name:**` line in <hermes>/SOUL.md — the file Hermes loads as its identity.
 func (s *HermesService) UpdateIdentityName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -75,10 +63,7 @@ func (s *HermesService) UpdateIdentityName(name string) error {
 	return nil
 }
 
-// rewriteSoulName returns content with the first `**name:**` line's value replaced
-// by name (preserving the bullet prefix, dropping any trailing description). When
-// no name line exists, appends a fresh identity-card block so Hermes — which reads
-// SOUL.md — picks up the name.
+// rewriteSoulName returns content with the first `**name:**` line's value replaced by name (preserving the bullet prefix, dropping any trailing description).
 func rewriteSoulName(content, name string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -96,14 +81,7 @@ func rewriteSoulName(content, name string) string {
 	return prefix + "\n" + identitySoulHeading + "\n\n- **Name:** " + name + "\n"
 }
 
-// WatchIdentity polls SOUL.md and pushes updated wake words to HAL + the i18n
-// device name whenever the agent's name changes (e.g. the user says "call
-// yourself Noah"). Mirrors runtimes/openclaw/service_identity.go WatchIdentity —
-// the only differences are the watched file (SOUL.md, since Hermes has no
-// IDENTITY.md slot — the name is inlined as a `**Name:**` card line) and the
-// log component. Voice wake words come from the shared i18n.BuildVoiceWakeWords
-// (OpenClaw's private buildWakeWords is the same 5 variants); i18n.SetDeviceName
-// then refreshes the {name}/{Name} placeholders + chitchat strip list itself.
+// WatchIdentity polls SOUL.md and pushes updated wake words to HAL + the i18n device name whenever the agent's name changes (e.g. the user says "call yourself Noah").
 func (s *HermesService) WatchIdentity(ctx context.Context) {
 	soulPath := filepath.Join(hermesHome, "SOUL.md")
 	var lastName string
@@ -125,15 +103,11 @@ func (s *HermesService) WatchIdentity(ctx context.Context) {
 		words := i18n.BuildVoiceWakeWords(name)
 		slog.Info("agent renamed, updating wake words", "component", "hermes", "name", name, "words", words)
 		hal.SetVoiceConfig(words)
-		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too
+		i18n.SetDeviceName(name)
 	}
 }
 
-// parseSoulName extracts the agent name from the `- **Name:** <value>` card line
-// in SOUL.md. Mirrors openclaw.parseIdentityName: same line format, same trailing-
-// description strip (" — ...", " - ...", " | ..."). Only the explicit owner-set
-// name line is read — not the soul body's "You are **X**" — matching what
-// UpdateIdentityName writes.
+// parseSoulName extracts the agent name from the `- **Name:** <value>` card line in SOUL.md.
 func parseSoulName(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		field := soulNameLine.FindStringSubmatch(line)

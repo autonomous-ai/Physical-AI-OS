@@ -27,7 +27,6 @@ class _StatusWebSocket:
         self._receive_seq += 1
         capture = self._current_receive.get()
         if capture is not None:
-            # Keep parsing and transport errors under the SDK's ownership.
             try:
                 payload = json.loads(raw)
             except (ValueError, TypeError, UnicodeError):
@@ -42,7 +41,6 @@ class _StatusWebSocket:
             if isinstance(content, dict):
                 transcription = content.get("outputTranscription")
                 if isinstance(transcription, dict):
-                    # Observe the wire before SDK conversion or HAL buffering.
                     # Never dump the full payload (audio/image bytes or tokens).
                     logger.info(
                         "[realtime][wire-output] session=%s rx=%d status=%s "
@@ -58,11 +56,7 @@ class _StatusWebSocket:
         return raw
 
     def trace_endpoint(self, capture, message):
-        """Diagnose missing signals without changing SDK messages or VAD setup.
-
-        Counts belong to this socket, never a user interaction. Only enums and
-        offsets are logged; no audio, transcripts, credentials or full payloads.
-        """
+        """Diagnose missing signals without changing SDK messages or VAD setup (enums/offsets only)."""
         wire = capture.get("endpoint_wire", {})
         activity = wire.get("voiceActivity")
         legacy = wire.get("voiceActivityDetectionSignal")
@@ -91,10 +85,7 @@ class _StatusWebSocket:
 def install_interaction_status(session):
     """Attach raw serverContent.interactionStatus to this session's parsed messages.
 
-    google-genai 2.12.1 strips this field in its converter. Wrap only this live
-    session, retaining the SDK's parsing, validation, and exception behavior.
-    The context-local capture associates metadata with the exact receive call;
-    missing fields never inherit status from a preceding message.
+    google-genai 2.12.1 strips this field in its converter.
     """
     if isinstance(session._ws, _StatusWebSocket):
         return

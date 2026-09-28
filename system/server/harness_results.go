@@ -107,7 +107,6 @@ func (s *Server) reserveHarnessResult(frame harness.Frame, peer harness.ResultCo
 			return errors.New("Harness key belongs to an earlier server instance; reconcile its original receipt without resending")
 		}
 		if old.Owner == in.Owner && old.ServerInstanceID == in.ServerInstanceID && old.IdempotencyKey == key {
-			// Retries retain the original deadline, not a fresh fifteen-minute lease.
 			in.ExpiresAt = old.ExpiresAt
 		}
 	}
@@ -157,7 +156,6 @@ func (s *Server) bindHarnessResultReceipt(frame harness.Frame, peer harness.Resu
 		s.wakeHarnessResults()
 		return
 	}
-	// Only receipts matching a local reservation can introduce delivery IDs.
 	for _, in := range s.harnessResults.Inputs() {
 		if in.Owner != peer.Owner || in.ServerInstanceID != value("serverInstanceId") || in.IdempotencyKey != value("idempotencyKey") {
 			continue
@@ -185,8 +183,6 @@ func (s *Server) captureHarnessResult(frame harness.Frame, peer harness.ResultCo
 	if err != nil {
 		return err
 	}
-	// Envelope identity belongs to the live transport; payload identity belongs
-	// to the original receipt and may predate a daemon restart.
 	if transport, ok := frame["serverInstanceId"].(string); ok && transport != peer.ServerInstanceID {
 		return errors.New("Harness summary transport instance mismatch")
 	}
@@ -294,7 +290,6 @@ func (s *Server) processHarnessResults(peer harness.ResultContext) {
 			continue
 		}
 		if record, fresh, err := s.harnessResults.Apply(peer.Owner, staged.Frame, time.Now()); err != nil {
-			// A missing or conflicting member blocks the whole group. Keep the inbox.
 			slog.Warn("Harness result awaits receipt reconciliation", "result_id", p.ResultID, "error", err)
 		} else if fresh {
 			for _, in := range record.Inputs {
@@ -331,7 +326,7 @@ func (s *Server) harnessResultDestinationCurrent(peer harness.ResultContext, r h
 }
 
 func harnessResultReference(r harness.ResultRecord) string {
-	// Opaque local retrieval ID; remote identifiers cannot inject URLs or markup.
+	// Opaque local ID; remote identifiers cannot inject URLs or markup.
 	b, _ := json.Marshal([]string{r.Owner, r.Payload.ServerInstanceID, r.Payload.ResultID})
 	digest := sha256.Sum256(b)
 	return hex.EncodeToString(digest[:])
@@ -371,8 +366,7 @@ func (s *Server) deliverStoredHarnessResult(peer harness.ResultContext, r harnes
 			return
 		}
 	}
-	// Persist the outbox claim before any irreversible notification. A failed
-	// claim leaves UI and speech eligibility intact for a later storage retry.
+	// Persist the outbox claim before any irreversible notification.
 	claimed := false
 	if r.SpeechState == "pending" {
 		var err error

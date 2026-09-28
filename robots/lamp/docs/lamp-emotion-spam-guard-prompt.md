@@ -17,7 +17,7 @@ We need a pragmatic production guard. It is better to drop/merge uncertain emoti
 
 - **Phase 1 — TTL map dedup**: ✅ done. `_last_sent_by_key: dict[tuple[str, str], float]` in `emotion.py`; old entries pruned each flush.
 - **Phase 2 — polarity bucket dedup**: ✅ done. `EMOTION_BUCKETS` collapses fine-grained labels into `positive` / `negative` / `other`; dedup key is `(current_user, bucket)`.
-- **Outbound message hedge** (the "more product-correct variant" below): ✅ done. Message now appends a parenthetical with `confidence`, `bucket`, and a bucket-tuned hedge clause. The raw `Emotion detected: <Label>.` prefix is preserved so `user-emotion-detection/SKILL.md` parser + Fear→stressed / Sad→sad mood mapping keep working unchanged. See `docs/sensing-behavior.md` → `emotion.detected event` for the full spec.
+- **Outbound message hedge** (the "more product-correct variant" below): ✅ done. Message now appends a parenthetical with `confidence`, `bucket`, and a bucket-tuned hedge clause. The raw `Emotion detected: <Label>.` prefix is preserved so `user-emotion-detection/SKILL.md` parser + Fear→stressed / Sad→sad mood mapping keep working unchanged. See `robots/lamp/docs/sensing-behavior.md` → `emotion.detected` event for the full spec.
 
 What remains open:
 
@@ -30,7 +30,7 @@ What remains open:
 
 - `hal/drivers/sensing/perceptions/processors/emotion.py`
 - `hal/drivers/sensing/perceptions/processors/motion.py`
-- `hal/drivers/sensing/perceptions/processors/faceid/` (face recognizer; `facerecognizer.py` is the legacy InsightFace version, unused)
+- `hal/drivers/sensing/perceptions/processors/faceid/` (face pipeline; `processors/facerecognizer_v2.py` is a back-compat re-export shim for it)
 - `hal/drivers/sensing/sensing_service.py`
 - `hal/config.py`
 

@@ -65,12 +65,7 @@ def _orchestrator_for_rebuild(
 
 
 def _wait_disconnected(agent, timeout=2.0):
-    """The replaced session is closed on its own thread, so poll for it.
-
-    Nothing waits on that close (see RealtimeOrchestrator._disconnect_in_background):
-    it used to sit in the turn's critical path. The invariant these tests guard
-    is that the old session IS dropped, not that it is dropped synchronously.
-    """
+    """The replaced session is closed on its own thread, so poll for it."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         if agent.disconnected:
@@ -89,7 +84,6 @@ def test_noise_drop_rebuild_reserves_session_before_connecting():
     assert entered.wait(timeout=1.0)
     assert orchestrator.rebuilding
     assert not orchestrator.available
-    # A second false trigger must not start a competing connection.
     assert not orchestrator.discard_open_activity("noise-drop")
 
     release.set()

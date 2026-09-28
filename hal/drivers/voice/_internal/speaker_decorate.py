@@ -1,14 +1,4 @@
-"""Post-STT transcript decoration.
-
-Wraps three closely-related concerns that all run after STT produces a final
-transcript:
-
-  1. Wake-word resolution    — strip "hey <name>" prefix, classify event type
-  2. Speaker identification  — prefix "<Name>: " from voice embedding
-  3. Speech-emotion submit   — async SER call on the full mic session
-
-All speaker-recog + SER state lives here so VoiceService doesn't carry it.
-"""
+"""Post-STT transcript decoration."""
 
 import logging
 import os
@@ -41,19 +31,12 @@ def _sentences(transcript: str) -> list[str]:
 
 
 def _name_is_near(heard: str, expected: str) -> bool:
-    """Whether one heard word is the expected NAME with at most one typo.
-
-    Levenshtein distance 1 (one substitution, insertion or deletion), computed
-    on words short enough that the loop is free. Deliberately not a phonetic
-    matcher: the failure this exists for is STT swapping a single letter in a
-    name it half-heard, and a looser measure would start accepting real words.
-    """
+    """Whether one heard word is the expected NAME with at most one typo."""
     if heard == expected:
         return True
     if abs(len(heard) - len(expected)) > 1:
         return False
     if len(heard) < 3 or len(expected) < 3:
-        # A one-letter slip in a two-letter name is a different word, not a typo.
         return False
     if len(heard) == len(expected):
         return sum(a != b for a, b in zip(heard, expected)) == 1
@@ -63,7 +46,7 @@ def _name_is_near(heard: str, expected: str) -> bool:
     for j, ch in enumerate(long):
         if i < len(short) and short[i] == ch:
             i += 1
-        elif j - i:  # a second mismatch
+        elif j - i:
             return False
     return True
 
@@ -71,12 +54,8 @@ def _name_is_near(heard: str, expected: str) -> bool:
 def _phrase_matches_loosely(sentence_part: str, phrase: str) -> bool:
     """Whether a wake phrase matches with one typo allowed in its LAST word.
 
-    The prefix ("hello", "hey", ...) must match exactly — it is a common word
-    STT gets right, and loosening it would start matching ordinary speech. Only
-    the name is allowed to be off by one, because that is the word STT has no
-    reason to expect. Device-observed 04/09/2026 on lamp-0c89: "hello lamp" was
-    transcribed correctly in the partial and re-transcribed as "hello lamb" in
-    the final.
+    The prefix ("hello", "hey", ...) must match exactly — it is a common word STT gets
+    right, and loosening it would start matching ordinary speech.
     """
     heard = sentence_part.split()
     expected = phrase.split()
@@ -103,10 +82,7 @@ def merge_wake_words(*word_lists: list[str]) -> list[str]:
 def merge_stt_hypothesis(previous: str, current: str) -> str:
     """Merge cumulative and delta-style STT transcript updates.
 
-    Providers do not agree on interim semantics. One may send ``Hello`` then
-    ``Hello Luna``; another may send ``Hello`` then only the new token
-    ``Luna``. The wake-word gate needs a single leading hypothesis for both
-    shapes, without waiting for end-of-speech.
+    Providers do not agree on interim semantics.
     """
     previous_words = re.findall(r"\w+", previous.casefold())
     current_words = re.findall(r"\w+", current.casefold())
@@ -119,15 +95,12 @@ def merge_stt_hypothesis(previous: str, current: str) -> str:
     if previous_words[:len(current_words)] == current_words:
         return " ".join(current_words)
 
-    # Delta-style updates can repeat their boundary word ("hello luna" then
-    # "luna what time is it"). Keep the longest shared suffix/prefix once.
     overlap = min(len(previous_words), len(current_words))
     while overlap and previous_words[-overlap:] != current_words[:overlap]:
         overlap -= 1
     return " ".join(previous_words + current_words[overlap:])
 
 
-# Sentinel for "the recognizer ran and could not place this voice".
 UNKNOWN_LABEL = "unknown"
 
 
@@ -138,14 +111,9 @@ class SpeakerDecorator:
         self._wake_words: list = list(wake_words)
         self._wake_words_lock = threading.Lock()
 
-        # Enroll-nudge cooldown per voiceprint_hash. In-memory only — resets on
-        # restart (acceptable; worst case is one extra prompt after reboot).
         self._last_nudge_time: dict[str, float] = {}
         self._nudge_cooldown_s: float = nudge_cooldown_s
 
-        # Last recognizer verdict, reused for a short while instead of paying an
-        # external inference call per turn. Holds unknowns too — see
-        # _cached_identity. (name, display, monotonic-ish wall clock).
         self._identity_cache: Optional[tuple[str, Optional[str], float]] = None
         self._identity_cache_lock = threading.Lock()
 
@@ -185,7 +153,6 @@ class SpeakerDecorator:
                         setattr(self, attribute, service)
                         logger.info("Optional voice service %s initialization complete", attribute)
                         return
-                # Speaker ID is process-shared; only SER belongs to this instance.
                 if attribute == "_speech_emotion":
                     service.stop()
                 return
@@ -200,14 +167,8 @@ class SpeakerDecorator:
             if self._speech_emotion is not None:
                 self._speech_emotion.stop()
 
-    # ------------------------------------------------------------------
-    # Lazy service init
-    # ------------------------------------------------------------------
     @staticmethod
     def _init_speaker(enable_people_perception: bool = True):
-        # Speaker recognition (identifying WHO is speaking from their voiceprint)
-        # is voice people-perception — gated on the `audio` capability (the mic).
-        # It needs only a mic, so any device that declares `audio` runs it.
         if not enable_people_perception:
             logger.info("Speaker recognition off — device does not declare 'audio' (no mic for voice people-perception)")
             return None
@@ -239,9 +200,6 @@ class SpeakerDecorator:
 
     @staticmethod
     def _init_speech_emotion(enable_people_perception: bool = True):
-        # Speech emotion (reading the user's emotion from voice) is voice
-        # people-perception — gated on the `audio` capability (the mic), not the
-        # camera. Any device with a mic runs it; it is not a hard requirement.
         if not enable_people_perception:
             logger.info("Speech emotion recognition off — device does not declare 'audio' (no mic for voice people-perception)")
             return None
@@ -260,9 +218,6 @@ class SpeakerDecorator:
             logger.warning("Speech emotion service init failed: %s", e)
             return None
 
-    # ------------------------------------------------------------------
-    # Wake-word management
-    # ------------------------------------------------------------------
     def set_wake_words(self, words: list) -> None:
         """Update wake word list at runtime (called when agent is renamed)."""
         with self._wake_words_lock:
@@ -279,29 +234,9 @@ class SpeakerDecorator:
     def starts_with_wake_word(self, transcript: str) -> bool:
         """Return true when a wake phrase opens or closes any SENTENCE.
 
-        Three positions, deliberately not four:
-
-          * sentence start — "hey luna, what time is it"
-          * sentence end   — "what time is it, hey luna" (vocative; how people
-            actually talk once a thought arrives before they remember to
-            address the device)
-          * a LATER sentence — a mic session is one continuous stretch of
-            speech, not one sentence, so STT hands back
-            "What was the score? Hi lamp, can you hear me?" as ONE transcript.
-            Matching only the head of the whole thing threw that turn away
-            entirely: the gate rejected it, the question never reached the
-            agent, and the user just saw silence (device-observed 18/08/2026).
-
-        Mid-sentence stays rejected — the agent's name landing inside a
-        sentence is ordinary conversation ABOUT the device ("this lamp is
-        nice"), and letting that open the gate is how a device barges into a
-        chat between two other people.
-
-        Case and punctuation are ignored so Deepgram variants such as
-        ``Hey Luna, ...`` and ``hey luna ...`` both match.
-
-        Name kept as-is: every caller reads it as "is this turn addressed to
-        us", and the sentence-level rule is what that question always meant.
+        Matching only the head of the whole thing threw that turn away entirely: the
+        gate rejected it, the question never reached the agent, and the user just saw
+        silence (device-observed 18/08/2026).
         """
         phrases = self._normalized_wake_phrases()
         if not phrases:
@@ -319,18 +254,8 @@ class SpeakerDecorator:
     def matches_wake_word_loosely(self, transcript: str) -> bool:
         """Same sentence-position rule as starts_with_wake_word, one typo allowed.
 
-        Used ONLY to confirm a gate that an exactly-matching partial already
-        opened — never to open one. That is what keeps it safe: to reach this
-        check at all, the speaker must already have said the name correctly
-        enough for STT to transcribe it exactly once, so an ambient sentence
-        containing a near-miss word can not wake anything.
-
-        It exists because the confirmation step compares against the FINAL
-        transcript, and STT rewrites its own hypothesis there. Device-observed
-        04/09/2026 on lamp-0c89: partial 'hello lamp' opened the gate, the final
-        came back 'Hello, lamb. Can you hear me?', exact confirmation failed and
-        the whole turn was dropped — no realtime turn, no thinking cue, and the
-        question fell through to the much slower main agent.
+        Used ONLY to confirm a gate that an exactly-matching partial already opened —
+        never to open one.
         """
         phrases = self._normalized_wake_phrases()
         if not phrases:
@@ -350,16 +275,7 @@ class SpeakerDecorator:
         return False
 
     def classify_wake_word(self, combined: str) -> tuple[str, str]:
-        """Classify a leading wake phrase without modifying the transcript.
-
-        Returns (final_text, event_type):
-          * final_text — original text sent to the OS server, including the
-            wake phrase.
-          * event_type — "voice_command" if a wake word matched at the start,
-                         else "voice".
-
-        Empty combined → ("", "voice"); caller typically skips the POST then.
-        """
+        """Classify a leading wake phrase without modifying the transcript."""
         if not combined:
             return "", "voice"
 
@@ -367,9 +283,6 @@ class SpeakerDecorator:
             return combined, "voice_command"
         return combined, "voice"
 
-    # ------------------------------------------------------------------
-    # Speaker identification
-    # ------------------------------------------------------------------
     @staticmethod
     def _should_request_speaker_enroll(
         transcript: str,
@@ -417,14 +330,7 @@ class SpeakerDecorator:
                 f"user's request without asking their name.)"
             )
 
-        # No trailing "otherwise ask them to introduce themselves". This branch is
-        # the one a meaningless fragment lands in — too short to enrol IS the
-        # common case for a lone word STT scraped off someone talking nearby —
-        # and that clause is an imperative glued onto the turn text itself. The
-        # model then obeys the nearest, most specific instruction over the
-        # silence rule and greets a passer-by ("I don't think we've met, what's
-        # your name?") on the strength of one word. Surface the path and the tag
-        # so a LATER real turn can still enrol; never ask on this one.
+        # No trailing "otherwise ask them to introduce themselves".
         return (
             f"Unknown Speaker:{hash_tag} {transcript} "
             f"(audio saved at {audio_path}. Note: audio is too short for "
@@ -432,16 +338,11 @@ class SpeakerDecorator:
             f"combine their saved paths with this one when enrolling.)"
         )
 
-    # ------------------------------------------------------------------
-    # Identity cache
-    # ------------------------------------------------------------------
     def _cached_identity(self, in_followup: bool) -> Optional[tuple[str, Optional[str]]]:
         """Return (name, display) when the last result is still good enough.
 
-        Recognition is an external call and voices do not change mid-sentence,
-        let alone mid-conversation. Without this the same speaker is re-derived
-        from scratch on every turn, and each derivation sits in front of the
-        model receiving the audio.
+        Recognition is an external call and voices do not change mid-sentence, let alone
+        mid-conversation.
         """
         with self._identity_cache_lock:
             entry = self._identity_cache
@@ -474,29 +375,13 @@ class SpeakerDecorator:
     def identify_and_decorate(
         self, transcript: str, audio_buffer: list[bytes], in_followup: bool = False,
     ) -> tuple[str, Optional[str], Optional[str]]:
-        """Run speaker recognition; return (OS server message, SER user, display).
-
-        - OS server message — transcript decorated with the speaker prefix.
-        - SER user — known label or "unknown" (only when recognize completes
-          without `error`); None skips SER.
-        - display — the matched speaker's display name (e.g. "Darren") on a
-          confident match, else None. Used to name the voice speaker in the
-          realtime turn context WITHOUT re-running recognition; None on
-          unknown / gate-reject / server error so the caller falls back cleanly.
-
-        `in_followup` marks a turn inside a wake-word follow-up window, where a
-        cached identity is held for the whole window: those turns are one
-        conversation by definition.
-        """
+        """Run speaker recognition; return (OS server message, SER user, display)."""
         logger.info("Identify and decorate transcript: raw transcript is: '%s'", transcript)
         cached = self._cached_identity(in_followup)
         if cached is not None:
             name, display = cached
             if name != UNKNOWN_LABEL:
                 return f"Speaker - {display}: {transcript}", name, display
-            # A cached unknown returns the plain transcript: the decorated
-            # "unknown speaker" message exists to hand the enrolment UI the WAV
-            # path of THIS utterance, and a cache hit produced no new one.
             return transcript, UNKNOWN_LABEL, None
         if self._speaker is None:
             logger.info(
@@ -515,7 +400,7 @@ class SpeakerDecorator:
             return transcript, None, None
 
         total_bytes = sum(len(b) for b in audio_buffer)
-        duration_s = total_bytes / (STT_RATE * 2)  # int16 mono
+        duration_s = total_bytes / (STT_RATE * 2)
         if duration_s < SPEAKER_MIN_AUDIO_S:
             logger.info(
                 "Skip speaker ID: only %.2fs of audio buffered (<%.2fs)",
@@ -564,21 +449,12 @@ class SpeakerDecorator:
             transcript, audio_path, duration_s, vp_hash,
         ), UNKNOWN_USER_LABEL, None
 
-    # ------------------------------------------------------------------
-    # Speech-emotion submission
-    # ------------------------------------------------------------------
     @staticmethod
     def _session_wav_for_ser(audio_buffer: list[bytes]) -> Optional[tuple[bytes, float]]:
         """Build mono 16 kHz WAV + duration from the STT session buffer (for SER)."""
         if not audio_buffer:
             return None
         duration_s = sum(len(b) for b in audio_buffer) / (STT_RATE * 2)
-        # SPEAKER_MIN_AUDIO_S (0.8s) is INERT on the SER path: SpeechEmotionService
-        # .submit() applies its own SPEECH_EMOTION_MIN_AUDIO_S (3.0s) floor, and
-        # only the larger of the two can bind. Raising or lowering the speaker knob
-        # looks like it should change what SER sees, and does not — tune
-        # HAL_SPEECH_EMOTION_MIN_AUDIO_S for that. Kept rather than deleted because
-        # this helper's floor is correct for the speaker path it is named after.
         if duration_s < SPEAKER_MIN_AUDIO_S:
             return None
         try:
@@ -597,11 +473,7 @@ class SpeakerDecorator:
     def submit_speech_emotion_from_session(
         self, audio_buffer: list[bytes], user: str = "unknown",
     ) -> None:
-        """Submit SER on the full mic-session buffer (async via the service).
-
-        A turn ignored by the wake-word gate does not run speaker
-        identification, so its SER record intentionally uses ``unknown``.
-        """
+        """Submit SER on the full mic-session buffer (async via the service)."""
         if self._speech_emotion is None or not self._speech_emotion.available:
             logger.info(
                 "Speech emotion submit skipped: service_init=%s available=%s",

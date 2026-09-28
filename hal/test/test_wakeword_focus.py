@@ -26,14 +26,6 @@ def test_zero_timeout_disables_focus():
     assert not focus.is_active()
 
 
-# --- How much floor each opener may claim (F20) ---
-#
-# Three things open the wake gate: the spoken phrase, a single click, and (when
-# armed) gaze. The first two are deliberate acts. Gaze is an inference from
-# where a head was pointing, and the window it opens is EXTENDED by every later
-# authorised turn — so a wrong inference costs a conversation, not a turn.
-
-
 def test_an_inferred_wake_claims_less_floor():
     now = [10.0]
     focus = WakeWordFocus(60.0, clock=lambda: now[0])
@@ -54,11 +46,7 @@ def test_a_shorter_grant_can_never_exceed_the_configured_window():
 
 
 def test_a_short_grant_does_not_cut_back_a_window_already_open():
-    """A deliberate wake mid-conversation keeps its full floor.
-
-    Otherwise a gaze sample landing inside a wake-word conversation would
-    shorten it — the opposite of what the cap is for.
-    """
+    """A deliberate wake mid-conversation keeps its full floor."""
     now = [10.0]
     focus = WakeWordFocus(60.0, clock=lambda: now[0])
 

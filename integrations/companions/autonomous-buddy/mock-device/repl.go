@@ -212,8 +212,7 @@ func printResponse(raw json.RawMessage) {
 	}
 }
 
-// truncateLarge prevents the REPL from dumping huge base64 strings (e.g. screenshot image_b64)
-// to the terminal. Keys with values >200 chars are shown as "<N chars>".
+// truncateLarge replaces string values >200 chars (e.g. image_b64) with "<N chars>".
 func truncateLarge(v any) any {
 	m, ok := v.(map[string]any)
 	if !ok {

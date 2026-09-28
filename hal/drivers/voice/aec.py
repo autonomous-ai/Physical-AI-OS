@@ -1,16 +1,4 @@
-"""Acoustic echo cancellation for the mic path (WebRTC AEC3).
-
-Provider-independent: the reference is tapped at the TTS output stream, so it
-covers synthesized speech, queued speech and realtime native audio alike.
-
-Requires `aec-audio-processing` (SWIG binding over libwebrtc-audio-processing-2).
-It is NOT a hal dependency — absent or unloadable, every entry point here
-degrades to a no-op and the voice path behaves exactly as before.
-
-Wiring:
-    tts/service.py  _WatchedStream.write  → reference_write()
-    voice_service.py mic open             → wrap_mic()
-"""
+"""Acoustic echo cancellation for the mic path (WebRTC AEC3)."""
 
 import logging
 import os
@@ -21,7 +9,7 @@ from math import gcd
 
 logger = logging.getLogger("hal.voice.aec")
 
-FRAME_MS = 10  # APM's fixed frame size
+FRAME_MS = 10
 # Mean square of an int16 frame at RMS 1000 — well over the ~6 room floor
 # measured on this hardware, so a 'dry and loud' frame really is the mic
 # hearing the speaker with no reference to cancel it against.
@@ -35,11 +23,7 @@ _unavailable_logged = False
 
 
 class EchoReference:
-    """FIFO of audio handed to the speaker, drained by the canceller.
-
-    Bounded to `max_ms`: older audio is past any useful alignment and letting it
-    pile up drifts the reference out of step with the mic.
-    """
+    """FIFO of audio handed to the speaker, drained by the canceller."""
 
     def __init__(self, rate: int, max_ms: int = 500):
         self._max_ms = max_ms
@@ -78,14 +62,7 @@ class EchoReference:
             self._append(pcm.tobytes())
 
     def read(self, nbytes: int):
-        """Take the next `nbytes` of played audio; zero-pad if it ran dry.
-
-        Returns `(pcm, underran)`. The flag matters: an all-zero reference is
-        ambiguous on its own — it means either a genuine silence in the reply
-        (nothing to cancel, mic is clean) or a starved FIFO (echo present, no
-        reference to cancel it with). Only the caller that knows which can make
-        a safe decision, so say it here instead of guessing downstream.
-        """
+        """Take the next `nbytes` of played audio; zero-pad if it ran dry."""
         with self._lock:
             if len(self._buffer) >= nbytes:
                 out = bytes(self._buffer[:nbytes])
@@ -109,12 +86,7 @@ class EchoReference:
 
 
 class EchoCanceller:
-    """Runs mic audio through WebRTC's APM with played audio as the reference.
-
-    `process()` is the only hot path: it buffers to APM's fixed 10 ms frames and
-    returns exactly as many samples as the caller asked for, so it drops into an
-    existing read loop without changing framing.
-    """
+    """Runs mic audio through WebRTC's APM with played audio as the reference."""
 
     def __init__(self, rate: int, reference: EchoReference, delay_ms: int,
                  noise_suppression: bool, dump_dir: str = ""):
@@ -131,8 +103,6 @@ class EchoCanceller:
         self._erle_frames = 0
         self._erle_dry = 0
         self._erle_dry_loud = 0
-        # True when the mic frame just returned was NOT fully cancelled, so
-        # callers can refuse to act on it. See uncancelled().
         self._uncancelled = True
 
         from aec_audio_processing import AudioProcessor
@@ -140,7 +110,7 @@ class EchoCanceller:
         self._apm = AudioProcessor(
             enable_aec=True,
             enable_ns=noise_suppression,
-            enable_agc=False,  # AGC rides the gain up under the bot's own voice
+            enable_agc=False,
             enable_vad=False,  # hal runs webrtcvad/silero/ten-vad for that
         )
         self._apm.set_stream_format(rate, 1)
@@ -160,11 +130,7 @@ class EchoCanceller:
         self._reference.clear()
 
     def process(self, pcm: bytes) -> bytes:
-        """Cancel the speaker signal out of `pcm`, returning the same byte count.
-
-        Primes with up to one 10 ms frame of silence on the first call; from then
-        on input and output stay length-for-length.
-        """
+        """Cancel the speaker signal out of `pcm`, returning the same byte count."""
         want = len(pcm)
         self._pending.extend(pcm)
         uncancelled = False
@@ -198,21 +164,7 @@ class EchoCanceller:
     def _accumulate_erle(
         self, mic: bytes, cleaned: bytes, played: bytes, underran: bool
     ) -> None:
-        """Log echo return loss enhancement while the speaker is actually active.
-
-        This is the number that says whether the canceller is doing anything:
-        0 dB means it is not.
-
-        Frames whose reference came back all-zero are counted SEPARATELY rather
-        than skipped. The reference is a FIFO drained by the mic loop, so it can
-        run dry while the speaker is still playing — after an arecord overrun
-        (AecStream returns early without draining it), or whenever the tap falls
-        out of step with playback. Those frames get no cancellation at all, and
-        skipping them silently meant ERLE only ever reported the frames that
-        happened to line up: a mostly-dry run logged a healthy-looking number,
-        or nothing at all when no frame aligned. `dry` with a loud mic is the
-        echo leak, stated directly.
-        """
+        """Log echo return loss enhancement while the speaker is actually active."""
         import numpy as np
 
         m = np.frombuffer(mic, dtype=np.int16).astype(np.float32)
@@ -265,11 +217,7 @@ class EchoCanceller:
 
 
 class AecStream:
-    """Mic stream wrapper that cancels echo out of every read.
-
-    Wraps any object with the `sd.InputStream` read contract (also satisfied by
-    ArecordStream): `read(frames) -> (int16 ndarray, overflowed)`.
-    """
+    """Mic stream wrapper that cancels echo out of every read."""
 
     def __init__(self, inner, canceller: EchoCanceller, tail_s: float, np):
         self._inner = inner
@@ -297,10 +245,8 @@ class AecStream:
         idle = self._canceller._reference.idle_for()
         if idle > self._tail_s:
             if not self._bypassed:
-                # Logged because `active()` keeps returning True here: callers
-                # that relax an echo defence stay armed while the mic is running
-                # raw. If this fires while TTS is still speaking, the reference
-                # tap stopped early and the leak is downstream of it.
+                # Logged because `active()` keeps returning True here: callers that
+                # relax an echo defence stay armed while the mic is running raw.
                 logger.info(
                     "AEC bypassed — no speaker write for %.1fs (tail %.1fs)",
                     idle, self._tail_s,
@@ -315,12 +261,7 @@ class AecStream:
         try:
             cleaned = self._canceller.process(data.tobytes())
         except Exception as e:
-            # Mark the frame raw before handing it back. The bypass branch above
-            # does this; forgetting it here left `_uncancelled` holding whatever
-            # the PREVIOUS frame set, so a failure right after a successful frame
-            # published full speaker bleed as "cancelled" — and the live uplink
-            # gate, whose only echo defence is that flag, would send the
-            # device's own voice up as the user's.
+            # Mark the frame raw before handing it back.
             self._canceller._uncancelled = True
             logger.warning("AEC process failed, passing mic through: %s", e)
             return data, overflowed
@@ -334,11 +275,7 @@ class AecStream:
 
 
 def configure(rate: int) -> bool:
-    """Build the canceller for a mic sample rate. Safe to call repeatedly.
-
-    Returns False when AEC is off, the rate is unsupported, or the native
-    binding is missing — callers then use the raw mic.
-    """
+    """Build the canceller for a mic sample rate. Safe to call repeatedly."""
     global _canceller, _reference, _unavailable_logged
 
     from hal.drivers.voice._internal import config as voice_cfg
@@ -380,9 +317,9 @@ def configure(rate: int) -> bool:
 def active() -> bool:
     """Whether cancellation is actually running — configured AND binding present.
 
-    Callers that relax an echo defence must gate on this, not on AEC_ENABLED:
-    with the binding missing every entry point is a no-op and the mic still
-    carries full speaker bleed.
+    Callers that relax an echo defence must gate on this, not on AEC_ENABLED: with the
+    binding missing every entry point is a no-op and the mic still carries full speaker
+    bleed.
     """
     return _canceller is not None
 
@@ -390,24 +327,14 @@ def active() -> bool:
 def uncancelled() -> bool:
     """Whether the mic frame just read went through WITHOUT real cancellation.
 
-    True when the reference FIFO underran, the stream was bypassed, or the mic
-    overran — in all three the frame still carries full speaker bleed. Any
-    defence that a loudspeaker can trip (the live uplink gate in `cancelled`
-    mode) must skip such a frame, or it is deciding on echo. Measured on
-    lamp-ee17 25/08/2026: the reference underran on 86% of processed frames
-    during a reply.
+    Any defence that a loudspeaker can trip (the live uplink gate in `cancelled` mode)
+    must skip such a frame, or it is deciding on echo.
     """
     return _canceller is None or _canceller._uncancelled
 
 
 def reference_idle_for() -> float:
-    """Seconds since anything was last handed to the speaker (inf if never).
-
-    The only signal that separates "the APM was bypassed because nothing is
-    playing, so the frame is clean" from "the APM was starved while the speaker
-    was live, so the frame is dirty" — `uncancelled()` is True in BOTH, and is
-    the ordinary state of a quiet conversation.
-    """
+    """Seconds since anything was last handed to the speaker (inf if never)."""
     ref = _reference
     if ref is None or _canceller is None:
         return float("inf")
@@ -425,13 +352,7 @@ def wrap_mic(mic_ctx, rate: int, np):
 
 @lru_cache(maxsize=32)
 def _reference_resample_filter(up: int, down: int, dtype: str):
-    """Cache SciPy's default polyphase FIR for a reduced ratio and dtype.
-
-    Speaker writes may be only a few milliseconds long. Rebuilding the same
-    Kaiser filter for every write puts avoidable work on the playback thread.
-    Keep the unscaled coefficients; the streaming resampler applies the
-    upsampling gain once when it creates its per-stream state.
-    """
+    """Cache SciPy's default polyphase FIR for a reduced ratio and dtype."""
     import numpy as np
     import scipy.signal
 
@@ -445,13 +366,7 @@ def _reference_resample_filter(up: int, down: int, dtype: str):
 
 
 class _ReferenceResampler:
-    """Causal polyphase FIR with chunk-independent timing and bounded history.
-
-    Restarting resample_poly at every speaker write rounds up each chunk and
-    pads each boundary with zeros. Here both the FIR history and rational
-    sample phase survive writes. The short FIR delay is constant; it cannot
-    accumulate into the render/capture clock drift caused by chunk rounding.
-    """
+    """Causal polyphase FIR with chunk-independent timing and bounded history."""
 
     def __init__(self, src_rate: int, dst_rate: int):
         import numpy as np
@@ -475,8 +390,6 @@ class _ReferenceResampler:
         buf = np.concatenate((self._history, samples))
         self._received += len(samples)
         end = (self._received * self._up + self._down - 1) // self._down
-        # _start is always a multiple of down: each local convolution lands
-        # on the same global output grid, including fractional rate ratios.
         base = self._start * self._up // self._down
         filtered = upfirdn(self._filter, buf, up=self._up, down=self._down)
         out = filtered[self._emitted - base:end - base].copy()
@@ -489,12 +402,7 @@ class _ReferenceResampler:
 
 
 def prepare_reference(rate: int) -> None:
-    """Prime optional resampling before playback, without publishing audio.
-
-    Importing SciPy and designing the first filter after a speaker write can
-    starve the next write. Call before the first audio is handed to the device;
-    reference_write still handles an unprepared or subsequently changed route.
-    """
+    """Prime optional resampling before playback, without publishing audio."""
     canceller = _canceller
     if _reference is None or canceller is None or rate == canceller._rate:
         return
@@ -509,12 +417,7 @@ def prepare_reference(rate: int) -> None:
 
 
 def reference_write(samples, rate: int) -> None:
-    """Record float32 audio on its way to the speaker. Never raises.
-
-    Called from the TTS output stream write, i.e. at playback rate — which is
-    the timing the mic sees. Tapping at synthesis instead would be wrong: TTS
-    renders a sentence far faster than real time.
-    """
+    """Record float32 audio on its way to the speaker. Never raises."""
     ref = _reference
     if ref is None or _canceller is None:
         return

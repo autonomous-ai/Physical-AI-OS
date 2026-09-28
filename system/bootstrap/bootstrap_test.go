@@ -141,10 +141,7 @@ func TestOTAErrorLEDSchedulesRestore(t *testing.T) {
 	gotRestore()
 }
 
-// A component the device does not have must not read as "out of date". Before
-// this gate, an absent artifact made detectVersion return "" — which sorts below
-// every min_version floor — so the worker announced an update over the speaker,
-// lit the OTA LED and tried to install it on every poll, forever.
+// An absent component must not read as out of date.
 func TestReconcileSkipsUninstalledComponent(t *testing.T) {
 	devicesDir := t.TempDir() // no <type> subdir → the profile is not installed
 	t.Setenv("DEVICES_DIR", devicesDir)
@@ -152,8 +149,7 @@ func TestReconcileSkipsUninstalledComponent(t *testing.T) {
 
 	b := &Bootstrap{state: &state.State{Components: map[string]string{}}}
 
-	// Without the gate this reaches applyUpdate, which execs software-update and
-	// returns an error — so a nil error is what proves the skip happened.
+	// A nil error proves the skip (applyUpdate would fail here).
 	updated, err := b.reconcile(context.Background(), domain.OTAKeyDevice,
 		domain.OTAComponent{Version: "9.9.9"})
 	if err != nil {
@@ -199,12 +195,9 @@ func TestComponentInstalled(t *testing.T) {
 	if !b.componentInstalled(domain.OTAKeyDevice) {
 		t.Error("device profile reported missing although its directory exists")
 	}
-	// The worker is the bootstrap component: always installed, so it can always
-	// self-update.
 	if !b.componentInstalled(domain.OTAKeyBootstrap) {
 		t.Error("bootstrap must always count as installed")
 	}
-	// An unresolvable device type must not resolve to some other device's dir.
 	t.Setenv("DEVICE_TYPE", "")
 	if b.componentInstalled(domain.OTAKeyDevice) {
 		t.Error("device profile reported installed with an unresolved device type")
@@ -229,10 +222,7 @@ func TestCLISemver(t *testing.T) {
 }
 
 func TestComponentInstalledAgentCLIsFollowRuntime(t *testing.T) {
-	// The agent CLIs are gated on the configured runtime, not on the binary
-	// being present — every lamp/intern-v2 image bakes all of them. With no
-	// resolvable config (this test host), every CLI must report NOT installed so
-	// the worker never pushes a runtime the device does not run.
+	// With no resolvable config, every agent CLI must report not installed.
 	if _, err := os.Stat("/root/config/config.json"); err == nil {
 		t.Skip("host has a real /root/config/config.json; runtime gate not isolatable")
 	}
@@ -262,22 +252,17 @@ fi
 	if !updaterSupports(domain.OTAKeyCodex) {
 		t.Error("codex branch present but reported unsupported")
 	}
-	// picoclaw appears in the usage line only — a loose substring search would
-	// wrongly report support for an updater that cannot apply it.
+	// picoclaw appears only in the usage line; that must not count as support.
 	if updaterSupports(domain.OTAKeyPicoClaw) {
 		t.Error("picoclaw reported supported from its usage-string mention alone")
 	}
-	// An updater that is not on PATH at all must report no support, not panic.
 	t.Setenv("PATH", t.TempDir())
 	if updaterSupports(domain.OTAKeyCodex) {
 		t.Error("missing software-update reported as supporting codex")
 	}
 }
 
-// Hermes is applied only through a PINNING updater (one that reads
-// .hermes.commit): the older HEAD-following hermes branch must not count, or a
-// pinned entry would be applied via `hermes update`, land on HEAD, and
-// re-trigger every poll — the failure hermes used to be excluded for.
+// Hermes needs a pinning updater that reads .hermes.commit.
 func TestUpdaterSupportsHermesPinRequiresCommitField(t *testing.T) {
 	dir := t.TempDir()
 	write := func(script string) {
@@ -296,8 +281,7 @@ func TestUpdaterSupportsHermesPinRequiresCommitField(t *testing.T) {
 	}
 }
 
-// An unpinned hermes metadata entry (no commit) is neither applied nor
-// advertised; every other component, and a pinned hermes entry, passes.
+// An unpinned hermes entry is neither applied nor advertised.
 func TestHermesPinnedGate(t *testing.T) {
 	if hermesPinned(domain.OTAKeyHermes, domain.OTAComponent{Version: "0.21.1"}) {
 		t.Fatal("unpinned hermes entry passed the gate")

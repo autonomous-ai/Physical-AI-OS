@@ -7,27 +7,18 @@ import type { SystemInfo, NetworkInfo } from "./types";
 import { GaugeRing, StatPill, CardLabel } from "./components";
 import { formatUptime, formatSize } from "./utils";
 
-// Polling interval (ms) that populates cpuHistory/ramHistory. Used to label
-// the time axis on history charts since each datapoint is one poll tick.
 const POLL_MS = 5000;
 
-// Build chart.js datasets + options for a percentage history series.
-// `now` is "0s" (right edge), older values stretch back as negative seconds.
-// Resolve a CSS custom property to its computed color so chart.js (canvas, which
-// can't read CSS vars) still tracks the active theme. Falls back to the passed
-// default if the var is empty (e.g. during SSR/first paint).
+// Resolves a CSS custom property so chart.js (canvas) tracks the theme.
 function cssVar(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
   const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 }
 
-// `colorVar` is a CSS custom property name (e.g. "--lm-amber"); resolved here so
-// the line/fill colors track the theme like everything else.
+// Chart.js datasets + options for a percentage history series; `colorVar` is a CSS custom property.
 function historyChart(data: number[], colorVar: string, label: string) {
   const color = cssVar(colorVar, "#f59e0b");
-  // Grid/tick colors pulled from theme tokens so the chart chrome stays legible
-  // on both dark and light backgrounds (the old hardcoded white vanished on light).
   const gridColor = cssVar("--lm-border", "rgba(255,255,255,0.06)");
   const tickColor = cssVar("--lm-text-muted", "rgba(255,255,255,0.4)");
   const labels = data.map((_, i) => {
@@ -95,19 +86,14 @@ function historyChart(data: number[], colorVar: string, label: string) {
   };
 }
 
-// Temperature tier — absolute °C, follows Pi thermal behavior.
-// Standard state-tier mapping: OK / warn / crit at 60 / 75°C.
 const TEMP_MAX = 80;
 function tempColor(t: number): string {
   if (t > 75) return "var(--lm-red)";
   if (t > 60) return "var(--lm-amber)";
-  return "var(--lm-teal)"; // identity color for Temp metric
+  return "var(--lm-teal)";
 }
 
-// Percentage-based metric tier — same thresholds across Disk/RAM/Swap/per-core
-// so a glance at any chart reads with the same convention. `identityColor` is
-// what the metric shows when it's "fine" (its brand color); warnings escalate
-// to amber and crits to red regardless of the metric.
+// Percentage tier color: identity color when fine, amber/red when high.
 function pctColor(pct: number, identityColor: string): string {
   if (pct > 85) return "var(--lm-red)";
   if (pct > 60) return "var(--lm-amber)";
@@ -133,23 +119,16 @@ export function SystemSection({
 
   const diskColor = pctColor(sys.diskPercent ?? 0, "var(--lm-teal)");
 
-  // The `.lm-mon-card` class owns the resting + hover box-shadow (plus the
-  // gradient/accent/glow), so we strip the inline boxShadow from S.card to let
-  // the class's :hover shadow win — matching the Overview cards.
   const monCard = { ...S.card, boxShadow: undefined };
   const monCard12 = { ...monCard, padding: 12 };
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Performance — one card per metric so each gets a clean visual unit.
-          CPU card includes a compact per-core strip so spikes pinned to a single
-          core (e.g. STT thread) are visible against an otherwise low aggregate. */}
       <div style={{ display: "flex", justifyContent: "flex-end" }}>
         <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>
           updated {lastUpdate.toLocaleTimeString()}
         </span>
       </div>
-      {/* Row 1: CPU (1/4) + CPU history (3/4) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -178,7 +157,6 @@ export function SystemSection({
         </div>
       </div>
 
-      {/* Row 2: Memory (1/4) + RAM history (3/4) */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -187,8 +165,6 @@ export function SystemSection({
               {formatSize(sys.memUsed, "KB")} / {formatSize(sys.memTotal, "KB")}
             </span>
           </div>
-          {/* RAM + Swap side-by-side. Swap is smaller (size 80 vs 110) since RAM
-              is the primary metric; it's hidden entirely when no swap is configured. */}
           <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 12 }}>
             <GaugeRing
               value={sys.memPercent}
@@ -226,7 +202,6 @@ export function SystemSection({
         </div>
       </div>
 
-      {/* Row 3: Disk + Temp + Service + Network Detail — 4 cards one row */}
       <div className="lm-grid-4">
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
@@ -281,11 +256,7 @@ export function SystemSection({
   );
 }
 
-// CoreStrip renders per-core load as small vertical bars side by side —
-// the compact "CPU history" look from system monitors. Hover for exact %.
-// Uses pure state-tier colors (green/amber/red) since the strip's whole
-// purpose is to surface which core is hot — identity-amber for all cores
-// would defeat the visual signal.
+// CoreStrip renders per-core load as small vertical bars side by side
 function CoreStrip({ values }: { values: number[] }) {
   const coreColor = (p: number) =>
     p > 85 ? "var(--lm-red)" : p > 60 ? "var(--lm-amber)" : "var(--lm-green)";

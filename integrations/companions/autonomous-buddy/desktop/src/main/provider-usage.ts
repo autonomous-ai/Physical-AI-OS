@@ -182,8 +182,7 @@ export async function readClaudeUsage(options: {
   } catch { return unavailable('claude', 'Claude quota could not be read. Check CLI login or try again later.') }
 }
 
-// Optional scoped fields observed in Orca's compatibility adapter at
-// ba5f708290b72012132fb23a6f016b8fd5601718; absent windows are never synthesized.
+// Optional scoped fields from Orca's compatibility adapter; absent windows are never synthesized.
 export function normalizeClaudeOAuthUsage(input: unknown): ProviderUsage {
   const payload = object(input)
   const mapWindow = (label: string, raw: unknown): UsageWindow | undefined => {

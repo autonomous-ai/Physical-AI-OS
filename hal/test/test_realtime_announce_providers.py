@@ -1,5 +1,4 @@
-"""AnnounceInput on the providers that support it (Gemini, pipecat_v1) and the
-orchestrator's announce / preemption contract."""
+"""AnnounceInput on Gemini / pipecat_v1 and the orchestrator announce/preemption contract."""
 
 import asyncio
 import queue
@@ -16,9 +15,6 @@ from hal.realtime.orchestrator import RealtimeOrchestrator
 from hal.realtime.voice_agent.base import VoiceAgentBase
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 from hal.realtime.voice_agent.pipecat_v1 import PipecatV1Agent
-
-
-# --- Gemini ---------------------------------------------------------------------------------
 
 
 class _Session:
@@ -49,7 +45,7 @@ def test_gemini_announce_is_a_complete_user_text_turn():
     sent = session.client_contents[0]
     assert sent["turn_complete"] is True
     assert sent["turns"].role == "user" and sent["turns"].parts[0].text == "update"
-    assert not agent._turn_done.is_set()  # the next commit waits for this response
+    assert not agent._turn_done.is_set()
 
 
 @pytest.mark.parametrize("busy", ["tool", "activity"])
@@ -78,9 +74,6 @@ def test_gemini_supports_announce_only_on_text_capable_turn_based_models(monkeyp
     assert not agent.supports_announce
 
 
-# --- pipecat_v1 -------------------------------------------------------------------------------
-
-
 class _Handle:
     def __init__(self) -> None:
         self.calls: list[tuple] = []
@@ -100,7 +93,7 @@ def _pipecat(monkeypatch, *, live=False) -> PipecatV1Agent:
 
 def test_pipecat_announce_opens_a_new_generation_past_a_fenced_turn(monkeypatch):
     agent = _pipecat(monkeypatch)
-    agent.end_turn()  # previous turn delegated: its generation is fenced
+    agent.end_turn()
     before = agent._gen
     agent._sync_send_input(AnnounceInput(text="update"))
     assert agent._handle.calls == [("announce", "update")]
@@ -122,7 +115,7 @@ def test_pipecat_announce_refused_while_a_committed_turn_awaits_its_reply(monkey
 
 def test_pipecat_announce_not_blocked_by_an_abandoned_noise_capture(monkeypatch):
     agent = _pipecat(monkeypatch)
-    agent._manual_turn_open = True  # a noise-dropped capture never committed
+    agent._manual_turn_open = True
     agent._sync_send_input(AnnounceInput(text="update"))
     assert agent._handle.calls == [("announce", "update")]
 
@@ -130,9 +123,6 @@ def test_pipecat_announce_not_blocked_by_an_abandoned_noise_capture(monkeypatch)
 def test_pipecat_supports_announce_only_turn_based(monkeypatch):
     assert _pipecat(monkeypatch).supports_announce
     assert not _pipecat(monkeypatch, live=True).supports_announce
-
-
-# --- providers without support ------------------------------------------------------------------
 
 
 def test_base_provider_refuses_announce():
@@ -148,9 +138,6 @@ def test_base_provider_refuses_announce():
     agent._connected.set()
     assert not agent.supports_announce and not agent.announce("x")
     assert agent._send_queue.empty()
-
-
-# --- orchestrator ---------------------------------------------------------------------------------
 
 
 class _ScriptedAgent(VoiceAgentBase):
@@ -248,17 +235,17 @@ def test_user_capture_preempts_and_drains_the_announcement(monkeypatch):
     first = next(stream)
     assert first.text == "First."
     assert not orch._announce_idle.is_set()
-    orch.prepare_turn()  # the user starts talking
+    orch.prepare_turn()
     assert stop.is_set()
-    assert list(stream) == []  # nothing more reaches the speaker
+    assert list(stream) == []
     assert orch._announce_idle.is_set() and agent.ended == 1
-    assert agent._recv_queue.empty()  # the rest of the reply was drained
+    assert agent._recv_queue.empty()
 
 
 def test_a_finished_capture_reopens_the_announcement_gate(monkeypatch):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", "pipecat_v1")
     orch = _orchestrator(_ScriptedAgent([]))
-    orch.prepare_turn()  # a capture that is later dropped as noise
+    orch.prepare_turn()
     assert orch.turn_in_flight and not orch.prepare_announcement(allow_resume=True)
     orch.finish_capture()
     assert not orch.turn_in_flight and orch.prepare_announcement(allow_resume=True)
@@ -268,7 +255,7 @@ def test_announcement_waits_for_an_in_flight_rebuild(monkeypatch):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", "pipecat_v1")
     orch = _orchestrator(_ScriptedAgent([]))
     orch._rebuild_done = threading.Event()
-    orch._rebuild_lock.acquire()  # a noise-drop rebuild is connecting
+    orch._rebuild_lock.acquire()
 
     def finish_rebuild():
         orch._rebuild_lock.release()
@@ -281,7 +268,7 @@ def test_announcement_waits_for_an_in_flight_rebuild(monkeypatch):
 def test_abandoned_activity_gets_a_fresh_session_before_announcing(monkeypatch):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", "pipecat_v1")
     stale = _ScriptedAgent([])
-    stale._activity_started = True  # a capture ended without a commit
+    stale._activity_started = True
     fresh = _ScriptedAgent([])
     orch = _orchestrator(stale)
     reasons = []

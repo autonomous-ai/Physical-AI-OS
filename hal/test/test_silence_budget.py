@@ -31,14 +31,9 @@ def test_a_final_that_just_arrived_never_closes_on_the_same_frame():
 
 
 def test_a_mid_utterance_final_does_not_close_the_turn_retroactively():
-    """Flux emits EndOfTurn on a breath pause ("Hello." before the question).
-
-    The short clock must run from that final, not from the last speech, or the
-    session dies on the next frame while the user is still talking.
-    """
+    """Flux emits EndOfTurn on a breath pause ("Hello." before the question)."""
     spoke = NOW - 0.9  # already quiet for 0.9s when the final lands
     assert not turn_should_close(NOW, spoke, NOW)
-    # ...and it does close once the speaker really has stopped for that long.
     assert turn_should_close(
         NOW + voice_cfg.ENDPOINT_SILENCE_S + 0.01, spoke, NOW
     )

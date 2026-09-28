@@ -14,8 +14,7 @@ import (
 )
 
 // handleSkillsUpload handles kind="skills.upload" — the MQTT counterpart of
-// POST /api/agent/skills/upload. It accepts the same .md, .zip, and .skill
-// formats, with file bytes base64-encoded for JSON transport.
+// POST /api/agent/skills/upload.
 func (h *DeviceMQTTHandler) handleSkillsUpload(env domain.MQTTDataCommand) error {
 	filename, content, errMsg := parseSkillsUploadData(env.Data)
 	if errMsg != "" {

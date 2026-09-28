@@ -103,7 +103,7 @@ export function PoseBucketModal({
     return () => ac.abort();
   }, [bucketId]);
 
-  const samples = [...(data?.samples ?? [])].reverse(); // newest first
+  const samples = [...(data?.samples ?? [])].reverse();
   const worstSet = new Set(data?.worst_snapshots ?? []);
   const startLocal = data?.window_start_ts
     ? new Date(data.window_start_ts * 1000).toLocaleString()

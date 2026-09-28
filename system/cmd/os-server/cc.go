@@ -1,25 +1,7 @@
 package main
 
-// `os-server claude-sessions` — the unified claude coding-session picker for
-// the device terminal.
-//
-// Claude's interactive `/resume` picker excludes headless (`claude -p`)
-// sessions BY DESIGN, so sessions created over Telegram remote-coding
-// (runtimes/claudecode/telegram_coding.go) never show up in it — but
-// `claude --resume <id>` opens ANY session by id, including headless ones
-// (device-proven). This subcommand closes that gap: it lists every session
-// for the current folder (or all folders with --all) using the SAME discovery
-// the Telegram feature uses (claudecode.ListCodingSessions — one source of
-// truth), lets the user pick one by number, and execs `claude --resume <id>`
-// in the session's folder.
-//
-// Codex needs no picker: its own `codex resume` lists every thread globally,
-// including Telegram-created ones — claude-sessions just points there when
-// the active runtime is codex.
-//
-// The claudecode presync installs a thin `/usr/local/bin/claude-sessions`
-// wrapper that sudo-reexecs into this subcommand, so on the device it is just
-// `claude-sessions`. (Internal cc* naming predates the rename from `cc`.)
+// `os-server claude-sessions` lists claude coding sessions (including headless ones
+// that `/resume` hides) and execs `claude --resume <id>` in the session's folder.
 
 import (
 	"bufio"
@@ -109,8 +91,7 @@ func ccMain(args []string) int {
 	return 0 // unreachable: ccResume execs on success
 }
 
-// ccAgentRuntime resolves the active runtime from config.json ("" when the
-// file is unreadable or the field is absent — treated as claudecode).
+// ccAgentRuntime returns agent_runtime from config.json ("" means claudecode).
 func ccAgentRuntime(configPath string) string {
 	data, err := os.ReadFile(configPath)
 	if err != nil {
@@ -125,8 +106,7 @@ func ccAgentRuntime(configPath string) string {
 	return c.AgentRuntime
 }
 
-// ccScopeDir resolves the folder to list: the optional positional arg, else
-// the current directory.
+// ccScopeDir returns the positional folder arg, else the current directory.
 func ccScopeDir(arg string) (string, error) {
 	if strings.TrimSpace(arg) != "" {
 		abs, err := filepath.Abs(strings.TrimSpace(arg))
@@ -153,8 +133,7 @@ func ccFilterFolder(sessions []claudecode.CodingSessionInfo, folder string) []cl
 	return out
 }
 
-// ccPrintMenu renders the numbered listing: index + (folder with --all) +
-// recent prompts + short id + age.
+// ccPrintMenu renders the numbered session listing.
 func ccPrintMenu(scope string, sessions []claudecode.CodingSessionInfo, all bool) {
 	fmt.Printf("claude sessions in %s (newest first):\n\n", scope)
 	for i, cs := range sessions {
@@ -196,8 +175,7 @@ func ccReadPick(n int) (int, bool) {
 	}
 }
 
-// ccResume replaces this process with interactive `claude --resume <id>` run
-// in the session's own folder (claude resume is cwd-scoped).
+// ccResume execs `claude --resume <id>` in the session's folder (resume is cwd-scoped).
 func ccResume(cs claudecode.CodingSessionInfo) error {
 	path, err := exec.LookPath("claude")
 	if err != nil {
@@ -210,11 +188,7 @@ func ccResume(cs claudecode.CodingSessionInfo) error {
 	return syscall.Exec(path, []string{"claude", "--resume", cs.SessionID}, ccChildEnv())
 }
 
-// ccChildEnv builds the exec env: the process env overlaid with the presync
-// .env (auth vars — cc may be reached from a shell that never sourced
-// /etc/profile.d/agent-cli-env.sh, e.g. via the sudo re-exec in the wrapper)
-// plus the same vars that profile.d snippet exports. Later duplicates win via
-// dedupe.
+// ccChildEnv returns the process env overlaid with the presync .env and profile.d vars.
 func ccChildEnv() []string {
 	env := os.Environ()
 	env = append(env, ccEnvFilePairs("/root/.claudecode/.env")...)
@@ -222,9 +196,7 @@ func ccChildEnv() []string {
 	return ccDedupeEnv(env)
 }
 
-// ccEnvFilePairs parses a KEY=VALUE env file into "KEY=VALUE" entries — same
-// rules as the gatewayd child loader (claudecode.loadEnvFilePairs): blank/#/
-// no-"=" lines skipped, trimmed, surrounding double quotes stripped.
+// ccEnvFilePairs parses a KEY=VALUE env file (same rules as claudecode.loadEnvFilePairs).
 func ccEnvFilePairs(path string) []string {
 	f, err := os.Open(path)
 	if err != nil {
@@ -252,8 +224,7 @@ func ccEnvFilePairs(path string) []string {
 	return out
 }
 
-// ccDedupeEnv collapses duplicate KEY= entries, last occurrence winning, so
-// the execve child never sees two values for one variable.
+// ccDedupeEnv collapses duplicate KEY= entries; the last one wins.
 func ccDedupeEnv(pairs []string) []string {
 	idx := map[string]int{}
 	out := make([]string, 0, len(pairs))

@@ -8,13 +8,9 @@ import (
 	"path/filepath"
 )
 
-// OpenCode MCP wiring. opencode keeps MCP servers in the global config
-// (~/.config/opencode/opencode.json) under the top-level "mcp" object, keyed by
-// server name: local (stdio) servers are {type:"local", command:[…], enabled,
-// environment}; remote (streamable HTTP) servers are {type:"remote", url,
-// enabled, headers}. presync.sh regenerates the provider/model head on every
-// switch but preserves the existing "mcp" object, so the two owners do not
-// collide; concurrent connector.set writes are serialized under mcpMu.
+// presync.sh regenerates the provider/model head on every switch but preserves the existing "mcp"
+// object, so the two owners do not collide; concurrent connector.set writes are serialized under
+// mcpMu.
 
 // opencodeConfigPath returns opencode's global config.json (XDG).
 func opencodeConfigPath() string {
@@ -22,10 +18,7 @@ func opencodeConfigPath() string {
 }
 
 // WriteMCPEntry upserts mcp.<name> in opencode.json and restarts the gateway so
-// the next `opencode run` picks the server up. entry is the canonical
-// (OpenClaw-shaped) server-config map the connector writer produces —
-// {type:"http", url, headers} for hosted MCP, or {command, args, env} for
-// stdio. The shape is translated in toOpenCodeMCPEntry.
+// the next `opencode run` picks the server up.
 func (s *OpenCodeService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -50,9 +43,7 @@ func (s *OpenCodeService) WriteMCPEntry(name string, entry map[string]any) error
 	return nil
 }
 
-// RemoveMCPEntry deletes mcp.<name> from opencode.json. Returns removed=false
-// (no write, no restart) when the entry was already absent or the config file
-// does not exist yet. Mirrors OpenclawService.RemoveMCPEntry.
+// RemoveMCPEntry deletes mcp.<name> from opencode.json.
 func (s *OpenCodeService) RemoveMCPEntry(name string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -91,17 +82,8 @@ func (s *OpenCodeService) RemoveMCPEntry(name string) (bool, error) {
 }
 
 // toOpenCodeMCPEntry translates the canonical OpenClaw-shaped server entry into
-// opencode's opencode.json "mcp" shape:
-//
-//	{type:"http", url, headers}  → {type:"remote", url, headers, enabled:true}
-//	{command, args, env}         → {type:"local", command:[cmd, args…],
-//	                                environment:env, enabled:true}
-//
-// opencode's local transport wants a single `command` array (command + args
-// merged) and names the env map `environment`; the remote transport keeps
-// `headers`. enabled defaults to true so a freshly-added server starts.
+// opencode's opencode.json "mcp" shape.
 func toOpenCodeMCPEntry(entry map[string]any) map[string]any {
-	// Remote (hosted HTTP) MCP: presence of a url.
 	if url, ok := entry["url"]; ok {
 		out := map[string]any{"type": "remote", "url": url, "enabled": true}
 		if h, ok := entry["headers"]; ok {
@@ -109,7 +91,6 @@ func toOpenCodeMCPEntry(entry map[string]any) map[string]any {
 		}
 		return out
 	}
-	// Local (stdio) MCP: merge command + args into one array.
 	out := map[string]any{"type": "local", "enabled": true}
 	cmd := []any{}
 	if c, ok := entry["command"].(string); ok && c != "" {
@@ -130,9 +111,7 @@ func toOpenCodeMCPEntry(entry map[string]any) map[string]any {
 	return out
 }
 
-// readOpenCodeConfig loads opencode.json into a generic map. Errors (including
-// not-exist) are returned so connector writes surface a clear failure rather
-// than silently no-op'ing on an un-provisioned device.
+// readOpenCodeConfig loads opencode.json into a generic map.
 func readOpenCodeConfig(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -146,8 +125,7 @@ func readOpenCodeConfig(path string) (map[string]any, error) {
 }
 
 // writeOpenCodeConfig marshals + atomically writes opencode.json (2-space
-// indent, matching presync's jq output). The provider/model head is preserved
-// verbatim; presync re-asserts it idempotently on the next switch regardless.
+// indent, matching presync's jq output).
 func writeOpenCodeConfig(path string, cfg map[string]any) error {
 	written, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {

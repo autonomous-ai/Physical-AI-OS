@@ -15,13 +15,13 @@ func TestIsAutonomousEndpoint(t *testing.T) {
 		{"https://campaign-api.autonomous.ai/api/v1/ai/v1", true},
 		{"https://autonomous.ai/v1", true},
 		{"https://campaign-api.staging.autonomousdev.xyz/api/v1/ai/v1", true},
-		{"", true},                 // unset — keep the hosted path
-		{"::not a url::", true},    // unparseable — keep the hosted path
-		{"not-a-url-either", true}, // no host — keep the hosted path
+		{"", true},
+		{"::not a url::", true},
+		{"not-a-url-either", true},
 		{"http://192.168.1.42:11434/v1", false},
 		{"http://localhost:11434/v1", false},
 		{"https://openrouter.ai/api/v1", false},
-		{"https://autonomous.ai.evil.example.com/v1", false}, // suffix must be a real label boundary
+		{"https://autonomous.ai.evil.example.com/v1", false},
 	}
 	for _, c := range cases {
 		if got := isAutonomousEndpoint(c.url); got != c.want {
@@ -44,9 +44,7 @@ func TestModelsEndpoint(t *testing.T) {
 	}
 }
 
-// A BYO endpoint that speaks the OpenAI list shape (Ollama, vLLM, LM Studio)
-// is what makes a fully local robot possible: the model list comes from the
-// endpoint that will actually serve the turns.
+// A BYO OpenAI-compatible endpoint (Ollama, vLLM, LM Studio) supplies its own model list.
 func TestResolveModels_OpenAIShape(t *testing.T) {
 	var gotPath, gotAuth string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -104,8 +102,7 @@ func TestResolveModels_OurCatalogShape(t *testing.T) {
 	}
 }
 
-// A BYO endpoint that cannot list models must report the error rather than
-// silently advertising models it does not serve — the caller falls back.
+// A BYO endpoint that cannot list models must report the error rather than silently advertising models it does not serve — the caller falls back.
 func TestResolveModels_ByoErrorIsReported(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

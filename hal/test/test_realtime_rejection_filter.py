@@ -1,8 +1,4 @@
-"""Regression coverage for the explicit AI rejection gate.
-
-The critical distinction is that model silence is never proof of rejection: only
-the dedicated tool signal may suppress the normal main-agent fallback.
-"""
+"""Regression coverage for the explicit AI rejection gate."""
 
 from unittest import mock
 

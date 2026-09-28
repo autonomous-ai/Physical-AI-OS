@@ -47,7 +47,6 @@ export function CanvasModal({
           Scroll to zoom · Drag to pan · Click ⟳ to reset · Zoom in to see tool/func details
         </div>
 
-        {/* Legend */}
         <div style={{ marginTop: 20, display: "flex", flexWrap: "wrap" as const, gap: 8 }}>
           {FLOW_NODES.map((n) => (
             <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 5, fontSize: 10.5, color: "var(--lm-text-dim)" }}>
@@ -57,7 +56,6 @@ export function CanvasModal({
           ))}
         </div>
 
-        {/* Path descriptions */}
         <div style={{ marginTop: 16, display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, fontSize: 10.5, color: "var(--lm-text-dim)" }}>
           <div style={{ padding: "8px 12px", borderRadius: 8, background: "var(--lm-surface)", border: "1px solid var(--lm-border)" }}>
             <span style={{ color: "var(--lm-green)", fontWeight: 600 }}>Fast path (~50ms)</span><br />

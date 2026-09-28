@@ -7,8 +7,7 @@ import (
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
-// The realtime agent answers the newest question, so the main-agent turn still
-// working on the previous one must not speak its answer afterwards.
+// A main-agent turn on an older question must not speak after the realtime answer.
 func TestRealtimeHandledMutesOlderInFlightTurn(t *testing.T) {
 	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
@@ -21,9 +20,7 @@ func TestRealtimeHandledMutesOlderInFlightTurn(t *testing.T) {
 	}
 }
 
-// The system-stamped mark takes the speaker and nothing else. A turn whose body
-// the user really did ask for must still run — silently dropping it would read
-// as the device ignoring the request.
+// The system-stamped mark mutes the speaker only; the turn's body still runs.
 func TestRealtimeHandledDoesNotDropHardware(t *testing.T) {
 	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
@@ -36,10 +33,7 @@ func TestRealtimeHandledDoesNotDropHardware(t *testing.T) {
 	}
 }
 
-// Fillers follow the speech, not the hardware. Leaving them armed reproduced
-// the very thing the click had to fix: the device answers the new question in
-// the realtime voice, then promises "one moment" about the old one and falls
-// silent. A filler is not an action the user asked for.
+// Fillers follow the speech: the auto mark disarms them too.
 func TestRealtimeHandledDropsPendingFillers(t *testing.T) {
 	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
@@ -85,9 +79,7 @@ func TestPhysicalClickStillDropsHardware(t *testing.T) {
 	}
 }
 
-// "Realtime answers, then the user asks the main agent something new" — the new
-// turn is on the far side of the mark and speaks. This is why the mark is a
-// timestamp and not a suppressed flag.
+// A turn started after the mark still speaks, which is why the mark is a timestamp.
 func TestTurnStartedAfterRealtimeHandledStillSpeaks(t *testing.T) {
 	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
@@ -100,8 +92,7 @@ func TestTurnStartedAfterRealtimeHandledStillSpeaks(t *testing.T) {
 	}
 }
 
-// The two marks are independent: the auto mark must still mute a turn the click
-// was too early to catch, and must not widen the click's hardware verdict.
+// The auto and click marks are independent and do not widen each other.
 func TestMarksDoNotOverwriteEachOther(t *testing.T) {
 	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
 	h := newCancelTestHandler()
@@ -120,8 +111,7 @@ func TestMarksDoNotOverwriteEachOther(t *testing.T) {
 	}
 }
 
-// Off by default: a body that has never heard of this switch keeps the old
-// behaviour — realtime answers, the older turn still speaks.
+// Off by default: the older turn still speaks after a realtime answer.
 func TestSupersedeIsOffUnlessOptedIn(t *testing.T) {
 	h := newCancelTestHandler()
 	older := deviceRunID(5, time.Now().Add(-2*time.Second))

@@ -15,7 +15,6 @@ class PythonSyntaxTests(unittest.TestCase):
             subprocess.run(["git", "init", "-q", str(root)], check=True)
             router = root / "hal" / "routes" / "new_route.py"
             router.parent.mkdir(parents=True)
-            # No FastAPI/hardware imports are executed by the syntax gate.
             router.write_text('@router.get("/ready")\ndef ready():\n    return True\n')
             subprocess.run(["git", "add", "."], cwd=root, check=True)
             self.assertEqual(check(root), 0)

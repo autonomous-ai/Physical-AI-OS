@@ -1,29 +1,15 @@
-"""Localized user-facing phrases.
+"""Localized user-facing phrases (single source of truth for spoken multi-language strings).
 
-Single source of truth for every multi-language string the agent speaks. Kept
-out of the modules that use them so copy/translation edits don't require
-touching action logic.
-
-Pools live here:
-- Button/touch action announcements (listening cue, reboot, shutdown)
-- Head-pat persona responses
-- Backchannel fillers (active-listening cues during STT)
-- Music pre-play backchannel pools (plain + ElevenLabs audio-tag variants)
-- Known provider error apologies to suppress (matching only, never spoken)
-
-Add new languages by adding a key to every dict — missing keys fall back
-to DEFAULT_LANG at lookup time, so a partial translation is safe.
+Missing language keys fall back to DEFAULT_LANG at lookup time.
 """
 
 from hal.presets import DEFAULT_LANG, LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
 
 
 def localized_phrase(key: str, lang: str | None = None) -> str:
-    """Return PHRASES_BY_LANG[key] for the device's stt_language, falling back to
-    DEFAULT_LANG (then ""). Pass `lang` to override the config.json lookup.
+    """Return PHRASES_BY_LANG[key] for the device's stt_language (fallback DEFAULT_LANG, then "").
 
-    Shared single-language lookup so callers (os_shutdown, music quiet-hours, …)
-    don't each re-implement the stt_language read + DEFAULT_LANG fallback.
+    Pass `lang` to override the config.json lookup.
     """
     if lang is None:
         try:
@@ -34,8 +20,6 @@ def localized_phrase(key: str, lang: str | None = None) -> str:
     pool = PHRASES_BY_LANG.get(key, {})
     return pool.get(lang) or pool.get(DEFAULT_LANG, "")
 
-
-# --- Button / touch action phrases ---
 
 PHRASE_HARNESS_ON = "harness_voice_on"
 PHRASE_HARNESS_OFF = "harness_voice_off"
@@ -50,35 +34,13 @@ PHRASE_REBOOT = "reboot"
 PHRASE_SLEEP = "sleep"
 PHRASE_SHUTDOWN = "shutdown"
 PHRASE_SERVICE_RESTART = "service_restart"
-# Spoken confirmation for the TTP223 double-tap mic toggle lives in the pools at
-# the bottom of this file (MIC_MUTED_PHRASES_BY_LANG / MIC_UNMUTED_...), not as a
-# single fixed phrase — see the note there.
-# Spoken when a music/audio play request is suppressed by the audio.quiet_hours
-# safety window, so the user hears WHY nothing played instead of silent failure.
+# Spoken when audio.quiet_hours suppresses a play request.
 PHRASE_QUIET_HOURS = "quiet_hours"
-# Spoken when the TTS provider rejects a request for rate-limit / quota reasons
-# (e.g. ElevenLabs 429). Prerendered at boot so it plays from the WAV cache
-# without another API call, letting the user hear WHY the reply went silent.
+# Prerendered at boot so it plays from cache when the TTS provider rate-limits.
 PHRASE_RATE_LIMIT = "rate_limit"
-# NOTE: the LLM-usage-limit notice deliberately does NOT live here — its
-# caller is the os-server (Go), so its wording lives in lib/i18n/phrases.go
-# (PhraseLLMLimit) and arrives via /voice/speak with cached=true. Phrases in
-# THIS table are the ones spoken by hal's own Python code (rule: wording
-# lives where its caller lives).
+# The LLM-usage-limit notice lives in Go (lib/i18n/phrases.go): wording lives with its caller.
 
-# Localized action announcements. reboot/shutdown phrases stay literal
-# in every language ("rebooting", "shutting down") because the user just
-# triggered a destructive gesture and needs explicit confirmation of
-# which action fired. Sleep is a softer user-initiated action, but is also
-# explicit so the user knows the hold registered. Empty/unknown
-# stt_language → DEFAULT_LANG.
-#
-# PHRASE_SERVICE_RESTART fires when only the HAL process is going
-# down (OTA replace, deploy, manual `systemctl restart`) — OS itself
-# stays up and HAL will be back in 10-30s. Tone deliberately
-# different from PHRASE_SHUTDOWN/REBOOT so the user can tell at a
-# glance whether the board is going dark for minutes or just blinking
-# during a service reload.
+# reboot/shutdown stay literal in every language so the user knows which destructive action fired.
 PHRASES_BY_LANG = {
     PHRASE_HARNESS_FOCUS: {
         LANG_EN: "Agent switched.", LANG_VI: "Đã chuyển agent.",
@@ -163,22 +125,7 @@ PHRASES_BY_LANG = {
     },
 }
 
-# Pet/stroke responses — one is picked at random each time so Lamp
-# doesn't sound robotic when repeatedly stroked. Persona moment (not a
-# safety announcement). Tone per Lamp's character (AI companion + smart
-# light + expressive robot, "like a pet/friend"): mix of tickle-cute,
-# affectionate, pet-like (purring), light-themed (named what you are —
-# a lamp), "ask for more", and the moody flip-side — playful protest,
-# mock-annoyed, shy, sleepy — so Lamp feels like a real pet with moods, not
-# a smile machine. Keep phrases short — they fire mid-stroke and should
-# feel responsive, not lecture-y.
-#
-# Audio tags ([laughs], [excited], [whispers], [sighs], [calm]) are
-# eleven_v3 audio direction (not spoken). They're safe across providers
-# because tts_openai._strip_audio_tags whitelists the base verbs — so
-# OpenAI strips them while ElevenLabs interprets them. Stay inside that
-# whitelist when adding new ones; any tag outside it will be spoken
-# aloud by the OpenAI backend.
+# Audio tags must stay inside tts_openai._strip_audio_tags' whitelist, or OpenAI speaks them.
 HEAD_PAT_PHRASES_BY_LANG = {
     LANG_EN: [
         "[laughs] That tickles!",
@@ -358,15 +305,8 @@ HEAD_PAT_PHRASES_BY_LANG = {
     ],
 }
 
-# --- Backchannel fillers (active listening cues during STT) ---
 
-# Default filler pools per stt_language. These are short listening cues
-# — ideally 1-2 syllables — so the user barely notices them when pausing
-# mid-sentence. Mixed-language pools are fine (e.g. Vietnamese keeps "Hmm"
-# alongside "Ờ" / "Ừm") because those universal interjections sound
-# natural in any tongue. Stored as comma-separated strings because the
-# HAL_BACKCHANNEL_FILLERS env override is also CSV — keeps both inputs
-# in the same shape.
+# Comma-separated to match the HAL_BACKCHANNEL_FILLERS env override.
 DEFAULT_FILLERS_BY_LANG = {
     LANG_EN:    "Uhm,Ok,Hmm,Yeah,Uh huh,Right,Sure,Mm,Ah,Oh",
     LANG_VI:    "Ờ,Ừm,Dạ,Vâng,À,Hmm,Uhm,Ơ",
@@ -374,19 +314,7 @@ DEFAULT_FILLERS_BY_LANG = {
     LANG_ZH_TW: "嗯,好,啊,是,嗯嗯,對,哦,呃",
 }
 
-# --- Music pre-play backchannel pools ---
-#
-# yt-dlp resolve + ffmpeg startup takes 1-3s before audio actually plays.
-# A short cached TTS line fills that gap so the agent sounds responsive.
-# Phrases are intentionally generic and short so one cache pool covers
-# every style/query. Cache is keyed by provider/voice/model in TTSService.
-#
-# Pools are split by language × provider:
-#   - language is read from the device's stt_language (config.json) at fire time,
-#     so changing the language picker doesn't require code edits — only a
-#     hal restart so the prewarm hits the new pool.
-#   - ElevenLabs variants embed eleven_v3 audio tags ([excited], [curious])
-#     which the OpenAI provider would speak aloud, hence two separate pools.
+# Music pre-play pools, split by language x provider (ElevenLabs variants carry audio tags).
 
 MUSIC_BACKCHANNEL_PHRASES = [
     "On it!",
@@ -403,11 +331,7 @@ MUSIC_BACKCHANNEL_PHRASES = [
     "Hmm, let me see.",
 ]
 
-# ElevenLabs eleven_v3 audio tags — index-aligned with the plain pool so the
-# no-repeat tracker works the same regardless of provider. Tags are inline
-# directives that v3 interprets as audio direction (not spoken). OpenAI
-# provider must NOT see these — its strip regex only whitelists a subset
-# (`tts_openai.py:_strip_audio_tags`), so unknown tags would be read aloud.
+# Index-aligned with the plain pool; OpenAI must never see these tags.
 MUSIC_BACKCHANNEL_PHRASES_ELEVENLABS = [
     "[excited] On it!",
     "[excited] Coming right up.",
@@ -530,20 +454,7 @@ MUSIC_BACKCHANNEL_POOLS = {
 }
 
 
-# Mic-toggle confirmations for the TTP223 double tap. Pools rather than one fixed
-# line, and in the same voice as the pet phrases, because the same gesture saying
-# the same sentence forever is the thing that reads as a machine.
-#
-# CONSTRAINT, and it is not decorative: every line must still say WHICH WAY the
-# toggle went. This is a privacy control — a confirmation the user cannot decode
-# is worse than a robotic one, because they are left unsure whether the
-# microphone is live. `physical-controls.md` states the same rule for the
-# destructive announcements. Warmth goes in the delivery, never in the meaning:
-# "Shh, my ears are closed" is fine, a bare "Shh!" is not.
-#
-# Audio tags ([whispers] / [excited] / [calm]) are eleven_v3 markers, same as
-# HEAD_PAT_PHRASES_BY_LANG uses, and are chosen to match the state — hushed going
-# quiet, bright coming back.
+# Mic-toggle confirmations: every line must still say which way the toggle went (privacy control).
 MIC_MUTED_PHRASES_BY_LANG = {
     LANG_EN: [
         "[whispers] Okay, I'll stop listening.",

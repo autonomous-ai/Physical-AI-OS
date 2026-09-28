@@ -12,12 +12,7 @@ logger = logging.getLogger(__name__)
 
 
 def _first_sentence(text: str, cap: int = 150) -> str:
-    """First sentence of a skill description (cheap token cut for the catalog).
-
-    Collapses newlines, cuts at the first sentence terminator (. ! ?) followed
-    by whitespace, else hard-caps at `cap` chars. Keeps the catalog
-    declaration-driven while dropping the verbose main-agent-only tail.
-    """
+    """First sentence of a skill description, else hard-capped at `cap` chars."""
     text = " ".join(text.split())
     m = re.search(r"[.!?](\s|$)", text)
     s = text[: m.end()].strip() if m else text
@@ -25,32 +20,18 @@ def _first_sentence(text: str, cap: int = 150) -> str:
 
 
 class OpenClawContextManager(ContextManagerBase):
-    """Context manager for the OpenClaw agent runtime.
-
-    Reads SOUL.md/IDENTITY.md/USER.md for identity, root MEMORY.md plus
-    workspace/memory/*.md for device memory, and workspace/skills/*/SKILL.md
-    for the skill catalog.
-    """
+    """Context manager for the OpenClaw agent runtime."""
 
     FRONTMATTER_RE: re.Pattern[str] = re.compile(r"^---\s*\n(.*?)\n---", re.DOTALL)
     NAME_RE: re.Pattern[str] = re.compile(r"^name:\s*(.+)$", re.MULTILINE)
     DESC_RE: re.Pattern[str] = re.compile(r"^description:\s*(.+)$", re.MULTILINE)
 
-    # Where SKILL.md folders live, relative to the workspace root. Claude Code
-    # keeps them under .claude/skills (the claude CLI auto-loads that dir), so
-    # its subclass overrides this; every other OpenClaw-layout runtime uses
-    # workspace/skills.
+    # Relative to the workspace root; Claude Code overrides with .claude/skills.
     SKILLS_SUBDIR: tuple[str, ...] = ("skills",)
 
     @override
     def load_device_context(self) -> str:
-        """Load SOUL.md, IDENTITY.md, and USER.md from the workspace.
-
-        Capped as a whole: this section is billed every realtime turn and
-        USER.md/IDENTITY.md are agent-writable, so without a ceiling the
-        floor grows unbounded over time. File order is the priority order —
-        SOUL (personality) survives truncation first, USER tail goes first.
-        """
+        """Load SOUL.md, IDENTITY.md and USER.md, capped as a whole (SOUL survives truncation first)."""
         parts: list[str] = []
         for filename in ("SOUL.md", "IDENTITY.md", "USER.md"):
             path: Path = self._workspace / filename
@@ -90,10 +71,7 @@ class OpenClawContextManager(ContextManagerBase):
 
         total_chars: int = sum(len(entry) for entry in entries)
 
-        # OpenClaw-layout runtimes keep their curated long-term memory at the
-        # workspace root. It is not a daily file and therefore cannot be
-        # recovered from device_summary.md; omitting it made realtime sessions
-        # forget facts that the main agent correctly remembered.
+        # Curated long-term memory at the workspace root (not recoverable from device_summary.md).
         root_memory_path: Path = self._workspace / "MEMORY.md"
         try:
             root_memory: str = root_memory_path.read_text(encoding="utf-8").strip()
@@ -238,8 +216,7 @@ class OpenClawContextManager(ContextManagerBase):
         )
         new_summary: str = self._summarizer.summarize(to_summarize)
         if new_summary:
-            # Same write-time cap as the realtime summary in base.py — billed
-            # every turn and re-fed as [Previous summary], so it compounds.
+            # Same write-time cap as base.py: re-fed every turn, so it compounds.
             if len(new_summary) > self._summary_max_chars:
                 logger.warning(
                     "[realtime] device summary truncated %d → %d chars",

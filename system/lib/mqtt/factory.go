@@ -1,24 +1,21 @@
 package mqtt
 
-// Factory creates MQTT clients for publishing (or subscribe). Each CreateClient() returns
-// a new client with the factory's config; client IDs are generated so multiple clients can coexist.
+// Factory creates MQTT clients sharing one config; each gets a unique client ID.
 type Factory struct {
 	config Config
 }
 
-// ProvideFactory creates a factory from config. Use CreateClient() to get a new client to Connect and Publish.
+// ProvideFactory creates a Factory from config.
 func ProvideFactory(cfg Config) (*Factory, error) {
 	return &Factory{config: cfg}, nil
 }
 
-// UpdateConfig refreshes the factory's connection config. Call before restartMQTT
-// to pick up new credentials written during setup.
+// UpdateConfig refreshes the connection config; call before restartMQTT to pick up new credentials.
 func (f *Factory) UpdateConfig(cfg Config) {
 	f.config = cfg
 }
 
-// CreateClient returns a new MQTT client using the factory's config. Each client gets a unique client ID.
-// Call Connect(ctx) then Publish(ctx, topic, qos, payload) (and Close() when done).
+// CreateClient returns a new client with a unique ID; call Connect, Publish, then Close.
 func (f *Factory) GetClient(clientID string) *MQTT {
 	return ProvideClient(Options{
 		Endpoint: f.config.Endpoint,

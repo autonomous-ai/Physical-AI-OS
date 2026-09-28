@@ -123,7 +123,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 - `NSStatusItem` trên menu bar (không có Dock icon; `setActivationPolicy(.accessory)`)
 - Menu: trạng thái pair, trạng thái kết nối, command gần nhất, "Pause", "Revoke pairing", "Quit"
 - mDNS browser qua `Network.framework` (`NWBrowser`)
-- Luồng pairing (6-digit code, token Keychain)
+- Luồng pairing (6-digit code; token lưu ở `~/Library/Application Support/AutonomousBuddy/pairing.json`, mode 0600)
 - `URLSessionWebSocketTask` persistent tới lamp
 - Command executor:
   - **NSWorkspace** để launch app, mở URL
@@ -131,7 +131,7 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
   - **AppleScript / OSAScript** cho "close app" và vài script trắng-list
   - **UNUserNotificationCenter** cho notification desktop
 - Helper permission (prompt Accessibility, Automation per-app)
-- Audit log local (`~/Library/Application Support/AutonomousBuddy/audit.log`) — đồng thời push lên thiết bị khi có thể
+- Audit log local (`~/Library/Application Support/AutonomousBuddy/audit.log`) ; thiết bị không có endpoint audit
 - OSLog (unified logging) cho debug
 
 ### 4.2 `lamp` Go server — package mới `system/buddy/`
@@ -147,18 +147,20 @@ Use case MVP KHÔNG hỗ trợ (chờ phase vision):
 | `service.go` | Service tầng cao gộp các phần trên |
 | `wire.go` | Wire provider set của Google |
 
-Route HTTP mới (`server/buddy/delivery/http/`):
+Route HTTP (đăng ký trong `system/server/server.go`, handler ở `system/server/buddy/delivery/http/`). Thiết bị chỉ giữ một pairing:
 
 | Route | Auth | Mục đích |
 |-------|------|----------|
-| `POST /api/buddy/pair/start` | admin | Cấp code 6-digit, hết hạn 60s |
-| `POST /api/buddy/pair/confirm` | code | Xác nhận code → trả token long-lived |
-| `GET  /api/buddy/list` | admin | Liệt kê buddy đã pair + status |
-| `DELETE /api/buddy/:id` | admin | Hủy pairing |
-| `GET  /api/buddy/ws` | bearer token | WS upgrade cho buddy |
-| `POST /api/buddy/command` | internal/admin | Dispatch 1 command (OpenClaw skill gọi) |
-| `GET  /api/buddy/status` | admin | Tổng quan trạng thái kết nối |
-| `GET  /api/buddy/audit` | admin | Audit log (paginated) |
+| `POST /api/buddy/pair/start` | admin (`adminAuthMiddleware`) | Cấp code 6-digit, hết hạn 60s → `{code, expires_in}` |
+| `POST /api/buddy/pair/confirm` | không (code chính là credential) | Xác nhận code → `{token, buddy_id}` |
+| `GET  /api/buddy/status` | admin | `{paired, connected}` kèm `buddy_id`, `name`, `os_version`, `fingerprint`, `paired_at` khi đã pair |
+| `DELETE /api/buddy` | admin | Hủy pairing hiện tại |
+| `DELETE /api/buddy/self` | Bearer token của buddy (kiểm trong handler) | Buddy tự unpair |
+| `GET  /api/buddy/ws` | Bearer token của buddy (kiểm trong handler) | WS upgrade cho buddy |
+| `POST /api/buddy/command` | chỉ loopback (`localOnlyMiddleware`) | Dispatch đồng bộ 1 command (mặc định 30 s; `timeout_ms` + 5 s nếu có) |
+| `POST /api/buddy/exec/:action` | chỉ loopback | Biến thể HW marker (`[HW:/buddy/exec/<action>:{...}]`), 15 s |
+| `POST /api/buddy/observe` | chỉ loopback | Screenshot + mô tả từ vision model phụ |
+| `POST /api/buddy/suggest` | chỉ loopback | Endpoint gợi ý cho agent trên thiết bị |
 
 ### 4.3 `lelamp` (Python) — **không sửa cho MVP**
 
@@ -168,18 +170,18 @@ Hardware-only theo `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw →
 
 Hành vi skill hiện tại (mọi runtime): trạng thái hiện tại đáng tin cậy xác nhận chưa pair, mất kết nối hoặc pause sẽ dừng tác vụ desktop trước mọi command hay việc đọc vision reference, kể cả HW marker đơn giản. Nếu chưa biết trạng thái, skill kiểm tra read-only `desktop_info` một lần và đọc đầy đủ kết quả cùng exit code. Kết quả kiểm tra thành công được dùng lại trong workflow. Lỗi kết nối/quyền và timeout kết thúc turn, không retry, tự pair/kết nối lại hoặc chuyển sang Harness/browser trên thiết bị. Phản hồi ngắn nêu đúng blocker, không hứa tự hoàn thành sau đó. User yêu cầu thử lại hoặc có cập nhật kết nối đáng tin cậy mới thì được kiểm tra lại. Đây là chỉ dẫn skill, không phải backend chặn thực thi; không bổ sung cơ chế inject trạng thái mới.
 
-- Nằm trong skill directory của OpenClaw (path tùy convention OpenClaw)
+- Nằm ở `skills/computer-use/`
 - `SKILL.md` mô tả trigger và tool surface
 - Trigger pattern gồm tiếng Việt ("mở ... trên máy tính", "vào trang ... trên máy", "đóng app ...") và tiếng Anh ("open ... on my computer", "go to ... on my mac")
-- Skill script (hoặc tool-call LLM) build command rồi `curl` `http://localhost:5000/api/buddy/command` với internal auth header
+- Skill script (`scripts/buddy.py`) hoặc HW marker POST tới `http://127.0.0.1:5000/api/buddy/command` (hoặc `/api/buddy/exec/<action>`); các route này chỉ nhận loopback, không cần auth header
 - Trả về kết quả TTS-friendly ("đã mở Chrome rồi", "không tìm thấy máy tính đã pair", …)
 
-### 4.5 Web UI (`lamp/web/`)
+### 4.5 Web UI (`system/web/`)
 
-Page mới `Paired Computers`:
-- Liệt kê buddy đã pair (tên, OS, last seen, status)
-- Nút "Add new" → gọi `/api/buddy/pair/start` → hiển thị code 6-digit → poll `/api/buddy/list` để phát hiện pair thành công
-- Nút "Revoke" trên mỗi row
+`BuddyCard` trong phần pairing của trang Monitor (`system/web/src/pages/monitor/BuddyCard.tsx`):
+- Hiển thị Mac đang pair duy nhất (tên, OS, buddy ID, trạng thái kết nối)
+- Nút "Pair" → gọi `POST /api/buddy/pair/start` → hiển thị code 6-digit; poll `GET /api/buddy/status` mỗi 5 s để phát hiện pair thành công
+- Nút "Revoke" → `DELETE /api/buddy`
 
 ---
 
@@ -249,7 +251,7 @@ Page mới `Paired Computers`:
 5. User nhập code vào buddy
 6. Buddy gọi `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}` qua LAN.
 7. Thiết bị validate code, sinh bearer token long-lived, lưu `{buddy_id, token, fingerprint, name, os_version, paired_at}` vào `config/buddies.json`.
-8. Buddy lưu token vào macOS Keychain (service `network.autonomous.ai.buddy`)
+8. Buddy lưu `{buddy_id, device_host, token, paired_at}` vào `~/Library/Application Support/AutonomousBuddy/pairing.json` (file mode 0600, `Pairing/PairingStore.swift`). App desktop Electron không tự lưu token: pairing được giao cho Swift helper nhúng bên trong, dùng chung file này.
 9. Buddy mở WS với `Authorization: Bearer <token>`
 
 Phân quyền MQTT dựa trên credentials của broker và ACL của topic hiện có;
@@ -293,7 +295,7 @@ riêng duy nhất cho app, không cần sửa BFF. Vẫn cần kiểm chứng br
 và ACL topic trên triển khai thật. Luồng cập nhật foreground, không phải push
 notification khi đóng app. Xem
 [contract MQTT status đầy đủ](../../../../../docs/vi/mqtt_vi.md#buddystatus--đọc-và-theo-dõi-trạng-thái-buddy)
-và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
+và [prompt bàn giao mobile](../../../../../docs/vi/buddy-mobile-handoff_vi.md).
 
 
 ### Reconnect
@@ -310,10 +312,10 @@ và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
 | Layer | Cơ chế |
 |-------|--------|
 | Pairing | Yêu cầu user thao tác thực sự trên Mac (gõ code). Không thể pair lén. |
-| Lưu token | macOS Keychain (encrypted at rest) bên buddy; `buddies.json` bên lamp (file mode 0600) |
+| Lưu token | `~/Library/Application Support/AutonomousBuddy/pairing.json` (file mode 0600, không mã hóa; bỏ Keychain vì build ad-hoc-signed gặp prompt mật khẩu không duyệt được) bên buddy; `config/buddies.json` bên lamp (file mode 0600) |
 | Transport | WS over HTTP trên LAN (MVP). **TLS để sau** — risk được document, mitigate bằng LAN-only + pairing. v1.1: self-signed cert + pinning. |
 | Indicator session | Chấm đỏ trên menu bar khi buddy đang connect + active. Luôn nhìn thấy. |
-| Audit log | Mọi command đều log (timestamp, action, hash params, source). File local + push lên lamp `/api/buddy/audit`. |
+| Audit log | Mọi command đều log (timestamp, action, hash params, source). Chỉ file local (`~/Library/Application Support/AutonomousBuddy/audit.log`). |
 | Kill switch | "Pause" trên menu = drop WS giữ token. "Revoke pairing" = drop token + bảo lamp xóa. |
 | Permission gating | Command fail clean với error rõ ràng nếu permission macOS bị deny (không silent fail). |
 | Blast radius | **Document rõ với user**: Lamp có quyền tương đương account user trên Mac. Trust ask là vấn đề UX trung tâm. |
@@ -321,7 +323,7 @@ và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
 
 ### Threat đã cân nhắc
 
-1. **Attacker trên LAN** → không pair được nếu không có mã từ luồng HTTP hoặc MQTT đã kiểm tra quyền. Không replay token được nếu không phá Keychain.
+1. **Attacker trên LAN** → không pair được nếu không có mã từ luồng HTTP hoặc MQTT đã kiểm tra quyền. Không replay token được nếu không đọc được `pairing.json` (0600) của user.
 2. **Lamp bị compromise** → chạy được command tùy ý trên Mac (= blast radius). Mitigation: user revoke bất cứ lúc nào từ menu bar, không cần truy cập lamp.
 3. **Buddy bị compromise** (malware Mac hijack WS) → có thể gửi response giả về lamp. Mitigation: command ID + signed response (v1.1+).
 4. **Eavesdrop trên LAN** → MVP không mã hóa WS. Chấp nhận với LAN nhà, phải fix trước khi deploy network không tin cậy.
@@ -378,7 +380,7 @@ và [prompt bàn giao mobile](../../../../../docs/buddy-mobile-handoff_vi.md).
 | Network protocol | **WebSocket (raw, không TLS MVP)** | Persistent, hai chiều, support tốt qua URLSessionWebSocketTask. TLS ở v1.1 |
 | Discovery | **mDNS qua `Network.framework` `NWBrowser`** | Native, không cần dep thứ 3 |
 | Codec command | **JSON** | Đồng style với serializer của lamp; dễ debug |
-| Lưu token | **macOS Keychain** | Encrypted, OS quản lý |
+| Lưu token | **File, mode 0600** (`pairing.json`) | Keychain prompt không duyệt được với build ad-hoc-signed; xem lại khi có Developer ID signed |
 | Lưu pref | **UserDefaults / plist** | Chuẩn macOS cho non-secret |
 | Logging | **OSLog (unified)** | Native, xem được trong Console.app |
 | Test framework | **XCTest** | Chuẩn |
@@ -453,7 +455,7 @@ MVP computer-use ban đầu chọn **Swift native**. Kiến trúc tháng 9 giữ
 - `lelamp` (Python) — **không sửa**. Chỉ hardware.
 - `lamp` (Go) — **package mới** `system/buddy/`, route HTTP mới, WS gateway mới.
 - `OpenClaw` — skill mới `computer-use`.
-- `lamp/web` — page mới "Paired Computers".
+- `system/web` — `BuddyCard` trong trang Monitor (pair / status / revoke).
 - `CLAUDE.md` — thêm row docs.
 
 ---

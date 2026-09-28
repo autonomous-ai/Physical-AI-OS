@@ -11,8 +11,6 @@ import (
 )
 
 // A HAL restart is a listener that goes away and comes back on the same port.
-// reviveAfter reproduces exactly that: the address is dead when the caller
-// first tries it, and serving by the time it gives up waiting.
 func reviveAfter(t *testing.T, d time.Duration, h http.Handler) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -40,8 +38,7 @@ func reviveAfter(t *testing.T, d time.Duration, h http.Handler) string {
 	return "http://" + addr
 }
 
-// A POST that lands while HAL is restarting must survive it. Before this, the
-// click was simply lost and the operator was told to try again later.
+// A POST that lands while HAL is restarting survives it.
 func TestPiperFetchRetriesPostUntilHALReturns(t *testing.T) {
 	var got []byte
 	url := reviveAfter(t, 2*time.Second, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -60,15 +57,12 @@ func TestPiperFetchRetriesPostUntilHALReturns(t *testing.T) {
 	if resp.StatusCode != http.StatusOK {
 		t.Fatalf("status = %d, want 200", resp.StatusCode)
 	}
-	// The body has to survive being replayed: it is read from the client request
-	// once and every attempt after the first needs its own reader.
 	if string(got) != string(body) {
 		t.Fatalf("body reached HAL as %q, want %q", got, body)
 	}
 }
 
-// Status polls are what tell the page the device is restarting, so they must
-// fail immediately rather than being held open.
+// Status polls fail immediately rather than being held open.
 func TestPiperFetchDoesNotRetryGet(t *testing.T) {
 	url := reviveAfter(t, 2*time.Second, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -84,9 +78,7 @@ func TestPiperFetchDoesNotRetryGet(t *testing.T) {
 	}
 }
 
-// The whole safety argument rests on this distinction: a refused dial proves
-// the request was never delivered, while a timeout proves nothing — HAL may
-// have done the work and answered slowly.
+// Only a refused dial is retried; a timeout is not.
 func TestDialFailedSeparatesRefusalFromSlowReply(t *testing.T) {
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -108,8 +100,7 @@ func TestDialFailedSeparatesRefusalFromSlowReply(t *testing.T) {
 	}
 }
 
-// Retrying is only safe because no request was processed. Once HAL answers,
-// whatever it said is final — including a refusal.
+// Once HAL answers, its reply is final, including a refusal.
 func TestPiperFetchDoesNotRetryARefusal(t *testing.T) {
 	var calls int
 	url := reviveAfter(t, 0, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

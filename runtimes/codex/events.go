@@ -28,33 +28,12 @@ type pendingEvent struct {
 	fixedRunID  string
 }
 
-// busyTTL bounds how long the busy flag survives without a terminal frame. It
-// exists for ONE case: the turn's final frame was DROPPED, so the sensing
-// pipeline would otherwise wedge forever. It must therefore stay LONGER than
-// the gatewayd's per-turn timeout — the gatewayd always ends a turn (completed,
-// failed, or its own "timeout"), so any TTL shorter than that fires on turns
-// that are merely SLOW.
-//
-// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
-// takes a while ("build me a Three.js scene"), and the same prompt answered over
-// Telegram/OpenClaw runs 35 minutes to completion. The old fixed 5 minutes was
-// half the 10-minute turn timeout, so every such turn tripped it — and this path
-// additionally called clearTurn(), wiping the IN-FLIGHT run id. That orphaned the
-// browser's pending run: every later lifecycle/error frame found no current run,
-// allocated a fresh id, and attached to an unrelated queued turn, so the chat sat
-// on a pending bubble until its own deadline and reported "no response".
-// Measured 2026-09-03 on lamp-0c89: run device-chat-139 started 15:40:41, lost
-// its id at 15:45:41, and the 15:50:41 "timeout" landed on device-chat-168.
-//
-// Derived from CODEX_TURN_TIMEOUT_S (the same value the gatewayd enforces) plus a
-// margin, so raising the turn timeout cannot silently re-open this bug.
+// busyTTL bounds how long the busy flag survives without a terminal frame.
+// It must stay longer than the gatewayd per-turn timeout, or slow turns lose their run id.
 const busyTTLMargin = 5 * time.Minute
 
 func busyTTL() time.Duration {
-	// Same default as the gatewayd's own Config (10 minutes). Long enough for a
-	// heavy turn, short enough that a WEDGED one — the upstream stream going
-	// silent mid-turn, measured on lamp-0c89 2026-09-03 — is killed and the
-	// device recovers instead of being held for most of an hour.
+	// Matches the gatewayd default turn timeout.
 	timeout := 10 * time.Minute
 	if f, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("CODEX_TURN_TIMEOUT_S")), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
@@ -63,8 +42,7 @@ func busyTTL() time.Duration {
 }
 
 // IsBusy mirrors openclaw's OpenclawService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for its first inbound frame. Auto-clears after
-// busyTTL if the final frame got dropped so the sensing pipeline cannot wedge.
+// chat.send is still waiting for its first inbound frame.
 func (s *CodexService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
@@ -88,18 +66,12 @@ func (s *CodexService) SupportsActiveTurnSteering() bool { return true }
 
 // failStuckTurn ends the in-flight turn when the busy TTL decides its terminal
 // frame is never coming: it drops the run id AND tells the waiting client why.
-//
-// Doing only one of the two is a bug either way. Leaving the id set orphans the
-// NEXT turn — ensureTurnStarted returns early on a non-empty currentRunID, so
-// the new turn's frames are attributed to the dead run and the new chat hangs.
-// Clearing it silently leaves the browser on a pending bubble until its own
-// deadline, which is exactly the "no response" this whole path exists to
-// prevent. Ids are cleared BEFORE the dispatch, matching handleError: the
-// consumer clears busy on lifecycle.error and drains the queue synchronously.
+// Ids are cleared BEFORE the dispatch, matching handleError: the consumer clears busy on
+// lifecycle.error and drains the queue synchronously.
 func (s *CodexService) failStuckTurn() {
 	runID := s.getCurrentRunID()
 	if runID == "" {
-		return // nothing in flight — the TTL fired on a stale busy flag alone
+		return
 	}
 	slog.Warn("ending the in-flight turn — busy TTL expired with no terminal frame",
 		"component", "codex", "runID", runID)
@@ -107,12 +79,10 @@ func (s *CodexService) failStuckTurn() {
 	s.clearTurn()
 	dispatch, _ := s.wsDispatch.Load().(dispatchFn)
 	if dispatch == nil {
-		// These acknowledged steers were removed before clearTurn; no terminal
-		// callback is available to account for them on this path.
 		for _, merged := range steeredRuns {
 			telemetry.ReportTaskObservationLost(merged.runID)
 		}
-		return // socket already gone; the reconnect path owns the cleanup
+		return
 	}
 	payload, _ := json.Marshal(map[string]any{
 		"runId":      runID,
@@ -129,8 +99,8 @@ func (s *CodexService) failStuckTurn() {
 }
 
 // failDisconnectedTurn gives a live client a terminal event when only the
-// local Codex gateway restarted. It must run before runWSConn's clearTurn
-// defer, while the original run correlation still exists.
+// local Codex gateway restarted.
+// It must run before runWSConn's clearTurn defer, while the original run correlation still exists.
 func (s *CodexService) failDisconnectedTurn(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() == "" {
 		return
@@ -139,10 +109,11 @@ func (s *CodexService) failDisconnectedTurn(dispatch func(domain.WSEvent)) {
 	s.handleError("codex gateway restarted; turn cancelled", dispatch)
 }
 
-// SetBusy flips active state. Drains pending events on idle.
+// SetBusy flips active state.
 func (s *CodexService) SetBusy(busy bool) {
-	// A queued rejection also emits lifecycle.error. The generic consumer has
-	// no run-aware busy API, so it must not idle another active/queued turn.
+	// A queued rejection also emits lifecycle.error.
+	// The generic consumer has no run-aware busy API, so it must not idle another active/queued
+	// turn.
 	if !busy && (s.getCurrentRunID() != "" || s.hasPendingRuns()) {
 		s.activeTurn.Store(true)
 		return
@@ -174,13 +145,7 @@ func (s *CodexService) QueuePendingEvent(eventType, msg string, images []string,
 	})
 }
 
-// drainPendingEvents replays buffered sensing events. Behaviour matches the
-// openclaw / hermes drain: voice events prioritised, expirable high-frequency
-// types (presence / motion / emotion) coalesced to latest-only and stale entries
-// dropped after expireAfter.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
+// DrainPendingEvents replays buffered sensing events; it also runs when the speaker frees up.
 func (s *CodexService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -192,8 +157,6 @@ func (s *CodexService) drainPendingEvents() {
 	defer s.pendingEventsDrainMu.Unlock()
 	s.pendingEventsMu.Lock()
 	if !s.wsConnected.Load() {
-		// An idle/speaker callback can run while reconnecting. Leave unsent
-		// events in place for the next connection-ready drain.
 		s.pendingEventsMu.Unlock()
 		return
 	}
@@ -205,11 +168,7 @@ func (s *CodexService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
+	// Put the batch back while the last reply is still playing; replaying now would cut it off.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -290,8 +249,6 @@ func (s *CodexService) drainPendingEvents() {
 	slog.Info("draining pending sensing events", "component", "sensing", "count", len(events))
 	for i, ev := range events {
 		if !s.wsConnected.Load() {
-			// Only this unattempted tail is safe to retry. A previous send may
-			// have reached the gateway even if its response was lost.
 			s.pendingEventsMu.Lock()
 			s.pendingEvents = append(events[i:], s.pendingEvents...)
 			s.pendingEventsMu.Unlock()
@@ -325,14 +282,11 @@ func (s *CodexService) drainPendingEvents() {
 		msg = strings.TrimSpace(msg)
 		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
-		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-		// on the reply (same as the live PostEvent path).
 		if ev.eventType == "voice_agent_handled" {
 			s.MarkSilentRun(runID)
 		}
 
 		if telemetry.TaskGroup(ev.eventType) == "sensing" {
-			// Keep this cohort stable if the socket disappears before dispatch.
 			ev.fixedRunID = runID
 			events[i] = ev
 			telemetry.ReportTaskStarted(ev.eventType, "", runID)
@@ -345,8 +299,6 @@ func (s *CodexService) drainPendingEvents() {
 		}
 		if err != nil {
 			if errors.Is(err, errDisconnectedBeforeSend) {
-				// The connection vanished between the preflight and sendChat.
-				// No write occurred, so this event and its tail remain unsent.
 				s.RemovePendingChatTraceByRunID(runID)
 				s.pendingEventsMu.Lock()
 				s.pendingEvents = append(events[i:], s.pendingEvents...)

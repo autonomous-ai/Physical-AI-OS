@@ -10,7 +10,7 @@ export function RestartServiceButton({ target, disabled }: {
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
     if (state !== "queued") return;
-    // This is a click cooldown, not confirmation that the service is healthy.
+    // Click cooldown, not a health confirmation.
     const timer = setTimeout(() => setState("idle"), 15000);
     return () => clearTimeout(timer);
   }, [state]);

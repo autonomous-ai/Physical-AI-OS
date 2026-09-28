@@ -23,14 +23,9 @@ import (
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
-// allowedLogs maps source names to their log file paths (supports glob patterns).
-// Entries prefixed with "journal:" use journalctl instead of file reading.
-//
-// "hal" and "os-server" are resolved in resolveLogSource through syspath rather
-// than listed here: both processes already take their log location from an env
-// var, so hardcoding the device path would make the web UI read a file nobody
-// writes whenever they are pointed elsewhere. Unset env still yields exactly the
-// two paths this map used to carry.
+// allowedLogs maps source names to their log file paths (supports glob
+// patterns). Entries prefixed with "journal:" use journalctl instead of file
+// reading.
 var allowedLogs = map[string]string{
 	"bootstrap":        "journal:bootstrap.service",
 	"openclaw":         "/var/log/openclaw/agent.log",
@@ -38,41 +33,20 @@ var allowedLogs = map[string]string{
 	"buddy":            "/var/log/claude-desktop-buddy.log",
 }
 
-// hermesAgentLog is Hermes's own rich per-turn agent log under $HERMES_DIR/logs
-// (HERMES_DIR=/root/.hermes, see runtimes/hermes/install.sh) — the analogue of
-// openclaw's agent.log file.
+// hermesAgentLog is Hermes's own rich per-turn agent log under
+// $HERMES_DIR/logs (HERMES_DIR=/root/.hermes, see runtimes/hermes/install.sh)
+// — the analogue of openclaw's agent.log file.
 const hermesAgentLog = "/root/.hermes/logs/agent.log"
 
 // picoclawAgentLog is PicoClaw's own gateway log under /root/.picoclaw/logs
 const picoclawAgentLog = "/root/.picoclaw/logs/gateway.log"
 
-// resolveLogSource maps a web log-source id to its file/journal pattern, with one
-// runtime-aware twist: the generic "Agent"/"Agent Service" tabs follow whichever
-// agentic backend is ACTIVE. When agent_runtime != openclaw, openclaw isn't running
-// so its file/journal is empty/stale — so, exactly mirroring the openclaw mapping
-// (Agent → main file log, Agent Service → systemd journal), the tabs serve, per runtime:
-//   - hermes:   "openclaw" → ~/.hermes/logs/agent.log,     "openclaw-service" → journal:hermes-gateway.service
-//   - picoclaw: "openclaw" → ~/.picoclaw/logs/gateway.log, "openclaw-service" → journal:picoclaw.service
-//   - codex:    "openclaw" → journal:codex.service,        "openclaw-service" → journal:codex.service
-//     (the codex gatewayd bridge has no file log — it logs to the journal only)
-//   - claudecode: "openclaw" → journal:claudecode.service, "openclaw-service" → journal:claudecode.service
-//     (the claudecode gatewayd bridge has no file log — it logs to the journal only)
-//   - opencode: "openclaw" → journal:opencode.service, "openclaw-service" → journal:opencode.service
-//     (the opencode gatewayd bridge has no file log — it logs to the journal only)
-//
-// "openclaw" also bakes in resolveOpenclawLog()'s /tmp fallback so callers don't
-// special-case it. The explicit "hermes"/"picoclaw"/"codex"/"claudecode" ids
-// always map to that backend's log.
-//
-// Every `journal:` mapping for a bridge-only runtime is overridable by
-// OS_AGENT_BRIDGE_LOG (syspath.AgentBridgeLog). Unset on a board, so the units
-// above stand; off-device there is no systemd and `make codex-dev` tees the
-// bridge to a file instead.
+// resolveLogSource maps a web log-source id to its file/journal pattern, with
+// one runtime-aware twist: the generic "Agent"/"Agent Service" tabs follow
+// whichever agentic backend is ACTIVE.
 func (s *Server) resolveLogSource(source string) (string, bool) {
 	runtime := device.CurrentAgentRuntimeFromConfig(s.config)
 
-	// bridgeLog names a file to read the agent bridge from instead of its
-	// journal unit. Empty on a board, so every `journal:` mapping below stands.
 	bridgeLog := syspath.AgentBridgeLog()
 	journalOrBridge := func(unit string) string {
 		if bridgeLog != "" {
@@ -171,7 +145,6 @@ func (s *Server) logTail(c *gin.Context) {
 		n = 200
 	}
 
-	// Journal-based source: use journalctl instead of file reading.
 	if strings.HasPrefix(pattern, "journal:") {
 		unit := strings.TrimPrefix(pattern, "journal:")
 		lines, err := journalTail(unit, n)
@@ -208,7 +181,6 @@ func (s *Server) logTail(c *gin.Context) {
 		lines, _ := tailFile(p, n)
 		allLines = append(allLines, lines...)
 	}
-	// Keep only last n lines across all files
 	if len(allLines) > n {
 		allLines = allLines[len(allLines)-n:]
 	}
@@ -235,7 +207,6 @@ func (s *Server) logStream(c *gin.Context) {
 	c.Header("Connection", "keep-alive")
 	c.Header("X-Accel-Buffering", "no")
 
-	// Journal-based source: stream via journalctl -f.
 	if strings.HasPrefix(pattern, "journal:") {
 		unit := strings.TrimPrefix(pattern, "journal:")
 		s.streamJournal(c, unit)
@@ -262,7 +233,6 @@ func (s *Server) logStream(c *gin.Context) {
 		if err != nil {
 			continue
 		}
-		// Seek to end
 		_, _ = f.Seek(0, 2)
 		tails = append(tails, fileTail{f: f, reader: bufio.NewReader(f)})
 	}
@@ -301,20 +271,14 @@ func (s *Server) logStream(c *gin.Context) {
 }
 
 // logSecretPatterns scrub api keys / tokens / passwords out of log lines
-// before they're shipped to the web monitor. Plaintext secrets occasionally
-// land in stdout (config dumps, third-party SDK debug output, error context
-// echoing the request body) — without this, /api/logs/tail and /logs/stream
-// would leak them to any authenticated admin caller and to anyone capturing
-// the browser session log.
+// before they're shipped to the web monitor.
 var logSecretPatterns = []struct {
 	re  *regexp.Regexp
 	rep string
 }{
-	// key=value | "key": "value" | key: value — covers env-style, JSON, YAML
 	{regexp.MustCompile(`(?i)((?:api[_-]?key|token|secret|password)\s*["']?\s*[=:]\s*["']?)[A-Za-z0-9\-_./+]{4,}`), "${1}***"},
 	// Authorization: Bearer <token> — common log line shape for HTTP request dumps
 	{regexp.MustCompile(`(?i)(authorization\s*:\s*bearer\s+)\S+`), "${1}***"},
-	// Bare OpenAI/Anthropic/Codex style keys appearing without an obvious key= prefix
 	{regexp.MustCompile(`sk-(?:proj-|ant-|svcacct-)?[A-Za-z0-9_\-]{20,}`), "sk-***"},
 }
 
@@ -387,7 +351,6 @@ func (s *Server) streamJournal(c *gin.Context, unit string) {
 				return false
 			}
 			c.SSEvent("log", redactLogLine(line))
-			// Drain any buffered lines to batch SSE writes.
 			for {
 				select {
 				case l, ok := <-lineCh:

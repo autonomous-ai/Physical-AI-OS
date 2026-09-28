@@ -51,8 +51,7 @@ func TestNotify_PostsToAlertPathWithBearerAndBody(t *testing.T) {
 	if c.hits != 1 {
 		t.Fatalf("want 1 request, got %d", c.hits)
 	}
-	// LLMBaseURL already ends in /v1, so the endpoint is {base}/alert with no
-	// stripping — i.e. /v1/alert (the /api/v1/ai/v1/alert sibling of chat/completions).
+	// LLMBaseURL already ends in /v1, so the endpoint is {base}/alert.
 	if !strings.HasSuffix(c.path, "/v1/alert") {
 		t.Errorf("path = %q, want suffix /v1/alert", c.path)
 	}
@@ -134,8 +133,7 @@ func TestCompose_IncludesTitleAndPreamble(t *testing.T) {
 	}
 }
 
-// A BYO-LLM device (llm_base_url on Ollama) keeps its ops alerts on the
-// Autonomous backend once backend_base_url / backend_api_key are set.
+// BYO-LLM devices keep ops alerts on the Autonomous backend when backend_* is set.
 func TestNotifyUsesBackendOverride(t *testing.T) {
 	var c captured
 	srv := newCaptureServer(t, &c)

@@ -1,15 +1,4 @@
-"""The addressee rule: who may the lamp answer, and what may it say back.
-
-A backchannel ("Right", "Uhm") is the device claiming to be the addressee. It
-predates the wake gate — added Apr 2026 to fire on every STT partial — and kept
-firing on every utterance after that gate arrived, so the lamp murmured at
-conversations between two other people. It also made testing the openers
-misleading: the cue sounds like acknowledgement while the turn is dropped
-unheard.
-
-The rule is exercised here as the standalone predicate the code uses, so both
-callers (listening cue and backchannel) are covered by one statement of it.
-"""
+"""The addressee rule: who may the lamp answer, and what may it say back."""
 
 import threading
 
@@ -43,11 +32,7 @@ def test_without_a_wake_word_every_utterance_is_addressed():
 
 
 def test_the_same_rule_governs_the_cue_and_the_backchannel():
-    """Both are claims to be the addressee, so both ask the same question.
-
-    Kept as one predicate rather than two copies: they drifted apart once
-    already, which is how the backchannel outlived the gate.
-    """
+    """Both are claims to be the addressee, so both ask the same question."""
     import inspect
 
     from hal.drivers.voice.voice_service import VoiceService

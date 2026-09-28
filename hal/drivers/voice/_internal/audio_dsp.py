@@ -1,7 +1,4 @@
-"""Pure-function audio DSP helpers.
-
-No class state, no I/O. Just transforms on numpy arrays. Easier to test and reuse.
-"""
+"""Pure-function audio DSP helpers."""
 
 from math import gcd
 
@@ -13,10 +10,7 @@ def rms(audio_data, np) -> float:
 
 
 def resample_to_stt(data, device_rate: int, stt_rate: int, np) -> bytes:
-    """Resample audio from device_rate to stt_rate using polyphase + anti-aliasing.
-
-    Returns raw bytes at stt_rate. No-op (just .tobytes()) if rates already match.
-    """
+    """Resample audio from device_rate to stt_rate using polyphase + anti-aliasing."""
     if device_rate == stt_rate:
         return data.tobytes()
     import scipy.signal

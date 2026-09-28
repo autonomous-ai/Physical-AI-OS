@@ -24,15 +24,8 @@ import { PluginsSection } from "@/pages/settings/PluginsSection";
 import { ScheduledSection } from "@/pages/settings/ScheduledSection";
 import { FacebookSection } from "@/pages/settings/FacebookSection";
 
-// The set of sections this panel can render. Controlled by the parent now (the
-// page shell owns the sidebar / active-section state). `stt` is the Language
-// section (rendered under id="stt"), matching the legacy /edit layout. `runtime`
-// is the agent-backend switch (its own Switch button, not part of Save).
-// `scheduled` is read-only (see ScheduledSection's doc comment) — no Save flow.
 export type SettingsSectionId = "device" | "wifi" | "llm" | "runtime" | "voice" | "face" | "tts" | "realtime" | "stt" | "channel" | "mqtt" | "mcp" | "plugins" | "timezone" | "scheduled" | "facebook";
 
-// Header-row label lookup. Kept local so the panel can render the active-section
-// title above the form without depending on the page's NAV_GROUPS config.
 const SECTION_LABELS: Record<SettingsSectionId, string> = {
   device: "General",
   wifi: "Wi-Fi",
@@ -52,10 +45,6 @@ const SECTION_LABELS: Record<SettingsSectionId, string> = {
   facebook: "Facebook",
 };
 
-// Field / LockedField / LockedPasswordField / SectionCard live in
-// @/components/setup/shared. SkeletonBlock stays inline because this panel's
-// version renders 4 stacked cards whereas Setup's renders just one.
-
 function SkeletonBlock() {
   const bar = (w: string | number, h = 10) => (
     <div style={{ width: w, height: h, borderRadius: 6, background: C.surface, marginBottom: 10 }} />
@@ -72,21 +61,15 @@ function SkeletonBlock() {
   );
 }
 
-// SettingsPanel — the self-contained settings form body. Owns all form state,
-// config load/save, and the section components. Renders WITHOUT a sidebar so it
-// can be embedded both inside the /edit page shell and inside the Monitor
-// dashboard. `activeSection` is controlled by the parent.
+// Self-contained settings form body (state, load/save, sections); `activeSection` is controlled by the parent.
 export function SettingsPanel({ activeSection }: { activeSection: SettingsSectionId }): React.JSX.Element {
   const [loadingCfg, setLoadingCfg] = useState(true);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  // form state
   const [ssid, setSsid] = useState("");
   const [password, setPassword] = useState("");
-  // Rotate-admin-password field. Empty = no change; non-empty = bcrypt +
-  // replace server-side. Existing session cookie keeps working since it's
-  // signed by SessionSecret, not by the password hash.
+  // Empty = keep the current password.
   const [adminPassword, setAdminPassword] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [mac, setMac] = useState("");
@@ -97,12 +80,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [deepgramApiKey, setDeepgramApiKey] = useState("");
   const [sttApiKey, setSttApiKey] = useState("");
   const [sttBaseUrl, setSttBaseUrl] = useState("");
-  // STT provider: derived from saved config (deepgram if key present, else autonomous).
-  // Default for fresh devices is "autonomous" — uses LLM endpoint as fallback.
   const [sttProvider, setSttProvider] = useState<SttProvider>("autonomous");
-  // STT language drives model selection on the server (operators don't pick
-  // model directly). Defaults to "en" so a never-configured device lands on
-  // English instead of "auto/unset" (which surfaces as a blank dropdown).
   const [sttLanguage, setSttLanguage] = useState("en");
   const [ttsApiKey, setTtsApiKey] = useState("");
   const [ttsBaseUrl, setTtsBaseUrl] = useState("");
@@ -120,7 +98,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [realtimeReasoning, setRealtimeReasoning] = useState("MINIMAL");
   const [realtimeApiKey, setRealtimeApiKey] = useState("");
   const [realtimeBaseUrl, setRealtimeBaseUrl] = useState("");
-  // pipecat_v1 only: the in-session `web_search` tool. Default on (HAL's).
   const [realtimeWebSearch, setRealtimeWebSearch] = useState(true);
   const [channel, setChannel] = useState<ChannelType>("telegram");
   const [teleToken, setTeleToken] = useState("");
@@ -131,14 +108,9 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [discordBotToken, setDiscordBotToken] = useState("");
   const [discordGuildId, setDiscordGuildId] = useState("");
   const [discordUserId, setDiscordUserId] = useState("");
-  // iMessage / BlueBubbles — see ChannelSection's guide for the operator flow
-  // (Mac install → password → server URL → iMessage handle).
   const [bluebubblesServerUrl, setBluebubblesServerUrl] = useState("");
   const [bluebubblesPassword, setBluebubblesPassword] = useState("");
   const [bluebubblesUserAddress, setBluebubblesUserAddress] = useState("");
-  // Optional plaintext caller-context prompt — see ChannelSection for the
-  // operator-facing textarea. Non-secret, so we hydrate the raw string
-  // from cfg.bluebubbles_caller_context and ship it verbatim on save.
   const [bluebubblesCallerContext, setBluebubblesCallerContext] = useState("");
   const [mqttEndpoint, setMqttEndpoint] = useState("");
   const [mqttPort, setMqttPort] = useState("");
@@ -146,14 +118,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [mqttPassword, setMqttPassword] = useState("");
   const [faChannel, setFaChannel] = useState("");
   const [fdChannel, setFdChannel] = useState("");
-  // Snapshot of MQTT fields that were already populated when config loaded.
-  // Locks those fields against edits; fields blank at load remain editable.
   const [mqttLoaded, setMqttLoaded] = useState({
     endpoint: false, port: false, username: false,
     password: false, faChannel: false, fdChannel: false,
   });
-  // Same idea for messaging-channel credentials. Already-saved values render
-  // read-only with an inline "Edit" button to opt-in to changing them.
   const [channelLoaded, setChannelLoaded] = useState({
     teleToken: false, teleUserId: false,
     slackBotToken: false, slackAppToken: false, slackUserId: false,
@@ -164,22 +132,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [wifiLoaded, setWifiLoaded] = useState({ ssid: false, password: false });
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
   const [ttsLoaded, setTtsLoaded] = useState<TtsLoadedState>({ apiKey: false, baseUrl: false, choice: "autonomous" });
-  // True once the device has preserved its shipped credentials — i.e. the
-  // operator has replaced one at least once. Nothing to offer before that.
   const [hasDefaults, setHasDefaults] = useState(false);
-  // Which brain the AI Brain section is showing. Derived from the config on
-  // load — a device whose llm_base_url and llm_model still match the stored
-  // Autonomous set is on it, and one that has never been edited is on it by
-  // definition — then held locally so picking "Custom" unlocks the fields
-  // before anything has been typed into them.
   const [llmMode, setLlmMode] = useState<LlmMode>("autonomous");
   const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
 
-  // Baseline snapshot of non-secret fields captured after load (and after every
-  // successful save). Used to gate Save button on dirty-only. Secrets are
-  // handled separately: their input state is empty when nothing was typed, so
-  // any non-empty secret state implies a pending change.
+  // Baseline of non-secret fields, used to enable Save only when dirty.
   type InitialSnapshot = {
     ssid: string; deviceId: string;
     llmUrl: string; llmModel: string; llmDisableThinking: boolean;
@@ -193,9 +151,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     bluebubblesCallerContext: string;
     mqttEndpoint: string; mqttPort: string; mqttUsername: string;
     faChannel: string; fdChannel: string;
-    // Realtime block. Fields tracked here so /setting#realtime edits flip
-    // the Save Changes button — earlier they were missing from the baseline
-    // and the button stayed disabled no matter what the operator changed.
     realtimeEnabled: boolean;
     realtimeProvider: string;
     realtimeVoice: string;
@@ -203,15 +158,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeBaseUrl: string;
     realtimeWebSearch: boolean;
   };
-  // Held as state, not a ref: the Save button's disabled/enabled rendering is
-  // derived from it, and React 19 requires render-relevant values to be state.
-  // Written exactly twice (after config load, after a successful save) — both
-  // outside render, so the render output is unchanged.
   const [baseline, setBaseline] = useState<InitialSnapshot | null>(null);
 
-  // Face owners — top-level state because both Voice and Face sections read
-  // it. Section-local state (faceName, voiceLabel, etc.) lives in the section
-  // components themselves.
   const [faceOwners, setFaceOwners] = useState<FaceOwner[]>([]);
 
   const loadFaceOwners = useCallback(async () => {
@@ -219,24 +167,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       const r = await fetch(hwUrl("/face/owners")).then((x) => x.json());
       if (Array.isArray(r?.persons)) setFaceOwners(r.persons);
     } catch {
-      // Face owners are optional decoration in the settings form — a device
-      // without the face capability simply renders an empty list.
+      // Face owners are optional; a device without face capability shows an empty list.
     }
   }, []);
 
-  // Rule over-approximates here: loadFaceOwners is async and its only setState
-  // runs after `await fetch(...)`, so nothing is set synchronously in the effect
-  // body. Fetching the face-owner list on mount is exactly the "subscribe to an
-  // external system" case the rule is meant to allow.
+  // Only sets state after `await fetch`, i.e. subscribing to an external system.
   // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { loadFaceOwners(); }, [loadFaceOwners]);
 
   useEffect(() => {
     getDeviceConfig()
       .then((cfg: DeviceConfig) => {
-        // ConfigPublicResponse — secrets are returned as has_* booleans only.
-        // State for secret fields stays empty until the operator types a new
-        // value in SecretUpdateField; submit then ships only the touched ones.
+        // Secrets come back as has_* flags; their inputs stay empty until typed.
         setSsid(cfg.network_ssid ?? "");
         setDeviceId(cfg.device_id ?? "");
         setMac(cfg.mac ?? "");
@@ -245,8 +187,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
         const llmUrlInit = cfg.llm_base_url ?? "";
         const sttProviderInit: SttProvider = cfg.has_deepgram_api_key ? "deepgram" : "autonomous";
-        // Apply client-side fallback values with the async config response,
-        // rather than scheduling a second render just to mirror form fields.
         setSttBaseUrl((cfg.stt_base_url ?? "") || (sttProviderInit === "autonomous" ? llmUrlInit : ""));
         setSttProvider(sttProviderInit);
         setSttLanguage(cfg.stt_language || "en");
@@ -328,10 +268,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           apiKey: cfg.has_stt_api_key,
           baseUrl: !!cfg.stt_base_url,
         });
-        // Mirror the post-load behavior of the LLM→TTS/STT base-URL auto-fill
-        // effects so the baseline matches the rendered state. Without this,
-        // a config with llm_base_url but no tts/stt_base_url would show the
-        // form as dirty immediately on load.
+        // Mirror post-load defaults so the form is not dirty on load.
         setBaseline({
           ssid: cfg.network_ssid ?? "",
           deviceId: cfg.device_id ?? "",
@@ -359,10 +296,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           mqttUsername: cfg.mqtt_username ?? "",
           faChannel: cfg.fa_channel ?? "",
           fdChannel: cfg.fd_channel ?? "",
-          // Mirror the defaults the individual useState calls use, so the
-          // baseline reflects what actually rendered — not the server's raw
-          // (possibly missing) values. Otherwise `dirty` would flip true on
-          // page load for any field the server omitted.
           realtimeEnabled: cfg.realtime?.enabled ?? true,
           realtimeProvider: cfg.realtime?.provider || "gemini",
           realtimeVoice: cfg.realtime?.voice || "Kore",
@@ -377,10 +310,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     getTTSVoices().then(setTtsVoices).catch(() => {});
   }, []);
 
-  // Refetch voices when provider OR stt_language changes — only reset voice
-  // if the currently-saved voice is not in the new (filtered) list.
-  // Passing sttLanguage filters ElevenLabs voices to the active language's
-  // bucket so VN/CN owners only see voices that sound natural for them.
   const providerChangedByUser = useRef(false);
   useEffect(() => {
     getTTSVoices(ttsProvider, sttLanguage).then((voices) => {
@@ -392,14 +321,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     }).catch(() => {});
   }, [ttsProvider, sttLanguage, ttsVoice]);
 
-  // Mirror AI Brain values in the event that changes a source or re-enables a
-  // blank destination. The mirror remains sticky, without scheduling state
-  // updates from an effect after React has already committed a render.
-  // Only the inheriting choices may be auto-filled from the AI Brain key.
-  // OpenAI/ElevenLabs direct reject that credential with a 401 that hal turns
-  // into silence, so mirroring into one recreates issue #309 through the back
-  // door — and a non-empty (but wrong) key would sail past the save guard.
-  // Mirrors the `sttProvider === "autonomous"` guard the STT side already has.
+  // TTS may inherit the AI Brain key only for inheriting choices; direct vendors would 401 into silence (#309).
   const ttsInheritsLlmKey = () => {
     const c = detectChoice(ttsBaseUrl, ttsProvider);
     return c === "autonomous" || c === "custom";
@@ -433,9 +355,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     if (!sttBaseUrl && llmUrl) setSttBaseUrl(llmUrl);
   };
 
-  // Dirty = any non-secret field diverges from the loaded/last-saved baseline,
-  // OR any secret field has user-typed content. Save button uses this to stay
-  // disabled until something actually changed.
   const dirty = !loadingCfg && baseline != null && (
     ssid !== baseline.ssid ||
     deviceId !== baseline.deviceId ||
@@ -460,9 +379,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     mqttUsername !== baseline.mqttUsername ||
     faChannel !== baseline.faChannel ||
     fdChannel !== baseline.fdChannel ||
-    // Realtime block: without these, toggling Enabled / picking a provider /
-    // pasting a Base URL on /setting#realtime silently produced NO change to
-    // dirty and the Save button never enabled.
     realtimeEnabled !== baseline.realtimeEnabled ||
     realtimeProvider !== baseline.realtimeProvider ||
     realtimeVoice !== baseline.realtimeVoice ||
@@ -473,8 +389,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     !!sttApiKey || !!deepgramApiKey || !!mqttPassword ||
     !!teleToken || !!slackBotToken || !!slackAppToken || !!discordBotToken ||
     !!realtimeApiKey ||
-    // iMessage: server URL + handle are plain fields (dirty when changed),
-    // password is a secret (dirty when typed).
     bluebubblesServerUrl !== baseline.bluebubblesServerUrl ||
     bluebubblesUserAddress !== baseline.bluebubblesUserAddress ||
     bluebubblesCallerContext !== baseline.bluebubblesCallerContext ||
@@ -484,19 +398,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const handleSubmit = useCallback(async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    // Admin password rotation is optional here (empty = keep current). But when
-    // the operator IS rotating, hold them to the same ADMIN_PASSWORD_MIN floor as
-    // initial setup so /edit can't be used to weaken the admin login below the
-    // policy the setup flow enforces. Backend has no min-length, so this is the gate.
+    // Backend has no min length, so enforce ADMIN_PASSWORD_MIN when rotating.
     if (adminPassword && adminPassword.length < ADMIN_PASSWORD_MIN) {
       setError(`New admin password must be at least ${ADMIN_PASSWORD_MIN} characters.`);
       return;
     }
-    // A direct vendor is authenticated with its own key. Blank means the
-    // backend falls back to the AI-brain key — an Autonomous JWT — which the
-    // vendor rejects with a 401 that hal retries, gives up on, and turns into
-    // zero samples. The device goes mute with no error anywhere in this UI, so
-    // refuse the save instead of shipping a silent device. Issue #309.
+    // Direct vendors need their own key; a blank key falls back to the AI-brain JWT and 401s into silence (#309).
     const ttsChoiceToSave = detectChoice(ttsBaseUrl, ttsProvider);
     const ttsNeedsOwnKey = ttsChoiceToSave === "openai" || ttsChoiceToSave === "elevenlabs";
     if (ttsNeedsOwnKey && !ttsApiKey && !(ttsLoaded.apiKey && ttsLoaded.choice === ttsChoiceToSave)) {
@@ -505,12 +412,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     }
     setSaving(true);
     try {
-      // Build the payload from non-secret fields first, then layer on each
-      // secret only when the operator typed something into its
-      // SecretUpdateField. Empty secrets would otherwise clobber the saved
-      // value on disk (PUT treats blanks as intentional clears for STT /
-      // Deepgram). Channel id fields (telegram_user_id, slack_user_id,
-      // discord_guild_id, discord_user_id) are non-secret and ship every time.
+      // Secrets ship only when typed; blanks would clear the saved value.
       const body: Record<string, unknown> = {
         ssid: ssid.trim(),
         channel,
@@ -525,32 +427,22 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       };
       if (password) body.password = password;
       if (adminPassword) body.admin_password = adminPassword;
-      // Realtime block — server applies + restarts hal. api_key only when typed.
       const realtime: Record<string, unknown> = { enabled: realtimeEnabled, provider: realtimeProvider };
       if (realtimeProvider !== "none") { realtime.voice = realtimeVoice; realtime.reasoning = realtimeReasoning; }
-      // The server rejects web_search for any other provider, so send it only
-      // where the knob exists.
+      // The server rejects web_search for other providers.
       if (realtimeProvider === "pipecat_v1") realtime.web_search = realtimeWebSearch;
       if (realtimeBaseUrl) realtime.base_url = realtimeBaseUrl;
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
       body.realtime = realtime;
       body.wakeword = wakeWord;
       if (llmApiKey) body.llm_api_key = llmApiKey;
-      // The stored TTS key belongs to whichever provider was selected when it
-      // was saved. Switching provider makes it a different vendor's credential,
-      // and GetTTSAPIKey would hand it straight to the new one — an ElevenLabs
-      // sk_... sent to the Autonomous proxy, or a proxy JWT sent to ElevenLabs.
-      // Both 401, and hal turns a 401 into silence, so delete it explicitly.
-      // See issue #309.
+      // Switching TTS provider invalidates the stored key, so delete it explicitly (#309).
       if (ttsApiKey) {
         body.tts_api_key = ttsApiKey;
       } else if (ttsLoaded.apiKey && ttsLoaded.choice !== ttsChoiceToSave) {
         body.clear_tts_api_key = true;
       }
       if (mqttPassword) body.mqtt_password = mqttPassword;
-      // STT provider switch: clear the opposing key explicitly so the
-      // operator's mode toggle takes effect. When staying on the same provider
-      // and not typing a new key, leave both fields untouched.
       if (sttProvider === "deepgram") {
         if (deepgramApiKey) body.deepgram_api_key = deepgramApiKey;
         if (sttLoaded.apiKey || sttApiKey) body.stt_api_key = "";
@@ -558,7 +450,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         if (sttApiKey) body.stt_api_key = sttApiKey;
         if (sttLoaded.deepgram || deepgramApiKey) body.deepgram_api_key = "";
       }
-      // Channel credentials: send IDs always, tokens only when typed.
       if (channel === "telegram") {
         body.telegram_user_id = teleUserId;
         if (teleToken) body.telegram_bot_token = teleToken;
@@ -571,27 +462,18 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         body.discord_user_id = discordUserId;
         if (discordBotToken) body.discord_bot_token = discordBotToken;
       } else if (channel === "imessage") {
-        // BlueBubbles: server URL + user address are plain (send always so
-        // clearing them works too); password is a secret and only ships on
-        // change so an empty save does not silently wipe the on-disk value.
         body.bluebubbles_server_url = bluebubblesServerUrl;
         body.bluebubbles_user_address = bluebubblesUserAddress;
         if (bluebubblesPassword) body.bluebubbles_password = bluebubblesPassword;
-        // Caller-context is non-secret plaintext; ship every time so an
-        // empty submit clears it (matches server URL / user address).
         body.bluebubbles_caller_context = bluebubblesCallerContext;
       }
       await updateDeviceConfig(body);
-      // Re-baseline the key's presence and owner without a refetch, so the
-      // "✓ configured" badge reflects what this save actually left on disk.
       setTtsLoaded({
         apiKey: body.clear_tts_api_key ? false : (ttsLoaded.apiKey || !!ttsApiKey),
         baseUrl: !!ttsBaseUrl,
         choice: ttsChoiceToSave,
       });
       toast.success("Config saved — restart your robot for changes to take effect.");
-      // Reset baseline so Save button goes back to disabled until next edit.
-      // Non-secret fields adopt their current values as the new baseline.
       setBaseline({
         ssid, deviceId,
         llmUrl, llmModel, llmDisableThinking,
@@ -608,9 +490,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         realtimeEnabled, realtimeProvider, realtimeVoice,
         realtimeReasoning, realtimeBaseUrl, realtimeWebSearch,
       });
-      // Clear typed secrets so their non-empty state no longer marks the form
-      // dirty. Their persisted values live server-side; has_* flags surface
-      // "configured" in the UI.
       setPassword(""); setAdminPassword("");
       setLlmApiKey(""); setTtsApiKey(""); setSttApiKey("");
       setDeepgramApiKey(""); setMqttPassword("");
@@ -636,17 +515,12 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeWebSearch,
   ]);
 
-  // Save is hidden for sections that aren't part of the form's PUT flow: Face/My
-  // Voice enroll via their own buttons, Runtime switches via its own action, and
-  // Scheduled is read-only (its only action is per-row "Run now").
   const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "scheduled" && activeSection !== "facebook";
 
   return (
     <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
 
-        {/* Header row: active-section label on the left, Save button on the right.
-            A hairline divider under the row separates the title from the body. */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           marginBottom: 18, paddingBottom: 14, borderBottom: `1px solid ${C.border}`,
@@ -664,8 +538,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
                 cursor: saving || loadingCfg || !dirty ? "not-allowed" : "pointer",
                 border: "none",
                 background: saving || loadingCfg || !dirty ? C.surface : C.amber,
-                // Dark ink that reads on the amber fill in both themes; theme-
-                // constant on purpose (see --lm-on-amber in index.css).
                 color: saving || loadingCfg || !dirty ? C.textMuted : "var(--lm-on-amber)",
                 transition: "all 0.15s",
                 opacity: saving || loadingCfg || !dirty ? 0.6 : 1,
@@ -716,10 +588,6 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               mode={llmMode}
               onModeChange={(m) => {
                 if (m === "custom") { setLlmMode("custom"); return; }
-                // Back to Autonomous is a restore, not just an unlock: the
-                // stored set has to be written back before the fields can
-                // honestly claim to show it. Nothing to restore on a device
-                // that was never edited — it is already there.
                 if (!hasDefaults) { setLlmMode("autonomous"); return; }
                 restoreAutonomousDefaults("llm")
                   .then(() => { toast.success("Back on the Autonomous brain"); window.location.reload(); })

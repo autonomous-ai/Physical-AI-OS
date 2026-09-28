@@ -48,9 +48,11 @@ which brain is active.
 
 | `agent_runtime` | Backend |
 |---|---|
-| `"openclaw"` / unset | OpenClaw (default; or `gateway.default` from `ROBOT.md`) |
-| `"hermes"` | Hermes (`hermes.ProvideService`) |
+| unset | image-baked `/root/config/f_r_default_agent`, else `gateway.default` from `ROBOT.md`, else OpenClaw |
+| `"openclaw"` | OpenClaw (default) |
+| `"hermes"` / `"remote"` | Hermes (`hermes.ProvideService`; `remote` = Hermes-over-LAN via `ApplyExternalEndpoint`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) |
+| `"codex"` / `"claudecode"` / `"opencode"` | Codex / Claude Code / OpenCode (`<runtime>.ProvideService`) |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
 
 On startup `ProvideGateway` prints an `AGENT BACKEND ACTIVE → PICOCLAW` banner
@@ -471,7 +473,9 @@ the reset wipes `/root/.picoclaw` **wholesale** and re-onboards a clean baseline
    overrides `Restart=always` (it is not a crash), so the gateway stays down while we
    wipe. `waitForPicoclawStop` polls `is-active` for up to 5s.
 2. **`systemctl disable picoclaw`** — a factory reset also wipes `/root/config/config.json`
-   and reboots into the **default (openclaw)** runtime, so PicoClaw must NOT auto-start.
+   and reboots into the device's **default** runtime (`f_r_default_agent`, else ROBOT.md
+   `gateway.default` — e.g. hermes on a Lamp — openclaw only if neither is set), so
+   PicoClaw must NOT auto-start.
    `switch-runtime` re-enables it only when the user switches back.
 3. **`rm -rf /root/.picoclaw`** — config, `.security.yml`, workspace (persona/memory/
    skills), sessions, and the **`.openclaw-migrated` marker** (so `presync.sh` §0

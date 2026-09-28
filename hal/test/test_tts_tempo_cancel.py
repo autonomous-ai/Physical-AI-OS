@@ -63,7 +63,6 @@ def test_cancel_pending_http_reaps_filter_and_next_request_works(monkeypatch, ti
             assert not consumer.is_alive(), "cancel blocked on HTTP"
             assert processes[0].poll() is not None
             assert not output and not errors
-            # A new utterance can run even before the old HTTP call returns.
             assert b"".join(backend.stream_pcm("New", "Rachel", "eleven_v3", 1.2))
         finally:
             release.set()
@@ -112,7 +111,7 @@ def test_cancel_full_producer_queue_survives_stop_event_reset(monkeypatch, tail)
     worker.start()
     assert blocked.wait(2)
     svc.stop()
-    svc._stop_event.clear()  # A new turn claims playback immediately.
+    svc._stop_event.clear()
     worker.join(2)
     assert not worker.is_alive(), "old producer remained blocked on its abandoned queue"
     assert out.get_nowait() == "occupied"

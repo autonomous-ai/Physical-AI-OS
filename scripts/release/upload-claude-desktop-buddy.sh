@@ -7,13 +7,9 @@ source "${RELEASE_DIR}/ota-metadata.sh"
 BUDDY_DIR="${ROOT_DIR}/integrations/companions/claude-desktop-buddy"
 VERSION_FILE="${BUDDY_DIR}/VERSION_BUDDY"
 
-# Bucket and path: ${BUCKET_PREFIX}/ota/claude-desktop-buddy/[semver].zip
-
-# Build for linux/arm64
 echo "========== Building buddy-plugin (linux/arm64) =========="
 (cd "$BUDDY_DIR" && GOOS=linux GOARCH=arm64 go build -ldflags "-s -w" -o buddy-plugin .)
 
-# Auto-increment semver (patch) before upload
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
   IFS='.' read -r major minor patch <<< "$version"
@@ -37,15 +33,12 @@ rm -f "$ZIP_PATH"
   buddy-plugin \
   config/buddy.json)
 
-# Clean up binary (covers both `-o buddy-plugin` artifact and default
-# `go build` output which uses the module name `claude-desktop-buddy`).
 rm -f "${BUDDY_DIR}/buddy-plugin" "${BUDDY_DIR}/claude-desktop-buddy"
 
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")
 
-# Update metadata.json - claude-desktop-buddy key
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

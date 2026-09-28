@@ -19,17 +19,14 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// System info probes. All bounded by short timeouts — these are read-only
-// introspection calls that the web dashboard polls; the broker callback must
-// not block on a hung subprocess.
+// System info probes.
 const (
 	sysProbeTimeout = 2 * time.Second
 	bootstrapBinary = "/usr/local/bin/bootstrap-server"
 )
 
-// handleSystemInfo returns the full aggregate snapshot — versions + network +
-// host — in a single MQTT response. Synchronous (no `starting` intermediate);
-// all probes run inline and individual failures fall back to zero-value fields.
+// handleSystemInfo returns the full aggregate snapshot — versions + network
+// + host — in a single MQTT response.
 func (h *DeviceMQTTHandler) handleSystemInfo(env domain.MQTTDataCommand) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
@@ -70,12 +67,6 @@ func (h *DeviceMQTTHandler) handleSystemNetwork(env domain.MQTTDataCommand) erro
 }
 
 // probeVersions collects os-server + bootstrap + hal + openclaw versions.
-//   - os-server: read straight from the ldflags-injected build var (no exec needed).
-//   - bootstrap: exec `bootstrap-server --version`; "" on any error.
-//   - hal: queried over HTTP from the local HAL service /version endpoint.
-//   - openclaw: read from the cached version probed by the agent monitor.
-//     OpenClawDetected distinguishes "not installed" from "installed but
-//     unparseable".
 func probeVersions(ctx context.Context) domain.MQTTVersionsData {
 	out := domain.MQTTVersionsData{
 		OSServer: config.OSVersion,
@@ -102,13 +93,7 @@ func probeVersions(ctx context.Context) domain.MQTTVersionsData {
 }
 
 // probeNetwork collects the IPv4 + hardware MAC of the interface carrying the
-// default route, plus the current SSID and default gateway. Each piece probes
-// independently — a missing SSID doesn't poison the IP/MAC fields, which is the
-// normal state both in AP mode and on a device wired over ethernet.
-//
-// The interface is resolved from the route table rather than hardcoded to wlan0:
-// on an ethernet-connected device wlan0 carries no address, so the dashboard used
-// to show a blank IP and MAC for a device that was perfectly reachable.
+// default route, plus the current SSID and default gateway.
 func probeNetwork(ctx context.Context) domain.MQTTNetworkData {
 	ifaceName := network.PrimaryInterface()
 	out := domain.MQTTNetworkData{Interface: ifaceName}
@@ -127,14 +112,8 @@ func probeNetwork(ctx context.Context) domain.MQTTNetworkData {
 		}
 	}
 
-	// SSID via the shared fallback chain (iwgetid → iw → wpa_cli); iwgetid
-	// alone returns empty on some Pi images even while associated, which left
-	// this field blank in system.info while the HTTP monitor (same chain)
-	// showed it.
 	out.SSID = network.ReadCurrentSSID()
 
-	// `ip route show default` → "default via 192.168.1.1 dev end0 …".
-	// Pull the gateway IPv4 out of the via-field; the rest of the line varies.
 	if v, err := system.Run(ctx, "ip", "route", "show", "default"); err == nil {
 		fields := strings.Fields(string(v))
 		for i, f := range fields {

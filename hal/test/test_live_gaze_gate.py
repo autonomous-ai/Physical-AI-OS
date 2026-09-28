@@ -51,10 +51,8 @@ def test_wake_focus_opens_live_and_expiry_returns_to_stt(monkeypatch, gaze, shad
     service._wakeword_focus = WakeWordFocus(20, clock=lambda: now[0])
     service._realtime = Mock()
     service._realtime.wait_until_available.return_value = True
-    # Ambient speech must reach STT without preparing or sending live audio.
     assert service._live_decision([]) == "turn"
     service._realtime.prepare_turn.assert_not_called()
-    # The existing confirmed-wake dispatch (or a button/gaze) grants focus.
     service._wakeword_focus.refresh()
     assert service._live_decision([]) == "live"
     now[0] = 20.0

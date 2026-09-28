@@ -4,27 +4,17 @@ import type { FaceOwnersDetail } from "../types";
 import { usePolling } from "../../../hooks/usePolling";
 import type { CooldownState } from "./types";
 
-// Enrolled-owners list + face detection state (cooldowns, current user), with
-// background polling and a user-triggered refresh. `refresh` is returned so the
-// owner-mutation flows (enroll / rename / remove) can reload the list after a
-// change.
+// Enrolled-owners list + face detection state (cooldowns, current user), with background polling and a user-triggered refresh.
 export function useFaceData() {
   const [data, setData] = useState<FaceOwnersDetail | null>(null);
   const [error, setError] = useState(false);
   const abortRef = useRef<AbortController | null>(null);
 
-  // Cooldown state (strangers/friends forget countdown — unrelated to
-  // current_user; /face/cooldowns is purely a debug view of detection state).
   const [cooldowns, setCooldowns] = useState<CooldownState | null>(null);
   const [cdError, setCdError] = useState(false);
   const [resetting, setResetting] = useState(false);
-  // Spins the ↻ glyph only on an explicit user-triggered refresh (not on the
-  // 10s background poll, which would flicker the icon nonstop).
   const [manualRefreshing, setManualRefreshing] = useState(false);
 
-  // Current user (effective user the device sees right now). Polled separately
-  // from /face/current-user — this is the source used by the OS-server handler,
-  // activity logging, and the "Here now" UI.
   const [currentUser, setCurrentUser] = useState<string>("");
 
   const refresh = useCallback(async () => {
@@ -42,8 +32,6 @@ export function useFaceData() {
     }
   }, []);
 
-  // User-triggered refresh: spins the ↻ for a beat so the click feels answered,
-  // even if the fetch returns instantly. The 600ms floor keeps the spin visible.
   const handleManualRefresh = useCallback(async () => {
     setManualRefreshing(true);
     const started = performance.now();
@@ -61,9 +49,7 @@ export function useFaceData() {
   }, []);
 
   usePolling(async (signal) => {
-    // Delegate to refresh(), but we can't pass the signal because refresh
-    // uses its own AbortController. The usePolling timeout will still fire
-    // its own abort — refresh's internal controller handles staleness.
+    // refresh() uses its own AbortController.
     void signal;
     await refresh();
   }, 10_000, { timeoutMs: 8000 });

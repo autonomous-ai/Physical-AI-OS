@@ -16,7 +16,6 @@ import (
 var cacheUsagePatch string
 
 // ensureCacheUsagePatch repairs the known local Hermes API serialization gap.
-// Remote gateways belong to their host; OS onboarding never patches them.
 func (s *HermesService) ensureCacheUsagePatch() (bool, error) {
 	u, err := url.Parse(BaseURL)
 	if err != nil {

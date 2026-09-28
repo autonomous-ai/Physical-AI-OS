@@ -1,35 +1,4 @@
-"""Stack-chan motion driver over the authenticated local Wi-Fi protocol.
-
-The ESP32 initiates one WebSocket connection to HAL.  HAL owns the controller
-lease and sends acknowledged, timed pan/tilt commands; the firmware owns the
-physical interpolation, measured-position readback, torque and the independent
-disconnect/lease-expiry halt path.
-
-Joint model exposed to HAL (degrees):
-
-    base_yaw.pos       -30 .. 30
-    base_pitch.pos     -15 .. 15 (relative to Stack-chan's 45 degree midpoint)
-
-Configuration is environment-driven because SDK-backed motion services are
-constructed by hal.server with only ``safety_policy``:
-
-    STACKCHAN_BODY_HOST       bind address (default 0.0.0.0)
-    STACKCHAN_BODY_PORT       bind port (default 8765)
-    STACKCHAN_DEVICE_ID       expected firmware device id
-    STACKCHAN_BODY_TOKEN      shared bearer token, at least 32 characters
-    STACKCHAN_BODY_TLS_CERT   optional PEM certificate path
-    STACKCHAN_BODY_TLS_KEY    optional PEM private-key path
-    STACKCHAN_BODY_ALLOW_INSECURE_WS
-                              set to 1 only for trusted-network development
-    STACKCHAN_BODY_COMMAND_TIMEOUT
-                              command timeout in seconds (default 3.0)
-    STACKCHAN_BODY_LEASE_TTL_MS
-                              controller lease TTL (default 1500)
-
-TLS certificate and key must be supplied together. Plain WebSocket is refused
-unless the explicit development-only opt-in is enabled. Production firmware
-connects by WSS and validates the configured certificate.
-"""
+"""Stack-chan motion driver over the authenticated local Wi-Fi protocol."""
 from __future__ import annotations
 
 import hmac
@@ -72,10 +41,10 @@ _FIRMWARE_SETTLE_GRACE_S = 0.05
 _RELEASE_DURATION_S = 2.0
 _TARGET_SETTLE_TIMEOUT_S = 2.0
 _POSITION_TOLERANCE_DEG = 1.0
-_HOME_MIN_PROGRESS_DEG = 1.0       # measured progress required before any arrival or repeat decision
-_HOME_RECOMMAND_LIMIT = 1          # at most one repeat of the same target after a stable, short settle
+_HOME_MIN_PROGRESS_DEG = 1.0
+_HOME_RECOMMAND_LIMIT = 1
 _HOME_RECOMMAND_MAX_SHORT_DEG = 3.0  # do not repeat if the head is further than this from target
-_HOME_STABLE_SPAN_DEG = 0.2        # last three samples within this span count as stable
+_HOME_STABLE_SPAN_DEG = 0.2
 _GRAVITY_REST = {"base_yaw.pos": 0.0, "base_pitch.pos": -15.0}
 _REQUIRED_CAPABILITIES = {
     "motion.pan_tilt",
@@ -110,11 +79,7 @@ class StackChanOffline(StackChanTransportError):
 
 
 class StackChanCommandRejected(StackChanTransportError):
-    """The firmware answered a command with an error code.
-
-    The firmware has already handled the physical state (held, released, or
-    faulted); HAL reports the code and keeps the transport open.
-    """
+    """The firmware answered a command with an error code."""
 
     def __init__(self, op: str, code: str):
         super().__init__(f"Stack-chan rejected {op}: {code}")
@@ -127,10 +92,7 @@ class StackChanTargetNotReached(StackChanTransportError):
 
 
 class StackChanCommissioningFailed(StackChanTransportError):
-    """Home commissioning halted and held without reaching its target.
-
-    The body stays connected; ``details`` carries the measured evidence.
-    """
+    """Home commissioning halted and held without reaching its target."""
 
     def __init__(self, reason: str, details: dict[str, Any]):
         super().__init__(reason)
@@ -479,7 +441,6 @@ class _BodyTransport:
 
         try:
             initial = self._read_home_positions(peer)
-            # Reject an unsuitable starting pose before acquiring any lease.
             if not (abs(initial["pan"]) <= 30 and 0 <= initial["tilt"] < 5):
                 raise ValueError("Home commissioning requires measured pan within +/-30 and pitch in [0, 5) degrees")
             target = round(target * 10) / 10.0
@@ -553,8 +514,6 @@ class _BodyTransport:
                                     sample["elapsed_s"], sample["pan"], sample["tilt"], target, recommands + 1)
                         arrived = self._home_arrived(measured, initial, target)
                     except StackChanTransportError:
-                        # Invalid feedback, a replaced peer, or yaw drift: halt the
-                        # scheduled move ourselves rather than waiting for lease expiry.
                         request("motion.halt")
                         raise
                     if arrived:
@@ -573,8 +532,6 @@ class _BodyTransport:
                     logger.info("[stackchan] commissioning re-command %d: measured tilt=%s target=%s",
                                 recommands, measured["tilt"], target)
                     continue
-                # Halt-and-hold is the fail-closed action. The body stays
-                # connected so the measured evidence survives the failure.
                 request("motion.halt")
                 reason = "Home commissioning did not reach a measured holdable target"
                 logger.warning("[stackchan] commissioning failed: %s (final pan=%s tilt=%s, %d samples, %d re-commands)",
@@ -598,10 +555,7 @@ class _BodyTransport:
             # relinquishes its lock. Never report this move as successful.
             raise
         except Exception as exc:
-            # Do not close the transport here. Firmware halts and holds on its
-            # own when the lease lapses, and closing only forces a reboot that
-            # destroys the evidence of what happened. Command timeouts still
-            # close inside request(), where delivery is genuinely unknown.
+            # Do not close the transport here.
             logger.warning("[stackchan] commissioning ended without success: %s", exc)
             raise
         finally:
@@ -722,8 +676,6 @@ class _BodyTransport:
         return True
 
     def _finish_operation(self, cancel: threading.Event) -> None:
-        # Release the operation before taking _active_lock. A superseding
-        # release holds _active_lock while it waits to claim this operation.
         self._operation_lock.release()
         with self._active_lock:
             if self._active_cancel is cancel:
@@ -750,7 +702,6 @@ class _BodyTransport:
         finally:
             self._active_lock.release()
         try:
-            # lease.release performs measured halt-and-hold after interpolation.
             self._run_timed_motion(
                 native,
                 duration,
@@ -776,16 +727,10 @@ class _BodyTransport:
             cancel = self._active_cancel
             if cancel is not None:
                 cancel.set()
-            # Wait for the cancelled operation to stop issuing commands, then
-            # send halt last on the wire. Holding _active_lock makes concurrent
-            # moves fail instead of queuing behind this recovery action.
             if not self._operation_lock.acquire(timeout=self._timeout + 0.5):
                 connection.force_close("halt could not claim controller")
                 raise StackChanTransportError("controller did not stop for halt")
             try:
-                # Reacquire or renew after the prior operation is fully done.
-                # This covers the small window after lease.release succeeds but
-                # before the old cancellation marker is cleared.
                 self._acquire(connection)
                 self._request("motion.halt", connection=connection)
             except StackChanCommandRejected:
@@ -807,8 +752,6 @@ class _BodyTransport:
             previous = self._active_cancel
             if previous is not None:
                 previous.set()
-            # Keep _active_lock while waiting: this blocks a new move from
-            # slipping between the cancelled operation and recovery ownership.
             if not self._operation_lock.acquire(timeout=self._timeout + 0.5):
                 connection.force_close("release could not claim controller")
                 raise StackChanTransportError("controller did not stop for release")
@@ -900,10 +843,8 @@ class StackChanMotionService:
         self._current_recording: Optional[str] = None
         self._target: Dict[str, float] = {joint: 0.0 for joint in JOINT_KEYS}
 
-    # --- Lifecycle ---
-
     def start(self, skip_wake: bool = False) -> None:
-        del skip_wake  # Connecting doesn't perform a wake animation.
+        del skip_wake
         if self._server is not None:
             return
         ssl_context = None
@@ -944,8 +885,6 @@ class StackChanMotionService:
         server = self._server
         self._server = None
         if server is not None:
-            # websockets 12 exposes shutdown() without the connection-closing
-            # arguments added later. Close our one device explicitly first.
             self._gateway.close_connection("HAL stopping")
             server.shutdown()
         if self._server_thread and self._server_thread.is_alive():
@@ -956,11 +895,7 @@ class StackChanMotionService:
     def is_connected(self) -> bool:
         return self._gateway.connected
 
-    # --- Animation / event dispatch ---
-
     def dispatch(self, event_type: str, payload: Any) -> None:
-        # Stack-chan has no HAL recording library yet. Direct aim/nudge/move
-        # remain available; accepting an invented animation would be misleading.
         logger.debug("[stackchan] dispatch %s (%r) ignored", event_type, payload)
 
     def get_available_recordings(self) -> List[str]:
@@ -988,8 +923,6 @@ class StackChanMotionService:
                 return "hold"
         return None
 
-    # --- Freeze ---
-
     def freeze(self) -> None:
         with self._state_lock:
             self._frozen = True
@@ -1003,8 +936,6 @@ class StackChanMotionService:
         with self._state_lock:
             return self._frozen
 
-    # --- Body ownership ---
-
     @property
     def _tracking_active(self) -> bool:
         with self._state_lock:
@@ -1012,7 +943,6 @@ class StackChanMotionService:
 
     @_tracking_active.setter
     def _tracking_active(self, value: bool) -> None:
-        # A tracking session cannot release an overlapping aim/capture owner.
         with self._state_lock:
             self._tracking_flag = bool(value)
 
@@ -1023,8 +953,6 @@ class StackChanMotionService:
     def release_body(self) -> None:
         with self._state_lock:
             self._body_owners = max(0, self._body_owners - 1)
-
-    # --- Motion primitives ---
 
     @staticmethod
     def _validated(positions: Dict[str, float]) -> Dict[str, float]:
@@ -1127,8 +1055,6 @@ class StackChanMotionService:
         duration = min_move_duration(self._safety_policy, positions, current, _MIN_MOVE_DURATION_S)
         self.move_to(positions, duration)
 
-    # --- Postures & modes ---
-
     def zero_pose(self) -> None:
         with self._state_lock:
             self._zero_mode = True
@@ -1166,7 +1092,7 @@ class StackChanMotionService:
             self._released = False
 
     def hold(self, explicit: bool = False) -> None:
-        del explicit  # Stack-chan has no scene-change animation exception.
+        del explicit
         with self._state_lock:
             self._hold_mode = True
         self.halt()
@@ -1177,8 +1103,6 @@ class StackChanMotionService:
             "base_yaw": {"online": True, "id": 1, "angle": round(positions["base_yaw.pos"], 1)},
             "base_pitch": {"online": True, "id": 2, "angle": round(positions["base_pitch.pos"], 1)},
         }
-
-    # --- Aim & nudge ---
 
     def aim(
         self,

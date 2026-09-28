@@ -29,7 +29,6 @@ func TestListInstalled(t *testing.T) {
 		"scripts/resolve.py":  "x",
 	})
 	seedSkill(t, dir, "voice", map[string]string{"SKILL.md": "no front-matter here"})
-	// Staging/backup leftovers and dot-dirs are implementation detail.
 	seedSkill(t, dir, "music.new", map[string]string{"SKILL.md": "x"})
 	seedSkill(t, dir, "music.old", map[string]string{"SKILL.md": "x"})
 	seedSkill(t, dir, ".hidden", map[string]string{"SKILL.md": "x"})
@@ -45,19 +44,16 @@ func TestListInstalled(t *testing.T) {
 		}
 		t.Fatalf("want 2 skills, got %d: %v", len(list), names)
 	}
-	// Sorted by name.
 	if list[0].Name != "music" || list[1].Name != "voice" {
 		t.Fatalf("unsorted: %s, %s", list[0].Name, list[1].Name)
 	}
 	if list[0].Description != "Play music." {
 		t.Errorf("description = %q", list[0].Description)
 	}
-	// A SKILL.md with no front-matter yields no description, not garbage.
 	if list[1].Description != "" {
 		t.Errorf("voice description = %q, want empty", list[1].Description)
 	}
 
-	// music: dirs first (reference, scripts), then SKILL.md.
 	files := list[0].Files
 	if len(files) != 3 {
 		t.Fatalf("music files = %d, want 3", len(files))
@@ -68,7 +64,6 @@ func TestListInstalled(t *testing.T) {
 	if files[2].Name != "SKILL.md" || files[2].Dir {
 		t.Errorf("files[2] = %+v, want file SKILL.md last", files[2])
 	}
-	// Paths are relative to the skills root so the UI can show music/reference/….
 	if files[0].Path != "music/reference" {
 		t.Errorf("dir path = %q", files[0].Path)
 	}
@@ -80,9 +75,7 @@ func TestListInstalled(t *testing.T) {
 	}
 }
 
-// UpdatedAt is the newest mtime ANYWHERE in the tree, not the skill dir's own:
-// editing a nested file in place leaves the directory's mtime untouched, and a
-// listing that reported that would call an edited skill unchanged.
+// UpdatedAt is the newest mtime anywhere in the tree, not the skill dir's own.
 func TestListInstalledUpdatedAt(t *testing.T) {
 	dir := t.TempDir()
 	seedSkill(t, dir, "music", map[string]string{
@@ -98,7 +91,6 @@ func TestListInstalledUpdatedAt(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	// The nested file is the only recent thing, and it is two levels down.
 	if err := os.Chtimes(filepath.Join(skillDir, "reference", "tempo.md"), recent, recent); err != nil {
 		t.Fatal(err)
 	}
@@ -170,9 +162,7 @@ func TestReadSkillDescription(t *testing.T) {
 	}
 }
 
-// Hermes namespaces its skills dir, so listing must merge roots. The first root
-// wins on a name clash — the device-owned root is passed first so a skill the
-// user created isn't masked by an imported one.
+// Listing merges roots; the first root wins on a name clash.
 func TestListInstalledFromMergesRoots(t *testing.T) {
 	base := t.TempDir()
 	authored := filepath.Join(base, "authored")
@@ -212,7 +202,6 @@ func TestListInstalledFromMergesRoots(t *testing.T) {
 	if byName["voice"] != "Imported voice." {
 		t.Errorf("second root not merged in: %q", byName["voice"])
 	}
-	// Merged output stays sorted across roots.
 	if list[0].Name != "music" || list[1].Name != "voice" || list[2].Name != "weekly-report" {
 		t.Errorf("merged list not sorted: %s %s %s", list[0].Name, list[1].Name, list[2].Name)
 	}

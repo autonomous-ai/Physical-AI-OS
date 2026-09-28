@@ -56,11 +56,11 @@ def test_empty_or_unknown_updates_are_ignored():
 
 def test_progress_is_spoken_only_when_the_roll_wins():
     queue, clock, rolls = make_queue(roll=0.9)
-    clock.now += 20  # past the quiet start of the run first seen at 1000
+    clock.now += 20
     update(queue, clock, "progress", run="a")
     queue._first_seen["a"] = 1000.0
     assert queue.take_snapshot(progress_renderable=True) is None
-    assert not queue.pending()  # a lost roll drops the batch
+    assert not queue.pending()
     rolls[0] = 0.1
     update(queue, clock, "progress", "first", run="a")
     update(queue, clock, "progress", "newest", run="a")
@@ -71,13 +71,13 @@ def test_progress_is_spoken_only_when_the_roll_wins():
 def test_progress_respects_quiet_start_and_per_run_gap():
     queue, clock, _ = make_queue(roll=0.0)
     update(queue, clock, "progress", run="a")
-    assert queue.take_snapshot(progress_renderable=True) is None  # 0 s after the request
+    assert queue.take_snapshot(progress_renderable=True) is None
     clock.now += 20
     update(queue, clock, "progress", run="a")
     assert queue.take_snapshot(progress_renderable=True) is not None
     clock.now += 30
     update(queue, clock, "progress", run="a")
-    assert queue.take_snapshot(progress_renderable=True) is None  # within the 60 s gap
+    assert queue.take_snapshot(progress_renderable=True) is None
     clock.now += 31
     update(queue, clock, "progress", run="a")
     assert queue.take_snapshot(progress_renderable=True) is not None
@@ -86,7 +86,7 @@ def test_progress_respects_quiet_start_and_per_run_gap():
 def test_quiet_start_reads_the_run_id_creation_stamp():
     clock = Clock()
     queue = HarnessUpdateQueue(rng=lambda: 0.0, clock=clock, wall_clock=lambda: 1_788_422_100.0)
-    run = "device-chat-7-1788422075499"  # created ~24.5 s before wall_clock
+    run = "device-chat-7-1788422075499"
     queue.put(HarnessUpdate(kind="progress", text="working", run_id=run, received_at=clock.now))
     assert queue.take_snapshot(progress_renderable=True) is not None
 

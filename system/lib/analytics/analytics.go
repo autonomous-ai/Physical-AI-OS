@@ -1,6 +1,4 @@
-// Package analytics ships events to Autonomous Analytics (AA), the same
-// event_tracking backend the web app and the mobile app post to. Events land
-// in one warehouse and are sliced by `platform` — "device" for us.
+// Package analytics posts device events to Autonomous Analytics (platform "device").
 package analytics
 
 import (
@@ -35,29 +33,20 @@ var (
 
 func initOnce() {
 	once.Do(func() {
-		// os-server already godotenv.Load()s /opt/hal/.env at startup; read
-		// the file directly as a fallback for callers that don't (tests, CLI).
 		apiKey = os.Getenv(envKey)
-		// fileURL holds ONLY what the file says. The process env is read live
-		// in Endpoint() instead of being cached here: caching it would keep a
-		// stale endpoint alive after the variable is cleared, which reads as
-		// "analytics is still on" when it is not.
+		// fileURL holds only the file value; the process env is read live in Endpoint().
 		if kv, err := godotenv.Read(envFile); err == nil {
 			if apiKey == "" {
 				apiKey = kv[envKey]
 			}
 			fileURL = kv[envKeyURL]
 		}
-		// Stable per-device identity: hostname is what the fleet is named by.
 		pseudoID, _ = os.Hostname()
-		// One session per process run — a device process is the session.
 		sessionID = fmt.Sprintf("%s-%d", pseudoID, time.Now().Unix())
 	})
 }
 
-// TrackEvent posts one event. params are flattened into AA's event_params
-// list. Returns an error so callers can log it; analytics must never fail the
-// feature that triggered it, so callers should not propagate it.
+// TrackEvent posts one event with params flattened into event_params; callers should log, not propagate, errors.
 func TrackEvent(ctx context.Context, name string, params map[string]any) error {
 	initOnce()
 	url := Endpoint()
@@ -111,13 +100,7 @@ func TrackEvent(ctx context.Context, name string, params map[string]any) error {
 	return nil
 }
 
-// Endpoint is where events are posted: AUTONOMOUS_ANALYTICS_URL from the
-// process env first (what tests set), then the same key in the body's
-// /opt/hal/.env. Read per call so a test can point it at a local server.
-//
-// Empty means analytics is not configured on this body — that is the OFF
-// switch. There is deliberately no built-in default: a device sends events
-// only to an endpoint someone wrote down.
+// Endpoint returns AUTONOMOUS_ANALYTICS_URL from the process env, then /opt/hal/.env; "" means off.
 func Endpoint() string {
 	initOnce()
 	if u := os.Getenv(envKeyURL); u != "" {

@@ -19,9 +19,9 @@
 - Pairing 6-digit (web UI lamp hiện code)
 - WS connection persistent (`buddy → lamp`)
 - Command executor: `open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`
-- Lamp Go: package `system/buddy/` + 7 HTTP route + WS gateway
+- Lamp Go: package `system/buddy/` + HTTP route + WS gateway (hiện có 10 route `/api/buddy/*`; xem [design doc §4.2](autonomous-buddy_vi.md))
 - OpenClaw skill `computer-use` (intent → command cơ bản)
-- Web UI: page "Paired Computers" ở `lamp/web/`
+- Web UI: `BuddyCard` trong trang Monitor (`system/web/src/pages/monitor/BuddyCard.tsx`)
 - Audit log (backend file only — chưa có UI ở MVP)
 
 **Ngoài scope (chờ sau MVP):**
@@ -72,11 +72,11 @@ Mỗi phase ship & review độc lập được.
 
 ### Phase 1C — Luồng pairing
 
-**Status:** ✓ Done — code 6 số + lưu token trong `buddies.json` (lamp) và Keychain (Mac). Có thêm `DELETE /api/buddy/self` (Bearer-auth) để khi user unpair từ buddy app, lamp cũng xóa record — 2 phía sync.
+**Status:** ✓ Done — code 6 số + lưu token trong `buddies.json` (lamp) và `pairing.json` (Application Support, mode 0600) trên Mac. Có thêm `DELETE /api/buddy/self` (Bearer-auth) để khi user unpair từ buddy app, lamp cũng xóa record — 2 phía sync.
 
 **File buddy:**
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingManager.swift`
-- `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingStore.swift` (Keychain)
+- `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingStore.swift` (`~/Library/Application Support/AutonomousBuddy/pairing.json`, mode 0600)
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingWindow.swift` (UI nhập code)
 
 **File Lamp Go:**
@@ -89,26 +89,26 @@ Mỗi phase ship & review độc lập được.
 - `system/buddy/wire.go`
 - Sửa: `system/server/server.go` (đăng ký route)
 - Sửa: `system/server/wire.go` (provider)
-- Chạy: `make generate`
+- Chạy: `make os-generate`
 
 **File Lamp web:**
-- `lamp/web/src/pages/PairedComputers.tsx` (sơ — chỉ hiện code)
-- Update `lamp/web/src/App.tsx` (route)
-- Update `lamp/web/src/lib/api.ts` (endpoint pair)
+- `system/web/src/pages/monitor/BuddyCard.tsx` (hiện code, poll status, revoke)
+- `system/web/src/pages/monitor/PairingSection.tsx` (chứa `BuddyCard` trong trang Monitor)
 
 **Route thêm:**
 - `POST /api/buddy/pair/start`
 - `POST /api/buddy/pair/confirm`
-- `GET  /api/buddy/list`
-- `DELETE /api/buddy/:id`
+- `GET  /api/buddy/status`
+- `DELETE /api/buddy` (admin)
+- `DELETE /api/buddy/self` (buddy Bearer token)
 
 **Acceptance:**
 1. User mở menu buddy → "Pair with device" → web UI thiết bị hiện code 6-digit
 2. User đọc code, gõ vào cửa sổ nhập code của buddy
-3. Buddy lưu token vào Keychain
+3. Buddy lưu token vào `~/Library/Application Support/AutonomousBuddy/pairing.json` (0600)
 4. Lamp persist buddy vào `buddies.json`
 5. Menu buddy hiện "Paired with lamp-xxxx"
-6. `GET /api/buddy/list` trả về buddy đã pair
+6. `GET /api/buddy/status` (admin) trả về `paired: true` kèm `buddy_id`/`name` của buddy
 
 ### Phase 1D — WebSocket connection
 
@@ -126,18 +126,17 @@ Mỗi phase ship & review độc lập được.
 
 **Route thêm:**
 - `GET /api/buddy/ws` (WS upgrade)
-- `GET /api/buddy/status`
 
 **Acceptance:**
 - Buddy auto-connect WS khi khởi động (và sau pair)
 - Lamp log `[buddy] connected: <fingerprint>` khi connect
 - Menu buddy hiện chấm xanh khi connected, đỏ khi disconnected
 - WS sống qua lamp reboot (buddy reconnect với backoff)
-- `GET /api/buddy/status` trả về `{"connected": [...], "paired": [...]}`
+- `GET /api/buddy/status` trả về `{"paired": true, "connected": true, "buddy_id": …, "name": …, "os_version": …, "fingerprint": …, "paired_at": …}` (chỉ `paired`/`connected` khi chưa pair)
 
 ### Phase 1E — Command executor (bên buddy)
 
-**Status:** ✓ Done — 16 executors (MVP set + `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` qua Accessibility, `cursor_pos`, `list_displays`). Các vision executors landed sớm hơn vision phase chính thức để skill bash+curl (`computer-use/references/vision.md`) dùng được luôn.
+**Status:** ✓ Done — 16 executors (MVP set + `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` qua Accessibility, `cursor_pos`, `list_displays`). Các vision executors landed sớm hơn vision phase chính thức để skill bash+curl (`skills/computer-use/references/vision.md`) dùng được luôn.
 
 **Files:**
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Commands/Command.swift` (type)
@@ -163,24 +162,25 @@ Mỗi phase ship & review độc lập được.
 **Files:**
 - `system/buddy/dispatcher.go`
 - `system/server/buddy/delivery/http/handler_command.go`
-- Update: wire provider, chạy `make generate`
+- Update: wire provider, chạy `make os-generate`
 
 **Route thêm:**
 - `POST /api/buddy/command`
 
 **Acceptance:**
-- `curl -X POST http://lamp/api/buddy/command -H 'Authorization: Bearer <admin-token>' -d '{"action":"ping"}'` trả về `{"ok":true,"result":{"pong":true}}`
-- Timeout chạy (default 5s; 503 nếu buddy không response)
-- 404 nếu không có buddy connect
+- Route chỉ nhận loopback (`localOnlyMiddleware`; gọi từ LAN bị 403), nên test ngay trên thiết bị: `curl -X POST http://127.0.0.1:5000/api/buddy/command -H 'Content-Type: application/json' -d '{"action":"ping"}'` trả về `{"status":1,"data":{"id":…,"ok":true,"result":{"pong":true,"timestamp":…},…},"message":null}`
+- Timeout chạy (mặc định 30 s; `timeout_ms` 500–60000 → giá trị đó + 5 s); lỗi dispatch trả 502 (`timeout waiting for buddy response`)
+- 502 `no buddy connected` nếu không có buddy connect
 - Command concurrent xử lý đúng (match response theo command ID)
 
 ### Phase 1G — OpenClaw skill
 
 **Status:** ✓ Done — `SKILL.md` chỉ English, theo style led-control / scene, intent-based fire-and-forget HW markers (`[HW:/buddy/exec/<action>:{...}]`). Plus `references/vision.md` opt-in cho task cần thực sự nhìn màn hình (bash + curl loop tới `/api/buddy/command`). Vision reference được tune theo guidance Anthropic Computer Use (anchor screenshot ~1280px wide, evaluate sau mỗi step, ưu tiên keyboard shortcut khi click coord rủi ro).
 
-**Files (vị trí tùy convention skill của OpenClaw):**
-- `computer-use/SKILL.md`
-- `computer-use/script.sh` (hoặc tương đương)
+**Files:**
+- `skills/computer-use/SKILL.md`
+- `skills/computer-use/scripts/buddy.py` (client loopback cho `/api/buddy/command`)
+- `skills/computer-use/references/vision.md`
 
 **Acceptance:**
 - User nói với lamp: "Mở Chrome trên máy tính" → buddy launch Chrome → lamp đọc "đã mở Chrome rồi"
@@ -193,8 +193,8 @@ Mỗi phase ship & review độc lập được.
 **Status:** ✓ Done — `BuddyCard` trong Monitor Overview hiện pair/status/revoke. Buddy app cũng có thêm Activity submenu trên menu bar + cửa sổ "Activity" riêng (terminal-tail style) để user audit recent commands không phải mở file audit log. Path audit log: `~/Library/Application Support/AutonomousBuddy/audit.log`.
 
 **Files:**
-- Update `lamp/web/src/pages/PairedComputers.tsx`
-- Update `lamp/web/src/components/` nếu cần
+- `system/web/src/pages/monitor/BuddyCard.tsx`
+- `system/web/src/pages/monitor/PairingSection.tsx`
 
 **Acceptance:**
 - Page list buddy đã pair với tên, OS, last seen, online/offline
@@ -226,7 +226,7 @@ Mỗi phase ship & review độc lập được.
 
 1. **mDNS browsability** — ✓ Xong. Thiết bị publish `_autonomous._tcp` cho `NWBrowser` qua file avahi tĩnh (`/etc/avahi/services/autonomous.service`, port 80) bake lúc provisioning (`setup.sh` + `scripts/imager/build*.sh`), cạnh host record `<device_type>-xxxx.local`. Wildcard `%h` giữ device-agnostic.
 2. **Convention header admin auth** — confirm endpoint buddy mới dùng `Authorization: Bearer <token>` (cookie hay bearer); reuse pattern `project_security_login_ui_batch.md`.
-3. **Vị trí OpenClaw skill** — tìm xem skill đang sống ở đâu, naming convention, lamp đăng ký skill thế nào. (Có thể trong filesystem lamp `~/.openclaw/skills/<name>/SKILL.md`.)
+3. **Vị trí OpenClaw skill** — ✓ Đã giải quyết: `skills/computer-use/` trong repo.
 
 ---
 
@@ -271,7 +271,7 @@ autonomous-buddy/
 
 Subfolder `autonomous-buddy/windows/` và `autonomous-buddy/linux/` sẽ host port tương lai (v1.2+). Mỗi platform self-contained để toolchain không "lây" lẫn nhau.
 
-### Go (`lamp/`)
+### Go (`system/`)
 ```
 system/buddy/
 ├── types.go
@@ -295,25 +295,25 @@ Sửa:
 - `system/server/wire.go` (provider set)
 - `system/server/wire_gen.go` (regenerated)
 
-### Web (`lamp/web/`)
+### Web (`system/web/`)
 ```
-lamp/web/src/
-├── pages/PairedComputers.tsx (mới)
-├── App.tsx (sửa — thêm route)
-└── lib/api.ts (sửa — thêm endpoint buddy)
+system/web/src/pages/monitor/
+├── BuddyCard.tsx (pair / status / revoke)
+└── PairingSection.tsx (chứa BuddyCard)
 ```
 
 ### OpenClaw skill
 ```
-<openclaw-skills-dir>/computer-use/
+skills/computer-use/
 ├── SKILL.md
-└── script.sh (hoặc tương đương)
+├── references/vision.md
+└── scripts/buddy.py
 ```
 
 ### Khác
 - `CLAUDE.md` — thêm row doc table
-- `Makefile` — target `build-buddy`
-- `VERSION_BUDDY` (root) — `0.0.1`
+- `integrations/companions/autonomous-buddy/Makefile` — các target `native-*` (Swift helper)
+- `integrations/companions/autonomous-buddy/VERSION_AUTONOMOUS_BUDDY` (bắt đầu từ `0.0.1`)
 
 ---
 
@@ -345,7 +345,7 @@ lamp/web/src/
 - [x] **MVP không sign code** — right-click → Open OK — confirmed
 - [ ] **Pairing model** — 1 lamp ↔ 1 buddy (MVP). Confirm? (reply của Leo gợi ý yes nhưng nên confirm)
 - [ ] **"Join Google Meet" — URL cố định hay nhớ link gần nhất?** — MVP đề xuất URL config trong preferences của buddy (user set room họp định kỳ)
-- [ ] **Vị trí skill directory của OpenClaw** — cần tìm xem skill hiện sống ở đâu trong repo này
+- [x] **Vị trí skill directory của OpenClaw** — `skills/computer-use/`
 - [ ] **Versioning** — `VERSION_BUDDY` follow scheme `VERSION_OS_SERVER`?
 
 ---
@@ -353,7 +353,7 @@ lamp/web/src/
 ## Risk riêng của MVP
 
 1. **Publishing mDNS service** — ✓ Đã giải quyết. Thiết bị publish `_autonomous._tcp` qua `/etc/avahi/services/autonomous.service` (drop lúc provisioning), nên buddy browse được không cần nhập tay.
-2. **Convention skill OpenClaw** — chưa biết cho đến khi inspect. Có thể ảnh hưởng design phase 1G.
+2. **Convention skill OpenClaw** — ✓ Đã giải quyết; skill nằm ở `skills/computer-use/`.
 3. **UX permission lần chạy đầu** — Accessibility prompt 1 lần; nếu user deny mà mình không re-prompt sạch, action keyboard fail âm thầm. Cần UX fallback.
 4. **WS keepalive qua Mac sleep** — Mac sleep kill WS. Reconnect phải xử lý gracefully.
-5. **Bundling** — `swift run` chạy dev OK nhưng install production cần `.app` bundle có `Info.plist`. Có thể để sau nhưng phải document.
+5. **Bundling** — ✓ Đã giải quyết. `desktop/scripts/package-macos.mjs` tạo bundle thống nhất `Autonomous Buddy.app` (bundle ID `network.autonomous.ai.buddy.manager`) với Swift helper nhúng tại `Contents/Resources/native/AutonomousBuddy`; xem [native bridge](native-bridge_vi.md) và [release signing](release-signing_vi.md).

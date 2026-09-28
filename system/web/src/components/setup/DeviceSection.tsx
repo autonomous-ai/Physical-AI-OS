@@ -5,10 +5,7 @@ import { SecretUpdateField } from "@/components/SecretUpdateField";
 import { copyText } from "@/lib/clipboard";
 import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 
-// Read-only MAC field masked behind ••••, with an eye toggle to reveal. The
-// caller only renders this when `value` is non-empty — on the pre-auth Setup
-// page, GET /api/device/config is admin-gated and returns 401, so MAC stays
-// empty and the field is omitted entirely rather than showing "not available".
+// Read-only MAC field masked behind ••••, with an eye toggle to reveal.
 function MaskedReadField({ label, id, value }: {
   label: string; id: string; value: string;
 }) {
@@ -44,17 +41,7 @@ function MaskedReadField({ label, id, value }: {
   );
 }
 
-// PasswordStrength — lightweight meter under the admin password input. This
-// guards a device with a camera/mic, so we nudge toward something stronger than
-// the bare minimum: score on length + character-class variety, render a 3-segment
-// bar + label. Purely advisory (the only hard gate is the ADMIN_PASSWORD_MIN min);
-// the goal is to discourage "1111"-class passwords without hard-blocking.
-//
-// UX rule: RED is reserved for the one blocking state (below the min). Once the
-// password is long enough to submit, every other state is advisory, so the
-// hint switches to amber/green — never red — to match the fact that Next stays
-// enabled. And every message is ACTION-ORIENTED ("add a number…") rather than a
-// bare verdict ("Weak"), so the user always knows what to do next.
+// Advisory password strength meter under the admin password input.
 function PasswordStrength({ value }: { value: string }) {
   if (!value) return null;
   const tooShort = value.length < ADMIN_PASSWORD_MIN;
@@ -64,16 +51,12 @@ function PasswordStrength({ value }: { value: string }) {
         message={`At least ${ADMIN_PASSWORD_MIN} characters needed (${value.length}/${ADMIN_PASSWORD_MIN}).`} />
     );
   }
-  // Score variety + length on the already-valid (≥ min) password.
   const classes = [/[a-z]/, /[A-Z]/, /[0-9]/, /[^a-zA-Z0-9]/].filter((re) => re.test(value)).length;
   let score = 0;
   if (value.length >= 12) score += 1;
   if (classes >= 2) score += 1;
   if (classes >= 3) score += 1;
-  // Collapse to 3 buckets: weak (0), fair (1-2), strong (3).
   const level = score === 0 ? 0 : score <= 2 ? 1 : 2;
-  // Advisory messages always tell the user the concrete way to level up; the
-  // "Strong" case confirms instead of nagging.
   const messages = [
     "A bit simple — add a capital letter, number, or symbol to make it stronger.",
     "Good — add a symbol or make it longer for a stronger password.",
@@ -83,10 +66,9 @@ function PasswordStrength({ value }: { value: string }) {
   return <StrengthRow level={level} color={colors[level]} message={messages[level]} />;
 }
 
-// StrengthRow — the 3-segment bar + hint line. level -1 = invalid (no filled
-// segments, red text); 0/1/2 fill 1/2/3 segments in the given color.
+// 3-segment strength bar + hint; level -1 = invalid.
 function StrengthRow({ level, color, message }: { level: number; color: string; message: string }) {
-  const filled = level + 1; // -1→0, 0→1, 1→2, 2→3
+  const filled = level + 1;
   return (
     <div style={{ marginTop: -4, marginBottom: 12 }}>
       <div style={{ display: "flex", gap: 4 }}>
@@ -105,11 +87,6 @@ function StrengthRow({ level, color, message }: { level: number; color: string; 
   );
 }
 
-// DeviceMetaCard — compact read-only "device identity" card used in edit mode.
-// Groups Device ID + MAC into a single bordered surface with key/value rows and
-// a thin divider, instead of two free-floating read-only inputs. Device ID gets
-// a copy button; MAC keeps a reveal toggle. Purely presentational — the values
-// are server-set and never edited here, so there's no input/form state to carry.
 function MetaRow({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
   return (
     <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "11px 14px", minHeight: 44 }}>
@@ -126,10 +103,6 @@ function DeviceMetaCard({ deviceId, mac }: { deviceId: string; mac?: string }) {
   const [copied, setCopied] = useState(false);
   const [showMac, setShowMac] = useState(false);
   const copyId = async () => {
-    // The old code went straight to navigator.clipboard, which is undefined on
-    // the plain-HTTP device UI (http://<pi-ip>) — the button silently no-oped.
-    // copyText() falls back to document.execCommand("copy") when the Async
-    // Clipboard API isn't available. See lib/clipboard.ts.
     const ok = await copyText(deviceId);
     if (ok) {
       setCopied(true);
@@ -201,23 +174,15 @@ export function DeviceSection({
   deviceId: string;
   setDeviceId: (v: string) => void;
   mac?: string;
-  // Setup mode — operator picks an initial password (with confirm). Caller
-  // gates these on `!hasAdminPassword`.
   adminPassword?: string;
   setAdminPassword?: (v: string) => void;
   adminPasswordConfirm?: string;
   setAdminPasswordConfirm?: (v: string) => void;
-  // EditConfig mode — write-only rotate field. Empty value means "keep
-  // existing hash"; submit only ships admin_password when the operator typed
-  // something here. Server bcrypts + replaces; live sessions keep working.
+  // Empty means keep the existing password.
   rotateAdminPassword?: string;
   setRotateAdminPassword?: (v: string) => void;
-  // Edit Settings only: top-level voice gate, deliberately independent of the
-  // debug-only realtime configuration.
   wakeWord?: boolean;
   setWakeWord?: (v: boolean) => void;
-  // Settings mode receives the effective phrases from the server, including
-  // the active runtime's current agent name.
   agentName?: string;
   wakePhrases?: string[];
 }) {
@@ -228,18 +193,11 @@ export function DeviceSection({
     !!adminPasswordConfirm &&
     !!adminPassword &&
     adminPassword !== adminPasswordConfirm;
-  // Description adapts to mode: setup (pick a new password) vs. edit (rotate an
-  // existing one). The rotate flow has no password fields visible until the
-  // operator clicks the pencil, so its copy points at that.
   const description = showAdminPasswordFields
     ? "Set an admin password — you'll use it to sign in from any browser after setup."
     : "Your device's identity and admin login.";
   return (
     <SectionCard id="device" title="Device" active={active} description={description} icon={<Cpu size={17} />}>
-      {/* The admin password is the only thing the operator actively does on
-          this step, so it leads. Device ID / MAC are read-only identifiers and
-          drop to a compact metadata footer — putting them first made the step
-          look like "nothing to do here" and operators skipped past the password. */}
       {showAdminPasswordFields && (
         <>
           <PasswordField
@@ -270,9 +228,6 @@ export function DeviceSection({
             onChange={setRotateAdminPassword!}
             placeholder={`New password (min ${ADMIN_PASSWORD_MIN} chars)`}
           />
-          {/* Same strength meter as the setup flow — only meaningful once the
-              operator starts typing a new password. Empty (the resting "keep
-              current password" state) renders nothing. */}
           <PasswordStrength value={rotateAdminPassword ?? ""} />
         </>
       )}
@@ -303,10 +258,6 @@ export function DeviceSection({
         </div>
       )}
 
-      {/* Read-only identity metadata. Edit mode (Settings → General) groups
-          Device ID + MAC into a compact key/value card with copy/reveal — these
-          are server-set identifiers, never edited here. Setup mode keeps the
-          plain Field/MaskedReadField so the first-run flow is unchanged. */}
       {showRotateField ? (
         <DeviceMetaCard deviceId={deviceId} mac={mac} />
       ) : (

@@ -1,14 +1,4 @@
 // Package http exposes the autonomous-buddy HTTP + WebSocket endpoints.
-//
-// Route layout (registered under /api/buddy in server.go):
-//
-//	POST /api/buddy/pair/start      (admin)        — issue 6-digit code, 60s TTL
-//	POST /api/buddy/pair/confirm    (code in body) — exchange code for long-lived token
-//	GET  /api/buddy/status          (admin)        — paired buddy summary + online flag
-//	DELETE /api/buddy               (admin)        — revoke current pairing (from web UI)
-//	DELETE /api/buddy/self          (bearer)       — revoke current pairing (initiated by buddy app)
-//	GET  /api/buddy/ws              (bearer)       — buddy's persistent WebSocket
-//	POST /api/buddy/command         (localOnly)    — dispatch a command to the buddy (OpenClaw skill calls this)
 package http
 
 import (

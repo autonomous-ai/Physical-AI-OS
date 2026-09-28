@@ -11,8 +11,7 @@ import (
 
 var emotionRe = regexp.MustCompile(`(?:\\"|")emotion(?:\\"|")\s*:\s*(?:\\"|")([a-zA-Z_]+)(?:\\"|")`)
 
-// parseEmotion extracts the emotion name from a tool call args string.
-// Handles both plain JSON ("emotion": "sad") and escaped JSON (\"emotion\": \"sad\").
+// parseEmotion extracts the emotion name from tool-call args (plain or escaped JSON).
 func parseEmotion(toolArgs string) string {
 	if m := emotionRe.FindStringSubmatch(toolArgs); len(m) == 2 {
 		return m[1]
@@ -20,8 +19,8 @@ func parseEmotion(toolArgs string) string {
 	return ""
 }
 
-// extractTTSText parses the text argument from an OpenClaw built-in tts tool call.
-// Args can be JSON like {"text":"hello"} or a plain string.
+// extractTTSText parses the text argument of a built-in tts tool call.
+// Example: `{"text":"hello"}` or `hello` → "hello".
 func extractTTSText(toolArgs string) string {
 	var obj struct {
 		Text string `json:"text"`
@@ -32,9 +31,7 @@ func extractTTSText(toolArgs string) string {
 	return strings.TrimSpace(toolArgs)
 }
 
-// isAgentNoReply returns true if text is an OpenClaw framework "silent" sentinel
-// (e.g. "NO_REPLY", "NO_RE") or a bare "NO" the LLM sometimes emits instead.
-// These should never be spoken aloud or shown to the user.
+// isAgentNoReply reports whether text is a silent sentinel ("NO_REPLY", "NO_*" or bare "NO").
 func isAgentNoReply(text string) bool {
 	t := strings.TrimSpace(strings.ToUpper(text))
 	if t == "NO" {
@@ -48,21 +45,13 @@ func isAgentNoReply(text string) bool {
 	return false
 }
 
-// metaNonReplyRe matches the prose an LLM emits when it narrates its decision
-// to stay silent instead of returning the NO_REPLY sentinel, e.g.
-// "Sound event, no user message. Nothing to say". isAgentNoReply() only knows
-// the sentinel forms, so without this gate the narration reaches TTS and the
-// device reads its own bookkeeping out loud.
+// metaNonReplyRe matches prose narrating a decision to stay silent (e.g. "Nothing to say").
 var metaNonReplyRe = regexp.MustCompile(`(?i)\b(nothing (to|worth) (say|saying|add|adding|mention|mentioning|report|reporting|note|noting|comment|commenting)|no (user )?(message|reply|response|comment)( needed| required| necessary)?|no need to (reply|respond|speak|say)|not worth (saying|mentioning|a reply|a response)|staying silent|remaining silent|no action needed)\b`)
 
-// metaNonReplyMaxLen bounds the gate to short bookkeeping lines. A real reply
-// that happens to contain one of these phrases is normally part of a longer
-// sentence, so the length cap keeps false positives off the speaker.
+// metaNonReplyMaxLen limits the meta-non-reply gate to short lines to avoid false positives.
 const metaNonReplyMaxLen = 100
 
-// isMetaNonReply reports whether text is a silent-decision narration rather
-// than a real reply. Conservative by design: short text only, and never a
-// question (a question is always a real reply).
+// isMetaNonReply reports whether text is a short silent-decision narration (never a question).
 func isMetaNonReply(text string) bool {
 	t := strings.TrimSpace(text)
 	if t == "" || len(t) > metaNonReplyMaxLen || strings.Contains(t, "?") {
@@ -76,8 +65,7 @@ func isMetaNonReply(text string) bool {
 	return true
 }
 
-// sanitizeAgentText strips internal sentinels the LLM sometimes appends to real replies.
-// e.g. "Hello! NO_REPLY" → "Hello!", "...done! HEARTBEAT_OK" → "...done!"
+// sanitizeAgentText strips trailing internal sentinels. Example: "Hello! NO_REPLY" → "Hello!".
 func sanitizeAgentText(text string) string {
 	for _, sentinel := range []string{"NO_REPLY", "HEARTBEAT_OK"} {
 		if idx := strings.LastIndex(strings.ToUpper(text), sentinel); idx >= 0 {
@@ -91,15 +79,10 @@ func sanitizeAgentText(text string) string {
 	return text
 }
 
-// sayTagRe captures the content between the first <say>...</say> pair.
-// The (?s) flag lets `.` match newlines so multi-line content is supported.
+// sayTagRe captures the content of the first <say>...</say> pair (multi-line).
 var sayTagRe = regexp.MustCompile(`(?s)<say>(.*?)</say>`)
 
-// extractSayTag pulls the spoken sentence out of a <say>...</say> wrapper.
-// Skills (currently wellbeing) instruct the model to wrap the one caring sentence
-// in <say> tags so its free-form reasoning in the text block doesn't leak to TTS.
-// Passthrough when no tag is present so skills that don't opt in stay unchanged.
-// Empty tag (`<say></say>`) collapses to NO_REPLY.
+// extractSayTag returns the <say> content, text unchanged if no tag, or NO_REPLY for an empty tag.
 func extractSayTag(text string) string {
 	m := sayTagRe.FindStringSubmatch(text)
 	if m == nil {
@@ -114,9 +97,7 @@ func extractSayTag(text string) string {
 	return inner
 }
 
-// isDeviceOutboundChatRunID is true when runID matches the device's chat.send idempotency key
-// (device-chat-* / device-sensing-*). Used so traceless lifecycle_start is not
-// mis-tagged as Telegram-only when the turn was initiated from the device.
+// isDeviceOutboundChatRunID reports whether runID is a device chat.send key (device-chat-* / device-sensing-*).
 func isDeviceOutboundChatRunID(runID string) bool {
 	if runID == "" {
 		return false
@@ -124,14 +105,8 @@ func isDeviceOutboundChatRunID(runID string) bool {
 	return strings.HasPrefix(runID, "device-chat-") || strings.HasPrefix(runID, "device-sensing-")
 }
 
-// labelForDeviceInternal returns the UI label that best describes a device-
-// internal message (sensing/voice/wellbeing/system events the device posts via
-// chat.send). Used by the Flow Monitor channel-turn handler to avoid
-// mis-labelling steer-merged self-fire turns as `[telegram]` when they
-// are actually sensing or voice events the device originated.
-//
-// Returns "" when the text doesn't match any known internal prefix —
-// caller should fall back to the configured-channel label in that case.
+// labelForDeviceInternal returns the Flow Monitor label for a device-internal message,
+// or "" if text has no known internal prefix.
 func labelForDeviceInternal(text string) string {
 	switch {
 	case strings.HasPrefix(text, "[user] [ambient]"),
@@ -156,19 +131,7 @@ func labelForDeviceInternal(text string) string {
 	return ""
 }
 
-// isChannelOriginatedRun returns true only when any of the given runIDs was
-// synthesised by the device from a real external channel user message — currently
-// "tg-<msgID>" created in the session.message handler when OpenClaw forwards
-// a Telegram user turn (see handler_events.go ~line 1157).
-//
-// This is the positive-evidence signal for "real channel user", replacing the
-// older "anything NOT device-chat-*" default which mis-classified UUID runs
-// from OpenClaw steer-mode self-fire / cron / heartbeat as Telegram and
-// suppressed their TTS even when no real user was on the other end.
-//
-// The channelRuns map override (chat.history fallback) remains the safety net
-// for any future case where a real channel user shows up under a non-tg-
-// runID before this helper recognises it.
+// isChannelOriginatedRun reports whether any runID came from a real channel user ("tg-<msgID>").
 func isChannelOriginatedRun(runIDs ...string) bool {
 	for _, r := range runIDs {
 		if strings.HasPrefix(r, "tg-") {
@@ -178,12 +141,8 @@ func isChannelOriginatedRun(runIDs ...string) bool {
 	return false
 }
 
-// canStreamSentenceTTS returns true when the run is eligible for first-
-// sentence streaming. Excludes channel-originated runs (their reply fans out
-// to Telegram at lifecycle:end, not the speaker), web chat (display-only),
-// silent runs (voice_agent_handled: the realtime agent already spoke), and
-// runs already flagged for TTS suppression (music playing / agent already
-// spoke via the built-in tts tool intercept).
+// canStreamSentenceTTS reports whether the run may stream its first sentence to the speaker
+// (not channel, web chat, silent, Slack, or TTS-suppressed).
 func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 	if isChannelOriginatedRun(runID, flowRunID) {
 		return false
@@ -191,18 +150,12 @@ func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 	if h.agentGateway.IsWebChatRun(flowRunID) {
 		return false
 	}
-	// voice_agent_handled: the realtime voice agent already spoke this turn, so
-	// the main agent's reply must stay silent. lifecycle:end suppresses the
-	// remainder via ConsumeSilentRun, but the mid-turn first-sentence flush has
-	// its own path and would otherwise leak sentence 1 to the speaker when the
-	// LLM ignores the input-branching NO_REPLY hint. IsSilentRun is non-consuming
-	// so the lifecycle:end ConsumeSilentRun stays intact.
+	// Realtime agent already spoke; IsSilentRun is non-consuming so lifecycle:end's
+	// ConsumeSilentRun still works.
 	if h.agentGateway.IsSilentRun(flowRunID) || h.agentGateway.IsSilentRun(runID) {
 		return false
 	}
-	// Slack (hermes HTTP bridge): a Slack turn replies in Slack, never on the
-	// speaker — suppress the mid-turn first-sentence stream too. Guarded by the
-	// SlackBridge type-assert so non-Slack runs and openclaw are unaffected.
+	// Slack turns reply in Slack, never on the speaker.
 	if sb, ok := h.agentGateway.(domain.SlackBridge); ok && (sb.IsSlackOriginRun(runID) || sb.IsSlackOriginRun(flowRunID)) {
 		return false
 	}
@@ -218,11 +171,8 @@ func (h *AgentHandler) canStreamSentenceTTS(runID, flowRunID string) bool {
 	return !suppressed
 }
 
-// extractMessageContentText collects text from a session.message `content`
-// field. OpenClaw emits content as either a plain string or an array of typed
-// blocks ({"type":"text","text":"..."} / {"type":"toolCall",...}). Only
-// `type == "text"` blocks contribute to the joined output; tool blocks
-// carry no spoken text.
+// extractMessageContentText joins text from a session.message `content` (string or
+// typed-block array; only "text" blocks count).
 func extractMessageContentText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -247,13 +197,8 @@ func extractMessageContentText(raw json.RawMessage) string {
 	return strings.Join(parts, "")
 }
 
-// deviceInternalPrefixes are message-text prefixes the device puts on chat.sends it
-// issues itself (sensing events, ambient voice, activity, emotion cues,
-// wellbeing nudges, wake greetings). Used as a robust guard alongside
-// IsRecentOutboundChat — that exact-match buffer can miss when the 30s
-// window expires or 32-entry cap overflows under load. Any text starting
-// with one of these prefixes is definitely device-internal, never a real
-// Telegram user message, and must NOT mark the run as a channel turn.
+// deviceInternalPrefixes mark chat.sends issued by the device itself; such text must
+// never mark a run as a channel turn (backs up the bounded IsRecentOutboundChat buffer).
 var deviceInternalPrefixes = []string{
 	"[sensing:",
 	"[ambient]",
@@ -269,9 +214,7 @@ var deviceInternalPrefixes = []string{
 	"你剛剛醒來",
 }
 
-// isDeviceInternalMessage returns true when the message text was issued by
-// the device via chat.send (matches a known prefix). The check is independent of
-// the recent-outbound TTL buffer so it stays correct under burst load.
+// isDeviceInternalMessage reports whether text starts with a device-internal prefix.
 func isDeviceInternalMessage(text string) bool {
 	if text == "" {
 		return false
@@ -284,14 +227,10 @@ func isDeviceInternalMessage(text string) bool {
 	return false
 }
 
-// telegramChatIDRe extracts the chat_id from OpenClaw queue-mode metadata
-// injected at the top of a Telegram-originated user message, e.g.
-// `"chat_id": "telegram:158406741"`.
+// telegramChatIDRe matches queue-mode metadata, e.g. `"chat_id": "telegram:158406741"`.
 var telegramChatIDRe = regexp.MustCompile(`"chat_id"\s*:\s*"telegram:(\d+)"`)
 
-// extractTelegramChatID returns the numeric Telegram chat_id from a session
-// message body when OpenClaw injected the conversation metadata block; "" if
-// the marker is absent (non-Telegram message or older OpenClaw format).
+// extractTelegramChatID returns the numeric Telegram chat_id from a message body, or "".
 func extractTelegramChatID(text string) string {
 	if m := telegramChatIDRe.FindStringSubmatch(text); len(m) == 2 {
 		return m[1]
@@ -299,14 +238,10 @@ func extractTelegramChatID(text string) string {
 	return ""
 }
 
-// senderLabelTelegramIDRe captures the numeric id from senderLabel formats
-// emitted by OpenClaw, e.g. "Leo (@squall_leo_hart) id:158406741" or
-// "Leo (158406741)". Used as fallback when the message content lacks the
-// `chat_id: telegram:<id>` metadata block (sometimes injected, sometimes not).
+// senderLabelTelegramIDRe captures the id from senderLabels like "Leo (@x) id:158406741" or "Leo (158406741)".
 var senderLabelTelegramIDRe = regexp.MustCompile(`(?:id:|\()(\d{6,})\)?`)
 
-// extractTelegramIDFromSenderLabel returns the numeric Telegram user ID found
-// in a senderLabel string. Returns "" if no id-like substring matches.
+// extractTelegramIDFromSenderLabel returns the numeric Telegram user ID in label, or "".
 func extractTelegramIDFromSenderLabel(label string) string {
 	if label == "" {
 		return ""
@@ -317,13 +252,10 @@ func extractTelegramIDFromSenderLabel(label string) string {
 	return ""
 }
 
-// shortError extracts a short, readable message from a potentially large error string.
-// Strips HTML bodies (e.g. Cloudflare 403 pages) down to the status line.
+// shortError shortens an error string, reducing HTML error pages to their status line.
 func shortError(errMsg string) string {
-	// Extract leading status code + domain if it looks like "403 <!DOCTYPE..."
 	if idx := strings.Index(errMsg, "<!"); idx > 0 {
 		prefix := strings.TrimSpace(errMsg[:idx])
-		// Try to find domain from <h2> "unable to access X"
 		if i := strings.Index(errMsg, "unable_to_access"); i > 0 {
 			if j := strings.Index(errMsg[i:], ">"); j > 0 {
 				if k := strings.Index(errMsg[i+j:], "<"); k > 0 {

@@ -198,7 +198,6 @@ class TestMPR121(unittest.TestCase):
     def test_selected_electrodes_overlap_form_one_touch(self):
         handler = self.make_handler(electrodes=(0, 1))
         handler._bus = mock.Mock()
-        # Electrode 2 is excluded. Overlapping 0 and 1 must not split the tap.
         masks = [4, 1, 1, 3, 2, 2, 4, 4]
         handler._bus.read_regs.side_effect = [mask.to_bytes(2, 'little') for mask in masks]
         times = [0, 1, 1.04, 2, 3, 3.04, 4, 4.04]
@@ -390,8 +389,7 @@ class TestMPR121(unittest.TestCase):
                     self.assertLogs('hal.drivers.mpr121', level='INFO') as logs:
                 handler._action_thread = threading.Thread(target=handler._dispatch)
                 handler._action_thread.start()
-                # Observing an empty queue means the worker has consumed the request;
-                # stop then joins it before assertions about execution/logging.
+                # An empty queue means the worker consumed the request; stop then joins it.
                 deadline = time.monotonic() + 1
                 while not handler._pending.empty() and time.monotonic() < deadline:
                     threading.Event().wait(.001)

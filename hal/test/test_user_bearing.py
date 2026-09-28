@@ -1,9 +1,4 @@
-"""Focused tests for the remembered user bearing.
-
-The estimate is open-loop — nothing corrects it — so the guarantees that matter
-are: it converges on real sightings, it reports staleness honestly, it never
-writes a torn file, and it rate-limits so one stationary user cannot dominate.
-"""
+"""Focused tests for the remembered user bearing."""
 
 import json
 import os
@@ -46,7 +41,7 @@ def test_one_stray_sample_cannot_hijack_the_estimate():
         t = 1_000_000.0
         for i in range(10):
             ub.record_sighting(20.0, now=t + i * 60.0)
-        ub.record_sighting(-120.0, now=t + 11 * 60.0)  # someone walking past
+        ub.record_sighting(-120.0, now=t + 11 * 60.0)
         est = ub.read_estimate(now=t + 12 * 60.0)
         assert est.bearing_deg > 0.0, "a single outlier must not flip the sign"
 
@@ -60,14 +55,7 @@ def test_rate_limit_drops_rapid_sightings():
 
 
 def test_confidence_does_not_decay_with_age():
-    """Confidence measures how well the estimate is LEARNED, not how recent.
-
-    It used to halve every six hours, which fought the thing that feeds this
-    file: a device recording ~2 sightings a day decayed faster than it learned,
-    so the bearing was refused for low confidence exactly when it was needed.
-    Staleness is now the prediction-failure path's job (see the miss-streak
-    tests) — a bearing that stops working is dropped outright rather than fading.
-    """
+    """Confidence measures how well the estimate is LEARNED, not how recent."""
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         for i in range(ub.CONFIDENCE_FULL_SAMPLES):
@@ -76,7 +64,6 @@ def test_confidence_does_not_decay_with_age():
         stale = ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).confidence
         assert fresh > 0.9
         assert stale == fresh, "age must not move confidence"
-        # ...but the age is still reported, so a caller that cares can ask.
         assert ub.read_estimate(now=t + 8 * 60.0 + 48 * 3600).age_s > 47 * 3600
 
 
@@ -93,7 +80,6 @@ def test_confidence_still_grows_with_sightings():
 
 
 def test_no_estimate_reads_as_none_not_zero():
-    # Zero is a real bearing (dead ahead) — "unknown" must be distinguishable.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         assert ub.read_estimate() is None
 
@@ -103,7 +89,7 @@ def test_clear_forgets_the_estimate():
         ub.record_sighting(50.0)
         assert ub.clear() is True
         assert ub.read_estimate() is None
-        assert ub.clear() is True  # idempotent
+        assert ub.clear() is True
 
 
 def test_corrupt_file_is_ignored_not_fatal():
@@ -129,8 +115,6 @@ def test_write_is_atomic_no_partial_file_left_behind():
 
 
 def test_a_sustained_move_is_accepted_as_relocation():
-    # The flip side of outlier damping: if the user really has moved seat, a
-    # repeated new position must win rather than being damped forever.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         for i in range(10):
@@ -142,8 +126,6 @@ def test_a_sustained_move_is_accepted_as_relocation():
 
 
 def test_early_sightings_are_not_treated_as_outliers():
-    # With one sample the estimate is not settled; a genuinely different second
-    # position must still be free to move it.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         ub.record_sighting(0.0, now=t)
@@ -151,11 +133,7 @@ def test_early_sightings_are_not_treated_as_outliers():
         assert ub.read_estimate(now=t + 120.0).bearing_deg > 10.0
 
 
-# --- prediction-failure detection (how a moved lamp is noticed) -----------
-
 def test_repeated_failed_predictions_drop_the_estimate():
-    # No IMU can see the lamp move, so a bearing that stops finding anyone is
-    # the only available evidence that it no longer describes reality.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         ub.record_sighting(30.0)
         for _ in range(ub.PREDICTION_MISS_LIMIT - 1):
@@ -166,7 +144,6 @@ def test_repeated_failed_predictions_drop_the_estimate():
 
 
 def test_a_single_miss_does_not_drop_the_estimate():
-    # The user simply being out of the room must not wipe a good estimate.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         ub.record_sighting(30.0)
         ub.record_prediction(hit=False)
@@ -192,9 +169,6 @@ def test_scoring_with_no_estimate_is_harmless():
 
 
 def test_misses_spread_far_apart_do_not_accumulate():
-    # A user occasionally in another room must not look like a moved lamp.
-    # A moved lamp fails every attempt from the moment it moved; scattered
-    # absences are a different signal and must not add up across weeks.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         ub.record_sighting(30.0, now=t)
@@ -216,18 +190,13 @@ def test_clustered_misses_still_drop_the_estimate():
 
 
 def test_a_small_lamp_move_self_corrects_without_being_detected():
-    # If the lamp is nudged a little on the desk, the user is still inside the
-    # camera FOV at the stale bearing — so every centred sighting records the
-    # NEW correct servo yaw and the estimate simply follows. Nothing has to
-    # notice the move; only large moves need the miss-streak machinery.
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         t = 1_000_000.0
         for i in range(10):
             ub.record_sighting(30.0, now=t + i * 60.0)
         assert abs(ub.read_estimate(now=t).bearing_deg - 30.0) < 1.0
 
-        # Lamp rotated ~20 deg: same user, new servo yaw. Under OUTLIER_DEG, so
-        # it is folded in at full weight rather than being damped as a stray.
+        # Under OUTLIER_DEG, so it is folded in at full weight.
         shifted = 50.0
         assert abs(shifted - 30.0) < ub.OUTLIER_DEG
         for i in range(10, 22):
@@ -239,11 +208,8 @@ def test_a_small_lamp_move_self_corrects_without_being_detected():
         )
 
 
-# --- Full-posture memory (schema v2) ----------------------------------------
-
 def test_sighting_stores_the_whole_posture(tmp_path, monkeypatch):
-    """The bearing must describe a SHAPE, not just a direction — pitch lives
-    across base/elbow/wrist and yaw alone cannot aim the camera."""
+    """The bearing stores a full posture, not just yaw."""
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
     pose = {"base_yaw.pos": 20.0, "base_pitch.pos": 5.0, "elbow_pitch.pos": 10.0}
     assert ub.record_sighting(20.0, pose=pose) is True
@@ -253,8 +219,7 @@ def test_sighting_stores_the_whole_posture(tmp_path, monkeypatch):
 
 
 def test_bearing_stays_consistent_with_the_pose_yaw(tmp_path, monkeypatch):
-    """One source of truth: a scalar bearing that disagreed with the posture
-    would point the base one way and the head another."""
+    """The scalar bearing stays consistent with the posture's yaw."""
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
     ub.record_sighting(20.0, pose={"base_yaw.pos": 20.0, "base_pitch.pos": 5.0})
     ub.record_sighting(30.0, pose={"base_yaw.pos": 30.0, "base_pitch.pos": 9.0},
@@ -264,8 +229,7 @@ def test_bearing_stays_consistent_with_the_pose_yaw(tmp_path, monkeypatch):
 
 
 def test_pose_joints_are_smoothed_like_the_bearing(tmp_path, monkeypatch):
-    """Each joint gets its own EMA — a single odd posture must not snap the
-    remembered shape to it."""
+    """Each joint is smoothed with its own EMA."""
     import time as _t
 
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
@@ -277,16 +241,7 @@ def test_pose_joints_are_smoothed_like_the_bearing(tmp_path, monkeypatch):
 
 
 def test_v1_file_is_no_longer_migrated(tmp_path, monkeypatch):
-    """This used to keep v1's yaw, on the grounds that a schema bump must not
-    throw away hours of sightings. v3 reverses that deliberately.
-
-    The reason the yaw looked safe to keep was that only the POSE was new in
-    v2. But a recalibration moves every joint's degree scale, base_yaw
-    included — `6f0c4ec4` zeroed all five homing offsets — so a v1 bearing is
-    an angle in an unknown frame of reference, not a direction. Restoring it
-    confidently is the failure the calibration fingerprint exists to prevent,
-    and re-learning costs about eight sightings.
-    """
+    """A v1 file is no longer migrated."""
     path = tmp_path / "b.json"
     path.write_text(json.dumps({
         "version": 1, "bearing_deg": 25.709, "confidence": 0.25,
@@ -302,11 +257,11 @@ def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monk
 
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
     t = _t.time()
-    for i in range(6):  # settle a confident estimate
+    for i in range(6):
         ub.record_sighting(0.0, pose={"base_yaw.pos": 0.0, "base_pitch.pos": 0.0},
                            now=t + i * 60.0)
     t2 = t + 600.0
-    for i in range(ub.OUTLIER_STREAK):  # sustained move to a new spot
+    for i in range(ub.OUTLIER_STREAK):
         ub.record_sighting(80.0, pose={"base_yaw.pos": 80.0, "base_pitch.pos": 30.0},
                            now=t2 + i * 60.0)
     est = ub.read_estimate()
@@ -314,20 +269,16 @@ def test_relocation_replaces_the_posture_rather_than_averaging_it(tmp_path, monk
 
 
 def test_a_sighting_without_a_pose_still_moves_the_bearing(tmp_path, monkeypatch):
-    """A passive sampler may know the direction but not a trustworthy posture.
-    Reading the yaw back out of an unchanged pose would discard the sighting."""
+    """A sighting without a pose still updates the yaw bearing."""
     import time as _t
 
     monkeypatch.setattr(ub.config, "USER_BEARING_PATH", str(tmp_path / "b.json"), raising=False)
     ub.record_sighting(0.0, pose={"base_yaw.pos": 0.0, "base_pitch.pos": 5.0})
-    ub.record_sighting(40.0, now=_t.time() + 60.0)  # no pose at all
+    ub.record_sighting(40.0, now=_t.time() + 60.0)
     est = ub.read_estimate()
     assert est.bearing_deg > 0.0, "the pose-less sighting was ignored"
     assert est.pose["base_pitch.pos"] == 5.0, "the known posture was lost"
     assert est.pose["base_yaw.pos"] == est.bearing_deg
-
-
-# --- F1: a pose is only valid on the calibration it was recorded against ---
 
 
 def _seed(d, payload):
@@ -340,12 +291,7 @@ def _fp(value):
 
 
 def test_a_v2_estimate_is_dropped_because_its_calibration_is_unknown():
-    """Every angle is degrees ON A CALIBRATION, and v2 never recorded which.
-
-    `6f0c4ec4` zeroed all five homing offsets, so the same number names a
-    different posture afterwards. An unverifiable pose restored at confidence
-    1.0 is the failure this schema version exists to stop.
-    """
+    """Every angle is degrees ON A CALIBRATION, and v2 never recorded which."""
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         _seed(d, {"version": 2, "bearing_deg": 42.0, "pose": {"base_yaw.pos": 42.0},
                   "confidence": 1.0, "samples": 20, "updated": 1_000_000.0})
@@ -353,8 +299,7 @@ def test_a_v2_estimate_is_dropped_because_its_calibration_is_unknown():
 
 
 def test_a_v1_estimate_is_dropped_too_not_migrated():
-    """v1's yaw used to be kept. The recalibration moved base_yaw's scale as
-    well, so the direction is as suspect as the posture."""
+    """v1 yaw is not kept after recalibration."""
     with tempfile.TemporaryDirectory() as d, _with_path(d):
         _seed(d, {"version": 1, "bearing_deg": 42.0, "samples": 20,
                   "updated": 1_000_000.0})
@@ -379,9 +324,7 @@ def test_a_pose_from_the_same_calibration_is_kept():
 
 
 def test_an_unreadable_calibration_does_not_wipe_the_estimate():
-    """A missing file or a permissions change usually means the arm is not
-    running, not that the numbers moved — wiping the fleet's bearings over that
-    would be its own bug."""
+    """Missing or unreadable calibration does not wipe bearings."""
     with tempfile.TemporaryDirectory() as d, _with_path(d), _fp(None):
         _seed(d, {"version": 3, "calibration": "0000dead", "bearing_deg": 42.0,
                   "pose": {"base_yaw.pos": 42.0}, "confidence": 1.0,
@@ -405,7 +348,7 @@ def test_the_fingerprint_follows_content_not_timestamp():
             f.write('{"base_yaw": {"homing_offset": 0}}')
         with mock.patch.object(ub, "_calibration_path", lambda: cal):
             first = ub._calibration_fingerprint()
-            os.utime(cal, (0, 0))          # same bytes, different timestamp
+            os.utime(cal, (0, 0))
             assert ub._calibration_fingerprint() == first
             with open(cal, "w", encoding="utf-8") as f:
                 f.write('{"base_yaw": {"homing_offset": 1909}}')
@@ -413,11 +356,7 @@ def test_the_fingerprint_follows_content_not_timestamp():
 
 
 def test_the_calibration_path_comes_from_the_robot_not_a_second_derivation():
-    """Two copies of the resolution rule can drift; the arm's own answer cannot.
-
-    A drifted mirror would fingerprint a file the arm never loaded — dropping
-    good bearings on every read, or accepting a stale pose from another unit.
-    """
+    """Two copies of the resolution rule can drift; the arm's own answer cannot."""
     import hal.app_state as state
 
     robot = mock.Mock()

@@ -6,12 +6,7 @@ import (
 	"time"
 )
 
-// The report callback is the ONE seam everything downstream of a run hangs
-// off (the schedule.run ack, and the ops alert). An alert has to name the task
-// in every outcome — but Summary is the name only on success (it is the error
-// on failure, the missing connectors on a skip) — so the report carries the
-// name itself. And it has to say whether the run was a manual "Run now",
-// which the callback cannot otherwise tell from a ticker fire.
+// RunReport must carry Name in every outcome and Manual for RunNow.
 
 func TestRunNow_ReportIsManualAndNamed(t *testing.T) {
 	store := newTestStore(t)

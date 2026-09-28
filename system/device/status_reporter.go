@@ -15,13 +15,8 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// buildPingPayload assembles the backend ping body with the same device-state
-// fields the MQTT `info` uplink publishes (local_ip, versions, runtime,
-// voice/STT, wake-word gate, timezone) so the backend can read them from either channel. The
-// critical field is LocalIP: the setup web popup's parent page polls the
-// backend for it to rescue the AP→STA redirect when both the AP-alive window
-// and mDNS fail (see docs/setup-flow.md). Every field is omitempty — a backend
-// that consumes none of them loses nothing.
+// buildPingPayload assembles the backend ping body (same fields as the MQTT
+// `info` uplink). LocalIP is setup-critical: it rescues the AP→STA redirect.
 func (s *Service) buildPingPayload(status string) beclient.PingPayload {
 	runtime := CurrentAgentRuntimeFromConfig(s.config)
 	p := beclient.PingPayload{
@@ -53,47 +48,34 @@ func (s *Service) buildPingPayload(status string) beclient.PingPayload {
 	return p
 }
 
-// installedSkillsForPing lists what the active runtime has installed, flattened
-// to name+description for the ping. Best-effort: a runtime that can't list
-// skills (ErrNotSupportedByRuntime) or an unreadable skills dir simply omits the
-// field rather than failing the ping, which carries the setup-critical LocalIP.
-//
-// Only name+description ride along — the file trees ListSkills also returns are
-// a UI concern (the Manage-skills detail pane reads them from
-// GET /api/agent/skills/files on demand), and the ping fires every 15s.
+// installedSkillsForPing returns installed skills as name+description only;
+// best-effort, nil on listing failure.
 func (s *Service) installedSkillsForPing() []domain.SkillSummary {
 	if s.agentGateway == nil {
 		return nil
 	}
 	list, err := s.agentGateway.ListSkills()
 	if err != nil {
-		// Debug, not warn: on a backend without a device-readable skills dir this
-		// would otherwise log on every single ping.
+		// Debug, not warn: this would otherwise log on every ping.
 		slog.Debug("[ping] skills list unavailable", "component", "device", "error", err)
 		return nil
 	}
 	return domain.SummarizeSkills(list)
 }
 
-// StartStatusReporter periodically pings the autonomous backend.
-// Uses LLMAPIKey as Bearer token. Exits when ctx is cancelled.
-// If the backend response contains MQTT config, it saves to config (triggers config notify).
+// StartStatusReporter periodically pings the backend (Bearer LLMAPIKey) and saves
+// any MQTT config it returns. Exits when ctx is cancelled.
 func (s *Service) StartStatusReporter(ctx context.Context) {
 	if s.beClient == nil || s.config.LLMAPIKey == "" {
 		return
 	}
-	// The ping IS the device's claim on its backend record — it carries local_ip,
-	// mac, version and skills keyed by an identity the backend derives from the
-	// api key. Off-device that record belongs to a real board.
+	// Off-device, never ping: the backend record belongs to a real board.
 	if !syspath.BackendUplink() {
 		slog.Info("backend uplink off — status reporter not started", "component", "status-reporter")
 		return
 	}
 	ticker := time.NewTicker(beclient.StatusReportInterval)
 	defer ticker.Stop()
-	// Last LAN address we pinged from. The device's address is not stable: moving
-	// the ethernet cable to another network, or a DHCP re-lease, changes it while
-	// os-server keeps running.
 	var lastLocalIP string
 	for {
 		select {
@@ -103,17 +85,11 @@ func (s *Service) StartStatusReporter(ctx context.Context) {
 			if !s.agentGateway.IsReady() {
 				continue
 			}
-			// Lazy resolve of slack team_id: once per process. ResolveSlackTeamIDFromConfig
-			// is a no-op when team_id is already cached OR when slack isn't configured,
-			// so it's safe to call on every tick — the auth.test call only fires once.
+			// No-op once team_id is cached or when Slack is not configured.
 			s.beClient.ResolveSlackTeamIDFromConfig(s.config.OpenclawConfigDir)
 			payload := s.buildPingPayload("working")
-			// Address changed under us → every pooled connection to the backend is
-			// bound to an address the device no longer holds. They don't fail fast:
-			// the old path is gone, so there's no RST, and the next ping writes into
-			// a blackhole until the 15s timeout. Drop them before pinging so this
-			// tick dials fresh instead of burning a cycle (and logging a failure)
-			// per stale connection.
+			// LAN address changed: pooled connections would blackhole until the 15s
+			// timeout (no RST), so drop them before pinging.
 			if payload.LocalIP != "" && lastLocalIP != "" && payload.LocalIP != lastLocalIP {
 				slog.Info("local IP changed, dropping pooled backend connections",
 					"component", "status-reporter", "from", lastLocalIP, "to", payload.LocalIP)

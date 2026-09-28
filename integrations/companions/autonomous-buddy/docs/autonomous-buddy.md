@@ -123,7 +123,7 @@ Out-of-scope MVP examples (defer to vision phase):
 - `NSStatusItem` in menu bar (no Dock icon; `setActivationPolicy(.accessory)`)
 - Menu: pairing state, connection state, last command, "Pause", "Revoke pairing", "Quit"
 - mDNS browser via `Network.framework` (`NWBrowser`)
-- Pairing flow (6-digit code, Keychain token)
+- Pairing flow (6-digit code; token stored in `~/Library/Application Support/AutonomousBuddy/pairing.json`, mode 0600)
 - Persistent `URLSessionWebSocketTask` to lamp
 - Command executors:
   - **NSWorkspace** for app launch, URL open
@@ -131,7 +131,7 @@ Out-of-scope MVP examples (defer to vision phase):
   - **AppleScript / OSAScript** for "close app" and limited whitelisted scripts
   - **UNUserNotificationCenter** for desktop notifications
 - Permission helpers (Accessibility prompt, Automation per-app prompts)
-- Local audit log (file in `~/Library/Application Support/AutonomousBuddy/audit.log`) — also pushed to the device opportunistically
+- Local audit log (file in `~/Library/Application Support/AutonomousBuddy/audit.log`); there is no device-side audit endpoint
 - OSLog (unified logging) for diagnostics
 
 ### 4.2 `lamp` Go server — new package `system/buddy/`
@@ -147,18 +147,20 @@ Out-of-scope MVP examples (defer to vision phase):
 | `service.go` | High-level service tying the above together |
 | `wire.go` | Google Wire provider set |
 
-New HTTP routes (in `server/buddy/delivery/http/`):
+HTTP routes (registered in `system/server/server.go`, handlers in `system/server/buddy/delivery/http/`). The device holds a single pairing:
 
 | Route | Auth | Purpose |
 |-------|------|---------|
-| `POST /api/buddy/pair/start` | admin | Issue 6-digit code, valid 60s |
-| `POST /api/buddy/pair/confirm` | code | Confirm code → return long-lived token |
-| `GET  /api/buddy/list` | admin | List paired buddies + status |
-| `DELETE /api/buddy/:id` | admin | Revoke pairing |
-| `GET  /api/buddy/ws` | bearer token | WS upgrade for buddy |
-| `POST /api/buddy/command` | internal/admin | Dispatch single command (used by OpenClaw skill) |
-| `GET  /api/buddy/status` | admin | Connection status summary |
-| `GET  /api/buddy/audit` | admin | Paginated audit log |
+| `POST /api/buddy/pair/start` | admin (`adminAuthMiddleware`) | Issue 6-digit code, valid 60s → `{code, expires_in}` |
+| `POST /api/buddy/pair/confirm` | none (the code is the credential) | Confirm code → `{token, buddy_id}` |
+| `GET  /api/buddy/status` | admin | `{paired, connected}` plus `buddy_id`, `name`, `os_version`, `fingerprint`, `paired_at` when paired |
+| `DELETE /api/buddy` | admin | Revoke the current pairing |
+| `DELETE /api/buddy/self` | buddy Bearer token (checked in handler) | Buddy-initiated unpair |
+| `GET  /api/buddy/ws` | buddy Bearer token (checked in handler) | WS upgrade for buddy |
+| `POST /api/buddy/command` | loopback only (`localOnlyMiddleware`) | Dispatch one command synchronously (default 30 s; `timeout_ms` + 5 s when given) |
+| `POST /api/buddy/exec/:action` | loopback only | HW-marker variant (`[HW:/buddy/exec/<action>:{...}]`), 15 s |
+| `POST /api/buddy/observe` | loopback only | Screenshot + auxiliary vision-model description |
+| `POST /api/buddy/suggest` | loopback only | Suggestion endpoint used by device-side agents |
 
 ### 4.3 `lelamp` (Python) — **no changes for MVP**
 
@@ -168,18 +170,18 @@ Hardware-only per `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → 
 
 Current skill behavior (all runtimes): trusted current unpaired, disconnected, or paused status stops desktop work before any command or vision-reference read, including simple HW markers. If status is unknown, the skill performs one read-only `desktop_info` check and consumes its full result and exit code. Successful preflight is reused within the workflow. Connection/permission failures and timeouts stop the turn without retries, automatic pairing/reconnection, or fallback to Harness/device-local browsing. The response briefly states the actual blocker without promising automatic completion. An explicit retry or new trusted connection update permits a fresh check. These are skill instructions, not a backend execution gate; no new status injection is added.
 
-- Lives in OpenClaw skills directory (path TBD per OpenClaw conventions)
+- Lives in `skills/computer-use/`
 - `SKILL.md` describes triggers and tool surface
 - Trigger patterns include Vietnamese ("mở ... trên máy tính", "vào trang ... trên máy", "đóng app ...") and English ("open ... on my computer", "go to ... on my mac")
-- Skill script (or LLM tool-call) constructs the command and `curl`s `http://localhost:5000/api/buddy/command` with internal auth header
+- Skill script (`scripts/buddy.py`) or HW marker posts to `http://127.0.0.1:5000/api/buddy/command` (or `/api/buddy/exec/<action>`); these routes are loopback-only, with no auth header
 - Returns TTS-friendly result string ("đã mở Chrome rồi", "không tìm thấy máy tính đã pair", etc.)
 
-### 4.5 Web UI (`lamp/web/`)
+### 4.5 Web UI (`system/web/`)
 
-New page `Paired Computers`:
-- List paired buddies (name, OS, last seen, status)
-- "Add new" button → calls `/api/buddy/pair/start` → displays 6-digit code → polls `/api/buddy/list` to detect successful pair
-- "Revoke" button per row
+`BuddyCard` in the Monitor page's pairing section (`system/web/src/pages/monitor/BuddyCard.tsx`):
+- Shows the single paired Mac (name, OS, buddy ID, connection status)
+- "Pair" button → calls `POST /api/buddy/pair/start` → displays 6-digit code; polls `GET /api/buddy/status` every 5 s to detect a successful pair
+- "Revoke" button → `DELETE /api/buddy`
 
 ---
 
@@ -249,7 +251,7 @@ Reserved for later (defined but not implemented MVP):
 5. User types code into buddy
 6. Buddy calls `POST /api/buddy/pair/confirm {code, name, fingerprint, os_version}` over LAN.
 7. The device validates code, generates a long-lived bearer token, and persists `{buddy_id, token, fingerprint, name, os_version, paired_at}` in `config/buddies.json`.
-8. Buddy stores token in macOS Keychain (service `network.autonomous.ai.buddy`)
+8. Buddy stores `{buddy_id, device_host, token, paired_at}` in `~/Library/Application Support/AutonomousBuddy/pairing.json` (file mode 0600, `Pairing/PairingStore.swift`). The Electron desktop app does not store the token itself: pairing is delegated to its embedded Swift helper, which uses the same file.
 9. Buddy opens WS with `Authorization: Bearer <token>`
 
 MQTT authorization relies on existing broker credentials and topic ACLs; the
@@ -295,7 +297,7 @@ a unique app client ID, with no BFF code changes. Broker reachability and topic
 ACLs still need deployment verification. This covers foreground updates, not
 push notifications after the app closes. See the
 [full MQTT status contract](../../../../docs/mqtt.md#buddystatus--query-and-observe-buddy-state)
-and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
+and [mobile handoff prompt](../../../../docs/vi/buddy-mobile-handoff_vi.md).
 
 
 ### Reconnect
@@ -312,10 +314,10 @@ and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
 | Layer | Mechanism |
 |-------|-----------|
 | Pairing | Requires explicit user action on Mac (typing the code). Cannot be initiated silently. |
-| Token storage | macOS Keychain (encrypted at rest) on buddy side; `buddies.json` on lamp (file mode 0600) |
+| Token storage | `~/Library/Application Support/AutonomousBuddy/pairing.json` (file mode 0600, not encrypted; Keychain was dropped because ad-hoc-signed builds hit an unapprovable password prompt) on buddy side; `config/buddies.json` on lamp (file mode 0600) |
 | Transport | WS over HTTP on LAN (MVP). **TLS deferred** — documented risk, mitigated by LAN-only and pairing requirement. v1.1: self-signed cert + pinning. |
 | Session indicator | Red dot in menu bar when buddy is connected and active. Always-visible. |
-| Audit log | Every command logged (timestamp, action, params hash, source). Local file + push to lamp `/api/buddy/audit`. |
+| Audit log | Every command logged (timestamp, action, params hash, source). Local file only (`~/Library/Application Support/AutonomousBuddy/audit.log`). |
 | Kill switch | "Pause" in menu = drop WS but keep token. "Revoke pairing" = drop token + tell lamp to remove. |
 | Permission gating | Commands fail clean with descriptive error if macOS permission denied (no silent failures). |
 | Blast radius | **Documented explicitly to user**: Lamp gets the same access level as the user account on the Mac. Trust ask is the central UX concern. |
@@ -323,7 +325,7 @@ and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
 
 ### Threats considered
 
-1. **Malicious LAN attacker** → cannot pair without a code from the authorized HTTP or MQTT flow. Cannot replay token without breaching Keychain.
+1. **Malicious LAN attacker** → cannot pair without a code from the authorized HTTP or MQTT flow. Cannot replay token without reading the user's `pairing.json` (0600).
 2. **Compromised lamp** → can run arbitrary commands on Mac (= blast radius). Mitigation: user can revoke at any time from menu bar without needing lamp access.
 3. **Compromised buddy** (malware on Mac that hijacks the WS) → could send fake responses to lamp. Mitigation: command IDs + signed responses (v1.1+).
 4. **Eavesdropping on LAN** → MVP doesn't encrypt WS. Acceptable for home LAN, must fix before any non-trusted-network deployment.
@@ -380,7 +382,7 @@ and [mobile handoff prompt](../../../../docs/buddy-mobile-handoff_vi.md).
 | Network protocol | **WebSocket (raw, no TLS in MVP)** | Persistent, bi-directional, well-supported by URLSessionWebSocketTask. TLS in v1.1 |
 | Discovery | **mDNS via `Network.framework` `NWBrowser`** | Native, no third-party deps |
 | Command codec | **JSON** | Matches lamp's existing serializer style; easy debug |
-| Token storage | **macOS Keychain** | Encrypted, OS-managed |
+| Token storage | **File, mode 0600** (`pairing.json`) | Keychain prompted unapprovably for ad-hoc-signed builds; revisit once Developer ID signed |
 | Pref storage | **UserDefaults / plist** | Standard macOS for non-secrets |
 | Logging | **OSLog (unified)** | Native, viewable in Console.app |
 | Test framework | **XCTest** | Standard |
@@ -455,7 +457,7 @@ The original computer-use MVP chose **Swift native**. The September architecture
 - `lelamp` (Python) — **no changes**. Hardware-only.
 - `lamp` (Go) — **new package** `system/buddy/`, new HTTP routes, new WS gateway.
 - `OpenClaw` — new skill `computer-use`.
-- `lamp/web` — new "Paired Computers" page.
+- `system/web` — `BuddyCard` in the Monitor page (pair / status / revoke).
 - `CLAUDE.md` — new doc row.
 
 ---

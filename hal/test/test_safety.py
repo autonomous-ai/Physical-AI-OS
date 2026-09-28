@@ -1,8 +1,4 @@
-"""Tests for the safety policy layer — pure parser + gate, no hardware.
-
-Covers the slice-1 (brightness ceiling) checklist in docs/safety.md:
-unit clamp behavior, schema fail-loud, and the load_safety fail-safe rules.
-"""
+"""Tests for the safety policy layer — pure parser + gate, no hardware."""
 import os
 import tempfile
 import unittest
@@ -117,7 +113,6 @@ class TestClampColor(unittest.TestCase):
         self.assertEqual(clamp_color(self.p, (255, 255, 255)), (180, 180, 180))
 
     def test_hue_preserved_when_scaling(self):
-        # pure red at full -> scaled to ceiling, still pure red
         self.assertEqual(clamp_color(self.p, (255, 0, 0)), (180, 0, 0))
 
     def test_below_ceiling_unchanged(self):
@@ -143,16 +138,13 @@ class TestLoadSafety(unittest.TestCase):
         self.assertEqual(p.max_brightness, 180)
 
     def test_prose_only_returns_none(self):
-        # SAFETY.md with no front matter -> pass-through (legacy prose), not a crash
         d = self._write("SAFETY.md", "# SAFETY.md\n\nNo front matter here.\n")
         self.assertIsNone(load_safety(d, "SAFETY.md"))
 
     def test_missing_file_returns_none(self):
-        # declared safety_ref but no file -> pass-through + warn, not a crash
         self.assertIsNone(load_safety(tempfile.mkdtemp(), "SAFETY.md"))
 
     def test_bad_schema_file_raises(self):
-        # present front matter with an unknown major -> fail loud (abort boot)
         d = self._write("SAFETY.md", "---\nschema: autonomous.safety.v9\n---\n")
         with self.assertRaises(ValueError):
             load_safety(d, "SAFETY.md")
@@ -161,7 +153,6 @@ class TestLoadSafety(unittest.TestCase):
 class TestQuietHoursParse(unittest.TestCase):
     def test_parses_both_windows_and_base(self):
         p = parse_safety(_FM_QUIET)
-        # base ceiling is the light max_brightness, NOT the quiet one
         self.assertEqual(p.max_brightness, 180)
         self.assertEqual(p.light_quiet, QuietHours(dtime(22, 0), dtime(7, 0), 40))
         self.assertEqual(p.audio_quiet, QuietHours(dtime(22, 0), dtime(7, 0), None))
@@ -174,8 +165,8 @@ class TestQuietHoursParse(unittest.TestCase):
 
 class TestInWindow(unittest.TestCase):
     def setUp(self):
-        self.wrap = QuietHours(dtime(22, 0), dtime(7, 0))      # crosses midnight
-        self.same = QuietHours(dtime(9, 0), dtime(17, 0))      # same day
+        self.wrap = QuietHours(dtime(22, 0), dtime(7, 0))
+        self.same = QuietHours(dtime(9, 0), dtime(17, 0))
 
     def test_wrap_evening_inside(self):
         self.assertTrue(in_window(self.wrap, dtime(23, 0)))
@@ -205,7 +196,6 @@ class TestQuietHoursGate(unittest.TestCase):
         self.assertEqual(active_max_brightness(self.p, dtime(12, 0)), 180)
 
     def test_clamp_color_night_vs_day(self):
-        # full white: clamps to 40 at night, 180 by day (real wall-clock injected)
         self.assertEqual(clamp_color(self.p, (255, 255, 255), dtime(23, 0)), (40, 40, 40))
         self.assertEqual(clamp_color(self.p, (255, 255, 255), dtime(12, 0)), (180, 180, 180))
 
@@ -249,8 +239,6 @@ class TestVolumeCeiling(unittest.TestCase):
         self.assertEqual(clamp_volume(self.p, 0), 0)
 
     def test_absent_bound_is_pass_through(self):
-        # presence-driven: no audio.max_volume declared -> only the 0-100 scale
-        # clamp applies. The engine never invents a ceiling nobody wrote.
         self.assertIsNone(parse_safety(_FM).max_volume)
         self.assertEqual(clamp_volume(parse_safety(_FM), 100), 100)
         self.assertEqual(clamp_volume(None, 100), 100)
@@ -261,8 +249,6 @@ class TestVolumeCeiling(unittest.TestCase):
         self.assertEqual(clamp_volume(None, -5), 0)
 
     def test_ceiling_is_independent_of_quiet_hours(self):
-        # The ceiling is all-day; the quiet window only suppresses loud output.
-        # A max_volume nested inside quiet_hours must not be read as the bound.
         p = parse_safety(
             "---\nschema: autonomous.safety.v1\n"
             "audio:\n  quiet_hours: { start: \"22:00\", end: \"07:00\", max_volume: 10 }\n---\n"
@@ -285,7 +271,6 @@ class TestMotionParse(unittest.TestCase):
         self.assertIsNone(parse_safety(_FM).motion)
 
     def test_commented_stop_always_not_a_bound(self):
-        # a motion section with ONLY commented placeholders → no real bounds → None
         fm = "---\nschema: autonomous.safety.v1\nmotion:\n  # stop_always: true\n  # max_speed: <int>\n---\n"
         self.assertIsNone(parse_safety(fm).motion)
 
@@ -296,7 +281,7 @@ class TestMotionParse(unittest.TestCase):
 
 class TestMinMoveDuration(unittest.TestCase):
     def setUp(self):
-        self.p = parse_safety(_FM_MOTION)  # max_speed 120 deg/s
+        self.p = parse_safety(_FM_MOTION)
 
     def test_stretches_when_too_fast(self):
         # 120 deg move requested in 0.1s -> needs 1.0s at 120 deg/s
@@ -308,7 +293,6 @@ class TestMinMoveDuration(unittest.TestCase):
         self.assertEqual(d, 5.0)
 
     def test_instant_request_bounded(self):
-        # duration 0 with a real delta -> stretched to the speed-safe minimum
         d = min_move_duration(self.p, {"pan.pos": 60.0}, {"pan.pos": 0.0}, 0.0)
         self.assertAlmostEqual(d, 0.5, places=3)
 
@@ -316,12 +300,9 @@ class TestMinMoveDuration(unittest.TestCase):
         self.assertEqual(min_move_duration(parse_safety(_FM), {"a.pos": 99}, {"a.pos": 0}, 0.2), 0.2)
 
     def test_no_policy_passthrough(self):
-        # no safety config at all → motion runs unclamped (presence-driven, the
-        # same pass-through rule as light/audio; no fail-closed, no kill switch)
         self.assertEqual(min_move_duration(None, {"a.pos": 999}, {"a.pos": 0}, 0.01), 0.01)
 
     def test_unknown_current_joint_ignored(self):
-        # no known start for the joint -> can't bound its speed -> requested kept
         self.assertEqual(min_move_duration(self.p, {"pan.pos": 200.0}, {}, 0.1), 0.1)
 
 
@@ -368,8 +349,8 @@ class TestThermalOver(unittest.TestCase):
 
     def test_no_policy_or_no_thermal_or_no_temp(self):
         self.assertFalse(thermal_over(None, 200.0, False))
-        self.assertFalse(thermal_over(parse_safety(_FM), 200.0, False))  # no thermal section
-        self.assertFalse(thermal_over(self.p, None, True))                # unreadable temp
+        self.assertFalse(thermal_over(parse_safety(_FM), 200.0, False))
+        self.assertFalse(thermal_over(self.p, None, True))
 
 
 class TestReadSocTemp(unittest.TestCase):
@@ -387,11 +368,10 @@ class TestReadSocTemp(unittest.TestCase):
 
 
 class TestCapSpeedDps(unittest.TestCase):
-    """The bound for streaming paths (the vision-tracking loop), which have no
-    destination for min_move_duration to stretch a move toward."""
+    """Speed bound for streaming paths with no move duration to stretch."""
 
     def setUp(self):
-        self.p = parse_safety(_FM_MOTION)  # max_speed 120 deg/s
+        self.p = parse_safety(_FM_MOTION)
 
     def test_below_the_ceiling_passes_through(self):
         # The tracker's own pursuit/saccade ceilings on Lamp today.
@@ -402,8 +382,7 @@ class TestCapSpeedDps(unittest.TestCase):
         self.assertEqual(cap_speed_dps(self.p, 200.0), 120.0)
 
     def test_lower_declared_ceiling_wins_over_tuning(self):
-        """The case the gate exists for: a body whose declared bound is below
-        the loop's tuning constants."""
+        """A body whose declared bound is below the loop's tuning constants."""
         slow = parse_safety(_FM_MOTION.replace("max_speed: 120", "max_speed: 40"))
         self.assertEqual(cap_speed_dps(slow, 55.0), 40.0)
         self.assertEqual(cap_speed_dps(slow, 100.0), 40.0)
@@ -412,7 +391,6 @@ class TestCapSpeedDps(unittest.TestCase):
         self.assertEqual(cap_speed_dps(parse_safety(_FM), 55.0), 55.0)
 
     def test_no_policy_passthrough(self):
-        # Undeclared stays undeclared — never invent a ceiling of 0.
         self.assertEqual(cap_speed_dps(None, 55.0), 55.0)
 
 

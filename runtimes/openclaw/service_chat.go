@@ -16,8 +16,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// A failed WriteMessage has an uncertain outcome; only pre-write disconnects
-// carry this sentinel and are eligible for automatic queue replay.
+// A failed WriteMessage has an uncertain outcome; only pre-write disconnects carry this sentinel and are eligible for automatic queue replay.
 var errDisconnectedBeforeSend = errors.New("websocket disconnected before send")
 
 // GetConfigJSON reads and returns the raw bytes of openclaw.json.
@@ -31,7 +30,6 @@ func (s *OpenclawService) GetConfigJSON() (json.RawMessage, error) {
 }
 
 // GetConfiguredChannel reads openclaw.json and returns the first enabled channel name.
-// Falls back to "channel" if none can be determined.
 func (s *OpenclawService) GetConfiguredChannel() string {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	data, err := os.ReadFile(configPath)
@@ -46,7 +44,6 @@ func (s *OpenclawService) GetConfiguredChannel() string {
 	if json.Unmarshal(data, &cfg) != nil {
 		return "channel"
 	}
-	// Return the first enabled channel found. Priority order: telegram, discord, slack.
 	for _, name := range []string{"telegram", "discord", "slack"} {
 		if ch, ok := cfg.Channels[name]; ok {
 			if ch.Enabled == nil || *ch.Enabled {
@@ -54,7 +51,6 @@ func (s *OpenclawService) GetConfiguredChannel() string {
 			}
 		}
 	}
-	// Fallback: any channel present in config.
 	for name, ch := range cfg.Channels {
 		if ch.Enabled == nil || *ch.Enabled {
 			return name
@@ -64,21 +60,16 @@ func (s *OpenclawService) GetConfiguredChannel() string {
 }
 
 // SendChatMessage sends a user message to the OpenClaw agent via WebSocket chat.send RPC.
-// Returns the reqID on success.
 func (s *OpenclawService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "user")
 }
 
-// SendSystemChatMessage sends a system-originated message (skill watcher notifications,
-// wake greeting, /compact, …) so Flow Monitor can distinguish it from real user input.
-// The WS RPC payload is identical to SendChatMessage — only the flow event `type` differs.
+// SendSystemChatMessage sends a system-originated message, flagged as such for Flow Monitor.
 func (s *OpenclawService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "system")
 }
 
-// SendChatMessageWithImages sends a message with base64 JPEG images to the
-// OpenClaw agent. Each image is included as its own vision content block so the
-// LLM can analyze every attached snapshot.
+// SendChatMessageWithImages sends a message with base64 JPEG images to the OpenClaw agent.
 func (s *OpenclawService) SendChatMessageWithImages(message string, imagesBase64 []string) (string, error) {
 	return s.sendChat(message, imagesBase64, "", "", "user")
 }
@@ -100,12 +91,7 @@ func (s *OpenclawService) SendChatMessageWithImagesAndRun(message string, images
 	return s.sendChat(message, imagesBase64, reqID, runID, "user")
 }
 
-// SendSlashCommandWithRun sends a slash-prefixed message (e.g. "/status") with
-// deliver:false so the gateway routes the reply only back to this client and
-// does not broadcast to bound channels (Telegram/Discord). Mirrors gw web's
-// chat.send behavior — OpenClaw's system prompt then dispatches the slash to
-// the appropriate tool (e.g. session_status). Use only when the message text
-// starts with "/" and originates from the web monitor chat.
+// SendSlashCommandWithRun sends a slash command with deliver:false so the reply is not broadcast to bound channels.
 func (s *OpenclawService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, nil, reqID, runID, "user", withDeliver(false))
 }
@@ -115,22 +101,15 @@ func (s *OpenclawService) SendSlashCommandWithImagesAndRun(message string, image
 	return s.sendChat(message, imagesBase64, reqID, runID, "user", withDeliver(false))
 }
 
-// sendChatOpt is a functional option that mutates the chat.send params map
-// before the payload is marshaled. New flags can be added without changing
-// the sendChat signature or any existing call sites.
+// sendChatOpt is a functional option that mutates the chat.send params map before the payload is marshaled.
 type sendChatOpt func(map[string]interface{})
 
-// withDeliver sets the chat.send `deliver` flag. Pass false for slash
-// commands so the gateway routes the reply only back to this caller (and
-// does not broadcast to bound channels).
+// withDeliver sets the chat.send `deliver` flag.
 func withDeliver(v bool) sendChatOpt {
 	return func(p map[string]interface{}) { p["deliver"] = v }
 }
 
 // sendChat is the internal implementation for sending chat messages, optionally with an image.
-// If fixedReqID and fixedRunID are both non-empty, they are used (caller already incremented reqCounter via NextChatRunID).
-// sourceType labels the flow event ("user" for real user / sensing-driven input, "system" for
-// watcher / wake / compact notifications). Does not affect the WS RPC payload.
 func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedReqID string, fixedRunID string, sourceType string, opts ...sendChatOpt) (string, error) {
 	s.wsMu.Lock()
 	conn := s.wsConn
@@ -140,8 +119,6 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 	}
 
 	// reqID labels outbound chat.send from the os server (sensing POST, wake greeting, etc.) — not "audio only".
-	// Idempotency key must stay stable for OpenClaw run_id mapping; use device-chat-* (not device-sensing-*)
-	// so logs are not mistaken for sound/voice-only turns vs Telegram.
 	var reqID string
 	var idempotencyKey string
 	if fixedReqID != "" && fixedRunID != "" {
@@ -163,22 +140,12 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 		opt(params)
 	}
 
-	// Strip [snapshot: ...] paths from presence events before sending to agent —
-	// face recognition already ran, agent doesn't need file paths (wastes tokens).
-	// Keep original message for flow/monitor so UI can render snapshot thumbnails.
 	wsMessage := message
 	if strings.Contains(message, "[sensing:presence.enter]") || strings.Contains(message, "[sensing:presence.leave]") {
 		wsMessage = strings.TrimSpace(reSnapshotPath.ReplaceAllString(message, ""))
 	}
 	params["message"] = wsMessage
-	// Track the form OpenClaw will rebroadcast (post-strip) so the SSE
-	// session.message handler can skip the echo and not mistake it for
-	// real telegram/channel input.
 	s.markOutboundChat(wsMessage)
-	// Emit chat_input flow event so Flow Monitor's IN field shows the
-	// actual message text. Without this, device-chat-* turns render as
-	// "Input not captured" because the agent path skips chat.history
-	// fetch for os-server-originated runs (only channel turns hit that path).
 	previewMsg := message
 	if len(previewMsg) > 500 {
 		previewMsg = previewMsg[:500] + "…"
@@ -188,9 +155,6 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 		"source":  sourceType,
 		"message": previewMsg,
 	}, idempotencyKey)
-	// OpenClaw chat.send accepts attachments[]{content, mimeType} — content is a
-	// raw base64 string. It has always been a LIST on the wire; sending one entry
-	// per attached photo is what lets a chat client attach several at once.
 	attachments := make([]map[string]interface{}, 0, len(imagesBase64))
 	imgLen := 0
 	for _, img := range imagesBase64 {
@@ -223,7 +187,6 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 		return "", fmt.Errorf("marshal chat.send: %w", err)
 	}
 
-	// Log full payload (mask image content to avoid log spam)
 	slog.Info("[chat.send] full payload", "component", "openclaw", "reqId", reqID, "payload", string(body))
 	slog.Info("[chat.send] >>> sending to OpenClaw", "component", "openclaw",
 		"reqId", reqID, "runId", idempotencyKey,
@@ -244,18 +207,16 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 		s.wsMu.Unlock()
 		return "", errDisconnectedBeforeSend
 	}
-	// Set busy before write — closes the timing gap where sensing IsBusy()=false
-	// because lifecycle_start SSE hasn't arrived yet. SSE lifecycle_end still clears it.
+	// Set busy before write so IsBusy() covers the gap until lifecycle_start.
 	s.busySince.Store(time.Now().UnixMilli())
 	s.activeTurn.Store(true)
-	// Register before the write: a fast lifecycle/final may arrive as soon as
-	// the peer reads the frame. Match the exact post-strip wire message.
+	// Register before the write: a fast lifecycle/final may arrive as soon as the peer reads the frame.
 	s.SetPendingChatTrace(idempotencyKey, wsMessage)
 	err = conn.WriteMessage(websocket.TextMessage, body)
 	s.wsMu.Unlock()
 	if err != nil {
 		s.RemovePendingChatTraceByRunID(idempotencyKey)
-		s.activeTurn.Store(false) // write failed — no turn will start, clear immediately
+		s.activeTurn.Store(false)
 		slog.Error("[chat.send] write failed", "component", "openclaw",
 			"reqId", reqID, "runId", idempotencyKey, "error", err)
 		return "", fmt.Errorf("write chat.send: %w", err)
@@ -281,7 +242,6 @@ func (s *OpenclawService) sendChat(message string, imagesBase64 []string, fixedR
 		RunID:   idempotencyKey,
 	})
 
-	// Return idempotencyKey (not reqID) so trace_id matches OpenClaw's run_id.
 	return idempotencyKey, nil
 }
 
@@ -323,19 +283,7 @@ func (s *OpenclawService) CompactSession(sessionKey string) error {
 	return nil
 }
 
-// NewSession resets the agent's in-session conversation history by
-// sending the OpenClaw `/new` text command (alias of `/reset`) via the
-// normal chat.send path. Unlike CompactSession this does not run an
-// LLM summarize step — the runtime drops history and starts clean.
-//
-// History: an earlier version used a dedicated `sessions.new` RPC, but
-// OpenClaw 5.7+ removed that method (returns INVALID_REQUEST
-// `unknown method: sessions.new`). The `/new` command is the supported
-// surface for this operation and is handled by OpenClaw's command
-// dispatcher before any LLM call, so it does not consume a turn.
-// `sessionKey` is accepted for call-site compatibility but is implicit
-// in the chat.send routing — the command applies to the session keyed
-// by the WS connection's active sessionKey.
+// NewSession resets the agent's in-session conversation history by sending the OpenClaw `/new` text command (alias of `/reset`) via the normal chat.send path.
 func (s *OpenclawService) NewSession(sessionKey string) error {
 	if _, err := s.sendChat("/new", nil, "", "", "system"); err != nil {
 		return fmt.Errorf("send /new: %w", err)
@@ -344,20 +292,10 @@ func (s *OpenclawService) NewSession(sessionKey string) error {
 	return nil
 }
 
-// sessionRotateTokenThreshold is the conversation token count above which a
-// turn triggers an auto-new-session. OpenClaw reports real session tokens, so a
-// token threshold is the right rotation signal. The reported chat.history
-// TotalTokens undercounts by ~35K (excludes system prompt, tools, workspace
-// bootstrap), so 150K here ≈ 185K actual context — well below the gpt-5.5 272K
-// window and below the ~200K mark where OpenClaw's native overflow
-// auto-compaction kicks in (3-min freeze observed 2026-05-11). The OS server's
-// /new resets in ~3s, so it races and wins under normal usage. Previously 80K
-// (≈115K actual) — bumped because resets felt too aggressive for short sessions.
+// sessionRotateTokenThreshold is the conversation token count above which a turn triggers an auto-new-session.
 const sessionRotateTokenThreshold = 150_000
 
-// ShouldRotateSession rotates on real session token count (see
-// domain.AgentGateway). OpenClaw reports the true session size, so the turn
-// count is unused.
+// ShouldRotateSession rotates on real session token count (see domain.AgentGateway).
 func (s *OpenclawService) ShouldRotateSession(totalTokens, _ int) bool {
 	return totalTokens > sessionRotateTokenThreshold
 }

@@ -38,8 +38,7 @@ type subEntry struct {
 	qos   byte
 }
 
-// ProvideClient creates an MQTT client from config. Endpoint (domain or IP) is required.
-// Used by Wire (lib/mqtt.ProviderSet).
+// ProvideClient creates an MQTT client from config; Endpoint is required.
 func ProvideClient(opts Options) *MQTT {
 	if opts.KeepAlive == 0 {
 		opts.KeepAlive = DefaultKeepAlive
@@ -65,27 +64,16 @@ func defaultClientID() string {
 	return "os-mqtt-" + hex.EncodeToString(b)
 }
 
-// Connect establishes the connection and starts auto-reconnect, then returns
-// once the initial handshake completes (or ctx gives up waiting / the
-// handshake fails). Run in a goroutine for long-lived use.
+// Connect starts auto-reconnect and returns once the initial handshake completes or ctx expires.
 func (c *MQTT) Connect(ctx context.Context) error {
 	c.mu.Lock()
 	if c.conn != nil {
 		c.mu.Unlock()
 		return nil // already connected
 	}
-	// The connection's lifetime is deliberately decoupled from ctx: callers
-	// commonly bound ctx only to cap how long they wait for the initial
-	// handshake (context.WithTimeout + defer cancel()) and then keep this
-	// client around for reuse afterward — e.g. chat_stream.go's long-lived
-	// fd_channel publisher. Deriving the connection's own context from ctx
-	// meant that deferred cancel tore the freshly-established connection
-	// back down the instant Connect returned, so every publish after the
-	// first failed with "context deadline exceeded" and never recovered
-	// (closeClient()'s reconnect hit the exact same bug). Close() (via
-	// c.connCancel) is the only intended way to end a connection's life now;
-	// on a failed/timed-out handshake below we cancel it ourselves so the
-	// connection manager's goroutines don't leak.
+	// Connection lifetime is decoupled from ctx: ctx only bounds the handshake wait,
+	// since callers often defer cancel() yet reuse the client. Only Close (or a failed
+	// handshake below) cancels connCtx.
 	c.connCtx, c.connCancel = context.WithCancel(context.Background())
 	connCtx := c.connCtx
 	connCancel := c.connCancel
@@ -152,9 +140,7 @@ func (c *MQTT) Connect(ctx context.Context) error {
 	c.conn = conn
 	c.mu.Unlock()
 
-	// ctx (the caller's, possibly short-lived) bounds only this wait for the
-	// handshake — connCtx (the connection's own, decoupled lifetime) is
-	// untouched by it either way.
+	// ctx bounds only this handshake wait; connCtx is unaffected.
 	if err := conn.AwaitConnection(ctx); err != nil {
 		c.mu.Lock()
 		c.conn = nil
@@ -193,8 +179,7 @@ func (c *MQTT) Close() error {
 	return nil
 }
 
-// Subscribe registers a topic subscription and handler. Subscriptions are re-applied on reconnect.
-// Call before Connect, or after Connect (handler will be used for new messages; re-subscribe requires re-connect or internal re-sub logic).
+// Subscribe registers a topic handler; subscriptions are re-applied on reconnect.
 func (c *MQTT) Subscribe(topic string, qos byte, handler MessageHandler) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -204,7 +189,7 @@ func (c *MQTT) Subscribe(topic string, qos byte, handler MessageHandler) {
 	}
 }
 
-// Publish sends a message. Returns when the message is sent or the context is cancelled.
+// Publish sends a message and returns when sent or ctx is cancelled.
 func (c *MQTT) Publish(ctx context.Context, topic string, qos byte, payload []byte) error {
 	c.mu.Lock()
 	conn := c.conn

@@ -22,11 +22,7 @@ const (
 )
 
 // runPresync executes the EMBEDDED presync hook (PresyncScript — the same
-// script switch-runtime runs right before opencode starts). Running it from
-// EnsureOnboarding on every boot gives OpenCode the same self-heal property
-// hermes has: a device that boots straight into opencode, or an llm_* change
-// while opencode is active, gets opencode.json/.env re-synced from config.json
-// without waiting for the next runtime switch.
+// script switch-runtime runs right before opencode starts).
 func (s *OpenCodeService) runPresync() error {
 	f, err := os.CreateTemp("", "opencode-presync-*.sh")
 	if err != nil {

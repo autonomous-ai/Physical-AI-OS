@@ -9,16 +9,7 @@ import (
 	"claude-desktop-buddy/httpapi"
 )
 
-// CodeApprovals implements httpapi.CodeApprovalService: the device side of the
-// Claude Code reverse-approval round-trip.
-//
-// The Mac plugin's permission hook calls Request, which registers a pending
-// approval, fires the device cue (voice + LED + sensing event so the on-device
-// agent asks the user), then blocks on a per-request channel until the agent
-// POSTs /claude-code/approve|deny (-> Approve/Deny) or the request times out.
-//
-// Keyed by id, so multiple concurrent prompts (parallel tool calls / multiple
-// Claude Code sessions) each block independently.
+// CodeApprovals implements httpapi.CodeApprovalService: Request blocks per id until Approve/Deny or the ttl expires.
 type CodeApprovals struct {
 	mu     sync.Mutex
 	items  map[string]*codeEntry
@@ -32,9 +23,7 @@ type codeEntry struct {
 	created time.Time
 }
 
-// NewCodeApprovals builds the service. ttl bounds how long a single Request
-// blocks before falling back to "timeout" (the hook then defers to Claude Code's
-// native dialog).
+// NewCodeApprovals builds the service; ttl bounds how long Request blocks before returning "timeout".
 func NewCodeApprovals(bridge *Bridge, ttl time.Duration) *CodeApprovals {
 	if ttl <= 0 {
 		ttl = 55 * time.Second
@@ -62,9 +51,7 @@ func (c *CodeApprovals) Request(ctx context.Context, req httpapi.CodeApprovalReq
 	}()
 
 	log.Printf("[code-approval] pending %s tool=%s hint=%q", req.ID, req.Tool, req.Hint)
-	// Announce/restore make blocking HAL+OS-server HTTP calls (5s timeout each).
-	// Run them off the request goroutine so a slow/hung device never delays the
-	// long-poll from starting (which would eat into the user's answer window).
+	// Run blocking HAL calls off the request goroutine so a slow device can't eat the answer window.
 	go c.bridge.announceCodeApproval(req)
 	defer func() { go c.bridge.restoreAfterCodeApproval() }()
 
@@ -92,8 +79,7 @@ func (c *CodeApprovals) resolve(id, decision string) error {
 	if e == nil {
 		return httpapi.ErrNoPending
 	}
-	// Non-blocking send: the channel is buffered(1), so a second resolve for the
-	// same id is a silent no-op (first decision wins) instead of blocking.
+	// Buffered(1) non-blocking send: first decision wins, later resolves are no-ops.
 	select {
 	case e.ch <- decision:
 	default:

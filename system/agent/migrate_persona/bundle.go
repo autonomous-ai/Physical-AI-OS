@@ -6,34 +6,17 @@ import (
 	"strings"
 )
 
-// PersonaBundle is the runtime-neutral canonical form of a device's persona +
-// long-term memory. It is the hub of the migration: every runtime has ONE read
-// adapter (its on-disk layout → bundle) and ONE write adapter (bundle → its
-// layout), so migrating between any two runtimes is read[from] → write[to].
-// That keeps the file count LINEAR (2 per runtime) instead of the quadratic
-// N×(N-1) a per-pair migrator would need — adding a runtime is one adapter file
-// that immediately interoperates with every existing runtime, both directions.
-//
-// Fields a runtime lacks are simply nil on read and folded by the write adapter
-// (e.g. Hermes has no KNOWLEDGE/daily slot, so its writer folds those into
-// Memory). Whether a round-trip is structurally lossless is therefore a property
-// of each runtime's slots, decided in its adapter — see docs/agentic/
-// adding-agent-runtime.md §4.
+// PersonaBundle is the runtime-neutral form of a device's persona + long-term memory: each
+// runtime has one read and one write adapter; slots a runtime lacks are nil on read and
+// folded by the writer.
 type PersonaBundle struct {
-	// Soul is the persona/character body, with any inlined identity card stripped
-	// (identity travels in Identity). Brand tokens are left as-is; the write
-	// adapter rebrands to its own runtime name.
-	Soul string
-	// Identity holds the owner's filled identity fields (Name, Vibe, …). On a
-	// runtime with a dedicated IDENTITY.md it comes from that file; on one that
-	// inlines into SOUL (Hermes) it is parsed back out of the card.
+	// Soul is the persona body without the inlined identity card; the writer rebrands it.
+	Soul     string
 	Identity []IdentityField
-	// Memory / User are long-term memory + user-profile entries (canonical,
-	// untransformed; the writer rebrands + entry-merges into the destination).
+	// Memory / User are canonical entries; the writer rebrands and entry-merges them.
 	Memory []string
 	User   []string
-	// Knowledge / Daily are distilled learnings + per-day memory. Populated only
-	// by runtimes that keep them as separate slots (OpenClaw); nil otherwise.
+	// Knowledge / Daily are set only by runtimes with separate slots (OpenClaw).
 	Knowledge []string
 	Daily     []string
 }
@@ -41,20 +24,14 @@ type PersonaBundle struct {
 // IdentityField is one "- **Name:** value" line of the owner's identity.
 type IdentityField struct{ name, value string }
 
-// identityCardHeading marks the identity block inlined into a SOUL.md by runtimes
-// that have no separate IDENTITY.md slot (Hermes). It is also the idempotency
-// guard so a round-trip does not inline twice, and the strip boundary on the way
-// back out.
+// identityCardHeading marks the identity block inlined into SOUL.md (Hermes); it is also the
+// idempotency guard and strip boundary.
 const identityCardHeading = "## Your identity card"
 
-// identityFieldRe matches a FILLED identity field line, e.g. "- **Name:** Ngân".
-// Unfilled template fields keep the placeholder on the next line, so a same-line
-// value requirement naturally skips them.
+// identityFieldRe matches a filled identity line, e.g. "- **Name:** Ngân".
 var identityFieldRe = regexp.MustCompile(`^- \*\*(.+?):\*\*\s*(\S.*)$`)
 
-// readIdentityFields parses the filled identity fields from an IDENTITY.md file
-// (the slot OpenClaw owns). Empty / `_(…)_` placeholders are skipped. Returns nil
-// when the file is absent or has no filled fields.
+// readIdentityFields parses filled identity fields from IDENTITY.md; nil when absent.
 func readIdentityFields(path string) []IdentityField {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -63,10 +40,7 @@ func readIdentityFields(path string) []IdentityField {
 	return parseIdentityLines(string(raw))
 }
 
-// identityCardFields extracts the filled identity fields from the "## Your
-// identity card" block of a SOUL.md (the slot Hermes uses). Scoped to the card
-// (heading → EOF) so unrelated bold-bullet lines in the soul body are never
-// misread as identity.
+// identityCardFields extracts filled fields from SOUL.md's identity card only (heading to EOF).
 func identityCardFields(soul string) []IdentityField {
 	idx := strings.Index(soul, identityCardHeading)
 	if idx < 0 {
@@ -84,7 +58,7 @@ func parseIdentityLines(text string) []IdentityField {
 			continue
 		}
 		val := strings.TrimSpace(mt[2])
-		if val == "" || strings.HasPrefix(val, "_(") { // unfilled placeholder
+		if val == "" || strings.HasPrefix(val, "_(") {
 			continue
 		}
 		out = append(out, IdentityField{name: mt[1], value: val})
@@ -92,10 +66,7 @@ func parseIdentityLines(text string) []IdentityField {
 	return out
 }
 
-// stripIdentityCard removes the trailing "## Your identity card" block from a
-// SOUL.md (the card is always the last section). Used both when carrying a soul
-// to a runtime that owns identity elsewhere and when reading a card-bearing soul
-// into the bundle (Soul holds only the persona body).
+// stripIdentityCard removes the trailing identity card block from a SOUL.md.
 func stripIdentityCard(text string) string {
 	idx := strings.Index(text, identityCardHeading)
 	if idx < 0 {
@@ -104,10 +75,8 @@ func stripIdentityCard(text string) string {
 	return strings.TrimRight(text[:idx], " \t\r\n") + "\n"
 }
 
-// setIdentityField replaces the first "**field:**" line's value (preserving the
-// bullet prefix, dropping a stale italic placeholder hint beneath it), or appends
-// "- **field:** value" when no such line exists. Generic line-rewrite used to
-// restore identity into an IDENTITY.md without clobbering the rest of the file.
+// setIdentityField replaces the "**field:**" line value (dropping a stale placeholder hint
+// below it) or appends "- **field:** value".
 func setIdentityField(content, field, value string) string {
 	lines := strings.Split(content, "\n")
 	needle := "**" + strings.ToLower(field) + ":**"
@@ -129,9 +98,7 @@ func setIdentityField(content, field, value string) string {
 	return prefix + "- **" + field + ":** " + value + "\n"
 }
 
-// isItalicPlaceholderLine reports whether line is a markdown italic note wrapped
-// in `_(...)_` or `*(...)*` — a template hint left under an unfilled field, stale
-// once the field is filled.
+// isItalicPlaceholderLine reports whether line is a `_(...)_` or `*(...)*` template hint.
 func isItalicPlaceholderLine(line string) bool {
 	t := strings.TrimSpace(line)
 	if len(t) < 4 {
@@ -141,8 +108,7 @@ func isItalicPlaceholderLine(line string) bool {
 		(strings.HasPrefix(t, "*(") && strings.HasSuffix(t, ")*"))
 }
 
-// rebrandEntries applies a brand transform to each entry (writers rebrand the
-// canonical, source-branded entries to their own runtime name before merging).
+// rebrandEntries applies brand to each entry.
 func rebrandEntries(entries []string, brand func(string) string) []string {
 	if len(entries) == 0 {
 		return nil

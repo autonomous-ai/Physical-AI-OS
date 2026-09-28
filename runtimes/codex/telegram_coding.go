@@ -17,25 +17,11 @@ import (
 	"time"
 )
 
-// Telegram remote-coding: attach a Telegram chat to a folder's interactive
-// `codex` thread and continue it from your phone (see coding_sessions.go for
-// discovery). Usecase: code on the device terminal at home, walk out, keep
-// going over Telegram — across multiple folders, each its own thread.
-//
-// Model = HAND-OFF, not co-editing. Each accepted turn spawns a fresh `codex
-// exec --json --cd <folder> [resume <thread>]`, so history persists in the
-// rollout and the bridge stays stateless. A per-folder lock serializes turns,
-// and a /proc check refuses to run while an interactive codex TUI still holds
-// the folder. This is separate from the device-main persona turn (the gatewayd
-// per-turn child): a chat with NO coding selection still talks to device-main.
-//
-// This mirrors runtimes/claudecode/telegram_coding.go 1:1; only the runtime
-// specifics differ — codex resumes by thread id via `codex exec resume` (cwd
-// set independently by --cd), its reply is parsed from the JSONL agent_message
-// items, and its env asserts CODEX_HOME (like the gatewayd's turnEnv).
+// A per-folder lock serializes turns, and a /proc check refuses to run while an interactive codex
+// TUI still holds the folder.
 
 // codingSelFileDefault persists chat→thread selections so a restart keeps each
-// chat in its thread. Overridable via the codingSelPath test seam.
+// chat in its thread.
 var codingSelFileDefault = codexHome + "/telegram_coding.json"
 
 const (
@@ -57,17 +43,14 @@ const codingHelpText = "🤖 Coding over Telegram\n\n" +
 	"/device — return to the device assistant\n\n" +
 	"Once a thread is selected, a plain message runs codex in that folder and sends the result back here."
 
-// codingTarget is a chat's selected coding thread. SessionID is empty for a
-// freshly requested /new folder until its first turn captures the real thread id.
+// codingTarget is a chat's selected coding thread.
 type codingTarget struct {
 	Folder    string `json:"folder"`
 	SessionID string `json:"session_id"`
 }
 
 // handleTelegramCoding intercepts coding commands and routes plain messages for
-// a chat that has an active coding selection. Returns true when it took the
-// update (caller then skips the default device-main injection). A chat with no
-// selection and no coding command returns false → device-main handles it.
+// a chat that has an active coding selection.
 func (s *CodexService) handleTelegramCoding(ctx context.Context, rawText, chatID string) bool {
 	text := strings.TrimSpace(rawText)
 	if strings.HasPrefix(text, "/") {
@@ -75,24 +58,19 @@ func (s *CodexService) handleTelegramCoding(ctx context.Context, rawText, chatID
 	}
 	tgt, ok := s.getCodingTarget(chatID)
 	if !ok {
-		return false // no coding selection → device-main persona handles it
+		return false
 	}
 	go s.runTelegramCodingTurn(ctx, chatID, tgt, text)
 	return true
 }
 
-// handleCodingCommand dispatches a /slash command. Returns true when consumed.
-// A KNOWN command is always consumed. An UNKNOWN slash is consumed only when a
-// coding thread is active (passed through as a prompt); with no selection it
-// returns false so device-main still receives arbitrary slash text unchanged.
+// handleCodingCommand dispatches a /slash command.
 func (s *CodexService) handleCodingCommand(ctx context.Context, text, chatID string) bool {
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(fields[0])
 	arg := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
 	switch cmd {
 	case "/resume":
-		// Mirrors the codex CLI's resume: no arg lists threads, an arg picks one
-		// (by number or folder).
 		if arg == "" {
 			s.cmdListSessions(ctx, chatID, "")
 		} else {
@@ -145,7 +123,6 @@ func (s *CodexService) cmdListSessions(ctx context.Context, chatID, arg string) 
 	b.WriteString(header)
 	b.WriteString("\n\n")
 	for i, cs := range sessions {
-		// number → what you type; folder + recent prompts + age → how you know it.
 		fmt.Fprintf(&b, "%d.  📂 %s\n     🕐 %s\n", i+1, cs.Folder, humanizeAgo(cs.Modified))
 		if len(cs.Recent) == 0 {
 			b.WriteString("     📝 (no description)\n")
@@ -195,8 +172,7 @@ func (s *CodexService) selectCoding(ctx context.Context, chatID string, cs codin
 	s.dmCoding(ctx, chatID, fmt.Sprintf("✅ In thread:\n📂 %s\n📝 %s\n\nSend a message to continue coding. /device to exit.", cs.Folder, cs.label()))
 }
 
-// cmdNewSession selects a folder for a brand-new thread (no resume). The folder
-// is created if missing; the real thread id is captured on the first turn.
+// cmdNewSession selects a folder for a brand-new thread (no resume).
 func (s *CodexService) cmdNewSession(ctx context.Context, chatID, arg string) {
 	folder := normalizeFolder(arg)
 	if folder == "" {
@@ -227,7 +203,8 @@ func (s *CodexService) cmdWhere(ctx context.Context, chatID string) {
 
 // runTelegramCodingTurn executes one hand-off turn: serialize on the folder,
 // refuse if an interactive TUI holds it, run codex, persist any new thread id,
-// and DM the reply. Runs in its own goroutine (called with `go`).
+// and DM the reply.
+// Runs in its own goroutine (called with `go`).
 func (s *CodexService) runTelegramCodingTurn(ctx context.Context, chatID string, tgt codingTarget, prompt string) {
 	unlock := s.lockCodingFolder(tgt.Folder)
 	defer unlock()
@@ -262,8 +239,7 @@ func (s *CodexService) runTelegramCodingTurn(ctx context.Context, chatID string,
 // runCodingCodex is the production runner: `codex exec --json
 // --dangerously-bypass-approvals-and-sandbox --cd <folder> [resume <thread>]
 // <prompt>` (flag order matters: --cd is rejected after `resume`, so it rides
-// before). Returns the accumulated agent_message text and the (possibly new)
-// thread id.
+// before).
 func (s *CodexService) runCodingCodex(ctx context.Context, folder, threadID, prompt string) (string, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, codingTurnTimeout)
 	defer cancel()
@@ -297,8 +273,7 @@ func (s *CodexService) runCodingCodex(ctx context.Context, folder, threadID, pro
 
 // parseCodexResult scans `codex exec --json` JSONL: thread.started → thread id,
 // item.completed/agent_message → accumulated reply text, turn.completed → done,
-// turn.failed/error → error message. turnErr is non-empty only when the turn
-// did not complete (a top-level error/turn.failed with no reply).
+// turn.failed/error → error message.
 func parseCodexResult(b []byte) (reply, threadID, turnErr string) {
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -353,8 +328,7 @@ func parseCodexResult(b []byte) (reply, threadID, turnErr string) {
 // codingChildEnv mirrors the gatewayd's turnEnv: the process env with HOME and
 // CODEX_HOME asserted (deduped), plus the presync .env pairs (OPENAI_API_KEY in
 // API mode; omitted in subscription mode, where codex reads auth.json from
-// CODEX_HOME). This makes codex resolve the same config.toml + auth the gatewayd
-// uses, so remote coding works in either auth mode without runner changes.
+// CODEX_HOME).
 func (s *CodexService) codingChildEnv() []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+8)
@@ -365,9 +339,6 @@ func (s *CodexService) codingChildEnv() []string {
 		out = append(out, kv)
 	}
 	out = append(out, loadEnvFilePairs(s.codingEnvFile())...)
-	// HOME is codexHome's parent (/root); CODEX_HOME points codex at config.toml
-	// + auth.json — supports BOTH auth modes (OPENAI_API_KEY via config.toml, or
-	// the ChatGPT-subscription auth.json) with no runner change.
 	out = append(out, "HOME="+filepath.Dir(codexHome), "CODEX_HOME="+codexHome)
 	return out
 }
@@ -419,7 +390,7 @@ func (s *CodexService) liveCodexHolds(folder string) bool {
 }
 
 // procHoldsFolder scans /proc for a `codex` process whose cwd == folder (Linux;
-// the device is Linux). Best-effort: unreadable entries are skipped.
+// the device is Linux).
 func procHoldsFolder(folder string) bool {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -455,8 +426,6 @@ func procIsCodex(pid string) bool {
 	first := string(bytes.SplitN(cmdline, []byte{0}, 2)[0])
 	return strings.Contains(filepath.Base(first), "codex")
 }
-
-// ── selection state (in-memory + persisted) ─────────────────────────────────
 
 func (s *CodexService) codingSelFile() string {
 	if s.codingSelPath != "" {
@@ -511,7 +480,7 @@ func (s *CodexService) getCodingList(chatID string) []codingSession {
 }
 
 // loadCodingSelLocked reads persisted selections (called under codingMu with a
-// nil map). A missing/corrupt file yields an empty map.
+// nil map).
 func (s *CodexService) loadCodingSelLocked() {
 	s.codingSel = map[string]codingTarget{}
 	data, err := os.ReadFile(s.codingSelFile())
@@ -558,8 +527,6 @@ func (s *CodexService) lockCodingFolder(folder string) func() {
 	mu.Lock()
 	return mu.Unlock
 }
-
-// ── Telegram delivery ────────────────────────────────────────────────────────
 
 // dmCoding sends text to chatID, chunked to Telegram's per-message limit.
 func (s *CodexService) dmCoding(ctx context.Context, chatID, text string) {

@@ -21,20 +21,8 @@ import (
 // Compile-time check: the claudecode backend is the ClaudeLoginPairer.
 var _ domain.ClaudeLoginPairer = (*ClaudeCodeService)(nil)
 
-// claude.ai OAuth login flow — the claudecode implementation of
-// domain.ClaudeLoginPairer. Mirrors the WhatsApp pairing flow
-// (runtimes/openclaw/pairing.go): spawn the CLI, scan its output, stream
-// domain.PairingEvents. The one structural difference is the extra inbound leg:
-// `claude setup-token` prints an authorization URL, the user opens it in a
-// browser and copies a code back, and SubmitClaudeLoginCode feeds that code to
-// the waiting CLI.
-//
-// On success the long-lived token (sk-ant-oat01-…) is persisted to config.json
-// (claude_code_oauth_token) and EnsureOnboarding re-runs presync, which flips
-// the launch env to subscription auth: CLAUDE_CODE_OAUTH_TOKEN is injected and
-// the ANTHROPIC_* API-key vars are OMITTED — they outrank OAuth in Claude
-// Code's credential precedence, so leaving them set would silently keep the
-// device on the llm_api_key path.
+// On success the token is persisted to config.json (claude_code_oauth_token) and presync
+// re-runs to switch the launch env to subscription auth.
 
 const (
 	// claudeLoginTimeout caps the whole flow — the user has to open the URL on
@@ -42,14 +30,11 @@ const (
 	claudeLoginTimeout = 10 * time.Minute
 
 	// claudeCredentialsPath is where the CLI stores OAuth credentials on Linux
-	// (no keychain). Its presence after the CLI exits is the success fallback
-	// when the token line was not captured from the pty stream.
+	// (no keychain).
 	claudeCredentialsPath = "/root/.claude/.credentials.json"
 )
 
 // loginURLRe matches the claude.ai / console authorization URL the CLI prints.
-// Broad on host (claude.ai today, console.anthropic.com historically) but
-// anchored on an oauth-ish path so incidental doc links don't false-positive.
 var loginURLRe = regexp.MustCompile(`https://[^\s"']+(?:oauth|authorize)[^\s"']*`)
 
 // loginTokenRe matches the long-lived OAuth token `claude setup-token` prints.
@@ -60,20 +45,16 @@ var loginTokenRe = regexp.MustCompile(`sk-ant-oat01-[A-Za-z0-9_-]+`)
 var ansiRe = regexp.MustCompile(`\x1b\[[0-9;?]*[ -/]*[@-~]|\x1b\][^\x07]*\x07`)
 
 // Per-process mutex: only one login flow runs at a time (the CLI owns
-// ~/.claude credentials; concurrent flows would race). claudeLoginStdin is the
-// waiting CLI's pty stdin while a flow is active — SubmitClaudeLoginCode
-// writes the pasted code there.
+// ~/.claude credentials; concurrent flows would race).
 var (
 	claudeLoginMu     sync.Mutex
 	claudeLoginActive bool
 	claudeLoginStdin  io.Writer
 )
 
-// StartClaudeLogin implements domain.ClaudeLoginPairer. Runs
-// `claude setup-token` and emits PairingEvents on the returned channel:
-// pairing_starting → pairing_url → success | timeout | failure. The channel is
-// closed once the flow ends. Caller MUST drain; writes are buffered (capacity
-// 8) but block once the buffer fills.
+// StartClaudeLogin implements domain.ClaudeLoginPairer.
+// Runs `claude setup-token` and emits PairingEvents on the returned channel: pairing_starting →
+// pairing_url → success | timeout | failure.
 func (s *ClaudeCodeService) StartClaudeLogin(ctx context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 8)
 
@@ -103,8 +84,6 @@ func (s *ClaudeCodeService) StartClaudeLogin(ctx context.Context) <-chan domain.
 
 // SubmitClaudeLoginCode implements domain.ClaudeLoginPairer: feeds the
 // authorization code the user copied from the browser to the waiting CLI.
-// The code is terminated with "\r" — the pty is in raw mode, where Enter is a
-// carriage return, not a newline.
 func (s *ClaudeCodeService) SubmitClaudeLoginCode(code string) error {
 	code = strings.TrimSpace(code)
 	if code == "" {
@@ -123,10 +102,7 @@ func (s *ClaudeCodeService) SubmitClaudeLoginCode(code string) error {
 }
 
 // runLoginProcess spawns `claude setup-token` under a pty, scans its output,
-// and emits PairingEvents. `setup-token` refuses to run without a TTY (its
-// prompt is interactive), so it is wrapped in util-linux `script -qec` — the
-// standard pty allocator on the device images; script forwards our stdin to
-// the pty, which is how the pasted code reaches the CLI.
+// and emits PairingEvents.
 func (s *ClaudeCodeService) runLoginProcess(ctx context.Context, ch chan<- domain.PairingEvent) {
 	runCtx, cancel := context.WithTimeout(ctx, claudeLoginTimeout)
 	defer cancel()
@@ -190,8 +166,8 @@ func (s *ClaudeCodeService) runLoginProcess(ctx context.Context, ch chan<- domai
 
 // adoptOAuthToken persists the token to config.json and re-runs onboarding so
 // presync rewrites /root/.claudecode/.env for subscription auth and the bridge
-// restarts into it. An empty token is valid — credentials.json carries the
-// auth and presync detects it on disk.
+// restarts into it.
+// An empty token is valid — credentials.json carries the auth and presync detects it on disk.
 func (s *ClaudeCodeService) adoptOAuthToken(token string) error {
 	if token != "" {
 		if err := s.config.WithLockSave(func(c *config.Config) { c.ClaudeCodeOAuthToken = token }); err != nil {
@@ -213,10 +189,7 @@ type loginScan struct {
 }
 
 // scanLoginOutput reads the pty stream, emits pairing_url once when the
-// authorization URL appears, and captures the token / success marker. The pty
-// renders an interactive prompt, so lines are split on BOTH \n and \r (clack
-// redraws in place with bare carriage returns) and ANSI escapes are stripped
-// before matching.
+// authorization URL appears, and captures the token / success marker.
 func scanLoginOutput(r io.Reader, ch chan<- domain.PairingEvent) loginScan {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -244,7 +217,6 @@ func scanLoginOutput(r io.Reader, ch chan<- domain.PairingEvent) loginScan {
 				out.sawSuccess = true
 			}
 		}
-		// Textual success markers, in case the token render is ever elided.
 		lower := strings.ToLower(line)
 		if strings.Contains(lower, "successfully logged in") ||
 			strings.Contains(lower, "token created") ||

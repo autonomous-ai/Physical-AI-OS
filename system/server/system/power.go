@@ -39,8 +39,6 @@ var (
 )
 
 // triggerPower accepts one device-power operation and schedules its HAL call.
-// It is shared by HTTP and MQTT so both surfaces retain the same single-flight
-// guard and both use HAL's cue/servo-aware action route.
 func triggerPower(action powerAction) (started bool, reason string) {
 	powerMu.Lock()
 	if powerPending != "" {

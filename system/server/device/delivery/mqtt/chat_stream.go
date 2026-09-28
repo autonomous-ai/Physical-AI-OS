@@ -23,29 +23,9 @@ func isSilentReply(evt domain.MonitorEvent) bool {
 	return s == "no_reply" || s == "[no reply]"
 }
 
-// Streaming an agent turn back to the backend over MQTT.
-//
-// The web chat renders a turn from the monitor bus (GET /api/agent/events):
-// assistant_delta for the typing, thinking, tool_call / hw_* for the chips,
-// chat_response at the end. A phone app cannot reach that stream — the device
-// sits on a LAN behind NAT — so for turns the backend started (kind chat.send)
-// the same events are republished on fd_channel as kind chat.event, VERBATIM.
-// Same struct, same field names: the backend relays and the phone reuses the web
-// chat's reducer rather than a second, drifting vocabulary.
-//
-// Two things make this different from every other fd publish in this package:
-//
-//   - It is a STREAM, not one reply. DeviceMQTTHandler.publish opens a fresh
-//     broker connection per message, which is fine for a once-per-command result
-//     and ruinous for dozens of events a turn. This holds one client open.
-//   - Only the backend's OWN runs are published. The bus carries every turn on
-//     the device, including voice ones nobody asked to mirror.
-
 const (
 	// deltaFlush is how long assistant_delta text is accumulated before being
-	// sent. The bus emits a delta per model chunk; at QoS 1 each publish costs a
-	// round-trip, so forwarding them 1:1 would spend more time on the uplink than
-	// the model spends generating. 250ms still reads as live typing.
+	// sent.
 	deltaFlush = 250 * time.Millisecond
 
 	// runTTL bounds how long a run is mirrored when no terminal event arrives —
@@ -58,21 +38,13 @@ const (
 )
 
 // terminalEventTypes end a run's mirroring on their own, regardless of state:
-// these Types never fire more than once per run. chat_response is NOT one of
-// them — see chatResponseTerminalStates.
+// these Types never fire more than once per run.
 var terminalEventTypes = map[string]bool{
 	"no_reply": true,
 }
 
-// chatResponseTerminalStates are the domain.ChatPayload.State values
-// (autonomous system/domain/openclaw.go) at which a Type=="chat_response"
-// event is the run's actual last word. OpenClaw pushes chat_response
-// repeatedly while a reply streams in (state e.g. "delta"/"partial") before
-// the terminal one — ending the mirror on the FIRST chat_response, as this
-// used to, truncates every reply to its first chunk. This must match the web
-// monitor's own reducer exactly (ChatSection.tsx: `ev.state === "complete" ||
-// ev.state === "final"` for a normal reply, `ev.state === "error"` for a
-// failed one) — same event vocabulary, one client.
+// chatResponseTerminalStates are the chat_response states that end a run.
+// Must match the web reducer (ChatSection.tsx).
 var chatResponseTerminalStates = map[string]bool{
 	"complete": true,
 	"final":    true,
@@ -114,9 +86,7 @@ type ChatStream struct {
 	// device that never receives a chat.send pays nothing.
 	client *mqtt.MQTT
 
-	// publish is the transport, swapped in tests. Everything above it — run
-	// tracking, coalescing, ordering — is the part worth testing, and it should
-	// not need a broker to exercise.
+	// publish is the transport, swapped in tests.
 	publish func(payload []byte) error
 }
 
@@ -182,7 +152,7 @@ func (s *ChatStream) Start(ctx context.Context) {
 
 	// Two goroutines on purpose: Bus.Push DROPS an event when a subscriber's
 	// channel is full, so the receiving side must never block on a broker
-	// round-trip. It only hands off to the publisher.
+	// round-trip.
 	go func() {
 		defer unsub()
 		defer close(queue)
@@ -228,9 +198,8 @@ func (s *ChatStream) publishLoop(ctx context.Context, queue <-chan domain.Monito
 	}
 }
 
-// handle mirrors one event. Deltas accumulate; everything else flushes the
-// pending text FIRST so the backend never sees a tool chip jump ahead of the
-// sentence that preceded it.
+// handle mirrors one event. Non-delta events flush pending text first to keep
+// ordering.
 func (s *ChatStream) handle(evt domain.MonitorEvent) {
 	s.deliveryMu.Lock()
 	defer s.deliveryMu.Unlock()
@@ -267,8 +236,6 @@ func (s *ChatStream) handleOrdered(evt domain.MonitorEvent) {
 		delete(s.runs, evt.RunID)
 	}
 	s.mu.Unlock()
-	// A silent final still terminates the mobile request. Suppress the sentinel,
-	// not the terminal event, so the client can stop its pending indicator.
 	if isSilentReply(evt) {
 		if terminal {
 			evt.Summary = ""
@@ -278,8 +245,6 @@ func (s *ChatStream) handleOrdered(evt domain.MonitorEvent) {
 		return
 	}
 
-	// Pending text goes out first: a tool chip that overtook the sentence it
-	// followed would render out of order on the phone.
 	if flushed != nil {
 		s.send(evt.RunID, sessionID, *flushed)
 	}
@@ -297,9 +262,6 @@ func (s *ChatStream) takePending(run *trackedRun) *domain.MonitorEvent {
 		return nil
 	}
 	evt := run.lastEvt
-	// Re-shape the carrier event to hold the WHOLE accumulated run of text. The
-	// id is cleared so the backend can't mistake a coalesced event for a replay
-	// of the last chunk it was built from.
 	evt.ID = ""
 	evt.Summary = run.pending.String()
 	evt.Detail = map[string]any{"text": run.pending.String(), "coalesced": true}
@@ -390,8 +352,6 @@ func (s *ChatStream) publishMQTT(body []byte) error {
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()
 	if err := client.Publish(ctx, s.cfg.FDChannel, byte(1), body); err != nil {
-		// Drop the client so the next event reconnects rather than reusing a
-		// connection the broker may already have torn down.
 		s.closeClient()
 		return err
 	}
@@ -405,8 +365,7 @@ func (s *ChatStream) publisher() (*mqtt.MQTT, error) {
 	if s.client != nil {
 		return s.client, nil
 	}
-	// Distinct client id from the command handler's "device-<id>": two clients
-	// sharing one id makes the broker evict whichever connected first.
+	// Distinct client id: a shared id makes the broker evict the other client.
 	client := s.factory.GetClient("device-" + s.cfg.DeviceID + "-chat")
 	ctx, cancel := context.WithTimeout(context.Background(), publishTimeout)
 	defer cancel()

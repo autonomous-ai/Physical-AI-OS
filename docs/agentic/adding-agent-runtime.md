@@ -18,8 +18,9 @@ wire the switch, install, migration, skills, hooks, and reset.
 > **Agentic-backend docs:** this file (generic contract + how to add one) ·
 > [`hermes.md`](hermes.md) (Hermes, a full backend) · [`picoclaw.md`](picoclaw.md)
 > (PicoClaw, client-only gateway with install/presync scripts) ·
-> [`claudecode.md`](claudecode.md) (Claude Code behind a local bridge, native
-> channel plugins for Telegram/Discord, claude.ai OAuth login). Per-backend
+> [`claudecode.md`](claudecode.md) (Claude Code behind a local bridge,
+> device-owned Telegram/Slack/Discord channels — native channel plugins
+> deliberately not used — claude.ai OAuth login). Per-backend
 > protocol/quirks live in those; the generic mechanics + checklist live here.
 
 ---
@@ -28,10 +29,14 @@ wire the switch, install, migration, skills, hooks, and reset.
 
 - `config.agent_runtime` (`/root/config/config.json`) selects the active backend.
 - `system/agent/factory.go` `ProvideGateway` resolves it at boot via Wire DI:
-  `config.agent_runtime` > ROBOT.md `gateway.default` > openclaw.
+  `config.agent_runtime` > `/root/config/f_r_default_agent` (image-baked via
+  `DEFAULT_AGENT`, survives factory reset) > ROBOT.md `gateway.default` > openclaw.
+  The middle two are resolved by `device.ResolveDefaultAgent`
+  (`system/device/runtime.go`), shared with the seed below.
 - **Seed-on-empty:** at boot `device.ProvideService` calls
   `SeedAgentRuntimeFromGateway` — when `config.agent_runtime` is empty/null **and**
-  ROBOT.md `gateway.default` names a valid runtime, that value is written into
+  `ResolveDefaultAgent` names a valid runtime (`f_r_default_agent`, else ROBOT.md
+  `gateway.default`), that value is written into
   config.json (idempotent; only the first boot of a fresh/legacy config writes).
   Once a concrete value is on disk the device **owns** its runtime: a dev who set
   it (via switch or by hand) is left untouched, and the resolve-fallback above
@@ -168,7 +173,7 @@ The fix pattern (use it for everything stateful):
 Hermes's presync (`runtimes/hermes/presync.sh`) now owns **both** the
 `config.yaml` model wiring (idempotent — coerces a reset-blanked `model: ''` back
 to a map, asserts `provider`/`custom_providers` structure, syncs `llm_*`/secrets)
-**and** the skill restore (re-runs `claw migrate` when `skills/openclaw-imports`
+**and** the skill restore (re-runs `claw migrate` when `~/.hermes/skills/openclaw-imports`
 is empty). Keep `verify` CLI-only (`command -v <bin>`) — a structure-check in
 `verify` would force a heavy full reinstall when presync alone heals it.
 

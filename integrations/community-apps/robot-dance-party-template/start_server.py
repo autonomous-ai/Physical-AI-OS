@@ -1,7 +1,4 @@
-"""Static file server + YouTube audio download.
-
-Auto-installs yt-dlp if missing. User just runs: python start_server.py
-"""
+"""Static file server + YouTube audio download (auto-installs yt-dlp)."""
 
 import http.server
 import json
@@ -9,7 +6,6 @@ import subprocess
 import sys
 from pathlib import Path
 
-# Auto-install yt-dlp if missing
 try:
     import yt_dlp
 except ImportError:
@@ -35,7 +31,6 @@ def download_audio(url):
     """Download YouTube audio as mp3, return (filepath, title). Reuses cached files."""
     video_id, title = extract_video_id(url)
 
-    # Reuse cached file if already downloaded
     mp3 = DOWNLOADS / f"{video_id}.mp3"
     if mp3.exists():
         print(f"Cache hit: {mp3.name}")

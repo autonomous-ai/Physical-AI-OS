@@ -7,7 +7,6 @@ import (
 )
 
 func TestToHermesMCPEntry_HTTPDropsTypeAddsEnabled(t *testing.T) {
-	// Canonical OpenClaw-shaped hosted-MCP entry.
 	in := map[string]any{
 		"type": "http",
 		"url":  "https://mcp.notion.com/mcp",
@@ -54,9 +53,7 @@ func TestToHermesMCPEntry_StdioPreservesCommand(t *testing.T) {
 	}
 }
 
-// TestHermesConfigRoundTrip verifies write→read of config.yaml round-trips a nested
-// mcp_servers map as map[string]any (the goccy/go-yaml decode assumption the
-// nested-access code relies on), and that ensureYAMLMap upserts in place.
+// TestHermesConfigRoundTrip checks config.yaml round-trips nested mcp_servers and ensureYAMLMap upserts in place.
 func TestHermesConfigRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.yaml")
 
@@ -95,7 +92,6 @@ func TestHermesConfigRoundTrip(t *testing.T) {
 	if notion["enabled"] != true {
 		t.Errorf("enabled lost in round-trip: %+v", notion)
 	}
-	// The pre-existing model section must survive the rewrite.
 	if _, ok := back["model"].(map[string]any); !ok {
 		t.Errorf("model section dropped: %+v", back)
 	}

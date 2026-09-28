@@ -5,23 +5,6 @@ import { C } from "@/components/setup/shared";
 import { getConnector, setConnectorPAT, removeConnector } from "@/lib/api";
 import type { ConnectorInfo } from "@/lib/api";
 
-// FacebookSection — the on-device settings surface for the Facebook Fan Page
-// posting skill. Layout mirrors the ecm-website admin PAT connector modal
-// (see connectorAuthRegistry's PatConnectModal): a compact "Connect Facebook
-// Fan Page" card with the mandatory-prerequisites callout, a numbered
-// how-to-get-the-token walkthrough, the two inputs (Page ID + Page Access
-// Token), a bottom safety note, and a right-aligned Cancel/Connect pair.
-//
-// Storage: NOT config.json. This writes through the same connectorWriter the
-// MQTT connector.set.<code> dispatcher uses, via POST
-// /api/device/connectors/pat → <OpenclawConfigDir>/workspace/configs/
-// facebook_access_tokens.json. That is the exact file the skill reads and
-// the same file the ecm-website admin's connector flow would write when it
-// ships — no drift between local paste and remote push.
-//
-// This section renders its own Cancel/Connect footer (SectionCard-scoped, not
-// modal-shaped) so SettingsPanel excludes "facebook" from the shared Save
-// button chrome. Cancel resets the local form; Connect submits.
 const CONNECTOR_CODE = "facebook";
 
 export function FacebookSection({ active }: { active: boolean }) {
@@ -32,9 +15,6 @@ export function FacebookSection({ active }: { active: boolean }) {
   const [pageId, setPageId] = useState("");
   const [pageAccessToken, setPageAccessToken] = useState("");
   const [showToken, setShowToken] = useState(false);
-  // Guide starts collapsed to keep the form short. Persist the choice per-
-  // browser so an operator who wants it open doesn't have to re-expand on
-  // every visit; fall back to false on any storage error (private windows).
   const [guideOpen, setGuideOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("fb-guide-open") === "1"; } catch { return false; }
   });
@@ -54,9 +34,7 @@ export function FacebookSection({ active }: { active: boolean }) {
         setConnectedAt(r.obtained_at ?? 0);
       })
       .catch(() => {
-        // A device that has never had this connector set answers with
-        // connected:false; a hard error only fires on 500. Silent on 500 is
-        // fine — the UI shows the empty form and the operator can try again.
+        // A never-set connector returns connected:false; stay silent on 500.
       })
       .finally(() => setLoading(false));
   };
@@ -69,11 +47,7 @@ export function FacebookSection({ active }: { active: boolean }) {
     setShowToken(false);
   };
 
-  // Explicit click handler, not a form submit. FacebookSection is rendered
-  // inside SettingsPanel's shared <form id="edit-form"> and HTML forbids
-  // nested forms — a browser flattens them, so an inner form's submit event
-  // never fires and our POST never leaves the page. Using onClick sidesteps
-  // that entirely; the Enter-key affordance is handled by onKeyDown below.
+  // Click handler, not a form submit: this renders inside SettingsPanel's form, and nested forms never submit.
   const onSubmit = async (e: React.MouseEvent | React.KeyboardEvent) => {
     e.preventDefault();
     setError(null);
@@ -124,9 +98,6 @@ export function FacebookSection({ active }: { active: boolean }) {
     }
   };
 
-  // Bypass SectionCard: this section renders a modal-style card whose own
-  // header replaces SectionCard's title chip, so we mount/unmount inline and
-  // keep the display:none idiom the other sections use.
   return (
     <div
       id="section-facebook"
@@ -142,10 +113,6 @@ export function FacebookSection({ active }: { active: boolean }) {
       ) : (
         <div
           onKeyDown={(e) => {
-            // Preserve the Enter-to-submit affordance without a real <form>.
-            // Only fires when the token/page-id inputs are focused; ignores
-            // Enter inside anything else (e.g. no textarea here today, but
-            // keeps behaviour narrow if one is added later).
             const target = e.target as HTMLElement;
             if (e.key === "Enter" && target.tagName === "INPUT") {
               if (!submitting && pageId && pageAccessToken) onSubmit(e);
@@ -171,12 +138,6 @@ export function FacebookSection({ active }: { active: boolean }) {
             spellCheck={false}
             style={{ ...inputStyle, marginBottom: 6, fontFamily: "monospace" }}
           />
-          {/* One-line hint under the Page ID input — a link that expands the
-              walkthrough below so the how-to lives in exactly ONE place. The
-              hint used to inline the full "Page Transparency" instructions
-              which duplicated step 6 of the guide and made the form scroll.
-              openGuide → expand + scroll into view so people who click the
-              link actually see the section they were pointed at. */}
           <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
             Don't know your Page ID?{" "}
             <button
@@ -231,13 +192,6 @@ export function FacebookSection({ active }: { active: boolean }) {
             <Lock size={11} /> Stored on your robot only. Never uploaded to our servers.
           </div>
 
-          {/* Collapsible walkthrough — placed BELOW the form fields (after the
-              Privacy line) so an operator who already has the token in hand
-              sees the form first without scrolling past a wall of steps. Header
-              row is always visible so people who need the walkthrough know
-              where to click. Expanded state persisted in localStorage — see
-              guideOpen. The `id` is a scroll target for the Page-ID hint link
-              above so a click on "See how to find it" jumps here. */}
           <div id="fb-guide-anchor" style={{
             background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10,
             padding: "10px 14px", marginBottom: 12,
@@ -448,11 +402,7 @@ export function FacebookSection({ active }: { active: boolean }) {
   );
 }
 
-// ── Sub-components ──────────────────────────────────────────────────────────
-
-// ModalHeader — logo + title + description row. Named "Modal" because it
-// visually anchors the card like the modal header of the ecm-website's PAT
-// connector, even though this renders in-page (not a real dialog).
+// Logo + title + description row.
 function ModalHeader({
   connected,
   connectedAt,
@@ -545,10 +495,7 @@ function Step({ n, last, children }: { n: number; last?: boolean; children: Reac
   );
 }
 
-// TokenCounter reproduces the "✓ 16/16" affordance from the Gmail modal —
-// a green check when the token looks long enough to be a real Page Access
-// Token, plus the character count. Threshold is intentionally loose
-// (>=40 chars) because Meta's tokens are variable-length.
+// Check mark + character count once the token looks long enough (>= 40 chars).
 function TokenCounter({ length }: { length: number }) {
   if (length === 0) return null;
   const ok = length >= 40;

@@ -1,22 +1,5 @@
-// Package migrateconfig carries LLM provider config (API key + base URL) from one
-// agent runtime to another when the active backend is switched.
-//
-// Design: hub-and-spoke (mirrors migrate_persona). Each runtime has ONE read adapter
-// (its on-disk layout → LLMConfig) and ONE write adapter (LLMConfig → its layout).
-// A migration is read[from] → write[to]. Adding a runtime is a single adapter file
-// that interoperates with every existing runtime — O(N) adapters, not O(N²) pairs.
-//
-// Why this is separate from migrate_persona: persona files (SOUL.md, MEMORY.md) and
-// LLM provider config (api key, base URL) have different sources of truth and
-// different failure modes. A persona migration failure leaves the agent with a stale
-// persona; a config migration failure leaves the agent unable to call the LLM. Keeping
-// them separate lets each fail, log, and retry independently.
-//
-// Relation to ensureProviderConfig (onboarding.go): that function is a fallback safety
-// net — it patches openclaw.json from config.json when fields are missing. This package
-// is the main path — it reads the actual on-disk state of the SOURCE runtime (which may
-// have drifted from config.json if the agent self-edited its config) and carries it to
-// the destination runtime, then syncs config.json to match.
+// Package migrateconfig carries LLM provider config (API key + base URL) between agent runtimes
+// on a switch via one read and one write adapter per runtime (hub-and-spoke).
 package migrateconfig
 
 import (
@@ -25,9 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/syspath"
 )
 
-// LLMConfig is the canonical representation of per-device LLM provider settings
-// shared across runtimes. Only the fields that runtimes actually store in their
-// native configs are included — model selection is runtime-specific and excluded.
+// LLMConfig is the runtime-neutral LLM provider config (model selection is runtime-specific, excluded).
 type LLMConfig struct {
 	APIKey  string
 	BaseURL string
@@ -115,11 +96,8 @@ func ReadConfig(from Runtime, opts Options) (LLMConfig, error) {
 	return cfg, nil
 }
 
-// WriteConfig writes the canonical LLM config to the destination runtime's native
-// on-disk files. The caller is responsible for syncing config.json BEFORE calling
-// this so that ensureProviderConfig (the fallback) always sees consistent values —
-// if this write fails, ensureProviderConfig reads config.json (already updated) and
-// correctly patches the destination rather than overwriting with stale values.
+// WriteConfig writes cfg to the destination runtime's native files. Sync config.json first so
+// ensureProviderConfig falls back to fresh values if this fails.
 func WriteConfig(to Runtime, cfg LLMConfig, opts Options) error {
 	dst, ok := adapters[to]
 	if !ok {

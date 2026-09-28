@@ -10,8 +10,7 @@ import (
 )
 
 // handleHarnessVoiceGesture is called by HAL's action worker, never by the
-// input poller. TTS stays in HAL so configured-language button feedback uses
-// the same phrase and playback pipeline as other physical controls.
+// input poller.
 func (s *Server) handleHarnessVoiceGesture(c *gin.Context) {
 	c.Header("Cache-Control", "no-store")
 	var req struct {

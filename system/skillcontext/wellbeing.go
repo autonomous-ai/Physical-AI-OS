@@ -1,13 +1,5 @@
-// Package skillcontext builds pre-fetched context blocks that the sensing
-// handler injects into the chat message before forwarding to the agent.
-//
-// Saves one read tool turn per reactive event (motion.activity → wellbeing,
-// emotion.detected → mood + music-suggestion). The agent reads the data
-// from the prompt instead of firing GETs, eliminating the "plan reads"
-// LLM-think pass between lifecycle_start and the read batch.
-//
-// SKILL.md keeps a fallback path: if the context block is missing
-// (pre-fetch failure), the agent re-fetches via the original bash batch.
+// Package skillcontext builds pre-fetched context blocks the sensing handler
+// injects into the agent message, saving the agent a read tool turn.
 package skillcontext
 
 import (
@@ -32,18 +24,11 @@ const (
 	bootstrapMinDays = 3
 )
 
-// reactionCountActions are the user-driven reset actions the skill surfaces
-// as "lần thứ N hôm nay" reaction fuel. Sedentary labels are intentionally
-// excluded — counting them would explode the map and isn't useful phrasing.
+// reactionCountActions are the user-driven actions counted per day.
 var reactionCountActions = []string{"drink", "break"}
 
-// nonActivityActions are wellbeing-log rows that don't count as the user
-// DOING something: presence boundaries written by the backend, agent-written
-// nudge/reminder logs, and `yawning` (HAL logs it like any other raw label,
-// but it is a state the user leaked, not an activity they performed). Used to
-// decide first_activity_today — the morning-greeting route fires on the first
-// REAL activity of the day, not on a presence.enter row that landed at
-// wake-up, and not on the first yawn of the morning.
+// nonActivityActions are wellbeing rows that don't count as user activity
+// (presence markers, agent nudges, yawning).
 var nonActivityActions = map[string]bool{
 	"enter":            true,
 	"leave":            true,
@@ -57,10 +42,7 @@ var nonActivityActions = map[string]bool{
 	"meal_reminder":    true,
 }
 
-// eatLabels are the raw Kinetics labels HAL emits for the `eat` bucket
-// (kept raw in motion.activity, not collapsed to a single "eat" string —
-// same pattern as sedentary). They count as meal signals for the meal-
-// reminder gate and as user activity for first_activity_today.
+// eatLabels are raw Kinetics labels HAL emits for the eat bucket.
 var eatLabels = map[string]bool{
 	"tasting food":      true,
 	"dining":            true,
@@ -74,9 +56,7 @@ var eatLabels = map[string]bool{
 	"eating watermelon": true,
 }
 
-// Lunch / dinner meal-reminder windows. Used by activity-router routes:
-// when the current hour falls inside a window AND no meal_reminder has been
-// logged in that window today, the agent fires the reminder once.
+// Lunch / dinner meal-reminder windows.
 const (
 	lunchWindowStartHour  = 11 // 11:30 — start offset applied in inMealWindow
 	lunchWindowEndHour    = 13 // 13:30
@@ -87,8 +67,7 @@ const (
 	sleepWinddownHour     = 21 // sedentary at >=21h routes to sleep wind-down
 )
 
-// wellbeingContext is the digest the agent reads. Deltas are pre-computed so
-// the skill only applies thresholds; raw history is dropped from the prompt.
+// wellbeingContext is the digest the agent reads; deltas are pre-computed.
 type wellbeingContext struct {
 	HydrationDeltaMin        int                      `json:"hydration_delta_min"`         // minutes since last drink/enter/nudge_hydration; -1 if no reset today
 	BreakDeltaMin            int                      `json:"break_delta_min"`             // minutes since last break/enter/nudge_break; falls back to first real activity today; -1 if no rows at all
@@ -114,12 +93,8 @@ type patternDigest struct {
 	Strength      string `json:"strength"`
 }
 
-// BuildWellbeingContext returns a `[wellbeing_context: ...]` block for
-// motion.activity events. All decision math (delta, latest activity,
-// pattern lookup, bootstrap eligibility) runs here; SKILL.md only applies
-// thresholds and picks phrasing.
-//
-// Returns "" on hard failure so the SKILL.md fallback bash batch can run.
+// BuildWellbeingContext returns a `[wellbeing_context: ...]` block for motion.activity,
+// or "" on hard failure so the SKILL.md fallback runs.
 func BuildWellbeingContext(user string) string {
 	user = usercanon.Resolve(user)
 	if user == "" {
@@ -133,10 +108,7 @@ func BuildWellbeingContext(user string) string {
 	hydrationDelta := computeDeltaMin(events, now, []string{"drink", "enter", "nudge_hydration"})
 	breakDelta := computeDeltaMin(events, now, []string{"break", "enter", "nudge_break"})
 	if breakDelta == -1 {
-		// No reset point today (user was already seated at boot, or the face
-		// never triggered presence.enter). Count from the first real activity
-		// row instead so the break nudge can still fire — -1 would make the
-		// skill stay silent all day.
+		// No reset point today: count from the first real activity so the break nudge can fire.
 		breakDelta = minutesSinceFirstActivity(events, now)
 	}
 	latestActivity := latestAction(events)
@@ -184,11 +156,7 @@ func BuildWellbeingContext(user string) string {
 	return fmt.Sprintf("\n[wellbeing_context: %s]", string(body))
 }
 
-// lastPostureNudgeAgeMin returns minutes since the most recent
-// `nudge_posture` row today, or -1 if none. Lets the wellbeing skill
-// defend against double-nudging when hal lost its cooldown state
-// (process restart) and enables the praise route (recent nudge + the
-// summary trending better -> praise instead of re-nudge).
+// lastPostureNudgeAgeMin returns minutes since today's last nudge_posture row, or -1.
 func lastPostureNudgeAgeMin(events []posture.Event, now time.Time) int {
 	var latestTS float64
 	for _, e := range events {
@@ -205,9 +173,7 @@ func lastPostureNudgeAgeMin(events []posture.Event, now time.Time) int {
 	return int(now.Sub(time.Unix(int64(latestTS), 0)).Minutes())
 }
 
-// computeDeltaMin returns minutes since the most recent event with an action
-// in resetActions. Returns -1 when no reset event has happened today (delta
-// is undefined, skill treats as "no nudge yet").
+// computeDeltaMin returns minutes since the latest event in resetActions, or -1 if none today.
 func computeDeltaMin(events []wellbeing.Event, now time.Time, resetActions []string) int {
 	var latestTS float64
 	for _, e := range events {
@@ -224,9 +190,7 @@ func computeDeltaMin(events []wellbeing.Event, now time.Time, resetActions []str
 	return int(now.Sub(time.Unix(int64(latestTS), 0)).Minutes())
 }
 
-// minutesSinceFirstActivity returns minutes since the earliest real
-// activity row today (anything not in nonActivityActions), or -1 if none.
-// Fallback reset point when no enter/break/nudge row exists yet.
+// minutesSinceFirstActivity returns minutes since today's first real activity, or -1.
 func minutesSinceFirstActivity(events []wellbeing.Event, now time.Time) int {
 	for _, e := range events {
 		if nonActivityActions[e.Action] {
@@ -237,8 +201,7 @@ func minutesSinceFirstActivity(events []wellbeing.Event, now time.Time) int {
 	return -1
 }
 
-// latestAction returns the action label of the most recent event today
-// (regardless of whether it is a reset point).
+// latestAction returns the action label of today's most recent event.
 func latestAction(events []wellbeing.Event) string {
 	if len(events) == 0 {
 		return ""
@@ -246,9 +209,7 @@ func latestAction(events []wellbeing.Event) string {
 	return events[len(events)-1].Action
 }
 
-// countTodayActions tallies how many times each tracked action appears in
-// today's events. Empty entries are dropped so the JSON block stays compact
-// (a missing key reads as zero).
+// countTodayActions tallies today's actions, dropping zero entries.
 func countTodayActions(events []wellbeing.Event, actions []string) map[string]int {
 	counts := make(map[string]int, len(actions))
 	for _, a := range actions {
@@ -270,9 +231,7 @@ func countTodayActions(events []wellbeing.Event, actions []string) map[string]in
 	return counts
 }
 
-// timeOfDayLabel buckets the hour into a coarse phrase the skill can weave
-// into reactions ("cuối ngày rồi mà...", "morning kickoff..."). Boundaries
-// are intentionally fuzzy — exact hour is in the patterns block when needed.
+// timeOfDayLabel buckets the hour into a coarse phrase.
 func timeOfDayLabel(now time.Time) string {
 	switch h := now.Hour(); {
 	case h >= 5 && h < 11:
@@ -288,9 +247,7 @@ func timeOfDayLabel(now time.Time) string {
 	}
 }
 
-// mealWindowFor returns "lunch" or "dinner" when now falls inside the
-// respective meal-reminder window, or "" otherwise. Windows are
-// minute-precise (lunch 11:30-13:30, dinner 18:30-20:30).
+// mealWindowFor returns "lunch" (11:30-13:30), "dinner" (18:30-20:30) or "".
 func mealWindowFor(now time.Time) string {
 	mins := now.Hour()*60 + now.Minute()
 	switch {
@@ -303,11 +260,8 @@ func mealWindowFor(now time.Time) string {
 	}
 }
 
-// hasMealSignalInWindow returns true when a meal signal already happened
-// today inside the same named window. A meal signal is EITHER a
-// meal_reminder the agent already fired OR a raw eat label HAL logged when
-// the user actually ate (eating burger / dining / …). Used to suppress
-// the meal-reminder route so the agent doesn't ask "ăn chưa?" after a real meal.
+// hasMealSignalInWindow reports whether a meal reminder or eat label already occurred
+// today in window.
 func hasMealSignalInWindow(events []wellbeing.Event, window string, now time.Time) bool {
 	if window == "" {
 		return false
@@ -324,8 +278,7 @@ func hasMealSignalInWindow(events []wellbeing.Event, window string, now time.Tim
 	return false
 }
 
-// hasActionToday returns true when any event in today's events has the given
-// action label. Used by morning_greeting and sleep_winddown one-per-day gates.
+// hasActionToday reports whether today's events contain action.
 func hasActionToday(events []wellbeing.Event, action string) bool {
 	for _, e := range events {
 		if e.Action == action {
@@ -335,11 +288,7 @@ func hasActionToday(events []wellbeing.Event, action string) bool {
 	return false
 }
 
-// countDrinksSinceToiletNudge returns how many `drink` rows are logged today
-// after the most recent `nudge_toilet` row. If no toilet nudge has fired yet
-// today, it returns the total drink count for the day. The toilet-nudge route
-// fires when this hits the count threshold, and the new nudge_toilet row then
-// resets the counter to 0 — no separate cooldown timer needed.
+// countDrinksSinceToiletNudge counts today's drink rows after the last nudge_toilet row.
 func countDrinksSinceToiletNudge(events []wellbeing.Event) int {
 	var lastToiletTS float64
 	for _, e := range events {
@@ -356,16 +305,8 @@ func countDrinksSinceToiletNudge(events []wellbeing.Event) int {
 	return count
 }
 
-// isFirstActivityToday returns true when no prior REAL user activity event
-// has been logged today. Presence boundaries (enter/leave) and agent-written
-// nudge/reminder rows don't count — they're not motion.activity events.
-//
-// IMPORTANT: HAL logs activity rows to wellbeing JSONL BEFORE firing the
-// motion.activity event (deliberate, prevents read-before-write race when
-// the agent queries history). So by the time BuildWellbeingContext runs,
-// the JSONL already contains the row for the event being routed. We
-// therefore exclude events within the last 5s — those are this current
-// event itself. Only rows older than 5s count as "prior" real activity.
+// isFirstActivityToday reports whether no prior real activity was logged today.
+// HAL writes the row before firing the event, so rows from the last 5s are the current event.
 func isFirstActivityToday(events []wellbeing.Event, now time.Time) bool {
 	cutoff := now.Add(-5 * time.Second)
 	for _, e := range events {
@@ -389,9 +330,7 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// readWellbeingPatterns parses patterns.json and returns the wellbeing_patterns
-// subset, keyed by action. The second return value is true when the file is
-// fresh (mtime < patternsFreshAge); false → stale or missing.
+// readWellbeingPatterns returns wellbeing patterns by action and whether the file is fresh.
 func readWellbeingPatterns(user string) (map[string]patternDigest, bool) {
 	path := filepath.Join(usersDir, user, patternsSubpath)
 	info, err := os.Stat(path)
@@ -418,8 +357,7 @@ func readWellbeingPatterns(user string) (map[string]patternDigest, bool) {
 	}
 	out := make(map[string]patternDigest, len(raw.WellbeingPatterns))
 	for _, p := range raw.WellbeingPatterns {
-		// Only surface "moderate" or "strong" — weak patterns add noise to
-		// phrasing without changing decisions.
+		// Only moderate/strong patterns; weak ones add noise.
 		if p.Strength != "moderate" && p.Strength != "strong" {
 			continue
 		}
@@ -432,8 +370,7 @@ func readWellbeingPatterns(user string) (map[string]patternDigest, bool) {
 	return out, true
 }
 
-// countWellbeingDays counts per-day wellbeing JSONL files for habit bootstrap
-// eligibility (Flow A requires >=3 days).
+// countWellbeingDays counts daily wellbeing files (habit bootstrap needs >=3).
 func countWellbeingDays(user string) int {
 	dir := filepath.Join(usersDir, user, wellbeingSubdir)
 	entries, err := os.ReadDir(dir)

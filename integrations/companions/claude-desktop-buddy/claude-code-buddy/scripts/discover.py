@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Discover a device's :5002 daemon on the LAN.
-
-Cache check -> mDNS (_autonomous._tcp) -> HTTP /health sweep fallback.
-Prints a JSON array [{"host":..., "ip":...}] to stdout, or
-{"error":"not_found"} to stderr with exit 1.
-"""
+"""Discover device buddy daemons on the LAN (cache, then mDNS, then /health sweep)."""
 
 import concurrent.futures
 import json
@@ -115,8 +110,7 @@ def http_sweep(subnets):
 
 
 def scan():
-    """mDNS first; fall back to an HTTP /health subnet sweep only if mDNS found
-    nothing. Deduplicated by ip."""
+    """Discover via mDNS, falling back to a /health sweep; deduplicated by ip."""
     found = mdns_discover()
     if not found:
         subnets = get_subnets()
@@ -139,7 +133,6 @@ def main():
         found = scan()
 
     if found:
-        # Deduplicate by ip across cache + scan results.
         seen = set()
         unique = []
         for dev in found:

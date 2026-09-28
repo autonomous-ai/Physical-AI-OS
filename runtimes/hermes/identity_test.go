@@ -6,9 +6,6 @@ import (
 )
 
 func TestSoulNameIgnoresManagedInstructions(t *testing.T) {
-	// The real injected block that triggered the bogus wake words. It now lives in
-	// AGENTS.md, but it carries a `**Name:**` line of its own, so the SOUL.md name
-	// parser must stay immune to it wherever it turns up.
 	if got := parseSoulName(agentsMDBlock); got != "" {
 		t.Fatalf("instructions parsed as name: %q", got)
 	}
@@ -46,7 +43,6 @@ func TestRewriteSoulName_AppendsWhenAbsent(t *testing.T) {
 }
 
 func TestRewriteSoulName_PreservesBulletPrefix(t *testing.T) {
-	// A non-bullet name line keeps whatever prefix precedes **Name:**.
 	in := "**Name:** Old Description that should be dropped\n"
 	got := rewriteSoulName(in, "Ngân")
 	want := "**Name:** Ngân\n"

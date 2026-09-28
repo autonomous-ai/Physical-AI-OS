@@ -1,9 +1,4 @@
-"""Correlate live provider observations without guessing audio ownership.
-
-Provider input IDs are session-local. Each maps to exactly one HAL interaction;
-timeouts between receive calls do not close it or create another task. A missing
-speech endpoint excludes only the latency KPI, never execution completion.
-"""
+"""Correlate live provider observations with HAL interactions without guessing audio ownership."""
 
 from collections import Counter
 from functools import wraps
@@ -48,8 +43,7 @@ class LiveVoiceMetrics:
     @_observation("")
     def speech(self, turn_id: str, endpoint_at: float | None, method: str) -> str:
         if method == "server_vad_receive":
-            # Preserve provider/cue behaviour while refusing a network arrival
-            # timestamp as a substitute for the end of captured speech.
+            # Never substitute a network arrival timestamp for the end of captured speech.
             self.coverage["endpoint_receive_only_observations"] += 1
             endpoint_at = None
         if not turn_id:
@@ -102,16 +96,12 @@ class LiveVoiceMetrics:
             self.coverage["unowned_interruptions"] += 1
             return
         if turn_id in self.finished and not voice_metrics.is_playing(iid) and not pending_audio:
-            # An ordinary next question, after the previous response went
-            # silent, is not something that had to suppress an old reply.
             return
         self.interrupted.add(turn_id)
         voice_metrics.boundary(
             voice_metrics.BOUNDARY_SERVER_BARGE_IN,
             target_interaction_ids={iid}, at=at,
         )
-        # User interruption is an ack exclusion, not proof execution failed or
-        # completed. Already completed execution remains completed.
         voice_metrics.exclude(iid, voice_metrics.EXCL_INTERRUPTED)
 
     @_observation()

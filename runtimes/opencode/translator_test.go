@@ -97,13 +97,9 @@ func TestTranslateHappyTurn(t *testing.T) {
 		t.Fatalf("missing expected events: start=%v toolStart=%v toolEnd=%v delta=%v end=%v",
 			lifecycleStart, toolStart, toolEnd, assistantDelta, lifecycleEnd)
 	}
-	// "Hello" is the pre-tool narration, "world" the reply: only the LAST text
-	// part is the reply (the preamble is demoted to the thinking stream).
 	if chatFinal != "world" {
 		t.Fatalf("final chat text = %q, want %q", chatFinal, "world")
 	}
-	// Cache read stays in its own field (Anthropic semantics) so the Flow
-	// monitor can render ↓fresh R<cache>; TotalTokens is the whole turn.
 	if lifecycleEndUsage == nil || lifecycleEndUsage.InputTokens != 10 ||
 		lifecycleEndUsage.CacheReadTokens != 2 || lifecycleEndUsage.OutputTokens != 5 ||
 		lifecycleEndUsage.TotalTokens != 17 {

@@ -1,8 +1,4 @@
-"""
-HAL Pydantic request/response models.
-
-All FastAPI endpoint models live here — import from server.py via `from hal.models import *`.
-"""
+"""HAL Pydantic request/response models for all FastAPI endpoints."""
 
 from typing import Literal, Optional, Union
 
@@ -18,8 +14,7 @@ class ServoRequest(BaseModel):
 class ServoStateResponse(BaseModel):
     available_recordings: list[str]
     current: Optional[str]
-    # null = no mode holding the body. Key stays present so that is
-    # distinguishable from a HAL too old to send it.
+    # null = no mode holds the body (key stays present, unlike an older HAL).
     motion_mode: Optional[str] = None
 
     model_config = {
@@ -82,9 +77,7 @@ class LEDOffRequest(BaseModel):
 
 class LEDPaintRequest(BaseModel):
     colors: list[Union[list[int], int]]
-    # Treat `colors` as gradient stops and interpolate them across the whole
-    # strip (2 stops -> smooth 64-pixel fade) instead of painting the first
-    # len(colors) pixels and leaving the rest stale.
+    # Interpolate `colors` as gradient stops across the whole strip.
     gradient: bool = False
     transient: bool = False
 
@@ -175,9 +168,7 @@ class StatusResponse(BaseModel):
 
 
 class ServoPlayResponse(BaseModel):
-    """Status is "ok" only when the recording started. A play the sleep gate or
-    zero/hold dropped answers "ignored" plus the reason — the shape `/emotion`
-    uses."""
+    """"ok" only when the recording started; else "ignored" plus the reason."""
 
     status: str
     reason: Optional[str] = None
@@ -241,13 +232,9 @@ class AudioDevicesResponse(BaseModel):
 
 class CameraInfoResponse(BaseModel):
     available: bool
-    # True only once the capture loop has delivered at least one frame. False
-    # with available=True means the hardware is missing/undetected (or the
-    # camera is disabled and has not been started yet).
+    # True once a frame arrived; False with available=True means missing/undetected hardware.
     has_frame: bool = False
-    # Actual capture mode the device negotiated (None until the capture loop
-    # has opened the device once). Falls back to configured CAMERA_WIDTH/
-    # CAMERA_HEIGHT when device has not reported yet.
+    # Negotiated capture mode; None until the capture loop opened the device.
     width: Optional[int]
     height: Optional[int]
     fps: Optional[float] = None
@@ -297,14 +284,7 @@ class SceneResponse(BaseModel):
 
 
 class RealtimeHistoryRequest(BaseModel):
-    """A main-agent reply the realtime agent must know about but must not say.
-
-    Posted by os-server when a reply is produced but never reaches the speaker
-    — today, a turn muted by the physical cancel gesture. The turn keeps
-    running and its text is still the answer to what the user asked, so the
-    realtime session has to receive it or it reasons from an unanswered
-    question on the next turn.
-    """
+    """A main-agent reply the realtime agent must know about but must not say."""
 
     text: str = Field(
         ..., min_length=1, max_length=2000, description="Reply text to record as history"
@@ -312,11 +292,7 @@ class RealtimeHistoryRequest(BaseModel):
 
 
 class HarnessUpdateRequest(BaseModel):
-    """A Harness result, question or progress line for the announcer to speak.
-
-    os-server posts the raw Harness text; HAL queues it and speaks a rendered
-    version once the device is free (see drivers/harness/announcer.py).
-    """
+    """A Harness result, question or progress line for the announcer to speak."""
 
     kind: Literal["result", "question", "progress"] = Field(..., description="Update type")
     text: str = Field(..., min_length=1, max_length=20000, description="Raw Harness text")
@@ -330,32 +306,18 @@ class SpeakRequest(BaseModel):
     )
     speed: Optional[float] = Field(None, ge=0.25, le=4.0, description="Speed override for this uncached utterance only")
     voice: str = Field("", description="Override TTS voice for this request (e.g. 'Rachel', 'Brian')")
-    # When True, this speech can be interrupted by the next speak() call (e.g. dead air filler).
     interruptible: bool = Field(False, description="If True, can be interrupted by next speech")
     harness_result: bool = Field(False, description="Play a short source cue before a Harness reply")
-    # Optional provider override for one-off tests (e.g. web TTS preview before saving config).
-    # When set and differs from the running service, the backend is hot-swapped using the
-    # supplied credentials so the test does not require restarting /voice/start.
     provider: Optional[str] = Field(None, description="Override TTS provider: 'openai', 'elevenlabs', 'gemini' or 'piper'")
     tts_api_key: Optional[str] = Field(None, description="API key for provider override")
     tts_base_url: Optional[str] = Field(None, description="Base URL for provider override")
-    # Cache controls — see tts_service.speak_cached(). Cache key includes
-    # provider/voice/model/speed/text so config changes invalidate naturally.
     cached: bool = Field(False, description="Look up WAV cache; render+save on miss")
     prerender: bool = Field(False, description="Render+save to cache without playing (warmup)")
-    # Feed this spoken text back to the realtime voice agent as [TTS HISTORY]
-    # so it stays aware of what the device said. ONLY the agentic runtime's
-    # actual reply should set this. Hardcoded TTS (dead-air fillers, ambient
-    # mumble, backchannel, system notices, local chitchat) must leave it False
-    # — feeding those pollutes the realtime model's context and makes it echo
-    # lines it never generated.
+    # Only the agentic runtime's actual reply sets this; hardcoded TTS must leave it False.
     realtime_feedback: bool = Field(
         False, description="Feed this text to the realtime agent as history (agent replies only)"
     )
-    # Queue ownership for streamed agent replies. turn_seq is a monotonically
-    # increasing, os-server-local order assigned when a turn starts; HAL uses it
-    # to reject a delayed request from an older turn after a newer one won.
-    # Plain /voice/speak callers and system notices leave both fields empty.
+    # turn_seq is os-server-local order; HAL rejects a delayed request from an older turn.
     turn_id: str = Field("", max_length=200, description="Owning agent turn for /voice/speak-queue")
     turn_seq: int = Field(0, ge=0, description="Monotonic owning-turn order for /voice/speak-queue")
 
@@ -385,10 +347,7 @@ class MusicStatusResponse(BaseModel):
 
 
 class VolumeSetResponse(BaseModel):
-    """POST /audio/volume reply. Carries the volume actually applied, which is
-    the request clamped to the SAFETY.md ceiling — so a caller never has to
-    assume its request landed verbatim, and a UI can correct its control
-    immediately instead of drifting until the next poll."""
+    """POST /audio/volume reply with the volume actually applied (clamped to SAFETY.md)."""
     status: str
     volume: int
     max_volume: Optional[int] = None
@@ -397,9 +356,7 @@ class VolumeSetResponse(BaseModel):
 class VolumeResponse(BaseModel):
     control: str
     volume: int
-    # SAFETY.md `audio.max_volume` ceiling (%), or None when the device declares
-    # none. Reported so a client (web slider) can bound its own control instead of
-    # letting an operator drag past a value the gate will pull back down.
+    # SAFETY.md `audio.max_volume` (%), or None when undeclared.
     max_volume: Optional[int] = None
 
 
@@ -435,13 +392,7 @@ class ServoSearchRequest(BaseModel):
 
 
 class ServoSearchResponse(BaseModel):
-    """What a sweep found, in fields rather than in one prose string.
-
-    `message` stays for the agent to read aloud, but every number in it is also
-    a field, because the previous single-string body forced the agent to parse
-    English to learn anything — and it was the string, not the sweep, that
-    produced "after 27 stop(s)" against a maximum of 3.
-    """
+    """What a sweep found, as structured fields (`message` is for reading aloud)."""
 
     status: str = "ok"
     message: str = Field(
@@ -472,11 +423,7 @@ class ServoSearchResponse(BaseModel):
 
 
 class ServoDemoResponse(BaseModel):
-    """Whether the demo STARTED, not how it went.
-
-    The performance runs on its own thread and narrates itself, so there is
-    nothing for the caller to wait for and nothing for it to report afterwards.
-    """
+    """Whether the demo started (it runs and narrates on its own thread)."""
 
     status: str = "ok"
     started: bool
@@ -621,10 +568,7 @@ class VoiceStatusResponse(BaseModel):
     tts_speaking: bool
     tts_detail: Optional[dict] = None
     mic_muted: bool = False
-    # Hardware kill-switch position (Intern v2 Pro PD1 slide switch). null on
-    # devices without the switch (Lamp) so the web UI can hide the "HW-locked"
-    # hint entirely. True/False mirrors the physical throw and is the authority:
-    # while True, /voice/unmute rejects with 409 and the touchpad ignores taps.
+    # Hardware mic switch position; null on devices without it. True blocks /voice/unmute (409).
     hw_mic_switch_muted: Optional[bool] = None
 
 
@@ -640,8 +584,7 @@ class HealthResponse(BaseModel):
     tts: bool
     music: bool
     display: bool
-    # Thermal fail-safe: null when no `thermal` bound is declared (monitoring off);
-    # otherwise {over, temp_c, max_temp_c}. over=True means SoC is above its ceiling.
+    # null when no `thermal` bound is declared; else {over, temp_c, max_temp_c}.
     thermal: Optional[dict] = None
 
 
@@ -802,8 +745,7 @@ class VoiceStartRequest(BaseModel):
 
 
 class TTSConfigRequest(BaseModel):
-    """Partial TTS settings applied to the running service by POST
-    /voice/tts/config. Every field optional: only what is sent is changed."""
+    """Partial TTS settings for POST /voice/tts/config (only sent fields change)."""
 
     provider: Optional[str] = None
     voice: Optional[str] = None

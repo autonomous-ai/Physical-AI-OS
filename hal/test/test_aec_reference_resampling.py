@@ -93,7 +93,6 @@ def test_repeated_writes_design_the_filter_once(monkeypatch):
     with patch.object(scipy.signal, "firwin", wraps=scipy.signal.firwin) as design:
         for size in (441, 137, 1764):
             aec.reference_write(np.zeros(size, dtype=np.float32), 44100)
-        # The doubled source and destination rates share the reduced ratio.
         monkeypatch.setattr(aec, "_canceller", SimpleNamespace(_rate=32000))
         monkeypatch.setattr(aec, "_reference", aec.EchoReference(32000))
         aec.reference_write(np.zeros(882, dtype=np.float32), 88200)

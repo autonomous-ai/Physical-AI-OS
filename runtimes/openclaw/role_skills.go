@@ -16,37 +16,24 @@ import (
 )
 
 const (
-	// roleSkillsBaseURL is the GCS prefix holding one skills.zip per role. Each
-	// zip contains a top-level `skills/` tree with every skill of the role
-	// (e.g. skills/<name>/SKILL.md plus auxiliary files).
+	// roleSkillsBaseURL is the GCS prefix holding one skills.zip per role.
 	roleSkillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/plugins-skills/openclaw-roles"
 
 	roleSkillsZipPrefix  = "skills/"
 	roleSkillsMaxRetries = 3
 	roleSkillsRetryDelay = 2 * time.Second
 
-	// mcpSkillsBaseURL is the GCS prefix holding one <name>.zip per MCP connector
-	// skill. Unlike role zips, these contain a top-level `<name>/` tree (no
-	// `skills/` prefix), extracted verbatim into workspace/skills.
+	// mcpSkillsBaseURL is the GCS prefix holding one <name>.zip per MCP connector skill.
 	mcpSkillsBaseURL = "https://storage.googleapis.com/s3-autonomous-upgrade-3/plugins-skills/skills_for_MCP"
 )
 
-// ErrInvalidRole is returned when the role slug has an unsafe shape (empty or
-// containing path-escaping characters). The set of valid roles is NOT
-// hardcoded — the backend owns the catalog and the device fetches
-// <role>/skills.zip on demand, so adding a role needs no code change. This
-// guard only blocks path traversal / URL injection.
+// ErrInvalidRole is returned when the role slug has an unsafe shape (empty or containing path-escaping characters).
 var ErrInvalidRole = errors.New("invalid role")
 
 // roleNamePattern allows only lowercase letters, digits, dash and underscore.
 var roleNamePattern = regexp.MustCompile(`^[a-z0-9_-]+$`)
 
-// InstallRoleSkills downloads <role>/skills.zip from GCS and extracts its
-// `skills/` tree into {configDir}/workspace/skills, returning the number of
-// files written. Existing skills (other roles, OTA-pushed skills) are left
-// untouched — only files present in the zip are (over)written, so installs are
-// cumulative. The gateway is NOT restarted: skills.load.watch (set at setup,
-// service_setup.go) picks new files up per session.
+// InstallRoleSkills downloads <role>/skills.zip from GCS and extracts its `skills/` tree into {configDir}/workspace/skills, returning the number of files written.
 func InstallRoleSkills(configDir, role string) (int, error) {
 	if !roleNamePattern.MatchString(role) {
 		return 0, fmt.Errorf("%w: %q", ErrInvalidRole, role)
@@ -84,13 +71,7 @@ func InstallRoleSkills(configDir, role string) (int, error) {
 	return count, nil
 }
 
-// EnsureMCPSkill makes sure the MCP connector skill <name> is present under
-// {configDir}/workspace/skills/<name>. Idempotent: if <name>/SKILL.md already
-// exists it is a no-op, so the connector refresh loop (which re-runs the
-// writer's Write on every token rotation) doesn't re-download the zip each
-// time. Otherwise it downloads skills_for_MCP/<name>.zip from GCS and extracts
-// it verbatim (the zip already carries a top-level <name>/ dir). The gateway is
-// NOT restarted — skills.load.watch picks new files up per session.
+// EnsureMCPSkill makes sure the MCP connector skill <name> is present under {configDir}/workspace/skills/<name>.
 func EnsureMCPSkill(configDir, name string) error {
 	if !roleNamePattern.MatchString(name) {
 		return fmt.Errorf("%w: %q", ErrInvalidRole, name)
@@ -98,7 +79,7 @@ func EnsureMCPSkill(configDir, name string) error {
 
 	skillsDir := filepath.Join(configDir, "workspace", "skills")
 	if _, err := os.Stat(filepath.Join(skillsDir, name, "SKILL.md")); err == nil {
-		return nil // already installed
+		return nil
 	}
 
 	url := fmt.Sprintf("%s/%s.zip", mcpSkillsBaseURL, name)
@@ -124,8 +105,6 @@ func EnsureMCPSkill(configDir, name string) error {
 	}
 	defer os.Remove(tmpZip)
 
-	// Extract verbatim (srcPrefix "") so "<name>/SKILL.md" lands at
-	// workspace/skills/<name>/SKILL.md.
 	count, err := extractDirFromZip(tmpZip, "", skillsDir)
 	if err != nil {
 		return fmt.Errorf("extract %s mcp skill: %w", name, err)
@@ -134,10 +113,7 @@ func EnsureMCPSkill(configDir, name string) error {
 	return nil
 }
 
-// extractDirFromZip extracts every entry under srcPrefix in the zip at zipPath
-// into destDir (with the prefix stripped), returning the number of files
-// written. Path-traversal guarded; forces 0644/0755 perms. Cumulative — does
-// not delete destDir first, so other roles' skills survive.
+// extractDirFromZip extracts every entry under srcPrefix in the zip at zipPath into destDir (with the prefix stripped), returning the number of files written.
 func extractDirFromZip(zipPath, srcPrefix, destDir string) (int, error) {
 	r, err := zip.OpenReader(zipPath)
 	if err != nil {

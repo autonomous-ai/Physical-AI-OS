@@ -275,7 +275,7 @@ def test_real_live_session_keeps_mic_streaming_during_opener_reply(monkeypatch, 
     assert captured.is_set() and opener["consumed"]
     audio = [c[1] for c in calls if isinstance(c, tuple) and c[0] == "audio"]
     assert audio[:2] == frames
-    assert len(audio) > 2  # Real-time mic frames followed the captured opener.
+    assert len(audio) > 2
     assert calls.index("flush") < calls.index(("audio", frames[0]))
 
 

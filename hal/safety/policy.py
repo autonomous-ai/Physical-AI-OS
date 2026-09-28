@@ -1,33 +1,7 @@
-"""Safety policy layer — read a device's SAFETY.md bounds and expose pure,
-deterministic gate functions the HAL routes/drivers call before actuating.
+"""Safety policy layer: parse SAFETY.md bounds and expose pure, deterministic gate functions.
 
-Mirrors hal/board/device.py: a dependency-free regex front-matter parser (no
-pyyaml in the runtime) and pure functions, fully unit-testable off-hardware. This
-is the mechanism behind the first principle in robots/contract/SAFETY-SPEC.md — *safety
-is below the brain*: the gate sits in the request path between the agent and the
-hardware, runs on every request regardless of who issued it, and cannot be
-bypassed by prompting.
-
-Enforced bounds:
-  - slice 1: light.max_brightness            — LED brightness ceiling
-  - slice 2: light.quiet_hours{max_brightness}, audio.quiet_hours — a nightly
-             window that lowers the LED ceiling and suppresses loud audio (music)
-  - slice 3: motion.max_speed                — deg/s ceiling, enforced by
-             stretching a move's duration (see min_move_duration)
-  - slice 4: thermal.max_temp_c              — SoC over-temp → health event +
-             stop discretionary motion (background monitor, see thermal_over)
-  - slice 5: audio.max_volume                — speaker volume ceiling (%), clamped
-             in the /audio/volume request path (see clamp_volume)
-  - slice 5: audio.max_volume                — speaker volume ceiling (%), clamped
-             in the /audio/volume request path (see clamp_volume)
-
-Enforcement is presence-driven and uniform across capabilities: a declared bound
-is enforced, an absent one is pass-through — the engine never invents a limit
-nobody wrote. Removing a section (or the whole front matter) turns its enforcement
-off; there is no separate kill switch.
-
-The autonomous.safety.v1 ABI only ever gains fields. See robots/contract/SAFETY-SPEC.md
-and docs/safety.md.
+Invariant: a declared bound is enforced, an absent one is pass-through (never invent a limit).
+Unknown schema majors and out-of-range bounds fail boot. See robots/contract/SAFETY-SPEC.md.
 """
 from __future__ import annotations
 
@@ -43,10 +17,7 @@ from hal.clock import device_now
 
 logger = logging.getLogger("hal.safety")
 
-# The SAFETY.md `schema:` is an ABI tag (SAFETY-SPEC.md §Versioning), identical in
-# discipline to autonomous.device.v1: within a major version fields are only added,
-# so a v1 file must keep enforcing on every later v1 runtime. A file that declares
-# a major this runtime does not understand cannot be parsed safely → fail loud.
+# ABI tag: fields are only added within a major; an unknown major fails loud.
 SCHEMA_NAMESPACE = "autonomous.safety"
 SUPPORTED_SCHEMA_MAJORS = frozenset({1})
 
@@ -59,9 +30,7 @@ MAX_VOLUME_PCT = 100  # speaker volume is a percentage, the same scale /audio/vo
 
 @dataclass(frozen=True)
 class QuietHours:
-    """A daily time window (may wrap past midnight). `max_brightness` is the
-    reduced LED ceiling that applies inside the window (light only; None for the
-    audio window, which suppresses loud output rather than dimming it)."""
+    """A daily window (may wrap midnight); `max_brightness` is the in-window LED ceiling (light only)."""
     start: dtime
     end: dtime
     max_brightness: Optional[int] = None
@@ -69,53 +38,32 @@ class QuietHours:
 
 @dataclass(frozen=True)
 class MotionBounds:
-    # deg/s ceiling — enforced by stretching a move's duration so its fastest
-    # joint never exceeds it (the move still reaches its target, just not too
-    # fast). None = no speed ceiling declared.
+    # deg/s ceiling, enforced by stretching move duration (target still reached). None = undeclared.
     max_speed: Optional[int] = None
-    # motion.stop is deterministic and never gated (you must always be able to
-    # halt a body — stop/release/zero/hold are recovery actions, never refused).
+    # Stop/release/zero/hold are recovery actions: never gated or refused.
     stop_always: bool = False
-    # Millimetres the whole-body centre of gravity may sit from the base axis.
-    # A tip-over is a COMBINATION of joint angles, so it cannot be written as a
-    # per-joint bound; scoring a pose needs the body's own geometry, which is
-    # why this one is only enforceable alongside ROBOT.md `urdf_ref`.
-    # None = no stability ceiling declared.
+    # Max CoG offset (mm) from the base axis; needs ROBOT.md `urdf_ref`. None = undeclared.
     max_cog_offset_mm: Optional[int] = None
 
 
 @dataclass(frozen=True)
 class ThermalBounds:
-    # SoC temperature (°C) at/above which the device is "thermally over": the
-    # runtime surfaces a health event and stops discretionary motion (tracking).
-    # The threshold is device/SoC-specific — read the board's own critical trip
-    # point (`/sys/class/thermal/.../trip_point_*_temp`); never a generic guess.
+    # SoC °C at/above which motion is stopped; use the board's own critical trip point.
     max_temp_c: int
-    # cooled to/below this clears the over state (hysteresis, avoids flapping at
-    # the boundary). Defaults to max_temp_c - 10 when not declared.
+    # Hysteresis clear threshold; defaults to max_temp_c - 10.
     resume_temp_c: int
 
 
 @dataclass(frozen=True)
 class SafetyPolicy:
     schema: str
-    # light brightness ceiling (0–255). None = no ceiling declared → pass-through
-    # (light fail-safe: a calm LED is not a hazard; never invent a limit).
+    # 0-255 LED ceiling. None = pass-through (light fail-safe).
     max_brightness: Optional[int] = None
     light_quiet: Optional[QuietHours] = None   # nightly reduced LED ceiling
     audio_quiet: Optional[QuietHours] = None    # nightly window: suppress loud audio
-    # speaker volume ceiling (0–100 %). None = no ceiling declared → pass-through,
-    # the same presence-driven rule as every other bound. Independent of
-    # audio_quiet: this one applies all day, to every caller of /audio/volume.
+    # 0-100 % all-day speaker ceiling. None = pass-through.
     max_volume: Optional[int] = None
-    # Motion bounds. None = no machine motion bounds declared → pass-through, the
-    # same presence-driven rule as light/audio: a declared bound is enforced, an
-    # absent one is not (the engine never invents a limit nobody wrote). The only
-    # motion enforcement is the speed cap (see min_move_duration).
     motion: Optional[MotionBounds] = None
-    # Thermal bound. None = no SoC over-temp monitoring declared → off (the same
-    # presence-driven rule). When set, a background monitor reads SoC temp and, on
-    # crossing max_temp_c, raises a health event + stops discretionary motion.
     thermal: Optional[ThermalBounds] = None
 
 
@@ -126,11 +74,7 @@ def extract_front_matter(text: str) -> str:
 
 
 def validate_schema(front_matter: str) -> str:
-    """Parse + validate the `schema:` ABI tag. Returns the raw schema string.
-
-    Raises ValueError if missing/malformed/unknown-major — a deploy fault that
-    must fail boot rather than enforce a bounds ABI the runtime cannot read.
-    """
+    """Validate the `schema:` ABI tag and return it; raises ValueError on missing/unknown major."""
     m = _RE_SCHEMA.search(front_matter)
     if not m:
         raise ValueError(
@@ -153,10 +97,7 @@ def validate_schema(front_matter: str) -> str:
 
 
 def _section_body(front_matter: str, key: str) -> str:
-    """Return the body of a top-level `key:` section — either flow style
-    (`key: { ... }`) or block style (`key:` then indented lines). '' if absent.
-    Scoping by section keeps `max_brightness` under `light` distinct from the one
-    inside `light.quiet_hours`."""
+    """Body of a top-level `key:` section (flow or block style), or '' if absent."""
     flow = re.search(
         r"^" + re.escape(key) + r":[ \t]*\{(.*?)\}[ \t]*$",
         front_matter, re.MULTILINE | re.DOTALL,
@@ -196,8 +137,7 @@ def _parse_hhmm(s: str) -> dtime:
 
 
 def _parse_quiet_hours(section_body: str, *, with_brightness: bool) -> Optional[QuietHours]:
-    """Parse a `quiet_hours: { start: "HH:MM", end: "HH:MM"[, max_brightness: N] }`
-    object out of a section body, or None if absent."""
+    """Parse `quiet_hours: { start: "HH:MM", end: "HH:MM"[, max_brightness: N] }`, or None."""
     m = re.search(r"quiet_hours:\s*\{([^}]*)\}", section_body)
     if not m:
         return None
@@ -211,8 +151,7 @@ def _parse_quiet_hours(section_body: str, *, with_brightness: bool) -> Optional[
 
 
 def _parse_motion(motion_body: str) -> Optional[MotionBounds]:
-    """Parse the `motion:` section into MotionBounds, or None if it declares no
-    real bounds (an absent/empty section is pass-through, like light/audio)."""
+    """Parse the `motion:` section into MotionBounds, or None if it declares no bounds."""
     max_speed = _int_field(motion_body, "max_speed")
     if max_speed is not None and max_speed <= 0:
         raise ValueError(f"SAFETY.md motion.max_speed {max_speed} must be > 0 (deg/s)")
@@ -230,8 +169,7 @@ def _parse_motion(motion_body: str) -> Optional[MotionBounds]:
 
 
 def _parse_thermal(thermal_body: str) -> Optional[ThermalBounds]:
-    """Parse the `thermal:` section into ThermalBounds, or None if it declares no
-    `max_temp_c` (absent → no thermal monitoring, like every other bound)."""
+    """Parse the `thermal:` section into ThermalBounds, or None without `max_temp_c`."""
     max_temp = _int_field(thermal_body, "max_temp_c")
     if max_temp is None:
         return None
@@ -248,19 +186,14 @@ def _parse_thermal(thermal_body: str) -> Optional[ThermalBounds]:
 
 
 def parse_safety(text: str) -> SafetyPolicy:
-    """Parse SAFETY.md text (which HAS front matter) into a SafetyPolicy.
-    Validates the schema fail-loud; raises on an out-of-range/malformed bound."""
+    """Parse SAFETY.md text into a SafetyPolicy; raises on a bad schema or out-of-range bound."""
     fm = extract_front_matter(text)
     schema = validate_schema(fm)
-    # Drop full-line comments so commented-out placeholders (e.g. `# stop_always:
-    # true`) are not mistaken for declared bounds. Inline trailing comments stay
-    # (the int/time regexes stop at the value).
+    # Drop full-line comments so commented-out placeholders aren't read as bounds.
     fm = "\n".join(ln for ln in fm.splitlines() if not ln.lstrip().startswith("#"))
     light_body = _section_body(fm, "light")
     audio_body = _section_body(fm, "audio")
-    # Base ceilings = the fields outside the quiet_hours object, so a
-    # `max_brightness`/`max_volume` nested inside the window is never mistaken
-    # for the all-day bound.
+    # Base ceilings exclude fields nested in quiet_hours.
     light_base_body = re.sub(r"quiet_hours:\s*\{[^}]*\}", "", light_body)
     audio_base_body = re.sub(r"quiet_hours:\s*\{[^}]*\}", "", audio_body)
     return SafetyPolicy(
@@ -274,31 +207,20 @@ def parse_safety(text: str) -> SafetyPolicy:
     )
 
 
-# ── time helpers ─────────────────────────────────────────────────────────────
-
 def _now() -> dtime:
-    """Device-local wall-clock time. Isolated so gates stay unit-testable: callers
-    pass an explicit `now` in tests; production reads the clock here.
-
-    Reads the device's CURRENT timezone each call (see hal.clock) so quiet-hours
-    gates stay correct after a runtime timezone change without restarting HAL."""
+    """Device-local wall-clock time in the current timezone (tests pass `now`)."""
     return device_now().time()
 
 
 def in_window(window: QuietHours, now: dtime) -> bool:
-    """True if `now` falls inside the window, handling wrap past midnight
-    (start > end, e.g. 22:00→07:00 = late evening OR early morning)."""
+    """True if `now` is inside the window, handling wrap past midnight (e.g. 22:00->07:00)."""
     if window.start <= window.end:
         return window.start <= now < window.end
     return now >= window.start or now < window.end
 
 
-# ── gate functions — pure when `now` is passed, deterministic, single point ──────
-
 def active_max_brightness(policy: Optional[SafetyPolicy], now: Optional[dtime] = None) -> Optional[int]:
-    """The LED brightness ceiling in effect right now: the base ceiling, lowered
-    to the quiet-hours ceiling while inside the light quiet window. None = no
-    ceiling (pass-through)."""
+    """The LED ceiling in effect now (lowered inside the light quiet window); None = pass-through."""
     if policy is None:
         return None
     if now is None:
@@ -311,8 +233,7 @@ def active_max_brightness(policy: Optional[SafetyPolicy], now: Optional[dtime] =
 
 
 def clamp_brightness(policy: Optional[SafetyPolicy], value: int, now: Optional[dtime] = None) -> int:
-    """Clamp a 0–255 brightness scalar to the ceiling in effect now. No ceiling →
-    pass-through unchanged (light fail-safe)."""
+    """Clamp a 0-255 brightness to the ceiling in effect now; pass-through without one."""
     ceiling = active_max_brightness(policy, now)
     return value if ceiling is None else min(value, ceiling)
 
@@ -320,9 +241,10 @@ def clamp_brightness(policy: Optional[SafetyPolicy], value: int, now: Optional[d
 def clamp_color(
     policy: Optional[SafetyPolicy], color: Tuple[int, int, int], now: Optional[dtime] = None
 ) -> Tuple[int, int, int]:
-    """Scale an (r,g,b) tuple so its brightest channel respects the ceiling in
-    effect now, preserving hue (full white 255, ceiling 180 → 180,180,180; pure
-    red → 180,0,0). Pass-through when no ceiling or already within it."""
+    """Scale (r,g,b) so the brightest channel respects the ceiling, preserving hue.
+
+    Example: ceiling 180 -> (255,0,0) becomes (180,0,0).
+    """
     ceiling = active_max_brightness(policy, now)
     if ceiling is None:
         return color
@@ -335,8 +257,7 @@ def clamp_color(
 
 
 def audio_quiet_now(policy: Optional[SafetyPolicy], now: Optional[dtime] = None) -> bool:
-    """True if loud discretionary audio (music) must be suppressed right now —
-    i.e. inside the declared audio quiet-hours window."""
+    """True inside the declared audio quiet-hours window (suppress music)."""
     if policy is None or policy.audio_quiet is None:
         return False
     if now is None:
@@ -345,36 +266,19 @@ def audio_quiet_now(policy: Optional[SafetyPolicy], now: Optional[dtime] = None)
 
 
 def max_volume_pct(policy: Optional[SafetyPolicy]) -> Optional[int]:
-    """The declared speaker ceiling (%), or None when none is declared. Exposed so
-    a UI can present the real ceiling instead of letting an operator drag a slider
-    to a value the gate will silently pull back down."""
+    """The declared speaker ceiling (%), or None."""
     return policy.max_volume if policy is not None else None
 
 
 def clamp_volume(policy: Optional[SafetyPolicy], value: int) -> int:
-    """Clamp a requested speaker volume (%) to the declared ceiling.
-
-    Absent bound = pass-through (only the 0–100 scale clamp applies), the same
-    presence-driven rule as clamp_brightness. Lives here rather than in the route
-    so every caller of /audio/volume is bound identically — agent, local intent,
-    web slider, os-server boot restore.
-    """
+    """Clamp a requested speaker volume (%) to the declared ceiling (0-100 scale clamp always applies)."""
     value = max(0, min(MAX_VOLUME_PCT, value))
     ceiling = max_volume_pct(policy)
     return value if ceiling is None else min(value, ceiling)
 
 
 def cap_speed_dps(policy: Optional[SafetyPolicy], requested: float) -> float:
-    """The speed ceiling to actually use, in deg/s: `requested`, or the declared
-    `motion.max_speed` when that is lower.
-
-    For the continuous paths — the vision-tracking loop and any other follower
-    that streams positions rather than commanding a move with a duration.
-    `min_move_duration` cannot bound those: there is no destination to stretch a
-    move towards, only a speed profile per frame. Pure; pass-through when no
-    ceiling is declared, so an undeclared bound stays undeclared rather than
-    inventing 0.
-    """
+    """Speed to use for streaming followers (deg/s): `requested`, capped by `motion.max_speed`."""
     if policy is None or policy.motion is None or policy.motion.max_speed is None:
         return requested
     return min(float(requested), float(policy.motion.max_speed))
@@ -386,13 +290,10 @@ def min_move_duration(
     current: dict,
     requested: float,
 ) -> float:
-    """The duration to actually use for a move: at least `requested`, but stretched
-    so the fastest joint stays within motion.max_speed (deg/s). The move still
-    reaches `target` — only its speed is capped, never its destination. Pure;
-    pass-through (returns `requested`) when no speed ceiling is declared.
+    """Duration for a move, stretched so the fastest joint stays within motion.max_speed.
 
-    target/current: {joint: degrees}. Joints absent from `current` are ignored
-    (no known start → can't bound their speed here)."""
+    target/current: {joint: degrees}; joints missing from `current` are ignored.
+    """
     if policy is None or policy.motion is None or policy.motion.max_speed is None:
         return requested
     max_delta = 0.0
@@ -406,14 +307,10 @@ def min_move_duration(
 
 
 def thermal_over(policy: Optional[SafetyPolicy], temp_c: Optional[float], was_over: bool) -> bool:
-    """Hysteresis gate for SoC over-temperature. Returns whether the device should
-    be in the thermal-over state given the current temp and the previous state:
+    """Hysteresis gate for SoC over-temperature: trip at `max_temp_c`, clear at `resume_temp_c`.
 
-      - no policy / no thermal bound / unreadable temp → False (monitoring off).
-      - not yet over: trip True once temp reaches `max_temp_c`.
-      - already over: stay True until temp cools to/below `resume_temp_c`.
-
-    Pure (no IO) so the state machine is unit-testable; the caller supplies temp."""
+    Returns False when monitoring is off or temp is unreadable.
+    """
     if policy is None or policy.thermal is None or temp_c is None:
         return False
     t = policy.thermal
@@ -426,9 +323,7 @@ _THERMAL_ZONE = "/sys/class/thermal/thermal_zone0/temp"
 
 
 def read_soc_temp_c(path: str = _THERMAL_ZONE) -> Optional[float]:
-    """Read the SoC temperature in °C from the kernel thermal zone (millidegrees),
-    or None if unreadable (no zone, permission, parse error) — best-effort, never
-    raises. Isolated like _now() so the gate stays pure in tests."""
+    """SoC temperature in °C from the kernel thermal zone, or None (never raises)."""
     try:
         with open(path, "r") as f:
             return int(f.read().strip()) / 1000.0
@@ -436,11 +331,8 @@ def read_soc_temp_c(path: str = _THERMAL_ZONE) -> Optional[float]:
         return None
 
 
-# ── loader ───────────────────────────────────────────────────────────────────
-
 def _read_ref(device_dir: str, ref: str) -> str:
-    """Resolve a *_ref to text, mirroring device._read_ref: an http(s) URL is
-    downloaded, anything else is read as a path relative to the device dir."""
+    """Resolve a *_ref to text: an http(s) URL is downloaded, else read relative to the device dir."""
     if ref.startswith("http://") or ref.startswith("https://"):
         with urllib.request.urlopen(ref, timeout=30) as r:  # noqa: S310 (device-trusted ref)
             return r.read().decode("utf-8")
@@ -449,17 +341,9 @@ def _read_ref(device_dir: str, ref: str) -> str:
 
 
 def load_safety(device_dir: str, safety_ref: str) -> Optional[SafetyPolicy]:
-    """Resolve `safety_ref` (path/URL) and parse the bounds, or None when there
-    are no enforceable bounds (pass-through; light fail-safe):
+    """Resolve `safety_ref` and parse the bounds, or None (with a WARN) when nothing is enforceable.
 
-      - no safety_ref                          → None
-      - safety_ref set but file unreadable     → None + WARN (declared-but-absent)
-      - SAFETY.md present but no front matter   → None + WARN (legacy prose-only)
-
-    A SAFETY.md that *does* carry front matter must have a valid schema — a
-    missing/malformed/unknown-major tag (or an out-of-range bound) raises and
-    aborts boot, since the runtime will not enforce an ABI it cannot read
-    (robots/contract/SAFETY-SPEC.md).
+    Front matter with a bad schema or out-of-range bound raises and aborts boot.
     """
     if not safety_ref:
         return None

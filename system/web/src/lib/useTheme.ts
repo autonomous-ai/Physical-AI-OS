@@ -2,17 +2,7 @@ import { useEffect, useState } from "react";
 
 type Theme = "dark" | "light";
 
-/**
- * App-wide theme state, synchronized with next-themes.
- *
- * next-themes (see theme-provider.tsx) is the single source of truth: it toggles the
- * `dark` class on <html> and persists to localStorage under the `theme` key. This hook
- * mirrors that exact storage + class contract so the Lamp Monitor pages (Login, Setup,
- * Monitor, EditConfig) — which were written before next-themes and apply their own
- * `lm-light`/`lm-dark` class to `.lm-root` — switch in lockstep with the rest of the app.
- *
- * Default is DARK (matches defaultTheme="dark" in theme-provider.tsx).
- */
+/** App-wide theme state, synchronized with next-themes. */
 const STORAGE_KEY = "theme";
 
 function read(): Theme {
@@ -39,8 +29,6 @@ function apply(theme: Theme) {
 export function useTheme(): [Theme, () => void, string] {
   const [theme, setTheme] = useState<Theme>(read);
 
-  // Keep <html>.dark + storage in sync, and react to changes made elsewhere
-  // (e.g. the shadcn ThemeToggle via next-themes, or another tab).
   useEffect(() => {
     apply(theme);
     const onStorage = (e: StorageEvent) => {

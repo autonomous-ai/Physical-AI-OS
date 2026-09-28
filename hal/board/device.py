@@ -1,18 +1,6 @@
-"""Device profile layer — read a device's ROBOT.md and turn its declared
-capabilities into a mount plan for the HAL runtime.
+"""Device profile layer: parse ROBOT.md capabilities into a HAL mount plan.
 
-This replaces the implicit `try/except ImportError` route-skip in server.py,
-which could not tell three different situations apart. The declaration makes
-them explicit:
-
-  - declared + driver present       -> mount
-  - declared + required + missing   -> FAIL LOUD (a hardware fault)
-  - declared + optional + missing   -> skip (graceful degradation)
-  - undeclared                      -> skip (a different device, by design)
-
-Dependency-free: a focused parser for the ROBOT.md front-matter capability
-block (no pyyaml in the runtime). Pure functions so the logic is unit-testable
-off-hardware. See robots/contract/ROBOT-SPEC.md and robots/contract/capabilities.md.
+declared+present -> mount; declared+required+missing -> fail loud; otherwise skip.
 """
 from __future__ import annotations
 
@@ -25,17 +13,11 @@ from typing import Dict, List, Optional
 
 logger = logging.getLogger("hal.device")
 
-# The ROBOT.md `schema:` is an ABI tag (ROBOT-SPEC.md §Versioning): within a
-# major version fields are only added, so a v1 file must keep booting on every
-# later v1 runtime. The runtime declares which majors it understands; a file
-# whose major is unknown can't be parsed safely, so boot fails loud.
+# ABI tag: unknown major versions fail boot.
 SCHEMA_NAMESPACE = "autonomous.device"
 SUPPORTED_SCHEMA_MAJORS = frozenset({1})
 
-# Speaker level a device boots at when its ROBOT.md declares no
-# `startup_volume`. 100% means software at max, so the hardware/alsactl level
-# is the effective control. Fail-safe to max, never to silent. Must stay equal
-# to Go's device.DefaultStartupVolume (system/device/devicemd.go).
+# Fail-safe to max, never silent. Must equal Go's device.DefaultStartupVolume.
 DEFAULT_STARTUP_VOLUME = 100
 
 _RE_SCHEMA = re.compile(r"^schema:\s*(\S+)\s*$", re.MULTILINE)
@@ -49,10 +31,7 @@ class Capability:
     required: bool
     driver: Optional[str] = None   # implementation family; motion selector (factory.py), others informational
     safety: Optional[str] = None
-    # Another process on the device holds this hardware and hands it over on
-    # request. Selects a handover implementation (media_owner/factory.py); None
-    # means HAL opens the hardware directly, which is the case everywhere except
-    # a body that ships a vendor runtime of its own.
+    # Process that holds this hardware and hands it over on request; None = HAL opens it directly.
     owner: Optional[str] = None
 
 
@@ -80,20 +59,13 @@ def _parse_safety(body: str) -> Optional[str]:
 
 
 def _parse_driver(body: str) -> Optional[str]:
-    """The capability's `driver:` implementation family, or None. For motion,
-    this selects the service class (hal/drivers/motors/factory.py); for other
-    capabilities it remains informational."""
+    """The capability's `driver:` family, or None (selects the motion service class)."""
     m = re.search(r"driver:\s*([^\s,}]+)", body)
     return m.group(1) if m else None
 
 
 def _parse_owner(body: str) -> Optional[str]:
-    """The capability's `owner:` name, or None when HAL owns the hardware.
-
-    Set it when another process on the device holds this hardware and only
-    yields it on request — a vendor runtime shipped with the body. The name
-    selects a handover implementation in hal/drivers/media_owner/factory.py, the
-    same way `driver:` selects a motion or camera class."""
+    """The capability's `owner:` name, or None when HAL owns the hardware."""
     m = re.search(r"owner:\s*([^\s,}]+)", body)
     return m.group(1) if m else None
 
@@ -113,10 +85,7 @@ def _parse_scalar(front_matter: str, key: str) -> str:
 
 
 def _parse_startup_volume(front_matter: str) -> int:
-    """The `startup_volume:` (0-100) scalar, or DEFAULT_STARTUP_VOLUME when it
-    is absent or out of range. Mirrors Go's device.StartupVolume — same field,
-    same fallback — because both runtimes restore the speaker level and must
-    not disagree about what this body's level is."""
+    """The `startup_volume:` (0-100), else DEFAULT_STARTUP_VOLUME; mirrors Go's device.StartupVolume."""
     raw = _parse_scalar(front_matter, "startup_volume")
     try:
         v = int(raw)
@@ -126,19 +95,13 @@ def _parse_startup_volume(front_matter: str) -> int:
 
 
 def _parse_memory_backend(front_matter: str) -> str:
-    """The `memory: { backend: <x> }` backend name, or ''. Informational — the
-    brain owns memory today; there is no memory-backend abstraction to gate on."""
+    """The `memory: { backend: <x> }` backend name, or '' (informational)."""
     m = re.search(r"^memory:\s*\{[^}]*\bbackend:\s*([^\s,}]+)", front_matter, re.MULTILINE)
     return m.group(1) if m else ""
 
 
 def validate_schema(front_matter: str) -> str:
-    """Parse and validate the `schema:` ABI tag. Returns the raw schema string.
-
-    Raises ValueError if it is missing, malformed, or declares a major version
-    this runtime does not support — all of which are deploy faults that must
-    fail boot rather than mount a body against an ABI we can't read.
-    """
+    """Validate the `schema:` ABI tag and return it; raises ValueError on missing/unsupported major."""
     m = _RE_SCHEMA.search(front_matter)
     if not m:
         raise ValueError(
@@ -161,12 +124,9 @@ def validate_schema(front_matter: str) -> str:
 
 
 def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
-    """Parse the `capabilities:` block of a ROBOT.md front matter.
+    """Parse the `capabilities:` block of ROBOT.md front matter.
 
-    Supports the flow-style entries this repo uses, e.g.:
-        capabilities:
-          audio:  { routes: [audio, speaker, voice], required: true }
-          motion: { routes: [servo], driver: feetech, required: false }
+    Example: audio: { routes: [audio, speaker, voice], required: true }
     """
     caps: Dict[str, Capability] = {}
     in_block = False
@@ -182,7 +142,7 @@ def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
         indent = len(line) - len(line.lstrip())
         if block_indent is None:
             block_indent = indent
-        if indent < block_indent:        # dedented back to a top-level key -> block ended
+        if indent < block_indent:
             break
         m = re.match(r"^\s+([A-Za-z0-9_]+):\s*\{(.*)\}\s*$", line)
         if not m:
@@ -201,11 +161,7 @@ def parse_capabilities(front_matter: str) -> Dict[str, Capability]:
 
 @dataclass(frozen=True)
 class DeviceProfile:
-    # NOTE two distinct concepts, deliberately not merged:
-    #   device_type — the class/folder id this profile mounts from (lamp, intern,
-    #                 unitree-go2w); == `id`; what Go's config.DeviceType selects.
-    #   type        — the ROBOT.md `type:` form-factor category (desk_robot,
-    #                 desk_agent, mobile_robot); a coarse grouping, display-only.
+    # device_type is the folder id (== `id`); `type` is the display-only form-factor category.
     device_type: str
     id: str
     name: str
@@ -213,8 +169,6 @@ class DeviceProfile:
     schema: str
     boards: List[str]
     safety_ref: str
-    # Kinematic description (URDF) for geometric safety bounds; see
-    # robots/contract/ROBOT-SPEC.md. Empty when the body declares none.
     urdf_ref: str
     memory_backend: str
     startup_volume: int
@@ -232,25 +186,16 @@ class DeviceProfile:
 
 def parse_device(device_type: str, text: str) -> DeviceProfile:
     front_matter = extract_front_matter(text)
-    schema = validate_schema(front_matter)  # fail loud on missing/unknown ABI
+    schema = validate_schema(front_matter)
     dev_id = _parse_scalar(front_matter, "id")
-    # `id` is the device's stable identity; it must equal the folder it is
-    # mounted from (device_type). A mismatch means a ROBOT.md copied into the
-    # wrong folder or a typo'd id — a deploy fault, so fail loud (ROBOT-SPEC #3).
+    # `id` must equal the folder it is mounted from; a mismatch is a deploy fault.
     if dev_id != device_type:
         raise ValueError(
             f"ROBOT.md id '{dev_id}' does not match its folder '{device_type}' — "
             f"id must equal the device folder name"
         )
     capabilities = parse_capabilities(front_matter)
-    # `presence` (people perception: who is here + their emotional state) is a
-    # routeless capability — it runs ML over a sensor via perception-service. It reads the
-    # user's emotion from EITHER the camera (facial emotion, needs `vision`) OR the
-    # microphone (speech emotion / SER, needs `audio`), so it needs at least one
-    # people sensor to function. This is what `required: true` MEANS for a
-    # perception capability: its prerequisite must be present, mirroring how a
-    # required route's driver must be available (else FAIL LOUD). Declared
-    # non-required → people perception simply degrades off when no sensor exists.
+    # A required `presence` needs at least one people sensor (vision or audio).
     presence = capabilities.get("presence")
     if presence and presence.required and "vision" not in capabilities and "audio" not in capabilities:
         raise ValueError(
@@ -274,13 +219,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
 
 
 def validate_safety_refs(profile: DeviceProfile, safety_md_text: str) -> List[str]:
-    """Pure check that each capability's `safety: SAFETY.md#<anchor>` reference
-    resolves to a heading in SAFETY.md. Returns human-readable problem strings
-    (empty = clean). No file IO so it stays unit-testable.
-
-    The safety enforcement engine does not exist yet; this only catches
-    declaration errors, so callers WARN rather than fail boot.
-    """
+    """Check each capability's `safety: SAFETY.md#<anchor>` resolves; returns problem strings (empty = clean)."""
     problems: List[str] = []
     for cap in profile.capabilities.values():
         if not cap.safety:
@@ -292,7 +231,7 @@ def validate_safety_refs(profile: DeviceProfile, safety_md_text: str) -> List[st
             continue
         m = re.match(r"SAFETY\.md#(.+)$", cap.safety)
         if not m:
-            continue  # not a SAFETY.md anchor reference; nothing to resolve here
+            continue
         anchor = m.group(1)
         heading = re.compile(r"^##\s+" + re.escape(anchor) + r"\s*$", re.IGNORECASE | re.MULTILINE)
         if not heading.search(safety_md_text):
@@ -303,8 +242,7 @@ def validate_safety_refs(profile: DeviceProfile, safety_md_text: str) -> List[st
 
 
 def _read_ref(device_dir: str, ref: str) -> str:
-    """Resolve a *_ref value to text, mirroring soul_ref: an http(s) URL is
-    downloaded, anything else is read as a path relative to the device dir."""
+    """Resolve a *_ref value to text: an http(s) URL is downloaded, else read relative to the device dir."""
     if ref.startswith("http://") or ref.startswith("https://"):
         with urllib.request.urlopen(ref, timeout=30) as r:  # noqa: S310 (device-trusted ref)
             return r.read().decode("utf-8")
@@ -312,18 +250,12 @@ def _read_ref(device_dir: str, ref: str) -> str:
         return f.read()
 
 
-# The declaration filename. ROBOT.md is canonical; DEVICE.md is the name it
-# shipped under and is still read, because robots in the field have it on disk
-# and OTA device profiles carry it. Write ROBOT.md, accept either.
+# ROBOT.md is canonical; DEVICE.md is still accepted for devices in the field.
 PROFILE_NAMES = ("ROBOT.md", "DEVICE.md")
 
 
 def profile_path(device_dir: str) -> str:
-    """The declaration file inside a device folder — ROBOT.md, else DEVICE.md.
-
-    Returns the ROBOT.md path when neither exists so the caller's open() raises
-    with the name we want people to use.
-    """
+    """The declaration file inside a device folder: ROBOT.md, else DEVICE.md."""
     for name in PROFILE_NAMES:
         candidate = os.path.join(device_dir, name)
         if os.path.isfile(candidate):
@@ -337,16 +269,13 @@ def load_device(device_type: str, devices_dir: str) -> DeviceProfile:
     with open(profile_path(device_dir), "r") as f:
         profile = parse_device(device_type, f.read())
 
-    # Resolve the safety document from the top-level `safety_ref` (path or URL),
-    # then anchor-check the per-capability `safety:` refs against it. safety_ref
-    # is OPTIONAL and the enforcement engine does not exist yet, so every problem
-    # is a WARNING, never a boot failure.
+    # safety_ref is optional; every problem is a warning, never a boot failure.
     if any(cap.safety for cap in profile.capabilities.values()):
         safety_text = ""
         if profile.safety_ref:
             try:
                 safety_text = _read_ref(device_dir, profile.safety_ref)
-            except Exception as e:  # missing file, bad URL, network error
+            except Exception as e:
                 logger.warning(
                     "[device] %s: cannot read safety_ref %r: %s",
                     device_type, profile.safety_ref, e,
@@ -374,21 +303,20 @@ class MountPlan:
 
 
 def plan_mounts(declared: Dict[str, bool], available: Dict[str, bool]) -> MountPlan:
-    """Pure mount planner — the heart of declaration-driven mounting.
+    """Pure mount planner.
 
-    declared:  route -> required   (from ROBOT.md)
-    available: route -> driver importable/initialized
+    Args: declared route -> required (ROBOT.md); available route -> driver present.
     """
     mounted: List[str] = []
     skipped: List[str] = []
     failed: List[str] = []
     for route in sorted(set(declared) | set(available)):
         if route not in declared:
-            skipped.append(route)               # not this device
+            skipped.append(route)
         elif available.get(route, False):
-            mounted.append(route)               # declared + present
+            mounted.append(route)
         elif declared[route]:
-            failed.append(route)                # declared + required + missing -> loud
+            failed.append(route)
         else:
-            skipped.append(route)               # declared + optional + missing -> graceful
+            skipped.append(route)
     return MountPlan(mounted=mounted, skipped=skipped, failed_required=failed)

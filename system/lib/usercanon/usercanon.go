@@ -1,10 +1,5 @@
-// Package usercanon resolves raw user labels (AI-supplied names, Telegram
-// sender strings, face-recognition ids) to the canonical user directory
-// under /root/local/users.
-//
-// Resolve mirrors the Python hal.service.voice.music_service.canonicalize_person
-// behaviour so Go-written and Python-written paths converge on the same
-// folder for a given person.
+// Package usercanon resolves raw user labels to canonical user directories.
+// Resolve must stay in sync with Python canonicalize_person so both sides pick the same folder.
 package usercanon
 
 import (
@@ -31,8 +26,7 @@ var (
 	reTelegramID = regexp.MustCompile(`\((\d+)\)`)
 )
 
-// Slugify lowercases, collapses non [a-z0-9_-] runs to "_", trims, caps at 64.
-// Matches Python FaceRecognizer.normalize_label.
+// Slugify lowercases, collapses non [a-z0-9_-] runs to "_", trims, caps at 64 (matches Python normalize_label).
 func Slugify(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = reNonLabel.ReplaceAllString(s, "_")
@@ -46,12 +40,8 @@ func Slugify(name string) string {
 	return s
 }
 
-// Resolve maps a raw label to a canonical user dir name by trying, in order:
-//  1. Slug match against an existing user dir.
-//  2. Telegram id in `NAME (123456)` form → scan metadata.json for matching telegram_id.
-//  3. Longest alphanumeric token that matches an existing user dir
-//     (e.g. "i am gray" → "gray").
-//  4. Slug fallback (may create a new dir, but stays filesystem-safe).
+// Resolve maps a raw label to a user dir name: slug, Telegram id, longest matching token, then slug fallback.
+// Example: "i am gray" -> "gray".
 func Resolve(label string) string {
 	if strings.TrimSpace(label) == "" {
 		return DefaultUser

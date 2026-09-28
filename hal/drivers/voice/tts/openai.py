@@ -14,11 +14,7 @@ logger = logging.getLogger("hal.voice.tts")
 
 
 def _ensure_openai_v1(base_url: str) -> str:
-    """Append /v1 to autonomous API base URLs that are missing it.
-
-    Covers three cases: (1) missing /v1 → append it, (2) already has /v1 →
-    leave untouched, (3) non-autonomous URL → leave untouched.
-    """
+    """Append /v1 to autonomous API base URLs that are missing it."""
     base_url = base_url.rstrip("/")
     if "campaign-api.autonomous.ai" in base_url and base_url.endswith("/ai"):
         base_url += "/v1"
@@ -33,16 +29,7 @@ class OpenAITTSBackend(TTSBackend):
         try:
             from openai import OpenAI
             base_url = _ensure_openai_v1(base_url)
-            # timeout=10 caps a single TTS request end-to-end. Default SDK
-            # timeout is 600s — long enough for an upstream Cloudflare 524 or
-            # similar backend stall to freeze self._speaking=True for MINUTES,
-            # which drains the mic pipeline and looks like the whole voice
-            # loop hung (observed 2026-07-17: campaign-api returned 524 on
-            # attempt 1, attempt 2 hung ~22s+ with no timeout). 10s is well
-            # above normal TTFB (~2-5s) but keeps the worst-case retry
-            # chain (max_retries=3 → 4 attempts × 10s ≈ 40s wall-clock)
-            # short enough for the user to still connect the amber flash
-            # cue to the utterance that triggered it.
+            # timeout=10 caps a single TTS request end-to-end.
             self._client = OpenAI(api_key=api_key, base_url=base_url, timeout=10.0)
             logger.info("OpenAI TTS backend ready (base_url=%s, timeout=10s)", base_url)
         except ImportError as e:
@@ -84,10 +71,8 @@ class OpenAITTSBackend(TTSBackend):
         except Exception as e:
             # OpenAI SDK raises openai.RateLimitError (an APIStatusError with
             # status_code 429) for rate limit AND insufficient_quota. Match on
-            # status_code so we don't need a hard import of the SDK's exception
-            # types here. Re-raise as TTSRateLimitError so the service announces
-            # the prerendered notice instead of failing silently. Any other error
-            # propagates unchanged.
+            # status_code so we don't need a hard import of the SDK's exception types
+            # here.
             if getattr(e, "status_code", None) == 429:
                 raise TTSRateLimitError(f"OpenAI TTS rate limit / quota: {e}", status_code=429) from e
             raise

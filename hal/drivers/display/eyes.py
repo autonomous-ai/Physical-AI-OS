@@ -1,13 +1,4 @@
-"""
-Pixel Art Eyes — renders expressive eyes on the GC9A01 240x240 round LCD.
-
-Dual-mode display:
-  - Eyes mode (default): pixel art eyes with expressions and animations
-  - Info mode: shows text info (time, weather, timer, notifications)
-
-Eyes are drawn with PIL on a 240x240 canvas, then pushed to the display driver.
-Each eye expression is a combination of: eye shape, pupil position, eyelid position.
-"""
+"""Pixel Art Eyes — renders expressive eyes on the GC9A01 240x240 round LCD."""
 
 from PIL import Image, ImageDraw, ImageFont
 from typing import Optional, Tuple
@@ -17,26 +8,22 @@ from hal.presets import (
     EMO_SHY, EMO_SLEEPY, EMO_THINKING,
 )
 
-# Display resolution
 WIDTH = 240
 HEIGHT = 240
 CENTER_X = WIDTH // 2
 CENTER_Y = HEIGHT // 2
 
-# Eye colors
-BG_COLOR = (0, 0, 0)         # black background
-EYE_WHITE = (240, 240, 240)  # slightly off-white
-PUPIL_COLOR = (40, 40, 40)   # dark gray
-IRIS_COLOR = (80, 160, 255)  # blue iris
-EYELID_COLOR = (0, 0, 0)     # same as bg for closing effect
+BG_COLOR = (0, 0, 0)
+EYE_WHITE = (240, 240, 240)
+PUPIL_COLOR = (40, 40, 40)
+IRIS_COLOR = (80, 160, 255)
+EYELID_COLOR = (0, 0, 0)
 
-# Eye geometry (single eye centered on round display)
 EYE_WIDTH = 140
 EYE_HEIGHT = 120
 PUPIL_RADIUS = 22
 IRIS_RADIUS = 38
 
-# Pupil offset range (how far pupil can move from center)
 PUPIL_MAX_OFFSET_X = 30
 PUPIL_MAX_OFFSET_Y = 20
 
@@ -46,22 +33,21 @@ class EyeState:
 
     def __init__(self):
         self.expression: str = "neutral"
-        self.pupil_x: float = 0.0  # -1.0 (left) to 1.0 (right)
-        self.pupil_y: float = 0.0  # -1.0 (up) to 1.0 (down)
-        self.openness: float = 1.0  # 0.0 (closed) to 1.0 (fully open)
+        self.pupil_x: float = 0.0
+        self.pupil_y: float = 0.0
+        self.openness: float = 1.0
         self.blink: bool = False
 
 
-# Expression definitions: modify eye shape and pupil behavior
 EXPRESSIONS = {
     "neutral":     {"eye_h_scale": 1.0, "pupil_y": 0.0, "squint": 0.0},
-    EMO_HAPPY:     {"eye_h_scale": 0.6, "pupil_y": 0.1, "squint": 0.3},   # squinted happy
+    EMO_HAPPY:     {"eye_h_scale": 0.6, "pupil_y": 0.1, "squint": 0.3},
     EMO_SAD:       {"eye_h_scale": 0.8, "pupil_y": 0.3, "squint": 0.0, "droop_top": True},
-    EMO_CURIOUS:   {"eye_h_scale": 1.2, "pupil_y": -0.1, "squint": 0.0},  # wide open
+    EMO_CURIOUS:   {"eye_h_scale": 1.2, "pupil_y": -0.1, "squint": 0.0},
     EMO_THINKING:  {"eye_h_scale": 0.9, "pupil_x": 0.5, "pupil_y": -0.3, "squint": 0.1},
-    EMO_EXCITED:   {"eye_h_scale": 1.3, "pupil_y": 0.0, "squint": 0.0},   # very wide
+    EMO_EXCITED:   {"eye_h_scale": 1.3, "pupil_y": 0.0, "squint": 0.0},
     EMO_SHY:       {"eye_h_scale": 0.5, "pupil_x": -0.4, "pupil_y": 0.2, "squint": 0.2},
-    EMO_SHOCK:     {"eye_h_scale": 1.4, "pupil_y": 0.0, "squint": 0.0},   # max wide
+    EMO_SHOCK:     {"eye_h_scale": 1.4, "pupil_y": 0.0, "squint": 0.0},
     EMO_SLEEPY:    {"eye_h_scale": 0.3, "pupil_y": 0.2, "squint": 0.5},
     "angry":       {"eye_h_scale": 0.7, "pupil_y": 0.0, "squint": 0.2, "angry_brow": True},
     "love":        {"eye_h_scale": 0.8, "pupil_y": 0.0, "squint": 0.1, "heart": True},
@@ -75,21 +61,18 @@ def render_eye(state: EyeState) -> Image.Image:
 
     expr = EXPRESSIONS.get(state.expression, EXPRESSIONS["neutral"])
 
-    # Calculate eye dimensions
     eye_h_scale = expr.get("eye_h_scale", 1.0)
     squint = expr.get("squint", 0.0)
     ew = EYE_WIDTH
     eh = int(EYE_HEIGHT * eye_h_scale * state.openness)
 
     if eh < 4:
-        # Eye fully closed — just a line
         draw.line(
             [(CENTER_X - ew // 2, CENTER_Y), (CENTER_X + ew // 2, CENTER_Y)],
             fill=EYE_WHITE, width=3,
         )
         return img
 
-    # Eye white (rounded rectangle)
     eye_left = CENTER_X - ew // 2
     eye_top = CENTER_Y - eh // 2
     eye_right = CENTER_X + ew // 2
@@ -102,59 +85,48 @@ def render_eye(state: EyeState) -> Image.Image:
         fill=EYE_WHITE,
     )
 
-    # Squint: draw eyelids (top and bottom) closing in
     if squint > 0:
         squint_px = int(eh * squint * 0.5)
-        # Top eyelid
         draw.rectangle(
             [eye_left - 5, eye_top - 5, eye_right + 5, eye_top + squint_px],
             fill=BG_COLOR,
         )
-        # Bottom eyelid
         draw.rectangle(
             [eye_left - 5, eye_bottom - squint_px, eye_right + 5, eye_bottom + 5],
             fill=BG_COLOR,
         )
 
-    # Sad droopy top eyelid
     if expr.get("droop_top"):
         for i in range(20):
             x = eye_left + i * (ew // 20)
-            y = eye_top + int(i * 0.8)  # slopes down left to right
+            y = eye_top + int(i * 0.8)
             draw.rectangle([x, eye_top - 5, x + ew // 20 + 1, y], fill=BG_COLOR)
 
-    # Angry brow — diagonal line above eye
     if expr.get("angry_brow"):
         draw.line(
             [(eye_left + 10, eye_top - 15), (eye_right - 10, eye_top - 5)],
             fill=(200, 50, 50), width=5,
         )
 
-    # Pupil position
     px_offset = expr.get("pupil_x", 0.0) + state.pupil_x
     py_offset = expr.get("pupil_y", 0.0) + state.pupil_y
     px = CENTER_X + int(px_offset * PUPIL_MAX_OFFSET_X)
     py = CENTER_Y + int(py_offset * PUPIL_MAX_OFFSET_Y)
 
-    # Clamp pupil within eye bounds
     px = max(eye_left + IRIS_RADIUS, min(eye_right - IRIS_RADIUS, px))
     py = max(eye_top + IRIS_RADIUS, min(eye_bottom - IRIS_RADIUS, py))
 
-    # Heart eyes
     if expr.get("heart"):
         _draw_heart(draw, px, py, IRIS_RADIUS, (255, 80, 120))
     else:
-        # Iris
         draw.ellipse(
             [px - IRIS_RADIUS, py - IRIS_RADIUS, px + IRIS_RADIUS, py + IRIS_RADIUS],
             fill=IRIS_COLOR,
         )
-        # Pupil
         draw.ellipse(
             [px - PUPIL_RADIUS, py - PUPIL_RADIUS, px + PUPIL_RADIUS, py + PUPIL_RADIUS],
             fill=PUPIL_COLOR,
         )
-        # Highlight (small white circle)
         hl_x = px - PUPIL_RADIUS // 2
         hl_y = py - PUPIL_RADIUS // 2
         draw.ellipse(
@@ -162,7 +134,6 @@ def render_eye(state: EyeState) -> Image.Image:
             fill=(255, 255, 255),
         )
 
-    # Apply circular mask (round display)
     mask = Image.new("L", (WIDTH, HEIGHT), 0)
     mask_draw = ImageDraw.Draw(mask)
     mask_draw.ellipse([0, 0, WIDTH - 1, HEIGHT - 1], fill=255)
@@ -176,7 +147,6 @@ def render_info(text: str, subtitle: str = "", bg_color: Tuple[int, int, int] = 
     img = Image.new("RGB", (WIDTH, HEIGHT), bg_color)
     draw = ImageDraw.Draw(img)
 
-    # Use default font (monospace) — on Pi, can use a custom .ttf
     try:
         font_large = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", 48)
         font_small = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf", 20)
@@ -184,7 +154,6 @@ def render_info(text: str, subtitle: str = "", bg_color: Tuple[int, int, int] = 
         font_large = ImageFont.load_default()
         font_small = ImageFont.load_default()
 
-    # Main text centered
     bbox = draw.textbbox((0, 0), text, font=font_large)
     tw = bbox[2] - bbox[0]
     th = bbox[3] - bbox[1]
@@ -193,7 +162,6 @@ def render_info(text: str, subtitle: str = "", bg_color: Tuple[int, int, int] = 
         text, fill=(255, 255, 255), font=font_large,
     )
 
-    # Subtitle
     if subtitle:
         bbox2 = draw.textbbox((0, 0), subtitle, font=font_small)
         sw = bbox2[2] - bbox2[0]
@@ -202,7 +170,6 @@ def render_info(text: str, subtitle: str = "", bg_color: Tuple[int, int, int] = 
             subtitle, fill=(180, 180, 180), font=font_small,
         )
 
-    # Circular mask
     mask = Image.new("L", (WIDTH, HEIGHT), 0)
     mask_draw = ImageDraw.Draw(mask)
     mask_draw.ellipse([0, 0, WIDTH - 1, HEIGHT - 1], fill=255)
@@ -214,8 +181,6 @@ def render_info(text: str, subtitle: str = "", bg_color: Tuple[int, int, int] = 
 def _draw_heart(draw: ImageDraw.Draw, cx: int, cy: int, size: int, color: Tuple[int, int, int]):
     """Draw a simple heart shape centered at (cx, cy)."""
     s = size
-    # Two circles for top bumps
     draw.ellipse([cx - s, cy - s, cx, cy], fill=color)
     draw.ellipse([cx, cy - s, cx + s, cy], fill=color)
-    # Triangle for bottom point
     draw.polygon([(cx - s, cy - s // 4), (cx + s, cy - s // 4), (cx, cy + s)], fill=color)

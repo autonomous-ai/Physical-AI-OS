@@ -21,18 +21,12 @@ import { PersonCard } from "./face-owners/PersonCard";
 export function FaceOwnersSection() {
   const [, , themeClass] = useTheme();
 
-  // Enrolled-owners list + detection state (cooldowns, current user) + polling
-  // and refresh live in their own hook. `refresh` reloads the list after a
-  // mutation (enroll / rename / remove).
   const {
     data, error, currentUser,
     cooldowns, cdError, resetting, manualRefreshing,
     refresh, handleManualRefresh, handleResetCooldowns,
   } = useFaceData();
 
-  // Owner-mutation flows (enroll / rename / remove user-photo-voice) + their
-  // confirm/in-flight state live in their own hook; it takes `refresh` to reload
-  // the list after a change.
   const {
     showEnroll, setShowEnroll,
     enrollName, setEnrollName,
@@ -57,21 +51,12 @@ export function FaceOwnersSection() {
     handleRemoveVoiceFile, confirmRemoveVoice,
   } = useOwnerActions(refresh);
 
-  // Timeline modal state
   const [timelineUser, setTimelineUser] = useState<string | null>(null);
 
-  // Person card expand state — cards start collapsed so the grid stays dense.
-  // Auto-expands the currently-active user the first time it appears.
   const [expandedPerson, setExpandedPerson] = useState<Record<string, boolean>>({});
-  // Tracks which card is hovered so its action buttons fade in (cleaner UX
-  // than a permanent row of icons cluttering every card).
   const [hoveredPerson, setHoveredPerson] = useState<string | null>(null);
-  // Tracks the hovered photo thumbnail so only its delete button shows —
-  // identified by "label/filename".
   const [hoveredPhoto, setHoveredPhoto] = useState<string | null>(null);
 
-  // Unknown voice clusters + face stranger visit stats live in their own hook
-  // (independent of the enrolled-owners data).
   const {
     strangers, strangersError,
     expandedCluster, setExpandedCluster,
@@ -83,8 +68,6 @@ export function FaceOwnersSection() {
     handleDeleteStrangerFile, confirmDeleteStrangerFile,
   } = useStrangers();
 
-  // Per-person file gallery: folder toggle, inline preview, audio playback, and
-  // file-open routing live in their own hook.
   const {
     expanded, toggleDir,
     preview, setPreview, previewLoading,
@@ -93,12 +76,8 @@ export function FaceOwnersSection() {
   } = useFilePreview();
 
 
-  // Base card style matching Overview/System: the `.lm-mon-card` class owns the
-  // resting + hover box-shadow (and the gradient sheen / amber accent / glow), so
-  // we strip the inline boxShadow from S.card to let the class's :hover win.
   const monCard = { ...S.card, boxShadow: undefined };
 
-  // Sizing-only — visual surface/border/hover/focus comes from `.lm-u-input`.
   const inputStyle: React.CSSProperties = {
     fontSize: 12,
     padding: "8px 11px",
@@ -106,14 +85,11 @@ export function FaceOwnersSection() {
     width: "100%",
   };
 
-  // Small uppercase field label for the enroll form, so each input reads as a
-  // labelled field rather than a bare placeholder box.
   const fieldLabel: React.CSSProperties = {
     display: "block", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
     textTransform: "uppercase", color: "var(--lm-text-dim)", marginBottom: 5,
   };
 
-  // Sizing-only — visual surface/border/hover/focus comes from `.lm-u-btn`.
   const btnStyle: React.CSSProperties = {
     fontSize: 10,
     padding: "4px 12px",
@@ -121,16 +97,11 @@ export function FaceOwnersSection() {
     fontWeight: 600,
   };
 
-  // Card header row — label on the left, badge/action on the right, matching the
-  // Overview/System header pattern (no tinted strip, just spacing + alignment).
   const cardHeader: React.CSSProperties = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
     marginBottom: 12,
   };
 
-  // Square icon button — used for the per-person action row (Edit / Timeline /
-  // Delete / Expand) so each is the same compact size regardless of label width.
-  // Surface/border/hover come from `.lm-u-btn`.
   const iconBtnStyle: React.CSSProperties = {
     width: 26, height: 26,
     display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -146,19 +117,13 @@ export function FaceOwnersSection() {
   ];
   const hasActiveCooldowns = allCooldownEntries.some((e) => e.cooldown_remaining > 0);
 
-  // "Here now" only names a concrete enrolled user; the "unknown" bucket means
-  // someone is present but unrecognized, which reads better as a dash on the tile.
   const hereNow = currentUser && currentUser !== "unknown" ? currentUser : null;
-  // First enrolled photo of the active user, so the Here-now tile can show a real
-  // face avatar instead of the generic icon when we have one.
   const hereNowPhoto = hereNow
     ? data?.persons.find((p) => p.label === hereNow)?.photos?.[0] ?? null
     : null;
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      {/* Hero — command-center header for the Users page: title + live stat tiles,
-          mirroring the Overview hero so the tab reads as a dashboard, not a list. */}
       <div className="lm-mon-hero">
         <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -205,7 +170,6 @@ export function FaceOwnersSection() {
             </div>
           </div>
 
-          {/* Live stat tiles — headline numbers pulled up from the cards below. */}
           <div className="lm-grid-auto">
             <HeroStat icon={<Users size={16} />} label="Enrolled" tone="amber"
               value={data ? data.enrolled_count : "—"} />
@@ -228,8 +192,6 @@ export function FaceOwnersSection() {
         </div>
       </div>
 
-      {/* Enroll form — Add New User popup modal (keeps the dense person grid
-          uncluttered). All enroll state + handleEnroll stay in this component. */}
       {showEnroll && (
         <EnrollModal
           themeClass={themeClass}
@@ -247,7 +209,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Rename modal — themed replacement for the native prompt()/alert(). */}
       {renaming != null && (
         <RenameModal
           themeClass={themeClass}
@@ -260,7 +221,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Delete-user confirm — themed replacement for window.confirm(). */}
       {confirmDelete != null && (
         <ConfirmDialog
           danger
@@ -272,7 +232,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Delete-photo confirm — single face photo from a user. */}
       {confirmPhoto != null && (
         <ConfirmDialog
           danger
@@ -284,7 +243,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Delete-voice-sample confirm. */}
       {confirmVoice != null && (
         <ConfirmDialog
           danger
@@ -296,7 +254,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Delete stranger voice cluster confirm. */}
       {confirmCluster != null && (
         <ConfirmDialog
           danger
@@ -308,7 +265,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Delete stranger sample file confirm. */}
       {confirmStrangerFile != null && (
         <ConfirmDialog
           danger
@@ -320,7 +276,6 @@ export function FaceOwnersSection() {
         />
       )}
 
-      {/* Person cards */}
       {data && data.persons.length > 0 && (
         <div className="lm-grid-4">
           {data.persons.map((person, idx) => (
@@ -362,12 +317,8 @@ export function FaceOwnersSection() {
         </div>
       )}
 
-      {/* Bottom row: 3 diagnostic cards side-by-side so we get the same
-          horizontal density as Sensing/Analytics, instead of three full-width
-          stacks. */}
       <div className="lm-grid-3">
 
-      {/* Unknown Voice Clusters */}
       <StrangerClustersCard
         strangers={strangers}
         strangersError={strangersError}
@@ -381,7 +332,6 @@ export function FaceOwnersSection() {
         cardHeader={cardHeader}
       />
 
-      {/* Unknown Faces (visit stats per stranger_id) */}
       <UnknownFacesCard
         faceStrangers={faceStrangers}
         faceStrangersError={faceStrangersError}
@@ -389,7 +339,6 @@ export function FaceOwnersSection() {
         cardHeader={cardHeader}
       />
 
-      {/* Face Recognition Cooldowns */}
       <CooldownsCard
         allCooldownEntries={allCooldownEntries}
         cdError={cdError}

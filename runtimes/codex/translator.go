@@ -51,8 +51,7 @@ func (e *codexError) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
-// codexItem is one output item of a turn. Codex has emitted the discriminator
-// as both "item_type" and "type" across versions — accept either.
+// codexItem is one output item of a turn.
 type codexItem struct {
 	ID       string `json:"id"`
 	ItemType string `json:"item_type"`
@@ -94,18 +93,9 @@ type codexUse struct {
 	OutputTokens         int `json:"output_tokens"`
 }
 
-// toDomain maps Codex usage onto domain.TokenUsage. Codex speaks the OpenAI
-// Responses API, whose `input_tokens` ALREADY INCLUDES `cached_input_tokens`,
-// while domain.TokenUsage follows Anthropic semantics (InputTokens = uncached
-// only, cache read separate — the Flow monitor renders ↓in R<cache> from
-// those). Subtract, exactly like runtimes/hermes/translator.go does for the
-// chat/completions shape; adding them instead double-counts the context.
-// Measured on lamp-0c89 2026-09-10 once campaign-api enabled prompt caching:
-// a fresh turn reported input 17,623 / cached 17,408 — 215 genuinely new
-// tokens, not 35k.
-//
-// The live context size for rotation is NOT read from here — translateFrame
-// stashes the raw input_tokens into s.lastContextTokens (see rotation.go).
+// toDomain maps Codex usage onto domain.TokenUsage.
+// The live context size for rotation is NOT read from here — translateFrame stashes the raw
+// input_tokens into s.lastContextTokens (see rotation.go).
 func (u *codexUse) toDomain() *domain.TokenUsage {
 	if u == nil {
 		return nil
@@ -131,22 +121,7 @@ func (u *codexUse) toDomain() *domain.TokenUsage {
 }
 
 // translateFrame parses one inbound bridge frame and emits 0..N domain.WSEvent
-// frames into dispatch. Mapping (keep in sync with docs/agentic/codex.md):
-//
-//	thread.started                → capture session key, lifecycle.start
-//	turn.started                  → lifecycle.start (once per turn)
-//	item.started  command/mcp     → tool.start
-//	item.completed command/mcp    → tool.end (start first when unseen)
-//	item.completed web_search /
-//	               file_change    → tool.start + tool.end pair
-//	item.completed agent_message  → buffer as the reply (no delta stream); the
-//	                                previous buffered one is demoted to thinking
-//	item.completed agent_message  → …unless it carries [HW:…], then it is kept
-//	item.* reasoning / todo_list  → ignored
-//	turn.completed                → delta(final) + chat.final + lifecycle.end
-//	turn.failed / error /
-//	bridge.error                  → lifecycle.error (ends turn)
-//	bridge.status / pong          → log / ignore
+// frames into dispatch.
 func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	var f codexFrame
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -192,19 +167,16 @@ func (s *CodexService) translateFrame(raw []byte, dispatch func(domain.WSEvent))
 	case "bridge.status":
 		slog.Info("codex bridge status", "component", "codex", "state", f.State, "threadId", f.ThreadID)
 	case "pong":
-		// keepalive reply — ignore
 	default:
 		slog.Debug("codex: unhandled frame type", "component", "codex", "type", f.Type)
 	}
 }
 
 // completeSteeredFrame links an accepted follow-up to its active model turn.
-// Only silent history synchronization completes on acknowledgement; actual
-// requests await the shared result and terminal lifecycle.
 func (s *CodexService) completeSteeredFrame(f codexFrame, dispatch func(domain.WSEvent)) {
 	pending := s.takePendingRun(f.RequestID, f.RunID, false)
 	if pending.runID == "" {
-		return // stale acknowledgement or an older client that did not track it
+		return
 	}
 	flow.Log("turn_merged", map[string]any{"parent_run_id": s.getCurrentRunID()}, pending.runID)
 	if s.IsWebChatRun(pending.runID) || !s.IsSilentRun(pending.runID) {
@@ -272,10 +244,7 @@ func (s *CodexService) handleItemStarted(f codexFrame, dispatch func(domain.WSEv
 	}
 }
 
-// handleItemCompleted routes a finished item. agent_message text is
-// accumulated (codex exec sends it whole — there is no delta stream) and the
-// consumer gets everything at turn.completed, matching the picoclaw N=1
-// streaming contract.
+// handleItemCompleted routes a finished item.
 func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch)
 	it := f.Item
@@ -284,13 +253,8 @@ func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WS
 		if strings.TrimSpace(it.Text) == "" {
 			return
 		}
-		// Codex exec emits "preamble" agent_message items before it calls a
-		// tool ("Using the sensing skill for this presence event.", "Checking
-		// the posture reference for phrasing."). Only the LAST agent_message of
-		// a turn is the reply; every earlier one is narration that must never
-		// reach TTS. So a buffered part is demoted to the thinking stream (Flow
-		// Monitor only) as soon as a newer one proves it was not the reply —
-		// unless it carries a [HW:…] marker, which is a real hardware action.
+		// Only the LAST agent_message of a turn is the reply; every earlier one is narration that
+		// must never reach TTS.
 		s.turnMu.Lock()
 		var preamble string
 		if n := len(s.assistantParts); n > 0 && !hasHWMarker(s.assistantParts[n-1]) {
@@ -315,7 +279,6 @@ func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WS
 		s.ensureToolStart(it.ID, "file_changes", string(it.Changes), dispatch)
 		s.emitToolEnd(it.ID, it.Status, dispatch)
 	case "reasoning", "todo_list":
-		// thinking / plan bookkeeping — status, not content
 	default:
 		slog.Debug("codex: unhandled item kind", "component", "codex", "kind", it.kind())
 	}
@@ -323,9 +286,7 @@ func (s *CodexService) handleItemCompleted(f codexFrame, dispatch func(domain.WS
 
 // hasHWMarker reports whether text carries an inline hardware marker, in
 // either the plain form `[HW:/led/off]` or the markdown-link form
-// `[Lights off](HW:/led/off)`. Deliberately coarse: it only decides whether a
-// non-final agent_message is narration (droppable) or a real action to keep —
-// the authoritative parse lives in server/agent/delivery/http/handler_hw.go.
+// `[Lights off](HW:/led/off)`.
 func hasHWMarker(text string) bool {
 	return strings.Contains(text, "[HW:") || strings.Contains(text, "](HW:")
 }
@@ -358,12 +319,10 @@ func mcpToolName(it codexItem) string {
 	return name
 }
 
-// ensureTurnStarted emits lifecycle.start exactly once per turn. The runID is
-// adopted from a pending outbound SendChat when present, else freshly
-// allocated for an externally-initiated turn.
+// ensureTurnStarted emits lifecycle.start exactly once per turn.
 func (s *CodexService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() != "" {
-		return // already started
+		return
 	}
 	runID := s.consumePendingRunID()
 	if runID == "" {
@@ -446,15 +405,7 @@ func (s *CodexService) emitToolEnd(id, result string, dispatch func(domain.WSEve
 
 // emitFinal emits, in order: (a) the whole reply as a single assistant delta,
 // (b) the final chat message, (c) lifecycle.end with usage — then closes the
-// turn. Order matches OpenClaw/Hermes/PicoClaw (assistant deltas → chat.final
-// → lifecycle.end → idle); codex exec does not stream tokens, so (a) is the
-// N=1 case of that contract — it is what lets the shared consumer flush TTS +
-// [HW:/…] hardware markers at lifecycle.end.
-//
-// The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false)
-// on chat.final / lifecycle.end, which synchronously drains queued sensing
-// events and starts the NEXT turn (fresh queued run ID). Clearing here lets
-// that turn's runID survive instead of being clobbered.
+// turn. Turn ids are reset BEFORE dispatch: the consumer starts the next turn synchronously.
 func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch)
 	runID := s.getCurrentRunID()
@@ -476,21 +427,12 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 			"inputTokens", f.Usage.InputTokens,
 			"cachedInputTokens", f.Usage.CachedInputTokens,
 			"outputTokens", f.Usage.OutputTokens)
-		// Live context size for the rotation net (see rotation.go). Responses
-		// API `input_tokens` is ALREADY the whole prompt including the cached
-		// prefix, so it IS the context size — adding cached on top double-counts
-		// it and rotates the session at half the intended threshold.
 		s.lastContextTokens.Store(int64(f.Usage.InputTokens))
 	}
 	slog.Info("codex <<< turn completed", logArgs...)
 
-	// Preserve all queued request/run pairs so later silent/web-chat markers
-	// still match their own turn; only clear the currently streamed turn.
 	s.finishCurrentCorrelation()
 	steeredRuns := s.takeSteeredRuns()
-	// The latest audible follow-up owns the voice response and its Harness
-	// route. Suppress duplicate speech before any assistant delta is dispatched;
-	// the host still executes hardware markers once, and child text strips them.
 	speechRunID := runID
 	for _, merged := range steeredRuns {
 		if !s.IsWebChatRun(merged.runID) && !s.IsSilentRun(merged.runID) {
@@ -509,11 +451,8 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	}
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
-	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
-	// this DM is the user-visible output. [HW:/...] hardware markers and TTS
-	// audio tags are for HAL, not the chat bubble — strip them
-	// (stripForChannel, hal.go). Best-effort in a goroutine: the read loop
-	// must not block on the Bot API.
+	// originating chat.
+	// Best-effort in a goroutine: the read loop must not block on the Bot API.
 	if chatID := s.consumeTelegramRun(runID); chatID != "" && finalText != "" {
 		if reply := stripForChannel(finalText); reply != "" {
 			go func() {
@@ -526,20 +465,15 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 	}
 
 	// Slack-originated turn (slack.go): post the reply back to the originating
-	// channel/thread (chat.postMessage) and clear the eyes ack reaction. TTS
-	// was suppressed at injection (MarkSilentRun); markers are stripped like
-	// the telegram path. Consumed here — synchronously, before dispatch — so
-	// the shared handler's DeliverSlackReply safety net stays a no-op.
+	// channel/thread (chat.postMessage) and clear the eyes ack reaction.
 	// Best-effort in a goroutine: the read loop must not block on the Web API.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		go s.finishSlackTurn(o, stripForChannel(finalText))
 	}
 
 	// Discord-originated turn (discord.go): post the reply back to the
-	// originating channel (chunked at Discord's 2000-char limit). TTS was
-	// suppressed at injection (MarkSilentRun); markers are stripped like the
-	// telegram path. Best-effort in a goroutine: the read loop must not block
-	// on the Discord API.
+	// originating channel (chunked at Discord's 2000-char limit).
+	// Best-effort in a goroutine: the read loop must not block on the Discord API.
 	if channelID := s.consumeDiscordRun(runID); channelID != "" && finalText != "" {
 		go s.finishDiscordTurn(channelID, stripForChannel(finalText))
 	}
@@ -580,17 +514,13 @@ func (s *CodexService) emitFinal(f codexFrame, dispatch func(domain.WSEvent)) {
 }
 
 func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
-	s.ensureTurnStarted(dispatch) // make sure a runID exists for the error
+	s.ensureTurnStarted(dispatch)
 	runID := s.getCurrentRunID()
 	if msg == "" {
 		msg = "codex error"
 	}
 	slog.Warn("codex <<< error", "component", "codex", "runID", runID, "error", msg)
 
-	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
-	// on lifecycle.error, draining the next turn synchronously.
-	// Preserve all queued request/run pairs so later silent/web-chat markers
-	// still match their own turn; only clear the currently streamed turn.
 	s.finishCurrentCorrelation()
 	steeredRuns := s.takeSteeredRuns()
 	s.turnMu.Lock()
@@ -599,14 +529,11 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 	s.turnMu.Unlock()
 
 	// Telegram-originated turn: consume the tracker so the map doesn't leak.
-	// No DM — the user simply gets no reply for a failed turn.
 	if chatID := s.consumeTelegramRun(runID); chatID != "" {
 		slog.Warn("telegram-originated turn failed — reply dropped",
 			"component", "codex", "runID", runID, "chatID", chatID)
 	}
 
-	// Slack-originated turn: consume the tracker (no reply for a failed turn)
-	// and clear the eyes ack reaction so the message isn't left marked.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		slog.Warn("slack-originated turn failed — reply dropped",
 			"component", "codex", "runID", runID, "channel", o.channel)
@@ -614,7 +541,7 @@ func (s *CodexService) handleError(msg string, dispatch func(domain.WSEvent)) {
 	}
 
 	// Discord-originated turn: consume the tracker so the map doesn't leak
-	// (and the typing keeper stops). No reply for a failed turn.
+	// (and the typing keeper stops).
 	if channelID := s.consumeDiscordRun(runID); channelID != "" {
 		slog.Warn("discord-originated turn failed — reply dropped",
 			"component", "codex", "runID", runID, "channelID", channelID)
@@ -643,8 +570,6 @@ func (s *CodexService) emitMergedErrors(runs []pendingRun, msg string, dispatch 
 		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 	}
 }
-
-// --- turn-correlation helpers ---
 
 func (s *CodexService) getCurrentRunID() string {
 	v, _ := s.currentRunID.Load().(string)
@@ -711,7 +636,7 @@ func isTurnFrame(kind string) bool {
 func (s *CodexService) adoptFrameCorrelation(f codexFrame, dispatch func(domain.WSEvent)) bool {
 	if f.RequestID == "" && f.RunID == "" {
 		return true
-	} // old bridge: FIFO
+	}
 	if current := s.getCurrentRunID(); current != "" {
 		request, _ := s.currentRequestID.Load().(string)
 		if (f.RunID == "" || f.RunID == current) && (f.RequestID == "" || request == "" || f.RequestID == request) {
@@ -753,8 +678,7 @@ func (s *CodexService) adoptFrameCorrelation(f codexFrame, dispatch func(domain.
 	return true
 }
 
-// Queue rejection is not a failure of the currently streaming turn. Remove
-// only the rejected pending request and emit its own correlated terminal event.
+// Queue rejection is not a failure of the currently streaming turn.
 func (s *CodexService) rejectQueuedFrame(f codexFrame, dispatch func(domain.WSEvent)) {
 	pending := s.takePendingRun(f.RequestID, f.RunID, false)
 	if pending.runID == "" {
@@ -767,10 +691,7 @@ func (s *CodexService) rejectQueuedFrame(f codexFrame, dispatch func(domain.WSEv
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
-// clearTurn resets correlation on disconnect or busy-TTL expiry. Those paths
-// cannot assume queued requests are still live. Modern gateway frames carry
-// their originating run IDs if work later resumes; legacy untagged frames do
-// not have enough information to recover after a lost connection.
+// clearTurn resets correlation on disconnect or busy-TTL expiry.
 func (s *CodexService) clearTurn() {
 	telemetry.ReportTaskObservationLost(s.unfinishedTaskRunIDs()...)
 	s.currentRequestID.Store("")

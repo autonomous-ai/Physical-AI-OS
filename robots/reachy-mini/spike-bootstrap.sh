@@ -1,36 +1,10 @@
 #!/usr/bin/env bash
-# spike-bootstrap.sh — install the OTA bootstrap worker on a Reachy Mini.
-#
-# RUNS ON THE ROBOT. Pulls the `bootstrap` component from OTA metadata, seeds
-# /root/config/bootstrap.json, and runs it under systemd.
-#
-# What it is for: the other spike scripts install one version, once. The
-# bootstrap worker is what keeps a robot current afterwards — it polls the OTA
-# metadata and applies new os-server / hal / web / device builds without anyone
-# SSHing in. On a spike robot that is the difference between "the port worked
-# on the day we tried it" and a device that keeps up with the fleet.
-#
-# It is also what makes bootstrap.json authoritative: every other spike script
-# reads metadata_url from that file (see spike-lib.sh), so a robot pointed at a
-# staging feed keeps using it instead of silently falling back to production.
-#
-# Deliberately LAST in spike.sh. It can restart os-server and hal the moment it
-# finds a newer build, and doing that while the rest of the stack is still being
-# installed turns a clean bring-up into a race.
-#
-# Usage:
-#   sudo bash spike-bootstrap.sh                       # install + start
-#   sudo OTA_METADATA_URL=https://…/metadata.json \
-#        bash spike-bootstrap.sh                       # point at another feed
-#   sudo bash spike-bootstrap.sh --no-start            # install, leave it stopped
-#   sudo bash spike-bootstrap.sh --stop
-#   sudo bash spike-bootstrap.sh --uninstall
+# spike-bootstrap.sh — install the OTA bootstrap worker + software-update helper on a Reachy Mini.
+# Usage: sudo [OTA_METADATA_URL=...] bash spike-bootstrap.sh [--no-start|--stop|--uninstall]
 set -euo pipefail
 
 SPIKE_TAG="spike-bootstrap"
-# Where this package was unpacked. install.sh runs the scripts out of a staging
-# dir, spike-device.sh later copies the same package to /opt/devices — so resolve
-# it from THIS file rather than assuming either location.
+# Resolve from this file: the package runs from a staging dir or /opt/devices.
 SPIKE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # shellcheck source=spike-lib.sh
 . "$SPIKE_DIR/spike-lib.sh"
@@ -65,10 +39,6 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
 fi
 
 say "1/4  Seed $CONFIG_DIR/bootstrap.json"
-# Shared with spike-os.sh, which already seeds this before starting os-server —
-# the file is os-server's only source of OTAMetadataURL, and the skill watchers
-# read the URL from there. Idempotent, so calling it again here costs nothing and
-# keeps this script standalone.
 ensure_bootstrap_config
 BS_JSON="$CONFIG_DIR/bootstrap.json"
 URL="$(jq -r '.metadata_url // empty' "$BS_JSON" 2>/dev/null || true)"
@@ -79,16 +49,7 @@ stop_unit "$SERVICE"
 ota_install_binary bootstrap "$BIN_DIR/bootstrap-server"
 
 say "3/4  Install the software-update helper"
-# The worker is only half of the OTA path: it decides WHAT to update, then execs
-# $BIN_DIR/software-update to do it. Installing the binary alone is what left the
-# first robot detecting updates it could never apply, five minutes apart, forever
-# — with every unit reporting healthy.
-#
-# The script ships in this device package: upload-device.sh stages the canonical
-# scripts/provision/software-update at the package root, so it sits next to this
-# file. (It used to be a checked-in copy under robots/reachy-mini/ — that copy
-# drifted and is gone; there is one source now.) Fatal when missing: continuing would reproduce
-# exactly that failure, and nothing on the robot can repair it afterwards.
+# The worker execs software-update to apply updates; fatal when missing from the package.
 SU_SRC="$SPIKE_DIR/software-update"
 [ -f "$SU_SRC" ] || SU_SRC="$DEVICES_DIR/$DEVICE_TYPE/software-update"
 [ -f "$SU_SRC" ] || die "software-update is not in this device package.

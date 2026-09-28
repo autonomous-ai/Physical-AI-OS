@@ -8,10 +8,8 @@ import (
 	"sync/atomic"
 )
 
-// memoryState is the active runtime's loaded-memory fingerprint, published by
-// the guard and attached to every turn's lifecycle_start flow event so a
-// routing regression can be tied to the memory it ran with. Sizes and hashes
-// only — never content.
+// memoryState is the active runtime's memory fingerprint (sizes and hashes, never content),
+// attached to each turn's lifecycle_start flow event.
 var memoryState atomic.Pointer[map[string]any]
 
 // SetMemoryState replaces the published fingerprint.

@@ -11,12 +11,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// telegramTargetsFile is the device-side store of Telegram chats os-server may
-// proactively broadcast to (sensing/guard alerts). Inbound telegram is owned by
-// the hermes gateway (it receives + replies), so this file is os-server's own
-// separate target list, not an inbound mirror.
-//
-// Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
+// telegramTargetsFile is the device-side store of Telegram chats os-server may proactively broadcast to (sensing/guard alerts).
 const telegramTargetsFile = "/root/config/telegram_targets.json"
 
 type telegramTargetEntry struct {
@@ -28,19 +23,15 @@ type telegramTargetsFileContent struct {
 	Targets []telegramTargetEntry `json:"targets"`
 }
 
-// targetsFileMu serialises reads on telegramTargetsFile, kept only across the
-// disk I/O so it never blocks the broadcast path.
+// targetsFileMu serialises reads on telegramTargetsFile, kept only across the disk I/O so it never blocks the broadcast path.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from the device config. There is no
-// agent-side config to consult under Hermes.
+// GetTelegramBotToken returns the bot token from the device config.
 func (s *HermesService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the device-side target store. Returns nil + nil
-// (no error) when the file doesn't exist yet — the steady state until a
-// broadcast target list is provisioned.
+// GetTelegramTargets reads the device-side target store.
 func (s *HermesService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(telegramTargetsFile)

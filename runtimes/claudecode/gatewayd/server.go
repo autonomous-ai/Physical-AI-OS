@@ -70,10 +70,8 @@ type turnPayload struct {
 }
 
 // handleWS upgrades the connection, enforces bearer auth (close 4401 on
-// failure) and runs the read loop. A new client replaces the previous one.
+// failure) and runs the read loop.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	// The "/claude/ws/" mux pattern matches the whole subtree; only the two
-	// exact paths are valid WS endpoints.
 	if r.URL.Path != "/claude/ws" && r.URL.Path != "/claude/ws/" {
 		http.NotFound(w, r)
 		return
@@ -119,19 +117,14 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s client disconnected", logPrefix)
 }
 
-// handleFrame dispatches one inbound frame. message.send is written to the
-// child stdin immediately (claude serializes queued turns itself); frames that
-// arrive while the child is down are queued and flushed on respawn. Replies go
-// through s.send: this connection IS the current client (single-client
-// invariant), so no per-frame connection plumbing is needed.
+// handleFrame dispatches one inbound frame.
 func (s *Server) handleFrame(data []byte) {
 	var frame inboundFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
-		return // unparseable frames are ignored (bridge.py behavior)
+		return
 	}
 	switch frame.Type {
 	case "ping":
-		// bridge.py answers a bare {"type":"pong"} without echoing the id.
 		s.sendJSON(map[string]any{"type": "pong"})
 	case "message.send":
 		var payload turnPayload
@@ -149,8 +142,8 @@ func (s *Server) handleFrame(data []byte) {
 	}
 }
 
-// send forwards raw bytes to the connected client, if any. Write errors mark
-// the client gone but never fail the caller: a disconnect must not disturb the
+// send forwards raw bytes to the connected client, if any.
+// Write errors mark the client gone but never fail the caller: a disconnect must not disturb the
 // child — the turn finishes so the session stays consistent.
 func (s *Server) send(data []byte) {
 	s.mu.Lock()
@@ -177,9 +170,7 @@ func (s *Server) sendJSON(v any) {
 	s.send(data)
 }
 
-// sendStatus emits a bridge.status frame:
-// {"type":"bridge.status","payload":{"claude_running":<bool>,"session_id":<string|null>,..extra}}.
-// The payload field names match what runtimes/claudecode/translator.go expects.
+// sendStatus emits a bridge.status frame with claude_running, session_id and extra fields.
 func (s *Server) sendStatus(extra map[string]any) {
 	s.mu.Lock()
 	running := s.child != nil
@@ -187,7 +178,7 @@ func (s *Server) sendStatus(extra map[string]any) {
 	s.mu.Unlock()
 	payload := map[string]any{
 		"claude_running": running,
-		"session_id":     nil, // JSON null when no session yet (bridge.py compat)
+		"session_id":     nil,
 	}
 	if sid != "" {
 		payload["session_id"] = sid
@@ -198,8 +189,7 @@ func (s *Server) sendStatus(extra map[string]any) {
 	s.sendJSON(map[string]any{"type": "bridge.status", "payload": payload})
 }
 
-// sendBridgeError emits {"type":"bridge.error","payload":{"message":..}} — the
-// translator maps it to lifecycle.error, closing the client-side turn.
+// sendBridgeError emits a bridge.error frame, which ends the client-side turn.
 func (s *Server) sendBridgeError(format string, args ...any) {
 	s.sendJSON(map[string]any{
 		"type":    "bridge.error",

@@ -1,8 +1,4 @@
-"""Gemini ACKs omit unsupported scheduling, including on NON_BLOCKING models.
-
-The deployed 3.8 extended-thinking backend closes with code 1007 when scheduling
-is present. SDK model validation alone does not establish server support.
-"""
+"""Gemini ACKs omit unsupported scheduling, including on NON_BLOCKING models."""
 import asyncio
 import threading
 from types import SimpleNamespace

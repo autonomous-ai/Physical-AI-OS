@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// Text buffered before a tool call is narration and must leave the reply buffer;
-// text that already reached TTS, or that carries a hardware marker, must stay.
+// Pre-tool narration leaves the reply buffer; text already in TTS or carrying a HW marker stays.
 func TestDemoteAssistantBufferToThinking(t *testing.T) {
 	newHandler := func() *AgentHandler {
 		return &AgentHandler{

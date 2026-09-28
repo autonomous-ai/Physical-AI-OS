@@ -10,11 +10,7 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// handleDeviceRename rewrites the agent name in workspace/IDENTITY.md. WatchIdentity
-// will pick up the change on its next poll cycle and push fresh wake words to
-// HAL; OpenClaw re-reads IDENTITY.md on its own so no gateway restart is needed.
-// After the file write succeeds, an async system chat message tells the agent its
-// new name so it greets the owner with the new identity in the next turn.
+// handleDeviceRename rewrites the agent name in workspace/IDENTITY.md.
 func (h *DeviceMQTTHandler) handleDeviceRename(env domain.MQTTDataCommand) error {
 	var req domain.MQTTDeviceRenameData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
@@ -35,10 +31,8 @@ func (h *DeviceMQTTHandler) handleDeviceRename(env domain.MQTTDataCommand) error
 		return h.publishDataResult(domain.KindDeviceRename, "failure", err.Error(), nil)
 	}
 
-	// Tell the agent its new name asynchronously — failures don't fail the ack.
-	// IDENTITY.md was already written above; this system message gives the agent
-	// the new identity inline so the very next reply uses it without waiting for
-	// OpenClaw to re-read the file.
+	// Tell the agent its new name asynchronously — failures don't fail the
+	// ack.
 	go func() {
 		prompt := renameGreetingPrompt(name)
 		if _, err := h.agentGateway.SendSystemChatMessage(prompt); err != nil {
@@ -52,10 +46,8 @@ func (h *DeviceMQTTHandler) handleDeviceRename(env domain.MQTTDataCommand) error
 	})
 }
 
-// renameGreetingPrompt builds the [system] message that tells the agent it was
-// just renamed. Phrased in the owner's current STT language (read from i18n at
-// call time) so the very first acknowledgment reply lands in that language —
-// SOUL.md's "mirror owner's turn language" only kicks in once owner speaks.
+// renameGreetingPrompt builds the [system] message that tells the agent it
+// was just renamed.
 func renameGreetingPrompt(name string) string {
 	switch i18n.Lang() {
 	case i18n.LangVI:

@@ -16,9 +16,7 @@ type sidecar struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-// TestCatalogMatchesTree is the guarantee behind "one folder per skill": the
-// generated catalog must equal what is on disk. Add skills/<name>/ and forget
-// `make skills-catalog` and this fails, naming the skill.
+// TestCatalogMatchesTree fails when catalog_gen.go is stale (run `make skills-catalog`).
 func TestCatalogMatchesTree(t *testing.T) {
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {
@@ -59,8 +57,7 @@ func TestCatalogMatchesTree(t *testing.T) {
 	}
 }
 
-// TestCapabilityMatchesSidecars checks the other half: every requirement in the
-// generated map comes from a skill.json, and every skill.json is honored.
+// TestCapabilityMatchesSidecars checks the generated map against every skill.json.
 func TestCapabilityMatchesSidecars(t *testing.T) {
 	entries, err := os.ReadDir(skillsDir)
 	if err != nil {

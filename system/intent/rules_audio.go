@@ -1,4 +1,3 @@
-// Audio rules — volume, speaker mute, music stop, TTS interrupt.
 package intent
 
 import (
@@ -10,7 +9,7 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 )
 
-// Serialize intent read-modify-write pairs so simultaneous requests do not lose a step.
+// Serializes volume read-modify-write pairs so concurrent requests don't lose a step.
 var volumeAdjustmentMu sync.Mutex
 
 func adjustVolume(increase bool) *Result {
@@ -58,7 +57,6 @@ func adjustVolume(increase bool) *Result {
 }
 
 var audioRules = []rule{
-	// --- Volume ---
 	{
 		name:       "volume_up",
 		capability: device.CapAudio,
@@ -71,9 +69,7 @@ var audioRules = []rule{
 		match:      anyOf("volume down", "quieter"),
 		exec:       func(string) *Result { return adjustVolume(false) },
 	},
-	// unmute before mute: belt-and-braces ordering on top of the
-	// word-boundary match (containsPhrase) that already keeps "unmute
-	// speaker" from hitting the mute keywords.
+	// unmute before mute.
 	{
 		name:       "unmute_speaker",
 		capability: device.CapMedia,
@@ -93,7 +89,6 @@ var audioRules = []rule{
 		},
 	},
 
-	// --- Music control ---
 	{
 		name:       "music_stop",
 		capability: device.CapMedia,
@@ -104,7 +99,6 @@ var audioRules = []rule{
 		},
 	},
 
-	// --- TTS stop (interrupt the device speaking) ---
 	{
 		name:       "stop_talking",
 		capability: device.CapAudio,

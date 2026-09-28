@@ -29,25 +29,29 @@ which brain is active.
 
 | `agent_runtime` | Backend |
 |---|---|
-| unset | falls back to `gateway.default` in `robots/<type>/ROBOT.md`, then OpenClaw if that is empty too |
+| unset | falls back to the image-baked `/root/config/f_r_default_agent`, then `gateway.default` in `robots/<type>/ROBOT.md`, then OpenClaw if both are empty (`device.ResolveDefaultAgent`) |
 | `"openclaw"` | OpenClaw (default) |
-| `"hermes"` | Hermes (`hermes.ProvideService`) |
+| `"hermes"` | Hermes (`hermes.ProvideService`) — HTTP+SSE |
+| `"remote"` | Hermes-over-LAN: same client after `hermes.ApplyExternalEndpoint(agent_remote_url, agent_remote_token)` — see [`remote-hermes.md`](remote-hermes.md). HAL aliases `remote` → `hermes`. |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — persistent WebSocket client; assumes the PicoClaw service is already running. See `docs/agentic/picoclaw.md` + `runtimes/picoclaw`. |
+| `"codex"` / `"claudecode"` / `"opencode"` | Codex / Claude Code / OpenCode (`<runtime>.ProvideService`) — see [`codex.md`](codex.md), [`claudecode.md`](claudecode.md), [`opencode.md`](opencode.md) |
 | anything else | OpenClaw (logged as `FALLBACK — unknown runtime=…`) |
 
 When `agent_runtime` is unset in `config.json`, the backend is taken from the
+image-baked `/root/config/f_r_default_agent` (survives factory reset), then the
 device's declared `gateway.default` (`robots/<type>/ROBOT.md`); OpenClaw is used
-only if that is also empty. The banner logs `source` so you can tell which won.
+only if both are empty. The banner logs `source` so you can tell which won.
 
 On startup `ProvideGateway` prints an `AGENT BACKEND ACTIVE → HERMES` banner with
 `base_url`, `conversation`, `model`, and `api_key_set`. There is **no per-unit
-config** for these yet — they are compile-time constants in
-`runtimes/hermes/constants.go`:
+config** for the local server — the defaults are package-level `var`s in
+`runtimes/hermes/constants.go` (mutable so the `remote` runtime can repoint
+`BaseURL`/`APIKey` via `ApplyExternalEndpoint`, `runtimes/hermes/remote.go`):
 
-| Const | Default | Meaning |
+| Var | Default | Meaning |
 |---|---|---|
 | `BaseURL` | `http://127.0.0.1:8642` | Local Hermes API server |
-| `APIKey` | `hermes-api-key` | Bearer for Hermes |
+| `APIKey` | `hermes-local-api-key` | Bearer for Hermes |
 | `Conversation` | `device-main` | Named channel all turns flow into |
 | `Model` | `hermes-agent` | Model id sent to Hermes |
 
@@ -136,8 +140,9 @@ this, os-server rotates the conversation name:
   the wired path is `maybeAutoNewSession` (compact is disabled), each firing
   dropped the history with no summary and the device lost what it had just said.
   250 k holds ~10 turns at that rate — a net has to sit **above** where the
-  gateway's own compression settles, not inside it (same value and reasoning as
-  [`codex`](codex.md)).
+  gateway's own compression settles, not inside it (same reasoning as
+  [`codex`](codex.md), which uses a lower 120 k net because larger contexts hit a
+  latency cliff on its per-turn `codex exec` transport).
 
 ## 4. Request protocol — native Runs and Responses fallback
 
@@ -538,7 +543,7 @@ inline, a direct `bash install.sh` is fully configured and running.
 
 > Unit name: the gateway runs as `hermes-gateway.service`. The installer declares
 > this in `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables
-> the right unit (§11); `reset_hermes.go` targets the same unit.
+> the right unit (§11); `runtimes/hermes/reset.go` targets the same unit.
 
 ### The gateway unit is self-healed (image pre-bake + runtime backstop)
 
@@ -565,7 +570,7 @@ succeeded. Two layers close this gap:
   switch-runtime `service`/`verify` files. This is fast — the binary + venv are
   already pre-baked, so it only writes the unit (no git clone / `uv sync`).
   `EnsureOnboarding` then **`systemctl enable`s** the unit (factory reset disables it
-  — `reset_hermes.go` step 4, "SetupAgent re-enables" — and a freshly installed one
+  — `runtimes/hermes/reset.go` step 4, "SetupAgent re-enables" — and a freshly installed one
   is not enabled for boot) and (re)starts it whenever config changed, the unit was
   just installed, **or** the unit exists but is not active (crashed / disabled).
 
@@ -691,7 +696,7 @@ during install) and does three things, in order:
 | `discord_bot_token` / `discord_guild_id` / `discord_user_id` | → | `.env` `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID` / `DISCORD_ALLOWED_USERS` |
 | `whatsapp_user_id` | → | `.env` `WHATSAPP_ALLOWED_USERS` |
 
-`.env` `API_SERVER_KEY` must equal `constants.go` `APIKey` (`hermes-api-key`) or
+`.env` `API_SERVER_KEY` must equal `constants.go` `APIKey` (`hermes-local-api-key`) or
 every turn 401s. Hermes must listen on `127.0.0.1:8642` to match `BaseURL`.
 
 To target a different Hermes endpoint / key / model today, edit
@@ -813,7 +818,7 @@ before is the `terminal.cwd` bullet below.
   migrated device's persona from being deleted when both blocks shared one marker
   in one file (issue #403).
 - The block carries **the OS rule set every runtime gets** — eight rules: skill
-  priority (`skills/openclaw-imports/` beat any overlapping Hermes bundled skill;
+  priority (`~/.hermes/skills/openclaw-imports/` beat any overlapping Hermes bundled skill;
   third-party services go through `connectors`; never install an alternative
   client/CLI for a service a connector covers), `memories/USER.md` discipline,
   skill scope before acting — including the four-branch `SKILL.md` selection
@@ -915,7 +920,7 @@ still-installed old backend). Hermes-specific facts the generic switcher relies 
 
 - **Unit name** `hermes-gateway.service` (not `hermes.service`) — declared in
   `/usr/local/lib/os-runtimes/hermes/service` so `switch-runtime` enables the right
-  unit; `reset_hermes.go` targets the same unit.
+  unit; `runtimes/hermes/reset.go` targets the same unit.
 - **Verify hook** `/usr/local/lib/os-runtimes/hermes/verify` runs `command -v
   hermes` (cheap CLI-presence check). It is deliberately **not** a config-structure
   check — config self-heals via presync (§10), so a verify failure would force an
@@ -931,7 +936,7 @@ Confirm the swap from the `AGENT BACKEND ACTIVE → HERMES` banner + a healthy
 ## 12. Persona, memory & skills carried across a switch
 
 Switching openclaw→hermes runs a Go persona migration
-(`system/agent/migrate_persona/openclaw_to_hermes.go`) at os-server boot —
+(`system/agent/migrate_persona/runtime_hermes.go` via `migrator.go`) at os-server boot —
 **separate from `claw migrate`**. It carries, into `~/.hermes/`:
 
 - **SOUL.md** (rebranded) — and, because Hermes has no separate IDENTITY.md slot,
@@ -965,7 +970,7 @@ SOUL and restores its fields back into OpenClaw's `IDENTITY.md`** (`restoreIdent
 the inverse of the inline) — so the name set under Hermes survives the trip back,
 not just the trip out. **Skills** stay fresh under Hermes via two complementary
 paths: every `EnsureOnboarding` capability-gates and reconciles the full supported
-catalog from the CDN into `skills/openclaw-imports` (repairing stale local files
+catalog from the CDN into `~/.hermes/skills/openclaw-imports` (repairing stale local files
 even when OTA was published before the watcher started), while `skill_watcher.go`
 polls OTA metadata every five minutes for later publishes. Both use the shared
 `system/skills/skillzip.go` engine; a real content change restarts the gateway and
@@ -977,8 +982,8 @@ second root of its own (`runtimes/hermes/save_skill.go`):
 
 | Root | Owner | Written by |
 |------|-------|------------|
-| `skills/openclaw-imports/` | `hermes claw migrate` + the skill watcher | presync §0, CDN updates |
-| `skills/authored/` | the device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
+| `~/.hermes/skills/openclaw-imports/` | `hermes claw migrate` + the skill watcher | presync §0, CDN updates |
+| `~/.hermes/skills/authored/` | the device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
 
 The split is load-bearing, not cosmetic: presync §0 restores the imported
 platform skills **only when `openclaw-imports` is empty**, so an authored skill
@@ -988,8 +993,8 @@ would silently never restore the real imports. `ListSkills` merges both roots
 discovers skills anywhere under `~/.hermes/skills`, so no config change is
 needed, and no gateway restart either — skills are re-read per session.
 
-Note that `wipeHermesState` (reset.go) clears `skills/openclaw-imports` but
-**not** `skills/authored`, so user-authored skills survive a factory reset.
+Note that `wipeHermesState` (reset.go) clears `~/.hermes/skills/openclaw-imports` but
+**not** `~/.hermes/skills/authored`, so user-authored skills survive a factory reset.
 
 **MCP connectors are carried across too** — the configured remote-MCP servers are
 cloned config→config by `MCPReconcile` on the same switch boot (see §10, *MCP

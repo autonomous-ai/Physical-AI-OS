@@ -30,8 +30,7 @@ func TestResolveServesAllowedFile(t *testing.T) {
 	if err != nil {
 		t.Fatalf("want served, got %v", err)
 	}
-	// The returned path is the RESOLVED one — on macOS t.TempDir() lives under
-	// /var, itself a symlink to /private/var.
+	// t.TempDir() may sit under a symlink (/var -> /private/var on macOS).
 	resolved, _ := filepath.EvalSymlinks(img)
 	if got != resolved {
 		t.Errorf("path = %q, want %q", got, resolved)
@@ -41,8 +40,7 @@ func TestResolveServesAllowedFile(t *testing.T) {
 	}
 }
 
-// The extension whitelist is checked before the filesystem, so a type we don't
-// serve is refused whether or not it exists.
+// The extension whitelist is checked before the filesystem.
 func TestResolveRejectsUnservedTypes(t *testing.T) {
 	root := t.TempDir()
 	roots := []string{root}
@@ -53,8 +51,7 @@ func TestResolveRejectsUnservedTypes(t *testing.T) {
 			t.Errorf("%s: err = %v, want ErrType", name, err)
 		}
 	}
-	// …and for a path that doesn't exist either, so the error can't be used to
-	// probe for the file's presence.
+	// Absent files get the same error, so presence cannot be probed.
 	if _, _, err := Resolve(filepath.Join(root, "absent.json"), roots); !errors.Is(err, ErrType) {
 		t.Errorf("absent .json: err = %v, want ErrType", err)
 	}
@@ -71,8 +68,6 @@ func TestResolveRejectsTraversal(t *testing.T) {
 	if _, _, err := Resolve(escape, []string{allowed}); !errors.Is(err, ErrOutsideRoots) {
 		t.Fatalf("traversal err = %v, want ErrOutsideRoots", err)
 	}
-	// Sanity: the same file IS readable when its own dir is a root, so the test
-	// above failed for the right reason.
 	if _, _, err := Resolve(secret, []string{base}); err != nil {
 		t.Fatalf("control case failed: %v", err)
 	}
@@ -96,8 +91,7 @@ func TestResolveRejectsSymlinkEscape(t *testing.T) {
 	}
 }
 
-// A sibling whose name merely starts with the root's must not pass as being
-// under it.
+// A sibling whose name merely starts with the root's must not pass.
 func TestResolveRejectsRootPrefixLookalike(t *testing.T) {
 	base := t.TempDir()
 	allowed := filepath.Join(base, "media")
@@ -146,8 +140,7 @@ func TestResolveMissingRootAllowsNothing(t *testing.T) {
 	}
 }
 
-// The shipped roots must cover the snapshot dir HAL writes and /tmp, and must
-// NOT cover a runtime's config dir (openclaw.json holds gateway tokens).
+// Roots cover HAL snapshots and /tmp but never a runtime's config dir.
 func TestRootsScope(t *testing.T) {
 	roots := Roots()
 	has := func(want string) bool {
@@ -171,9 +164,7 @@ func TestRootsScope(t *testing.T) {
 	}
 }
 
-// Scan must find a path wherever a turn put it — typed into the reply, buried in
-// a tool's JSON arguments, or returned in a tool result — and must NOT fire on
-// paths outside the served roots.
+// Scan finds paths in replies, tool args and tool results, only under served roots.
 func TestScan(t *testing.T) {
 	cases := []struct {
 		name string
@@ -238,8 +229,7 @@ func TestScan(t *testing.T) {
 	}
 }
 
-// Scan only proposes candidates — a path it finds still has to survive Resolve,
-// which is what actually reads the disk.
+// Scan only proposes candidates; Resolve still decides.
 func TestScanIsCandidatesOnly(t *testing.T) {
 	got := Scan("/tmp/definitely-not-here-9f3a.png")
 	if len(got) != 1 {
@@ -250,8 +240,7 @@ func TestScanIsCandidatesOnly(t *testing.T) {
 	}
 }
 
-// The client picks the filename, and it decides a path on disk — only its
-// extension may be used, and only when it is a plain short suffix.
+// Only a plain short client extension may be used.
 func TestSafeExt(t *testing.T) {
 	cases := []struct{ name, want string }{
 		{"report.pdf", ".pdf"},
@@ -274,8 +263,7 @@ func TestSafeExt(t *testing.T) {
 	}
 }
 
-// A document must land with its REAL extension: writing every attachment as
-// .jpg is what made a PDF arrive looking like a photo and fail the vision gate.
+// Attachments keep their real extension.
 func TestSaveInboundKeepsRealExtension(t *testing.T) {
 	dir := t.TempDir()
 	content := base64.StdEncoding.EncodeToString([]byte("%PDF-1.4 hello"))
@@ -287,7 +275,6 @@ func TestSaveInboundKeepsRealExtension(t *testing.T) {
 	if filepath.Ext(path) != ".pdf" {
 		t.Errorf("path = %q, want a .pdf suffix", path)
 	}
-	// The filename is generated — the client's name is never the path.
 	if strings.Contains(filepath.Base(path), "quarterly") {
 		t.Errorf("client filename leaked into %q", path)
 	}

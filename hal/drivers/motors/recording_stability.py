@@ -1,25 +1,4 @@
-"""Whole-body stability gate for servo recordings — the tip-over check.
-
-Speed is already bounded (``recording_timing``) and each joint is individually
-inside its range, yet a recording can still put a body on its side: what tips it
-is the COMBINATION of joint angles, which no per-joint bound can express.
-
-Measured 2026-09-04 on lamp-0c89 (issue #271). A third-party CSV whose every
-joint sat inside its declared range tipped the unit over. Reconstructing the
-centre of gravity for that clip and for all 29 shipped lamp recordings separates
-them cleanly: the clip that tipped peaked at 31.6 mm off the base axis, the
-worst shipped recording at 17.7 mm, the other 28 at or below 17.6 mm.
-
-Nothing here knows which robot it is running on. The geometry comes from the
-body's own URDF (``ROBOT.md`` ``urdf_ref``) and the ceiling from its own
-``SAFETY.md`` (``motion.max_cog_offset_mm``); both are per-body declarations,
-and a body that ships neither is simply not gated — presence-driven, like every
-other bound in ``robots/contract/SAFETY-SPEC.md``.
-
-Deriving the ceiling for a new body: score its own animation library, take the
-widest, add headroom. Never copy another robot's number — it is millimetres of
-that body's geometry and mass, not a universal constant.
-"""
+"""Whole-body stability gate for servo recordings — the tip-over check."""
 from __future__ import annotations
 
 import logging
@@ -36,10 +15,10 @@ logger = logging.getLogger("hal.motion.stability")
 class _Link:
     """One revolute joint and the link it carries, in chain order."""
     joint: str
-    offset: Tuple[float, float, float]   # metres, in the parent frame
-    rpy: Tuple[float, float, float]      # radians, fixed rotation of the joint frame
-    axis: Tuple[float, float, float]     # rotation axis, joint frame
-    mass: float                          # kg, placed at the child link's origin
+    offset: Tuple[float, float, float]
+    rpy: Tuple[float, float, float]
+    axis: Tuple[float, float, float]
+    mass: float
 
 
 @dataclass(frozen=True)
@@ -61,15 +40,7 @@ def _floats(text: Optional[str], default: Tuple[float, float, float]) -> Tuple[f
 
 
 def parse_urdf(text: str) -> Optional[BodyGeometry]:
-    """Read a URDF into the single serial chain of revolute joints from the root.
-
-    Only what a centre-of-gravity score needs is read: joint origins, axes, and
-    link masses. Meshes, inertia tensors, materials and limits are ignored.
-
-    Returns None when the file describes nothing usable (no revolute joints, or
-    a branching tree this walk cannot reduce to one chain) — a body whose URDF
-    cannot be reduced is left ungated rather than scored against a guess.
-    """
+    """Read a URDF into the single serial chain of revolute joints from the root."""
     root = ET.fromstring(text)
     masses: Dict[str, float] = {}
     for link in root.findall("link"):
@@ -123,8 +94,8 @@ def load_geometry(device_dir: str, urdf_ref: str) -> Optional[BodyGeometry]:
     """Resolve `urdf_ref` (path or URL) and parse it, or None with a warning.
 
     Mirrors how `safety_ref` is resolved, and fails the same way: a declared but
-    unreadable reference is a warning and pass-through, never a boot failure —
-    a body that cannot be scored still has to move.
+    unreadable reference is a warning and pass-through, never a boot failure — a body
+    that cannot be scored still has to move.
     """
     if not urdf_ref:
         return None
@@ -168,12 +139,7 @@ def _axis_rot(axis: Tuple[float, float, float], angle: float):
 
 
 def cog_offset_mm(frame: Dict[str, float], geometry: BodyGeometry) -> float:
-    """Horizontal distance (mm) from the base axis to the whole-body CoG.
-
-    Joint names are accepted with or without the ``.pos`` suffix. Each link's
-    mass is placed at its own frame origin, which is what a URDF with zeroed
-    inertial origins supports; see the module docstring on what that costs.
-    """
+    """Horizontal distance (mm) from the base axis to the whole-body CoG."""
     angles = {k.removesuffix(".pos"): v for k, v in frame.items()}
     rot = [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0], [0.0, 0.0, 1.0]]
     pos = [0.0, 0.0, 0.0]
@@ -206,9 +172,6 @@ def _pose(frame: Dict[str, float]) -> str:
     return " ".join(f"{k.removesuffix('.pos')}={v:.1f}" for k, v in sorted(frame.items()))
 
 
-# Fraction of the ceiling above which a clip is reported even though it passes.
-# A recording that creeps up on the limit is worth seeing in the journal before
-# the day it crosses, not after.
 _WARN_FRACTION = 0.85
 
 
@@ -216,19 +179,9 @@ def check_stable(frames: Iterable[Dict[str, float]], name: str = "",
                  policy: object = None, geometry: Optional[BodyGeometry] = None) -> None:
     """Raise ``ValueError`` if any frame reaches too far off the base axis.
 
-    Both halves are per-body declarations and both must be present: the ceiling
-    from ``SAFETY.md`` ``motion.max_cog_offset_mm`` and the geometry from
-    ``ROBOT.md`` ``urdf_ref``. Missing either is pass-through with a log line,
-    which is the contract's rule for every bound — the engine never invents a
-    limit nobody declared, and never scores a pose it has no geometry for.
-
-    Refusing is the conservative side once a ceiling IS declared: a recording
-    that does not play is a missing animation, one that tips the body is a unit
-    on the floor. Callers load recordings inside a try/except that logs and
-    skips, so a refusal degrades to "that animation did not play".
-
-    Every outcome is logged with the offending frame: a refusal has to be
-    explainable from the journal alone, and the pose is the whole explanation.
+    Both halves are per-body declarations and both must be present: the ceiling from
+    ``SAFETY.md`` ``motion.max_cog_offset_mm`` and the geometry from ``ROBOT.md``
+    ``urdf_ref``.
     """
     motion = getattr(policy, "motion", None)
     ceiling = getattr(motion, "max_cog_offset_mm", None) if motion else None
@@ -244,11 +197,7 @@ def check_stable(frames: Iterable[Dict[str, float]], name: str = "",
 
     frames = list(frames)
     if frames:
-        # Every modelled joint must be present. A missing one silently reads as
-        # 0 deg, which hands back a comfortable number for a pose that was never
-        # evaluated — and a false pass is worse than no check at all. This is
-        # also what rejects another body's recording: none of its joint names
-        # are in this chain.
+        # Every modelled joint must be present.
         missing = geometry.joints - {k.removesuffix(".pos") for k in frames[0]}
         if missing:
             logger.warning(

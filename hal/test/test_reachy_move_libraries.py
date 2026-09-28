@@ -1,8 +1,4 @@
-"""Recorded moves resolve across several HF libraries (#287).
-
-The driver used to load exactly one dataset, so a move pushed to the Hub could
-not be played by name. HAL_REACHY_MOVES prepends datasets to the search order.
-"""
+"""Recorded moves resolve across several HF libraries (#287)."""
 import os
 import sys
 import types
@@ -69,8 +65,6 @@ class TestDatasetList(unittest.TestCase):
                              ["me/mine", "me/other", rs._EMOTES_DATASET, rs._DANCES_DATASET])
 
     def test_duplicates_collapse_keeping_first_position(self):
-        # Naming an official dataset explicitly moves it up the search order
-        # rather than loading it twice.
         with mock.patch.dict(os.environ, {"HAL_REACHY_MOVES": rs._DANCES_DATASET}):
             self.assertEqual(rs._move_datasets(),
                              [rs._DANCES_DATASET, rs._EMOTES_DATASET])

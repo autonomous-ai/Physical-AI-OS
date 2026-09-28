@@ -6,10 +6,7 @@ import (
 	"testing"
 )
 
-// Every registered runtime must contribute paths. The interface forces the
-// method to exist; this catches the other half — a new adapter that satisfies
-// the compiler with `return nil` and so keeps its persona through a factory
-// reset.
+// Every registered runtime must contribute persona paths.
 func TestEveryAdapterContributesPersonaPaths(t *testing.T) {
 	opts := DefaultOptions("", "")
 	for rt, a := range adapters {
@@ -26,8 +23,7 @@ func TestEveryAdapterContributesPersonaPaths(t *testing.T) {
 	}
 }
 
-// The reason this package exists: a retired user's USER.md must be reachable in
-// every runtime tree, not just the active one.
+// A USER.md must be reachable in every runtime tree.
 func TestPersonaPathsCoverEveryRuntimeUserProfile(t *testing.T) {
 	got := PersonaPaths(DefaultOptions("", ""))
 	index := make(map[string]bool, len(got))
@@ -48,9 +44,7 @@ func TestPersonaPathsCoverEveryRuntimeUserProfile(t *testing.T) {
 	}
 }
 
-// A persona wipe must not take the runtime installation with it. Hermes keeps
-// its install and logs directly under the home root, and every other runtime
-// keeps skills/ + configs/ in the workspace, so neither dir may be listed.
+// Persona paths must never include a runtime install or workspace root.
 func TestPersonaPathsNeverWipeARuntimeRoot(t *testing.T) {
 	for _, p := range PersonaPaths(DefaultOptions("", "")) {
 		switch p {
@@ -77,8 +71,7 @@ func TestPersonaPathsAreDedupedAndSorted(t *testing.T) {
 	}
 }
 
-// A caller that supplies its own dirs (tests, a device with a relocated
-// OpenClaw config) must get those, not the hardcoded defaults.
+// Caller-supplied dirs override the defaults.
 func TestPersonaPathsHonourCustomRoots(t *testing.T) {
 	opts := DefaultOptions("/tmp/oc", "/tmp/hermes")
 	got := strings.Join(PersonaPaths(opts), "\n")

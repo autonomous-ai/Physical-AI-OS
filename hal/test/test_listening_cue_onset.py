@@ -42,8 +42,7 @@ def _run(color, start_at_peak, limit=3):
     return svc.frames
 
 
-# The lamp's own listening colour: dim enough that int() truncation renders
-# the start of the arc as literal black.
+# Dim enough that int() truncation renders the arc start as black.
 LAMP_LISTENING = (0, 0, 3)
 
 
@@ -63,8 +62,7 @@ def test_start_at_peak_breathes_down_and_never_exceeds_the_preset():
 
 
 def test_only_the_opening_arc_starts_at_the_peak():
-    # The opening arc is the peak-to-0 half only: 50 frames. Everything after
-    # it is an ordinary cycle, which rises from 0 at the usual slow pace.
+    # The opening arc is the peak-to-0 half only: 50 frames.
     frames = _run((0, 0, 30), start_at_peak=True, limit=62)
     assert frames[49][2] == 0, frames[45:62]
     assert frames[50][2] == 0, frames[45:62]
@@ -103,9 +101,6 @@ def test_emotion_led_passes_the_flag_to_the_effect_thread(monkeypatch):
     started.clear()
     state._apply_emotion_led_display(EMO_GREETING, force_led=True)
     assert started.get("start_at_peak") is False
-
-
-# --- breathing_fine: resolution from the ring, not from 8-bit colour --------
 
 
 class _PaintRec:
@@ -147,15 +142,11 @@ def test_opening_frame_is_the_whole_ring_at_the_peak():
 
 
 def test_the_ring_average_moves_in_many_more_steps_than_the_colour_allows():
-    # Plain breathing on this colour reaches 3 distinct values; the dithered
-    # ring must produce far more distinct averages over one arc.
     sums = {sum(px[2] for px in f) for f in _run_fine(LAMP_LISTENING, limit=100)}
     assert len(sums) > 20, sorted(sums)
 
 
 def test_raised_pixels_are_scattered_not_a_lit_arc():
-    # Half-raised ring: the raised pixels must not be contiguous, or the strip
-    # reads as an arc sweeping around instead of one ring changing level.
     frame = _dither_ring((0, 0, 1), (0, 0, 2), 16, 32)
     raised = [i for i, px in enumerate(frame) if px[2] == 2]
     runs = sum(1 for a, b in zip(raised, raised[1:]) if b != a + 1) + 1

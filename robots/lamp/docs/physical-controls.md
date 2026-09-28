@@ -17,7 +17,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 | Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
 | Reset GPIO button | not wired | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
 | Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
-| TTP223 | not wired | Two pads: S1 at physical pin 29 / PD0 / gpiochip0 line 96; S3 at physical pin 33 / PD2 / gpiochip0 line 98. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
+| TTP223 | not wired | Two pads, gpiochip0 lines **37 and 96** as configured in `robots/lamp/ttp223.json` (doc previously said 96/98 — S1 pin 29 / PD0 / line 96, S3 pin 33 / PD2 / line 98; confirm on hardware). **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
@@ -28,8 +28,8 @@ OrangePi entry is:
 ```json
 {
   "buttons": [
-    {"name": "primary", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "standard", "factory_reset": false},
-    {"name": "factory_reset", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
+    {"name": "primary", "chip": 0, "line": 99, "debounce_ns": 200000000, "behavior": "standard", "factory_reset": false},
+    {"name": "factory_reset", "chip": 0, "line": 100, "debounce_ns": 200000000, "behavior": "factory_reset", "hold_s": 5}
   ]
 }
 ```
@@ -59,10 +59,12 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-Hardware confirmed two pads: S1 on pin 29 (line 96) and S3 on pin 33 (line 98).
-The Lamp JSON uses these lines, leaving pin 35 (line 99) for the mechanical
-button. The legacy fallback still uses lines 96/100; keep the Lamp JSON installed
-to avoid that old overlap.
+The Lamp JSON currently configures `orangepi_sun60` as chip 0, lines `[37, 96]`
+(no `axis`). This doc previously stated S1 on pin 29 (line 96) and S3 on pin 33
+(line 98); the two disagree, so **confirm the second pad's line on hardware**
+(`hal/test_ttp223_probe_orangepi.py watch`). Either way pin 35 (line 99) stays
+with the mechanical button. The legacy fallback still uses lines 96/100, which
+overlaps the reset button; keep the Lamp JSON installed to avoid that.
 
 Board detection reads `/proc/device-tree/model`:
 - `"sun60iw2"` → OrangePi 4 Pro / A733
@@ -209,7 +211,7 @@ Degradation is by omission in both directions. On a device with **no camera** ne
 **Relocating, not merely writing.** Two states write the servos continuously without moving the head anywhere: the idle loop breathing, and a tracking session pursuing the user's face. Treating either as a move means `last_servo_write` is never stale and nearly every frame is refused — measured, idle: 0.3 samples/s recorded against 4.9/s blocked; measured, tracking: 0.7/s against 4.5/s, refusing a user at yaw 0.9° with a 130 px face dead centre for having one sample in the window instead of two. Tracking matters most: it is the lamp following this user's face, so refusing to notice they are addressing it precisely then is the most broken-looking moment available — which is why the settling test must not become `_tracking_active` by the back door. Both are small continuous corrections and the yaw survives them. The `[gaze] sampling at N/s; blocked: …` line breaks the blocked count down by reason, because the two gates are fixed in different places.
 
 End-to-end chain:
-1. `gpio_button.py` / `ttp223.py` / `mpr121.py` detect single click → call `single_click_action(source)` in `button_actions.py`
+1. `gpio_button.py` / `mpr121.py` (Harness OFF) detect single click → call `single_click_action(source)` in `button_actions.py`. TTP223 is not part of this chain: every TTP223 gesture calls `head_pat_action` and never stops speech.
 2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + deferred `_announce_listening()` thread
 2a. `_cancel_agent_speech()` → `POST /api/agent/speech/cancel` on the OS server. Needed because `stop_tts()` only silences what HAL already holds: the sentence playing plus the pre-synthesised queue. The OS server streams a reply sentence by sentence, so without this call the device goes quiet for one sentence and then talks on. The OS server mutes every turn in flight (see `docs/os-server.md`) while letting turns started after the click speak — so the user can tap and immediately say something new even with a backlog of older turns still draining. The turns are not aborted, only unspoken — which is why the same call also drops those turns' pending dead-air fillers: they speak straight to HAL rather than through the muted reply path, so a still-running cancelled turn kept announcing "one moment" for an answer it would never give. Dispatched on its own thread and fired on both branches (mic-unmute and stop-speaker), since either way the tap means the user is taking the floor.
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
@@ -316,11 +318,9 @@ debounce happen in software, and a chip-side debounce would delay every
 footprint by two samples. These registers are set by HAL, not exposed in
 `mpr121.json`; changing touch thresholds alone does not change filtering.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
-thresholds; `robots/lamp/hardware/touch-cap/mpr121_opi_test.py` programs the
-chip like HAL when run with `--debounce 0 --sfi 2 --esi 0` (`calibrate` for
-idle noise and a threshold recommendation, `test --verbose` for per-touch
-hold time, `trace` for filtered/baseline per sample). Stop HAL first; it owns
-the bus.
+thresholds (the standalone `mpr121_opi_test.py` probe this section used to
+reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver
+logic only). Stop HAL before probing the bus by hand; it owns the bus.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
@@ -354,9 +354,9 @@ click burst. Destructive actions never commit while held.
 ### MPR121 directional swipe
 
 `swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
-`electrodes`, in physical **left-to-right** order. Lamp defaults to E0…E11.
-Verify the mounted bar: if E11 is physically on the left, reverse the existing
-axis to E11…E0. Increasing axis position (`+1`, left to right) calls
+`electrodes`, in physical **left-to-right** order. Lamp's `robots/lamp/mpr121.json`
+declares E11…E0 (E11 physically on the left). Verify the mounted bar: if E0 is
+physically on the left, reverse the axis to E0…E11. Increasing axis position (`+1`, left to right) calls
 `swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
 position (`-1`, right to left) enables Harness voice. These actions apply with Harness OFF; with Harness ON the same directions select previous/next agent.
 A swipe need not cross the entire strip: the centroid must travel at least 3
@@ -492,7 +492,7 @@ The actions live in one place so the GPIO button, TTP223, MPR121, and any future
 | `shutdown_action(source)` | Speak "Shutting down now" → wait 5 s → `release_servos()` (so the lamp doesn't slam down mid-pose) → `shutdown_os()` (`sudo shutdown -h now`). | Yes |
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
-| `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. After the flip it speaks the resulting **state**, drawn at random from `MIC_MUTED_PHRASES_BY_LANG` / `MIC_UNMUTED_PHRASES_BY_LANG` in the lamp's own voice ("[whispers] Shh, my ears are closed." / "[excited] My ears are open!"), so the voice and the mic-muted LED agree; a refused toggle stays silent rather than announcing a mute that did not happen. | No — non-interrupting, drops if TTS is busy |
+| `mic_toggle_action(source)` | Mic mute toggle. **Currently has no caller** — TTP223 double tap now goes to `head_pat_action`, and GPIO/MPR121 do not map a double tap. Refuses while the HW mic switch is off or a voice enrollment is recording. After the flip it speaks the resulting **state**, drawn at random from `MIC_MUTED_PHRASES_BY_LANG` / `MIC_UNMUTED_PHRASES_BY_LANG` in the lamp's own voice ("[whispers] Shh, my ears are closed." / "[excited] My ears are open!"), so the voice and the mic-muted LED agree; a refused toggle stays silent rather than announcing a mute that did not happen. | No — non-interrupting, drops if TTS is busy |
 | `head_pat_action(source)` | Picks a random local pet phrase and calls `speak_cached` off-thread, then notifies the OS on acceptance. TTP223 maps every resolved gesture here and never stops current speech first. | No explicit stop; uses existing TTS admission rules. |
 
 ### Factory-reset: what gets wiped
@@ -628,7 +628,7 @@ Input handlers are started in `hal/server.py` lifespan startup. Missing optional
 
 ### Harness-mode MPR121 gestures
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp defaults E0…E11; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp's `mpr121.json` declares E11…E0; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
 

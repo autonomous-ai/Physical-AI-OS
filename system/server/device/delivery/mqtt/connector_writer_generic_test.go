@@ -8,9 +8,7 @@ import (
 	"go.autonomous.ai/os/runtimes/openclaw"
 )
 
-// fakeMCPGateway records WriteMCPEntry/RemoveMCPEntry calls so routing decisions
-// can be asserted without touching openclaw.json or restarting the gateway.
-// It satisfies the mcpEntryWriter interface the connectorWriter depends on.
+// fakeMCPGateway records WriteMCPEntry/RemoveMCPEntry calls.
 type fakeMCPGateway struct {
 	written  map[string]map[string]any
 	removed  []string
@@ -84,7 +82,6 @@ func TestConnectorWriter_RejectsUnsafeCode(t *testing.T) {
 			t.Fatalf("Remove(%q) accepted, want rejected", bad)
 		}
 	}
-	// Nothing was written or mirrored to openclaw.json.
 	if len(fake.written) != 0 {
 		t.Fatalf("unsafe codes leaked mcp entries: %v", fake.written)
 	}
@@ -109,7 +106,6 @@ func TestConnectorWriter_DataDrivenMCPRouting(t *testing.T) {
 		t.Fatalf("Write: %v", err)
 	}
 
-	// Token file persisted under the per-connector path.
 	if _, ok, err := w.loadEntry("intercom"); err != nil || !ok {
 		t.Fatalf("loadEntry intercom: ok=%v err=%v", ok, err)
 	}
@@ -145,8 +141,7 @@ func TestConnectorWriter_PayloadOverridesFallback(t *testing.T) {
 	}
 }
 
-// Known MCP connectors keep working via the fallback table when the payload
-// carries no mcp_url yet (migration safety net).
+// Known MCP connectors fall back to the table when the payload has no mcp_url.
 func TestConnectorWriter_FallbackRouting(t *testing.T) {
 	cases := []struct {
 		connector string
@@ -188,8 +183,7 @@ func TestConnectorWriter_FallbackRouting(t *testing.T) {
 	}
 }
 
-// Credential-only connectors (no mcp_url, not in fallback) get a token file and
-// NO openclaw entry.
+// Credential-only connectors get a token file and no openclaw entry.
 func TestConnectorWriter_CredentialOnlyNoMCPEntry(t *testing.T) {
 	dir := t.TempDir()
 	fake := &fakeMCPGateway{}
@@ -207,17 +201,13 @@ func TestConnectorWriter_CredentialOnlyNoMCPEntry(t *testing.T) {
 	}
 }
 
-// RefreshableEntries scans every per-connector file and gates on
-// refresh_token + refresh:true.
+// RefreshableEntries gates on refresh_token + refresh:true.
 func TestConnectorWriter_RefreshableEntriesAcrossFiles(t *testing.T) {
 	dir := t.TempDir()
 	w := newConnectorWriter(dir, &fakeMCPGateway{}, nil)
 
-	// Eligible: refresh_token + refresh:true (in its own notion file).
 	mustWrite(t, w, ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-n", Refresh: true, ExpiresAt: 111})
-	// Ineligible: refresh:false (separate gmail file).
 	mustWrite(t, w, ConnectorCreds{Connector: "gmail", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-g", Refresh: false})
-	// Ineligible: no refresh_token (separate figma file).
 	mustWrite(t, w, ConnectorCreds{Connector: "figma", AuthType: "oauth", AccessToken: "at", Refresh: true})
 
 	got := w.RefreshableEntries()
@@ -229,10 +219,7 @@ func TestConnectorWriter_RefreshableEntriesAcrossFiles(t *testing.T) {
 	}
 }
 
-// Codes owned by a special writer must be excluded from the generic writer's
-// refresh glob, even though their token file matches *_access_tokens.json —
-// otherwise the generic writer would re-Write figma-api as an http entry,
-// clobbering its stdio entry.
+// Codes owned by a special writer are excluded from the generic refresh glob.
 func TestConnectorWriter_RefreshableEntriesSkipsReserved(t *testing.T) {
 	dir := t.TempDir()
 	w := newConnectorWriter(dir, &fakeMCPGateway{}, map[string]bool{"figma-api": true})
@@ -240,7 +227,6 @@ func TestConnectorWriter_RefreshableEntriesSkipsReserved(t *testing.T) {
 	// figma-api token file is eligible on its face (refresh_token + refresh:true)
 	// but is owned by a special writer → must be skipped here.
 	mustWrite(t, w, ConnectorCreds{Connector: "figma-api", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-f", Refresh: true, ExpiresAt: 222})
-	// A normal connector in the same dir is still surfaced.
 	mustWrite(t, w, ConnectorCreds{Connector: "notion", AuthType: "oauth", AccessToken: "at", RefreshToken: "rt-n", Refresh: true, ExpiresAt: 111})
 
 	got := w.RefreshableEntries()
@@ -255,8 +241,6 @@ func TestConnectorWriter_Remove(t *testing.T) {
 	w := newConnectorWriter(dir, fake, nil)
 	ctx := context.Background()
 
-	// Absent → no-op (removed=false), but RemoveMCPEntry is still attempted
-	// (idempotent on the openclaw side).
 	removed, err := w.Remove(ctx, "notion")
 	if err != nil || removed {
 		t.Fatalf("Remove(absent) = removed=%v err=%v, want false,nil", removed, err)

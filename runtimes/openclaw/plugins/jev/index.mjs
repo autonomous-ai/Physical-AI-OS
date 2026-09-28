@@ -81,8 +81,6 @@ export function createHandler(api, deps = {}) {
   const catalog = deps.catalog ?? (ctx => nativeCatalog(api, ctx));
   let busy = false, cooldown = 0;
   return async (event, ctx) => {
-    // Go provisioning sets this flag from the runtime build switch before
-    // any config/credential/provider access.
     if (api.pluginConfig?.enabled !== true || (ctx.trigger && ctx.trigger !== "user")) return;
     if (hasAttachments(event)) return;
     const raw = Object.hasOwn(event, "currentUserMessage") ? event.currentUserMessage : event.prompt;

@@ -10,22 +10,6 @@ import (
 	"time"
 )
 
-// Runtime-patch scripts baked into os-server so a plain OTA / clean flash makes
-// BlueBubbles (iMessage) work end-to-end. Each script:
-//
-//   - Targets a specific line/anchor in the installed Hermes gateway sources
-//     under /usr/local/lib/hermes-agent/gateway/...
-//   - Is idempotent: it checks a MARKER string in the target file and no-ops
-//     when the marker is already present.
-//   - Prints one of PATCHED / ALREADY_PATCHED / RELAXED / ALREADY_RELAXED /
-//     ALREADY_ADDED on stdout so this Go wrapper can count real changes.
-//
-// The patches live under runtimes/hermes/patches/ and are embedded at build
-// time (same pattern as cache_usage_patch.py). A Hermes update overwrites the
-// installed .py files, so ensureBluebubblesPatches must run on every runtime
-// touch (runtime switch, os-server boot, Hermes update) — that is exactly what
-// EnsureOnboarding gives it.
-
 //go:embed patches/caller_context_persona.py
 var patchCallerContextPersona string
 
@@ -53,32 +37,16 @@ var patchSMSPrefixDrop string
 //go:embed patches/sender_short_code_drop.py
 var patchSenderShortCodeDrop string
 
-// bluebubblesPatchTarget is the installed BlueBubbles plugin. If it is missing
-// we skip the whole ensure — Hermes is not installed on this box (e.g. the
-// device is talking to a remote Hermes gateway), so there is nothing to patch.
+// bluebubblesPatchTarget is the installed BlueBubbles plugin.
 const bluebubblesPatchTarget = "/usr/local/lib/hermes-agent/gateway/platforms/bluebubbles.py"
 
-// bluebubblesPatch names an ordered runtime patch. Order matters:
-//
-//  1. caller_context_persona.py MUST run before caller_context_file_fallback.py
-//     — the fallback edits the block the persona patch injects into run.py.
-//  2. Both caller_context_* patches MUST run before the bluebubbles.py-touching
-//     patches — persona also removes the legacy _CALLER_CONTEXT_APPLIED text
-//     prefix from bluebubbles.py, and strip_markers.py's marker check would
-//     otherwise get confused if that block were still around.
-//  3. imessage_only_service_filter.py MUST run before relax_chat_guid_check.py
-//     (relax edits the block that filter injects) and before sms_prefix_drop.py
-//     (sms_prefix anchors on filter's `_svc != "imessage"` line).
-//  4. sender_short_code_drop.py MUST run after relax_chat_guid_check.py — its
-//     anchor is the RELAXED comment that patch writes into the filter block.
+// bluebubblesPatch names an ordered runtime patch.
 type bluebubblesPatch struct {
 	name   string // logging label + patches/<name>.py identity
 	script string // embedded script contents
 }
 
 // bluebubblesPatches — ordered list applied on every EnsureOnboarding pass.
-// Adding a new patch: put it at the tail unless it edits a block another patch
-// already touched, in which case chain it after that patch.
 var bluebubblesPatches = []bluebubblesPatch{
 	{"caller_context_persona", patchCallerContextPersona},
 	{"caller_context_file_fallback", patchCallerContextFileFallback},
@@ -91,10 +59,7 @@ var bluebubblesPatches = []bluebubblesPatch{
 	{"sender_short_code_drop", patchSenderShortCodeDrop},
 }
 
-// bluebubblesChangeTokens are the stdout tokens each script prints when it
-// actually mutated the target file. Matched at start of stdout so trailing
-// diagnostic lines (bluebubbles.py-side messages from caller_context_persona)
-// do not fool the counter.
+// bluebubblesChangeTokens are the stdout tokens each script prints when it actually mutated the target file.
 var bluebubblesChangeTokens = []string{
 	"PATCHED",
 	"RELAXED",
@@ -103,17 +68,8 @@ var bluebubblesChangeTokens = []string{
 	"BLUEBUBBLES_OLD_TEXT_PREFIX_REMOVED",
 }
 
-// ensureBluebubblesPatches applies every embedded BlueBubbles runtime patch in
-// order and returns the number of scripts that reported an actual change (so
-// EnsureOnboarding can factor patch changes into its gateway-restart decision).
-//
-// Never returns a hard error: a Hermes update can shift anchor lines and a
-// single script may then refuse to patch. We WARN and continue with the next
-// one — degrading iMessage is preferable to blocking gateway startup and taking
-// voice down with it.
+// ensureBluebubblesPatches applies every embedded BlueBubbles patch; returns how many changed something.
 func (s *HermesService) ensureBluebubblesPatches() (int, error) {
-	// No Hermes plugin on disk → nothing to patch (remote-gateway devices, a
-	// first boot before Hermes install runs, etc.).
 	if _, err := os.Stat(bluebubblesPatchTarget); os.IsNotExist(err) {
 		return 0, nil
 	} else if err != nil {
@@ -130,9 +86,7 @@ func (s *HermesService) ensureBluebubblesPatches() (int, error) {
 		elapsedMs := time.Since(start).Milliseconds()
 		stdout := strings.TrimSpace(string(out))
 		if err != nil {
-			// Non-zero exit — log and keep going. Voice is more important
-			// than iMessage; a single patch refusing to anchor must not
-			// abort the rest of the chain.
+			// Non-zero exit — log and keep going.
 			slog.Warn("bluebubbles patch failed", "component", "hermes",
 				"patch", p.name, "elapsed_ms", elapsedMs,
 				"output", stdout, "error", err)
@@ -150,9 +104,7 @@ func (s *HermesService) ensureBluebubblesPatches() (int, error) {
 	return changed, nil
 }
 
-// patchOutputChanged returns true when a patch script's stdout contains a
-// change-token on any line. Some scripts emit multiple lines (run.py + status
-// line for bluebubbles.py) so we scan every line, not just the first.
+// patchOutputChanged returns true when a patch script's stdout contains a change-token on any line.
 func patchOutputChanged(stdout string) bool {
 	if stdout == "" {
 		return false
@@ -165,10 +117,5 @@ func patchOutputChanged(stdout string) bool {
 			}
 		}
 	}
-	// No change token → treat as no-op. Recognised no-op tokens the scripts
-	// emit are ALREADY_PATCHED / ALREADY_RELAXED / ALREADY_ADDED /
-	// RUN_PY_ALREADY_PATCHED / BLUEBUBBLES_TEXT_PREFIX_ABSENT; unknown output
-	// also counts as no-op so a Hermes update that shifts wording never
-	// spuriously restarts the gateway.
 	return false
 }

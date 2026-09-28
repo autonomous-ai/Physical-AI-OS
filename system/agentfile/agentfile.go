@@ -1,21 +1,5 @@
-// Package agentfile owns the files that cross an agent turn's boundary in both
-// directions: which device-local files a turn is allowed to hand OUT (and the
-// scanner that finds the ones a turn named), and where a file attached IN by the
-// user lands on disk.
-//
-// A turn can only NAME a file it produced — "take a photo" ends with an absolute
-// path like /root/.openclaw/media/hal-snapshots/snap_*.jpg. Two very different
-// consumers need to turn that into something a person can see:
-//
-//	GET /api/agent/file  (system/server/agent/delivery/http) — the web chat, on
-//	                     the LAN, fetching the bytes directly
-//	kind chat.file.get   (system/server/device/delivery/mqtt) — a phone, which
-//	                     cannot reach the device at all, so it asks the backend
-//	                     and the bytes come back over MQTT
-//
-// Both must agree on exactly what may leave the device. That is why the rules
-// live here and not in either caller: a second copy is a second chance to widen
-// one of them by accident.
+// Package agentfile decides which device files an agent turn may hand out (web chat
+// and MQTT share these rules) and where user-attached files land.
 package agentfile
 
 import (
@@ -28,17 +12,11 @@ import (
 	"strings"
 )
 
-// MaxBytes caps a single file. Generous for a snapshot or a PDF, small enough
-// that a stray path to something huge fails fast.
+// MaxBytes caps a single served file.
 const MaxBytes = 32 << 20
 
-// Types is the whitelist: extension → Content-Type. An extension that isn't here
-// is refused before the filesystem is touched.
-//
-// Deliberately absent: `.json` and `.log`. Both are plausible agent output, but a
-// runtime's own config JSON carries gateway tokens — the same reason
-// GET /api/agent/config-json is loopback-only — and one mis-scoped root would
-// turn a viewer into a credential leak.
+// Types maps served extensions to Content-Type; others are refused before touching disk.
+// .json and .log are excluded on purpose: runtime config JSON holds gateway tokens.
 var Types = map[string]string{
 	".jpg":  "image/jpeg",
 	".jpeg": "image/jpeg",
@@ -65,19 +43,11 @@ func Inline(path string) bool {
 	return inlineExts[strings.ToLower(filepath.Ext(path))]
 }
 
-// runtimes are the agentic backends whose output directories are served. All of
-// them rather than just the active one: a conversation scrolled back far enough
-// can reference a file written before a runtime switch, and the file is no more
-// sensitive for having been made by the previous backend.
+// runtimes whose output dirs are served (all, since old turns may predate a switch).
 var runtimes = []string{"openclaw", "hermes", "picoclaw", "codex", "claudecode", "opencode"}
 
-// Roots is where an agent's output is allowed to live.
-//
-// Per runtime this is media/ and workspace/ — NOT the runtime's config dir
-// itself, which holds openclaw.json and friends. /tmp is included because the
-// CLI-based runtimes genuinely write scratch output there; it is the reason the
-// extension whitelist exists, since /tmp is shared with everything else on the
-// device.
+// Roots are the dirs agent output may be served from: each runtime's media/ and
+// workspace/ (never its config dir) plus /tmp.
 func Roots() []string {
 	roots := make([]string, 0, len(runtimes)*2+1)
 	for _, rt := range runtimes {
@@ -96,11 +66,8 @@ var (
 	ErrNotFound = errors.New("file not found")
 )
 
-// Resolve validates raw against roots and returns the path to serve plus its
-// Content-Type.
-//
-// Order matters: the extension is checked FIRST, so a probe for a file type we
-// never serve cannot be used to test whether a path exists.
+// Resolve validates raw against roots and returns the path and Content-Type.
+// The extension is checked first so file existence cannot be probed.
 func Resolve(raw string, roots []string) (path, contentType string, err error) {
 	if raw == "" || !filepath.IsAbs(raw) {
 		return "", "", ErrNotFound
@@ -111,8 +78,7 @@ func Resolve(raw string, roots []string) (path, contentType string, err error) {
 		return "", "", ErrType
 	}
 
-	// Resolve BEFORE comparing: `..` segments and symlinks both let a path that
-	// reads as being under a root actually land outside it.
+	// Resolve symlinks and `..` before comparing against roots.
 	resolved, err := filepath.EvalSymlinks(filepath.Clean(raw))
 	if err != nil {
 		return "", "", ErrNotFound
@@ -132,12 +98,8 @@ func Resolve(raw string, roots []string) (path, contentType string, err error) {
 	return resolved, ct, nil
 }
 
-// underAnyRoot reports whether resolved sits inside one of roots. Roots are
-// resolved too — /tmp is a symlink to /private/tmp on macOS, and a root that only
-// matched textually would reject every real file under it.
-//
-// The separator suffix is what stops "/root/.openclaw/media-evil" from passing as
-// being under "/root/.openclaw/media".
+// underAnyRoot reports whether resolved is inside a (resolved) root; the separator
+// suffix stops "/media-evil" from passing as "/media".
 func underAnyRoot(resolved string, roots []string) bool {
 	for _, root := range roots {
 		r, err := filepath.EvalSymlinks(root)
@@ -151,25 +113,13 @@ func underAnyRoot(resolved string, roots []string) bool {
 	return false
 }
 
-// pathRE matches one absolute path under a served root ending in a served
-// extension. Anchored to the roots so a turn mentioning /usr/bin/something or
-// /etc/hosts produces no candidate at all.
-//
-// The character class stops at whatever normally terminates a path in prose,
-// markdown or JSON — whitespace, quotes, brackets, backticks.
+// pathRE matches an absolute path under a served root with a served extension.
 var pathRE = regexp.MustCompile(
 	`(?i)(?:/root/\.[a-z0-9_-]+/(?:media|workspace)|/tmp)/[^\s"'` + "`" + `)<>\]\\]+\.` +
 		`(?:jpg|jpeg|png|gif|webp|pdf|txt|md|csv|wav|mp3|mp4|webm)\b`)
 
-// Scan returns the candidate device paths named in text, de-duplicated, in the
-// order they appear. Candidates only — Resolve still rules on every one.
-//
-// Text is whatever a turn produced: the reply, a tool's arguments, a tool's
-// result. All three matter and none is enough alone. Asked to send a photo, an
-// agent typically calls its channel tool —
-// {"action":"send","media":"/root/.openclaw/media/…jpg"} — and its spoken reply
-// names no path; a `curl /camera/snapshot` puts the path in the tool result
-// instead; and sometimes the agent just types the path out.
+// Scan returns de-duplicated candidate paths in order of appearance; Resolve still
+// rules on each.
 func Scan(text string) []string {
 	if text == "" {
 		return nil
@@ -177,7 +127,6 @@ func Scan(text string) []string {
 	var out []string
 	seen := map[string]bool{}
 	for _, m := range pathRE.FindAllString(text, -1) {
-		// Trailing punctuation belongs to the sentence, not the filename.
 		p := strings.TrimRight(m, ".,;:")
 		if seen[p] {
 			continue
@@ -188,34 +137,14 @@ func Scan(text string) []string {
 	return out
 }
 
-// ─── Inbound ─────────────────────────────────────────────────────────────────
-//
-// The other direction: a file the USER attached to a turn, which has to land on
-// disk so the agent's tools can open it.
-//
-// This used to only work for images. Everything a client attached — a PDF, a
-// CSV — was sent in the sensing event's `image` field and written as
-// `/tmp/web-chat-<ms>.jpg`, so a document arrived mislabelled as a photo and
-// then failed the describe-first vision gate. Inbound files now carry their own
-// name and land with their real extension.
-
-// InboundMaxBytes caps one attached file, decoded. Matches the web composer's
-// 10 MB client-side check so the two can't disagree about what is acceptable.
+// InboundMaxBytes caps one decoded attachment (matches the web composer's 10 MB check).
 const InboundMaxBytes = 10 << 20
 
-// extRE is the shape an extension must have to be used verbatim: the name comes
-// from the client, and it decides a path on disk.
+// extRE is the shape a client extension must have to be used verbatim.
 var extRE = regexp.MustCompile(`^[a-z0-9]{1,8}$`)
 
-// SaveInbound decodes a base64 attachment and writes it into dir, returning the
-// path. name is used ONLY for its extension — the filename itself is generated,
-// so a name like "../../etc/passwd" can never steer the write.
-//
-// An unusable extension degrades to ".bin" rather than failing: the agent can
-// still be told a file is there, which beats dropping the user's attachment.
-// Note the file lands in /tmp, which is an outbound root — but the outbound
-// whitelist (Types) still governs what may be read back out, so an attachment
-// of a type this device won't serve cannot be laundered into one that is.
+// SaveInbound decodes a base64 attachment into dir and returns the path.
+// name only supplies the extension (generated filename); unusable extensions become ".bin".
 func SaveInbound(dir, name, contentB64 string, stamp int64) (string, error) {
 	if contentB64 == "" {
 		return "", errors.New("empty attachment")
@@ -235,10 +164,7 @@ func SaveInbound(dir, name, contentB64 string, stamp int64) (string, error) {
 	return path, nil
 }
 
-// SafeExt returns the leading-dot extension to write a client-named file with,
-// or ".bin" when the name carries nothing usable. Never returns a path
-// separator or a multi-part suffix, so the result can be concatenated onto a
-// generated filename safely.
+// SafeExt returns a safe leading-dot extension for name, or ".bin".
 func SafeExt(name string) string {
 	ext := strings.ToLower(strings.TrimPrefix(filepath.Ext(filepath.Base(name)), "."))
 	if !extRE.MatchString(ext) {

@@ -19,8 +19,9 @@ const (
 )
 
 // ResetAgent is the PicoClaw factory-reset wipe, called on the active gateway by
-// server/system/factoryreset.go. PicoClaw keeps nothing: config.json/.security.yml
-// are regenerated from the project config.json by presync.sh on the next switch.
+// server/system/factoryreset.go.
+// PicoClaw keeps nothing: config.json/.security.yml are regenerated from the project config.json by
+// presync.sh on the next switch.
 func (s *PicoclawService) ResetAgent() error {
 	wipePicoclawState()
 	return nil
@@ -28,8 +29,7 @@ func (s *PicoclawService) ResetAgent() error {
 
 // wipePicoclawState: stop+disable gateway → wipe /root/.picoclaw → re-onboard.
 func wipePicoclawState() {
-	// 1. Stop the gateway (Restart=always is overridden by an explicit stop) and
-	//    confirm it is down — it holds the data dir open, so it must die before wipe.
+	// The gateway holds the data dir open, so it must be stopped before the wipe.
 	log.Printf("[factory-reset/picoclaw] step 1/4 — systemctl stop picoclaw")
 	if out, err := exec.Command("systemctl", "stop", picoclawUnit).CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/picoclaw] step 1/4 — stop error: %v — %s", err, strings.TrimSpace(string(out)))
@@ -40,18 +40,14 @@ func wipePicoclawState() {
 		log.Printf("[factory-reset/picoclaw] step 1/4 — WARNING still active after %s", picoStopVerifyTimeout)
 	}
 
-	// 2. Disable — reboot defaults to openclaw; switch-runtime re-enables on switch back.
 	log.Printf("[factory-reset/picoclaw] step 2/4 — systemctl disable picoclaw")
 	if out, err := exec.Command("systemctl", "disable", picoclawUnit).CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/picoclaw] step 2/4 — disable error: %v — %s", err, strings.TrimSpace(string(out)))
 	}
 
-	// 3. Wipe everything: config, .security.yml, workspace, sessions, migrate marker.
 	log.Printf("[factory-reset/picoclaw] step 3/4 — wiping %s", picoclawDataDir)
 	osreset.WipePath("[factory-reset/picoclaw]", picoclawDataDir)
 
-	// 4. Re-onboard a clean baseline. Non-fatal: presync re-asserts the real config
-	//    on the next switch. HOME=/root pins the data dir to /root/.picoclaw.
 	log.Printf("[factory-reset/picoclaw] step 4/4 — picoclaw onboard")
 	cmd := exec.Command(picoclawBin, "onboard")
 	cmd.Env = append(envWithoutHome(), "HOME=/root")
@@ -81,7 +77,7 @@ func waitForPicoclawStop(unit string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
 		if exec.Command("systemctl", "is-active", "--quiet", unit).Run() != nil {
-			return true // non-zero exit → not active
+			return true
 		}
 		if time.Now().After(deadline) {
 			return false

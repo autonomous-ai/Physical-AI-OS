@@ -18,8 +18,8 @@ import (
 )
 
 var deviceWipePaths = []string{
-	"/root/config/config.json",                      // os-server config (API keys, channel tokens, MQTT creds) — bootstrap.json in the same dir is intentionally kept
-	"/root/config/agent_state.json",                 // agent-runtime switch history/baseline — MUST wipe in lockstep with config.json (which holds agent_runtime). Leaving it makes prev (stale, e.g. hermes) diverge from the reset current (default) and triggers a spurious persona migration on next boot that propagates the just-wiped stub persona across runtimes.
+	"/root/config/config.json",                      // os-server config; bootstrap.json in the same dir is intentionally kept
+	"/root/config/agent_state.json",                 // MUST wipe with config.json, or a spurious persona migration runs on next boot
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
 	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
@@ -27,26 +27,18 @@ var deviceWipePaths = []string{
 }
 
 // FactoryResetMinInterval is the minimum gap between two factory-reset
-// triggers. Acts as a circuit breaker against runaway callers and accidental
-// double-clicks.
+// triggers.
 const FactoryResetMinInterval = 5 * time.Minute
 
 // Single-flight + cooldown state shared across all trigger surfaces (HTTP /
-// MQTT / GPIO). Package-level globals are fine — this is a singleton operation
-// per device, no second instance should ever run.
+// MQTT / GPIO).
 var (
 	factoryResetMu       sync.Mutex
 	factoryResetInFlight bool
 	factoryResetLastFire time.Time
 )
 
-// runFactoryReset is the trigger-agnostic worker. Returns immediately after
-// spawning the wipe + reboot goroutine; callers (HTTP / MQTT / GPIO) decide
-// how to surface acceptance to the user.
-//
-// Returns (started, errStatus, errMessage). errStatus mirrors HTTP semantics
-// so HTTP callers can use it directly; non-HTTP callers (MQTT/GPIO) just
-// check started=false and log errMessage.
+// runFactoryReset is the trigger-agnostic worker.
 func runFactoryReset(gw domain.AgentGateway) (started bool, errStatus int, errMessage string) {
 	factoryResetMu.Lock()
 	if factoryResetInFlight {
@@ -64,15 +56,6 @@ func runFactoryReset(gw domain.AgentGateway) (started bool, errStatus int, errMe
 	factoryResetLastFire = time.Now()
 	factoryResetMu.Unlock()
 
-	// The runtime to reset is whatever backend is currently running: factory reset
-	// calls gw.ResetAgent() on the active gateway, so there is no per-backend switch
-	// to keep in sync (adding a backend = implement ResetAgent, nothing here). A
-	// runtime whose state is owned externally (e.g. PicoClaw) ships a no-op
-	// ResetAgent, so it is correctly left untouched.
-	//
-	// The INACTIVE backends still get their persona cleared — see
-	// wipeInactivePersonas. That list is also switch-free: it comes from the
-	// persona adapters, which the compiler makes every runtime provide.
 	log.Printf("[factory-reset] accepted — resetting active agent → wipe %d device paths + all runtime personas → reboot",
 		len(deviceWipePaths))
 
@@ -89,7 +72,6 @@ func runFactoryReset(gw domain.AgentGateway) (started bool, errStatus int, errMe
 
 		wipeDeviceState()
 
-		// Detached reboot so the HTTP response escapes before init kills us.
 		log.Printf("[factory-reset] all done — rebooting in 2s")
 		if err := exec.Command("sh", "-c", "(sleep 2 && systemctl reboot) &").Start(); err != nil {
 			log.Printf("[factory-reset] schedule reboot failed: %v", err)
@@ -108,22 +90,8 @@ func wipeDeviceState() {
 	wipeInactivePersonas()
 }
 
-// wipeInactivePersonas clears the persona + long-term memory of EVERY runtime,
-// not only the one gw.ResetAgent() just handled.
-//
-// gw.ResetAgent() reaches the active backend alone, but persona files are
-// copies: a runtime switch migrates SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE into
-// the destination and leaves the source's copy behind. So a device that has
-// ever switched backends holds the same profile in several trees, and clearing
-// only the active one leaves the next switch free to migrate a stale copy back
-// in — a factory reset that does not survive contact with the switch (device
-// observed 2026-09-03: a retired owner's name in four byte-identical USER.md
-// files, oldest from 2026-07-08, still being spoken).
-//
-// Paths come from the persona adapters themselves (migratepersona.PersonaPaths)
-// so registering a new runtime cannot forget this — the compiler requires
-// personaPaths alongside read/write. Re-wiping the active runtime's files is
-// harmless: WipePath ignores what is already gone.
+// wipeInactivePersonas clears the persona + long-term memory of EVERY
+// runtime, not only the one gw.ResetAgent() just handled.
 func wipeInactivePersonas() {
 	paths := migratepersona.PersonaPaths(migratepersona.DefaultOptions("", ""))
 	log.Printf("[factory-reset] wiping %d persona paths across all runtimes", len(paths))
@@ -133,31 +101,10 @@ func wipeInactivePersonas() {
 }
 
 // FactoryReset performs a soft factory reset: wipe device state (config / API
-// keys / enrollments / WiFi creds) + reboot. Kernel / OS / system packages /
-// binaries / hal .venv are NOT touched — this is a state reset, not a
-// reflash. After reboot the device boots into AP "<device_type>-XXXX" with a fresh
-// setup wizard.
-//
-// POST /api/system/factory-reset
-//
-// No body. The currently-active agent backend is reset via gw.ResetAgent() (a
-// backend whose state is owned externally ships a no-op ResetAgent).
-//
-// For per-component binary refresh use POST /api/system/software-update/:target.
-//
-// Returns 202 Accepted with the work scheduled in the background — the
-// goroutine reboots the device, so the response must be sent before reboot
-// fires. 409 Conflict if another reset is already running; 429 Too Many
-// Requests inside the cooldown window.
+// keys / enrollments / WiFi creds) + reboot.
 func FactoryReset(c *gin.Context, gw domain.AgentGateway) {
-	// Audit who triggered this destructive action. Logged BEFORE runFactoryReset
-	// so even a rejected attempt (cooldown / single-flight / failed auth) leaves a
-	// trail. RemoteAddr is the TCP peer (always 127.0.0.1 for nginx-proxied
-	// requests); X-Forwarded-For / X-Real-IP carry the real client behind nginx.
-	// A pure-loopback caller (no XFF/X-Real-IP) bypassed auth — i.e. an on-device
-	// process (the GPIO button handler, the agent, a local curl, or localhost web
-	// UI). The Authorization scheme (never the token itself) + os_session cookie
-	// presence distinguish a remote admin Bearer call from a logged-in web UI.
+	// Logged BEFORE runFactoryReset so even a rejected attempt (cooldown /
+	// single-flight / failed auth) leaves a trail.
 	authScheme := ""
 	if h := c.GetHeader("Authorization"); h != "" {
 		if i := strings.IndexByte(h, ' '); i > 0 {
@@ -198,8 +145,7 @@ func FactoryReset(c *gin.Context, gw domain.AgentGateway) {
 }
 
 // TriggerFactoryReset is the entry point for non-HTTP triggers (MQTT command
-// handler, GPIO long-press service). Returns whether the trigger was accepted
-// (single-flight + cooldown gates apply identically). Caller logs the outcome.
+// handler, GPIO long-press service).
 func TriggerFactoryReset(gw domain.AgentGateway) (started bool, reason string) {
 	started, _, msg := runFactoryReset(gw)
 	return started, msg

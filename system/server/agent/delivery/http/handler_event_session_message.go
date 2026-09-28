@@ -12,16 +12,9 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// handleSessionMessageEvent handles WS event=="session.message": channel
-// (Telegram) turns that OpenClaw 5.x gates off the agent lifecycle stream.
-// Extracted from HandleEvent; outer-switch `break`s became `return nil`.
+// handleSessionMessageEvent handles "session.message" events for channel (Telegram)
+// turns, which OpenClaw 5.x does not emit on the agent lifecycle stream.
 func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
-	// OpenClaw 5.x gates the `agent` lifecycle stream behind
-	// isControlUiVisible (server-chat.ts), so non-device-originated runs
-	// (Telegram, etc.) emit no lifecycle_start/end on the agent path.
-	// Drive chat_input + HW marker firing for those turns from
-	// `session.message` instead. The device's own chat.send flows still use
-	// the agent path above — guarded by sessionKey + origin.provider.
 	var sm struct {
 		SessionKey string `json:"sessionKey"`
 		SessionID  string `json:"sessionId"`
@@ -50,63 +43,34 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 		slog.Warn("session.message unmarshal error", "component", "agent", "err", err)
 		return nil
 	}
-	// Skip heartbeat / cron / proactive turns up front — they may share
-	// a telegram session key but must keep the lifecycle path so their
-	// reply reaches the device speaker, not just Telegram.
+	// Heartbeat turns must keep the lifecycle path so replies reach the speaker.
 	if sm.Session.Origin.Provider == "heartbeat" {
 		return nil
 	}
-	// Detect inbound channel turns. sessionKey prefix is the most stable
-	// signal across OpenClaw versions; origin.provider/deliveryContext
-	// are best-effort (sessionRow.origin can be undefined when telegram
-	// routes through the default agent session).
+	// sessionKey prefix is the stable signal; origin/deliveryContext are best-effort.
 	isTelegramChannel := strings.HasPrefix(sm.SessionKey, "agent:main:telegram:") ||
 		sm.Session.Origin.Provider == "telegram" ||
 		sm.Session.DeliveryContext.Channel == "telegram"
 	if !isTelegramChannel {
 		return nil
 	}
-	// Skip if the agent path is already handling this session — cron
-	// heartbeat ("Continue the OpenClaw runtime event.") fires both
-	// event=agent lifecycle AND session.message; without this guard
-	// every heartbeat would emit a duplicate chat_input. Real user
-	// telegram does NOT fire event=agent (isControlUiVisible gate),
-	// so this map stays empty for them and the handler proceeds.
+	// Skip sessions the agent lifecycle path already handles (avoids duplicate chat_input).
 	const agentLifecycleWindowMs int64 = 30_000
 	h.agentLifecycleMu.Lock()
 	recentLifecycleMs := h.agentLifecycleAt[sm.SessionKey]
 	activeRunID := h.activeRunIDBySession[sm.SessionKey]
 	h.agentLifecycleMu.Unlock()
 	if recentLifecycleMs > 0 && time.Now().UnixMilli()-recentLifecycleMs < agentLifecycleWindowMs {
-		// Queue-mode interleave: a Telegram user message can arrive WHILE a
-		// device-issued run (sensing/voice chat.send) is being processed.
-		// OpenClaw injects it into the running turn and the agent's reply
-		// goes back on the device run's stream — its runID is "device-chat-*"
-		// so isDeviceOutboundChatRunID() is true → isChannelRun=false →
-		// reply ends up on TTS instead of Telegram. Capture the chat_id
-		// here (before the skip) and mark the active run so lifecycle.end
-		// suppresses TTS and routes the reply via DM.
-		//
-		// chat_id sources, in priority order:
-		//   1. Conversation-info metadata block in content (when present)
-		//   2. sm.Session.DisplayName / Origin.Label regex — these session
-		//      fields are populated by OpenClaw for every Telegram broadcast
-		//      and don't depend on whether the metadata block was injected.
+		// A Telegram message interleaved into a running device turn: mark that run as
+		// a channel run so lifecycle.end suppresses TTS and DMs the reply instead.
 		isTelegramChannel := strings.HasPrefix(sm.SessionKey, "agent:main:telegram:") ||
 			sm.Session.Origin.Provider == "telegram" ||
 			sm.Session.DeliveryContext.Channel == "telegram"
 		if sm.Message.Role == "user" && activeRunID != "" && isTelegramChannel {
-			// Skip the device's own outbound echoes. Origin.Provider on a shared
-			// `agent:main:main` session goes "sticky telegram" after any
-			// real Telegram turn, so subsequent device-issued chat.send
-			// echoes (sensing/voice/wakeup) would otherwise look like
-			// Telegram messages and falsely DM the last seen chat_id.
-			// Two-layer check: prefix match (deterministic, survives the
-			// 30s/32-entry buffer overflow) + IsRecentOutboundChat (catches
-			// custom message texts not in the prefix list).
+			// Origin.Provider goes "sticky telegram" on a shared session; skip device echoes.
 			msgText := extractMessageContentText(sm.Message.Content)
 			if msgText != "" && (isDeviceInternalMessage(msgText) || h.agentGateway.IsRecentOutboundChat(msgText)) {
-				// fall through to skip log — not a real interleave
+				// Device echo, not a real interleave.
 			} else {
 				chatID := extractTelegramChatID(msgText)
 				if chatID == "" {
@@ -136,13 +100,7 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 			"ageMs", time.Now().UnixMilli()-recentLifecycleMs)
 		return nil
 	}
-	// Skip echoes of the device's own chat.send messages. session.message
-	// arrives BEFORE the corresponding agent lifecycle.start (race), so
-	// the lifecycle window above doesn't catch the first turn frame.
-	// Match by exact text the device pushed via markOutboundChat (in sendChat),
-	// plus a deterministic prefix check so burst voice/sensing turns that
-	// overflow the 32-entry recent-outbound buffer or arrive >30s late
-	// still get correctly classified as device-internal (not Telegram).
+	// Skip device chat.send echoes; session.message can arrive before lifecycle.start.
 	if sm.Message.Role == "user" {
 		text := extractMessageContentText(sm.Message.Content)
 		if text != "" && (isDeviceInternalMessage(text) || h.agentGateway.IsRecentOutboundChat(text)) {
@@ -163,13 +121,6 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 		if senderLabel == "" {
 			senderLabel = sm.Session.Origin.Label
 		}
-		// Capture Telegram user ID for outbound DM at lifecycle.end.
-		// OpenClaw 5.4 queue mode does NOT auto-deliver replies to the
-		// originating Telegram chat when the session is `agent:main:main`
-		// (per-sender mode), so the device must DM via Bot API itself. Two
-		// signals tried in order: conversation metadata block injected
-		// into content (most reliable when present), then senderLabel
-		// regex (always available since OpenClaw populates session info).
 		telegramID := extractTelegramChatID(text)
 		if telegramID == "" {
 			telegramID = extractTelegramIDFromSenderLabel(senderLabel)
@@ -212,11 +163,7 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 			"message": text,
 			"sender":  senderLabel,
 		}, runID)
-		// Synthesise lifecycle_start so the AGENT pipeline node lights up
-		// in Flow Monitor — same anchor the existing agent path emits.
 		lcStart := map[string]any{"run_id": runID, "source": "session.message"}
-		// Fingerprint of the memory this turn runs with (sizes + sha8, no
-		// content) so a routing regression can be tied to a memory write.
 		if st := migratepersona.MemoryState(); st != nil {
 			lcStart["memory"] = st
 		}
@@ -238,12 +185,7 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 	st, ok := h.channelTurns[sm.SessionKey]
 	if !ok {
 		h.channelTurnMu.Unlock()
-		// No tracked turn (user role was skipped earlier — e.g. dedup
-		// false-positive). Still clear busy on assistant stop so the
-		// turn-gate hook's SetBusy(true) doesn't wedge sensing for 5
-		// min. Channel turns are the only path that needs this safety;
-		// missing the chat_input/lifecycle synthesis is acceptable
-		// (turn just won't show in Flow Monitor for this case).
+		// Untracked turn: still clear busy so sensing isn't wedged for busyTTL.
 		if isFinalAssistant {
 			slog.Info("session.message untracked assistant stop — clearing busy",
 				"component", "agent", "sessionKey", sm.SessionKey)
@@ -254,8 +196,6 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 	if text != "" {
 		st.accumulated.WriteString(text)
 	}
-	// stopReason "stop" or "end_turn" both signal the final assistant
-	// message of the turn. "toolUse" means another tool round will follow.
 	isFinal := sm.Message.StopReason == "stop" || sm.Message.StopReason == "end_turn"
 	runID := st.runID
 	telegramID := st.telegramID
@@ -273,9 +213,6 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 	hwCalls, cleanText := extractHWCalls(fullText)
 	cleanText = extractSayTag(cleanText)
 	cleanText = sanitizeAgentText(cleanText)
-	// CoT-leak filter (see cot_leak_filter.go): channel turns never TTS, but
-	// their text reaches the web chat / Flow Monitor via chat_response and
-	// tts_suppressed — strip leaked planning monologue there too.
 	chFilter := newCoTLeakFilter(h.replyLanguageCode())
 	if filtered := chFilter.filterText(cleanText); len(chFilter.dropped) > 0 {
 		slog.Warn("CoT leak dropped from channel turn reply",
@@ -285,32 +222,19 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 		cleanText = filtered
 	}
 
-	// ADDED 2026-05-26: drain any leftover firedHWCount for this runID so
-	// the per-runID map doesn't leak. Channel turns don't stream-fire
-	// markers today (no tryFirstSentenceFlush on this path), so the
-	// count is normally 0 — call is defensive against future changes.
+	// Drain the per-run count so the map doesn't leak.
 	_ = h.consumeFiredHWCount(runID)
 
-	// Fire HW markers (LED, emotion, servo, audio) on the local device
-	// even though the spoken text goes back to the originating channel.
 	h.fireHWCalls(hwCalls, runID)
 
-	// Synthesise lifecycle_end so RESP node lights up.
 	flow.Log("lifecycle_end", map[string]any{
 		"run_id": runID,
 		"source": "session.message",
 	}, runID)
-	// Clear the agent busy flag — hal's turn-gate hook called
-	// /api/openclaw/busy when this channel turn was preprocessed, but
-	// the agent-path lifecycle.end that normally clears it never fires
-	// for channel turns (OpenClaw 5.x gate). Without this, sensing
-	// events queue for up to busyTTL (5 min) before auto-clearing.
+	// Agent-path lifecycle.end never fires for channel turns; clear busy here.
 	h.agentGateway.SetBusy(false)
 
-	// Channel turns: TTS stays silent on the speaker. OpenClaw 5.4 queue
-	// mode does NOT auto-deliver replies to the originating Telegram chat
-	// when session is `agent:main:main`, so the device DMs the reply via Bot API
-	// using telegramID captured at channel-turn start.
+	// Channel turns never speak on the device; OpenClaw delivers the reply.
 	switch {
 	case isAgentNoReply(cleanText):
 		slog.Info("channel turn replied NO_REPLY", "component", "agent", "run_id", runID)
@@ -344,43 +268,8 @@ func (h *AgentHandler) handleSessionMessageEvent(evt domain.WSEvent) error {
 			State:   "final",
 			Detail:  map[string]string{"role": "assistant", "message": cleanText},
 		})
-		// 2026-06-02: Disabled band-aid Telegram DM send below. Users were
-		// reporting 2 reply messages per DM turn — OpenClaw upstream now
-		// fans out the reply itself, so this code path was the duplicate.
-		// REVERT this comment-out (uncomment the block) only if users start
-		// reporting "turn ended without visible final response" again, i.e.
-		// OpenClaw stops delivering the eventual reply to the originating
-		// Telegram chat. The interleave fix elsewhere is a separate case
-		// and stays regardless.
-		// if telegramID != "" {
-		// 	// FIXME: band-aid for OpenClaw 5.4 queue-mode regression. The
-		// 	// telegram plugin closes its message-processing window in
-		// 	// ~1–2s and reports "turn ended without visible final
-		// 	// response" before the agent (which can take 20s+) finishes.
-		// 	// The eventual reply lands in chat history but never gets
-		// 	// fanned out to the originating Telegram chat. Until OpenClaw
-		// 	// fixes that path, the device DMs via Bot API itself. REMOVE this
-		// 	// goroutine + flow.Log when upstream fix lands — otherwise
-		// 	// users will receive duplicate replies (one from OpenClaw,
-		// 	// one from the device). The interleave fix above is a separate
-		// 	// case and should stay even after upstream fixes this one.
-		// 	go func(t, tid string) {
-		// 		slog.Info("channel turn → Telegram DM", "component", "agent", "run_id", runID, "telegram_id", tid)
-		// 		if err := h.agentGateway.SendToUser(tid, t, ""); err != nil {
-		// 			slog.Error("channel turn DM failed", "component", "agent", "run_id", runID, "err", err)
-		// 		}
-		// 	}(cleanText, telegramID)
-		// 	flow.Log("telegram_dm_send", map[string]any{
-		// 		"run_id":      runID,
-		// 		"telegram_id": telegramID,
-		// 		"source":      "channel_turn",
-		// 	}, runID)
-		// } else {
-		// 	slog.Warn("channel turn has no telegram_id — reply not delivered",
-		// 		"component", "agent", "run_id", runID, "sender_label", "elided")
-		// }
+		// No device-side DM: OpenClaw fans out the reply (a DM here duplicated it).
 	}
-	// Drop the channelRuns marker — turn is finished.
 	h.channelRunsMu.Lock()
 	delete(h.channelRuns, runID)
 	h.channelRunsMu.Unlock()

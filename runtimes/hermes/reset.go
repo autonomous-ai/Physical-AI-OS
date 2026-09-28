@@ -13,27 +13,21 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// ResetAgent performs the Hermes factory-reset wipe. The factory-reset flow
-// (server/system/factoryreset.go) resolves the active gateway and calls this on
-// it — so adding a backend means implementing ResetAgent, not editing a switch.
+// ResetAgent performs the Hermes factory-reset wipe.
 func (s *HermesService) ResetAgent() error {
 	wipeHermesState(s.config)
 	return nil
 }
 
-// stopVerifyTimeout caps how long we wait for hermes-gateway to actually leave
-// the active state after `systemctl stop`.
+// stopVerifyTimeout caps how long we wait for hermes-gateway to actually leave the active state after `systemctl stop`.
 const stopVerifyTimeout = 5 * time.Second
 
 // isServiceActive returns true if `systemctl is-active <unit>` exits 0 (active).
-// All other states (inactive, failed, unknown, activating) are treated as "not
-// active" — safe to wipe.
 func isServiceActive(unit string) bool {
 	return exec.Command("systemctl", "is-active", "--quiet", unit).Run() == nil
 }
 
-// waitForServiceStop polls is-active until the unit is no longer active or the
-// timeout elapses. Returns true if the service is confirmed stopped in the window.
+// waitForServiceStop polls is-active until the unit is no longer active or the timeout elapses.
 func waitForServiceStop(unit string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)
 	for {
@@ -47,40 +41,25 @@ func waitForServiceStop(unit string, timeout time.Duration) bool {
 	}
 }
 
-// hermesWipeDirs are Hermes state subdirs we recursively remove on factory
-// reset. Top-level files inside hermesHome are handled separately by the
-// directory sweep (see hermesKeepFiles) — anything NOT in this list and NOT in
-// hermesKeepFiles stays untouched (skills/, bin/, audio_cache/, pairing/, …).
+// hermesWipeDirs are Hermes state subdirs we recursively remove on factory reset.
 var hermesWipeDirs = []string{
-	hermesHome + "/sessions",                // conversation session state
-	hermesHome + "/memories",                // semantic memory store
-	hermesHome + "/tasks",                   // background task runs
-	hermesHome + "/subagents",               // subagent history
-	hermesHome + "/checkpoints",             // run checkpoints
-	hermesHome + "/logs",                    // runtime logs
-	hermesHome + "/.cache",                  // cache dir (dotted)
-	hermesHome + "/cron",                    // scheduled jobs
-	hermesHome + "/cache",                   // runtime cache (non-dotted, see tree)
-	hermesHome + "/gateway",                 // gateway runtime state dir
-	hermesHome + "/migration",               // migration history
-	hermesHome + "/skills/openclaw-imports", // CDN-downloaded user-defined skills
-	hermesHome + "/skills/audio_cache",      // audio cache
-	hermesHome + "/skills/image_cache",      // image cache
+	hermesHome + "/sessions",
+	hermesHome + "/memories",
+	hermesHome + "/tasks",
+	hermesHome + "/subagents",
+	hermesHome + "/checkpoints",
+	hermesHome + "/logs",
+	hermesHome + "/.cache",
+	hermesHome + "/cron",
+	hermesHome + "/cache",
+	hermesHome + "/gateway",
+	hermesHome + "/migration",
+	hermesHome + "/skills/openclaw-imports",
+	hermesHome + "/skills/audio_cache",
+	hermesHome + "/skills/image_cache",
 }
 
-// hermesKeepFiles is the allow-list of TOP-LEVEL FILES (not dirs) under
-// hermesHome that survive factory reset. The sweep removes every regular file
-// at hermesHome whose name is NOT a key here.
-//
-//   - .env, config.yaml: reset in place by `hermes setup --reset` (Step 3)
-//   - auth.lock:         lock file — leave for daemon to manage on restart
-//   - SOUL.md:           kept on disk but overwritten to a blank template
-//     after the sweep (so the persona resets without orphaning the file).
-//
-// Anything else at top level (DB triples like state.db / state.db-shm /
-// state.db-wal, response_store.*, kanban.*, auth.json, gateway.pid,
-// gateway.lock, gateway_state.json, channel_directory.json,
-// config.yaml.bak.*, *_cache.json, image_cacheon, …) is swept out.
+// hermesKeepFiles is the allow-list of TOP-LEVEL FILES (not dirs) under hermesHome that survive factory reset.
 var hermesKeepFiles = map[string]bool{
 	".env":        true,
 	"config.yaml": true,
@@ -88,27 +67,12 @@ var hermesKeepFiles = map[string]bool{
 	"SOUL.md":     true,
 }
 
-// hermesSoulFallback is written to SOUL.md only when the device has no soul_ref
-// and hermes setup --reset did not seed one. Keeps a parseable stub so Hermes
-// starts from a clean slate rather than a missing file.
+// hermesSoulFallback is written to SOUL.md only when the device has no soul_ref and hermes setup --reset did not seed one.
 const hermesSoulFallback = "# Hermes Agent Persona\n"
 
-// wipeHermesState runs the Hermes reset flow. Unlike openclaw, Hermes has no
-// single "reset everything" CLI. Daemon MUST die before we touch state files,
-// otherwise it holds SQLite write handles + re-creates wiped paths on its next
-// write tick. Order:
-//  1. hermes gateway stop                       (kill daemon first)
-//  2. systemctl stop hermes-gateway + verify    (kill any systemd-supervised process)
-//  3. hermes setup --reset --non-interactive    (now-safe config.yaml/.env reset)
-//  4. systemctl disable hermes-gateway          (no auto-start; SetupAgent re-enables)
-//  5. surgical rm                               (dirs + top-level file sweep + SOUL.md reset)
-//
-// `~/.hermes/.env` and `~/.hermes/config.yaml` are NOT rm'd — Step 3 resets
-// them in place to defaults. `~/.hermes/SOUL.md` is seeded in Step 5:
-//   - device has soul_ref → write the device-specific soul content
-//   - no soul_ref         → write hermesSoulFallback (Hermes manages its own default)
+// wipeHermesState runs the Hermes reset flow.
+// The daemon must be stopped first: it holds SQLite handles and re-creates wiped paths.
 func wipeHermesState(cfg *config.Config) {
-	// Step 1: stop hermes gateway.
 	log.Printf("[factory-reset/hermes] step 1/5 — hermes gateway stop")
 	if out, err := exec.Command("hermes", "gateway", "stop").CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/hermes] step 1/5 — hermes gateway stop error: %v — %s", err, strings.TrimSpace(string(out)))
@@ -116,7 +80,6 @@ func wipeHermesState(cfg *config.Config) {
 		log.Printf("[factory-reset/hermes] step 1/5 — hermes gateway stopped")
 	}
 
-	// Step 2: stop hermes-gateway systemd unit.
 	log.Printf("[factory-reset/hermes] step 2/5 — systemctl stop hermes-gateway")
 	if out, err := exec.Command("systemctl", "stop", "hermes-gateway").CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/hermes] step 2/5 — stop hermes-gateway error: %v — %s", err, strings.TrimSpace(string(out)))
@@ -130,8 +93,6 @@ func wipeHermesState(cfg *config.Config) {
 			stopVerifyTimeout)
 	}
 
-	// Step 3: hermes setup --reset — resets config.yaml to defaults and scrubs
-	// API keys in .env.
 	log.Printf("[factory-reset/hermes] step 3/5 — hermes setup --reset --non-interactive")
 	if out, err := exec.Command("hermes", "setup", "--reset", "--non-interactive").CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/hermes] step 3/5 — hermes setup --reset error: %v — %s", err, strings.TrimSpace(string(out)))
@@ -139,7 +100,6 @@ func wipeHermesState(cfg *config.Config) {
 		log.Printf("[factory-reset/hermes] step 3/5 — hermes setup --reset done: %s", strings.TrimSpace(string(out)))
 	}
 
-	// Step 4: disable hermes-gateway so the service does NOT auto-start on reboot.
 	log.Printf("[factory-reset/hermes] step 4/5 — systemctl disable hermes-gateway")
 	if out, err := exec.Command("systemctl", "disable", "hermes-gateway").CombinedOutput(); err != nil {
 		log.Printf("[factory-reset/hermes] step 4/5 — disable hermes-gateway error: %v — %s", err, strings.TrimSpace(string(out)))
@@ -147,19 +107,12 @@ func wipeHermesState(cfg *config.Config) {
 		log.Printf("[factory-reset/hermes] step 4/5 — hermes-gateway disabled")
 	}
 
-	// Step 5: surgical wipe. Two buckets — enumerated subdirs (rm -rf) and a
-	// top-level file sweep keyed by hermesKeepFiles. SQLite DB triples
-	// (.db + .db-shm + .db-wal), config.yaml rotating backups, gateway runtime
-	// files, etc. are all caught by the sweep — no enumeration needed.
 	log.Printf("[factory-reset/hermes] step 5/5 — wiping %d dirs + top-level file sweep", len(hermesWipeDirs))
 
 	for _, d := range hermesWipeDirs {
 		osreset.WipePath("[factory-reset/hermes]", d)
 	}
 
-	// Top-level file sweep: ReadDir(hermesHome), delete every regular file
-	// whose name is NOT in hermesKeepFiles. Dirs at top level are untouched
-	// here — they're handled (or intentionally preserved) above.
 	entries, err := os.ReadDir(hermesHome)
 	if err != nil {
 		log.Printf("[factory-reset/hermes] sweep: cannot read %s: %v (non-fatal)", hermesHome, err)
@@ -178,9 +131,7 @@ func wipeHermesState(cfg *config.Config) {
 		log.Printf("[factory-reset/hermes] sweep: removed %d top-level files (keep-list: %d)", swept, len(hermesKeepFiles))
 	}
 
-	// SOUL.md: kept by sweep, but user-customised content must not survive a
-	// factory reset. Seed from the device's soul_ref if declared; otherwise
-	// fall back to the minimal stub so Hermes starts from a clean slate.
+	// SOUL.md: kept by sweep, but user-customised content must not survive a factory reset.
 	soulPath := filepath.Join(hermesHome, "SOUL.md")
 	soulContent := resolveSoulContent(cfg)
 	if err := os.WriteFile(soulPath, soulContent, 0o644); err != nil {
@@ -190,13 +141,7 @@ func wipeHermesState(cfg *config.Config) {
 	}
 }
 
-// resolveSoulContent returns the SOUL.md bytes to seed after a factory reset:
-//   - device declares soul_ref → content of robots/<type>/<ref> (or URL)
-//   - no soul_ref              → hermesSoulFallback stub
-//
-// A declared-but-unresolvable soul_ref falls back rather than failing the reset:
-// a device mid-wipe must come back up with a parseable soul either way, and
-// onboarding re-injects the real one on the next boot.
+// resolveSoulContent returns the SOUL.md to seed after reset: the soul_ref content, else hermesSoulFallback.
 func resolveSoulContent(cfg *config.Config) []byte {
 	devType := cfg.DeviceTypeOrDefault()
 	content, hasSoul, err := device.ResolveSoul(devType)

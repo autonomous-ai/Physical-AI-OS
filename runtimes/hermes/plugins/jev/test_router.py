@@ -113,8 +113,6 @@ class RouterTest(unittest.TestCase):
         self.assertNotIn("injection", message)
 
     def test_shipped_computer_skill_fits_default_inline_budget(self):
-        # Guard the real fast-path instructions against growing back beyond the
-        # default Hermes hook spill cap. Native metadata has additional headroom.
         skill_dir = Path(__file__).resolve().parents[4] / "skills" / "computer-use"
         native = {"success": True, "name": "computer-use",
                   "skill_dir": "/root/.hermes/skills/openclaw-imports/computer-use",
@@ -209,7 +207,6 @@ class RouterTest(unittest.TestCase):
             try:
                 hint = plugin.before_turn(user_message="read email")
                 self.assertEqual(hint is not None, current == "allowed")
-                # Wait for worker cleanup so the next turn is not a busy bypass.
                 with plugin.busy:
                     pass
             finally:

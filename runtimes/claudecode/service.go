@@ -1,24 +1,6 @@
 // Package claudecode implements domain.AgentGateway against Claude Code
 // (the Anthropic CLI agent) reached over a persistent WebSocket to a thin local
-// bridge. See docs/agentic/claudecode.md for the protocol mapping and the
-// runtime boundaries with OpenClaw / Hermes / PicoClaw.
-//
-// Claude Code has no server mode, so the claudecode systemd unit runs a bridge
-// (the Go gatewayd in runtimes/claudecode/gatewayd, launched as
-// `os-server claudecode-gatewayd`) that holds ONE headless
-// Claude process (`claude --print --input-format stream-json --output-format
-// stream-json`, plus `--channels plugin:discord@...` when configured) and
-// exposes the socket at WSURL. os-server only acts as a client: it sends user
-// turns as `message.send`, and translates the forwarded Claude stream-json
-// events (system / assistant / user / result) into the same domain.WSEvent
-// shape that the OpenClaw handler at server/agent/delivery/http/
-// handler_events.go consumes — so the downstream pipeline (HAL TTS, [HW:/...]
-// markers, monitor SSE, sensing drain, Telegram fan-out) stays untouched.
-//
-// Like PicoClaw, there is no per-frame runId on the wire: the final answer
-// arrives on the `result` event, and turns are correlated by a single in-flight
-// runID (the bridge's Claude process handles one turn at a time; queued inputs
-// are serialized by Claude itself).
+// bridge.
 package claudecode
 
 import (
@@ -78,17 +60,14 @@ type ClaudeCodeService struct {
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
 
-	// Persistent WebSocket. wsConn is set once connected and nil'd on drop.
+	// Persistent WebSocket.
 	wsMu           sync.Mutex
 	wsConn         *websocket.Conn
 	wsConnected    atomic.Bool
 	wsConnectedAt  atomic.Int64 // unix seconds when the socket last became ready
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
-	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRuns preserves every outbound request
-	// in socket-write order, adopted as each serialized turn begins;
-	// currentRunID is the runID of the turn currently being streamed back.
+	// Turn lifecycle.
 	activeTurn           atomic.Bool
 	busySince            atomic.Int64
 	pendingMu            sync.Mutex
@@ -99,8 +78,7 @@ type ClaudeCodeService struct {
 	currentRunID         atomic.Value // string
 	reqCounter           atomic.Int64
 
-	// Session state. sessionUUID is the Claude-assigned session_id captured from
-	// any inbound frame.
+	// Session state.
 	sessionUUID atomic.Value // string
 
 	// lastAssistantText is the latest assistant text block of the in-flight
@@ -145,15 +123,11 @@ type ClaudeCodeService struct {
 	discordMu      sync.Mutex
 	discordSession *discordgo.Session
 
-	// Discord inbound test seams (discord.go). Zero values select the
-	// production defaults: the real sendChat-backed send step and the live
-	// discordgo session's ChannelMessageSend.
+	// Discord inbound test seams (discord.go).
 	discordSendTurn    func(text, reqID, runID string) error
 	discordSendMessage func(channelID, text string) error
 
-	// Telegram inbound test seams (telegram_poll.go). Zero values select the
-	// production defaults: api.telegram.org, the on-disk offset file and the
-	// real sendChat-backed send step.
+	// Telegram inbound test seams (telegram_poll.go).
 	telegramAPIBase     string
 	telegramOffsetPath  string
 	telegramTargetsPath string
@@ -164,26 +138,19 @@ type ClaudeCodeService struct {
 	slackRunsMu sync.Mutex
 	slackRuns   map[string]slackRun
 
-	// Slack inbound test seams (slack.go / slack_sender.go). Zero values select
-	// the production defaults: slack.com/api and the real sendChat-backed send step.
+	// Slack inbound test seams (slack.go / slack_sender.go).
 	slackAPIBase  string
 	slackSendTurn func(text, reqID, runID string) error
 
 	// Telegram coding-sessions (telegram_coding.go / coding_sessions.go): a chat
 	// can attach to a folder's interactive `claude` session and continue it over
-	// Telegram (per-turn --resume in the folder's cwd). codingSel maps chatID →
-	// selection (persisted to codingSelPath so it survives restarts); codingList
-	// caches the last /sessions listing so /use <n> can index it; codingFolder
-	// holds a per-folder mutex serializing turns so two Telegram turns never
-	// append to the same transcript at once.
+	// Telegram (per-turn --resume in the folder's cwd).
 	codingMu     sync.Mutex
 	codingSel    map[string]codingTarget
 	codingList   map[string][]codingSession
 	codingFolder map[string]*sync.Mutex
 
-	// Coding-session test seams. Zero values select production defaults:
-	// /root/.claude/projects, the presync .env, /root/.claudecode's selection
-	// file, a real `claude` exec, and a /proc-based interactive-TUI check.
+	// Coding-session test seams.
 	claudeProjectsDirPath string
 	codingEnvFilePath     string
 	codingSelPath         string
@@ -195,8 +162,7 @@ type ClaudeCodeService struct {
 
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook: when the device
 	// declares the `expression` capability, every visible turn flashes a "thinking"
-	// face before the reply lands. Resolved once at construction from the shared
-	// hook registry (skills.SupportedHooks). See emotion_ack.go.
+	// face before the reply lands.
 	ackHookEnabled bool
 
 	// Pending chat traces (idempotencyKey ↔ message text for MatchPendingByMessage).
@@ -228,8 +194,7 @@ type poseBucketInfo struct {
 	markedAt  time.Time
 }
 
-// ProvideService constructs the Claude Code service. Wired via system/agent/factory.go
-// when config.AgentRuntime == "claudecode".
+// ProvideService constructs the Claude Code service.
 func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *ClaudeCodeService {
 	s := &ClaudeCodeService{
 		config:         cfg,
@@ -260,11 +225,10 @@ func (s *ClaudeCodeService) IsReady() bool { return s.wsConnected.Load() }
 func (s *ClaudeCodeService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 
 // AgentUptime — Claude Code does not report process uptime over the wire, so we
-// have no value independent of the local WS reconnect cycle. Returns 0 (unknown).
+// have no value independent of the local WS reconnect cycle.
 func (s *ClaudeCodeService) AgentUptime() int64 { return 0 }
 
-// markOutboundChat / IsRecentOutboundChat mirror openclaw.ClaudeCodeService. Used by the
-// session.message handler to skip echoes of Device-injected user messages.
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.ClaudeCodeService.
 func (s *ClaudeCodeService) markOutboundChat(text string) {
 	if text == "" {
 		return

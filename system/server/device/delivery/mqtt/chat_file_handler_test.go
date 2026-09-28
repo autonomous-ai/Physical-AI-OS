@@ -9,8 +9,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// seedServedFile writes a file under /tmp, which is one of the allow-listed
-// agentfile roots, and returns its path.
+// seedServedFile writes a file under the allow-listed /tmp root.
 func seedServedFile(t *testing.T, name string, size int) string {
 	t.Helper()
 	dir, err := os.MkdirTemp("/tmp", "chatfile-")
@@ -44,16 +43,12 @@ func TestBuildChatFileServesAllowedFile(t *testing.T) {
 	if derr != nil || len(raw) != 64 {
 		t.Errorf("content decode = %d bytes, err %v", len(raw), derr)
 	}
-	// The correlation fields are echoed untouched so the backend can route the
-	// reply to whoever asked, and Path is echoed so a reply can be matched to
-	// its request without relying on ordering.
 	if got.RunID != "run1" || got.SessionID != "sess1" || got.Path != img {
 		t.Errorf("correlation = %+v", got)
 	}
 }
 
-// Past the inline budget the metadata still comes back — a client should be
-// able to say "a big file" rather than show nothing.
+// Past the inline budget the metadata still comes back.
 func TestBuildChatFileMarksOversized(t *testing.T) {
 	big := seedServedFile(t, "clip.mp4", chatFileMaxInlineBytes+1)
 
@@ -72,9 +67,7 @@ func TestBuildChatFileMarksOversized(t *testing.T) {
 	}
 }
 
-// `path` is client-supplied. The allow-list is what makes that safe, and it is
-// the same one GET /api/agent/file enforces — these are the cases that must
-// never come back with bytes.
+// `path` is client-supplied.
 func TestBuildChatFileRefusals(t *testing.T) {
 	unserved := seedServedFile(t, "creds.json", 16) // served root, unserved type
 	dirWithExt := filepath.Join(t.TempDir(), "shots.jpg")
@@ -102,9 +95,6 @@ func TestBuildChatFileRefusals(t *testing.T) {
 			if got.Content != "" {
 				t.Error("a refusal must never carry bytes")
 			}
-			// The reason is logged, not returned: which of "wrong type" /
-			// "outside roots" / "absent" it was would tell a prober about the
-			// device's filesystem.
 			if err.Error() != "file not available" {
 				t.Errorf("error = %q, want the uniform refusal", err)
 			}

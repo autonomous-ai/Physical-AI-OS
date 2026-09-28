@@ -65,8 +65,7 @@ def load_mpr121_config(device_dir: str, board_id: str) -> Optional[MPR121Config]
             if not isinstance(entry, dict):
                 raise ValueError(f"{board}: invalid MPR121 configuration fields")
             values = dict(entry)
-            # Older device declarations may outlive HAL during a component OTA.
-            # Ignore the retired chord setting; it no longer enables a gesture.
+            # Retired setting that older device declarations may still carry.
             values.pop("harness_voice_chord", None)
             if set(values) - allowed:
                 raise ValueError(f"{board}: invalid MPR121 configuration fields")

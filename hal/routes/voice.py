@@ -1,9 +1,4 @@
-"""Voice route handlers -- /voice/*, /tts/* endpoints.
-
-Note: ``/voice/strangers*`` (unknown-voice-cluster browsing) lives in
-:mod:`hal.routes.speaker` — it's semantic output of the speaker
-recognition service, kept next to the rest of that code.
-"""
+"""Voice route handlers: /voice/*, /tts/* (strangers live in hal.routes.speaker)."""
 
 import asyncio
 import json
@@ -33,7 +28,6 @@ from hal.models import (
 
 router = APIRouter(tags=["Voice"])
 
-# Lazy imports
 sd = None
 np = None
 VoiceService = None
@@ -76,8 +70,6 @@ def start_voice(req: VoiceStartRequest):
         return {"status": "already_running" if state.voice_service.listening else "ok"}
     voice = req.tts_voice or TTS_VOICE
     instructions = req.tts_instructions or TTS_INSTRUCTIONS or None
-    # Resolve per-role credentials with fallback to the LLM defaults so
-    # households with one shared credential keep working.
     tts_api_key = req.tts_api_key or req.llm_api_key
     tts_base_url = req.tts_base_url or req.llm_base_url
     stt_api_key = req.stt_api_key or req.llm_api_key
@@ -92,10 +84,7 @@ def start_voice(req: VoiceStartRequest):
     if need_tts:
         if state.tts_service and state.tts_service.speaking:
             state.tts_service.stop()
-        # Release the old service's persistent OutputStream BEFORE creating
-        # the new one. Otherwise the new TTSService.__init__ rate probe
-        # fails on every rate (device busy) and never writes audio_rate.json,
-        # leaving us probe-less until next restart.
+        # Release the old OutputStream first, or the new service's rate probe fails (device busy).
         if state.tts_service and hasattr(state.tts_service, "release_stream"):
             try:
                 state.tts_service.release_stream()
@@ -114,9 +103,7 @@ def start_voice(req: VoiceStartRequest):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=req.tts_provider,
-                # Same tracking hooks the boot-time instance gets. Without
-                # them a provider/voice swap keeps speaking but stops
-                # reporting playback, and the metrics go blind until restart.
+                # Same tracking hooks as the boot-time instance, or metrics go blind after a swap.
                 on_playback_audio=tts_hooks.on_playback_audio,
                 on_playback_done=tts_hooks.on_playback_done,
                 on_playback_muted=tts_hooks.on_playback_muted,
@@ -138,13 +125,7 @@ def start_voice(req: VoiceStartRequest):
         raise HTTPException(503, "Voice service not available (missing deps)")
     try:
         stt_provider = None
-        # Boost every name the wake-word gate will listen for. STT decides
-        # whether a turn is even heard, and it mis-hears proper nouns it has no
-        # reason to expect — "hi lamp" came back as "hi lance", "hello rachel"
-        # as "hello risa", and each miss silently drops the whole turn. The
-        # agent name alone is not enough: the device type and the permanent
-        # "autonomous" alias arm the same gate (see _build_wake_words and
-        # voice/_internal/config.py DEFAULT_WAKE_WORDS).
+        # Boost every wake-gate name (agent, device type, "autonomous"); STT mis-hears proper nouns.
         stt_keywords = state._stt_boost_terms()
         if req.deepgram_api_key and DeepgramSTT:
             stt_provider = DeepgramSTT(api_key=req.deepgram_api_key, keywords=stt_keywords)
@@ -166,9 +147,7 @@ def start_voice(req: VoiceStartRequest):
             alsa_device=AUDIO_INPUT_ALSA,
         )
         if state._mic_muted:
-            # Mute restored from the sidecar (or applied by the physical
-            # switch) before the pipeline was built: create the service but
-            # don't open the mic. /voice/unmute (or the switch) starts it.
+            # Muted before the pipeline was built: create but don't open the mic.
             state.logger.info("Voice pipeline created but not started -- mic muted")
         else:
             state.start_voice_service("voice-pipeline-init")
@@ -206,25 +185,14 @@ def update_voice_config(req: VoiceConfigRequest):
 
 @router.post("/voice/tts/config", response_model=StatusResponse)
 def update_tts_config(req: TTSConfigRequest):
-    """Apply TTS settings to the running service, no restart.
-
-    The service reads provider, voice and speed per utterance, so setting them
-    here takes effect on the next sentence. os-server used to apply a voice
-    change with `systemctl restart hal`, which takes the microphone, speaker and
-    wake word down with it for ten to fifteen seconds — and any admin click that
-    lands in that window is simply lost, because HAL is not listening.
-
-    Only fields that are sent are changed; the rest keep their current values,
-    so this is safe to call with a partial config.
-    """
+    """Apply TTS settings to the running service without a restart; only sent fields change."""
     if not state.tts_service:
         raise HTTPException(503, "tts service not running")
     svc = state.tts_service
     backend = svc._backend
     current_key = getattr(backend, "_api_key", "") or ""
     current_base = (getattr(backend, "_base_url", "") or "").rstrip("/")
-    # ElevenLabs appends /elevenlabs to base_url; strip it for comparison, the
-    # same way the speak-time hot swap does.
+    # ElevenLabs appends /elevenlabs to base_url; strip it for comparison.
     if current_base.endswith("/elevenlabs"):
         current_base = current_base[: -len("/elevenlabs")]
     current_provider = getattr(svc, "_provider", None)
@@ -254,10 +222,7 @@ def update_tts_config(req: TTSConfigRequest):
         "TTS config applied live (provider=%s, voice=%s, speed=%s)",
         svc._provider, svc._voice, svc._speed,
     )
-    # The TTS cache is keyed by provider, voice, model and speed, so a change
-    # here invalidates every clip the device has ready to play about itself.
-    # Re-render them now, on a thread: the operator is waiting on this response,
-    # and the point of warming is that nobody ever waits for it.
+    # Cache is keyed by provider/voice/model/speed; re-warm on a thread.
     threading.Thread(
         target=lambda: svc.warm_lifecycle_phrases(),
         daemon=True,
@@ -268,24 +233,16 @@ def update_tts_config(req: TTSConfigRequest):
 
 @router.get("/voice/voices")
 def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
-    """Return available TTS voices for the requested (or current) provider.
+    """Return TTS voices for the requested (or current) provider.
 
-    `lang` is a BCP-47 stt_language code (e.g. "vi", "zh-CN"). When set,
-    ElevenLabs voices are filtered to that language's curated bucket so
-    VN/CN owners see only voices that sound natural in their language.
-    Empty / unknown lang returns the full flat list (back-compat for
-    older clients that don't send lang). OpenAI voices ignore lang —
-    its built-in voices are language-agnostic.
+    `lang` (BCP-47, e.g. "vi") filters ElevenLabs voices only; empty returns all.
     """
     from hal.drivers.voice.tts import ElevenLabsTTSBackend
     from hal.drivers.voice.tts import PROVIDER_ELEVENLABS, PROVIDER_OPENAI as _PO
     if provider is None:
         provider = getattr(state.tts_service, "_provider", _PO) if state.tts_service else _PO
     if provider == "piper":
-        # Piper voices are model files, so the truth is the filesystem rather
-        # than a curated list: whatever .onnx is installed can be selected.
-        # `lang` is ignored — a Piper model IS a language, so filtering would
-        # only hide models the operator deliberately put there.
+        # Piper: whatever .onnx is installed is selectable; `lang` is ignored.
         import glob
         import os
         voices_dir = os.environ.get("HAL_PIPER_VOICES", "/opt/piper/voices")
@@ -328,11 +285,7 @@ def speak_text(req: SpeakRequest):
         )
         raise HTTPException(409, "Speaker busy -- music is playing")
 
-    # Optional provider/voice override for a TTS preview (web Test Voice,
-    # MQTT tts.preview). It applies to THIS utterance only: the running
-    # service keeps its saved backend and voice. Swapping them in place made
-    # one preview of another provider speak every later reply in that voice
-    # while config still named the old one (device 2026-09-25).
+    # Preview override applies to THIS utterance only; the service keeps its saved voice.
     preview = None
     if req.provider or req.voice:
         if req.cached or req.prerender:
@@ -390,17 +343,11 @@ def speak_text(req: SpeakRequest):
             interruptible=req.interruptible,
             prerender=req.prerender,
             realtime_feedback=req.realtime_feedback,
-            # Ownership for voice metrics only: which turn this phrase belongs to
-            # (os-server sets it for dead-air fillers). Playback behaviour is
-            # unchanged — turn_seq gating stays exclusive to /voice/speak-queue.
+            # Metrics ownership only; turn_seq gating stays exclusive to /voice/speak-queue.
             turn_id=req.turn_id,
         )
         if not started:
-            # HTTPException's second positional arg is `detail`, not a status —
-            # the ternary here used to yield HTTPException(409, 503), reporting
-            # every failed prerender as "409 Conflict" with the literal 503 as
-            # its body. A prerender never conflicts with anything: it warms the
-            # cache and speaks nothing, so a failure is 503, not a busy speaker.
+            # A failed prerender is 503, never 409 (it speaks nothing).
             if req.prerender:
                 raise HTTPException(503, "TTS prerender failed")
             raise HTTPException(409, "TTS is busy speaking")
@@ -421,12 +368,7 @@ def speak_text(req: SpeakRequest):
 
 @router.post("/voice/harness/update", response_model=StatusResponse)
 def harness_update(req: HarnessUpdateRequest):
-    """Queue a Harness update to be spoken once the device is free.
-
-    Returns immediately: `queued` means accepted, never proof of playback (the
-    same contract as /voice/speak). `suppressed` while the speaker is muted, so
-    os-server records the mute exactly as it does for a speak.
-    """
+    """Queue a Harness update to speak when free; `queued` is not proof of playback."""
     if not state.tts_service:
         raise HTTPException(503, "TTS not initialized")
     if state._speaker_muted:
@@ -443,16 +385,7 @@ def harness_update(req: HarnessUpdateRequest):
 
 @router.post("/voice/realtime/history", response_model=StatusResponse)
 def realtime_history(req: RealtimeHistoryRequest):
-    """Record a main-agent reply with the realtime agent WITHOUT speaking it.
-
-    The speaking path already feeds history from the on_speak_end hook. This is
-    for replies that never get there: os-server drops a cancelled turn's speech
-    before it reaches TTS, and without this call the realtime session keeps
-    save_main_handoff's "its spoken reply follows" placeholder and never learns
-    the answer. Returns skipped (not an error) when realtime is off or no voice
-    service is running — os-server fires this best-effort and must not treat a
-    realtime-less device as a failure.
-    """
+    """Record a main-agent reply with the realtime agent without speaking it (skipped if realtime is off)."""
     if state.voice_service is None:
         return {"status": "skipped"}
     fed = state.voice_service.feed_realtime_history(req.text, spoken=False)
@@ -461,20 +394,7 @@ def realtime_history(req: RealtimeHistoryRequest):
 
 @router.post("/voice/speak-queue", response_model=StatusResponse)
 def speak_queue_text(req: SpeakRequest):
-    """Speak text, queueing if TTS is currently busy.
-
-    Differs from /voice/speak: when the speaker is already in use, /voice/speak
-    returns 409 and the caller drops the text; /voice/speak-queue accepts the
-    request, pre-synthesizes the audio in the background, and plays it
-    seamlessly when the current speech finishes (same open ALSA stream → no
-    TTFB gap between sentences). Used by the SSE handler so a multi-sentence
-    agent reply that streams sentence-by-sentence is heard as one continuous
-    utterance instead of N choppy speak() calls separated by ~400ms each.
-
-    409 is still returned when music is playing (speaker fully committed) and
-    503 when TTS isn't initialized; both match /voice/speak's contract so
-    upstream error handling stays uniform.
-    """
+    """Speak text, queueing seamlessly behind current speech (409 while music plays, 503 without TTS)."""
     if not state.tts_service:
         state.logger.error("POST /voice/speak-queue: tts_service is None (not initialized)")
         raise HTTPException(503, "TTS not initialized")
@@ -521,11 +441,7 @@ def stop_tts():
 
 @router.post("/voice/wake-focus", response_model=StatusResponse)
 def grant_wake_focus(source: str = "os"):
-    """Open the wake-word follow-up window without a spoken wake phrase.
-
-    os-server calls this right after the boot greeting so the user can answer
-    without repeating the wake phrase. Same window a click / gaze / presence
-    grant opens; no-op when wake word is off or follow-up timeout is 0."""
+    """Open the wake-word follow-up window without a spoken wake phrase (e.g. after the boot greeting)."""
     voice = state.voice_service
     if voice is None or not hasattr(voice, "grant_wakeword_focus"):
         return {"status": "unavailable"}
@@ -554,9 +470,7 @@ def mute_mic():
         return {"status": "already_muted"}
     state._mic_muted = True
     state._mic_manual_override = True
-    # LED + sidecar BEFORE the pipeline teardown: voice_service.stop() can
-    # block for seconds (session teardown), and the mute feedback must not
-    # wait that out.
+    # LED + sidecar before teardown: voice_service.stop() can block for seconds.
     state._apply_mic_muted_led()
     state._persist_mic_state()
     if state.voice_service and state.voice_service.available:
@@ -569,11 +483,7 @@ def mute_mic():
 @router.post("/voice/unmute", response_model=StatusResponse)
 def unmute_mic():
     """Unmute mic -- restart voice pipeline."""
-    # HW kill-switch beats software: while the physical PD1 slide switch is
-    # muted, the web/API is not allowed to override it — privacy_button.py would
-    # just flip it back on the next reconcile anyway, leaving the UI briefly
-    # showing "unmuted" while the pipeline stays down. 409 lets the web toast
-    # a specific "flip the switch first" message.
+    # HW kill-switch beats software: 409 while the physical switch is muted.
     if state._hw_mic_switch_muted is True:
         raise HTTPException(409, "Hardware mic switch is off -- flip the physical switch to unmute")
     if not state._mic_muted:
@@ -588,11 +498,7 @@ def unmute_mic():
 
 
 def _sound_perception():
-    """Sensing-mic SoundPerception instance, or None when sensing is down.
-
-    Same private-attribute access path the face endpoints use
-    (state.sensing_service._perception_orchestrator._processors.*).
-    """
+    """Sensing-mic SoundPerception instance, or None when sensing is down."""
     if not state.sensing_service:
         return None
     try:
@@ -603,29 +509,9 @@ def _sound_perception():
 
 @router.get("/voice/mic-level")
 async def mic_level_stream(request: Request):
-    """Stream live mic input levels as Server-Sent Events (~10Hz).
+    """Stream live mic levels as Server-Sent Events (~10Hz).
 
-    Each event: `data: {"level", "threshold", "active", "muted",
-    "sensing_level", "sensing_age_s", "sensing_threshold",
-    "tts_speaking", "music_playing"}`.
-
-    - `level` — voice-pipeline mic (STT), latest capture-frame RMS on int16
-      scale (0..32768, computed anyway by the VAD loop — zero added DSP
-      cost). Falls to 0 while the mic drains under TTS/music or the
-      pipeline is down. `threshold` is the VAD wake threshold.
-    - `sensing_level` / `sensing_age_s` — noise mic (SoundPerception on
-      HAL_AUDIO_SENSING_DEVICE): the last 0.5s sample's RMS and how old it
-      is. Sampled once per sensing poll (a few seconds apart, paused
-      during/after TTS), NOT continuous — the web bar steps rather than
-      pumps. null when sensing/sound perception isn't running.
-      `sensing_threshold` is the loud-noise threshold.
-    - `tts_speaking` / `music_playing` — live playback state, piggybacked so
-      the web audio card flips "Speaking…/Playing music" the moment playback
-      ends instead of waiting out its 5s `/voice/status` poll.
-
-    Consumed by the web Overview audio card (VU meters) via the os-server
-    `/api/hardware` proxy — httputil.ReverseProxy streams event-stream
-    responses unbuffered, same as the MJPEG camera stream.
+    `level` is the STT mic RMS (int16 scale); `sensing_level` the noise mic's last sample (null if absent).
     """
     try:
         from hal.drivers.voice._internal.config import RMS_THRESHOLD as vad_threshold
@@ -661,8 +547,6 @@ async def mic_level_stream(request: Request):
                     "sensing_age_s": sensing_age_s,
                     "sensing_threshold": sound_threshold,
                     "tts_speaking": state._tts_speaking,
-                    # Same source as GET /audio/status "playing" (music flag,
-                    # not the stricter MusicService.streaming).
                     "music_playing": bool(state.music_service.playing)
                     if state.music_service
                     else False,
@@ -703,14 +587,7 @@ def voice_status():
     }
 
 
-# Piper install + voice download live in their own module but mount under this
-# router: they are not a hardware capability, so they must not need a ROBOT.md
-# declaration of their own, and `voice` is already mounted wherever audio is.
-# Guarded: an OTA lands files one at a time, so this module can briefly exist
-# on a device where hal/routes/piper.py does not. An unguarded import would
-# take the WHOLE voice router down with it — no TTS, no STT, a mute device —
-# to add a feature nobody had asked for yet. Losing the install endpoints is
-# the correct failure here; losing speech is not.
+# Guarded: a partial OTA may lack piper.py; losing install endpoints is fine, losing speech is not.
 try:
     from hal.routes.piper import router as _piper_router  # noqa: E402
     router.include_router(_piper_router)

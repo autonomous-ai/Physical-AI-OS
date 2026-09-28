@@ -1,78 +1,69 @@
 # Gợi Ý Nhạc Chủ Động (Music Suggestion)
 
-> Lamp chủ động gợi ý nhạc phù hợp với mood/trạng thái người dùng — **không auto-play**, chỉ gợi ý bằng giọng nói và chờ xác nhận.
+> Lamp chủ động gợi ý nhạc phù hợp với mood của người dùng — **không auto-play**, chỉ gợi ý bằng giọng nói và chờ xác nhận.
+>
+> Bản tiếng Anh: [../music-suggestion.md](../music-suggestion.md)
 
 ---
 
 ## Tổng quan
 
-Tính năng này cho phép Lamp **tự quyết định thời điểm** gợi ý nhạc dựa trên:
-- **Mood trigger** — khi mood được log (sad, stressed, tired, excited, happy, bored), agent dùng mood đó để suggest nhạc ngay
-- **Activity trigger** — khi camera phát hiện hoạt động tĩnh (ngồi máy tính, đọc sách), agent suggest background music
-- **Suggestion history** — lưu lại mỗi lần suggest, user accept/reject, để AI learn pattern
+Agent **tự quyết định thời điểm** gợi ý nhạc. Thiết kế là **event-driven** — không có cron job, không có timer ở backend:
 
-Hoàn toàn **AI-driven** — agent tự quyết định dựa trên SKILL.md instructions. Backend chỉ cung cấp API để lưu/đọc history.
+- **Mood trigger (trigger duy nhất)** — `skills/user-emotion-detection/SKILL.md` là router cho event `emotion.detected` (camera) và `speech_emotion.detected` (giọng nói). Router chọn đúng một route mỗi turn (`music` / `checkin` / `action` / `silent`); `skills/music-suggestion/SKILL.md` chỉ tạo output khi router chọn `music`.
+- **Activity event không bao giờ gợi ý nhạc** — event `motion.activity` / `[activity]` (sedentary, drink/break, celebrate) chỉ route sang `skills/wellbeing/SKILL.md`.
+- **Suggestion history** — lưu lại mỗi lần suggest và việc user accept/reject, để AI học pattern.
+
+Hoàn toàn **AI-driven**: agent tự quyết định dựa trên SKILL.md. Backend tính sẵn context và lưu/trả history.
 
 ---
 
-## Triggers
-
-### 1. Mood Trigger
+## Luồng trigger
 
 ```
-Agent detect mood signal (camera/voice/telegram)
+emotion.detected (camera) / speech_emotion.detected (giọng nói)
     ↓
-POST /api/mood/log {kind:"signal", ...} → ghi raw signal
+Backend inject [context: current_user=X] + [emotion_context: {...}]
     ↓
-GET /api/agent/mood-history?last=15 → đọc signal + decision gần đây
+user-emotion-detection/SKILL.md (router): log mood signal/decision (HW marker),
+chọn MỘT route: music | checkin | action | silent
+    ↓ (music)
+Cổng của music-suggestion/SKILL.md — phải thỏa tất cả:
+  ├── suggestion_worthy == true (mood ∈ sad, stressed, tired, excited, happy, bored)
+  ├── audio_playing == false
+  ├── last_suggestion_age_min ∉ [0, 7)   (cooldown, dùng chung với checkin)
+  └── is_decision_stale == false, hoặc turn này vừa tổng hợp decision mới
+    ↓ (pass hết)
+Chọn genre: music_pattern_for_hour → bảng genre mặc định → override theo audio history
     ↓
-Agent tổng hợp mood (fuse signal mới + history + decision cũ)
-    ↓
-POST /api/mood/log {kind:"decision", based_on, reasoning} → ghi decision
-    ↓
-Mood SKILL.md: decision mood thuộc [sad, stressed, tired, excited, happy, bored]?
-    ↓ (yes)
-Follow Music skill "AI-Driven Music Suggestion"
-    ↓
-Music skill: GET /api/agent/mood-history?kind=decision&last=1 → đọc lại decision mới nhất
-    ↓
-Agent check:
-  ├── Audio đang play? (GET /audio/status) → skip nếu playing
-  └── Music suggestion gần đây? (GET /music-suggestion-history) → skip nếu < 30 phút
-    ↓ (all pass)
-Agent suggest nhạc → POST /api/music-suggestion/log
+Một câu nói + [HW:/emotion] (+ [HW:/dm] cho user quen)
++ [HW:/music-suggestion/log:{...}]  → POST /api/music-suggestion/log
 ```
 
-### 2. Activity Trigger (Sedentary) — không cần mood
+### Context tính sẵn (`[emotion_context: ...]`)
 
-```
-Camera detect "using computer" → [sensing:motion.activity] raw label "using computer"
-    ↓
-Sensing SKILL.md: raw label thuộc nhóm sedentary → follow Music skill Flow B (sedentary)
-    ↓
-Agent check:
-  ├── Audio đang play? (GET /audio/status) → skip nếu playing
-  └── Music suggestion gần đây? (GET /music-suggestion-history) → skip nếu < 30 phút
-    ↓ (all pass)
-    ↓ KHÔNG check mood — sedentary tự đủ context
-    ↓
-GET /audio/history?person={name}&last=1 → personalize genre
-    ↓
-Default: lo-fi, ambient, study beats (override nếu có audio history rõ preference)
-Optional: nếu có mood decision fresh → refine genre (tired + sedentary → calm piano)
-    ↓
-Agent suggest background music → POST /api/music-suggestion/log
-```
+Do `BuildEmotionContext` trong `system/skillcontext/emotion.go` dựng. Khi có block này agent **không gọi tool đọc nào**:
+
+| Field | Thay cho |
+|-------|----------|
+| `audio_playing` | `GET /audio/status` |
+| `last_suggestion_age_min` (`-1` nếu hôm nay chưa có) | music-suggestion history `last=1` |
+| `prior_decision` + `is_decision_stale` | mood-history `kind=decision&last=1` |
+| `audio_recent` (`{track,duration_s,stopped}`) | `GET /audio/history?last=1` |
+| `music_pattern_for_hour` | đọc `habit/patterns.json` theo giờ hiện tại ±1 |
+| `suggestion_worthy`, `mapped_mood` | cổng mood bucket đã áp sẵn |
+
+Chỉ khi thiếu block này skill mới fallback sang batch GET song song (audio status, suggestion history, mood history, audio history, `patterns.json`).
 
 ### Unknown Users
 
-Unknown users (strangers) vẫn được suggest nhạc. Data lưu trong `/root/local/users/unknown/`. Khác biệt duy nhất: chỉ speak qua loa (`[HW:/speak]`), không DM vì không có telegram_id.
+Unknown users (người lạ) vẫn được suggest nhạc. Data lưu trong `/root/local/users/unknown/`. Khác biệt duy nhất: chỉ nói qua loa, không DM Telegram (không có telegram_id), và `/audio/play` bỏ field `person`.
 
 ### Cooldown
 
-- **30 phút** giữa các lần suggestion
-- Agent tự check bằng `GET /api/agent/music-suggestion-history?user={name}&last=1`
-- Áp dụng cho cả mood trigger và activity trigger
+- **7 phút** trong skill hiện tại (`last_suggestion_age_min ∉ [0, 7)`); skill ghi chú cần tăng lên **30 phút** trước khi lên production.
+- Backend tính từ suggestion log hôm nay — agent không check bằng tool call.
+- Dùng chung với route `checkin` của router (cả hai log qua `music-suggestion/log`).
 
 ---
 
@@ -90,7 +81,7 @@ Mỗi record:
 | Field | Ý nghĩa |
 |-------|---------|
 | `seq` | Unix nanoseconds — unique ID cho mỗi suggestion |
-| `trigger` | Nguồn trigger: `mood:tired`, `activity:sedentary` |
+| `trigger` | Nguồn trigger: `mood:<mood>` (trigger gợi ý duy nhất); route check-in của router log `checkin:<emotion>` |
 | `query` | YouTube search query (empty nếu chỉ text suggestion) |
 | `message` | Text suggestion gửi cho user |
 | `status` | `pending` → `accepted` / `rejected` / `expired` |
@@ -99,9 +90,9 @@ Mỗi record:
 
 | Endpoint | Method | Mục đích |
 |----------|--------|----------|
-| `/api/music-suggestion/log` | POST | Agent ghi music suggestion event |
-| `/api/music-suggestion/status` | POST | Agent update status (accepted/rejected) |
-| `/api/agent/music-suggestion-history` | GET | Query history (params: `user`, `date`, `last`) |
+| `/api/music-suggestion/log` | POST | Ghi suggestion (thường qua marker inline `[HW:/music-suggestion/log:{...}]`) |
+| `/api/music-suggestion/status` | POST | Update status (`accepted` / `rejected`) theo `day` + `seq` |
+| `/api/agent/music-suggestion-history` | GET | Query history (params: `user`, `date`, `last`; cần admin auth) |
 
 ### Retention
 
@@ -133,68 +124,74 @@ User nói "không" hoặc "not now"
 Agent: POST /api/music-suggestion/status → status="rejected"
 ```
 
+User lờ đi thì không update status.
+
 ---
 
 ## Các layer và file liên quan
 
-### Go server (Lamp)
+### Go server (os-server)
 
 | File | Vai trò |
 |------|---------|
-| `system/skillcontext/musicsuggestion/suggestion.go` | Logger JSONL per-user per-day. Log, Query, UpdateStatus, LastSuggestion, Days |
+| `system/skillcontext/musicsuggestion/suggestion.go` | Logger JSONL per-user per-day: Log, Query, UpdateStatus, retention |
+| `system/skillcontext/emotion.go` | `BuildEmotionContext` — dựng block `[emotion_context: ...]` |
 | `system/skillcontext/mood/mood.go` | Logger mood events |
-| `system/server/sensing/delivery/http/handler.go` | PostSuggestionLog/PostSuggestionStatus: API handlers. Motion.activity sedentary nudge agent follow Music skill |
-| `system/server/openclaw/delivery/sse/handler.go` | SuggestionHistory: GET endpoint |
-| `system/server/server.go` | Routes: /api/music-suggestion/*, /api/agent/music-suggestion-history |
+| `system/server/sensing/delivery/http/handler.go` | Handler `PostMusicSuggestionLog` / `PostMusicSuggestionStatus` |
+| `system/server/agent/delivery/http/handler_api_history.go` | Handler GET `MusicSuggestionHistory` |
+| `system/server/agent/delivery/http/handler_hw.go` | Route marker `[HW:/music-suggestion/...]` → `POST :5000/api/music-suggestion/...` |
+| `system/server/server.go` | Routes: `/api/music-suggestion/*`, `/api/agent/music-suggestion-history` |
 
-### OpenClaw Skills
+### Agent skills
 
 | File | Vai trò |
 |------|---------|
-| `lamp/resources/openclaw-skills/music/SKILL.md` | AI-driven suggestion logic, mood→music mapping, suggestion logging, cooldown check |
-| `lamp/resources/openclaw-skills/mood/SKILL.md` | Mood logging → follow Music skill suggestion |
-| `lamp/resources/openclaw-skills/sensing/SKILL.md` | Activity groups, sedentary → follow Music skill suggestion |
+| `skills/user-emotion-detection/SKILL.md` | Router cảm xúc — chọn music / checkin / action / silent |
+| `skills/music-suggestion/SKILL.md` | Gợi ý chủ động: cổng, chọn genre, log, học |
+| `skills/music/SKILL.md` | Nhạc reactive (user yêu cầu), phát nhạc |
+| `skills/mood/SKILL.md` | Log mood |
 
 ### HAL (Python)
 
 | File | Vai trò |
 |------|---------|
-| `hal/models.py` | FacePersonDetail: includes music_suggestion_days |
-| `hal/server.py` | /face/owners endpoint: reads music_suggestion_days from JSONL files |
+| `hal/models.py` | `FacePersonDetail`: có `music_suggestion_days` |
+| `hal/routes/sensing.py` | Endpoint `/face/owners`: đọc `music_suggestion_days` từ thư mục JSONL |
+| `hal/routes/music.py` | `/audio/play`, `/audio/stop`, `/audio/status`, `/audio/history` |
 
 ### Frontend (React)
 
 | File | Vai trò |
 |------|---------|
-| `lamp/web/src/pages/monitor/types.ts` | FaceOwnerDetail: music_suggestion_days field |
-| `lamp/web/src/pages/monitor/FaceOwnersSection.tsx` | Hiển thị music_suggestion_days badge + folder tree |
+| `system/web/src/pages/monitor/types.ts` | Field `music_suggestion_days` |
+| `system/web/src/pages/monitor/face-owners/PersonCard.tsx` | Hiển thị badge music-suggestion-days + folder tree |
 
 ---
 
 ## Dữ liệu AI sử dụng
 
-### Music suggestion history (`GET /api/agent/music-suggestion-history`)
+### Music suggestion history
 
 | Field | Dùng để |
 |-------|---------|
-| `trigger` | Biết suggestion từ mood hay activity |
+| `trigger` | Biết suggestion đến từ mood nào |
 | `status` | Learn accept/reject pattern |
 | `hour` | Pattern thời gian nào user hay accept |
 | `message` | Tránh suggest trùng lặp |
 
-### Audio history (`GET /audio/history?person={name}&last=1`)
+### Audio history (`audio_recent`, hoặc fallback `GET /audio/history?person={name}&last=1`)
 
 | Field | Dùng để |
 |-------|---------|
-| `query` | Genre/artist signal |
+| `query` / `track` | Genre/artist signal |
 | `duration_s` | Satisfaction: > 180s = enjoyed |
 | `stopped_by` | `"end"` = liked, `"user"` < 30s = disliked |
 
 ### Learning Rules
 
-- `stopped_by: "end"` + `duration_s` > 180s → suggest similar artist/genre
-- `stopped_by: "user"` + `duration_s` < 30s → try different direction
-- Multiple `rejected` in suggestion history → reduce frequency / change approach
+- Bài hát hết tự nhiên + nghe > 3 phút → suggest artist/genre tương tự
+- User tự dừng + nghe < 30s → thử hướng khác
+- Nhiều `rejected` trong suggestion history → giảm tần suất / đổi cách tiếp cận
 
 ---
 
@@ -204,8 +201,8 @@ Lamp chỉ có 1 speaker chia sẻ giữa TTS và music:
 
 | Tình huống | Hành vi |
 |-----------|---------|
-| AI suggest bằng text | TTS nói suggestion → user nghe |
-| User confirm → play | suppressTTS → TTS không đè lên nhạc |
+| AI suggest bằng giọng nói | TTS nói suggestion → user nghe |
+| User confirm → play | TTS bị suppress để không đè lên nhạc |
 | Music đang play + TTS | HAL trả 409 — music giữ priority |
 | User nói "stop" | `[HW:/audio/stop:{}]` → dừng music |
 
@@ -216,11 +213,11 @@ Lamp chỉ có 1 speaker chia sẻ giữa TTS và music:
 ### API kiểm tra
 
 ```bash
-# Suggestion history hôm nay
-curl -s "http://<LAMP_IP>:5000/api/agent/music-suggestion-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
+# Suggestion history hôm nay (cần admin auth)
+curl -s -H "Authorization: Bearer <admin-token>" "http://<LAMP_IP>:5000/api/agent/music-suggestion-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
 
-# Mood history
-curl -s "http://<LAMP_IP>:5000/api/agent/mood-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
+# Mood history (cần admin auth)
+curl -s -H "Authorization: Bearer <admin-token>" "http://<LAMP_IP>:5000/api/agent/mood-history?user=gray&date=$(date +%Y-%m-%d)&last=50"
 
 # Audio status
 curl -s "http://<LAMP_IP>:5001/audio/status"

@@ -2,11 +2,8 @@ import AppKit
 import CoreGraphics
 import Foundation
 
-// Coordinate system note:
-//   All x/y values are in the GLOBAL DISPLAY COORDINATE SPACE used by CGEvent —
-//   top-left origin, units = points (NOT pixels). On Retina, the screenshot is
-//   in image pixels. Use screenshot.image_to_global_points to account for the
-//   actual resized image dimensions and the selected display's global origin.
+// All x/y are CGEvent global display points (top-left origin), not pixels.
+// Use screenshot.image_to_global_points to convert from screenshot pixels.
 
 struct ClickAtExecutor: Executor {
     let action = "click_at"
@@ -71,7 +68,6 @@ struct ScrollExecutor: Executor {
             throw ExecutorError.permissionDenied("Accessibility access required for scroll")
         }
 
-        // Optionally move cursor first so scroll lands on the requested element.
         if let point {
             guard let move = CGEvent(mouseEventSource: nil, mouseType: .mouseMoved,
                                      mouseCursorPosition: point, mouseButton: .left) else {
@@ -198,10 +194,8 @@ struct CursorPosExecutor: Executor {
     let action = "cursor_pos"
 
     func execute(params: [String: Any]) async throws -> [String: Any] {
-        // NSEvent.mouseLocation: origin bottom-left of the MENU-BAR (primary) screen, in POINTS.
-        // CGEvent coords: origin top-left of the same primary screen. Same x, flipped y.
-        // Y-flip pivot MUST be the primary screen's height — NOT NSScreen.main (which is the
-        // "key window" screen and changes when focus moves between displays).
+        // NSEvent is bottom-left origin, CGEvent top-left: flip y around the primary
+        // (menu-bar) screen height, not NSScreen.main, which follows focus.
         return await MainActor.run {
             let pt = NSEvent.mouseLocation
             let screens = NSScreen.screens

@@ -1,7 +1,3 @@
-// Local data types + constants for the Face Owners (Users) page. The shared
-// FaceOwnerDetail/FaceOwnersDetail types stay in ../types — only the types
-// specific to this page live here.
-
 export interface CooldownEntry {
   person_id: string;
   kind: string;
@@ -39,6 +35,5 @@ export interface FaceStrangerStat {
   last_seen: string;
 }
 
-// Familiar-stranger threshold mirrors the device's _FAMILIAR_VISIT_THRESHOLD.
-// At this count the device pushes an enroll prompt to the agent (one-shot).
+// Mirrors the device's _FAMILIAR_VISIT_THRESHOLD.
 export const FAMILIAR_VISIT_THRESHOLD = 2;

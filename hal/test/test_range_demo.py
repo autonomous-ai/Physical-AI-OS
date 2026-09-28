@@ -1,10 +1,4 @@
-"""The range demo: a narrated tour of what the body can actually do.
-
-What matters: the yaw legs reach the REAL limits (the 54° recording narrated as
-a full turn is exactly what this replaces), the pitch legs stay inside travel
-the device is known to have, every leg is narrated, and the abort gesture stops
-the body and the speech together.
-"""
+"""The range demo: a narrated tour of what the body can actually do."""
 
 from unittest import mock
 
@@ -17,8 +11,7 @@ from test.body_ownership import BodyOwnership
 
 
 class _FakeSvc(BodyOwnership):
-    # A lamp at rest: head low, which is the posture that has the LEAST room
-    # above it. PITCH_LOOK_DEG must still fit.
+    # Head low at rest: the posture with the least room above. PITCH_LOOK_DEG must still fit.
     REST = {
         "base_yaw.pos": 3.0, "base_pitch.pos": 29.8, "elbow_pitch.pos": 27.1,
         "wrist_pitch.pos": -61.7, "wrist_roll.pos": 8.2,
@@ -67,9 +60,7 @@ def _run(svc, say=None):
 
 
 def test_the_demo_reaches_the_actual_yaw_limits():
-    """The reported bug: "I'll sweep my whole range… doing a full turn now!"
-    played a 54.4° recording against a 270° travel. Waypoints computed from the
-    limits cannot drift like that."""
+    """Waypoints come from joint limits, not a recording."""
     yaws = [p["base_yaw.pos"] for p, _pool in range_demo.waypoints(_FakeSvc.REST)
             if "base_yaw.pos" in p]
     assert min(yaws) == pytest.approx(C.YAW_MIN, abs=0.01)
@@ -80,11 +71,7 @@ def test_the_demo_reaches_the_actual_yaw_limits():
 
 
 def test_the_pitch_legs_stay_inside_travel_the_device_is_known_to_have():
-    """WRIST_PITCH_MIN/MAX are ±90 and the arm does not have that: device-
-    measured on lamp-ac82, wrist_pitch reached -89.55 going up and only -16.61
-    going down. Driving a demo to the declared limit would stall the joint
-    against a number nobody has verified, so the legs are a bounded offset from
-    the seed — the same one the sweep's look ring already uses every time."""
+    """The demo stays within the measured wrist_pitch range, not the declared limit."""
     seed = _FakeSvc.REST["wrist_pitch.pos"]
     pitches = [p["wrist_pitch.pos"] for p, _pool in range_demo.waypoints(_FakeSvc.REST)
                if "wrist_pitch.pos" in p]
@@ -97,9 +84,7 @@ def test_the_pitch_legs_stay_inside_travel_the_device_is_known_to_have():
 
 
 def test_every_joint_is_narrated_at_least_once():
-    """Silent legs are allowed — a return to centre, the second half of a pair —
-    but every JOINT the demo moves must be announced when it starts. Silent
-    movement of a joint is what the canned animation already did."""
+    """Every joint the demo moves is announced when it starts."""
     wps = range_demo.waypoints(_FakeSvc.REST)
     announced = set()
     for pose, pool in wps:
@@ -111,10 +96,7 @@ def test_every_joint_is_narrated_at_least_once():
 
 
 def test_every_joint_gets_a_turn_and_returns_to_centre_before_the_next():
-    """Reviewed on device: the first cut ran yaw into pitch from the far end of
-    the yaw sweep, so the head tilted while the body still faced the wall, and
-    only two joints ever moved. Every joint performs, one at a time, and each
-    comes home before the next begins."""
+    """Each joint performs alone and returns home before the next."""
     wps = range_demo.waypoints(_FakeSvc.REST)
     joints_in_order = []
     for pose, _ in wps:
@@ -124,18 +106,14 @@ def test_every_joint_gets_a_turn_and_returns_to_centre_before_the_next():
     assert joints_in_order == [
         "base_yaw.pos", "wrist_roll.pos", "wrist_pitch.pos", "elbow_pitch.pos", "base_pitch.pos",
     ], joints_in_order
-    # Each joint's last leg is its seed value.
     for joint in joints_in_order:
         last = [pose[joint] for pose, _ in wps if joint in pose][-1]
         assert last == pytest.approx(_FakeSvc.REST[joint]), f"{joint} does not return to centre"
 
 
 def test_the_small_joints_stay_inside_their_travel():
-    """Elbow and base pitch have documented limits and a documented tipping
-    case; the demo must never command past the travel table."""
-    # PITCH_TRAVEL is distribute_pitch's table and search.py documents it as
-    # unusable for wrist_pitch (rest sits at -61.7, already outside it); that
-    # joint is bounded by WRIST_PITCH_MIN/MAX and checked in its own test.
+    """The demo never commands past the travel table."""
+    # PITCH_TRAVEL does not cover wrist_pitch; that joint is checked in its own test.
     wps = range_demo.waypoints(_FakeSvc.REST)
     for pose, _ in wps:
         for joint, v in pose.items():
@@ -157,15 +135,7 @@ def test_the_demo_speaks_every_narrated_leg_in_order_and_nothing_for_silent_ones
 
 
 def test_each_leg_is_announced_then_performed_and_never_overlaps_the_next():
-    """The phrase LEADS its own leg — "all the way left" as the base starts
-    turning left — so speak-then-move is the right order, not move-then-speak
-    (which would narrate what already happened).
-
-    What must not happen is the next leg's phrase arriving while the previous
-    leg is still moving. `move_and_hold` returns when it has finished SENDING
-    frames, not when the servos arrive — device-measured, a 90° base turn
-    returns in 0.77s and is still moving at 5.88s — so without a settle between
-    legs the whole script would outrun the body within two legs."""
+    """Each phrase is spoken before its leg moves."""
     svc = _FakeSvc()
     order = []
     with (
@@ -190,10 +160,7 @@ def test_each_leg_is_announced_then_performed_and_never_overlaps_the_next():
 
 
 def test_the_base_is_sped_up_for_the_demo_and_put_back():
-    """base_yaw manages ~14°/s untouched, so a 135° leg would take ~9s and the
-    phrase would finish long before the body did. The sweep already writes this
-    register for the same reason — and puts it back, because a cap left behind
-    would throttle idle and every emotion."""
+    """The base speed is raised for the demo and restored after."""
     svc = _FakeSvc()
     _run(svc)
     assert svc.speeds, "the demo never touched the base speed"
@@ -202,8 +169,7 @@ def test_the_base_is_sped_up_for_the_demo_and_put_back():
 
 
 def test_an_abort_stops_the_body_and_the_narration_together():
-    """The single click means "stop moving and pay attention to me". A demo
-    that keeps talking through it is worse than one that keeps moving."""
+    """A single click stops both the motion and the narration."""
     svc = _FakeSvc()
     said = []
 
@@ -255,9 +221,7 @@ def test_a_second_demo_does_not_start_on_top_of_a_running_one():
 
 
 def test_start_returns_immediately_rather_than_performing():
-    """The agent reaches this through a [HW:...] marker, and fireHWCall gives a
-    hardware POST five seconds while the demo runs ~20. A blocking route would
-    time out mid-performance and log nothing at all."""
+    """The demo route returns immediately and runs in the background."""
     svc = _FakeSvc()
     with (
         mock.patch.object(state, "_sleeping", False, create=True),
@@ -300,8 +264,7 @@ def test_the_route_starts_the_demo_and_returns_at_once():
 
 
 def test_the_route_refuses_while_the_device_sleeps():
-    """Sleep is a terminal state — nothing external touches the servos until a
-    wake emotion clears it. A demo is about as external as it gets."""
+    """The demo is refused while the device sleeps."""
     with (
         mock.patch("hal.routes.servo._sleep_servo_locked", return_value=True),
         mock.patch("hal.drivers.motors.range_demo.start") as start,
@@ -314,9 +277,7 @@ def test_the_route_refuses_while_the_device_sleeps():
 
 
 def test_the_single_click_aborts_the_demo_with_the_aim_and_the_sweep():
-    """Wired where the other two aborts already are. A click that stopped the
-    arm but not the narration would leave the lamp describing legs it is no
-    longer performing."""
+    """The single click aborts the demo alongside the aim and the sweep."""
     from hal.drivers import button_actions
 
     with (

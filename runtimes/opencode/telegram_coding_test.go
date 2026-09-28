@@ -67,9 +67,7 @@ func (r *codingTestRig) waitDM(t *testing.T) string {
 	}
 }
 
-// TestCodingCommandsFlow drives the /new → plain-message → /device path. On-disk
-// discovery is degraded, so /new is how a chat picks a folder; the first turn
-// captures opencode's session id.
+// TestCodingCommandsFlow drives the /new → plain-message → /device path.
 func TestCodingCommandsFlow(t *testing.T) {
 	rig := newCodingRig(t)
 	s := rig.svc
@@ -102,7 +100,6 @@ func TestCodingCommandsFlow(t *testing.T) {
 	if dm := rig.waitDM(t); !strings.Contains(dm, "ok reply for add undo button") {
 		t.Fatalf("reply DM = %q", dm)
 	}
-	// The session id captured on the first turn is persisted for resume.
 	if tgt, _ := s.getCodingTarget(chat); tgt.SessionID != "new-thread-1234" {
 		t.Errorf("session id not updated: %+v", tgt)
 	}
@@ -178,7 +175,6 @@ func TestParseOpenCodeResult(t *testing.T) {
 		t.Fatalf("ok: reply=%q id=%q terr=%q", reply, id, terr)
 	}
 
-	// Multiple text events accumulate; nested part.text is honored too.
 	multi := []byte(`{"type":"text","sessionID":"s2","text":"part1 "}
 {"type":"text","sessionID":"s2","part":{"text":"part2"}}
 {"type":"session.idle","sessionID":"s2"}`)
@@ -186,14 +182,12 @@ func TestParseOpenCodeResult(t *testing.T) {
 		t.Fatalf("multi: reply=%q id=%q", reply, id)
 	}
 
-	// A session.error with no reply → turnErr surfaces the object's message.
 	failed := []byte(`{"type":"text","sessionID":"s3"}
 {"type":"session.error","sessionID":"s3","error":{"message":"404 boom"}}`)
 	if reply, id, terr := parseOpenCodeResult(failed); reply != "" || id != "s3" || terr != "404 boom" {
 		t.Fatalf("failed: reply=%q id=%q terr=%q", reply, id, terr)
 	}
 
-	// A bare-string error is surfaced verbatim.
 	strErr := []byte(`{"type":"error","sessionID":"s4","error":"kaboom"}`)
 	if _, _, terr := parseOpenCodeResult(strErr); terr != "kaboom" {
 		t.Fatalf("strErr: terr=%q, want kaboom", terr)

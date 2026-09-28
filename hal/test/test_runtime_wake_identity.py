@@ -20,7 +20,7 @@ def test_voice_restart_loads_active_identity_and_preserves_aliases(tmp_path, mon
     other = 'SOUL.md' if filename == 'IDENTITY.md' else 'IDENTITY.md'
     (tmp_path / other).write_text('- **Name:** Stale\n')
     (tmp_path / filename).write_text('You are Lamp.\n- **Name:** Mini — companion\n')
-    for _ in range(2):  # Re-create the startup aliases with no rename callback.
+    for _ in range(2):
         name = app_state._read_agent_name()
         assert name == 'mini'
         decorator = object.__new__(SpeakerDecorator)

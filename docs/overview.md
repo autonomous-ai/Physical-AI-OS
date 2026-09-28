@@ -8,7 +8,7 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → H
 
 | Layer | Language | Port | Role |
 |-------|----------|------|------|
-| Agentic Runtime | Go | WS | AI brain, LLM, SKILL.md, memory, channels |
+| Agentic Runtime | Go | WS / SSE | AI brain, LLM, SKILL.md, memory, channels (Hermes and remote Hermes use HTTP+SSE; the others use WebSocket) |
 | OS Server | Go | 5000 | System (network, OTA, MQTT, reset), sensing event routing, local intent |
 | HAL | Python | 5001 | Hardware drivers (servo, LED, camera, audio, display), FastAPI |
 
@@ -17,7 +17,7 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → H
 - **[Harness](https://github.com/autonomous-ai/openharness):** `harness-use` delegates coding and research to agents on a paired computer over a direct authenticated LAN connection. Questions and results return through voice or chat. Harness-only voice routes manual tap-to-record captures to the agent focused in Harness. See [Harness](harness.md).
 - **Mac computer use:** `computer-use` lets the device agent observe, act and verify through Autonomous Buddy, using the bundled Cua Driver and screenshot support. Buddy executes desktop actions; the device agent owns reasoning and completion. Harness and Buddy keep separate pairing and connections. See [Computer use](../integrations/companions/autonomous-buddy/docs/computer-use.md).
 - **Jev:** the OS-managed Hermes plugin selects and preloads an installed skill before the first model call, with normal skill discovery as fallback. This plugin is enabled in the current build; the separate voice-intent fallback is on by default, while Buddy's action-suggestion endpoint is enabled but experimental. Selection does not execute actions or grant permission. See [Hermes preloading](agentic/hermes.md#13-optional-jev-skill-preloading), [intent fallback](os-server.md#jev-intent-fallback), and [Buddy suggestions](os-server.md#buddy-computer-use-feedback).
-- **Realtime voice:** HAL supports Gemini Live (default model `gemini-3.8-live`), OpenAI Realtime, GPT-Live and Pipecat v1. Pipecat orchestrates STT → an OpenAI-compatible LLM (default `qwen/qwen3.6-35b-a3b`) → HAL TTS on the device; model calls still use remote services. Normal voice can answer directly or delegate to the main runtime.
+- **Realtime voice:** HAL supports Gemini Live (os-server seeds `gemini-3.8-live-extended-thinking` into `config.json` and re-seeds it on unpinned `realtime` blocks; HAL's own fallback when no model is configured is `gemini-3.8-live`), OpenAI Realtime, GPT-Live and Pipecat v1. Pipecat orchestrates STT → an OpenAI-compatible LLM (default `qwen/qwen3.6-35b-a3b`) → HAL TTS on the device; model calls still use remote services. Normal voice can answer directly or delegate to the main runtime.
 - **Smart Turn:** local ONNX inference supplements silence detection in shared non-Live hands-free capture; Pipecat Live uses its own Silero VAD + Smart Turn pipeline. Silence fallbacks bound the wait when inference is unavailable. Manual Harness capture ends on the user's tap. The optional `pipecat` extra is included in Lamp/Pi/OrangePi setup and excluded from Reachy because of ONNX dependency conflicts. See [Realtime voice](realtime-voice.md).
 
 ## Project Directory
@@ -295,7 +295,7 @@ HAL sensing loop (every 2s) → Read 1 camera frame, run all detectors:
 Event has image? (large motion, face enter) → encode frame full-resolution JPEG q85
 Face enter image: original frame annotated with bounding boxes + labels
 
-POST /api/sensing/event {type, message, image?}
+POST /api/sensing/event {type, message, images?: []string}
     → OS server (Go):
         1. Voice event + local intent match? → execute directly (~50ms)
         2. No match → forward to OpenClaw:

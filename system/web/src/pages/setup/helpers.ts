@@ -1,17 +1,7 @@
-// Pure, UI-free helpers for the Setup page. Kept out of the component + the
-// controller hook so both can import them without pulling in React state.
-
-// SetupMode controls which sections render. Initial = AP/offline (hide
-// online-only enrollments + tests), Continue = LAN/online (the device can hit
-// APIs, so Voice/Face enroll + TTS preview become available).
+// SetupMode: initial = AP/offline, continue = LAN/online (enrollment available).
 export type SetupMode = "initial" | "continue";
 
-// Go playground/validator returns errors shaped like:
-//   "Key: 'SetupRequest.SSID' Error:Field validation for 'SSID' failed on the
-//    'required' tag\nKey: 'SetupRequest.LLMAPIKey' Error:Field validation …"
-// Surface that as a human-readable list of missing fields so operators don't
-// see what looks like a stack trace. Falls through unchanged when the message
-// doesn't match the validator format (other backend errors stay as-is).
+// Maps go-playground/validator errors to human-readable field names.
 const FIELD_LABELS: Record<string, string> = {
   SSID: "Wi-Fi name",
   Password: "Wi-Fi password",

@@ -28,7 +28,6 @@ interface DiscoveredDevice {
 }
 
 function Pill({ text, tone }: { text: string; tone: "ok" | "warn" | "off" }) {
-  // Theme-aware tones (the old hardcoded #3ad29f/#e8a849 didn't track light mode).
   const palette = {
     ok:   { fg: "var(--lm-green)", bg: "var(--lm-green-dim)", bd: "color-mix(in srgb, var(--lm-green) 33%, transparent)" },
     warn: { fg: "var(--lm-amber)", bg: "var(--lm-amber-dim)", bd: "color-mix(in srgb, var(--lm-amber) 33%, transparent)" },
@@ -47,9 +46,6 @@ function deviceLabel(d: { mac: string; name: string | null }): string {
   return d.name && d.name.trim() ? d.name : d.mac;
 }
 
-// A caught value is `unknown`: it may be an Error thrown here, a TypeError from
-// fetch, or a DOMException (AbortError). Read the two fields we care about
-// defensively instead of asserting a concrete class.
 type CaughtError = { name?: string; message?: string } | undefined;
 
 function errMessage(e: unknown, fallback: string): string {
@@ -60,7 +56,6 @@ export function BluetoothSection() {
   const [status, setStatus] = useState<BTStatus | null>(null);
   const [statusError, setStatusError] = useState<string | null>(null);
 
-  // Pair-modal state
   const [pairOpen, setPairOpen] = useState(false);
   const [discovered, setDiscovered] = useState<DiscoveredDevice[]>([]);
   const [scanning, setScanning] = useState(false);
@@ -68,12 +63,10 @@ export function BluetoothSection() {
   const [pairError, setPairError] = useState<string | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
-  // Per-row busy flags (so the right button shows a spinner / disables).
   const [busyMac, setBusyMac] = useState<string | null>(null);
   const [forgetConfirm, setForgetConfirm] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  // Reload the headset list. Used by both poll and post-mutation refresh.
   const refresh = useCallback(async (signal?: AbortSignal) => {
     try {
       const r = await fetch(`${HW}/bluetooth/status`, { signal });
@@ -89,8 +82,6 @@ export function BluetoothSection() {
 
   usePolling(refresh, 5_000);
 
-  // Scan poller: when pair modal is open, refresh discovered list every 2s
-  // until the scan window closes.
   useEffect(() => {
     if (!pairOpen) return;
     let stop = false;
@@ -102,16 +93,13 @@ export function BluetoothSection() {
         setDiscovered(j.devices || []);
         setScanning(!!j.scanning);
       } catch {
-        // Best-effort poll: a failed tick keeps the last known scan results and
-        // retries on the next 2s interval rather than blanking the list.
+        // Best-effort: keep the last scan results and retry next tick.
       }
     };
     tick();
     const id = setInterval(tick, 2000);
     return () => { stop = true; clearInterval(id); };
   }, [pairOpen]);
-
-  // --- Actions ---
 
   const startScan = async () => {
     setPairOpen(true);
@@ -192,11 +180,6 @@ export function BluetoothSection() {
     }
   };
 
-  // --- Render ---
-
-  // The `.lm-mon-card` class owns the resting + hover box-shadow (plus the
-  // gradient/accent/glow), so strip the inline boxShadow from S.card to let the
-  // class's :hover shadow win — matching the Overview/System cards.
   const monCard = { ...S.card, boxShadow: undefined };
 
   if (status && !status.available) {
@@ -245,9 +228,6 @@ export function BluetoothSection() {
           )}
           {(status?.paired || []).map((d) => {
             const isActive = active === d.mac;
-            // Disconnect posts with busyMac="__device__" (routing back to the
-            // device), but the click came from the ACTIVE row — that row must
-            // show the "Disconnecting..." spinner too, not sit inert.
             const rowBusy = busyMac === d.mac || (busyMac === "__device__" && isActive);
             return (
               <div key={d.mac} className="lm-bt-row" style={deviceRow}>
@@ -297,7 +277,6 @@ export function BluetoothSection() {
         </div>
       </div>
 
-      {/* --- Pair modal --- */}
       {pairOpen && (
         <Modal onClose={() => setPairOpen(false)} title="Connect Bluetooth headset">
           <p style={{ fontSize: 13, color: "var(--lm-text-muted)", marginTop: 0 }}>
@@ -363,7 +342,6 @@ export function BluetoothSection() {
         </Modal>
       )}
 
-      {/* --- Forget confirm modal --- */}
       {forgetConfirm && (
         <Modal onClose={() => setForgetConfirm(null)} title="Forget device?">
           <p style={{ fontSize: 13, color: "var(--lm-text-muted)" }}>
@@ -384,8 +362,6 @@ export function BluetoothSection() {
     </div>
   );
 }
-
-// --- Local style atoms (kept inline to avoid bloating styles.ts) ---
 
 const errBox: React.CSSProperties = {
   fontSize: 12, padding: "6px 10px", marginBottom: 10,

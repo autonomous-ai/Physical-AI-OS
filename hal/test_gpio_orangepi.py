@@ -1,8 +1,4 @@
-"""Simple button state viewer for OrangePi 4 Pro.
-
-Wiring: button between header pin 11 (PL9) and any GND.
-Run:    sudo /opt/hal/.venv/bin/python ~/test_button.py
-"""
+"""Button state viewer for OrangePi 4 Pro (button between header pin 11 / PL9 and GND)."""
 
 import sys
 import time

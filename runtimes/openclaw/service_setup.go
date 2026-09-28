@@ -72,10 +72,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		slog.Debug("no existing config, starting fresh", "component", "openclaw")
 	}
 
-	// Fetch the live model catalog: our hosted one, or — when llm_base_url is
-	// not an Autonomous host — the BYO endpoint's own `GET {base}/models`
-	// (byo_models.go). On any failure fall back to the hardcoded defaultModels
-	// so setup still completes when the catalog is unreachable.
 	slog.Debug("fetching models", "component", "openclaw")
 	modelsResp, byo, err := resolveModels(context.Background(), llmBaseURL, llmAPIKey)
 	usedFallback := false
@@ -90,9 +86,7 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	}
 	slog.Debug("got models", "component", "openclaw", "count", len(modelsResp.Models), "fallback", usedFallback)
 
-	// Primary precedence: fetch OK → upstream default_model; fallback (API down)
-	// → the user's selection already persisted in config.LLMModel (set by
-	// device.OpenclawService.Setup before this call); else first in the catalog.
+	// Precedence: upstream default_model, else persisted config.LLMModel (API down), else first in catalog.
 	wantKey := strings.TrimSpace(modelsResp.DefaultModel)
 	if usedFallback {
 		wantKey = strings.TrimSpace(s.config.LLMModel)
@@ -102,8 +96,7 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	}
 	defaultModel, err := findModelByLLMModel(modelsResp.Models, wantKey)
 	if err != nil {
-		// Requested key not in the catalog — fall back to the first model so
-		// setup never hard-fails on a stale/unknown selection.
+		// Requested key not in the catalog — fall back to the first model so setup never hard-fails on a stale/unknown selection.
 		slog.Warn("setup: requested model not in catalog, using first", "component", "openclaw", "want", wantKey)
 		defaultModel = modelsResp.Models[0]
 	}
@@ -123,10 +116,8 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	providersMap[customProviderName] = map[string]any{
 		"baseUrl": llmBaseURL,
 		"api":     resolveAutonomousAPI(modelsResp.API),
-		// resolveAutonomousAPI keeps anthropic-messages for our gateway and
-		// takes openai-completions from a BYO catalog.
-		"apiKey": llmAPIKey,
-		"models": modelsEntries,
+		"apiKey":  llmAPIKey,
+		"models":  modelsEntries,
 	}
 	configData["models"] = modelsMap
 
@@ -147,9 +138,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	defaultsMap["bootstrapTotalMaxChars"] = 30000
 	agentModelsMap := ensureMap(defaultsMap, "models")
 	for _, m := range modelsResp.Models {
-		// Use prefixed key "{provider}/{key}" so the on-disk shape matches what
-		// the periodic model sync (overwriteAgentAutonomousModels) writes —
-		// avoids a one-time migrate+restart on the first sync tick after setup.
 		agentModelsMap[agentModelKey(m)] = map[string]any{
 			"params": map[string]any{
 				"cacheRetention": "short",
@@ -160,8 +148,7 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		"primary": fmt.Sprintf("%s/%s", customProviderName, defaultModel.Key),
 	}
 	defaultsMap["models"] = agentModelsMap
-	// Seed the default image/vision model from upstream when published. Gated by
-	// presence only — fresh setup always seeds it on the autonomous provider.
+	// Seed the default image/vision model from upstream when published.
 	if img := strings.TrimSpace(modelsResp.DefaultImageModel); img != "" {
 		defaultsMap["imageModel"] = map[string]any{
 			"primary": fmt.Sprintf("%s/%s", customProviderName, img),
@@ -177,8 +164,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	switch channel {
 	case "slack":
 		slog.Debug("setting channels.slack", "component", "openclaw")
-		// Slack is an externalized plugin (@openclaw/slack) — ensure it's
-		// installed+enabled before writing config (self-heals a missing plugin).
 		slackPluginCtx, slackCancel := context.WithTimeout(context.Background(), channelPluginInstallTimeout)
 		slackPluginErr := ensureChannelPlugin(slackPluginCtx, domain.ChannelSlack, slackPluginPackage)
 		slackCancel()
@@ -186,8 +171,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 			return fmt.Errorf("ensure slack plugin: %w", slackPluginErr)
 		}
 		slackMap := ensureMap(channelsMap, "slack")
-		// Initial setup always provisions Socket Mode; the HTTP-mode switch goes
-		// through AddChannel after setup completes.
 		applySlackChannelConfig(slackMap, slackChannelConfig{
 			BotToken: data.SlackBotToken,
 			AppToken: data.SlackAppToken,
@@ -202,9 +185,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		slackEntryMap["enabled"] = true
 	case "discord":
 		slog.Debug("setting channels.discord", "component", "openclaw")
-		// Discord is an externalized plugin (@openclaw/discord) — ensure it's
-		// installed+enabled before writing config. Enable is instant when the
-		// plugin is already provisioned; this self-heals a missing plugin.
 		pluginCtx, cancel := context.WithTimeout(context.Background(), channelPluginInstallTimeout)
 		err := ensureChannelPlugin(pluginCtx, domain.ChannelDiscord, discordPluginPackage)
 		cancel()
@@ -313,8 +293,6 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	if err := os.MkdirAll(s.config.OpenclawConfigDir, 0755); err != nil {
 		return fmt.Errorf("create openclaw config dir: %w", err)
 	}
-	// Serialise flag+file write under primarySyncMu so this cannot interleave
-	// with the watcher (syncPrimaryFromFile) or other openclaw.json writers.
 	expectedPrimary := customProviderName + "/" + defaultModel.Key
 	s.primarySyncMu.Lock()
 	setOSWriteFlag(s.config.OpenclawConfigDir, expectedPrimary)
@@ -328,11 +306,7 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	}
 	slog.Info("wrote openclaw config", "component", "openclaw", "path", configPath)
 
-	// On a successful fetch, update config.LLMModel to the resolved upstream
-	// default_model and record the catalog version. On fallback (API down) leave
-	// config.LLMModel as-is — it already holds the user's selection set by
-	// device.OpenclawService.Setup. The shared *config.Config is persisted by
-	// device.OpenclawService.Setup's config.Save() after this returns.
+	// On a successful fetch, update config.LLMModel to the resolved upstream default_model and record the catalog version.
 	if !usedFallback {
 		s.config.LLMModel = defaultModel.Key
 		if modelsResp.Version > 0 {
@@ -349,19 +323,9 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 }
 
 // AddChannel adds a messaging channel to openclaw.json (multi-channel) and restarts the gateway.
-//
-// For non-whatsapp channels this is a pure on-disk overlay + gateway restart.
-// For whatsapp the canonical block is bootstrapped via the openclaw CLI
-// (`channels add --channel whatsapp`) so defaults from upstream (accounts.default,
-// mediaMaxMb) ride through unchanged; the plugin is also enabled/installed.
-// ctx flows through to all subprocess calls so the MQTT 10-minute cap bounds
-// the whole flow.
 func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannelRequest) error {
 	channel := data.EffectiveChannel()
 
-	// Hold primarySyncMu for the full read-modify-write cycle so this cannot
-	// interleave with SyncModelsFromAPI or RefreshModelsConfig writing a newer
-	// version of openclaw.json between our ReadFile and our WriteFile.
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
 
@@ -381,17 +345,11 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 
 	switch channel {
 	case domain.ChannelSlack:
-		// Ensure the externalized @openclaw/slack plugin is installed+enabled
-		// before writing config (self-heals a missing plugin).
 		if err := ensureChannelPlugin(ctx, domain.ChannelSlack, slackPluginPackage); err != nil {
 			return fmt.Errorf("ensure slack plugin: %w", err)
 		}
 		slackMap := ensureMap(channelsMap, domain.ChannelSlack)
-		// HTTP mode is the message-loss-tolerant path: a public proxy forwards
-		// Slack events over MQTT to this device's slack_event handler, which POSTs
-		// them to the local gateway's webhookPath — so the gateway needs the signing
-		// secret (to re-verify) and no Slack WebSocket / appToken. Socket mode opens
-		// an outbound WSS to Slack and needs the appToken instead.
+		// HTTP mode: a public proxy forwards Slack events via MQTT, so the gateway needs the signing secret, not an appToken.
 		applySlackChannelConfig(slackMap, slackChannelConfig{
 			BotToken:      data.SlackBotToken,
 			AppToken:      data.SlackAppToken,
@@ -405,8 +363,6 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 		slackEntryMap := ensureMap(entriesMap, domain.ChannelSlack)
 		slackEntryMap["enabled"] = true
 	case domain.ChannelDiscord:
-		// Ensure the externalized @openclaw/discord plugin is installed+enabled
-		// before writing config (self-heals a missing plugin).
 		if err := ensureChannelPlugin(ctx, domain.ChannelDiscord, discordPluginPackage); err != nil {
 			return fmt.Errorf("ensure discord plugin: %w", err)
 		}
@@ -416,13 +372,9 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 		discordEntryMap := ensureMap(entriesMap, domain.ChannelDiscord)
 		discordEntryMap["enabled"] = true
 	case domain.ChannelWhatsapp:
-		// Bootstrap the canonical channels.whatsapp block via the CLI; it sets
-		// defaults (accounts.default, mediaMaxMb, etc.) we'd otherwise have to
-		// mirror by hand.
 		if err := runOpenclawCLI(ctx, "channels", "add", "--channel", domain.ChannelWhatsapp); err != nil {
 			return fmt.Errorf("openclaw channels add whatsapp: %w", err)
 		}
-		// channels add mutated openclaw.json on disk — reload before overlay.
 		raw, err := os.ReadFile(configPath)
 		if err != nil {
 			return fmt.Errorf("re-read openclaw config after channels add: %w", err)
@@ -437,7 +389,6 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 		whatsappMap := ensureMap(channelsMap, domain.ChannelWhatsapp)
 		applyWhatsappChannelConfig(whatsappMap, data.WhatsappUserID)
 		channelsMap[domain.ChannelWhatsapp] = whatsappMap
-		// Ensure the externalized @openclaw/whatsapp plugin is installed+enabled.
 		if err := ensureChannelPlugin(ctx, domain.ChannelWhatsapp, whatsappPluginPackage); err != nil {
 			return err
 		}
@@ -460,7 +411,6 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 	}
 	configData["channels"] = channelsMap
 
-	// Add elevated.allowFrom for the new channel
 	if toolsMap, ok := configData["tools"].(map[string]any); ok {
 		if elevatedMap, ok := toolsMap["elevated"].(map[string]any); ok {
 			elevatedAllowFrom := ensureMap(elevatedMap, "allowFrom")
@@ -473,9 +423,6 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 	if err != nil {
 		return fmt.Errorf("marshal openclaw config: %w", err)
 	}
-	// AddChannel does not change the primary model — write the existing primary
-	// into the flag so the watcher correctly identifies this as an os-server write.
-	// primarySyncMu is already held for the full RMW cycle (acquired at entry).
 	existingPrimary := extractPrimaryModel(configData)
 	if existingPrimary != "" {
 		setOSWriteFlag(s.config.OpenclawConfigDir, existingPrimary)
@@ -495,14 +442,7 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 	return nil
 }
 
-// ResetAgent for OpenClaw lives in reset.go — the factory-reset wipe (CLI reset
-// + disable service + rm runtime state), invoked by server/system/factoryreset.go
-// on the active gateway.
-
-// RefreshModelsConfig patches the models reasoning fields in openclaw.json
-// based on current config and restarts the agent. Safe to call after UpdateConfig.
-// Holds primarySyncMu for the entire read-modify-write cycle so it cannot
-// interleave with other openclaw.json writers (watcher, model-sync, setup).
+// RefreshModelsConfig patches the models reasoning fields in openclaw.json based on current config and restarts the agent.
 func (s *OpenclawService) RefreshModelsConfig() error {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
@@ -518,16 +458,9 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 	}
 
 	disableThinking := s.config.LLMThinkingDisabled()
-	// Read LLMModel under config.mu so it cannot race with a concurrent
-	// WithLockSave call. Lock order: primarySyncMu (held) → config.mu (acquired
-	// here briefly) — consistent with syncPrimaryFromFile's order.
+	// Read LLMModel under config.mu so it cannot race with a concurrent WithLockSave call.
 	currentModel := s.config.LLMModelKey()
 
-	// Patch models.providers.autonomous — apiKey + baseUrl + per-model reasoning.
-	// apiKey is patched because openclaw.json holds its OWN copy (separate from
-	// config.json's llm_api_key) — without this, a key rotation via the web UI
-	// would only land in config.json and openclaw would keep sending the OLD
-	// key to grid.autonomous.ai, getting 401 authentication_error on every turn.
 	currentBaseURL := s.config.LLMBaseURL
 	currentAPIKey := s.config.LLMAPIKey
 	if modelsMap, ok := configData["models"].(map[string]any); ok {
@@ -554,15 +487,11 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 		}
 	}
 
-	// Conditionally sync agents.defaults.model.primary. Only overwrite it when
-	// the current provider is autonomous — if the user switched OpenClaw to a
-	// non-autonomous provider (e.g. openai/gpt-4) externally, we must not
-	// silently reset it back to the os-server-managed model.
+	// Conditionally sync agents.defaults.model.primary.
 	currentPrimary := extractPrimaryModel(configData)
 	prov, _, _ := splitProviderModel(currentPrimary)
 	var flagPrimary string // value written into the os-server-write flag
 	if currentPrimary == "" || prov == customProviderName {
-		// No primary set yet, or it belongs to us — safe to update.
 		newPrimary := customProviderName + "/" + currentModel
 		agents := ensureMap(configData, "agents")
 		defaults := ensureMap(agents, "defaults")
@@ -574,8 +503,6 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 		flagPrimary = newPrimary
 		slog.Info("refreshed models config in openclaw.json", "component", "openclaw", "disableThinking", disableThinking, "primary", newPrimary)
 	} else {
-		// Non-autonomous provider is active; preserve it and log state drift so
-		// operators know why the os-server-side model and OpenClaw diverge.
 		flagPrimary = currentPrimary
 		slog.Warn("[refresh] non-autonomous provider active, skipping primary patch (state drift)",
 			"current", currentPrimary, "os_model", s.config.LLMModel)
@@ -585,8 +512,6 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 	if err != nil {
 		return fmt.Errorf("marshal openclaw config: %w", err)
 	}
-	// Write the flag BEFORE the file so the watcher can match by content and
-	// correctly skip this os-server-initiated write regardless of the provider.
 	setOSWriteFlag(s.config.OpenclawConfigDir, flagPrimary)
 	if err := os.WriteFile(configPath, written, 0600); err != nil {
 		return fmt.Errorf("write openclaw config: %w", err)

@@ -181,9 +181,7 @@ def store_workflow(action, params, context, persist):
         persist()
     route = {'response': record['response']} if record.get('response') else {}
 
-    # A poll invocation is bounded already; also bound repeated invocations in
-    # the same user turn. Persist the deadline so subprocess/reconnect cannot
-    # renew it. Only a new response run may resume the same saved intent.
+    # Persist the wait deadline so subprocesses/reconnects cannot renew it.
     def wait_expired():
         if record.get('task') or record.get('selectedAgentId'):
             return None
@@ -486,7 +484,7 @@ def run(action, params, path=None):
             save(path, state)
             return {'selected': target}
         if action in ('status', 'recap'):
-            # Default to the newest turn only: its recap/text pair is what selection and progress checks need.
+            # Newest turn only by default.
             return request(action, **target, **({'n': params.get('n', 1)} if action == 'recap' else {}))
         if context.get('pending'):
             raise ValueError('A previous delivery is unresolved. Inspect receipt/status; do not resend automatically')

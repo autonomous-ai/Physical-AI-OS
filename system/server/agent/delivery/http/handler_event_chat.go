@@ -11,9 +11,7 @@ import (
 	"go.autonomous.ai/os/system/telemetry"
 )
 
-// handleChatEvent handles WS event=="chat": OpenClaw chat-stream events
-// (errors, empty/slash finals, assistant/partial pushes). Extracted verbatim
-// from HandleEvent.
+// handleChatEvent handles WS "chat" events (errors, empty/slash finals, assistant/partial pushes).
 func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 	slog.Debug("chat raw payload", "component", "agent", "payload", string(evt.Payload))
 	var payload domain.ChatPayload
@@ -29,10 +27,9 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		"message_len", len(payload.Message),
 		"message", payload.Message,
 		"raw_message", string(payload.RawMessage))
-	// Same as agent stream: OpenClaw may send UUID while lifecycle/tool/tts used resolved device id.
+	// OpenClaw may send a UUID while lifecycle/tool/tts used the resolved device id.
 	flowRunID := h.resolveRunID(payload.RunID)
-	// Harness owns the final response for this exact run. Do not close the
-	// Web/MQTT stream with the device agent's handoff before it arrives.
+	// Harness owns this run's final response; don't close the Web/MQTT stream with the handoff.
 	h.harnessRepliesMu.Lock()
 	_, harnessOwnsReply := h.harnessReplies[flowRunID]
 	h.harnessRepliesMu.Unlock()
@@ -40,8 +37,6 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		return nil
 	}
 
-	// Debug alignment: OpenClaw "chat" stream may or may not include user messages for outbound chat.send.
-	// When flowRunID belongs to the device, log role/state/message so we can confirm whether chat_input can be emitted.
 	if strings.HasPrefix(flowRunID, "device-") {
 		msgPreview := payload.Message
 		msgPreview = strings.ReplaceAll(msgPreview, "\n", " ")
@@ -63,13 +58,10 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 			"role", payload.Role, "state", payload.State)
 	}
 
-	// (OpenClaw gateway never broadcasts role:"user" on the chat stream.
-	// User messages are captured via lifecycle_start + chat.history above.)
+	// OpenClaw never broadcasts role:"user" on the chat stream; user input comes via lifecycle_start.
 
-	// Chat error: OpenClaw reports agent processing failure. Skip the banner
-	// when the reply was already salvaged from this run's deltas/history
-	// (see handler_error_recovery.go) — covers both the initial incomplete-
-	// turn error and the gateway's ~15s-later retry error.
+	// Skip the error banner when the reply was already recovered (handler_error_recovery.go),
+	// including the gateway's ~15s-later retry error.
 	if payload.State == "error" {
 		defer hal.EndVoiceFollowup(flowRunID)
 		errMsg := payload.ErrorMessage
@@ -94,15 +86,8 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		}
 	}
 
-	// Factual detection: OpenClaw sent a `state:"final"` chat event with
-	// empty Message for a device-format runId, and the device never opened a
-	// lifecycle for that runId (pendingChatTrace entry still present —
-	// lifecycle_start would have removed it; see ~line 84).
-	//
-	// We record only what we observe; we do NOT infer "steered" /
-	// "merged" / "self-reply" — those are downstream interpretations
-	// the operator makes from the timeline (e.g. a UUID lifecycle
-	// arriving later with matching input).
+	// Record (not interpret) an empty final for a device runId that never opened a lifecycle
+	// (pendingChatTrace entry still present).
 	isDeviceOutboundFinal := payload.State == "final" && isDeviceOutboundChatRunID(flowRunID)
 	isEmptyFinalNoLifecycle := isDeviceOutboundFinal &&
 		strings.TrimSpace(payload.Message) == "" &&
@@ -127,23 +112,12 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 				"lifecycle_started": "false",
 			},
 		})
-		// No lifecycle.end will fire for this run — release the busy flag
-		// here so subsequent sensing/chat events aren't queued for the
-		// full busyTTL (5 min). chat.send sets activeTurn=true before
-		// every write, including slash commands and steered/merged turns
-		// that resolve via this empty-final path.
+		// No lifecycle.end will fire for this run: release busy now or events queue for busyTTL (5 min).
 		h.agentGateway.SetBusy(false)
 	}
 
-	// Slash commands (e.g. /status, /new) are pre-LLM dispatched by OpenClaw
-	// so they emit `state:"final"` with the reply payload but never open a
-	// lifecycle. Without a closing flow event, Flow Monitor renders the turn
-	// as active forever. Mirror chat_final_empty but record the success case.
-	// RemovePendingChatTraceByRunID is the no-lifecycle witness: lifecycle_start
-	// removes the entry, so a returning true here proves no lifecycle ran.
-	// The existing isEmptyFinalNoLifecycle check above already consumed the
-	// pending entry when it fires, so this Remove call is naturally false
-	// when both conditions could match — no double-emit possible.
+	// Slash commands emit a final without a lifecycle; close the flow turn here. A true Remove proves
+	// no lifecycle ran, and the empty-final branch above already consumed it, so no double-emit.
 	isSlashFinalOk := isDeviceOutboundFinal &&
 		!isEmptyFinalNoLifecycle &&
 		strings.TrimSpace(payload.Message) != "" &&
@@ -152,9 +126,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		defer hal.EndVoiceFollowup(flowRunID)
 		slog.Info("chat final ok, no lifecycle for runId (slash dispatcher)",
 			"component", "agent", "run_id", flowRunID)
-		// Include the reply payload (truncated like chat_input) so Flow
-		// Monitor can render OUT for slash turns — without it, turnIO
-		// has no source for the output field on these no-lifecycle turns.
+		// Include the (truncated) reply so Flow Monitor can render OUT for no-lifecycle turns.
 		msgPreview := payload.Message
 		if len(msgPreview) > 500 {
 			msgPreview = msgPreview[:500] + "…"
@@ -166,18 +138,12 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 			"lifecycle_started": false,
 			"message":           msgPreview,
 		}, flowRunID)
-		// This successful final is the execution boundary for a command
-		// that bypassed lifecycle events. Empty finals remain unproven.
 		telemetry.ReportTaskExecution(flowRunID, "", "completed", "chat_final_no_lifecycle")
-		// Slash commands bypass the LLM lifecycle so lifecycle.end never
-		// fires for this run. Without this, every /status (or /new etc.)
-		// wedges the busy flag for the full busyTTL (5 min), queueing
-		// every subsequent sensing/chat event behind it.
+		// No lifecycle.end for slash commands: release busy or it wedges for busyTTL (5 min).
 		h.agentGateway.SetBusy(false)
 	}
 
-	// Push assistant/partial chat events to monitor (user input tracked via lifecycle_start — already tracked as chat_input).
-	// Skip the generic empty-final emit when we already pushed the factual chat_final_empty event above.
+	// Skip the generic empty-final emit when chat_final_empty was already pushed above.
 	if payload.Role != "user" && payload.State != "error" && !isEmptyFinalNoLifecycle {
 		summary := payload.Message
 		if len(summary) > 120 {
@@ -195,8 +161,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 		})
 	}
 
-	// TTS is sent from the lifecycle_end path above (assistant delta accumulation).
-	// The chat stream's final message is not used for TTS to avoid speaking responses twice.
+	// TTS comes from the lifecycle_end path; the chat final is not spoken to avoid double speech.
 
 	return nil
 }

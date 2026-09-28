@@ -8,8 +8,7 @@ import (
 )
 
 // handleSystemPower publishes its acknowledgement before scheduling the power
-// action. A reboot or shutdown would otherwise often cut the fd_channel reply
-// off before the backend can tell the operator it was accepted.
+// action.
 func (h *DeviceMQTTHandler) handleSystemPower(env domain.MQTTDataCommand, action string) error {
 	if err := h.publishDataResult(env.Kind, "starting", "", map[string]any{
 		"started": true,

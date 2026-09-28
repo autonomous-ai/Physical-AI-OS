@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Run this script directly on the Pi (as root) to add proxy_read_timeout /
-# proxy_send_timeout to the existing /hw/ nginx location. Without it,
-# long-running hardware endpoints (e.g. /hw/speaker/record-enroll) hit the
-# default 60s nginx timeout and return 504.
+# Add proxy_read/send_timeout to the /hw/ nginx location so long HAL endpoints avoid 504.
+# Run directly on the Pi as root.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -21,8 +19,6 @@ fi
 if grep -q "proxy_read_timeout 300s" "$CONF"; then
   echo "[skip]  /hw/ already has 300s timeout"
 else
-  # Insert the two timeout directives right after the X-Forwarded-Prefix line
-  # inside the /hw/ block. That line is unique to /hw/, so the anchor is safe.
   sed -i '/proxy_set_header X-Forwarded-Prefix \/hw;/a \    proxy_read_timeout 300s;\n    proxy_send_timeout 300s;' "$CONF"
   echo "[patch] Added proxy_read_timeout/proxy_send_timeout to /hw/"
 fi

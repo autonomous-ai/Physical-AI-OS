@@ -8,8 +8,7 @@ import (
 	"path/filepath"
 )
 
-// ExportSkillArchive writes a complete, portable .skill bundle. It reads from
-// disk rather than the preview API, so binary assets are never lost.
+// ExportSkillArchive writes a portable .skill bundle from disk, including binary assets.
 func ExportSkillArchive(skillsDir, name, destDir string) (string, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return "", err

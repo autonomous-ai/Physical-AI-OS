@@ -43,8 +43,8 @@ func textFrame(text string) string {
 	return string(raw)
 }
 
-// opencode narrates before each tool call as its own text part. Only the last
-// part is the reply — the preambles must not be joined into the spoken text.
+// opencode narrates before each tool call as its own text part.
+// Only the last part is the reply — the preambles must not be joined into the spoken text.
 func TestPreamblesDoNotReachReply(t *testing.T) {
 	cases := []struct {
 		name  string

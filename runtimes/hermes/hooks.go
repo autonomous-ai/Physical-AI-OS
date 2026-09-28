@@ -21,15 +21,7 @@ const (
 	observerHookPort    = 5000 // fallback when config.HttpPort is unset
 )
 
-// ensureObserverHook materializes the os-server-observer hook into the Hermes
-// hooks dir. The gateway owns all messaging-channel I/O and never surfaces those
-// turns to os-server, so without this hook Telegram/Slack/Discord turns are
-// invisible in Flow Monitor (see hooks/os-server-observer/handler.py). The hook
-// POSTs every turn to the loopback /api/agent/channel-turn endpoint.
-//
-// Returns true when any file's content changed — the gateway discovers hooks
-// only at boot, so the caller must restart it to load a new/updated hook.
-// Idempotent: an unchanged boot rewrites nothing and reports changed=false.
+// ensureObserverHook materializes the os-server-observer hook into the Hermes hooks dir.
 func (s *HermesService) ensureObserverHook() (bool, error) {
 	port := s.config.HttpPort
 	if port == 0 {
@@ -56,9 +48,7 @@ func (s *HermesService) ensureObserverHook() (bool, error) {
 	return false, nil
 }
 
-// writeIfChanged writes data to path only when it differs from the current
-// content, so a steady boot neither churns the file nor forces a gateway
-// restart. Returns true when the file was (re)written.
+// writeIfChanged writes data to path only when it differs from the current content, so a steady boot neither churns the file nor forces a gateway restart.
 func writeIfChanged(path string, data []byte) (bool, error) {
 	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
 		return false, nil

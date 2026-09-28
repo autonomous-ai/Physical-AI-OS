@@ -1,9 +1,4 @@
-"""
-HAL Hardware Runtime -- FastAPI server on port 5001.
-
-Only starts the drivers we need. LiveKit/OpenAI code stays untouched but never imported.
-OS Server (Go, port 5000) bridges requests here.
-"""
+"""HAL hardware runtime: FastAPI server on port 5001 (os-server bridges requests here)."""
 
 import json
 import os
@@ -16,7 +11,7 @@ _startup_started = time.perf_counter()
 
 from dotenv import load_dotenv
 
-# Load .env BEFORE any hal imports so config.py reads correct env vars
+# Load .env BEFORE any hal imports so config.py reads the right env vars.
 load_dotenv(Path(__file__).parent / ".env", override=False)
 
 from fastapi import FastAPI
@@ -57,29 +52,20 @@ from hal.models import HealthResponse, StatusResponse
 from hal.presets import SERVO_CMD_PLAY
 from hal.server_support.openapi_meta import API_DESCRIPTION, OPENAPI_TAGS
 
-# --- Logging: colored stdout + rotating file (+ GELF) ---
 from hal.server_support.log_setup import setup_logging
 
 logger = setup_logging()
 
 
-# --- Device declaration first: ROBOT.md decides which drivers we even import ---
-# Driver imports are the expensive part of boot (cv2, onnx/torch model stacks —
-# several seconds on an A523). Resolving the profile before them lets every
-# import below be gated on the declared routes, so a device without the hardware
-# never pays the import cost. plan_mounts semantics are unchanged: undeclared
-# routes were skipped anyway; declared routes still use import success ==
-# availability.
+# Resolve ROBOT.md before driver imports so undeclared hardware costs zero import time.
 
 
 from hal.server_support.boot_config import (
     _resolve_device_type, _devices_dir, boot_config,
 )
 
-# ROBOT.md is required — _device_profile() fail-louds if it's missing/unparseable.
 _boot = boot_config()
 _profile = _boot.profile
-# Full declared route surface (incl. `speaker`), keys usable with `in`.
 _declared = _profile.declared_routes()
 _simulation = SIMULATE
 _simulation_media = SIM_MEDIA
@@ -90,10 +76,7 @@ if _simulation:
 elif os.environ.get("HAL_BOARD") == "sim":
     raise RuntimeError("HAL_BOARD=sim requires HAL_SIMULATE=1; refusing a physical-driver boot on a virtual board")
 
-# Warm the heaviest driver chain (lerobot → torch, ~4s of the ~7.5s total import
-# time on an A523) in parallel with the rest of the module imports below.
-# Python's per-module import locks make the gated factory import further down
-# wait on — not duplicate — this import, so it acts as a join point.
+# Warm lerobot -> torch (~4s) in parallel; per-module import locks make the later import a join.
 if "servo" in _declared:
     import importlib
     from hal.drivers.motors.factory import MOTION_DRIVERS
@@ -111,8 +94,6 @@ if "servo" in _declared:
 
     threading.Thread(target=_warm_import_servo, daemon=True, name="warm-import-servo").start()
 
-# --- Lazy imports for hardware drivers (may not be available on dev machines),
-# gated on the declared routes so undeclared hardware costs zero import time ---
 
 AnimationService = None  # resolved motion service class (may be any MotionService impl)
 RGBService = None
@@ -149,13 +130,9 @@ if "camera" in _declared:
         from hal.drivers.camera.models import VideoCaptureDeviceInfo
         from hal.drivers.camera.video_capture_device import resolve_camera_device_id
 
-        # Same selector shape as motion: ROBOT.md picks the backend, because a
-        # CSI sensor behind libcamera and a UVC webcam share no open path.
+        # ROBOT.md picks the vision backend (CSI/libcamera vs UVC).
         _vision_cap = _profile.capabilities.get("vision")
-        # Simulation never uses the production UVC driver: "virtual" paints a
-        # synthetic scene, "host" opens the developer machine's webcam through
-        # the platform's native OpenCV backend. Only a real body reaches the
-        # ROBOT.md `driver:` selector.
+        # Simulation never uses the production UVC driver ("virtual" or "host" webcam).
         if _simulation:
             _camera_driver = "host" if _simulation_media == "host" else "virtual"
         else:
@@ -172,15 +149,7 @@ if "camera" in _declared:
 else:
     logger.info("Camera drivers skipped — 'camera' not declared in ROBOT.md")
 
-# --- Media owners: processes that hold this device's hardware ---------------
-# A body that ships its own vendor runtime has that runtime holding the camera
-# and the audio PCMs before HAL exists, and HAL cannot open what it does not
-# own. Capabilities in that position declare `owner:` in ROBOT.md and this
-# resolves each declared name to a handover class — same selector shape as
-# `driver:` on motion and vision, so nothing here knows which body is running.
-# One owner typically holds several capabilities (audio and vision both), so
-# resolve by distinct name and release once each rather than once per
-# capability.
+# Vendor runtimes that hold the camera/audio declare `owner:`; release each distinct owner once.
 _media_owners = []
 for _owner_name in dict.fromkeys(
     c.owner for c in _profile.capabilities.values() if c.owner
@@ -189,9 +158,7 @@ for _owner_name in dict.fromkeys(
 
     _owner_cls = resolve_media_owner(_owner_name)
     if _owner_cls is not None:
-        # startup_volume travels with the handover because releasing the media
-        # is what resets the card's mixer — the owner needs this body's level to
-        # put it back on a unit that has no persisted level yet.
+        # Releasing the media resets the card mixer, so the owner needs this body's level.
         _media_owners.append(_owner_cls(startup_volume=_profile.startup_volume))
         logger.info("Media owner '%s' declared — HAL will borrow the hardware", _owner_name)
 
@@ -227,8 +194,7 @@ if "voice" in _declared:
 else:
     logger.info("Voice service skipped — 'voice' not declared in ROBOT.md")
 
-# TTS serves more than the voice route (music backchannel, sensing announcements,
-# shutdown cue), so any declared audio-producing route pulls it in.
+# TTS serves more than the voice route (music backchannel, sensing, shutdown cue).
 if {"voice", "audio", "music"} & set(_declared):
     try:
         from hal.drivers.voice.tts import TTSService
@@ -250,10 +216,7 @@ if "display" in _declared:
     except ImportError as e:
         logger.warning(f"Display service not available: {e}")
 
-# Join the motion import only after independent driver imports have run.
-# Resolving it immediately after starting the warm thread serializes startup.
-# Resolution still happens before route availability checks and lifespan, so
-# missing required drivers retain the existing fail-loud mount contract.
+# Join the motion import late to avoid serializing startup (still before mount checks).
 _motion_wait_started = time.perf_counter()
 if "servo" in _declared:
     from hal.drivers.motors.factory import resolve_motion_class
@@ -277,20 +240,12 @@ _ttp223_handler = None
 _mpr121_handler = None
 _privacy_button_handler = None
 
-# Set the moment lifespan shutdown begins — late async initializers (sensing-init)
-# check it so they don't start services nobody will stop.
+# Late async initializers check this so they don't start services nobody will stop.
 _lifespan_stopping = threading.Event()
 
 
 def _sim_audio_probe(sd_module) -> None:
-    """Confirm the host speaker and microphone are actually usable (sim only).
-
-    Enumeration is not permission: on macOS `sd.query_devices()` lists the
-    built-in microphone even when the terminal app has never been granted
-    microphone access, and only the first real read raises. Probing a few
-    milliseconds at boot turns that into one honest fallback with an actionable
-    message, instead of a 500 the first time someone presses "Record 3s".
-    """
+    """Confirm the host speaker and microphone are actually usable (sim only; macOS permissions)."""
     import platform
 
     def _mac_hint(what: str) -> str:
@@ -352,33 +307,20 @@ async def lifespan(app: FastAPI):
     from hal import privacy
     privacy.prepare(_privacy_button_config)
 
-    # --- Phase 0: Borrow the hardware from whoever owns it ---
-    # Empty unless ROBOT.md declares an `owner:`. Where one exists it holds
-    # /dev/video* and both ALSA PCMs, and nothing below can succeed until it
-    # lets go — the camera opens "busy", and PortAudio cannot probe a sample
-    # rate, which resurfaces much later as TTS on output device -1 while every
-    # status endpoint still reads healthy. Blocking, and first: a vendor SDK may
-    # release as a side effect of connecting, but that runs in the motion-init
-    # thread and races the audio detection in Phase 2.
+    # Phase 0 (blocking, first): borrow hardware from a declared owner before anything opens it.
     for _owner in _media_owners:
         _owner.release()
 
-    # --- Phase 1: Fire slow hardware init in background threads ---
+    # Phase 1: slow hardware init in background threads.
 
     def _init_servo():
         if not AnimationService:
             return
-        # Declaration-driven: the servo route is mounted only when the device
-        # declares the `motion` capability (ROBOT.md → motion: { routes: [servo] }).
-        # Without it, starting AnimationService connects to a servo bus that isn't
-        # there and every animation playback throws DeviceNotConnectedError. Gate on
-        # the mount plan so a device that has no servo (e.g. intern-v2) never starts it.
+        # Only when the device declares `motion`; a missing bus makes every playback throw.
         if "servo" not in _plan.mounted:
             logger.info("AnimationService skipped — device does not declare 'motion' (servo route not mounted)")
             return
         try:
-            # Per-driver construction: the feetech backend needs the serial-bus
-            # kwargs; SDK-backed drivers own their transport config (env-tunable).
             if (_motion_driver or "feetech") == "feetech":
                 svc = AnimationService(
                     port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
@@ -386,12 +328,9 @@ async def lifespan(app: FastAPI):
                     safety_policy=_safety, geometry=_geometry,
                 )
             else:
-                # SDK backends carry the safety policy themselves: their play
-                # ramp is computed in the driver, with no route to pass it in
-                # the way aim/nudge do.
+                # SDK backends carry the safety policy themselves.
                 svc = AnimationService(safety_policy=_safety)
-            # A device that was asleep must not perform its wake sequence just
-            # because HAL restarted (see AnimationService.start docstring).
+            # A device that was asleep must not perform its wake sequence on restart.
             svc.start(skip_wake=state._sleeping)
             state.animation_service = svc
             logger.info("Motion service started (%s)", type(svc).__name__)
@@ -399,8 +338,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"Motion service failed to start: {e}")
 
     def _init_led():
-        # The HTTP entrypoint may already own the strip. Never reopen it or
-        # erase an LED request received while the other drivers were loading.
+        # The HTTP entrypoint may already own the strip; never reopen it.
         if state.rgb_service is not None:
             return
         if not RGBService:
@@ -416,16 +354,12 @@ async def lifespan(app: FastAPI):
     def _init_camera():
         if not (LocalVideoCaptureDevice and VideoCaptureDeviceInfo and cv2):
             return
-        # Gated like servo: the camera route mounts only when the device declares
-        # `vision`. A device with no camera (e.g. intern-v2) must not try to open
-        # one — otherwise it logs a misleading "Camera failed to start" hardware
-        # warning when the camera was simply never part of the spec.
+        # Only when the device declares `vision`.
         if "camera" not in _plan.mounted:
             logger.info("Camera skipped — device does not declare 'vision' (camera route not mounted)")
             return
         try:
-            # V4L2 index resolution is a UVC concern; a libcamera backend has no
-            # node to look up, and probing would log a misleading failure.
+            # V4L2 index resolution is a UVC concern only.
             camera_device_id = (
                 resolve_camera_device_id(CAMERA_NAME, CAMERA_INDEX)
                 if LocalVideoCaptureDevice.requires_v4l2_index
@@ -445,9 +379,7 @@ async def lifespan(app: FastAPI):
             if _privacy_button_config and _privacy_button_config.disable_camera_on_mute:
                 cap = privacy.GuardedCamera(cap)
             if state._camera_disabled:
-                # Disabled state restored from the camera sidecar: keep the
-                # capture object (so /camera/enable can start it) but don't
-                # open the sensor.
+                # Disabled (restored): create the capture object but don't open the sensor.
                 logger.info("Camera capture created but not started -- disabled (restored)")
             else:
                 cap.start()
@@ -457,10 +389,7 @@ async def lifespan(app: FastAPI):
             )
         except Exception as e:
             if _simulation and _simulation_media == "host":
-                # A missing / busy / permission-denied host webcam must not leave
-                # the simulator with no camera at all, and must not leave a live
-                # stream promised in the UI. Drop to the virtual scene and record
-                # why, so GET /simulator/state can say so.
+                # Fall back to the virtual scene and record why (GET /simulator/state).
                 state.sim_media_fallback("camera", str(e))
                 try:
                     from hal.drivers.camera.virtual_capture_device import (
@@ -489,16 +418,11 @@ async def lifespan(app: FastAPI):
         t.start()
         hw_threads.append(t)
 
-    # --- Phase 2: Audio detect + TTS + VoiceService ---
+    # Phase 2: audio detect + TTS + VoiceService.
 
-    # A declaration without audio/media routes must not even enumerate the
-    # laptop's speaker or microphone. Besides keeping the mock body honest,
-    # this avoids a device without audio claiming an arbitrary host device in
-    # GET /health.
+    # Without declared audio routes, never enumerate the host's speaker or mic.
     if _simulation and _simulation_media != "host" and {"audio", "voice", "music", "speaker"} & set(_plan.mounted):
-        # Virtual device ids are never passed to sounddevice. They make the
-        # capability observable via the existing API while avoiding macOS mic /
-        # speaker permissions and any sound emitted on the developer's host.
+        # Virtual device ids are never passed to sounddevice.
         state.audio_output_device = 0
         state.audio_input_device = 0
         logger.info("Audio using virtual input/output devices")
@@ -527,19 +451,12 @@ async def lifespan(app: FastAPI):
             _alsa_out = os.environ["HAL_AUDIO_OUTPUT_ALSA"]
             _alsa_card = _alsa_out.split(":")[1].split(",")[0] if ":" in _alsa_out else ""
             if _alsa_card:
-                # ALSA short card id (e.g. "wm8960soundcard") and PortAudio device
-                # label (e.g. "wm8960-soundcard: ...") often differ by dashes/
-                # underscores. Normalize both sides so matching is robust.
+                # ALSA card ids and PortAudio labels differ by dashes/underscores; normalize both.
                 def _norm(s: str) -> str:
                     return "".join(c for c in s.lower() if c.isalnum())
 
                 _needle = _norm(_alsa_card)
-                # PortAudio caches its device list at sd import time. At OS cold
-                # boot, sndi2s4 (ES8389 codec) often isn't registered yet, so the
-                # cached enum lacks both the hw card and any asound.conf plug
-                # alias that points at it (e.g. plug:device_speaker). Force a
-                # fresh enum each retry via _terminate+_initialize, until the
-                # alias appears or we time out (~10s).
+                # PortAudio caches devices at import; re-enumerate until the codec alias appears (~10s).
                 _matched = False
                 for _attempt in range(20):
                     for _i, _d in enumerate(sd.query_devices()):
@@ -580,16 +497,7 @@ async def lifespan(app: FastAPI):
         state.audio_output_device = 0
         state.audio_input_device = 0
 
-    # Auto-start voice pipeline from os-server config.
-    #
-    # Gated on state.simulation_audio, not on _simulation: `HAL_SIM_MEDIA=host`
-    # means "use the developer machine's devices", and the mic is one of them —
-    # so host mode falls through to the real pipeline below (STT, realtime,
-    # dispatch) exactly as a board runs it. The flag is also what
-    # _sim_audio_probe flips back to True when macOS denies the microphone, so a
-    # refused permission lands on the stub with a logged reason instead of a
-    # real pipeline reading a dead device. Same flag routes/voice.py keys off,
-    # so /voice/start and this boot path can never disagree.
+    # Gated on simulation_audio, not _simulation: host mode uses the real pipeline.
     if state.simulation_audio and "voice" in _plan.mounted:
         from hal.drivers.voice.virtual_service import VirtualTTSService, VirtualVoiceService
         state.tts_service = VirtualTTSService(voice=TTS_VOICE, instructions=TTS_INSTRUCTIONS)
@@ -603,17 +511,7 @@ async def lifespan(app: FastAPI):
         dgk = os_cfg.get("deepgram_api_key", "")
         llm_key = os_cfg.get("llm_api_key", "")
         llm_url = os_cfg.get("llm_base_url", "")
-        # Per-service credentials, falling back to the AI Brain's. On most
-        # devices all three are the same string — the settings page mirrors the
-        # brain's key/URL into the TTS and STT fields while those are blank — so
-        # this reads identically to what it replaced.
-        #
-        # It matters when the brain points somewhere else. A device with
-        # llm_base_url on openrouter and tts_base_url on the autonomous proxy
-        # was building openrouter.ai/api/v1/elevenlabs/text-to-speech/... and
-        # taking a 404 on every spoken reply: the ElevenLabs backend appends
-        # /elevenlabs to whatever base it is handed, and it was being handed the
-        # brain's. The config had the right URL all along; nothing read it.
+        # Per-service credentials fall back to the brain's (ElevenLabs appends /elevenlabs to its base).
         tts_key = os_cfg.get("tts_api_key", "") or llm_key
         tts_url = os_cfg.get("tts_base_url", "") or llm_url
         stt_key = os_cfg.get("stt_api_key", "") or llm_key
@@ -633,10 +531,7 @@ async def lifespan(app: FastAPI):
                 on_speak_start=state._on_tts_speak_start,
                 on_speak_end=state._on_tts_speak_end,
                 provider=tts_provider,
-                # Voice metrics (measurement only): fired at the first frame that
-                # actually reaches the stream, with the owner that claimed the
-                # speaker. Separate from on_speak_start, which the cached path
-                # fires before it has written anything.
+                # Fired at the first frame that reaches the stream (unlike on_speak_start).
                 on_playback_audio=tts_hooks.on_playback_audio,
                 on_playback_done=tts_hooks.on_playback_done,
                 on_playback_muted=tts_hooks.on_playback_muted,
@@ -676,23 +571,13 @@ async def lifespan(app: FastAPI):
                     music_service=state.music_service,
                     wake_words=wake_words,
                     alsa_device=AUDIO_INPUT_ALSA,
-                    # `audio` (the mic) gates VOICE people perception: speaker-ID
-                    # and speech emotion (reading the user's emotion from voice)
-                    # need only a mic, not a camera or the presence people-layer —
-                    # so any device with a mic runs them. (Face emotion in the
-                    # sensing loop stays `presence`-gated; see SensingService below.)
+                    # A mic alone enables voice people perception (speaker-ID, speech emotion).
                     enable_people_perception=("audio" in _profile.capabilities),
-                    # `expression` (LED+servo face) gates the realtime agent's
-                    # express_emotion tool. A device with no face never registers
-                    # the tool, so the realtime model can't set an emotion.
+                    # No face (`expression`) = no express_emotion tool.
                     enable_expression=("expression" in _profile.capabilities),
                 )
                 if state._mic_muted:
-                    # Mute restored from the sidecar (or the physical switch
-                    # applied it during driver init): build the pipeline but
-                    # don't open the mic — same guard as routes/voice.py
-                    # start_voice. Without this the boot auto-start reopened
-                    # the mic on every HAL restart while "muted".
+                    # Muted: build the pipeline but don't open the mic.
                     logger.info("VoiceService created but NOT started -- mic muted")
                 else:
                     state.start_voice_service("boot-autostart")
@@ -704,7 +589,6 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Auto-start voice from os-server config failed: {e}")
 
-    # Start music service
     if MusicService:
         try:
             from hal.routes.music import _on_music_complete
@@ -718,15 +602,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"MusicService failed to start: {e}")
 
-    # Pre-render the phrases that play from cache, so the first use of each is
-    # ~50ms instead of a TTS round-trip. Runs in a daemon thread so a slow
-    # render doesn't delay startup.
-    #
-    # Order matters, and it is the reverse of what it looks like. The lifecycle
-    # phrases go first even though the music cues are the bigger set: measured
-    # on a cold cache with Piper, rendering the music pool first left the
-    # restart notice unwarmed for 30 s — and that notice is precisely what plays
-    # in the first seconds after boot, while nobody opens music that early.
+    # Pre-render cached phrases in the background; lifecycle phrases first (they play right after boot).
     def _prerender_cached_phrases():
         if not state.tts_service or not getattr(state.tts_service, "available", False):
             return
@@ -740,14 +616,7 @@ async def lifespan(app: FastAPI):
                 state.tts_service.speak_cached(phrase, prerender=True)
         except Exception as e:
             logger.warning("Music backchannel prerender failed: %s", e)
-        # Also warm the rate-limit notice so it can play from cache (no API call)
-        # when the TTS provider later returns 429 / quota-exhausted mid-turn.
-        # (Go-owned notices — e.g. the LLM-limit phrase — warm themselves via
-        # /voice/speak prerender=true from the os-server side.)
-        # Warm the touch-gesture acks too. The mic toggle's confirmation is the
-        # only audible feedback that gesture has, and it is non-interrupting —
-        # paying a first-use TTS round-trip makes it far likelier to arrive late
-        # or lose the lock and drop entirely.
+        # Warm the rate-limit notice and touch-gesture acks too.
         try:
             from hal.drivers.button_actions import _current_lang
             from hal.i18n import (
@@ -777,45 +646,26 @@ async def lifespan(app: FastAPI):
         name="prerender-cached-phrases",
     ).start()
 
-    # --- Phase 3: Wait for hardware threads, then start hardware-dependent services ---
+    # Phase 3: wait for hardware threads, then start dependent services.
     for t in hw_threads:
         t.join(timeout=10)
 
-    # Start sensing loop
     sensing_enabled = os.environ.get("HAL_SENSING_ENABLED", "true").lower() in (
         "true",
         "1",
         "yes",
     )
-    # Constructing SensingService opens the remote perception WS channels
-    # (motion/pose/fire-hazard/emotion encryption handshakes) sequentially —
-    # ~4-5s on device. Run it in a background thread so it doesn't hold up
-    # "Application startup complete"; every /sensing route already degrades
-    # gracefully while state.sensing_service is still None.
+    # SensingService opens perception channels sequentially (~4-5s); run it in the background.
     def _start_sensing():
         try:
-            # `presence` capability gates the people-perception loop: face
-            # identity + facial emotion (ML over the camera via perception-service). A
-            # device with a camera but no `presence` (it only streams / does
-            # motion) must not run those models. Declaration-driven, not env.
+            # `presence` gates face identity + facial emotion models.
             _has_presence = "presence" in _profile.capabilities
             if _lifespan_stopping.is_set():
                 logger.info("sensing-init: shutdown already in progress — skipping")
                 return
             svc = SensingService(
                 camera_capture=state.camera_capture,
-                # Declared or absent, never guessed. This used to fall back to
-                # the voice mic, which is only ever right by luck: on a device
-                # whose speaker and mic are one card, sound sensing then opened
-                # the raw PortAudio index for a card the 16 kHz capture already
-                # held, exclusively and at 44100 Hz. It failed several times a
-                # minute, filled the journal with pa_linux_alsa "AlsaOpen
-                # failed", and reported no sound the whole time — a feature that
-                # looks configured and does nothing. Passing None instead lets
-                # the orchestrator's existing gate skip SoundPerception and say
-                # so, matching ROBOT-SPEC.md: undeclared is not a default, it
-                # is an absence. Every shipping device declares
-                # HAL_AUDIO_SENSING_DEVICE, so none of them loses the feature.
+                # Declared or absent, never guessed: None skips SoundPerception.
                 input_device=AUDIO_SENSING_DEVICE,
                 poll_interval=float(os.environ.get("HAL_SENSING_INTERVAL", "2.0")),
                 rgb_service=state.rgb_service,
@@ -824,9 +674,7 @@ async def lifespan(app: FastAPI):
                 is_sleeping=lambda: state._sleeping,
                 enable_people_perception=_has_presence,
             )
-            # The ~4-5s constructor may finish after shutdown began — the
-            # shutdown path's `if state.sensing_service` check has already
-            # passed by then, so nobody would stop it. Don't start it.
+            # Shutdown may have begun during the ~4-5s constructor; don't start it then.
             if _lifespan_stopping.is_set():
                 logger.info("sensing-init: shutdown began during construction — not starting")
                 return
@@ -840,8 +688,7 @@ async def lifespan(app: FastAPI):
     if SensingService and sensing_enabled:
         threading.Thread(target=_start_sensing, daemon=True, name="sensing-init").start()
 
-    # Warm the look-aim detector. Its first inference loads the model lazily and
-    # costs seconds; paid here it never lands inside a look's aim deadline.
+    # Warm the look-aim detector so its lazy model load never lands inside a look deadline.
     if LOOK_AIM_ENABLED and "camera" in _plan.mounted:
         def _warm_look_aim():
             try:
@@ -862,8 +709,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("bearing sampler unavailable: %s", e)
 
-        # Watch for the user turning toward the lamp, so addressing it does not
-        # always require the wake phrase. Off by default; shadow-logs when on.
+        # Off by default; shadow-logs when on.
         try:
             from hal.drivers.tracking import gaze
 
@@ -871,7 +717,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.debug("gaze watcher unavailable: %s", e)
 
-    # Start display (GC9A01 eyes)
     if DisplayService:
         try:
             state.display_service = DisplayService()
@@ -881,9 +726,7 @@ async def lifespan(app: FastAPI):
             logger.warning(f"DisplayService failed to start: {e}")
             state.display_service = None
 
-    # Object tracker (servo follow) — needs both a camera to see with and a
-    # servo to follow with; every route touching state.tracker_service is
-    # None-tolerant, so devices without either never load the tracker stack.
+    # Needs both a camera and a servo; tracker routes are None-tolerant.
     if "servo" in _plan.mounted and "camera" in _plan.mounted:
         from hal.drivers.tracking import TrackerService
         state.tracker_service = TrackerService()
@@ -924,8 +767,7 @@ async def lifespan(app: FastAPI):
     else:
         logger.info("MPR121 skipped — no enabled device wiring or simulated board")
 
-    # TTP223 capacitive touchpad (OrangePi sun60 only — same gestures as
-    # GPIO button, runs independently. Skips silently on other boards.)
+    # OrangePi sun60 only; skips silently on other boards.
     try:
         from hal.drivers.ttp223 import TTP223Handler
 
@@ -943,8 +785,7 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Mic switch init failed: {e}")
 
-    # Restore Bluetooth headset route if the user had one active before reboot.
-    # Best effort — silent fallback to the device speaker/mic if anything goes wrong.
+    # Best effort: falls back to the device speaker/mic.
     if "bluetooth" in _plan.mounted:
         try:
             from hal.drivers.audio_route import maybe_restore_bt_route
@@ -954,9 +795,7 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.warning(f"BT route restore scheduling failed: {e}")
 
-    # Re-apply the scene that was active before a service restart (boot-scoped
-    # sidecar) so the agent's belief ("focus mode is on") stays true across
-    # HAL restarts instead of desyncing from a scene-less HAL.
+    # Re-apply the pre-restart scene (boot-scoped sidecar).
     try:
         from hal.routes.scene import restore_persisted_scene
         threading.Thread(
@@ -965,32 +804,18 @@ async def lifespan(app: FastAPI):
     except Exception as e:
         logger.warning(f"Scene restore scheduling failed: {e}")
 
-    # Mic mute restored from the sidecar (or already applied by the physical
-    # switch during driver init): paint the mic-muted LED indicator now that
-    # the RGB service is up. _start_mic_muted_effect (not _apply_): the flag
-    # is already set, and it self-guards on scene/LED-off via owns_strip.
+    # Flag already set: _start_mic_muted_effect (not _apply_) paints the indicator.
     if state._mic_muted:
         try:
             state._start_mic_muted_effect()
         except Exception as e:
             logger.warning(f"Mic-muted LED repaint failed: {e}")
 
-    # Sleep restored from the sidecar. Do NOT re-express `sleepy` here: that
-    # PLAYS the going-to-sleep animation, so a device that was already resting
-    # in the sleep pose energised its servos, moved, and released again — from
-    # the outside, exactly the "it woke up, then went back to sleep" this whole
-    # change exists to prevent. The body is left as sleep left it (limp, servos
-    # not energised — see AnimationService.start(skip_wake)), the strip stays
-    # dark because nothing paints it, and every `_sleeping` gate is already
-    # armed from the import-time restore. All that is missing is the emotion
-    # bookkeeping the restore did not go through.
+    # Do NOT re-express `sleepy` (it plays the animation); only restore emotion bookkeeping.
     if state._sleeping:
         try:
             from hal.presets import EMO_SLEEPY
 
-            # Everything sleep owns — the flag and the mic/speaker mutes — comes
-            # back from its sidecar at import. All that is left is the emotion
-            # bookkeeping the restore did not go through.
             state._current_emotion = EMO_SLEEPY
             logger.info(
                 "Sleep restored: asleep, mic_muted=%s speaker_muted=%s (no wake performance)",
@@ -1030,9 +855,7 @@ async def lifespan(app: FastAPI):
     if _mpr121_handler is not None:
         _mpr121_handler.stop()
 
-    # Voice/sensing stops (~3s) run concurrently with the announce+park below —
-    # they only tear down mic/STT/perception threads, never the TTS output the
-    # cue plays on.
+    # Voice/sensing stops (~3s) run concurrently with the announce+park below.
     _shutdown_threads = []
     if state.voice_service:
         close_voice = getattr(state.voice_service, "close", state.voice_service.stop)
@@ -1042,9 +865,7 @@ async def lifespan(app: FastAPI):
     for t in _shutdown_threads:
         t.start()
 
-    # Shutdown — announce + park servos first (only when OS is actually
-    # going down and no button path already announced), so the audible cue
-    # fires while tts_service is still alive.
+    # Announce + park while tts_service is still alive.
     from hal.drivers.os_shutdown import announce_os_shutdown
     announce_os_shutdown()
 
@@ -1058,22 +879,11 @@ async def lifespan(app: FastAPI):
         state.tracker_service.stop()
 
     for t in _shutdown_threads:
-        # Best-effort grace only — systemd kills the whole cgroup (arecord
-        # included) right after, so a slow voice/sensing stop must not add
-        # seconds to every restart.
+        # Best-effort: systemd kills the cgroup right after.
         t.join(timeout=3)
 
     if state.animation_service:
-        # MotionService.stop(), not the AnimationService internals this used to
-        # clear by hand: `_running` and `_event_thread` belong to the feetech
-        # backend, so on any other one the teardown died here with
-        # AttributeError and uvicorn logged "Application shutdown failed.
-        # Exiting." — abandoning every line below it. On a Reachy that cost the
-        # SDK its goto_sleep and client.disconnect, left the daemon holding a
-        # dead client socket, and skipped the media handover entirely, so
-        # Pollen's stack stayed deaf and blind after every HAL restart.
-        # Wrapped because shutdown must not raise: whatever a driver does here,
-        # the LEDs, the camera and the handover below still have to run.
+        # MotionService.stop() works on every backend; wrapped because shutdown must not raise.
         try:
             state.animation_service.stop(timeout=3.0)
         except Exception as e:
@@ -1083,9 +893,7 @@ async def lifespan(app: FastAPI):
     if state.camera_capture:
         state.camera_capture.stop()
 
-    # Give the hardware back last — after voice, sensing and the camera have all
-    # closed their handles, so the owner can actually reopen them. Restarting
-    # HAL without this leaves the vendor runtime deaf and blind.
+    # Give the hardware back last, after every handle is closed.
     for _owner in _media_owners:
         _owner.acquire()
 
@@ -1097,10 +905,7 @@ app = FastAPI(
     if (Path(__file__).parent / "VERSION_HAL").exists()
     else "dev",
     lifespan=lifespan,
-    # Built-in /docs disabled; a custom handler below serves the Swagger HTML
-    # without inline <script> so the OS server nginx can keep CSP `script-src 'self'`
-    # (no `'unsafe-inline'`). /redoc stays on the default since it's not the
-    # endpoint the in-iframe browser flow uses.
+    # Custom /docs handler serves Swagger without inline <script> (CSP `script-src 'self'`).
     docs_url=None,
     redoc_url="/redoc",
     # `servers` tells Swagger UI which base URL to prepend on "Try it out".
@@ -1115,24 +920,10 @@ app = FastAPI(
     openapi_tags=OPENAPI_TAGS,
 )
 
-# --- Include route modules (declaration-driven via ROBOT.md) ---
-# Mount routes by crossing what this device's ROBOT.md *declares* with which
-# drivers are actually *available* (importable), via hal.board.device.plan_mounts.
-# A device is "the device minus motion+display" by declaring fewer capabilities — not by
-# forking. Per robots/contract/ROBOT-SPEC.md the boot rule is:
-#   declared + available            -> mount
-#   declared + required + missing    -> FAIL LOUD in production (a hardware fault)
-#   declared + optional  + missing    -> skip (graceful degradation)
-#   undeclared                       -> skip (a different device, by design)
-# Falls back to mounting everything when no ROBOT.md is found, so existing
-# deployments are unaffected. See robots/contract/ROBOT-SPEC.md and hal/board/device.py.
+# Mount routes by crossing ROBOT.md declarations with driver availability (plan_mounts):
+# declared+available -> mount; declared+required+missing -> fail loud; otherwise skip.
 
-# Route modules import their own driver stacks, so importing all 12
-# unconditionally would defeat the declaration-gated driver imports above.
-# Undeclared hardware routes are never mounted (plan_mounts only consults
-# declared routes), so skipping their module import changes nothing else.
-# The driverless routes (emotion/scene/system/bluetooth) import cheaply and
-# other code calls into them in-process, so they always load.
+# Undeclared hardware route modules are never imported; driverless routes always load.
 import importlib
 
 _ALWAYS_ROUTES = ("audio", "emotion", "scene", "system", "bluetooth")
@@ -1146,10 +937,6 @@ for _rname in (
         continue
     _ROUTERS_BY_NAME[_rname] = importlib.import_module(f"hal.routes.{_rname}").router
 
-# Speaker recognition imports separately — its deps (face/speaker embedding
-# models) are heavy and may be absent. It's a declared `speaker` route under the
-# audio capability (robots/*/ROBOT.md), so it joins the SAME declaration gate
-# below: import success == availability, no separate bypass mount.
 if "speaker" in _declared:
     try:
         from hal.routes.speaker import router as _speaker_router
@@ -1159,12 +946,7 @@ if "speaker" in _declared:
         logger.warning("Speaker recognition router unavailable: %s", _speaker_import_err)
 
 
-# Mount-time driver availability: "is this route's driver code importable on this
-# machine". The lazy driver-class imports near the top of this file already set
-# each global to None on ImportError. Hardware-connection faults (cable unplugged)
-# surface later in lifespan() as warnings — they can't abort the mount because
-# lifespan runs after app construction. Routes with no import-time driver
-# dependency are always mountable; their handlers degrade if the service is absent.
+# Availability = driver code importable; connection faults surface later in lifespan().
 _route_available = {
     "servo": AnimationService is not None,
     "led": RGBService is not None,
@@ -1174,41 +956,28 @@ _route_available = {
     "sensing": SensingService is not None,
     "display": DisplayService is not None,
     "music": MusicService is not None,
-    # Policy starts as a logging-only interface, so mounting it has no model or
-    # actuator dependency.  A real executor must make availability conditional
-    # on its driver and preserve the same response contract.
+    # Logging-only policy route: no model or actuator dependency.
     "policy": True,
     "environment": True,
     "emotion": True, "scene": True, "system": True, "bluetooth": True,
     "speaker": "speaker" in _ROUTERS_BY_NAME,
 }
 
-# Safety bounds (SAFETY.md front matter) resolved once at boot, below the brain.
-# Pass-through when absent (light fail-safe); a present-but-malformed schema
-# fail-louds inside load_safety, like ROBOT.md. Slice 1 = light.max_brightness.
+# SAFETY.md bounds resolved once at boot; absent = pass-through, malformed = fail loud.
 _device_dir = os.path.join(_devices_dir(), _resolve_device_type())
 _safety = _boot.safety
 
-# Geometry for the bounds that are shapes rather than scalars (today
-# motion.max_cog_offset_mm). Same resolution rules as safety_ref, same
-# fail-safe: unreadable or absent is a warning and pass-through, never a boot
-# failure — a body that cannot be scored still has to move.
+# Unreadable or absent geometry is a warning and pass-through, never a boot failure.
 from hal.drivers.motors.recording_stability import load_geometry
 _geometry = load_geometry(_device_dir, _profile.urdf_ref)
 
-# The policy route is a contract-only, logging implementation at this stage.
-# Constructing it neither loads a policy model nor opens a motion driver.
 if "policy" in _declared:
     from hal.policy.service import LoggingPolicyService
 
     state.policy_service = LoggingPolicyService(logger)
 state.safety_policy = _safety  # route-level gates (e.g. music quiet hours) read it here
 
-# Per-device preset overlay: deep-merge robots/<type>/presets.json onto the base
-# EMOTION/SCENE/AIM tables in place (a device declares only the look/behaviour
-# values it wants different) and resolve the LED ring size. Runs at import, before
-# lifespan builds RGBService and before any route reads a preset. No file → base
-# presets verbatim and the default LED count.
+# Merge presets.json onto base tables at import, before any route reads a preset.
 _led_count = _boot.led_count
 logger.info(
     "Safety policy: device=%s max_brightness=%s light_quiet=%s audio_quiet=%s",
@@ -1255,11 +1024,7 @@ def _safety_view(p):
     return out or None
 
 
-# Thermal fail-safe monitor — a background daemon that reads SoC temperature and,
-# when `thermal` bounds are declared, raises a health event + stops discretionary
-# motion (tracking) on over-temp, clearing on cool-down (hysteresis). Only started
-# when _safety.thermal is set (presence-driven; off otherwise). The CPU heat isn't
-# the servo's fault, so we don't freeze idle — same posture as the network reflex.
+# Thermal monitor only when `thermal` bounds are declared; stops tracking, not idle.
 _thermal_stop = threading.Event()
 
 
@@ -1299,13 +1064,8 @@ def _thermal_view():
         "max_temp_c": _safety.thermal.max_temp_c,
     }
 
-# Board gate: refuse to boot on hardware this device doesn't declare in
-# ROBOT.md `boards`. Wrong/unknown board → wrong pin maps → fail loud before we
-# mount any actuating route (raw match, so the default_board fallback can't mask
-# an unsupported board).
-# Simulation has no physical wiring and uses the inert sim board. A remote
-# body may instead explicitly declare HAL_BOARD=host while keeping its real
-# network driver. Neither board initializes local GPIO peripherals.
+# Board gate: fail loud on a board not declared in ROBOT.md `boards` (raw match).
+# Simulation and HAL_BOARD=host never initialize local GPIO.
 _board_id = _boot.board
 logger.info("Board gate: device=%s board=%s declared=%s", _resolve_device_type(), _board_id, _profile.boards)
 
@@ -1346,19 +1106,13 @@ _ttp223_config = (
 
 from hal.board.device import plan_mounts
 
-# _declared (full surface incl. `speaker`) resolved at the top of this file,
-# before the driver imports it gates. Availability = driver importable.
 _available = {r: _route_available.get(r, False) for r in _declared}
 _plan = plan_mounts(_declared, _available)
 logger.info(
     "Declaration-driven mount plan: device=%s mounted=%s skipped=%s failed_required=%s",
     _resolve_device_type(), _plan.mounted, _plan.skipped, _plan.failed_required,
 )
-# Spec rule #3: a required capability whose driver can't import is a real
-# fault — abort loudly in EVERY mode. Dev runs on real Pi hardware too, so
-# there is no off-hardware case to spare. Optional routes simply skip; a
-# declared route HAL has no router for is treated as unavailable (→ fail if
-# required, skip if optional).
+# A required route without an importable driver aborts boot in every mode.
 if not _plan.ok:
     raise RuntimeError(
         f"Device '{_resolve_device_type()}' requires routes whose drivers are "
@@ -1368,10 +1122,7 @@ if not _plan.ok:
 for _name in _plan.mounted:
     app.include_router(_ROUTERS_BY_NAME[_name])
 
-# Self-hosted Swagger UI assets. The OS server nginx CSP keeps `script-src 'self'` so
-# the bundled JS/CSS load from this same origin (no cdn.jsdelivr.net). The
-# /docs handler below serves the HTML; its <script> tags reference these
-# files via relative paths.
+# Self-hosted Swagger assets (no CDN) for the strict CSP.
 _STATIC_DIR = Path(__file__).parent / "static"
 if _STATIC_DIR.is_dir():
     app.mount("/static", StaticFiles(directory=str(_STATIC_DIR)), name="static")
@@ -1381,15 +1132,7 @@ else:
 
 @app.get("/docs", include_in_schema=False)
 def custom_swagger_ui() -> HTMLResponse:
-    """Serve Swagger UI with no inline <script>.
-
-    Built-in `app.docs_url` injects an inline `<script>const ui = SwaggerUIBundle(...)</script>`
-    block which forces the OS server nginx CSP to allow `'unsafe-inline'` for scripts.
-    Externalising the init into `/static/swagger-init.js` lets the CSP stay
-    strict (`script-src 'self'`). Relative URLs (`./openapi.json`,
-    `./static/...`) make the page work both via the OS server proxy iframe and
-    direct loopback access.
-    """
+    """Serve Swagger UI without inline <script> so the CSP can stay `script-src 'self'`."""
     html = (
         "<!doctype html>\n"
         '<html lang="en">\n'
@@ -1433,12 +1176,7 @@ def simulator_reference():
 
 @app.get("/simulator/cad", include_in_schema=False)
 def simulator_cad():
-    """Serve the Lamp's checked-in static CAD mesh for the local viewer.
-
-    STL carries a static assembly only. It intentionally is not transformed by
-    live servo positions: the repository has no joint hierarchy or axes with
-    which to make such a claim truthfully.
-    """
+    """Serve the Lamp's static CAD mesh (STL) for the local viewer."""
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
     mesh = Path(_devices_dir()) / "lamp" / "hardware" / "cad" / "stl" / "lamp.stl"
@@ -1452,13 +1190,7 @@ def simulator_cad():
 
 @app.get("/simulator/pixels", include_in_schema=False)
 def simulator_pixels():
-    """Every pixel on the ring, right now, for the local viewer.
-
-    /led/color cannot drive a visualiser: while an effect runs it reports the
-    effect's static base color, and otherwise it reads pixel 0 alone. Neither
-    shows what the ring is actually doing, so breathing, candle and rainbow all
-    render as one unchanging color. This reads the strip buffer itself.
-    """
+    """Every pixel on the ring right now, read from the strip buffer, for the local viewer."""
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
     service = state.rgb_service
@@ -1478,13 +1210,7 @@ def simulator_pixels():
 
 @app.get("/simulator/rig", include_in_schema=False)
 def simulator_rig():
-    """Serve the Lamp's rigged CAD model for the local viewer.
-
-    Unlike the STL assembly this GLB carries an armature: five joint nodes named
-    exactly as HAL names them (base_yaw, base_pitch, elbow_pitch, wrist_pitch,
-    wrist_roll), so live joint state can drive the real geometry instead of a
-    stand-in made of boxes.
-    """
+    """Serve the Lamp's rigged GLB (joint nodes named like HAL joints) for the local viewer."""
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
     model = Path(_devices_dir()) / "lamp" / "hardware" / "cad" / "glb" / "lamp.glb"
@@ -1498,23 +1224,12 @@ def simulator_rig():
 
 @app.get("/simulator/state", include_in_schema=False)
 def simulator_state():
-    """Expose the local UI mode and the rig's zero pose; changes no state.
-
-    The GLB is modelled in the same pose the CAD assembly is: the lamp standing
-    as it does when aimed at center. So the viewer must read joint angles as
-    offsets from the center preset, not from zero, or every pose comes out bent
-    twice. Serving the preset (rather than hardcoding it in the page) keeps the
-    two from drifting when the per-device presets change.
-    """
+    """Expose the local UI mode and the rig's zero pose (the center preset); changes no state."""
     if not _simulation or _profile.id != "lamp":
         return HTMLResponse(status_code=404, content="Lamp simulator is unavailable")
     from hal.presets import AIM_CENTER, AIM_PRESETS
 
-    # `media` stays the effective mode (what is really running) so the page and
-    # any script reading it can never be told "host" while looking at the
-    # virtual scene. It degrades to "virtual" as soon as either subsystem does;
-    # `media_camera` / `media_audio` give the per-subsystem truth and
-    # `media_reasons` the actionable why.
+    # `media` is the effective mode; `media_camera` / `media_audio` / `media_reasons` give details.
     effective = (
         "host"
         if state.sim_media_camera == "host" and state.sim_media_audio == "host"
@@ -1536,16 +1251,10 @@ from hal.server_support.http_security import (
     request_logging_middleware,
 )
 
-# Middleware registration order preserved exactly as before the extraction to
-# hal/http_security.py: ProxyPrefix first (sets root_path from
-# X-Forwarded-Prefix), then the local-only / same-origin / bearer gate, then
-# request logging. Identical Starlette stack — only the bodies moved out.
+# Order matters: ProxyPrefix, then the access gate, then request logging.
 app.add_middleware(ProxyPrefixMiddleware)
 app.middleware("http")(local_only_middleware)
 app.middleware("http")(request_logging_middleware)
-
-
-# --- System endpoints (stay in server.py) ---
 
 
 @app.get("/version", tags=["System"])
@@ -1556,8 +1265,7 @@ def version():
 
 @app.get("/device", tags=["System"])
 def device():
-    """This device's identity from ROBOT.md (id/name/type/schema) plus the
-    board the runtime resolved and the capability routes it mounted."""
+    """This device's identity from ROBOT.md plus the resolved board and mounted routes."""
     return {
         "id": _profile.id,
         "name": _profile.name,
@@ -1568,13 +1276,10 @@ def device():
         "inputs": {"mpr121": _mpr121_config is not None},
         "boards": _profile.boards,
         "safety_ref": _profile.safety_ref,
-        # Resolved, enforced safety bounds (not just the ref): brightness ceiling +
-        # quiet-hours windows. null when the device declares no machine bounds.
+        # Enforced safety bounds; null when none are declared.
         "safety": _safety_view(_safety),
         "memory": {"backend": _profile.memory_backend} if _profile.memory_backend else None,
         "routes": sorted(_plan.mounted),
-        # Declared implementation families (informational hardware manifest; the
-        # route is the contract, the driver behind it is free to change).
         "drivers": {g: c.driver for g, c in _profile.capabilities.items() if c.driver},
     }
 

@@ -1,18 +1,4 @@
-"""Pending Harness updates and the policy for what one spoken snapshot holds.
-
-os-server posts every Harness result, question and progress line here instead
-of speaking it. The announcer takes a snapshot whenever the device is free:
-
-- A result or question is always spoken. It supersedes queued progress of the
-  same run, and progress of other runs is not worth speaking next to it.
-- A snapshot of only progress is spoken with probability HARNESS_PROGRESS_SPEAK_P,
-  at most once per run per HARNESS_PROGRESS_MIN_GAP_S, never within
-  HARNESS_PROGRESS_QUIET_START_S of the request, and only its newest line.
-- Anything left unspoken past its max age is dropped; Web Chat and the Harness
-  app keep the full text.
-
-Pure state + policy (injectable clock and random source) so tests need no audio.
-"""
+"""Pending Harness updates and the policy for what one spoken snapshot holds."""
 
 import random
 import re
@@ -24,7 +10,6 @@ from typing import Callable
 from hal import config as hal_config
 
 KINDS = ("result", "question", "progress")
-# Trailing unix-ms creation stamp of a device run id ("device-chat-7-1788422075499").
 _RUN_ID_STAMP = re.compile(r"-(\d{13})$")
 
 
@@ -64,9 +49,7 @@ class HarnessUpdateQueue:
         self._wall_clock = wall_clock
         self._items: list[HarnessUpdate] = []
         self._cond = threading.Condition()
-        # run_id -> clock() when that run was first seen (runs without a stamp).
         self._first_seen: dict[str, float] = {}
-        # run_id -> clock() of its last spoken progress line.
         self._last_progress: dict[str, float] = {}
 
     def put(self, update: HarnessUpdate) -> None:
@@ -78,11 +61,7 @@ class HarnessUpdateQueue:
             self._cond.notify_all()
 
     def requeue(self, snapshot: Snapshot) -> None:
-        """Return an unspoken snapshot's results/questions for the next one.
-
-        Progress is not returned: by the time the user has finished talking it
-        is stale, and it already spent its per-run budget.
-        """
+        """Return an unspoken snapshot's results/questions for the next one."""
         with self._cond:
             keep = [item for item in snapshot.items if item.kind != "progress"]
             self._items[:0] = keep
@@ -127,12 +106,7 @@ class HarnessUpdateQueue:
                     del table[run_id]
 
     def take_snapshot(self, *, progress_renderable: bool) -> Snapshot | None:
-        """Drain the queue into one snapshot to speak, or None if nothing qualifies.
-
-        progress_renderable says whether a progress line could be spoken right
-        now without reconnecting anything; when False queued progress is
-        dropped without consuming its per-run budget.
-        """
+        """Drain the queue into one snapshot to speak, or None if nothing qualifies."""
         with self._cond:
             now = self._clock()
             self._prune_locked(now)
@@ -141,7 +115,6 @@ class HarnessUpdateQueue:
                 return None
             important = [item for item in items if item.kind != "progress"]
             if important:
-                # Questions first: they need an answer, results only a hearing.
                 important.sort(key=lambda item: (item.kind != "question", item.received_at))
                 return Snapshot(items=tuple(important))
             if not progress_renderable:

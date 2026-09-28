@@ -78,7 +78,6 @@ func TestCodingCommandsFlow(t *testing.T) {
 	ctx := context.Background()
 	chat := "9"
 
-	// /sessions lists the folder; nothing selected yet → not device-main.
 	if !s.handleTelegramCoding(ctx, "/sessions", chat) {
 		t.Fatal("/sessions should be handled")
 	}
@@ -86,7 +85,6 @@ func TestCodingCommandsFlow(t *testing.T) {
 		t.Fatalf("/sessions DM missing folder/summary: %q", dm)
 	}
 
-	// /use 1 selects it and persists.
 	s.handleTelegramCoding(ctx, "/use 1", chat)
 	if dm := rig.waitDM(t); !strings.Contains(dm, "In session") {
 		t.Fatalf("/use DM = %q", dm)
@@ -96,7 +94,6 @@ func TestCodingCommandsFlow(t *testing.T) {
 		t.Fatalf("selection = %+v ok=%v", tgt, ok)
 	}
 
-	// A plain message now routes to the coding runner (not device-main).
 	if !s.handleTelegramCoding(ctx, "add undo button", chat) {
 		t.Fatal("plain msg with active selection should be handled")
 	}
@@ -111,12 +108,10 @@ func TestCodingCommandsFlow(t *testing.T) {
 	if dm := rig.waitDM(t); !strings.Contains(dm, "ok reply for add undo button") {
 		t.Fatalf("reply DM = %q", dm)
 	}
-	// The new session id from the runner was captured.
 	if tgt, _ := s.getCodingTarget(chat); tgt.SessionID != "new-sid-1234" {
 		t.Errorf("session id not updated: %+v", tgt)
 	}
 
-	// /device clears the selection → plain msg falls through to device-main.
 	s.handleTelegramCoding(ctx, "/device", chat)
 	rig.waitDM(t)
 	if s.handleTelegramCoding(ctx, "hi lamp", chat) {
@@ -132,12 +127,10 @@ func TestResumeCommand(t *testing.T) {
 	ctx := context.Background()
 	chat := "9"
 
-	// /resume with no arg lists sessions (like /sessions).
 	s.handleTelegramCoding(ctx, "/resume", chat)
 	if dm := rig.waitDM(t); !strings.Contains(dm, "/root/test") {
 		t.Fatalf("/resume list DM = %q", dm)
 	}
-	// /resume <n> picks the session (like /use <n>).
 	s.handleTelegramCoding(ctx, "/resume 1", chat)
 	if dm := rig.waitDM(t); !strings.Contains(dm, "In session") {
 		t.Fatalf("/resume 1 DM = %q", dm)
@@ -163,7 +156,7 @@ func TestCodingSelectionPersists(t *testing.T) {
 
 func TestCodingLiveTUIGuard(t *testing.T) {
 	rig := newCodingRig(t, t.TempDir())
-	rig.svc.folderHasLiveClaude = func(string) bool { return true } // TUI holds the folder
+	rig.svc.folderHasLiveClaude = func(string) bool { return true }
 	ran := false
 	rig.svc.codingRunner = func(context.Context, string, string, string) (string, string, error) {
 		ran = true
@@ -186,7 +179,6 @@ func TestParseClaudeJSONResult(t *testing.T) {
 		t.Fatalf("single: res=%q sid=%q err=%v", res, sid, isErr)
 	}
 
-	// Noise line before the result object → fallback scan picks the object.
 	noisy := []byte("boot noise\n" + string(single))
 	if res, sid, _ := parseClaudeJSONResult(noisy); res != "done" || sid != "sid-9" {
 		t.Fatalf("noisy: res=%q sid=%q", res, sid)
@@ -207,7 +199,6 @@ func TestChunkString(t *testing.T) {
 	if len(parts) < 2 {
 		t.Fatalf("want >=2 chunks, got %d", len(parts))
 	}
-	// Reassembled chunks equal the original (no data lost).
 	if strings.Join(parts, "") != long {
 		t.Fatal("chunks do not reassemble to the original")
 	}

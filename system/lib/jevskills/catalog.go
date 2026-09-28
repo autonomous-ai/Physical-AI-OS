@@ -20,7 +20,6 @@ type skill struct{ Name, Description, Path, Dir, Content string }
 var skillName = regexp.MustCompile(`^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,127}$`)
 
 // readRegular refuses symlinks, pipes/devices, invalid UTF-8 and oversized files.
-// Runtime adapters only call this on local OS-managed config/skill directories.
 func readRegular(path string, limit int64) ([]byte, error) {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -158,9 +157,7 @@ func frontmatter(content string) (map[string]any, bool) {
 	return front, true
 }
 
-// A text preload cannot reproduce native subagent contexts, dynamic expansion,
-// tool allowlists or dependency filters. Leave those skills to the native loader.
-// Unknown frontmatter is deliberately excluded rather than silently bypassed.
+// simpleSkill reports whether a skill can be text-preloaded; unknown frontmatter excludes it.
 func simpleSkill(front map[string]any, content string) bool {
 	if strings.Contains(content, "!`") || strings.Contains(content, "$ARGUMENTS") || strings.Contains(content, "${") {
 		return false

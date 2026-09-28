@@ -36,11 +36,9 @@ async def _led_lifespan(app):
             state.rgb_service = service
             logger.info("[startup] led_ready elapsed_ms=%.0f", (time.perf_counter() - _started) * 1000)
         except Exception:
-            # Full startup retains the existing driver validation/retry path.
             logger.exception("Early LED initialization failed")
     yield
-    # Ownership passes to the full lifespan; the dispatcher cleans up here
-    # only when full startup never entered successfully.
+    # Ownership passes to the full lifespan; clean up here only if full startup never entered.
 
 
 _bootstrap = FastAPI(lifespan=_led_lifespan, docs_url=None, redoc_url=None, openapi_url=None)

@@ -6,11 +6,7 @@ import (
 	"testing"
 )
 
-// TestWithLockSave_NormalizesBaseURLs verifies that WithLockSave always
-// normalizes LLMBaseURL/STTBaseURL/TTSBaseURL before writing to disk, so a
-// caller that forgets to call urlnorm.NormalizeBaseURL (e.g. a new agent
-// presync that strips /v1 from ANTHROPIC_BASE_URL then writes it back) cannot
-// persist a de-normalized URL to config.json.
+// TestWithLockSave_NormalizesBaseURLs: WithLockSave never persists a de-normalized base URL.
 func TestWithLockSave_NormalizesBaseURLs(t *testing.T) {
 	dir := t.TempDir()
 	origPath := configPath
@@ -19,9 +15,6 @@ func TestWithLockSave_NormalizesBaseURLs(t *testing.T) {
 
 	c := &Config{}
 
-	// Simulate what claudecode/presync.sh does: strips /v1 from llm_base_url
-	// before writing ANTHROPIC_BASE_URL. A migration that reads it back and
-	// saves it without normalizing would land the stripped URL on disk.
 	stripped := "https://campaign-api.autonomous.ai/api/v1/ai"
 	normalized := "https://campaign-api.autonomous.ai/api/v1/ai/v1"
 
@@ -43,7 +36,6 @@ func TestWithLockSave_NormalizesBaseURLs(t *testing.T) {
 		t.Errorf("TTSBaseURL = %q, want %q", c.TTSBaseURL, normalized)
 	}
 
-	// Also verify the on-disk JSON reflects the normalized URL.
 	data, err := os.ReadFile(configPath)
 	if err != nil {
 		t.Fatalf("read config.json: %v", err)

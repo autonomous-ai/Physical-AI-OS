@@ -16,18 +16,8 @@ import (
 	"go.autonomous.ai/os/system/statusled"
 )
 
-// ProvideGateway returns the AgentGateway implementation. The backend is chosen
-// by config.AgentRuntime; when that is unset it falls back to the device's
-// declared gateway.default (robots/<type>/ROBOT.md), then OpenClaw.
-//
-// "openclaw" (default): persistent WebSocket to the OpenClaw daemon at
-// 127.0.0.1:18789. See runtimes/openclaw and docs/os-server.md.
-//
-// "hermes": HTTP+SSE client against the Hermes API server (default
-// 127.0.0.1:8642). See runtimes/hermes and docs/agentic/hermes.md.
-// gatewayTransport is the wire transport each runtime uses. The transport is a
-// property of the runtime, not an independent knob, so ROBOT.md
-// `gateway.protocol` is only validated against this (a consistency guard).
+// gatewayTransport is the wire transport each runtime speaks; ROBOT.md
+// gateway.protocol is only validated against it.
 var gatewayTransport = map[string]string{
 	"openclaw":   "websocket",
 	"hermes":     "sse",
@@ -35,16 +25,13 @@ var gatewayTransport = map[string]string{
 	"codex":      "websocket",
 	"claudecode": "websocket",
 	"opencode":   "websocket",
-	// "remote" is Hermes-over-LAN — the device runs the Hermes client against
-	// a server on another machine, so the transport is the same as "hermes".
+	// "remote" is Hermes-over-LAN, same transport as "hermes".
 	"remote": "sse",
 }
 
+// ProvideGateway returns the AgentGateway for the resolved runtime (see resolveRuntime).
 func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) domain.AgentGateway {
-	// Consistency guard: a device that declares gateway.protocol should match the
-	// transport its gateway.default runtime actually speaks. Warn (don't fail) on
-	// a contradiction — it can't drive anything, but it flags a misleading
-	// ROBOT.md (e.g. default: hermes with protocol: websocket).
+	// Warn only: gateway.protocol never drives transport selection.
 	devType := cfg.DeviceTypeOrDefault()
 	if proto := device.GatewayProtocol(devType); proto != "" {
 		if def := device.GatewayDefault(devType); def != "" {
@@ -68,9 +55,8 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 		})
 		return hermes.ProvideService(cfg, bus, sled)
 	case "remote":
-		// "remote" is Hermes-over-LAN: same client, different BaseURL/APIKey.
-		// Applies the override BEFORE ProvideService so client.go + health.go
-		// (which read the package vars at request time) hit the external server.
+		// Endpoint override must precede ProvideService; the client reads the
+		// package vars at request time.
 		hermes.ApplyExternalEndpoint(cfg.AgentRemoteURL, cfg.AgentRemoteToken)
 		logBackendBanner("HERMES-REMOTE", map[string]string{
 			"base_url":     hermes.BaseURL,
@@ -123,13 +109,9 @@ func ProvideGateway(cfg *config.Config, bus *monitor.Bus, sled *statusled.Servic
 	}
 }
 
-// resolveRuntime returns the effective agent runtime ("openclaw" or "hermes"), the raw value, and the source.
-// Prefers config.agent_runtime > f_r_default_agent > ROBOT.md gateway.default
-// > "openclaw" (default). The last two are resolved by device.ResolveDefaultAgent
-// — the SAME function device.SeedAgentRuntimeFromGateway uses — so this can never
-// disagree with what gets persisted to config.json a moment later at boot
-// (system/server/wire_gen.go constructs the gateway via this function before
-// device.ProvideService runs the seed; see ResolveDefaultAgent's doc comment).
+// resolveRuntime returns the effective runtime, the raw value and its source.
+// Order: config.agent_runtime > device.ResolveDefaultAgent > "openclaw". It must share
+// ResolveDefaultAgent with the boot seed so it never disagrees with the persisted value.
 func resolveRuntime(cfg *config.Config) (effective, raw, source string) {
 	raw = cfg.AgentRuntime
 	source = "config.agent_runtime"

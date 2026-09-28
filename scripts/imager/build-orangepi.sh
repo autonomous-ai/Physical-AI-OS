@@ -1,35 +1,15 @@
 #!/bin/bash
-# =============================================================================
-# build-orangepi.sh — Golden Image Builder for OrangePi 4 Pro v2 (A733/sun60iw2)
-# =============================================================================
-#
-# Source image: Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147.7z
-# (vendor "user-built" image from orangepi-xunlong/orangepi-build, hosted on
-# Google Drive folder 1AzF-uTwA328qDFPaVBaKpiP4VjZjkmbS — there is no public
-# mirror; the dev team uploaded it themselves).
-#
-# Flow:
-#   Phase 0  download .7z from Google Drive (cached in /input/)
-#   Phase 1  extract .img, expand to OUT_IMG_SIZE, partprobe, resize2fs
-#   Phase 2  chroot apt install + write systemd units + helper scripts + configs
-#   Phase 3  chroot OTA bake — backend binaries + hal + web UI + buddy
-#   Phase 4  install resize-once.service for first-boot SD-fill expand
-#   Phase 5  unmount + compress → /output/golden-opi.img.xz
-#
-# Run via Makefile (Docker container, --privileged for losetup/mount).
-# =============================================================================
+# Golden image builder for OrangePi 4 Pro v2 (A733); phases: source, expand, chroot, OTA bake, resize-once, compress.
+# Run via the imager Makefile (Docker, --privileged for losetup/mount).
 
 set -euo pipefail
 
-# ── config ───────────────────────────────────────────────────────────────────
 PI_HOSTNAME="autonomous"
 PI_TIMEZONE="America/New_York"
 USERNAME="system"
 PASSWORD="12345"
 OUT_IMG_SIZE="${OUT_IMG_SIZE:-14G}"
-# OTA metadata URL — per-deployment value, passed in by the Makefile (-e). No
-# hardcoded default: fail fast if the caller did not provide one. Baked into the
-# image's /root/config/bootstrap.json.
+# Required; baked into /root/config/bootstrap.json.
 OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
 OTA_SIGNING_PUBLIC_KEY="${OTA_SIGNING_PUBLIC_KEY:-}"
 AP_BAND="${AP_BAND:-2.4}"
@@ -40,46 +20,23 @@ OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.9.3}"
 # Release v2026.9.7 reports Hermes 0.21.1; pin the image checkout only.
 HERMES_VERSION="0.21.1"
 HERMES_COMMIT="2237be355906fbe6065ce1815711eee52b2d646e"
-# Device class this golden image is for — bakes robots/<type>/{DEVICE,SOUL}.md
-# so one DEVICE_TYPE = one golden image. Forwarded by the Makefile via docker -e.
-# REQUIRED, no default — a golden image must declare which device class it is.
+# Required; one device type per image.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE is required — build via 'make build DEVICE_TYPE=...'}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 
-# Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
-# by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
-# ROBOT.md gateway.default, and — unlike gateway.default — it survives Factory
-# Reset (not in factoryreset.go's deviceWipePaths). So an image whose
-# DEFAULT_AGENT was set here re-seeds to the SAME default after an F_R, instead
-# of falling back to the device-type-wide ROBOT.md value shared by every
-# build. OPTIONAL — unset (the default) bakes nothing, and behavior is 100%
-# unchanged: seeding falls through to ROBOT.md gateway.default exactly as
-# before. Also gates SSH for intern-v2 — see the "enable services" stage below.
-#
-# intern-v2 ships in 3 physical case colors, each defaulting to one agent —
-# blue=hermes, orange=openclaw, black=claudecode (Developer Edition). The case
-# color itself is COSMETIC and carries no logic of its own (there used to be a
-# separate CASE_COLOR var here — removed: color and SSH policy were two
-# different knobs an operator had to remember to keep in sync, and a
-# blue-cased build with the wrong CASE_COLOR would silently ship with the
-# wrong SSH state). DEFAULT_AGENT alone now drives both the seeded runtime AND
-# the SSH policy, so there is exactly one thing to set per case color and no
-# way for the two to disagree.
+# Optional; bakes /root/config/f_r_default_agent (survives Factory Reset) and drives intern-v2 SSH policy.
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
-# Optional assembly within the device package; empty/standard keeps legacy defaults.
 VARIANT="${VARIANT:-}"
 if [[ -n "$VARIANT" && ! "$VARIANT" =~ ^[a-z][a-z0-9_-]{0,63}$ ]]; then
   echo "Invalid VARIANT: expected a lowercase name (1-64 characters)" >&2
   exit 1
 fi
 
-# Google Drive file ID for the bookworm server image. Override via env var when
-# the dev team rotates the .7z (new Orange Pi release).
+# Override when the vendor .7z rotates.
 OPI_FILE_ID="${OPI_FILE_ID:-1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn}"
 OPI_FILE_NAME="Orangepi4pro_1.0.6_debian_bookworm_server_linux5.15.147"
 
-# Per-device pre-built base image. lamp and intern-v2 ship hardware-team-baked
-# .img.xz in input/<device>/. Other device types fall back to Google Drive stock.
+# lamp and intern-v2 use a hardware-team base image from input/<device>/; others use the stock image.
 case "${DEVICE_TYPE}" in
   lamp)
     DEVICE_BASE_IMG="${DEVICE_BASE_IMG:-/input/lamp/golden-opi-dev.img.xz}"
@@ -122,11 +79,7 @@ if [ -n "${DEFAULT_AGENT}" ]; then
   esac
 fi
 
-# CASE_COLOR was removed (see the DEFAULT_AGENT comment above) — fail fast
-# instead of silently ignoring it. Without this guard, an old invocation like
-# `CASE_COLOR=blue` with no DEFAULT_AGENT would previously close SSH; today it
-# would silently do nothing and SSH would ship OPEN instead — the opposite of
-# what the caller asked for, with no error to catch it.
+# CASE_COLOR was removed; fail fast so an old invocation doesn't silently ship SSH open.
 if [ -n "${CASE_COLOR:-}" ]; then
   err "CASE_COLOR is removed — set DEFAULT_AGENT=hermes|openclaw|claudecode instead (SSH now follows DEFAULT_AGENT directly)"
 fi
@@ -142,15 +95,12 @@ retry() {
   return 1
 }
 
-# ── prereq check ─────────────────────────────────────────────────────────────
 for bin in 7z losetup parted resize2fs e2fsck mkfs.ext4 qemu-aarch64-static gdown xz growpart; do
   command -v "$bin" >/dev/null || err "missing tool: $bin (check Dockerfile)"
 done
 mkdir -p /input /output "${OUT_DIR}" /work "${MNT}"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 0 — Source base image: per-device pre-built or Google Drive stock
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 0: source base image.
 if [ -n "${DEVICE_BASE_IMG:-}" ]; then
   log "Base image for ${DEVICE_TYPE}: ${DEVICE_BASE_IMG}"
   [ -f "${DEVICE_BASE_IMG}" ] || err "Base image not found: ${DEVICE_BASE_IMG} — place it at imager/input/${DEVICE_TYPE}/"
@@ -192,9 +142,7 @@ MSG
   fi
 fi
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 1 — Extract (stock only), expand to OUT_IMG_SIZE, partprobe, resize2fs
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 1: extract, expand, resize2fs.
 if [ -z "${DEVICE_BASE_IMG:-}" ]; then
   log "Extracting ${SRC_7Z}…"
   rm -f /work/*.img /work/*.sha
@@ -217,11 +165,7 @@ sleep 1
 log "Resizing partition 1 to fill image…"
 growpart "${LOOP_DEV}" 1 || parted -s "${LOOP_DEV}" resizepart 1 100%
 
-# Docker Desktop on Mac (and minimal containers in general) ship without udev
-# so /dev/loopXp1 device nodes don't appear after partition resize. Read the
-# new partition byte offset + size via parted, then attach a second loop
-# device pointing directly at the partition. Bypasses kernel partition device
-# node creation entirely.
+# No udev in Docker Desktop, so /dev/loopXp1 never appears; attach the partition by offset.
 PART_START=$(parted -s "${LOOP_DEV}" unit B print | awk '/^ 1/{gsub(/B/,""); print $2}')
 PART_SIZE=$( parted -s "${LOOP_DEV}" unit B print | awk '/^ 1/{gsub(/B/,""); print $4}')
 log "Partition 1: start=${PART_START} size=${PART_SIZE}"
@@ -236,13 +180,9 @@ resize2fs "${PART}"
 log "Mounting at ${MNT}…"
 mount "${PART}" "${MNT}"
 
-# The vendor MOTD update count scans apt metadata at every boot. Let hardware
-# become ready before that optional disk-heavy scan; daily updates are untouched.
 python3 "$(dirname "${BASH_SOURCE[0]}")/lib/defer_orangepi_update_count.py" --root "${MNT}"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 2 — Chroot: apt install, Node, OpenClaw, uv, systemd units, configs
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 2: chroot provisioning.
 log "Setting up chroot…"
 cp /usr/bin/qemu-aarch64-static "${MNT}/usr/bin/qemu-aarch64-static"
 mount --bind /proc "${MNT}/proc"
@@ -251,7 +191,6 @@ mount --bind /dev  "${MNT}/dev"
 cp -f "${MNT}/etc/resolv.conf" "${MNT}/etc/resolv.conf.bak" 2>/dev/null || true
 cp -f /etc/resolv.conf "${MNT}/etc/resolv.conf"
 
-# Suppress debconf interactive prompts during apt installs.
 chroot "${MNT}" debconf-set-selections <<'DBCONF' || true
 debconf debconf/frontend select Noninteractive
 keyboard-configuration keyboard-configuration/layoutcode string us
@@ -260,7 +199,7 @@ cat > "${MNT}/etc/apt/apt.conf.d/99-${DEVICE_TYPE}-silent" <<'APT'
 Dpkg::Use-Pty "false";
 APT
 
-# Pre-seed env passed into chroot heredoc — unquoted heredoc so ${VAR} expands.
+# Unquoted heredoc so outer ${VAR} expand inside the chroot.
 chroot "${MNT}" /bin/bash <<CHROOT_STAGES
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -1193,16 +1132,11 @@ fi
 echo "[stage] chroot Phase 2 complete"
 CHROOT_STAGES
 
-# ── install canonical software-update ────────────────────────────────────────
-# The on-device OTA updater is one file in the repo (scripts/provision/
-# software-update), staged into /input by the imager Makefile and installed
-# here from the host — NOT written by heredoc inside the chroot. setup.sh
-# inlines the same file at release time, so all fleets carry one version.
+# Install the canonical OTA updater from the repo (same file setup.sh inlines).
 echo "[stage] install /usr/local/bin/software-update (canonical)"
 [ -f /input/software-update ] || err "/input/software-update missing — run via 'make build' (it stages the file)"
 install -m 0755 /input/software-update "${MNT}/usr/local/bin/software-update"
 
-# Read runtime versions captured inside chroot (shell vars don't propagate out).
 BAKED_OPENCLAW_VERSION=$(cat "${MNT}/tmp/baked-openclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
 BAKED_HERMES_VERSION=$(cat "${MNT}/tmp/baked-hermes-version" 2>/dev/null | tr -d '[:space:]' || echo "unknown")
 BAKED_CODEX_VERSION=$(cat "${MNT}/tmp/baked-codex-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
@@ -1210,9 +1144,7 @@ BAKED_CLAUDECODE_VERSION=$(cat "${MNT}/tmp/baked-claudecode-version" 2>/dev/null
 BAKED_PICOCLAW_VERSION=$(cat "${MNT}/tmp/baked-picoclaw-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
 BAKED_OPENCODE_VERSION=$(cat "${MNT}/tmp/baked-opencode-version" 2>/dev/null | tr -d '[:space:]' || echo "unbaked")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 3 — OTA bake: backend binaries + hal + web UI + buddy
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 3: OTA bake.
 log "Phase 3 — OTA bake (OS binaries from metadata.json)"
 
 chroot "${MNT}" /bin/bash <<OVERLAY_STAGES
@@ -1425,7 +1357,6 @@ MANIFEST
 
 OVERLAY_STAGES
 
-# Capture OTA versions for the build manifest before they get wiped by Phase 5.
 BAKED_WEB_VER=""; BAKED_OS_SERVER_VER=""; BAKED_BOOTSTRAP_VER=""; BAKED_HAL_VER=""; BAKED_BUDDY_VER=""
 if [ -f "${MNT}/tmp/ota-versions.env" ]; then
   # shellcheck disable=SC1090
@@ -1438,8 +1369,6 @@ if [ -f "${MNT}/tmp/ota-versions.env" ]; then
   rm -f "${MNT}/tmp/ota-versions.env"
 fi
 
-# Write the build manifest. Makefile `upload` target reads this to populate
-# the per-release note with OTA versions actually baked in.
 SRC_7Z_SHA=$(sha256sum "${SRC_7Z}" 2>/dev/null | cut -d' ' -f1 || echo unknown)
 cat > /output/manifest-opi.json <<MANIFEST_JSON
 {
@@ -1464,10 +1393,6 @@ cat > /output/manifest-opi.json <<MANIFEST_JSON
 MANIFEST_JSON
 log "Manifest: /output/manifest-opi.json"
 
-# Bake a build snapshot into the image so anyone SSH-ing in can see exactly
-# what was flashed: when, from which git commit, what the hardware team's
-# manifest contained, and what OTA metadata was live at build time.
-# Check with: cat /etc/autonomous-build.json | jq .
 METADATA_FOR_SNAPSHOT="${MNT}/tmp/metadata-baked.json"
 HW_MANIFEST_FILE="/input/${DEVICE_TYPE}/manifest-opi-dev.json"
 if [ -f "${METADATA_FOR_SNAPSHOT}" ]; then
@@ -1501,9 +1426,7 @@ else
   log "WARN: skipping build snapshot — metadata missing"
 fi
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 4 — Install resize-once.service (first-boot SD-fill expand)
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 4: resize-once.service.
 log "Phase 4 — resize-once (first-boot expand)"
 
 cat > "${MNT}/usr/local/bin/resize-once" <<'RESIZE_EOF'
@@ -1557,20 +1480,16 @@ ExecStart=/usr/local/bin/resize-once
 WantedBy=multi-user.target
 UNIT
 
-# Manually link into wants (systemctl enable inside chroot also works, but we
-# already exited the chroot — symlink is the equivalent + no DBus needed).
+# Enable via symlink; we are outside the chroot (no DBus).
 mkdir -p "${MNT}/etc/systemd/system/multi-user.target.wants"
 ln -sf /etc/systemd/system/resize-once.service \
   "${MNT}/etc/systemd/system/multi-user.target.wants/resize-once.service"
 
-# ─────────────────────────────────────────────────────────────────────────────
-# Phase 5 — Restore resolv.conf, unmount, compress
-# ─────────────────────────────────────────────────────────────────────────────
+# Phase 5: restore resolv.conf, unmount, compress.
 log "Phase 5 — finalize"
 
 mv -f "${MNT}/etc/resolv.conf.bak" "${MNT}/etc/resolv.conf" 2>/dev/null || true
 
-# Kill any stale chroot processes (apt post-install spawns dbus/sshd sometimes).
 for pid in $(lsof -t +D "${MNT}" 2>/dev/null || true); do
   kill -9 "$pid" 2>/dev/null || true
 done
@@ -1583,14 +1502,12 @@ umount "${MNT}/dev"
 umount "${MNT}/sys"
 umount "${MNT}/proc"
 
-# Flush + unmount root before xz so the on-disk filesystem is consistent.
+# Flush + unmount before xz so the filesystem is consistent.
 sync
 umount "${MNT}"
 losetup -d "${LOOP_DEV}"; LOOP_DEV=""
 
-# COMPRESS=0 skips the .xz step (single-threaded under Docker's ~2 GB memory
-# cap, so it can take longer than the whole build). The raw .img is complete
-# and flashable via `make sd-card-flash-raw`.
+# COMPRESS=0 skips xz (slow under Docker's memory cap); the raw .img is flashable.
 if [ "${COMPRESS:-1}" = "0" ]; then
   log "DONE: ${OUT_IMG} (COMPRESS=0, skipped .xz)"
   log "Flash:  make sd-card-flash-raw DEVICE_TYPE=${DEVICE_TYPE} DISK=N"
@@ -1598,8 +1515,6 @@ if [ "${COMPRESS:-1}" = "0" ]; then
 fi
 log "Compressing ${OUT_IMG} → ${OUT_IMG}.xz (this takes a few minutes)…"
 rm -f "${OUT_IMG}.xz"
-# -k keeps the original .img alongside the .xz so operator can verify/inspect
-# or flash raw before deciding to delete. Manual cleanup: rm -f output/golden-opi.img
 xz -9 -k --threads=0 "${OUT_IMG}"
 
 log "DONE: ${OUT_IMG}.xz ($(du -h "${OUT_IMG}.xz" | cut -f1))"

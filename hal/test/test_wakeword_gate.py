@@ -76,11 +76,7 @@ def test_device_type_alias_is_retained_alongside_agent_name():
 
 
 def test_wake_word_matches_a_later_sentence():
-    """A mic session is one stretch of speech, not one sentence.
-
-    Device-observed 18/08/2026: the whole turn was dropped because the wake
-    phrase opened the SECOND sentence.
-    """
+    """A mic session is one stretch of speech, not one sentence."""
     decorator = _decorator(["hi lamp", "hey lamp"])
 
     assert decorator.starts_with_wake_word(

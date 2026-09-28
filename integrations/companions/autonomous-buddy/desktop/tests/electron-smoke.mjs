@@ -136,8 +136,6 @@ function alive(pid) {
 const detail = (id) => page.evaluate((id) => window.buddy.session(id), id)
 const snapshot = () => page.evaluate(() => window.buddy.snapshot())
 async function createUISession(provider, name) {
-  // Keep the original structured/voice compatibility checks separate from the
-  // new interactive CLI UI smoke, which creates agents through the actual dialog.
   if (provider === 'Codex') {
     const registered = (await snapshot()).projects[0]
     const session = await page.evaluate(({project, name}) => window.buddy.createSession({
@@ -372,7 +370,6 @@ try {
   await expect(page.locator('.git-tracked-changes .changed-file')).toHaveCount(2)
   await expect(page.locator('.git-untracked-changes .changed-file')).toHaveCount(1)
   await expect(page.getByRole('button', { name: 'Untracked files', exact: true })).toBeVisible()
-  // Splits own real PTYs in the selected worktree; drafts survive remounts.
   const pane = (id) => page.locator(`.session-pane[data-session-id="${id}"]`)
   const draft = 'Keep this unsent research prompt while arranging the workspace.'
   await pane(agent.id).getByRole('textbox', { name: 'Message agent' }).fill(draft)
@@ -425,7 +422,6 @@ try {
   expect(await terminalText(splitOne.id)).not.toContain('SPLIT_TWO_ONLY')
   expect(await terminalText(splitTwo.id)).not.toContain('SPLIT_ONE_ONLY')
   expect(await terminalText(terminal.id)).not.toContain('SPLIT_ONE_ONLY')
-  // Exercise the native menu and persisted appearance while real PTYs remain alive.
   await application.evaluate(({ Menu }) => {
     const item = Menu.getApplicationMenu().items.flatMap((entry) => entry.submenu?.items ?? [])
       .find((entry) => entry.label === 'Settings…')
@@ -527,7 +523,6 @@ try {
     .click()
   await page.getByRole('button', { name: /RECENT COMMITS/ }).click()
   await expect(page.locator('.commit-list')).toContainText('Add the agent workspace foundation')
-  // Bulk controls operate only on the displayed worktree changes.
   await page.getByRole('button', { name: 'Stage all changes', exact: true }).click()
   await expect.poll(async () => (await git(['diff', '--cached', '--name-only'])).stdout.trim().split('\n').sort()).toEqual(['README.md', 'notes.md', 'src/session-store.ts'])
   await page.getByRole('button', { name: 'Unstage all changes', exact: true }).click()
@@ -535,7 +530,6 @@ try {
   const bounds = await page.locator('.git-panel').evaluate((element) => ({right: element.getBoundingClientRect().right, viewport: window.innerWidth}))
   expect(bounds.right, JSON.stringify(bounds)).toBeLessThanOrEqual(bounds.viewport + 1)
   await nativeScreenshot('git-sidebar-dark.png')
-  // Stage and commit only README through the product UI in the temporary repo.
   await page.getByRole('button', { name: 'Stage README.md', exact: true }).click()
   await expect(page.getByRole('button', { name: 'Unstage README.md', exact: true })).toBeVisible()
   expect((await git(['diff', '--cached', '--name-only'])).stdout.trim()).toBe('README.md')
@@ -573,7 +567,6 @@ try {
   await page.locator('.git-commit-files').getByRole('button').filter({ hasText: 'README.md' }).click()
   await expect(page.locator('.file-preview')).toContainText('+Sessions preserve context')
   await page.getByRole('button', { name: 'Close file preview', exact: true }).click()
-  // A long change list stays compact and scrolls as one panel, like a real workspace.
   await Promise.all(Array.from({ length: 35 }, (_, index) =>
     writeFile(path.join(projectPath, 'src', `review-file-${String(index).padStart(2, '0')}.ts`), 'export const changed = true\n')))
   await page.getByRole('button', { name: 'Refresh files and Git', exact: true }).click()

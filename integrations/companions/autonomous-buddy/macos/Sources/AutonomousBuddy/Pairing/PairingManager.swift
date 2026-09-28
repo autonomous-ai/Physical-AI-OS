@@ -81,11 +81,7 @@ final class PairingManager {
         try store.clear()
     }
 
-    // Best-effort notification to the device that we're revoking the pairing on
-    // our side. Without this, the device keeps the pairing record alive and the
-    // web UI still shows "paired" until either the admin revokes manually or
-    // the next failed WS handshake. We don't block local unpair on this — if
-    // the device is unreachable, the local revoke proceeds anyway.
+    // Best-effort device notification of our revoke; local unpair proceeds regardless.
     func notifyRevokeSelf(host: String, token: String) async {
         let normalized = normalizeHost(host)
         guard let url = URL(string: "http://\(normalized)/api/buddy/self") else { return }
@@ -96,7 +92,6 @@ final class PairingManager {
         do {
             _ = try await URLSession.shared.data(for: req)
         } catch {
-            // Silent — device may be offline. Local unpair still happens.
         }
     }
 

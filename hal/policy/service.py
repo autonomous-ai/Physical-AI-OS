@@ -1,11 +1,4 @@
-"""Typed boundary for learned motion policies.
-
-This module deliberately has no LeRobot or motor-driver imports.  The first
-implementation is a dry-run recorder: it makes the HTTP contract observable
-without allowing an undeclared policy to command a physical body.  A future
-adapter may implement the same ``PolicyService`` protocol and feed its joint
-targets through the motion safety gate.
-"""
+"""Typed boundary for learned motion policies (no LeRobot or motor-driver imports)."""
 from __future__ import annotations
 
 import logging
@@ -40,13 +33,7 @@ class PolicyService(Protocol):
 
 
 class LoggingPolicyService:
-    """Temporary policy service that records intent and never actuates.
-
-    ``state='dry_run'`` is intentionally explicit in both the response and
-    logs.  Do not replace it with an inference implementation until the motion
-    driver owns safety-clamped target delivery and ``/servo/stop`` cancels its
-    worker.
-    """
+    """Dry-run policy service that records intent and never actuates."""
 
     def __init__(self, logger: logging.Logger) -> None:
         self._logger = logger

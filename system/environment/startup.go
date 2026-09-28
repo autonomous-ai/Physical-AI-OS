@@ -5,9 +5,7 @@ import (
 	"time"
 )
 
-// StartupCoordinator coordinates the greeting and polling worker without making
-// the greeting wait for HAL. A successful greeting or accepted initial event
-// consumes the single startup report for this OS process.
+// StartupCoordinator coordinates the greeting and polling worker; one startup report per process.
 type StartupCoordinator struct {
 	mu           sync.Mutex
 	enabled      bool

@@ -30,10 +30,8 @@ func newStartupAdmission(ctx context.Context, ready func(context.Context) bool, 
 		opened: make(chan struct{}), slot: make(chan struct{}, 1)}
 }
 
-// ConfigureStartup defers optional CLI probes until ready reports true or
-// maxWait expires, then serializes probes for the process lifetime. Call once,
-// before starting services or accessing caches. Cancellation stops queued work,
-// retry backoff and active probes. A nil ready callback opens immediately.
+// ConfigureStartup defers CLI probes until ready is true or maxWait expires, then serializes them.
+// Call once before starting services; a nil ready opens immediately.
 func ConfigureStartup(ctx context.Context, ready func(context.Context) bool, maxWait time.Duration) {
 	startup.Store(newStartupAdmission(ctx, ready, maxWait))
 }

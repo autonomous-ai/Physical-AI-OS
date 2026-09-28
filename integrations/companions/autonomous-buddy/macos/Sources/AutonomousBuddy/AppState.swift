@@ -1,10 +1,7 @@
 import Foundation
 
 extension Notification.Name {
-    // Posted on the main queue whenever any AppState field changes. Observers
-    // (e.g. the Activity window) can refresh themselves instead of polling.
-    // MenuBarController still uses the direct onChange closure to keep the
-    // pairing/connection UI snappy.
+    // Posted on the main queue whenever any AppState field changes.
     static let autonomousBuddyAppStateChanged = Notification.Name("autonomousBuddyAppStateChanged")
 }
 
@@ -32,10 +29,7 @@ struct CommandRecord {
 final class AppState {
     static let shared = AppState()
 
-    // Cap on the in-memory ring buffer. The full audit trail lives on disk
-    // (see AuditLog.swift) — this list is what the menu bar and the Activity
-    // window render. 100 entries is enough for a useful "tail -n 100" view
-    // without holding meaningful memory.
+    // In-memory ring buffer cap; the full audit trail lives on disk (AuditLog).
     static let recentCommandsCap = 100
 
     private(set) var pairing: PairingStatus = .notPaired { didSet { notify() } }
@@ -66,8 +60,7 @@ final class AppState {
     }
 
     private func notify() {
-        // didSet runs on whichever thread the setter ran. setPairing etc. always hop to main first,
-        // so onChange always fires on main.
+        // Setters hop to main first, so onChange always fires on main.
         onChange?()
         NotificationCenter.default.post(name: .autonomousBuddyAppStateChanged, object: nil)
     }

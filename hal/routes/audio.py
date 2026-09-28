@@ -24,7 +24,6 @@ from hal.models import (
 
 router = APIRouter(tags=["Audio"])
 
-# Lazy imports
 sd = None
 np = None
 try:
@@ -35,18 +34,13 @@ except ImportError:
 
 
 def _amixer_ctl_device() -> Optional[str]:
-    """Derive the amixer control (-D) device from HAL_AUDIO_OUTPUT_ALSA.
+    """Derive the amixer control (-D) device from HAL_AUDIO_OUTPUT_ALSA; None = default card.
 
-    The env names a PCM (e.g. 'plug:device_speaker'), but amixer needs a control
-    device. Our asound.conf defines `ctl.<alias>` alongside every `pcm.<alias>`,
-    so the bare alias ('device_speaker') is a valid amixer -D target pointing at the
-    real speaker card. Returning None falls back to amixer's default card (card 0
-    — often the camera mic), so volume changes silently miss the speaker.
+    Example: 'plug:device_speaker' -> 'device_speaker'
     """
     val = AUDIO_OUTPUT_ALSA
     if not val:
         return None
-    # Strip a leading ALSA plugin prefix (plug:/plughw:/hw:/dmix:) -> bare spec.
     rest = val.split(":", 1)[1] if ":" in val else val
     rest = rest.strip()
     if not rest:
@@ -59,15 +53,7 @@ def _amixer_ctl_device() -> Optional[str]:
 
 
 def _detect_playback_controls() -> tuple[list[str], Optional[str]]:
-    """Return (playback_control_names, amixer_ctl_device) from amixer.
-
-    Selection is by ALSA capability, not by control name. Names are vendor
-    prose: the Reachy Mini USB codec calls its CAPTURE control 'Headset', which
-    no keyword blocklist would catch, so a name-based filter fed it to
-    `amixer sset Headset <pct>%` and quietly dropped the microphone gain every
-    time someone changed speaker volume. `scontents` reports the authoritative
-    capability line per control, so one call tells us who actually plays back.
-    """
+    """Return (playback_control_names, amixer_ctl_device), selected by ALSA capability, not name."""
     dev = _amixer_ctl_device()
     cmd = ["amixer", "-D", dev, "scontents"] if dev else ["amixer", "scontents"]
     try:
@@ -84,16 +70,7 @@ def _detect_playback_controls() -> tuple[list[str], Optional[str]]:
                 continue
             if current and "Capabilities:" in line:
                 caps = line.split("Capabilities:", 1)[1].split()
-                # Playback-only: has pvolume and does NOT also carry capture
-                # volume. The `cvolume` exclusion is the whole point — Lamp's
-                # speaker card exposes a 'Mic' control with BOTH pvolume and
-                # cvolume (mic monitor), so "anything with pvolume" would write
-                # speaker volume straight into microphone gain there, which is
-                # the exact bug this function exists to avoid on Reachy.
-                # Rather than guess, a codec whose only playback control is also
-                # a capture control yields no match: the API then answers
-                # "No audio mixer controls found" instead of silently deafening
-                # the device.
+                # Playback-only: a control that also has cvolume (e.g. Lamp 'Mic') must never receive speaker volume.
                 if "pvolume" in caps and "cvolume" not in caps:
                     playback.append(current)
                 current = None
@@ -113,8 +90,7 @@ def get_audio_info():
     }
 
 
-# DAC-only controls (e.g. WM8960 / Rockchip on OrangePi) take dB, not percent.
-# Map 0-100% linearly onto this dB envelope; +2dB ceiling avoids speaker overdrive.
+# DAC-only controls take dB; map 0-100% onto this envelope. +2dB ceiling avoids speaker overdrive.
 _DAC_MAX_DB = 2.0
 _DAC_MIN_DB = -60.0
 _DAC_CONTROLS = {"DACL", "DACR", "DAC"}
@@ -132,9 +108,7 @@ def _db_to_pct(db: float) -> int:
 
 
 def _bt_sink() -> Optional[str]:
-    """The bluez sink name while a BT headset route is active, else None.
-    Volume must then go through PulseAudio — amixer would silently adjust
-    the idle built-in speaker card instead of the headset."""
+    """The bluez sink while a BT headset route is active, else None (volume then goes via PulseAudio)."""
     try:
         from hal.drivers import audio_route
         if not audio_route.bt_active():
@@ -148,9 +122,7 @@ def _bt_sink() -> Optional[str]:
 
 
 def _persist_volume(pct: int) -> None:
-    """Persist the last-set volume so os-server restores it at next boot
-    instead of resetting to the ROBOT.md startup_volume. Best-effort — a
-    write failure must not fail the volume change itself."""
+    """Persist the last-set volume for os-server boot restore (best-effort)."""
     try:
         os.makedirs(os.path.dirname(VOLUME_STATE_PATH), exist_ok=True)
         with open(VOLUME_STATE_PATH, "w") as f:
@@ -161,12 +133,7 @@ def _persist_volume(pct: int) -> None:
 
 @router.post("/audio/volume", response_model=VolumeSetResponse)
 def set_volume(req: VolumeRequest):
-    """Set system speaker volume (0-100%). Routes to the BT headset sink
-    (PulseAudio) when one is active, else to the built-in speaker (amixer).
-
-    Clamped to SAFETY.md `audio.max_volume` here, above the sink split, so the
-    ceiling holds on the built-in speaker and a Bluetooth headset alike and for
-    every caller (agent, local intent, web slider, os-server boot restore)."""
+    """Set speaker volume (0-100%), clamped to SAFETY.md `audio.max_volume` for every sink and caller."""
     pct = clamp_volume(state.safety_policy, req.volume)
     if pct != req.volume:
         state.logger.info(
@@ -207,9 +174,7 @@ def set_volume(req: VolumeRequest):
 
 
 def _vol_set_response(volume: int) -> dict:
-    """POST reply: the volume actually applied plus the ceiling that produced it.
-    Same reason as _vol_response — every write path reports what really landed,
-    so a client is never left believing an over-ceiling request went through."""
+    """POST reply: the volume actually applied plus the ceiling."""
     return {
         "status": "ok",
         "volume": volume,
@@ -218,9 +183,7 @@ def _vol_set_response(volume: int) -> dict:
 
 
 def _vol_response(control: str, volume: int) -> dict:
-    """Every /audio/volume read carries the safety ceiling alongside the current
-    value. Built here rather than inline so no read path (virtual, Bluetooth, DAC
-    dB, raw %) can quietly ship without it."""
+    """Volume read response; always carries the safety ceiling."""
     return {
         "control": control,
         "volume": volume,
@@ -230,14 +193,7 @@ def _vol_response(control: str, volume: int) -> dict:
 
 @router.get("/audio/volume", response_model=VolumeResponse)
 def get_volume():
-    """Get current speaker volume from amixer.
-
-    Reads back through the same envelope `set_volume` writes through:
-      - DAC controls -> parse [X.XdB] and map back via _db_to_pct
-      - everything else -> parse [NN%] directly
-    DAC controls are tried first so round-trip is stable on codecs whose raw%
-    range differs from our [-60dB, +2dB] envelope (e.g. WM8960, Rockchip).
-    """
+    """Get current speaker volume from amixer (DAC dB controls first, else raw %)."""
     if state.simulation_audio:
         return _vol_response("virtual", state.simulation_volume)
     sink = _bt_sink()
@@ -283,8 +239,7 @@ def play_tone(frequency: int = 440, duration_ms: int = 500):
         raise HTTPException(503, "Audio not available")
     if state.audio_output_device is None:
         raise HTTPException(503, "No output audio device found")
-    # Release the TTS persistent stream so sd.play can grab the ALSA device
-    # exclusively. TTS reopens lazily on the next speak() call.
+    # Release the TTS stream so sd.play gets the ALSA device; TTS reopens lazily.
     if state.tts_service and hasattr(state.tts_service, "release_stream"):
         state.tts_service.release_stream()
     dev_info = sd.query_devices(state.audio_output_device)

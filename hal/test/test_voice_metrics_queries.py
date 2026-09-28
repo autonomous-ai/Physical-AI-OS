@@ -15,17 +15,12 @@ class _CountIf:
         self.count += bool(condition)
 
     def finalize(self):
-        # BigQuery division produces a fractional result for integer inputs.
-        # SQLite needs a float to avoid truncating the KPI percentage.
+        # SQLite needs a float to match BigQuery's fractional division.
         return float(self.count)
 
 
 def _aggregate(rows):
-    """Run the actual SELECT; only warehouse extraction is replaced by rows.
-
-    The aggregation uses standard SQL plus BigQuery's COUNTIF, implemented
-    above so the published eligibility rules can be tested without a warehouse.
-    """
+    """Run the actual SELECT; only warehouse extraction is replaced by rows."""
     doc = Path(__file__).resolve().parents[2] / "docs" / "voice-metrics.md"
     block = doc.read_text().split("-- KPI-2: stale playback per suppression policy.", 1)[1]
     query = "SELECT\n" + block.split("\nSELECT\n", 1)[1].split("```", 1)[0]

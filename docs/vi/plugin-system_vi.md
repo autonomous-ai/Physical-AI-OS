@@ -76,15 +76,16 @@ requests.post(f"{HAL}/led/off")
 
 ### Phân Phối
 
-Plugin cài từ bất kỳ URL git nào — HuggingFace Spaces, GitHub, GitLab, Gitea,
-hoặc repo tự host:
+Plugin cài từ bất kỳ URL git nào — GitHub, GitLab, Gitea, repo của một Hugging
+Face Space, hoặc repo tự host. Hiện chưa có plugin store trong app (xem *Giao
+Diện Web* bên dưới):
 
 ```bash
-# Cài từ HuggingFace
-POST /api/plugin/install {"url": "https://huggingface.co/spaces/user/my-plugin"}
-
 # Cài từ GitHub
 POST /api/plugin/install {"url": "https://github.com/user/my-plugin"}
+
+# Cài từ bất kỳ git repo nào
+POST /api/plugin/install {"url": "https://git.example.com/my-plugin.git"}
 ```
 
 ### API Endpoints
@@ -92,7 +93,6 @@ POST /api/plugin/install {"url": "https://github.com/user/my-plugin"}
 Tất cả endpoint yêu cầu xác thực admin.
 
 ```
-GET    /api/plugin/browse        — khám phá plugin cộng đồng (proxy HuggingFace Spaces API)
 POST   /api/plugin/install       — clone git repo, tạo venv, tạo systemd unit
 GET    /api/plugin               — danh sách plugin đã cài với trạng thái
 POST   /api/plugin/:name/start   — khởi động plugin
@@ -100,12 +100,18 @@ POST   /api/plugin/:name/stop    — dừng plugin
 DELETE /api/plugin/:name         — gỡ cài đặt (dừng + xóa file + systemd unit)
 ```
 
+`GET /api/plugin/browse` (proxy Hugging Face Spaces theo tag
+`autonomous-os-plugin`) đang **tạm gác, không đăng ký route** (#213): handler bị
+comment trong `system/server/plugin/delivery/http/handler.go` và route trong
+`system/server/server.go`, chờ catalog riêng của OS có collection `plugins`.
+
 ### Tích Hợp Systemd
 
 Mỗi plugin chạy như systemd service (`os-plugin-<name>.service`):
 
 - `Restart=on-failure` — tự phục hồi khi crash
-- `MemoryMax=256M` — giới hạn tài nguyên trên thiết bị constrained
+- `MemoryMax=256M` — giới hạn bộ nhớ trên thiết bị constrained (giới hạn tài
+  nguyên duy nhất trong unit sinh ra, `system/plugin/service.go` `writeSystemdUnit`)
 - `WorkingDirectory` trỏ đến thư mục plugin
 - Biến `HAL_URL` được inject
 
@@ -114,23 +120,24 @@ Mỗi plugin chạy như systemd service (`os-plugin-<name>.service`):
 Tab **Settings > Plugins** cung cấp:
 - **Installed** — danh sách plugin đã cài với trạng thái (running/stopped/failed),
   nút Start/Stop/Uninstall
-- **Browse** — khám phá plugin cộng đồng từ HuggingFace Spaces với tag
-  `autonomous-os-plugin`, cài một click. Backend proxy HF API để tránh CORS
-  (`GET /api/plugin/browse`)
-- **Install from URL** — dán URL git cho plugin không phải HF (GitHub, GitLab, v.v.)
+- **Install from URL** — dán URL git bất kỳ (GitHub, GitLab, v.v.)
+
+Pane **Browse** cũ (khám phá qua Hugging Face Spaces) bị tạm gác cùng endpoint
+browse (#213) và không được render (`system/web/src/pages/settings/PluginsSection.tsx`).
 
 ## Lộ Trình
 
-### v1 — Pipeline + Store (đã triển khai)
+### v1 — Pipeline (đã triển khai)
 
 Git URL → venv → systemd unit → HAL HTTP. Hệ thống plugin đầy đủ:
-- Cài từ bất kỳ URL git nào (HuggingFace, GitHub, GitLab, v.v.)
+- Cài từ bất kỳ URL git nào (GitHub, GitLab, Hugging Face, v.v.)
 - Quản lý vòng đời bằng systemd (start/stop/restart khi crash)
-- Plugin store — duyệt plugin cộng đồng từ HuggingFace Spaces
-  (tag `autonomous-os-plugin`), cài một click
-- Cài thủ công bằng URL cho plugin không phải HF
-- Giao diện web (Installed / Browse / Install from URL)
-- Template plugin trên HuggingFace để community fork
+- Giao diện web (Installed / Install from URL)
+- Template plugin ở `integrations/community-apps/plugin-template/`
+
+Plugin store trên Hugging Face Spaces (browse + cài một click) chỉ là prototype
+và đang tạm gác (#213); việc khám phá plugin dự kiến chuyển sang catalog riêng
+của OS, cạnh skills.
 
 ### v2 — SDK + Tích Hợp Agent
 
@@ -161,12 +168,12 @@ Git URL → venv → systemd unit → HAL HTTP. Hệ thống plugin đầy đủ
 - **Mô hình tin cậy: chạy cục bộ = tin tưởng hoàn toàn.** Cài plugin nghĩa là
   tin tưởng tác giả. Giống mô hình app của Pollen.
 - Plugin truy cập HAL qua HTTP — không truy cập filesystem nội bộ HAL
-- Giới hạn tài nguyên systemd ngăn cạn kiệt tài nguyên
+- systemd `MemoryMax=256M` giới hạn bộ nhớ plugin (hiện không set `CPUQuota`)
 - Tương lai: sandbox container/seccomp nếu hệ sinh thái mở rộng
 
 ## Template
 
-Fork `integrations/plugin-template/` để bắt đầu. Chứa plugin hello-world
+Fork `integrations/community-apps/plugin-template/` để bắt đầu. Chứa plugin hello-world
 với demo LED + giọng nói.
 
 ## Tham Khảo
@@ -175,4 +182,4 @@ với demo LED + giọng nói.
 - API routes của HAL: `hal/routes/`
 - Capability thiết bị: `robots/contract/capabilities.md`
 - Template plugin: `integrations/community-apps/plugin-template/`
-- HuggingFace template: https://huggingface.co/spaces/autonomous-os/autonomous-os-hello-robot
+- Template Hugging Face cũ (prototype, từ store đã tạm gác): https://huggingface.co/spaces/autonomous-os/autonomous-os-hello-robot

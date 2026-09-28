@@ -1,41 +1,6 @@
 #!/usr/bin/env bash
-# spike-agent.sh — install the OpenClaw gateway on a Reachy Mini.
-#
-# RUNS ON THE ROBOT. Takes the openclaw version from OTA metadata, installs that
-# exact version from npm, seeds /root/.openclaw, and runs the gateway under
-# systemd. Mirrors stage_openclaw in scripts/provision/setup.sh and the
-# software-update openclaw branch in scripts/imager/build-orangepi.sh, minus the
-# parts Reachy does not need.
-#
-# This used to run from a Mac over ssh with the version hardcoded in the script.
-# Both were wrong: the pin drifted from what the fleet actually runs the moment
-# anyone published a new build, and a spike that reproduces a bug against a
-# version nobody else has says nothing about anyone else's robot.
-#
-# openclaw is the one OTA component with no url — it is an npm package, so the
-# metadata carries only a version and ota_unpack/ota_install_binary do not apply
-# here. `ota_field openclaw version` is still the single source of truth, the
-# same field the bootstrap worker reconciles against (system/bootstrap).
-#
-# Why it matters beyond chat: os-server's status reporter skips every tick until
-# the agent gateway is ready (system/device/status_reporter.go), so the backend
-# never assigns a device_id and MQTT stays subscribed to an empty channel. No
-# gateway means no cloud identity.
-#
-# Deltas from the lamp install, deliberate:
-#   - no chromium / xvfb, and therefore no PUPPETEER_EXECUTABLE_PATH / CHROME_BIN
-#     in the unit: they back the gateway's headless-browser tooling, which a
-#     screenless desk robot has no use for, and they cost ~600 MB on a 14 GB
-#     eMMC that ships ~60% full and is the same disk HAL's ~2 GB venv lands on.
-#     Add them back if a browser-driving skill is ever wanted here.
-#   - no skills seeding: os-server re-syncs and prunes skills on boot.
-#
-# Usage:
-#   sudo bash spike-agent.sh              # install + start
-#   sudo OPENCLAW_VERSION=2026.6.11 \
-#        bash spike-agent.sh              # override the OTA pin to test a build
-#   sudo bash spike-agent.sh --stop
-#   sudo bash spike-agent.sh --uninstall  # stop + remove the unit and the package
+# spike-agent.sh — install the OpenClaw gateway (version pinned by OTA metadata) on a Reachy Mini.
+# Usage: sudo [OPENCLAW_VERSION=x.y.z] bash spike-agent.sh [--stop|--uninstall]
 set -euo pipefail
 
 SPIKE_TAG="spike-agent"
@@ -43,10 +8,7 @@ SPIKE_TAG="spike-agent"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spike-lib.sh"
 
 SERVICE="openclaw"
-# The dot matters: os-server writes openclaw.json here and the gateway reads it
-# from the same path. A /root/openclaw vs /root/.openclaw mismatch is not a
-# missing-file error — the gateway boots with its own fresh token and every WS
-# connect from os-server closes with 1008 / token_mismatch.
+# Must match os-server's path, else the gateway mints its own token (WS 1008 token_mismatch).
 OPENCLAW_HOME="/root/.openclaw"
 
 STOP_ONLY=0
@@ -78,11 +40,7 @@ fi
 
 say "1/5  Resolve the version from OTA"
 ensure_tools
-# The npm spec is derived from the metadata version, but they are not always
-# byte-identical: the feed publishes zero-padded months ("2026.06.10") while npm
-# publishes "2026.6.10". npm parses the spec as a semver range, a leading zero
-# makes it an invalid range, and npm then falls back to reading it as a dist-tag
-# — the install dies with "No matching version found". Strip the padding.
+# Strip zero-padded months ("2026.06.10" -> "2026.6.10"): npm rejects leading zeros.
 OTA_VERSION="$(ota_field openclaw version)"
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-$OTA_VERSION}"
 [ -n "$OPENCLAW_VERSION" ] || die "OTA metadata has no openclaw version, and OPENCLAW_VERSION is unset"
@@ -90,18 +48,11 @@ NPM_SPEC="$(echo "$OPENCLAW_VERSION" | sed -E 's/(^|\.)0+([0-9])/\1\2/g')"
 info "OTA pin: ${OTA_VERSION:-<none>}   installing: $NPM_SPEC"
 
 say "2/5  Install Node.js 22"
-# Checked before npm runs, not after: the openclaw package tree is ~400 MB
-# unpacked and a half-written global install on a full disk leaves a binary on
-# PATH that cannot start, which reads exactly like a code bug.
 avail_kb="$(df -Pk / | awk 'NR==2 {print $4}')"
 info "free space: $(awk -v k="$avail_kb" 'BEGIN {printf "%.1f", k/1048576}') GB"
 [ "$avail_kb" -ge 1572864 ] || die "need at least 1.5 GB free on / for node + the openclaw package"
 
-# NodeSource, not apt: Debian trixie ships node 20, and openclaw hard-refuses to
-# start on anything below 22.19 ("Node.js v22.19+ is required"). npm only WARNs
-# at install time, so on the shipped OS the failure surfaces as a silent systemd
-# crash-loop hours later instead of an install error. Same source and major as
-# the lamp (scripts/provision/setup.sh, scripts/imager/build-orangepi.sh).
+# NodeSource, not apt: Debian ships node 20 and openclaw refuses to start below 22.19.
 node_major() { node --version 2>/dev/null | sed 's/^v//; s/\..*//'; }
 if [ "$(node_major)" ] && [ "$(node_major)" -ge 22 ] 2>/dev/null; then
   info "node $(node --version), npm $(npm --version) already present"
@@ -112,21 +63,16 @@ else
   apt-get install -y nodejs || die "apt-get install nodejs failed"
   info "installed node $(node --version), npm $(npm --version)"
 fi
-# Fail here rather than let the gateway crash-loop: an apt pin or a leftover
-# /usr/local/bin/node can still win on PATH after NodeSource succeeds.
+# An apt pin or leftover /usr/local/bin/node can still win on PATH.
 [ "$(node_major)" -ge 22 ] 2>/dev/null || die "node is $(node --version 2>/dev/null || echo missing) — openclaw needs >= 22.19"
 
 say "3/5  Install openclaw@$NPM_SPEC"
-# The browser-download opt-outs matter at INSTALL time, not just at runtime:
-# without them npm pulls a Chromium build for the capability this device does
-# not declare, on the eMMC checked above.
+# Skip browser downloads at install time (no browser capability on this device).
 installed="$(openclaw --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)"
 if [ "$installed" = "$NPM_SPEC" ]; then
   info "openclaw $NPM_SPEC already installed"
 else
   [ -n "$installed" ] && info "installed openclaw is $installed — replacing with $NPM_SPEC"
-  # --omit=optional matches the imager: the optional deps are platform-specific
-  # prebuilds that fall back to source builds on arm64 and cost minutes here.
   retry "env PLAYWRIGHT_SKIP_BROWSER_DOWNLOAD=1 PUPPETEER_SKIP_DOWNLOAD=1 npm install -g --no-fund --no-audit --omit=optional 'openclaw@$NPM_SPEC'" 3 30 \
     || die "npm install openclaw@$NPM_SPEC failed"
 fi
@@ -134,9 +80,7 @@ command -v openclaw >/dev/null || die "openclaw is not on PATH after install"
 info "openclaw version: $(openclaw --version 2>&1 | head -1)"
 
 say "4/5  Seed $OPENCLAW_HOME"
-# Pre-creating the whole tree, not just the root: the gateway creates what it
-# needs at runtime, but it does so with the umask it inherits, and 700 up front
-# is what keeps credentials/ and the sessions transcripts off a shared robot.
+# 700 up front keeps credentials and sessions private regardless of the gateway's umask.
 mkdir -p \
   "$OPENCLAW_HOME" "$OPENCLAW_HOME/workspace" \
   "$OPENCLAW_HOME/agents/main/agent" "$OPENCLAW_HOME/agents/main/sessions" \
@@ -150,10 +94,7 @@ for p in "$OPENCLAW_HOME" "$OPENCLAW_HOME/workspace" "$OPENCLAW_HOME/agents" \
   chmod 700 "$p" 2>/dev/null || true
 done
 
-# Never regenerate the token on an existing install: os-server caches it, and a
-# mismatch closes the gateway WS with 1008 / token_mismatch. The file also holds
-# onboarding state, model defaults and MCP connector entries that os-server
-# wrote (system/server/config_watch.go) — a re-seed silently drops all of it.
+# Never regenerate the token: os-server caches it and the file holds onboarding state.
 if [ -f "$OPENCLAW_HOME/openclaw.json" ]; then
   info "openclaw.json already present — keeping it (token preserved)"
 else
@@ -185,10 +126,6 @@ JSON
 fi
 
 say "5/5  Install the unit and start"
-# The gateway was the first spike to need a unit rather than tmux: os-server
-# restarts it with `systemctl restart openclaw.service` after onboarding writes
-# config, so a tmux-run gateway would be un-restartable by the very service that
-# drives it. spike-hal.sh and spike-os.sh install units of their own now too.
 OPENCLAW_BIN="$(command -v openclaw)"
 write_unit "$SERVICE" <<UNIT
 [Unit]
@@ -223,9 +160,7 @@ WantedBy=multi-user.target
 UNIT
 
 start_unit "$SERVICE"
-# Longer than the 2s the other spike scripts wait: the gateway loads its plugin
-# tree before it binds, and a node-version refusal only shows up after the first
-# RestartSec=5, so a shorter check would call a crash-loop healthy.
+# Wait past the first RestartSec=5 so a crash-loop is not reported as healthy.
 sleep 8
 if systemctl is-active --quiet "$SERVICE"; then
   info "running"
@@ -233,8 +168,7 @@ else
   info "WARN: not running — journalctl -u $SERVICE -n 50"
   info "WARN: 'Node.js v22.19+ is required' there means something outranks NodeSource on PATH"
 fi
-# The port, not just the unit state: the gateway can stay 'active' with its
-# plugin load wedged, and os-server dials the socket, not systemd.
+# Check the port too: the unit can be active with plugin load wedged.
 if command -v ss >/dev/null && ! ss -ltn 2>/dev/null | grep -q ':18789'; then
   info "WARN: nothing is listening on 18789 yet — os-server's WS dial will fail until it is"
 fi

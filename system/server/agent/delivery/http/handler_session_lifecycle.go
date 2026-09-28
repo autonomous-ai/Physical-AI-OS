@@ -11,32 +11,18 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// autoCompactCooldown is the minimum time between two compact triggers.
-// Compact itself can run for 30-60s+ on the agent runtime; this guard
-// prevents back-to-back fires while one is still in flight.
+// autoCompactCooldown is the minimum time between two compact triggers (compact can take 30-60s+).
 const autoCompactCooldown = 2 * time.Minute
 
-// autoNewSessionCooldown is the minimum time between two new-session
-// triggers. sessions.new is instant server-side but a token-usage burst
-// across consecutive lifecycle.end events could otherwise drop the
-// session more than once.
+// autoNewSessionCooldown is the minimum time between two new-session triggers, so a token
+// burst across consecutive lifecycle.end events cannot drop the session twice.
 const autoNewSessionCooldown = 30 * time.Second
 
-// maybeAutoCompact triggers a sessions.compact RPC when the backend's rotation
-// policy fires (ShouldRotateSession).
-//
-// Currently disabled in favour of maybeAutoNewSession — kept here as
-// reference / fallback. Re-enable by uncommenting the call site in
-// handler_events.go if new-session causes memory regressions.
-//
-// Trade-off vs new-session:
-//   - keeps verbatim conversation history via a generated summary
-//   - blocks the agent for 30-60s+ while the summarize LLM call runs
-//   - summary can override SKILL.md (see docs/agent-compaction.md)
+// maybeAutoCompact triggers a sessions.compact RPC when ShouldRotateSession fires.
+// Currently unused (maybeAutoNewSession is wired in handler_events.go instead).
 func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flowRunID string) {
-	// Same per-backend rotation decision as maybeAutoNewSession (the two are
-	// mutually exclusive — only one is wired at the call site, so the shared
-	// turnsSinceRotation counter is incremented by exactly one of them).
+	// Mutually exclusive with maybeAutoNewSession: only one is wired, so turnsSinceRotation
+	// is incremented exactly once per turn.
 	turns := int(h.turnsSinceRotation.Add(1))
 	if !h.agentGateway.ShouldRotateSession(totalTokens, turns) {
 		return
@@ -55,8 +41,7 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 		defer time.AfterFunc(autoCompactCooldown, func() {
 			h.compacting.Store(false)
 		})
-		// Cached variant: fixed phrase, self-caches into hal's WAV cache on
-		// first render so replays skip the TTS provider.
+		// Fixed phrase: HAL caches the WAV on first render.
 		if err := hal.SpeakCachedInterruptible(i18n.One(i18n.PhraseCompactNotice)); err != nil {
 			slog.Warn("compaction notice TTS failed", "component", "agent", "backend", h.agentGateway.Name(), "error", err)
 		}
@@ -75,24 +60,11 @@ func (h *AgentHandler) maybeAutoCompact(sessionKey string, totalTokens int, flow
 	}()
 }
 
-// maybeAutoNewSession triggers a sessions.new RPC when the backend's rotation
-// policy fires (ShouldRotateSession). Replaces compact for the latency-sensitive
-// case: sessions.new completes instantly on the agent runtime so the user does
-// not see the 30-60s freeze that compact causes.
-//
-// Trade-off vs compact:
-//   - loses verbatim in-session conversation flow ("what we said an
-//     hour ago")
-//   - keeps all device external memory: mood log, habit tracking, voice
-//     clusters, owner identity, music suggestion history — those live
-//     outside the agent session JSONL and survive a session swap
-//   - no TTS notice — the swap is meant to be invisible
+// maybeAutoNewSession triggers a sessions.new RPC when ShouldRotateSession fires. Instant, unlike
+// compact; loses in-session history but keeps device-side memory. No TTS notice.
 func (h *AgentHandler) maybeAutoNewSession(sessionKey string, totalTokens int, flowRunID string) {
 	turns := int(h.turnsSinceRotation.Add(1))
-	// Rotation policy is per-backend (ShouldRotateSession): OpenClaw/PicoClaw use
-	// a real-token threshold, Hermes uses turn count (its reported tokens are
-	// post-compression and never reflect the real chain size). See
-	// domain.AgentGateway.
+	// Rotation policy is per-backend (see domain.AgentGateway ShouldRotateSession).
 	if !h.agentGateway.ShouldRotateSession(totalTokens, turns) {
 		return
 	}

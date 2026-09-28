@@ -8,7 +8,7 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → P
 
 | Tầng | Ngôn ngữ | Port | Vai trò |
 |------|----------|------|---------|
-| Agentic Runtime | Go | WS | Bộ não AI, LLM, SKILL.md, memory, channels |
+| Agentic Runtime | Go | WS / SSE | Bộ não AI, LLM, SKILL.md, memory, channels (Hermes và Hermes remote dùng HTTP+SSE; các runtime khác dùng WebSocket) |
 | OS Server | Go | 5000 | Hệ thống (mạng, OTA, MQTT, reset), sensing event routing, local intent |
 | HAL | Python | 5001 | Hardware drivers (servo, LED, camera, audio, display), FastAPI |
 
@@ -17,7 +17,7 @@ Agentic Runtime (AI/LLM) → OS Server (Go, :5000) → HAL (Python, :5001) → P
 - **[Harness](https://github.com/autonomous-ai/openharness):** `harness-use` giao việc lập trình và nghiên cứu cho agent trên máy tính đã ghép đôi qua kết nối LAN trực tiếp có xác thực. Câu hỏi và kết quả được trả về qua giọng nói hoặc chat. Chế độ Harness-only voice chuyển bản thu tap-to-record thủ công tới agent đang được chọn trong Harness. Xem [Harness](harness_vi.md).
 - **Thao tác Mac:** `computer-use` cho phép agent trên thiết bị quan sát, thao tác và kiểm tra kết quả qua Autonomous Buddy, sử dụng Cua Driver tích hợp cùng hỗ trợ ảnh chụp màn hình. Buddy thực thi thao tác desktop; agent trên thiết bị chịu trách nhiệm suy luận và hoàn thành công việc. Harness và Buddy có ghép đôi và kết nối riêng. Xem [Computer use](../../integrations/companions/autonomous-buddy/docs/vi/computer-use_vi.md).
 - **Jev:** plugin Hermes do OS quản lý chọn và nạp trước một skill đã cài trước lần gọi model đầu tiên; nếu không thành công thì dùng cơ chế tìm skill thông thường. Plugin này được bật trong bản build hiện tại; nhánh dự phòng cho voice intent tách biệt mặc định bật, còn endpoint gợi ý thao tác Buddy được bật nhưng vẫn thử nghiệm. Việc chọn không thực thi thao tác hay cấp quyền. Xem [Nạp trước skill Hermes](agentic/hermes_vi.md), [Intent fallback](os-server_vi.md), và [Gợi ý Buddy](os-server_vi.md).
-- **Realtime voice:** HAL hỗ trợ Gemini Live (model mặc định `gemini-3.8-live`), OpenAI Realtime, GPT-Live và Pipecat v1. Pipecat điều phối STT → LLM tương thích OpenAI (mặc định `qwen/qwen3.6-35b-a3b`) → HAL TTS trên thiết bị; các lời gọi model vẫn dùng dịch vụ từ xa. Giọng nói thông thường có thể trả lời trực tiếp hoặc giao việc cho runtime chính.
+- **Realtime voice:** HAL hỗ trợ Gemini Live (os-server seed `gemini-3.8-live-extended-thinking` vào `config.json` và seed lại cho các block `realtime` chưa pin; fallback riêng của HAL khi chưa cấu hình model là `gemini-3.8-live`), OpenAI Realtime, GPT-Live và Pipecat v1. Pipecat điều phối STT → LLM tương thích OpenAI (mặc định `qwen/qwen3.6-35b-a3b`) → HAL TTS trên thiết bị; các lời gọi model vẫn dùng dịch vụ từ xa. Giọng nói thông thường có thể trả lời trực tiếp hoặc giao việc cho runtime chính.
 - **Smart Turn:** suy luận ONNX cục bộ bổ sung cho phát hiện khoảng lặng ở đường thu âm rảnh tay non-Live dùng chung; Pipecat Live có pipeline Silero VAD + Smart Turn riêng. Cơ chế dự phòng theo khoảng lặng giới hạn thời gian chờ khi suy luận không khả dụng. Bản thu Harness thủ công kết thúc khi người dùng chạm. Extra `pipecat` được cài trong luồng thiết lập Lamp/Pi/OrangePi và không dùng trên Reachy do xung đột dependency ONNX. Xem [Realtime voice](realtime-voice_vi.md).
 
 ## Thư Mục Dự Án
@@ -289,7 +289,7 @@ HAL sensing loop (mỗi 2s) → Đọc 1 frame camera, chạy tất cả detecto
 Event có ảnh? (large motion, face enter) → encode frame full-resolution JPEG q85
 Ảnh face enter: frame gốc được vẽ bounding box + nhãn friend/stranger
 
-POST /api/sensing/event {type, message, image?}
+POST /api/sensing/event {type, message, images?: []string}
     → OS server (Go):
         1. Voice event + local intent match? → thực thi trực tiếp (~50ms)
         2. Không match → forward OpenClaw:

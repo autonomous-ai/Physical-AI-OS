@@ -9,8 +9,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// fakeGateway embeds domain.AgentGateway so only the channel methods are real; any
-// other call panics (none happen in these tests).
+// fakeGateway implements only the channel methods; other calls panic.
 type fakeGateway struct {
 	domain.AgentGateway
 	supported    []string

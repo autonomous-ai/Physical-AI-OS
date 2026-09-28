@@ -1,9 +1,4 @@
-"""The device must not let the server close an idle Gemini session.
-
-An idle session is killed upstream with WS 1008 "The operation was aborted";
-the backend logs that as an error and alerts its dev channel. The idle watchdog
-closes the transport first, and the next turn reconnects on demand.
-"""
+"""The device must not let the server close an idle Gemini session."""
 
 import threading
 import time
@@ -74,8 +69,7 @@ def test_non_gemini_provider_untouched(monkeypatch):
 
 
 def test_gptlive_parks_on_its_own_threshold(monkeypatch):
-    """GPT-Live bills per session-minute while idle — park it like Gemini, but
-    on REALTIME_GPTLIVE_IDLE_PARK_S, not the Gemini knob."""
+    """GPT-Live parks on REALTIME_GPTLIVE_IDLE_PARK_S."""
     o = _orch(monkeypatch, idle_s=40, threshold=45.0)
     monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "gptlive", raising=False)
     monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 30.0, raising=False)
@@ -84,7 +78,7 @@ def test_gptlive_parks_on_its_own_threshold(monkeypatch):
     o2 = _orch(monkeypatch, idle_s=40)
     monkeypatch.setattr(hal_config, "REALTIME_GPTLIVE_IDLE_PARK_S", 0.0, raising=False)
     o2._maybe_park_idle_session()
-    assert o2._agent.disconnected == 0  # 0 disables
+    assert o2._agent.disconnected == 0
 
 
 def test_turn_in_flight_blocks_park(monkeypatch):
@@ -106,8 +100,7 @@ def test_abandoned_turn_marker_expires(monkeypatch):
 
 
 def test_parked_session_still_available(monkeypatch):
-    """Reporting unavailable while parked would route every post-idle turn to
-    the main agent — worse than the 1008 this replaces."""
+    """A parked session still reports available."""
     o = _orch(monkeypatch, idle_s=90)
     o._maybe_park_idle_session()
     assert o.available is True
@@ -125,8 +118,7 @@ def test_prepare_turn_resumes_parked_session(monkeypatch):
 
 
 def test_failed_resume_reports_unavailable(monkeypatch):
-    """A resume that cannot connect must fall the turn back to the main agent
-    rather than let it stream into the closed transport."""
+    """A failed resume reports unavailable so the turn falls back to the main agent."""
     o = _orch(monkeypatch, idle_s=90)
     o._maybe_park_idle_session()
     o._rebuild_now = lambda reason, **kw: False
@@ -137,8 +129,7 @@ def test_failed_resume_reports_unavailable(monkeypatch):
 
 
 def test_prewarm_resumes_in_background_and_prepare_turn_joins(monkeypatch):
-    """Speech start resumes a parked session off-thread; prepare_turn() after the
-    STT final must join that resume, not fall back or connect a second time."""
+    """prepare_turn() joins an in-flight resume instead of reconnecting."""
     o = _orch(monkeypatch, idle_s=90)
     o._maybe_park_idle_session()
     o._skip_post_idle_recycle = False

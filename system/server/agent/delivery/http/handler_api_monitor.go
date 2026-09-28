@@ -25,12 +25,7 @@ import (
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
-// agentUnitByBackend maps the runtime `Name()` (see domain.AgentRuntime*
-// constants) to its systemd unit name. Sourced from each runtime's own
-// gateway_unit.go / service_gateway.go — kept in sync with those files.
-// Used only by the UI-triggered Restart handler to re-enable the unit
-// before restarting; internal restart helpers still call systemctl restart
-// directly with the same names.
+// agentUnitByBackend maps runtime Name() to its systemd unit; keep in sync with each runtime's gateway unit.
 var agentUnitByBackend = map[string]string{
 	domain.AgentRuntimeOpenClaw:   "openclaw",
 	domain.AgentRuntimeHermes:     "hermes-gateway",
@@ -41,9 +36,6 @@ var agentUnitByBackend = map[string]string{
 }
 
 // GetOpenClawVersion returns the cached OpenClaw binary version (e.g. "2026.5.27").
-// The cache lives in the openclaw package — single source of truth, shared with
-// the MQTT `info` message and the channel-config writers — so this is a thin
-// pass-through for the agent HTTP/MQTT handlers.
 func GetOpenClawVersion() string {
 	return openclaw.GetOpenClawVersion()
 }
@@ -53,9 +45,7 @@ func populateOpenClawVersion() {
 	openclaw.PopulateOpenClawVersion()
 }
 
-// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0"). Thin
-// pass-through to the hermes package cache, mirroring GetOpenClawVersion so the
-// MQTT `info` message can report hermes_version next to openclaw_version.
+// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0").
 func GetHermesVersion() string {
 	return hermes.GetHermesVersion()
 }
@@ -111,49 +101,26 @@ func (h *AgentHandler) StopTTS(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
 
-// CancelSpeechHandler silences the turns that are in flight right now and cuts
-// whatever the speaker is already playing. Fired by the physical cancel gesture
-// (single click) via HAL, so the user gets the floor back without waiting for
-// the agent to finish.
-//
-// Two halves, because neither alone is enough: StopTTS kills the sentence being
-// played AND the pre-synthesised queue behind it (hal tts service stop() clears
-// the pending list), while the watermark stops os-server from handing HAL the
-// sentences that have not been generated yet. Stopping only at HAL means the
-// device goes quiet for one sentence and then resumes.
+// CancelSpeechHandler silences in-flight turns and cuts current playback (physical cancel gesture).
+// Both halves are needed: StopTTS clears HAL's playing+queued audio; the watermark mutes not-yet-generated sentences.
 func (h *AgentHandler) CancelSpeechHandler(c *gin.Context) {
 	h.CancelSpeech()
 	if err := h.agentGateway.StopTTS(); err != nil {
-		// The watermark already landed — the backlog stays muted regardless.
-		// Report the failure but do not fail the request: a HAL hiccup must
-		// not make the gesture look like it did nothing.
+		// Watermark already applied; report the HAL failure without failing the request.
 		slog.Warn("StopTTS during speech cancel failed", "component", "agent", "error", err)
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
 
-// SetBusy marks the agent as busy from an external signal (e.g. turn-gate hook firing at
-// message:preprocessed before lifecycle_start SSE arrives). Closes the timing gap for
-// channel-initiated turns (Telegram, Slack, Discord) that bypass the OS server entirely.
+// SetBusy marks the agent busy from an external signal (e.g. turn-gate hook), covering
+// channel-initiated turns that bypass the OS server.
 func (h *AgentHandler) SetBusy(c *gin.Context) {
 	h.agentGateway.SetBusy(true)
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
 }
 
-// Restart is the "start + enable + restart" recovery action fired from the
-// Overview's Agent Gateway card. It differs from the internal restart callers
-// (config refresh, migration) by ALSO re-enabling the unit so the recovery
-// survives a reboot.
-//
-// Steps:
-//  1. systemctl enable <unit>  — best-effort; a failed enable does not block
-//     the restart (survives reboot is nice-to-have; getting the service running
-//     right now is the primary user intent).
-//  2. agentGateway.RestartAgent()  — runtime picks the actual command; on
-//     openclaw this is `systemctl restart openclaw`, which STARTS the service
-//     if it's currently stopped (systemctl restart semantics), so an operator
-//     who stopped+disabled a broken gateway can recover from the web UI without
-//     SSH.
+// Restart enables the unit (best-effort) then restarts the agent gateway, so a stopped or
+// disabled gateway can be recovered from the UI and survives reboot.
 func (h *AgentHandler) Restart(c *gin.Context) {
 	name := h.agentGateway.Name()
 	slog.Info("agent restart requested", "component", "agent", "backend", name)
@@ -186,17 +153,11 @@ func (h *AgentHandler) Restart(c *gin.Context) {
 
 // Status returns the current agent connection status.
 func (h *AgentHandler) Status(c *gin.Context) {
-	// Get real emotion from HAL (source of truth) instead of parsed text
 	emotion := h.fetchHALEmotion()
 
-	// Active backend's own version (OpenClaw → "2026.5.27", Hermes → "0.17.0"),
-	// so the web Overview shows the running runtime's version, not always OpenClaw's.
 	version := h.agentGateway.Version()
 
-	// uptime: seconds since the WS connection last became ready (resets when
-	// the OS server reconnects). agentUptime: actual OpenClaw process uptime sourced from
-	// the gateway's hello-ok payload — survives OS server restarts. The UI shows
-	// agentUptime; uptime stays for debugging WS reconnect cadence.
+	// uptime: since the WS last became ready; agentUptime: runtime process uptime from hello-ok.
 	var uptime int64
 	if connectedAt := h.agentGateway.ConnectedAt(); connectedAt > 0 {
 		uptime = time.Now().Unix() - connectedAt
@@ -219,10 +180,7 @@ func (h *AgentHandler) Status(c *gin.Context) {
 // fetchHALEmotion calls HAL /emotion/status to get the current emotion.
 // Falls back to lastEmotion if HAL is unreachable.
 func (h *AgentHandler) fetchHALEmotion() string {
-	// Only devices that declare the `expression` capability mount HAL's /emotion
-	// route. On a device without it (e.g. intern-v2: audio+light only) the call
-	// just 404s on every status poll. Gate on the declared capability so the OS
-	// never reaches for a route the body doesn't have.
+	// Only devices with the `expression` capability mount HAL /emotion; avoid 404 polling.
 	if !device.Has(h.config.DeviceTypeOrDefault(), device.CapExpression) {
 		return ""
 	}

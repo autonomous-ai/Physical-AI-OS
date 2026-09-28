@@ -1,10 +1,4 @@
-"""Regression tests for the pending-tool-call session quarantine (Gemini Live 1008).
-
-Gemini refuses client input while a tool call it emitted is unanswered and
-closes the session with 1008 ("The operation was aborted"). A tool response is
-the only way to make that session reusable. Fire-and-forget tools deliberately
-do not send one, so their session must be rebuilt before another capture.
-"""
+"""Regression tests for the pending-tool-call session quarantine (Gemini Live 1008)."""
 
 import asyncio
 import queue
@@ -126,13 +120,10 @@ def test_fire_and_forget_result_requires_a_fresh_session():
         )
     )
 
-    # Gemini was deliberately told nothing, so the original call remains
-    # unresolved from the server's point of view.
     assert session.tool_responses == []
     assert agent._pending_tool_calls == {"call-1"}
     assert agent.requires_fresh_session is True
 
-    # No client input may touch a session Gemini is still waiting on.
     asyncio.run(agent._async_send_input(_audio()))
     asyncio.run(agent._async_send_input(TextInput(text="turn context")))
     assert session.realtime_inputs == []
@@ -254,19 +245,12 @@ def test_activity_end_is_suppressed_while_a_tool_call_is_pending():
     asyncio.run(agent._async_commit())
 
     assert session.realtime_inputs == []
-    # The bracket belongs to the dying session, so do not carry it into its
-    # replacement.
     assert agent._activity_started is False
     assert agent.requires_fresh_session is True
 
 
 def test_an_image_is_dropped_while_a_tool_call_is_pending():
-    """The gate is not audio-only: ImageInput rides send_realtime_input too.
-
-    This is the `look` flow's frame. It shares the API Gemini refuses while a
-    call is unanswered, so it must be gated for the same reason audio is —
-    otherwise the session dies with 1008 instead of losing one frame.
-    """
+    """The gate is not audio-only: ImageInput rides send_realtime_input too."""
     session = _RecordingSession()
     agent = _agent(session)
     agent._pending_tool_calls = {"call-1"}
@@ -274,18 +258,11 @@ def test_an_image_is_dropped_while_a_tool_call_is_pending():
     asyncio.run(agent._async_send_input(ImageInput(image=_frame())))
 
     assert session.realtime_inputs == []
-    # Not audio, so it must not be counted as a gated audio frame.
     assert agent._gated_audio_frames == 0
 
 
 def test_an_image_flows_once_the_tool_call_has_been_answered():
-    """What the look flow depends on: ack first, then the frame goes out.
-
-    The fresh-frame path used to send no result at all and relied on the gate's
-    10s expiry outliving an 8s aim — flaky by construction, and broken outright
-    once the expiry was removed. Acknowledging the call is what reopens
-    send_realtime_input for both the frame and the replayed audio.
-    """
+    """What the look flow depends on: ack first, then the frame goes out."""
     session = _RecordingSession()
     agent = _agent(session)
     agent._pending_tool_calls = {"call-1"}
@@ -307,12 +284,7 @@ def test_an_image_flows_once_the_tool_call_has_been_answered():
 
 
 def test_replayed_audio_flows_once_the_tool_call_has_been_answered():
-    """The other half of the look flow: the user's utterance is sent twice.
-
-    The replay re-appends the SAME mic frames so the queued image joins the
-    question. Those are AudioInput, so an unanswered call silences the replay
-    as surely as it drops the frame — the model then answers from nothing.
-    """
+    """The other half of the look flow: the user's utterance is sent twice."""
     session = _RecordingSession()
     agent = _agent(session)
     agent._pending_tool_calls = {"call-1"}
@@ -329,9 +301,6 @@ def test_replayed_audio_flows_once_the_tool_call_has_been_answered():
 
     assert len(session.realtime_inputs) == 1
     assert "audio" in session.realtime_inputs[0]
-
-
-# --- The look ack tells the model whether the aim found the user ---
 
 
 def _ack_payload(res):
@@ -358,22 +327,19 @@ def test_a_centred_aim_reports_nothing_unusual():
 
 
 def test_running_out_of_time_still_counts_as_finding_them():
-    """The person IS in frame on these exits — just not centred yet. Flagging
-    them would make the model hedge on a perfectly good picture."""
+    """Uncentred-but-in-frame aim exits are not flagged as poor framing."""
     assert "found_user" not in _ack_payload(_Aim(False, "deadline"))
     assert "found_user" not in _ack_payload(_Aim(False, "max iterations"))
 
 
 def test_finding_nobody_is_reported_to_the_model():
-    """Without this the model cannot tell a framed shot from "wherever the
-    camera happened to be pointing", and answers both with equal confidence."""
+    """An aim that found nobody is flagged to the model."""
     ack = _ack_payload(_Aim(False, "subject not found"))
     assert ack["found_user"] is False
 
 
 def test_a_disabled_aim_makes_no_claim_either_way():
-    """LOOK_AIM_ENABLED off, or the aim raised — no aim ran, so nothing is
-    known about framing and the model should not be told otherwise."""
+    """No framing note when no aim ran."""
     assert "found_user" not in _ack_payload(None)
 
 

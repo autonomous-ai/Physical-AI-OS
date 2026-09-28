@@ -1,10 +1,4 @@
-"""POST transcripts to os-server + drop transcripts that echo our own TTS.
-
-`_is_echo` is the third layer of echo handling:
-  Layer 1: temporal isolation (mic closed during TTS) — voice_service main loop
-  Layer 2: adaptive RMS reverb gate                    — voice_service._wait_for_tts
-  Layer 3: transcript similarity filter                — here
-"""
+"""POST transcripts to os-server + drop transcripts that echo our own TTS."""
 
 import json as _json
 import logging
@@ -23,14 +17,7 @@ logger = logging.getLogger("hal.voice")
 
 
 class SendResult:
-    """What os-server said about a forwarded turn.
-
-    ``run_id`` correlates this utterance with the os-server run it created.
-    ``speech_suppressed`` is os-server's ANSWER to "did you actually take the
-    speaker away from the older turn" — only meaningful for
-    voice_agent_handled, and False when the supersession policy is off. Both
-    are for measurement; nothing in the voice path branches on them.
-    """
+    """What os-server said about a forwarded turn."""
 
     __slots__ = ("run_id", "speech_suppressed", "delivered", "handled_locally")
 
@@ -39,9 +26,6 @@ class SendResult:
         self.run_id = run_id
         self.speech_suppressed = speech_suppressed
         self.delivered = delivered
-        # os-server answered the command itself (local intent match: volume,
-        # LED, time). Served, just without an agent run — so a missing run id
-        # here is success, not a failed dispatch.
         self.handled_locally = handled_locally
 
     def __bool__(self) -> bool:
@@ -49,8 +33,9 @@ class SendResult:
 
 
 def _result_of(resp) -> "SendResult":
-    """Parse the os-server response. Never raises: a correlation id is nice to
-    have, not a reason to fail a voice turn."""
+    """Parse the os-server response. Never raises: a correlation id is nice to have, not a
+    reason to fail a voice turn.
+    """
     try:
         data = (resp.json() or {}).get("data") or {}
         return SendResult(
@@ -98,23 +83,10 @@ class SensingSender:
         harness_voice: dict | None = None,
         voice_turn_type: str = "",
     ) -> "SendResult":
-        """POST decorated message to os-server /api/sensing/event with retry.
-
-        ``image_b64`` (raw base64 JPEG, no data-URI prefix) rides the payload's
-        ``images`` list. HAL only ever has ONE snapshot per event, so it sends a
-        single-element list; the field is a list because a chat client can attach
-        several photos to one turn and every wire format behind os-server already
-        carries `attachments[]`. os-server describes it with a vision model and forwards
-        the description as text (describe-first) — required because the main
-        model can be text-only: a file path in ``message`` is useless there
-        (tool-read image blocks are silently dropped), and a raw attachment
-        404s at the smart-agent-router when it picks a no-vision backend.
-        """
+        """POST decorated message to os-server /api/sensing/event with retry."""
         if not skip_echo and self.is_echo(message):
             return SendResult()
 
-        # Someone spoke to the device: keep presence from timing out to AWAY
-        # (and the sleep announcement) while the camera cannot see them.
         if event_type in ("voice", "voice_command", "voice_followup", "voice_agent_handled"):
             try:
                 from hal import app_state as presence_state
@@ -133,18 +105,7 @@ class SensingSender:
                 "generation": harness_voice["generation"],
             }
         if interaction_id:
-            # Voice metrics ownership, sent UP so os-server can tag the audio it
-            # starts on its own. The opening filler fires the moment this POST
-            # arrives — before the response carrying runId gets back here — so
-            # binding on the response would leave a cache-hit filler unowned
-            # and its turn counted as unacknowledged.
             payload["interaction_id"] = interaction_id
-        # Voice turns used to ship NO current_user at all, so the identity in
-        # them reached os-server only as the `Speaker - <Name>:` text prefix and
-        # the backend fell back to its last cached value. Send the resolved
-        # identity like every sensing event does. Face still wins inside the
-        # resolver, so on a camera device this is the same value those events
-        # already carry — it only adds a user on the voice-only path.
         try:
             from hal import app_state as identity_state
 
@@ -155,21 +116,18 @@ class SensingSender:
             logger.exception("[voice] current_user resolution failed")
         if image_b64:
             payload["images"] = [image_b64]
-        # Log a copy with the image masked — a ~70KB base64 blob would drown the log.
         log_payload = {**payload, "images": [f"<{len(image_b64)} b64 chars>"]} if image_b64 else payload
         logger.info(
             "curl -s -X POST %s -H 'Content-Type: application/json' -d '%s'",
             OS_SENSING_URL, _json.dumps(log_payload),
         )
         # Image turns wait for the os-server-side vision describe (up to 80s,
-        # system/vision DescribeTimeout — qwen measured 2026-07-06: scene
-        # images 8-20s but TEXT-DENSE images 23-38s per attempt) before the
-        # response comes back — don't let the plain-text timeout abort them
-        # into a spurious "failed to send" warning.
+        # system/vision DescribeTimeout — qwen measured 2026-07-06: scene images 8-20s
+        # but TEXT-DENSE images 23-38s per attempt) before the response comes back —
+        # don't let the plain-text timeout abort them into a spurious "failed to send"
+        # warning.
         harness_only = bool(harness_voice and harness_voice["enabled"])
         user_voice = event_type in ("voice", "voice_command", "voice_followup")
-        # Local/Jev handling can take 3s for classification and multiple 5s HAL
-        # calls. Give it time to return a receipt; keep direct Harness unchanged.
         timeout_s = 90 if image_b64 else (30 if user_voice and not harness_only else 5)
         # A transport error can occur after Harness accepted the turn. Never
         # retry that mutation without a known receipt / idempotency outcome.
@@ -188,9 +146,6 @@ class SensingSender:
                     logger.warning("os-server returned %d: %s", resp.status_code, resp.text)
                 else:
                     logger.info("Sent to os-server: %r", message)
-                    # Returned so a caller can correlate this turn with the
-                    # os-server run it created (voice metrics does; nothing else
-                    # has to care).
                     return _result_of(resp)
                 return SendResult()
             except requests.ConnectionError as e:

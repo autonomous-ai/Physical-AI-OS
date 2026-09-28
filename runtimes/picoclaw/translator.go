@@ -13,9 +13,7 @@ import (
 // timestamp convention).
 func nowUnixMs() int64 { return time.Now().UnixMilli() }
 
-// picoFrame is one inbound PicoClaw message. The discriminator is Type; for
-// message.create / message.update the category is decided by the payload fields
-// (placeholder / kind / tool_calls / content) — never by Type alone.
+// picoFrame is one inbound PicoClaw message.
 type picoFrame struct {
 	Type      string      `json:"type"`
 	SessionID string      `json:"session_id"`
@@ -64,9 +62,6 @@ func (u *picoUsage) toDomain() *domain.TokenUsage {
 	if u.UsedTokens == 0 && u.TotalTokens == 0 && u.HistoryTokens == 0 {
 		return nil
 	}
-	// PicoClaw reports cumulative context size, not per-turn input/output. Map
-	// the running context size onto TotalTokens and the carried history onto
-	// InputTokens so the monitor's token gauge has meaningful numbers.
 	return &domain.TokenUsage{
 		InputTokens:       u.HistoryTokens,
 		TotalTokens:       u.UsedTokens,
@@ -102,14 +97,7 @@ func categorize(p picoPayload) category {
 }
 
 // translateFrame parses one inbound PicoClaw frame and emits 0..N domain.WSEvent
-// frames into dispatch. Mapping (keep in sync with docs/agentic/picoclaw.md):
-//
-//	typing.start                    → lifecycle.start (once per turn)
-//	message.create/update placeholder/thought → ignored (state, not content)
-//	message.create kind=tool_calls  → tool.start + tool.end per call
-//	message.create/update final     → chat.final + lifecycle.end (ends turn)
-//	error                           → lifecycle.error (ends turn)
-//	typing.stop / message.delete / pong → ignored
+// frames into dispatch.
 func (s *PicoclawService) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	var f picoFrame
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -117,7 +105,6 @@ func (s *PicoclawService) translateFrame(raw []byte, dispatch func(domain.WSEven
 		return
 	}
 
-	// Capture the server-assigned session_id from any frame.
 	if f.SessionID != "" && f.SessionID != s.GetSessionKey() {
 		s.SetSessionKey(f.SessionID)
 	}
@@ -127,8 +114,8 @@ func (s *PicoclawService) translateFrame(raw []byte, dispatch func(domain.WSEven
 		s.ensureTurnStarted(dispatch)
 	case "typing.stop", "message.delete", "pong":
 		// typing.stop arrives BEFORE the final answer (right after the thinking
-		// phase) — it is NOT the end of the turn. message.delete removes the
-		// "Thinking..." placeholder we never rendered. pong is keepalive. Ignore.
+		// phase) — it is NOT the end of the turn.
+		// message.delete removes the "Thinking..." placeholder we never rendered.
 	case "error":
 		s.handleError(f, dispatch)
 	case "message.create", "message.update":
@@ -141,8 +128,6 @@ func (s *PicoclawService) translateFrame(raw []byte, dispatch func(domain.WSEven
 func (s *PicoclawService) handleMessage(f picoFrame, dispatch func(domain.WSEvent)) {
 	switch categorize(f.Payload) {
 	case catThinking:
-		// Open the turn so the lifecycle is consistent, but render nothing —
-		// "Thinking..." / reasoning is status, not the answer.
 		s.ensureTurnStarted(dispatch)
 	case catTool:
 		s.ensureTurnStarted(dispatch)
@@ -151,16 +136,13 @@ func (s *PicoclawService) handleMessage(f picoFrame, dispatch func(domain.WSEven
 		s.ensureTurnStarted(dispatch)
 		s.emitFinal(f, dispatch)
 	case catOther:
-		// empty content, nothing to do
 	}
 }
 
-// ensureTurnStarted emits lifecycle.start exactly once per turn. The runID is
-// adopted from a pending outbound SendChat when present, else freshly allocated
-// for an externally-initiated turn (e.g. a Telegram message PicoClaw processed).
+// ensureTurnStarted emits lifecycle.start exactly once per turn.
 func (s *PicoclawService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() != "" {
-		return // already started
+		return
 	}
 	runID := s.consumePendingRunID()
 	if runID == "" {
@@ -186,8 +168,7 @@ func (s *PicoclawService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 }
 
 // emitToolCalls surfaces each OpenAI-style tool call as a tool.start + tool.end
-// pair. PicoClaw reports calls after the fact and does not stream a separate
-// result frame, so tool.end carries an empty result purely to close the trace.
+// pair.
 func (s *PicoclawService) emitToolCalls(f picoFrame, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	for _, c := range f.Payload.ToolCalls {
@@ -229,16 +210,7 @@ func (s *PicoclawService) emitToolCalls(f picoFrame, dispatch func(domain.WSEven
 
 // emitFinal emits, in order: (a) the whole reply as a single assistant delta,
 // (b) the final chat message, (c) lifecycle.end with usage — then closes the
-// turn. Order matches OpenClaw/Hermes (assistant deltas → chat.final →
-// lifecycle.end → idle). PicoClaw does not stream tokens, so (a) is the N=1
-// case of that streaming contract: it is what lets the shared consumer flush
-// TTS + [HW:/…] hardware markers (and light the Flow Monitor tts_speak / hw_*
-// nodes) at lifecycle.end exactly as it does for the streaming backends —
-// without it the reply renders in web chat but never reaches the speaker or HW.
-//
-// Turn IDs stay reserved until all terminal callbacks complete. Both chat.final
-// and lifecycle.end can request idle; neither may release the next queued turn
-// while the previous terminal event is still being delivered.
+// turn.
 func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	finalText := f.Payload.Content
@@ -264,7 +236,6 @@ func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) 
 	// Surface the full reply as a single assistant delta BEFORE chat.final /
 	// lifecycle.end so the consumer's assistant buffer (accumulateAssistantDelta)
 	// is populated before it flushes at lifecycle.end — see this func's doc.
-	// finalText carries the raw [HW:/…] markers so extractHWCalls can parse them.
 	if finalText != "" {
 		deltaPayload, _ := json.Marshal(map[string]any{
 			"runId":      runID,
@@ -298,7 +269,7 @@ func (s *PicoclawService) emitFinal(f picoFrame, dispatch func(domain.WSEvent)) 
 }
 
 func (s *PicoclawService) handleError(f picoFrame, dispatch func(domain.WSEvent)) {
-	s.ensureTurnStarted(dispatch) // make sure a runID exists for the error
+	s.ensureTurnStarted(dispatch)
 	runID := s.getCurrentRunID()
 	msg := f.Payload.Message
 	if msg == "" {
@@ -309,7 +280,6 @@ func (s *PicoclawService) handleError(f picoFrame, dispatch func(domain.WSEvent)
 	}
 	slog.Warn("picoclaw <<< error", "component", "picoclaw", "runID", runID, "code", f.Payload.Code, "error", msg)
 
-	// Release the turn after dispatch, including callbacks that request idle.
 	defer s.finishTurn()
 
 	payload, _ := json.Marshal(map[string]any{
@@ -340,8 +310,6 @@ func (s *PicoclawService) peekPendingRunID() string {
 	return v
 }
 
-// --- turn-correlation helpers ---
-
 func (s *PicoclawService) getCurrentRunID() string {
 	v, _ := s.currentRunID.Load().(string)
 	return v
@@ -359,9 +327,7 @@ func (s *PicoclawService) consumePendingRunID() string {
 	return v
 }
 
-// clearTurn resets the in-flight turn ids without touching busy state. Used on
-// disconnect / busyTTL expiry / send failure. The normal end-of-turn path clears
-// the ids in finishTurn after all terminal callbacks have completed.
+// clearTurn resets the in-flight turn ids without touching busy state.
 func (s *PicoclawService) clearTurn() {
 	s.currentRunID.Store("")
 	s.pendingRunID.Store("")

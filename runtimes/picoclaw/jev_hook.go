@@ -12,7 +12,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// jevEnabled is the runtime build switch. Enable only after native validation.
+// jevEnabled is the runtime build switch.
 const jevEnabled = false
 
 //go:embed resources/hooks/jev/hook.py
@@ -75,7 +75,7 @@ func applyJevHook(cfg map[string]any, path string) {
 	processes["jev"] = map[string]any{"enabled": jevEnabled, "transport": "stdio", "command": []any{"python3", path}, "intercept": []any{"before_llm"}}
 }
 
-// Disabled builds install nothing. Only retire a registration from an older build.
+// Disabled builds install nothing.
 func disableExistingJevHook(cfgPath string) (bool, error) {
 	if _, err := os.Stat(cfgPath); os.IsNotExist(err) {
 		return false, nil

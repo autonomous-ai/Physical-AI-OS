@@ -1,24 +1,5 @@
 // Package gatewayd bridges a local WebSocket to per-turn `opencode run
-// --format json` subprocesses. It runs as `os-server opencode-gatewayd` under
-// the opencode.service systemd unit (EnvironmentFile=/root/.opencode/.env).
-//
-// Protocol (client = os-server runtimes/opencode):
-//
-//	client -> gatewayd: {"type":"message.send","id":..,"payload":{"content":..,
-//	                     "attachments":[{"type":"image","url":"data:<mt>;base64,<b64>"}]}}
-//	                    {"type":"session.new"}  -> forget session (runs after queued
-//	                     turns), next turn is fresh
-//	                    {"type":"ping","id":X}  -> {"type":"pong","id":X}
-//	gatewayd -> client: opencode `run --format json` JSONL events forwarded
-//	                    VERBATIM (text/reasoning/tool_use/step_start/step_finish/
-//	                    message.updated/session.idle/session.error/..), plus
-//	                    {"type":"pong"}, {"type":"bridge.status",..} and
-//	                    {"type":"bridge.error","error":".."}.
-//
-// Turns are strictly serialized (buffered channel + single worker goroutine).
-// The sessionID field present on every opencode JSONL line is persisted to the
-// session file and replayed via `opencode run --session <id>` on subsequent
-// turns. Model/provider come from opencode.json (presync-owned) — never --model.
+// --format json` subprocesses.
 package gatewayd
 
 import (
@@ -45,11 +26,9 @@ const (
 
 // resumeErrHints are case-insensitive substrings in stderr/stdout meaning the
 // resumed opencode session no longer exists (so a fresh retry is warranted).
-// ⚠️ VERIFY ON DEVICE: opencode's verbatim missing-session error string.
 var resumeErrHints = []string{"session not found", "no session", "not found", "unknown session"}
 
-// Config holds every tunable. Main() fills it from environment variables
-// (read once at start); tests construct it directly with temp paths.
+// Config holds every tunable.
 type Config struct {
 	JevConfigPath string
 	JevEnabled    bool
@@ -116,9 +95,9 @@ func New(cfg Config, ln net.Listener) *Server {
 	}
 }
 
-// Serve blocks until ctx is cancelled or the listener fails. It owns the
-// turn-worker goroutine; on ctx cancellation any in-flight subprocess is
-// killed (process group) and open connections are dropped.
+// Serve blocks until ctx is cancelled or the listener fails.
+// It owns the turn-worker goroutine; on ctx cancellation any in-flight subprocess is killed
+// (process group) and open connections are dropped.
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -156,9 +135,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// Main is the blocking entry point for `os-server opencode-gatewayd`. It reads
-// config from the environment, listens on 127.0.0.1:OPENCODE_PORT and shuts
-// down gracefully on SIGTERM/SIGINT.
+// Main is the blocking entry point for `os-server opencode-gatewayd`.
 func Main() int {
 	cfg := configFromEnv()
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", cfg.Port))

@@ -64,8 +64,7 @@ export async function nativeCatalog(api, ctx) {
     const content = await boundedRead(file, 32768);
     const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1];
     if (!front) continue;
-    // Accept only simple metadata; native handles all dependency/platform,
-    // invocation and permission declarations, including newly added ones.
+    // Accept only simple metadata; native handles dependency/platform/permission declarations.
     const keys = [...front.matchAll(/^([^\s:#][^:]*):/gm)].map(m => m[1].trim());
     const name = /^name:\s*["']?([a-zA-Z0-9_.-]+)["']?\s*$/m.exec(front)?.[1];
     if (name !== skill.name || keys.some(k => !["name", "description", "license", "compatibility"].includes(k)) || /[&*!]/.test(front)) continue;

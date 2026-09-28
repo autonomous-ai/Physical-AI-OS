@@ -6,12 +6,8 @@ import (
 	"errors"
 )
 
-// ErrNotSupportedByRuntime is returned by AgentGateway methods that the active
-// backend genuinely does not implement (e.g. UpdatePrimaryModel on Hermes, whose
-// model registry is server-owned). It lets callers distinguish "backend did
-// nothing by design" from "backend tried and failed" — stubs must return this
-// instead of nil so a config change is never silently dropped. Mirrors the
-// ErrChannelNotSupported convention in channel.go.
+// ErrNotSupportedByRuntime is returned by AgentGateway methods the active backend does not implement.
+// Stubs must return it instead of nil so a config change is never silently dropped.
 var ErrNotSupportedByRuntime = errors.New("not_supported_by_runtime")
 
 // TelegramTarget represents a Telegram chat the bot is connected to.
@@ -40,64 +36,41 @@ type AgentGateway interface {
 	// Name returns the display name of this agent gateway (e.g. "OpenClaw", "PicoClaw").
 	Name() string
 
-	// Version returns the active backend's own version (e.g. OpenClaw "2026.5.27",
-	// Hermes "0.17.0"), so version surfaces (web Status, etc.) reflect the running
-	// runtime rather than always reporting OpenClaw. Empty when undetected.
+	// Version returns the active backend's own version; empty when undetected.
 	Version() string
 
 	// IsReady returns true when the agent runtime is connected and ready.
 	IsReady() bool
 
-	// ConnectedAt returns the unix-seconds timestamp when the runtime
-	// connection last became ready, or 0 when not currently connected.
+	// ConnectedAt returns when the connection last became ready (Unix seconds), or 0.
 	ConnectedAt() int64
 
-	// AgentUptime returns the agent runtime process uptime in seconds,
-	// independent of the local WS reconnect cycle. Returns 0 when not connected
-	// or when the gateway has not yet reported its uptime.
+	// AgentUptime returns the runtime process uptime in seconds, or 0 when unknown.
 	AgentUptime() int64
 
 	// IsBusy returns true when the agent is currently processing a turn.
-	// Passive sensing events should be dropped while busy to avoid interrupting active commands.
 	IsBusy() bool
 
 	// SetBusy marks the agent as busy (true on lifecycle start, false on lifecycle end).
 	SetBusy(busy bool)
 
-	// QueuePendingEvent buffers a sensing event to replay when the agent becomes idle.
-	// Last-write-wins per event type. fixedRunID lets web_chat preallocate the runID
-	// returned to the web client so it can correlate SSE events at replay time;
-	// other event types pass "" and a fresh runID is allocated at drain.
+	// QueuePendingEvent buffers an event (last-write-wins per type) to replay when idle.
+	// fixedRunID preallocates the runID (web_chat); "" allocates one at drain.
 	QueuePendingEvent(eventType, msg string, images []string, fixedRunID string)
 
-	// DrainPendingEvents replays whatever QueuePendingEvent buffered. The
-	// runtimes call it themselves on the idle edge; this exposes it because
-	// that edge is not the only reason a queued event has to wait. An event
-	// queued while the DEVICE was busy — the agent long since idle, its reply
-	// still coming out of the speaker — has no turn ending behind it to
-	// trigger a drain, and would otherwise sit in the queue until the next
-	// unrelated turn happened to finish.
+	// DrainPendingEvents replays buffered events; exposed for device-busy waits with no agent turn ending.
 	DrainPendingEvents()
 
 	// SendChatMessage sends a user message to the agent. Returns the run ID.
 	SendChatMessage(msg string) (string, error)
 
-	// SendSystemChatMessage sends a system-originated message (skill updates, wake greeting,
-	// /compact) so Flow Monitor can render it separately from real user input. The WS RPC
-	// payload is identical to SendChatMessage.
+	// SendSystemChatMessage sends a system-originated message, shown separately in Flow Monitor.
 	SendSystemChatMessage(msg string) (string, error)
 
-	// SendChatMessageWithImages sends a message with base64 JPEG image
-	// attachments. Used by sensing events that include a camera snapshot for AI
-	// vision analysis, and by chat clients that attach photos. A slice, not a
-	// single image: a chat client can attach several at once, and every wire
-	// format behind this (OpenClaw chat.send, the bridge frame) already carries
-	// `attachments[]`. Pass one element for the single-snapshot case; an empty
-	// or nil slice means no attachment.
+	// SendChatMessageWithImages sends a message with base64 JPEG attachments; empty slice = none.
 	SendChatMessageWithImages(msg string, imagesBase64 []string) (string, error)
 
-	// NextChatRunID allocates the chat request id and idempotency key for the next outbound chat.send.
-	// Call flow.SetTrace(runID) before flow.Start so the sensing_input enter line matches chat_send.
+	// NextChatRunID allocates the request id and idempotency key for the next chat.send.
 	NextChatRunID() (reqID string, runID string)
 
 	// SendChatMessageWithRun sends using a preallocated pair from NextChatRunID (same idempotency as chat.send).
@@ -106,10 +79,7 @@ type AgentGateway interface {
 	// SendChatMessageWithImagesAndRun is SendChatMessageWithImages with preallocated ids.
 	SendChatMessageWithImagesAndRun(msg string, imagesBase64 []string, reqID string, runID string) (string, error)
 
-	// SendSlashCommandWithRun sends a slash-prefixed message (e.g. "/status")
-	// with deliver:false so the gateway routes the reply only back to this
-	// chat.send caller (mirrors gw web behavior). Use when the message text
-	// starts with "/" and originates from the web monitor chat.
+	// SendSlashCommandWithRun sends a slash command (e.g. "/status") with deliver:false, replying only to the caller.
 	SendSlashCommandWithRun(msg string, reqID string, runID string) (string, error)
 
 	// SendSlashCommandWithImagesAndRun is SendSlashCommandWithRun with image attachments.
@@ -124,43 +94,19 @@ type AgentGateway interface {
 	// SetupAgent configures and starts the agent runtime from setup data.
 	SetupAgent(data SetupRequest) error
 
-	// SupportedChannels returns the messaging channels this runtime can run
-	// (e.g. "telegram", "slack"). Callers enforce supported-vs-not-supported before
-	// persisting credentials and decide what to re-apply on a runtime switch.
-	// openclaw: telegram/slack/discord/whatsapp; hermes: telegram/slack/discord
-	// (delivered by the Hermes server via ~/.hermes/.env); picoclaw: telegram;
-	// claudecode: telegram/slack/discord (all device-owned, mirroring codex —
-	// telegram_poll.go / discord.go / slack.go; the Claude Code native channel
-	// plugins are deliberately not used).
+	// SupportedChannels returns the messaging channels this runtime can run (e.g. "telegram", "slack").
 	SupportedChannels() []string
 
-	// AddChannel adds a messaging channel to the agent runtime. ctx caps the
-	// underlying CLI subprocess + restart so callers (MQTT 10-min budget) can
-	// bound the whole flow. WhatsApp pairing is a separate streaming call —
-	// PairWhatsapp; this method only writes the channel config + enables the
-	// plugin.
+	// AddChannel adds a messaging channel; ctx bounds the CLI subprocess and restart.
 	AddChannel(ctx context.Context, data AddChannelRequest) error
 
-	// RefreshChannelConfig re-applies the canonical channels.<channel> block in
-	// openclaw.json using the same writer AddChannel uses, then restarts the
-	// gateway. Unlike AddChannel this path is config-only: no plugin install, no
-	// CLI bootstrap, no pairing. Returns the detected runtime version string
-	// ("Y.M.P", empty when undetected) so callers can echo it in fd_channel
-	// responses, and errors out (without restarting) when openclaw.json does not
-	// yet exist — refresh is only meaningful on already-onboarded devices. Today
-	// only the slack channel is implemented; other channels return an error.
+	// RefreshChannelConfig re-applies channels.<channel> config and restarts; returns the runtime version.
 	RefreshChannelConfig(ctx context.Context, req RefreshChannelRequest) (runtime string, err error)
 
-	// HasWhatsappSession reports whether a Baileys session already exists on
-	// disk for the given account ("default" when empty). When true, AddChannel
-	// callers can emit a single PairingStatusSuccess event and skip the
-	// interactive QR pairing flow.
+	// HasWhatsappSession reports whether a WhatsApp session exists for account ("default" when empty).
 	HasWhatsappSession(account string) bool
 
-	// PairWhatsapp runs `openclaw channels login --channel whatsapp` and emits
-	// PairingEvents on the returned channel. Callers MUST drain. Only one
-	// pairing flow may be active per device; concurrent calls produce a
-	// one-event channel containing PairingStatusFailure.
+	// PairWhatsapp runs the WhatsApp login flow; callers must drain. One active flow per device.
 	PairWhatsapp(ctx context.Context) <-chan PairingEvent
 
 	// ResetAgent factory-resets the agent runtime configuration.
@@ -169,118 +115,69 @@ type AgentGateway interface {
 	// RestartAgent restarts the agent runtime process.
 	RestartAgent() error
 
-	// RefreshModelsConfig patches the models reasoning fields in openclaw.json
-	// based on the current LLMDisableThinking config and restarts the agent.
-	// Backends whose model config is not device-patchable (hermes, picoclaw)
-	// return ErrNotSupportedByRuntime.
+	// RefreshModelsConfig patches model reasoning fields from LLMDisableThinking and restarts.
 	RefreshModelsConfig() error
 
 	// EnsureOnboarding seeds personality/identity files into the agent workspace.
 	EnsureOnboarding() error
 
-	// SaveSkill writes a user-authored skill (the web UI's "Write skill" form)
-	// into this runtime's skills dir as <name>/SKILL.md, and returns the path
-	// it wrote. Only the target directory differs per backend — the rendering
-	// and the write itself are shared (skills.WriteAuthoredSkill).
-	//
-	// Backends with no device-writable skills dir return
-	// ErrNotSupportedByRuntime, and nothing is stored. The runtime is NOT
-	// restarted; backends that have a skills dir pick new files up per session.
+	// SaveSkill writes draft as <name>/SKILL.md in the skills dir and returns the path (no restart).
 	SaveSkill(draft SkillDraft) (path string, err error)
 
-	// InstallSkillArchive extracts a downloaded `.skill` archive into this
-	// runtime's skills dir and returns the directory it wrote. fallbackName
-	// names the skill when the archive has no single wrapping directory.
-	// Same per-backend split as SaveSkill: only the target dir differs
-	// (skills.InstallSkillArchive does the work), and backends with no
-	// device-writable skills dir return ErrNotSupportedByRuntime.
+	// InstallSkillArchive extracts a `.skill` archive into the skills dir; fallbackName is used when unwrapped.
 	InstallSkillArchive(archivePath, fallbackName string) (dir string, err error)
 
-	// InstallSkillMarkdown installs a BARE SKILL.md into this runtime's skills
-	// dir and returns the directory it wrote. The file's YAML front-matter `name`
-	// decides the directory, so content without valid front-matter is refused
-	// (skills.ErrInvalidFrontMatter) rather than landing under a guessed name.
-	// Same per-backend split as InstallSkillArchive.
+	// InstallSkillMarkdown installs a bare SKILL.md named by its front-matter (else ErrInvalidFrontMatter).
 	InstallSkillMarkdown(content []byte) (dir string, err error)
 
-	// ListSkills returns the skills currently present in this runtime's skills
-	// dir, each with its file tree. Same per-backend split as SaveSkill: only
-	// the directory differs (skills.ListInstalled does the walk). Backends with
-	// no device-readable skills dir return ErrNotSupportedByRuntime; a runtime
-	// that has one but hasn't been provisioned yet returns an empty list.
+	// ListSkills returns the skills in this runtime's skills dir, each with its file tree.
 	ListSkills() ([]InstalledSkill, error)
 
-	// ReadSkillFiles returns one installed skill's files as a flat list with
-	// UTF-8 contents inlined — the Manage-skills detail view, which renders the
-	// same two-pane browser as the store preview. Same per-backend split as
-	// ListSkills (skills.ReadSkillFiles does the walk).
+	// ReadSkillFiles returns one installed skill's files as a flat list with text inlined.
 	ReadSkillFiles(name string) ([]SkillBundleFile, error)
 	ExportSkillArchive(name, destDir string) (string, error)
 
-	// ReadSkillFile returns one installed skill file addressed by the exact path
-	// emitted by ReadSkillFiles (for example "music/SKILL.md"). Callers that
-	// need one document should use this instead of loading the entire skill.
+	// ReadSkillFile returns one skill file by the path ReadSkillFiles emits (e.g. "music/SKILL.md").
 	ReadSkillFile(name, filePath string) (SkillBundleFile, error)
 
-	// DeleteSkill removes an installed skill from this runtime's skills dir and
-	// returns the directory it deleted. Same per-backend split as ListSkills:
-	// only the target dir differs (skills.DeleteSkill does the work). A skill
-	// that isn't there returns skills.ErrSkillNotFound, not success, so a stale
-	// caller sees the mismatch.
+	// DeleteSkill removes an installed skill; a missing one returns skills.ErrSkillNotFound.
 	DeleteSkill(name string) (path string, err error)
 
-	// FetchChatHistory sends a chat.history RPC and returns the raw messages array.
-	// Best-effort: returns nil on error or timeout without failing the caller.
+	// FetchChatHistory returns the raw chat.history messages array (best-effort).
 	FetchChatHistory(sessionKey string, limit int) (json.RawMessage, error)
 
-	// GetConfigJSON returns the active runtime's raw config file bytes
-	// (openclaw.json / picoclaw config.json). Backends with no agent-side
-	// config file (hermes) return ErrNotSupportedByRuntime.
+	// GetConfigJSON returns the active runtime's raw config file bytes.
 	GetConfigJSON() (json.RawMessage, error)
 
-	// WriteMCPEntry upserts mcp.servers.<name> in openclaw.json (the server
-	// config map, e.g. {type, url, headers}) and restarts the gateway. Used by
-	// the connector.set MQTT flow to wire remote-MCP connectors.
+	// WriteMCPEntry upserts mcp.servers.<name> and restarts the gateway.
 	WriteMCPEntry(name string, entry map[string]any) error
 
-	// RemoveMCPEntry deletes mcp.servers.<name>. Returns removed=false (no
-	// write/restart) when the entry was already absent.
+	// RemoveMCPEntry deletes mcp.servers.<name>; false (no restart) when already absent.
 	RemoveMCPEntry(name string) (bool, error)
 
 	// StartWS connects to the agent runtime and runs the event read loop.
 	StartWS(ctx context.Context, handler AgentEventHandler)
 
-	// MarkGuardRun marks a runID as a guard-active turn. When the agent responds,
-	// the SSE handler will broadcast the response to all Telegram chats via Bot API.
+	// MarkGuardRun marks a runID as a guard-active turn whose reply is broadcast to Telegram.
 	MarkGuardRun(runID string, snapshotPath string)
 
-	// ConsumeGuardRun checks if a runID is a guard-active turn and returns the
-	// snapshot path. Returns ("", false) if not a guard run.
+	// ConsumeGuardRun returns the snapshot path for a guard run (one-shot).
 	ConsumeGuardRun(runID string) (snapshotPath string, ok bool)
 
-	// MarkBroadcastRun marks a runID so the agent's response is broadcast
-	// to all messaging channels alongside TTS. Used for music.mood confirmations
-	// and other events where the user should be able to respond via voice or channel.
+	// MarkBroadcastRun marks a runID whose reply is broadcast to all channels alongside TTS.
 	MarkBroadcastRun(runID string)
 
 	// ConsumeBroadcastRun checks if a runID is marked for broadcast. One-shot.
 	ConsumeBroadcastRun(runID string) bool
 
-	// MarkPoseBucketRun stashes the pose bucket + worst-snapshot filenames
-	// associated with a motion.activity turn that surfaced a posture nudge.
-	// The SSE handler consumes this on /dm so the worst frames can be
-	// attached to the Telegram message without the agent having to know
-	// any file paths. bucketID is hal's window_start integer; filenames
-	// are relative to <SNAPSHOT_TMP_DIR>/sensing_pose/buckets/<bucketID>/.
+	// MarkPoseBucketRun stashes pose bucket snapshots for a posture-nudge turn.
+	// Filenames are relative to <SNAPSHOT_TMP_DIR>/sensing_pose/buckets/<bucketID>/.
 	MarkPoseBucketRun(runID string, bucketID string, worstFilenames []string)
 
-	// ConsumePoseBucketRun returns + removes the pose bucket info for a
-	// runID. One-shot, mirrors ConsumeGuardRun. ok is false when the run
-	// has no associated bucket (most turns).
+	// ConsumePoseBucketRun returns and removes the pose bucket info for a runID (one-shot).
 	ConsumePoseBucketRun(runID string) (bucketID string, worstFilenames []string, ok bool)
 
-	// MarkWebChatRun marks a runID as originating from the web monitor chat.
-	// TTS is suppressed for these runs — response is displayed in the web UI only.
+	// MarkWebChatRun marks a web monitor chat run; TTS is suppressed for it.
 	MarkWebChatRun(runID string)
 
 	// IsWebChatRun checks if a runID is a web chat run (non-consuming).
@@ -289,10 +186,7 @@ type AgentGateway interface {
 	// ConsumeWebChatRun checks and removes a web-chat-marked runID. One-shot.
 	ConsumeWebChatRun(runID string) bool
 
-	// MarkSilentRun marks a runID whose spoken reply must be suppressed even
-	// though the agent still processes the turn (e.g. voice_agent_handled: the
-	// realtime voice agent already replied, so the body stays silent but still
-	// absorbs the exchange for memory).
+	// MarkSilentRun marks a runID whose spoken reply is suppressed while the turn still runs.
 	MarkSilentRun(runID string)
 
 	// IsSilentRun checks if a runID is a silent run (non-consuming).
@@ -301,27 +195,15 @@ type AgentGateway interface {
 	// ConsumeSilentRun checks and removes a silent-marked runID. One-shot.
 	ConsumeSilentRun(runID string) bool
 
-	// SetPendingChatTrace records the idempotencyKey and exact message text of
-	// an outbound chat.send so a later UUID lifecycle (drained from OpenClaw's
-	// followup queue, which strips the idempotencyKey) can be mapped back via
-	// MatchPendingByMessage. The message string must match what was sent on
-	// the WS — chat.history returns it verbatim.
+	// SetPendingChatTrace records runID and exact sent text for MatchPendingByMessage.
+	// message must match the WS text verbatim (the followup queue strips idempotencyKey).
 	SetPendingChatTrace(runID string, message string)
 
-	// RemovePendingChatTraceByRunID removes the entry whose runID matches
-	// target. Used when lifecycle_start arrives with a device-format runId
-	// (5.4+ echo path) — the runId IS the device trace, no mapping needed,
-	// but the entry must be cleared so MatchPendingByMessage doesn't pick
-	// it up for a later UUID lifecycle with the same message.
+	// RemovePendingChatTraceByRunID removes the pending entry whose runID matches target.
 	RemovePendingChatTraceByRunID(target string) bool
 
-	// MatchPendingByMessage finds and removes the pending entry whose stored
-	// message text matches needle. Used when a UUID lifecycle arrives: the
-	// device fetches chat.history, extracts the last user message, and calls this to
-	// recover the original idempotencyKey. Returns "" when no entry matches.
+	// MatchPendingByMessage removes and returns the runID whose message matches needle, or "".
 	MatchPendingByMessage(needle string) string
-
-	// --- Channel abstraction (backend-agnostic) ---
 
 	// GetTelegramBotToken returns the Telegram bot token used by the agent runtime.
 	GetTelegramBotToken() string
@@ -329,54 +211,23 @@ type AgentGateway interface {
 	// GetTelegramTargets returns all Telegram chats (DMs + groups) the bot is connected to.
 	GetTelegramTargets() ([]TelegramTarget, error)
 
-	// Broadcast sends a message to all connected messaging channels.
-	// Currently supports Telegram via Bot API. imagePath is an optional local image file.
+	// Broadcast sends a message to all connected channels; imagePath is optional.
 	Broadcast(msg string, imagePath string) error
 
-	// SendToUser sends a direct message to a specific Telegram user by their user ID.
-	// If the user ID is empty, the message is silently dropped.
+	// SendToUser sends a Telegram DM; an empty user ID drops the message.
 	SendToUser(telegramID string, msg string, imagePath string) error
 
-	// SendToUserWithMedia sends a DM with multiple images via Telegram's
-	// sendMediaGroup (caption rides on the first photo). When imagePaths
-	// is empty or a single entry, behavior reduces to SendToUser. Telegram
-	// caps sendMediaGroup at 10 photos; callers should self-limit.
+	// SendToUserWithMedia sends a Telegram DM with multiple images (max 10, Telegram limit).
 	SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error
 
 	// SendToHALTTS posts response text to HAL for TTS playback.
 	SendToHALTTS(text string) error
 
-	// Speak says text out loud and nothing else — no agent turn, no session
-	// entry, no tokens. It exists so callers that already have the exact words
-	// (a "speak" scheduled task, whose instructions ARE the line to say) can
-	// reach the speaker without importing system/lib/hal directly: the
-	// scheduler depends on this interface alone, which is what keeps it
-	// testable against a fake gateway and independent of any one runtime.
-	//
-	// Distinct from SendToHALTTS on purpose. That one is for the AGENT'S OWN
-	// reply and posts with realtime_feedback set, so the spoken text is fed
-	// back to the realtime voice agent as history. A canned line is not
-	// something the agent said, so feeding it back would put words in the
-	// model's mouth — Speak uses plain /voice/speak, the same path hardcoded
-	// fillers and system notices use.
-	//
-	// WHAT THE ERROR MEANS, AND WHAT IT DOES NOT: a nil return means HAL
-	// ACCEPTED the text for playback. It is not evidence that audio was
-	// produced, that the speaker was connected, or that anyone was in the room
-	// to hear it — /voice/speak returns as soon as it has taken the request.
-	// Callers must not report a nil error as "the user heard this".
-	//
-	// Text is bounded by HAL's own contract (1..2000 characters) and is NOT
-	// truncated anywhere: an over-long string is rejected outright and nothing
-	// is said, which is why the length is validated at creation time rather
-	// than discovered at fire time. Empty (or whitespace-only) text is a no-op
-	// returning nil, since there is nothing to say and HAL would reject it.
+	// Speak plays text via /voice/speak with no agent turn and no realtime feedback.
+	// nil means HAL accepted the text, not that it was heard; text is 1..2000 chars, empty is a no-op.
 	Speak(text string) error
 
-	// SendToHALTTSQueue posts text to /voice/speak-queue: plays
-	// immediately when idle, otherwise queues + pre-synthesizes so the audio
-	// chains seamlessly onto the current speech (used for sentence-streamed
-	// agent replies).
+	// SendToHALTTSQueue posts text to /voice/speak-queue (plays now or chains onto current speech).
 	SendToHALTTSQueue(text string) error
 
 	// StopTTS interrupts active TTS playback and music on HAL.
@@ -385,89 +236,49 @@ type AgentGateway interface {
 	// SetVolume sets speaker volume on HAL (0-100).
 	SetVolume(pct int) error
 
-	// StartHALVoice starts the voice pipeline on HAL. sttKey / ttsKey
-	// and sttBaseURL / ttsBaseURL are the AutonomousSTT and TTS endpoints;
-	// pass empty for any to fall back to llmKey / llmBaseURL.
+	// StartHALVoice starts the HAL voice pipeline; empty STT/TTS keys or URLs fall back to llmKey / llmBaseURL.
 	StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error
 
 	// WatchIdentity polls IDENTITY.md and pushes updated wake words to HAL on rename.
 	WatchIdentity(ctx context.Context)
 
 	// UpdateIdentityName rewrites the **Name:** line in workspace/IDENTITY.md.
-	// WatchIdentity picks up the change within its next poll cycle and pushes the
-	// new wake words to HAL.
 	UpdateIdentityName(name string) error
 
 	// StartSkillWatcher polls OTA metadata for skill version changes and notifies the agent.
 	StartSkillWatcher(ctx context.Context)
 
-	// StartModelSync periodically reconciles the upstream model list (ModelsAPIURL)
-	// into openclaw.json. Fail-soft: a failed fetch logs and continues. Restarts
-	// the gateway only when the file actually changed.
+	// StartModelSync periodically reconciles the upstream model list; restarts only on change.
 	StartModelSync(ctx context.Context)
 
-	// UpdatePrimaryModel patches agents.defaults.model.primary in openclaw.json
-	// to "autonomous/{modelKey}" and restarts the gateway. No-op when modelKey
-	// is empty or when openclaw.json does not exist yet. Backends whose model
-	// is not device-selectable (hermes: fixed campaign-api alias; picoclaw:
-	// registry owned by the runtime) return ErrNotSupportedByRuntime.
+	// UpdatePrimaryModel sets the primary model to "autonomous/{modelKey}" and restarts; no-op if empty.
 	UpdatePrimaryModel(modelKey string) error
 
-	// StartPrimaryModelWatch watches the openclaw config directory for external
-	// changes to openclaw.json. When a change is detected without an os-server write
-	// flag, it reads the new primary model and syncs it to config.LLMModel
-	// (only when provider == "autonomous"; others are silently ignored).
+	// StartPrimaryModelWatch syncs external primary-model edits into config.LLMModel (autonomous provider only).
 	StartPrimaryModelWatch(ctx context.Context)
 
-	// GetConfiguredChannel returns the primary messaging channel type configured
-	// in the agent runtime (e.g. "telegram", "discord", "slack").
-	// Returns "channel" if none can be determined.
+	// GetConfiguredChannel returns the primary channel type (e.g. "telegram"), or "channel" if unknown.
 	GetConfiguredChannel() string
 
-	// CompactSession sends a sessions.compact RPC to the agent runtime
-	// to summarize and reduce conversation history for the given session.
-	// Backends without a compact API (hermes, picoclaw) return
-	// ErrNotSupportedByRuntime — rotate via NewSession instead.
+	// CompactSession summarizes and reduces the session's history via sessions.compact.
 	CompactSession(sessionKey string) error
 
-	// NewSession sends a sessions.new RPC to start a fresh conversation
-	// session for the given key. Unlike CompactSession (which runs a
-	// summarize LLM call and can take 30-60s+), this is instant — the
-	// runtime drops in-session history and starts clean. External device
-	// memory (mood log, habit tracking, owner identity, voice clusters)
-	// is unaffected because it lives outside the agent session JSONL.
+	// NewSession starts a fresh session for key via sessions.new (device memory is unaffected).
 	NewSession(sessionKey string) error
 
-	// ShouldRotateSession decides whether the agent session should be rotated
-	// (NewSession) now, given the turn's reported totalTokens and the number of
-	// turns since the last rotation. Each backend declares its own policy because
-	// the right signal differs: OpenClaw/PicoClaw report real token counts and
-	// rotate on a token threshold; Hermes compresses history server-side so its
-	// reported tokens never reflect the real (multi-million-token) chain size, so
-	// it rotates on turn count instead. Called once per turn by the os-server
-	// lifecycle handler.
+	// ShouldRotateSession reports whether to rotate the session now; each backend sets its own policy.
 	ShouldRotateSession(totalTokens, turnsSinceRotation int) bool
 
-	// IsRecentOutboundChat returns true if the os-server just called chat.send with
-	// this exact text within the recent window. Used by the session.message
-	// handler to skip echoes of os-server-injected user messages (wake greeting,
-	// ambient guard, sensing events) which OpenClaw broadcasts back as
-	// session.message role=user — identical in shape to real channel input.
+	// IsRecentOutboundChat reports whether os-server recently sent this exact text (to skip echoes).
 	IsRecentOutboundChat(text string) bool
 }
 
-// TurnAwareTTSQueue is implemented by agent runtimes that can attach an
-// ordered turn identity to HAL's queued TTS endpoint. It remains separate from
-// AgentGateway while downstream integrations migrate; the built-in runtimes
-// all implement it.
+// TurnAwareTTSQueue is implemented by runtimes that attach an ordered turn identity to queued TTS.
 type TurnAwareTTSQueue interface {
 	SendToHALTTSQueueForTurn(text, turnID string, turnSeq uint64) error
 }
 
-// ActiveTurnSteerer is implemented by runtimes that can append a new user
-// input to a currently running model turn. The sensing handler uses it only
-// for direct user input; passive device events still wait for idle so they do
-// not displace the user's active request.
+// ActiveTurnSteerer is implemented by runtimes that can append user input to a running turn.
 type ActiveTurnSteerer interface {
 	SupportsActiveTurnSteering() bool
 }

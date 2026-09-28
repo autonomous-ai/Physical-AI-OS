@@ -1,8 +1,4 @@
-"""Bluetooth manager — bluetoothctl wrapper for BT audio (headset) routing.
-
-Persists the user's active headset MAC across restarts so reboot keeps
-the private-mode preference.
-"""
+"""Bluetooth manager — bluetoothctl wrapper for BT audio (headset) routing."""
 
 import json
 import logging
@@ -29,17 +25,7 @@ def _run(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
 
 
 def _resolve_pulse_owner() -> tuple[Optional[str], Optional[int], Optional[int]]:
-    """Locate the per-user PulseAudio: returns (XDG_RUNTIME_DIR, uid, gid).
-
-    hal runs as root via systemd while PulseAudio runs as the desktop user
-    (uid 1000 on OrangePi/Pi). Two problems to solve:
-      1. Without XDG_RUNTIME_DIR pactl can't find the PA socket.
-      2. libpulse refuses a root connection to a non-root socket
-         ('XDG_RUNTIME_DIR is not owned by us'). So we drop privileges in
-         the pactl subprocess via preexec_fn.
-
-    We scan /run/user/*/pulse/native for an existing socket and pick the
-    first match — there's only one desktop user on these devices."""
+    """Locate the per-user PulseAudio: returns (XDG_RUNTIME_DIR, uid, gid)."""
     if os.environ.get("XDG_RUNTIME_DIR"):
         try:
             st = os.stat(os.environ["XDG_RUNTIME_DIR"])
@@ -72,10 +58,9 @@ else:
 
 
 def pulse_popen_kwargs() -> dict:
-    """Env + privilege-drop kwargs so a root-spawned PulseAudio client
-    (pactl, paplay, …) reaches the per-user PA daemon: XDG_RUNTIME_DIR pointed
-    at the PA owner's runtime dir, and setuid into that owner before exec —
-    libpulse rejects root opening a user socket."""
+    """Env + privilege-drop kwargs so a root-spawned PulseAudio client (pactl, paplay, …)
+    reaches the per-user PA daemon.
+    """
     env = os.environ.copy()
     if _PULSE_RUNTIME_DIR:
         env["XDG_RUNTIME_DIR"] = _PULSE_RUNTIME_DIR
@@ -104,11 +89,7 @@ def pulse_popen_kwargs() -> dict:
 
 
 def _pactl(args: list[str], timeout: float = 10.0) -> subprocess.CompletedProcess:
-    """Run pactl with the right env + identity to reach the per-user PA.
-
-    Default timeout is generous (10s) because PulseAudio stalls noticeably
-    while a Bluetooth SCO link is being set up or torn down — short timeouts
-    here cause false 'no sink' errors during normal A2DP↔HFP transitions."""
+    """Run pactl with the right env + identity to reach the per-user PA."""
     kwargs: dict = dict(
         capture_output=True, text=True, timeout=timeout, **pulse_popen_kwargs()
     )
@@ -157,8 +138,6 @@ class BluetoothManager:
         self._scan_lock = threading.Lock()
         self._state = self._load_state()
 
-    # --- State persistence ---
-
     def _load_state(self) -> dict:
         try:
             if _STATE_FILE.exists():
@@ -182,16 +161,12 @@ class BluetoothManager:
         self._state["active_mac"] = mac.upper() if mac else None
         self._save_state()
 
-    # --- Availability ---
-
     def available(self) -> bool:
         try:
             r = _run(["bluetoothctl", "--version"], timeout=2)
             return r.returncode == 0
         except Exception:
             return False
-
-    # --- Scan ---
 
     def scan_start(self, timeout_s: int = SCAN_TIMEOUT_S) -> None:
         """Kick off a time-boxed scan in the background. Idempotent."""
@@ -224,8 +199,6 @@ class BluetoothManager:
             logger.warning("discovered_devices failed: %s", e)
             return []
 
-    # --- Paired ---
-
     def paired_devices(self) -> list[dict]:
         try:
             r = _run(["bluetoothctl", "devices", "Paired"], timeout=5)
@@ -245,12 +218,10 @@ class BluetoothManager:
     def info(self, mac: str) -> dict:
         return _device_info(mac)
 
-    # --- Pair / connect / forget ---
-
     def _le_toggle(self, enable: bool) -> None:
-        """Toggle the controller's LE side at runtime via btmgmt — the flag
-        only changes while the adapter is powered off, so power-cycle around
-        it. Best effort: a missing btmgmt just leaves the controller as-is."""
+        """Toggle the controller's LE side at runtime via btmgmt — the flag only changes
+        while the adapter is powered off, so power-cycle around it.
+        """
         val = "on" if enable else "off"
         for args in (["power", "off"], ["le", val], ["power", "on"]):
             try:
@@ -266,20 +237,11 @@ class BluetoothManager:
         except Exception as e:
             logger.warning("pair %s failed: %s", mac, e)
         if not _device_info(mac)["paired"]:
-            # Apple dual-mode headsets (AirPods) often reject SSP while the
-            # controller runs dual mode — the handshake strays onto the LE
-            # transport (AuthenticationRejected). Retry with LE temporarily
-            # disabled so pairing can only happen over BR/EDR; the stored
-            # link key works fine in dual mode afterwards. BLE (buddy
-            # advertising) blips for a few seconds and re-arms on power-on.
             logger.info("pair %s failed in dual mode — retrying BR/EDR-only", mac)
             self._le_toggle(False)
             try:
                 _run(["bluetoothctl", "pair", mac], timeout=30)
                 if not _device_info(mac)["paired"]:
-                    # Bonding can complete just after bluetoothctl gives up
-                    # (seen as Canceled/InProgress/AlreadyExists) — settle and
-                    # re-ask once before declaring failure.
                     time.sleep(2)
                     _run(["bluetoothctl", "pair", mac], timeout=30)
             except Exception as e:
@@ -297,7 +259,6 @@ class BluetoothManager:
         return _device_info(mac)["paired"]
 
     def connect(self, mac: str) -> bool:
-        # 30s: sleepy headsets (AirPods) can take >16s to answer paging.
         try:
             _run(["bluetoothctl", "connect", mac.upper()], timeout=30)
         except Exception as e:
@@ -333,16 +294,8 @@ class BluetoothManager:
             self.set_active_mac(None)
         return ok
 
-    # --- PulseAudio routing helpers ---
-    #
-    # PortAudio (used by sounddevice) only enumerates a single generic `pulse`
-    # device for the whole PulseAudio server, not one device per bluez sink.
-    # So the route-swap strategy is:
-    #   1. Find the PulseAudio sink name matching this MAC (bluez_sink.XX...).
-    #   2. `pactl set-default-sink <that>` so anything written to `pulse` lands
-    #      on the BT device.
-    #   3. Point TTS/voice at the `pulse` PortAudio device for the active period.
-    # Switching back to the device restores the previously-default sink.
+    # PortAudio (used by sounddevice) only enumerates a single generic `pulse` device
+    # for the whole PulseAudio server, not one device per bluez sink.
 
     def pa_default_sink(self) -> Optional[str]:
         try:
@@ -375,9 +328,10 @@ class BluetoothManager:
             return False
 
     def first_alsa_sink(self) -> Optional[str]:
-        """First non-bluez hardware sink — the safe 'built-in speaker' default
-        when the captured snapshot is unusable (e.g. hal booted while a BT
-        sink was still PulseAudio's default)."""
+        """First non-bluez hardware sink — the safe 'built-in speaker' default when the
+        captured snapshot is unusable (e.g. hal booted while a BT sink was still
+        PulseAudio's default).
+        """
         try:
             r = _pactl(["list", "short", "sinks"], timeout=5)
             if r.returncode != 0:
@@ -391,9 +345,10 @@ class BluetoothManager:
         return None
 
     def set_pa_sink_volume(self, sink_name: str, pct: int) -> bool:
-        """Set the sink volume (0-100%). On A2DP sinks PulseAudio forwards it
-        to the headset via AVRCP absolute volume, so this is the volume knob
-        while a BT headset is the active output."""
+        """Set the sink volume (0-100%). On A2DP sinks PulseAudio forwards it to the
+        headset via AVRCP absolute volume, so this is the volume knob while a BT headset
+        is the active output.
+        """
         pct = max(0, min(100, pct))
         try:
             r = _pactl(["set-sink-volume", sink_name, f"{pct}%"], timeout=5)
@@ -452,9 +407,7 @@ class BluetoothManager:
         return None
 
     def pa_card_profiles(self, card_name: str) -> dict[str, bool]:
-        """Return {profile_name: available} for the given card. Profiles that
-        BlueZ knows about but can't currently activate (e.g. HFP when the
-        SCO link is broken) are marked unavailable."""
+        """Return {profile_name: available} for the given card."""
         out: dict[str, bool] = {}
         try:
             r = _pactl(["list", "cards"], timeout=5)
@@ -468,8 +421,6 @@ class BluetoothManager:
                     continue
                 if not in_card:
                     continue
-                # Profile lines look like:
-                #   handsfree_head_unit: Handsfree Head Unit (HFP) (sinks: 1, sources: 1, priority: 30, available: yes)
                 m = re.match(r"^([a-zA-Z0-9_+\-]+):\s.*available:\s*(yes|no)\)", stripped)
                 if m:
                     out[m.group(1)] = m.group(2) == "yes"
@@ -478,9 +429,9 @@ class BluetoothManager:
         return out
 
     def set_pa_card_profile(self, card_name: str, profile: str) -> bool:
-        """Switch the bluez card to a different profile (a2dp_sink ↔ HFP).
-        Switching to HFP exposes a real PulseAudio source (the headset mic);
-        A2DP only exposes the sink."""
+        """Switch the bluez card to a different profile (a2dp_sink ↔ HFP). Switching to HFP
+        exposes a real PulseAudio source (the headset mic); A2DP only exposes the sink.
+        """
         try:
             r = _pactl(["set-card-profile", card_name, profile], timeout=10)
             return r.returncode == 0
@@ -510,15 +461,9 @@ class BluetoothManager:
     def pulse_sd_index(self, sd_module) -> Optional[int]:
         """Find the PortAudio index of the generic `pulse` device.
 
-        Enumerates FIRST and only falls back to a Pa_Terminate()+Pa_Initialize()
-        re-enumeration when `pulse` is missing (PortAudio snapshotted its device
-        list before PulseAudio came up). The re-init is the dangerous part: any
-        sounddevice stream alive at Pa_Terminate() aborts the process (SIGABRT,
-        killed hal.service twice on 2026-07-06), so it runs inside the
-        audio_route re-init window — openers are refused, a fresh quiesce closes
-        anything that slipped in after the caller's quiesce, and the lock
-        excludes in-flight opens. PA outlives hal restarts, so in practice the
-        first enumeration hits and the re-init never runs."""
+        PA outlives hal restarts, so in practice the first enumeration hits and the
+        re-init never runs.
+        """
 
         def _find() -> Optional[int]:
             for i, dev in enumerate(sd_module.query_devices()):
@@ -534,10 +479,8 @@ class BluetoothManager:
 
         audio_route.pa_reinit_event.set()
         try:
-            # Close streams opened since the caller's quiesce (TTS speak can
-            # fire from an agent turn at any moment). Must run BEFORE taking
-            # pa_reinit_lock: it grabs the openers' own locks and an opener
-            # blocked on pa_reinit_lock while holding its lock would deadlock.
+            # Close streams opened since the caller's quiesce (TTS speak can fire from
+            # an agent turn at any moment).
             audio_route.quiesce_portaudio_users()
             with audio_route.pa_reinit_lock:
                 try:

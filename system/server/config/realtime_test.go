@@ -8,10 +8,7 @@ import (
 
 func boolPtr(b bool) *bool { return &b }
 
-// With no realtime block the accessors return HAL/Python-mirroring defaults —
-// enabled + provider gemini, flash model, Kore voice — and the reasoning knob
-// defaults to the cost-lean MINIMAL (deliberately below HAL's HIGH). Keys/URLs
-// fall back to the LLM credentials.
+// With no realtime block the accessors return HAL-mirroring, cost-lean defaults.
 func TestRealtime_DefaultsWhenUnset(t *testing.T) {
 	c := &Config{LLMAPIKey: "llm-key", LLMBaseURL: "https://llm.example"}
 	if !c.RealtimeEnabled() {
@@ -37,13 +34,8 @@ func TestRealtime_DefaultsWhenUnset(t *testing.T) {
 	}
 }
 
-// RealtimeBaseURLOverride returns ONLY the explicit override (no LLM fallback) so
-// the public config / web form stays blank when deriving. Echoing the resolved
-// bare LLMBaseURL into the editable field would let the web re-persist a URL
-// missing the "/ws/gemini" suffix, breaking HAL's Gemini Live handshake (404).
+// RealtimeBaseURLOverride returns only the explicit override (no LLM fallback).
 func TestRealtime_BaseURLOverride(t *testing.T) {
-	// No block, and an empty block: override is blank even though the resolver
-	// would fall back to LLMBaseURL.
 	for _, c := range []*Config{
 		{LLMBaseURL: "https://llm.example"},
 		{LLMBaseURL: "https://llm.example", Realtime: &RealtimeConfig{}},
@@ -55,7 +47,6 @@ func TestRealtime_BaseURLOverride(t *testing.T) {
 			t.Errorf("RealtimeBaseURL() = %q, want LLM fallback (resolver unchanged)", got)
 		}
 	}
-	// An explicit override is returned verbatim.
 	set := &Config{LLMBaseURL: "https://llm.example", Realtime: &RealtimeConfig{BaseURL: "https://rt.example/ws/gemini"}}
 	if got := set.RealtimeBaseURLOverride(); got != "https://rt.example/ws/gemini" {
 		t.Errorf("RealtimeBaseURLOverride() = %q, want explicit override", got)
@@ -71,7 +62,6 @@ func TestRealtime_EnabledAndOff(t *testing.T) {
 	if off.RealtimeEnabled() {
 		t.Error("Enabled:false → want false")
 	}
-	// provider none disables via the provider path; model/voice go empty (off).
 	none := &Config{Realtime: &RealtimeConfig{Provider: "none"}}
 	if none.RealtimeProvider() != "" {
 		t.Errorf("provider none → want \"\", got %q", none.RealtimeProvider())
@@ -95,8 +85,7 @@ func TestRealtime_ProviderNormalize(t *testing.T) {
 	}
 }
 
-// The active provider selects which sub-object the knobs read; explicit overrides
-// beat the defaults, and the inactive provider's block is ignored.
+// The active provider selects the sub-object; overrides beat defaults.
 func TestRealtime_ProviderAwareOverrides(t *testing.T) {
 	c := &Config{Realtime: &RealtimeConfig{
 		Provider: "gemini",
@@ -114,8 +103,7 @@ func TestRealtime_ProviderAwareOverrides(t *testing.T) {
 	}
 }
 
-// Active provider with no sub-object → provider defaults (not empty); per-field
-// key/baseURL override beats the LLM fallback.
+// A missing sub-object yields provider defaults; per-field overrides beat the LLM fallback.
 func TestRealtime_MissingSubAndKeyOverride(t *testing.T) {
 	c := &Config{
 		LLMAPIKey:  "llm-key",
@@ -151,7 +139,6 @@ func TestRealtime_Validate(t *testing.T) {
 		}
 	}
 
-	// gemini knobs
 	if err := ValidateRealtimeKnobs("gemini", "Kore", "MINIMAL"); err != nil {
 		t.Errorf("valid gemini knobs rejected: %v", err)
 	}
@@ -161,15 +148,12 @@ func TestRealtime_Validate(t *testing.T) {
 	if ValidateRealtimeKnobs("gemini", "", "xhigh") == nil {
 		t.Error("openai reasoning on gemini should be rejected")
 	}
-	// openai knobs
 	if err := ValidateRealtimeKnobs("openai", "alloy", "minimal"); err != nil {
 		t.Errorf("valid openai knobs rejected: %v", err)
 	}
 	if ValidateRealtimeKnobs("openai", "Kore", "") == nil {
 		t.Error("gemini voice on openai should be rejected")
 	}
-	// gptlive knobs: any listed voice is fine, reasoning is always rejected
-	// (the Live model has no such knob), foreign voices are rejected.
 	for _, v := range RealtimeGPTLiveVoiceList {
 		if err := ValidateRealtimeKnobs("gptlive", v, ""); err != nil {
 			t.Errorf("valid gptlive voice %q rejected: %v", v, err)
@@ -199,19 +183,15 @@ func TestRealtime_Validate(t *testing.T) {
 	if ValidateRealtimeKnobs("openai", "marin", "") == nil {
 		t.Error("gptlive-only voice marin on openai should be rejected")
 	}
-	// empty voice/reasoning allowed (keep current)
 	if err := ValidateRealtimeKnobs("gemini", "", ""); err != nil {
 		t.Errorf("empty knobs should be allowed: %v", err)
 	}
-	// knobs require a concrete provider
 	if ValidateRealtimeKnobs("none", "Kore", "") == nil {
 		t.Error("knobs with provider none should be rejected")
 	}
 }
 
-// DefaultRealtimeConfig seeds enabled + gemini with the cost-lean defaults and
-// both provider sub-objects (so switching provider keeps tuned values). api_key /
-// base_url stay empty → LLM fallback.
+// DefaultRealtimeConfig seeds enabled + gemini with every provider sub-object.
 func TestRealtime_DefaultSeed(t *testing.T) {
 	rt := DefaultRealtimeConfig()
 	if rt.Enabled == nil || !*rt.Enabled {
@@ -236,7 +216,6 @@ func TestRealtime_DefaultSeed(t *testing.T) {
 		t.Error("seed gptlive: api_key/base_url should be empty (shared realtime credentials)")
 	}
 
-	// Default() now carries the seeded block, so a fresh config.json includes it.
 	if Default().Realtime == nil {
 		t.Error("Default() should seed Realtime")
 	}
@@ -246,9 +225,7 @@ func TestRealtime_DefaultSeed(t *testing.T) {
 	}
 }
 
-// The pointer field must omit cleanly: a nil Realtime emits no "realtime" key,
-// while a present block round-trips. (Guards the omitempty-on-struct gotcha — a
-// value field would always marshal "realtime":{}.)
+// A nil Realtime omits the key; a present block round-trips.
 func TestRealtime_JSONOmitAndRoundTrip(t *testing.T) {
 	noBlock, err := json.Marshal(&Config{LLMAPIKey: "k"})
 	if err != nil {
@@ -277,11 +254,7 @@ func TestRealtime_JSONOmitAndRoundTrip(t *testing.T) {
 	}
 }
 
-// gptlive resolves like the other providers: defaults when the sub-object is
-// missing, overrides when set, and NO reasoning (the Live model has no knob).
-// Credentials stay on the shared realtime fields (LLM fallback), not the
-// sub-object — HAL reads the shared key; the base URL is never derived from
-// llm_base_url, so the override stays blank unless the operator sets one.
+// gptlive resolves like the other providers, with no reasoning knob.
 func TestRealtime_GPTLiveResolution(t *testing.T) {
 	c := &Config{
 		LLMAPIKey:  "llm-key",
@@ -323,9 +296,7 @@ func TestRealtime_GPTLiveResolution(t *testing.T) {
 	}
 }
 
-// The options payload the web renders carries gptlive: listed as a provider
-// (before none), its 22-voice list, and an EMPTY (not absent, not null)
-// reasoning list so the selector is hidden client-side.
+// The options payload lists gptlive with its voices and an empty reasoning list.
 func TestRealtime_OptionsIncludeGPTLive(t *testing.T) {
 	opts := GetRealtimeOptions()
 	want := []string{"gemini", "openai", "gptlive", "pipecat_v1", "none"}
@@ -353,8 +324,7 @@ func TestRealtime_OptionsIncludeGPTLive(t *testing.T) {
 	}
 }
 
-// The gptlive sub-object round-trips through JSON (including its optional
-// per-provider credential overrides) and a nil sub-object omits the key.
+// The gptlive sub-object round-trips through JSON; nil omits the key.
 func TestRealtime_GPTLiveJSONRoundTrip(t *testing.T) {
 	noSub, err := json.Marshal(&Config{Realtime: &RealtimeConfig{Provider: "gptlive"}})
 	if err != nil {
@@ -384,10 +354,7 @@ func TestRealtime_GPTLiveJSONRoundTrip(t *testing.T) {
 	}
 }
 
-// pipecat_v1: an on-device text-out pipeline — listed as a provider before
-// none, with EMPTY (present, non-nil) voice and reasoning lists so the web
-// hides both selectors; any voice or reasoning value is rejected for it, the
-// model resolves to the Qwen relay default and is overridable.
+// pipecat_v1 has empty voice/reasoning lists and rejects both knobs.
 func TestRealtime_PipecatV1(t *testing.T) {
 	opts := GetRealtimeOptions()
 	for _, m := range []map[string][]string{opts.Voices, opts.Reasoning} {

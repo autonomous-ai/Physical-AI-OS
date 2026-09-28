@@ -28,12 +28,12 @@ HAL (Python)                       OS Server (Go)                     Web UI (Re
                             │                                    ↓
                             └─ agentGateway.SendChat ──→ Agentic Runtime (WS)
                                                            │
-                          SSE Handler ←── WS events ───────┘
+                        AgentHandler ←── WS events ───────┘
                             │
-                            ├─ flow.Log("lifecycle_*") ──→ JSONL file ──→ /flow-stream (SSE)
+                            ├─ flow.Log("lifecycle_*") ──→ JSONL file ──→ /api/agent/flow-stream (SSE)
                             ├─ flow.Log("tool_call")                         ↓
-                            ├─ flow.Log("tts_send")                    system/web/.../Monitor.tsx
-                            └─ monitorBus.Push() ──→ /openclaw/events (SSE)  └─ groupIntoTurns()
+                            ├─ flow.Log("tts_send")                    system/web/src/pages/monitor/FlowSection/
+                            └─ monitorBus.Push() ──→ /api/agent/events (SSE)  └─ groupIntoTurns() (helpers.ts)
 ```
 
 ## Per-Event Run ID (refactored from global trace)
@@ -129,7 +129,7 @@ Structured `slog.Info` lines for end-to-end ID alignment (device idempotency key
 
 ## Turn Grouping (Frontend)
 
-`groupIntoTurns()` in `Monitor.tsx` groups events into turns:
+`groupIntoTurns()` in `system/web/src/pages/monitor/FlowSection/helpers.ts` groups events into turns:
 
 1. **Turn start detection**: `sensing_input`, `chat_input`, `ambient_action`, `schedule_trigger`
 2. **Run ID grouping**: events with same `runId` stay in same turn
@@ -147,23 +147,25 @@ Structured `slog.Info` lines for end-to-end ID alignment (device idempotency key
 
 ## Turn Pipeline (SVG `FlowDiagram`)
 
-Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is **observational only** (zoom/pan, node highlights from recent events). Drag with a mouse or one finger to pan; pinch with two fingers (or use the in-canvas minus/plus controls) to zoom, and use reset to restore the default view. On phones, the LLM/tool stream is rendered as pure SVG text for reliable display; **LLM / Tool / Curl details** opens a responsive native sheet for long payloads and node output. Three **tinted cluster** regions group nodes:
+Rendered by `FlowDiagram` in `system/web/src/pages/monitor/FlowSection/FlowDiagram.tsx`. The diagram is **observational only** (zoom/pan, node highlights from recent events). Drag with a mouse or one finger to pan; pinch with two fingers (or use the in-canvas minus/plus controls) to zoom, and use reset to restore the default view. On phones, the LLM/tool stream is rendered as pure SVG text for reliable display; **LLM / Tool / Curl details** opens a responsive native sheet for long payloads and node output. Three **tinted cluster** regions group nodes:
 
 | Region | Color (theme) | Stages |
 |--------|----------------|--------|
-| **OS Server** | Teal (`--lm-teal`) | `intent_check`, `local_match`, `schedule_trigger`, `lamp_gate` |
-| **HAL** | Amber (`--lm-amber`) | `mic_input`, `cam_input`, `hw_camera`, `hw_emotion`, `hw_led`, `hw_servo`, `tts_speak` |
-| **OpenClaw** | Blue (`--lm-blue`) | `agent_call`, `telegram_input`, `tool_exec`, `agent_thinking`, `agent_response`, `tg_out` |
+| **OS Server** | Teal (`--lm-teal`) | Top band: `intent_check`, `local_match`. Vertical column at `x=467`: `os_gate`, `tg_alert`, `hw_mood`, `hw_wellbeing`, `hw_music_suggestion`, `hw_posture` |
+| **Device** (HAL) | Amber (`--lm-amber`) | `mic_input`, `cam_input`, `button_input`, `hw_camera`, `hw_emotion`, `hw_led`, `hw_servo`, `hw_audio`, `tts_speak` |
+| **Agent** | Blue (`--lm-blue`) | `schedule_trigger`, `agent_call`, Event Pipeline rect (`tool_exec` / `agent_thinking` anchors), `agent_response` |
+
+External channel nodes sit outside the clusters on the right: `channel_input`, `webchat_input`, `tg_out`.
 
 ### OS Server (top band)
 
 - **Intent** and **Local** sit on the **same top row** (left to right).
-- **Cron** (`schedule_trigger`) is an **OS server** stage (timer owned by the OS server, not OpenClaw). It shares the **same top `y`** as Intent / Local but uses **`x` aligned with `agent_call`** so Cron → Agent reads as a **vertical column** in the SVG.
-- Cron is **not** inside the OpenClaw cluster; only the shared `x` is for layout.
+- The **gate** (`os_gate`) and the OS-server log writes (`tg_alert`, then `hw_mood`, `hw_wellbeing`, `hw_music_suggestion`, `hw_posture`) are stacked in a second teal column at `x=467`, between the device column and the agent cluster.
+- **Cron** (`schedule_trigger`) is drawn inside the Agent cluster on the `agent_call` row, left of Agent, so Cron → Agent reads as a short horizontal edge.
 
 ### HAL (left column)
 
-- **MIC** and **CAM** are input nodes (top of HAL section). The lower **CAM**
+- **MIC** and **CAM** are input nodes (top of the Device section); **BTN** (`button_input`, GPIO button / TTP223 touchpad) sits below MIC. The lower **CAM**
   diamond is separate and represents an agent tool calling
   `GET /camera/snapshot`.
 - Output nodes are stacked vertically in a single column:
@@ -202,96 +204,106 @@ Rendered by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. The diagram is 
     runtimes (codex and friends send `arguments` only on `start`, `result` only
     on `end`), so the args are carried across by `toolCallId` — see
     `rememberToolArgs` in `system/server/agent/delivery/http/camera_snapshot.go`.
+  - **AUDIO** (`hw_audio`) — `/audio/play` and other audio playback
   - **TTS** (`tts_speak`) — `/voice/speak`, text-to-speech output
 - These represent direct hardware calls from OpenClaw tools that bypass the OS server.
 
-### OpenClaw layout rules (column + row)
+### Agent layout rules (column + row)
 
-These are the **stable rules** for nodes inside the OpenClaw rectangle; `positions` in `Monitor.tsx` follow this grid.
+These are the **stable rules** for nodes inside and right of the Agent rectangle; `positions` in `FlowDiagram.tsx` follow this grid.
 
 **Columns (left → right)**
 
 | Col | Stages |
 |-----|--------|
-| **1** | Tool Exec, Response (stacked — Response under Tool) |
-| **2** | Agent Call (top) → Event Pipeline rect (middle) → Response (bottom). The pipeline contains rows for thinking / assistant / tool / lifecycle / compaction / error events in order; see `docs/debug/flow-monitor-pipeline.md` for aggregation rules and the rationale for collapsing the previous 3-node `LLM Start / Thinking / Tool Exec` chain into one rect. |
-| **3** | Telegram In (`TG IN`) |
+| **1** | Cron (`schedule_trigger`) |
+| **2** | Agent Call (top) → Event Pipeline rect (middle) → Response (bottom). The pipeline contains rows for thinking / assistant / tool / lifecycle / compaction / error events in order; `tool_exec` (left edge) and `agent_thinking` are invisible anchors on the rect. See `robots/lamp/docs/debug/flow-monitor-pipeline.md` for aggregation rules and the rationale for collapsing the previous 3-node `LLM Start / Thinking / Tool Exec` chain into one rect. |
+| **3** | External channels (outside the cluster): Channel In, Web Chat, Channel Out (`tg_out`) |
 
 **Rows (top → bottom)**
 
 | Row | Rule |
 |-----|------|
-| **1** | **Agent** and **TG In** share one horizontal row (TG → Agent). |
-| **2** | **Thinking** and **Tool** share one horizontal row (flow Think → Tool, left to right). |
-| **3** | **Response** under column 1 (below Tool). |
+| **1** | **Cron**, **Agent** and **Channel In** share one horizontal row (Cron → Agent ← Channel In). |
+| **2** | **Web Chat** (right) feeds Agent; the Event Pipeline rect fills the middle of column 2. |
+| **3** | **Response** and **Channel Out** share the bottom row, level with `os_gate`. |
 
-**ASCII grid (OpenClaw only)**
+**ASCII grid (Agent + channels)**
 
 ```
               Col1        Col2        Col3
          ┌──────────┬──────────┬──────────┐
-    Row1 │          │  Agent   │  TG In   │
+    Row1 │   Cron   │  Agent   │  CH In   │
          ├──────────┼──────────┼──────────┤
-    Row2 │   Tool   │ Thinking │          │
-         ├──────────┴──────────┴──────────┤
-    Row3 │   Response (under Tool)        │
-         └────────────────────────────────┘
+    Row2 │          │ Pipeline │ Web Chat │
+         ├──────────┼──────────┼──────────┤
+    Row3 │          │ Response │  CH Out  │
+         └──────────┴──────────┴──────────┘
 ```
 
 ### Approximate coordinates (for layout maintenance)
 
-Values are the **node center** `(x, y)` in the SVG view box (see `positions` in `Monitor.tsx`). Adjust clusters if you move nodes.
+Values are the **node center** `(x, y)` in the SVG view box (see `positions` in `FlowDiagram.tsx`). Adjust clusters if you move nodes.
 
 | Stage | `(x, y)` | Note |
 |-------|----------|------|
 | `intent_check` | `(80, 50)` | OS server top |
 | `local_match` | `(200, 50)` | OS server top |
-| `schedule_trigger` | `(800, 50)` | OS server top; `x` = Agent column |
-| `lamp_gate` | `(400, 570)` | OS server; between HAL and OpenClaw |
-| `mic_input` | `(-40, 240)` | HAL input |
-| `cam_input` | `(80, 240)` | HAL input |
-| `hw_camera` | `(200, 345)` | HAL output; agent camera API call |
-| `hw_emotion` | `(200, 480)` | HAL output; emotion calls |
-| `hw_led` | `(200, 615)` | HAL output; LED control |
-| `hw_servo` | `(200, 750)` | HAL output; servo motor |
-| `hw_audio` | `(200, 885)` | HAL output; audio playback |
-| `tts_speak` | `(200, 1020)` | HAL output; TTS |
-| `agent_call` | `(800, 240)` | OpenClaw row 1 |
-| `telegram_input` | `(1000, 240)` | OpenClaw row 1 |
-| `tool_exec` | `(600, 390)` | OpenClaw row 2, col 1 |
-| `agent_thinking` | `(800, 390)` | OpenClaw row 2, col 2 |
-| `agent_response` | `(600, 570)` | OpenClaw row 3, col 1 |
-| `tg_out` | `(1000, 570)` | OpenClaw row 3; Telegram output |
+| `os_gate` | `(467, 795)` | OS server column; between Device and Agent |
+| `tg_alert` | `(467, 930)` | OS server column; broadcast alert |
+| `hw_mood` | `(467, 1065)` | OS server column; mood log write |
+| `hw_wellbeing` | `(467, 1200)` | OS server column; wellbeing log write |
+| `hw_music_suggestion` | `(467, 1335)` | OS server column; music suggestion log write |
+| `hw_posture` | `(467, 1470)` | OS server column; posture log write |
+| `mic_input` | `(-40, 240)` | Device input |
+| `cam_input` | `(80, 240)` | Device input |
+| `button_input` | `(-40, 350)` | Device input; button / touchpad |
+| `hw_camera` | `(200, 345)` | Device output; agent camera API call |
+| `hw_emotion` | `(200, 480)` | Device output; emotion calls |
+| `hw_led` | `(200, 615)` | Device output; LED control |
+| `hw_servo` | `(200, 750)` | Device output; servo motor |
+| `hw_audio` | `(200, 885)` | Device output; audio playback |
+| `tts_speak` | `(200, 1020)` | Device output; TTS |
+| `schedule_trigger` | `(750, 240)` | Agent row 1, col 1 |
+| `agent_call` | `(950, 240)` | Agent row 1, col 2 |
+| `tool_exec` | `(820, 600)` | Pipeline rect left-edge anchor (HW edges) |
+| `agent_thinking` | `(1180, 480)` | Pipeline rect inert anchor |
+| `agent_response` | `(950, 795)` | Agent row 3, col 2 |
+| `channel_input` | `(1300, 240)` | External; channel input |
+| `webchat_input` | `(1300, 440)` | External; web chat input |
+| `tg_out` | `(1300, 795)` | External; channel output |
 
 ### Edges
 
 ```
-mic_input → intent_check → local_match → hw_emotion / hw_led / hw_servo / tts_speak
-cam_input → intent_check → agent_call
-schedule_trigger → agent_call
-telegram_input → agent_call
-agent_call → [Event Pipeline rect — thinking/assistant/tool rows] → agent_response
-tool_exec → hw_emotion         (OpenClaw /emotion call → HAL)
-tool_exec → hw_led             (OpenClaw /led/* or /scene call → HAL)
-tool_exec → hw_servo           (OpenClaw /servo/* call → HAL)
+mic_input / cam_input / button_input → intent_check → local_match → hw_emotion / hw_led / hw_servo / tts_speak
+intent_check → agent_call
+channel_input / webchat_input / schedule_trigger → agent_call
+agent_call → tool_exec [Event Pipeline rect — thinking/assistant/tool rows] → agent_response
+tool_exec → hw_emotion         (agent /emotion call → HAL)
+tool_exec → hw_led             (agent /led/* or /scene call → HAL)
+tool_exec → hw_servo           (agent /servo/* call → HAL)
+tool_exec → hw_audio           (agent /audio/* call → HAL)
 tool_exec → hw_camera          (agent GET /camera/snapshot → HAL; saved frame shown below node)
-tool_exec → lamp_gate          (OS server listens: pause ambient if LED; TTS-vs-music ordering is handled in HAL, not suppressed here)
-agent_response → lamp_gate     (OS server accumulates assistant text for TTS)
-agent_response → tts_speak     (Direct TTS from response to HAL)
-agent_response → tg_out        (Telegram/Slack output)
-lamp_gate → tts_speak          (Gate passes if not suppressed → HAL TTS)
+tool_exec → os_gate            (OS server listens: pause ambient if LED; TTS-vs-music ordering is handled in HAL, not suppressed here)
+agent_response → os_gate       (OS server accumulates assistant text for TTS)
+os_gate → hw_emotion / hw_led / hw_servo / hw_audio   ([HW:...] markers fired by the OS server)
+os_gate → hw_mood / hw_wellbeing / hw_music_suggestion / hw_posture   (OS-server log writes)
+os_gate → tts_speak            (Gate passes if not suppressed → HAL TTS)
+os_gate → tg_out               (Channel output)
+os_gate → tg_alert → tg_out    (Broadcast alert)
 ```
 
 If the device speaker is muted, HAL answers the TTS call with HTTP 200 `{"status":"suppressed"}` and plays nothing — surfaced as the `tts_muted` flow event (see below).
 
-**Elbow routing**: Edges from `local_match` to output nodes (hw_emotion, hw_led, hw_servo, tts_speak) use elbow paths routed to the **left** of the output column to avoid crossing intermediate nodes.
+**Elbow routing**: Edges from `local_match` to output nodes (hw_emotion, hw_led, hw_servo, tts_speak) use elbow paths routed to the **left** of the output column to avoid crossing intermediate nodes. Edges from `os_gate` to the log-write nodes route right → down → left to avoid running through `tg_alert`.
 
 ### Event → node labels (runtime detail boxes)
 
 Node info extracted from turn events:
 - `sensing_input` → Sensing node (type + message). Detail: `{ type }`.
-- **The `look` frame rides the voice turn.** When the realtime `look` tool captures, HAL copies the frame to `/var/lib/hal/snapshots/sensing_look/` (`hal/realtime/look_monitor.py`, newest 20 kept) and appends a `[snapshot: ...]` marker to the message that turn already sends — so the picture appears **inside the turn that asked for it**, next to the transcript and the reply, instead of as a separate event with no question attached. os-server strips the marker before the text reaches the model but keeps it in the flow JSONL, exactly as `motion.activity` does. Unlike a `motion.activity` snapshot, **this frame IS what the model saw**, making it the artefact to compare against the model's answer. (A `look.capture` monitor-only branch still exists in `handler.go` from the earlier design; HAL no longer sends it.)
-- `chat_send` → outbound `chat.send` from the device. Detail: `{ type, run_id, has_session, has_image, image_bytes, message }`. `type` is `"user"` for real user / sensing-driven input, or `"system"` for internal notifications (skill watcher, wake greeting). The WS RPC payload sent to OpenClaw is identical in both cases — `type` only labels the flow event so the UI can distinguish them. Auto-compact does **not** emit a `chat_send`; it calls the `sessions.compact` RPC directly via `CompactSession`.
+- **The `look` frame rides the voice turn.** When the realtime `look` tool captures, HAL copies the frame to `/var/lib/hal/snapshots/sensing_look/` (`hal/realtime/look_monitor.py`, newest 20 kept) and appends a `[snapshot: ...]` marker to the message that turn already sends — so the picture appears **inside the turn that asked for it**, next to the transcript and the reply, instead of as a separate event with no question attached. os-server strips the marker before the text reaches the model but keeps it in the flow JSONL, exactly as `motion.activity` does. Unlike a `motion.activity` snapshot, **this frame IS what the model saw**, making it the artefact to compare against the model's answer. (A `look.capture` monitor-only branch still exists in `system/server/sensing/delivery/http/handler.go` from the earlier design; HAL no longer sends it.)
+- `chat_send` → outbound `chat.send` from the device. Detail: `{ type, run_id, has_session, has_image, image_bytes, message }`. `type` is `"user"` for real user / sensing-driven input, or `"system"` for internal notifications (skill watcher, wake greeting). The WS RPC payload sent to OpenClaw is identical in both cases — `type` only labels the flow event so the UI can distinguish them. Session rotation does **not** emit a `chat_send` flow event (it logs `new_session_triggered`); the disabled auto-compact path would call the `sessions.compact` RPC directly via `CompactSession`.
 - `sound_tracker` → pushed by HAL Python directly via `POST /api/monitor/event`. Appears alongside `sensing_input` turns to show escalation state:
   - `{ action: "silent", occurrence: 1 }` — forwarded, agent stays silent
   - `{ action: "persistent", occurrence: 3 }` — forwarded, agent will speak
@@ -302,7 +314,7 @@ Node info extracted from turn events:
 - `tool_call` → one Event Pipeline row per tool invocation, kind=`tool`,
   label=`tool · <name>`, with `start`/`result` phases collapsed into the
   row's duration. Outgoing HW edges (LED / servo / emotion / audio /
-  lamp_gate) anchor at the pipeline's right edge.
+  os_gate) anchor at the pipeline's `tool_exec` anchor.
   - **Echoed-marker rescue (2026-07-23):** an `[HW:...]` marker only reaches
     HAL when the agent emits it as **reply text** (the Go interceptor runs
     `extractHWCalls` on the assistant message). Occasionally the agent instead
@@ -338,9 +350,13 @@ For delegated music requests, `skills/music/SKILL.md` requires leading HW marker
 
 ### NO_REPLY suppression
 
-The agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
+The agent may respond with `NO_REPLY` (or truncated forms `NO`, `NO_RE`, `NO_...`) when it decides not to respond — typically for passive sensing events like sound/motion. These are suppressed by `isAgentNoReply()` in `handler_text.go`: no TTS playback, no output display. Matches: exact `"NO"`, or any string starting with `"NO_"` or `"NO_RE"` (case-insensitive after trim). Source: `lifecycle_end` payload if available, otherwise fetched from `chat.history` RPC on `lifecycle_end` (async goroutine, best-effort). OpenClaw `lifecycle_end` currently does not include usage data, so `chat.history` is the primary source.
 
 **Silence-narration gate.** Models sometimes describe their decision to stay quiet instead of emitting the sentinel (e.g. `Sound event, no user message. Nothing to say`). That prose passes `isAgentNoReply()`, so `isMetaNonReply()` in `handler_text.go` suppresses it too: text ≤ 100 bytes, no `?`, matching one of the meta phrases (`nothing to say/add/report`, `no (user) message/reply/response/comment (needed)`, `no need to reply/respond/speak/say`, `staying|remaining silent`, `no action needed`). Applied at end-of-turn (`handler_event_agent.go`) and in `tryFirstSentenceFlush()` (`handler_state.go`), where it defers WITHOUT marking the run streamed so a later real sentence still gets the first-audio latency win. Both hits log a `WARN` and the turn is reported as `no_reply`.
+
+### Cron-fire auto-force TTS
+
+When OpenClaw emits `event:"cron"` with `action:"started"`, the OS server appends the current time to a FIFO queue (`cronFireExpected`; OpenClaw omits `sessionKey` for `sessionTarget="main"` jobs, so correlation is by time, not session). The next `lifecycle_start` with a UUID run ID consumes the oldest entry if it is within `cronFireWindowMs` (10 s) and marks the run in `cronFireRuns`; membership forces `isChannelRun=false`, so the device speaker speaks the reply without a `[HW:/speak]` marker. The marker stays in skills as a defense-in-depth fallback in case the cron event is dropped.
 
 ## Stream summary events (`agent_*_token` / `thinking_*_token`)
 
@@ -356,9 +372,9 @@ To bridge that gap, the OpenClaw stream handler emits four lightweight summary f
 | `thinking_last_token` | `lifecycle.end` | `{run_id, text, chunks, chars}` | Same as above, for the thinking stream |
 | `narration_demoted` | A `tool` start arrives while `assistant` text is buffered | `{run_id, tool, text}` | Text streamed BEFORE a tool call is the model narrating its plan ("Let me take a look."), not the reply. The handler drops it from the reply buffer (so it never reaches web chat / TTS at `lifecycle.end`) and shows it in the thinking row instead. Runtime-agnostic; skipped when the first sentence already streamed to TTS or the text carries an `[HW:...]` marker |
 
-Maximum 4 extra JSONL lines per turn (often 0–2). Stream from OpenClaw is still called `"assistant"` in code (`handler_events.go: case "assistant"`); only the JSONL node names use the `agent_` prefix for consistency with existing `agent_thinking` / `agent_call` / `agent_response` nodes.
+Maximum 4 extra JSONL lines per turn (often 0–2). Stream from OpenClaw is still called `"assistant"` in code (`handler_event_agent.go: case "assistant"`); only the JSONL node names use the `agent_` prefix for consistency with existing `agent_thinking` / `agent_call` / `agent_response` nodes.
 
-State lives in `OpenClawHandler.streamStats` (per-run counters + accumulated text), independent of `assistantBuf` (which serves TTS flush). Drained on `lifecycle.end`. See `recordAssistantDelta` / `recordThinkingDelta` / `drainStreamStats` in `handler_state.go`.
+State lives in `AgentHandler.streamStats` (per-run counters + accumulated text), independent of `assistantBuf` (which serves TTS flush). Drained on `lifecycle.end`. See `recordAssistantDelta` / `recordThinkingDelta` / `drainStreamStats` in `handler_state.go`.
 
 Frontend (`aggregateEvents` in `helpers.ts`) builds pipeline rows from `*_first_token` (opens a row) + `*_last_token` (closes it with `chunks`/`chars`). `extractTurnTiming` and `turnFirstTokenMs` both fall back to these markers when live deltas aren't in `turn.events`.
 
@@ -467,7 +483,7 @@ Two sensing events arriving close together: turn B's `SetTrace` overwrites turn 
 
 ### 4. Double TTS
 Both agent stream (`lifecycle_end` flush) and chat stream (`chat final assistant`) can send TTS for the same response.
-- **Status**: Known bug, documented as TODO in handler.go. Fix: deduplicate with per-runID guard.
+- **Status**: Previously tracked as a TODO in the agent handler; that TODO is no longer present in `system/server/agent/delivery/http/`. Intended fix: deduplicate with per-runID guard (current dedup status not re-verified).
 
 ### 5. Server restarts every ~20s
 WebSocket reconnects cause process-level restarts (seq counter resets). This is likely a separate stability issue, not a monitor bug.
@@ -477,7 +493,7 @@ WebSocket reconnects cause process-level restarts (seq counter resets). This is 
 ### 6. OpenClaw built-in `tts` tool bypasses HAL speaker (FIXED)
 Agent called OpenClaw's built-in `tts` tool instead of responding with assistant text. OpenClaw generated audio server-side (`"Generated audio reply."`) but never routed it to the physical speaker (`/voice/speak` on HAL). Agent then returned `NO_REPLY`, so the OS server had no assistant text to flush → silent.
 - **Root cause**: OpenClaw provides a built-in `tts` tool when `tools.profile = "full"`. The sensing SKILL.md instructed the agent to call `/voice/speak`, which the agent mapped to the built-in `tts` tool instead of using `curl` to HAL.
-- **Fix**: (1) Deny OpenClaw built-in `tts` tool via `tools.deny: ["tts"]` in config (`service.go`). `tools.disabled` is NOT a valid OpenClaw key — use `tools.deny` (deny wins over `tools.profile`). (2) Intercept fallback in handler.go: if agent still calls `tts` tool, extract text and route to `SendToHalTTS()`. (3) Updated sensing SKILL.md and SOUL.md to instruct the agent to respond with plain text — the OS server's assistant-delta accumulation pipeline routes it to HAL TTS automatically.
+- **Fix**: (1) Deny OpenClaw built-in `tts` tool via `tools.deny: ["tts"]` in config. `tools.disabled` is NOT a valid OpenClaw key — use `tools.deny` (deny wins over `tools.profile`). Note: `runtimes/openclaw` no longer writes this key; only the interceptor below remains in code. (2) Intercept fallback (`toolName == "tts"` in `handler_event_agent.go` and `handler_event_session_tool.go`): if agent still calls `tts` tool, extract text and route to `SendToHalTTS()`. (3) Updated sensing SKILL.md and SOUL.md to instruct the agent to respond with plain text — the OS server's assistant-delta accumulation pipeline routes it to HAL TTS automatically.
 - **Status**: Fixed in v0.0.138.
 
 ### 7. OpenClaw tool-call visibility gap (action without `tool_call`)
@@ -489,11 +505,11 @@ Observed on multiple Telegram turns: user asks for a device action (e.g. LED col
 
 ## Compaction summary inspector
 
-The agent session auto-compacts when context tokens cross ~80k. Every compaction writes a `type:"compaction"` record into `/root/.openclaw/agents/main/sessions/<sessionId>.jsonl` containing a `summary` string that is then prepended to every subsequent turn's prompt until the next compaction. Rules accidentally copied or generalized into that summary can override SKILL.md (the summary sits earlier in the prompt and is framed as "established context").
+Compaction is performed by the runtime itself (OpenClaw `safeguard` mode near the context limit); the OS server's own auto-compact trigger is currently disabled in favour of session rotation (`new_session_triggered`, 150k reported tokens on OpenClaw) — see [agent-compaction.md](agent-compaction.md). Every compaction writes a `type:"compaction"` record into `/root/.openclaw/agents/main/sessions/<sessionId>.jsonl` containing a `summary` string that is then prepended to every subsequent turn's prompt until the next compaction. Rules accidentally copied or generalized into that summary can override SKILL.md (the summary sits earlier in the prompt and is framed as "established context").
 
 **UI:** Flow Monitor header exposes a `📋 Summary` button. Click → fetch + render modal showing the latest compaction record: timestamp, `tokensBefore`, `summaryChars`, `compactionCount`, `readFiles` fed into the compaction prompt, and the full `summary` text.
 
-**Endpoint:** `GET /api/agent/compaction-latest?session=<key>` (default session key `agent:main:main`). Returns:
+**Endpoint:** `GET /api/agent/compaction-latest?session=<key>&at=<iso-ts>` (admin auth; default session key `agent:main:main`; `at` empty = newest record). Returns:
 
 ```json
 {
@@ -504,28 +520,32 @@ The agent session auto-compacts when context tokens cross ~80k. Every compaction
     "sessionFile": "/root/.openclaw/agents/main/sessions/<id>.jsonl",
     "compactionCount": 18,
     "id": 17170331,
+    "parentId": "369818c9",
     "timestamp": "2026-04-24T03:21:30.305Z",
+    "nextTimestamp": "",
     "tokensBefore": 80458,
     "summaryChars": 14263,
     "summary": "...",
     "details": { "readFiles": ["..."], "modifiedFiles": ["..."] },
     "fromHook": true,
-    "firstKeptEntryId": 17170331
+    "firstKeptEntryId": 17170331,
+    "atQuery": ""
   }
 }
 ```
 
-Use when the agent cites rules that cannot be found in any `skills/**/SKILL.md` — the source is almost always the compaction summary, not the loaded skill. Handler: `system/server/openclaw/delivery/sse/handler_api_compaction.go`.
+Use when the agent cites rules that cannot be found in any `skills/**/SKILL.md` — the source is almost always the compaction summary, not the loaded skill. Handler: `system/server/agent/delivery/http/handler_api_compaction.go`.
 
 ## Turns list vs downloaded log
 
 | Source | Scope |
 |--------|--------|
-| **Turns list** (Monitor) | Built from the **last 10 000** `flow_events_*.jsonl` lines (`GET /openclaw/flow-events?last=10000`), then `groupIntoTurns` returns **all** turns (no cap). |
-| **↓ Bundle** button | One click downloads **two**: (1) `GET /openclaw/flow-logs?last=10000` via `fetch` + blob save (`lamp_flow_YYYY-MM-DD_last10000.jsonl`) — **same tail** as the UI feed; (2) client JSON of `events[]` + grouped `turns[]` (`lamp_flow_ui_snapshot_*.json`). |
-| **full day** link | `GET /openclaw/flow-logs` — entire day file; can be **longer** than the UI window, so Turns are **not** a reconstruction of the full file. |
+| **Turns list** (Monitor) | Fed by the `GET /api/agent/flow-stream` SSE: each time today's `flow_events_*.jsonl` changes, the server pushes a full snapshot of the **last 500** lines (`recentFlowFromJSONL(day, 500, …)`); the client keeps at most `FLOW_EVENTS_MAX` (10000) of them, so the effective window is 500 lines. `groupIntoTurns` then returns **all** turns (no cap). |
+| **↓ Bundle** button | One click downloads **two** files (the button tooltip says three; `downloadFlowBundle` only does two): (1) `GET /api/agent/flow-logs?last=10000` via `fetch` + blob save (`flow_YYYY-MM-DD_last10000.jsonl`) — the server caps `last` at **2000**, so this is a 2000-line tail, **wider** than the 500-line UI feed; (2) client JSON of `events[]` + grouped `turns[]` (`flow_ui_snapshot_*.json`, format `os-monitor-ui-snapshot-v1`). |
+| **Full day** link | `GET /api/agent/flow-logs` — entire day file; can be **longer** than the UI window, so Turns are **not** a reconstruction of the full file. |
+| `GET /api/agent/flow-events` | JSON (not SSE) query: `date`, `last` (default 500, max 10000). Used by Chat (`last=500`), not by the Turns list. |
 
-Turns now show every turn derivable from the fetched events. Comparing server to UI should use **↓ Bundle** (or the same two artifacts manually: `flow-logs?last=10000` + UI snapshot JSON).
+Turns show every turn derivable from the streamed events. Comparing server to UI should use **↓ Bundle** (remember the JSONL tail is wider than the UI window) or `flow-logs?last=500` + the UI snapshot JSON for an exact match.
 
 ## Files
 
@@ -533,11 +553,14 @@ Turns now show every turn derivable from the fetched events. Comparing server to
 |---|---|
 | `system/lib/flow/flow.go` | Flow event emission, JSONL persistence, per-event runID API |
 | `system/server/sensing/delivery/http/handler.go` | Sensing input → flow.Start/End with runID |
-| `system/server/openclaw/delivery/sse/handler.go` | Agent events → flow.Log with payload.RunID, turn detection |
-| `runtimes/openclaw/service.go` | sendChat returns idempotencyKey as runID |
-| `system/web/src/pages/Monitor.tsx` | `groupIntoTurns`, `turnIO`, `extractNodeInfo`, `FlowDiagram` |
+| `system/server/agent/delivery/http/handler_event_agent.go` | Agent events → flow.Log with payload.RunID, turn detection |
+| `system/server/agent/delivery/http/handler_api_flow.go` | `flow-events`, `flow-stream` (SSE), `flow-logs` endpoints |
+| `runtimes/openclaw/service_chat.go` | sendChat returns idempotencyKey as runID |
+| `system/web/src/pages/monitor/FlowSection/helpers.ts` | `groupIntoTurns`, `turnIO`, `extractNodeInfo`, `aggregateEvents` |
+| `system/web/src/pages/monitor/FlowSection/FlowDiagram.tsx` | `FlowDiagram` (SVG nodes, `positions`, `edges`) |
+| `system/web/src/pages/monitor/FlowSection/index.tsx` | Flow section, Bundle / Full day downloads |
 
-Vietnamese summary: `docs/vi/flow-monitor_vi.md`.
+Vietnamese version: [`docs/vi/flow-monitor_vi.md`](vi/flow-monitor_vi.md).
 
 Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
 

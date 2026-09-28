@@ -14,8 +14,7 @@ type halAnnounceTransport func(*http.Request) (*http.Response, error)
 
 func (f halAnnounceTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
-// captureHALUpdates records every HAL request body by path; HAL's client uses
-// http.DefaultTransport.
+// captureHALUpdates records every HAL request body by path.
 func captureHALUpdates(t *testing.T) <-chan map[string]any {
 	t.Helper()
 	original := http.DefaultTransport
@@ -110,8 +109,7 @@ func TestHarnessProgressAnnouncedOnlyForLiveVoiceRuns(t *testing.T) {
 	}
 }
 
-// A realtime reply to a newer, unrelated utterance must not mute a Harness
-// update: the announcer waits for a free moment itself. Only the click does.
+// A realtime reply to a newer utterance must not mute a Harness update; only the click does.
 func TestHarnessUpdatesIgnoreRealtimeSupersedeButHonorClick(t *testing.T) {
 	const run = "device-chat-270-1790318924951"
 	later := int64(1790319247903) // someone chatted after the task was sent

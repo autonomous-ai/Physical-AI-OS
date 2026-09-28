@@ -9,9 +9,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// repoDevicesDir resolves the committed robots/ tree by walking up from the
-// test working dir until it finds it, so package moves don't silently break
-// the SOUL.md tests with an off-by-one ".." chain again.
+// repoDevicesDir walks up from the test dir to find the committed robots/ tree.
 func repoDevicesDir(t *testing.T) string {
 	t.Helper()
 	wd, err := os.Getwd()
@@ -31,9 +29,6 @@ func repoDevicesDir(t *testing.T) string {
 func soulFor(t *testing.T, deviceType string) ([]byte, bool) {
 	t.Helper()
 	t.Setenv("DEVICES_DIR", repoDevicesDir(t))
-	// DEVICE_TYPE is the primary resolver (env-first); set it explicitly so the
-	// test is deterministic regardless of ambient env. Empty → config.json
-	// device_type ("" here) → DeviceTypeOrDefault returns "" (no "lamp" fallback).
 	t.Setenv("DEVICE_TYPE", deviceType)
 	s := &OpenclawService{config: &config.Config{}}
 	content, has, err := s.deviceSoulCore()
@@ -102,8 +97,7 @@ func TestDeviceSoulCore_DogHasOwnSoul(t *testing.T) {
 	}
 }
 
-// Empty device_type no longer falls back to "lamp" — DeviceTypeOrDefault returns
-// "" and resolves no soul (the Serve startup guard fail-louds instead).
+// Empty device_type no longer falls back to "lamp" — DeviceTypeOrDefault returns "" and resolves no soul (the Serve startup guard fail-louds instead).
 func TestDeviceSoulCore_EmptyTypeNoLampFallback(t *testing.T) {
 	if _, has := soulFor(t, ""); has {
 		t.Error("empty device_type must NOT resolve the lamp soul (no fallback)")
@@ -117,9 +111,7 @@ func TestDeviceSoulCore_UnknownTypeHasNoSoul(t *testing.T) {
 	}
 }
 
-// openclawDefaultSoul is the gateway's own default soul that OpenClaw seeds into
-// workspace/SOUL.md on first boot. Onboarding's device block is meant to override
-// it — keeping it below `---` is the SOUL.md duplication bug.
+// openclawDefaultSoul is the gateway's own default soul that OpenClaw seeds into workspace/SOUL.md on first boot.
 const openclawDefaultSoul = `# SOUL.md - Who You Are
 
 _You're not a chatbot. You're becoming someone._
@@ -133,8 +125,7 @@ _You're not a chatbot. You're becoming someone._
 - [SOUL.md personality guide](/concepts/soul)
 `
 
-// soulService builds a OpenclawService whose OpenclawConfigDir is an isolated temp dir and
-// whose device soul resolves from the committed robots/ tree.
+// soulService builds a OpenclawService whose OpenclawConfigDir is an isolated temp dir and whose device soul resolves from the committed robots/ tree.
 func soulService(t *testing.T, deviceType string) (*OpenclawService, string) {
 	t.Helper()
 	t.Setenv("DEVICES_DIR", repoDevicesDir(t))
@@ -155,8 +146,7 @@ func readSoul(t *testing.T, cfgDir string) string {
 	return string(b)
 }
 
-// When the OpenClaw gateway has seeded its own default soul, ensureSoulMDBlock must
-// replace it with the device block — NOT keep it below `---` (the duplication bug).
+// When the OpenClaw gateway has seeded its own default soul, ensureSoulMDBlock must replace it with the device block — NOT keep it below `---` (the duplication bug).
 func TestEnsureSoulMDBlock_StripsOpenClawDefault(t *testing.T) {
 	s, cfgDir := soulService(t, "lamp")
 	soulPath := filepath.Join(cfgDir, "workspace", "SOUL.md")
@@ -180,12 +170,9 @@ func TestEnsureSoulMDBlock_StripsOpenClawDefault(t *testing.T) {
 	}
 }
 
-// Already-dup'd file (device block + openclaw default below `---`) must self-heal:
-// the fast path has to fall through and strip the lingering default.
+// Already-dup'd file (device block + openclaw default below `---`) must self-heal: the fast path has to fall through and strip the lingering default.
 func TestEnsureSoulMDBlock_HealsExistingDuplicate(t *testing.T) {
 	s, cfgDir := soulService(t, "lamp")
-	// Build the current canonical block, then append the openclaw default below it
-	// — exactly the on-device dup shape.
 	core, has, err := s.deviceSoulCore()
 	if err != nil || !has {
 		t.Fatalf("deviceSoulCore: has=%v err=%v", has, err)
@@ -209,7 +196,6 @@ func TestEnsureSoulMDBlock_HealsExistingDuplicate(t *testing.T) {
 		t.Errorf("duplicate not healed:\n%s", got)
 	}
 
-	// Idempotent: a second run on the healed file must be a no-op (no churn).
 	changed2, err := s.ensureSoulMDBlock()
 	if err != nil {
 		t.Fatalf("ensureSoulMDBlock (2nd): %v", err)
@@ -219,8 +205,7 @@ func TestEnsureSoulMDBlock_HealsExistingDuplicate(t *testing.T) {
 	}
 }
 
-// An owner `## Personal` section below the default must be preserved while the
-// default soul above it is discarded.
+// An owner `## Personal` section below the default must be preserved while the default soul above it is discarded.
 func TestEnsureSoulMDBlock_PreservesOwnerPersonal(t *testing.T) {
 	s, cfgDir := soulService(t, "lamp")
 	const ownerNote = "My owner likes tea at 9pm."

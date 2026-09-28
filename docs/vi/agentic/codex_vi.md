@@ -150,6 +150,14 @@ chỉ-OpenClaw), refresh khối AGENTS.md **toàn cục** ở tầng user
 chỉ-markdown không bao giờ restart gateway; chỉ presync đổi config hoặc
 self-heal unit mới restart.
 
+> **Lỗ hổng đã biết — không có heartbeat driver.** Khối `HEAcodexBEAT.md` (dùng
+> nguyên văn chung với openclaw/picoclaw) giả định có heartbeat poll định kỳ của
+> gateway để chạy knowledge synthesis và people sync `KNOWLEDGE.md` → `USER.md`.
+> codex không có heartbeat driver (không gì trong `runtimes/codex/` đọc `HEAcodexBEAT.md`
+> theo lịch), nên khối đó ở đây không có tác dụng: `memory/*.md` hằng ngày không
+> được chưng cất vào `KNOWLEDGE.md`, và thông tin về người chỉ vào `USER.md` khi
+> agent tự ghi trong một turn.
+
 **Vì sao phải seed `AGENTS.md`.** Codex không có lệnh `setup` để sinh lại
 `AGENTS.md` nền như openclaw, nên một **thiết bị chỉ chạy codex** — chưa từng
 chạy openclaw, khiến presync §1 không có gì để migrate — hoàn toàn không có file
@@ -404,7 +412,7 @@ chính thread đó, không bao giờ vào thread khác hoặc turn đã hoàn t�
 Codex **tự auto-compact context của nó** (`model_auto_compact_token_limit`),
 nhưng thiết bị có lưới an toàn **120k token**: tại 134k, một lượt `codex exec`
 đã mất 100 giây; các lượt resume sau đó phình lên 376k rồi 473k. Nó tính trên kích thước **context** đang sống —
-`input_tokens + cached_input_tokens` của `turn.completed` gần nhất, được
+`input_tokens` thô (vốn đã gồm `cached_input_tokens`) của `turn.completed` gần nhất, được
 translator lưu vào `lastContextTokens` — chứ không phải `totalTokens` mà handler
 chung truyền vào (số đó cộng cả output của lượt này, là khối lượng turn chứ
 không phải context). Tự đọc usage frame của mình giúp thay đổi này nằm gọn
@@ -637,8 +645,10 @@ nên các entry sống sót qua mọi lần sync.
 
 `ResetAgent` (do `server/system/factoryreset.go` gọi trên gateway đang active)
 không giữ lại gì — config.toml/.env được presync regenerate ở lần switch kế:
-**stop** `codex.service` (+ verify inactive, poll 5s), **disable** nó (reboot
-mặc định về openclaw), **xoá sạch `/root/.codex`** — config, auth CLI, thread
+**stop** `codex.service` (+ verify inactive, poll 5s), **disable** nó (
+(reboot resolve về runtime mặc định của thiết bị — `f_r_default_agent`, nếu không
+thì ROBOT.md `gateway.default`, vd. hermes trên Lamp — chỉ về openclaw khi cả hai
+đều không set)), **xoá sạch `/root/.codex`** — config, auth CLI, thread
 (`sessions/`), workspace, và marker `.openclaw-migrated` (để presync §1
 re-migrate ở lần switch kế) — rồi tạo lại các thư mục baseline `workspace/` +
 `attachments/` (Codex không có subcommand onboard; CLI tự tạo lại state dưới

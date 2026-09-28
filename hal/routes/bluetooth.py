@@ -1,9 +1,4 @@
-"""Bluetooth headset routes — pair / connect / route TTS+STT to a BT
-headset so the user can use the device privately without disturbing others.
-
-Endpoints live under /bluetooth/* (exposed to the web UI via /hw/bluetooth/*
-through the existing OS server reverse proxy).
-"""
+"""Bluetooth headset routes: pair / connect / route TTS+STT to a BT headset."""
 
 import logging
 import time
@@ -79,9 +74,7 @@ def bt_devices():
     mgr = _mgr()
     paired = mgr.paired_devices()
     active = mgr.active_mac
-    # "active" = audio is actually routed there right now (live label), not
-    # just the persisted preference — after a failed boot-restore active_mac
-    # stays set while routing is builtin, and the UI must show the truth.
+    # "active" means audio is routed there now, not just the persisted preference.
     routed = bool(active) and current_label() == f"bt:{active}"
     for d in paired:
         d["active"] = routed and d["mac"] == active
@@ -106,8 +99,7 @@ def bt_forget(req: MacRequest):
     mgr = _mgr()
     target = req.mac.upper()
     if mgr.active_mac and mgr.active_mac == target:
-        # Bring TTS/STT back to the device before it disappears,
-        # otherwise the persistent OutputStream is left pointed at a gone sink.
+        # Route back to the device first, or the persistent OutputStream points at a gone sink.
         with route_op_lock:
             route_to_builtin()
     if not mgr.forget(target):
@@ -123,19 +115,11 @@ def bt_active_get():
 
 @router.post("/active")
 def bt_active_set(req: ActiveRequest):
-    """Toggle voice routing.
-
-    mac = null / "" → route back to the device's built-in speaker + mic.
-    mac = MAC       → ensure connected, find PortAudio indices, route TTS+STT
-                      to the BT device. STT mic falls back to the device mic if the
-                      device has no input (BT speaker case).
-    """
+    """Toggle voice routing: null/"" -> built-in speaker+mic; MAC -> route TTS+STT to the BT device."""
     mgr = _mgr()
     target = (req.mac or "").strip().upper() or None
 
-    # route_op_lock serializes whole route flows (this handler, boot restore,
-    # concurrent clicks): two interleaved quiesce→PortAudio-re-init→swap
-    # sequences abort the process from the C layer.
+    # Serializes whole route flows: interleaved PortAudio re-inits abort the process.
     if target is None:
         with route_op_lock:
             route_to_builtin()
@@ -149,9 +133,7 @@ def bt_active_set(req: ActiveRequest):
         if not mgr.info(target)["connected"] and not mgr.connect(target):
             raise HTTPException(503, f"Could not connect to {target}")
 
-        # Profile choice (config.BT_PREFER_HFP): HFP routes the headset mic too
-        # (mono 16kHz both ways over SCO); default A2DP = stereo playback with
-        # the STT mic falling back to the device's built-in mic.
+        # HFP routes the headset mic too (mono 16 kHz); default A2DP keeps the device mic for STT.
         card = mgr.pa_card_for_mac(target)
         if card:
             profiles = mgr.pa_card_profiles(card)
@@ -163,9 +145,7 @@ def bt_active_set(req: ActiveRequest):
             if profile:
                 mgr.set_pa_card_profile(card, profile)
 
-        # Poll for the sink to appear instead of a fixed sleep — PA exposes the
-        # bluez sink asynchronously after a profile switch / reconnect, and on
-        # a flaky BT chip it can take a few seconds. Up to ~8s.
+        # PA exposes the bluez sink asynchronously; poll up to ~8s.
         pa_sink: Optional[str] = None
         for _ in range(8):
             pa_sink = mgr.pa_sink_for_mac(target)
@@ -177,9 +157,7 @@ def bt_active_set(req: ActiveRequest):
                 503,
                 f"PulseAudio has no sink for {target} — check pulseaudio-module-bluetooth",
             )
-        # PortAudio re-init aborts the process if other sounddevice streams are
-        # live (TTS persistent stream, mic capture) — quiesce them first; the
-        # route swap below reopens everything.
+        # PortAudio re-init aborts the process while other streams are live; quiesce first.
         quiesce_portaudio_users()
         pulse_idx = mgr.pulse_sd_index(sd)
         if pulse_idx is None:

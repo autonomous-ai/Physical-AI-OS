@@ -18,7 +18,6 @@ class SleepSidecarTest(unittest.TestCase):
         state._persist_sleep_state()
         self.assertTrue(os.path.exists(state._SLEEP_STATE_PATH))
 
-        # Simulate the restart: forget the flag, reload from disk.
         state._sleeping = False
         state._load_peripheral_sidecars()
         self.assertTrue(state._sleeping, "device woke itself up across a restart")
@@ -29,7 +28,7 @@ class SleepSidecarTest(unittest.TestCase):
         state._persist_sleep_state()
         state._sleeping = False
         state._persist_sleep_state()
-        state._sleeping = True          # pretend the restart lost the truth
+        state._sleeping = True
         state._load_peripheral_sidecars()
         self.assertFalse(state._sleeping, "restart resurrected a sleep the user ended")
 
@@ -39,10 +38,7 @@ if __name__ == "__main__":
 
 
 class SleepOwnedMutesTest(unittest.TestCase):
-    """Sleep mutes the mic and speaker in memory and marks them sleep-owned, so
-    waking hands them back to whatever the USER had chosen. They must survive a
-    restart with that ownership intact — otherwise a sleeping device comes back
-    listening, and a turn still in flight speaks out loud."""
+    """Sleep-owned mutes survive a restart with ownership intact."""
 
     def setUp(self):
         from hal import app_state as state
@@ -57,7 +53,6 @@ class SleepOwnedMutesTest(unittest.TestCase):
         state._sleepy_auto_muted_speaker = True
         state._persist_sleep_state()
 
-        # Restart: every in-memory flag is gone.
         state._sleeping = False
         state._mic_muted = False
         state._speaker_muted = False
