@@ -1573,3 +1573,9 @@ Speaker-ID và SER khởi tạo bằng các worker nền độc lập, không ch
 Worker đèn trắng setup gọi thẳng `/led/status` và retry khi lỗi, không đợi `/health` đầy đủ. Acknowledge LED nghĩa là đã nhận lệnh; khi đo thực tế còn cần kiểm tra đầu ra strip. Đo từ lúc systemd chạy process đến acknowledge, tách riêng với mốc full health. `[startup] led_ready` đánh dấu khởi tạo driver, còn `[startup] full HTTP API ready` đánh dấu chuyển sang app đầy đủ.
 
 HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.
+
+### Xác thực sự kiện sensing
+
+`POST /api/sensing/event` yêu cầu xác thực admin cho mọi loại sự kiện từ xa, kể cả sự kiện thụ động vì chúng có thể gọi agent. HAL gọi trực tiếp qua loopback vẫn được phép khi các header chuyển tiếp cũng là loopback hoặc không có. IP LAN và Origin/Referer không cấp quyền. Web chat tiếp tục dùng cookie đăng nhập; dispatch MQTT nội bộ không đổi.
+
+Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music suggestion, monitor) dùng cùng ranh giới admin hoặc loopback; guard đã áp dụng sẵn. Sensing nhận tối đa bốn attachment, mỗi file 10 MiB và tổng dữ liệu giải mã 20 MiB; body JSON giới hạn 29 MiB trước khi parse. Base64 không hợp lệ bị từ chối trước khi ghi file hoặc gọi agent.

@@ -63,7 +63,7 @@ Work credit: PRs by `31803smith` — #69 (aa98a207), #77 (e9d8a1f1), #79 (039b25
 | F8b | `POST /api/device/channel` hijack | ✅ | 2026-05-19: `adminAuthMiddleware` applied |
 | F9 | Logs leak secrets | ✅ | 2026-05-19: admin auth. 2026-05-20: `redactLogLine()` regex scrubs 3 patterns (key=value secrets, `Authorization: Bearer`, bare `sk-...` keys) on file-based + journal tail + SSE stream + journal stream |
 | F10 | `/api/system/software-update/:target` OTA trigger | ✅ | 2026-05-19: admin auth. 2026-05-20: per-target rate limit 30s (in-memory map + mutex), 429 with `Retry-After` header |
-| F11 | Ingestion endpoints unauthenticated | ✅ | PR #81 — `sameOriginOrLAN` applied to mood/log, wellbeing/log, posture/log, music-suggestion/log+status, monitor/event, guard/alert. `sensing/event` per `a0ccfd23` |
+| F11 | Ingestion endpoints unauthenticated | ✅ | AOS-1: sensing/event, telemetry/event, mood/log, wellbeing/log, posture/log, music-suggestion/log+status and monitor/event require admin or direct loopback; guard already uses this gate. Origin/LAN alone no longer grants ingestion access. Sensing attachments are bounded (4 files, 10 MiB each, 20 MiB total) |
 | F12 | Lamp Go bind 0.0.0.0 | ✅ | PR #81 — bind `127.0.0.1:5000` |
 | F13 | Bootstrap server bind 0.0.0.0 | ✅ | PR #81 — bind `127.0.0.1:8080` |
 
