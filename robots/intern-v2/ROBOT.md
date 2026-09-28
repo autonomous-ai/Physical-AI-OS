@@ -17,6 +17,7 @@ capabilities:
   light:        { routes: [led], driver: ws2812, required: true, safety: SAFETY.md#light }
   media:        { routes: [music], required: true }
   connectivity: { routes: [bluetooth], required: true }
+soul_ref:   SOUL.md
 safety_ref: SAFETY.md
 memory:     { backend: local }
 startup_volume: 100

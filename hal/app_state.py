@@ -698,7 +698,7 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
         _mic_muted = True
         _sleepy_auto_muted_mic = True
         if voice_service and voice_service.available:
-            threading.Thread(target=voice_service.stop, daemon=True, name="sleepy-mic-stop").start()
+            voice_service.stop(background=True)
 
     if mute_speaker:
         # Music is never an announcement. The speaker goes to the drain, which

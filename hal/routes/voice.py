@@ -556,22 +556,8 @@ def mute_mic():
     state._apply_mic_muted_led()
     state._persist_mic_state()
     if state.voice_service and state.voice_service.available:
-        # voice_service.stop() has been observed to block for 20-30s when
-        # realtime.stop's LLM memory-summarization call hangs on an
-        # unresponsive backend (Cloudflare 524, network stall). Detaching
-        # to a daemon thread lets this route return in ms — critical because
-        # the caller is often the mic-switch driver, which holds an
-        # apply_lock while inside this route. If that lock stays held for
-        # 27s, the driver can't process the user's next flip (verified in
-        # trace: unmute reconcile blocked 11s waiting for the mute lock).
-        # Voice service already tolerates parallel start/stop via its
-        # _running flag; a small race with a subsequent unmute is
-        # acceptable — realtime reconnect logic self-heals.
-        threading.Thread(
-            target=state.voice_service.stop,
-            daemon=True,
-            name="voice-mute-teardown",
-        ).start()
+        # Reserve teardown synchronously; release hardware in the background.
+        state.voice_service.stop(background=True)
     state.logger.info("Mic muted by user (voice_service.stop() dispatched to bg thread)")
     return {"status": "ok"}
 

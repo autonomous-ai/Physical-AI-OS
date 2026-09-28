@@ -38,26 +38,42 @@ class ArecordStream:
         )
         return self
 
+    def abort(self):
+        """Unblock a concurrent read and reap the process before releasing ALSA."""
+        proc = self._proc
+        if proc is None:
+            return
+        if proc.poll() is None:
+            proc.terminate()
+        try:
+            proc.wait(timeout=2)
+        except subprocess.TimeoutExpired:
+            proc.kill()
+            proc.wait(timeout=2)
+
     def __exit__(self, *args):
-        if self._proc:
-            self._proc.terminate()
-            try:
-                self._proc.wait(timeout=2)
-            except Exception:
-                self._proc.kill()
+        self.abort()
+        proc = self._proc
+        if proc is not None:
+            proc.stdout.close()
+            proc.stderr.close()
             self._proc = None
 
     def read(self, frames):
         n_bytes = frames * self._bytes_per_frame
-        raw = self._proc.stdout.read(n_bytes)
+        proc = self._proc
+        if proc is None:
+            raise IOError("arecord stream is closed")
+        raw = proc.stdout.read(n_bytes)
         if not raw:
             # arecord process died — surface its ALSA stderr + exit code so the
             # root cause (device busy / USB dropout / xrun) is visible, instead of
             # swallowing it. Raise so the main loop can restart capture.
-            rc = self._proc.poll()
+            rc = proc.poll()
             err = ""
             try:
-                err = (self._proc.stderr.read() or b"").decode("utf-8", "replace").strip()
+                if rc is not None:
+                    err = (proc.stderr.read() or b"").decode("utf-8", "replace").strip()
             except Exception:
                 pass
             raise IOError(
