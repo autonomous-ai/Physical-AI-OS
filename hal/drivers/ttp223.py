@@ -41,15 +41,11 @@ threshold everything else follows:
   TAP         anything else, including several fingers landing at once — that
               lights every pad but within ~20ms, which is not movement.
 
-Two parts of the tap action escape the decision wait, both at the FIRST contact
-end of a burst (~0.2s after the finger lifts): in-flight TTS is stopped
-immediately, and a short ack chime plays — stop latency and "did it hear me"
-feedback are the parts of the gesture users actually feel. Deliberate semantic
-change that comes with it: petting her head while she talks now cuts her off
-(the pet giggle follows) — touch means "attention here" either way. Only TTS is
-cut early; music keeps playing until the burst actually resolves as a tap, so
-petting during music never kills the playlist. Unmute + the listening cue also
-still wait for resolution.
+All resolved gestures trigger head_pat_action: tap, double tap, swipe and pet
+are affection on the headpad. MPR121/GPIO own control gestures. The first
+contact keeps its acknowledgement chime, but never stops speech. Classification
+is retained for diagnostics and early pet recognition; it does not select a
+mic, sleep or stop action. Every response arms the same pet cooldown.
 """
 
 import logging
@@ -57,15 +53,11 @@ import os
 import threading
 import time
 
-import hal.app_state as state
 from hal.board.board import TouchConfig
 from hal.drivers import touch_debug
 from hal.drivers.button_actions import (
     head_pat_action,
-    mic_toggle_action,
     play_ack_chime,
-    single_click_action,
-    swipe_action,
 )
 
 logger = logging.getLogger(__name__)
@@ -84,20 +76,18 @@ SESSION_GAP_S = 0.2
 # pace on this hardware is 0.8-1.2s per beat (FastMode forces a
 # tap-tap-tap rhythm rather than continuous motion). 1.2s catches the
 # slowest natural stroke. Cost: single tap responds 1.2s after release
-# — the price of preventing a spurious "single click" at the start of
-# every pet motion.
+# — this groups the start of a pet motion into one response.
 DECISION_WINDOW_S = 1.2
 
 # Contacts needed before the COUNT-based rules apply — the pet fallback for a
 # stroke with no readable traversal, and the slow double tap. With SWIPE_ENABLED
 # the spatial rules resolve most gestures before these are reached; with it off
 # this is the whole of pet detection, and two taps under ~0.9s apart fire pet
-# rather than two singles (users who want two stops space them 1s+).
+# rather than two separate pet responses.
 PET_SESSION_THRESHOLD = 2
 
 # After head_pat fires, swallow further sessions for this long so a
-# continuous stroke doesn't produce stuttering "single click" interjections
-# between pet responses. Every session inside the window extends the
+# continuous stroke does not produce repeated pet responses. Every session inside the window extends the
 # window — petting is finished only when the user stops touching for
 # PET_COOLDOWN_S consecutively.
 PET_COOLDOWN_S = 1.5
@@ -105,23 +95,15 @@ PET_COOLDOWN_S = 1.5
 # Settle window after claiming the lines. lgpio reports each line's current
 # level as an initial edge the moment the alert callback is registered. The
 # pads rest HIGH, so without this guard those startup reports are read as a
-# real touch and fire a phantom single_click ~DECISION_WINDOW after every HAL
+# real touch and fire a phantom pet response ~DECISION_WINDOW after every HAL
 # start (Restart=always makes it recur). Ignore all edges for this long after
 # claim so the startup transient never starts a session.
 SETTLE_S = 0.5
 
 # --- Gesture classification (swipe / double tap / spatial pet) --------------
 #
-# DEFAULT ON since 2026-08-27, after hands-on validation on orange-lamp across
-# tap, fast and slow double tap, pet and swipe. Setting HAL_TOUCH_SWIPE=false
-# restores the two-gesture behaviour this driver shipped with, in one step and
-# without a redeploy — that is the rollback if a field unit misbehaves.
-#
-# Note what turning this on means: a double tap now toggles the MICROPHONE, and
-# a swipe puts the device to sleep. Both are reversible (double tap again; one
-# tap wakes), and nothing destructive is reachable from this surface — FastMode
-# cannot measure a hold, so reboot / shutdown / factory-reset stay on the
-# mechanical button.
+# Classification remains optional for diagnostics and early pet recognition.
+# Both flag states map every resolved gesture to the same head-pat action.
 SWIPE_ENABLED = os.environ.get("HAL_TOUCH_SWIPE", "true").lower() in ("1", "true", "yes")
 
 # Absolute floor on how many pads a swipe must span. The real requirement is
@@ -151,7 +133,7 @@ SWIPE_MIN_PADS = 2
 # belongs below 35.7, and 35 keeps clear air on both sides.
 #
 # The band narrows as the user swipes faster; it is a property of THEM, not just
-# the hardware. Raise it if firm taps start sleeping the device, lower it if
+# the hardware. Raise it if firm taps are classified as swipes, lower it if
 # real swipes are missed. HAL_TOUCH_DEBUG records the gaps it is measured
 # against, and a TAP trace now names this number when it is what declined.
 SWIPE_MIN_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MIN_GAP_MS", "35"))
@@ -555,9 +537,8 @@ class TTP223Handler:
                 pet_now = SWIPE_ENABLED and not _landed and (
                     _revisited or (_moved and count >= PET_SESSION_THRESHOLD)
                 )
-                # First session of a burst: cut in-flight TTS NOW rather than
-                # after the decision window (see module docstring). Checked
-                # outside the lock — it does I/O.
+                # First session of a burst: play the acknowledgement chime.
+                # Checked outside the lock because it does I/O.
                 grab_floor = count == 1
                 logger.debug("TTP223 session ended (count=%d)", count)
                 if SWIPE_ENABLED:
@@ -633,22 +614,10 @@ class TTP223Handler:
             head_pat_action(source="TTP223")
 
     def _ack_first_session(self):
-        """Instant ack for the first touch session of a burst: cut in-flight
-        TTS (barge-in), then sound the ack chime so the user gets sub-250ms
-        confirmation the touch registered. Chime is gesture-neutral, so it
-        fires for taps AND the first stroke of a pet; the spoken cue / pet
-        phrase still waits for tap-vs-pet resolution. TTS stop only — no
-        unmute, no music stop; those wait for resolution too. Off-thread
-        because stop_tts and the chime write do I/O and this is called from
-        a Timer thread that must go on to arm the decision timer promptly."""
+        """Acknowledge the first contact without interrupting speech."""
 
         def _run():
             try:
-                tts = state.tts_service
-                if False and tts is not None and tts.speaking:  # PARKED (no issue): only pet acts on TTP223
-                    logger.info("TTP223 first touch during TTS -- stopping speech early")
-                    from hal.routes.voice import stop_tts
-                    stop_tts()
                 play_ack_chime(source="TTP223")
             except Exception as e:
                 logger.warning("TTP223 first-session ack failed: %s", e)
@@ -677,11 +646,9 @@ class TTP223Handler:
             # 1) SWIPE — one contact that ran cleanly across every pad in order.
             #    Checked first so a resolved swipe never also fires a tap.
             if is_swipe:
-                self._reset_cycle()
-                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "SWIPE", f"one contact traversed all pads, gaps {gaps[0]:.0f}-{gaps[1]:.0f}ms",
-                    count, "swipe_action", swipe_action,
+                    count, "head_pat_action", head_pat_action,
                 )
                 return
 
@@ -697,13 +664,11 @@ class TTP223Handler:
             # lift, tap L100. Nothing but the press count separates that from a
             # slow swipe.
             if (revisited and landed) or (presses >= 2 and not revisited):
-                self._reset_cycle()
-                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "DOUBLE_TAP",
                     ("revisited a pad, and two pads lit together" if revisited
                      else f"the hand arrived on the surface {presses} times"),
-                    count, "mic_toggle_action", mic_toggle_action,
+                    count, "head_pat_action", head_pat_action,
                 )
                 return
 
@@ -726,11 +691,9 @@ class TTP223Handler:
             #    touched": several fingers land on several pads at once, and
             #    requiring a single pad made this reachable only with a fingertip.
             if count >= PET_SESSION_THRESHOLD:
-                self._reset_cycle()
-                return  # PARKED (no issue): only pet acts on TTP223
                 self._dispatch(
                     "DOUBLE_TAP", f"{count} contacts, no revisit and no movement",
-                    count, "mic_toggle_action", mic_toggle_action,
+                    count, "head_pat_action", head_pat_action,
                 )
                 return
 
@@ -739,19 +702,10 @@ class TTP223Handler:
         #    occasionally splits one physical touch into two close sessions and
         #    treating both as one tap is friendlier than ignoring.
         #
-        # The tap gesture IS live. A `Disabled:` comment and a bare `# pass`
-        # survived here from 01d8ac24, which commented the call out while
-        # phantom triggers were being chased; the call was restored but the
-        # comment was not, so the file claimed the opposite of what it did.
-        # chime=False: the ack chime already sounded at the first session end
-        # (_ack_first_session) — don't ping twice.
-        self._reset_cycle()
-        return  # PARKED (no issue): only pet acts on TTP223
+        # The acknowledgement chime already sounded at the first contact.
         self._dispatch(
             "TAP", self._tap_reason(count),
-            count, "single_click_action",
-            lambda source: single_click_action(source=source, chime=False),
-            chime=False,
+            count, "head_pat_action", head_pat_action,
         )
 
     def _tap_reason(self, count):
@@ -809,11 +763,9 @@ class TTP223Handler:
     def _dispatch(self, gesture, reason, count, fn_name, fn, **trace_fields):
         """Record the verdict, CLOSE THE TRACE, then run the action.
 
-        Finishing before dispatch is deliberate. `sleep_action` blocks ~5s
-        waiting out its TTS clip, which outlived the tracer's idle flush and
-        filed four correctly-classified swipes as `IGNORED-unresolved`
-        (device-observed 2026-08-27). Writing first also means the trace
-        survives an action that raises.
+        The classifier label remains in the trace; every action is a head pat.
+        Close before dispatch so a slow or failed action cannot leave the
+        trace unresolved.
         """
         is_swipe, moved, gaps, n, revisited, landed, presses = self._classify()
         touch_debug.note_classifier(
@@ -827,4 +779,6 @@ class TTP223Handler:
         touch_debug.note_action(fn_name, "TTP223", **trace_fields)
         touch_debug.finish(gesture)
         self._reset_cycle()
+        with self._lock:
+            self._pet_cooldown_until = time.monotonic() + PET_COOLDOWN_S
         fn(source="TTP223")
