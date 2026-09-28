@@ -3,6 +3,7 @@
        start-runpod-master start-runpod-master-ssl start-runpod-slave start-runpod-slave-ssl \
        start-nginx start-nginx-ssl stop-nginx gen-ssl-cert \
        start-runpod-dlserver start-runpod-dlserver-slot start-runpod-lbserver stop-runpod-dlserver stop-runpod-lbserver start-jupyter \
+       deploy-dlserver \
        info \
        test test-api test-local \
        test-action test-action-api test-action-local \
@@ -226,6 +227,12 @@ start-runpod-dlserver-slot: stop-runpod-dlserver
 
 stop-runpod-dlserver:
 	@bash scripts/stop-tree.sh dlserver $(DLSERVER_PORT) $(DLSERVER_WRAPPER_PID) $(DLSERVER_PID) $(DLSERVER_LOG_DIR)
+
+# Zero-downtime deploy of new dlserver code (two slots). See docs/deployment.md.
+deploy-dlserver:
+	@RUN_DIR=$(RUN_DIR) LOG_ROOT=$(LOG_ROOT) DLSERVER_STATE_FILE=$(DLSERVER_STATE_FILE) \
+		DLSERVER_SLOT_A=$(DLSERVER_SLOT_A) DLSERVER_SLOT_B=$(DLSERVER_SLOT_B) \
+		LBSERVER_PORT=$(LBSERVER_PORT) bash scripts/deploy-dlserver.sh
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
 	@LB__STATE_FILE=$(DLSERVER_STATE_FILE) nohup setsid bash scripts/run-with-restart.sh \
