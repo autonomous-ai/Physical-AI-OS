@@ -151,6 +151,18 @@ class RealtimeSummarizer:
                     for text in stream.text_stream:
                         chunks.append(text)
                 summary: str = "".join(chunks).strip()
+                if not summary:
+                    # HTTP 200 is not proof of a usable summary. The proxy can
+                    # exhaust output tokens before emitting any text. Return
+                    # promptly so the announcer can use its local fallback.
+                    final = stream.get_final_message()
+                    logger.warning(
+                        "[realtime] Empty summarizer response: stop_reason=%s "
+                        "output_tokens=%s max_tokens=%s (model=%s); caller fallback required",
+                        final.stop_reason, final.usage.output_tokens,
+                        getattr(self, "_max_tokens", 4096), self._model,
+                    )
+                    return ""
                 logger.info(
                     "[realtime] Summarized %d entries (%d chars) → %d chars%s",
                     len(entries), len(user_content), len(summary),

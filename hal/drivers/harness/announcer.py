@@ -247,7 +247,9 @@ def _summarize_for_speech(instructions: str, content: str) -> str:
         return ""
     from hal.realtime.summarizer import RealtimeSummarizer
 
-    return RealtimeSummarizer(system_prompt=instructions, max_tokens=400).summarize([content])
+    # Proxy-observed: a 400-token cap can end with max_tokens and no text.
+    # Budget is not spoken length; the prompt keeps successful updates brief.
+    return RealtimeSummarizer(system_prompt=instructions, max_tokens=1024).summarize([content])
 
 
 def _call_with_timeout(fn: Callable[[], str], timeout_s: float) -> str:
