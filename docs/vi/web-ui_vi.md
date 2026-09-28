@@ -473,6 +473,9 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
 
 **Giọng nói Harness-only**
 
+Trang Pairing chỉ hiện công tắc Harness-only voice và mô tả khi OS trả `supported:true` (board hiện tại có cấu hình MPR121). Thiếu metadata hỗ trợ thì ẩn công tắc. Pairing và thông tin agent đang focus vẫn hiển thị; API/MQTT cũng chặn bật nếu không đáp ứng phần cứng.
+
+
 - Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
 - Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.
 - Mode/focus refresh mỗi 2 giây qua `GET /api/harness/voice-mode`. Công tắc chỉ gửi `{enabled}` bằng `PUT`, dùng được khi offline hoặc chưa có focus; nếu đọc mode lỗi thì khóa đến khi refresh thành công. UI giải thích rõ khi offline, thiếu focus hoặc CLI chưa hỗ trợ capability nên không thể delivery giọng nói.

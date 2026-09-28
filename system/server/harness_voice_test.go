@@ -39,9 +39,10 @@ func TestHarnessVoiceManagementAuthAndFocus(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	supported := false
 	transport := &voiceRouteTransport{mutations: make(chan harness.Frame, 4)}
 	s := &Server{config: &config.Config{LLMAPIKey: "owner"}, harnessService: service,
-		harnessVoice: harness.NewVoiceController(transport, harness.VoiceCallbacks{})}
+		harnessVoice: harness.NewVoiceController(transport, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return supported, nil }})}
 	router := gin.New()
 	s.registerHarnessRoutes(router.Group("/api"), context.Background())
 	call := func(method, path, body, address, token string) *httptest.ResponseRecorder {
@@ -55,7 +56,7 @@ func TestHarnessVoiceManagementAuthAndFocus(t *testing.T) {
 		router.ServeHTTP(w, r)
 		return w
 	}
-	if w := call("GET", "/api/harness/voice-mode", "", "127.0.0.1:50", ""); w.Code != 200 || !strings.Contains(w.Body.String(), `"enabled":false`) {
+	if w := call("GET", "/api/harness/voice-mode", "", "127.0.0.1:50", ""); w.Code != 200 || (!strings.Contains(w.Body.String(), `"enabled":false`) || !strings.Contains(w.Body.String(), `"supported":false`)) {
 		t.Fatalf("default mode: %d %s", w.Code, w.Body.String())
 	}
 	for _, row := range []struct{ method, path string }{
@@ -80,7 +81,14 @@ func TestHarnessVoiceManagementAuthAndFocus(t *testing.T) {
 			t.Fatalf("legacy selector must fail: %d %s", w.Code, w.Body.String())
 		}
 	}
-	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":true}`, "192.168.1.2:50", "owner"); w.Code != 200 || !s.harnessVoice.State().Enabled {
+	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":true}`, "192.168.1.2:50", "owner"); w.Code != 409 || s.harnessVoice.State().Enabled || !strings.Contains(w.Body.String(), "MPR121") {
+		t.Fatalf("unsupported enable: %d %s", w.Code, w.Body.String())
+	}
+	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":false}`, "192.168.1.2:50", "owner"); w.Code != 200 {
+		t.Fatalf("unsupported disable: %s", w.Body.String())
+	}
+	supported = true
+	if w := call("PUT", "/api/harness/voice-mode", `{"enabled":true}`, "192.168.1.2:50", "owner"); w.Code != 200 || !s.harnessVoice.State().Enabled || !strings.Contains(w.Body.String(), `"supported":true`) {
 		t.Fatalf("enable: %s", w.Body.String())
 	}
 	if w := call("PUT", "/api/harness/voice-mode", `{}`, "192.168.1.2:50", "owner"); w.Code != 400 {
@@ -103,7 +111,7 @@ func TestHarnessVoiceManagementAuthAndFocus(t *testing.T) {
 
 func TestHarnessVoiceSnapshotDispatchAndIsolation(t *testing.T) {
 	transport := &voiceRouteTransport{mutations: make(chan harness.Frame, 4)}
-	controller := harness.NewVoiceController(transport, harness.VoiceCallbacks{})
+	controller := harness.NewVoiceController(transport, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	if err := controller.RefreshFocus(context.Background()); err != nil {
 		t.Fatal(err)
 	}
