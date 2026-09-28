@@ -133,3 +133,25 @@ func TestCompose_IncludesTitleAndPreamble(t *testing.T) {
 		t.Errorf("compose should append the detail, got %q", out)
 	}
 }
+
+// A BYO-LLM device (llm_base_url on Ollama) keeps its ops alerts on the
+// Autonomous backend once backend_base_url / backend_api_key are set.
+func TestNotifyUsesBackendOverride(t *testing.T) {
+	var c captured
+	srv := newCaptureServer(t, &c)
+	defer srv.Close()
+	cfg := &config.Config{
+		DeviceID:       "lamp-1",
+		LLMBaseURL:     "http://127.0.0.1:1/v1", // local model server, must not be hit
+		LLMAPIKey:      "ollama",
+		BackendBaseURL: srv.URL,
+		BackendAPIKey:  "backend-key",
+	}
+	Notify(context.Background(), cfg, "hello")
+	if c.hits != 1 {
+		t.Fatalf("hits = %d, want 1 on the backend server", c.hits)
+	}
+	if c.auth != "Bearer backend-key" {
+		t.Fatalf("auth = %q, want backend key", c.auth)
+	}
+}

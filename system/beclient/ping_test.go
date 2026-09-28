@@ -2,7 +2,11 @@ package beclient
 
 import (
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"testing"
+
+	"go.autonomous.ai/os/system/server/config"
 )
 
 func TestPingPayloadIncludesWakeWordState(t *testing.T) {
@@ -27,5 +31,37 @@ func TestPingPayloadIncludesWakeWordState(t *testing.T) {
 		if got != want {
 			t.Fatalf("wakeword_enabled = %t, want %t", got, want)
 		}
+	}
+}
+
+func TestPingUsesBackendOverride(t *testing.T) {
+	var gotPath, gotAuth string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotPath, gotAuth = r.URL.Path, r.Header.Get("Authorization")
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	cfg := &config.Config{
+		LLMBaseURL:     "http://127.0.0.1:1/v1", // local model server, must not be hit
+		LLMAPIKey:      "ollama",
+		BackendBaseURL: srv.URL + "/api/v1/ai/v1",
+		BackendAPIKey:  "backend-key",
+		MQTTEndpoint:   "mqtt.example",
+	}
+	if _, err := New(cfg).Ping(cfg.BackendKey(), PingPayload{}); err != nil {
+		t.Fatalf("ping: %v", err)
+	}
+	if gotPath != "/api/v1/ai/ping" {
+		t.Fatalf("path = %q, want /api/v1/ai/ping", gotPath)
+	}
+	if gotAuth != "Bearer backend-key" {
+		t.Fatalf("auth = %q, want backend key", gotAuth)
+	}
+}
+
+func TestBackendFallsBackToLLM(t *testing.T) {
+	cfg := &config.Config{LLMBaseURL: "https://x/v1", LLMAPIKey: "k"}
+	if cfg.BackendBase() != "https://x/v1" || cfg.BackendKey() != "k" {
+		t.Fatalf("empty backend fields must reuse llm_base_url / llm_api_key")
 	}
 }
