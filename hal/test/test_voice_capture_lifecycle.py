@@ -168,3 +168,26 @@ def test_stop_aborts_raw_backend_under_aec_wrapper(monkeypatch):
         wrapped.abort.assert_not_called()
     wrapped.__exit__.assert_called_once()
     assert s._active_mic is None
+
+
+def test_mute_preserves_perception_but_close_disposes_it(monkeypatch):
+    s = service(monkeypatch)
+    s._decorator = Mock()
+    s.stop()
+    s._decorator.close.assert_not_called()
+    s.close()
+    s._decorator.close.assert_called_once()
+
+
+def test_constructor_failure_does_not_start_optional_workers(monkeypatch):
+    monkeypatch.setattr(module, 'SileroVADFilter', Mock())
+    monkeypatch.setattr(module, 'WebRTCVADFilter', Mock())
+    monkeypatch.setattr(module, 'Backchannel', Mock())
+    monkeypatch.setattr(module, 'SensingSender', Mock())
+    decorator = Mock()
+    monkeypatch.setattr(module, 'SpeakerDecorator', decorator)
+    monkeypatch.setattr(module, 'RealtimeOrchestrator',
+                        Mock(side_effect=RuntimeError('mock realtime init failure')))
+    with pytest.raises(RuntimeError, match='mock realtime init failure'):
+        module.VoiceService(stt_provider=Mock())
+    decorator.assert_not_called()

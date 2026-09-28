@@ -289,11 +289,6 @@ class VoiceService:
         # additional alias ("hey Luna"). Runtime rename updates must never
         # replace the permanent aliases.
         self._device_wake_words = list(voice_cfg.DEFAULT_WAKE_WORDS)
-        self._decorator = SpeakerDecorator(
-            wake_words=merge_wake_words(self._device_wake_words, wake_words or []),
-            nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
-            enable_people_perception=enable_people_perception,
-        )
         # Unlike per-session wake_word_confirmed, this small focus window is
         # shared across mic sessions so a user can naturally continue a
         # wake-word conversation without reopening the gate on every sentence.
@@ -341,6 +336,13 @@ class VoiceService:
                 self.feed_realtime_history(text, spoken=False)
 
             tts_service._on_unspoken_reply = _unspoken_reply_to_realtime
+
+        # Start optional workers only after the rest of construction succeeds.
+        self._decorator = SpeakerDecorator(
+            wake_words=merge_wake_words(self._device_wake_words, wake_words or []),
+            nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
+            enable_people_perception=enable_people_perception,
+        )
 
     def feed_realtime_history(self, text: str, spoken: bool = True,
                               interrupted: bool = False) -> bool:
@@ -570,6 +572,11 @@ class VoiceService:
 
     def cancel_harness_capture(self) -> None:
         self._harness_capture.cancel()
+
+    def close(self):
+        """Permanently dispose this pipeline; mute/unmute uses stop/start."""
+        self._decorator.close()
+        self.stop()
 
     def stop(self, *, background=False):
         # Reserve teardown before returning to a mute caller, so a subsequent

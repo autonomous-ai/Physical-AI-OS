@@ -149,8 +149,56 @@ class SpeakerDecorator:
         self._identity_cache: Optional[tuple[str, Optional[str], float]] = None
         self._identity_cache_lock = threading.Lock()
 
-        self._speaker = self._init_speaker(enable_people_perception)
-        self._speech_emotion = self._init_speech_emotion(enable_people_perception)
+        self._speaker = None
+        self._speech_emotion = None
+        self._init_stop = threading.Event()
+        self._init_lock = threading.Lock()
+        self._init_threads = []
+        # Optional perception must not hold up HAL or the basic voice pipeline.
+        for attribute, enabled, factory in (
+            ("_speaker", SPEAKER_RECOGNITION_ENABLED, self._init_speaker),
+            ("_speech_emotion", SPEECH_EMOTION_ENABLED, self._init_speech_emotion),
+        ):
+            if enable_people_perception and enabled:
+                worker = threading.Thread(
+                    target=self._init_optional_service,
+                    args=(attribute, factory),
+                    name=f"voice-init{attribute}", daemon=True,
+                )
+                try:
+                    worker.start()
+                except Exception:
+                    self.close()
+                    raise
+                self._init_threads.append(worker)
+
+    def _init_optional_service(self, attribute, factory):
+        while not self._init_stop.is_set():
+            try:
+                service = factory()
+            except Exception:
+                logger.exception("Optional voice service %s initialization failed", attribute)
+                service = None
+            if service is not None:
+                with self._init_lock:
+                    if not self._init_stop.is_set():
+                        setattr(self, attribute, service)
+                        logger.info("Optional voice service %s initialization complete", attribute)
+                        return
+                # Speaker ID is process-shared; only SER belongs to this instance.
+                if attribute == "_speech_emotion":
+                    service.stop()
+                return
+            logger.warning("Optional voice service %s unavailable; retrying in 30s", attribute)
+            if self._init_stop.wait(30.0):
+                return
+
+    def close(self):
+        """Dispose optional workers without waiting for an in-flight key fetch."""
+        with self._init_lock:
+            self._init_stop.set()
+            if self._speech_emotion is not None:
+                self._speech_emotion.stop()
 
     # ------------------------------------------------------------------
     # Lazy service init

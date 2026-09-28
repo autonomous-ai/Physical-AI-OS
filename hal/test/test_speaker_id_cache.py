@@ -8,9 +8,7 @@ from hal.drivers.voice._internal.speaker_decorate import UNKNOWN_LABEL, SpeakerD
 
 
 def _decorator():
-    with mock.patch.object(SpeakerDecorator, "_init_speaker", return_value=None), \
-         mock.patch.object(SpeakerDecorator, "_init_speech_emotion", return_value=None):
-        return SpeakerDecorator(wake_words=["lamp"], nudge_cooldown_s=0)
+    return SpeakerDecorator(wake_words=["lamp"], nudge_cooldown_s=0, enable_people_perception=False)
 
 
 def test_a_fresh_decorator_has_nothing_to_reuse():

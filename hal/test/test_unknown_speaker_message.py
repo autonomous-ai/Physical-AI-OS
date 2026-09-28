@@ -7,15 +7,11 @@ conversation ("program.") produced a spoken "I don't think we've met, what's
 your name?".
 """
 
-from unittest import mock
-
 from hal.drivers.voice._internal.speaker_decorate import SpeakerDecorator
 
 
 def _decorator():
-    with mock.patch.object(SpeakerDecorator, "_init_speaker", return_value=None), \
-         mock.patch.object(SpeakerDecorator, "_init_speech_emotion", return_value=None):
-        return SpeakerDecorator(wake_words=["lamp"], nudge_cooldown_s=0)
+    return SpeakerDecorator(wake_words=["lamp"], nudge_cooldown_s=0, enable_people_perception=False)
 
 
 def test_a_short_fragment_carries_no_instruction_to_speak():

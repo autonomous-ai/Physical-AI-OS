@@ -1035,7 +1035,8 @@ async def lifespan(app: FastAPI):
     # cue plays on.
     _shutdown_threads = []
     if state.voice_service:
-        _shutdown_threads.append(threading.Thread(target=state.voice_service.stop, daemon=True))
+        close_voice = getattr(state.voice_service, "close", state.voice_service.stop)
+        _shutdown_threads.append(threading.Thread(target=close_voice, daemon=True))
     if state.sensing_service:
         _shutdown_threads.append(threading.Thread(target=state.sensing_service.stop, daemon=True))
     for t in _shutdown_threads:

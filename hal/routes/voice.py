@@ -155,6 +155,8 @@ def start_voice(req: VoiceStartRequest):
         if not stt_provider:
             raise HTTPException(503, "No STT provider available")
         wake_words = state._build_wake_words(state._read_agent_name())
+        if state.voice_service:
+            getattr(state.voice_service, "close", state.voice_service.stop)()
         state.voice_service = VoiceService(
             stt_provider=stt_provider,
             input_device=state.audio_input_device,
@@ -172,6 +174,8 @@ def start_voice(req: VoiceStartRequest):
             state.start_voice_service("voice-pipeline-init")
         return {"status": "ok"}
     except Exception as e:
+        if state.voice_service:
+            getattr(state.voice_service, "close", state.voice_service.stop)()
         state.voice_service = None
         raise HTTPException(500, f"Failed to start voice: {e}")
 
@@ -180,7 +184,7 @@ def start_voice(req: VoiceStartRequest):
 def stop_voice():
     """Stop the voice pipeline."""
     if state.voice_service:
-        state.voice_service.stop()
+        getattr(state.voice_service, "close", state.voice_service.stop)()
         state.voice_service = None
     if state.tts_service and hasattr(state.tts_service, "release_stream"):
         try:
