@@ -335,6 +335,12 @@ The route reuses the existing `/api/` HTTP upstream (`backend` or
 Symlinked sites are updated at their real target, preserving the enabled link.
 The updater validates with `nginx -t` and reloads nginx only after adding a route.
 
+For a manual repair of older images that already have `/api/buddy/ws`, run
+`scripts/maintenance/patch-nginx-harness-ws.sh` as root on the device. It resolves
+symlinked sites before editing, saves a separate copy of the original file under
+`/var/backups/nginx-harness-ws/`, and restores that file if `nginx -t` fails,
+preserving the enabled symlink. An existing Harness route is left unchanged.
+
 Directory installs have the same recovery contract. Before a web update, the
 updater stops nginx, swaps the fully unpacked staged bundle into place, and
 retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
