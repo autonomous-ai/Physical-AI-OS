@@ -106,9 +106,9 @@ A conversation can stay with realtime. A music request can use music and audio s
 
 Autonomous OS is a software stack. Each layer uses only the layer below it, so any layer can be replaced without touching the others. Every layer is a folder in this repo.
 
-![Autonomous OS stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack-animated.gif)
+![Autonomous OS stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack-dark.svg)
 
-[View the static diagram](docs/architecture/autonomous-stack.svg). The animation tours the layers; it is not a request execution trace.
+[View the diagram](docs/architecture/autonomous-stack-dark.svg). Layers show the platform structure, not request execution order.
 
 ### [Apps](system/web/)
 
