@@ -59,3 +59,13 @@ def test_lbserver_gets_state_file_and_log_dir(tmp_path):
     out = _dry(tmp_path, "start-runpod-lbserver")
     assert f"LB__STATE_FILE={tmp_path}/dlserver-active " in out
     assert f"--log-dir {tmp_path}/logs/lbserver " in out
+
+
+def test_print_dlserver_pid_follows_state_file(tmp_path):
+    (tmp_path / "dlserver-active").write_text("http://127.0.0.1:8002\n")
+    r = subprocess.run(
+        ["make", "-s", "--no-print-directory", "-C", str(ROOT), f"RUN_DIR={tmp_path}", "print-dlserver-pid"],
+        capture_output=True, text=True, timeout=60,
+    )
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == f"{tmp_path}/dlserver-8002.pid"
