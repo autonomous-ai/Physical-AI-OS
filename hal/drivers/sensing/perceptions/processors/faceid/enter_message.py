@@ -24,9 +24,8 @@ Shape (#426):
 - ``faces in frame:`` — the number of boxes in the frame the snapshot
   shows and their labels in detection order, ``unsure`` for a box without
   an identity yet. Same labels ``_annotate_frame`` draws. It is not the
-  number of arrivals: flushed stranger ids may come from several buffered
-  frames; the count and ``already present:`` describe the newest one, the
-  frame the agent is looking at (``FrameFacts``).
+  number of arrivals; it describes the newest frame attached, the one the
+  agent is looking at.
 """
 
 from collections.abc import Iterable
@@ -36,14 +35,11 @@ from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 
 class FrameFacts(NamedTuple):
-    """What one frame says about itself, captured on the tick it was seen.
+    """What one frame says about itself: its box labels and the friends present.
 
-    A stranger snapshot is buffered on its mint tick and flushed up to
-    FACE_STRANGER_FLUSH_S later; the frame at flush time can look nothing
-    like the one attached (device-observed: friend blurred out for two ticks
-    and the text said ``1 (unsure)`` over a two-box picture). So the facts
-    travel with the snapshot and the message is built from the frame the
-    agent actually sees.
+    Always the newest attached frame — a new friend's current frame, or the
+    tick where a stranger's gaze was confirmed — so the text describes the
+    picture the agent sees.
     """
 
     labels: list[str]

@@ -169,7 +169,6 @@ FACE_STRANGER_GAZE_TICKS = int(os.environ.get("HAL_FACE_STRANGER_GAZE_TICKS", "3
 FACE_STRANGER_GAZE_MIN_FACING = int(
     os.environ.get("HAL_FACE_STRANGER_GAZE_MIN_FACING", "2")
 )
-FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
 # An enrolled face can grant voice focus on presence.enter. Keep stranger-only
 # enters agent-visible without granting focus unless a deployment explicitly
 # opts into guest-first conversation.

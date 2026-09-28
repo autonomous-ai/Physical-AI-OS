@@ -135,6 +135,8 @@ FACE_EXTEND_MIN_ENROLL_SIM = 0.45   # Ngưỡng ảnh upload phải đạt để
 FACE_COOLDOWN_S = 10.0              # Số giây tối thiểu giữa hai presence event
 FACE_OWNER_FORGET_S = 3600.0        # Bắn lại presence sau N giây không thấy chủ
 FACE_STRANGER_FORGET_S = 1800.0     # Tương tự cho người lạ
+FACE_STRANGER_GAZE_TICKS = 3        # Chào người lạ: số nhịp face-ID trong lượt bỏ phiếu gaze
+FACE_STRANGER_GAZE_MIN_FACING = 2   # Chào người lạ: số nhịp nhìn về đèn cần có
 ```
 
 Ngưỡng height ratio lọc bỏ những khuôn mặt **quá nhỏ** so với frame — thường là người ở xa, hoặc false positive mà crop mặt quá thấp độ phân giải để nhận diện đáng tin. Mặt có chiều cao bbox dưới ngưỡng (theo tỉ lệ chiều cao frame) bị bỏ qua trước khi phân loại.
@@ -253,7 +255,7 @@ Một người khách thật không bị ảnh hưởng quá một nhịp: 2 gi�
 | Lamp cấp `stranger_N` cho chính chủ trong lúc đang quay | Nhoè do chuyển động — đó là thứ `FACE_MIN_SHARPNESS` lọc ra; xem thư mục `FAIL-blurred` để biết độ nét thực tế |
 | Khách lạ mất quá lâu mới được ghi nhận | Giảm `FACE_STRANGER_MIN_TICKS` xuống 1 để cấp id ngay từ một frame (hành vi cũ) |
 | Vẫn xuất hiện id `stranger_N` giả | Tăng `FACE_STRANGER_MIN_TICKS` lên 3; mỗi bậc khiến khách thật chậm thêm một nhịp sensing |
-| Khách bị chào trong lúc user đang ngồi đó, `already present` không bao giờ xuất hiện | Kiểm tra `FACE_STRANGER_MIN_TICKS` ≥ 2 (nhịp xác nhận của nó nuôi bộ đếm); với 1 thì bộ đếm không thể chạm 2 khi cấp id |
+| Lamp không bao giờ chào một vị khách đã nhìn về phía nó | Giảm `FACE_STRANGER_GAZE_MIN_FACING` (2 → 1); kiểm tra `[face] stranger gaze:` trong log HAL |
 | Nhận diện chết hẳn trong phòng tối sau khi cập nhật | Phương sai Laplacian giảm theo ánh sáng; giảm `FACE_MIN_SHARPNESS` (100 → 70) rồi kiểm tra lại `FAIL-blurred` |
 | Lamp cấp id `stranger_N` cho chính chủ ở cự ly gần | Detector đang bắt trúng vành tai hoặc tương tự — đó là thứ `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 lọc ra |
 | Mặt rõ ràng bình thường lại ngừng được nhận diện sau khi cập nhật | Giảm `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); mặc định được tinh chỉnh trên một thiết bị |

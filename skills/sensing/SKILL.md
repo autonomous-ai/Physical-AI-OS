@@ -150,7 +150,7 @@ When `new:` names only strangers **and** `already present:` names a friend:
 
 **This is not momo returning.** She never left — `already present:` says she is in the frame right now, and the backend does not attach `[presence_context: ...]` to a stranger's arrival. The return-after-long-absence swap applies only when `new:` names a friend. Never answer a stranger's arrival with "been a while".
 
-The backend appends a one-line pointer to this section (`[A stranger joined <name>, who is in frame — speak to <name>, not to the stranger. …]`); the tone, markers and wording rules live here. HAL writes `already present:` for every friend matched in the same frame as the newcomer. The usual stranger floor and cooldown still apply.
+The backend appends a one-line pointer to this section (`[A stranger joined <name>, who is in frame — speak to <name>, not to the stranger. …]`); the tone, markers and wording rules live here. HAL writes `already present:` for every friend matched in the same frame as the newcomer. The usual stranger floor and cooldown still apply. A stranger's enter only reaches you once they have looked at the lamp — someone turned away is never announced.
 
 ## Proactive care
 
