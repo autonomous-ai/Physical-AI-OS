@@ -65,8 +65,8 @@ func Notify(ctx context.Context, cfg *config.Config, text string) {
 	if cfg == nil || cfg.AlertsDisabled {
 		return
 	}
-	base := strings.TrimRight(strings.TrimSpace(cfg.LLMBaseURL), "/")
-	key := strings.TrimSpace(cfg.LLMAPIKey)
+	base := strings.TrimRight(cfg.BackendBase(), "/")
+	key := cfg.BackendKey()
 	if base == "" || key == "" {
 		slog.Debug("alert: skipped (base or key unset)", "component", "alert")
 		return
