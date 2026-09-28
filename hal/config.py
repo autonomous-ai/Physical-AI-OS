@@ -157,6 +157,18 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # person, and a fresh id is always "new" — without this floor that's an agent
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
+# A stranger is greeted only once they look at the lamp (#531): greeting someone
+# turned away — talking to a colleague, reading a monitor — is odd. Face ID ticks
+# every HAL_SENSING_INTERVAL (2 s), too slow for gaze wake's 1.5 s window, so the
+# vote counts face-ID ticks: the stranger must face the lamp (gaze wake's cone,
+# size floor and edge rules) on FACE_STRANGER_GAZE_MIN_FACING of the last
+# FACE_STRANGER_GAZE_TICKS ticks they were in frame. One glance or one noisy yaw
+# does not greet. Never held or timed out: someone who never looks is never
+# greeted, and is still logged, snapshotted and counted as today.
+FACE_STRANGER_GAZE_TICKS = int(os.environ.get("HAL_FACE_STRANGER_GAZE_TICKS", "3"))
+FACE_STRANGER_GAZE_MIN_FACING = int(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_MIN_FACING", "2")
+)
 FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
 # An enrolled face can grant voice focus on presence.enter. Keep stranger-only
 # enters agent-visible without granting focus unless a deployment explicitly
