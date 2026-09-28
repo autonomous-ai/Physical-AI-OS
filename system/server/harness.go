@@ -425,7 +425,8 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		s.harnessRepliesMu.Unlock()
 		if ok && time.Since(reply.created) <= 15*time.Minute {
 			s.agentHandler.DeliverHarnessTool(reply.runID, toolName, toolArgs)
-			s.agentHandler.AnnounceHarnessProgress(reply.runID, harnessToolProgressText(toolName, toolArgs))
+			// Progress remains visible in UI/logs; only results/questions should speak.
+			// s.agentHandler.AnnounceHarnessProgress(reply.runID, harnessToolProgressText(toolName, toolArgs))
 		}
 		return
 	}
@@ -453,11 +454,10 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 	}
 	if !terminal {
 		s.agentHandler.DeliverHarnessProgress(reply.runID, text)
-		// turn.done lands milliseconds before its result; speaking "finished,
-		// receiving its result" just delays the result itself.
-		if kind != "turn.done" {
-			s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
-		}
+		// Progress remains display-only: no summarization or TTS.
+		// if kind != "turn.done" {
+		// 	s.agentHandler.AnnounceHarnessProgress(reply.runID, text)
+		// }
 		return
 	}
 	// A legacy single-input summary uses only the event's own text. Neither

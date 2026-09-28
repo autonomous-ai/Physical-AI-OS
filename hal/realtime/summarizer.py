@@ -24,6 +24,7 @@ class RealtimeSummarizer:
         model: str = app_config.REALTIME_SUMMARIZER_MODEL,
         system_prompt: str | None = None,
         max_tokens: int = 4096,
+        disable_thinking: bool = False,
     ) -> None:
         # anthropic imports lazily on first summarize(): the SDK costs ~1.3s of
         # import time on device and every summarize() runs on a background
@@ -36,6 +37,7 @@ class RealtimeSummarizer:
         self._retries: int = app_config.REALTIME_SUMMARIZER_RETRIES
         self._retry_backoff_s: float = app_config.REALTIME_SUMMARIZER_RETRY_BACKOFF_S
         self._max_tokens: int = max_tokens
+        self._disable_thinking = disable_thinking
         if system_prompt is not None:
             # Another task on the same endpoint (e.g. Harness speech rendering).
             self._system_prompt = system_prompt
@@ -140,6 +142,9 @@ class RealtimeSummarizer:
         for attempt in range(1, attempts + 1):
             try:
                 chunks: list[str] = []
+                # Speech notifications need a short answer, not reasoning. Keep
+                # memory summarization's provider defaults unchanged.
+                options = {"thinking": {"type": "disabled"}} if getattr(self, "_disable_thinking", False) else {}
                 with self._get_client().messages.stream(
                     model=self._model,
                     max_tokens=getattr(self, "_max_tokens", 4096),
@@ -147,6 +152,7 @@ class RealtimeSummarizer:
                     messages=[
                         {"role": "user", "content": user_content},
                     ],
+                    **options,
                 ) as stream:
                     for text in stream.text_stream:
                         chunks.append(text)

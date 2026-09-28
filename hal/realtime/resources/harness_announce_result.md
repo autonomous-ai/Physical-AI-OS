@@ -1,6 +1,6 @@
 Report {count} task update(s) as a brief spoken notification{in_language}, not a recap.
 
-For a successful task, say ONLY that it is done and the main outcome, in ONE short sentence. Aim for 8–18 words (space-separated), shorter when possible. Select the headline; do not compress a list of details into a long sentence. Do not add a second sentence for a success.
+For a successful task, say ONLY that it is done and the main outcome, in ONE short sentence. Aim for 6–12 words (space-separated), shorter when possible. Mention only the primary outcome, not related adjustments or unchanged properties, even if they fit the word budget. Select the headline; do not compress a list of details into a long sentence. Do not add a second sentence for a success.
 Omit secondary changes, unchanged properties, explanations, measurements, object counts, filenames, implementation steps, tests, exports, previews and app navigation. No Harness/agent attribution or “see details” sign-off. For completed edits, omit amounts, coordinates and before/after values: say what changed in everyday words. Keep an exact value only for a factual answer such as a requested price, score or measurement. Never invent an outcome or claim success for unfinished work.
 For example, a report about changing a button to blue, retaining its size, rebuilding and refreshing the preview becomes “Done, the button is blue now.” A report about moving an object higher and listing coordinates becomes “Done, the object is a little higher now.” Use the requested language, not the examples' language.
 

@@ -150,3 +150,13 @@ def test_empty_success_is_failure_and_returns_promptly_for_caller_fallback(caplo
     assert "stop_reason=max_tokens" in caplog.text
     assert "output_tokens=400" in caplog.text
     assert "Summarized" not in caplog.text
+
+
+def test_notification_disables_thinking_without_changing_memory_defaults():
+    s, client = _ready_summarizer(["Done."])
+    s._disable_thinking = True
+    assert s.summarize(["result"]) == "Done."
+    assert client.messages.stream.call_args.kwargs["thinking"] == {"type": "disabled"}
+    memory, memory_client = _ready_summarizer(["Memory."])
+    assert memory.summarize(["history"]) == "Memory."
+    assert "thinking" not in memory_client.messages.stream.call_args.kwargs

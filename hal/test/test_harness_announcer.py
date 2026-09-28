@@ -308,3 +308,21 @@ def test_update_preempted_before_any_speech_is_requeued():
     assert not tts.spoken and queue.pending()
     snapshot = queue.take_snapshot(progress_renderable=False)
     assert [item.text for item in snapshot.items] == ["Done"]
+
+
+def test_empty_summary_bounds_completed_result_fallback():
+    tts = FakeTTS()
+    rt = FakeRealtime([], supports=False)
+    announcer, queue = make_announcer(rt, tts, summary="")
+    queue.put(HarnessUpdate(
+        kind="result", outcome="completed", run_id="run-short",
+        text="The cow is black now. Scene contains 209 objects. " + "Technical detail " * 40,
+    ))
+    assert announcer.speak_next()
+    assert tts.spoken[0][1] == "The cow is black now."
+    assert len(sanitize_for_speech("result", "detail " * 100, "completed")) <= 120
+
+
+def test_failure_fallback_keeps_required_action():
+    text = "Could not save. Free disk space and retry."
+    assert sanitize_for_speech("result", text, "failed") == text

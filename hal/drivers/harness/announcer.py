@@ -39,7 +39,7 @@ _BULLET_RE = re.compile(r"^\s*(?:[-•]|\d+\.)\s+", re.MULTILINE)
 _SENTENCE_RE = re.compile(r"(?<=[.!?。！？])\s+")
 
 
-def sanitize_for_speech(kind: str, text: str) -> str:
+def sanitize_for_speech(kind: str, text: str, outcome: str = "") -> str:
     """Last-resort spoken form: markup stripped, cut to its opening sentences."""
     text = _CODE_BLOCK_RE.sub(" ", text)
     text = _LINK_RE.sub(r"\1", text)
@@ -47,7 +47,14 @@ def sanitize_for_speech(kind: str, text: str) -> str:
     text = _BULLET_RE.sub("", text)
     text = _MARKUP_RE.sub("", text)
     text = " ".join(text.split())
-    limit, sentences = (500, 6) if kind == "question" else (280, 2)
+    if kind == "question":
+        limit, sentences = 500, 6
+    elif outcome == "completed":
+        # A failed rewrite must not read a long technical report aloud.
+        limit, sentences = 120, 1
+    else:
+        # Keep more context for failures/unknown outcomes and required actions.
+        limit, sentences = 280, 2
     spoken = " ".join(_SENTENCE_RE.split(text)[:sentences])
     if len(spoken) > limit:
         spoken = spoken[:limit].rsplit(" ", 1)[0].rstrip(",;:") + "…"
@@ -210,7 +217,7 @@ class HarnessAnnouncer:
             hal_config.HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S,
         )
         if not text:
-            text = " ".join(filter(None, (sanitize_for_speech(i.kind, i.text) for i in items)))
+            text = " ".join(filter(None, (sanitize_for_speech(i.kind, i.text, i.outcome) for i in items)))
             logger.info("[announce] summarizer unavailable — speaking sanitized text")
         if not text:
             return False
@@ -247,9 +254,11 @@ def _summarize_for_speech(instructions: str, content: str) -> str:
         return ""
     from hal.realtime.summarizer import RealtimeSummarizer
 
-    # Proxy-observed: a 400-token cap can end with max_tokens and no text.
-    # Budget is not spoken length; the prompt keeps successful updates brief.
-    return RealtimeSummarizer(system_prompt=instructions, max_tokens=1024).summarize([content])
+    # The proxy can spend the entire output budget on reasoning with no text.
+    # Disable it for notifications only; memory summaries retain their defaults.
+    return RealtimeSummarizer(
+        system_prompt=instructions, max_tokens=400, disable_thinking=True,
+    ).summarize([content])
 
 
 def _call_with_timeout(fn: Callable[[], str], timeout_s: float) -> str:
