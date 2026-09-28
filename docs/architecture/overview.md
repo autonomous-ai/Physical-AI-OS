@@ -5,6 +5,20 @@ depends only on the one below, so any layer can be replaced without touching the
 
 ![Autonomous OS stack, top down: 25 skills, six swappable agent runtimes, 14 Go system packages, the realtime voice agent, 13 HAL capabilities, a deterministic safety gate below them (brightness, quiet hours, explicit-move speed, thermal today), in-tree drivers and board profiles, the vendor Linux kernel, and the bodies — each row labelled with its repo folder.](autonomous-stack.png)
 
+The README embeds an [animated layer tour](autonomous-stack-animated.gif), generated with `hal/.venv/bin/python docs/architecture/animate_stack.py --gif --png /tmp/autonomous-stack-current.png` (Pillow required). Rebuild after updating the canonical SVG and PNG with `build_figures.py` and its render command. The GIF keeps labels stationary and highlights one layer at a time; it illustrates layer order, not runtime call order. A script-free [SVG variant](autonomous-stack-animated.svg) respects reduced-motion preferences in compatible viewers. GIF animation does not adapt to that preference, so the README also links the [static SVG](autonomous-stack.svg).
+
+## Three routes on one SVG
+
+[platform-flows.svg](platform-flows.svg) shares the device, realtime, main runtime and spoken-output blocks across three examples: direct conversation, music playback and volume through the music/audio skills → OS dispatch or HAL API → drivers, and a computer task through Harness. The final Harness result returns through OS to HAL rather than through the main runtime again. The music example uses `music` for playback plus its emotion marker and `audio` for volume. Mic capture is voice input; music LED feedback is HAL behavior on RGB bodies, subject to sleep/TTS priority, not another required skill. Hardware support depends on the body; local intent shortcuts and other routing alternatives are outside this illustration.
+
+The self-contained SVG has no scripts or external assets. Its 18-second CSS loop highlights each route in turn and animates music LED feedback and planes rising from their outlined original positions. All labels and paths remain visible without animation; reduced-motion viewers disable the effects. GitHub README displays the static SVG, so download and open it in a browser for motion. Edit the SVG directly. The existing stack animation remains below it; the more detailed Harness GIF is in an expandable README section. Timing is illustrative, not measured.
+
+## Voice to result animation
+
+The [voice-to-result animation](voice-to-result.gif) follows one explicit computer-task request: voice → HAL realtime → `delegate_to_main` → OS main runtime → `harness-use` → paired computer agent. The illustrated Blender scene changes, then Harness sends the final `turn.summary` back through OS to the HAL announcer. A receipt is not completion. Progress remains in the UI; the final result is summarized for speech, while full text remains available in the app. The announcer can use realtime voice or a summarizer plus TTS. Simple conversation can stay with realtime without using the main runtime or Harness. See [Harness integration](../harness.md) for the implementation.
+
+This is an illustration, not captured execution or a latency benchmark. Regenerate the 21-second, 1100 × 660 GIF and its [static poster](voice-to-result-poster.png) with `hal/.venv/bin/python docs/architecture/animate_voice_flow.py`. It needs Pillow and Arial (macOS) or DejaVu Sans (Linux); `--font-dir` accepts a directory containing `Arial.ttf`, `Arial Bold.ttf`, and `Courier New.ttf`. The renderer makes no API calls and uses a shared palette to keep stationary labels stable. A six-stage review sheet is written to `/tmp/autonomous-voice-flow-review.png`.
+
 ## Layers
 
 **Skills** — what the device does: 25 skills, each a `SKILL.md` the runtime invokes — apps

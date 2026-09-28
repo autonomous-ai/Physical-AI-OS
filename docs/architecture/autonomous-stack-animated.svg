@@ -1,0 +1,201 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1795 1300" font-family="Avenir Next, Nunito, Segoe UI, Helvetica, Arial, sans-serif" role="img" aria-labelledby="tour-title tour-desc">
+  <title id="tour-title">Autonomous OS — one platform, every layer replaceable</title>
+  <desc id="tour-desc">A slow visual tour of the platform layers, not an execution trace. All labels remain visible. Dashed boxes mark extension points.</desc>
+  <defs>
+    <marker id="ha" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1.5 1 L10 5 L1.5 9" fill="none" stroke="#a1a099" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="Ha" markerWidth="19" markerHeight="19" refX="13" refY="6.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 L12.5 6.5 L2 11.5" fill="none" stroke="#a1a099" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="hg" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1.5 1 L10 5 L1.5 9" fill="none" stroke="#5a912f" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="Hg" markerWidth="19" markerHeight="19" refX="13" refY="6.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 L12.5 6.5 L2 11.5" fill="none" stroke="#5a912f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="hp" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1.5 1 L10 5 L1.5 9" fill="none" stroke="#5d579d" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="Hp" markerWidth="19" markerHeight="19" refX="13" refY="6.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 L12.5 6.5 L2 11.5" fill="none" stroke="#5d579d" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="hc" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1.5 1 L10 5 L1.5 9" fill="none" stroke="#ad5130" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="Hc" markerWidth="19" markerHeight="19" refX="13" refY="6.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 L12.5 6.5 L2 11.5" fill="none" stroke="#ad5130" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="hk" markerWidth="14" markerHeight="14" refX="11" refY="5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M1.5 1 L10 5 L1.5 9" fill="none" stroke="#2b2b29" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+    <marker id="Hk" markerWidth="19" markerHeight="19" refX="13" refY="6.5" orient="auto" markerUnits="userSpaceOnUse">
+      <path d="M2 1.5 L12.5 6.5 L2 11.5" fill="none" stroke="#2b2b29" stroke-width="3" stroke-linecap="round" stroke-linejoin="round" />
+    </marker>
+  </defs>
+  <rect width="1795" height="1300" fill="#fff" />
+  <text x="40" y="92" fill="#2b2b29" font-size="28" font-weight="600">Apps</text>
+  <rect x="360" y="57" width="280" height="66" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="500" y="99" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">Autonomous app</text>
+  <rect x="658" y="57" width="193" height="66" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="754" y="99" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">web setup</text>
+  <rect x="869" y="57" width="211" height="66" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="974" y="99" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">live monitor</text>
+  <text x="40" y="204" fill="#2b2b29" font-size="28" font-weight="600">Skills</text>
+  <rect x="360" y="169" width="122" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="421" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">guard</text>
+  <rect x="500" y="169" width="158" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="579" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">emotion</text>
+  <rect x="676" y="169" width="201" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="776" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">face-enroll</text>
+  <rect x="895" y="169" width="253" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="1022" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">servo-tracking</text>
+  <rect x="1166" y="169" width="132" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="1232" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">music</text>
+  <rect x="1316" y="169" width="185" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" />
+  <text x="1408" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">+ 20 more</text>
+  <rect x="1519" y="169" width="176" height="66" fill="#eff5ea" stroke="#b8d7a6" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="1607" y="211" text-anchor="middle" fill="#5a912f" font-size="28" font-weight="600">your skill</text>
+  <text x="40" y="316" fill="#2b2b29" font-size="28" font-weight="600">Agentic runtime</text>
+  <rect x="360" y="281" width="184" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="452" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">OpenClaw</text>
+  <rect x="562" y="281" width="149" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="636" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">Hermes</text>
+  <rect x="729" y="281" width="176" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="817" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">PicoClaw</text>
+  <rect x="923" y="281" width="183" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="1014" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">OpenCode</text>
+  <rect x="1124" y="281" width="131" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="1190" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">Codex</text>
+  <rect x="1273" y="281" width="218" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" />
+  <text x="1382" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">Claude Code</text>
+  <rect x="1509" y="281" width="184" height="66" fill="#f3f2f9" stroke="#a9a3c9" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="1601" y="323" text-anchor="middle" fill="#5d579d" font-size="28" font-weight="600">your brain</text>
+  <text x="40" y="428" fill="#2b2b29" font-size="28" font-weight="600">System services</text>
+  <rect x="360" y="393" width="131" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="426" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">server</text>
+  <rect x="509" y="393" width="123" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="570" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">intent</text>
+  <rect x="650" y="393" width="122" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="711" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">agent</text>
+  <rect x="790" y="393" width="123" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="852" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">skills</text>
+  <rect x="931" y="393" width="140" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="1001" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">device</text>
+  <rect x="1089" y="393" width="175" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="1176" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">bootstrap</text>
+  <rect x="1282" y="393" width="167" height="66" fill="#eef4fa" stroke="#a5c3e2" stroke-width="2" />
+  <text x="1366" y="435" text-anchor="middle" fill="#2f6193" font-size="28" font-weight="600">+ 8 more</text>
+  <text x="40" y="540" fill="#2b2b29" font-size="28" font-weight="600">Realtime voice</text>
+  <rect x="360" y="505" width="211" height="66" fill="#eaf5f3" stroke="#9ecfc6" stroke-width="2" />
+  <text x="466" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">Gemini Live</text>
+  <rect x="589" y="505" width="280" height="66" fill="#eaf5f3" stroke="#9ecfc6" stroke-width="2" />
+  <text x="729" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">OpenAI Realtime</text>
+  <rect x="887" y="505" width="174" height="66" fill="#eaf5f3" stroke="#9ecfc6" stroke-width="2" />
+  <text x="974" y="547" text-anchor="middle" fill="#23786c" font-size="28" font-weight="600">GPT-Live</text>
+  <text x="40" y="652" fill="#2b2b29" font-size="28" font-weight="600">Capabilities</text>
+  <rect x="360" y="617" width="122" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="421" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">audio</text>
+  <rect x="500" y="617" width="131" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="566" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">vision</text>
+  <rect x="649" y="617" width="141" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="720" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">motion</text>
+  <rect x="808" y="617" width="106" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="861" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">light</text>
+  <rect x="932" y="617" width="157" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="1010" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">sensing</text>
+  <rect x="1107" y="617" width="149" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="1182" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">display</text>
+  <rect x="1274" y="617" width="167" height="66" fill="#fdf4e6" stroke="#e6c489" stroke-width="2" />
+  <text x="1358" y="659" text-anchor="middle" fill="#96660f" font-size="28" font-weight="600">+ 7 more</text>
+  <text x="40" y="764" fill="#2b2b29" font-size="28" font-weight="600">Safety gate</text>
+  <text x="40" y="876" fill="#2b2b29" font-size="28" font-weight="600">Drivers</text>
+  <rect x="360" y="841" width="141" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="430" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">motors</text>
+  <rect x="519" y="841" width="149" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="594" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">camera</text>
+  <rect x="686" y="841" width="122" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="747" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">voice</text>
+  <rect x="826" y="841" width="157" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="904" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">sensing</text>
+  <rect x="1001" y="841" width="149" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="1076" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">display</text>
+  <rect x="1168" y="841" width="167" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" />
+  <text x="1252" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">+ 3 more</text>
+  <rect x="1353" y="841" width="193" height="66" fill="#f1f3f7" stroke="#b4bfcf" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="1450" y="883" text-anchor="middle" fill="#46566d" font-size="28" font-weight="600">your driver</text>
+  <text x="40" y="960" fill="#2b2b29" font-size="28" font-weight="600">Boards</text>
+  <rect x="360" y="925" width="245" height="66" fill="#f4f4ea" stroke="#c8c99e" stroke-width="2" />
+  <text x="482" y="967" text-anchor="middle" fill="#67691f" font-size="28" font-weight="600">Raspberry Pi 5</text>
+  <rect x="623" y="925" width="289" height="66" fill="#f4f4ea" stroke="#c8c99e" stroke-width="2" />
+  <text x="768" y="967" text-anchor="middle" fill="#67691f" font-size="28" font-weight="600">Raspberry Pi CM4</text>
+  <rect x="930" y="925" width="245" height="66" fill="#f4f4ea" stroke="#c8c99e" stroke-width="2" />
+  <text x="1052" y="967" text-anchor="middle" fill="#67691f" font-size="28" font-weight="600">OrangePi 4 Pro</text>
+  <rect x="1193" y="925" width="192" height="66" fill="#f4f4ea" stroke="#c8c99e" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="1289" y="967" text-anchor="middle" fill="#67691f" font-size="28" font-weight="600">your board</text>
+  <text x="40" y="1072" fill="#2b2b29" font-size="28" font-weight="600">Linux</text>
+  <text x="40" y="1184" fill="#2b2b29" font-size="28" font-weight="600">Bodies</text>
+  <rect x="360" y="1149" width="115" height="66" rx="33" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="418" y="1191" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">Lamp</text>
+  <rect x="493" y="1149" width="123" height="66" rx="33" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="554" y="1191" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">Intern</text>
+  <rect x="634" y="1149" width="211" height="66" rx="33" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" />
+  <text x="740" y="1191" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">Reachy Mini</text>
+  <rect x="863" y="1149" width="132" height="66" rx="33" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="929" y="1191" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">Go2-W</text>
+  <rect x="1013" y="1149" width="176" height="66" rx="33" fill="#fbf0ed" stroke="#f0c5b6" stroke-width="2" stroke-dasharray="7 7" />
+  <text x="1101" y="1191" text-anchor="middle" fill="#ad5130" font-size="28" font-weight="600">your robot</text>
+  <rect x="360" y="729" width="1335" height="66" fill="#fceded" stroke="#e7adad" stroke-width="2" />
+  <text x="1028" y="771" text-anchor="middle" fill="#a33b3b" font-size="28" font-weight="600">brightness · quiet hours · explicit-move speed · thermal</text>
+  <rect x="360" y="1037" width="1335" height="66" fill="#f3f3f3" stroke="#c6c6c6" stroke-width="2" />
+  <text x="1028" y="1079" text-anchor="middle" fill="#565656" font-size="28" font-weight="600">Raspberry Pi OS · OrangePi Debian · the robot's own image</text>
+  <style>
+      .layer-highlight { opacity: 0; animation: layer-tour 17.6s ease-in-out infinite; }
+      @keyframes layer-tour { 0%, 13%, 100% { opacity: 0; } 3%, 8% { opacity: .9; } }
+      @media (prefers-reduced-motion: reduce) { .layer-highlight { animation: none; } }
+    </style>
+  <g class="layer-highlight" style="animation-delay: 0.0s" fill="none" stroke="#ad5130" stroke-width="3">
+    <rect x="350" y="48" width="1405" height="84" rx="9" />
+    <path d="M 19 68 V 112" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 1.4s" fill="none" stroke="#5a912f" stroke-width="3">
+    <rect x="350" y="160" width="1405" height="84" rx="9" />
+    <path d="M 19 180 V 224" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 2.8s" fill="none" stroke="#5d579d" stroke-width="3">
+    <rect x="350" y="272" width="1405" height="84" rx="9" />
+    <path d="M 19 292 V 336" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 4.2s" fill="none" stroke="#2f6193" stroke-width="3">
+    <rect x="350" y="384" width="1405" height="84" rx="9" />
+    <path d="M 19 404 V 448" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 5.6s" fill="none" stroke="#23786c" stroke-width="3">
+    <rect x="350" y="496" width="1405" height="84" rx="9" />
+    <path d="M 19 516 V 560" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 7.0s" fill="none" stroke="#96660f" stroke-width="3">
+    <rect x="350" y="608" width="1405" height="84" rx="9" />
+    <path d="M 19 628 V 672" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 8.4s" fill="none" stroke="#a33b3b" stroke-width="3">
+    <rect x="350" y="720" width="1405" height="84" rx="9" />
+    <path d="M 19 740 V 784" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 9.8s" fill="none" stroke="#46566d" stroke-width="3">
+    <rect x="350" y="832" width="1405" height="84" rx="9" />
+    <path d="M 19 852 V 896" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 11.2s" fill="none" stroke="#67691f" stroke-width="3">
+    <rect x="350" y="916" width="1405" height="84" rx="9" />
+    <path d="M 19 936 V 980" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 12.6s" fill="none" stroke="#565656" stroke-width="3">
+    <rect x="350" y="1028" width="1405" height="84" rx="9" />
+    <path d="M 19 1048 V 1092" stroke-width="5" stroke-linecap="round" />
+  </g>
+  <g class="layer-highlight" style="animation-delay: 14.0s" fill="none" stroke="#ad5130" stroke-width="3">
+    <rect x="350" y="1140" width="1405" height="84" rx="9" />
+    <path d="M 19 1160 V 1204" stroke-width="5" stroke-linecap="round" />
+  </g>
+</svg>

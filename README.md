@@ -94,9 +94,30 @@ Follow **[the full guide](docs/bring-your-own-robot.md)**.
 
 ## Platform architecture
 
+### One voice, three ways to act
+
+A conversation can stay with realtime. A music request can use music and audio skills to play a song at the requested volume, with LED feedback on supported bodies. A computer task can use Harness to reach a paired agent, then return a short spoken result.
+
+![One shared Autonomous OS diagram with three routes: realtime answers conversation directly; the main runtime uses music and audio skills to play jazz at 30% volume with HAL LED feedback; or it uses harness-use to update a Blender scene, whose final result returns through OS to HAL for speech.](docs/architecture/platform-flows.svg)
+
+[Open the animated SVG](docs/architecture/platform-flows.svg) (download and open in a browser to play). All three routes remain readable in GitHub’s static SVG rendering. The timing is illustrative, not a latency benchmark. Supported hardware actions depend on the body’s capabilities; these are example routes, not every routing optimization.
+
+<details>
+<summary>Watch the computer-task example in detail</summary>
+
+![Illustrated Harness task: voice request, realtime delegation, computer agent raises yellow planes in Blender, final result returns, and the device says “Done. The yellow planes are higher.”](docs/architecture/voice-to-result.gif)
+
+[Still image](docs/architecture/voice-to-result-poster.png) · [Harness integration](docs/harness.md). Progress stays in the UI; the final result becomes a short spoken announcement, with full text available in the app.
+
+</details>
+
+### The layers behind it
+
 Autonomous OS is a software stack. Each layer uses only the layer below it, so any layer can be replaced without touching the others. Every layer is a folder in this repo.
 
-![Autonomous OS stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack.png)
+![Autonomous OS stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack-animated.gif)
+
+[View the static diagram](docs/architecture/autonomous-stack.svg). The animation tours the layers; it is not a request execution trace.
 
 ### [Apps](system/web/)
 
