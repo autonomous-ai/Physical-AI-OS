@@ -304,7 +304,7 @@ def play_tone(
 
 
 @router.post("/audio/record")
-def record_audio(duration_ms: Annotated[int, Query(ge=100, le=30_000)] = 3000):
+def record_audio(duration_ms: Annotated[int, Query(ge=1, le=30_000)] = 3000):
     """Record bounded audio from an unmuted microphone. Returns WAV bytes."""
     if state._mic_muted or privacy.mic_locked():
         raise HTTPException(409, "Microphone is muted")

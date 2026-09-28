@@ -72,11 +72,12 @@ def test_record_discards_audio_if_muted_during_capture(monkeypatch):
     sd.rec.return_value.tobytes.assert_not_called()
 
 
-def test_valid_simulated_recording_still_returns_wav(monkeypatch):
+@pytest.mark.parametrize("duration_ms", [1, 50, 100])
+def test_valid_simulated_recording_still_returns_wav(monkeypatch, duration_ms):
     monkeypatch.setattr(state, 'simulation_audio', True)
     app = FastAPI()
     app.include_router(audio.router)
     with TestClient(app) as client:
-        response = client.post('/audio/record?duration_ms=100')
+        response = client.post(f'/audio/record?duration_ms={duration_ms}')
     assert response.status_code == 200
     assert response.content.startswith(b'RIFF')
