@@ -878,3 +878,9 @@ Cảnh báo delivery Harness không còn chặn câu nói mới hoặc khóa tr�
 ### Địa chỉ người vận hành iMessage
 
 Handle trong settings iMessage xác định hội thoại home của người vận hành. Đây không phải cam kết giới hạn người gửi: presync Hermes mặc định nhận tin khách hàng từ địa chỉ khác (`BLUEBUBBLES_ALLOW_ALL_USERS=true` nếu không override rõ ràng).
+
+### Lưu Wi-Fi trong Settings khi chuyển mạng
+
+Tại `/setting#wifi` (kể cả với `?debug=true`), việc đổi Wi-Fi có thể làm trình duyệt mất kết nối. Phản hồi lưu thành công chỉ xác nhận cấu hình đã được lưu, chưa xác nhận thiết bị đã kết nối mạng. Settings hiển thị tên SSID cần nối lại và kiểm tra mạng thực tế qua `GET /api/network/current` mỗi ba giây, tối đa hai phút (mỗi request giới hạn bốn giây). Khi rời panel, kiểm tra bị hủy; không tự gửi lại yêu cầu lưu cấu hình.
+
+Lỗi truyền tải fetch khi sửa Wi-Fi hoặc lưu từ tab Wi-Fi được hiển thị là **chưa xác định kết quả lưu**, không khẳng định thành công hay thất bại. Các trường đang sửa được giữ trong bộ nhớ; dù thiết bị đã báo đúng SSID, UI vẫn yêu cầu tải lại để xác nhận toàn bộ cấu hình. Lỗi HTTP/API vẫn hiển thị lỗi từ server. Nếu hết thời gian mà chưa truy cập được mạng/địa chỉ mới, thông báo hướng dẫn người dùng nối mạng đích rồi mở lại trang thiết bị. Không lưu thông tin đăng nhập vào browser storage. Trang provisioning độc lập `/wifi` không thay đổi.

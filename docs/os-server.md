@@ -1594,6 +1594,8 @@ uses the original answer key and never resends the command.
 
 For `PUT /api/device/config`, omitted or null `bluebubbles_server_url`, `bluebubbles_user_address`, and `bluebubbles_caller_context` preserve their saved values. An explicit empty string clears only that field. An omitted or empty `bluebubbles_password` preserves the saved secret. Changing unrelated settings must not reset the channel or its caller context.
 
+When `PUT /api/device/config` changes the saved Wi-Fi SSID, the reconnect is scheduled with a two-second grace period after synchronous config side effects finish. This allows the save response to reach the client before AP/STA teardown. HTTP success confirms config persistence, not successful Wi-Fi association; clients must check `/api/network/current` after reconnecting. A transport interruption alone does not establish that saving failed.
+
 ### HAL startup timing
 
 `hal.server:app` is the lightweight HTTP entrypoint; `hal/runtime.py` retains the full hardware runtime. Startup validates the device/board and loads safety bounds and LED presets first, then starts one RGB service and exposes the existing `/led/*` routes with the existing HTTP security middleware. Full runtime imports and initialization run in a background thread of the same process. Until that finishes, other HTTP endpoints (including `/health`) return `503` with `Retry-After: 1`. Requests then pass to the full app; it reuses the RGB instance without reopening the strip. There is no new service, port, setup mode or UI flow. Required-runtime startup failure exits the process nonzero so the service supervisor can recover.

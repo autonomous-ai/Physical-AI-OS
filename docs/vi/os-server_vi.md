@@ -1560,6 +1560,8 @@ nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không g
 
 Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_server_url`, `bluebubbles_user_address`, `bluebubbles_caller_context` sẽ giữ giá trị đã lưu. Chuỗi rỗng được gửi rõ ràng chỉ xoá field đó. Bỏ qua hoặc gửi rỗng `bluebubbles_password` vẫn giữ mật khẩu. Đổi setting không liên quan không được reset channel hoặc caller context.
 
+Khi `PUT /api/device/config` đổi SSID Wi-Fi đã lưu, việc reconnect được lên lịch sau khoảng chờ hai giây, tính từ khi các side effect đồng bộ của config hoàn tất. Nhờ đó response lưu config có thời gian về client trước khi AP/STA ngắt. HTTP thành công chỉ xác nhận đã lưu config, không xác nhận đã vào Wi-Fi; client cần kiểm tra `/api/network/current` sau khi kết nối lại. Request bị đứt mạng không đủ để kết luận lưu thất bại.
+
 ### HAL startup timing
 
 `hal.server:app` là entrypoint HTTP nhẹ; `hal/runtime.py` giữ runtime phần cứng đầy đủ. Startup kiểm tra device/board, nạp giới hạn safety và preset LED trước, rồi khởi tạo một RGB service và mở các route `/led/*` hiện có với middleware bảo vệ HTTP như cũ. Import và khởi tạo runtime đầy đủ chạy trong thread nền cùng process. Trước khi xong, các HTTP endpoint khác (gồm `/health`) trả `503` kèm `Retry-After: 1`. Sau đó request chuyển sang app đầy đủ; app dùng lại RGB instance, không mở lại strip. Không thêm service, cổng, chế độ setup hay flow UI. Nếu startup runtime bắt buộc thất bại, process thoát mã khác 0 để service supervisor phục hồi.
