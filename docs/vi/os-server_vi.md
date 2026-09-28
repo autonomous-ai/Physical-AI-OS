@@ -487,6 +487,10 @@ Cần sensing có camera (InsightFace). Mặc định ảnh người đã đăng
 `POST /api/voice/preview` nhận `speed` tùy chọn (`0.25–4.0`), chuyển tới HAL
 `/voice/speak` cho riêng câu thử không dùng cache. Không lưu tốc độ hoặc thay
 đổi tốc độ chung của service; bỏ qua field thì dùng tốc độ runtime hiện tại.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) trên `/voice/speak` cũng
+vậy: HAL dựng backend preview cho riêng câu đó, service đang chạy giữ nguyên
+provider, backend và voice đã lưu. Chúng chỉ dùng với câu không cache (`400` nếu
+kèm `cached`/`prerender`). Áp dụng cho **Test Voice** trên web và MQTT `tts.preview`.
 
 `GET /api/device/config` trả `tts_speed` hiệu lực; `PUT /api/device/config`
 nhận `{"tts_speed":1.2}`. Field tùy chọn nhận `0.25–4.0`; bỏ qua thì giữ
@@ -496,6 +500,30 @@ qua `get_tts_speed()`; đổi tốc độ được đẩy live qua `/voice/tts/c
 ElevenLabs HTTP v3 gửi speed `1.0` và áp dụng tốc độ đã lưu ở HAL qua
 streaming giữ cao độ. Các model ElevenLabs khác vẫn giới hạn giá trị gửi đi
 trong `0.7–1.2`.
+
+### Gemini — TTS qua proxy autonomous
+
+`tts_provider: "gemini"` tổng hợp bằng model Gemini TTS
+(`hal/drivers/voice/tts/gemini.py`). Dùng lại relay Gemini REST của proxy — cùng
+route `…/ai/v1/google-search/v1beta` mà web search của pipecat gọi — dưới dạng
+`<tts_base_url>/google-search/v1beta/models/<model>:streamGenerateContent?alt=sse`
+với header `x-goog-api-key`, nên BFF không cần sửa. Model mặc định
+`gemini-3.8-flash-tts` (đổi bằng `HAL_TTS_GEMINI_MODEL`; model TTS 3.8/3.1 stream
+PCM 24 kHz, model 2.5 trả nguyên clip trong một event). Voice mặc định `Kore`;
+voice lạ (ví dụ lưu từ provider khác) tự rơi về `Kore`. Danh sách voice là 30
+voice dựng sẵn đa ngôn ngữ của Gemini nên bộ lọc ngôn ngữ không áp dụng. Gemini
+không có tham số speed: HAL áp dụng tốc độ đã lưu tại chỗ, giống ElevenLabs HTTP
+v3. Audio tag trong ngoặc vuông bị bỏ. Trong Settings → Voice, đây là vendor thứ
+ba dưới `Autonomous (proxy)`.
+
+Khi chọn Gemini TTS và realtime provider là Gemini Live, các câu chit-chat do
+model Live tự trả lời được phát bằng **native audio với đúng voice TTS**, không
+gọi TTS (`native_voice()` trong `hal/drivers/voice/tts/gemini.py`), bất kể
+`HAL_REALTIME_NATIVE_AUDIO`. Session Live mở bằng voice TTS thay vì
+`realtime.gemini.voice`; đổi voice hoặc provider thì session được dựng lại trước
+lượt kế tiếp (`gemini-voice-change`). Câu trả lời delegate vẫn đọc bằng Gemini
+TTS. Native audio phát ở 1.0×; tốc độ TTS đã lưu chỉ áp dụng cho TTS. Provider
+TTS khác thì native audio giữ nguyên như cấu hình.
 
 ### Piper — TTS chạy trên thiết bị
 
@@ -723,7 +751,7 @@ HAL (Python): FastAPI standard JSON responses.
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
    - Seed `device_type` từ device class đã resolve (env `DEVICE_TYPE`, không có thì lấy key sẵn có) để config.json mang giá trị này cho các bên đọc không có env — wake word của HAL và `software-update`. Provisioning chỉ ghi env, nên không có seed này thì key không bao giờ tồn tại trên máy đã provision. Chỉ ghi khi giá trị đang lưu khác giá trị resolve
-   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel)
+   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel); khi là `gemini` thì chọn `Kore`
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT
@@ -1531,3 +1559,7 @@ nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không g
 ### Cập nhật cấu hình iMessage
 
 Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_server_url`, `bluebubbles_user_address`, `bluebubbles_caller_context` sẽ giữ giá trị đã lưu. Chuỗi rỗng được gửi rõ ràng chỉ xoá field đó. Bỏ qua hoặc gửi rỗng `bluebubbles_password` vẫn giữ mật khẩu. Đổi setting không liên quan không được reset channel hoặc caller context.
+
+### HAL startup timing
+
+HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.

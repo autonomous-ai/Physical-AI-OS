@@ -247,6 +247,14 @@ class PipelineHandle:
             )
         )
 
+    def run_announcement(self, text: str) -> None:
+        """Device-initiated turn (AnnounceInput): append it and run the LLM."""
+        self._submit(
+            self._worker.queue_frame(
+                LLMMessagesAppendFrame(messages=[{"role": "user", "content": text}], run_llm=True)
+            )
+        )
+
     def remind_tools(self) -> None:
         """Re-state the action rule right before the utterance the aggregator is
         about to append (see _TOOL_RULE). No-op without delegate_to_main."""

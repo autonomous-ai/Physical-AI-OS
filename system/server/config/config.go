@@ -173,6 +173,15 @@ type Config struct {
 	LLMModel   string `json:"llm_model" yaml:"llmModel" validate:"required"`
 	LLMBaseURL string `json:"llm_base_url" yaml:"llmBaseURL" validate:"required"`
 
+	// BackendBaseURL / BackendAPIKey point the Autonomous backend channel —
+	// the /ping status report (which also delivers MQTT endpoint updates) and
+	// ops /alert — somewhere other than the LLM endpoint. Empty = reuse
+	// LLMBaseURL / LLMAPIKey, so one-endpoint configs behave exactly as before.
+	// Set them when llm_base_url points at your own model server (Ollama, vLLM,
+	// LM Studio) but the device should keep reporting to the Autonomous backend.
+	BackendBaseURL string `json:"backend_base_url,omitempty" yaml:"backendBaseURL"`
+	BackendAPIKey  string `json:"backend_api_key,omitempty" yaml:"backendAPIKey"`
+
 	// AutonomousDefaults preserves the credential set the device shipped with —
 	// the Autonomous team's proxy. Captured once, the first time an operator
 	// replaces any credential, and never written again: the point is to survive
@@ -415,6 +424,24 @@ func Default() Config {
 
 		notify: make(chan bool, 1),
 	}
+}
+
+// BackendBase returns the base URL for the Autonomous backend channel
+// (/ping, /alert): BackendBaseURL when set, else LLMBaseURL.
+func (c *Config) BackendBase() string {
+	if v := strings.TrimSpace(c.BackendBaseURL); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.LLMBaseURL)
+}
+
+// BackendKey returns the bearer token for the backend channel:
+// BackendAPIKey when set, else LLMAPIKey.
+func (c *Config) BackendKey() string {
+	if v := strings.TrimSpace(c.BackendAPIKey); v != "" {
+		return v
+	}
+	return strings.TrimSpace(c.LLMAPIKey)
 }
 
 // WakeWordEnabled reports whether STT must first recognize a wake phrase

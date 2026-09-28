@@ -20,6 +20,7 @@ class InputTypeEnum(StrEnum):
     IMAGE = "image"
     AUDIO = "audio"
     FUNCTION_CALL_RESULT = "function_call_result"
+    ANNOUNCE = "announce"
 
 
 class OutputTypeEnum(StrEnum):

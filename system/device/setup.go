@@ -483,9 +483,9 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	// popup polls the backend for this IP and redirects the popup when neither
 	// the AP-alive window nor mDNS could deliver it (see docs/setup-flow.md).
 	// Must run after config.Save above: beclient derives the ping URL from the
-	// just-assigned LLMBaseURL.
-	if s.beClient != nil && llmAPIKey != "" {
-		go func() { s.beClient.PingSafe(llmAPIKey, s.buildPingPayload("setting_up")) }()
+	// just-assigned LLMBaseURL (or BackendBaseURL when set).
+	if key := s.config.BackendKey(); s.beClient != nil && key != "" {
+		go func() { s.beClient.PingSafe(key, s.buildPingPayload("setting_up")) }()
 	}
 
 	// SetupAgent runs AFTER config.json is saved: a backend that materializes its
@@ -515,8 +515,8 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 	hal.ResetLEDToResting()
 
 	slog.Info("agent gateway is ready", "component", "device")
-	if s.beClient != nil && llmAPIKey != "" {
-		s.beClient.PingSafe(llmAPIKey, s.buildPingPayload("working"))
+	if key := s.config.BackendKey(); s.beClient != nil && key != "" {
+		s.beClient.PingSafe(key, s.buildPingPayload("working"))
 	}
 	return nil
 }

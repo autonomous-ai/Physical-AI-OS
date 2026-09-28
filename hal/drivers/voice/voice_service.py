@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 from collections import deque
+from contextlib import contextmanager
 from difflib import SequenceMatcher
 from typing import Optional
 
@@ -40,6 +41,7 @@ from hal.realtime.orchestrator import (
 from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32, resample_float32
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal import live_playback
+from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
 from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
@@ -182,6 +184,11 @@ class VoiceService:
         self._harness_capture = HarnessCapture()
         self._stt = stt_provider
         self._input_device = input_device
+        self._lifecycle_revision = 0
+        self._lifecycle_lock = threading.Lock()
+        self._mic_lock = threading.Lock()
+        self._active_mic = None
+        self._realtime_stop_thread = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._listening = False
@@ -304,6 +311,8 @@ class VoiceService:
             enable_expression=enable_expression,
             # pipecat_v1 runs STT inside its pipeline on this same provider.
             stt_provider=stt_provider,
+            # Gemini TTS selected → Live speaks in the same voice (native audio).
+            voice_override=lambda: native_voice(tts_service),
         )
 
         # Hook into TTS on_speak_end to feed spoken text back to the realtime agent.
@@ -492,6 +501,23 @@ class VoiceService:
         return self._mic_level
 
     def start(self):
+        with self._lifecycle_lock:
+            self._lifecycle_revision += 1
+            self._start_locked()
+
+    def _start_locked(self):
+        # A timed-out teardown must retain ownership until its workers exit.
+        if not self._running and (
+            (self._thread is not None and self._thread.is_alive())
+            or (self._realtime_stop_thread is not None and self._realtime_stop_thread.is_alive())
+        ):
+            logger.warning("VoiceService start deferred: previous teardown is still running")
+            threading.Thread(
+                target=self._resume_after_teardown,
+                args=(self._lifecycle_revision, self._thread, self._realtime_stop_thread),
+                daemon=True, name="voice-restart-wait",
+            ).start()
+            return
         if self._running:
             return
         if not self.available:
@@ -502,6 +528,9 @@ class VoiceService:
                 self._stt.available,
             )
             return
+        if self._turn_detector is not None:
+            self._turn_detector.close()
+            self._turn_detector = None
         self._running = True
         if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE:
             self._turn_detector = SmartTurnDetector()
@@ -509,9 +538,23 @@ class VoiceService:
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
 
+    def _resume_after_teardown(self, revision, voice_thread, realtime_thread):
+        for worker in (voice_thread, realtime_thread):
+            if worker is not None:
+                worker.join()
+        with self._lifecycle_lock:
+            # A later mute/config change cancels this pending restart.
+            if revision == self._lifecycle_revision:
+                self._start_locked()
+
     @property
     def harness_capture_active(self) -> bool:
         return self._harness_capture.active
+
+    @property
+    def realtime(self) -> RealtimeOrchestrator:
+        """The realtime orchestrator, for device-initiated announcements."""
+        return self._realtime
 
     def start_harness_capture(self, snapshot: dict) -> bool:
         from hal import app_state
@@ -528,37 +571,91 @@ class VoiceService:
     def cancel_harness_capture(self) -> None:
         self._harness_capture.cancel()
 
-    def stop(self):
+    def stop(self, *, background=False):
+        # Reserve teardown before returning to a mute caller, so a subsequent
+        # unmute cannot overtake a background worker that has not run yet.
+        self._lifecycle_lock.acquire()
+        self._lifecycle_revision += 1
+        self._running = False
+        if background:
+            try:
+                threading.Thread(target=self._stop_and_unlock, daemon=True,
+                                 name="voice-mute-teardown").start()
+            except BaseException:
+                self._lifecycle_lock.release()
+                raise
+        else:
+            self._stop_and_unlock()
+
+    def _stop_and_unlock(self):
+        try:
+            self._stop_locked()
+        finally:
+            self._lifecycle_lock.release()
+
+    def _stop_locked(self):
+        with self._mic_lock:
+            if self._active_mic is not None:
+                try:
+                    self._active_mic.abort()
+                except Exception:
+                    logger.exception("Failed to abort voice capture")
         self._wakeword_focus.clear()
         self.cancel_harness_capture()
         self._running = False
-        if self._turn_detector is not None:
-            self._turn_detector.close()
-            self._turn_detector = None
         if hal_config.REALTIME_ENABLED:
             # realtime.stop() calls _context.summarize_device_memory() +
             # summarize_realtime_memory() which fire LLM requests — an
             # unresponsive backend (Cloudflare 524, network stall) can hang
             # them for tens of seconds and stall the entire voice teardown.
             # Wrap in a daemon thread with a bounded join so the summarize
-            # is best-effort: if it doesn't finish in 3s we orphan it and
-            # continue teardown. Better to lose one summary than to leave
-            # the whole voice pipeline stuck waiting.
-            rt_thread = threading.Thread(
-                target=self._realtime.stop,
-                daemon=True,
-                name="voice-realtime-teardown",
-            )
-            rt_thread.start()
+            # is bounded here; retain the worker so a subsequent start waits
+            # for it instead of racing its disconnect against a new session.
+            rt_thread = self._realtime_stop_thread
+            if rt_thread is None or not rt_thread.is_alive():
+                rt_thread = threading.Thread(
+                    target=self._realtime.stop,
+                    daemon=True,
+                    name="voice-realtime-teardown",
+                )
+                self._realtime_stop_thread = rt_thread
+                rt_thread.start()
             rt_thread.join(timeout=3.0)
             if rt_thread.is_alive():
                 logger.warning(
-                    "realtime.stop() did not finish in 3s -- orphaning (memory summary or WS disconnect stalled)"
+                    "realtime.stop() did not finish in 3s -- restart will wait for teardown"
                 )
         if self._thread:
             self._thread.join(timeout=5)
+            if self._thread.is_alive():
+                logger.warning("VoiceService teardown pending: voice thread is still running")
+                return
             self._thread = None
+        if self._turn_detector is not None:
+            self._turn_detector.close()
+            self._turn_detector = None
         logger.info("VoiceService stopped")
+
+    @contextmanager
+    def _capture(self, backend, rate=None):
+        with self._mic_lock:
+            if not self._running:
+                # PortAudio opens the device in its constructor, before enter.
+                close = getattr(backend, "close", None)
+                if close is not None:
+                    close()
+                raise InterruptedError("Voice capture stopped")
+            context = aec.wrap_mic(backend, rate, self._np) if rate is not None else backend
+            mic = context.__enter__()
+            self._active_mic = backend
+        try:
+            yield mic
+        finally:
+            with self._mic_lock:
+                try:
+                    context.__exit__(None, None, None)
+                finally:
+                    self._active_mic = None
 
     # ------------------------------------------------------------------
     # Audio device discovery
@@ -784,7 +881,7 @@ class VoiceService:
                     device=self._input_device,
                 )
             elapsed = 0.0
-            with mic_ctx as tmp_mic:
+            with self._capture(mic_ctx) as tmp_mic:
                 while elapsed < voice_cfg.ECHO_GATE_MAX_WAIT_S and self._running:
                     data, overflowed = tmp_mic.read(window_frames)
                     if overflowed:
@@ -803,8 +900,9 @@ class VoiceService:
                 "Reverb gate timeout after %.1fs, resuming anyway", voice_cfg.ECHO_GATE_MAX_WAIT_S
             )
         except Exception as e:
-            logger.warning("RMS gate failed, falling back to fixed delay: %s", e)
-            time.sleep(1.0)
+            if self._running:
+                logger.warning("RMS gate failed, falling back to fixed delay: %s", e)
+                time.sleep(1.0)
 
     # ------------------------------------------------------------------
     # Main loop
@@ -895,8 +993,7 @@ class VoiceService:
                         blocksize=frame_size,
                         device=self._input_device,
                     )
-                mic_ctx = aec.wrap_mic(mic_ctx, device_rate, self._np)
-                with mic_ctx as mic:
+                with self._capture(mic_ctx, device_rate) as mic:
                     if getattr(self, "_live_gate", None) is not None:
                         # Hardware AEC convergence belongs to the open device,
                         # not each logical provider listening window.
@@ -924,8 +1021,8 @@ class VoiceService:
             except Exception as e:
                 if manual_capture is not None:
                     self._harness_capture.release(manual_capture)
-                logger.warning("Voice loop error: %s", e)
                 if self._running:
+                    logger.warning("Voice loop error: %s", e)
                     time.sleep(3)
 
     # ------------------------------------------------------------------
@@ -1512,13 +1609,17 @@ class VoiceService:
             native_started = False
             transcript = ""
             # False => Gemini was opened TEXT-only and OUR TTS speaks the reply.
-            native = hal_config.REALTIME_NATIVE_AUDIO
+            native = hal_config.REALTIME_NATIVE_AUDIO or native_voice(self._tts) is not None
             sentence_buf = ""
             buffer_reply_key = ""
             first_sent = False
             speech_iid = ""
             buffer_mixed = False
             native_owner = ""
+            native_pending = []
+            native_pending_samples = 0
+            native_pending_key = None
+            native_failed_keys = set()
             try:
                 output_options = {"stop_event": stop_event} if stop_event is not None else {}
                 for out in self._realtime.stream_output(**output_options):
@@ -1677,6 +1778,9 @@ class VoiceService:
                         )
                         continue
                     if isinstance(out, RTInterruptedOutput):
+                        if not out.user_turn_id or out.user_turn_id == native_pending_key:
+                            native_pending.clear()
+                            native_pending_samples = 0
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
@@ -1728,11 +1832,30 @@ class VoiceService:
                             cues.finish(out.user_turn_id)
                         def write_native():
                             nonlocal native_started, native_owner
+                            nonlocal native_pending_key, native_pending_samples
+                            key = out.user_turn_id or fallback_key
+                            if key in native_failed_keys:
+                                return
+                            if key != native_pending_key:
+                                native_pending.clear()
+                                native_pending_samples = 0
+                                native_pending_key = key
                             owner = metrics.owner(out.user_turn_id)
                             if native_started and owner != native_owner:
                                 self._tts.set_native_playback_owner(owner)
                                 native_owner = owner
                             if not native_started:
+                                # Admission can fail while a filler/protected
+                                # utterance owns the speaker. Retain the prefix
+                                # instead of starting midway through the reply.
+                                native_pending.append(out.audio)
+                                native_pending_samples += len(out.audio)
+                                if native_pending_samples > self._realtime.output_sample_rate * 30:
+                                    logger.warning("[live] Native speaker unavailable for 30s of audio; cancelling reply=%s", key)
+                                    native_pending.clear()
+                                    native_pending_samples = 0
+                                    native_failed_keys.add(key)
+                                    return
                                 native_started = self._tts is not None and (
                                     self._tts.native_play_begin(
                                         self._realtime.output_sample_rate, owner=owner,
@@ -1742,7 +1865,16 @@ class VoiceService:
                             if native_started:
                                 if opener is not None:
                                     opener["consumed"] = True
-                                self._tts.native_play_frame(out.audio)
+                                frames = native_pending or [out.audio]
+                                for frame in frames:
+                                    if self._tts.native_play_frame(frame) is False:
+                                        # Do not resume with a later suffix after
+                                        # cancellation or a failed device write.
+                                        native_failed_keys.add(key)
+                                        logger.warning("[live] Native playback stopped; discarding remaining audio reply=%s", key)
+                                        break
+                                native_pending.clear()
+                                native_pending_samples = 0
                                 if opener is not None:
                                     if out.user_turn_id and out.user_turn_id == opener["key"]:
                                         opener["replied"] = True
@@ -2276,6 +2408,13 @@ class VoiceService:
             release_input()
             for iid in followup_ids:
                 self._wakeword_focus.finish(iid)
+            # A capture dropped as noise (or routed without a realtime reply)
+            # never reaches stream_output, which is what normally ends the
+            # realtime turn; without this the announcer's gate stays shut for
+            # TURN_IN_FLIGHT_MAX_S after every noise blip.
+            realtime = getattr(self, "_realtime", None)
+            if realtime is not None:
+                realtime.finish_capture()
 
     def _stream_session_impl(
         self,

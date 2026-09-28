@@ -131,8 +131,7 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
-hiển thị khoảng có thể chọn (`0.7–1.5×` cho ElevenLabs, `0.25–4.0×` cho
-provider khác), bước `0.05`. **Save Changes** lưu tốc độ qua
+hiển thị khoảng có thể chọn (`0.5–2.0×` cho mọi provider), bước `0.05`. **Save Changes** lưu tốc độ qua
 `PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần
 lưu; tốc độ thử chỉ áp dụng cho câu preview. Giá trị đã lưu
 ưu tiên hơn `HAL_TTS_SPEED` (mặc định `1.2`); ElevenLabs HTTP v3 áp dụng tốc độ ở HAL và gửi provider speed `1.0`;
@@ -150,7 +149,8 @@ key openrouter đi kèm URL proxy autonomous, một cặp không thể chạy.
 **Quyền sở hữu key TTS.** Thiết bị chỉ lưu đúng một key TTS (`ttsAPIKey`), và nó
 luôn thuộc về provider đang được chọn trong Voice. `Autonomous (proxy)` và
 `Custom (BYO URL)` không lưu gì cả mà kế thừa key AI Brain qua
-`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`); `Piper` không cần
+`Config.GetTTSAPIKey()` (`system/server/config/config.go:605`) — ô chọn vendor
+của nó có OpenAI, ElevenLabs và Gemini; `Piper` không cần
 key; `OpenAI (direct)` và `ElevenLabs (direct)` **bắt buộc phải có key riêng** —
 JWT Autonomous kế thừa sẽ bị từ chối bằng 401, HAL retry rồi bỏ cuộc và trả về 0
 sample, tức là thiết bị câm mà UI không báo lỗi gì. Bốn quy tắc giữ bất biến này:
@@ -472,6 +472,9 @@ nối gọn và bố cục card hai cột, chuyển thành một cột khi nhỏ
   pairing/phiên E2EE gốc và giữ khóa riêng, độc lập với Buddy.
 
 **Giọng nói Harness-only**
+
+Trang Pairing chỉ hiện công tắc Harness-only voice và mô tả khi OS trả `supported:true` (board hiện tại có cấu hình MPR121). Thiếu metadata hỗ trợ thì ẩn công tắc. Pairing và thông tin agent đang focus vẫn hiển thị; API/MQTT cũng chặn bật nếu không đáp ứng phần cứng.
+
 
 - Khi có máy đã ghép đôi, `HarnessCard.tsx` hiển thị `HarnessVoiceMode.tsx`. **Focused Harness agent** đồng bộ pane agent đang focus trong app Harness, kể cả khi mode tắt. Web không có bộ chọn agent; target hội thoại của `harness-use` thông thường vẫn độc lập.
 - Bật **Harness-only voice** để gửi yêu cầu giọng nói thẳng đến agent đang focus; kết quả vẫn qua TTS thiết bị. Chat text giữ hành vi hiện có. Trạng thái nằm trong RAM; restart tắt mode và focus đồng bộ lại sau reconnect. Đổi focus giữa capture từ chối capture cũ và yêu cầu nói lại. Task đã gửi giữ route phản hồi gốc.

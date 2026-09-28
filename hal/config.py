@@ -2003,6 +2003,31 @@ REALTIME_SUMMARIZER_RETRY_BACKOFF_S: float = float(
     os.environ.get("HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S", "1.5")
 )
 
+# --- Harness update announcer (drivers/harness/announcer.py) ---
+# Harness results, questions and progress are queued and spoken in snapshots
+# once the device is free, rendered by the realtime model where the provider
+# supports it (Gemini text-capable models, pipecat_v1) and by the summarizer
+# above + TTS otherwise.
+# Chance that a snapshot holding only progress updates is spoken at all.
+# 0 disables spoken progress; 1 speaks every eligible snapshot.
+HARNESS_PROGRESS_SPEAK_P: float = float(os.environ.get("HAL_HARNESS_PROGRESS_SPEAK_P", "0.15"))
+# At most one spoken progress line per Harness run within this window.
+HARNESS_PROGRESS_MIN_GAP_S: float = float(os.environ.get("HAL_HARNESS_PROGRESS_MIN_GAP_S", "60"))
+# No spoken progress this soon after the request (the dead-air filler covers it).
+HARNESS_PROGRESS_QUIET_START_S: float = float(os.environ.get("HAL_HARNESS_PROGRESS_QUIET_START_S", "15"))
+# Progress older than this is never spoken.
+HARNESS_PROGRESS_MAX_AGE_S: float = float(os.environ.get("HAL_HARNESS_PROGRESS_MAX_AGE_S", "30"))
+# Results and questions still unspoken after this long are dropped (the
+# Web Chat / Harness app keeps the full text).
+HARNESS_UPDATE_MAX_AGE_S: float = float(os.environ.get("HAL_HARNESS_UPDATE_MAX_AGE_S", "600"))
+# Quiet time after any speech or user transcript before the next snapshot, so
+# the user can answer what they just heard.
+HARNESS_ANNOUNCE_GRACE_S: float = float(os.environ.get("HAL_HARNESS_ANNOUNCE_GRACE_S", "1.5"))
+# Harness text handed to the renderer is cut to this many characters.
+HARNESS_ANNOUNCE_CONTENT_MAX_CHARS: int = int(os.environ.get("HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS", "4000"))
+# Upper bound on the fallback summarizer call before the sanitized text is spoken instead.
+HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S: float = float(os.environ.get("HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S", "12"))
+
 # Gaze re-point: turn back toward the remembered bearing when nobody has been
 # visible for a while.
 #

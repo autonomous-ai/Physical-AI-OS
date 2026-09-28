@@ -379,13 +379,6 @@ class TTSService:
         self._native_direct: bool = False
         self._native_rs_carry = None
         self._native_rs_pos: float = 0.0
-        # Whether this device accepts a given model rate, keyed (device, rate).
-        # Asking costs a close + reopen of the PERSISTENT stream, which exists
-        # precisely to avoid a multi-second codec warmup — so ask once, not once
-        # per reply. Device-observed 2026-09-07 on intern-v2-6286: the ES8389
-        # refuses 24 kHz with PaErrorCode -9999, and retrying it every reply
-        # churned the stream each time.
-        self._native_direct_cache: dict = {}
 
         # Whether the CURRENT speech should be fed back to the realtime voice
         # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
@@ -1070,14 +1063,17 @@ class TTSService:
 
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
               turn_id: str = "", realtime_reply: bool = False,
-              speed: Optional[float] = None, harness_result: bool = False) -> bool:
+              speed: Optional[float] = None, harness_result: bool = False,
+              preview: Optional[tuple] = None) -> bool:
         """Synthesize and play text. Returns True if started, False if busy or unavailable.
         If interruptible=True, a subsequent speak() call can stop this one.
         realtime_feedback=True feeds this text to the realtime agent on completion
         (agent replies only — see _realtime_feedback)."""
         logger.info("[tts-timing] stage=speak_requested text_key=%s owner=%s",
                     hashlib.sha256(text.encode()).hexdigest()[:12], turn_id or "unowned")
-        if not self.available:
+        # A preview brings its own (already checked) backend, so it can test a
+        # provider before the saved one works (e.g. no key saved yet).
+        if not (self.available or (preview is not None and self._sd is not None)):
             logger.warning("TTS not available")
             return False
         if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
@@ -1097,8 +1093,9 @@ class TTSService:
         # audible while the TTS provider itself is rate-limited. Dynamic
         # agent replies never match — the cache only ever holds warm-listed
         # fixed phrases. speak_cached mirrors this method's lock semantics.
-        # Preview speed belongs to this utterance, never the shared service or cache.
-        if not harness_result and speed is None and self._tts_cache_path(text).exists():
+        # Preview speed/backend/voice belong to this utterance, never the shared
+        # service or cache. `preview` is (backend, voice) from /voice/speak.
+        if not harness_result and speed is None and preview is None and self._tts_cache_path(text).exists():
             logger.info("TTS cache-first hit: %s", text[:50])
             return self.speak_cached(
                 text, interruptible=interruptible, realtime_feedback=realtime_feedback,
@@ -1125,6 +1122,7 @@ class TTSService:
             target=self._speak_sync,
             args=(text,),
             kwargs={**({"speed": speed} if speed is not None else {}),
+                    **({"preview": preview} if preview is not None else {}),
                     **({"harness_result": True} if harness_result else {})},
             daemon=True,
             name="tts-speak",
@@ -1488,34 +1486,32 @@ class TTSService:
             logger.info("native audio suppressed -- turn stopped by user")
             return False
         if not self._lock.acquire(blocking=False):
-            logger.info("native audio: speaker busy, skipping")
+            # Match speak(): an answer takes over an interruptible filler.
+            # Otherwise each incoming native frame is discarded until the
+            # filler ends, leaving only the tail of the model's sentence.
+            # An existing native stream is released by its consumer; do not
+            # wait for that same consumer here or stop another native owner.
+            if self._interruptible and not self._native_mode:
+                logger.info("native audio: interrupting filler before playback")
+                self.stop()
+                if not self._lock.acquire(blocking=True, timeout=2.0):
+                    logger.warning("native audio: speaker lock not released after stop")
+                    return False
+            else:
+                logger.info("native audio: speaker busy, skipping")
+                return False
+        # A stop or mute may have arrived while waiting for the filler worker.
+        if self._speaker_muted() or self._owner_suppressed(owner):
+            self._lock.release()
             return False
         self._stop_event.clear()
         self._native_src_rate = src_rate
         self._native_rs_carry = None
         self._native_rs_pos = 0.0
-        # Prefer opening the device AT the model's rate. The alternative is
-        # resampling every chunk that arrives, and a realtime model streams many
-        # small ones — ALSA's converter runs continuously across writes, a
-        # per-chunk one in Python cannot. Falls back to the device rate plus the
-        # streaming resampler below when the device refuses the rate.
+        # Keep the device-rate stream shared with TTS/fillers warm. Switching
+        # to the model rate closes it and can spend seconds reopening ALSA.
+        # The streaming resampler below preserves continuity across chunks.
         self._native_direct = False
-        cache_key = (self._device_key(), src_rate)
-        if self._native_direct_cache.get(cache_key) is False:
-            pass  # known to refuse this rate — go straight to the resampler
-        else:
-            try:
-                with self._stream_lock:
-                    self._ensure_stream(src_rate)
-                self._native_direct = True
-                self._native_direct_cache[cache_key] = True
-            except Exception as e:
-                self._native_direct_cache[cache_key] = False
-                logger.info(
-                    "native audio: device would not open at %d Hz (%s) — "
-                    "resampling to %s Hz for the rest of this run",
-                    src_rate, e, self._device_rate,
-                )
         self._native_mode = True
         # Native playback is the realtime model's OWN voice — never feed it back
         # (the native_mode check in the hook already skips it; clear the flag too
@@ -1744,15 +1740,16 @@ class TTSService:
 
     def _iter_tts_samples(self, text: str, dst_rate: int, ttfb_tag: Optional[str] = None,
                           cancelled: Optional[Callable[[], bool]] = None,
-                          speed: Optional[float] = None):
+                          speed: Optional[float] = None, preview: Optional[tuple] = None):
         """Yield float32 sample frames from the TTS backend's PCM stream."""
+        backend, voice = preview if preview is not None else (self._backend, self._voice)
         generation = getattr(self, "_synthesis_generation", 0)
         stopped = cancelled if cancelled is not None else lambda: (
             self._stop_event.is_set()
             or generation != getattr(self, "_synthesis_generation", 0)
         )
         np = self._np
-        src_rate = self._backend.sample_rate
+        src_rate = backend.sample_rate
         # Head, tail and queued pre-synthesis run concurrently. Each iterator
         # owns its sample clock; never share the realtime resampler's state.
         resampler = PCMResampler(src_rate, dst_rate)
@@ -1760,13 +1757,13 @@ class TTSService:
         first_audio_logged = False
         t0 = time.perf_counter()
 
-        for chunk in self._backend.stream_pcm(
+        for chunk in backend.stream_pcm(
             text=text,
-            voice=self._voice,
+            voice=voice,
             model=self._model,
             speed=self._speed if speed is None else speed,
             instructions=self._instructions,
-            **({"cancelled": stopped} if getattr(self._backend, "supports_synthesis_cancellation", False) else {}),
+            **({"cancelled": stopped} if getattr(backend, "supports_synthesis_cancellation", False) else {}),
         ):
             if stopped():
                 return
@@ -1780,7 +1777,7 @@ class TTSService:
                 / 32768.0
             )
             # Apply the provider's gain before resampling, including the EOF tail.
-            samples = np.clip(samples * self._backend.volume_boost, -1.0, 1.0)
+            samples = np.clip(samples * backend.volume_boost, -1.0, 1.0)
             samples = resampler.process(samples)
             if not len(samples):
                 continue
@@ -1858,6 +1855,7 @@ class TTSService:
         out_q: "queue.Queue[Optional[np.ndarray]]",
         idx_total: tuple[int, int],
         speed: Optional[float] = None,
+        preview: Optional[tuple] = None,
     ) -> None:
         """Produce head chunk frames into a queue. Runs in parallel with the
         ALSA OutputStream open call so HTTP TTFB overlaps codec warmup."""
@@ -1872,7 +1870,7 @@ class TTSService:
                         "TTS chunk %d/%d: len=%d (attempt=%d, speed=%.2f)",
                         idx, total, len(text), attempt + 1, self._speed if speed is None else speed,
                     )
-                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed, cancelled=stopped):
+                    for frame in self._iter_tts_samples(text, dst_rate, ttfb_tag="c0", speed=speed, preview=preview, cancelled=stopped):
                         if stopped():
                             return
                         while not stopped():
@@ -1907,6 +1905,7 @@ class TTSService:
         dst_rate: int,
         out_q: "queue.Queue[Optional[np.ndarray]]",
         speed: Optional[float] = None,
+        preview: Optional[tuple] = None,
     ) -> None:
         """Produce tail frames sequentially into one shared queue."""
         total = len(tail_chunks) + 1
@@ -1920,7 +1919,7 @@ class TTSService:
                 while attempt <= self._max_retries and not stopped():
                     try:
                         logger.info("Tail producer start c%d/%d len=%d", i, total, len(chunk_text))
-                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed, cancelled=stopped):
+                        for frame in self._iter_tts_samples(chunk_text, dst_rate, speed=speed, preview=preview, cancelled=stopped):
                             if stopped():
                                 return
                             while not stopped():
@@ -1959,8 +1958,10 @@ class TTSService:
                 pass
 
     def _speak_sync(self, text: str, speed: Optional[float] = None,
-                    harness_result: bool = False):
+                    harness_result: bool = False, preview: Optional[tuple] = None):
         """Head chunk direct playback + parallel tail producer queue."""
+        producer_kwargs = {**({"speed": speed} if speed is not None else {}),
+                           **({"preview": preview} if preview is not None else {})}
         logger.info("[tts-timing] stage=worker_start text_key=%s",
                     hashlib.sha256(text.encode()).hexdigest()[:12])
         sd = self._sd
@@ -2003,7 +2004,7 @@ class TTSService:
         head_thread = threading.Thread(
             target=self._head_producer,
             args=(head_text, dst_rate, head_q, (1, head_total)),
-            kwargs={"speed": speed} if speed is not None else {},
+            kwargs=producer_kwargs,
             daemon=True,
             name="tts-head-producer",
         )
@@ -2028,7 +2029,7 @@ class TTSService:
                         tail_thread = threading.Thread(
                             target=self._tail_producer,
                             args=(tail_chunks, dst_rate, tail_q),
-                            kwargs={"speed": speed} if speed is not None else {},
+                            kwargs=producer_kwargs,
                             daemon=True,
                             name="tts-tail-producer",
                         )
@@ -2102,7 +2103,7 @@ class TTSService:
                     head_thread = threading.Thread(
                         target=self._head_producer,
                         args=(head_text, dst_rate, head_q, (1, head_total)),
-                        kwargs={"speed": speed} if speed is not None else {},
+                        kwargs=producer_kwargs,
                         daemon=True,
                         name="tts-head-producer-retry",
                     )
@@ -2429,14 +2430,25 @@ class TTSService:
                  for frequency in frequencies]
         return np.concatenate((notes[0], np.zeros(int(rate * 0.025)), notes[1])).astype(np.float32).reshape(-1, 1)
 
-    def _harness_result_chime_samples(self, rate: int):
-        """Soft 200 ms chord, distinct from capture's rising/falling notes."""
+    def play_harness_result_chime(self) -> bool:
+        """The Harness result cue on its own, for speech that does not come
+        from speak(harness_result=True) — a realtime-rendered announcement."""
+        return self._play_gesture_chime(
+            lambda rate: self._harness_result_chime_samples(rate, boosted=False)
+        )
+
+    def _harness_result_chime_samples(self, rate: int, *, boosted: bool = True):
+        """Soft 200 ms chord, distinct from capture's rising/falling notes.
+
+        boosted=False leaves the software gain to _play_gesture_chime, which
+        applies it itself.
+        """
         np = self._np
         t = np.arange(int(rate * 0.2)) / rate
         envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
         samples = 0.14 * envelope * (np.sin(2 * np.pi * 659.25 * t)
                                     + np.sin(2 * np.pi * 987.77 * t))
-        gain = self._backend.volume_boost if self._backend is not None else 1.0
+        gain = self._backend.volume_boost if (boosted and self._backend is not None) else 1.0
         return np.clip(samples * gain, -1.0, 1.0).astype(np.float32).reshape(-1, 1)
 
     def _write_harness_result_chime(self, stream, rate: int) -> bool:

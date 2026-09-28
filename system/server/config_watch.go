@@ -106,33 +106,52 @@ func (s *Server) handleMQTTConfigChange() {
 	s.restartMQTT()
 }
 
-// waitAndPaintSetupReady polls HAL /health up to 30s; when LED hardware
-// reports ready it paints the strip solid white as the "device awaiting WiFi
-// setup" cue. Exits early if setup completes mid-wait so we don't repaint
-// over the post-setup user/agent LED state. Best-effort — silent when HAL
-// never reports LED ready within budget (logs a warning).
-//
-// Why this is a poll loop and not a single fire-and-forget call: os-server binds
-// :5000 faster than HAL's FastAPI binds :5001 on cold boot, so a fire-
-// and-forget paint at L<see Serve> would silently drop on connection refused
-// and leave the strip dark — exactly when the user needs the "ready for AP"
-// signal most.
-func (s *Server) waitAndPaintSetupReady() {
-	deadline := time.Now().Add(30 * time.Second)
-	ticker := time.NewTicker(1 * time.Second)
-	defer ticker.Stop()
-	for time.Now().Before(deadline) {
-		if s.config.SetUpCompleted {
-			return
-		}
-		if h, err := hal.GetHealth(); err == nil && h.LED {
-			hal.SetStatus("setup")
-			slog.Info("setup-needed white painted", "component", "server")
-			return
-		}
-		<-ticker.C
+// waitAndPaintSetupReady survives slow HAL boots without blocking OS startup.
+// Retry until HAL acknowledges the cue, setup completes, or Serve shuts down.
+func (s *Server) waitAndPaintSetupReady(ctx context.Context) {
+	if !device.Has(s.config.DeviceTypeOrDefault(), device.CapLight) {
+		return
 	}
-	slog.Warn("setup-needed paint skipped: hal LED not ready within 30s", "component", "server")
+	retrySetupLED(ctx, func() bool { return s.config.SetUpCompleted },
+		func(ctx context.Context) (bool, error) {
+			h, err := hal.GetHealthContext(ctx)
+			return h != nil && h.LED, err
+		}, func(ctx context.Context) error { return hal.SetStatusContext(ctx, "setup") }, waitSetupLED)
+}
+
+// Callbacks let tests advance a slow boot without wall-clock sleeps or hardware.
+func retrySetupLED(ctx context.Context, completed func() bool, ready func(context.Context) (bool, error), paint func(context.Context) error, wait func(context.Context, time.Duration) bool) {
+	delay := time.Second
+	for ctx.Err() == nil && !completed() {
+		ok, err := ready(ctx)
+		// Setup may have finished while the health request was in flight.
+		if ctx.Err() != nil || completed() {
+			return
+		}
+		if err == nil && ok {
+			if err := paint(ctx); err == nil {
+				slog.Info("setup-needed LED acknowledged by HAL", "component", "server")
+				return
+			} else {
+				slog.Debug("setup-needed LED retry", "component", "server", "error", err)
+			}
+		}
+		if !wait(ctx, delay) {
+			return
+		}
+		delay = min(delay*2, 10*time.Second)
+	}
+}
+
+func waitSetupLED(ctx context.Context, delay time.Duration) bool {
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return false
+	case <-timer.C:
+		return true
+	}
 }
 
 // halStartupTimeout bounds waitHALReady. Generous because a first boot pays

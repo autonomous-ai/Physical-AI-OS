@@ -21,6 +21,7 @@ import hal.app_state as state
 from hal.telemetry import tts_hooks
 from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
+    HarnessUpdateRequest,
     RealtimeHistoryRequest,
     SpeakRequest,
     StatusResponse,
@@ -289,6 +290,10 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
             for p in glob.glob(os.path.join(voices_dir, "*.onnx"))
         )
         return {"provider": provider, "voices": names}
+    if provider == "gemini":
+        # Gemini prebuilt voices are multilingual, so `lang` does not filter.
+        from hal.drivers.voice.tts.gemini import GeminiTTSBackend
+        return {"provider": provider, "voices": GeminiTTSBackend.VOICES}
     if provider == PROVIDER_ELEVENLABS:
         return {
             "provider": provider,
@@ -319,43 +324,44 @@ def speak_text(req: SpeakRequest):
         )
         raise HTTPException(409, "Speaker busy -- music is playing")
 
-    # Optional provider hot-swap for web TTS preview (test before saving config).
-    # Only swap when something actually changed -- comparing values instead of
-    # truthiness, so passing the same api_key/base_url every request is a no-op.
-    if req.provider:
-        current_backend = state.tts_service._backend
-        current_provider = getattr(state.tts_service, "_provider", None)
-        current_api_key = getattr(current_backend, "_api_key", "") or ""
-        current_base_url = getattr(current_backend, "_base_url", "") or ""
-        # ElevenLabs appends /elevenlabs to base_url; strip it for comparison.
-        normalized_current_base = current_base_url.rstrip("/")
-        if normalized_current_base.endswith("/elevenlabs"):
-            normalized_current_base = normalized_current_base[: -len("/elevenlabs")]
-        wanted_api_key = (req.tts_api_key or current_api_key).strip()
-        wanted_base_url = (req.tts_base_url or normalized_current_base).strip()
-        needs_swap = (
-            req.provider != current_provider
-            or wanted_api_key != current_api_key
-            or wanted_base_url != normalized_current_base
-        )
-        if needs_swap:
-            from hal.drivers.voice.tts import create_backend
-            if state.tts_service.speaking:
-                state.tts_service.stop()
-            try:
-                state.tts_service._backend = create_backend(
-                    provider=req.provider, api_key=wanted_api_key, base_url=wanted_base_url,
-                )
-                state.tts_service._provider = req.provider
-                state.logger.info(
-                    "TTS backend hot-swapped (provider=%s, base_url=%s)",
-                    req.provider, wanted_base_url,
-                )
-            except Exception as e:
-                state.logger.error("TTS backend swap failed: %s", e)
-                raise HTTPException(500, f"Failed to swap TTS backend: {e}")
+    # Optional provider/voice override for a TTS preview (web Test Voice,
+    # MQTT tts.preview). It applies to THIS utterance only: the running
+    # service keeps its saved backend and voice. Swapping them in place made
+    # one preview of another provider speak every later reply in that voice
+    # while config still named the old one (device 2026-09-25).
+    preview = None
+    if req.provider or req.voice:
+        if req.cached or req.prerender:
+            raise HTTPException(400, "Provider/voice preview requires uncached speech")
+        svc = state.tts_service
+        backend = svc._backend
+        if req.provider:
+            current_provider = getattr(svc, "_provider", None)
+            current_api_key = getattr(backend, "_api_key", "") or ""
+            # ElevenLabs appends /elevenlabs to base_url; strip it for comparison.
+            current_base_url = (getattr(backend, "_base_url", "") or "").rstrip("/")
+            if current_base_url.endswith("/elevenlabs"):
+                current_base_url = current_base_url[: -len("/elevenlabs")]
+            wanted_api_key = (req.tts_api_key or current_api_key).strip()
+            wanted_base_url = (req.tts_base_url or current_base_url).strip()
+            if (
+                req.provider != current_provider
+                or wanted_api_key != current_api_key
+                or wanted_base_url != current_base_url
+            ):
+                from hal.drivers.voice.tts import create_backend
+                try:
+                    backend = create_backend(
+                        provider=req.provider, api_key=wanted_api_key, base_url=wanted_base_url,
+                    )
+                except Exception as e:
+                    state.logger.error("TTS preview backend failed: %s", e)
+                    raise HTTPException(500, f"Failed to create TTS preview backend: {e}")
+        if backend is None or not backend.available:
+            raise HTTPException(503, "TTS preview backend not available")
+        preview = (backend, req.voice or svc._voice)
 
-    if not state.tts_service.available:
+    if not state.tts_service.available and preview is None:
         state.logger.error(
             "POST /voice/speak: tts_service not available -- backend=%s, sd=%s",
             state.tts_service._backend is not None and state.tts_service._backend.available,
@@ -364,8 +370,6 @@ def speak_text(req: SpeakRequest):
         raise HTTPException(
             503, "TTS not available -- missing openai SDK or sounddevice"
         )
-    if req.voice:
-        state.tts_service._voice = req.voice
     # Don't dump req.model_dump_json() — it contains tts_api_key. Log shape only.
     state.logger.info(
         "POST /voice/speak: provider=%s voice=%s len=%d interruptible=%s cached=%s prerender=%s",
@@ -404,10 +408,33 @@ def speak_text(req: SpeakRequest):
         turn_id=req.turn_id,
         **({"speed": req.speed} if req.speed is not None else {}),
         **({"harness_result": True} if req.harness_result else {}),
+        **({"preview": preview} if preview is not None else {}),
     )
     if not started:
         raise HTTPException(409, "TTS is busy speaking")
     return {"status": "ok"}
+
+
+@router.post("/voice/harness/update", response_model=StatusResponse)
+def harness_update(req: HarnessUpdateRequest):
+    """Queue a Harness update to be spoken once the device is free.
+
+    Returns immediately: `queued` means accepted, never proof of playback (the
+    same contract as /voice/speak). `suppressed` while the speaker is muted, so
+    os-server records the mute exactly as it does for a speak.
+    """
+    if not state.tts_service:
+        raise HTTPException(503, "TTS not initialized")
+    if state._speaker_muted:
+        state.logger.info("POST /voice/harness/update: suppressed -- speaker muted")
+        return {"status": "suppressed"}
+    from hal.drivers.harness.announcer import default_announcer
+    from hal.drivers.harness.update_queue import HarnessUpdate
+
+    default_announcer().submit(
+        HarnessUpdate(kind=req.kind, text=req.text, run_id=req.turn_id, outcome=req.outcome)
+    )
+    return {"status": "queued"}
 
 
 @router.post("/voice/realtime/history", response_model=StatusResponse)
@@ -529,22 +556,8 @@ def mute_mic():
     state._apply_mic_muted_led()
     state._persist_mic_state()
     if state.voice_service and state.voice_service.available:
-        # voice_service.stop() has been observed to block for 20-30s when
-        # realtime.stop's LLM memory-summarization call hangs on an
-        # unresponsive backend (Cloudflare 524, network stall). Detaching
-        # to a daemon thread lets this route return in ms — critical because
-        # the caller is often the mic-switch driver, which holds an
-        # apply_lock while inside this route. If that lock stays held for
-        # 27s, the driver can't process the user's next flip (verified in
-        # trace: unmute reconcile blocked 11s waiting for the mute lock).
-        # Voice service already tolerates parallel start/stop via its
-        # _running flag; a small race with a subsequent unmute is
-        # acceptable — realtime reconnect logic self-heals.
-        threading.Thread(
-            target=state.voice_service.stop,
-            daemon=True,
-            name="voice-mute-teardown",
-        ).start()
+        # Reserve teardown synchronously; release hardware in the background.
+        state.voice_service.stop(background=True)
     state.logger.info("Mic muted by user (voice_service.stop() dispatched to bg thread)")
     return {"status": "ok"}
 

@@ -26,6 +26,16 @@ on the data line leave a few pixels latched to a garbage colour (green shows up
 most, being the leading byte of a WS2812 frame). Without the clear that garbage
 stays lit until the first LED command, which may be minutes after boot.
 
+### Concurrent frame writes and clear diagnostics
+
+Solid, per-pixel paint and clear share a driver lock for the entire operation.
+Clear holds it across both black-frame writes, the two 10 ms waits, SPI idle
+and buffer read-back. An animation cannot repaint the buffer midway and cause
+`LED clear did NOT take` to report a false clear failure. A later frame can
+still paint after clear returns; effect ownership and cancellation remain the
+caller's responsibility. The diagnostic reads software memory, not physical
+LED feedback, so a black buffer does not prove the hardware is dark.
+
 ## Endpoints
 
 | Method | Endpoint | Description |

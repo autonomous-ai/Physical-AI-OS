@@ -18,6 +18,10 @@ from hal.drivers.motors.stackchan_service import (
     StackChanTransportError,
     _BodyTransport,
     _BodyGateway,
+    StackChanCommandRejected,
+    StackChanTargetNotReached,
+    _DeviceConnection,
+    StackChanOffline,
 )
 
 
@@ -276,6 +280,7 @@ class TestStackChanMotionService(unittest.TestCase):
 class _FakeConnection:
     def __init__(self):
         self.messages = []
+        self.close_reasons = []
         self.motion_started = threading.Event()
         self.positions = {"pan": 2.0, "tilt": -3.0}
         self.apply_moves = True
@@ -314,7 +319,7 @@ class _FakeConnection:
         return {"status": "completed", "result": {}}
 
     def force_close(self, reason):
-        raise AssertionError(f"unexpected close: {reason}")
+        self.close_reasons.append(reason)
 
 
 class _FakeGateway:
@@ -354,7 +359,8 @@ class TestBodyTransport(unittest.TestCase):
         self.assertIn("motion.get", operations)
         self.assertIn("motion.halt", operations)
         self.assertNotIn("lease.release", operations)
-        self.assertEqual(gateway.closed, ["motion failed"])
+        # The halt succeeded, so the body is held; closing would only reboot it.
+        self.assertEqual(gateway.connection_value.close_reasons, [])
 
     def test_move_renews_lease_until_delayed_firmware_reaches_target(self):
         gateway = _FakeGateway()
@@ -450,9 +456,14 @@ class TestBodyTransport(unittest.TestCase):
             "pitchServo": {"angle": 300, "speed": 1000},
         }
 
-        with self.assertRaisesRegex(StackChanTransportError, "measured target"):
-            transport.release(rest, duration=0.05)
+        closed = []
+        with patch.object(gateway.connection_value, "force_close", side_effect=closed.append):
+            with self.assertRaisesRegex(StackChanTransportError, "measured target"):
+                transport.release(rest, duration=0.05)
 
+        # HAL halted the short rest move and torque is held; no close.
+        self.assertEqual(closed, [])
+        self.assertEqual(gateway.closed, [])
         operations = [message["op"] for message in gateway.connection_value.messages]
         self.assertNotIn("motion.release", operations)
         self.assertIn("motion.halt", operations)
@@ -583,7 +594,7 @@ class TestBodyTransport(unittest.TestCase):
                 with self.assertRaises(StackChanTransportError):
                     transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
                 self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
-                self.assertEqual(gateway.closed, ["motion failed"])
+                self.assertEqual(gateway.connection_value.close_reasons, ["motion failed"])
 
     def test_malformed_position_result_fails_closed(self):
         policy = SimpleNamespace(motion=SimpleNamespace(max_speed=5))
@@ -599,7 +610,7 @@ class TestBodyTransport(unittest.TestCase):
         with patch.object(gateway.connection_value, "request", side_effect=request):
             with self.assertRaisesRegex(StackChanTransportError, "invalid measured positions"):
                 transport.move({"yawServo": {"angle": 0, "speed": 1000}}, 0.05)
-        self.assertEqual(gateway.closed, ["motion failed"])
+        self.assertEqual(gateway.connection_value.close_reasons, ["motion failed"])
         self.assertNotIn("motion.move", [m["op"] for m in gateway.connection_value.messages])
 
     def test_handshake_acceptance_precedes_connection_publication(self):
@@ -640,6 +651,228 @@ class TestBodyTransport(unittest.TestCase):
     def test_tls_is_required_without_explicit_development_opt_in(self):
         with self.assertRaisesRegex(ValueError, "requires TLS"):
             StackChanMotionService(device_id="stackchan-test", token=TOKEN, port=0)
+
+
+class TestFirmwareRejections(unittest.TestCase):
+    """A firmware error reply means the firmware already handled the state; HAL must not hang up."""
+
+    def _rejecting(self, op, code):
+        gateway = _FakeGateway()
+        original = gateway.connection_value.request
+
+        def request(message, timeout):
+            if message["op"] == op:
+                gateway.connection_value.messages.append(message)
+                raise StackChanCommandRejected(op, code)
+            return original(message, timeout)
+
+        gateway.connection_value.request = request
+        return gateway
+
+    def test_halt_rejected_by_firmware_keeps_transport_open(self):
+        gateway = self._rejecting("motion.halt", "halt_failed")
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=500)
+        with self.assertRaises(StackChanCommandRejected) as caught:
+            transport.halt()
+        self.assertEqual((caught.exception.op, caught.exception.code), ("motion.halt", "halt_failed"))
+        self.assertEqual(gateway.connection_value.close_reasons, [])
+        # The warning line is emitted by _DeviceConnection.request; see the
+        # device-connection test below. This fake raises past that layer.
+
+    def test_move_rejected_by_firmware_keeps_transport_open(self):
+        gateway = self._rejecting("motion.move", "motion_enable_failed")
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=500)
+        with self.assertRaises(StackChanCommandRejected):
+            transport.move({"yawServo": {"angle": 10, "speed": 1000}}, duration=0.1)
+        self.assertEqual(gateway.connection_value.close_reasons, [])
+
+    def test_release_rejected_by_firmware_keeps_transport_open(self):
+        gateway = self._rejecting("motion.release", "release_failed")
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=500)
+        transport._target_settle_timeout = 0.01
+        with self.assertRaises(StackChanCommandRejected):
+            transport.release({"yawServo": {"angle": 0, "speed": 1000}, "pitchServo": {"angle": 300, "speed": 1000}}, 0.1)
+        self.assertEqual(gateway.connection_value.close_reasons, [])
+
+    def test_other_transport_errors_still_close(self):
+        gateway = _FakeGateway()
+        original = gateway.connection_value.request
+
+        def request(message, timeout):
+            if message["op"] == "motion.halt":
+                raise StackChanTransportError("Stack-chan returned invalid measured positions")
+            return original(message, timeout)
+
+        gateway.connection_value.request = request
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=500)
+        with self.assertRaises(StackChanTransportError):
+            transport.halt()
+        self.assertEqual(gateway.connection_value.close_reasons, ["halt failed"])
+
+    def test_device_connection_turns_error_reply_into_rejection_with_code(self):
+        sent = threading.Event()
+
+        class Socket:
+            def __init__(self):
+                self.sent = []
+                self.closed = []
+
+            def send(self, data):
+                self.sent.append(json.loads(data))
+                sent.set()
+
+            def close(self, code=None, reason=None):
+                self.closed.append((code, reason))
+
+        socket = Socket()
+        connection = _DeviceConnection(socket)
+        message = {"v": 1, "id": "abc", "op": "motion.halt", "session": "s", "seq": 1}
+        outcome = {}
+
+        def call():
+            try:
+                connection.request(message, timeout=2.0)
+            except Exception as exc:  # noqa: BLE001 - captured for assertions
+                outcome["exc"] = exc
+
+        worker = threading.Thread(target=call)
+        with self.assertLogs("hal.motion.stackchan", level="WARNING") as logs:
+            worker.start()
+            self.assertTrue(sent.wait(2))
+            connection.deliver({"v": 1, "id": "abc", "status": "error", "code": "halt_failed"})
+            worker.join(2)
+        exc = outcome["exc"]
+        self.assertIsInstance(exc, StackChanCommandRejected)
+        self.assertEqual((exc.op, exc.code), ("motion.halt", "halt_failed"))
+        self.assertIn("halt_failed", str(exc))
+        self.assertTrue(any("motion.halt" in line and "halt_failed" in line for line in logs.output))
+        self.assertEqual(socket.closed, [])
+
+    def test_socket_disconnect_while_waiting_is_offline_not_a_rejection(self):
+        sent = threading.Event()
+
+        class Socket:
+            def send(self, data):
+                sent.set()
+
+            def close(self, code=None, reason=None):
+                pass
+
+        connection = _DeviceConnection(Socket())
+        outcome = {}
+
+        def call():
+            try:
+                connection.request({"v": 1, "id": "x", "op": "motion.move", "session": "s", "seq": 1}, timeout=2.0)
+            except Exception as exc:  # noqa: BLE001
+                outcome["exc"] = exc
+
+        worker = threading.Thread(target=call)
+        worker.start()
+        self.assertTrue(sent.wait(2))
+        connection.close()  # what the server handler does when the socket drops
+        worker.join(2)
+        self.assertIsInstance(outcome["exc"], StackChanOffline)
+        self.assertNotIsInstance(outcome["exc"], StackChanCommandRejected)
+
+    def test_settle_miss_in_timed_move_halts_and_keeps_transport(self):
+        gateway = _FakeGateway()
+        gateway.connection_value.apply_moves = False
+        transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
+        transport._target_settle_timeout = 0.01
+        with self.assertRaises(StackChanTargetNotReached):
+            transport.move({"yawServo": {"angle": 100, "speed": 1000}}, 0.05)
+        operations = [m["op"] for m in gateway.connection_value.messages]
+        self.assertIn("motion.halt", operations)
+        self.assertNotIn("lease.release", operations)
+        self.assertEqual(gateway.connection_value.close_reasons, [])
+
+    def _bench_client(self, svc, stack):
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+        import hal.app_state as state
+        from robots._experimental.stackchan.commissioning import router
+
+        app = FastAPI()
+        app.include_router(router)
+        stack.enter_context(patch.object(StackChanMotionService, "is_connected", True))
+        stack.enter_context(patch.object(state, "animation_service", svc))
+        stack.enter_context(patch.object(state, "tracker_service", None))
+        stack.enter_context(patch.object(state, "policy_service", None))
+        return TestClient(app)
+
+    def test_http_stop_reports_firmware_code(self):
+        svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+        svc._transport = _FakeServiceTransport()
+        with ExitStack() as stack:
+            client = self._bench_client(svc, stack)
+            stack.enter_context(patch.object(svc._transport, "halt", side_effect=StackChanCommandRejected("motion.halt", "halt_failed")))
+            response = client.post("/stackchan/stop")
+        self.assertEqual(response.status_code, 502)
+        detail = response.json()["detail"]
+        self.assertEqual((detail["op"], detail["code"]), ("motion.halt", "halt_failed"))
+
+    def test_http_release_reports_firmware_code(self):
+        svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+        svc._transport = _FakeServiceTransport()
+        svc._transport.release_error = StackChanCommandRejected("motion.release", "release_failed")
+        with ExitStack() as stack:
+            response = self._bench_client(svc, stack).post("/stackchan/release")
+        self.assertEqual(response.status_code, 502)
+        self.assertEqual(response.json()["detail"]["code"], "release_failed")
+
+    def test_http_release_requires_measured_arrival_and_torque_off(self):
+        for reaches_target in (False, True):
+            with self.subTest(reaches_target=reaches_target):
+                svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+                gateway = _FakeGateway()
+                gateway.connection_value.apply_moves = reaches_target
+                svc._transport = _BodyTransport(gateway, timeout=1.0, lease_ttl_ms=1000)
+                svc._transport._target_settle_timeout = 0.01
+                with ExitStack() as stack:
+                    client = self._bench_client(svc, stack)
+                    stack.enter_context(patch("hal.drivers.motors.stackchan_service._RELEASE_DURATION_S", 0.05))
+                    response = client.post("/stackchan/release")
+                operations = [message["op"] for message in gateway.connection_value.messages]
+                self.assertEqual(gateway.connection_value.close_reasons, [])
+                if reaches_target:
+                    self.assertEqual(response.status_code, 200)
+                    self.assertEqual(response.json(), {"status": "ok"})
+                    self.assertEqual(operations[-1], "motion.release")
+                    self.assertEqual(svc.motion_mode, "released")
+                else:
+                    self.assertEqual(response.status_code, 502)
+                    self.assertIn("did not reach", response.json()["detail"]["errors"]["stackchan"])
+                    self.assertEqual(operations[-1], "motion.halt")
+                    self.assertNotIn("motion.release", operations)
+                    self.assertIsNone(svc.motion_mode)
+
+    def test_http_release_reports_cancellation_and_transport_failure(self):
+        for message in ("release was halted before torque-off", "command timed out; delivery is unknown"):
+            with self.subTest(error=message):
+                svc = StackChanMotionService(device_id="t-01", token=TOKEN, port=0, allow_insecure_ws=True)
+                transport = _FakeServiceTransport()
+                transport.release_error = StackChanTransportError(message)
+                svc._transport = transport
+                with ExitStack() as stack:
+                    response = self._bench_client(svc, stack).post("/stackchan/release")
+                self.assertEqual(response.status_code, 502)
+                self.assertEqual(response.json()["detail"]["errors"], {"stackchan": message})
+                self.assertIsNone(svc.motion_mode)
+
+    def test_service_release_preserves_os_error_dict_contract(self):
+        svc = StackChanMotionService(device_id="t-01", token="x" * 40, host="127.0.0.1", port=0, allow_insecure_ws=True)
+
+        class Transport:
+            def release(self, native, duration):
+                raise StackChanCommandRejected("motion.release", "release_failed")
+
+        svc._transport = Transport()
+        errors = svc.release()
+        self.assertEqual(errors, {"stackchan": "Stack-chan rejected motion.release: release_failed"})
+        with self.assertRaises(StackChanCommandRejected) as caught:
+            svc.release_checked()
+        self.assertEqual((caught.exception.op, caught.exception.code), ("motion.release", "release_failed"))
 
 
 if __name__ == "__main__":

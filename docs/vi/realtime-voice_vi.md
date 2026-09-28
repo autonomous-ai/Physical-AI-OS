@@ -196,7 +196,9 @@ focus Desktop và thông báo không tự chọn agent.
 
 Với task Harness, runtime chính chọn agent và gửi request rồi giữ im lặng. Recap
 `turn.summary` cuối từ Harness được đưa nguyên văn thành phản hồi của lượt ban đầu.
-Voice đọc recap đó; Web Chat hiển thị recap và luôn suppress TTS.
+Web Chat hiển thị recap và luôn suppress TTS; voice không đọc nguyên văn mà đưa
+recap vào hàng đợi announcer Harness, announcer đọc một bản rút gọn đã diễn đạt lại
+(xem [Thông báo cập nhật Harness](#thông-báo-cập-nhật-harness)).
 
 Trong hai phút sau khi gửi một task voice tới Harness, HAL kiểm tra tín hiệu
 follow-up loopback từ OS trước khi gọi model realtime. Một câu làm rõ ngắn như
@@ -208,6 +210,63 @@ summary của agent là dữ liệu không đáng tin cậy. Một câu “đồ
 approve tool hoặc gõ mù vào terminal. Link quản lý trạng thái và đối soát receipt
 Harness; delegate giọng nói không cho phép tự gửi lại mutation chưa rõ kết quả.
 Luồng giọng nói thực tế vẫn cần kiểm chứng sau này.
+
+### Thông báo cập nhật Harness
+
+Kết quả, câu hỏi có cấu trúc và progress của Harness tới HAL qua
+`POST /voice/harness/update` và chờ trong hàng đợi
+(`hal/drivers/harness/update_queue.py`). Thread announcer
+(`hal/drivers/harness/announcer.py`) chỉ lấy snapshot khi không có gì đang nói
+hoặc đang nghe, không có lượt người dùng đang xử lý (`turn_in_flight`, được đặt bởi
+`prepare_turn()` và xóa khi câu trả lời kết thúc hoặc bởi `finish_capture()` khi
+`_stream_session` trả về, nên capture bị loại vì nhiễu không giữ nó lại), không có
+nhạc hay capture Harness đang chạy, và đã qua `HAL_HARNESS_ANNOUNCE_GRACE_S` kể từ
+lời nói hoặc transcript gần nhất. Kết quả và câu hỏi luôn được đọc; snapshot chỉ
+có progress được đọc với xác suất `HAL_HARNESS_PROGRESS_SPEAK_P` và giới hạn theo
+từng run. Chính sách hàng đợi và phía OS được mô tả ở
+[Đọc cập nhật Harness bằng giọng nói](harness_vi.md#đọc-cập-nhật-harness-bằng-giọng-nói).
+
+**Diễn đạt bằng realtime.** `VoiceAgentBase.supports_announce` cho biết provider
+có thể mở một response chỉ từ text hay không; `announce(text)` đưa một
+`AnnounceInput` vào hàng đợi:
+
+| Provider | Announcement | Wire |
+|----------|---------------|------|
+| Gemini (model có khả năng text, ví dụ 3.1) | có, chế độ turn-based | `send_client_content(role=user, turn_complete=True)`; `_turn_done` được xóa để lần commit tiếp theo chờ response này. Bị từ chối bằng `TurnDoneEvent` ngay lập tức khi còn tool call đang chờ hoặc user activity đang mở. |
+| Gemini 2.5 native-audio | không | Cùng guard theo dạng wire đã chặn `send_text` (WS 1011). |
+| `pipecat_v1` | có, chế độ turn-based | Generation và user-turn ID mới (vượt qua mọi fence `end_turn()`), sau đó `LLMMessagesAppendFrame(run_llm=True)`. Bị từ chối khi có lượt đã commit đang chờ trả lời, hoặc response hay tool call đang mở; lượt thủ công chưa commit do capture bị loại vì nhiễu để lại không chặn nó. |
+| OpenAI Realtime, GPT-Live | không | Chưa triển khai; fallback bên dưới sẽ đọc. |
+| Mọi provider ở chế độ live | không | Live pump sở hữu hàng đợi output. |
+
+`RealtimeOrchestrator.prepare_announcement(allow_resume)` chuẩn bị session giống
+`prepare_turn()` (resume khi park, rebuild khi còn tool chưa xử lý, recycle idle
+trước lượt của Gemini) nhưng từ chối khi có lượt người dùng đang xử lý, và không
+bao giờ resume session đang park cho progress. Nó chờ (tối đa `PREWARM_JOIN_TIMEOUT_S`)
+một lần rebuild đang chạy, ví dụ reconnect sau khi loại nhiễu, và thay session Gemini
+vẫn còn giữ activity manual-VAD mà không capture nào sở hữu nữa.
+`announce(text, stop_event)` flush
+output cũ, gửi input và yield giống hệt `stream_output()`, với watchdog lượt im
+lặng được nâng lên `ANNOUNCE_RECV_TIMEOUT_S` (20 s; relay pipecat đo được 11.6 s tới
+token đầu tiên với context nguội 12.5k token);
+`realtime_announce.play_realtime_announcement` phát câu trả lời như một lượt
+realtime bình thường (audio native của model với owner `run:<run id>`, hoặc TTS
+tách câu với `realtime_reply`), có âm báo kết quả Harness phát trước. Câu trả lời
+đã nói được lưu vào memory realtime dưới dạng lượt `[Harness update]`.
+
+**Người dùng chen ngang.** `prepare_turn()` đặt `stop_event` của announcement đang
+chạy. Announcement ngừng yield, lời nói đang chờ của nó bị hủy, và orchestrator
+xả phần còn lại của response đó (tối đa `ANNOUNCE_DRAIN_S`, 3 s) rồi gọi
+`end_turn()`. `flush_output()` của người dùng chờ lần xả đó, nên hai bên không bao
+giờ cùng đọc hàng đợi output và không phần nào của announcement được nói trong
+lượt của người dùng. Announcement bị chen ngang trước khi nói được gì (kể cả
+announcement bị bỏ qua vì capture bắt đầu ngay sau `prepare_announcement()`) trả
+kết quả và câu hỏi của nó về hàng đợi; progress bị bỏ.
+
+**Fallback.** Khi không thể diễn đạt bằng realtime hoặc model không trả về lời nói,
+model summarizer realtime (`RealtimeSummarizer` với prompt dành cho lời nói,
+`HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S`) viết lại cập nhật và TTS đọc nó với
+`harness_result` và `realtime_feedback`; khi không có summarizer thì đọc các câu
+mở đầu đã bỏ markup. Progress không bao giờ fallback.
 
 ### Điều khiển legacy Buddy agent session bằng giọng nói
 
@@ -1246,10 +1305,45 @@ và dựng trong `orchestrator._make_agent`; Go `RealtimeProviders` và dropdown
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | thuần đồng bộ; 1 `LiveConnection` (SDK `openai` ≥ 3.14.1, `openai.resources.live`) dùng chung bởi thread send/recv dưới `_conn_lock`, cộng thread watchdog `gptlive-watchdog` (tick 50 ms) tổng hợp ranh giới lượt | `gpt-live-1` | 24000 Hz (hoặc 16000; một định dạng PCM cho cả hai chiều) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **không có session vendor**: một pipeline Pipecat trên event loop asyncio riêng (thread `pipecat-io`) ngay trong HAL; thread send submit frame qua `run_coroutine_threadsafe`, `EventSink` của pipeline ghi thẳng vào recv queue, thread recv chỉ canh sức khỏe của pipeline | `qwen/qwen3.6-35b-a3b` qua relay Qwen của campaign-api (bất kỳ endpoint chat tương thích OpenAI nào) | 16000 Hz vào; **text ra** (TTS của HAL đọc) |
 
+Phát native realtime ngắt filler có thể ngắt được bằng cơ chế chờ khóa loa có giới
+hạn như TTS thường. Consumer chế độ turn hủy timer filler ngay chunk audio đầu
+và giữ phần audio đầu khi loa còn bận (tối đa 30 giây audio nguồn cho mỗi lần
+nhận câu trả lời); khi lấy được loa thì phát các frame đã giữ đúng thứ tự trước
+khi tiếp tục. Nếu vượt giới hạn trước lúc phát, bỏ câu native để đi qua luồng
+turn chưa được xử lý hiện có, thay vì chỉ đọc phần đuôi. Owner đã mute/stop và
+lời nói không cho ngắt vẫn được bảo vệ khi lấy loa. Native dùng stream loa đang
+mở ở sample rate thiết bị và resample liên tục, tránh đóng/mở lại giữa audio
+filler cache và Gemini 24 kHz. Log device ngày 2026-09-25 xác nhận chunk native
+bị bỏ với `speaker busy, skipping` suốt filler, rồi stream đổi từ 44.1 sang
+24 kHz; người dùng chỉ nghe đuôi câu. Ngày 2026-09-28, test phần cứng có kiểm soát
+trên `172.168.20.207` đưa audio Gemini Live Kore qua consumer native chế độ turn
+đã deploy và loa thật. Phát lại không/có filler cache cho ngắt đều giữ đủ 23 frame
+(184.321 sample nguồn). Lượt thứ hai nhận trực tiếp từ Gemini khi filler đang phát
+giữ đủ 28 frame (164.881 sample). Bản thu mic khớp đầu, giữa và cuối từng câu
+(tương quan waveform chuẩn hóa 0,66–0,81). Test yêu cầu nói bằng session Gemini
+announcement riêng; không kiểm tra đầu vào STT/wake-word qua mic hoặc Live Mode
+trên phần cứng. Lựa chọn ElevenLabs đã lưu được giữ nguyên. HAL được khởi động
+lại sau test; ba lần mute/unmute đều chỉ còn một recorder và không quan sát thấy
+lỗi mic busy. Đây là bằng chứng trong phạm vi test, không khẳng định mọi báo cáo
+mất tiếng đều có cùng nguyên nhân.
+
+Output pump của Live Mode cũng giữ các frame native đầu khi chưa lấy được loa,
+tối đa 30 giây audio nguồn cho mỗi reply. Khi lấy được loa, phát phần đầu đúng
+thứ tự; bỏ audio đang giữ khi bị ngắt hoặc đổi reply, và ngừng chuyển phần còn
+lại nếu ghi một frame thất bại. Cơ chế này áp dụng cả khi chọn Gemini TTS tự bật
+native audio. Test trong `hal/test/test_live_native_admission.py` tái hiện mất
+đầu câu trước sửa; chưa thể kết luận nguyên nhân của một báo cáo trên device
+nếu chưa đối chiếu log phát audio tương ứng.
+
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
 worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị
-kẹt không sống sót qua session rebuild. Với họ native-audio, HAL gửi websocket
+kẹt không sống sót qua session rebuild. Teardown còn chạy callback hoàn tất đang
+chờ ngay cả khi không còn task pending, để receive vừa kết thúc chuyển kết quả/lỗi
+về thread đang chờ trước khi đóng loop. Điều này tránh future bị bỏ lại và
+`Task exception was never retrieved` khi đóng/rebuild, kể cả SDK `APIError(1000)`
+cho WebSocket đóng bình thường; lỗi receive bất thường vẫn đi qua xử lý lỗi/reconnect
+hiện có. Với họ native-audio, HAL gửi websocket
 ping mỗi 20 giây nhưng không đặt ping timeout: traffic đi ra giữ đường proxy
 sống mà pong bị thiếu không bị hiểu là lỗi client. HAL cũng
 recycle Gemini đồng bộ trước khi stream audio nếu session hiện tại đã idle quá
@@ -2412,7 +2506,9 @@ sau onset 1,5 giây, rồi mỗi 400 ms khi VAD vẫn báo nói (VAD kết thúc
 500 ms dưới ngưỡng). Ra khỏi cửa sổ rủi ro vọng cũng khôi phục gain. Nếu Gemini đã sinh xong nhưng
 ElevenLabs còn phát, không đảm bảo provider sẽ gửi tín hiệu ngắt; hạ âm cục
 bộ chưa đảm bảo dừng hẳn trong trường hợp này.
-Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này; ElevenLabs
+Native audio vẫn là cấu hình riêng, không tự bật khi chọn đường này (trừ khi
+chọn Gemini TTS: khi đó Gemini Live nói native bằng đúng voice TTS — xem mục
+Gemini TTS trong `docs/vi/os-server_vi.md`); ElevenLabs
 vẫn được hỗ trợ. Ngưỡng báo qua SSE cập nhật theo bộ chặn thích nghi; log
 `live-aec` có giới hạn, báo trạng thái phiên đang hoạt động tối đa mỗi giây
 một lần. Triển khai lấy ý tưởng từ script test hardware, không phải thuật
@@ -2900,6 +2996,14 @@ trong `config.json`:
 |------|----------|---------|
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
 | `wakeword` | `voice.wakeword` trong ROBOT.md khi config còn mới, ngược lại `false` | Cổng wake word top-level trong config file. Khi bật, partial khớp chỉ là tín hiệu tạm: HAL chỉ commit audio buffer sang realtime hoặc forward command sau khi STT **final** xác nhận wake phrase. Transcript được tách thành câu (`.` `!` `?`) và phrase được chấp nhận ở đầu **hoặc cuối** bất kỳ câu nào; xuất hiện giữa câu bị từ chối. Bước xác nhận kiểm lại trên transcript đã ghép mà vẫn còn dấu câu, để bước merge chỉ giữ `\w+` không rút lại cái gate mà một partial đã mở. Nếu bước kiểm khớp tuyệt đối đó trượt nhưng trước đó đã có một partial khớp chính xác, thì riêng chữ TÊN được phép lệch 1 ký tự và gate vẫn được xác nhận: STT tự viết lại giả thuyết của nó ở final, và trên lamp-0c89 (04/09/2026) partial `hello lamp` quay lại thành `Hello, lamb.` làm rơi cả lượt — không mở lượt realtime, không có cue thinking, câu hỏi rơi xuống main agent chậm hơn nhiều. Tiền tố (`hello`, `hey`, …) vẫn phải khớp tuyệt đối, và luật lỏng này KHÔNG BAO GIỜ mở được gate mà chỉ xác nhận lại gate do một partial khớp chính xác đã mở, nên một từ gần giống trong lời nói xung quanh vẫn không đánh thức được gì. Nó được log riêng thành `Wake-word confirmed with a one-letter STT slip` để còn đếm được — nhiều dòng này nghĩa là keyterm boost đang không làm tròn việc. Các prefix hỗ trợ là `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, `wake up`, áp dụng cho alias chung cố định (`hey autonomous`), device type (`hey lamp`) và tên agent hiện tại (`hey Luna`). Runtime rename chỉ cập nhật alias theo tên agent. Bare name và các prefix khác không mở gate. Một câu bị từ chối sẽ bị bỏ và LED `listening` tạm thời được restore về trạng thái nghỉ bình thường; không bao giờ để hiệu ứng `idle` cố định tiếp tục chạy. Một lượt đã xác nhận mở cửa sổ focus follow-up; lượt trong cửa sổ đó được forward dưới type `voice_followup` mà không cần wake phrase khác. Mọi lượt được phép đều dispatch sang os-server: câu realtime đã nói thành event đồng bộ im lặng `voice_agent_handled`; realtime unavailable, im lặng, lỗi hoặc delegate đi theo đường thường. Nếu realtime tắt hoặc không khả dụng, final transcript đã xác nhận đi theo đường os-server/main agent thường. Với Live ON và realtime khả dụng, lần thu đã xác nhận chuyển sang live song công mà không commit audio thủ công. Thiếu/`false` giữ nguyên luồng luôn lắng nghe trước gate. Với `config.json` do os-server tạo ra, giá trị khởi tạo lấy từ `voice.wakeword` của body (xem phần Cổng wake word ở trên); config nạp lên mà không có key thì vẫn là `false`. HAL restart sau khi lưu ở local Settings hoặc MQTT `wakeword.gate`. |
+| `HAL_HARNESS_PROGRESS_SPEAK_P` | `0.15` | Xác suất một snapshot Harness chỉ có progress được đọc; `0` tắt đọc progress. Xem [Thông báo cập nhật Harness](#thông-báo-cập-nhật-harness). |
+| `HAL_HARNESS_PROGRESS_MIN_GAP_S` | `60` | Tối đa một dòng progress được đọc cho mỗi run Harness trong khoảng này. |
+| `HAL_HARNESS_PROGRESS_QUIET_START_S` | `15` | Không đọc progress quá sớm như vậy sau request. |
+| `HAL_HARNESS_PROGRESS_MAX_AGE_S` | `30` | Progress trong hàng đợi cũ hơn mức này bị bỏ. |
+| `HAL_HARNESS_UPDATE_MAX_AGE_S` | `600` | Kết quả/câu hỏi chưa đọc cũ hơn mức này bị bỏ. |
+| `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Thời gian yên lặng sau bất kỳ lời nói hay transcript người dùng nào trước snapshot tiếp theo. |
+| `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Văn bản Harness đưa cho bộ diễn đạt bị cắt tới độ dài này. |
+| `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
@@ -2998,7 +3102,9 @@ trong `config.json`:
 | `voice_agent/pipecat_pipeline.py` | Phía Pipecat: dựng pipeline (`HALSTTService` → user aggregator → `OpenAILLMService` → `EventSink` → assistant aggregator) trên loop `pipecat-io`, tool handler, `PipelineHandle` (queue_frame / proposal / finalize / stop thread-safe), `_CommittedTurnStopStrategy` |
 | `voice_agent/pipecat_stt.py` | `HALSTTService`: `STTService` của Pipecat bọc `STTProvider` của HAL (session theo lượt hoặc session dài trên thread sender `pipecat-stt`), `STTFinalizeFrame` |
 | `context_manager/{base,openclaw,hermes}.py` | Lắp ráp prompt + memory + skills theo gateway |
-| `summarizer.py` | Summarizer memory dựa trên Anthropic |
+| `summarizer.py` | Summarizer memory dựa trên Anthropic (cũng là bộ diễn đạt fallback của announcer Harness qua `system_prompt=`) |
+| `../drivers/harness/{announcer,update_queue}.py` | Hàng đợi cập nhật Harness, chính sách snapshot, gate và chọn bộ diễn đạt |
+| `../drivers/voice/_internal/realtime_announce.py` | Envelope announcement Harness và phát realtime |
 | `config.py` | Model config provider (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`, `PipecatV1Config`) |
 | `models/`, `enums/` | Kiểu input/output/event, enum provider + gateway |
 | `resources/` | System prompt (chung `system_prompt.md` + theo provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md` / `system_prompt_pipecat.md`) |
@@ -3081,3 +3187,24 @@ phát lời xác nhận cho handoff wellbeing. Thay đổi đi cùng HAL; chỉ 
 nhật prompt realtime.
 
 Gợi ý ngôn ngữ nhận dạng đầu vào Gemini được bật bằng flag có sẵn `HAL_GEMINI_USE_LANGUAGE_CODES=true`. Với google-genai 2.12.1 đang pin, HAL gửi `input_audio_transcription.language_hints.language_codes`, không dùng `language_codes` cấp trên vốn không được SDK hỗ trợ cho Developer API. Hint lấy từ `stt_language` (`vi` thành `vi-VN`); ngôn ngữ rỗng hoặc tắt flag vẫn tự nhận dạng. Transcript đầu ra không có hint. Đây là gợi ý nhận dạng, không khóa ngôn ngữ. Hai profile `pro-respeaker-lite` và `pro-xvf3800` bật flag này; các profile khác giữ mặc định tắt. Trên device Lite chạy 3.8 extended-thinking, provider đã chấp nhận hint và log ghi đúng các yêu cầu giá vàng, thời tiết và dừng lại trong lượt test người dùng; chưa có phép đo độ chính xác tổng quát hoặc xác nhận trên XVF3800.
+
+### Quyền giữ microphone khi stop/start
+
+VoiceService tuần tự hóa start và teardown. Mute và sleep ghi nhận stop trước
+khi chuyển cleanup sang background, nên unmute ngay sau đó không thể vượt trước
+stop. Stop abort input đang mở, gồm cả echo gate sau TTS và backend gốc bên dưới
+AEC. Với `arecord`, abort terminate tiến trình con, chờ tối đa 2 giây, rồi kill
+và chờ thêm tối đa 2 giây nếu cần; thoát context đóng cả hai pipe. Nhờ đó ALSA
+được giải phóng ngay cả khi capture đang kẹt trong `read()`.
+
+Voice thread được giữ lại nếu join quá 5 giây. Realtime teardown cũng giữ worker
+sau thời gian chờ 3 giây. Yêu cầu restart đợi cả hai worker thoát rồi mới mở
+capture mới; stop tiếp theo hủy restart đang đợi. Worker kẹt vĩnh viễn sẽ chặn
+restart thay vì tạo nhiều recorder tranh mic. Thay đổi này sửa race quyền giữ
+mic khi stop/start gây lặp `arecord: audio open error: Device or resource busy`;
+ứng dụng khác giữ ALSA vẫn có thể gây cùng lỗi.
+
+Regression test: `hal/test/test_voice_capture_lifecycle.py` kiểm tra đọc subprocess
+bị kẹt, kill/reap, mute/unmute nhanh, hủy restart đang đợi, join timeout, capture
+đã stop và abort qua AEC wrapper. Test local không thay thế test microphone
+trên device.

@@ -493,6 +493,10 @@ Requires sensing with camera (InsightFace). Enrolled person JPEGs persist under 
 `POST /api/voice/preview` accepts optional `speed` (`0.25–4.0`) and forwards it
 to HAL `/voice/speak` for that uncached utterance only. It does not persist the
 rate or change the shared service speed. Omission retains the runtime default.
+`provider` / `voice` (+ `tts_api_key` / `tts_base_url`) on `/voice/speak` are the
+same: HAL builds a preview backend for that utterance and the running service
+keeps its saved provider, backend and voice. They require uncached speech (`400`
+with `cached`/`prerender`). This covers web **Test Voice** and MQTT `tts.preview`.
 
 `GET /api/device/config` returns effective `tts_speed`; `PUT /api/device/config`
 accepts `{"tts_speed":1.2}`. This optional field accepts `0.25–4.0`; omitting
@@ -502,6 +506,30 @@ at boot and `/voice/start` through `get_tts_speed()`; speed changes are pushed
 live through `/voice/tts/config {speed}`. ElevenLabs HTTP v3 uses provider speed `1.0` and applies the saved speed
 locally with pitch-preserving streaming. Other ElevenLabs models still clamp
 the outgoing value to `0.7–1.2`.
+
+### Gemini — TTS through the autonomous proxy
+
+`tts_provider: "gemini"` renders with a Gemini TTS model
+(`hal/drivers/voice/tts/gemini.py`). It reuses the proxy's Gemini REST relay —
+the same `…/ai/v1/google-search/v1beta` route the pipecat web search calls — as
+`<tts_base_url>/google-search/v1beta/models/<model>:streamGenerateContent?alt=sse`
+with the `x-goog-api-key` header, so no BFF change is needed. Default model
+`gemini-3.8-flash-tts` (override `HAL_TTS_GEMINI_MODEL`; the 3.8/3.1 TTS models
+stream 24 kHz PCM, 2.5 models return the whole clip in one event). Default voice
+`Kore`; an unknown voice (e.g. one saved under another provider) falls back to
+it. Voices are the 30 multilingual Gemini prebuilt voices, so the language
+filter does not apply. Gemini has no speed parameter: HAL applies the saved
+speed locally, like ElevenLabs HTTP v3. Bracket audio tags are stripped. In
+Settings → Voice it is the third vendor under `Autonomous (proxy)`.
+
+When Gemini TTS is selected and the realtime provider is Gemini Live, chit-chat
+the Live model answers itself plays as **native audio in the TTS voice**, with no
+TTS call (`native_voice()` in `hal/drivers/voice/tts/gemini.py`), regardless of
+`HAL_REALTIME_NATIVE_AUDIO`. The Live session is opened with the TTS voice
+instead of `realtime.gemini.voice`; after a voice or provider change the session
+is rebuilt before the next turn (`gemini-voice-change`). Delegated replies are
+still spoken by Gemini TTS. Native audio plays at 1.0×; the saved TTS speed only
+applies to TTS. Any other TTS provider leaves native audio as configured.
 
 ### Piper — on-device TTS
 
@@ -735,7 +763,7 @@ HAL (Python): FastAPI standard JSON responses.
 1. OS Server starts Gin on :5000
 2. Reads `config/config.json`
    - Seeds `device_type` from the resolved device class (`DEVICE_TYPE` env, else the existing key) so config.json carries it for readers that have no env — HAL's wake words and `software-update`. Provisioning only writes the env, so without this seed the key never exists on a provisioned device. Written once, when the stored value differs
-   - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel)
+   - Seeds `tts_provider` + `tts_voice` from ROBOT.md `voice:` block when the user hasn't chosen them (persisted once; the user's saved choice always wins; provider absent/unknown → `openai`). When the seeded provider is `elevenlabs` and no voice is declared, picks a language-aware default (`vi`→Ngan, `zh`→Amy, else Rachel); when it is `gemini`, `Kore`
 3. If `SetUpCompleted`:
    - Connect OpenClaw WebSocket
    - Connect MQTT
@@ -1565,3 +1593,7 @@ uses the original answer key and never resends the command.
 ### iMessage configuration updates
 
 For `PUT /api/device/config`, omitted or null `bluebubbles_server_url`, `bluebubbles_user_address`, and `bluebubbles_caller_context` preserve their saved values. An explicit empty string clears only that field. An omitted or empty `bluebubbles_password` preserves the saved secret. Changing unrelated settings must not reset the channel or its caller context.
+
+### HAL startup timing
+
+HAL overlaps motion-driver imports with independent audio, camera, sensing and voice imports. It resolves the motion class only after those imports, before route availability checks and lifespan initialization, preserving required-driver failures. Startup logs `[startup] driver_imports_complete` (including `motion_wait_ms`), `lifespan_begin`, and `lifespan_ready` separate module-loading time from device initialization. Elapsed time starts inside `hal.server`, so it excludes interpreter/Uvicorn setup. Background vision warm-up can continue after lifespan readiness; this is not a guarantee that every subsystem or an intentionally muted microphone is ready.

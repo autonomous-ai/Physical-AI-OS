@@ -10,6 +10,7 @@ from hal.realtime.models.events import (
     TurnDoneEvent,
 )
 from hal.realtime.models.input import (
+    AnnounceInput,
     AudioInput,
     FunctionCallResultInput,
     ImageInput,
@@ -37,6 +38,7 @@ __all__ = [
     "TurnDoneEvent",
     "InputBase",
     "TextInput",
+    "AnnounceInput",
     "AudioInput",
     "ImageInput",
     "FunctionCallResultInput",

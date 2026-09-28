@@ -309,6 +309,8 @@ func (s *Server) Serve(closeFn func()) error {
 			seedVoice = v
 		} else if effectiveProvider == domain.TTSProviderElevenLabs {
 			seedVoice = domain.DefaultElevenLabsVoiceForLang(s.config.STTLanguage)
+		} else if effectiveProvider == domain.TTSProviderGemini {
+			seedVoice = domain.DefaultGeminiVoice
 		}
 	}
 	if seedProvider != "" || seedVoice != "" {
@@ -703,7 +705,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// the background and fire the setup status only once LED hardware reports ready.
 	// Skipped post-setup — agent flash + ambient take over from here.
 	if !s.config.SetUpCompleted {
-		safego.Go("setup-needed-paint", s.waitAndPaintSetupReady)
+		safego.Go("setup-needed-paint", func() { s.waitAndPaintSetupReady(eventCtx) })
 	}
 
 	// Warm the Go-owned spoken notices into hal's persistent WAV cache so

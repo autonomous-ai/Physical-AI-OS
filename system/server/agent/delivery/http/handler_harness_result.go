@@ -89,8 +89,11 @@ func (h *AgentHandler) harnessResultRunOrderLocked(runIDs []string) []string {
 // SpeakHarnessGroupedResult submits exactly one synchronous HAL request. Nil
 // means HAL accepted the request, never proof of playback. The caller must claim
 // its durable outbox before calling and must not retry an uncertain submission.
-func (h *AgentHandler) SpeakHarnessGroupedResult(text string, runIDs []string) error {
-	return h.speakHarnessGroupedResult(text, runIDs, hal.SpeakHarnessReplyForTurn)
+// HAL's announcer renders the text for speech; displays keep it unchanged.
+func (h *AgentHandler) SpeakHarnessGroupedResult(text, outcome string, runIDs []string) error {
+	return h.speakHarnessGroupedResult(text, runIDs, func(text, owner string) error {
+		return hal.AnnounceHarnessUpdate(hal.HarnessUpdateResult, text, owner, outcome)
+	})
 }
 
 func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, send func(string, string) error) error {
@@ -113,11 +116,12 @@ func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, s
 	// An earlier member may have lost the speaker before the user supplied a
 	// new input. The merged answer belongs to that newest input's speech turn;
 	// never let cancellation of an older member cancel the newer request too.
-	if h.isSpeechCancelled(owner) {
+	if h.isHarnessSpeechCancelled(owner) {
 		flow.Log("tts_cancelled", map[string]any{"run_id": owner, "source": h.speechCancelSource(owner)}, owner)
 		return fmt.Errorf("%w: latest member %q lost the speaker", ErrHarnessResultSpeechSuppressed, owner)
 	}
-	// Immutable correlated results are never replaced by a local paraphrase.
+	// Immutable correlated results are never replaced by a local notice; the
+	// announcer's spoken rendering is not a replacement for the displayed text.
 	if isLLMLimitText(text) {
 		return fmt.Errorf("%w: usage-limit banner is display-only", ErrHarnessResultSpeechSuppressed)
 	}
@@ -154,7 +158,9 @@ func (h *AgentHandler) DeliverHarnessQuestion(runID, questionID, text string) bo
 		h.monitorBus.Push(domain.MonitorEvent{Type: "assistant_delta", Summary: text, RunID: runID, Detail: map[string]string{"role": "assistant", "source": "harness", "question_id": questionID}})
 	}
 	if !state.webChat && !state.restored {
-		h.deliverTTS(hal.SpeakHarnessReply, text, runID, "speak Harness question")
+		h.deliverTTSUnless(h.isHarnessSpeechCancelled, func(text string) error {
+			return hal.AnnounceHarnessUpdate(hal.HarnessUpdateQuestion, text, runID, "")
+		}, text, runID, "speak Harness question")
 	}
 	return true
 }

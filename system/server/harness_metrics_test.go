@@ -185,7 +185,7 @@ func TestHarnessAnswerAPIStartsChatBeforeImmediateTerminal(t *testing.T) {
 	capture := captureHarnessMetrics(t)
 	s := &Server{config: &config.Config{LLMAPIKey: "owner"}, agentHandler: &agenthttp.AgentHandler{}}
 	transport := &harnessAnswerMetricTransport{server: s}
-	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{
+	s.harnessVoice = harness.NewVoiceController(transport, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil },
 		OnDispatch: func(agentID, runID string) {
 			transport.runID = runID
 			s.registerHarnessReply(agentID, runID, true, false)

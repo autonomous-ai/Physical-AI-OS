@@ -27,6 +27,7 @@ from hal.realtime.voice_agent.gemini_status import install_interaction_status
 from hal.realtime.enums import GeminiThinkingLevel
 from hal.realtime.models import (
     AgentInputEvent,
+    AnnounceInput,
     AudioCommitEvent,
     AudioStreamEndEvent,
     AudioInput,
@@ -196,6 +197,17 @@ class GeminiLiveAgent(VoiceAgentBase):
         return getattr(self, "_requires_fresh_session", False) or bool(
             self._pending_tool_calls
         )
+
+    @property
+    @override
+    def supports_announce(self) -> bool:
+        """Turn-based sessions on models that accept text turns.
+
+        2.5 native-audio is excluded for the same reason send_text drops text
+        there (wire-shape guard, WS 1011). Live mode is excluded because the
+        open uplink and the live pump own the session and its output queue.
+        """
+        return not app_config.LIVE_MODE and not gemini_needs_idle_workaround()
 
     def _activity_detection(self) -> types.AutomaticActivityDetection:
         """Provider-side VAD settings for this session.
@@ -407,10 +419,13 @@ class GeminiLiveAgent(VoiceAgentBase):
             pending = asyncio.all_tasks(loop)
             for task in pending:
                 task.cancel()
-            if pending:
-                loop.run_until_complete(
-                    asyncio.gather(*pending, return_exceptions=True)
-                )
+            # Even with no pending tasks, a completed receive may still have
+            # its run_coroutine_threadsafe completion callback queued. Pump
+            # the loop before closing so the waiting thread receives its
+            # result/error instead of leaking an unretrieved task exception.
+            loop.run_until_complete(
+                asyncio.gather(*pending, return_exceptions=True)
+            )
             loop.close()
             asyncio.set_event_loop(None)
 
@@ -483,6 +498,19 @@ class GeminiLiveAgent(VoiceAgentBase):
 
         # logger.info("Sending %s to Gemini Live: %s", type(_input).__name__, detail)
 
+        if isinstance(_input, AnnounceInput) and (
+            self._tool_call_pending() or self._activity_started
+        ):
+            # A tool call or an open user activity owns the session: sending a
+            # text turn now would be rejected (1008) or split the user's turn.
+            # End the announcement at once so the caller falls back instead of
+            # waiting out the receive timeout.
+            logger.info(
+                "[realtime] Announcement dropped (tool pending=%s, activity open=%s)",
+                self._tool_call_pending(), self._activity_started,
+            )
+            self._recv_queue.put(TurnDoneEvent())
+            return
         if not isinstance(_input, FunctionCallResultInput) and self._tool_call_pending():
             if isinstance(_input, AudioInput):
                 self._gated_audio_frames += 1
@@ -528,6 +556,18 @@ class GeminiLiveAgent(VoiceAgentBase):
                     role="user",
                 ),
                 turn_complete=False,
+            )
+        elif isinstance(_input, AnnounceInput):
+            # A complete text turn: the model answers it like a user turn. The
+            # next commit waits on _turn_done, so it cannot interleave with
+            # this response; turn_complete sets it again.
+            self._turn_done.clear()
+            await self._session.send_client_content(
+                turns=types.Content(
+                    parts=[types.Part(text=_input.text)],
+                    role="user",
+                ),
+                turn_complete=True,
             )
         elif isinstance(_input, ImageInput):
             _: bool

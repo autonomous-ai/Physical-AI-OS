@@ -464,7 +464,7 @@ func (s *OpenclawService) deviceSoulCore() (content []byte, hasSoul bool, err er
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
-		return nil, false, nil // soulless body (e.g. Intern): no override
+		return nil, false, nil // body without a soul_ref: no override
 	}
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		b, derr := downloadSoul(ref)

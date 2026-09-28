@@ -1695,10 +1695,18 @@ const (
 	// apply, and there is no shared rate limit to queue behind — every unit
 	// renders its own audio.
 	TTSProviderPiper = "piper"
+	// TTSProviderGemini renders with Gemini TTS models through the autonomous
+	// proxy's Gemini REST relay (HAL hal/drivers/voice/tts/gemini.py).
+	TTSProviderGemini = "gemini"
 )
 
+// DefaultGeminiVoice is seeded when a device defaults to gemini without a
+// voice. Gemini prebuilt voices are multilingual, so it is not language-aware.
+// Must stay in HAL's GeminiTTSBackend.VOICES.
+const DefaultGeminiVoice = "Kore"
+
 // TTSProviders is the list of supported TTS providers.
-var TTSProviders = []string{TTSProviderOpenAI, TTSProviderElevenLabs, TTSProviderPiper}
+var TTSProviders = []string{TTSProviderOpenAI, TTSProviderElevenLabs, TTSProviderPiper, TTSProviderGemini}
 
 // IsValidTTSProvider reports whether p is a supported TTS provider. Used to
 // reject a bad ROBOT.md `voice.tts_provider` before seeding it into config.
@@ -1738,7 +1746,9 @@ var TTSVoicesByProvider = map[string][]string{
 	// name that is safe to offer when HAL is unreachable. Naming one anyway
 	// gets it saved as the configured voice, and the device is then set to a
 	// model it does not have. An empty list makes the UI say so instead.
-	TTSProviderPiper:      {},
+	TTSProviderPiper: {},
+	// Mirrors HAL's GeminiTTSBackend.VOICES (the live list comes from HAL).
+	TTSProviderGemini:     {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"},
 	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
 }
 
