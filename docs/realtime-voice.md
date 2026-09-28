@@ -1351,6 +1351,40 @@ dropdown (`RealtimeSection.tsx`) list the same values, in that order, before
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 24000) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **no vendor session**: a Pipecat pipeline on a private asyncio loop (`pipecat-io` thread) inside HAL; the send thread submits frames with `run_coroutine_threadsafe`, the pipeline's `EventSink` writes straight to the recv queue, the recv thread only watches pipeline health | `qwen/qwen3.6-35b-a3b` via the campaign-api Qwen relay (any OpenAI-compatible chat endpoint) | 16000 Hz in; **text out** (HAL's TTS speaks) |
 
+Native realtime playback preempts interruptible fillers using the same bounded
+speaker-lock handoff as ordinary TTS. The turn-mode consumer cancels the filler
+timer on the first audio chunk and retains leading audio while admission remains
+busy (at most 30 seconds of source audio per response attempt); when admission
+succeeds it flushes those frames in order before continuing. If the bound is
+exceeded before playback starts, it abandons the native reply for the existing
+unhandled-turn path rather than speaking only its tail. Muted/stopped owners and
+non-interruptible speech retain their admission protection. Native output uses
+the persistent device-rate stream with continuous resampling, avoiding a close
+and reopen between cached filler audio and Gemini's 24 kHz audio. On 2026-09-25,
+device logs showed native chunks discarded as `speaker busy, skipping` throughout
+a filler, followed by a 44.1-to-24 kHz stream reopen; only the answer tail played.
+On 2026-09-28, a controlled hardware test on `172.168.20.207` used Gemini Live
+Kore audio through the deployed turn-mode native consumer and actual speaker.
+Replay without/with a cached interruptible filler preserved all 23 frames
+(184,321 source samples). A second response streamed directly from Gemini while
+the filler was playing preserved all 28 frames (164,881 samples). The microphone
+recordings matched the beginning, middle and end of each response (normalized
+waveform correlation 0.66–0.81). The test requested speech through an isolated
+Gemini announcement session; it did not exercise microphone STT/wake-word entry
+or hardware Live Mode. The saved ElevenLabs selection was retained. HAL was
+restarted after testing; three mute/unmute cycles each left exactly one recorder
+and no capture-busy error was observed. This is bounded test evidence, not a
+claim that every reported truncation has the same cause.
+
+The Live Mode output pump also retains leading native frames while speaker
+admission is busy, up to 30 seconds of source audio per reply. It flushes the
+prefix in order once admitted, discards pending audio on interruption or reply
+identity changes, and stops forwarding the remainder after a failed frame write.
+This also applies when selecting Gemini TTS automatically enables native audio.
+Regression tests in `hal/test/test_live_native_admission.py` reproduced prefix
+loss before the fix; this does not establish the cause of a particular device
+report without matching playback logs.
+
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
 then joins workers; a failed handshake rolls back that loop/thread immediately.
@@ -3250,3 +3284,25 @@ searching. Neither stage speaks a wellbeing acknowledgment. It ships with HAL; u
 alone does not update the realtime prompts.
 
 Gemini input transcription language hints are opt-in through the existing `HAL_GEMINI_USE_LANGUAGE_CODES=true` flag. With pinned google-genai 2.12.1, HAL sends `input_audio_transcription.language_hints.language_codes`, not the unsupported Developer API top-level `language_codes`. The hint follows `stt_language` (`vi` becomes `vi-VN`); an empty language or disabled flag retains automatic detection. Output transcription stays unhinted. This biases recognition, not a language lock. The `pro-respeaker-lite` and `pro-xvf3800` profiles enable this flag; other profiles retain the disabled default. On the Lite device with 3.8 extended-thinking, the provider accepted the hint and transcribed the user's gold-price, weather and stop requests in a live test; this is not a general accuracy measurement or XVF3800 acoustic validation.
+
+### Microphone ownership during stop/start
+
+VoiceService serializes start and teardown. Mute and sleep reserve the stop
+before dispatching background cleanup, so an immediate unmute cannot overtake
+it. Stop aborts the active input, including the post-TTS echo gate and the raw
+backend underneath AEC. For `arecord`, abort terminates the child, waits up to
+2 seconds, then kills and waits up to another 2 seconds if needed; context exit
+closes both pipes. This releases ALSA even when capture was blocked in `read()`.
+
+The voice thread is retained after a 5-second join timeout. Realtime teardown
+also retains its worker after the 3-second wait. A requested restart waits for
+both workers to exit before opening a new capture; a later stop cancels that
+pending restart. A permanently stuck worker therefore prevents restart instead
+of creating competing recorders. This fixes the stop/start ownership race that
+can cause repeated `arecord: audio open error: Device or resource busy`; another
+application holding ALSA can still cause the same error.
+
+Regression coverage: `hal/test/test_voice_capture_lifecycle.py` exercises blocked
+subprocess reads, forced kill/reap, rapid mute/unmute, cancelled deferred restart,
+join timeout, stopped capture, and abort through the AEC wrapper. These local
+tests do not replace a microphone test on the device.

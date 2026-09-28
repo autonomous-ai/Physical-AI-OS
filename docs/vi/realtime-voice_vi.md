@@ -1305,6 +1305,36 @@ và dựng trong `orchestrator._make_agent`; Go `RealtimeProviders` và dropdown
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | thuần đồng bộ; 1 `LiveConnection` (SDK `openai` ≥ 3.14.1, `openai.resources.live`) dùng chung bởi thread send/recv dưới `_conn_lock`, cộng thread watchdog `gptlive-watchdog` (tick 50 ms) tổng hợp ranh giới lượt | `gpt-live-1` | 24000 Hz (hoặc 16000; một định dạng PCM cho cả hai chiều) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **không có session vendor**: một pipeline Pipecat trên event loop asyncio riêng (thread `pipecat-io`) ngay trong HAL; thread send submit frame qua `run_coroutine_threadsafe`, `EventSink` của pipeline ghi thẳng vào recv queue, thread recv chỉ canh sức khỏe của pipeline | `qwen/qwen3.6-35b-a3b` qua relay Qwen của campaign-api (bất kỳ endpoint chat tương thích OpenAI nào) | 16000 Hz vào; **text ra** (TTS của HAL đọc) |
 
+Phát native realtime ngắt filler có thể ngắt được bằng cơ chế chờ khóa loa có giới
+hạn như TTS thường. Consumer chế độ turn hủy timer filler ngay chunk audio đầu
+và giữ phần audio đầu khi loa còn bận (tối đa 30 giây audio nguồn cho mỗi lần
+nhận câu trả lời); khi lấy được loa thì phát các frame đã giữ đúng thứ tự trước
+khi tiếp tục. Nếu vượt giới hạn trước lúc phát, bỏ câu native để đi qua luồng
+turn chưa được xử lý hiện có, thay vì chỉ đọc phần đuôi. Owner đã mute/stop và
+lời nói không cho ngắt vẫn được bảo vệ khi lấy loa. Native dùng stream loa đang
+mở ở sample rate thiết bị và resample liên tục, tránh đóng/mở lại giữa audio
+filler cache và Gemini 24 kHz. Log device ngày 2026-09-25 xác nhận chunk native
+bị bỏ với `speaker busy, skipping` suốt filler, rồi stream đổi từ 44.1 sang
+24 kHz; người dùng chỉ nghe đuôi câu. Ngày 2026-09-28, test phần cứng có kiểm soát
+trên `172.168.20.207` đưa audio Gemini Live Kore qua consumer native chế độ turn
+đã deploy và loa thật. Phát lại không/có filler cache cho ngắt đều giữ đủ 23 frame
+(184.321 sample nguồn). Lượt thứ hai nhận trực tiếp từ Gemini khi filler đang phát
+giữ đủ 28 frame (164.881 sample). Bản thu mic khớp đầu, giữa và cuối từng câu
+(tương quan waveform chuẩn hóa 0,66–0,81). Test yêu cầu nói bằng session Gemini
+announcement riêng; không kiểm tra đầu vào STT/wake-word qua mic hoặc Live Mode
+trên phần cứng. Lựa chọn ElevenLabs đã lưu được giữ nguyên. HAL được khởi động
+lại sau test; ba lần mute/unmute đều chỉ còn một recorder và không quan sát thấy
+lỗi mic busy. Đây là bằng chứng trong phạm vi test, không khẳng định mọi báo cáo
+mất tiếng đều có cùng nguyên nhân.
+
+Output pump của Live Mode cũng giữ các frame native đầu khi chưa lấy được loa,
+tối đa 30 giây audio nguồn cho mỗi reply. Khi lấy được loa, phát phần đầu đúng
+thứ tự; bỏ audio đang giữ khi bị ngắt hoặc đổi reply, và ngừng chuyển phần còn
+lại nếu ghi một frame thất bại. Cơ chế này áp dụng cả khi chọn Gemini TTS tự bật
+native audio. Test trong `hal/test/test_live_native_admission.py` tái hiện mất
+đầu câu trước sửa; chưa thể kết luận nguyên nhân của một báo cáo trên device
+nếu chưa đối chiếu log phát audio tương ứng.
+
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
 worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị
@@ -3157,3 +3187,24 @@ phát lời xác nhận cho handoff wellbeing. Thay đổi đi cùng HAL; chỉ 
 nhật prompt realtime.
 
 Gợi ý ngôn ngữ nhận dạng đầu vào Gemini được bật bằng flag có sẵn `HAL_GEMINI_USE_LANGUAGE_CODES=true`. Với google-genai 2.12.1 đang pin, HAL gửi `input_audio_transcription.language_hints.language_codes`, không dùng `language_codes` cấp trên vốn không được SDK hỗ trợ cho Developer API. Hint lấy từ `stt_language` (`vi` thành `vi-VN`); ngôn ngữ rỗng hoặc tắt flag vẫn tự nhận dạng. Transcript đầu ra không có hint. Đây là gợi ý nhận dạng, không khóa ngôn ngữ. Hai profile `pro-respeaker-lite` và `pro-xvf3800` bật flag này; các profile khác giữ mặc định tắt. Trên device Lite chạy 3.8 extended-thinking, provider đã chấp nhận hint và log ghi đúng các yêu cầu giá vàng, thời tiết và dừng lại trong lượt test người dùng; chưa có phép đo độ chính xác tổng quát hoặc xác nhận trên XVF3800.
+
+### Quyền giữ microphone khi stop/start
+
+VoiceService tuần tự hóa start và teardown. Mute và sleep ghi nhận stop trước
+khi chuyển cleanup sang background, nên unmute ngay sau đó không thể vượt trước
+stop. Stop abort input đang mở, gồm cả echo gate sau TTS và backend gốc bên dưới
+AEC. Với `arecord`, abort terminate tiến trình con, chờ tối đa 2 giây, rồi kill
+và chờ thêm tối đa 2 giây nếu cần; thoát context đóng cả hai pipe. Nhờ đó ALSA
+được giải phóng ngay cả khi capture đang kẹt trong `read()`.
+
+Voice thread được giữ lại nếu join quá 5 giây. Realtime teardown cũng giữ worker
+sau thời gian chờ 3 giây. Yêu cầu restart đợi cả hai worker thoát rồi mới mở
+capture mới; stop tiếp theo hủy restart đang đợi. Worker kẹt vĩnh viễn sẽ chặn
+restart thay vì tạo nhiều recorder tranh mic. Thay đổi này sửa race quyền giữ
+mic khi stop/start gây lặp `arecord: audio open error: Device or resource busy`;
+ứng dụng khác giữ ALSA vẫn có thể gây cùng lỗi.
+
+Regression test: `hal/test/test_voice_capture_lifecycle.py` kiểm tra đọc subprocess
+bị kẹt, kill/reap, mute/unmute nhanh, hủy restart đang đợi, join timeout, capture
+đã stop và abort qua AEC wrapper. Test local không thay thế test microphone
+trên device.

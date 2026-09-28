@@ -14,7 +14,8 @@ import (
 func TestHarnessVoiceMQTTSharedStateAndValidation(t *testing.T) {
 	factory, messages := statusBroker(t)
 	h := &DeviceMQTTHandler{config: &config.Config{DeviceID: "voice-test", FDChannel: "test/fd"}, mqttFactory: factory}
-	voice := harness.NewVoiceController(nil, harness.VoiceCallbacks{})
+	supported := false
+	voice := harness.NewVoiceController(nil, harness.VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return supported, nil }})
 	call := func(kind, data, wantStatus string) harness.VoiceModeState {
 		t.Helper()
 		if err := h.dispatchData(domain.MQTTDataCommand{Kind: kind, Data: json.RawMessage(data)}); err != nil {
@@ -50,8 +51,14 @@ func TestHarnessVoiceMQTTSharedStateAndValidation(t *testing.T) {
 	if initial.Enabled || initial.Generation != voice.State().Generation {
 		t.Fatal("default snapshot mismatch")
 	}
+	call(domain.KindHarnessVoiceModeSet, `{"enabled":true}`, "failure")
+	if voice.State().Enabled || voice.State().Supported {
+		t.Fatal("unsupported mode enabled")
+	}
+	call(domain.KindHarnessVoiceModeSet, `{"enabled":false}`, "success")
+	supported = true
 	on := call(domain.KindHarnessVoiceModeSet, `{"enabled":true}`, "success")
-	if !on.Enabled || !voice.State().Enabled || on.Generation == initial.Generation {
+	if !on.Supported || !on.Enabled || !voice.State().Enabled || on.Generation == initial.Generation {
 		t.Fatal("MQTT did not change shared controller")
 	}
 	duplicate := call(domain.KindHarnessVoiceModeSet, `{"enabled":true}`, "success")

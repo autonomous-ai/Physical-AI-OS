@@ -677,6 +677,8 @@ def run_realtime_turn(
                     # Retry/look replay is still the same user-visible wait.
                     thinking_started = True
                     _thinking_cue_start()
+                native_pending = []
+                native_pending_samples = 0
                 for output in outputs:
                     if not first_output_logged:
                         first_output_logged = True
@@ -713,6 +715,16 @@ def run_realtime_turn(
                     # Native voice: play the model's OWN audio straight to the speaker.
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:
+                            # Retain the leading frames while speaker admission
+                            # waits for a filler/protected utterance to finish.
+                            native_pending.append(output.audio)
+                            native_pending_samples += len(output.audio)
+                            if native_pending_samples > realtime.output_sample_rate * 30:
+                                logger.warning("[realtime] Native speaker unavailable for 30s of audio — abandoning reply")
+                                break
+                            # Cancel the timer before contending for the speaker;
+                            # an already-playing filler is preempted by admission.
+                            wait_filler.cancel()
                             native_started = tts.native_play_begin(
                                 realtime.output_sample_rate,
                                 # Explicit ownership for voice metrics: this audio
@@ -728,7 +740,14 @@ def run_realtime_turn(
                                 _thinking_cue_clear()
                                 wait_filler.cancel()
                         if native_started:
-                            tts.native_play_frame(output.audio)
+                            if native_pending:
+                                for frame in native_pending:
+                                    if not tts.native_play_frame(frame):
+                                        break
+                                native_pending.clear()
+                                native_pending_samples = 0
+                            else:
+                                tts.native_play_frame(output.audio)
                         if output.transcript:
                             text_parts.append(output.transcript)
                         continue

@@ -379,13 +379,6 @@ class TTSService:
         self._native_direct: bool = False
         self._native_rs_carry = None
         self._native_rs_pos: float = 0.0
-        # Whether this device accepts a given model rate, keyed (device, rate).
-        # Asking costs a close + reopen of the PERSISTENT stream, which exists
-        # precisely to avoid a multi-second codec warmup — so ask once, not once
-        # per reply. Device-observed 2026-09-07 on intern-v2-6286: the ES8389
-        # refuses 24 kHz with PaErrorCode -9999, and retrying it every reply
-        # churned the stream each time.
-        self._native_direct_cache: dict = {}
 
         # Whether the CURRENT speech should be fed back to the realtime voice
         # agent as [TTS HISTORY] (via the on_speak_end hook in VoiceService).
@@ -1493,34 +1486,32 @@ class TTSService:
             logger.info("native audio suppressed -- turn stopped by user")
             return False
         if not self._lock.acquire(blocking=False):
-            logger.info("native audio: speaker busy, skipping")
+            # Match speak(): an answer takes over an interruptible filler.
+            # Otherwise each incoming native frame is discarded until the
+            # filler ends, leaving only the tail of the model's sentence.
+            # An existing native stream is released by its consumer; do not
+            # wait for that same consumer here or stop another native owner.
+            if self._interruptible and not self._native_mode:
+                logger.info("native audio: interrupting filler before playback")
+                self.stop()
+                if not self._lock.acquire(blocking=True, timeout=2.0):
+                    logger.warning("native audio: speaker lock not released after stop")
+                    return False
+            else:
+                logger.info("native audio: speaker busy, skipping")
+                return False
+        # A stop or mute may have arrived while waiting for the filler worker.
+        if self._speaker_muted() or self._owner_suppressed(owner):
+            self._lock.release()
             return False
         self._stop_event.clear()
         self._native_src_rate = src_rate
         self._native_rs_carry = None
         self._native_rs_pos = 0.0
-        # Prefer opening the device AT the model's rate. The alternative is
-        # resampling every chunk that arrives, and a realtime model streams many
-        # small ones — ALSA's converter runs continuously across writes, a
-        # per-chunk one in Python cannot. Falls back to the device rate plus the
-        # streaming resampler below when the device refuses the rate.
+        # Keep the device-rate stream shared with TTS/fillers warm. Switching
+        # to the model rate closes it and can spend seconds reopening ALSA.
+        # The streaming resampler below preserves continuity across chunks.
         self._native_direct = False
-        cache_key = (self._device_key(), src_rate)
-        if self._native_direct_cache.get(cache_key) is False:
-            pass  # known to refuse this rate — go straight to the resampler
-        else:
-            try:
-                with self._stream_lock:
-                    self._ensure_stream(src_rate)
-                self._native_direct = True
-                self._native_direct_cache[cache_key] = True
-            except Exception as e:
-                self._native_direct_cache[cache_key] = False
-                logger.info(
-                    "native audio: device would not open at %d Hz (%s) — "
-                    "resampling to %s Hz for the rest of this run",
-                    src_rate, e, self._device_rate,
-                )
         self._native_mode = True
         # Native playback is the realtime model's OWN voice — never feed it back
         # (the native_mode check in the hook already skips it; clear the flag too
