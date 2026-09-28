@@ -167,6 +167,12 @@ class LBSetting(BaseModel):
     max_connections: int = 100
     max_keepalive: int = 20
 
+    # Two-slot deploy (scripts/deploy-dlserver.sh). When set, lbserver replaces the
+    # loopback entry of `backends` with the URL in this file, at startup and on
+    # SIGHUP, and records what it applied in "<state_file>.applied". Empty = off,
+    # which is exactly the single-dlserver behaviour.
+    state_file: str = ""
+
 
 class Settings(BaseSettings):
     model_config: ClassVar[SettingsConfigDict] = SettingsConfigDict(
