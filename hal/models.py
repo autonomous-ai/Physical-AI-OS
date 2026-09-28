@@ -6,7 +6,7 @@ All FastAPI endpoint models live here — import from server.py via `from hal.mo
 
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 
 
 class ServoRequest(BaseModel):
@@ -646,7 +646,7 @@ class HealthResponse(BaseModel):
 
 
 class ServoMoveRequest(BaseModel):
-    positions: dict[str, float] = Field(
+    positions: dict[str, FiniteFloat] = Field(
         ...,
         description=(
             "Joint positions (degrees). Ordered by servo ID: "

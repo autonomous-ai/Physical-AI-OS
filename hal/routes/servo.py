@@ -8,6 +8,7 @@ raw encoder values) leak into this file.
 
 import csv
 import io
+import math
 import os
 import re
 import time
@@ -256,13 +257,21 @@ def move_servo(req: ServoMoveRequest):
         )
 
     # Safety gate (SAFETY.md motion.max_speed) — stretch the duration so no
-    # joint exceeds the ceiling. Best-effort read of current pose.
+    # joint exceeds the ceiling. A declared speed bound requires a known pose.
     current = {}
     try:
         current = svc.get_positions()
     except Exception as e:
         state.logger.warning("move: could not read current pose for speed clamp: %s", e)
-    eff_duration = min_move_duration(state.safety_policy, req.positions, current, req.duration)
+    policy = state.safety_policy
+    if policy and policy.motion and policy.motion.max_speed is not None:
+        try:
+            known_pose = all(math.isfinite(float(current[joint])) for joint in req.positions)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            known_pose = False
+        if not known_pose:
+            raise HTTPException(503, "Cannot enforce motion speed limit without a valid current pose")
+    eff_duration = min_move_duration(policy, req.positions, current, req.duration)
 
     errors = {}
 
@@ -340,7 +349,6 @@ def stop_servos():
         except Exception as e:
             state.logger.warning("stop: policy cancellation failed: %s", e)
 
-    svc = _svc_connected()
     # The tracker drives the bus from its own worker thread. Stop it first or it
     # keeps writing goals and the "stop" holds nothing — same ordering the
     # release path needs, and for the same reason.
@@ -350,6 +358,7 @@ def stop_servos():
             state.tracker_service.stop()
         except Exception as e:
             state.logger.warning(f"tracker stop during halt failed: {e}")
+    svc = _svc_connected()
     svc.halt()
     return {"status": "ok"}
 
