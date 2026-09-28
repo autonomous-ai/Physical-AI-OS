@@ -54,11 +54,40 @@ func TestDeviceSoulCore_LampHasOwnSoul(t *testing.T) {
 	}
 }
 
-// Intern-v2 is a body with no persona → no soul_ref → we must NOT override; the
-// agentic runtime (OpenClaw) keeps its own default soul.
-func TestDeviceSoulCore_InternHasNoSoul(t *testing.T) {
-	if _, has := soulFor(t, "intern-v2"); has {
-		t.Error("intern-v2 declares no soul_ref — deviceSoulCore must return hasSoul=false")
+// Intern-v2 ships its own persona, independent of Lamp's.
+func TestDeviceSoulCore_InternHasOwnSoul(t *testing.T) {
+	content, has := soulFor(t, "intern-v2")
+	if !has {
+		t.Fatal("intern-v2 must resolve a SOUL.md")
+	}
+	if !strings.Contains(string(content), "You are **Intern**") {
+		t.Errorf("intern soul missing persona text; got start %q", head(content))
+	}
+}
+
+// A body without soul_ref leaves the agentic runtime's default soul intact.
+func TestDeviceSoulCore_NoSoulRef(t *testing.T) {
+	devicesDir := t.TempDir()
+	deviceDir := filepath.Join(devicesDir, "no-persona")
+	if err := os.MkdirAll(deviceDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(deviceDir, "ROBOT.md"), []byte("---\nname: no-persona\n---\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	// Even a file named SOUL.md must not be injected without an explicit ref.
+	if err := os.WriteFile(filepath.Join(deviceDir, "SOUL.md"), []byte("Unreferenced persona"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("DEVICES_DIR", devicesDir)
+	t.Setenv("DEVICE_TYPE", "no-persona")
+	s := &OpenclawService{config: &config.Config{}}
+	content, has, err := s.deviceSoulCore()
+	if err != nil {
+		t.Fatalf("deviceSoulCore: %v", err)
+	}
+	if has || len(content) != 0 {
+		t.Errorf("body without soul_ref must return no soul; got hasSoul=%v content=%q", has, content)
 	}
 }
 
