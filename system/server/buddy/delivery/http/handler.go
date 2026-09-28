@@ -28,6 +28,7 @@ type BuddyHandler struct {
 	service         *buddy.Service
 	suggestSelector *buddyjev.Selector
 	suggestGate     *sync.Mutex
+	pairConfirmGate pairingConfirmGate
 }
 
 func ProvideBuddyHandler(cfg *config.Config, svc *buddy.Service) BuddyHandler {
