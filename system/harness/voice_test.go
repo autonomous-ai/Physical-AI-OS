@@ -60,6 +60,7 @@ func newVoiceFake() *voiceFake {
 }
 func enableVoice(t *testing.T, f *voiceFake, cb VoiceCallbacks) *VoiceController {
 	t.Helper()
+	cb.SupportsMode = func(context.Context) (bool, error) { return true, nil }
 	v := NewVoiceController(f, cb)
 	if e := v.RefreshFocus(context.Background()); e != nil {
 		t.Fatal(e)
@@ -89,7 +90,7 @@ func questionSet(id string, keys ...string) any {
 func TestVoiceDefaultRestartAndStale(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
-	v := NewVoiceController(f, VoiceCallbacks{})
+	v := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	old := v.State()
 	if old.Enabled {
 		t.Fatal("enabled by default")
@@ -113,7 +114,7 @@ func TestVoiceDefaultRestartAndStale(t *testing.T) {
 	if mutationCount(f) != 0 {
 		t.Fatal("stale mutation")
 	}
-	restart := NewVoiceController(f, VoiceCallbacks{}).State()
+	restart := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }}).State()
 	if restart.Enabled || restart.Generation == s.Generation {
 		t.Fatalf("bad restart: %+v", restart)
 	}
@@ -181,7 +182,7 @@ func TestVoiceStartedTurnAllowsFollowupWithDistinctDeliveryCorrelation(t *testin
 			t.Error("input reached transport before its correlation was registered")
 		}
 	}
-	v := enableVoice(t, f, VoiceCallbacks{
+	v := enableVoice(t, f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil },
 		OnDispatch: func(_, _ string) { t.Error("legacy callback also invoked") },
 		OnDispatchRequest: func(agentID, runID string, frame Frame) {
 			registered++
@@ -327,7 +328,7 @@ func TestVoiceOfflineAndMachineChange(t *testing.T) {
 func TestVoiceFocusSyncWhileOffKeepsCaptureGeneration(t *testing.T) {
 	ctx := context.Background()
 	f := newVoiceFake()
-	v := NewVoiceController(f, VoiceCallbacks{})
+	v := NewVoiceController(f, VoiceCallbacks{SupportsMode: func(context.Context) (bool, error) { return true, nil }})
 	generation := v.State().Generation
 	if err := v.RefreshFocus(ctx); err != nil {
 		t.Fatal(err)

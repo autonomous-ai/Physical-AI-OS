@@ -1597,6 +1597,8 @@ def device():
         "type": _profile.type,
         "schema": _profile.schema,
         "board": _board_id,
+        # Resolved board wiring, not transient driver health or device type.
+        "inputs": {"mpr121": _mpr121_config is not None},
         "boards": _profile.boards,
         "safety_ref": _profile.safety_ref,
         # Resolved, enforced safety bounds (not just the ref): brightness ceiling +

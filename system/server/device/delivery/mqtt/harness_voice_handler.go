@@ -33,7 +33,7 @@ func (h *DeviceMQTTHandler) handleHarnessVoiceMode(env domain.MQTTDataCommand) e
 		return h.publishDataResult(env.Kind, "failure", "Harness voice service unavailable", nil)
 	}
 	if env.Kind == domain.KindHarnessVoiceModeGet {
-		return h.publishDataResult(env.Kind, "success", "", voice.State())
+		return h.publishDataResult(env.Kind, "success", "", voice.SupportState(context.Background()))
 	}
 	var req struct {
 		Enabled *bool `json:"enabled"`
