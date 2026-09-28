@@ -1,5 +1,7 @@
 # Hermes — backend agent
 
+**Ưu tiên phần cứng lúc khởi động:** Installer và onboarding quản lý `/etc/systemd/system/hermes-gateway.service.d/20-hardware-startup.conf`, thêm `ExecStartPre=-/usr/local/bin/os-server --wait-hal-ready` mà không thay lệnh gateway của upstream. Hermes chờ HAL `/health` thành công rồi mới import, giảm tranh chấp storage lúc cold boot. Helper kiểm tra ngay, thử lại mỗi giây và tiếp tục sau tối đa 60 giây nếu HAL vẫn chưa sẵn sàng. HTTP của OS khởi động độc lập; chat Hermes có thể sẵn sàng sau phần cứng. Binary OS cũ từ chối flag chưa hỗ trợ `--wait-hal-ready` trước khi khởi tạo service; dấu `-` cho phép systemd tiếp tục sau khi lệnh thoát. Lệnh restart của OS chờ tối đa 180 giây để đủ thời gian drain gateway, chờ HAL 60 giây và phần khởi động còn lại. Khi HAL đã sẵn sàng, restart gateway chỉ thêm một lần kiểm tra local. Phần Go chỉ reload systemd khi file được quản lý thay đổi; cập nhật riêng OS áp dụng cơ chế chờ cho các lần start gateway tiếp theo.
+
 Jev preload kèm `lookup_name` có category và hướng dẫn dùng nguyên tên đó khi đọc reference (ví dụ `openclaw-imports/computer-use`). Skill bundled trùng tên ngắn vẫn có thể tồn tại; preload không xóa nó hay tự xử lý lời gọi tên ngắn mơ hồ thay model.
 
 Hermes là một trong các **backend agent có thể hoán đổi** mà os-server chạy phía

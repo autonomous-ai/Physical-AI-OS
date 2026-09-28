@@ -52,8 +52,8 @@ func PopulateClaudeCodeVersion() {
 
 // probeClaudeCodeVersion runs a single probe; ok is false on failure/timeout or
 // when no semver token is present, signalling the caller to retry.
-func probeClaudeCodeVersion() (version string, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), claudecodeVersionProbeTimeout)
+func probeClaudeCodeVersion(ctx context.Context) (version string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, claudecodeVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, claudecodeBinary, "--version")
 	if err != nil {

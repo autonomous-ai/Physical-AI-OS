@@ -60,8 +60,8 @@ func PopulateHermesVersion() {
 
 // probeHermesVersion runs one version probe. A failed command, timeout, or
 // unparseable output returns ok=false so PopulateHermesVersion can retry.
-func probeHermesVersion() (version string, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), hermesVersionProbeTimeout)
+func probeHermesVersion(ctx context.Context) (version string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, hermesVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, hermesBinary, "--version")
 	if err != nil {

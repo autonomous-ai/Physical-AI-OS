@@ -160,6 +160,20 @@ echo "[install-hermes] install + start hermes gateway as a system service"
 set +o pipefail
 yes y | "$HERMES_BIN" gateway install --system --run-as-user root
 set -o pipefail
+# Keep optional gateway imports off the disk while HAL starts. Append to any
+# upstream ExecStartPre entries; older OS binaries fail open via the '-' prefix.
+HARDWARE_STARTUP_DIR=/etc/systemd/system/hermes-gateway.service.d
+HARDWARE_STARTUP_DROPIN="$HARDWARE_STARTUP_DIR/20-hardware-startup.conf"
+mkdir -p "$HARDWARE_STARTUP_DIR"
+HARDWARE_STARTUP_TMP=$(mktemp "$HARDWARE_STARTUP_DIR/.hardware-startup-XXXXXX")
+printf '[Service]\nExecStartPre=-/usr/local/bin/os-server --wait-hal-ready\n' >"$HARDWARE_STARTUP_TMP"
+if cmp -s "$HARDWARE_STARTUP_TMP" "$HARDWARE_STARTUP_DROPIN"; then
+  rm -f "$HARDWARE_STARTUP_TMP"
+else
+  chmod 0644 "$HARDWARE_STARTUP_TMP"
+  mv -f "$HARDWARE_STARTUP_TMP" "$HARDWARE_STARTUP_DROPIN"
+  systemctl daemon-reload
+fi
 "$HERMES_BIN" gateway start --system
 "$HERMES_BIN" gateway status --system || true
 

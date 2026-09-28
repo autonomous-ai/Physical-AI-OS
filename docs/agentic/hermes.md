@@ -1,5 +1,7 @@
 # Hermes agent backend
 
+**Hardware-first startup:** The installer and onboarding maintain `/etc/systemd/system/hermes-gateway.service.d/20-hardware-startup.conf`, appending `ExecStartPre=-/usr/local/bin/os-server --wait-hal-ready` without replacing upstream gateway commands. This delays Hermes imports until HAL `/health` succeeds, reducing cold-boot storage contention. The helper checks immediately, retries once per second, and proceeds after at most 60 seconds if HAL remains unavailable. OS HTTP startup is independent; Hermes chat readiness can be later than hardware readiness. Older OS binaries reject the unknown `--wait-hal-ready` flag before initializing services; the leading `-` lets systemd continue after that exit. The OS restart command allows up to 180 seconds for gateway drain, the 60-second HAL wait, and startup overhead. An already-ready HAL adds only one local check on gateway restarts. The Go reconciliation reloads systemd only when the managed file changes; an OS-only upgrade applies the gate for subsequent gateway starts.
+
 The Jev preload carries the categorized `lookup_name` and instructs reference reads to reuse it exactly (for example `openclaw-imports/computer-use`). A bundled skill with the same bare name can coexist; preload does not delete it or resolve ambiguous bare-name calls on the model’s behalf.
 
 Hermes is one of the **swappable agentic backends** the os-server can run behind

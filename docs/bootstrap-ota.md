@@ -1,5 +1,7 @@
 # Bootstrap & OTA System
 
+OrangePi images defer the vendor MOTD update-count job (`orangepi-apt-updates`) by 120 seconds after boot to avoid competing with HAL for storage reads. Only its exact `@reboot root /usr/lib/orangepi/orangepi-apt-updates` cron entry changes; the daily count and APT/security update schedules remain unchanged. Existing devices can apply the same tuning with `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` after copying the script onto the device. The helper is idempotent, skips missing/customized entries, and keeps the original at `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Restore that file to `/etc/cron.d/orangepi-updates` to undo the tuning. This is an image/device configuration change, not part of a HAL-only OTA.
+
 ## 1. Overview
 
 The device runs **5 software components** on a supported board (Raspberry Pi 4, Pi 5, or OrangePi). All components are installed via an initial setup script and kept up-to-date by a background OTA worker.
