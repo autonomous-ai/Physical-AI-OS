@@ -2,7 +2,7 @@
        start start-dlserver start-lbserver \
        start-runpod-master start-runpod-master-ssl start-runpod-slave start-runpod-slave-ssl \
        start-nginx start-nginx-ssl stop-nginx gen-ssl-cert \
-       start-runpod-dlserver start-runpod-lbserver stop-runpod-dlserver stop-runpod-lbserver start-jupyter \
+       start-runpod-dlserver start-runpod-dlserver-slot start-runpod-lbserver stop-runpod-dlserver stop-runpod-lbserver start-jupyter \
        info \
        test test-api test-local \
        test-action test-action-api test-action-local \
@@ -34,13 +34,35 @@ HOST ?= 0.0.0.0
 #   8001 — dlserver (master only, behind LB)
 #   8890 — jupyter
 LBSERVER_PORT ?= 7999
-DLSERVER_PORT ?= 8001
 JUPYTER_PORT ?= 8890
 
-DLSERVER_PID ?= /tmp/dlserver.pid
-DLSERVER_WRAPPER_PID ?= /tmp/dlserver-wrapper.pid
-LBSERVER_PID ?= /tmp/lbserver.pid
-LBSERVER_WRAPPER_PID ?= /tmp/lbserver-wrapper.pid
+RUN_DIR ?= /tmp
+LOG_ROOT ?= /workspace/logs
+
+# Two-slot deploy (scripts/deploy-dlserver.sh): dlserver can run on two ports and
+# lbserver sends traffic to the one named in DLSERVER_STATE_FILE. The file lives in
+# RUN_DIR so a container recreate, which wipes /tmp and every process, falls back
+# to slot A together with the pid files. DLSERVER_PORT defaults to the active slot,
+# so every dlserver target acts on the slot that is serving.
+DLSERVER_SLOT_A ?= 8001
+DLSERVER_SLOT_B ?= 8002
+DLSERVER_STATE_FILE ?= $(RUN_DIR)/dlserver-active
+DLSERVER_PORT ?= $(shell sed -n 's|^http://127.0.0.1:\([0-9][0-9]*\)$$|\1|p' $(DLSERVER_STATE_FILE) 2>/dev/null | grep . || echo $(DLSERVER_SLOT_A))
+# Slot A keeps the historical paths; other slots get a -<port> suffix.
+ifeq ($(DLSERVER_PORT),$(DLSERVER_SLOT_A))
+DLSERVER_SLOT :=
+else
+DLSERVER_SLOT := -$(DLSERVER_PORT)
+endif
+
+DLSERVER_PID ?= $(RUN_DIR)/dlserver$(DLSERVER_SLOT).pid
+DLSERVER_WRAPPER_PID ?= $(RUN_DIR)/dlserver$(DLSERVER_SLOT)-wrapper.pid
+DLSERVER_LOG_DIR ?= $(LOG_ROOT)/dlserver$(DLSERVER_SLOT)
+# Commit the slot was started from; the deploy refuses if pyproject.toml changed since.
+DLSERVER_REV ?= $(RUN_DIR)/dlserver$(DLSERVER_SLOT).rev
+LBSERVER_PID ?= $(RUN_DIR)/lbserver.pid
+LBSERVER_WRAPPER_PID ?= $(RUN_DIR)/lbserver-wrapper.pid
+LBSERVER_LOG_DIR ?= $(LOG_ROOT)/lbserver
 
 # Resolve TensorRT/cuDNN LD_LIBRARY_PATH (evaluated once, cached)
 define SET_TRT_LD_PATH
@@ -125,8 +147,8 @@ start-runpod-slave: start-nginx stop-runpod-dlserver install
 	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
 		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
 		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
-		--log-dir /workspace/logs/dlserver -- \
-		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver \
+		--log-dir $(LOG_ROOT)/dlserver -- \
+		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir $(LOG_ROOT)/dlserver \
 		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(LBSERVER_PORT) (slave, no LB)"
 
@@ -134,8 +156,8 @@ start-runpod-slave-ssl: start-nginx-ssl stop-runpod-dlserver install
 	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
 		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
 		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
-		--log-dir /workspace/logs/dlserver -- \
-		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/dlserver \
+		--log-dir $(LOG_ROOT)/dlserver -- \
+		python -m dlserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir $(LOG_ROOT)/dlserver \
 		</dev/null >/dev/null 2>&1 &
 	@echo "dlserver started on port $(LBSERVER_PORT) (slave-ssl, no LB)"
 
@@ -177,29 +199,40 @@ start-nginx-ssl: gen-ssl-cert stop-nginx
 	cp $(NGINX_SSL_CONF) /etc/nginx/perception-service-nginx-ssl.conf
 	nginx -c /etc/nginx/perception-service-nginx-ssl.conf
 
+# One dlserver slot; DLSERVER_PORT picks it and its pid files / log dir follow.
+define START_DLSERVER
+@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
+	--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
+	--probe-url http://127.0.0.1:$(DLSERVER_PORT)/livez \
+	--log-dir $(DLSERVER_LOG_DIR) -- \
+	python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir $(DLSERVER_LOG_DIR) \
+	</dev/null >/dev/null 2>&1 &
+@git rev-parse HEAD > $(DLSERVER_REV) 2>/dev/null || true
+@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
+endef
+
 start-runpod-dlserver: install stop-runpod-dlserver
-	@$(SET_TRT_LD_PATH); nohup setsid bash scripts/run-with-restart.sh \
-		--pid-file $(DLSERVER_PID) --wrapper-pid-file $(DLSERVER_WRAPPER_PID) --cooldown 5 \
-		--probe-url http://127.0.0.1:$(DLSERVER_PORT)/livez \
-		--log-dir /workspace/logs/dlserver -- \
-		python -m dlserver --host 127.0.0.1 --port $(DLSERVER_PORT) --log-dir /workspace/logs/dlserver \
-		</dev/null >/dev/null 2>&1 &
-	@echo "dlserver started on port $(DLSERVER_PORT) (auto-restart enabled)"
+	$(START_DLSERVER)
+
+# Same without `install`: the deploy starts the new slot while the old one still
+# serves from this venv, and pip must not rewrite it underneath.
+start-runpod-dlserver-slot: stop-runpod-dlserver
+	$(START_DLSERVER)
 
 stop-runpod-dlserver:
-	@bash scripts/stop-tree.sh dlserver $(DLSERVER_PORT) $(DLSERVER_WRAPPER_PID) $(DLSERVER_PID)
+	@bash scripts/stop-tree.sh dlserver $(DLSERVER_PORT) $(DLSERVER_WRAPPER_PID) $(DLSERVER_PID) $(DLSERVER_LOG_DIR)
 
 start-runpod-lbserver: install-lb stop-runpod-lbserver
-	@nohup setsid bash scripts/run-with-restart.sh \
+	@LB__STATE_FILE=$(DLSERVER_STATE_FILE) nohup setsid bash scripts/run-with-restart.sh \
 		--pid-file $(LBSERVER_PID) --wrapper-pid-file $(LBSERVER_WRAPPER_PID) --cooldown 5 \
 		--probe-url http://127.0.0.1:$(LBSERVER_PORT)/livez \
-		--log-dir /workspace/logs/lbserver -- \
-		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir /workspace/logs/lbserver \
+		--log-dir $(LBSERVER_LOG_DIR) -- \
+		python -m lbserver --host 127.0.0.1 --port $(LBSERVER_PORT) --log-dir $(LBSERVER_LOG_DIR) \
 		</dev/null >/dev/null 2>&1 &
 	@echo "lbserver started on port $(LBSERVER_PORT) (auto-restart enabled)"
 
 stop-runpod-lbserver:
-	@bash scripts/stop-tree.sh lbserver $(LBSERVER_PORT) $(LBSERVER_WRAPPER_PID) $(LBSERVER_PID)
+	@bash scripts/stop-tree.sh lbserver $(LBSERVER_PORT) $(LBSERVER_WRAPPER_PID) $(LBSERVER_PID) $(LBSERVER_LOG_DIR)
 
 start-jupyter:
 	@if ! command -v jupyter-lab > /dev/null 2>&1; then \

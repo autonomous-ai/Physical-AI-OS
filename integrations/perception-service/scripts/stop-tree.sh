@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Stop a perception-service process tree and PROVE it stopped.
 #
-# Usage: stop-tree.sh NAME PORT WRAPPER_PID_FILE PID_FILE
+# Usage: stop-tree.sh NAME PORT WRAPPER_PID_FILE PID_FILE [LOG_DIR]
 #
 # The old `make stop-runpod-*` bodies sent one SIGTERM to two PIDs read from
 # /tmp, slept 2 seconds, and printed "stopped" unconditionally. Three problems,
@@ -21,6 +21,10 @@ NAME=${1:?usage: stop-tree.sh NAME PORT WRAPPER_PID_FILE PID_FILE}
 PORT=${2:?}
 WPID_FILE=${3:?}
 PID_FILE=${4:?}
+# LOG_DIR identifies ONE instance. Two dlserver slots run side by side with
+# different log dirs (two-slot deploy); matching the name alone stopped both.
+# Anchored with ( |$) so /workspace/logs/dlserver does not match dlserver-8002.
+LOG_DIR=${5:-/workspace/logs/$NAME}
 
 # Every PID belonging to this service, from every source we have. The process
 # group covers anything the wrapper spawned (child, size guard, liveness probe);
@@ -47,8 +51,8 @@ collect() {
         done
         [[ -r "$WPID_FILE" ]] && cat "$WPID_FILE"
         [[ -r "$PID_FILE"  ]] && cat "$PID_FILE"
-        pgrep -f "run-with-restart.sh .*--log-dir /workspace/logs/$NAME" 2>/dev/null
-        pgrep -f "python -m $NAME " 2>/dev/null
+        pgrep -f "run-with-restart.sh .*--log-dir $LOG_DIR( |\$)" 2>/dev/null
+        pgrep -f "python -m $NAME .*--log-dir $LOG_DIR( |\$)" 2>/dev/null
     } 2>/dev/null | grep -E '^[0-9]+$' | sort -un
 }
 
