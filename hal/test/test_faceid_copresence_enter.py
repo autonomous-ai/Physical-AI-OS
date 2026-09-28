@@ -262,3 +262,37 @@ def test_reset_cooldowns_forgets_waiting_strangers(perception, monkeypatch):
 
     assert perception._ungreeted_strangers == {}
     assert len(perception._stranger_gaze_ticks) == 0
+
+
+def _tick_at(perception, faces, monkeypatch, ts: float):
+    """A tick at wall-clock time ``ts`` — for the gaze window, which ages votes."""
+    monkeypatch.setattr(perception_mod.time, "time", lambda: ts)
+    _tick(perception, faces, monkeypatch)
+
+
+def test_glances_far_apart_do_not_greet(perception, monkeypatch):
+    """#531: a glance at 10:00 and one at 10:01 (same visit) are not "looking at
+    the lamp" — the first vote has aged out of FACE_STRANGER_GAZE_WINDOW_S."""
+    t0 = 1_000_000.0
+    _tick_at(perception, [STRANGER], monkeypatch, t0)
+    _tick_at(perception, [STRANGER], monkeypatch, t0 + 60)
+
+    assert _enters(perception) == []
+
+    _tick_at(perception, [STRANGER], monkeypatch, t0 + 62)  # looking now, 2 in window
+
+    assert _enters(perception) == [
+        "Person detected — new: stranger (stranger_2); faces in frame: 1 (stranger_2)"
+    ]
+    assert len(_enter_images(perception)[-1]) == 2  # the 60 s old frame is not attached
+
+
+def test_a_skipped_tick_inside_the_window_still_greets(perception, monkeypatch):
+    """Busy perception workers skip ticks; two facing ticks 4 s apart still count."""
+    t0 = 1_000_000.0
+    _tick_at(perception, [STRANGER], monkeypatch, t0)
+    _tick_at(perception, [STRANGER], monkeypatch, t0 + 4)
+
+    assert _enters(perception) == [
+        "Person detected — new: stranger (stranger_2); faces in frame: 1 (stranger_2)"
+    ]

@@ -3,7 +3,8 @@
 The per-face rule is gaze wake's (hal/drivers/tracking/gaze.py): yaw from the
 five keypoints, the GAZE_MAX_YAW_DEG cone widened toward the frame edge, the
 GAZE_MIN_FACE_PX floor, and landmarks outside the frame never vote. Only the
-vote differs: face ID ticks every 2 s, so it counts ticks, not a time window.
+vote differs: face ID ticks every 2 s, so it counts ticks, and only ticks
+younger than FACE_STRANGER_GAZE_WINDOW_S.
 """
 
 from collections.abc import Iterable
@@ -22,6 +23,7 @@ class StrangerGazeTick(NamedTuple):
 
     frame: cv2.typing.MatLike  # annotated snapshot
     facing: frozenset[str]  # ungreeted stranger ids facing the lamp on it
+    ts: float  # when the tick was seen; older than FACE_STRANGER_GAZE_WINDOW_S no longer votes
 
 
 def face_facing_lamp(face: Face, frame_w: int, frame_h: int) -> bool:

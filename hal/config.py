@@ -162,12 +162,23 @@ FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOO
 # every HAL_SENSING_INTERVAL (2 s), too slow for gaze wake's 1.5 s window, so the
 # vote counts face-ID ticks: the stranger must face the lamp (gaze wake's cone,
 # size floor and edge rules) on FACE_STRANGER_GAZE_MIN_FACING of the last
-# FACE_STRANGER_GAZE_TICKS ticks they were in frame. One glance or one noisy yaw
+# FACE_STRANGER_GAZE_TICKS ticks they were in frame, within
+# FACE_STRANGER_GAZE_WINDOW_S. One glance or one noisy yaw
 # does not greet. Never held or timed out: someone who never looks is never
 # greeted, and is still logged, snapshotted and counted as today.
 FACE_STRANGER_GAZE_TICKS = int(os.environ.get("HAL_FACE_STRANGER_GAZE_TICKS", "3"))
 FACE_STRANGER_GAZE_MIN_FACING = int(
     os.environ.get("HAL_FACE_STRANGER_GAZE_MIN_FACING", "2")
+)
+# How far back those ticks may reach. The vote means "looked at the lamp for a
+# few seconds", not "glanced twice in one visit": without an age limit, a glance
+# at 10:00 and another at 10:15 (same visit, still ungreeted) add up to a
+# greeting, with a 15-minute-old frame attached. 10 s holds the 3 ticks (6 s at
+# HAL_SENSING_INTERVAL 2 s) plus slack for a tick skipped while the shared
+# perception workers are busy. Ticks, not an unbroken run: a face that blurs to
+# unsure for one tick must not reset someone who is looking.
+FACE_STRANGER_GAZE_WINDOW_S = float(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_WINDOW_S", "10.0")
 )
 # An enrolled face can grant voice focus on presence.enter. Keep stranger-only
 # enters agent-visible without granting focus unless a deployment explicitly

@@ -137,6 +137,7 @@ FACE_OWNER_FORGET_S = 3600.0        # Bắn lại presence sau N giây không th
 FACE_STRANGER_FORGET_S = 1800.0     # Tương tự cho người lạ
 FACE_STRANGER_GAZE_TICKS = 3        # Chào người lạ: số nhịp face-ID trong lượt bỏ phiếu gaze
 FACE_STRANGER_GAZE_MIN_FACING = 2   # Chào người lạ: số nhịp nhìn về đèn cần có
+FACE_STRANGER_GAZE_WINDOW_S = 10.0  # Chào người lạ: tuổi tối đa của một phiếu gaze
 ```
 
 Ngưỡng height ratio lọc bỏ những khuôn mặt **quá nhỏ** so với frame — thường là người ở xa, hoặc false positive mà crop mặt quá thấp độ phân giải để nhận diện đáng tin. Mặt có chiều cao bbox dưới ngưỡng (theo tỉ lệ chiều cao frame) bị bỏ qua trước khi phân loại.
@@ -258,6 +259,7 @@ Việc kiểm tra ánh nhìn của người lạ dùng lại `GAZE_MAX_YAW_DEG`,
 | Khách lạ mất quá lâu mới được ghi nhận | Giảm `FACE_STRANGER_MIN_TICKS` xuống 1 để cấp id ngay từ một frame (hành vi cũ) |
 | Vẫn xuất hiện id `stranger_N` giả | Tăng `FACE_STRANGER_MIN_TICKS` lên 3; mỗi bậc khiến khách thật chậm thêm một nhịp sensing |
 | Lamp không bao giờ chào một vị khách đã nhìn về phía nó | Giảm `FACE_STRANGER_GAZE_MIN_FACING` (2 → 1); kiểm tra `[face] stranger gaze:` trong log HAL |
+| Khách nhìn một lúc ngắn nhưng không được chào vì nhịp chậm hoặc bị bỏ qua | Tăng `FACE_STRANGER_GAZE_WINDOW_S` (10 → 15); quá lớn thì các cái liếc cách nhau vài phút sẽ cộng dồn |
 | Nhận diện chết hẳn trong phòng tối sau khi cập nhật | Phương sai Laplacian giảm theo ánh sáng; giảm `FACE_MIN_SHARPNESS` (100 → 70) rồi kiểm tra lại `FAIL-blurred` |
 | Lamp cấp id `stranger_N` cho chính chủ ở cự ly gần | Detector đang bắt trúng vành tai hoặc tương tự — đó là thứ `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 lọc ra |
 | Mặt rõ ràng bình thường lại ngừng được nhận diện sau khi cập nhật | Giảm `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); mặc định được tinh chỉnh trên một thiết bị |

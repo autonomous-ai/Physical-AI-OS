@@ -139,7 +139,8 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         # None). A stranger is greeted only once they look at the lamp (#531).
         self._ungreeted_strangers: dict[str, str | None] = {}
         # The last FACE_STRANGER_GAZE_TICKS ticks an ungreeted stranger was in
-        # frame: the annotated snapshot and who faced the lamp on it.
+        # frame (no older than FACE_STRANGER_GAZE_WINDOW_S): the annotated
+        # snapshot, who faced the lamp on it, and when.
         self._stranger_gaze_ticks: deque[StrangerGazeTick] = deque(
             maxlen=config.FACE_STRANGER_GAZE_TICKS
         )
@@ -542,7 +543,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                 for sid in new_strangers:
                     self._ungreeted_strangers[sid] = familiar_paths.get(sid)
                 greeted, gaze_frames, familiar_paths = self._stranger_gaze_greeting(
-                    frame, faces, annotated_frame
+                    frame, faces, annotated_frame, cur_ts
                 )
                 stranger_ids_to_send = greeted
                 annotated_frames_to_send = gaze_frames
@@ -1015,6 +1016,7 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         frame: cv2.typing.MatLike,
         faces: list[Face],
         annotated_frame: cv2.typing.MatLike,
+        cur_ts: float,
     ) -> tuple[set[str], list[cv2.typing.MatLike], dict[str, str]]:
         """Record this tick's gaze for ungreeted strangers; return who to greet.
 
@@ -1034,7 +1036,16 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         facing = frozenset(
             f.person_id for f in waiting if face_facing_lamp(f, frame_w, frame_h)
         )
-        self._stranger_gaze_ticks.append(StrangerGazeTick(annotated_frame, facing))
+        # A vote older than the window says nothing about looking now (#531).
+        while (
+            self._stranger_gaze_ticks
+            and cur_ts - self._stranger_gaze_ticks[0].ts
+            > config.FACE_STRANGER_GAZE_WINDOW_S
+        ):
+            _ = self._stranger_gaze_ticks.popleft()
+        self._stranger_gaze_ticks.append(
+            StrangerGazeTick(annotated_frame, facing, cur_ts)
+        )
         ticks = [t.facing for t in self._stranger_gaze_ticks]
         in_frame = sorted({f.person_id for f in waiting})
         logger.info(

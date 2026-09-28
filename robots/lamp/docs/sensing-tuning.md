@@ -180,6 +180,7 @@ FACE_OWNER_FORGET_S = 3600.0        # Re-fire presence after N seconds without s
 FACE_STRANGER_FORGET_S = 1800.0     # Same for strangers
 FACE_STRANGER_GAZE_TICKS = 3        # Stranger greeting: face-ID ticks in the gaze vote
 FACE_STRANGER_GAZE_MIN_FACING = 2   # Stranger greeting: ticks facing the lamp needed
+FACE_STRANGER_GAZE_WINDOW_S = 10.0  # Stranger greeting: max age of a gaze vote
 ```
 
 The height ratio threshold filters out faces that are **too small** relative to the frame — typically distant people or false positives where the face crop is too low-resolution for reliable recognition. Faces whose bounding-box height is under the threshold fraction of the frame height are skipped, before classification.
@@ -362,6 +363,7 @@ The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_S
 | Unknown visitors take too long to be noticed | Lower `FACE_STRANGER_MIN_TICKS` to 1 to mint from a single frame (the old behaviour) |
 | Spurious `stranger_N` identities still appear | Raise `FACE_STRANGER_MIN_TICKS` to 3; each step costs a visitor one more sensing tick |
 | Lamp never greets a visitor who looked at it | Lower `FACE_STRANGER_GAZE_MIN_FACING` (2 → 1); check `[face] stranger gaze:` in the HAL log |
+| Visitor who looked briefly is not greeted because ticks are slow or skipped | Raise `FACE_STRANGER_GAZE_WINDOW_S` (10 → 15); too large lets glances minutes apart add up |
 | Recognition drops out in a dim room after an update | Laplacian variance falls with light; lower `FACE_MIN_SHARPNESS` (100 → 70) and re-check `FAIL-blurred` |
 | Lamp mints `stranger_N` ids for the enrolled user at close range | The detector is firing on an ear or similar — that is what `HAL_FACE_LANDMARK_CONF_THRESHOLD` 0.99 screens out |
 | Faces that are plainly fine stop being recognized after an update | Lower `HAL_FACE_LANDMARK_CONF_THRESHOLD` (0.99 → 0.95); the default is tuned on one device |
