@@ -1084,6 +1084,9 @@ mục đích đó.
 
 ### `harness.voice-mode.get` / `harness.voice-mode.set` — Giọng nói Harness-only
 
+Bật mode yêu cầu HAL xác nhận board đang chạy có cấu hình MPR121. Metadata thiếu/false hoặc lỗi đọc HAL trả `status:"failure"` và giữ mode tắt. Vẫn cho phép tắt. Snapshot có thêm `supported`; xem [Tích hợp Harness](harness_vi.md#chế-độ-giọng-nói-harness-only).
+
+
 **Nhận trên `fa_channel`:**
 ```json
 {"cmd":"data","kind":"harness.voice-mode.get"}
@@ -1101,10 +1104,10 @@ Cả hai lệnh phản hồi trên `fd_channel` bằng metadata `MQTTDataRespons
 `type:"data"`, cùng `kind` với request và snapshot giống
 `GET /api/harness/voice-mode` (lược bỏ metadata thiết bị trong ví dụ):
 ```json
-{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
+{"type":"data","kind":"harness.voice-mode.set","status":"success","data":{"enabled":true,"supported":true,"generation":1789350000000000,"machineId":"computer-id","agentId":"agent-id","agentName":"Mike","focusRevision":"instance:3","focusAvailable":true}}
 ```
 
-Snapshot là `{enabled,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
+Snapshot là `{enabled,supported,generation,machineId,agentId,agentName?,focusRevision,focusAvailable,pending?,error?}`.
 Khi focus chưa khả dụng, snapshot có thể chứa `focusAvailable:false` và
 `error` dù lệnh thành công. Input không hợp lệ hoặc controller không khả dụng
 trả `status:"failure"` cùng field `error` của envelope.
