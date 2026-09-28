@@ -5,12 +5,13 @@ import os
 import re
 import subprocess
 import wave
-from typing import Optional
+from typing import Annotated, Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import Response
 
 import hal.app_state as state
+from hal import privacy
 from hal.config import AUDIO_OUTPUT_ALSA, VOLUME_STATE_PATH
 from hal.drivers.voice._internal import live_playback
 from hal.safety.policy import clamp_volume, max_volume_pct
@@ -275,8 +276,13 @@ def get_volume():
 
 
 @router.post("/audio/play-tone", response_model=StatusResponse)
-def play_tone(frequency: int = 440, duration_ms: int = 500):
-    """Play a test tone through the speaker."""
+def play_tone(
+    frequency: Annotated[int, Query(ge=20, le=20_000)] = 440,
+    duration_ms: Annotated[int, Query(ge=1, le=5_000)] = 500,
+):
+    """Play a bounded test tone while speaker privacy policy allows it."""
+    if state._speaker_muted or privacy.speaker_muted:
+        raise HTTPException(409, "Speaker is muted")
     if state.simulation_audio:
         return {"status": "ok"}
     if not sd or not np:
@@ -298,8 +304,10 @@ def play_tone(frequency: int = 440, duration_ms: int = 500):
 
 
 @router.post("/audio/record")
-def record_audio(duration_ms: int = 3000):
-    """Record audio from the microphone. Returns WAV bytes."""
+def record_audio(duration_ms: Annotated[int, Query(ge=100, le=30_000)] = 3000):
+    """Record bounded audio from an unmuted microphone. Returns WAV bytes."""
+    if state._mic_muted or privacy.mic_locked():
+        raise HTTPException(409, "Microphone is muted")
     if state.simulation_audio:
         sample_rate = 16_000
         frames = int(sample_rate * duration_ms / 1000)
@@ -326,6 +334,8 @@ def record_audio(duration_ms: int = 3000):
         device=state.audio_input_device,
     )
     sd.wait()
+    if state._mic_muted or privacy.mic_locked():
+        raise HTTPException(409, "Microphone was muted during recording")
 
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
