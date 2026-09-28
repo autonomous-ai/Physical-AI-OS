@@ -196,3 +196,27 @@ def test_the_stranger_bar_is_read_from_the_constructor(rec):
     r._stranger_threshold = 0.30
     face = _tick(r, basis, owner_sim=0.0, stranger_sim=0.385)
     assert face.kind == PersonKind.STRANGER and face.person_id == "stranger_7"
+
+
+def test_face_carries_the_five_keypoints_flat(rec):
+    """#531: the stranger greeting measures head yaw from SCRFD's 5 points."""
+    r, basis = rec
+    kps = np.array(
+        [[150, 150], [250, 150], [200, 200], [160, 260], [240, 260]], dtype=np.float32
+    )
+    original_get = r._app.get
+
+    def get_with_kps(frame):
+        dets = original_get(frame)
+        dets[0]["kps"] = kps
+        return dets
+
+    r._app.get = get_with_kps
+    face = _tick(r, basis, owner_sim=0.0, stranger_sim=0.65)
+    assert face.kps == [150.0, 150.0, 250.0, 150.0, 200.0, 200.0, 160.0, 260.0, 240.0, 260.0]
+
+
+def test_face_kps_is_none_without_keypoints(rec):
+    r, basis = rec
+    face = _tick(r, basis, owner_sim=0.0, stranger_sim=0.65)
+    assert face.kps is None
