@@ -43,11 +43,16 @@ LOG_ROOT ?= /workspace/logs
 # lbserver sends traffic to the one named in DLSERVER_STATE_FILE. The file lives in
 # RUN_DIR so a container recreate, which wipes /tmp and every process, falls back
 # to slot A together with the pid files. DLSERVER_PORT defaults to the active slot,
-# so every dlserver target acts on the slot that is serving.
+# so every dlserver target acts on the slot that is serving. It is read from the
+# state file (or env/command-line, which still win) exactly once per make run --
+# not on every reference -- so the pid/log-dir paths derived below and every
+# recipe line agree even if the state file changes mid-invocation.
 DLSERVER_SLOT_A ?= 8001
 DLSERVER_SLOT_B ?= 8002
 DLSERVER_STATE_FILE ?= $(RUN_DIR)/dlserver-active
-DLSERVER_PORT ?= $(shell sed -n 's|^http://127.0.0.1:\([0-9][0-9]*\)$$|\1|p' $(DLSERVER_STATE_FILE) 2>/dev/null | grep . || echo $(DLSERVER_SLOT_A))
+ifndef DLSERVER_PORT
+DLSERVER_PORT := $(shell sed -n 's|^http://127.0.0.1:\([0-9][0-9]*\)$$|\1|p' $(DLSERVER_STATE_FILE) 2>/dev/null | grep . || echo $(DLSERVER_SLOT_A))
+endif
 # Slot A keeps the historical paths; other slots get a -<port> suffix.
 ifeq ($(DLSERVER_PORT),$(DLSERVER_SLOT_A))
 DLSERVER_SLOT :=
