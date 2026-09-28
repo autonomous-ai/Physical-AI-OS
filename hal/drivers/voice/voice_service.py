@@ -1601,6 +1601,10 @@ class VoiceService:
             speech_iid = ""
             buffer_mixed = False
             native_owner = ""
+            native_pending = []
+            native_pending_samples = 0
+            native_pending_key = None
+            native_failed_keys = set()
             try:
                 output_options = {"stop_event": stop_event} if stop_event is not None else {}
                 for out in self._realtime.stream_output(**output_options):
@@ -1759,6 +1763,9 @@ class VoiceService:
                         )
                         continue
                     if isinstance(out, RTInterruptedOutput):
+                        if not out.user_turn_id or out.user_turn_id == native_pending_key:
+                            native_pending.clear()
+                            native_pending_samples = 0
                         # The first output transcript also sends an audio reset;
                         # that is not evidence of a user asking us to stop.
                         if out.reason == "server_interrupt":
@@ -1810,11 +1817,30 @@ class VoiceService:
                             cues.finish(out.user_turn_id)
                         def write_native():
                             nonlocal native_started, native_owner
+                            nonlocal native_pending_key, native_pending_samples
+                            key = out.user_turn_id or fallback_key
+                            if key in native_failed_keys:
+                                return
+                            if key != native_pending_key:
+                                native_pending.clear()
+                                native_pending_samples = 0
+                                native_pending_key = key
                             owner = metrics.owner(out.user_turn_id)
                             if native_started and owner != native_owner:
                                 self._tts.set_native_playback_owner(owner)
                                 native_owner = owner
                             if not native_started:
+                                # Admission can fail while a filler/protected
+                                # utterance owns the speaker. Retain the prefix
+                                # instead of starting midway through the reply.
+                                native_pending.append(out.audio)
+                                native_pending_samples += len(out.audio)
+                                if native_pending_samples > self._realtime.output_sample_rate * 30:
+                                    logger.warning("[live] Native speaker unavailable for 30s of audio; cancelling reply=%s", key)
+                                    native_pending.clear()
+                                    native_pending_samples = 0
+                                    native_failed_keys.add(key)
+                                    return
                                 native_started = self._tts is not None and (
                                     self._tts.native_play_begin(
                                         self._realtime.output_sample_rate, owner=owner,
@@ -1824,7 +1850,16 @@ class VoiceService:
                             if native_started:
                                 if opener is not None:
                                     opener["consumed"] = True
-                                self._tts.native_play_frame(out.audio)
+                                frames = native_pending or [out.audio]
+                                for frame in frames:
+                                    if self._tts.native_play_frame(frame) is False:
+                                        # Do not resume with a later suffix after
+                                        # cancellation or a failed device write.
+                                        native_failed_keys.add(key)
+                                        logger.warning("[live] Native playback stopped; discarding remaining audio reply=%s", key)
+                                        break
+                                native_pending.clear()
+                                native_pending_samples = 0
                                 if opener is not None:
                                     if out.user_turn_id and out.user_turn_id == opener["key"]:
                                         opener["replied"] = True

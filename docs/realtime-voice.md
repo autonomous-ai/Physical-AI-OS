@@ -1365,6 +1365,15 @@ device logs showed native chunks discarded as `speaker busy, skipping` throughou
 a filler, followed by a 44.1-to-24 kHz stream reopen; only the answer tail played.
 The fix is locally regression-tested; no on-device playback validation is implied.
 
+The Live Mode output pump also retains leading native frames while speaker
+admission is busy, up to 30 seconds of source audio per reply. It flushes the
+prefix in order once admitted, discards pending audio on interruption or reply
+identity changes, and stops forwarding the remainder after a failed frame write.
+This also applies when selecting Gemini TTS automatically enables native audio.
+Regression tests in `hal/test/test_live_native_admission.py` reproduced prefix
+loss before the fix; this does not establish the cause of a particular device
+report without matching playback logs.
+
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
 then joins workers; a failed handshake rolls back that loop/thread immediately.

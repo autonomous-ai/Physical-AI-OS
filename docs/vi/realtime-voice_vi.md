@@ -1318,6 +1318,14 @@ bị bỏ với `speaker busy, skipping` suốt filler, rồi stream đổi từ
 24 kHz; người dùng chỉ nghe đuôi câu. Bản sửa đã có regression test local, chưa
 xác nhận phát tiếng trên device sau sửa.
 
+Output pump của Live Mode cũng giữ các frame native đầu khi chưa lấy được loa,
+tối đa 30 giây audio nguồn cho mỗi reply. Khi lấy được loa, phát phần đầu đúng
+thứ tự; bỏ audio đang giữ khi bị ngắt hoặc đổi reply, và ngừng chuyển phần còn
+lại nếu ghi một frame thất bại. Cơ chế này áp dụng cả khi chọn Gemini TTS tự bật
+native audio. Test trong `hal/test/test_live_native_admission.py` tái hiện mất
+đầu câu trước sửa; chưa thể kết luận nguyên nhân của một báo cáo trên device
+nếu chưa đối chiếu log phát audio tương ứng.
+
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
 worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị
