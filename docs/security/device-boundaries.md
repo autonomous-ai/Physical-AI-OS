@@ -38,3 +38,11 @@ Diagnostic tone behavior during quiet hours is unchanged; the existing music qui
 ## Agent file symlinks
 
 Web Chat (`GET /api/agent/file`) and MQTT (`chat.file.get`) share the resolver. Both requested and resolved target extensions must be allowed: a `.txt` symlink cannot expose a `.json`, `.log` or extensionless target, even inside an allowed root. Valid inside-root symlinks still work and use the target MIME type. Root, regular-file, 32 MiB and authentication checks remain unchanged.
+
+## HAL file paths
+
+Face photo/file routes resolve requested paths and require containment within `USERS_DIR`; matching-prefix sibling directories and symlink escapes are rejected. Voice enrollment uses a private randomly named temporary WAV independent of the supplied name and cleans it up while restoring service state even if temporary-file creation fails.
+
+## Scope of the September 2026 corrections
+
+The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS trust and archive supply-chain proposals remain separate review items, not claims of fixed vulnerabilities.

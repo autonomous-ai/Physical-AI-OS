@@ -1,6 +1,8 @@
 """Mock regressions for HAL privacy boundaries."""
 
 from unittest import mock
+from pathlib import Path
+import stat
 
 import pytest
 from fastapi import HTTPException
@@ -46,3 +48,43 @@ def test_enrollment_refuses_muted_mic(monkeypatch, flag):
         assert error.value.status_code == 409
         capture.assert_not_called()
     state.voice_service.start.assert_not_called()
+
+
+def test_enrollment_temp_file_is_private_and_name_independent(monkeypatch, tmp_path):
+    monkeypatch.setattr(speaker.time, 'sleep', lambda _: None)
+    original_mkstemp = speaker.tempfile.mkstemp
+    monkeypatch.setattr(speaker.tempfile, 'mkstemp',
+                        lambda **kwargs: original_mkstemp(dir=tmp_path, **kwargs))
+    captured = []
+
+    def capture(path, _duration):
+        wav = Path(path)
+        captured.append(wav)
+        assert wav.parent == tmp_path
+        assert stat.S_IMODE(wav.stat().st_mode) == 0o600
+        assert wav.name.startswith('voice-enroll-')
+        # An error after opening the file must still clean up and restore voice.
+        raise HTTPException(503, 'mock capture failure')
+
+    monkeypatch.setattr(speaker, '_capture_enroll_wav', capture)
+    with pytest.raises(HTTPException) as error:
+        speaker.speaker_record_enroll(speaker.RecordEnrollRequest(name='../../outside'))
+    assert error.value.status_code == 503
+    assert len(captured) == 1
+    assert not captured[0].exists()
+    assert not state._enrolling
+    assert not state._speaker_muted
+    state.voice_service.start.assert_called_once()
+
+
+def test_enrollment_temp_creation_failure_restores_state(monkeypatch):
+    monkeypatch.setattr(speaker.time, 'sleep', lambda _: None)
+    with mock.patch.object(speaker.tempfile, 'mkstemp', side_effect=OSError('no space')):
+        with mock.patch.object(speaker, '_capture_enroll_wav') as capture:
+            with pytest.raises(HTTPException) as error:
+                speaker.speaker_record_enroll(speaker.RecordEnrollRequest(name='tester'))
+    assert error.value.status_code == 500
+    capture.assert_not_called()
+    assert not state._enrolling
+    assert not state._speaker_muted
+    state.voice_service.start.assert_called_once()

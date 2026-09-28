@@ -27,6 +27,7 @@ import os
 import re
 import shutil
 import subprocess
+import tempfile
 import time
 import wave
 from pathlib import Path
@@ -473,8 +474,11 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
     # this, arecord can fail with "Device or resource busy".
     time.sleep(0.4)
 
-    wav_path = f"/tmp/voice-enroll-{name}-{int(time.time() * 1000)}.wav"
+    wav_path = None
     try:
+        # Create privately and independently of the user-supplied display name.
+        fd, wav_path = tempfile.mkstemp(prefix="voice-enroll-", suffix=".wav")
+        os.close(fd)
         logger.info("POST /speaker/record-enroll name=%r duration=%ds", name, duration)
         if state._mic_muted or privacy.mic_locked():
             raise HTTPException(409, "Microphone is muted")
@@ -515,10 +519,11 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
         raise HTTPException(status_code=500, detail=f"record-enroll failed: {e}") from e
     finally:
         # Belt-and-braces cleanup of the temp WAV (sr.enroll already copied it).
-        try:
-            os.remove(wav_path)
-        except OSError:
-            pass
+        if wav_path is not None:
+            try:
+                os.remove(wav_path)
+            except OSError:
+                pass
         # Restore speaker mute state — only relax the gate if we set it.
         # Don't overwrite a pre-existing mute the user/scene may have asked for.
         state._enrolling = False

@@ -132,3 +132,20 @@ Day-by-day 2026-05-20 batches:
 - **Web F13** — TTS preview routed through `POST /api/voice/preview` (Go reads the TTS key server-side); the browser body carries `{text, voice, provider}` only.
 - **Web F12 (with F9 trade-off → reverted)** — `/hw/docs` iframe now loads via `/api/hardware/docs` (Go reverse proxy, admin-auth gated). New `/openapi.json` route (Go + nginx location) returns the HAL spec through the same auth gate. The initial CSP loosening (`cdn.jsdelivr.net` + `'unsafe-inline'` script-src) needed for FastAPI's auto-generated Swagger HTML was reverted later the same day by self-hosting Swagger assets in HAL; CSP is now back to strict.
 - **Go F1 / F3 / web F6 closeout** — gated every `/api/agent/*` endpoint with admin auth (F1 → ✅), locked the `/api/system/exec` 2-layer-defense decision as skip-remove (F3 → ➖), and locked the CliSection 3-layer-defense decision as accept-as-is (web F6 → ✅).
+
+## September 2026 confirmed-bug corrections
+
+See [device security boundaries](device-boundaries.md) ([Vietnamese](../vi/security/device-boundaries_vi.md)) for current behavior. AOS identifiers follow the private fix brief.
+
+| Items | Correction | Local verification |
+|-------|------------|--------------------|
+| AOS-1 | Admin or direct loopback ingestion; bounded attachments | Go authentication/attachment regressions |
+| AOS-2 | Query-free access logs, safe recovery, proxy token stripping | Go logger/proxy regressions |
+| AOS-3/4/5/9 | Mic/speaker mute respected; bounded audio; no muted enrollment restart | Mock HAL privacy regressions |
+| AOS-6 | Pairing code burns after five misses; bounded confirmation attempts | Go race tests |
+| AOS-10 | Finite servo targets, known pose for declared speed limits, tracker stop before disconnected motor error | Mock HAL safety tests |
+| AOS-11 | Manual camera disable preserved; concurrent snapshot lifecycle serialized | Mock HAL snapshot tests |
+| AOS-12 | Plugin path validation and Git option separation | Go plugin regressions |
+| AOS-13 (file subset) | Resolved file types/containment and private temporary enrollment WAV | Go resolver and mock HAL file tests |
+
+This is not a blanket closure of the report: OTA, credential migration, setup policy, CORS and additional archive/joint-limit proposals are outside these corrections. No device validation is claimed by this checklist entry.

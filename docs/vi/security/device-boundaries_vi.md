@@ -39,3 +39,11 @@ Công tắc tắt microphone phần cứng chặn khởi động voice và bật
 ## Symlink của file agent
 
 Web Chat (`GET /api/agent/file`) và MQTT (`chat.file.get`) dùng chung resolver. Phần mở rộng của đường dẫn yêu cầu và đích symlink đều phải được phép: symlink `.txt` không thể mở file `.json`, `.log` hoặc không có phần mở rộng, dù nằm trong thư mục hợp lệ. Symlink hợp lệ vẫn hoạt động và dùng MIME của đích. Kiểm tra thư mục, file thường, giới hạn 32 MiB và xác thực giữ nguyên.
+
+## Đường dẫn file HAL
+
+Các route ảnh/file khuôn mặt resolve đường dẫn và yêu cầu nằm trong `USERS_DIR`; từ chối thư mục ngoài trùng tiền tố và symlink thoát ra ngoài. Ghi danh giọng nói dùng WAV tạm riêng tư có tên ngẫu nhiên, độc lập tên người dùng; dọn file và khôi phục trạng thái service kể cả khi tạo file tạm thất bại.
+
+## Phạm vi sửa lỗi tháng 9/2026
+
+Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS rộng và đề xuất kiểm tra chuỗi cung ứng archive vẫn là mục review riêng, không được coi là lỗi đã sửa.
