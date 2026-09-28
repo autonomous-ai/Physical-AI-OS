@@ -1305,6 +1305,19 @@ và dựng trong `orchestrator._make_agent`; Go `RealtimeProviders` và dropdown
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | thuần đồng bộ; 1 `LiveConnection` (SDK `openai` ≥ 3.14.1, `openai.resources.live`) dùng chung bởi thread send/recv dưới `_conn_lock`, cộng thread watchdog `gptlive-watchdog` (tick 50 ms) tổng hợp ranh giới lượt | `gpt-live-1` | 24000 Hz (hoặc 16000; một định dạng PCM cho cả hai chiều) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **không có session vendor**: một pipeline Pipecat trên event loop asyncio riêng (thread `pipecat-io`) ngay trong HAL; thread send submit frame qua `run_coroutine_threadsafe`, `EventSink` của pipeline ghi thẳng vào recv queue, thread recv chỉ canh sức khỏe của pipeline | `qwen/qwen3.6-35b-a3b` qua relay Qwen của campaign-api (bất kỳ endpoint chat tương thích OpenAI nào) | 16000 Hz vào; **text ra** (TTS của HAL đọc) |
 
+Phát native realtime ngắt filler có thể ngắt được bằng cơ chế chờ khóa loa có giới
+hạn như TTS thường. Consumer chế độ turn hủy timer filler ngay chunk audio đầu
+và giữ phần audio đầu khi loa còn bận (tối đa 30 giây audio nguồn cho mỗi lần
+nhận câu trả lời); khi lấy được loa thì phát các frame đã giữ đúng thứ tự trước
+khi tiếp tục. Nếu vượt giới hạn trước lúc phát, bỏ câu native để đi qua luồng
+turn chưa được xử lý hiện có, thay vì chỉ đọc phần đuôi. Owner đã mute/stop và
+lời nói không cho ngắt vẫn được bảo vệ khi lấy loa. Native dùng stream loa đang
+mở ở sample rate thiết bị và resample liên tục, tránh đóng/mở lại giữa audio
+filler cache và Gemini 24 kHz. Log device ngày 2026-09-25 xác nhận chunk native
+bị bỏ với `speaker busy, skipping` suốt filler, rồi stream đổi từ 44.1 sang
+24 kHz; người dùng chỉ nghe đuôi câu. Bản sửa đã có regression test local, chưa
+xác nhận phát tiếng trên device sau sửa.
+
 Gemini Live dùng `google-genai` và private asyncio loop của nó do thread
 `gemini-io` sở hữu. Teardown đóng/hủy provider receive task trước, rồi mới join
 worker; handshake thất bại rollback loop/thread ngay. Nhờ vậy một receive bị

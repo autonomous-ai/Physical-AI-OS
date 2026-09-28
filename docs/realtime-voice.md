@@ -1351,6 +1351,20 @@ dropdown (`RealtimeSection.tsx`) list the same values, in that order, before
 | GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 24000) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **no vendor session**: a Pipecat pipeline on a private asyncio loop (`pipecat-io` thread) inside HAL; the send thread submits frames with `run_coroutine_threadsafe`, the pipeline's `EventSink` writes straight to the recv queue, the recv thread only watches pipeline health | `qwen/qwen3.6-35b-a3b` via the campaign-api Qwen relay (any OpenAI-compatible chat endpoint) | 16000 Hz in; **text out** (HAL's TTS speaks) |
 
+Native realtime playback preempts interruptible fillers using the same bounded
+speaker-lock handoff as ordinary TTS. The turn-mode consumer cancels the filler
+timer on the first audio chunk and retains leading audio while admission remains
+busy (at most 30 seconds of source audio per response attempt); when admission
+succeeds it flushes those frames in order before continuing. If the bound is
+exceeded before playback starts, it abandons the native reply for the existing
+unhandled-turn path rather than speaking only its tail. Muted/stopped owners and
+non-interruptible speech retain their admission protection. Native output uses
+the persistent device-rate stream with continuous resampling, avoiding a close
+and reopen between cached filler audio and Gemini's 24 kHz audio. On 2026-09-25,
+device logs showed native chunks discarded as `speaker busy, skipping` throughout
+a filler, followed by a 44.1-to-24 kHz stream reopen; only the answer tail played.
+The fix is locally regression-tested; no on-device playback validation is implied.
+
 Gemini Live uses `google-genai` and keeps its private asyncio loop owned by its
 `gemini-io` thread. Teardown first closes/cancels the provider receive task,
 then joins workers; a failed handshake rolls back that loop/thread immediately.
