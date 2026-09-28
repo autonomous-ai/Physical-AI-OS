@@ -396,10 +396,11 @@ func (s *Server) Serve(closeFn func()) error {
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
 	// os.WriteFile would clobber each other).
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(credentialSafeLogger(gin.DefaultWriter))
 	r.RedirectTrailingSlash = false // avoid 301 redirect loop on /network vs /network/
 	r.Use(corsMiddleware())
-	r.Use(gin.Recovery())
+	r.Use(credentialSafeRecovery(gin.DefaultErrorWriter))
 
 	api := r.Group("api")
 	s.registerHarnessRoutes(api, eventCtx)

@@ -30,6 +30,7 @@ var openapiProxy = func() http.Handler {
 	origDirector := proxy.Director
 	proxy.Director = func(req *http.Request) {
 		origDirector(req)
+		stripProxyCredential(req)
 		req.Header.Del("X-Forwarded-For")
 		req.Header.Del("X-Real-IP")
 	}
@@ -96,6 +97,7 @@ var hardwareProxy = func() http.Handler {
 			req.URL.Path = "/"
 		}
 		origDirector(req)
+		stripProxyCredential(req)
 		// Stop leaking the original LAN client IP downstream: HAL's
 		// same-origin/local check trusts loopback, so we present as one.
 		req.Header.Del("X-Forwarded-For")
@@ -103,3 +105,13 @@ var hardwareProxy = func() http.Handler {
 	}
 	return proxy
 }()
+
+// Authentication has already run in Go. HAL must never receive the browser's
+// legacy admin credential, including through its access log query string.
+func stripProxyCredential(req *http.Request) {
+	query := req.URL.Query()
+	if _, present := query["token"]; present {
+		query.Del("token")
+		req.URL.RawQuery = query.Encode()
+	}
+}
