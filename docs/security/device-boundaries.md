@@ -34,3 +34,7 @@ Diagnostic tone behavior during quiet hours is unchanged; the existing music qui
 ## Camera snapshot privacy
 
 `GET /camera/snapshot` returns 409 when the user manually disabled the camera or the physical privacy lock is active. Automatic camera pauses can still temporarily start capture. Snapshot requests serialize temporary start/capture/stop so one request cannot stop another snapshot. The snapshot mutex does not hold the privacy lock; manual/physical disable remains available during capture, and a disabled result is discarded. If another action enabled the camera during capture, snapshot cleanup does not stop it.
+
+## Agent file symlinks
+
+Web Chat (`GET /api/agent/file`) and MQTT (`chat.file.get`) share the resolver. Both requested and resolved target extensions must be allowed: a `.txt` symlink cannot expose a `.json`, `.log` or extensionless target, even inside an allowed root. Valid inside-root symlinks still work and use the target MIME type. Root, regular-file, 32 MiB and authentication checks remain unchanged.
