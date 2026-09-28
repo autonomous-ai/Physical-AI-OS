@@ -425,7 +425,7 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
     enroll. ``voice_service`` is *paused* (not torn down) so we don't lose
     the configured tts/stt credentials — restart needs no extra args.
     """
-    if privacy.mic_locked():
+    if state._mic_muted or privacy.mic_locked():
         raise HTTPException(409, "Privacy switch is on -- microphone recording is blocked")
     name = req.name.strip().lower()
     duration = req.duration_sec
@@ -476,7 +476,11 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
     wav_path = f"/tmp/voice-enroll-{name}-{int(time.time() * 1000)}.wav"
     try:
         logger.info("POST /speaker/record-enroll name=%r duration=%ds", name, duration)
+        if state._mic_muted or privacy.mic_locked():
+            raise HTTPException(409, "Microphone is muted")
         _capture_enroll_wav(wav_path, duration)
+        if state._mic_muted or privacy.mic_locked():
+            raise HTTPException(409, "Microphone was muted during enrollment")
         if not Path(wav_path).is_file() or Path(wav_path).stat().st_size < 4096:
             raise HTTPException(status_code=500, detail="recorded file empty/missing")
 
@@ -520,12 +524,8 @@ def speaker_record_enroll(req: RecordEnrollRequest) -> EnrollResponse:
         state._enrolling = False
         if not prev_speaker_muted and not privacy.speaker_muted:
             state._speaker_muted = False
-        # Always restart the listener so passive recognition / wake word
-        # doesn't stay broken after a failed enroll. This is the one caller
-        # that bypasses state.start_voice_service(): it owns the stop above
-        # and must restore the pipeline unconditionally. Safe because
-        # _enrolling was already cleared, so the gate would pass anyway.
-        if was_running and state.voice_service is not None and not privacy.mic_locked():
+        # Restore only if the user has not muted the microphone during capture.
+        if was_running and state.voice_service is not None and not state._mic_muted and not privacy.mic_locked():
             try:
                 state.voice_service.start()
             except Exception as e:
