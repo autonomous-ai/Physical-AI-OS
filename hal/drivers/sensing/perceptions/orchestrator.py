@@ -117,7 +117,6 @@ class PerceptionOrchestrator:
         return self
 
     def _register_processors(self):
-        # Perception detectors
         if cv2 is not None:
             if self._config.enable_face:
                 self._processors.face_recognizer = FacePerception(
@@ -169,8 +168,6 @@ class PerceptionOrchestrator:
                 self._perception_state.frame.register(
                     self._processors.pose_processor.check
                 )
-                # Wire pose into motion so motion.activity can fold the
-                # posture summary when the sedentary streak is long enough.
                 if self._processors.motion_processor is not None:
                     self._processors.motion_processor.set_pose_perception(
                         self._processors.pose_processor
@@ -209,14 +206,10 @@ class PerceptionOrchestrator:
                 input_device=self._sound_device_id,
                 tts_service=self._tts_service,
             )
-            # TODO: change this to correct data type
             self._perception_state.frame.register(
                 self._processors.sound_recognizer.check
             )
         elif self._config.enable_sound:
-            # Loud-noise detection was requested but can't run — say why
-            # instead of failing silently (a silently-None sound_device_id
-            # kept SoundPerception dead for a long time).
             self._logger.warning(
                 "SoundPerception disabled: sd=%s np=%s sound_device_id=%s",
                 sd is not None,
@@ -252,7 +245,6 @@ class PerceptionOrchestrator:
         self._logger.info("SensingService stopped")
 
     def _loop(self):
-        # TODO: Bad practice.
         # Wait a bit for hardware to initialize
         time.sleep(3)
 
@@ -265,12 +257,8 @@ class PerceptionOrchestrator:
             time.sleep(self._poll_interval_ts)
 
     def _tick(self):
-
-        # Read camera frame once per tick (shared across detectors).
-        # Skip when camera is intentionally disabled (manual /camera/disable,
-        # sleepy mode, preset transition) — every stop() call site sets
-        # app_state._camera_disabled first. try/except kept as a safety net
-        # in case the flag is out of sync with the device thread state.
+        # Read camera frame once per tick (shared across detectors). try/except kept as
+        # a safety net in case the flag is out of sync with the device thread state.
         if self._camera_capture and not app_state._camera_disabled:
             try:
                 response = self._camera_capture.capture()
@@ -279,7 +267,6 @@ class PerceptionOrchestrator:
             if response is not None and response.frame is not None:
                 self._perception_state.frame.data = response.frame
 
-        # Presence timeout check (dim/off)
         if self._presense_service is not None:
             self._presense_service.tick()
 

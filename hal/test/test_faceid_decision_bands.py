@@ -1,15 +1,4 @@
-"""Where the face-ID decision bands sit, and why (#429, #299).
-
-Three banks, three bars. The enrolled UPLOADS are a phone photo matched against
-the device camera, so the same person scores lower there than camera-to-camera;
-they match at FACE_MATCH_THRESHOLD. The two auto-captured banks — a user's
-.extended views and the stranger bank — are camera-to-camera and were admitted
-by the device's own guess, so both need the higher FACE_EXTENDED_THRESHOLD /
-FACE_STRANGER_THRESHOLD bar. Below the owner banks' negative_threshold and below
-the stranger bar, a face is corroborated and minted; the stranger bank is NOT
-part of the negative test, because with N rows some row is nearly always above
-0.2 and a genuinely new person could never mint (#429).
-"""
+"""Where the face-ID decision bands sit, and why (#429, #299)."""
 
 import numpy as np
 import pytest
@@ -28,9 +17,7 @@ def test_stranger_bank_is_matched_at_least_as_strictly_as_the_extended_bank():
 
 
 def test_upload_match_bar_sits_in_the_gap_between_three_quarter_and_frontal():
-    """Measured on orange-lamp 2026-09-16: owner frontal 0.60-0.85, owner 3/4
-    pose 0.29-0.34, strangers <= 0.28. 0.40 sits in the gap; 0.30 sat inside
-    the 3/4 cluster where genuine and impostor overlap."""
+    """The default match threshold sits between the owner 3/4-pose and stranger clusters."""
     assert 0.35 <= config.FACE_MATCH_THRESHOLD <= 0.45
 
 
@@ -49,9 +36,7 @@ _SHARP_CROP = np.random.default_rng(0).integers(0, 255, (112, 112, 3), dtype=np.
 
 
 def _basis(n: int = 3, dim: int = 512) -> np.ndarray:
-    """``n`` orthonormal rows — the owner row, the stranger row, and a noise
-    direction — so a query's cosine to each is exactly the coefficient we give
-    it."""
+    """Orthonormal owner / stranger / noise rows so cosines equal the given coefficients."""
     rng = np.random.default_rng(42)
     q, _ = np.linalg.qr(rng.normal(size=(dim, n)))
     return q.T.astype(np.float32)
@@ -64,8 +49,7 @@ def _query(basis: np.ndarray, owner_sim: float, stranger_sim: float) -> np.ndarr
 
 
 class _StubPipeline:
-    """Stands in for _EdgeFacePipeline: one detected face with a chosen
-    embedding, passing every quality gate."""
+    """Stands in for _EdgeFacePipeline with one face of a chosen embedding."""
 
     def __init__(self, embedding: np.ndarray):
         self.embedding = embedding
@@ -87,8 +71,7 @@ class _StubPipeline:
 
 @pytest.fixture
 def rec(tmp_path, monkeypatch):
-    """A recogniser with one enrolled user ('long'), one known stranger
-    ('stranger_7'), no extended bank, stranger state redirected to tmp."""
+    """Recogniser with one enrolled user and one known stranger, state in tmp."""
     monkeypatch.setattr(recognizer_mod, "STRANGER_STATE_DIR", tmp_path)
     basis = _basis()
     r = FaceRecognizer()
@@ -116,9 +99,7 @@ def test_defaults_come_from_config():
 
 
 def test_a_stale_stranger_row_at_0_385_does_not_claim_a_new_person(rec):
-    """#429 verbatim: the worst false accept measured on reachy-mini was 0.385
-    against a row minted a month earlier for someone else. That must be a new
-    person — unsure on the first tick, minted on the second."""
+    """A 0.385 match to a stale stranger row mints a new person (#429)."""
     r, basis = rec
     first = _tick(r, basis, owner_sim=0.05, stranger_sim=0.385)
     assert first.kind == PersonKind.UNSURE
@@ -138,8 +119,7 @@ def test_a_returning_stranger_matches_its_own_row(rec):
 
 
 def test_a_freshly_minted_stranger_is_recognised_on_the_next_tick(rec):
-    """The whole point of minting: the new row carries the person from then on
-    instead of the argmax flipping between stale rows."""
+    """After minting, the new row keeps matching the same person."""
     r, basis = rec
     _tick(r, basis, owner_sim=0.0, stranger_sim=0.30)
     minted = _tick(r, basis, owner_sim=0.0, stranger_sim=0.30)
@@ -150,10 +130,7 @@ def test_a_freshly_minted_stranger_is_recognised_on_the_next_tick(rec):
 
 
 def test_stranger_score_between_negative_and_stranger_bar_still_mints(rec):
-    """The second half of #429: raising the stranger bar alone would have moved
-    people from 'wrong stranger' to 'never a stranger'. A stranger score in
-    (negative_threshold, stranger_threshold) with no owner evidence is a new
-    person, not a permanent '?'."""
+    """A mid-band stranger score with no owner evidence becomes a new person (#429)."""
     r, basis = rec
     _tick(r, basis, owner_sim=0.0, stranger_sim=0.30)
     face = _tick(r, basis, owner_sim=0.0, stranger_sim=0.30)
@@ -162,9 +139,7 @@ def test_stranger_score_between_negative_and_stranger_bar_still_mints(rec):
 
 
 def test_an_upload_score_in_the_three_quarter_band_is_unsure_not_friend(rec):
-    """0.35 against the upload was a FRIEND at the old 0.30 bar. It is the 3/4
-    cluster (orange-lamp: 0.29-0.34), where a genuine off-angle frame and a
-    similar-looking stranger overlap — so it is neither named nor minted."""
+    """A 0.35 owner score in the 3/4-pose overlap is neither named nor minted."""
     r, basis = rec
     for _ in range(3):
         face = _tick(r, basis, owner_sim=0.35, stranger_sim=0.0)
@@ -180,8 +155,7 @@ def test_an_upload_above_the_match_bar_is_a_friend(rec):
 
 
 def test_owner_evidence_above_negative_never_mints_a_stranger(rec):
-    """A face that resembles an enrolled user at 0.25 is not 'nobody we know',
-    however it scores against the stranger bank. Three ticks, no new row."""
+    """A face resembling an enrolled user at 0.25 never mints a stranger row."""
     r, basis = rec
     for _ in range(3):
         face = _tick(r, basis, owner_sim=0.25, stranger_sim=0.30)
@@ -190,8 +164,7 @@ def test_owner_evidence_above_negative_never_mints_a_stranger(rec):
 
 
 def test_the_stranger_bar_is_read_from_the_constructor(rec):
-    """The knob is a knob: a device that sets HAL_FACE_STRANGER_THRESHOLD=0.30
-    gets the old matching back."""
+    """The stranger threshold is configurable; 0.30 restores the old matching."""
     r, basis = rec
     r._stranger_threshold = 0.30
     face = _tick(r, basis, owner_sim=0.0, stranger_sim=0.385)

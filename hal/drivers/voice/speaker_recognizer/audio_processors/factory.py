@@ -1,12 +1,4 @@
-"""Factory for building composite audio processors from config.
-
-Mirrors perception-service's AudioProcessorFactory (same order) so the on-device
-pipeline matches what the server used to run. Two HAL-only deltas: the optional
-STOI intelligibility gate (after VAD, before RMS), which perception-service has
-no equivalent of, and a VAD stage backed by TEN-VAD (``ten_vad_lite``) instead of
-silero — which changes the VAD defaults (see ``vad_min_voice_ratio``) but not the
-stage order or the ``PreprocessRejected`` contract.
-"""
+"""Factory for building composite audio processors from config."""
 
 import logging
 
@@ -87,12 +79,8 @@ class AudioProcessorFactory:
                 speaker_band=self._vad_speaker_band,
                 max_level_drop_db=self._vad_max_level_drop_db,
             ))
-        # STOI intelligibility gate — AFTER VAD (only scores clips that already
-        # contain speech), BEFORE RMS (score the raw-level signal the model was
-        # calibrated on). The ~20 MB weight is downloaded on first use from the
-        # CDN into /root/local/models (see model_store). If it can't be resolved
-        # (unreachable CDN / unknown filename) the gate is skipped with a warning,
-        # so recognition still works — it just loses the quality gate.
+        # STOI intelligibility gate — AFTER VAD (only scores clips that already contain
+        # speech), BEFORE RMS (score the raw-level signal the model was calibrated on).
         if self._enable_stoi:
             try:
                 from .model_store import ensure_stoi_model

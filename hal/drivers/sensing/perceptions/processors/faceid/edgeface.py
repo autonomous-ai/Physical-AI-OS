@@ -1,8 +1,4 @@
-"""EdgeFace face embedder (ONNX) — aligned 112x112 crop -> embedding vector.
-
-Ported & renamed (module-private) from the reference
-``temp-updated-for-facerecognizer/edgeface_onnx.py``.
-"""
+"""EdgeFace face embedder (ONNX) — aligned 112x112 crop -> embedding vector."""
 
 import os
 

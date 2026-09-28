@@ -14,10 +14,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// busyGateway embeds domain.AgentGateway so only the methods this path calls
-// are real; any other call panics on the nil embedded interface, which is fine
-// because these tests never reach them. Mirrors the fakeGateway pattern used
-// elsewhere in this repo.
+// busyGateway implements only the methods this path calls.
 type busyGateway struct {
 	domain.AgentGateway
 	queued int
@@ -68,11 +65,7 @@ func postRealtimeHandled(t *testing.T, h *SensingHandler, voiceType ...string) *
 	return rec
 }
 
-// The regression this whole hook exists for. voice_agent_handled counts as
-// passive, so a BUSY agent queues it and returns early — and "the agent is
-// busy" is exactly the case with an older turn still in flight. Hooking the
-// mark further down, next to MarkSilentRun, made it a no-op precisely when it
-// was needed.
+// The regression this whole hook exists for.
 func TestRealtimeHandledHookFiresEvenWhenTheAgentIsBusy(t *testing.T) {
 	gw := &busyGateway{}
 	h := &SensingHandler{agentGateway: gw, monitorBus: monitor.ProvideBus(), config: &config.Config{}}
@@ -118,10 +111,7 @@ func TestPostEventWithoutHookIsUnaffected(t *testing.T) {
 	}
 }
 
-// The response must tell HAL whether the older turn ACTUALLY lost the speaker.
-// HAL records a stale-reply metrics situation only for real suppressions: with the
-// policy off nothing was suppressed, and counting it would inflate the
-// denominator with situations that never existed.
+// The response tells HAL whether the older turn actually lost the speaker.
 func TestRealtimeHandledResponseReportsWhetherSpeechWasSuppressed(t *testing.T) {
 	for _, tc := range []struct {
 		name      string

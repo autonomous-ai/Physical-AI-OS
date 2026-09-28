@@ -5,18 +5,11 @@
 # --pid-file PATH:         the inner process PID is written here on each start.
 # --wrapper-pid-file PATH: this wrapper's own PID is written here once at startup.
 # --cooldown SECONDS:      wait between restarts (default: 5).
-# --probe-url URL:         if set, poll this every PROBE_INTERVAL seconds. After
-#                          PROBE_FAILURES consecutive failures the child is killed
-#                          with -9 and the restart loop takes over. Use a liveness
-#                          endpoint (/livez): it must not check models, auth or any
-#                          downstream service, or a slow start becomes a restart loop.
-# --log-dir PATH:          if set, stdout → log-dir/stdout.log, stderr → log-dir/stderr.log
-#                          and watchdog messages → log-dir/watchdog.log.
-#                          Plain files on purpose: a pipe to multilog can block the
-#                          writer forever if multilog pauses on a write error, which
-#                          wedges a single-threaded asyncio server (see MAX_LOG_BYTES).
-#
-# Sending SIGTERM to the wrapper gracefully stops the inner process and exits.
+# --probe-url URL:         liveness endpoint (/livez); after PROBE_FAILURES consecutive
+#                          failures the child is killed with -9 and restarted.
+# --log-dir PATH:          stdout/stderr/watchdog logs as plain files (a pipe can block
+#                          the writer forever and wedge the asyncio server).
+# SIGTERM to the wrapper stops the inner process and exits.
 
 set -euo pipefail
 
@@ -43,24 +36,20 @@ if [[ $# -eq 0 ]]; then
     exit 1
 fi
 
-# Write wrapper PID so the stop target can kill us
 [[ -n "$WRAPPER_PID_FILE" ]] && echo "$$" > "$WRAPPER_PID_FILE"
 
-# Largest a log file may reach before the size guard copy-truncates it.
 MAX_LOG_BYTES=${MAX_LOG_BYTES:-8388608}   # 8 MiB
 LOG_BACKUPS=3
 GUARD_INTERVAL=${GUARD_INTERVAL:-60}     # seconds between size checks
 
-# Liveness probe. Deliberately conservative: a probe that is too eager turns a slow
-# start into an endless restart loop.
+# Conservative on purpose: an eager probe turns a slow start into a restart loop.
 PROBE_INTERVAL=${PROBE_INTERVAL:-10}     # seconds between probes
 PROBE_TIMEOUT=${PROBE_TIMEOUT:-5}        # per-probe curl timeout
 PROBE_FAILURES=${PROBE_FAILURES:-6}      # consecutive failures before acting (~60s)
 PROBE_GRACE=${PROBE_GRACE:-180}          # seconds after start before probing at all;
                                          # dlserver needs ~2-3 min to load its models
 
-# Rename FILE aside on startup, keeping LOG_BACKUPS generations. Safe here because
-# no process holds these files open yet.
+# Rename aside on startup; safe because no process holds these files open yet.
 rotate_on_start() {
     local f=$1 i
     [[ -f "$f" ]] || return 0
@@ -71,9 +60,8 @@ rotate_on_start() {
     mv -f "$f" "$f.1"
 }
 
-# Cap a live log file. MUST copy-then-truncate, never rename: the child holds an
-# O_APPEND fd, so renaming would leave it writing to the renamed inode forever
-# (the deleted-but-open pattern that caused the 2026-08-10/17 freezes).
+# Must copy-then-truncate, never rename: the child holds an O_APPEND fd and would
+# keep writing to the renamed inode.
 guard_size() {
     local f=$1 i
     [[ -f "$f" ]] || return 0
@@ -87,14 +75,11 @@ guard_size() {
     cp -f "$f" "$f.1" && : >"$f"
 }
 
-# Set up logging
 if [[ -n "$LOG_DIR" ]]; then
     mkdir -p "$LOG_DIR"
     for _f in stdout stderr watchdog; do
         rotate_on_start "$LOG_DIR/$_f.log"
     done
-    # Plain append redirect, never a pipe: a failed write returns an error to the
-    # writer instead of blocking it forever.
     exec >>"$LOG_DIR/watchdog.log" 2>&1
 fi
 
@@ -103,8 +88,6 @@ GUARD_PID=""
 PROBE_PID=""
 RUNNING=true
 
-# Background size guard: caps the log files while the child runs. Runs in its own
-# subshell so the main loop stays blocked on `wait` as before.
 start_size_guard() {
     [[ -n "$LOG_DIR" ]] || return 0
     (
@@ -118,13 +101,8 @@ start_size_guard() {
     GUARD_PID=$!
 }
 
-# Watches liveness while the child runs. `wait` alone only fires when the child
-# EXITS -- a frozen child never exits, so the wrapper sat in do_wait for 3.5h on
-# 2026-08-10 and ~50min on 2026-08-17 while the port stayed bound and green.
-#
-# kill -9 is mandatory: a hung uvicorn absorbs SIGTERM. Its handler only sets
-# should_exit, and the only thing that can act on that flag is the event loop --
-# which is the thing that is stuck.
+# `wait` never fires for a frozen child. kill -9 is mandatory: a hung uvicorn
+# absorbs SIGTERM because only the stuck event loop acts on it.
 start_liveness_probe() {
     [[ -n "$PROBE_URL" ]] || return 0
     local target=$1

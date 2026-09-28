@@ -1,7 +1,4 @@
-"""GET /camera/snapshot must say "hardware not delivering frames" (503, not
-retryable) when no frame has ever arrived, and keep the transient 500 otherwise.
-Regression for lamp-0c4e 2026-09-16: USB camera never enumerated, the bare 500
-read as a hiccup and the agent retried through a second endpoint."""
+"""GET /camera/snapshot returns 503 when no frame ever arrived, 500 for transient misses."""
 
 import pytest
 from fastapi import FastAPI

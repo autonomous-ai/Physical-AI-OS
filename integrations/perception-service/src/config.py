@@ -143,27 +143,13 @@ class LBSetting(BaseModel):
     host: str = "0.0.0.0"
     port: int = 7999
     internal_prefix: str = ""
-    # Deadlines must shrink as you go inward, so the innermost layer gives up first
-    # and the outer layers report an attributable failure. nginx sits in front at
-    # proxy_read_timeout 45s; HAL clients on the device use 10-15s. Measured owlv2
-    # service time is well under 5s, so 30s is ~6x headroom while still failing long
-    # before nginx does. Equal timeouts (both were 120s) are a race with a
-    # nondeterministic winner and were why a hung backend surfaced as 504 sometimes
-    # and 500 other times.
+    # Must stay below nginx proxy_read_timeout (45s) so the LB fails first with a clear 504.
     http_timeout: float = 30.0  # seconds, httpx read/write/pool timeout for backend requests
-    # Connecting to a backend is either instant (localhost) or hopeless. Sharing the
-    # 30s read budget would make a dead backend take 30s to report instead of ms.
-    # Mirrors proxy_connect_timeout 5s on nginx.
+    # Mirrors nginx proxy_connect_timeout 5s.
     connect_timeout: float = 5.0  # seconds, httpx connect timeout
     ws_open_timeout: float = 30.0  # seconds, websocket handshake timeout to backend
 
-    # One pooled AsyncClient is shared by every proxied request. Building a client
-    # per request re-parses the CA bundle each time -- ~11ms of CPU for a plaintext
-    # localhost call -- which caps the LB at roughly 90 req/s on its single event
-    # loop. Pooling also stops a failing backend accumulating CLOSE-WAIT sockets
-    # (433 of them during the 2026-08-17 incident).
-    # max_connections bounds how many requests a hung backend can tie up; past that
-    # httpx raises PoolTimeout, which is a TimeoutException and so surfaces as 504.
+    # Bounds requests a hung backend can tie up; past it httpx PoolTimeout surfaces as 504.
     max_connections: int = 100
     max_keepalive: int = 20
 

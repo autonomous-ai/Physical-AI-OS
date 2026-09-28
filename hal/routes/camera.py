@@ -13,7 +13,6 @@ from hal.config import CAMERA_WIDTH, CAMERA_HEIGHT
 
 router = APIRouter(tags=["Camera"])
 
-# Lazy import -- cv2 may not be available
 cv2 = None
 try:
     import cv2
@@ -30,14 +29,8 @@ def _camera_info_payload() -> dict:
     actual_fps = getattr(cap, "actual_fps", None) if available else None
     return {
         "available": available,
-        # `available` only says a capture object exists. It stays True when the
-        # USB camera never enumerated (no /dev/video*, every open failed) because
-        # the capture object is still created; the only truthful signal for
-        # "can this device see" is whether a frame ever arrived — the same test
-        # GET /health uses for its `camera` flag.
+        # Truthful "can this device see": a frame ever arrived (same test as /health `camera`).
         "has_frame": bool(available and cap.last_frame is not None),
-        # Prefer the device-negotiated mode; fall back to configured values
-        # until the capture loop has reported (e.g. camera disabled at boot).
         "width": actual_w if actual_w else (CAMERA_WIDTH if available else None),
         "height": actual_h if actual_h else (CAMERA_HEIGHT if available else None),
         "fps": actual_fps,
@@ -55,12 +48,7 @@ def get_camera_info():
 
 @router.post("/camera/zoom", response_model=CameraInfoResponse)
 def set_camera_zoom(req: CameraZoomRequest):
-    """Set digital zoom factor (1.0 = no zoom, applies to all frame consumers).
-
-    Side effect: zoom > 1 narrows the FOV seen by sensing (face recog, motion,
-    pose, emotion) and tracking. Use for focusing on a small subject (e.g.
-    laptop screen in a video call); set back to 1.0 to restore wide view.
-    """
+    """Set digital zoom factor (1.0 = none); applies to every frame consumer (sensing, tracking)."""
     if not state.camera_capture:
         raise HTTPException(503, "Camera not available")
     state.camera_capture.zoom = req.zoom
@@ -114,21 +102,13 @@ def camera_snapshot(
     height: int | None = Query(default=None, ge=1, le=4096, description="Resize output height (preserves aspect ratio). Capped at source height — never upscales."),
     quality: int = Query(default=85, ge=1, le=100, description="JPEG quality 1-100."),
 ):
-    """Capture a single JPEG frame from the camera (freezes servos for stability).
-
-    Optional resize: pass width and/or height to downscale the output. Aspect
-    ratio is preserved; if both given, the frame is fit inside the requested
-    box. Upscaling above source is not allowed (just blurs without detail) —
-    requests above source are clamped.
-    """
+    """Capture a single JPEG frame (freezes servos); optional width/height downscale, never upscales."""
     if privacy.camera_muted:
         raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
     if not state.camera_capture or cv2 is None:
         raise HTTPException(503, "Camera not available")
 
-    # Lazy import: video_capture_device imports cv2 at module level, and this
-    # route module must stay importable on cv2-less devices (server.py imports
-    # it unconditionally). Guarded by the cv2 check above.
+    # Lazy: video_capture_device imports cv2 at module level.
     from hal.drivers.camera.video_capture_device import capture_still
 
     was_disabled = state._camera_disabled
@@ -136,11 +116,6 @@ def camera_snapshot(
         state.camera_capture.start()
 
     try:
-        # Freezes servos (animation loop + tracker worker, when the device has
-        # them) and waits for a frame captured after the arm went quiet, using
-        # frame/bus-write timestamps instead of a blind sleep. Zero added
-        # latency when the servos are already still. animation_service is None
-        # on servo-less devices — capture_still then just grabs the frame.
         frame = capture_still(
             state.camera_capture,
             state.animation_service,
@@ -148,11 +123,7 @@ def camera_snapshot(
             timeout_s=2.5,
         )
         if frame is None:
-            # Distinguish "hardware never delivered a frame" from a transient
-            # miss. lamp-0c4e 2026-09-16: the USB camera was not enumerated at
-            # all, every capture failed since boot, but the bare 500 read as a
-            # hiccup and the agent retried through a second endpoint — another
-            # 6s LLM hop for the same failure. Say it is not retryable.
+            # Never-delivered-a-frame is not retryable; say so instead of a bare 500.
             if getattr(state.camera_capture, "last_frame_ts", 0.0) == 0.0:
                 raise HTTPException(
                     503,
@@ -170,8 +141,6 @@ def camera_snapshot(
 
     if width is not None or height is not None:
         src_h, src_w = frame.shape[:2]
-        # Compute target scale honoring aspect ratio, clamped so we never
-        # upscale (digital upscale adds no detail, only blur).
         scale_w = (width / src_w) if width else 1.0
         scale_h = (height / src_h) if height else 1.0
         if width and height:
@@ -236,7 +205,6 @@ def camera_stream():
                     time.sleep(0.05)
                     continue
 
-                # Draw tracking bbox overlay if active
                 if state.tracker_service and state.tracker_service.is_tracking:
                     ts = state.tracker_service.status
                     bbox = ts.get("bbox")

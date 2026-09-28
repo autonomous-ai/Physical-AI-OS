@@ -29,12 +29,7 @@ _request_adapter: TypeAdapter[EmotionRequest] = TypeAdapter(EmotionRequest)
 async def emotion_analysis_ws(websocket: WebSocket):
     """WebSocket endpoint for streaming emotion recognition.
 
-    Accepts JSON messages with a "type" field:
-    - {"type": "frame", "task": "emotion", "frame_b64": "<base64>"} — feed a frame
-    - {"type": "config", "task": "emotion", "threshold": 0.5} — update threshold
-    - {"type": "heartbeat", "task": "emotion"} — keep-alive
-
-    API key is validated from the X-API-Key header on connect.
+    Message types: ``frame``, ``config`` (threshold), ``heartbeat``. Requires X-API-Key.
     """
     if not await verify_ws_api_key(websocket):
         return
@@ -114,8 +109,7 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
         face_crop = decode_image(req.image_b64)
 
         if req.raw:
-            # The client gates. Hand back what the model said, even below
-            # threshold — dropping it here would hide it from the client's gate.
+            # The client gates, so return the result even below threshold.
             emotion = await emotion_model.predict_face(face_crop, gate=False)
             if emotion is None:
                 return EmotionRecognizeResponse(detections=[])
@@ -127,9 +121,7 @@ async def emotion_recognize(req: EmotionRecognizeRequest):
             probabilities = None
 
         if req.raw:
-            # Raw mode fires once per face per lamp tick (no server-side gate
-            # to filter it down); keep this at debug to avoid flooding the
-            # shared server's logs.
+            # Raw mode fires every tick; debug level avoids flooding shared logs.
             logger.debug("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)
         else:
             logger.info("[Facial emotion] Detected %s (%.2f)", emotion.emotion, emotion.confidence)

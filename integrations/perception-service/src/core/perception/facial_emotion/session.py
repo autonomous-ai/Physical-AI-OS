@@ -1,8 +1,4 @@
-"""Per-connection emotion detection session.
-
-Uses InputBatchers for face detection and emotion classification.
-Filters results by threshold and manages rate limiting.
-"""
+"""Per-connection emotion detection session (threshold filtering and rate limiting)."""
 
 import time
 from typing import Any, cast
@@ -75,7 +71,6 @@ class EmotionPerceptionSession(
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
-        # Detect faces via batcher
         face_futures = await self._face_batcher.submit([input])
         face_raw: RawFaceDetection = await face_futures[0]
 
@@ -88,16 +83,13 @@ class EmotionPerceptionSession(
             self._last_update_ts = cur_ts
             return self._last_prediction
 
-        # Classify emotions on each face crop via batcher
         crops: list[cv2t.MatLike] = [fc.crop for fc in face_crops]
         emotion_futures = await self._emotion_batcher.submit(crops)
         raw_detections: list[RawEmotionDetection] = [await f for f in emotion_futures]
 
         recognizer = cast(EmotionRecognizer, self._emotion_batcher.predictor)
 
-        # Combine output with face detector info, filter by threshold.
-        # Per-label gating runs first; a Neutral fallback is always emitted
-        # (bypasses the global confidence_threshold drop).
+        # A Neutral fallback from per-label gating bypasses confidence_threshold.
         emotions: list[Emotion] = []
         for face_crop, raw in zip(face_crops, raw_detections):
             resolved = resolve_label(

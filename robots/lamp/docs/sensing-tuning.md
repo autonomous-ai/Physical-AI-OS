@@ -1,7 +1,7 @@
 # Sensing Threshold Tuning Guide
 
 How to tune Lamp's sensing thresholds on real hardware.
-All constants live in `hal/config.py` and `hal/drivers/voice/voice_service.py`.
+All constants live in `hal/config.py` and `hal/drivers/voice/_internal/config.py`.
 
 ## View Logs
 
@@ -82,7 +82,7 @@ INFO hal...motion: [motion] transition bypass: ['sedentary'] → ['eat'] (last e
 **File:** `hal/config.py`
 
 ```python
-SOUND_RMS_THRESHOLD = 3000   # RMS level to trigger "loud noise" event
+SOUND_RMS_THRESHOLD = 8000   # RMS level to trigger "loud noise" event (env HAL_SOUND_RMS_THRESHOLD)
 SOUND_SAMPLE_DURATION_S = 0.5 # sample window length
 ```
 
@@ -90,7 +90,7 @@ SOUND_SAMPLE_DURATION_S = 0.5 # sample window length
 The event message includes the actual RMS level:
 
 ```
-INFO lelamp.service.sensing.sensing_service: [sensing] sound: Loud noise detected (level: 4521)
+INFO lelamp.service.sensing.sensing_service: [sensing] sound: Loud noise detected (level: 9521)
 ```
 
 Watch the `level` value during normal ambient conditions vs. when you clap/speak loudly.
@@ -99,15 +99,15 @@ Watch the `level` value during normal ambient conditions vs. when you clap/speak
 
 | Symptom | Fix |
 |---------|-----|
-| Normal speech doesn't trigger event | Decrease `SOUND_RMS_THRESHOLD` (3000 → 1500) |
-| Triggers on fan noise / AC hum | Increase `SOUND_RMS_THRESHOLD` (3000 → 5000) |
+| Normal speech doesn't trigger event | Decrease `SOUND_RMS_THRESHOLD` (8000 → 4000) |
+| Triggers on fan noise / AC hum | Increase `SOUND_RMS_THRESHOLD` (8000 → 12000) |
 
 
 ---
 
 ## Voice Wake Word (VAD)
 
-**File:** `hal/drivers/voice/voice_service.py` (all env-tunable)
+**File:** `hal/drivers/voice/_internal/config.py` (all env-tunable)
 
 ```python
 HAL_VAD_THRESHOLD = 3500        # RMS to trigger speech detection (default 3500)
@@ -140,22 +140,22 @@ HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 **File:** `hal/config.py`
 
 ```python
-LIGHT_LEVEL_INTERVAL_S = 30.0  # check every 30 seconds
-LIGHT_CHANGE_THRESHOLD = 30    # min brightness change (0–255) to trigger event
+LIGHT_LEVEL_INTERVAL_S = 300.0  # check every 5 minutes (env HAL_LIGHT_LEVEL_INTERVAL_S)
+LIGHT_CHANGE_THRESHOLD = 100    # min brightness change (0–255) to trigger event (env HAL_LIGHT_CHANGE_THRESHOLD)
 ```
 
 **How to read the log:**
 
 ```
-INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient light decreased significantly (level: 45/255, change: -38)
+INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient light decreased significantly (level: 45/255, change: -120)
 ```
 
 **Tuning:**
 
 | Symptom | Fix |
 |---------|-----|
-| No event when lights are turned on/off | Decrease `LIGHT_CHANGE_THRESHOLD` (30 → 15) |
-| Too sensitive (triggers from lamp dimming slowly) | Increase `LIGHT_CHANGE_THRESHOLD` (30 → 50) |
+| No event when lights are turned on/off | Decrease `LIGHT_CHANGE_THRESHOLD` (100 → 50) |
+| Too sensitive (triggers from lamp dimming slowly) | Increase `LIGHT_CHANGE_THRESHOLD` (100 → 150) |
 | Events too frequent | Increase `LIGHT_LEVEL_INTERVAL_S` |
 
 ---

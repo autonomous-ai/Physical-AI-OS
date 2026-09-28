@@ -1,7 +1,4 @@
-"""Shared detection utilities — NMS, box conversion, preprocessing.
-
-Used by all ONNX object detection predictors at inference time.
-"""
+"""Shared detection utilities: NMS, box conversion, preprocessing."""
 
 import cv2
 import numpy as np
@@ -13,13 +10,7 @@ def nms_xywh(
     scores: npt.NDArray[np.float32],
     iou_threshold: float = 0.5,
 ) -> npt.NDArray[np.intp]:
-    """Non-maximum suppression on center-based xywh boxes.
-
-    Uses cv2.dnn.NMSBoxes which expects [x, y, w, h] where (x, y) is
-    the top-left corner. Converts from center-based on the fly.
-
-    Returns indices of kept detections.
-    """
+    """Non-maximum suppression on center-based xywh boxes; returns kept indices."""
     if len(boxes_xywh) == 0:
         return np.array([], dtype=np.intp)
 
@@ -69,11 +60,7 @@ def unletterbox_boxes(
     orig_hw: tuple[int, int],
     target_size: int = 640,
 ) -> npt.NDArray[np.float32]:
-    """Convert boxes from letterboxed normalized [0,1] to original-image normalized [0,1] xywh.
-
-    Recomputes scale and padding from the original image size, converts to
-    pixel coords, then re-normalizes to [0,1] relative to original dims.
-    """
+    """Convert boxes from letterboxed normalized [0,1] to original-image normalized [0,1] xywh."""
     h, w = orig_hw
     scale = target_size / max(h, w)
     pad_x = (target_size - int(w * scale)) // 2
@@ -124,11 +111,7 @@ def unowlv2_boxes(
     boxes_xywh: npt.NDArray[np.float32],
     orig_hw: tuple[int, int],
 ) -> npt.NDArray[np.float32]:
-    """Convert OWLv2 normalized [0,1] boxes to original-image normalized [0,1] xywh.
-
-    OWLv2 boxes are relative to the padded square (max(H,W) × max(H,W)).
-    Converts to pixel coords then re-normalizes to original dims.
-    """
+    """Convert OWLv2 boxes (relative to the padded max(H,W) square) to original-image normalized xywh."""
     h, w = orig_hw
     max_dim = float(max(h, w))
     out = boxes_xywh * max_dim

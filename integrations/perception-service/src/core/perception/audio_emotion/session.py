@@ -1,8 +1,4 @@
-"""Per-connection audio emotion detection session.
-
-Uses an InputBatcher to submit audio for batched inference,
-filters results by threshold.
-"""
+"""Per-connection audio emotion detection session."""
 
 from typing import Any, cast
 

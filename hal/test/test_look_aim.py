@@ -1,8 +1,4 @@
-"""Focused tests for the one-shot look-aim.
-
-The sign test is the important one: an inverted yaw sign is silent — the lamp
-turns confidently the wrong way and nothing in the code looks wrong.
-"""
+"""Focused tests for the one-shot look-aim."""
 
 import time
 from unittest import mock
@@ -32,15 +28,13 @@ class _FakeCap:
 
 
 class _FakeSvc:
-    """Tracks yaw across nudges. A fake that ignored commands could not tell
-    "decided to move" from "moved", which is exactly what the trace asserts."""
+    """Fake arm that tracks yaw across nudges."""
 
     JOINTS = ["base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos"]
 
     def __init__(self):
         self.yaw = 0.0
-        # Non-yaw joints start away from any remembered posture so a restore is
-        # observable — this is the head-pointing-at-the-floor case.
+        # Non-yaw joints start away from any remembered posture so a restore is observable.
         self.pose = {j: -40.0 for j in self.JOINTS if j != "base_yaw.pos"}
         self.nudge = mock.Mock(side_effect=self._nudge)
         self.move_and_hold = mock.Mock(side_effect=self._move_and_hold)
@@ -72,21 +66,17 @@ def _detector(box, target_hit="person"):
     return d
 
 
-# Captured before the autouse fixture below replaces it, so the two tests that
-# exercise the sweep itself can reach past the stub every other test relies on.
+# Captured before the autouse fixture below replaces it.
 _REAL_SWEEP = aim._sweep_for_subject
 
 
 @pytest.fixture(autouse=True)
 def _reset_module_state():
-    """`_last_seen_mono` deliberately persists across look calls in production —
-    seconds-scale occlusion memory is the point — so tests must reset it."""
+    """Reset `_last_seen_mono`, which persists across look calls in production."""
     aim._last_seen_mono = 0.0
     aim._last_seen_yaw = 0.0
     aim._abort_evt.clear()
-    # The give-up path now looks around before saying it is lost. A real sweep
-    # drives servos and a detector for tens of seconds, which no test of the aim
-    # wants; the tests that care about it patch this themselves.
+    # Stub the give-up sweep; tests that exercise it patch this themselves.
     with mock.patch.object(aim, "_sweep_for_subject", return_value=False):
         yield
 
@@ -110,9 +100,8 @@ def _run(box, target_hit="person", disabled=False, deadline=5.0):
 
 
 def test_subject_on_the_right_moves_yaw_positive():
-    # dx > 0 (subject right of centre) must INCREASE base_yaw — the tracker's
-    # empirically verified convention. Flipping this silently mirrors every aim.
-    res, svc = _run(box=(500, 100, 80, 200))  # centre x = 540 > 320
+    # dx > 0 must INCREASE base_yaw (the tracker's verified convention).
+    res, svc = _run(box=(500, 100, 80, 200))
     assert svc.nudge.called
     yaw = svc.nudge.call_args[0][0]
     assert yaw > 0, f"expected positive yaw for a right-of-centre subject, got {yaw}"
@@ -120,19 +109,18 @@ def test_subject_on_the_right_moves_yaw_positive():
 
 
 def test_subject_on_the_left_moves_yaw_negative():
-    res, svc = _run(box=(60, 100, 80, 200))  # centre x = 100 < 320
+    res, svc = _run(box=(60, 100, 80, 200))
     assert svc.nudge.called
     assert svc.nudge.call_args[0][0] < 0
 
 
 def test_pitch_is_never_commanded_in_v1():
-    # Pitch sign is unvalidated on the nudge() path — v1 must not touch it.
     _res, svc = _run(box=(500, 100, 80, 200))
     assert svc.nudge.call_args[0][1] == 0.0
 
 
 def test_already_centred_does_not_move():
-    res, svc = _run(box=(300, 100, 40, 200))  # centre x = 320 == frame centre
+    res, svc = _run(box=(300, 100, 40, 200))
     assert res.aimed is True
     assert not svc.nudge.called
 
@@ -145,7 +133,6 @@ def test_subject_not_found_reports_and_does_not_move():
 
 
 def test_camera_disabled_never_aims():
-    # Privacy: never turn toward someone who asked the device not to look.
     res, svc = _run(box=(500, 100, 80, 200), disabled=True)
     assert res.aimed is False
     assert res.reason == "camera disabled"
@@ -164,8 +151,7 @@ def test_abort_stops_before_moving():
         res, svc = _run(box=(500, 100, 80, 200))
     finally:
         aim._abort_evt.clear()
-    # request_abort() is cleared at entry by design, so the aim runs; this
-    # asserts the abort path exists and is callable without side effects.
+    # request_abort() is cleared at entry by design, so the aim still runs.
     assert res is not None
 
 
@@ -176,12 +162,7 @@ def test_deadline_zero_returns_immediately():
     assert not svc.nudge.called
 
 
-# --- priority 2: occlusion hysteresis -------------------------------------
-
 def test_occlusion_holds_instead_of_turning_away():
-    # The failure this guards: user holds an object up, it covers their face,
-    # detection fails, and the lamp turns away from the very thing it was asked
-    # to look at.
     frame = _frame()
     svc = _FakeSvc()
     with (
@@ -213,12 +194,8 @@ def test_stale_sighting_does_not_hold():
     assert "occluded" not in res.reason
 
 
-# --- priority 3: remembered-bearing fallback ------------------------------
-
 def _bearing(deg, conf, pose=None):
-    # Realistic shape — read_estimate() returns a BearingEstimate, and a bare
-    # Mock's auto-attributes previously made the aim silently skip the step.
-    # `pose` must be a real dict: the remembered posture is iterated.
+    # Realistic BearingEstimate: a bare Mock silently skipped the step; `pose` must be a real dict.
     if pose is None:
         pose = {"base_yaw.pos": deg, "base_pitch.pos": 5.0,
                 "elbow_pitch.pos": 10.0, "wrist_pitch.pos": 0.0}
@@ -251,13 +228,7 @@ def test_no_subject_steps_toward_the_remembered_bearing():
 
 
 def test_bearing_travel_goes_straight_to_the_remembered_pose():
-    """One move, not a series of hops.
-
-    Hopping re-detected between steps so it could not sail past someone en
-    route — but the lens sees ~110 deg, so anyone in between is already in frame
-    before the head moves. Each hop cost a detect plus a settle, roughly a
-    second, against the aim's own deadline.
-    """
+    """Bearing travel is one move to the remembered pose, not a series of hops."""
     res, svc = _run_no_subject(_bearing(120.0, 0.9))
     assert svc.move_and_hold.call_count == 1, "should arrive in a single move"
     (positions,), _ = svc.move_and_hold.call_args
@@ -282,19 +253,13 @@ def test_bearing_steps_are_bounded():
 
 
 def test_camera_disabled_never_scores_a_failed_prediction():
-    # Privacy mode is not evidence that the bearing is wrong. Counting it would
-    # let "don't look at me" slowly erase where the user sits.
     with mock.patch("hal.drivers.tracking.user_bearing.record_prediction") as scored:
         res, _svc = _run(box=(500, 100, 80, 200), disabled=True)
     assert res.reason == "camera disabled"
     assert not scored.called
 
 
-# --- Task F: speaking while searching -------------------------------------
-
 def test_searching_is_announced_once_when_the_lamp_turns_away():
-    # The lamp physically turning away mid-question reads as broken unless it
-    # says why. This is the one aim state that genuinely needs a voice.
     with mock.patch.object(aim, "_say") as say:
         res, svc = _run_no_subject(_bearing(120.0, 0.9))
     assert res.bearing_steps > 0, "the search never ran, so nothing was announced"
@@ -303,15 +268,12 @@ def test_searching_is_announced_once_when_the_lamp_turns_away():
 
 
 def test_nothing_is_said_when_the_subject_is_already_centred():
-    # A fast, silent, correct capture is the good outcome — narrating it is noise.
     with mock.patch.object(aim, "_say") as say:
         _run(box=(300, 100, 40, 200))
     assert not say.called
 
 
 def test_found_is_only_announced_after_a_search():
-    # "There you are" makes sense as the resolution of an announced search, and
-    # is noise on a visual question that never had to look.
     with mock.patch.object(aim, "_say") as say:
         _run(box=(500, 100, 80, 200))
     assert not any(c[0][0] == "look_found" for c in say.call_args_list)
@@ -324,17 +286,12 @@ def test_speech_can_be_disabled():
     assert not say.called
 
 
-# --- servo ownership: nothing else may move the head mid-look --------------
-
 class _FakeAnim(BodyOwnership):
     def __init__(self, tracking=False):
         self._tracking_active = tracking
 
 
 def test_ownership_is_claimed_for_the_whole_look():
-    # An emotion animation landing between the aim and the shutter re-poses the
-    # head on every joint (recordings are absolute, roll included) — which is
-    # how a "curious" reaction ends up capturing the ceiling.
     anim = _FakeAnim()
     with mock.patch.object(state, "animation_service", anim):
         with aim.servo_ownership():
@@ -343,9 +300,6 @@ def test_ownership_is_claimed_for_the_whole_look():
 
 
 def test_ownership_does_not_release_a_real_tracking_session():
-    # If the vision tracker already owns the servo, a look must hand it back
-    # rather than clearing it — otherwise a visual question would silently end
-    # an object-follow session.
     anim = _FakeAnim(tracking=True)
     with mock.patch.object(state, "animation_service", anim):
         with aim.servo_ownership():
@@ -367,16 +321,11 @@ def test_ownership_is_released_even_when_the_body_raises():
 def test_ownership_is_harmless_with_no_animation_service():
     with mock.patch.object(state, "animation_service", None):
         with aim.servo_ownership():
-            pass  # must not raise
+            pass
 
 
 def test_overlapping_owners_release_in_any_order():
-    # The #312 race, replayed deterministically. Six call sites enter this from
-    # three threads (gaze watcher, realtime `look`, sweep), so two owners
-    # overlap routinely. With save/restore the second owner captured `prev=True`
-    # and re-asserted it on exit, wedging the lock with nobody holding it — and
-    # a wedged lock suppresses every emotion animation until a face-track
-    # session happens to clear it.
+    # The #312 overlapping-owner race, replayed deterministically.
     anim = _FakeAnim()
     with mock.patch.object(state, "animation_service", anim):
         gaze_watcher = aim.servo_ownership()
@@ -393,12 +342,9 @@ def test_overlapping_owners_release_in_any_order():
 
 
 def test_an_aim_over_a_live_writer_does_not_become_a_permanent_flag():
-    # The narrower hazard in the same code: `prev` read the COMPOSITE property
-    # but the setter wrote the FLAG, so an aim overlapping a running
-    # ServoFollower converted a counter hold — which ends when the worker
-    # thread ends — into a flag hold that nothing releases.
+    # `prev` read the composite property but the setter wrote the flag.
     anim = _FakeAnim()
-    anim.acquire_body()  # a ServoFollower is writing the bus
+    anim.acquire_body()
     with mock.patch.object(state, "animation_service", anim):
         with aim.servo_ownership():
             assert anim._tracking_active is True
@@ -410,8 +356,6 @@ def test_an_aim_over_a_live_writer_does_not_become_a_permanent_flag():
 
 
 def test_trace_shows_whether_the_head_actually_moved():
-    # "yaw commanded" and "yaw actually reached" are different questions — a
-    # trace has to answer the second one.
     res, svc = _run(box=(500, 100, 80, 200))
     assert res.start_yaw is not None and res.end_yaw is not None
     assert res.end_yaw != res.start_yaw, "head should have moved toward the subject"
@@ -419,7 +363,6 @@ def test_trace_shows_whether_the_head_actually_moved():
 
 
 def test_trace_distinguishes_no_bearing_from_a_bearing_that_missed():
-    # These look identical in a summary but need different fixes.
     res_none, _ = _run_no_subject(None)
     assert res_none.bearing_consulted is None
     assert any("no bearing recorded yet" in st["action"] for st in res_none.steps)
@@ -445,10 +388,7 @@ def test_trace_records_the_occlusion_hold():
 
 
 def test_the_detector_is_built_once_not_per_look():
-    # A per-look ObjectDetector cost ~7s on device (its constructor fetches the
-    # DL public key over the network), which blew the realtime turn budget and
-    # made Gemini time out — the user then got "I couldn't see it" for a frame
-    # that had been captured perfectly.
+    # A per-look ObjectDetector cost ~7s on device, so it must be reused.
     aim._shared_detector = None
     with mock.patch("hal.drivers.tracking.detection.ObjectDetector") as ctor:
         ctor.return_value = mock.Mock()
@@ -469,17 +409,11 @@ def test_a_failing_detector_does_not_wedge_the_aim():
 
 
 class _StaleCap(_FakeCap):
-    """A camera whose frame timestamp does not advance after a servo write.
-
-    This is the device failure, reproduced: `last_frame` kept returning the
-    pre-move image, so every iteration measured the same offset and re-issued
-    the same correction. On green-lamp that marched the head 61 deg across six
-    steps with dx frozen at 0.241, and the lamp ended up aimed at a wall.
-    """
+    """A camera whose frame timestamp does not advance after a servo write."""
 
     def __init__(self, frame):
         super().__init__(frame)
-        self.last_frame_ts = 100.0  # frozen: never advances
+        self.last_frame_ts = 100.0
         self.consumers = 0
         self.max_consumers = 0
 
@@ -499,7 +433,7 @@ class _StampingSvc(_FakeSvc):
         self.last_servo_write = 100.0
 
     def _nudge(self, yaw, pitch, duration, current, policy):
-        self.last_servo_write += 1.0  # every write is newer than any held frame
+        self.last_servo_write += 1.0
         return super()._nudge(yaw, pitch, duration, current, policy)
 
 
@@ -513,22 +447,15 @@ def _run_stale(box, deadline=1.0):
         mock.patch.object(state, "safety_policy", None),
         mock.patch.object(state, "_camera_disabled", False, create=True),
         mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
-        mock.patch.object(aim, "FRAME_WAIT_S", 0.05),  # keep the test fast
+        mock.patch.object(aim, "FRAME_WAIT_S", 0.05),
     ):
         res = aim.aim_for_look(deadline, detector=_detector(box))
     return res, svc, cap
 
 
 def test_stale_frames_do_not_march_the_head():
-    """With feedback frozen, the aim must not keep issuing the same correction.
-
-    Bounding total travel is the assertion that matters: the old loop moved
-    ~12 deg per iteration forever because it never saw the result of its own
-    move.
-    """
-    # One command per fresh measurement is the invariant; total travel depends
-    # on how far off-centre the subject is, so counting corrections is the
-    # assertion that actually encodes the rule.
+    """With feedback frozen, the aim must not keep issuing the same correction."""
+    # One command per fresh measurement is the invariant, so count corrections.
     res, svc, _ = _run_stale((520, 200, 600, 400))
     assert svc.nudge.call_count == 1, (
         f"issued {svc.nudge.call_count} corrections from one measurement "
@@ -538,19 +465,12 @@ def test_stale_frames_do_not_march_the_head():
 
 
 def test_camera_consumer_held_once_for_the_whole_aim():
-    """Acquire/release per frame let the device drop below full FPS between
-    iterations — which is why a fresh frame never arrived."""
+    """The camera consumer is held once for the whole aim, not per frame."""
     _run_stale((520, 200, 600, 400))
     _, _, cap = _run_stale((520, 200, 600, 400))
     assert cap.max_consumers == 1, "consumer should be held once, not per grab"
     assert cap.consumers == 0, "consumer leaked"
 
-
-# --- Closed-loop convergence -------------------------------------------------
-# The fakes above hold the subject still, so they measure the decision but not
-# whether the loop actually lands. These simulate a camera and servo that agree:
-# the subject's pixel offset responds to the head's real yaw, which is what makes
-# the FOV calibration observable.
 
 _REAL_FOV_DEG = 110.0  # device-measured (107-123); the aim's constant is a guess
 
@@ -571,10 +491,10 @@ def _sim_detector(svc, subject_bearing_deg, width=640):
     def _detect(frame, target, strict=True, min_conf=None):
         if target != "person":
             return None
-        rel = subject_bearing_deg - svc.yaw  # degrees off the optical axis
+        rel = subject_bearing_deg - svc.yaw
         px = width / 2.0 + rel * (width / _REAL_FOV_DEG)
         if not (0 <= px < width):
-            return None  # subject left the frame
+            return None
         # (x, y, w, h) top-left, matching ObjectDetector — NOT corners.
         return (int(px) - 20, 200, 40, 200)
 
@@ -602,8 +522,7 @@ def _run_closed_loop(subject_bearing_deg, fov_setting):
 
 
 def test_calibrated_fov_centres_within_two_iterations():
-    """With the FOV close to the truth the aim lands almost immediately —
-    this is what keeps it inside LOOK_AIM_DEADLINE_S on device."""
+    """With a calibrated FOV the aim centres within two iterations."""
     res, svc = _run_closed_loop(30.0, 100.0)
     assert res.aimed, f"did not centre: {res.reason}"
     assert res.iterations <= 2, f"took {res.iterations} iterations"
@@ -611,13 +530,7 @@ def test_calibrated_fov_centres_within_two_iterations():
 
 
 def test_self_calibration_recovers_from_a_wrong_fov_constant():
-    """The constant is only the first guess.
-
-    A fisheye has no single right value — the device measured 91 deg near the
-    frame centre and 229 deg at the edge — so the aim measures the LOCAL scale
-    from what its own last move achieved. A badly wrong constant must therefore
-    cost at most the first step, not the whole aim.
-    """
+    """Self-calibration recovers from a wrong FOV constant."""
     res_bad, _ = _run_closed_loop(30.0, 60.0)
     res_good, _ = _run_closed_loop(30.0, 100.0)
     assert res_bad.aimed and res_good.aimed, (res_bad.reason, res_good.reason)
@@ -627,45 +540,34 @@ def test_self_calibration_recovers_from_a_wrong_fov_constant():
 
 
 def test_measured_scale_is_recorded_per_step():
-    """The scale is the number to look at when an aim crawls — it must be in
-    the trace, and flagged while it is still the unmeasured guess."""
+    """The scale is traced and flagged while still the unmeasured guess."""
     res, _ = _run_closed_loop(30.0, 100.0)
     assert res.steps and all("scale" in st for st in res.steps)
 
 
 def test_scale_measurement_rejects_uninformative_steps():
-    """Dividing a tiny shift by a tiny move turns detector jitter into a wild
-    scale, and one wild scale sends the head across the room."""
-    assert aim._measure_scale(0.5, 0.10) is None      # move too small
-    assert aim._measure_scale(20.0, 0.001) is None    # shift too small
-    assert aim._measure_scale(20.0, -0.10) is None    # subject went the wrong way
-    assert aim._measure_scale(400.0, 0.05) is None    # implausible, out of bounds
-    assert aim._measure_scale(20.0, 0.10) == 200.0    # a real measurement
+    """Tiny moves do not update the scale."""
+    assert aim._measure_scale(0.5, 0.10) is None
+    assert aim._measure_scale(20.0, 0.001) is None
+    assert aim._measure_scale(20.0, -0.10) is None
+    assert aim._measure_scale(400.0, 0.05) is None
+    assert aim._measure_scale(20.0, 0.10) == 200.0
 
 
 def test_last_move_is_reported_for_the_capture_settle():
-    """An aim that exits straight after a big swing leaves the arm ringing; the
-    caller needs the size to know how long to let it settle."""
+    """The aim result reports the swing size for settle time."""
     res, _ = _run_closed_loop(30.0, 100.0)
     assert res.last_move_deg != 0.0
 
 
 def test_aim_never_overshoots_past_the_subject():
-    """Overshoot oscillates and never settles; undershoot always converges.
-    Every step must move toward the subject and stop short of crossing it."""
+    """Every step moves toward the subject without crossing it."""
     _, svc = _run_closed_loop(30.0, 100.0)
     assert svc.yaw <= 30.0 + 1e-6, f"crossed the subject: {svc.yaw:+.1f} > +30"
 
 
-# --- Remembered posture, not just direction ---------------------------------
-
 def test_bearing_step_restores_the_remembered_pitch_joints():
-    """Yaw alone cannot describe "looking at the user".
-
-    With the head left pointing at the floor, sweeping yaw searches the floor in
-    a circle: device trace 20260819-143407 stepped -45 -> -13 toward a correct
-    bearing and still saw nothing, because pitch was never restored.
-    """
+    """A bearing step restores the remembered pitch joints, not just yaw."""
     res, svc = _run_no_subject(_bearing(60.0, 0.9))
     assert res.bearing_steps > 0
     assert svc.pose["base_pitch.pos"] == 5.0, svc.pose
@@ -673,10 +575,9 @@ def test_bearing_step_restores_the_remembered_pitch_joints():
 
 
 def test_posture_is_restored_even_when_the_yaw_is_already_right():
-    """The head can be pointed at the exact bearing and still be aimed at the
-    ground — "already pointing there" must mean the whole shape, not the base."""
+    """"Already pointing there" compares the whole pose, not just the base."""
     svc = _FakeSvc()
-    svc.yaw = 60.0  # already on the bearing
+    svc.yaw = 60.0
     est = _bearing(60.0, 0.9)
     with (
         mock.patch.object(state, "safety_policy", None, create=True),
@@ -703,8 +604,7 @@ def test_no_move_when_already_in_the_remembered_shape():
 
 
 def test_unknown_joints_are_not_commanded():
-    """A remembered pose from another robot (or an older servo set) must not be
-    sent to joints this device does not have."""
+    """A remembered pose is not sent to joints this device lacks."""
     svc = _FakeSvc()
     est = _bearing(60.0, 0.9, pose={"base_yaw.pos": 60.0, "tentacle.pos": 12.0})
     with (
@@ -716,12 +616,8 @@ def test_unknown_joints_are_not_commanded():
     assert "tentacle.pos" not in positions, positions
 
 
-# --- Near-subject gate -------------------------------------------------------
-
 def test_a_far_person_is_not_treated_as_a_subject():
-    """Device frame 20260819-142823: a ~22px "face" clear across the office,
-    and the lamp turned to it. Too small to be someone holding something up to
-    the camera, so the aim must fall through to hold/bearing instead."""
+    """A tiny far-away face is rejected as an aim target."""
     res, svc = _run((600, 300, 60, 25))
     assert not res.aimed
     assert res.reason != "centred on person"
@@ -729,27 +625,20 @@ def test_a_far_person_is_not_treated_as_a_subject():
 
 
 def test_a_close_person_still_passes_the_gate():
-    """Device frame 20260819-143218: ~165px of a person clipped by the frame
-    edge — the real asker. The gate must not cost us this one."""
+    """A large edge-clipped person is still accepted."""
     res, svc = _run((520, 200, 100, 165))
     assert svc.nudge.called or res.aimed
 
 
 def test_the_gate_uses_height_not_width():
-    """A close subject is routinely clipped left/right — the good device frame
-    is half out of shot — so width says nothing about distance."""
+    """The size gate uses box height, not width."""
     frame = _frame(width=640, height=480)
     narrow_but_tall = (10, 0, 12, 300)
     assert aim._is_near_enough(narrow_but_tall, frame, "person")
 
 
-# --- Confidence floor --------------------------------------------------------
-
 def test_the_aim_asks_for_a_higher_confidence_than_the_tracker():
-    """DETECT_MIN_CONFIDENCE is 0.15, tuned so the TRACKER keeps its lock on a
-    phone at an odd angle. Aiming wants the opposite trade — a false positive
-    turns the lamp at a wall (device 2026-08-19: a person rendered inside a
-    laptop screen was accepted and aimed at)."""
+    """Aiming uses a stricter confidence floor than the tracker."""
     import hal.config as hal_cfg
 
     det = _detector((520, 200, 100, 165))
@@ -778,11 +667,8 @@ def test_an_older_detector_without_min_conf_still_works():
 
 
 def test_found_is_announced_once_however_many_iterations_follow():
-    """`bearing_steps` stays above zero for the rest of the aim, so an
-    unlatched announcement fires on every centring iteration after a search —
-    device 2026-08-19 said "bạn đây rồi" four times in three seconds."""
+    """The found announcement fires once per aim, not every iteration."""
     svc = _FakeSvc()
-    # Seen only after a bearing step: no detection first, then a close person.
     seen = {"n": 0}
 
     def _detect(frame, target, strict=True, min_conf=None):
@@ -810,14 +696,9 @@ def test_found_is_announced_once_however_many_iterations_follow():
 
 
 def test_the_measured_scale_is_biased_low_not_high():
-    """Overshoot oscillates; undershoot just costs a step. The scale is measured
-    at the current eccentricity and spent at a smaller one, where a fisheye's
-    true scale is lower — so it must be damped, never amplified."""
+    """The measured scale is damped, never amplified."""
     assert 0.0 < aim.SCALE_SAFETY < 1.0
     assert aim.MAX_SCALE_DEG <= 250.0, "400 asked for corrections that got clamped"
-
-
-# --- Subject selection: the asker, not the detector's favourite (F24) ---
 
 
 def _candidate_detector(candidates, face=None):
@@ -836,15 +717,10 @@ def _candidate_detector(candidates, face=None):
 
 
 def test_the_nearest_person_wins_over_a_more_confident_distant_one():
-    """The device failure, reproduced (look_logs/20260824-112802).
-
-    A small, fully-visible colleague at the back scored 0.71 while the person
-    actually asking — clipped, occluded by what they held up — scored lower.
-    Confidence ranked the colleague first and the aim turned 19.8 deg away.
-    """
+    """The nearest person wins over a more confident distant one."""
     frame = _frame(width=1280, height=720)
-    colleague = ((300, 210, 160, 190), 0.71)   # 190px tall, 26% of frame
-    asker = ((640, 0, 640, 700), 0.52)         # 700px tall, at the edge
+    colleague = ((300, 210, 160, 190), 0.71)
+    asker = ((640, 0, 640, 700), 0.52)
     box, kind, conf = aim._detect_subject(_candidate_detector([colleague, asker]), frame)
 
     assert box == asker[0], "the closest person is the one talking to the lamp"
@@ -855,22 +731,17 @@ def test_the_nearest_person_wins_over_a_more_confident_distant_one():
 def test_a_detection_too_small_to_be_the_asker_is_not_chosen():
     """The floor still rejects — it just runs before the choice now."""
     frame = _frame(width=1280, height=720)
-    far = ((300, 300, 40, 70), 0.95)  # 70px = 9.7% of frame, under the 15% floor
+    far = ((300, 300, 40, 70), 0.95)
     box, kind, _ = aim._detect_subject(_candidate_detector([far], face=None), frame)
 
     assert box is None and kind == ""
 
 
 def test_the_size_floor_is_applied_before_ranking_not_after():
-    """A high-confidence stranger must not shadow a qualifying asker.
-
-    `detect` returns ONE box, so filtering afterwards could only rubber-stamp
-    whatever confidence had already picked — which is how the wrong human got
-    through.
-    """
+    """A high-confidence stranger must not shadow a qualifying asker."""
     frame = _frame(width=1280, height=720)
-    tiny_but_certain = ((10, 10, 30, 60), 0.99)   # 8% of frame — under the floor
-    real_asker = ((600, 100, 400, 500), 0.40)     # 69% of frame
+    tiny_but_certain = ((10, 10, 30, 60), 0.99)
+    real_asker = ((600, 100, 400, 500), 0.40)
     box, _kind, _conf = aim._detect_subject(
         _candidate_detector([tiny_but_certain, real_asker]), frame
     )
@@ -880,7 +751,7 @@ def test_the_size_floor_is_applied_before_ranking_not_after():
 
 def test_no_person_candidates_falls_back_to_the_face_path():
     frame = _frame(width=1280, height=720)
-    face_box = (500, 200, 120, 140)  # 19% of frame height, over the 8% face floor
+    face_box = (500, 200, 120, 140)
     box, kind, _ = aim._detect_subject(_candidate_detector([], face=face_box), frame)
 
     assert box == face_box and kind == "face"
@@ -901,15 +772,8 @@ def test_a_detector_without_the_candidate_path_still_works():
     assert box == (100, 100, 300, 400) and kind == "person"
 
 
-# --- Task C / F12: every exit scores the remembered bearing ---
-
-
 def _scored(box, target_hit="person", deadline=5.0):
-    """Run an aim WITH a bearing available; return (result, what was scored).
-
-    Not built on `_run`: that helper pins `read_estimate` to None so the aims it
-    drives never consult the bearing, which is exactly the thing under test here.
-    """
+    """Run an aim WITH a bearing available; return (result, what was scored)."""
     calls = []
     from hal.drivers.tracking import user_bearing
 
@@ -955,12 +819,8 @@ def test_the_bearing_is_scored_at_most_once_per_aim():
     assert len(calls) <= 1
 
 
-# --- Task H / F13: an announced search owes the user a resolution ---
-
-
 def test_a_failed_search_says_so():
-    """`look_searching` promises to look. Going silent leaves the lamp turned
-    away mid-question while the model answers about the wrong scene."""
+    """After `look_searching`, a failed search still reports back."""
     said = []
     with mock.patch.object(aim, "_say", side_effect=said.append):
         res, _calls = _scored(None)
@@ -971,8 +831,7 @@ def test_a_failed_search_says_so():
 
 
 def test_a_look_that_never_searched_stays_quiet():
-    """A look that found the subject immediately owes no explanation, and
-    narrating every visual question is what the filler gating exists to avoid."""
+    """An immediate find speaks no filler."""
     said = []
     with mock.patch.object(aim, "_say", side_effect=said.append):
         _res, _calls = _scored((300, 100, 60, 200))
@@ -981,15 +840,8 @@ def test_a_look_that_never_searched_stays_quiet():
     assert "look_lost" not in said
 
 
-# --- the aim looks around before it claims to be lost ---
-
-
 def test_look_lost_is_only_said_after_actually_looking_around():
-    """`look_lost` claims "I can't find you".
-
-    Until now it said that having only turned toward a remembered bearing —
-    a guess about where someone WAS, not a search. The phrase has to be earned.
-    """
+    """`look_lost` is only said after an actual look-around."""
     swept = []
     with mock.patch.object(aim, "_sweep_for_subject",
                            side_effect=lambda: swept.append(True) or False), \
@@ -1001,8 +853,7 @@ def test_look_lost_is_only_said_after_actually_looking_around():
 
 
 def test_a_subject_found_by_the_sweep_is_then_centred():
-    """The sweep stops the moment it SEES someone; it does not centre them, and
-    centring is this function's job."""
+    """After the sweep sees someone, the aim centres them."""
     seen = {"n": 0}
 
     def found_after_sweep():
@@ -1018,12 +869,7 @@ def test_a_subject_found_by_the_sweep_is_then_centred():
 
 
 def test_the_deadline_stops_counting_while_the_sweep_runs():
-    """The deadline exists so a live turn never stalls in SILENCE.
-
-    `look_searching` has already dealt with the silence, and a sweep takes
-    longer than the whole 8s budget — charging it against that budget would mean
-    never sweeping at all.
-    """
+    """The deadline pauses while the sweep runs."""
     def slow_sweep():
         time.sleep(0.4)
         return False
@@ -1039,11 +885,7 @@ def test_the_deadline_stops_counting_while_the_sweep_runs():
 
 
 def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
-    """The caller still needs an answer, even if it is "I could not find you".
-
-    Tests the guard inside `_sweep_for_subject` rather than around it — patching
-    the whole function would step over the very try/except being checked.
-    """
+    """A sweep that cannot run still yields an aim result."""
     from hal.drivers.tracking import search
 
     with mock.patch.object(search, "search_for_subject",
@@ -1051,15 +893,9 @@ def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
         assert aim._sweep_for_subject() is False
 
 
-# --- centre_on_box: the correction the search sweep borrows ------------------
-
-
 def test_centre_on_box_walks_the_subject_to_the_middle():
-    """A box parked right of centre must produce a POSITIVE yaw nudge, and the
-    loop must stop as soon as the box is inside the deadband — the convention
-    the tracker verified on device: dx>0 -> base_yaw increases."""
+    """A box right of centre produces a positive yaw nudge and stops in the deadband."""
     svc = _FakeSvc()
-    # Right of centre on the first probe, dead centre on the second.
     boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
 
     res = aim.centre_on_box(
@@ -1078,8 +914,7 @@ def test_centre_on_box_walks_the_subject_to_the_middle():
 
 
 def test_centre_on_box_gives_up_rather_than_hunting_forever():
-    """A detection that never moves must not spin forever — it exits with the
-    reason, not an exception."""
+    """A detection that never moves exits with a reason, not an exception."""
     res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
                             probe=lambda _f: (600, 200, 20, 20))
 
@@ -1089,8 +924,7 @@ def test_centre_on_box_gives_up_rather_than_hunting_forever():
 
 
 def test_centre_on_box_reports_the_last_good_box_when_it_loses_the_subject():
-    """Losing the detection mid-correction still leaves something true to show:
-    the frame and box from before the subject went missing."""
+    """Losing the detection keeps the last frame and box."""
     seen = [(500, 200, 40, 40), None]
 
     res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
@@ -1102,9 +936,7 @@ def test_centre_on_box_reports_the_last_good_box_when_it_loses_the_subject():
 
 
 def test_centre_on_box_does_not_score_the_remembered_bearing():
-    """A sweep hit is as often an OBJECT as a person. Teaching the bearing
-    estimator that a keyboard is where the user sits is the quiet corruption
-    this loop exists to stay out of — aim_for_look scores, this must not."""
+    """Centring a sweep hit does not score the bearing estimator."""
     with mock.patch.object(aim, "_score_prediction") as scored, \
          mock.patch.object(aim, "_record_bearing_if_centred") as recorded:
         aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
@@ -1115,8 +947,7 @@ def test_centre_on_box_does_not_score_the_remembered_bearing():
 
 
 def test_encode_annotated_keeps_its_debug_lines_by_default():
-    """The look-aim, the bearing sampler and the gaze loop all rely on the
-    centre lines — the flag exists for the search's user-facing image only."""
+    """Centre lines are drawn by default; the flag only affects the search image."""
     import inspect
 
     from hal.drivers.tracking import look_debug
@@ -1126,13 +957,7 @@ def test_encode_annotated_keeps_its_debug_lines_by_default():
 
 
 def test_centre_on_box_is_not_defeated_by_a_stale_abort():
-    """Device-observed on lamp-ac82: `[search] centring: aborted after 0
-    iteration(s)`. Only the button's single click sets the aim's abort flag,
-    and only aim_for_look cleared it — at its own entry. A click hours earlier
-    left the flag set, and the first centring correction ever run on the unit
-    returned "aborted" before its first frame. The flag means "abort the
-    correction in flight", so a correction that is only now starting must clear
-    it, exactly as aim_for_look does."""
+    """A stale abort flag from an earlier click does not abort centring."""
     aim.request_abort()
     boxes = [(500, 200, 40, 40), (310, 200, 40, 40)]
 
@@ -1145,12 +970,7 @@ def test_centre_on_box_is_not_defeated_by_a_stale_abort():
 
 
 def test_centre_on_box_tolerates_a_flickering_detection():
-    """Device-observed on lamp-ac82: the sweep's detector saw the keyboard,
-    and the correction's very next probe returned None — `lost the subject
-    after 0 iteration(s)`. A marginal detection at the frame edge flickers
-    frame to frame; giving up on the first miss means never centring on
-    exactly the objects that most need it."""
-    # miss, miss, hit-right-of-centre, then centred.
+    """A single missed probe at the frame edge does not end centring."""
     seen = [None, None, (500, 200, 40, 40), (310, 200, 40, 40)]
 
     res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
@@ -1161,8 +981,7 @@ def test_centre_on_box_tolerates_a_flickering_detection():
 
 
 def test_centre_on_box_still_gives_up_when_the_subject_stays_gone():
-    """Tolerance is bounded: a subject that is really gone must not keep the
-    lamp hunting until the deadline."""
+    """Miss tolerance is bounded so a vanished subject ends the hunt."""
     res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()), probe=lambda _f: None)
 
     assert res.centred is False
@@ -1170,14 +989,8 @@ def test_centre_on_box_still_gives_up_when_the_subject_stays_gone():
 
 
 def test_centre_on_box_corrects_pitch_with_gazes_verified_sign():
-    """Vertical centring, copied from gaze._maybe_pitch. A box ABOVE centre
-    (dy < 0) needs the camera tilted UP, and up is the DECREASING direction on
-    the pitch joints — device-measured on lamp-0c89, paired A/B/A:
-    wrist_pitch -75 -> dy +0.009, -90 -> dy +0.113. With the sign the other way
-    every correction enlarges the error it measures. The step is spread over
-    base/elbow/wrist by servo_follow.distribute_pitch, exactly as gaze does."""
+    """A box above centre tilts the camera up (decreasing pitch)."""
     svc = _FakeSvc()
-    # Horizontally centred, but high in the frame: 480 tall, box centre y=60.
     boxes = [(310, 40, 40, 40), (310, 220, 40, 40)]
 
     res = aim.centre_on_box(svc, _FakeCap(_frame()),
@@ -1187,10 +1000,7 @@ def test_centre_on_box_corrects_pitch_with_gazes_verified_sign():
     pitch_moves = [c.args[0] for c in svc.move_and_hold.call_args_list
                    if any(j.endswith("pitch.pos") for j in c.args[0])]
     assert pitch_moves, "a subject above centre produced no pitch correction"
-    # Camera-space, not joint-space: distribute_pitch applies a per-joint sign
-    # (the elbow moves POSITIVE to tilt the camera up — "elbow +1.6 framed the
-    # desk, +54.8 the ceiling"), so raw joint deltas can sum either way. The
-    # invariant is that the requested camera rotation is negative.
+    # Camera-space, not joint-space: distribute_pitch applies a per-joint sign.
     from hal.drivers.tracking.servo_follow import PITCH_AXIS_SIGN
 
     before = {j: -40.0 for j in ("base_pitch.pos", "elbow_pitch.pos", "wrist_pitch.pos")}
@@ -1208,14 +1018,7 @@ def test_centre_on_box_needs_both_axes_inside_the_deadband():
 
 
 def test_centre_on_box_reports_the_frame_after_its_last_move_not_before():
-    """Device-observed on lamp-ac82 ("find my doll"): three moves, the third
-    centred the doll — the user watched it happen — and the frame persisted was
-    the one measured BEFORE move three, with the doll top-left and
-    `centred: false`. The deadline and max-iteration exits fired at the top of
-    the next loop, before any frame was taken after the last move. An exit that
-    follows a move must measure once more and report what the lamp is actually
-    pointing at."""
-    # First probe: off-centre. Every probe after the (single allowed) move: centred.
+    """The persisted frame is taken after the final move, not before it."""
     boxes = [(500, 200, 40, 40)]
 
     with mock.patch.object(aim, "MAX_ITERATIONS", 1):
@@ -1229,18 +1032,15 @@ def test_centre_on_box_reports_the_frame_after_its_last_move_not_before():
 
 
 def test_centre_on_box_final_measurement_also_runs_on_the_deadline_exit():
-    """Same failure through the other door. A clock that jumps past the
-    deadline right after the first move must not skip the final look."""
+    """A deadline jump after the first move still takes the final look."""
     boxes = [(500, 200, 40, 40)]
     clock = {"t": 0.0}
 
     def _monotonic():
-        clock["t"] += 2.5   # deadline_s=4: probe 1 at 2.5, move, next check at 5.0
+        clock["t"] += 2.5
         return clock["t"]
 
-    # _grab_frame paces its freshness wait on the same clock; with a stepping
-    # clock it would give up at once and hand the final look no frame. That
-    # wait is not what this test is about.
+    # _grab_frame paces on the same clock; a stepping clock would starve it.
     with mock.patch.object(aim.time, "monotonic", _monotonic), \
          mock.patch.object(aim, "_grab_frame", lambda cap, svc=None, require_fresh=False: cap.last_frame):
         res = aim.centre_on_box(_FakeSvc(), _FakeCap(_frame()),
@@ -1251,13 +1051,9 @@ def test_centre_on_box_final_measurement_also_runs_on_the_deadline_exit():
     assert res.centred is True
 
 
-# The aim parks the head on the subject with move_and_hold (nudge goes through
-# it), same as the search. Gaze usually retakes the body once a face is back in
-# frame, which is why this was less visible — but with no face it froze the
-# same way.
 def test_an_aim_that_moved_hands_the_body_back_later():
     with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
-        res, svc = _run(box=(500, 100, 80, 200))  # right of centre → moves
+        res, svc = _run(box=(500, 100, 80, 200))
     assert svc.nudge.called
     later.assert_called_once()
     assert later.call_args[0][0] == aim.body.HOLD_AFTER_FIND_S
@@ -1265,7 +1061,7 @@ def test_an_aim_that_moved_hands_the_body_back_later():
 
 def test_an_already_centred_aim_leaves_playback_alone():
     with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
-        res, svc = _run(box=(300, 100, 40, 200))  # centre x == frame centre
+        res, svc = _run(box=(300, 100, 40, 200))
     assert res.iterations == 0
     assert not svc.nudge.called
     later.assert_not_called()

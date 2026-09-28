@@ -1,7 +1,4 @@
-// Package sensingmsg builds the LLM-bound message text for a sensing event.
-// Used by both the direct sensing handler (agent idle path) and the queue
-// drain (replay-after-busy path) so both share identical formatting,
-// prefix/precedence rules, and pre-fetched context blocks.
+// Package sensingmsg builds the agent-bound message text for a sensing event (direct and replay paths).
 package sensingmsg
 
 import (
@@ -12,67 +9,34 @@ import (
 	"go.autonomous.ai/os/system/skillcontext"
 )
 
-// IsChat reports whether the event type is a typed-chat turn: text the user
-// composed in a chat UI rather than something a sensor produced. Two origins
-// share every behaviour (TTS suppressed, no physical wake, sleep-drop bypassed)
-// and differ only in where the text came from, so callers gate on this helper
-// instead of comparing against one literal — the Monitor's turn badge is the
-// only place the two are told apart.
-//
-//   - web_chat  — the monitor UI's composer (POST /api/sensing/event)
-//   - mqtt_chat — MQTT kind:"chat.send", e.g. a phone app
+// IsChat reports whether eventType is a typed-chat turn (web_chat or mqtt_chat).
 func IsChat(eventType string) bool {
 	return eventType == "web_chat" || eventType == "mqtt_chat"
 }
 
-// EnterNamesNewFriend reports whether a presence.enter text announces a NEWLY
-// visible friend. Mirrors HAL's enter_message.has_new_friend: only the first
-// `;`-separated segment (`new: …`) carries the `friend (<name>)` label; a
-// friend who was merely already present is written `<name> (friend)` and must
-// not count.
+// EnterNamesNewFriend reports whether a presence.enter text announces a newly visible friend.
+// Mirrors HAL's enter_message.has_new_friend (only the `new:` segment counts).
 func EnterNamesNewFriend(message string) bool {
 	head, _, _ := strings.Cut(message, ";")
 	return strings.Contains(strings.ToLower(head), "friend (")
 }
 
-// EnterHasPresentFriend reports whether a presence.enter text lists a friend
-// who was already in the frame when the arrival happened — HAL writes the
-// `already present:` segment only after its co-presence guard passed.
+// EnterHasPresentFriend reports whether a presence.enter text lists an already-present friend.
 func EnterHasPresentFriend(message string) bool {
 	return strings.Contains(message, "already present:")
 }
 
-// Build returns the message that should be forwarded to the agent for a
-// sensing event. Precedence: voice_command/voice_followup > voice >
-// web_chat/mqtt_chat > guard > passive sensing.
-//
-//   - currentUser: resolved attribution string. Pass the request payload's
-//     CurrentUser, falling back to mood.CurrentUser(); "" is treated as
-//     "unknown" for context tags. BuildPresenceContext skips "unknown" so
-//     strangers don't get a "welcome back" framing.
-//   - guardTag: prebuilt "[sensing:<type>][guard-active][guard-instruction:…]"
-//     wrapper when guard mode is active. Pass "" otherwise (and always "" on
-//     the drain path — guard state isn't preserved across the queue).
-//
-// pose.ergo_risk used to be its own event type; it is now folded into
-// motion.activity via [posture_summary] / [computer_streak_min] blocks added
-// by HAL's MotionPerception. The wellbeing skill reads those blocks.
+// Build returns the agent message for a sensing event.
+// currentUser "" means unknown; guardTag is the guard-mode prefix, or "" (always "" on the drain path).
 func Build(eventType, message, currentUser, guardTag string) string {
 	switch eventType {
 	case "voice_command", "voice_followup":
-		// Wake word confirmed or an authorized follow-up. `[user]` lifts to top
-		// priority in batched turns.
 		return domain.AppendEnrollNudge("[user] " + message)
 	case "voice":
-		// Ambient speech — no wake word. `[user]` for batched-turn priority,
-		// `[ambient]` for voice/SKILL.md's overheard-audio mute guard.
+		// `[ambient]` drives voice/SKILL.md's overheard-audio mute guard.
 		return domain.AppendEnrollNudge("[user] [ambient] " + message)
 	case "web_chat", "mqtt_chat":
-		// Typed text from a chat UI (monitor composer or MQTT chat.send). The
-		// agent sees identical text either way — only the Monitor badge differs.
-		// Slash commands (`/status`, `/think`, …)
-		// bypass `[user]` so the agent's command router still sees the literal
-		// leading slash.
+		// Slash commands skip `[user]` so the command router sees the leading slash.
 		if strings.HasPrefix(message, "/") {
 			return message
 		}
@@ -83,8 +47,7 @@ func Build(eventType, message, currentUser, guardTag string) string {
 		return guardTag + " " + message
 	}
 
-	// Passive sensing. Domain-specific prefixes route SOUL.md to the
-	// dedicated skill instead of pulling in sensing/SKILL.md wholesale.
+	// Domain-specific prefixes route passive events to their dedicated skill.
 	var msg string
 	switch eventType {
 	case "environment.update":
@@ -107,46 +70,22 @@ func Build(eventType, message, currentUser, guardTag string) string {
 	case "environment.update":
 		msg += "\n[Use the environment skill and well-being guidance. Advisory sensor context, not a user request or a safety alarm. No mandatory speech or emotion; NO_REPLY when no useful, timely action is warranted.]"
 	case "presence.enter":
-		// Attribution BEFORE the presence digest. presence.enter is the
-		// greeting trigger and sensing/SKILL.md greets by name, but the event
-		// text carries only a face LABEL ("friend (long)"), which reads as a
-		// detection tag rather than a name. Without this line the only name in
-		// context is the persona's USER.md — a stale single-owner profile that
-		// survives runtime switches — so the device greets whoever used to own
-		// it (device-observed 2026-09-03: "Chào Leo" at a face resolved to
-		// `long`). motion.activity and emotion.detected already ship this tag.
+		// Attribution must precede the presence digest or the agent greets by the stale USER.md name.
 		msg += "\n[context: current_user=" + currentUser + "]"
-		// Pre-fetch "time since last seen" so sensing/SKILL.md can swap to a
-		// "return after long absence" greeting without a tool turn — but only
-		// when the ARRIVAL is a friend. current_user stays the friend for the
-		// whole forget window, so a stranger walking in beside her (or after
-		// she stepped out) would otherwise carry HER last-leave age, and the
-		// agent reads that as her returning (orange-lamp, 2026-09-16: "Long
-		// re-entering after ~28 min away" spoken at a visitor). The event
-		// text's `new:` segment is the arrival; HAL's enter_message.py owns
-		// that format. BuildPresenceContext returns "" for unknown.
+		// Presence context only when the arrival itself is a friend; current_user may be a stale friend.
 		if EnterNamesNewFriend(message) {
 			msg += skillcontext.BuildPresenceContext(currentUser)
 		} else if EnterHasPresentFriend(message) {
-			// A visitor beside the user. sensing/SKILL.md has the full rule
-			// ("Someone joins the user"), but Hermes only reads a skill when
-			// the model calls skill_view, and it skipped that and said
-			// "Hey, welcome back" to the user (orange-lamp, 2026-09-16). The
-			// one line that matters rides inline, like presence.leave's.
+			// Inline rule: runtimes may skip loading sensing/SKILL.md.
 			msg += "\n[A stranger joined " + currentUser + ", who is in frame — speak to " + currentUser + ", not to the stranger. See sensing/SKILL.md \"Someone joins the user\".]"
 		}
 	case "presence.leave", "presence.away":
 		msg += "\n[No crons to cancel. NO_REPLY unless worth saying.]"
 	case "touch.head_pat":
-		// HAL already played a random pet-response phrase locally; agent
-		// just records the moment for memory continuity.
+		// HAL already spoke a pet-response phrase locally.
 		msg += "\n[NO_REPLY unless worth saying — phrase already spoken locally.]"
 	case "motion.activity":
-		// Insert current_user right after the activity prefix line so the
-		// agent sees attribution before consuming the activity payload
-		// (snapshot path, computer_streak_min, posture_summary). The
-		// remaining context blocks still trail at the end where they
-		// don't clutter the priority section.
+		// current_user goes right after the activity prefix line, before the payload.
 		parts := strings.SplitN(msg, "\n", 2)
 		head := parts[0]
 		tail := ""
@@ -155,20 +94,14 @@ func Build(eventType, message, currentUser, guardTag string) string {
 		}
 		msg = head + "\n[context: current_user=" + currentUser + "]" + tail
 		msg += skillcontext.BuildUserContext(currentUser)
-		// Pre-fetch wellbeing/SKILL.md reads (history + patterns + days) so
-		// the skill doesn't burn a tool turn on plan-reads.
 		msg += skillcontext.BuildWellbeingContext(currentUser)
 	case "emotion.detected", "speech_emotion.detected":
 		msg += "\n[context: current_user=" + currentUser + "]"
 		msg += skillcontext.BuildUserContext(currentUser)
-		// Same context serves face FER (emotion.detected) and voice
-		// emotion2vec (speech_emotion.detected); the prefix tells the skill
-		// which source to log on the mood signal row.
 		msg += skillcontext.BuildEmotionContext(skillcontext.ExtractDetectedEmotion(message), currentUser)
 	}
 
-	// Inject device locale once per passive-sensing turn — sensor events
-	// carry no user text, so SOUL.md would otherwise default to English.
+	// Sensor events carry no user text, so inject the device locale.
 	msg += i18n.LangContextTag()
 	return msg
 }

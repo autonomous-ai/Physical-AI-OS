@@ -10,11 +10,7 @@ import numpy.typing as npt
 
 @dataclass
 class RawFaceDetection:
-    """Raw face detector output for a single frame — batched numpy arrays.
-
-    Each array's first dimension is N (number of detected faces).
-    Empty arrays (N=0) when no faces detected.
-    """
+    """Raw face detector output for one frame; each array's first dim is N faces (may be 0)."""
 
     bbox_xyxy: npt.NDArray[np.float32]
     """Shape: (N, 4) — [x1, y1, x2, y2] per face."""

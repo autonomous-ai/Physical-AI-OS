@@ -1,12 +1,6 @@
-"""HTTP integration tests for the audio emotion /ser/recognize endpoint.
+"""HTTP integration tests for /ser/recognize.
 
-Requires:
-    * ``DL_BACKEND_URL``  -- e.g. ``http://127.0.0.1:8001`` (set via .env).
-    * ``DL_API_KEY``      -- sent as ``X-API-Key``.
-    * Audio fixtures under ``tests/fixtures/audio/``.
-
-The module is skipped if ``DL_BACKEND_URL`` is unset or the endpoint
-returns 503 (server hasn't loaded the audio emotion model).
+Requires DL_BACKEND_URL, DL_API_KEY and tests/fixtures/audio/; skipped if the model is not loaded.
 """
 
 from __future__ import annotations

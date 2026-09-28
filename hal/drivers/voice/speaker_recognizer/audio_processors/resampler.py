@@ -7,7 +7,6 @@ from scipy.signal import resample_poly
 
 from .base import Audio, AudioProcessorBase
 
-# --- Defaults ---
 DEFAULT_TARGET_SAMPLE_RATE: int = 16000
 
 

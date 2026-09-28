@@ -1,12 +1,4 @@
-"""presence.enter must say who is NEW and who was ALREADY there (#426).
-
-A stranger walking in while the user sat at the desk used to produce
-"1 face(s) visible (stranger (stranger_2))" over a snapshot with two boxes, and
-the agent greeted the visitor while the user watched. The count was the number
-of new arrivals, not of faces, and nothing in the text said the user was in
-frame — `current_user=momo` is presence-window state, identical whether she is
-sitting there or left two minutes ago.
-"""
+"""presence.enter must say who is NEW and who was ALREADY there (#426)."""
 
 from hal.drivers.sensing.perceptions.models import Face, PersonKind
 from hal.drivers.sensing.perceptions.processors.faceid.enter_message import (
@@ -24,9 +16,6 @@ def _face(kind: PersonKind, pid: str) -> Face:
 FRIEND = _face(PersonKind.FRIEND, "momo")
 STRANGER = _face(PersonKind.STRANGER, "stranger_2")
 UNSURE = _face(PersonKind.UNSURE, "?")
-
-
-# -- wording -------------------------------------------------------------------
 
 
 def test_stranger_joining_a_present_user_names_both():
@@ -71,9 +60,6 @@ def test_unsure_boxes_are_counted_and_labelled_like_the_snapshot():
     assert frame_labels([FRIEND, UNSURE, STRANGER]) == ["momo", "unsure", "stranger_2"]
 
 
-# -- wake-focus contract -------------------------------------------------------
-
-
 def test_already_present_friend_does_not_read_as_a_new_friend():
     """`<name> (friend)` must not open the voice gate — only `friend (<name>)` does."""
     msg = build_enter_message(set(), {"stranger_2"}, ["momo"], ["momo", "stranger_2"])
@@ -92,9 +78,6 @@ def test_familiar_stranger_hint_does_not_read_as_a_new_friend():
         "to remember this face; image saved at /root/local/strangers/snapshots/x.jpg)"
     )
     assert not has_new_friend(msg)
-
-
-# -- co-presence guard ---------------------------------------------------------
 
 
 def test_ticks_count_only_while_a_friend_and_someone_else_share_the_frame():
@@ -116,8 +99,6 @@ def test_two_friends_alone_do_not_count():
 
 
 def test_an_unsure_box_next_to_the_friend_counts():
-    """The recognizer holds a new stranger as `unsure` for FACE_STRANGER_MIN_TICKS-1
-    ticks before minting. Those ticks must count, or the counter reads 1 on the
-    mint tick — which is also the tick presence.enter fires."""
+    """Unsure ticks before minting count toward the stranger's seen counter."""
     assert copresence_ticks(0, [FRIEND, UNSURE]) == 1
     assert copresence_ticks(1, [FRIEND, STRANGER]) == 2

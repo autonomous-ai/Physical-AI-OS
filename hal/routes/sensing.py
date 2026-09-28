@@ -36,17 +36,7 @@ logger = logging.getLogger(__name__)
 
 
 def _notify_user_reconcile(reason: str) -> None:
-    """Tell os-server that an enrollment DIRECTORY under USERS_DIR changed.
-
-    os-server retires a person from every runtime's USER.md once their
-    enrollment directory is gone. That check runs at startup, so without this
-    poke a person removed from the UI would keep their profile in the agent's
-    system prompt until the next boot — a half-delete.
-
-    Fire-and-forget: the real work (the directory) is already done, so a failure
-    here must never turn a successful removal into an HTTP error. Worst case the
-    profile is retired at the next start instead of now.
-    """
+    """Tell os-server an enrollment directory under USERS_DIR changed (fire-and-forget)."""
     try:
         requests.post(config.OS_USER_RECONCILE_URL, json={"reason": reason}, timeout=2)
     except requests.RequestException as e:
@@ -59,21 +49,11 @@ def _notify_user_reconcile(reason: str) -> None:
 
 
 class UserRenameRequest(BaseModel):
-    """Rename a user folder under /root/local/users/.
-
-    Touches every per-user surface in one move: face photos, voice samples,
-    metadata.json, mood/wellbeing/audio_history JSONLs, habit patterns —
-    all live inside the label folder, so a single os.rename moves them
-    atomically. The face recognizer's 2s disk poller and the speaker
-    recognizer's file-backed registry both pick up the new name on next
-    read; we touch the speaker registry inline so list_registered reflects
-    the rename immediately rather than after a full restart.
-    """
+    """Rename a user folder under /root/local/users/."""
 
     old_label: str = Field(min_length=1, max_length=64)
     new_label: str = Field(min_length=1, max_length=64)
 
-# Lazy import
 FacePerception = None
 try:
     from hal.drivers.sensing.perceptions.processors import FacePerception
@@ -96,8 +76,6 @@ def _require_face_recognizer():
     return fr
 
 
-# --- Sensing ---
-
 @router.get("/sensing", response_model=SensingResponse, tags=["Sensing"])
 def get_sensing_state():
     """Get perception state."""
@@ -112,9 +90,7 @@ def _pose_buckets_dir() -> Path:
 
 
 def _find_pose_snapshot_for_ts(ts: int) -> Path | None:
-    """Locate a snapshot named `<ts>_<score>.jpg` across all buckets.
-    Bucket count is small (≤ a few dozen with 2-day retention) so an
-    O(buckets) scan stays cheap. Newest mtime wins on score collision."""
+    """Locate a snapshot named `<ts>_<score>.jpg` across all buckets (newest mtime wins)."""
     root: Path = _pose_buckets_dir()
     if not root.is_dir():
         return None
@@ -144,11 +120,7 @@ def _find_pose_snapshot_for_ts(ts: int) -> Path | None:
 
 @router.get("/sensing/pose-snapshot", tags=["Sensing"])
 def get_pose_snapshot():
-    """Return the most recent annotated pose frame as JPEG.
-
-    Walks every bucket dir and picks the newest .jpg file regardless of
-    bucket. Prefer /sensing/pose-snapshot/{ts} when you have a specific
-    sample timestamp (e.g. clicking a row in the monitor table)."""
+    """Return the most recent annotated pose frame as JPEG."""
     root: Path = _pose_buckets_dir()
     if not root.is_dir():
         raise HTTPException(404, "No pose snapshot yet")
@@ -181,11 +153,7 @@ def get_pose_snapshot():
 
 @router.get("/sensing/pose-snapshot/{ts}", tags=["Sensing"])
 def get_pose_snapshot_at(ts: int):
-    """Return the annotated pose frame for a specific sample timestamp.
-
-    `ts` is int(unix-seconds) — matches int(sample.ts). Scans buckets/*
-    for `<ts>_<score>.jpg`. 404 when the file has been pruned (ephemeral
-    bucket dropped at window close, or kept bucket aged past retention)."""
+    """Return the annotated pose frame for `ts` (int unix seconds); 404 once pruned."""
     path: Path | None = _find_pose_snapshot_for_ts(ts)
     if path is None:
         raise HTTPException(404, "Snapshot not found (expired or never written)")
@@ -198,9 +166,7 @@ def get_pose_snapshot_at(ts: int):
 
 @router.get("/sensing/pose-bucket/{bucket_id}", tags=["Sensing"])
 def get_pose_bucket(bucket_id: str):
-    """Return the bucket.json manifest for a kept pose window. Used by the
-    Flow Monitor turn card popup to render the full sample table without
-    re-fetching `/sensing` (which only carries the live window)."""
+    """Return the bucket.json manifest for a kept pose window."""
     if "/" in bucket_id or ".." in bucket_id or not bucket_id.isdigit():
         raise HTTPException(404, "Bucket not found")
     bdir: Path = _pose_buckets_dir() / bucket_id
@@ -215,8 +181,7 @@ def get_pose_bucket(bucket_id: str):
 
 @router.get("/sensing/pose-bucket/{bucket_id}/img/{filename}", tags=["Sensing"])
 def get_pose_bucket_image(bucket_id: str, filename: str):
-    """Serve a single annotated frame from a kept bucket. Filename comes
-    from bucket.json (`samples[].filename` or `worst_snapshots[]`)."""
+    """Serve a single annotated frame from a kept bucket."""
     if "/" in bucket_id or ".." in bucket_id or not bucket_id.isdigit():
         raise HTTPException(404, "Image not found")
     if (
@@ -236,8 +201,6 @@ def get_pose_bucket_image(bucket_id: str, filename: str):
         raise HTTPException(500, f"read failed: {e}") from e
     return Response(content=data, media_type="image/jpeg")
 
-
-# --- Presence ---
 
 @router.get("/presence", response_model=PresenceResponse, tags=["Presence"])
 def get_presence():
@@ -270,8 +233,6 @@ def disable_presence():
     state.sensing_service.presence.disable()
     return {"status": "ok"}
 
-
-# --- Face ---
 
 @router.post("/face/enroll", response_model=FaceEnrollResponse, tags=["Face"])
 def face_enroll(req: FaceEnrollRequest):
@@ -312,17 +273,12 @@ def face_status():
 
 _IMG_EXTS = {".jpg", ".jpeg", ".png", ".bmp"}
 
-# Shared per-user-log bucket for an unidentified speaker. It is a real folder
-# under USERS_DIR and the Web UI renders it (PersonCard special-cases the label),
-# but it is never an enrolled person.
+# Shared log bucket for an unidentified speaker; never an enrolled person.
 SHARED_USER_BUCKET = "unknown"
 
 
 def _has_enrollment_evidence(d: Path) -> bool:
-    """True if a user dir holds something a person was actually enrolled with:
-    a face photo, a voice sample, or metadata.json. Log-only folders
-    (audio_history/, mood/, music-suggestions/, ...) are side effects of the
-    per-user loggers and do not make a person (#425)."""
+    """True if a user dir holds a face photo, voice sample or metadata.json (#425)."""
     if (d / "metadata.json").is_file():
         return True
     if any(f.is_file() and f.suffix.lower() in _IMG_EXTS for f in d.iterdir()):
@@ -333,11 +289,7 @@ def _has_enrollment_evidence(d: Path) -> bool:
 
 @router.get("/face/owners", response_model=FaceOwnersDetailResponse, tags=["Face"])
 def face_owners_detail():
-    """List enrolled persons with photo filenames.
-
-    Only directories with enrollment evidence are persons; the shared
-    "unknown" bucket is listed (the UI shows its logs) but not counted.
-    """
+    """List enrolled persons with photo filenames (the "unknown" bucket is listed, not counted)."""
     _require_face_recognizer()
     from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import USERS_DIR
 
@@ -457,14 +409,7 @@ def face_reset():
 
 @router.post("/users/rename", response_model=StatusResponse, tags=["User"])
 def user_rename(req: UserRenameRequest):
-    """Rename a per-user folder. All face / voice / mood / wellbeing data
-    lives under the label folder, so this is a single fs rename.
-
-    Validation:
-    - new_label must normalize cleanly and be non-empty.
-    - new_label must not collide with an existing folder.
-    - old folder must exist.
-    """
+    """Rename a per-user folder (single fs rename); the new label must be valid and unused."""
     from hal.drivers.sensing.perceptions.processors.facerecognizer_v2 import (
         FacePerception,
         USERS_DIR,
@@ -476,8 +421,7 @@ def user_rename(req: UserRenameRequest):
         raise HTTPException(400, "label must contain at least one valid character")
     if old == new:
         return {"status": "ok"}
-    # "unknown" is a sentinel label across face / voice / log paths — renaming
-    # it would silently break references everywhere. UI hides the button too.
+    # "unknown" is a sentinel label across face / voice / log paths.
     if old == "unknown" or new == "unknown":
         raise HTTPException(400, "'unknown' is reserved and cannot be renamed")
 
@@ -493,10 +437,7 @@ def user_rename(req: UserRenameRequest):
     except OSError as e:
         raise HTTPException(500, f"rename failed: {e}") from e
 
-    # Per-user metadata.json files mirror the label as `name` / `display_name`.
-    # Recognize / list endpoints read these directly, so a folder rename alone
-    # leaves stale identity strings until the next enrollment overwrites them.
-    # Update both the shared top-level file and the voice/ mirror inline.
+    # metadata.json mirrors the label as `name` / `display_name`; update both copies.
     now_iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
     for meta_path in (dst / "metadata.json", dst / "voice" / "metadata.json"):
         if not meta_path.is_file():
@@ -519,9 +460,7 @@ def user_rename(req: UserRenameRequest):
             except OSError:
                 pass
 
-    # Speaker registry is keyed by label — re-key the entry inline so
-    # /speaker/list reflects the new name on the next call instead of
-    # waiting for a process restart.
+    # Re-key the speaker registry so /speaker/list reflects the rename immediately.
     registry_path = USERS_DIR / ".voice_registry.json"
     if registry_path.is_file():
         try:
@@ -535,17 +474,12 @@ def user_rename(req: UserRenameRequest):
         except (json.JSONDecodeError, OSError):
             pass
 
-    # Force the face recognizer's mtime poller to notice. USERS_DIR
-    # rglob picks up the rename anyway, but touching a sentinel ensures
-    # the next 2s tick triggers a reload even on filesystems where the
-    # rename leaves parent dir mtime unchanged.
+    # Touch a sentinel so the recognizer's 2s poller reloads even if dir mtime is unchanged.
     try:
         os.utime(USERS_DIR, None)
     except OSError:
         pass
 
-    # The old label's directory no longer exists, so any profile still keyed to
-    # it is now stale.
     _notify_user_reconcile(f"users/rename:{old}->{new}")
 
     return {"status": "ok"}
@@ -567,13 +501,7 @@ def face_cooldowns():
 
 @router.get("/face/current-user", tags=["Face"])
 def face_current_user():
-    """Return who HAL considers "in front of the device" right now.
-
-    Friend with the newest session_start still within the forget window,
-    else "unknown" when only strangers are present, else empty string.
-    Dedicated endpoint so callers don't have to pull the whole cooldown
-    payload just to get one field.
-    """
+    """Who HAL considers in front of the device: newest friend, else "unknown", else ""."""
     fr = _require_face_recognizer()
     return {"current_user": fr.current_user()}
 
@@ -585,8 +513,6 @@ def face_cooldowns_reset():
     fr.reset_cooldowns()
     return {"status": "ok"}
 
-
-# --- User ---
 
 def _resolve_user_dir(name: str) -> tuple[str, Path]:
     """Resolve user name and directory."""

@@ -37,11 +37,7 @@ def create_person_detector(
     bbox_expand_scale: float | None = None,
     batch_size: int | None = None,
 ) -> PersonDetector:
-    """Instantiate the correct person detector.
-
-    Uses ONNX predictor when an ONNX model path is provided,
-    otherwise falls back to ultralytics.
-    """
+    """Instantiate an ONNX person detector if an ONNX path is given, else ultralytics."""
     use_onnx = model_path is not None and str(model_path).endswith(".onnx")
 
     if model_name == PersonDetectorEnum.YOLO:

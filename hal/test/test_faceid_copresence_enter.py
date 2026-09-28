@@ -1,11 +1,4 @@
-"""A stranger joining the user is announced WITH the user in the text (#426).
-
-Replays the green-lamp log of 2026-09-16 11:23 tick by tick through
-`FacePerception._check_impl` with the recognizer stubbed: momo alone (greeted),
-momo + an unsure box (the recognizer corroborating), momo + stranger_2 (minted).
-The enter event for stranger_2 must list momo as already present — and must
-NOT when the two boxes have not coexisted for FACE_COPRESENCE_MIN_TICKS ticks.
-"""
+"""A stranger joining the user is announced WITH the user in the text (#426)."""
 
 import numpy as np
 import pytest
@@ -48,10 +41,7 @@ def perception(monkeypatch, tmp_path):
         events.append((event_type, message))
 
     p = FacePerception(PerceptionStateObservers(), send_event)
-    # Ticks here are microseconds apart, so the 10s stranger flush window would
-    # never elapse. On the device the flush landed on the mint tick (last flush
-    # was >10s old — see the issue's 11:23:51 log); a zero interval reproduces
-    # that without a fake clock.
+    # Ticks are microseconds apart; a zero flush interval reproduces the device's flush-on-mint.
     p._stranger_flush_interval = 0.0
     p.events = events  # type: ignore[attr-defined]
     return p
@@ -67,9 +57,9 @@ def _enters(perception) -> list[str]:
 
 
 def test_stranger_joining_momo_lists_momo_as_already_present(perception, monkeypatch):
-    _tick(perception, [MOMO], monkeypatch)             # 11:12 momo arrives
-    _tick(perception, [MOMO, UNSURE], monkeypatch)     # recognizer corroborating
-    _tick(perception, [MOMO, STRANGER], monkeypatch)   # 11:23 stranger_2 minted
+    _tick(perception, [MOMO], monkeypatch)
+    _tick(perception, [MOMO, UNSURE], monkeypatch)
+    _tick(perception, [MOMO, STRANGER], monkeypatch)
 
     assert _enters(perception) == [
         "Person detected — new: friend (momo); faces in frame: 1 (momo)",
@@ -98,7 +88,7 @@ def test_momo_out_of_frame_is_not_already_present_even_inside_her_window(percept
     assert _enters(perception)[-1] == (
         "Person detected — new: stranger (stranger_2); faces in frame: 1 (stranger_2)"
     )
-    assert perception.current_user() == "momo"  # still her window — text must not say she is here
+    assert perception.current_user() == "momo"
 
 
 def test_a_new_friend_lists_a_present_friend_without_the_guard(perception, monkeypatch):
@@ -120,17 +110,13 @@ def test_copresence_counter_resets_when_the_frame_empties(perception, monkeypatc
 
 
 def test_delayed_flush_describes_the_buffered_snapshot_not_the_flush_tick(perception, monkeypatch):
-    """Device log, orange-lamp 2026-09-16 13:5x: the photo was minted on a tick
-    with both boxes (that frame is what gets attached), the flush landed two
-    ticks later when long had blurred out, and the text said
-    "faces in frame: 1 (unsure)" over a two-box snapshot. The message must
-    describe the frame the snapshot shows."""
-    perception._stranger_flush_interval = 10_000.0  # hold the buffer
+    """The enter message reflects the faces seen on the tick the photo was minted."""
+    perception._stranger_flush_interval = 10_000.0
     _tick(perception, [MOMO], monkeypatch)
-    _tick(perception, [MOMO, UNSURE], monkeypatch)     # recognizer corroborating
-    _tick(perception, [MOMO, STRANGER], monkeypatch)   # minted, buffered with both boxes
-    _tick(perception, [STRANGER], monkeypatch)         # momo blurred out
-    perception._stranger_flush_interval = 0.0          # flush lands now
+    _tick(perception, [MOMO, UNSURE], monkeypatch)
+    _tick(perception, [MOMO, STRANGER], monkeypatch)
+    _tick(perception, [STRANGER], monkeypatch)
+    perception._stranger_flush_interval = 0.0
     _tick(perception, [UNSURE], monkeypatch)
 
     assert _enters(perception)[-1] == (
@@ -144,9 +130,9 @@ def test_immediate_friend_send_still_describes_the_current_frame(perception, mon
     perception._stranger_flush_interval = 10_000.0
     _tick(perception, [MOMO], monkeypatch)
     _tick(perception, [MOMO, UNSURE], monkeypatch)
-    _tick(perception, [MOMO, STRANGER], monkeypatch)   # stranger_2 buffered, not flushed
+    _tick(perception, [MOMO, STRANGER], monkeypatch)
     leo = _face(PersonKind.FRIEND, "leo")
-    _tick(perception, [MOMO, leo], monkeypatch)        # leo arrives, stranger gone
+    _tick(perception, [MOMO, leo], monkeypatch)
 
     assert _enters(perception)[-1] == (
         "Person detected — new: friend (leo); already present: momo (friend); "

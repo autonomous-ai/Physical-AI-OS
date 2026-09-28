@@ -16,10 +16,7 @@ def _round_or_none(value: float) -> Optional[float]:
 
 
 class PreprocessRejected(ValueError):
-    """Raised when the speech gate rejects an audio clip.
-
-    Carries structured measurements so callers can surface exact numbers.
-    """
+    """Raised when the speech gate rejects an audio clip."""
 
     def __init__(
         self,
@@ -39,7 +36,6 @@ class PreprocessRejected(ValueError):
         self.voice_ratio: float = float(voice_ratio)
         self.min_duration_sec: float = float(min_duration_sec)
         self.min_voice_ratio: float = float(min_voice_ratio)
-        # STOI intelligibility gate (REJECT_LOW_INTELLIGIBILITY only)
         self.stoi_score: float = float(stoi_score)
         self.stoi_threshold: float = float(stoi_threshold)
         super().__init__(self._format_message())
@@ -85,8 +81,6 @@ class PreprocessRejected(ValueError):
             "voice_ratio": round(self.voice_ratio, 3),
             "min_duration_sec": round(self.min_duration_sec, 3),
             "min_voice_ratio": round(self.min_voice_ratio, 3),
-            # None (not NaN) when the STOI gate wasn't the rejecting stage —
-            # NaN is not valid JSON and this payload goes into error responses.
             "stoi_score": _round_or_none(self.stoi_score),
             "stoi_threshold": _round_or_none(self.stoi_threshold),
         }

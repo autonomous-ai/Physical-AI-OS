@@ -23,10 +23,7 @@ router = APIRouter(tags=["audio-recognizer"])
 
 @router.post("/audio-recognizer/embed", response_model=EmbedAudioResponse)
 async def embed_audio(req: EmbedAudioRequest):
-    """Return per-chunk and/or aggregated L2-normalized embeddings.
-
-    Stateless — does NOT touch the speaker DB.
-    """
+    """Return per-chunk and/or aggregated L2-normalized embeddings (stateless)."""
     embedder = get_audio_embedder()
     if embedder is None:
         raise HTTPException(status_code=503, detail="Audio embedder is unavailable")

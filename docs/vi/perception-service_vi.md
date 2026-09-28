@@ -35,8 +35,9 @@ HAL / client
 - **`dlserver`** (`:8001`) — nạp các mô hình ML, phục vụ các endpoint perception.
 - **`lbserver`** (`:7999`) — proxy round-robin trước một hoặc nhiều `dlserver`; kết
   thúc (terminate) mã hóa RSA+AES để `dlserver` luôn nhận plaintext.
-- **`nginx`** (`:8899`) — cửa ngõ công khai; ánh xạ prefix `/lelamp/` (phía thiết
-  bị) sang prefix nội bộ `/hal/` và nâng cấp WebSocket.
+- **`nginx`** (`:8899`) — cửa ngõ công khai; cho `/hal/...` (prefix mà mặc định
+  hiện tại của HAL dùng, ví dụ `/hal/api/dl/ser/recognize`) đi thẳng qua, ánh xạ
+  prefix cũ `/lelamp/` sang `/hal/`, và nâng cấp WebSocket.
 
 Khi dev một node, có thể gọi thẳng `dlserver:8001` với mã hóa tắt.
 
@@ -68,11 +69,11 @@ lọc/VAD/chuẩn hoá audio **tại thiết bị** và gọi `/audio-recognizer
 định `preprocess=false`; chỉ truyền `true` nếu upload audio thô để server tự làm
 sạch). HAL cũng đặt `use_sliding_window`: bước enroll gửi `false` để nhồi nguyên
 câu vào model một lần (một vector sạch), còn bước recognize gửi `true` để trượt
-cửa sổ chồng lấn và bỏ phiếu theo từng chunk. Response embed (và `/health`) còn
-trả `embed_model_version` — vân tay của
+cửa sổ chồng lấn và bỏ phiếu theo từng chunk. Response embed
+(`embed_model_version`) và `/health` (`audio_embedder_version`) còn trả vân tay của
 trọng số model đang nạp, để HAL biết khi model server đổi và **tự tính lại
 embedding** cho các hồ sơ giọng đã lưu thay vì so khớp với vector đã lỗi thời
-(xem [`robots/lamp/docs/speaker-enrollment.md`](../../robots/lamp/docs/speaker-enrollment.md)). Endpoint và payload chính xác nằm trong
+(xem [`robots/lamp/docs/vi/speaker-enrollment_vi.md`](../../robots/lamp/docs/vi/speaker-enrollment_vi.md)). Endpoint và payload chính xác nằm trong
 [`integrations/perception-service/docs/api.md`](../../integrations/perception-service/docs/api.md); mọi tham số cấu hình nằm trong
 [`integrations/perception-service/docs/configuration.md`](../../integrations/perception-service/docs/configuration.md).
 

@@ -1,8 +1,4 @@
-"""YOLO person detector using ONNX Runtime.
-
-Wraps the YOLO ONNX object detector, filters to person class,
-and converts xywh → xyxy for RawPersonDetection.
-"""
+"""YOLO person detector using ONNX Runtime (person class only, xyxy output)."""
 
 from pathlib import Path
 from typing import Any

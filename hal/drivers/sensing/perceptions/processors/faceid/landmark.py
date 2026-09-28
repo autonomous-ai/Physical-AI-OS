@@ -1,22 +1,4 @@
-"""MediaPipe FaceMesh landmark regressor (ONNX) + landmark-based aligner.
-
-The pip ``mediapipe`` package cannot be installed on the target device, so its
-FaceMesh landmark stage is served by an ONNX regressor instead
-(``_MediaPipeLandmarkONNX``). The model is the landmark REGRESSOR only (no
-internal detector): it expects a square, roughly-upright face ROI, so
-``detect_in_frame`` builds a square ROI centered on the SCRFD bbox (optionally
-roll-corrected with the eye keypoints), runs the regressor, and maps the
-landmarks back to full-frame coordinates.
-
-Model I/O (verified):
-    input  'image'     : (1, 3, 192, 192) float32, NCHW, RGB, range [0, 1]
-    output 'scores'    : (1,)             float32, face-presence logit
-    output 'landmarks' : (1, 468, 3)      float32, (x, y, z) normalized to [0, 1]
-
-``_OnnxLandmarkAligner`` gates on landmark confidence: only confident, in-bounds
-dense landmarks are used to align (there is NO SCRFD keypoint fallback), so
-low-confidence / non-face detections never produce an embedding.
-"""
+"""MediaPipe FaceMesh landmark regressor (ONNX) + landmark-based aligner."""
 
 import logging
 import os
@@ -33,13 +15,11 @@ from .geometry import (
 
 logger = logging.getLogger(__name__)
 
-# FaceMesh landmark indices -> the 5 canonical alignment points (same indices the
-# old pip-MediaPipe path used).
 _LM_NOSE = 1
 _LM_MOUTH_RIGHT = 287
 _LM_MOUTH_LEFT = 57
-_LM_RIGHT_EYE = (362, 263)  # corners -> averaged to the eye center
-_LM_LEFT_EYE = (33, 243)    # corners -> averaged to the eye center
+_LM_RIGHT_EYE = (362, 263)
+_LM_LEFT_EYE = (33, 243)
 
 
 class _MediaPipeLandmarkONNX:
@@ -55,20 +35,7 @@ class _MediaPipeLandmarkONNX:
         fp16: bool = False,
         session_options: ort.SessionOptions | None = None,
     ):
-        """
-        model_path: path to the MediaPipe landmark ONNX model.
-        input_size: model input resolution (int or (w, h)); MediaPipe = 192.
-        conf_thresh: face-presence probability (sigmoid of the raw 'scores'
-            output) above which the landmarks are trusted. ~0.6 mirrors the pip
-            MediaPipe succeed/fail split — clear frontal faces use the dense
-            landmarks; hard/profile / non-face crops fall below it and are
-            dropped (no keypoint fallback).
-        roi_scale: square ROI side as a multiple of the bbox's longer side. 1.4
-            reproduces the old path (FaceMesh on bbox + 0.2 margin ≈ 1.4x).
-        roll_align: if True and eye keypoints are given, rotate the ROI so the
-            eyes are horizontal before inference (mirrors MediaPipe).
-        fp16: cast the input blob to float16 (use with an fp16 exported model).
-        """
+        """model_path: path to the MediaPipe landmark ONNX model."""
         sess_opts = session_options or ort.SessionOptions()
         self.session = ort.InferenceSession(model_path, sess_opts)
         self.input_name = self.session.get_inputs()[0].name
@@ -97,8 +64,7 @@ class _MediaPipeLandmarkONNX:
         scores, landmarks = self.session.run(
             self.output_names, {self.input_name: self._blob(bgr_crop)}
         )
-        score = float(scores[0]) # already sigmoided in the model output (face-presence probability)
-        # normalized [0,1] -> pixels of the (square) model input
+        score = float(scores[0])
         xy = landmarks[0][:, :2].astype(np.float32) * np.float32(self.input_size)
         return xy, score
 
@@ -123,10 +89,7 @@ class _MediaPipeLandmarkONNX:
         return M
 
     def detect_in_frame(self, frame: np.ndarray, bbox, kps=None):
-        """Detect 468 landmarks for one face, in FULL-FRAME pixel coords.
-
-        Returns (landmarks_frame (468,2) float32, score in [0,1]).
-        """
+        """Detect 468 landmarks for one face, in FULL-FRAME pixel coords."""
         M = self._roi_transform(bbox, kps)
         roi = cv2.warpAffine(frame, M, self.input_size)
         xy, score = self._run(roi)
@@ -151,23 +114,7 @@ class _MediaPipeLandmarkONNX:
 class _OnnxLandmarkAligner:
     """ONNX-landmark alignment (drop-in for the old MediaPipe FaceMesh aligner).
 
-    Only confident, in-bounds dense landmarks are used to align:
-        score >= conf_thresh -> align from the dense ONNX landmarks
-        score <  conf_thresh -> drop the face (no embedding)
-    There is NO SCRFD keypoint fallback, so low-confidence / non-face detections
-    are gated out instead of being force-aligned and embedded.
-
-    Read the threshold in the scale the model actually emits: this score
-    saturates near 1.0 on anything face-shaped (median exactly 1.000 over 990
-    logged frames), so the useful range is the last hundredth, and
-    ``_LANDMARK_CONF_THRESHOLD`` defaults to 0.99 accordingly. A value like 0.6
-    does not mean "fairly strict" here — it means the gate never fires.
-
-    What it screens out is a crop that is facial but not identifiable — SCRFD
-    firing on an ear at close range, say. It is NOT an occlusion detector: the
-    model is the landmark regressor alone, with no detector head, so it is
-    handed an ROI SCRFD has already called a face and returns points for
-    whatever is inside. A face behind a paper tissue scores 0.9978.
+    A value like 0.6 does not mean "fairly strict" here — it means the gate never fires.
     """
 
     def __init__(self, landmarker: _MediaPipeLandmarkONNX) -> None:
@@ -176,28 +123,8 @@ class _OnnxLandmarkAligner:
     def align_crop_from_bbox(self, frame: np.ndarray, bbox, kps=None):
         """Aligned 112x112 crop for one detection.
 
-        Returns ``(aligned, pts5, emotion_box, landmarks, score)``:
-            * ``aligned``: 112x112 BGR crop, or None if the face cannot align.
-            * ``pts5``: the 5 alignment points used for the warp, or None.
-            * ``emotion_box``: axis-aligned ``[x1, y1, x2, y2]`` face box in frame
-              pixels, derived from the dense 468 landmarks (the framing the cloud
-              emotion model expects), or None. Computed here so the emotion
-              pipeline can reuse it instead of re-running the face mesh; NO
-              rotation is applied.
-            * ``landmarks``: the dense (468, 2) float32 mesh in FULL-FRAME pixel
-              coords, or None. Already computed for the alignment above, so
-              carrying it out is free; the debug log plots it (a skewed mesh is
-              the usual cause of a bad embedding, and it is invisible in the
-              aligned crop alone).
-            * ``score``: the landmark face-presence confidence in [0, 1], 0.0
-              when no mesh was produced. It is the gate that drops a face, so a
-              near-miss is worth seeing.
-
-        Faces whose landmark confidence is below ``conf_thresh`` (or whose
-        landmarks fall outside the bbox/image) are dropped: there is NO SCRFD
-        keypoint fallback, so low-confidence / non-face detections never produce
-        an embedding. ``kps`` is still used by the landmarker for ROI roll
-        correction.
+        Faces whose landmark confidence is below ``conf_thresh`` (or whose landmarks
+        fall outside the bbox/image) are dropped.
         """
         try:
             landmarks, score = self._landmarker.detect_in_frame(frame, bbox, kps=kps)
@@ -216,7 +143,4 @@ class _OnnxLandmarkAligner:
                 except Exception as e:  # noqa: BLE001
                     logger.debug("[face-v2] landmark alignment error: %s", e)
 
-        # Dropped (low confidence / out of bounds / warp failure). The dense
-        # mesh, when there was one, still rides along so the debug log can show
-        # WHY the face was rejected.
         return None, None, None, landmarks, score

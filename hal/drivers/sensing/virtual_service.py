@@ -1,9 +1,4 @@
-"""Local-only sensing surface for HAL_SIMULATE.
-
-It intentionally makes no perception-service or host-device calls. Tests can
-exercise presence state and the route contract against the synthetic camera;
-face identity remains unavailable until a test fixture supplies a person.
-"""
+"""Local-only sensing surface for HAL_SIMULATE."""
 
 from __future__ import annotations
 

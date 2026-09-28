@@ -31,15 +31,6 @@ logger = logging.getLogger(__name__)
 
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
-# Map raw Kinetics action labels to high-level activity groups. The bucket
-# decides three things at flush time: whether the label is emitted at all
-# (emotional is dropped), whether it is emitted raw or collapsed to the bucket
-# name (see _RAW_LABEL_GROUPS), and whether it participates in the coarse-class
-# cooldown (see coarse_classes).
-# Boot-scoped dedup sidecar — survives HAL service restarts so the first
-# flush after a deploy/OTA doesn't re-fire "Activity detected" as if the
-# activity were news (same pattern as the presence and scene sidecars).
-# tmpfs + boot_id: a full device reboot starts fresh on purpose.
 _MOTION_STATE_PATH = Path("/tmp/hal-motion-state.json")
 
 
@@ -51,80 +42,46 @@ def _current_boot_id() -> str:
 
 
 ACTIVITY_GROUP: dict[str, str] = {
-    # drink — reset hydration timer
     "drinking": "drink",
     "drinking beer": "drink",
     "drinking shots": "drink",
     "tasting beer": "drink",
-    # "opening bottle": "drink",  # prep, not the act — opening a bottle says
-    # nothing about whether the user drank. The bucket collapses to the word
-    # "drink", so it would reset the hydration timer and make the agent assert
-    # "that's your 3rd drink" over an unopened glass. Same reason as making tea.
-    # "making tea": "drink",
-    # break — reset break timer (stretching, movement)
     "stretching arm": "break",
     "stretching leg": "break",
-    # sneezing/sniffing/hugging/kissing/headbanging/sticking-tongue-out dropped:
-    # reflex/social noise, not real desk breaks, and magnet-prone.
-    # celebrate — upbeat reaction (collapses to bucket name, like drink/break)
     "celebrating": "celebrate",
     "clapping": "celebrate",
     "applauding": "celebrate",
-    # eat — meal signal (raw labels kept for phrasing + per-food UI icons)
     "tasting food": "eat",
     "dining": "eat",
     "eating burger": "eat",
     "eating cake": "eat",
     "eating carrots": "eat",
-    # "eating chips": "eat",
     "eating doughnuts": "eat",
     "eating hotdog": "eat",
     "eating ice cream": "eat",
     "eating spaghetti": "eat",
     "eating watermelon": "eat",
-    # sedentary — create wellbeing/music crons if missing
     "using computer": "sedentary",
     "writing": "sedentary",
     "texting": "sedentary",
     "reading book": "sedentary",
     "reading newspaper": "sedentary",
-    # reading book + reading newspaper both emit the generic label "reading"
-    # (see _RAW_LABEL_EMIT_REMAP): a phone misdetected as "reading newspaper" is
-    # still truthfully "reading", so the collapse neutralises the wording error
-    # while keeping the sedentary signal. "reading" is a synthetic emit label
-    # (never returned by the model), so it needs its own bucket entry for the
-    # sedentary streak / posture-window / cooldown lookups below.
+    # reading book + reading newspaper both emit the generic label "reading" (see
+    # _RAW_LABEL_EMIT_REMAP).
     "reading": "sedentary",
     "drawing": "sedentary",
     "playing controller": "sedentary",
-    # tired — fatigue evidence. Emits the RAW label (same hybrid as
-    # sedentary/eat) so the agent can reference the yawn directly instead of
-    # reading a bucket word. Deliberately NOT in `sedentary`: has_sedentary
-    # below starts the sedentary streak and opens the pose window, and a yawn
-    # mid-stretch would keep a real break from resetting either.
     "yawning": "tired",
-    # emotional — always speak, log mood
     "laughing": "emotional",
     "crying": "emotional",
     "singing": "emotional",
 }
 
-# Buckets whose raw Kinetics label is emitted verbatim instead of collapsing to
-# the bucket name. sedentary/eat keep the label for UI icons + phrasing; tired
-# keeps it because "yawning" is the whole signal.
 _RAW_LABEL_GROUPS: frozenset[str] = frozenset({"sedentary", "eat", "tired"})
 
 
 def coarse_classes(labels: set[str]) -> frozenset[str]:
-    """Coarse activity classes for the cooldown floor's transition bypass.
-
-    `tired` is excluded while any real activity is present: a yawn is a
-    MODIFIER on what the user is doing, not a change of activity. Counting it
-    as one would make `using computer` ↔ `using computer + yawning` look like a
-    computer→eat style transition every time the detection blinks, bypassing
-    the cooldown floor on its own min gap. A tired-only flush still gets its
-    own class — nothing else was detected, so it is the activity.
-    """
+    """Coarse activity classes for the cooldown floor's transition bypass."""
     core = frozenset(
         ACTIVITY_GROUP.get(label, label)
         for label in labels
@@ -133,10 +90,8 @@ def coarse_classes(labels: set[str]) -> frozenset[str]:
     return core or frozenset({"tired"})
 
 
-# Some raw Kinetics labels are folded to a coarser spoken label at emit time
-# while still routing through their real bucket. reading book / reading
-# newspaper both surface as "reading" so the agent never asserts the wrong
-# medium (book vs paper vs a phone misread as newspaper).
+# Some raw Kinetics labels are folded to a coarser spoken label at emit time while still
+# routing through their real bucket.
 _RAW_LABEL_EMIT_REMAP: dict[str, str] = {
     "reading book": "reading",
     "reading newspaper": "reading",
@@ -145,9 +100,9 @@ _RAW_LABEL_EMIT_REMAP: dict[str, str] = {
 
 class MoveEnum(Enum):
     BACKGROUND = (
-        "background"  # whole scene shifting — camera shake or very close object
+        "background"
     )
-    FOREGROUND = "foreground"  # localized movement — person walking, object moving
+    FOREGROUND = "foreground"
     NONE = "none"
 
 
@@ -219,7 +174,6 @@ class RemoteMotionChecker:
             if self._crypto is not None:
                 config_msg = self._crypto.wrap_ws_message(config_msg)
             self._ws_session.send(config_msg)
-            # Consume the config_updated response
             raw = self._ws_session.recv(timeout=config.DL_WS_RECV_TIMEOUT_S)
             if self._crypto is not None:
                 raw = self._crypto.unwrap_ws_message(raw)
@@ -228,10 +182,7 @@ class RemoteMotionChecker:
             self._ws_session = None
 
     def _setup_crypto(self) -> None:
-        """Perform WS key exchange after connection.
-
-        Raises RuntimeError if DL_ENCRYPTION_REQUIRED and setup fails.
-        """
+        """Perform WS key exchange after connection."""
         if self._ws_session is None:
             raise RuntimeError("Cannot setup crypto without a WS connection")
 
@@ -286,14 +237,8 @@ class RemoteMotionChecker:
             self._ws_session = None
 
     def update(self, frame: cv2.typing.MatLike) -> list[MotionDetection] | None:
-        """Send a frame for action recognition inference.
+        """Send a frame for action recognition inference."""
 
-        Returns list of dicts with keys: class_name, conf.
-        Sorted by confidence descending. Returns None if unavailable,
-        [] if nothing passes the backend threshold.
-        """
-
-        # Auto-reconnect if session was lost
         if self._ws_session is None:
             self._prepare_session()
             if self._ws_session is not None:
@@ -371,11 +316,7 @@ class RemoteMotionChecker:
 
 
 class MotionPerception(Perception[cv2.typing.MatLike]):
-    """Detects motion via remote DL backend action recognition.
-
-    Snapshots are buffered and flushed every MOTION_FLUSH_S seconds,
-    sending all accumulated snapshots together in one event.
-    """
+    """Detects motion via remote DL backend action recognition."""
 
     def __init__(
         self,
@@ -398,39 +339,19 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             threshold=config.MOTION_CONFIDENCE_THRESHOLD,
         )
 
-        # Snapshot buffer — flushed every MOTION_FLUSH_S
         self._flush_interval: float = config.MOTION_FLUSH_S
         self._last_flush_ts: float = 0.0
         self._snapshot_paths: list[str] = []
         self._snapshots_buffer: list[cv2.typing.MatLike] = []
         self._actions_buffer: list[str] = []
 
-        # Dedup state for outbound motion.activity events.
-        # Key = (current_user, frozenset(labels)) where `labels` matches what
-        # actually goes into the message: bucket names for drink/break, raw
-        # Kinetics labels for sedentary + eat. So `writing → drawing` flips
-        # the key (sedentary stays raw) and passes through so the agent sees
-        # the new activity; same logic now applies to `eating burger →
-        # eating cake` (eat stays raw, distinct keys), trading a bit of
-        # extra noise for richer reaction phrasing. Same key within
-        # MOTION_DEDUP_WINDOW_S = drop (saves agent tokens). User change flips
-        # the key immediately; different strangers collapse to "unknown" so
-        # they don't break dedup on their own.
+        # Dedup state for outbound motion.activity events. User change flips the key
+        # immediately; different strangers collapse to "unknown" so they don't break
+        # dedup on their own.
         self._last_sent_key: tuple[str, frozenset[str]] | None = None
         self._last_sent_ts: float = 0.0
-        self._dedup_window_s: float = 300.0  # 5 min
+        self._dedup_window_s: float = 300.0
 
-        # Global cooldown floor between two SAME-CLASS motion.activity
-        # emissions, independent of the per-label dedup above. The dedup keys
-        # on the exact label set, but noisy Kinetics labels (sedentary/eat keep
-        # their raw label) flip the key almost every flush, so the dedup alone
-        # lets the event fire every ~MOTION_FLUSH_S (~10s). This floor bounds
-        # that. Bypassed by: posture nudges (already time-gated by the pose
-        # window), a user change (reset_dedup nulls _last_sent_key on
-        # presence.enter), and a COARSE-CLASS transition (computer→eat is real
-        # information; writing→drawing is same-class noise and stays floored) —
-        # the transition bypass itself is min-gapped so a flickering detection
-        # can't turn it back into every-flush spam.
         self._event_cooldown_s: float = config.MOTION_EVENT_COOLDOWN_S
         self._transition_min_gap_s: float = config.MOTION_TRANSITION_MIN_GAP_S
         self._last_event_ts: float = 0.0
@@ -439,14 +360,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
 
         self._state_lock: threading.RLock = threading.RLock()
 
-        # Sedentary streak — tracks how long the user has been in a
-        # continuous "sedentary" activity (using computer / writing / …).
-        # Wired in by the orchestrator. Used to fold posture_summary into
-        # motion.activity whenever pose's tumbling window completes.
         self._pose_perception: PosePerception | None = None
-        # Tracks when the current continuous-sedentary stretch began. Used
-        # only to compute the [computer_streak_min: N] context hint that
-        # rides alongside the posture summary — not a gate.
         self._sedentary_streak_start_ts: float = 0.0
 
     def _load_dedup_state(self) -> None:
@@ -496,9 +410,9 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             logger.warning("[motion] dedup state save failed: %s", e)
 
     def set_pose_perception(self, pose: PosePerception | None) -> None:
-        """Wire in the pose sampler so motion can fold posture summaries
-        into outbound activity events. Called by the orchestrator after both
-        perceptions are constructed."""
+        """Wire in the pose sampler so motion can fold posture summaries into outbound
+        activity events.
+        """
         self._pose_perception = pose
 
     @staticmethod
@@ -520,13 +434,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             return
 
         # Presence gate for the remote stream: while AWAY (nobody seen for
-        # AWAY_TIMEOUT_S) don't send frames to the action-recognition backend
-        # — an empty room used to stream ~40k frames/day (~1GB) overnight for
-        # nothing. Local face detection keeps running every frame and its
-        # on_motion() flips presence back to PRESENT the moment someone shows
-        # up, which re-opens this stream on the next tick. IDLE still streams
-        # (a still reader is present, just not moving). fire_hazard is NOT
-        # gated like this on purpose — an empty room is when it matters most.
+        # AWAY_TIMEOUT_S) don't send frames to the action-recognition backend.
         if (
             self._presense_service is not None
             and self._presense_service.state == PresenceState.AWAY
@@ -544,10 +452,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         else:
             logger.debug("[motion] no detections")
 
-        # Annotate + JPEG-encode + disk write BEFORE taking the state lock —
-        # this is 50-200ms of CPU/disk on the A523 and used to run inside the
-        # lock, blocking every other perception's state access for the
-        # duration. It only needs the local frame + detections.
+        # Annotate + JPEG-encode + disk write BEFORE taking the state lock.
         snapshot_path: str | None = None
         if detections:
             snapshot_path = self._save_annotated(frame, detections)
@@ -599,7 +504,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             with open(filepath, "wb") as f:
                 _ = f.write(buf.tobytes())
 
-            # Rotate: remove oldest files if over max count
             files = sorted(
                 (
                     os.path.join(config.MOTION_SNAPSHOT_DIR, f)
@@ -635,22 +539,9 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             self._actions_buffer.clear()
             self._last_flush_ts = cur_ts
 
-        # Log raw detections in this flush window — useful for tuning
-        # the whitelist / ACTIVITY_GROUP mapping and for diagnosing why a
-        # particular flush did/didn't produce an event.
         if actions:
             logger.info("[motion] raw actions in window: %s", actions)
 
-        # Hybrid output: drink/break/celebrate collapse to bucket name,
-        # sedentary + eat + tired keep the raw Kinetics label. Bucket names are
-        # enough for hydration and break timer resets — the agent doesn't need
-        # the specific drink or movement type. Sedentary keeps the raw label so
-        # the agent can ground nudge phrasing and music-genre choice in the
-        # concrete activity (writing / reading book / playing controller / …).
-        # Eat keeps the raw label so reaction phrasing can reference the actual
-        # food (burger / dining / spaghetti / …) and the per-food UI icons
-        # render. Tired keeps it because "yawning" IS the signal — the wellbeing
-        # skill reads the label itself to shorten the break threshold.
         labels: set[str] = set()
 
         for a in reversed(actions):
@@ -659,11 +550,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                 logger.warning("[motion] unmapped action '%s', skipping", a)
                 continue
             if group == "emotional":
-                # Emotional actions (laughing/crying/yawning/singing) are
-                # intentionally NOT emitted via motion.activity. A dedicated
-                # motion.emotional event will be added later to carry them;
-                # until then emotional detections are silently ignored
-                # here so motion.activity stays purely about physical actions.
                 continue
             if group in _RAW_LABEL_GROUPS:
                 labels.add(_RAW_LABEL_EMIT_REMAP.get(a, a))
@@ -683,17 +569,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
             )
             return
 
-        # Track sedentary streak: time the user has been in continuous
-        # static activity. Starts on the first sedentary flush, stays warm
-        # while subsequent flushes still contain a sedentary label, resets
-        # the moment the activity transitions to something non-sedentary.
-        #
-        # A tired-only flush is NEUTRAL — it neither starts nor ends the
-        # streak. The classifier scoring one 10s clip as just "yawning" is not
-        # evidence the user left the desk, and resetting on it would restart
-        # [computer_streak_min] from zero mid-session, so a 3h stretch would be
-        # reported to the posture nudge as a few minutes. Same reasoning as
-        # coarse_classes(): tired modifies an activity, it isn't one.
         tired_only: bool = bool(labels) and all(
             ACTIVITY_GROUP.get(label) == "tired" for label in labels
         )
@@ -705,11 +580,9 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         elif has_sedentary:
             if self._sedentary_streak_start_ts <= 0:
                 self._sedentary_streak_start_ts = cur_ts
-            # Sedentary is the SOLE trigger to open the pose tumbling
-            # window. Idempotent — subsequent sedentary flushes inside an
-            # already-open window are no-ops. Once the window is open it
-            # runs purely on POSE_WINDOW_DURATION_S; later stretch breaks
-            # don't stop the clock, they just leave the bad_ratio honest.
+            # Sedentary is the SOLE trigger to open the pose tumbling window. Once the
+            # window is open it runs purely on POSE_WINDOW_DURATION_S; later stretch
+            # breaks don't stop the clock, they just leave the bad_ratio honest.
             if self._pose_perception is not None:
                 self._pose_perception.start_window()
         else:
@@ -723,14 +596,9 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
 
         message = f"Activity detected: {', '.join(sorted(labels))}."
 
-        # Posture tumbling-window evaluation. Pose.py opens a window on the
-        # first sedentary flush. Once it's been open for POSE_WINDOW_DURATION_S,
-        # we evaluate the aggregate and ALWAYS reset — fire or no-fire.
-        # The window itself is the rhythm: no separate streak gate (window
-        # start = "user is sedentary now") and no separate cooldown (next
-        # fire is naturally one window away). Only two gates remain at fold
-        # time: bad_ratio over the configured threshold, and the user must
-        # still be sedentary on this flush (don't nag mid-stretch).
+        # Posture tumbling-window evaluation. Only two gates remain at fold time:
+        # bad_ratio over the configured threshold, and the user must still be sedentary
+        # on this flush (don't nag mid-stretch).
         posture_injected: bool = False
         if (
             self._pose_perception is not None
@@ -745,11 +613,10 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                 if summary is not None and summary["bad_ratio"] >= config.POSE_BAD_RATIO:
                     summary_with_streak: dict[str, Any] = dict(summary)
                     summary_with_streak["streak_min"] = streak_min
-                    # Bucket pointers are surfaced as separate markers (not
-                    # inside posture_summary) so the OS server handler can lift
-                    # them off the message before stripping for the LLM —
-                    # the agent never sees the file paths. Mirrors the
-                    # existing [snapshot: …] marker pattern.
+                    # Bucket pointers are surfaced as separate markers (not inside
+                    # posture_summary) so the OS server handler can lift them off the
+                    # message before stripping for the LLM — the agent never sees the
+                    # file paths.
                     bucket_id: str = str(summary.get("bucket_id", "") or "")
                     worst_snaps: list[str] = list(summary.get("worst_snapshots") or [])
                     # Don't ride bucket info inside the LLM-facing summary
@@ -781,22 +648,14 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                         bucket_id,
                         len(worst_snaps),
                     )
-            # Unconditional reset — a completed window with no fire (stretch
-            # break in progress, bad_ratio under threshold, or too few samples
-            # for the noise floor) still must clear, otherwise the next
-            # sit-down would evaluate stale data from the previous cycle.
+            # Unconditional reset — a completed window with no fire (stretch break in
+            # progress, bad_ratio under threshold, or too few samples for the noise
+            # floor) still must clear, otherwise the next sit-down would evaluate stale
+            # data from the previous cycle.
             self._pose_perception.reset_window()
 
-        # Global cooldown floor: within the same coarse activity class, don't
-        # emit more than once per _event_cooldown_s. This is the dominant gate
-        # — it stops noisy same-class label flips (writing→drawing) from
-        # re-firing the event every flush. Skipped when there is no prior send
-        # (_last_sent_key is None: first event ever, or just reset by a user
-        # change), for posture nudges (time-gated), and for a coarse-class
-        # TRANSITION (computer→eat) — that's real information the agent should
-        # react to now, not up to a cooldown later. The transition bypass has
-        # its own min gap so a flickering detection (drink blinking in and out
-        # of the frame every ~10s flush) can't re-open the spam faucet.
+        # Global cooldown floor: within the same coarse activity class, don't emit more
+        # than once per _event_cooldown_s.
         classes: frozenset[str] = coarse_classes(labels)
         class_changed: bool = (
             self._last_sent_class is not None and classes != self._last_sent_class
@@ -829,11 +688,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
                 cur_ts - self._last_event_ts,
             )
 
-        # Dedup: drop if the outbound state (user + outbound labels) hasn't
-        # changed since the last send AND we're still within the dedup window.
-        # A user change or a label-set change flips the key — those always
-        # pass through. After 5 min the same key passes through anyway so
-        # the agent wakes up and reruns the threshold check.
         current_user = self._perception_state.current_user.data or ""
 
         key = (current_user, frozenset(labels))
@@ -860,14 +714,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._persist_dedup_state()
 
         # Log each outbound label to the OS server wellbeing BEFORE firing the event.
-        # Log-first means when the agent reads history on motion.activity,
-        # the new rows are already there — no read-before-write race if the
-        # skill queries concurrently. Log-and-forget on failure: we keep the
-        # same semantics as the old agent-side POST (a missing row is just a
-        # missing row; skills tolerate gaps).
         self._post_wellbeing_labels(current_user, labels)
-
-        # Attach latest snapshot path
 
         logger.info("[motion] flushing: %s", message)
 
@@ -876,9 +723,8 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
     def _post_wellbeing_labels(self, user: str, labels: set[str]) -> None:
         """POST each activity label to the OS server wellbeing log.
 
-        Replaces the agent's per-label POST that used to live in the
-        wellbeing SKILL (Step 1). Fires synchronously but with a short
-        timeout so a stuck OS server never blocks motion detection.
+        Fires synchronously but with a short timeout so a stuck OS server never blocks
+        motion detection.
         """
         log_user = user or "unknown"
         for label in sorted(labels):
@@ -903,16 +749,7 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._checker.close()
 
     def reset_dedup(self, new_user: str = "") -> None:
-        """Clear the outbound dedup state only if the visible user actually
-        changed. Called by SensingService on presence.enter — without this
-        guard, every stranger flicker (stranger_79 → stranger_77, both
-        collapsing to "unknown" via FaceRecognizer.current_user()) would wipe
-        the key and bypass the 5-minute window, spamming motion.activity
-        events on every presence.enter. Resetting only on an actual user
-        transition (leo → unknown, unknown → chloe, chloe → leo) keeps the
-        dedup window honest while still letting a new presence session see a
-        fresh activity event immediately.
-        """
+        """Clear the outbound dedup state only if the visible user actually changed."""
         if self._last_sent_key is None:
             return
         last_user = self._last_sent_key[0]
@@ -932,8 +769,6 @@ class MotionPerception(Perception[cv2.typing.MatLike]):
         self._last_event_ts = 0.0
         self._last_sent_class = None
         self._sedentary_streak_start_ts = 0.0
-        # Sync the sidecar (unlinks it) so a restart can't resurrect the
-        # state this user-change reset just cleared.
         self._persist_dedup_state()
 
     def to_dict(self) -> dict[str, Any]:

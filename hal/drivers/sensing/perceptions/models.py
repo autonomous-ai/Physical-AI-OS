@@ -20,12 +20,9 @@ class Face:
     kind: PersonKind
     person_id: str
     confidence: float
-    # Axis-aligned [x1, y1, x2, y2] face box (frame pixels) derived from the dense
-    # 468 face-mesh landmarks during recognition — the re-centered, no-rotation
-    # framing the cloud emotion model expects. Reused by the emotion pipeline so it
-    # never re-runs the face mesh; None when no mesh box is available (e.g. the v1
-    # recognizer), in which case the emotion pipeline falls back to ``bbox``. Stored
-    # as 4 ints (not the full landmark array) to keep the Face lightweight.
+    # Axis-aligned [x1, y1, x2, y2] face box (frame pixels) derived from the dense 468
+    # face-mesh landmarks during recognition — the re-centered, no-rotation framing the
+    # cloud emotion model expects.
     emotion_box: list[int] | None = None
 
 

@@ -1,14 +1,4 @@
-"""On-device audio preprocessing pipeline for speaker recognition.
-
-Ported from perception-service so the filter/VAD/normalize chain runs on HAL
-(next to the mic) instead of on the embedding server. Audio that passes the gate
-is sent to perception purely to compute the embedding; audio that fails raises
-PreprocessRejected and never leaves the device.
-
-One stage is HAL-only: the STOI intelligibility gate
-(``SpeechIntelligibilityFilter``), which runs after VAD and rejects noisy /
-garbled speech that VAD alone happily passes.
-"""
+"""On-device audio preprocessing pipeline for speaker recognition."""
 
 from .base import Audio, AudioProcessorBase
 from .composite import CompositeAudioProcessor

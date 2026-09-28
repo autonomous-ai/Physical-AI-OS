@@ -7,8 +7,6 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Field, Tag
 from core.models.object import ObjectDetection
 from core.types import Omit, omit
 
-# --- WebSocket messages ---
-
 
 class ObjectFrameRequest(BaseModel):
     type: Literal["frame"] = "frame"
@@ -36,9 +34,6 @@ ObjectRequest = Annotated[
     | Annotated[ObjectHeartBeatRequest, Tag("heartbeat")],
     Discriminator("type"),
 ]
-
-
-# --- HTTP request/response ---
 
 
 class ObjectDetectRequest(BaseModel):

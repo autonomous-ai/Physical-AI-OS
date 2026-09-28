@@ -4,7 +4,7 @@
 
 ## Overview
 
-Lamp identifies who is speaking via **WeSpeaker ResNet34** (256-dim embedding, ONNX Runtime). When a speaker is not recognized, HAL saves the audio and optionally nudges the AI agent to enroll the voice. Enrollment is **self-service only** — each person enrolls their own voice.
+Lamp identifies who is speaking via **WeSpeaker ResNet293** by default (256-dim embedding, ONNX Runtime; server-selectable via `AUDIO_EMBEDDER__MODEL`). When a speaker is not recognized, HAL saves the audio and optionally nudges the AI agent to enroll the voice. Enrollment is **self-service only** — each person enrolls their own voice.
 
 ## Architecture
 
@@ -77,10 +77,10 @@ Four layers prevent the agent from repeatedly asking "who are you?":
 
 | Property | Value |
 |----------|-------|
-| Model | WeSpeaker ResNet34 (VoxCeleb trained) |
+| Model | WeSpeaker ResNet293-LM by default (`AUDIO_EMBEDDER__MODEL=resnet293`; alternatives `resnet34`, `ecapa-tdnn1024`, `campplus`) |
 | Embedding dim | 256 |
 | Runtime | ONNX Runtime (CPU) on perception-service (RunPod) |
-| Endpoint | `POST {DL_BACKEND_URL}/lelamp/api/dl/audio-recognizer/embed` |
+| Endpoint | `POST {DL_BACKEND_URL}/hal/api/dl/audio-recognizer/embed` (`DL_SPEAKER_ENDPOINT`; the legacy `/lelamp/` prefix is still mapped by nginx) |
 | Auth | `X-API-Key` header |
 | Timeout | 15s |
 
@@ -155,7 +155,7 @@ The filter/VAD/normalize pipeline that used to run inside perception-service now
 
 A stored embedding is only comparable to a query embedding produced by the **same** server model. If the perception-service embedding model is swapped, every previously-stored vector silently becomes meaningless to compare against — cosine similarity still returns a number, so the failure is a **wrong match**, not an error. HAL guards against this by stamping each profile with the model identity and re-embedding when it changes. Because every enrollment WAV is retained on disk, this is an automatic background job — no user has to re-record.
 
-- **Model identity**: perception's `/audio-recognizer/embed` response (and `/health`) return `embed_model_version` — `<model-name>:<sha256(weights)[:12]>`, computed once when the model loads. `<model-name>` is the `AUDIO_EMBEDDER__MODEL` config value (`resnet293` / `resnet34` / `campplus` / `ecapa-tdnn1024`), e.g. `resnet293:1a2b3c4d5e6f`. Hashing the weights file catches even a **same-dimension checkpoint swap** that the `embedding_dim` check would miss. Only the model is fingerprinted; the on-device preprocessing config is deliberately **not** part of it.
+- **Model identity**: perception's `/audio-recognizer/embed` response returns `embed_model_version` (and `/health` the same value as `audio_embedder_version`) — `<model-name>:<sha256(weights)[:12]>`, computed once when the model loads. `<model-name>` is the `AUDIO_EMBEDDER__MODEL` config value (`resnet293` / `resnet34` / `campplus` / `ecapa-tdnn1024`), e.g. `resnet293:1a2b3c4d5e6f`. Hashing the weights file catches even a **same-dimension checkpoint swap** that the `embedding_dim` check would miss. Only the model is fingerprinted; the on-device preprocessing config is deliberately **not** part of it.
 - **On enroll**: HAL always takes the freshest version seen from that enroll's `/embed` calls and writes it to the voice `metadata.json` as `embed_model_version` (mirrored into the registry).
 - **On recognize**: after embedding the query (which refreshes the known server version), HAL compares each enrolled profile's stored version against it. Profiles whose version **differs** are **excluded from matching this turn** (so they read as **"unknown"** rather than wrong-matching against old-model vectors, and a dim change can't crash the match), and a one-shot **background** re-embed migration is kicked — single-flight, on a daemon thread, so the recognize turn itself never waits for the re-embed. Fresh profiles match normally in the same call; excluded ones return to normal automatically once the background migration re-embeds them.
 - **On HAL restart**: a background thread polls `/health` for the current `audio_embedder_version` (a few retries to cover server boot), cheaply scans profile metadata for staleness **before** loading the heavy preprocessing model, and migrates any stale profiles — so recognition is correct from the first turn.
@@ -363,10 +363,10 @@ Any other path that starts the pipeline while that recording is in flight steals
 | Record + enroll route | `hal/routes/speaker.py` | `speaker_record_enroll()` |
 | Nudge injection + cooldown | `system/domain/voice.go` | `AppendEnrollNudge()` |
 | Direct event path | `system/server/sensing/delivery/http/handler.go` | `PostEvent()` |
-| Drain/replay path | `runtimes/openclaw/service.go` | `drainPendingEvents()` |
-| Agent skill | `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` | — |
-| Embedding model | `integrations/perception-service/src/core/audio_recognition/audio_recognizer.py` | `ResNet34Recognizer` (default), `EcapaTdnn1024Recognizer`, `CamPPlusRecognizer` — chọn qua env `AUDIO_RECOGNIZER_ENGINE` |
-| Embedding endpoint | `integrations/perception-service/src/protocols/htpp/audio_recognizer.py` | `embed_audio()` |
+| Drain/replay path | `runtimes/openclaw/service_events.go` | `drainPendingEvents()` |
+| Agent skill | `skills/speaker-recognizer/SKILL.md` | — |
+| Embedding model | `integrations/perception-service/src/core/perception/audio/predictors/` (`resnet34.py`, `resnet293.py`, `ecapa_tdnn.py`, `campplus.py`) | `ResNet293Embedder` (default), `ResNet34Embedder`, `EcapaTdnn1024Embedder`, `CamPPlusEmbedder` — selected via env `AUDIO_EMBEDDER__MODEL` (`resnet293` \| `resnet34` \| `ecapa-tdnn1024` \| `campplus`) |
+| Embedding endpoint | `integrations/perception-service/src/dlserver/routes/audio.py` | `embed_audio()` |
 | Config | `hal/config.py` | `SPEAKER_*` constants |
 
 ## Message Flow Examples

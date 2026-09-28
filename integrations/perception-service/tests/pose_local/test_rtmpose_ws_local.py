@@ -219,10 +219,6 @@ class TestPoseEstimationWebSocket:
                 ws.receive_json()
 
 
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests using real fixture images
-# ---------------------------------------------------------------------------
-
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "images"
 
 

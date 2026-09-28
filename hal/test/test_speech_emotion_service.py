@@ -1,40 +1,4 @@
-"""
-End-to-end test of `SpeechEmotionService` on a local machine.
-
-What it exercises:
-  - Mic capture (sounddevice) → in-process `submit()`
-  - Worker thread → POST perception-service `/api/dl/ser/recognize`
-  - Per-user buffer + polarity-bucket dedup
-  - Flush thread → POST sensing event to Lamp
-
-To avoid needing a running Lamp instance on the dev machine, the script
-spins up a tiny mock HTTP listener on `127.0.0.1:5000` that captures
-every `/api/sensing/event` POST and prints it. Override with --sensing-url
-to talk to a real Lamp instead.
-
-Usage (from repo root):
-
-    export DL_BACKEND_URL="https://<host>"
-    export DL_API_KEY="<your key>"
-
-    # Default: record 3 clips of 3s each, all attributed to "alice"
-    python -m hal.test.test_speech_emotion_service
-
-    # Faster flush so the run finishes quickly
-    HAL_SPEECH_EMOTION_FLUSH_S=3 HAL_SPEECH_EMOTION_MIN_AUDIO_S=2 \\
-        python -m hal.test.test_speech_emotion_service --reps 3 --duration 3
-
-    # Submit as 'unknown' to verify the unknown-collapse path
-    python -m hal.test.test_speech_emotion_service --user unknown --reps 2
-
-    # Point at a real Lamp
-    python -m hal.test.test_speech_emotion_service \\
-        --sensing-url http://192.168.1.42:5000/api/sensing/event
-
-Run the engine-only script first
-(`python -m hal.test.test_speech_emotion_engine`) to confirm
-connectivity to perception-service before attempting this one.
-"""
+"""End-to-end test of `SpeechEmotionService` on a local machine."""
 
 from __future__ import annotations
 
@@ -62,13 +26,8 @@ SAMPLE_RATE = 16000
 CHANNELS = 1
 MOCK_OS_HOST = "127.0.0.1"
 MOCK_OS_PORT = 5000
-# Hit FastAPI directly. Production prefix `/hal/api/dl/ser/recognize`
-# only works when nginx fronts perception-service (RunPod) and strips `/hal/`.
-# Local dev hits uvicorn straight on its port, no prefix.
 DEFAULT_SER_ENDPOINT = "/api/dl/ser/recognize"
 
-
-# --- Mock os-server listener ---------------------------------------------------
 
 class _CapturedPost:
     def __init__(self, path: str, payload: dict):
@@ -96,7 +55,7 @@ class _MockOSHandler(http.server.BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b'{"status":1,"data":null,"message":null}')
 
-    def log_message(self, fmt: str, *args) -> None:  # silence default access log
+    def log_message(self, fmt: str, *args) -> None:
         return
 
 
@@ -112,8 +71,6 @@ def _start_mock_os() -> http.server.HTTPServer:
     )
     return server
 
-
-# --- Mic capture ----------------------------------------------------------
 
 def record_wav_bytes(duration_s: float, device: int | None) -> bytes:
     import numpy as np
@@ -139,8 +96,6 @@ def record_wav_bytes(duration_s: float, device: int | None) -> bytes:
         wf.writeframes(pcm.tobytes())
     return buf.getvalue()
 
-
-# --- Main -----------------------------------------------------------------
 
 def main() -> int:
     parser = argparse.ArgumentParser(description="E2E test of SpeechEmotionService")
@@ -183,14 +138,6 @@ def main() -> int:
         )
         return 2
 
-    # Make sure the service picks up the right backend URL + key + endpoint.
-    # We poke hal.config BEFORE importing SpeechEmotionService so the
-    # module's top-level _API_URL / _API_KEY captures the overrides.
-    #
-    # `args.endpoint` defaults to the no-prefix FastAPI path so local dev
-    # (uvicorn without nginx) works out of the box. Override with
-    # --endpoint /hal/api/dl/ser/recognize when hitting a production
-    # deployment that fronts perception-service with nginx.
     from hal import config as _cfg
     _cfg.DL_BACKEND_URL = args.dl_backend_url
     _cfg.DL_API_KEY = args.api_key
@@ -201,14 +148,12 @@ def main() -> int:
     _cfg.SPEECH_EMOTION_API_KEY = args.api_key
     logger.info("Resolved SER URL: %s", _cfg.SPEECH_EMOTION_API_URL)
 
-    # Mock os-server unless --sensing-url given.
     server = None
     if not args.sensing_url:
         server = _start_mock_os()
         args.sensing_url = f"http://{MOCK_OS_HOST}:{MOCK_OS_PORT}/api/sensing/event"
     _cfg.OS_SENSING_URL = args.sensing_url
 
-    # Import AFTER config patch so module-level defaults see the right values.
     from hal.drivers.voice.speech_emotion import SpeechEmotionService
 
     svc = SpeechEmotionService()
@@ -222,7 +167,6 @@ def main() -> int:
 
     logger.info("Service state at start: %s", svc.to_dict())
 
-    # Recording loop.
     for i in range(1, args.reps + 1):
         logger.info("===== clip %d / %d =====", i, args.reps)
         try:
@@ -233,14 +177,12 @@ def main() -> int:
         svc.submit(user=args.user, wav_bytes=wav_bytes, duration_s=args.duration)
         time.sleep(args.pause)
 
-    # Wait for at least one flush tick to fire (FLUSH_S + slack).
     flush_wait = svc._flush_s + 2.0  # type: ignore[attr-defined]
     logger.info("Waiting %.1fs for flush thread to drain buffer...", flush_wait)
     time.sleep(flush_wait)
 
     logger.info("Service state at end: %s", svc.to_dict())
 
-    # Final report.
     print()
     print("=" * 60)
     print(f"Submitted clips     : {args.reps}")
