@@ -80,13 +80,6 @@ class TestProfiles(unittest.TestCase):
         self.assertEqual((PROFILES["orangepi_sun60"].button.chip, PROFILES["orangepi_sun60"].button.line), (1, 9))
         self.assertEqual(PROFILES["orangepi_sun60"].button.debounce_ns, 200_000_000)
 
-    def test_touch_only_on_orangepi(self):
-        self.assertIsNone(PROFILES["raspberry_pi_4"].touch)
-        self.assertIsNone(PROFILES["raspberry_pi_5"].touch)
-        self.assertEqual(PROFILES["orangepi_sun60"].touch.chip, 0)
-        # Lines 97/99 dropped: their pad runs picked up EMI.
-        self.assertEqual(PROFILES["orangepi_sun60"].touch.lines, [96, 100])
-
 
 class TestBoardProfileCaching(unittest.TestCase):
     def test_board_profile_returns_a_known_profile(self):

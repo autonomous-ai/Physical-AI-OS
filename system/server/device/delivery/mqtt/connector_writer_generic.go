@@ -105,16 +105,6 @@ func (w *connectorWriter) resolveRouting(creds ConnectorCreds) mcpRouting {
 	return mcpRouting{}
 }
 
-// buildAuthHeader renders the Authorization value for the mcp.servers entry.
-// Deprecated: use connectorAuthHeader which also returns the header name and
-// raw token, enabling custom header keys (e.g. "header:X-Figma-Token").
-func buildAuthHeader(style string, creds ConnectorCreds) string {
-	if style == authHeaderBearerAPIKey {
-		return "Bearer " + creds.APIKey
-	}
-	return "Bearer " + creds.AccessToken
-}
-
 // connectorAuthHeader renders how a connector's token is presented as an HTTP
 // header for the mcp.servers entry, from the descriptor + creds.
 func connectorAuthHeader(descriptor string, creds ConnectorCreds) (name, value, token string) {

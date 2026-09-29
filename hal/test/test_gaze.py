@@ -479,7 +479,7 @@ def test_it_turns_at_most_once_per_cooldown(body):
     assert len(body.moves) == 1
 
 
-def test_it_never_moves_a_body_something_else_owns(body):
+def test_a_repoint_never_moves_a_body_something_else_owns(body):
     _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
     body._tracking_active = True
     gaze._maybe_repoint(gaze.time.monotonic())
