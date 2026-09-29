@@ -12,6 +12,7 @@ import numpy as np
 import numpy.typing as npt
 
 from hal import config as app_config
+from hal import cpu_affinity
 from hal.realtime.models import (
     AgentInputEvent,
     AgentOutputEvent,
@@ -108,10 +109,12 @@ class VoiceAgentBase(ABC):
         self._do_connect()
         self._connected.set()
         self._send_thread = threading.Thread(
-            target=self._send_loop, daemon=True, name="rt-send",
+            target=cpu_affinity.on_cores(cpu_affinity.FAST, self._send_loop),
+            daemon=True, name="rt-send",
         )
         self._recv_thread = threading.Thread(
-            target=self._recv_loop, daemon=True, name="rt-recv",
+            target=cpu_affinity.on_cores(cpu_affinity.FAST, self._recv_loop),
+            daemon=True, name="rt-recv",
         )
         self._send_thread.start()
         self._recv_thread.start()
