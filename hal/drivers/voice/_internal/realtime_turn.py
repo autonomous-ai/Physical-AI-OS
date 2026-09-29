@@ -31,6 +31,76 @@ CLAUSE_ENDS = (",", ";", ":", "—", "，", "；", "：", "、")
 FIRST_CHUNK_MIN_CHARS = 8
 
 
+def split_delivery_sentence(buf):
+    """Hold the last sentence until following words or EOF attach late tags.
+
+    ElevenLabs rejects tag-only requests. A trailing reaction arriving in the
+    next model chunk must stay with the sentence rather than become a new call.
+    """
+    head, tail = split_completed_prefix(buf, first=True)
+    if not head:
+        return "", buf
+    # Scan balanced brackets: HW JSON can itself contain arrays.
+    offset = 0
+    reaction_end = 0
+    prefix_only = True
+    while True:
+        while offset < len(tail) and tail[offset].isspace():
+            offset += 1
+        if prefix_only:
+            reaction_end = offset
+        if offset == len(tail):
+            return "", buf
+        if tail[offset] != "[":
+            break
+        start, depth = offset, 0
+        while offset < len(tail):
+            char = tail[offset]
+            offset += 1
+            if char == "[":
+                depth += 1
+            elif char == "]":
+                depth -= 1
+                if not depth:
+                    break
+        if depth:
+            return "", buf
+        tag = tail[start + 1:offset - 1].strip().lower()
+        reaction = re.fullmatch(
+            r"(?:laughs?|laughing|giggles?|giggle|chuckles?|sobs?|sobbing|crying|"
+            r"sighs?|gasps?|pause|short pause|long pause|big laugh|hearty laugh)", tag,
+        )
+        prefix_only = prefix_only and bool(reaction)
+        if prefix_only:
+            reaction_end = offset
+    return head + tail[:reaction_end], tail[reaction_end:]
+
+
+def split_realtime_first_chunk(buf, tts, strip_markers):
+    """Keep fast clause streaming unless a sentence is waiting for late tags."""
+    if getattr(tts, "_provider", None) == "elevenlabs":
+        visible = realtime_visible_text(buf, tts, strip_markers)
+        ready, _ = split_completed_prefix(buf)
+        if ready or visible.rstrip().endswith(SENTENCE_ENDS):
+            return "", buf
+    return split_first_chunk(buf)
+
+
+def realtime_visible_text(text, tts, strip_markers):
+    """Check sentence boundaries without counting complete delivery tags."""
+    text = strip_markers(text)
+    if getattr(tts, "_provider", None) == "elevenlabs":
+        text = re.sub(r"\[[^\]]*\]", "", text).strip()
+    return text
+
+
+def realtime_speech_text(text, tts, strip_markers):
+    """Keep delivery cues only on the ElevenLabs synthesis path."""
+    if getattr(tts, "_provider", None) == "elevenlabs":
+        return re.sub(r"\[[^\]]*$", "", strip_markers(text, preserve_audio_tags=True)).strip()
+    return strip_markers(text)
+
+
 def split_first_chunk(buf: str) -> tuple[str, str]:
     """Split the turn's FIRST utterance into (speak_now, keep_buffering)."""
     cap: int = hal_config.REALTIME_FIRST_CHUNK_MAX_CHARS
@@ -65,7 +135,7 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
     return (head, buf[cut + 1:]) if head else ("", buf)
 
 
-def split_completed_prefix(buf: str) -> tuple[str, str]:
+def split_completed_prefix(buf: str, *, first: bool = False) -> tuple[str, str]:
     """Release completed sentences bundled with the next unfinished sentence."""
     depth = 0
     cut = 0
@@ -82,7 +152,8 @@ def split_completed_prefix(buf: str) -> tuple[str, str]:
                 token = buf[:i].rsplit(maxsplit=1)[-1].lower() if buf[:i].strip() else ""
                 if (i and buf[i - 1].isdigit()) or token in abbreviations or len(token) == 1:
                     continue
-            cut = i + 1
+            if not first or not cut:
+                cut = i + 1
     if depth or not cut or not buf[cut:].strip():
         return "", buf
     return buf[:cut], buf[cut:]
@@ -572,8 +643,8 @@ def run_realtime_turn(
                             sentence_buf = ""
                             continue
                         if tts is not None and not first_sentence_sent:
-                            head, rest = split_first_chunk(sentence_buf)
-                            head = leak_filter.filter_text(strip_markers(head)) if head else ""
+                            head, rest = split_realtime_first_chunk(sentence_buf, tts, strip_markers)
+                            head = leak_filter.filter_text(realtime_speech_text(head, tts, strip_markers)) if head else ""
                             if head:
                                 logger.info(
                                     "[realtime] First clause → speak (+%.2fs after "
@@ -587,13 +658,16 @@ def run_realtime_turn(
                                 first_sentence_sent = True
                                 _thinking_cue_clear()
                                 sentence_buf = rest
-                        sentence = strip_markers(sentence_buf)
+                        sentence = realtime_visible_text(sentence_buf, tts, strip_markers)
                         complete = sentence.rstrip().endswith(SENTENCE_ENDS)
                         ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
-                        if ready:
-                            sentence = strip_markers(ready)
+                        if getattr(tts, "_provider", None) == "elevenlabs":
+                            ready, tail = split_delivery_sentence(sentence_buf)
+                            sentence = realtime_visible_text(ready, tts, strip_markers)
+                        elif ready:
+                            sentence = realtime_visible_text(ready, tts, strip_markers)
                         if tts is not None and sentence.rstrip().endswith(SENTENCE_ENDS):
-                            sentence = leak_filter.filter_text(sentence)
+                            sentence = leak_filter.filter_text(realtime_speech_text(ready if ready else sentence_buf, tts, strip_markers))
                             if sentence:
                                 if not first_sentence_sent:
                                     logger.info(
@@ -692,7 +766,7 @@ def run_realtime_turn(
             else:
                 # Flush any remaining text that didn't end with a sentence boundary
                 # (ElevenLabs path only — native mode never fills sentence_buf).
-                remaining: str = leak_filter.filter_text(strip_markers(sentence_buf))
+                remaining: str = leak_filter.filter_text(realtime_speech_text(sentence_buf, tts, strip_markers)) if realtime_visible_text(sentence_buf, tts, strip_markers) else ""
                 if not native and remaining and tts is not None:
                     if not first_sentence_sent:
                         logger.info(
