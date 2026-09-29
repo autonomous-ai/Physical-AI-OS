@@ -1,9 +1,4 @@
-"""Emotion perception: model lifecycle, session management, and single-shot prediction.
-
-Wraps an EmotionRecognizer + FaceDetector behind InputBatchers.
-Each WebSocket connection creates an EmotionPerceptionSession via create_session().
-Single-shot methods (predict_face, predict_image) are provided for HTTP endpoints.
-"""
+"""Emotion perception: model lifecycle, sessions, and single-shot predict_face/predict_image for HTTP."""
 
 import asyncio
 from typing import cast
@@ -128,18 +123,13 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
             config=config,
         )
 
-    # --- Single-shot prediction (for HTTP endpoints) ---
 
     @property
     def _label_thresholds(self) -> dict[str, float] | None:
         return self._default_config.label_thresholds if self._default_config else None
 
     async def predict_face(self, face_crop: cv2t.MatLike, *, gate: bool = True) -> Emotion | None:
-        """Classify emotion from a single pre-cropped face image.
-
-        ``gate=False`` skips the per-label gate and returns the raw argmax, for
-        clients (HAL) that apply their own gate from ``probabilities``.
-        """
+        """Classify emotion from a single pre-cropped face; ``gate=False`` returns the raw argmax."""
         if self._emotion_batcher is None:
             raise RuntimeError("EmotionPerception not started")
 
@@ -178,7 +168,6 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
 
         recognizer = cast(EmotionRecognizer, self._emotion_batcher.predictor)
 
-        # Face detection through batcher
         face_futures = await self._face_batcher.submit([frame])
         face_raw: RawFaceDetection = await face_futures[0]
         face_crops: list[FaceCrop] = FaceDetector.extract_crops_from_raw(
@@ -188,7 +177,6 @@ class EmotionPerception(PerceptionBase[EmotionPerceptionSession]):
         if not face_crops:
             return EmotionDetection(emotions=[])
 
-        # Emotion classification through batcher
         crops: list[cv2t.MatLike] = [fc.crop for fc in face_crops]
         emotion_futures = await self._emotion_batcher.submit(crops)
         raw_results: list[RawEmotionDetection] = [await f for f in emotion_futures]

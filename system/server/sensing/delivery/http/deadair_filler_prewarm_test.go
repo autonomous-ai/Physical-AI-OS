@@ -8,18 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// PrewarmFillers must enumerate pools from the pool maps, not from a list
-// maintained by hand beside it.
-//
-// A pool that is not prewarmed renders live at the TTS provider on its first
-// fire (~1-2s) and the late audio races the speech after it — the comment above
-// that loop says so itself. The hand-maintained list had already fallen behind
-// twice: every look_* pool was missing, and the demo_* pools would have been
-// missing too.
-//
-// Asserted against the source because the function itself talks to the TTS
-// provider and cannot be run here. That makes this a weak test of a strong
-// invariant — it catches the list drifting back, not a subtler mistake.
+// PrewarmFillers enumerates pools from the pool maps, not a hand-kept list.
 func TestPrewarmEnumeratesPoolsFromTheMaps(t *testing.T) {
 	src, err := os.ReadFile("deadair_filler.go")
 	if err != nil {
@@ -35,8 +24,7 @@ func TestPrewarmEnumeratesPoolsFromTheMaps(t *testing.T) {
 	}
 }
 
-// Everything the prewarm will render must be reachable through the same lookup
-// the runtime uses, in every language it may run in.
+// Every prewarmed phrase is reachable through the runtime lookup in every language.
 func TestEveryPrewarmedPoolResolvesInEveryLanguage(t *testing.T) {
 	keys := i18n.AllPoolKeys()
 	if len(keys) == 0 {

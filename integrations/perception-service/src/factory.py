@@ -1,8 +1,4 @@
-"""Perception builders using predictor factories.
-
-Factories capture settings and are passed to Perception classes.
-Predictors are created and started inside Perception.start().
-"""
+"""Perception builders; predictors are created and started inside Perception.start()."""
 
 import logging
 from pathlib import Path
@@ -36,11 +32,6 @@ from core.perception.pose.utils import (
 )
 
 logger: logging.Logger = logging.getLogger(__name__)
-
-
-# ---------------------------------------------------------------------------
-# Perception builders
-# ---------------------------------------------------------------------------
 
 
 def build_action_perception() -> ActionPerception:

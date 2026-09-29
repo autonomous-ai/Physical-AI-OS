@@ -9,11 +9,7 @@ REJECT_LOW_VOICE_RATIO = "low_voice_ratio"
 
 
 class PreprocessRejected(ValueError):
-    """Raised when the speech gate rejects an audio clip.
-
-    Carries structured measurements so the HTTP layer can surface exact
-    numbers back to the client.
-    """
+    """Raised when the speech gate rejects an audio clip; carries the measurements."""
 
     def __init__(
         self,

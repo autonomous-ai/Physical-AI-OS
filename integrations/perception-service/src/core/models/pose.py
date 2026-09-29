@@ -21,11 +21,6 @@ class Point3D(NamedTuple):
     z: float
 
 
-# ---------------------------------------------------------------------------
-# Raw predictor outputs (numpy arrays, batched)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class RawPose2DDetection:
     """Raw 2D pose estimator output — batched numpy arrays."""
@@ -43,11 +38,6 @@ class RawPose3DDetection:
 
     joints_3d: npt.NDArray[np.float32]
     """Shape: (N, K, 3) — (x, y, z) per joint per person."""
-
-
-# ---------------------------------------------------------------------------
-# Ergonomic assessment
-# ---------------------------------------------------------------------------
 
 
 class RiskLevel(IntEnum):
@@ -98,11 +88,6 @@ class ErgoAssessment:
     risk_level: RiskLevel
 
 
-# ---------------------------------------------------------------------------
-# Clean session outputs (after interpretation)
-# ---------------------------------------------------------------------------
-
-
 @dataclass
 class Pose2D:
     graph_type: GraphEnum
@@ -124,11 +109,6 @@ class PoseDetection:
     pose_2d: Pose2D
     pose_3d: Pose3D | None = None
     ergo: ErgoAssessment | None = None
-
-
-# ---------------------------------------------------------------------------
-# Session config
-# ---------------------------------------------------------------------------
 
 
 @dataclass

@@ -1,11 +1,4 @@
-"""The facial-emotion label gate, on the device.
-
-It used to live only on the shared perception server, so tuning one label meant
-restarting the server for every lamp. It must decide exactly as the server did:
-argmax, per-label bar, Neutral fallback carrying Neutral's own probability, then
-the confidence floor — and a reading that fails is NO reading, never a Neutral
-one, because the occupancy vote counts it against the label.
-"""
+"""The facial-emotion label gate, on the device."""
 
 from hal.drivers.sensing.perceptions.processors.emotion_gating import (
     DEFAULT_LABEL_THRESHOLDS,

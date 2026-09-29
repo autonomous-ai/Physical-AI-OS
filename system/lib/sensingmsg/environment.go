@@ -7,16 +7,14 @@ var environmentReplay struct {
 	allowed func() bool
 }
 
-// SetEnvironmentReplayAllowed supplies the current device capability and sleep
-// policy to runtime queues without coupling a runtime to the HTTP handler.
+// SetEnvironmentReplayAllowed sets the environment replay policy used by runtime queues.
 func SetEnvironmentReplayAllowed(allowed func() bool) {
 	environmentReplay.Lock()
 	environmentReplay.allowed = allowed
 	environmentReplay.Unlock()
 }
 
-// ReplayAllowed rechecks environment policy after a queued event has waited.
-// An unconfigured process must not emit optional environmental notifications.
+// ReplayAllowed rechecks environment policy for a queued event; false when unconfigured.
 func ReplayAllowed(eventType string) bool {
 	if eventType != "environment.update" {
 		return true

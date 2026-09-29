@@ -19,8 +19,7 @@ type capabilityBusyGateway struct {
 func (g *capabilityBusyGateway) SupportsActiveTurnSteering() bool { return g.enabled }
 func (g *capabilityBusyGateway) MarkWebChatRun(string)            {}
 
-// LIVE delegates arrive as voice even when their diagnostic turn type is a
-// follow-up. Capability discovery must let those reach the busy runtime.
+// LIVE delegates arriving as voice reach a busy steerable runtime.
 func TestBusyRuntimeSteeringAdmission(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 	for _, eventType := range []string{"voice", "web_chat", "presence.enter"} {

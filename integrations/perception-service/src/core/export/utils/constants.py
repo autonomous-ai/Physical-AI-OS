@@ -1,6 +1,5 @@
 from pathlib import Path
 
-# Project root: integrations/perception-service/
 PROJECT_ROOT = Path(__file__).parents[4]
 
 # Weights and export artifacts (outside src/)

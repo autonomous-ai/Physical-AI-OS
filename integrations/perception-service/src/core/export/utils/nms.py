@@ -40,11 +40,7 @@ def onnx_nms(
     conf_threshold: float = 0.25,
     iou_threshold: float = 0.45,
 ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """NMS that traces cleanly to ONNX.
-
-    Uses topk instead of boolean masking to avoid variable-length
-    tensors that break ONNX tracing. NMS runs on raw coords for correct
-    IoU, then boxes are normalized to [0, 1] using input_hw.
+    """NMS that traces cleanly to ONNX (topk instead of boolean masking).
 
     Args:
         boxes_xyxy: [B, A, 4] — decoded boxes in xyxy format.

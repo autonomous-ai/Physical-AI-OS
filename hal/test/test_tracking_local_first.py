@@ -1,8 +1,4 @@
-"""Keeping a local-model target on the local model.
-
-Two gates decided whether tracking a cup or a book felt like tracking a face,
-and both were sized for the face detector. These cover them.
-"""
+"""Keeping a local-model target on the local model."""
 
 import numpy as np
 
@@ -40,12 +36,7 @@ def _frame():
 
 
 def test_coco_miss_does_not_reach_remote_mid_session(monkeypatch):
-    """A local miss on a routine redetect must not spend a network round-trip on remote.
-
-    The detect thread is single-flight, so one such round-trip stretches the
-    confirm cycle past the trust window and freezes the servo while the object
-    is still in frame.
-    """
+    """A local miss on a routine redetect must not spend a network round-trip on remote."""
     calls: list = []
     det = _detector(monkeypatch, calls)
     assert det.detect(_frame(), "cup", strict=False,
@@ -81,6 +72,4 @@ def test_trust_window_grows_with_a_slower_detector():
     window = trust_window_s(0.6)
     assert window > C.TRUST_TRACKER_S
     assert window == C.YOLO_REDETECT_S + 1.2 + C.TRUST_MARGIN_S
-    # The point of the whole change: an ordinary miss (one full redetect cycle
-    # plus a detection) no longer reads as a lost lock.
     assert window > C.YOLO_REDETECT_S + 0.6

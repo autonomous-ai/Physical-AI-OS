@@ -14,10 +14,7 @@ import (
 	"go.autonomous.ai/os/system/skillcontext/mood"
 )
 
-// postSensingEvent drives PostEvent far enough to exercise the mood.CurrentUser
-// sync at the top of the handler. It reuses busyGateway (realtime_handled_hook_test.go)
-// so the passive-event fork returns early at the queue step — well after the
-// sync, and before anything that would need a real agent.
+// postSensingEvent drives PostEvent through the mood.CurrentUser sync.
 func postSensingEvent(t *testing.T, h *SensingHandler, eventType, currentUser string) {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -44,12 +41,7 @@ func newSyncTestHandler() *SensingHandler {
 	}
 }
 
-// The defect: SER identifies nobody. Its current_user is a courier value from
-// the voice turn, and five unrelated situations collapse into "unknown" —
-// speaker-ID found no match, speaker-ID could not run, no transcript at all,
-// the wake-word gate rejected the turn, or the noise guard dropped it. Before
-// the exemption, one ambient sigh from an unrecognized voice erased a live
-// face-derived identity for every downstream reader of mood.CurrentUser().
+// The defect: SER identifies nobody.
 func TestSpeechEmotionUnknownDoesNotClobberCurrentUser(t *testing.T) {
 	mood.SetCurrentUser("long") // as a face detection would have set it
 	t.Cleanup(mood.ClearCurrentUser)
@@ -61,11 +53,7 @@ func TestSpeechEmotionUnknownDoesNotClobberCurrentUser(t *testing.T) {
 	}
 }
 
-// The exemption is on the event type, not on the string "unknown": SER is never
-// a presence authority, so even a confidently-identified speaker must not write
-// here. Nothing is lost — a confident speaker-ID match is already promoted
-// device-wide by voice_service.py set_voice_user() before the SER event is even
-// queued, and every other producer ships it via app_state.resolve_current_user().
+// SER never writes the current user, even for a confident speaker.
 func TestSpeechEmotionNeverSetsCurrentUserEvenWhenIdentified(t *testing.T) {
 	mood.SetCurrentUser("long")
 	t.Cleanup(mood.ClearCurrentUser)
@@ -77,9 +65,7 @@ func TestSpeechEmotionNeverSetsCurrentUserEvenWhenIdentified(t *testing.T) {
 	}
 }
 
-// Guard against over-reach: the exemption must be scoped to SER alone. Face
-// emotion is the modality that genuinely observes who is present, so it keeps
-// writing.
+// Guard against over-reach: the exemption must be scoped to SER alone.
 func TestOtherSensingEventsStillSyncCurrentUser(t *testing.T) {
 	mood.SetCurrentUser("long")
 	t.Cleanup(mood.ClearCurrentUser)
@@ -91,8 +77,7 @@ func TestOtherSensingEventsStillSyncCurrentUser(t *testing.T) {
 	}
 }
 
-// The else-branch must survive the added condition. presence.leave carries no
-// current_user, so it still has to reach ClearCurrentUser.
+// presence.leave still reaches ClearCurrentUser.
 func TestPresenceLeaveStillClearsCurrentUser(t *testing.T) {
 	mood.SetCurrentUser("long")
 	t.Cleanup(mood.ClearCurrentUser)

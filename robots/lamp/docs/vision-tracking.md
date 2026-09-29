@@ -88,12 +88,14 @@ Weights are checked into the repo (`hal/drivers/tracking/models/`) so deploy is 
 
 Tracking drives 4 joints:
 
-- **base_yaw** (ID 1) — left/right pan (100 % of yaw)
-- **base_pitch** (ID 2) — up/down tilt, 10 % of pitch
-- **elbow_pitch** (ID 3) — up/down tilt, 90 % of pitch
-- **wrist_pitch** (ID 5) — up/down tilt, 0 %
+- **base_yaw** (ID 1) — left/right pan (100 % of yaw in object tracking; `ServoFollower.apply` writes yaw to `base_yaw` only)
+- **base_pitch** (ID 2) — up/down tilt, 20 % of pitch
+- **elbow_pitch** (ID 3) — up/down tilt, 60 % of pitch
+- **wrist_pitch** (ID 5) — up/down tilt, 20 % of pitch
 
-Pitch is concentrated on the elbow (`PITCH_WEIGHT_ELBOW = 0.90`). Empirically only pure-rotation joints move the object toward center; base/wrist mostly translate the camera (kinematic coupling), so their weights are low/zero. The elbow motor's positive direction was reversed in hardware, so its contribution carries `ELBOW_PITCH_SIGN = -1.0`.
+Pitch leads with the elbow (`PITCH_WEIGHT_BASE/ELBOW/WRIST = 0.20 / 0.60 / 0.20`). These are preferences, not hard shares: `servo_follow.distribute_pitch` spends the weights first and hands whatever a saturated joint could not absorb (against the measured `PITCH_TRAVEL_MIN/MAX`) to a joint that still has room. The elbow no longer takes 90 %, because an intermittently unresponsive elbow then swallowed almost every correction. The elbow motor's positive direction was reversed in hardware, so its contribution carries `ELBOW_PITCH_SIGN = -1.0`.
+
+Gaze panning (not object tracking) spreads yaw across `base_yaw` and `wrist_roll` via `servo_follow.distribute_yaw` with `YAW_WEIGHT_BASE/ROLL = 0.75 / 0.25` — see *Panning, and why it is lazier than pitch* below.
 
 ### Control law (vision loop → servo goal)
 
@@ -162,7 +164,8 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_COMMAND_MIN_DELTA` | 0.08 | Coalesce only tiny normalized setpoint changes; the final target is sent once |
 | `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Explicitly written at session start to clear a stale hardware cap; SmoothDamp profiles own the speed envelope (150 steps/s ≈ 13°/s flattened every ease curve into a robotic crawl) |
 | `TRACKING_ACCELERATION` | 30 | Hardware acceleration ramp |
-| `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.10 / 0.90 / 0.0 | Pitch distribution across joints |
+| `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.20 / 0.60 / 0.20 | Preferred pitch distribution across joints (overflow re-routed by `distribute_pitch`) |
+| `YAW_WEIGHT_BASE/ROLL` | 0.75 / 0.25 | Yaw split for `distribute_yaw` (gaze panning; object tracking drives `base_yaw` only) |
 | `ELBOW_PITCH_SIGN` | -1.0 | Elbow polarity (hardware reversed) |
 | `YOLO_REDETECT_S` | 1.5 | Background re-detect interval |
 | `YOLO_AREA_GATE_MULT` | 4.0 | Reject re-detect area outliers |
@@ -200,7 +203,7 @@ Set `HAL_TRACKING_MAX_DURATION_S` in the Lamp's `/opt/hal/.env` to choose the wa
 | No detector confirm for `STOP_NO_YOLO_S` (20 s) | Stop — ghost tracking |
 | CSRT misses `YOLO_MAX_MISS` (30) after `MAX_TRACKING_RETRIES` (4) | Stop — object gone |
 | Tracking duration > `HAL_TRACKING_MAX_DURATION_S` (10 s by default) | Stop — timeout to save motor/CPU |
-| GPIO-button or TTP223 single-click | Stop — explicit user attention-cancel |
+| GPIO-button or MPR121 single-click (Harness OFF) | Stop — explicit user attention-cancel. TTP223 headpad gestures do **not** stop tracking; they only call `head_pat_action`. |
 
 Note: a large bbox (e.g. a person filling the frame) is **not** a stop condition — PID drives off the centroid, not bbox size, so a close object still tracks. When tracking ends, idle interpolates from the arm's measured current pose instead of first moving through zero — see [Interaction with Other Systems](#interaction-with-other-systems).
 
@@ -212,13 +215,7 @@ Object tracking is driven by remote vision updates from the agent/cloud. When th
 
 All under `/servo/track`.
 
-### GET /servo/track/targets — List suggested targets
-
-```json
-{"targets": ["person", "cup", "bottle", "glass", "phone", "laptop", ...]}
-```
-
-Detection is open-vocabulary via YOLOWorld (and YuNet for faces) — any text works, this list is just suggestions.
+There is no target-list endpoint. Detection is open-vocabulary via YOLOWorld (and YuNet for faces) — any text works as `target` (e.g. `person`, `cup`, `bottle`, `phone`, `laptop`).
 
 ### POST /servo/track — Start tracking
 
@@ -363,7 +360,7 @@ something.
 
 **The body is owned for the whole look.** From the moment the aim starts until the shutter closes,
 `servo_ownership()` takes a refcounted slot in the same `_tracking_active` lock the vision tracker
-uses, which suppresses **all** emotion servo animation (`routes/emotion.py`) and makes the animation
+uses, which suppresses **all** emotion servo animation (`hal/routes/emotion.py`) and makes the animation
 loop drop any recording in progress.
 
 This is not optional polish. Emotion presets play **recorded** poses that are absolute on every

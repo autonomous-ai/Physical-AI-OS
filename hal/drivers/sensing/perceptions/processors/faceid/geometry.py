@@ -1,10 +1,4 @@
-"""Face alignment geometry — similarity-transform warp/crop helpers.
-
-Module-private helpers ported from the reference
-``temp-updated-for-facerecognizer`` utils. Used by the ONNX landmark aligner to
-warp a detected face onto the 112x112 ArcFace reference template before
-embedding.
-"""
+"""Face alignment geometry — similarity-transform warp/crop helpers."""
 
 import cv2
 import numpy as np
@@ -130,13 +124,6 @@ def _landmarks_out_of_bounds(pts5: np.ndarray, bbox, frame_shape) -> bool:
 def _box_from_landmarks(landmarks_xy: np.ndarray, w: int, h: int) -> list[int]:
     """Axis-aligned face box ``[x1, y1, x2, y2]`` from dense landmarks in FRAME
     pixel coords.
-
-    Reproduces the Emo-AffectNet reference ``get_box`` (onnx_face_utils): floor
-    each landmark, clamp to ``[0, w-1] / [0, h-1]``, and take the min/max extent.
-    This is the MediaPipe-mesh framing the cloud emotion model expects — tighter
-    and better-centered on the face than the raw detector bbox — with NO rotation
-    applied (the crop stays axis-aligned). ``landmarks_xy`` is the (468, 2) array
-    already mapped back to full-frame pixels by ``detect_in_frame``.
     """
     xs = np.minimum(np.floor(landmarks_xy[:, 0]).astype(int), w - 1)
     ys = np.minimum(np.floor(landmarks_xy[:, 1]).astype(int), h - 1)

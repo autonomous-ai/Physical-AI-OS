@@ -1,16 +1,4 @@
-"""Base for audio processors (ported from perception-service).
-
-Bundles everything the processors depend on so this package runs inside HAL
-independently of the perception-service codebase, with identical logic:
-
-  - ``Audio``               (was ``core.models.media.Audio``)
-  - ``gpu_lock``            (was ``core.perception.base.predictor.gpu_lock``)
-  - ``InputProcessorBase``  (was ``core.perception.base.processor``)
-  - ``AudioProcessorBase``  (was ``processors/base.py``)
-
-Only the imports were relocated — the lifecycle/processing logic is byte-for-byte
-identical to perception-service so enroll/recognize embeddings match.
-"""
+"""Base for audio processors (ported from perception-service)."""
 
 from __future__ import annotations
 
@@ -88,11 +76,7 @@ class InputProcessorBase(Generic[INPUT_T, OUTPUT_T], ABC):
 
 
 class AudioProcessorBase(InputProcessorBase[Audio, Audio], ABC):
-    """Base for audio processors. Input and output are both Audio.
-
-    Default lifecycle is no-op (ready immediately). Subclasses that load
-    resources (e.g. VAD model) override _start_impl/_stop_impl/_is_ready_impl.
-    """
+    """Base for audio processors. Input and output are both Audio."""
 
     def __init__(self) -> None:
         super().__init__()

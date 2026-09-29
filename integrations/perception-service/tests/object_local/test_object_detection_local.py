@@ -1,9 +1,4 @@
-"""Tests for object detection endpoints using local server.
-
-Starts a local TestClient (FastAPI lifespan loads models from config),
-parametrizes tests across all known detectors, and skips any that
-aren't ready.
-"""
+"""Object detection endpoint tests against a local TestClient, per ready detector."""
 
 import asyncio
 import base64
@@ -26,11 +21,6 @@ FIXTURES_DIR: Path = Path(__file__).parent.parent / "fixtures" / "images"
 AUTH_HEADERS: dict[str, str] = {"X-API-Key": TEST_API_KEY}
 
 ALL_DETECTORS: list[str] = ["yoloworld", "owlv2"]
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _load_image(name: str) -> tuple[str, int, int]:
@@ -135,11 +125,6 @@ def _skip_if_not_ready(
         pytest.skip(f"Detector '{detector}' not ready")
 
 
-# ---------------------------------------------------------------------------
-# HTTP tests
-# ---------------------------------------------------------------------------
-
-
 class TestObjectDetectionHTTP:
     def test_list_models(self, client: TestClient) -> None:
         resp = client.get("/api/dl/object-detect/models", headers=AUTH_HEADERS)
@@ -155,7 +140,6 @@ class TestObjectDetectionHTTP:
         ready_detectors: set[str],
         test_image_b64: str,
     ) -> None:
-        # _skip_if_not_ready(detector, ready_detectors)
         resp = client.post(
             f"/api/dl/{detector}",
             json={"image_b64": test_image_b64, "classes": ["person", "chair"]},
@@ -245,11 +229,6 @@ class TestObjectDetectionHTTP:
             headers=AUTH_HEADERS,
         )
         assert resp.status_code == 503
-
-
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests
-# ---------------------------------------------------------------------------
 
 
 def _detect(
@@ -353,11 +332,6 @@ class TestObjectDetectionPerformance:
         assert len(persons) == 0, (
             f"[{detector}] False positive: detected {len(persons)} person(s) in fire image"
         )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket tests
-# ---------------------------------------------------------------------------
 
 
 class TestObjectDetectionWebSocket:

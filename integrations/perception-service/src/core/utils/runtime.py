@@ -20,18 +20,15 @@ def prepare_ort_session(
 
     Args:
         model_path: Path to the ONNX model file.
-        warmup_inputs: If provided, run forward passes after creation to
-            pre-allocate workspace buffers at peak size. One input dict, or
-            several (each run n_warmup times).
+        warmup_inputs: One or more input dicts to run after creation, pre-allocating
+            buffers at peak size.
     """
     opts = ort.SessionOptions()
     opts.intra_op_num_threads = 0
     opts.inter_op_num_threads = 0
     opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
     opts.add_session_config_entry("session.dynamic_block_base", "4")
-    # Force single-threaded execution to prevent CUDA stream collisions
-    # under concurrent requests (the global _gpu_lock serializes at Python level,
-    # but ORT's internal thread pool can still launch parallel CUDA kernels)
+    # Sequential: ORT's thread pool can launch parallel CUDA kernels despite gpu_lock.
     opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
 
     available: list[str] = ort.get_available_providers()

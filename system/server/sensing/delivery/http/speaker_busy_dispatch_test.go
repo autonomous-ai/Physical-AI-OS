@@ -16,9 +16,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// idleGateway is the case this file is about: no turn in flight, so the old
-// code forwarded a passive event immediately — while the previous reply was
-// still coming out of the speaker.
+// idleGateway has no turn in flight while the speaker may still be busy.
 type idleGateway struct {
 	domain.AgentGateway
 	queued  atomic.Int32
@@ -32,8 +30,7 @@ func (g *idleGateway) QueuePendingEvent(eventType, msg string, images []string, 
 }
 func (g *idleGateway) DrainPendingEvents() { g.drained.Add(1) }
 
-// Not ready, so the forwarding path stops right after the branch under test
-// instead of walking into the rest of the gateway this fake does not implement.
+// Not ready, so forwarding stops right after the branch under test.
 func (g *idleGateway) IsReady() bool { return false }
 
 func postPresenceEnter(t *testing.T, h *SensingHandler) *httptest.ResponseRecorder {
@@ -55,10 +52,7 @@ func withSpeaker(t *testing.T, busy func() bool) {
 	t.Cleanup(func() { speakergate.SpeakerBusy = orig })
 }
 
-// The regression: a runtime reports idle the moment its reply text reaches the
-// TTS queue, but that reply keeps playing. Forwarding presence.enter then opens
-// a newer turn, and HAL hands the speaker to the newest turn — cutting off the
-// answer the user asked for.
+// An idle runtime still playing its reply must not be cut off by a passive event.
 func TestPresenceEnterWaitsWhileTheDeviceIsStillSpeaking(t *testing.T) {
 	var busy atomic.Bool
 	busy.Store(true)
@@ -79,8 +73,6 @@ func TestPresenceEnterWaitsWhileTheDeviceIsStillSpeaking(t *testing.T) {
 		t.Fatalf("nothing may replay while the speaker is still busy, drained=%d", got)
 	}
 
-	// Nothing else would drain this one — there is no turn in flight whose end
-	// could trigger it.
 	busy.Store(false)
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) && gw.drained.Load() == 0 {

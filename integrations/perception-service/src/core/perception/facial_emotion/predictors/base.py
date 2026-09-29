@@ -1,15 +1,4 @@
-"""Base emotion predictor — classifies emotion from face crops.
-
-Takes a batch of face crops, preprocesses, runs ONNX inference, and
-returns raw expression probability distributions as numpy arrays.
-
-Face detection is NOT done here — the session detects faces and passes
-crops to this predictor (same pattern as action: session handles person
-detection, predictor handles classification).
-
-Concrete subclasses (EmoNet, PosterV2) override class-level defaults
-(model path, input size, mean/std, classes file).
-"""
+"""Base emotion predictor: classifies emotion from face crops (detection is done by the session)."""
 
 from pathlib import Path
 from typing import Any, cast
@@ -30,12 +19,7 @@ from core.utils.runtime import prepare_ort_session
 
 
 class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
-    """Base class for emotion classifiers operating on face crops.
-
-    Subclasses override class-level defaults. The base handles ONNX
-    lifecycle, preprocessing, and inference. Class names are loaded
-    from a text file at start time (same pattern as action recognizer).
-    """
+    """Base class for emotion classifiers on face crops; subclasses override class-level defaults."""
 
     DEFAULT_MODEL_PATH: Path | None = None
     DEFAULT_REMOTE_URL: str | None = None
@@ -121,15 +105,10 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
         preprocess: bool = True,
         **kwargs: Any,
     ) -> list[RawEmotionDetection]:
-        """Classify emotion for a batch of face crops.
-
-        Stacks all crops into a single (N, C, H, W) tensor and runs
-        ONNX inference in one pass. Returns one RawEmotionDetection per crop.
+        """Classify emotion for a batch of BGR face crops; one RawEmotionDetection per crop.
 
         Args:
-            input: List of face crops (BGR).
-            preprocess: If True, run preprocess on each crop. Set to False
-                when input is already preprocessed.
+            preprocess: False when crops are already preprocessed.
         """
         if self._session is None:
             raise RuntimeError(f"{self.__class__.__name__} is not ready")
@@ -149,12 +128,7 @@ class EmotionRecognizer(PredictorBase[cv2t.MatLike, RawEmotionDetection]):
     def _postprocess_batch(
         self, raw_outputs: list[npt.NDArray[np.float32]], N: int
     ) -> list[RawEmotionDetection]:
-        """Convert batched ONNX output to per-sample RawEmotionDetection.
-
-        Default: first output is expression probs (N, C) — softmax is baked
-        into the ONNX graph. Subclasses override for models with additional
-        outputs (valence, arousal).
-        """
+        """Convert batched ONNX output (first output = probs (N, C), softmax baked in) to detections."""
         probs: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
 
         return [RawEmotionDetection(expression_probs=probs[i]) for i in range(N)]

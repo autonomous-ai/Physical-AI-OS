@@ -3,9 +3,7 @@
 import os
 from unittest import mock
 
-# The face-perception package creates these directories during module import.
-# Keep this focused unit test runnable on a development host, where /root is
-# normally read-only, without changing an explicitly supplied test location.
+# Face perception mkdirs at import; redirect off /root so this runs on a dev host.
 os.environ.setdefault("HAL_USERS_DIR", "/tmp/autonomous-hal-test-users")
 os.environ.setdefault("HAL_STRANGERS_DIR", "/tmp/autonomous-hal-test-strangers")
 

@@ -1,8 +1,4 @@
-"""Tests for the emotion-analysis endpoints using the local Emo-AffectNet model.
-
-Mirrors test_posterv2_ws_local.py. Skipped automatically until the ONNX
-weights exist locally (run `uv run export-emoaffectnet` first).
-"""
+"""Emotion endpoint tests with local Emo-AffectNet; skipped until exported (`uv run export-emoaffectnet`)."""
 
 import asyncio
 import base64
@@ -33,7 +29,6 @@ os.environ["EMOTION_RECOGNITION_MODEL"] = "emoaffectnet"
 
 EMOAFFECTNET_MODEL_PATH = get_default_model_path(ModelEnum.EMOAFFECTNET_ONNX)
 
-# Skip unless the exported weights are actually present on disk.
 pytestmark = pytest.mark.skipif(
     EMOAFFECTNET_MODEL_PATH is None or not EMOAFFECTNET_MODEL_PATH.exists(),
     reason="Emo-AffectNet ONNX not found — run `uv run export-emoaffectnet` first",

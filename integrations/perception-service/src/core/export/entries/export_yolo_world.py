@@ -1,16 +1,7 @@
-"""Export YOLO-World zero-shot object detector to ONNX.
+"""Export YOLO-World zero-shot object detector (with CLIP text encoder) to ONNX.
 
-The ONNX model includes the CLIP text encoder so it takes raw text
-token IDs as input, preserving zero-shot capability at runtime.
-
-Inputs:
-    images:    [batch, 3, H, W]           — preprocessed image
-    class_tokens: [num_classes, context_len]  — CLIP-tokenized class names
-
-Outputs:
-    boxes:   [batch, num_det, 4]           — center-based xywh, normalized [0,1]
-    probs:   [batch, num_det, num_classes] — full probability vector per detection
-    labels:  [batch, num_det]              — argmax class indices (-1 = padding)
+Inputs: images [B, 3, H, W], class_tokens [K, context_len].
+Outputs: boxes [B, D, 4] cxcywh in [0,1], probs [B, D, K], labels [B, D] (-1 = padding).
 """
 
 import argparse
@@ -34,12 +25,7 @@ _PATCHED = False
 
 
 def _patch_world_detect():
-    """Monkey-patch WorldDetect.forward to compute `no` dynamically from tensor shape.
-
-    The original uses `self.no = self.nc + self.reg_max * 4` which bakes nc as a
-    constant. This patch infers `no` from `x[0].shape[1]` so num_classes is dynamic
-    and ONNX can trace it for any number of text queries.
-    """
+    """Monkey-patch WorldDetect.forward to infer `no` from the tensor shape so num_classes stays dynamic in ONNX."""
     global _PATCHED
     if _PATCHED:
         return

@@ -1,7 +1,4 @@
-"""Abstract base class for object detectors.
-
-ObjectDetector — base for all detectors (PyTorch, HF, ONNX).
-"""
+"""Abstract base class for object detectors (PyTorch, HF, ONNX)."""
 
 from abc import ABC
 from pathlib import Path
@@ -17,11 +14,7 @@ from core.utils.common import get_or_default
 
 
 class ObjectDetector(PredictorBase[cv2t.MatLike, RawObjectDetection], ABC):
-    """Base interface for zero-shot object detectors.
-
-    Subclasses implement _predict_impl with classes passed via kwargs.
-    The public predict() adds a typed `classes` parameter.
-    """
+    """Base interface for zero-shot object detectors; predict() takes a typed `classes`."""
 
     DEFAULT_MODEL_PATH: Path | None = None
     DEFAULT_REMOTE_URL: str | None = None
@@ -47,7 +40,6 @@ class ObjectDetector(PredictorBase[cv2t.MatLike, RawObjectDetection], ABC):
         self._classes_path: Path = get_or_default(classes_path, self.DEFAULT_CLASSES_PATH)
         self._threshold: float = get_or_default(threshold, self.DEFAULT_THRESHOLD)
 
-        # Populated in _start_impl via _load_classes()
         self._class_names: list[str] = []
 
     @property

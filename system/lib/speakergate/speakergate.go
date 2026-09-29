@@ -1,18 +1,5 @@
-// Package speakergate decides when buffered sensing events may be replayed to
-// the agent.
-//
-// The problem it solves: an agent turn is marked idle as soon as the runtime
-// has produced its reply text, but that reply is only then handed to HAL's TTS
-// queue and can keep playing for tens of seconds. Every runtime drains its
-// pending sensing events on that idle edge, so a passive event queued during
-// the turn (typically presence.enter) starts a NEW turn while the previous
-// answer is still coming out of the speaker. HAL's queue gives the speaker to
-// the newest turn — by design, that is what makes barge-in work — so the reply
-// the user actually asked for is cut off mid-sentence (device-observed, 28/8).
-//
-// The fix belongs here rather than in HAL: the preemption rule is correct, the
-// turn was simply created too early. Six runtimes share the drain logic, so
-// the rule lives in one predicate they all call.
+// Package speakergate defers replay of buffered sensing events until the speaker is idle,
+// so a passive event does not start a new turn that cuts off the current reply.
 package speakergate
 
 import (
@@ -27,30 +14,17 @@ import (
 // pollInterval is how often the speaker is re-checked while a replay waits.
 var pollInterval = 500 * time.Millisecond
 
-// SpeakerBusy reports whether the device is still speaking. A variable, not a
-// function, so both this package's tests and the sensing handler's can swap the
-// probe without a HAL on the loopback — and so both paths that must respect the
-// speaker ask exactly the same question.
+// SpeakerBusy reports whether the device is still speaking (a variable so tests can swap it).
 var SpeakerBusy = hal.SpeakerBusy
 
-// maxWait caps the deferral. A stuck `speaking` flag on HAL must delay the
-// replay, never cancel it: past maxWait the events are replayed anyway, which
-// is the pre-existing behaviour.
+// maxWait caps the deferral; a stuck speaking flag delays replay, never cancels it.
 var maxWait = 90 * time.Second
 
-// deferring guards against stacking one waiter per drain call. The retry is a
-// full drain of the same queue, so a second waiter would replay nothing extra
-// and only multiply the polling.
+// deferring ensures at most one waiter polls at a time.
 var deferring atomic.Bool
 
-// WaitsForSpeaker reports whether replaying eventType has to wait for the
-// speaker to go idle.
-//
-// Only two kinds of event are exempt. User-driven ones — speech and chat —
-// because a person talking over the device IS the barge-in the preemption rule
-// exists for; making them wait would break interrupting a long answer. And
-// fire_hazard.detected, because a safety alert that waits politely for a
-// hunting-season answer to finish is worse than a cut-off reply.
+// WaitsForSpeaker reports whether replaying eventType must wait for the speaker to go idle.
+// User speech/chat (barge-in) and fire_hazard.detected are exempt.
 func WaitsForSpeaker(eventType string) bool {
 	switch eventType {
 	case "voice", "voice_command", "voice_followup", "voice_agent_handled",
@@ -61,14 +35,8 @@ func WaitsForSpeaker(eventType string) bool {
 	}
 }
 
-// DeferReplay reports whether a drain of eventTypes must be postponed because
-// the device is still speaking. When it returns true the caller re-queues its
-// events untouched and returns; retry is invoked once the speaker frees up (or
-// after maxWait).
-//
-// It returns false — replay now — as soon as ONE event in the batch is exempt:
-// that event has to go through immediately, and holding back the rest of the
-// batch would reorder the queue behind it.
+// DeferReplay reports whether a drain must wait for the speaker; if true, the caller re-queues and
+// retry runs once the speaker is idle (or after maxWait). One exempt event releases the whole batch.
 func DeferReplay(eventTypes []string, retry func()) bool {
 	if !SpeakerBusy() {
 		return false
@@ -85,10 +53,7 @@ func DeferReplay(eventTypes []string, retry func()) bool {
 	slog.Info("sensing replay deferred -- device still speaking",
 		"component", "sensing", "events", len(eventTypes))
 	safego.Go("speakergate", func() {
-		// The flag is released BEFORE retry runs, never in a defer: retry is a
-		// full drain, and a drain re-entering DeferReplay must be able to open
-		// a fresh waiter. Losing that CAS would return "deferred" with nobody
-		// polling, stranding the queue until the next agent turn ends.
+		// Release the flag BEFORE retry (not in a defer) so a re-entrant drain can open a fresh waiter.
 		defer deferring.Store(false)
 		deadline := time.Now().Add(maxWait)
 		for time.Now().Before(deadline) {

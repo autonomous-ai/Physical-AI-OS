@@ -1,9 +1,4 @@
-"""Tests for action recognition with person detector enabled.
-
-Uses a small YOLO model (yolo11n.pt) for person detection and
-X3D for action recognition. Verifies that the person detector
-crops the person before feeding to the action model.
-"""
+"""Tests for action recognition with the person detector (YOLO) cropping before X3D."""
 
 import asyncio
 import base64
@@ -37,11 +32,6 @@ pytestmark = pytest.mark.skipif(
     X3D_MODEL_PATH is None,
     reason="Model enum not found in CDN_PATHS",
 )
-
-
-# ---------------------------------------------------------------------------
-# Fixtures — media loaded once per session
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
@@ -133,19 +123,11 @@ def client_without_detector(model_without_detector: ActionPerception) -> TestCli
 AUTH_HEADERS: dict[str, str] = {"X-API-Key": TEST_API_KEY}
 
 
-# ---------------------------------------------------------------------------
-# Person detector unit tests
-# ---------------------------------------------------------------------------
-
-
 class TestPersonDetector:
     def test_detect_person_in_image(
         self, person_detector: PersonDetector, person_frame: cv2t.MatLike,
     ) -> None:
-        """Should detect at least one person in the drinking image.
-
-        Bounding boxes are normalized [0, 1] relative to image dimensions.
-        """
+        """Should detect at least one person (normalized bbox) in the drinking image."""
         detections = person_detector.predict([person_frame])[0]
         assert detections.bbox_xyxy.shape[0] >= 1
         for conf, bbox in zip(detections.confidence, detections.bbox_xyxy):
@@ -172,11 +154,6 @@ class TestPersonDetector:
         frame = np.zeros((240, 320, 3), dtype=np.uint8)
         crop = person_detector.extract_largest_crop([frame])[0]
         assert crop is None
-
-
-# ---------------------------------------------------------------------------
-# Action recognition with person detector (WebSocket integration)
-# ---------------------------------------------------------------------------
 
 
 class TestActionWithPersonDetector:

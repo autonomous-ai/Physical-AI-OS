@@ -11,11 +11,6 @@ def softmax(x: npt.NDArray[np.number[Any]], axis: int = -1) -> npt.NDArray[np.fl
     return e / (e.sum(axis=axis, keepdims=True) + EPSILON)
 
 
-# ---------------------------------------------------------------------------
-# 3D geometry utilities
-# ---------------------------------------------------------------------------
-
-
 def angle_between_3d(
     v1: npt.NDArray[np.float32],
     v2: npt.NDArray[np.float32],
@@ -29,12 +24,7 @@ def angle_between_3d(
 
 
 def ensure_3d(keypoints: npt.NDArray[np.float32]) -> npt.NDArray[np.float32]:
-    """Pad 2D (N, 2) to 3D (N, 3) by appending z=0.
-
-    Convention: (x, y, z) where x=right, y=down, z=depth.
-    2D input (col, row) is mapped to (col, row, 0).
-    Returns a copy if already 3D.
-    """
+    """Pad 2D (N, 2) to 3D (N, 3) with z=0 (x=right, y=down, z=depth); copies if already 3D."""
     if keypoints.shape[1] >= 3:
         return keypoints.copy()
     zeros: npt.NDArray[np.float32] = np.zeros((keypoints.shape[0], 1), dtype=np.float32)

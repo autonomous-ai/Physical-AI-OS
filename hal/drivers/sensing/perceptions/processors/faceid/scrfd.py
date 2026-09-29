@@ -1,8 +1,4 @@
-"""SCRFD face detector (ONNX) — returns bbox + 5 keypoints + score per face.
-
-Ported & renamed (module-private) from the reference
-``temp-updated-for-facerecognizer/scrfd_onnx.py``.
-"""
+"""SCRFD face detector (ONNX) — returns bbox + 5 keypoints + score per face."""
 
 import os
 
