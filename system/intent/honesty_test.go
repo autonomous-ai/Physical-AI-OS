@@ -10,7 +10,7 @@ import (
 
 func TestSleepingLightCommandsAreBlocked(t *testing.T) {
 	for _, body := range []string{`{"sleeping":true}`, `{}`, `{"sleeping":null}`, `broken`} {
-		for _, command := range []string{"light on", "set the light red", "dim the light"} {
+		for _, command := range []string{"light on", "set the light red", "dim the light", "brighten the light"} {
 			t.Run(body+command, func(t *testing.T) {
 				routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {
 					if r.URL.Path != "/emotion/status" || r.Method != "GET" {

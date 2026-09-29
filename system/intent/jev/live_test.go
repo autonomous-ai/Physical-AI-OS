@@ -7,6 +7,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 )
 
 // Opt-in classifier evaluation only: this never calls HAL or executes an action.
@@ -28,10 +29,32 @@ func TestJevLiveNaturalLanguage(t *testing.T) {
 		t.Fatal("evaluation requires proxy URL and key")
 	}
 	client := &jevClient{}
-	for _, tc := range []struct {
-		text, want string
-		parameters map[string]string
-	}{
+	for _, tc := range liveIntentCases() {
+		t.Run(tc.text, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
+			defer cancel()
+			started := time.Now()
+			got, err := client.decide(ctx, strings.TrimRight(config.BaseURL, "/")+"/jev/decisions", config.APIKey, tc.text, Candidates())
+			t.Logf("decision_ms=%d selected=%q expected=%q", time.Since(started).Milliseconds(), got.Intent, tc.want)
+			if err != nil {
+				t.Fatal("live decision failed; credentials and response omitted")
+			}
+			if got.Intent != tc.want || (len(got.Parameters) != 0 || len(tc.parameters) != 0) && !reflect.DeepEqual(got.Parameters, tc.parameters) {
+				t.Errorf("selected intent=%q parameters=%v, want intent=%q parameters=%v", got.Intent, got.Parameters, tc.want, tc.parameters)
+			}
+		})
+	}
+}
+
+type liveIntentCase struct {
+	text, want string
+	parameters map[string]string
+}
+
+// Keep natural phrasing and refusal boundaries in the same corpus so a routing
+// improvement cannot silently trade precision for recall. No hardware is used.
+func liveIntentCases() []liveIntentCase {
+	return []liveIntentCase{
 		{"Please switch this lamp off.", "led_off", nil},
 		{"Switch this lamp on now.", "led_on", nil},
 		{"Reduce the brightness of this lamp now.", "dim", nil},
@@ -97,7 +120,7 @@ func TestJevLiveNaturalLanguage(t *testing.T) {
 		{"Switch off the bedroom light.", "", nil},
 		{"Switch off the lamp and play music.", "", nil},
 		{"Set the brightness to 20 percent.", "", nil},
-		{"Dim the light but keep its blue color.", "", nil},
+		{"Dim the light but keep its blue color.", "dim", nil},
 		{"Increase the volume by five percent.", "", nil},
 		{"Why does bright light hurt my eyes?", "", nil},
 		{"He said 'switch off the light'; I am only quoting him.", "", nil},
@@ -106,17 +129,135 @@ func TestJevLiveNaturalLanguage(t *testing.T) {
 		{"The sun outside is too bright.", "", nil},
 		{"My laptop screen is too bright.", "", nil},
 		{"Increase the volume a little.", "volume_up", nil},
-	} {
-		t.Run(tc.text, func(t *testing.T) {
-			ctx, cancel := context.WithTimeout(context.Background(), DefaultTimeout)
-			defer cancel()
-			got, err := client.decide(ctx, strings.TrimRight(config.BaseURL, "/")+"/jev/decisions", config.APIKey, tc.text, Candidates())
-			if err != nil {
-				t.Fatal("live decision failed; credentials and response omitted")
+		{"This room feels too dark.", "brighten", nil},
+		{"The room is a little dim.", "brighten", nil},
+		{"Make this lamp a little brighter.", "brighten", nil},
+		{"Brighten this lamp without changing its current color.", "brighten", nil},
+		{"I can barely hear your voice; speak up a little.", "volume_up", nil},
+		{"Please soften your voice a bit.", "volume_down", nil},
+		{"Bring your light back on, please.", "led_on", nil},
+		{"Could you turn your light out?", "led_off", nil},
+		{"I'd like a pink glow from this lamp.", "led_color", map[string]string{"color": "pink"}},
+		{"Cancel the lamp's current scene.", "scene_off", nil},
+		{"I want lighting for reading a book.", "scene_reading", nil},
+		{"Give me your focus preset so I can study.", "scene_focus", nil},
+		{"Give me your relaxing lighting preset.", "scene_relax", nil},
+		{"Use your movie lighting preset, please.", "scene_movie", nil},
+		{"Could you enable your night preset?", "scene_night", nil},
+		{"Give me your energize preset, please.", "scene_energize", nil},
+		{"Disable sound from your speaker.", "mute_speaker", nil},
+		{"Enable sound from your speaker again.", "unmute_speaker", nil},
+		{"End the song you're playing.", "music_stop", nil},
+		{"Please cut your spoken answer short.", "stop_talking", nil},
+		{"Do you have the current local time?", "what_time", nil},
+		{"Quit tracking my face with your camera.", "servo_track_stop", nil},
+		{"Keep your camera on the stuffed animal.", "servo_track", map[string]string{"target": "teddy bear"}},
+		{"Follow the ball with your camera.", "servo_track", map[string]string{"target": "sports ball"}},
+		{"Don't brighten the lamp.", "", nil},
+		{"Don't increase your speaker volume.", "", nil},
+		{"Don't change the lamp to blue.", "", nil},
+		{"Don't leave the current scene.", "", nil},
+		{"Don't activate focus mode.", "", nil},
+		{"Don't activate relax mode.", "", nil},
+		{"Don't activate movie mode.", "", nil},
+		{"Don't activate energize mode.", "", nil},
+		{"Don't unmute your speaker.", "", nil},
+		{"Don't stop the song.", "", nil},
+		{"Don't stop speaking.", "", nil},
+		{"Don't tell me the time.", "", nil},
+		{"Don't stop following me with your camera.", "", nil},
+		{"Make the lamp brighter in ten minutes.", "", nil},
+		{"When I start reading, activate reading mode.", "", nil},
+		{"Enable focus mode tomorrow morning.", "", nil},
+		{"Turn on relax mode after dinner.", "", nil},
+		{"When the film starts, enable movie mode.", "", nil},
+		{"Activate night mode at bedtime.", "", nil},
+		{"Activate energize mode tomorrow.", "", nil},
+		{"Leave the scene in an hour.", "", nil},
+		{"Change the lamp to green after lunch.", "", nil},
+		{"Mute your speaker when my meeting begins.", "", nil},
+		{"Unmute your speaker in five minutes.", "", nil},
+		{"Stop the music after this song finishes.", "", nil},
+		{"Stop speaking when I raise my hand.", "", nil},
+		{"Tell me the time every hour.", "", nil},
+		{"Start following the cup after I leave.", "", nil},
+		{"Stop following me in ten minutes.", "", nil},
+		{"If you're too quiet, turn your volume up.", "", nil},
+		{"Lower your volume when the baby falls asleep.", "", nil},
+		{"The bedroom is too dark.", "", nil},
+		{"My monitor is too dim.", "", nil},
+		{"Turn up the TV volume.", "", nil},
+		{"Mute my laptop.", "", nil},
+		{"Unmute my phone.", "", nil},
+		{"Stop the music on my phone.", "", nil},
+		{"Stop the other assistant from talking.", "", nil},
+		{"Turn on focus mode on my phone.", "", nil},
+		{"Stop the security camera from tracking me.", "", nil},
+		{"Brighten the lamp and make it blue.", "", nil},
+		{"Activate focus mode and mute your speaker.", "", nil},
+		{"Unmute your speaker and play a song.", "", nil},
+		{"Stop speaking and switch off the light.", "", nil},
+		{"Tell me the time and turn on the lamp.", "", nil},
+		{"Follow my face and lower your volume.", "", nil},
+		{"Brighten the lamp by ten percent.", "", nil},
+		{"Set this lamp to maximum brightness.", "", nil},
+		{"Activate reading mode but keep the camera on.", "", nil},
+		{"Use focus lighting only; do not change the camera, mic or speaker.", "", nil},
+		{"Make the light softer but keep the rainbow animation running.", "", nil},
+		{"Turn your volume all the way up.", "", nil},
+		{"Set your volume to twenty percent.", "", nil},
+		{"Read this book aloud.", "", nil},
+		{"Play a relaxing song.", "", nil},
+		{"Play a movie.", "", nil},
+		{"Set an alarm for bedtime.", "", nil},
+		{"How can I concentrate better?", "", nil},
+		{"How much time has passed?", "", nil},
+		{"What day is it?", "", nil},
+		{"Do that again.", "", nil},
+		{"A little more, please.", "", nil},
+		{"The other one.", "", nil},
+		{"Yes, go ahead.", "", nil},
+	}
+}
+
+// This offline check makes new catalog entries require live evaluation coverage.
+func TestJevLiveCorpusCoversCatalog(t *testing.T) {
+	catalog := make(map[string]Candidate)
+	for _, candidate := range Candidates() {
+		catalog[candidate.ID] = candidate
+	}
+	covered := make(map[string]int)
+	seen := make(map[string]bool)
+	for _, tc := range liveIntentCases() {
+		if seen[tc.text] {
+			t.Errorf("duplicate evaluation input %q", tc.text)
+		}
+		seen[tc.text] = true
+		if tc.want == "" {
+			continue
+		}
+		candidate, ok := catalog[tc.want]
+		if !ok {
+			t.Errorf("unknown expected intent %q", tc.want)
+			continue
+		}
+		covered[tc.want]++
+		if len(tc.parameters) != len(candidate.Parameters) {
+			t.Errorf("%q: expected parameters do not match catalog", tc.text)
+		}
+		for name, parameter := range candidate.Parameters {
+			valid := false
+			for _, option := range parameter.Options {
+				valid = valid || tc.parameters[name] == option
 			}
-			if got.Intent != tc.want || (len(got.Parameters) != 0 || len(tc.parameters) != 0) && !reflect.DeepEqual(got.Parameters, tc.parameters) {
-				t.Errorf("selected intent=%q parameters=%v, want intent=%q parameters=%v", got.Intent, got.Parameters, tc.want, tc.parameters)
+			if !valid {
+				t.Errorf("%q: unsupported %s=%q", tc.text, name, tc.parameters[name])
 			}
-		})
+		}
+	}
+	for id := range catalog {
+		if covered[id] < 2 {
+			t.Errorf("intent %q needs at least two positive English examples; got %d", id, covered[id])
+		}
 	}
 }

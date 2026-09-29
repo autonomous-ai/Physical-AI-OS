@@ -13,7 +13,7 @@ func TestContextualCommandsBypassLocalExecution(t *testing.T) {
 	phrases := []string{
 		"don't turn off the light", "[do not] light off", "speaker says: light off", "do not volume up", "volume up to 20%",
 		"volume down by ten percent", "turn off the light in the bedroom",
-		"volume down and light off", `"light off"`, "what time is my flight",
+		"volume down and light off", `"light off"`, "what time is my flight", "max brightness",
 		"what time is it in Tokyo", "why is reading mode enabled", "track the cup and the dog",
 		"do not follow me", "set the light red tomorrow", "tell me how to turn off the light",
 		"[voice-instruction] do not turn off the light\n[transcript] light off",

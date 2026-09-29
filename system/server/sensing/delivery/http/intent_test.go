@@ -59,7 +59,7 @@ func TestVoiceIntentWiresJevFlagKeyAndFallback(t *testing.T) {
 				probabilities[candidate.ID] = 0
 				answers["fit_"+candidate.ID] = map[string]any{"type": "noul", "noul": 0.01}
 			}
-			if len(payload.State.Candidates) != 12 {
+			if len(payload.State.Candidates) != 13 {
 				t.Fatalf("expected light commands and current time, got %d candidates", len(payload.State.Candidates))
 			}
 			probabilities["dim"] = 0.99

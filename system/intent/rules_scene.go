@@ -101,7 +101,7 @@ var sceneRules = []rule{
 	{
 		name:       "scene_energize",
 		capability: device.CapLight,
-		match:      sceneOn("brighter", "energize", "max brightness"),
-		exec:       sceneExec("energize", "Max brightness!"),
+		match:      sceneOn("energize"),
+		exec:       sceneExec("energize", "Energize mode!"),
 	},
 }
