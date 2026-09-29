@@ -39,6 +39,7 @@ from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
 from lbserver.utils.switch import read_active, resolve_backends, write_ack
 from core.livez import router as livez_router
 from core.logging_ext import ResilientRotatingFileHandler, queued, uvicorn_file_log_config
+from core.stackdump import install_stack_dump, stack_dump_name
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -493,6 +494,11 @@ def main() -> None:
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
     install_switch()
+    try:
+        dump = install_stack_dump(stack_dump_name(args.log_dir, "lbserver"))
+        logger.info("Stack dump on SIGUSR1 → %s", dump)
+    except OSError as e:
+        logger.warning("Stack dump not installed: %s", e)
 
     if args.pid_file:
         try:

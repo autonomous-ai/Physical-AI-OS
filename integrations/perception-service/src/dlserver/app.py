@@ -50,6 +50,7 @@ from dlserver.utils.state import (
 )
 from core.livez import router as livez_router
 from core.logging_ext import ResilientRotatingFileHandler, queued, uvicorn_file_log_config
+from core.stackdump import install_stack_dump, stack_dump_name
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -279,6 +280,11 @@ def main() -> None:
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        dump = install_stack_dump(stack_dump_name(args.log_dir, "dlserver"))
+        logger.info("Stack dump on SIGUSR1 → %s", dump)
+    except OSError as e:
+        logger.warning("Stack dump not installed: %s", e)
 
     if args.pid_file:
         try:
