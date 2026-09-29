@@ -1,5 +1,6 @@
 """Dependency prefetch is bounded, optional, typed and namespace preserving."""
 import json
+import importlib
 import sys
 import threading
 import time
@@ -9,7 +10,7 @@ from unittest.mock import patch
 
 from test_router import router, RouterTest, decision
 
-deps = sys.modules[router.__package__ + ".dependencies"]
+deps = importlib.import_module(router.__package__ + ".dependencies")
 condition = {"context": "wellbeing_context", "field": "bootstrap_needed", "equals": True}
 message = '[activity] Activity detected: using computer.\n[wellbeing_context: {"bootstrap_needed":true}]'
 
@@ -32,7 +33,7 @@ class DependencyTest(unittest.TestCase):
         with patch.object(deps, 'inline_budget', return_value=budget):
             result = deps.preload_dependencies('openclaw-imports/wellbeing', 'PRIMARY', skills,
                 {s['lookup_name'] for s in skills}, text, 'task-A',
-                time.monotonic() + 1 if deadline is None else deadline, loader or load)
+                time.monotonic() + 1 if deadline is None else deadline, loader or load, rules={s["lookup_name"]: s.get("jev_preload", []) for s in skills})
         return result, calls
 
     def test_bundle_has_main_skill_and_reference(self):
@@ -119,7 +120,8 @@ class RouterDependencyTest(RouterTest):
             release.wait(1)
             return 'late', {}
         try:
-            with patch.object(router, 'TIMEOUT_SECONDS', .05), patch.object(router, 'preload_dependencies', side_effect=slow):
+            plugin.dependencies = slow
+            with patch.object(router, 'TIMEOUT_SECONDS', .05):
                 result = plugin.before_turn(user_message='Read email')
                 self.assertIn('Loaded skill connectors', result['context'])
         finally:
@@ -140,8 +142,23 @@ class RouterDependencyTest(RouterTest):
         plugin.request = request
         def bundle(*args, **kwargs):
             return deps.preload_dependencies(*args, **kwargs, loader=lambda name, task_id, file_path=None: 'HABIT ' + str(file_path))
-        with patch.object(router, 'preload_dependencies', side_effect=bundle):
-            with self.assertLogs(router.LOG, level='INFO') as logs:
-                result = plugin.before_turn(user_message=message)
+        plugin.dependencies = bundle
+        with self.assertLogs(router.LOG, level='INFO') as logs:
+            result = plugin.before_turn(user_message=message)
         self.assertIn('HABIT reference/build-patterns.md', result['context'])
         self.assertIn('dependency_files=2', '\n'.join(logs.output))
+
+    def test_disabled_router_never_loads_dependencies(self):
+        plugin = self.make()
+        with patch.object(router, 'ENABLED', False):
+            with patch.object(plugin, 'dependencies') as prefetch:
+                self.assertIsNone(plugin.before_turn(user_message=message))
+                prefetch.assert_not_called()
+        self.assertEqual(self.calls, [])
+
+    def test_shared_router_has_no_dependency_prefetch_by_default(self):
+        plugin = self.make()
+        self.assertIsNone(plugin.dependencies)
+        with patch.object(deps, 'preload_dependencies', side_effect=AssertionError('must not load')):
+            result = plugin.before_turn(user_message='Read email')
+        self.assertIn('Loaded skill connectors', result['context'])

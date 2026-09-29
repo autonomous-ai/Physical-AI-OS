@@ -3,7 +3,7 @@
 import json
 import re
 import time
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 
 from .preload import inline_budget, load_skill_context
 
@@ -47,15 +47,20 @@ def reference_path(value):
 
 
 def preload_dependencies(primary, context, catalog, eligible, message, task_id, deadline,
-                         loader=load_skill_context):
+                         loader=load_skill_context, rules=None):
     """Keep the accepted primary even if an optional group cannot be loaded.
 
-    Metadata may prefetch useful supporting instructions, but does not choose
+    Plugin rules may prefetch useful supporting instructions, but does not choose
     the final action or bypass the primary skill's guards. No recursive walk.
     """
     stats = {"dependency_skills": 0, "dependency_files": 0, "dependency_skipped": 0}
-    skill = next((s for s in catalog if isinstance(s, dict) and s.get("lookup_name", s.get("name")) == primary), {})
-    declarations = skill.get("jev_preload", [])
+    try:
+        if rules is None:
+            rules = json.loads(Path(__file__).with_name("dependencies.json").read_text())
+        declarations = rules.get(primary, []) if isinstance(rules, dict) else []
+    except (OSError, ValueError):
+        stats["dependency_skipped"] = 1
+        return context, stats
     if not isinstance(declarations, list):
         return context, stats
     seen = {primary}
@@ -88,8 +93,8 @@ def preload_dependencies(primary, context, catalog, eligible, message, task_id, 
                 if not isinstance(piece, str) or not piece.strip():
                     raise ValueError()
                 pieces.append(piece)
-            addition = ("\n\nSupporting instructions prefetched from the primary skill's dependency metadata. "
-                        "These files are already read for this turn. Use them only if the primary skill's "
+            addition = ("\n\nSupporting instructions prefetched by the Hermes JEV plugin. "
+                        "These exact files have been read for this turn; a separate skill_view solely to read them is redundant. Use them only if the primary skill's "
                         "execution conditions hold; prefetch is not an instruction to run a supporting skill.\n"
                         + "\n\n".join(pieces))
             if time.monotonic() >= deadline or len(context) + len(addition) > inline_budget():

@@ -1047,22 +1047,31 @@ tuyến lẫn nạp trước skill.
 
 ### Nạp hướng dẫn hỗ trợ theo điều kiện
 
-Jev vẫn chọn **một skill chính**, không chọn nhiều skill thắng độc lập. Sau khi
-nạp skill chính thành công, `dependencies.py` có thể nạp trước một cấp skill hỗ
-trợ và reference Markdown được khai báo. Frontmatter skill OS chứa metadata
-`jev_preload` tuỳ chọn; metadata chỉ dùng local, không thêm vào request định
-tuyến. Ví dụ `skills/wellbeing/SKILL.md` khai báo:
+Jev vẫn chọn **một skill chính**, không chọn nhiều skill thắng độc lập. Plugin
+Hermes bật nạp dependency qua callback của Router. Các runtime dùng chung
+selector không bật callback này. Quy tắc nằm trong `dependencies.json` thuộc
+plugin, theo đúng lookup name của skill chính; không đọc metadata frontmatter
+và không sửa các file SKILL.md dùng chung. Quy tắc đi kèm:
 
-```yaml
-jev_preload:
-  - skill: habit
-    references:
-      - reference/build-patterns.md
-    when:
-      context: wellbeing_context
-      field: bootstrap_needed
-      equals: true
+```json
+{
+  "openclaw-imports/wellbeing": [{
+    "skill": "habit",
+    "references": ["reference/build-patterns.md"],
+    "when": {
+      "context": "wellbeing_context",
+      "field": "bootstrap_needed",
+      "equals": true
+    }
+  }]
+}
 ```
+
+Plugin chỉ đánh dấu những file đã nạp thành công là đã đọc trong lượt hiện tại.
+Khi JEV tắt hoặc không được cài, không chạy quy tắc hay thêm context này;
+hướng dẫn đọc skill gốc được giữ nguyên. Registry là chính sách tối ưu khai báo
+rõ, không phải cơ chế tự suy ra nhiều skill.
+
 
 `when` phải có đúng ba trường `context`, `field`, `equals`. Tin nhắn hiện tại
 phải chứa đúng một block context độc lập có tên đó, bắt đầu ở đầu dòng và chứa

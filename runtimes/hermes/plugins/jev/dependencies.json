@@ -1,0 +1,15 @@
+{
+  "openclaw-imports/wellbeing": [
+    {
+      "skill": "habit",
+      "references": [
+        "reference/build-patterns.md"
+      ],
+      "when": {
+        "context": "wellbeing_context",
+        "field": "bootstrap_needed",
+        "equals": true
+      }
+    }
+  ]
+}

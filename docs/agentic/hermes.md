@@ -1051,22 +1051,32 @@ System notices prefixed with `[system]` bypass routing and preloading.
 
 ### Conditional supporting instructions
 
-Jev still chooses **one primary skill**, not several independent winners. After
-that skill loads successfully, `dependencies.py` can prefetch one hop of declared
-supporting skills and Markdown references. OS skill frontmatter carries the
-optional `jev_preload` metadata; it is used locally, not added to the routing
-request. For example, `skills/wellbeing/SKILL.md` declares:
+Jev still chooses **one primary skill**, not several independent winners. The
+Hermes plugin explicitly enables conditional dependency prefetch through a
+Router callback. Other consumers of the shared selector do not enable it.
+Rules live in the plugin-owned `dependencies.json`, keyed by the exact primary
+lookup name; skill frontmatter is not consulted and shared SKILL.md files are
+unchanged. The bundled rule is:
 
-```yaml
-jev_preload:
-  - skill: habit
-    references:
-      - reference/build-patterns.md
-    when:
-      context: wellbeing_context
-      field: bootstrap_needed
-      equals: true
+```json
+{
+  "openclaw-imports/wellbeing": [{
+    "skill": "habit",
+    "references": ["reference/build-patterns.md"],
+    "when": {
+      "context": "wellbeing_context",
+      "field": "bootstrap_needed",
+      "equals": true
+    }
+  }]
+}
 ```
+
+The plugin marks only successfully loaded files as already read for this turn.
+When JEV is disabled or not installed, none of these rules or context additions
+run; skills retain their original loading instructions. The registry is an
+explicit optimization policy, not automatic multi-skill discovery.
+
 
 `when` must contain exactly `context`, `field`, and `equals`. The current message
 must contain exactly one standalone context block of that name, starting at a

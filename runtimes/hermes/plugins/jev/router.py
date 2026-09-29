@@ -1,7 +1,6 @@
 """Bounded skill selection and native preloading into the current turn only."""
 
 from .preload import PreloadError, load_skill_context
-from .dependencies import preload_dependencies
 
 import contextvars
 import ipaddress
@@ -88,8 +87,7 @@ def live_skills():
         if not skill_matches_platform(frontmatter) or not skill_matches_environment(frontmatter):
             continue
         skills.append({"name": name, "lookup_name": lookup,
-                       "description": frontmatter.get("description", ""), "category": "openclaw-imports",
-                       "jev_preload": frontmatter.get("jev_preload", [])})
+                       "description": frontmatter.get("description", ""), "category": "openclaw-imports"})
     # Use the runtime's public catalog for authored, bundled and plugin skills.
     # Keep the direct OS scan above: native bare-name deduplication can hide an
     # OS skill behind a namesake. Native names are also its skill_view handles.
@@ -208,9 +206,10 @@ def request_decision(endpoint, key, timeout, payload):
 
 
 class Router:
-    def __init__(self, config_path=None, catalog=live_skills, request=request_decision, load=load_skill_context):
+    def __init__(self, config_path=None, catalog=live_skills, request=request_decision, load=load_skill_context, dependencies=None):
         self.config_path = config_path or Path(__file__).with_name("os-config-path.json")
         self.catalog, self.request, self.load = catalog, request, load
+        self.dependencies = dependencies
         self.busy = threading.Lock()
         self.cooldown_until = 0.0
 
@@ -295,11 +294,12 @@ class Router:
                         raise DecisionError("preload_timeout")
                     primary_ready.append({**evaluated, **timings, "outcome": "preloaded",
                                           "context": context, "context_chars": len(context)})
-                    context, dependency_stats = preload_dependencies(
-                        selected, context, current_catalog, set(current_names.values()),
-                        user_message, kwargs.get("task_id"), deadline,
-                    )
-                    timings.update(dependency_stats)
+                    if self.dependencies is not None:
+                        context, dependency_stats = self.dependencies(
+                            selected, context, current_catalog, set(current_names.values()),
+                            user_message, kwargs.get("task_id"), deadline,
+                        )
+                        timings.update(dependency_stats)
                     timings["context_chars"] = len(context)
                     evaluated.update(outcome="preloaded", context=context)
                 output.append(evaluated)
