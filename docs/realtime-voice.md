@@ -2244,6 +2244,36 @@ summarize and where it is loaded into session context — deterministic backstop
 so a pending task can't sit in context indefinitely and get "answered" from
 stale memory by a content-free nudge (#419, #421). `0` disables expiry.
 
+**Long conversations (#449).** A quiz, oral test or debate outlives many Gemini
+sessions (idle park, turn cap, tool-call recycle), and each new session only
+knows what `build_instructions()` re-feeds. Four rules keep that lossless:
+
+- **Separate budgets.** `summary.md` (cap `HAL_REALTIME_SUMMARY_MAX_CHARS`,
+  5000) and the verbatim turns (`HAL_REALTIME_MEMORY_MAX_CHARS`, 8000) no
+  longer share one window — a full summary used to leave ~3k chars of turns.
+- **Summarize before turns drop.** `_trim_memory_if_needed()` starts the
+  background summarize once the verbatim turns reach
+  `HAL_REALTIME_SUMMARIZE_AT_FRACTION` (0.75) of their budget, so no turn is
+  ever in neither the window nor the summary. Only one summarize runs at a time.
+  Each summarize leaves the newest `HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS` (4)
+  turns verbatim in `memory.jsonl`.
+- **Activity first, cap respected.** The prompt gets the real char budget and
+  must open with `## Current activity` (rules the user set, current
+  question/round, score, one line per covered item) while an activity is in
+  progress. An over-long summary is shrunk by `fit_summary()` — whole bullets,
+  oldest history first; `## Current activity` and `## Open requests` are kept —
+  instead of a hard cut that dropped the newest content.
+- **Summarizer health.** The memory summarizer runs with thinking disabled (the
+  proxy otherwise spent all 4096 output tokens reasoning and returned nothing);
+  a second consecutive empty result is logged at ERROR and consumes no entries.
+
+Gemini answers questions about the conversation in progress (question just
+asked, score, round, rules) itself from this memory instead of delegating them:
+the main agent was not part of the conversation (`system_prompt_gemini.md`,
+`routing_prompt_gemini.md`, `complete_response`). Recall of earlier sessions is
+still delegated. Cost: the realtime-memory block can now reach 13k chars
+(≈ +1.2k input tokens per turn at worst); summarization stays off the turn path.
+
 ## Live mode (full duplex)
 
 **What it changes.** The local VAD stops being an endpointer and becomes a
@@ -3230,7 +3260,7 @@ Diagnostics: `[realtime][timing]` records queued audio commits, first verified p
 
 Gemini extended-thinking camera replay: a successful explicit replay audio commit wakes the receiver and retires the filler's grace, outcome checks and buffered continuation, whether or not Gemini emits `interrupted`. The replay receives a fresh response generation and bounded progress budget while preserving the user question. The provider consumes the old response boundary before new speech; the queue consumer no longer swallows the replay's own fallback terminal. Ordinary commits and LIVE mode do not trigger this reset; user interruption after replay speech still cancels the response. The new response still needs a confirmed outcome; this does not force visual requests to succeed or disable fallback. Diagnostic: `look_replay_response_started`.
 
-Gemini delegation ordering: for work requiring main (including music, specific memory recall and Harness/code tasks), request only the actual `delegate_to_main` call, without Gemini speech or emotion before the handoff. HAL waiting cues remain available; main owns the substantive reply. A compact Gemini-only routing reminder follows identity and memory in the assembled instructions so examples of spoken receipts do not stand in for execution. Greetings remain direct answers; visual questions still use `look`. This changes model instructions, not deterministic routing or fallback deadlines. Validate model compliance using provider `Function call: delegate_to_main` events, not `route=delegated`, which also includes HAL fallback.
+Gemini delegation ordering: for work requiring main (including music, specific memory recall from earlier sessions and Harness/code tasks; questions about the conversation in progress are answered directly), request only the actual `delegate_to_main` call, without Gemini speech or emotion before the handoff. HAL waiting cues remain available; main owns the substantive reply. A compact Gemini-only routing reminder follows identity and memory in the assembled instructions so examples of spoken receipts do not stand in for execution. Greetings remain direct answers; visual questions still use `look`. This changes model instructions, not deterministic routing or fallback deadlines. Validate model compliance using provider `Function call: delegate_to_main` events, not `route=delegated`, which also includes HAL fallback.
 
 In Live ON, an accepted `reject_turn` also installs a persistent rejection barrier before publishing the tool to its consumer. The barrier survives receive-loop boundaries and the tool ACK: provider audio/text from that rejected turn cannot become a new unowned reply or trigger main fallback. A fresh provider speech-start event or nonempty input transcript releases it; protocol terminals and empty transcription-finished metadata do not. Reconnect resets the barrier. This protects turn ownership independently of response language; it does not prevent the remote backend from generating an error after an ACK.
 
