@@ -1023,7 +1023,7 @@ would map them 1:1 and round-trip cleanly. (See the fold-vs-move rule in
 
 ## 13. Optional Jev skill preloading
 
-The OS-managed `jev` plugin selects one installed skill before a Hermes user
+The OS-managed `jev` plugin selects one installed primary skill before a Hermes user
 turn's first model call through the `pre_llm_call` hook. On an accepted decision,
 it revalidates the skill against the live eligible catalog and loads its content
 through native `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
@@ -1048,6 +1048,58 @@ preprocessing is disabled; skills containing
 dynamic shell snippets (an exclamation mark followed by a backtick-delimited
 command) also fail open. Timeout results cannot be attached to a later turn.
 System notices prefixed with `[system]` bypass routing and preloading.
+
+### Conditional supporting instructions
+
+Jev still chooses **one primary skill**, not several independent winners. After
+that skill loads successfully, `dependencies.py` can prefetch one hop of declared
+supporting skills and Markdown references. OS skill frontmatter carries the
+optional `jev_preload` metadata; it is used locally, not added to the routing
+request. For example, `skills/wellbeing/SKILL.md` declares:
+
+```yaml
+jev_preload:
+  - skill: habit
+    references:
+      - reference/build-patterns.md
+    when:
+      context: wellbeing_context
+      field: bootstrap_needed
+      equals: true
+```
+
+`when` must contain exactly `context`, `field`, and `equals`. The current message
+must contain exactly one standalone context block of that name, starting at a
+line boundary and containing a JSON object. Matching uses the exact value **and
+JSON value type**; boolean `true` does not match `1` or `"true"`. Missing,
+malformed, or repeated blocks do not match. Supported comparison values are
+booleans, strings, integers, and floats; this is not an expression language.
+
+Dependencies resolve relative to the primary skill's namespace and must remain
+in the live eligible catalog. Thus `openclaw-imports/wellbeing` loads
+`openclaw-imports/habit`, never a bundled bare-name replacement. Reference paths
+must be relative `.md` files without traversal; `SKILL.md` is already included.
+The loader examines at most 8 declarations, accepts at most 2 distinct supporting
+skills, and permits at most 3 references per supporting skill. It does not walk
+dependencies recursively. Each dependency's skill and requested references form
+one group: the complete group must load and fit before it is appended.
+
+All files use native `skill_view` with preprocessing disabled and the same safety
+checks as the primary. The primary plus supporting content share the existing
+inline character limit and 3-second turn budget; there is no extra network
+routing call or time allowance. Optional missing, rejected, oversized, or failed
+groups leave the primary usable. If an optional read outlasts the wait budget,
+only the already completed primary is returned, with `dependency_timeout=true`;
+late supporting content cannot be attached to this or another turn. The busy
+worker and timeout cooldown rules still apply.
+
+For wellbeing, `bootstrap_needed=true` is only a **speculative prefetch hint**.
+The final route and nudge decision still determine whether habit building may
+run; for example, an eating reaction must not bootstrap merely because its
+instructions were prefetched. These files count as already read for this turn,
+not as authority to execute anything. This avoids redundant `skill_view` calls
+for loaded instructions, but does not remove actual data reads, pattern
+computation, permission checks, or reads of other needed references.
 
 ### Installation on existing devices
 
@@ -1159,7 +1211,10 @@ failures instead of grouping them as `deferred`:
 
 Logs include validated `session_id`, `turn_id` and `task_id` when supplied by
 Hermes, so a slow turn can be correlated without logging its prompt. Accepted
-preloads include `context_chars`. Native preload failures distinguish
+preloads include `context_chars`; completed dependency loading also reports
+`dependency_skills`, `dependency_files` (including `SKILL.md`), and
+`dependency_skipped`. Optional-load timeouts return the primary with
+`dependency_timeout=true`. Native preload failures distinguish
 `skill_response_size`, `skill_rejected`, `skill_empty`, `skill_dynamic`, and
 `skill_inline_budget`; other native failures remain `skill_load_failed`.
 Logs include total `decision_ms`, and `catalog_ms`, `request_ms`, and native

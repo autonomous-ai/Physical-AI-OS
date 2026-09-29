@@ -1022,7 +1022,7 @@ sạch. (Xem quy tắc fold-vs-move ở [`adding-agent-runtime_vi.md`](adding-ag
 
 ## 13. Nạp trước skill bằng Jev (tuỳ chọn)
 
-Plugin `jev` do OS quản lý chọn một skill đã cài trước lần gọi model đầu tiên
+Plugin `jev` do OS quản lý chọn một skill chính đã cài trước lần gọi model đầu tiên
 của lượt người dùng qua hook `pre_llm_call`. Khi quyết định được chấp nhận,
 plugin kiểm tra lại skill trong catalog đủ điều kiện hiện tại và nạp nội dung
 qua API gốc `tools.skills_tool.skill_view(name, task_id, preprocess=False)`.
@@ -1044,6 +1044,56 @@ không có API spill dùng giới hạn ký tự local. Tắt shell preprocessin
 lệnh trong dấu backtick) cũng quay về luồng bình thường. Kết quả timeout không
 được gắn vào lượt sau. Thông báo hệ thống có tiền tố `[system]` bỏ qua cả định
 tuyến lẫn nạp trước skill.
+
+### Nạp hướng dẫn hỗ trợ theo điều kiện
+
+Jev vẫn chọn **một skill chính**, không chọn nhiều skill thắng độc lập. Sau khi
+nạp skill chính thành công, `dependencies.py` có thể nạp trước một cấp skill hỗ
+trợ và reference Markdown được khai báo. Frontmatter skill OS chứa metadata
+`jev_preload` tuỳ chọn; metadata chỉ dùng local, không thêm vào request định
+tuyến. Ví dụ `skills/wellbeing/SKILL.md` khai báo:
+
+```yaml
+jev_preload:
+  - skill: habit
+    references:
+      - reference/build-patterns.md
+    when:
+      context: wellbeing_context
+      field: bootstrap_needed
+      equals: true
+```
+
+`when` phải có đúng ba trường `context`, `field`, `equals`. Tin nhắn hiện tại
+phải chứa đúng một block context độc lập có tên đó, bắt đầu ở đầu dòng và chứa
+object JSON. So khớp chính xác cả giá trị **và kiểu giá trị JSON**; boolean
+`true` không khớp `1` hay `"true"`. Block thiếu, sai định dạng hoặc lặp lại không
+khớp. Giá trị so sánh hỗ trợ boolean, chuỗi, số nguyên và số thực; đây không phải
+ngôn ngữ biểu thức.
+
+Skill phụ được tra tương đối trong namespace của skill chính và phải còn trong
+catalog đủ điều kiện hiện tại. Vì vậy `openclaw-imports/wellbeing` nạp
+`openclaw-imports/habit`, không thay bằng skill bundled trùng tên ngắn. Reference
+phải là đường dẫn `.md` tương đối không có traversal; `SKILL.md` đã được nạp kèm.
+Loader xét tối đa 8 khai báo, nhận tối đa 2 skill hỗ trợ khác nhau và cho phép tối
+đa 3 reference mỗi skill hỗ trợ. Không duyệt dependency đệ quy. Skill phụ cùng
+các reference yêu cầu tạo thành một nhóm: phải nạp đủ và vừa ngân sách mới thêm
+cả nhóm vào context.
+
+Mọi file dùng `skill_view` gốc với preprocessing tắt và cùng kiểm tra an toàn như
+skill chính. Nội dung chính và phụ chia sẻ giới hạn ký tự inline và ngân sách
+3 giây hiện có; không thêm request định tuyến hay thời gian chờ. Nhóm phụ thiếu,
+bị từ chối, quá lớn hoặc đọc lỗi không làm mất nội dung chính đã nạp. Nếu đọc
+phụ vượt thời gian chờ, chỉ trả về skill chính đã hoàn tất, kèm
+`dependency_timeout=true`; nội dung phụ đến muộn không được gắn vào lượt này hay
+lượt khác. Quy tắc worker bận và cooldown khi timeout vẫn áp dụng.
+
+Với wellbeing, `bootstrap_needed=true` chỉ là **gợi ý nạp trước dự phòng**.
+Route và quyết định nudge cuối cùng vẫn xác định có được chạy xây dựng habit
+hay không; ví dụ phản hồi ăn uống không được bootstrap chỉ vì đã nạp hướng dẫn.
+Các file này được tính là đã đọc trong lượt hiện tại, không cấp quyền thực thi.
+Cơ chế tránh gọi `skill_view` lặp lại cho hướng dẫn đã nạp, nhưng không bỏ các
+bước đọc dữ liệu, tính patterns, kiểm tra quyền hay đọc reference khác khi cần.
 
 ### Cài đặt cho device hiện có
 
@@ -1151,7 +1201,9 @@ và lỗi, thay vì gộp chung thành `deferred`:
 
 Log có `session_id`, `turn_id`, `task_id` đã kiểm tra định dạng khi Hermes cung cấp,
 để nối các event của lượt chậm mà không ghi prompt. Preload thành công có thêm
-`context_chars`. Lỗi preload phân biệt `skill_response_size`, `skill_rejected`,
+`context_chars`; khi bước nạp phụ hoàn tất còn có `dependency_skills`,
+`dependency_files` (gồm cả `SKILL.md`) và `dependency_skipped`. Timeout khi nạp
+phụ trả về skill chính với `dependency_timeout=true`. Lỗi preload phân biệt `skill_response_size`, `skill_rejected`,
 `skill_empty`, `skill_dynamic`, `skill_inline_budget`; lỗi native khác vẫn dùng
 `skill_load_failed`.
 Log có tổng `decision_ms` cùng `catalog_ms`, `request_ms` và thời gian nạp gốc

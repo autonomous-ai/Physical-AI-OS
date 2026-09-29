@@ -1,6 +1,7 @@
 """Bounded skill selection and native preloading into the current turn only."""
 
 from .preload import PreloadError, load_skill_context
+from .dependencies import preload_dependencies
 
 import contextvars
 import ipaddress
@@ -87,7 +88,8 @@ def live_skills():
         if not skill_matches_platform(frontmatter) or not skill_matches_environment(frontmatter):
             continue
         skills.append({"name": name, "lookup_name": lookup,
-                       "description": frontmatter.get("description", ""), "category": "openclaw-imports"})
+                       "description": frontmatter.get("description", ""), "category": "openclaw-imports",
+                       "jev_preload": frontmatter.get("jev_preload", [])})
     # Use the runtime's public catalog for authored, bundled and plugin skills.
     # Keep the direct OS scan above: native bare-name deduplication can hide an
     # OS skill behind a namesake. Native names are also its skill_view handles.
@@ -253,6 +255,7 @@ class Router:
             report("skipped", "busy")
             return None
         completed, output = threading.Event(), []
+        primary_ready = []
         deadline = time.monotonic() + config[2]
 
         def decide():
@@ -278,7 +281,8 @@ class Router:
                 if selected:
                     stage, stage_start = "load", time.monotonic()
                     # Recheck filters after inference: a skill may have been disabled.
-                    _, current_names = candidates_for(self.catalog())
+                    current_catalog = self.catalog()
+                    _, current_names = candidates_for(current_catalog)
                     if time.monotonic() >= deadline:
                         raise DecisionError("preload_timeout")
                     if selected not in current_names.values():
@@ -287,9 +291,16 @@ class Router:
                     if not isinstance(context, str) or not context.strip():
                         raise DecisionError("skill_load_failed")
                     timings["load_ms"] = round((time.monotonic() - stage_start) * 1000)
-                    timings["context_chars"] = len(context)
                     if time.monotonic() >= deadline:
                         raise DecisionError("preload_timeout")
+                    primary_ready.append({**evaluated, **timings, "outcome": "preloaded",
+                                          "context": context, "context_chars": len(context)})
+                    context, dependency_stats = preload_dependencies(
+                        selected, context, current_catalog, set(current_names.values()),
+                        user_message, kwargs.get("task_id"), deadline,
+                    )
+                    timings.update(dependency_stats)
+                    timings["context_chars"] = len(context)
                     evaluated.update(outcome="preloaded", context=context)
                 output.append(evaluated)
             except Exception as error:
@@ -317,9 +328,14 @@ class Router:
             return None
         if not completed.wait(config[2]):
             self.cooldown_until = time.monotonic() + 30
-            report("timeout", "budget_exceeded")
-            return None
-        result = output[0]
+            if not primary_ready:
+                report("timeout", "budget_exceeded")
+                return None
+            # Optional local reads cannot take an accepted primary away. The
+            # worker owns its context and lock until done; never inject late data.
+            result = {**primary_ready[0], "dependency_timeout": True}
+        else:
+            result = output[0]
         selected = result.pop("selected", None)
         context = result.pop("context", None)
         report(**result, skill=selected)

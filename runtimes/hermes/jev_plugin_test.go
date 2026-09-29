@@ -19,7 +19,7 @@ func TestSyncJevPluginExistingDevice(t *testing.T) {
 		t.Fatalf("first sync: %v, %v", changed, err)
 	}
 	dir := filepath.Join(home, "plugins", jevPluginName)
-	for _, name := range []string{"plugin.yaml", "__init__.py", "router.py", "preload.py", "os-config-path.json"} {
+	for _, name := range []string{"plugin.yaml", "__init__.py", "router.py", "preload.py", "dependencies.py", "os-config-path.json"} {
 		info, err := os.Stat(filepath.Join(dir, name))
 		if err != nil {
 			t.Fatal(err)

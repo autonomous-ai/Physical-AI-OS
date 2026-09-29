@@ -1,6 +1,14 @@
 ---
 name: wellbeing
 description: "Proactive coaching across hydration, breaks, meals, posture and environmental comfort (with the environment skill). Use when an [activity] event fires (message starts with `[activity] Activity detected: activity labels.` — labels include drink, break, celebrate, the fatigue label \"yawning\", or sedentary raw labels like \"using computer\"; sedentary events may also carry a [posture_summary: {...}] block when the user has been at the computer long enough for posture to drift), or when the user reports feeling tired, having a headache, dizzy, stuffy or unable to focus (including informal wording such as \"I’m headache, tired, what happen?\"), or asks if they should drink water / take a break / fix their posture. Activity-reminder thresholds are computed from per-user logs, never guessed."
+jev_preload:
+  - skill: habit
+    references:
+      - reference/build-patterns.md
+    when:
+      context: wellbeing_context
+      field: bootstrap_needed
+      equals: true
 ---
 
 # Wellbeing
@@ -296,7 +304,7 @@ After speaking, you are done — no log POST, no extra tool calls, no follow-up 
 
 ## Habit refresh (only when a nudge will fire)
 
-If you decided to nudge AND the context block has `bootstrap_needed=true` → invoke `habit/SKILL.md` Flow A in a separate tool turn to bootstrap `patterns.json` from the multi-day log. Otherwise, **do not load `habit/SKILL.md`** — the `patterns` field in the context block is sufficient (or no patterns yet, that's fine).
+If you decided to nudge AND the context block has `bootstrap_needed=true` → follow `habit/SKILL.md` Flow A to bootstrap `patterns.json` from the multi-day log. Use the complete skill and `reference/build-patterns.md` already preloaded in this turn; call `skill_view` only for a missing file. Prefetch alone never authorizes running Flow A. Otherwise, **do not load `habit/SKILL.md`** — the `patterns` field in the context block is sufficient (or no patterns yet, that's fine).
 
 Bootstrap is rare (file already exists for active users); the common path is "patterns object present → use it directly".
 
