@@ -25,13 +25,13 @@ import {
   Workflow, Users, Camera, Radar, ChartColumn, Move3d, Bluetooth, ScrollText,
   Terminal, FileCode, Hexagon, ExternalLink, SlidersHorizontal, ChevronRight,
   Server, Zap, LogOut, Clock, Search, X, CornerDownLeft, Plug, Blocks,
-  CalendarClock, Handshake, Facebook,
+  CalendarClock, Handshake, Facebook, Cable,
 } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 
 import { S } from "./styles";
-import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
-import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry } from "./types";
+import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, isNavSubgroup, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
+import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry, NavChild } from "./types";
 import { OverviewSection, type OverviewCache } from "./OverviewSection";
 import { PairingSection } from "./PairingSection";
 import { SystemSection } from "./SystemSection";
@@ -61,11 +61,43 @@ const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overvie
 // The capability a section requires, read from its NAV leaf (single source: the
 // nav definition itself declares `cap`). undefined → no hardware dependency, the
 // section is always shown.
+// Prune a group's children by debug mode and per-leaf capability. Recurses one
+// level into subgroups, dropping the subgroup entirely when none of its own
+// leaves survive so an empty header never renders.
+function filterNavChildren(
+  children: NavChild[],
+  isDebug: boolean,
+  sectionVisible: (id: Section) => boolean,
+): NavChild[] {
+  return children.reduce<NavChild[]>((acc, c) => {
+    if (isNavLink(c)) {
+      if (isDebug) acc.push(c);
+      return acc;
+    }
+    if (isNavSubgroup(c)) {
+      const kept = c.children.filter((leaf) => (isDebug || PUBLIC_SECTIONS.has(leaf.id)) && sectionVisible(leaf.id));
+      if (kept.length > 0) acc.push({ ...c, children: kept });
+      return acc;
+    }
+    if (!isDebug && !PUBLIC_SECTIONS.has(c.id)) return acc;
+    if (!sectionVisible(c.id)) return acc;
+    acc.push(c);
+    return acc;
+  }, []);
+}
+
 function sectionCap(id: Section): string | readonly string[] | undefined {
   for (const entry of NAV) {
     if (isNavGroup(entry)) {
-      const child = entry.children.find((c) => !isNavLink(c) && c.id === id);
-      if (child && !isNavLink(child)) return child.cap;
+      for (const child of entry.children) {
+        if (isNavLink(child)) continue;
+        if (isNavSubgroup(child)) {
+          const leaf = child.children.find((l) => l.id === id);
+          if (leaf) return leaf.cap;
+          continue;
+        }
+        if (child.id === id) return child.cap;
+      }
     } else if (entry.id === id) return entry.cap;
   }
   return undefined;
@@ -90,6 +122,8 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   // group headers
   settings: Settings,
   device: MonitorSmartphone,
+  // Subgroup header shown inside Settings.
+  connector: Cable,
   // settings children
   "settings:device": Cpu,
   "settings:wifi": Wifi,
@@ -136,8 +170,13 @@ const NavIcon = ({ id, size = 16 }: { id: string; size?: number }) => {
 function allNavLeaves(): { id: Section; label: string; icon: string }[] {
   const leaves: { id: Section; label: string; icon: string }[] = [];
   for (const entry of NAV) {
-    if (isNavGroup(entry)) entry.children.forEach((c) => { if (!isNavLink(c)) leaves.push(c); });
-    else leaves.push(entry);
+    if (isNavGroup(entry)) {
+      entry.children.forEach((c) => {
+        if (isNavLink(c)) return;
+        if (isNavSubgroup(c)) c.children.forEach((l) => leaves.push(l));
+        else leaves.push(c);
+      });
+    } else leaves.push(entry);
   }
   // Agent config isn't in NAV (rendered by AgentGWMenu) — register it here
   // so hash routing + topbar title work for the embedded view.
@@ -153,7 +192,16 @@ function searchableLeaves(): SearchLeaf[] {
   const out: SearchLeaf[] = [];
   for (const entry of NAV) {
     if (isNavGroup(entry)) {
-      entry.children.forEach((c) => { if (!isNavLink(c)) out.push({ id: c.id, label: c.label, group: entry.label }); });
+      entry.children.forEach((c) => {
+        if (isNavLink(c)) return;
+        if (isNavSubgroup(c)) {
+          // Subgroup leaves show as "Facebook · Settings › Connectors" so the
+          // parent trail stays visible in a flat search list.
+          c.children.forEach((leaf) => out.push({ id: leaf.id, label: leaf.label, group: `${entry.label} › ${c.label}` }));
+        } else {
+          out.push({ id: c.id, label: c.label, group: entry.label });
+        }
+      });
     } else {
       out.push({ id: entry.id, label: entry.label, group: null });
     }
@@ -230,6 +278,54 @@ function SidebarSearch({ query, setQuery, results, section, setSection, closeSid
   );
 }
 
+// A nested collapsible that renders the leaves of a NavSubgroup under an
+// indented header, matching the sub-item style of the parent group.
+function NavSubgroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
+  entry: Extract<NavChild, { subgroup: string }>;
+  section: Section;
+  setSection: (s: Section) => void;
+  closeSidebar: () => void;
+  leafHref: (id: Section) => string;
+}) {
+  const hasActiveChild = entry.children.some((leaf) => leaf.id === section);
+  const [open, setOpen] = useState(hasActiveChild);
+  useEffect(() => { setOpen(hasActiveChild); }, [section]); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
+  return (
+    <div>
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className={"lm-snav-sub lm-snav-subgroup" + (hasActiveChild ? " lm-snav-sub--active" : "")}
+        style={{ display: "flex", justifyContent: "space-between", alignItems: "center", width: "100%" }}
+      >
+        <span style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <NavIcon id={entry.subgroup} size={15} />
+          {entry.label}
+        </span>
+        <ChevronRight
+          size={12}
+          strokeWidth={2}
+          style={{ color: "var(--lm-text-muted)", transition: "transform 0.15s", transform: open ? "rotate(90deg)" : "none" }}
+        />
+      </button>
+      {open && (
+        <div className="lm-snav-children" style={{ paddingLeft: 12 }}>
+          {entry.children.map((leaf) => (
+            <a
+              key={leaf.id}
+              href={leafHref(leaf.id)}
+              className={"lm-snav-sub" + (section === leaf.id ? " lm-snav-sub--active" : "")}
+              onClick={(e) => { e.preventDefault(); setSection(leaf.id); closeSidebar(); }}
+            >
+              <NavIcon id={leaf.id} size={15} />
+              {leaf.label}
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
   entry: Extract<NavEntry, { group: string }>;
   section: Section;
@@ -237,7 +333,13 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
   closeSidebar: () => void;
   leafHref: (id: Section) => string;
 }) {
-  const hasActiveChild = entry.children.some((c) => !isNavLink(c) && c.id === section);
+  // A group is "active" when the current section is one of its direct leaves
+  // OR a leaf nested one level deeper inside a subgroup.
+  const hasActiveChild = entry.children.some((c) => {
+    if (isNavLink(c)) return false;
+    if (isNavSubgroup(c)) return c.children.some((leaf) => leaf.id === section);
+    return c.id === section;
+  });
   const [open, setOpen] = useState(hasActiveChild);
   // Sync expand state to the active section whenever it changes: a group
   // auto-opens when navigation lands on one of its children and auto-collapses
@@ -266,20 +368,35 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
       </button>
       {open && (
         <div className="lm-snav-children">
-          {entry.children.map((child) =>
-            isNavLink(child) ? (
-              <a
-                key={child.href}
-                href={child.href}
-                className="lm-snav-sub"
-                target={child.external ? "_blank" : undefined}
-                rel={child.external ? "noreferrer" : undefined}
-                onClick={closeSidebar}
-              >
-                <NavIcon id={child.label} size={15} />
-                {child.label}
-              </a>
-            ) : (
+          {entry.children.map((child) => {
+            if (isNavLink(child)) {
+              return (
+                <a
+                  key={child.href}
+                  href={child.href}
+                  className="lm-snav-sub"
+                  target={child.external ? "_blank" : undefined}
+                  rel={child.external ? "noreferrer" : undefined}
+                  onClick={closeSidebar}
+                >
+                  <NavIcon id={child.label} size={15} />
+                  {child.label}
+                </a>
+              );
+            }
+            if (isNavSubgroup(child)) {
+              return (
+                <NavSubgroupItem
+                  key={child.subgroup}
+                  entry={child}
+                  section={section}
+                  setSection={setSection}
+                  closeSidebar={closeSidebar}
+                  leafHref={leafHref}
+                />
+              );
+            }
+            return (
               <a
                 key={child.id}
                 href={leafHref(child.id)}
@@ -289,8 +406,8 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
                 <NavIcon id={child.id} size={15} />
                 {child.label}
               </a>
-            )
-          )}
+            );
+          })}
         </div>
       )}
     </div>
@@ -685,14 +802,7 @@ export default function Monitor() {
             })
             .map((entry) => {
               const group = entry as Extract<NavEntry, { group: string }>;
-              const filtered = {
-                ...group,
-                children: group.children.filter((c) => {
-                  if (isNavLink(c)) return isDebug; // external links: debug only
-                  if (!isDebug && !PUBLIC_SECTIONS.has(c.id)) return false;
-                  return sectionVisible(c.id); // hide tabs for absent hardware; settings leaves have no cap
-                }),
-              };
+              const filtered = { ...group, children: filterNavChildren(group.children, isDebug, sectionVisible) };
               if (filtered.children.length === 0) return null;
               return <NavGroupItem key={group.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
             })}
@@ -701,14 +811,7 @@ export default function Monitor() {
             .filter((e) => (isNavGroup(e) ? (e.group !== "settings" && e.group !== "device") : e.id !== "chat"))
             .map((entry) => {
               if (isNavGroup(entry)) {
-                const filtered = {
-                  ...entry,
-                  children: entry.children.filter((c) => {
-                    if (isNavLink(c)) return isDebug; // external links: debug only
-                    if (!isDebug && !PUBLIC_SECTIONS.has(c.id)) return false;
-                    return sectionVisible(c.id); // hide tabs for absent hardware
-                  }),
-                };
+                const filtered = { ...entry, children: filterNavChildren(entry.children, isDebug, sectionVisible) };
                 if (filtered.children.length === 0) return null;
                 return <NavGroupItem key={entry.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
               }

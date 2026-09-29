@@ -46,7 +46,7 @@ Các route ảnh/file khuôn mặt resolve đường dẫn và yêu cầu nằm 
 
 ## Phạm vi sửa lỗi tháng 9/2026
 
-Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS/HAL tin header và checksum pinning của archive vẫn là mục review riêng, không được coi là lỗi đã sửa. Phần giới hạn đường dẫn giải nén Piper đã được sửa như mô tả bên dưới.
+Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS rộng và checksum pinning của archive nằm ngoài phần sửa này. Mục HAL tin header được chấp nhận không đổi code với deployment local-only hiện tại, theo giải thích bên dưới. Phần giới hạn đường dẫn giải nén Piper đã được sửa như mô tả bên dưới.
 
 ## Quyền sở hữu Buddy handler
 
@@ -61,3 +61,13 @@ Archive engine Piper được kiểm tra trước và lọc trong lúc giải n�
 ## Phạm vi kiểm chứng
 
 Ngày 2026-09-29, lint HAL, toàn bộ test HAL local (3.093 pass; 3 skip; 140 subtest) và bộ test tập trung servo/Piper mới nhất (36 pass) đều đạt. Device `lamp-0c4e` đã pass chặn lệnh khi ngủ, phản hồi move/nudge nhỏ và archive Piper hợp lệ/độc hại trong thư mục tạm; đã khôi phục trạng thái sleep/mute ban đầu. Chưa test tải hoặc thay engine Piper thật. Device có camera `lamp-4ace` đã pass chụp JPEG thật, snapshot đồng thời, tắt thủ công qua restart và bật lại. Các ca local skip phần cứng/audio và Pipecat tùy chọn được tách biệt với test device có phạm vi này; chưa test vật lý các driver robot khác.
+
+## Endpoint filler và thay đổi mẫu giọng
+
+`POST /api/sensing/filler` yêu cầu quyền admin hoặc kết nối loopback trực tiếp không có header chuyển tiếp chỉ tới địa chỉ ngoài loopback. Filler realtime do HAL gọi nội bộ vẫn hoạt động; client LAN chưa xác thực không được xếp lệnh nói qua route này. `POST /api/voice/file/remove` luôn yêu cầu admin, kể cả caller loopback. Cookie đăng nhập web và Bearer hợp lệ vẫn hoạt động.
+
+Xóa mẫu chỉ nhận tên hồ sơ/file gồm một thành phần đường dẫn và phần mở rộng âm thanh hợp lệ. Thao tác file dùng handle Go `os.Root` giới hạn lần lượt trong thư mục users, hồ sơ đã chọn và thư mục `voice`. Từ chối traversal và symlink thoát ra ngoài, kể cả thay đường dẫn sau khi mở thư mục. Xóa hợp lệ chỉ xóa mẫu đã chọn cùng embedding; xóa WAV cuối vẫn gọi HAL xóa hồ sơ người nói.
+
+Quyết định cho mục HAL Origin/Host/header chuyển tiếp: không cần đổi code với deployment local-only hiện tại. HAL bind loopback, nginx `/hw/` chặn caller LAN và proxy hardware/OpenAPI của Go yêu cầu admin. Test header giả không vượt được các gate Go đó. Middleware HAL vẫn có thể bị vượt nếu mở trực tiếp ra mạng, nên phải đánh giá lại trước khi đổi bind/proxy; quyết định này không có nghĩa Origin xác thực được caller. Hai route thay đổi trạng thái thiếu auth là phát hiện riêng và đã được chặn; không có nghĩa mọi endpoint đều đã được audit.
+
+Kiểm chứng local cho phần bổ sung này: native ARM64 `go build ./...`, `go vet ./...`, toàn bộ `go test -p=2 -count=1 -timeout=120s ./...`, race test tập trung cho hai package đã đổi và cross-build os-server Linux ARM64 đều pass. Chưa deploy/test device cho phần này. Phản hồi dọn hồ sơ khi xóa WAV cuối vẫn chưa kiểm tra HAL thành công trước khi báo đã xóa; đây là lỗi phản hồi riêng có từ trước, chưa đổi trong bản sửa này.

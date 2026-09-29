@@ -495,14 +495,9 @@ func (s *Server) Serve(closeFn func()) error {
 	sensing.GET("snapshot/:category/:name", s.sensingHandler.GetSnapshot)
 	sensing.GET("agent-snapshot/:runtime/:source/:name", s.sensingHandler.GetAgentSnapshot)
 	sensing.GET("audio/:name", s.sensingHandler.GetAudio)
-	// HAL-driven dead-air filler for the realtime wait (see PlayFiller).
-	sensing.POST("filler", s.sensingHandler.PlayFiller)
+	s.registerVoiceMutationRoutes(api)
 
-	// Voice file delete (filesystem orchestration on Pi). Voice enroll
-	// itself lives on hal at /hw/speaker/record-enroll because hardware
-	// capture is Python's domain.
 	voice := api.Group("voice")
-	voice.POST("file/remove", s.sensingHandler.RemoveVoiceFile)
 	// TTS preview: web ships `{text, voice, provider}` only; server reads
 	// the TTS API key + base URL from cfg and forwards to HAL. Replaces
 	// the previous web-side `testTTSVoice` that POSTed tts_api_key through
@@ -764,4 +759,11 @@ func (s *Server) Serve(closeFn func()) error {
 			return err
 		}
 	}
+}
+
+// registerVoiceMutationRoutes keeps HAL filler access local or authenticated,
+// while voice enrollment file deletion always requires administrator access.
+func (s *Server) registerVoiceMutationRoutes(api *gin.RouterGroup) {
+	api.POST("sensing/filler", adminOrLoopbackAuth(s.config), s.sensingHandler.PlayFiller)
+	api.POST("voice/file/remove", adminAuthMiddleware(s.config), s.sensingHandler.RemoveVoiceFile)
 }
