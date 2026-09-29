@@ -264,6 +264,21 @@ class MockMotionService:
         self._mode = None
         self._record("resume")
 
+    # AnimationService exposes _hold_mode and routes/scene.py reads and writes it;
+    # without it /scene/off raised AttributeError in the simulator.
+    @property
+    def _hold_mode(self) -> bool:
+        return self._mode == "hold"
+
+    @_hold_mode.setter
+    def _hold_mode(self, value: bool) -> None:
+        if value:
+            self._suppressed = True
+            self._mode = "hold"
+        elif self._mode == "hold":
+            self._suppressed = False
+            self._mode = None
+
     def hold(self, explicit: bool = False) -> None:
         self._suppressed = True
         self._mode = "hold"
@@ -416,6 +431,8 @@ class MockMotionService:
                         self._apply(positions)
                         previous = timestamp
                     if playing == self.idle_recording:
+                        if self._suppressed:
+                            return  # hold() owns the pose: stop breathing, keep the current frame
                         continue  # idle is the resting loop, not a one-shot
                     # sleepy and friends are meant to hold their final pose, and
                     # an explicit hold() means the caller owns the pose now.

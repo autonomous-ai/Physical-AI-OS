@@ -116,6 +116,25 @@ class TestMockMotionService(unittest.TestCase):
     def test_satisfies_the_motion_contract(self):
         self.assertIsInstance(self.m, base.MotionService)
 
+    def test_hold_stops_a_running_idle_loop(self):
+        import time
+        # Two alternating frames: an idle loop that ignores hold() keeps changing base_yaw
+        frames = [(0.0, {"base_yaw.pos": 0.0}), (0.02, {"base_yaw.pos": 10.0}), (0.04, {"base_yaw.pos": 0.0})]
+        self.m._load_recording = lambda name: list(frames)
+        self.m._play_recording(self.m.idle_recording)
+        time.sleep(0.1)
+        self.m.hold(explicit=True)
+        self.m._play_thread.join(timeout=1.0)
+        self.assertFalse(self.m._play_thread.is_alive(), "idle loop kept running after hold()")
+
+    def test_exposes_hold_mode_like_animation_service(self):
+        # routes/scene.py reads and writes _hold_mode; /scene/off raised AttributeError without it
+        self.assertFalse(self.m._hold_mode)
+        self.m._hold_mode = True
+        self.assertTrue(self.m._hold_mode)
+        self.m._hold_mode = False
+        self.assertFalse(self.m._hold_mode)
+
     def test_moves_are_recorded_and_readable(self):
         self.m.move_to({"base_yaw.pos": 20.0}, duration=0.5)
         self.assertEqual(self.m.get_positions()["base_yaw.pos"], 20.0)
