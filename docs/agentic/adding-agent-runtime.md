@@ -334,13 +334,19 @@ request remains unchanged. Skill bodies are loaded locally. There are no retries
 direct-provider fallbacks or conversation-history uploads. The total selection
 budget is at most 3 seconds, with a 30-second error cooldown and a non-blocking
 busy gate. Selection requires probability >= 0.70, margin >= 0.20 and independent
-fit >= 0.60. More than 32 eligible skills causes abstention, not roster truncation.
+fit >= 0.60. The full serialized request has a local 256 KiB budget instead of a
+32-skill cutoff. Oversized requests skip with `catalog_budget`, without truncation
+or an error cooldown.
 These are skill-discovery thresholds, not the stricter hardware-intent thresholds.
 
 A preload includes the complete bounded SKILL.md and its absolute directory.
-The Go adapters only preload simple static skills from the runtime's installed
-root; dynamic templates, custom frontmatter controls, conflicting project skill
-roots and unsupported native policy settings defer to native discovery. They
+The Go adapters preload simple static skills from documented global and project
+roots (see each runtime's docs). Project roots stop at the nearest repository/worktree
+boundary, or at the working directory when no boundary is known. Ambiguous parsed
+names, dynamic templates, unsupported invocation metadata and native policy settings
+defer to native discovery; plugin caches are not scanned independently. Codex skills
+with `agents/openai.yaml` remain native-owned. OpenClaw and PicoClaw instead use
+the runtime-published roster, including eligible skills outside the workspace. They
 recheck eligibility and content after inference. System/slash/attachment turns
 keep their existing route. All new non-Hermes integrations are **disabled by
 default** pending native validation; Hermes is unchanged. Each new runtime owns a Go build switch `const jevEnabled = false`: bridges use `gatewayd/jev.go`, PicoClaw uses `jev_hook.go`, and OpenClaw uses `jev_plugin.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling requires changing the switch, rebuilding and restarting through runtime management; env/config is not a replacement for the build switch. `JEV_CONFIG_PATH` selects the bridge OS config file.

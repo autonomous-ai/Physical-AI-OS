@@ -26,6 +26,7 @@ Spec shape:
 
 import json
 import os
+from pathlib import Path, PurePosixPath
 import shutil
 import sys
 import tarfile
@@ -124,6 +125,46 @@ def _run_voice(spec: dict) -> None:
         raise
 
 
+def _extract_engine(tar_path: str, destination: str) -> Path:
+    """Extract release files without allowing archive paths to escape Piper."""
+    root = Path(destination).resolve()
+    source = root / "piper"
+
+    def release_filter(member: tarfile.TarInfo, path: str):
+        name = PurePosixPath(member.name)
+        if (name.is_absolute() or ".." in name.parts
+                or not name.parts or name.parts[0] != "piper"):
+            raise ValueError(f"Unsafe Piper archive path: {member.name}")
+        filtered = tarfile.data_filter(member, path)
+        target = root / member.name
+        if not target.resolve().is_relative_to(source):
+            raise ValueError(f"Piper archive path escapes release: {member.name}")
+        if member.issym() or member.islnk():
+            link = Path(member.linkname)
+            base = target.parent if member.issym() else root
+            if link.is_absolute() or not (base / link).resolve().is_relative_to(source):
+                raise ValueError(f"Unsafe Piper archive link: {member.name}")
+        return filtered
+
+    with tarfile.open(tar_path) as tf:
+        members = tf.getmembers()
+        # Check the complete manifest first, then recheck while extracting so
+        # earlier symlinks cannot redirect later writes outside the release.
+        for member in members:
+            release_filter(member, destination)
+        tf.extractall(destination, members=members, filter=release_filter)
+    if not source.is_dir() or source.is_symlink():
+        raise ValueError("Piper archive is missing its release directory")
+    for entry in source.rglob("*"):
+        if not entry.resolve().is_relative_to(source):
+            raise ValueError(f"Piper archive link escapes release: {entry.name}")
+        # copytree follows links. Reject directory links (including cycles),
+        # while retaining shared-library file symlinks used by real releases.
+        if entry.is_symlink() and not entry.is_file():
+            raise ValueError(f"Invalid Piper archive file link: {entry.name}")
+    return source
+
+
 def _run_engine(spec: dict) -> None:
     piper_dir = spec["dir"]
     os.makedirs(piper_dir, exist_ok=True)
@@ -131,9 +172,7 @@ def _run_engine(spec: dict) -> None:
         tar_path = os.path.join(td, "piper.tar.gz")
         _download(spec["url"], tar_path, 0, 85, True)
         _flush(force=True, percent=88)
-        with tarfile.open(tar_path) as tf:
-            tf.extractall(td)  # noqa: S202 — trusted release tarball
-        src = os.path.join(td, "piper")
+        src = _extract_engine(tar_path, os.path.join(td, "extracted"))
         for entry in os.listdir(src):
             s, d = os.path.join(src, entry), os.path.join(piper_dir, entry)
             if os.path.isdir(s):

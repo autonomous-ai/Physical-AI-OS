@@ -33,6 +33,11 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     service._music_is_playing.return_value = False
     service._backchannel.self_audio_active = False
     service._webrtcvad_is_speech.return_value = True
+    # Exercise the real entry gates. A bare Mock makes the newly introduced
+    # hardware-AEC predicate truthy and incorrectly selects its 160 ms holdoff.
+    service._live_gate = None
+    service._hardware_aec_live_entry = module.VoiceService._hardware_aec_live_entry.__get__(service)
+    service._vad_entry_is_speech = module.VoiceService._vad_entry_is_speech.__get__(service)
     service._silero_vad = None  # energy + webrtc gate only; Silero is opt-in
     service._live_decision.side_effect = [first_decision, "live"]
     service._live_session.return_value = True  # ends the loop
@@ -42,6 +47,7 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", True)
     monkeypatch.setattr(module.voice_cfg, "RMS_THRESHOLD", 0)
     monkeypatch.setattr(module.voice_cfg, "SPEECH_HOLDOFF_S", 0.0)
+    monkeypatch.setattr(module.voice_cfg, "SESSION_COOLDOWN_S", 0.0)
     monkeypatch.setattr(module.voice_cfg, "PRE_ROLL_FRAMES", 12)
     with patch.object(module, "read_voice_mode", return_value={}), \
          patch.object(module, "bypass_realtime", return_value=False), \
@@ -56,3 +62,6 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     else:
         # A session that actually opened ends the loop on the first trigger.
         assert values == [1000]
+    expected_triggers = 2 if first_decision == "skip" else 1
+    assert service._webrtcvad_is_speech.call_count == expected_triggers
+    assert service._live_decision.call_count == expected_triggers

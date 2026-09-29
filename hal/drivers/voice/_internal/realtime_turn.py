@@ -881,6 +881,15 @@ def run_realtime_turn(
             # realtime memory, and shown in web chat — a leak here re-enters the
             # model's context next turn and self-reinforces.
             transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
+            if (not native and not first_sentence_sent and not delegated
+                    and not look_replayed and not transcript and execution_completed
+                    and getattr(realtime, "intentional_silence", False) is True):
+                # Gemini completed a marker-only silent decision. Reuse the
+                # rejection route (including its feature flag and KPI exclusion)
+                # instead of sending a non-request to main as an empty failure.
+                rejected = True
+                execution_completed = False
+                logger.info("[realtime] Completed <no speech> decision — treating as rejected input")
 
             # Native playback owns the speaker for the whole turn — release it
             # once all frames are in (records transcript for STT echo cancel).

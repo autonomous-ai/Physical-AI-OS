@@ -174,7 +174,7 @@ PHRASES_BY_LANG = {
 # feel responsive, not lecture-y.
 #
 # Audio tags ([laughs], [excited], [whispers], [sighs], [calm]) are
-# eleven_v3 audio direction (not spoken). They're safe across providers
+# ElevenLabs audio direction (not spoken). They're safe across providers
 # because tts_openai._strip_audio_tags whitelists the base verbs — so
 # OpenAI strips them while ElevenLabs interprets them. Stay inside that
 # whitelist when adding new ones; any tag outside it will be spoken
@@ -385,7 +385,7 @@ DEFAULT_FILLERS_BY_LANG = {
 #   - language is read from the device's stt_language (config.json) at fire time,
 #     so changing the language picker doesn't require code edits — only a
 #     hal restart so the prewarm hits the new pool.
-#   - ElevenLabs variants embed eleven_v3 audio tags ([excited], [curious])
+#   - ElevenLabs variants embed ElevenLabs audio tags ([excited], [curious])
 #     which the OpenAI provider would speak aloud, hence two separate pools.
 
 MUSIC_BACKCHANNEL_PHRASES = [
@@ -403,9 +403,9 @@ MUSIC_BACKCHANNEL_PHRASES = [
     "Hmm, let me see.",
 ]
 
-# ElevenLabs eleven_v3 audio tags — index-aligned with the plain pool so the
+# ElevenLabs audio tags — index-aligned with the plain pool so the
 # no-repeat tracker works the same regardless of provider. Tags are inline
-# directives that v3 interprets as audio direction (not spoken). OpenAI
+# directives that ElevenLabs interprets as audio direction (not spoken). OpenAI
 # provider must NOT see these — its strip regex only whitelists a subset
 # (`tts_openai.py:_strip_audio_tags`), so unknown tags would be read aloud.
 MUSIC_BACKCHANNEL_PHRASES_ELEVENLABS = [
@@ -541,7 +541,7 @@ MUSIC_BACKCHANNEL_POOLS = {
 # destructive announcements. Warmth goes in the delivery, never in the meaning:
 # "Shh, my ears are closed" is fine, a bare "Shh!" is not.
 #
-# Audio tags ([whispers] / [excited] / [calm]) are eleven_v3 markers, same as
+# Audio tags ([whispers] / [excited] / [calm]) are ElevenLabs markers, same as
 # HEAD_PAT_PHRASES_BY_LANG uses, and are chosen to match the state — hushed going
 # quiet, bright coming back.
 MIC_MUTED_PHRASES_BY_LANG = {

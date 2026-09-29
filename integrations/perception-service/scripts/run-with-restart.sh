@@ -10,6 +10,9 @@
 #                          with -9 and the restart loop takes over. Use a liveness
 #                          endpoint (/livez): it must not check models, auth or any
 #                          downstream service, or a slow start becomes a restart loop.
+#                          Before the SIGKILL the child gets SIGUSR1 and
+#                          STACK_DUMP_WAIT seconds to dump its stacks
+#                          (lbserver/dlserver write /tmp/<log-dir name>-stack.log).
 # --log-dir PATH:          if set, stdout → log-dir/stdout.log, stderr → log-dir/stderr.log
 #                          and watchdog messages → log-dir/watchdog.log.
 #                          Plain files on purpose: a pipe to multilog can block the
@@ -58,6 +61,7 @@ PROBE_TIMEOUT=${PROBE_TIMEOUT:-5}        # per-probe curl timeout
 PROBE_FAILURES=${PROBE_FAILURES:-6}      # consecutive failures before acting (~60s)
 PROBE_GRACE=${PROBE_GRACE:-180}          # seconds after start before probing at all;
                                          # dlserver needs ~2-3 min to load its models
+STACK_DUMP_WAIT=${STACK_DUMP_WAIT:-2}    # seconds between SIGUSR1 (stack dump) and SIGKILL
 
 # Rename FILE aside on startup, keeping LOG_BACKUPS generations. Safe here because
 # no process holds these files open yet.
@@ -141,7 +145,12 @@ start_liveness_probe() {
                 fails=$(( fails + 1 ))
                 echo "[watchdog] probe failed ($fails/$PROBE_FAILURES): $PROBE_URL"
                 if (( fails >= PROBE_FAILURES )); then
-                    echo "[watchdog] unresponsive after $fails probes; SIGKILL $target"
+                    echo "[watchdog] unresponsive after $fails probes; SIGUSR1 $target for a stack dump"
+                    # A child with no SIGUSR1 handler just dies here, which is
+                    # what the SIGKILL below was about to do anyway.
+                    kill -USR1 "$target" 2>/dev/null || true
+                    sleep "$STACK_DUMP_WAIT"
+                    echo "[watchdog] SIGKILL $target"
                     kill -9 "$target" 2>/dev/null || true
                     return 0
                 fi

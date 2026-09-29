@@ -904,3 +904,8 @@ Validation: `go test ./system/telemetry ./system/server/sensing/delivery/http
 29 tests, including 100 starts / 85 completions, OS-only turns, HAL/OS dedup,
 queue binding and not-ready handling (the latter two in Go integration tests).
 Linux ARM64 os-server build passed. No historical AA records were fabricated.
+
+A completed marker-only Gemini `<no speech>` decision in the manual text-to-TTS
+path also uses `rejected_non_user`: it must have no tool, interruption, replay,
+delegation or spoken sentence. This preserves intentional silence without
+turning a receive timeout or main-agent `NO_REPLY` into a KPI exclusion.

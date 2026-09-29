@@ -36,9 +36,9 @@ class ElevenLabsWSTTSBackend(TTSBackend):
     """ElevenLabs TTS over the stream-input WebSocket. Same output as the HTTP
     backend: raw PCM int16, 24 kHz mono, volume_boost 1.0."""
 
-    # eleven_v3 (the HTTP backend default) is NOT supported on the realtime WS
-    # stream-input endpoint — the proxy fails upstream with 1011 "Failed to
-    # connect to ElevenLabs service". stream-input takes the turbo/flash/
+    # Keep this stream-input backend separate from the v4 HTTP default.
+    # v3 previously failed here with upstream 1011 "Failed to connect to
+    # ElevenLabs service". stream-input takes the turbo/flash/
     # multilingual families; flash_v2_5 is low-latency + multilingual (good for VI).
     DEFAULT_MODEL = "eleven_flash_v2_5"
     ELEVENLABS_PATH = ElevenLabsTTSBackend.ELEVENLABS_PATH

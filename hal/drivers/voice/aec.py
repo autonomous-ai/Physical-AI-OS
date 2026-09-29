@@ -32,6 +32,7 @@ _lock = threading.Lock()
 _canceller = None
 _reference = None
 _unavailable_logged = False
+_playback_rate = None
 
 
 class EchoReference:
@@ -374,6 +375,10 @@ def configure(rate: int) -> bool:
                     e,
                 )
             return False
+        # The speaker can be initialized before the microphone. Prepare its
+        # reference conversion before capture admits the first user turn.
+        if _playback_rate is not None:
+            prepare_reference(_playback_rate)
     return True
 
 
@@ -488,6 +493,17 @@ class _ReferenceResampler:
         return out
 
 
+def prepare_playback(rate: int) -> None:
+    """Remember the output rate and prime AEC outside the first speech write.
+
+    Either device may open first: configure() completes preparation when the
+    microphone opens later. No reference samples or playback events are emitted.
+    """
+    global _playback_rate
+    _playback_rate = rate
+    prepare_reference(rate)
+
+
 def prepare_reference(rate: int) -> None:
     """Prime optional resampling before playback, without publishing audio.
 
@@ -498,6 +514,7 @@ def prepare_reference(rate: int) -> None:
     canceller = _canceller
     if _reference is None or canceller is None or rate == canceller._rate:
         return
+    started = time.monotonic()
     try:
         import numpy as np
 
@@ -506,6 +523,10 @@ def prepare_reference(rate: int) -> None:
         _reference_resample_filter(dst // g, rate // g, np.dtype(np.float32).str)
     except Exception as e:
         logger.debug("AEC reference preparation skipped: %s", e)
+    finally:
+        elapsed_ms = (time.monotonic() - started) * 1000
+        if elapsed_ms >= 50:
+            logger.info("AEC reference preparation: source_rate=%d elapsed_ms=%.1f", rate, elapsed_ms)
 
 
 def reference_write(samples, rate: int) -> None:

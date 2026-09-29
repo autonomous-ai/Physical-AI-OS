@@ -29,7 +29,7 @@ def test_elevenlabs_normal_speed_is_sent_explicitly():
     backend._base_url = "https://proxy.example/v1/elevenlabs"
     with httpx.Client(transport=httpx.MockTransport(respond)) as client:
         backend._client = client
-        list(backend.stream_pcm("Hello", "Rachel", "eleven_v3", 1.0))
+        list(backend.stream_pcm("Hello", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.0))
     assert requests[0]["voice_settings"]["speed"] == 1.0
 
     class Socket:
@@ -95,7 +95,7 @@ def test_preview_speed_reaches_head_and_tail_without_changing_next_turn():
     svc._np = np
     svc._speed = 1.2
     svc._voice = "Rachel"
-    svc._model = "eleven_v3"
+    svc._model = ElevenLabsTTSBackend.DEFAULT_MODEL
     svc._instructions = None
     svc._max_retries = 0
     svc._stop_event = threading.Event()

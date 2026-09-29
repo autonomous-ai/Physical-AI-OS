@@ -160,6 +160,8 @@ Route HTTP mới (`server/buddy/delivery/http/`):
 | `GET  /api/buddy/status` | admin | Tổng quan trạng thái kết nối |
 | `GET  /api/buddy/audit` | admin | Audit log (paginated) |
 
+Mã ghép đôi vẫn dùng một lần, hết hạn sau 60 giây và bị hủy sau năm lần nhập sai. Endpoint xác nhận cho phép tối đa mười request mỗi phút cho tất cả client cộng lại (kể cả request sai định dạng); vượt giới hạn trả HTTP 429 cùng `Retry-After: 60`. Cấp mã mới cần xác thực và không đặt lại giới hạn request này. Không dùng IP hoặc header chuyển tiếp để bỏ qua giới hạn. Giới hạn chung cho thiết bị cũng tạm chặn xác nhận hợp lệ khi bị spam; chờ 60 giây rồi xin mã mới nếu cần.
+
 ### 4.3 `lelamp` (Python) — **không sửa cho MVP**
 
 Hardware-only theo `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → TTS đã có sẵn. Luồng buddy chỉ chạm tầng skill của OpenClaw — tầng đó nằm trong skill directory của OpenClaw, không phải Python source của lelamp.

@@ -245,7 +245,12 @@ export const Cap = {
 // sections with no hardware dependency (always shown).
 export type NavLeaf = { id: Section; label: string; icon: string; cap?: string | readonly string[] };
 export type NavLink = { href: string; label: string; icon: string; external?: boolean };
-export type NavChild = NavLeaf | NavLink;
+// A subgroup nests one level of leaves inside a top-level group — used to gather
+// integration-style items (e.g. Connectors: Facebook, Discord, Slack) under a
+// single collapsible header inside the parent group. Subgroups do not nest
+// further; the sidebar renderer walks children one level deep only.
+export type NavSubgroup = { subgroup: string; label: string; icon: string; children: NavLeaf[] };
+export type NavChild = NavLeaf | NavLink | NavSubgroup;
 export type NavGroup = { group: string; label: string; icon: string; children: NavChild[] };
 export type NavEntry = NavLeaf | NavGroup;
 
@@ -254,6 +259,9 @@ export function isNavGroup(e: NavEntry): e is NavGroup {
 }
 export function isNavLink(c: NavChild): c is NavLink {
   return "href" in c;
+}
+export function isNavSubgroup(c: NavChild): c is NavSubgroup {
+  return "subgroup" in c;
 }
 
 export const NAV: NavEntry[] = [
@@ -276,12 +284,22 @@ export const NAV: NavEntry[] = [
       // matched against anything.
       { id: "settings:face",     label: "Face",      icon: "☺", cap: Cap.Vision },
       { id: "settings:channel",  label: "Channels",  icon: "✉" },
-      { id: "settings:facebook", label: "Facebook",  icon: "❦" },
       { id: "settings:mqtt",     label: "MQTT",      icon: "⇄" },
       { id: "settings:mcp",      label: "MCP Tools", icon: "⬡" },
       { id: "settings:plugins",  label: "Plugins",   icon: "⧉" },
       { id: "settings:timezone", label: "Timezone",  icon: "◷" },
       { id: "settings:scheduled", label: "Scheduled", icon: "⏰" },
+      // Third-party integrations grouped under a collapsible header inside
+      // Settings, mirroring the Connectors menu on autonomous.ai admin. Leaf
+      // ids keep the `settings:` prefix so existing hash routes still resolve.
+      {
+        subgroup: "connector",
+        label: "Connectors",
+        icon: "⚯",
+        children: [
+          { id: "settings:facebook", label: "Facebook", icon: "❦" },
+        ],
+      },
     ],
   },
   {

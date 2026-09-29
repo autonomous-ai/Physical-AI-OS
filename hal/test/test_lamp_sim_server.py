@@ -113,13 +113,15 @@ class TestLampSimulationServer(unittest.TestCase):
             self.assertEqual(response.headers.get_content_type(), "image/jpeg")
             self.assertGreater(len(response.read()), 1_000)
 
-        # 42 is above Lamp's SAFETY.md audio.max_volume, so the route clamps it
-        # and reports the ceiling back alongside the value.
+        # Read the shipped policy rather than retaining an old tuning value.
+        from hal.safety.policy import load_safety, max_volume_pct
+        ceiling = max_volume_pct(load_safety(str(REPO_ROOT / "robots/lamp"), "SAFETY.md"))
+        expected_volume = min(42, ceiling) if ceiling is not None else 42
         _, volume = self._json("/audio/volume", "POST", {"volume": 42})
-        self.assertEqual(volume, {"status": "ok", "volume": 40, "max_volume": 40})
+        self.assertEqual(volume, {"status": "ok", "volume": expected_volume, "max_volume": ceiling})
         _, current_volume = self._json("/audio/volume")
         self.assertEqual(
-            current_volume, {"control": "virtual", "volume": 40, "max_volume": 40}
+            current_volume, {"control": "virtual", "volume": expected_volume, "max_volume": ceiling}
         )
         with self._response("/audio/record?duration_ms=50", "POST") as response:
             with wave.open(BytesIO(response.read())) as captured:

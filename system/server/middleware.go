@@ -4,7 +4,6 @@ import (
 	"crypto/subtle"
 	"net"
 	"net/http"
-	"os"
 	"regexp"
 	"strings"
 
@@ -14,43 +13,6 @@ import (
 	"go.autonomous.ai/os/system/server/serializers"
 	"go.autonomous.ai/os/system/server/session"
 )
-
-// sameOriginOrLAN blocks the route for callers that are neither on the local
-// network nor sending a same-origin browser header (Origin/Referer). This lets
-// the web UI and Swagger call the endpoint from any IP, while raw curl/Postman
-// requests without an Origin header are rejected when coming from outside LAN.
-func sameOriginOrLAN() gin.HandlerFunc {
-	return func(c *gin.Context) {
-		if strings.ToLower(strings.TrimSpace(os.Getenv("HAL_MODE"))) == "developer" {
-			c.Next()
-			return
-		}
-		// nginx proxies to Go on localhost, so RemoteAddr is always 127.0.0.1.
-		// Use X-Real-IP (set by nginx) to get the real client IP.
-		clientIP := strings.TrimSpace(c.GetHeader("X-Real-IP"))
-		if clientIP == "" {
-			// Fallback: first entry of X-Forwarded-For
-			clientIP = strings.TrimSpace(strings.SplitN(c.GetHeader("X-Forwarded-For"), ",", 2)[0])
-		}
-		if clientIP == "" {
-			remoteHost, _, _ := net.SplitHostPort(c.Request.RemoteAddr)
-			clientIP = remoteHost
-		}
-		if ip := net.ParseIP(clientIP); ip != nil && (ip.IsLoopback() || ip.IsPrivate()) {
-			c.Next()
-			return
-		}
-		deviceHost := c.Request.Host
-		origin := strings.SplitN(c.GetHeader("Origin"), ",", 2)[0]
-		referer := strings.SplitN(c.GetHeader("Referer"), ",", 2)[0]
-		if isAllowedOrigin(origin, deviceHost) || isAllowedOrigin(referer, deviceHost) {
-			c.Next()
-			return
-		}
-		c.JSON(http.StatusForbidden, gin.H{"status": 0, "message": "same-origin or LAN only"})
-		c.Abort()
-	}
-}
 
 func goSameOrigin(header, host string) bool {
 	if header == "" || host == "" {

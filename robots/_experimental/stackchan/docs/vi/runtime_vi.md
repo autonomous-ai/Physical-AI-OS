@@ -167,3 +167,5 @@ runtime Codex; cài/cấu hình runtime đã chọn và chạy gateway theo
 [hướng dẫn phát triển simulator hiện có](../../../../../docs/vi/simulator_vi.md).
 Bước Stack-chan thay cho bước HAL `make sim`: không chạy thêm HAL thứ hai hoặc
 bridge riêng trên cổng 5001. Profile không cài runtime agent hay firmware ESP32.
+
+Factory commissioning được bật riêng và thêm route vào `hal.runtime.app` (ứng dụng FastAPI đầy đủ) trước startup. Nó không gắn route vào ASGI dispatcher LED sớm. Entrypoint thông thường `hal.server:app` và hành vi sẵn sàng LED sớm giữ nguyên.

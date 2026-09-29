@@ -320,7 +320,7 @@ end to end. The values (`ROUTE_*` in `realtime_turn.py`):
 |---|---|
 | `realtime_handled` | Realtime spoke it. The main agent gets `voice_agent_handled` and stays silent. |
 | `delegated` | The model called `delegate_to_main`. |
-| `ai_rejected` | The model explicitly called `reject_turn`; it reaches nobody. |
+| `ai_rejected` | Explicit `reject_turn`, or a completed marker-only Gemini silence decision in manual text-to-TTS (see below); it reaches nobody when the rejection filter is enabled. |
 | `realtime_no_output` | Committed, but nothing came back (`receive()` timeout, dead WS) — main agent answers. |
 | `realtime_error` | The turn raised; forwarded rather than lost. |
 | `realtime_unavailable` | No live session to commit to — main agent answers. |
@@ -938,6 +938,12 @@ drift and repeated filter boundaries. The same anti-alias filter adds about
 0.625 ms of delay when the lower sample rate is 16 kHz; FIFO pacing is unchanged.
 `EchoReference.clear()` or a source-rate switch resets the resampling state.
 Acoustic improvement still requires an A/B check on the device.
+HAL primes the reference filter when both speaker and microphone rates become
+known during audio initialization, regardless of which device opens first. This
+moves the cold SciPy import off the first filler/answer path; it adds startup
+work, not synthetic audio or an acknowledgement. Output-rate changes prime the
+new filter too. Preparations taking at least 50 ms are logged with source rate
+and duration. The first-write fallback remains for unprepared routes.
 Before the first speaker write of a playback, HAL prepares the reference filter
 so a cold SciPy import/filter design cannot stall playback after its first 40 ms. This
 preparation is skipped when AEC is inactive or sample rates match. Cancellation
@@ -967,10 +973,50 @@ as the user. Note what it does **not** say:
 it reports whether a reference *arrived*, not whether cancellation *worked*, so
 a frame with 0.9 dB of ERLE still counts as cancelled.
 
-### ElevenLabs v3 playback speed
+### ElevenLabs v4 default and playback speed
 
-For ElevenLabs HTTP requests whose effective model is `eleven_v3` (including
-the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
+The shared ElevenLabs HTTP backend defaults to `eleven_v4` for both direct
+ElevenLabs and Autonomous proxy requests. An unset or non-ElevenLabs model
+(including the service default `tts-1`) resolves to v4; explicit `eleven_*`
+overrides are preserved. The request still uses `model_id` on the existing
+`text-to-speech/{voice_id}/stream` endpoint with `pcm_24000`; proxy requests
+retain the `/elevenlabs` prefix and existing authentication. The separate
+opt-in `HAL_TTS_ELEVENLABS_WS` backend keeps its Flash default and stream-input
+protocol. This change does not migrate that backend to Text to Dialogue.
+See [ElevenLabs v4 API example](https://elevenlabs.io/pl/v4) and
+[HTTP streaming reference](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
+On 2026-09-29, the existing Autonomous proxy successfully synthesized v4 PCM
+with Rachel, including six English emotion/delivery samples played on macOS.
+No proxy change was needed for that tested route. Subsequent voice-command
+turns on Lamp `172.168.20.142` verified main-agent audio tags reaching v4 through
+the proxy and speaker playback with Rachel; the owner confirmed the tearful
+English sample sounded correct. Direct ElevenLabs routing is covered by mocked
+HTTP tests; live direct API remains untested.
+
+V4 audio tags are natural-language performance directions, not a fixed emotion
+enum: combined cues such as `[excited, happy]`, delivery descriptions such as
+`[sleepy drowsy voice]`, and pauses such as `[long pause]` are documented.
+The ElevenLabs HTTP backend passes tags alongside spoken words unchanged;
+it does not restrict them to a v3 whitelist. Tag-only/blank chunks remain
+suppressed, so standalone sound-effect generation is not added by this upgrade.
+Realtime prompts keep their existing human-reaction/state/pause scope; hardware
+emotion markers remain a separate contract. Other providers do not automatically
+gain v4 tag support. See the [v4 announcement](https://elevenlabs.io/fr/blog/eleven-v4).
+
+Lamp's `robots/lamp/SOUL.md` uses an open palette of v4 voice directions:
+combined emotions, delivery descriptions, reactions and intentional pauses.
+Short replies normally use one appropriate cue or plain speech, replacing the
+old mandatory-tag rule. Requested stories, readings, roleplay and voice demos
+may follow the requested length and change delivery at meaningful beats.
+Crying/sobbing is reserved for requested performance, not an automatic reaction
+to user distress. Exact skill outputs, `NO_REPLY` and Harness handoffs override
+voice styling. Tags stay attached to words and do not extend physical emotion
+names; the usual Emotion skill controls the body. Other voices known not to
+support tags receive plain speech. This is persona guidance, not a new tag
+parser or an expansion of the device's physical emotions.
+
+For ElevenLabs HTTP requests whose effective model is `eleven_v4` or
+explicitly `eleven_v3`, HAL requests provider `speed=1.0` and applies
 `config.json`'s `tts_speed` locally through the existing `get_tts_speed` path.
 A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
 before resampling, speaker output, and AEC reference capture. Speed `1.0`
@@ -986,8 +1032,8 @@ already in flight may remain until data arrives or its configured timeout;
 its late audio is discarded and its source is closed.
 
 
-The v3 WAV cache key includes a discriminator so previously synthesized v3
-audio is not reused under this speed policy. This changes playback duration;
+The ElevenLabs WAV cache revision changes with the v4 default, so cached v3
+audio is not reused when the service model remains `tts-1`. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
 
@@ -3259,7 +3305,7 @@ A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identica
 
 Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
 
-LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.
+LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input, sampled before that input holds its own focus window. The first accepted input cannot label itself as a follow-up; later input can use the window it opened. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.
 
 Diagnostics: `[realtime][timing]` records queued audio commits, first verified progress, grounding receipt, first buffered continuation, continuation release/discard, deferred wait expiry, and receive timeout. Timing uses monotonic seconds since the latest queued commit (not microphone speech end), plus generation and remaining progress/output budgets. A late provider event may follow a newer commit; these fields do not prove which request initiated a search. `Google Search metadata received (search start unknown)` marks receipt of grounding metadata, not search start. The provider does not expose search start here; do not infer search duration from this log.
 
@@ -3341,3 +3387,14 @@ Regression coverage: `hal/test/test_voice_capture_lifecycle.py` exercises blocke
 subprocess reads, forced kill/reap, rapid mute/unmute, cancelled deferred restart,
 join timeout, stopped capture, and abort through the AEC wrapper. These local
 tests do not replace a microphone test on the device.
+
+### Completed Gemini silence markers (manual text-to-TTS)
+
+A normally completed Gemini turn whose entire raw output is one or more
+`<no speech>` markers (including split fragments) is treated as `ai_rejected`
+when no tool, interruption, look replay, delegation, or spoken sentence occurred.
+It does not fall back to main or report successful task execution. The existing
+`HAL_REALTIME_AI_REJECT_FILTER` controls downstream rejection and
+`rejected_non_user` KPI exclusion. Empty output, timeouts, incomplete markers,
+marker-prefixed answers, system-error sentences and main-agent `NO_REPLY` do
+not qualify. Native audio and the continuous LIVE output pump are unchanged.

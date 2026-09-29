@@ -171,6 +171,8 @@ arguments. It is not `/servo/release`, which travels to a rest pose before
 cutting torque; a stop that moves first is wrong for anything with wheels or
 legs (#201).
 
+`POST /servo/move` rejects non-finite joint targets with 422. When a `motion.max_speed` ceiling is declared, every requested joint must have a finite current position; a failed, missing or invalid pose read returns 503 before any move. Without that ceiling, the existing pass-through behavior remains. No new joint-angle limits are introduced. `/servo/stop` cancels the tracking worker before checking motor connectivity, so a disconnected motor cannot leave tracking active; the request still returns 503 if the hardware cannot be halted.
+
 The vision-tracking loop is gated too, and needs its own mechanism:
 `min_move_duration` cannot bound it because there is no destination to stretch a
 move toward, only a per-frame speed profile. `cap_speed_dps` clamps the loop's
