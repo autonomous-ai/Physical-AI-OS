@@ -46,7 +46,7 @@ Các route ảnh/file khuôn mặt resolve đường dẫn và yêu cầu nằm 
 
 ## Phạm vi sửa lỗi tháng 9/2026
 
-Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS rộng và đề xuất kiểm tra chuỗi cung ứng archive vẫn là mục review riêng, không được coi là lỗi đã sửa.
+Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS/HAL tin header và checksum pinning của archive vẫn là mục review riêng, không được coi là lỗi đã sửa. Phần giới hạn đường dẫn giải nén Piper đã được sửa như mô tả bên dưới.
 
 ## Quyền sở hữu Buddy handler
 
@@ -57,3 +57,7 @@ Server nhận `BuddyHandler` qua con trỏ từ Wire để không sao chép bộ
 Lệnh move/aim/nudge/resume/track khi ngủ trả 409, không đánh thức body. Move tách mục tiêu yêu cầu và vị trí quan sát, trả `clamped: null`; aim/nudge cũng tách mục tiêu khỏi số đo. Không đổi giới hạn driver hoặc calibration. Vị trí driver báo có thể là mục tiêu cache trên driver như Reachy, không chứng minh body đã tới đích. Xem [HAL API](../os-server_vi.md) về tương thích phản hồi.
 
 Archive engine Piper được kiểm tra trước và lọc trong lúc giải nén vào thư mục tạm mới. Đường dẫn và link phải nằm trong cây release `piper`; từ chối file đặc biệt, symlink thư mục hoặc đích không tồn tại. Vẫn hỗ trợ link file thư viện hợp lệ bên trong release. Giữ nguyên URL release HTTPS cố định; chưa thêm checksum pinning.
+
+## Phạm vi kiểm chứng
+
+Ngày 2026-09-29, lint HAL, toàn bộ test HAL local (3.093 pass; 3 skip; 140 subtest) và bộ test tập trung servo/Piper mới nhất (36 pass) đều đạt. Device `lamp-0c4e` đã pass chặn lệnh khi ngủ, phản hồi move/nudge nhỏ và archive Piper hợp lệ/độc hại trong thư mục tạm; đã khôi phục trạng thái sleep/mute ban đầu. Chưa test tải hoặc thay engine Piper thật. Device có camera `lamp-4ace` đã pass chụp JPEG thật, snapshot đồng thời, tắt thủ công qua restart và bật lại. Các ca local skip phần cứng/audio và Pipecat tùy chọn được tách biệt với test device có phạm vi này; chưa test vật lý các driver robot khác.

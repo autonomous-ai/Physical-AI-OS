@@ -45,7 +45,7 @@ Face photo/file routes resolve requested paths and require containment within `U
 
 ## Scope of the September 2026 corrections
 
-The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS trust and archive supply-chain proposals remain separate review items, not claims of fixed vulnerabilities.
+The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS/HAL header trust and archive checksum pinning remain separate review items, not claims of fixed vulnerabilities. Piper extraction containment is fixed as described below.
 
 ## Buddy handler ownership
 
@@ -56,3 +56,7 @@ The server receives `BuddyHandler` by pointer through Wire so the pairing confir
 Sleeping move/aim/nudge/resume/track requests return 409 without waking the body. Move returns separate requested/observed positions and `clamped: null`; aim/nudge report requested targets separately from readback. Driver limits and calibration are unchanged. Driver-reported positions may be cached targets on drivers such as Reachy, so they are not proof of physical arrival. See [HAL API](../os-server.md) for response compatibility.
 
 Piper engine archives are checked before extraction and filtered while extracting into a fresh staging directory. Paths and links must stay within the `piper` release tree; special files and directory/dangling symlinks are rejected. Valid contained shared-library file links remain supported. The fixed HTTPS release URL is unchanged; checksum pinning has not been added.
+
+## Verification scope
+
+On 2026-09-29, HAL lint, the full local HAL suite (3,093 passed; 3 skipped; 140 subtests) and the latest focused servo/Piper suite (36 passed) passed. Device `lamp-0c4e` passed sleeping-command rejection, small move/nudge response checks, and temporary valid/malicious Piper archive tests; its original sleep/mute state was restored. No real Piper engine download or replacement was tested. Camera-equipped `lamp-4ace` separately passed real JPEG capture, concurrent snapshots, manual disable across restart and re-enable. Local hardware/audio and optional Pipecat skips remain distinct from these targeted device checks; other robot drivers were not physically tested.
