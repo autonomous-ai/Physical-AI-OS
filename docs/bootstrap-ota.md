@@ -527,6 +527,15 @@ set up yet), `Serve()` does not start the poll loop or healthcheck server. It lo
 `/root/config/bootstrap.json` every 30s until a URL appears, then proceeds.
 Nothing is silent.
 
+**Log shipping**: bootstrap logs through the shared logger as
+`_service_name: "bootstrap"` (it used to be filed as `os-server`). It has no
+config-change signal, so `RunLogRelay` (`system/bootstrap/log_relay.go`) re-reads
+`/root/config/config.json` every minute and arms the relay with the device's
+Autonomous key (same rule as os-server). Until a key exists — a fresh device, or
+an OTA that runs during setup — its records wait in the spool
+(`/var/lib/autonomous/gelf-spool/bootstrap.jsonl`) and are replayed once it ships. See
+[setup-flow.md](setup-flow.md#setup-logs-reach-graylog-even-when-setup-fails).
+
 ### State (`/root/bootstrap/state.json`)
 
 Tracks last known installed version per component:

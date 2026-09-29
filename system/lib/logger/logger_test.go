@@ -277,20 +277,46 @@ func TestGELFRelayStaysDormantWithoutCredentials(t *testing.T) {
 	}
 }
 
-func TestGELFRelaySecondCallKeepsFirstTarget(t *testing.T) {
+func TestGELFRelaySameTargetIsANoOp(t *testing.T) {
+	collector := newGELFCollector(t)
+	done := initTestLogger(t, "")
+
+	EnableGELFRelay(collector.URL, "key-1")
+	first := activeGELF.sink.load()
+	EnableGELFRelay(collector.URL+"/", " key-1 ")
+	if activeGELF.sink.load() != first {
+		t.Fatal("repeat call with the same target started a second sender")
+	}
+	slog.Info("once")
+	done()
+
+	if got := collector.received(); len(got) != 1 {
+		t.Fatalf("requests = %d, want 1", len(got))
+	}
+}
+
+func TestGELFRelayRetargetsWhenTheKeyChanges(t *testing.T) {
+	shortReplayTiming(t)
 	first := newGELFCollector(t)
 	second := newGELFCollector(t)
 	done := initTestLogger(t, "")
+	EnableGELFSpool(t.TempDir(), "os-server")
 
+	// A re-setup saves a new record's key; the relay must follow it, or every
+	// record would be sent with a key the cloud no longer accepts.
 	EnableGELFRelay(first.URL, "key-1")
+	slog.Info("before re-setup")
+	waitFor(t, func() bool { return len(first.received()) == 1 })
 	EnableGELFRelay(second.URL, "key-2")
-	slog.Info("once")
+	slog.Info("after re-setup")
+	waitFor(t, func() bool { return len(second.received()) == 1 })
 	done()
 
 	if got := first.received(); len(got) != 1 {
 		t.Fatalf("first target requests = %d, want 1", len(got))
 	}
-	if got := second.received(); len(got) != 0 {
-		t.Fatalf("second target requests = %d, want 0: a repeat call must not re-arm", len(got))
+	got := second.received()[0]
+	if got.authorization != "Bearer key-2" || !strings.Contains(got.body, "after re-setup") {
+		t.Errorf("second target got %+v, want the new record with the new key", got)
 	}
 }

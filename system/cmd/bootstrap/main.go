@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"fmt"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"go.autonomous.ai/os/system/bootstrap"
 	"go.autonomous.ai/os/system/bootstrap/config"
 	"go.autonomous.ai/os/system/lib/logger"
+	"go.autonomous.ai/os/system/lib/syspath"
 )
 
 func main() {
@@ -28,6 +30,11 @@ func main() {
 
 	cleanup := logger.Init("/var/log/bootstrap.log")
 	defer cleanup()
+	// Filed as bootstrap, not os-server, and spooled until a key exists: OTA
+	// runs during and right after setup, so its records explain setup failures.
+	logger.SetGELFServiceName("bootstrap")
+	logger.EnableGELFSpool(syspath.GELFSpoolDir(), "bootstrap")
+	go bootstrap.RunLogRelay(context.Background())
 
 	b, err := bootstrap.ProvideServer()
 	if err != nil {

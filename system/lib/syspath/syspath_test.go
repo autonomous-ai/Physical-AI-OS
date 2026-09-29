@@ -16,6 +16,7 @@ func TestDeviceDefaults(t *testing.T) {
 		{"OS_AGENT_STATE_PATH", AgentStatePath, "/root/config/agent_state.json"},
 		{"OS_BOOTSTRAP_CONFIG", BootstrapConfig, "/root/config/bootstrap.json"},
 		{"OS_LOG_FILE", LogFile, "/var/log/os-server.log"},
+		{"OS_GELF_SPOOL_DIR", GELFSpoolDir, "/var/lib/autonomous/gelf-spool"},
 	}
 	for _, c := range cases {
 		t.Setenv(c.env, "")

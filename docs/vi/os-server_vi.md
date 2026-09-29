@@ -193,9 +193,10 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 | GET | `/api/network/check-internet` | Kiểm tra kết nối internet |
 
 **Monitor kết nối** (`system/network/service.go` và `recovery.go`, hoạt động khi
-`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; ping `8.8.8.8`
-thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, ping thành công thì
-xóa state này. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; kiểm tra
+thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, thành công thì xóa
+state này. Mỗi lần kiểm tra là ping `8.8.8.8`, nếu ICMP thất bại thì bắt tay TLS
+với host cloud API của thiết bị, nên mạng chặn ICMP không bị báo là offline. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
 và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
 Monitor không còn reboot thiết bị.
 
@@ -967,12 +968,25 @@ OS Server và bootstrap. Các giá trị hợp lệ là `DEBUG`, `INFO` (mặc �
 và file cục bộ xoay vòng `/var/log/os-server.log` (mỗi file 2 MB, giữ lại 10
 bản sao mới nhất).
 
-Khi có cấu hình `GELF_URL`, OS Server gửi các record từ cùng mức đã cấu hình trở lên
-tới collector tập trung bằng một worker với queue giới hạn 256 record. Logging không
-block request path và không tạo goroutine theo từng record: khi collector chậm/không
-hoạt động và queue đầy, GELF record mới bị drop (có stderr notice rate-limit); log
-console và rotating file cục bộ vẫn tiếp tục. Khi shutdown, worker flush record trong
-queue tối đa năm giây trước khi hủy delivery còn lại.
+Các record từ cùng mức trở lên cũng được gửi lên Graylog bằng một worker với queue
+giới hạn 256 record; logging không block request path và không tạo goroutine theo
+từng record.
+
+- **Relay (thiết bị xuất xưởng).** Không có `GELF_URL` thì worker POST từng record tới
+  `{llm_base_url}/logs/gelf` trên cloud API với device key làm Bearer token
+  (`config.GELFRelayCredentials`: chỉ credential Autonomous). Relay được bật (lại) từ
+  config-change listener chứ không chỉ lúc khởi động, nên bắt đầu ngay khi setup lưu
+  key và đi theo key mới của lần re-setup; cùng target thì không làm gì. Record không
+  gửi được — relay chưa bật, lỗi mạng, 401/403/408/429/5xx — vào spool trên đĩa trong
+  `OS_GELF_SPOOL_DIR` (mặc định `/var/lib/autonomous/gelf-spool`, 1 MiB mỗi service, bỏ record cũ
+  nhất trước) và được replay đúng thứ tự, có giãn nhịp, gắn `_spooled`, khi gửi thành
+  công; các mã 4xx khác thì bỏ record. Backoff giữa các lần replay lỗi là 5s tới 5 phút.
+  Khi shutdown hoặc đổi target, worker dừng ngay và queue của nó vào spool. Xem
+  [setup-flow_vi.md](setup-flow_vi.md).
+- **Collector trực tiếp.** Khi có cấu hình `GELF_URL`, worker gửi thẳng tới đó bằng
+  basic auth và không có spool: khi collector chậm/không hoạt động và queue đầy, record
+  mới bị drop (có stderr notice rate-limit); log console và rotating file cục bộ vẫn
+  tiếp tục. Khi shutdown, worker flush record trong queue tối đa năm giây.
 
 ## Local Intent Matching
 

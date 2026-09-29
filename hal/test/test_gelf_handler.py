@@ -96,19 +96,22 @@ def test_no_credentials_leaves_the_handler_without_a_target():
     assert resolve_target({}, None) == ("", None, {})
 
 
-def test_handler_without_target_sends_nothing(monkeypatch):
+def test_handler_without_target_sends_nothing(monkeypatch, tmp_path):
     monkeypatch.delenv("GELF_URL", raising=False)
-    handler = GELFHandler(os_cfg_get=_cfg({}))
+    handler = GELFHandler(os_cfg_get=_cfg({}), spool_dir=str(tmp_path), start_worker=False)
     sent = []
     monkeypatch.setattr(handler, "_send", sent.append)
     handler.emit(logging.LogRecord("hal", logging.ERROR, __file__, 1, "boom", None, None))
     assert sent == []
 
 
-def test_handler_relay_posts_bearer_without_basic_auth(monkeypatch):
+def test_handler_relay_posts_bearer_without_basic_auth(monkeypatch, tmp_path):
     monkeypatch.delenv("GELF_URL", raising=False)
     _use_fake_requests(monkeypatch)
-    handler = GELFHandler(os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}))
+    handler = GELFHandler(
+        os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
+        spool_dir=str(tmp_path), start_worker=False,
+    )
     handler._send({"short_message": "hi"})
 
     session = _FakeSession.instances[0]
@@ -141,3 +144,134 @@ def test_session_pools_enough_connections_for_log_bursts():
     session = handler._get_session()
     for prefix in ("https://", "http://"):
         assert session.get_adapter(prefix + "campaign-api.autonomous.ai")._pool_maxsize == gelf_handler.GELF_POOL_MAXSIZE == 32
+
+
+# --- spool: records that cannot ship yet are kept and replayed ---------------
+
+class _Resp:
+    def __init__(self, status):
+        self.status_code = status
+
+
+class _ScriptedSession(_FakeSession):
+    """Answers with the next status from `statuses` (then 202)."""
+    statuses = []
+
+    def post(self, url, json=None, timeout=None):
+        status = _ScriptedSession.statuses.pop(0) if _ScriptedSession.statuses else 202
+        if status == 202:
+            self.posts.append((url, json))
+        return _Resp(status)
+
+
+def _use_scripted_requests(monkeypatch, statuses):
+    _FakeSession.instances = []
+    _ScriptedSession.statuses = list(statuses)
+    monkeypatch.setitem(sys.modules, "requests", types.SimpleNamespace(
+        Session=_ScriptedSession, adapters=types.SimpleNamespace(HTTPAdapter=lambda **kwargs: kwargs),
+    ))
+    monkeypatch.setattr("hal.drivers.gelf_handler.GELF_REPLAY_INTERVAL", 0)
+
+
+def _record(msg):
+    return logging.LogRecord("hal", logging.ERROR, __file__, 1, msg, None, None)
+
+
+def test_setup_logs_wait_in_the_spool_until_the_key_arrives(monkeypatch, tmp_path):
+    monkeypatch.delenv("GELF_URL", raising=False)
+    _use_scripted_requests(monkeypatch, [])
+    config = {}
+    handler = GELFHandler(os_cfg_get=_cfg(config), spool_dir=str(tmp_path), start_worker=False)
+
+    handler.emit(_record("wifi join failed"))  # first setup: no key, no internet
+    assert _FakeSession.instances == []
+
+    config.update({"llm_base_url": API_BASE, "llm_api_key": "lobster", "device_id": "dev-1"})
+    handler.refresh_target()
+    assert handler.replay_once() is True
+
+    posts = _FakeSession.instances[0].posts
+    assert [p[1]["short_message"] for p in posts] == ["wifi join failed"]
+    assert posts[0][1]["_spooled"] == "true"
+    assert posts[0][1]["host"] == "dev-1"  # filed under the device, not the hostname
+    assert posts[0][0] == API_BASE + "/logs/gelf"
+
+
+def test_failed_sends_replay_in_order_after_the_collector_recovers(monkeypatch, tmp_path):
+    monkeypatch.delenv("GELF_URL", raising=False)
+    _use_scripted_requests(monkeypatch, [503, 503])
+    handler = GELFHandler(
+        os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
+        spool_dir=str(tmp_path), start_worker=False,
+    )
+    assert handler._send({"short_message": "one", "host": "x"}) is False
+    assert handler._send({"short_message": "two", "host": "x"}) is False
+
+    assert handler.replay_once() is True
+    posts = _FakeSession.instances[0].posts
+    assert [p[1]["short_message"] for p in posts] == ["one", "two"]
+
+
+def test_replay_stops_at_the_first_failure_and_keeps_the_rest(monkeypatch, tmp_path):
+    monkeypatch.delenv("GELF_URL", raising=False)
+    _use_scripted_requests(monkeypatch, [503, 503, 202, 503])
+    handler = GELFHandler(
+        os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
+        spool_dir=str(tmp_path), start_worker=False,
+    )
+    handler._send({"short_message": "a"})
+    handler._send({"short_message": "b"})
+    assert handler.replay_once() is False  # "a" ships, "b" fails again
+    assert handler.replay_once() is True
+    # "a" shipped once in the first round, "b" in the second: nothing resent.
+    assert [p[1]["short_message"] for p in _FakeSession.instances[-1].posts] == ["a", "b"]
+
+
+def test_rejected_record_is_dropped_not_retried(monkeypatch, tmp_path):
+    monkeypatch.delenv("GELF_URL", raising=False)
+    _use_scripted_requests(monkeypatch, [413])
+    handler = GELFHandler(
+        os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
+        spool_dir=str(tmp_path), start_worker=False,
+    )
+    assert handler._send({"short_message": "too big"}) is True
+    assert handler._spool.pending() is False
+
+
+def test_spool_is_bounded_and_drops_the_oldest(tmp_path):
+    from hal.drivers.gelf_handler import GELFSpool
+
+    spool = GELFSpool(str(tmp_path), "hal", max_bytes=1000)
+    for i in range(200):
+        spool.append({"short_message": f"line-{i:03d}"})
+    lines = spool.take()
+    assert b"line-199" in lines[-1]
+    assert b"line-000" not in lines[0]
+    assert sum(len(ln) + 1 for ln in lines) <= 1000
+
+
+def test_direct_collector_mode_has_no_spool(monkeypatch, tmp_path):
+    monkeypatch.setenv("GELF_URL", "https://logs.example/gelf")
+    handler = GELFHandler(os_cfg_get=_cfg({}), spool_dir=str(tmp_path), start_worker=False)
+    assert handler._spool is None
+
+
+def test_backoff_grows_only_with_failed_replays_and_resets_on_success():
+    from hal.drivers.gelf_handler import GELF_RETRY_MAX, GELF_RETRY_MIN, next_retry_delay
+
+    assert next_retry_delay(0.0, True) == 0.0
+    assert next_retry_delay(0.0, False) == GELF_RETRY_MIN
+    assert next_retry_delay(GELF_RETRY_MIN, False) == GELF_RETRY_MIN * 2
+    assert next_retry_delay(GELF_RETRY_MAX, False) == GELF_RETRY_MAX
+    assert next_retry_delay(120.0, True) == 0.0
+
+
+def test_backing_off_worker_ignores_wakeups_from_failed_live_sends(monkeypatch, tmp_path):
+    monkeypatch.delenv("GELF_URL", raising=False)
+    handler = GELFHandler(os_cfg_get=_cfg({}), spool_dir=str(tmp_path), start_worker=False)
+    slept = []
+    monkeypatch.setattr("hal.drivers.gelf_handler.time.sleep", slept.append)
+    handler._wake.set()  # a failed live send while the network is down
+    handler._sleep_until_next_attempt(40.0)
+    assert slept == [40.0]  # the full backoff, not cut short by the wake event
+    assert not handler._wake.is_set()

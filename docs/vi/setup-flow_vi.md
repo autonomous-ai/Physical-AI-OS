@@ -17,7 +17,8 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       early-capture publish IP LAN (STA) vào setup state ngay khi wlan0 có
       IP (trước cả khi có internet), để Web UI đọc được lúc AP còn sống
       trong giây lát (xem "Tự Động Chuyển Hướng AP→STA")
-   b. Chờ internet (poll 60s)
+   b. Chờ internet (tối đa 60s tính theo đồng hồ; ICMP tới 8.8.8.8, nếu không
+      được thì bắt tay TLS với host cloud API — cho mạng chặn ICMP)
    c. Lưu config
    d. Ping backend sớm (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publish IP LAN mới (local_ip) lên backend mà KHÔNG chờ
@@ -86,8 +87,11 @@ Toàn bộ phần sau đó (LLM config, channel, agent setup, `SetUpCompleted`) 
 1. Gọi `connect-wifi` CLI tool với SSID + password
 2. Poll kiểm tra:
    - SSID match? (`iwgetid`)
-   - Internet OK? (`ping`)
-3. Timeout 60s → fail
+   - Internet OK? (`ping 8.8.8.8`, nếu không được thì bắt tay TLS với host cloud
+     API của thiết bị — `system/network/reachability.go`)
+3. Timeout 60s tính theo đồng hồ → fail. (Trước đây đếm 60 lần thử, mà mỗi lần
+   ping thất bại chờ 5s, nên mạng chặn ICMP khiến thiết bị thử tới ~6 phút trong
+   khi web client đã bỏ cuộc sau 80s.)
 4. Thành công → lưu SSID + password vào config
 
 `connect-wifi` kết thúc bằng việc chạy `device-sta-mode` — đó chính là chỗ tắt AP.
@@ -486,14 +490,29 @@ Cả hai đường vẫn bắn `setup_failed` qua bridge. Màn hình chỉ bị 
 effect thường gửi nó bị gate bởi `setupWorking`, thứ mà đường này cố tình không
 bật.
 
-**Chưa xử lý.** Lý do từ phía thiết bị vẫn còn thô: `SetupNetwork` chỉ poll
-`CheckInternet()` + so khớp SSID, nên sai mật khẩu, mạng chỉ có 5GHz, và router
-từ chối client đều hiện ra như nhau là
-`"no internet or SSID did not match within 60s"` sau trọn 60s.
-`wpa_supplicant` biết ngay sự khác nhau (`4WAY_HANDSHAKE_FAILED`, `WRONG_KEY`);
-đọc `wpa_cli status` trong vòng poll sẽ fail trong ~5s với nguyên nhân chính xác
-— lúc đó AP vẫn còn sống nên phase poll sẽ chuyển được nó về, và timeout ở trên
-sẽ trở thành fallback hiếm dùng thay vì con đường chính.
+**Lý do setup thất bại.** Mọi lần setup thất bại đều được log với trường cố định
+`setup_failure_reason` — ở dòng `network setup failed` (component `network`) cho bước
+join WiFi, và ở dòng `setup failed` (component `device`) cho mọi bước — để gom nhóm
+theo nguyên nhân trên Graylog (`setup_failure_reason:* AND spooled:true` ra các lần
+được replay sau khi thiết bị online). Bước join WiFi được phân loại từ chính log của
+`wpa_supplicant` cho lần thử đó cùng trạng thái quan sát được cuối cùng
+(`system/network/setup_failure.go`):
+
+| `setup_failure_reason` | Dấu hiệu | Thông báo trên màn hình setup |
+|---|---|---|
+| `wrong_password` | `4-Way Handshake failed` / `CTRL-EVENT-SSID-TEMP-DISABLED … reason=WRONG_KEY` | sai mật khẩu WiFi: router từ chối key |
+| `association_rejected` | `CTRL-EVENT-ASSOC-REJECT`, `reason=AUTH_FAILED`/`CONN_FAILED` | router từ chối kết nối |
+| `ssid_not_found` | `CTRL-EVENT-NETWORK-NOT-FOUND`, hoặc không hề thử associate | không tìm thấy mạng WiFi: ngoài vùng phủ hoặc kênh thiết bị không dùng được |
+| `no_dhcp` | `wpa_state=COMPLETED` nhưng router không cấp địa chỉ | đã vào WiFi nhưng router không cấp IP |
+| `no_internet` | có địa chỉ trên đúng SSID nhưng cả ICMP lẫn probe TLS tới cloud đều không ra được | đã vào WiFi nhưng không có internet (captive portal hoặc firewall?) |
+| `ssid_too_long` / `wifi_connect_error` | SSID quá 32 byte / helper `connect-wifi` lỗi | như trước |
+| `agent_setup_failed` / `agent_timeout` | không setup được agent runtime / agent không bao giờ sẵn sàng (sau khi join WiFi) | như trước |
+| `unknown` | không xác định được trường hợp nào ở trên | no internet or SSID did not match within 60s |
+
+Key bị từ chối thì fail nhanh: khi `wpa_supplicant` đã từ chối 2 lần, vòng lặp dừng
+thay vì chờ hết 60s. Dòng `network setup failed` còn mang `wpa_state`, `has_ip`,
+`ssid_matched`, `wrong_key_failures` và `elapsed_s`. Mạng 5 GHz không phải nguyên
+nhân lỗi trên phần cứng Intern 2 — bản ghi sai mật khẩu ở trên là trên mạng 5745 MHz.
 
 ### Đánh dấu bước Wi-Fi đã xong sau khi reload
 
@@ -711,3 +730,28 @@ listener đầy đủ nằm ở phần header của file `lib/setupBridge.ts`.
 ### Credentials iMessage khi setup
 
 Setup và Wi-Fi provisioning nhận URL server BlueBubbles, mật khẩu và địa chỉ người vận hành khi `channel=imessage`. Credentials phải được lưu trước khi setup runtime; Wi-Fi provisioning chuyển credentials đã lưu vào `SetupAgent`. Hermes đọc config đã lưu qua presync.
+
+## Log setup lên được Graylog kể cả khi setup thất bại
+
+Lần setup đầu chạy khi chưa có device key và, trước khi join WiFi, chưa có
+internet, nên setup thất bại trước đây **không gửi được gì**: os-server và HAL chỉ
+bật log relay lúc process khởi động, bootstrap không bao giờ bật, và record không
+gửi được thì bị drop. Hiện tại:
+
+- **Spool từ lúc boot.** os-server, bootstrap và HAL ghi các record chưa gửi được —
+  chưa có key, chưa có internet, relay hoặc collector lỗi — vào spool trên đĩa có
+  giới hạn trong `OS_GELF_SPOOL_DIR` (mặc định `/var/lib/autonomous/gelf-spool` — trên thẻ
+  SD, không phải `/var/log` vốn nằm trong RAM (zram) trên thiết bị — nên rút điện
+  vẫn giữ): `<service>.jsonl` + `<service>.1.jsonl`, tối đa 1 MiB mỗi
+  service, bỏ record cũ nhất trước.
+- **Bật ngay khi có key.** os-server bật lại relay từ config-change listener (ngay
+  lúc setup lưu key, và khi re-setup thay key); bootstrap và HAL đọc lại
+  `config.json` mỗi phút / 30s. Chỉ dùng credential Autonomous của thiết bị, không
+  bao giờ gửi tới provider riêng của chủ máy.
+- **Replay đúng thứ tự.** Khi gửi thành công, spool được xả trước log live, có giãn
+  nhịp (~10 record/s — cloud relay drop im lặng khi vượt trần in-flight), mỗi record
+  gắn `_spooled: "true"` và được chuyển từ host tạm lúc chưa có config sang device
+  id, nên lần setup hỏng hiện ra dưới thiết bị, cạnh lần setup thành công.
+
+Thiết bị không bao giờ online lại thì không gửi được spool; nó nằm trên máy cho tới
+khi thiết bị online.
