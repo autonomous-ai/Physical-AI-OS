@@ -40,7 +40,12 @@ class RealtimeSummarizer:
             self._system_prompt = system_prompt
             return
         try:
-            self._system_prompt: str = SUMMARIZE_PROMPT_PATH.read_text(encoding="utf-8").strip()
+            # The real cap, not a word count: "under 2000 words" (~12k chars)
+            # against a 5k cap meant every summary was cut (#449).
+            self._system_prompt: str = (
+                SUMMARIZE_PROMPT_PATH.read_text(encoding="utf-8").strip()
+                .replace("{max_chars}", str(app_config.REALTIME_SUMMARY_MAX_CHARS))
+            )
         except FileNotFoundError:
             logger.warning("[realtime] Summarize prompt not found at %s", SUMMARIZE_PROMPT_PATH)
             self._system_prompt = "Summarize the following entries concisely."
@@ -108,8 +113,9 @@ class RealtimeSummarizer:
         for attempt in range(1, attempts + 1):
             try:
                 chunks: list[str] = []
-                # Speech notifications need a short answer, not reasoning. Keep
-                # memory summarization's provider defaults unchanged.
+                # Callers that need text, not reasoning, turn thinking off: the
+                # proxy can spend the whole budget thinking and return nothing
+                # (speech notifications, and realtime memory since #449).
                 options = {"thinking": {"type": "disabled"}} if getattr(self, "_disable_thinking", False) else {}
                 with self._get_client().messages.stream(
                     model=self._model,
