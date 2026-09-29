@@ -1,4 +1,4 @@
-"""Local v3 tempo preserves pitch, streams early, and leaves other models alone."""
+"""Expressive-model local tempo preserves pitch and streams early."""
 
 import json
 import shutil
@@ -9,6 +9,52 @@ import pytest
 
 from hal.drivers.voice.tts.elevenlabs import ElevenLabsTTSBackend
 from hal.drivers.voice.tts.tempo import change_tempo
+
+
+@pytest.mark.parametrize("base_url,prefix", [
+    ("https://api.elevenlabs.io/v1", "https://api.elevenlabs.io/v1"),
+    ("https://proxy.example/v1", "https://proxy.example/v1/elevenlabs"),
+])
+@pytest.mark.parametrize("text", [
+    "[happy] Xin chào",
+    "[excited, happy] Xin chào. [long pause] Chào bạn!",
+    "[sleepy drowsy voice] Chào buổi sáng. [yawning] Mình đây.",
+])
+def test_v4_default_request_on_direct_and_proxy(base_url, prefix, text):
+    requests = []
+
+    def respond(request):
+        requests.append(request)
+        return httpx.Response(200, content=b"\x00\x00")
+
+    backend = ElevenLabsTTSBackend("test-key", base_url)
+    backend.close()
+    with httpx.Client(transport=httpx.MockTransport(respond)) as client:
+        backend._client = client
+        assert b"".join(backend.stream_pcm(text, "Ngan", "tts-1", 1.0))
+    request = requests[0]
+    assert str(request.url) == prefix + "/text-to-speech/a3AkyqGG4v8Pg7SWQ0Y3/stream?output_format=pcm_24000"
+    assert request.headers["xi-api-key"] == "test-key"
+    assert json.loads(request.content) == {
+        "text": text, "model_id": ElevenLabsTTSBackend.DEFAULT_MODEL,
+        "voice_settings": {"speed": 1.0},
+    }
+
+
+def test_default_is_v4():
+    assert ElevenLabsTTSBackend.DEFAULT_MODEL == "eleven_v4"
+
+
+def test_v4_default_invalidates_cached_v3_audio():
+    from types import SimpleNamespace
+    from hal.drivers.voice.tts.service import TTSService
+
+    svc = object.__new__(TTSService)
+    svc._provider, svc._voice, svc._model, svc._speed = "elevenlabs", "Ngan", "tts-1", 1.0
+    svc._backend = SimpleNamespace(cache_revision="local-v3-tempo-v1")
+    old_key = svc._tts_cache_key("Xin chào")
+    svc._backend = SimpleNamespace(cache_revision=ElevenLabsTTSBackend.cache_revision)
+    assert svc._tts_cache_key("Xin chào") != old_key
 
 
 @pytest.mark.parametrize("speed", [0.25, 0.8, 1.15, 2.0, 4.0])
@@ -47,10 +93,11 @@ def test_streams_before_input_eof_and_closes():
 
 
 @pytest.mark.parametrize("model,provider_speed,local", [
-    ("eleven_v3", 1.0, True), ("tts-1", 1.0, True),
+    ("eleven_v3", 1.0, True), ("eleven_v4", 1.0, True),
+    ("tts-1", 1.0, True), ("", 1.0, True),
     ("eleven_multilingual_v2", 1.2, False),
 ])
-def test_only_effective_v3_gets_local_speed(monkeypatch, model, provider_speed, local):
+def test_expressive_models_get_local_speed(monkeypatch, model, provider_speed, local):
     requests, tempos = [], []
 
     def respond(request):
@@ -69,6 +116,7 @@ def test_only_effective_v3_gets_local_speed(monkeypatch, model, provider_speed, 
         backend._client = client
         assert b"".join(backend.stream_pcm("Hello", "Ngan", model, 1.5)) == b"\x01\x00"
     assert requests[0]["voice_settings"]["speed"] == provider_speed
+    assert requests[0]["model_id"] == (model if model.startswith("eleven_") else ElevenLabsTTSBackend.DEFAULT_MODEL)
     assert tempos == ([(1.5, 24000)] if local else [])
 
 
@@ -87,7 +135,7 @@ def test_timing_preserves_http_chunk_boundaries_and_pcm(sizes, caplog):
         lambda req: httpx.Response(200, stream=NetworkStream())
     )) as client:
         backend._client = client
-        chunks = list(backend.stream_pcm("Hello", "Rachel", "eleven_v3", 1.0))
+        chunks = list(backend.stream_pcm("Hello", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.0))
     raw = b"a" * sum(sizes)
     assert chunks == [raw[i:i + 4096] for i in range(0, len(raw), 4096)]
     stages = [r.message.split("stage=", 1)[1].split()[0]
@@ -121,9 +169,9 @@ def test_tempo_process_starts_before_http_and_is_reaped(monkeypatch, status):
     with httpx.Client(transport=httpx.MockTransport(respond)) as client:
         backend._client = client
         if status == 200:
-            assert b"".join(backend.stream_pcm("Hello", "Rachel", "eleven_v3", 1.2))
+            assert b"".join(backend.stream_pcm("Hello", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.2))
         else:
             with pytest.raises(httpx.HTTPStatusError):
-                list(backend.stream_pcm("Hello", "Rachel", "eleven_v3", 1.2))
+                list(backend.stream_pcm("Hello", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.2))
     assert len(processes) == 1
     assert processes[0].poll() is not None

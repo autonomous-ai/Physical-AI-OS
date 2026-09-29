@@ -49,7 +49,7 @@ def test_cancel_pending_http_reaps_filter_and_next_request_works(monkeypatch, ti
 
         def consume():
             try:
-                output.extend(backend.stream_pcm("Old", "Rachel", "eleven_v3", 1.2,
+                output.extend(backend.stream_pcm("Old", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.2,
                                                  cancelled=cancelled.is_set))
             except Exception as exc:
                 errors.append(exc)
@@ -64,7 +64,7 @@ def test_cancel_pending_http_reaps_filter_and_next_request_works(monkeypatch, ti
             assert processes[0].poll() is not None
             assert not output and not errors
             # A new utterance can run even before the old HTTP call returns.
-            assert b"".join(backend.stream_pcm("New", "Rachel", "eleven_v3", 1.2))
+            assert b"".join(backend.stream_pcm("New", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.2))
         finally:
             release.set()
             consumer.join(2)

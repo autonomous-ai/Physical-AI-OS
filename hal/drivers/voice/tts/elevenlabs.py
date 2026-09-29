@@ -19,7 +19,7 @@ from hal.drivers.voice.tts.tempo import change_tempo
 
 logger = logging.getLogger("hal.voice.tts")
 
-# Audio direction tags like "[laughs]" — eleven_v3 interprets them, but a chunk
+# Audio direction tags like "[laughs]" — expressive models interpret them, but a chunk
 # with ONLY tags (no words) has no speakable content and ElevenLabs 400s it.
 _AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 
@@ -27,16 +27,16 @@ _AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 class ElevenLabsTTSBackend(TTSBackend):
     """ElevenLabs TTS backend with streaming support."""
 
-    DEFAULT_MODEL = "eleven_v3"
-    cache_revision = "local-v3-tempo-v1"
+    DEFAULT_MODEL = "eleven_v4"
+    cache_revision = "default-v4-local-tempo-v1"
     supports_synthesis_cancellation = True
     ELEVENLABS_PATH = "/elevenlabs"
 
     # Voice name -> voice_id mapping, grouped by trained language.
     # Curated for companion AI — warm, friendly, expressive. Top picks marked (*).
     #
-    # eleven_v3 is multilingual — every voice can technically speak any
-    # language — but voices trained on a language sound substantially more
+    # ElevenLabs expressive models are multilingual — voices can speak across
+    # languages — but voices trained on a language sound substantially more
     # natural in that language (accent, prosody). The web UI filters this
     # by stt_language so VN/CN owners don't have to scroll past 22 American
     # voices to find one that fits.
@@ -221,7 +221,9 @@ class ElevenLabsTTSBackend(TTSBackend):
         }
         # Send normal speed explicitly too: omission inherits the voice's
         # stored settings, which may use a different speaking speed.
-        local_tempo = el_model == "eleven_v3"
+        # Keep the full HAL speed range and pitch-preserving playback policy
+        # when upgrading the default model, including explicit v3 overrides.
+        local_tempo = el_model in ("eleven_v3", "eleven_v4")
         body["voice_settings"] = {
             "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
         }
@@ -298,7 +300,7 @@ class ElevenLabsTTSBackend(TTSBackend):
         # overlaps network/provider wait rather than delaying the first PCM bytes.
         chunks = fetch_chunks()
         if local_tempo:
-            logger.info("TTS v3 local tempo: speed=%.2f provider_speed=1.00", speed)
+            logger.info("TTS %s local tempo: speed=%.2f provider_speed=1.00", el_model, speed)
             chunks = change_tempo(chunks, speed, self.sample_rate,
                                   **({"cancelled": cancelled} if cancelled is not None else {}))
         try:
