@@ -20,6 +20,9 @@ from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 from hal.drivers.voice._internal.realtime_turn import (
+    realtime_speech_text,
+    realtime_visible_text,
+    split_delivery_sentence,
     SENTENCE_ENDS,
     _reply_language_name,
     split_completed_prefix,
@@ -127,8 +130,8 @@ def play_realtime_announcement(
 
     def speak(sentence: str) -> None:
         nonlocal first_sent
-        sentence = leak_filter.filter_text(strip_markers(sentence)).strip()
-        if not sentence:
+        sentence = leak_filter.filter_text(realtime_speech_text(sentence, tts, strip_markers)).strip()
+        if not realtime_visible_text(sentence, tts, strip_markers):
             return
         chime_once()
         if not first_sent:
@@ -170,11 +173,12 @@ def play_realtime_announcement(
                 if native:
                     continue
                 sentence_buf += output.text
-                ready, tail = split_completed_prefix(sentence_buf)
+                delivery = getattr(tts, "_provider", None) == "elevenlabs"
+                ready, tail = split_delivery_sentence(sentence_buf) if delivery else split_completed_prefix(sentence_buf)
                 if ready:
                     speak(ready)
                     sentence_buf = tail
-                elif strip_markers(sentence_buf).rstrip().endswith(SENTENCE_ENDS):
+                elif not delivery and realtime_visible_text(sentence_buf, tts, strip_markers).rstrip().endswith(SENTENCE_ENDS):
                     speak(sentence_buf)
                     sentence_buf = ""
         if not native and not stop_event.is_set() and sentence_buf.strip():

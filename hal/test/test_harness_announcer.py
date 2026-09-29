@@ -326,3 +326,15 @@ def test_empty_summary_bounds_completed_result_fallback():
 def test_failure_fallback_keeps_required_action():
     text = "Could not save. Free disk space and retry."
     assert sanitize_for_speech("result", text, "failed") == text
+
+
+def test_elevenlabs_tag_only_announcement_is_not_spoken():
+    from hal.drivers.voice.voice_service import VoiceService
+    tts = FakeTTS()
+    tts._provider = 'elevenlabs'
+    rt = FakeRealtime([TextOutput(text='[laughs]')])
+    result = play_realtime_announcement(
+        rt, tts, VoiceService.strip_rt_markers, 'env', owner='run-tags', stop_event=threading.Event(),
+    )
+    assert not result.spoken
+    assert not tts.spoken and tts.chimes == 0

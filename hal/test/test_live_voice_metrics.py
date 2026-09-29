@@ -432,3 +432,34 @@ def test_live_bundled_sentence_starts_before_next_delta(monkeypatch, kpi):
           strip_markers=VoiceService.strip_rt_markers)
     assert [call.args[0] for call in tts.speak_queue.call_args_list] == [
         'I am right here.', 'Let me help you.']
+
+
+@pytest.mark.parametrize('chunks,expected', [
+    (['[laugh', 's] That was funny! [giggle]'], '[laughs] That was funny! [giggle]'),
+    (['[HW:/led/off:{}][voice trembling] I miss you. [sobbing]'],
+     '[voice trembling] I miss you. [sobbing]'),
+])
+def test_live_elevenlabs_preserves_delivery_at_terminal(monkeypatch, kpi, chunks, expected):
+    from unittest.mock import Mock
+    tts = Mock(speaking=False, _provider='elevenlabs')
+    outputs = [UserSpeechOutput(turn_id='u-tags')]
+    outputs.extend(TextOutput(text=text, user_turn_id='u-tags') for text in chunks)
+    _pump(monkeypatch, kpi, [(outputs, 'u-tags', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    tts.speak_queue.assert_called_once()
+
+    assert tts.speak_queue.call_args.args == (expected,)
+
+
+def test_elevenlabs_held_sentence_does_not_cross_reply_owner(monkeypatch, kpi):
+    from unittest.mock import Mock
+    tts = Mock(speaking=False, _provider='elevenlabs')
+    outputs = [
+        UserSpeechOutput(turn_id='old'),
+        TextOutput(text='Old response. [laughs]', user_turn_id='old'),
+        UserSpeechOutput(turn_id='new', transcript='Stop that and answer this instead'),
+        TextOutput(text='New response.', user_turn_id='new'),
+    ]
+    _pump(monkeypatch, kpi, [(outputs, 'new', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    assert [c.args[0] for c in tts.speak_queue.call_args_list] == ['New response.']
