@@ -15,10 +15,6 @@ jobs:
           go-version: '1.24'
       - name: build
         run: go build ./...
-      # Blocking since 2026-08: the copylocks backlog this step used to only
-      # report is gone (config.Load now returns *Config; the domain MQTT-info
-      # table holds *config.Config), so `go vet ./...` is clean and any new
-      # finding is one this change introduced.
       - name: vet
         run: go vet ./...
       - name: test
@@ -37,16 +33,10 @@ jobs:
       - name: install
         working-directory: system/web
         run: npm ci
-      # `npm run build` runs `tsc -b && vite build`, so it catches type errors
-      # and a broken production bundle in one step.
       - name: typecheck + build
         working-directory: system/web
         run: npm run build
-      # Blocking since 2026-08: the Monitor/web backlog this step used to only
-      # report is cleared (179 findings → 0 errors), so any error here is one
-      # the current change introduced. Two `exhaustive-deps` WARNINGS remain on
-      # purpose — both fixes would alter render/fetch behavior — and `eslint`
-      # exits 0 on warnings, so they report without blocking.
+      # Two intentional exhaustive-deps warnings remain; eslint exits 0 on warnings.
       - name: lint
         working-directory: system/web
         run: npm run lint
@@ -63,12 +53,7 @@ jobs:
         run: python -B scripts/ci/check_python_syntax.py
       - name: Python syntax gate regression tests
         run: python -B -m unittest discover -s scripts/ci -p 'test_*.py' -v
-      # Catches refactor-leftover broken imports — including a bare `from devices.x`
-      # left over after a module moved (e.g. devices/ -> drivers/camera/), which
-      # py_compile and the unit subset both miss because they never execute it.
-      # No deps: the moved-import check is stdlib AST (pyflakes undefined-name pass
-      # is skipped without the dev extra, so this step can't fail on pre-existing
-      # findings and block a merge).
+      # Catches broken/moved local imports that py_compile misses (stdlib only).
       - name: hal lint (broken / moved-away local imports)
         run: python hal/scripts/lint.py
       - name: unit tests (board + device — no hardware deps)
@@ -77,17 +62,13 @@ jobs:
         run: python -B -m unittest hal.test.test_route_contracts -v
       - name: Hermes Jev plugin tests (mock proxy, no credentials)
         run: python -B -m unittest discover -s runtimes/hermes/plugins/jev -p 'test_*.py' -v
-      # Go embeds patch scripts as strings: Go build/vet cannot validate the
-      # Python they generate. Run fixture-based patch contracts as well, and
-      # reject newly embedded patches without a discoverable contract suite.
+      # Go-embedded Python patches need fixture-based contract tests.
       - name: Hermes runtime patch contracts (generated Python + idempotence)
         run: python -B -m unittest discover -s runtimes/hermes -p '*_test.py' -v
       - name: Buddy helper tests (mock transport, no desktop actions)
         run: python -B -m unittest discover -s skills/computer-use/tests -p 'test_*.py' -v
       - name: conformance suite (CTS — devices vs COMPATIBILITY.md)
         run: python -m unittest discover -s robots/contract/cts -v
-      # Go's TestCatalogMatchesTree only compares the tree against catalog_gen.go.
-      # This is the half it cannot see: the SKILLS_CATALOG + skill_caps() block
-      # generated into setup.sh, which is what a body seeds from on first boot.
+      # Checks the setup.sh SKILLS_CATALOG block that TestCatalogMatchesTree cannot see.
       - name: skill catalog matches the skills/ tree
         run: python3 scripts/skills/gen_catalog.py --check

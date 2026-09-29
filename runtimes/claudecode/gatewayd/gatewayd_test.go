@@ -29,8 +29,7 @@ const (
 // child: it appends its argv (and $FOO from the env) to argvFile once per
 // SPAWN, emits a stream-json init event with a per-spawn session id, then per
 // stdin LINE logs the line to stdinFile, bumps the counter in countFile, and
-// emits an assistant + result event. The counter lets tests assert the SAME
-// child handled a second turn.
+// emits an assistant + result event.
 func writeFakeClaude(t *testing.T, dir, argvFile, countFile, stdinFile string) string {
 	t.Helper()
 	script := fmt.Sprintf(`#!/bin/bash
@@ -80,7 +79,7 @@ exit 7
 // writeFakeClaudeStaleResume stands in for a claude whose --resume target was
 // dropped from its store: spawned WITH --resume it prints the stale-session
 // marker to stderr and exits rc=1; spawned fresh it inits with a per-spawn
-// session id and stays alive reading stdin. Drives the self-heal path.
+// session id and stays alive reading stdin.
 func writeFakeClaudeStaleResume(t *testing.T, dir, argvFile string) string {
 	t.Helper()
 	script := fmt.Sprintf(`#!/bin/bash
@@ -107,8 +106,7 @@ func writeScript(t *testing.T, dir, name, content string) string {
 }
 
 // startServer boots a Server on an ephemeral loopback port with all paths
-// under dir. backoff overrides the 5s production respawn backoff so tests run
-// fast. Returns the ws URL and the config used.
+// under dir.
 func startServer(t *testing.T, claudeBin, dir string, backoff time.Duration) (string, Config) {
 	t.Helper()
 	cfg := Config{
@@ -171,9 +169,6 @@ func parseFrame(t *testing.T, data []byte) map[string]any {
 }
 
 // nextFrameSkipping reads frames until one whose type is not in skip.
-// bridge.status frames are timing-dependent (connect + every spawn/exit), and
-// the init event may have been forwarded before the client connected — tests
-// skip both unless they are the subject.
 func nextFrameSkipping(t *testing.T, conn *websocket.Conn, skip ...string) (map[string]any, []byte) {
 	t.Helper()
 	for {
@@ -270,8 +265,6 @@ func TestHappyPath(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv.txt")
 	countFile := filepath.Join(dir, "count.txt")
 	stdinFile := filepath.Join(dir, "stdin.txt")
-	// Env-file parsing: comments + junk skipped, values space-trimmed and
-	// quote-stripped, CLAUDECODE_CHANNELS whitespace-split into --channels.
 	envFile := "# managed env\nFOO = \"bar\"\njunk line without equals\n" +
 		"CLAUDECODE_CHANNELS=\"plugin:telegram@claude-plugins-official\"\n"
 	if err := os.WriteFile(filepath.Join(dir, ".env"), []byte(envFile), 0o600); err != nil {
@@ -281,8 +274,6 @@ func TestHappyPath(t *testing.T) {
 	url, cfg := startServer(t, bin, dir, 50*time.Millisecond)
 	conn := dial(t, url, testToken)
 
-	// First frame on connect is bridge.status with the byte contract the
-	// os-server translator expects: payload.claude_running + payload.session_id.
 	status := parseFrame(t, readRawFrame(t, conn))
 	if status["type"] != "bridge.status" {
 		t.Fatalf("expected bridge.status on connect, got %v", status)
@@ -298,14 +289,12 @@ func TestHappyPath(t *testing.T) {
 		t.Fatalf("bridge.status payload.session_id missing: %v", payload)
 	}
 
-	// The child persists its init session id before any turn.
 	waitFor(t, "session file", 5*time.Second, func() bool { return readSessionID(cfg.SessionFile) != "" })
 	sid := readSessionID(cfg.SessionFile)
 	if !strings.HasPrefix(sid, "sess-") {
 		t.Fatalf("unexpected persisted session id %q", sid)
 	}
 
-	// One turn with a good and a bad (invalid base64) attachment.
 	sendFrame(t, conn, `{"type":"message.send","id":1,"payload":{`+
 		`"content":"hi claude","attachments":[`+
 		`{"type":"image","url":"data:image/png;base64,aGVsbG8="},`+
@@ -314,7 +303,6 @@ func TestHappyPath(t *testing.T) {
 	if len(frames) != 2 {
 		t.Fatalf("expected assistant + result, got %d frames: %s", len(frames), frames)
 	}
-	// Forwarded VERBATIM: byte-identical to what the child wrote.
 	if string(frames[0]) != assistantLine {
 		t.Fatalf("assistant frame not verbatim:\n got %s\nwant %s", frames[0], assistantLine)
 	}
@@ -339,8 +327,6 @@ func TestHappyPath(t *testing.T) {
 		t.Fatalf("invalid attachment must be skipped, stdin: %s", stdin)
 	}
 
-	// Single spawn: full flag set, no --resume, channels from the env file,
-	// FOO from the env file visible in the child env.
 	lines := argvLines(t, argvFile)
 	if len(lines) != 1 {
 		t.Fatalf("expected 1 spawn, got %d: %v", len(lines), lines)
@@ -358,7 +344,6 @@ func TestHappyPath(t *testing.T) {
 		t.Fatalf("env file FOO not in child env: %s", data)
 	}
 
-	// ping -> bare pong (no id echo — bridge.py contract).
 	sendFrame(t, conn, `{"type":"ping","id":9}`)
 	pong, raw := nextFrameSkipping(t, conn, "bridge.status")
 	if pong["type"] != "pong" || len(pong) != 1 {
@@ -379,7 +364,6 @@ func TestSecondTurnReusesChild(t *testing.T) {
 	sendMessage(t, conn, "second")
 	readTurn(t, conn)
 
-	// One spawn, and that SAME child consumed both stdin lines.
 	if lines := argvLines(t, argvFile); len(lines) != 1 {
 		t.Fatalf("expected 1 spawn for 2 turns, got %d: %v", len(lines), lines)
 	}
@@ -396,8 +380,6 @@ func TestSessionNewRestartsFresh(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
 	bin := writeFakeClaude(t, dir, argvFile, filepath.Join(dir, "count.txt"), filepath.Join(dir, "stdin.txt"))
-	// Long-ish backoff so the removed session file is observable before the
-	// respawned child persists its new id.
 	url, cfg := startServer(t, bin, dir, 300*time.Millisecond)
 	conn := dial(t, url, testToken)
 
@@ -408,8 +390,6 @@ func TestSessionNewRestartsFresh(t *testing.T) {
 	readTurn(t, conn)
 
 	sendFrame(t, conn, `{"type":"session.new"}`)
-	// The handler removes the session file before the child terminates; the
-	// respawn (after the backoff) then persists a fresh id.
 	waitFor(t, "session file removal", 5*time.Second, func() bool {
 		_, err := os.Stat(cfg.SessionFile)
 		return os.IsNotExist(err)
@@ -423,8 +403,6 @@ func TestSessionNewRestartsFresh(t *testing.T) {
 	if strings.Contains(lines[1], "--resume") {
 		t.Fatalf("spawn after session.new must be fresh: %s", lines[1])
 	}
-	// The fresh child persists a NEW session id (resume re-enabled for later
-	// respawns).
 	waitFor(t, "new session id", 5*time.Second, func() bool {
 		sid := readSessionID(cfg.SessionFile)
 		return sid != "" && sid != oldSID
@@ -442,7 +420,7 @@ func TestChildCrashRespawnsWithResume(t *testing.T) {
 	sid := readSessionID(cfg.SessionFile)
 
 	sendMessage(t, conn, "one")
-	readTurn(t, conn) // result arrives, then the child exits (rc=3)
+	readTurn(t, conn)
 
 	waitFor(t, "respawn", 5*time.Second, func() bool { return len(argvLines(t, argvFile)) >= 2 })
 	lines := argvLines(t, argvFile)
@@ -457,8 +435,6 @@ func TestChildCrashRespawnsWithResume(t *testing.T) {
 func TestStaleResumeSelfHeals(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Pre-seed a dead session so New() sets resumeNext -> the first spawn
-	// resumes it, exactly like the bricked device.
 	if err := os.WriteFile(filepath.Join(dir, "session.json"),
 		[]byte(`{"session_id":"dead-session"}`), 0o600); err != nil {
 		t.Fatalf("seed session file: %v", err)
@@ -467,8 +443,6 @@ func TestStaleResumeSelfHeals(t *testing.T) {
 	url, cfg := startServer(t, bin, dir, 50*time.Millisecond)
 	_ = dial(t, url, testToken)
 
-	// The first spawn resumes the dead id and exits; the self-heal drops the
-	// stale session so a later spawn goes fresh and persists a live id.
 	waitFor(t, "fresh session after self-heal", 5*time.Second, func() bool {
 		sid := readSessionID(cfg.SessionFile)
 		return strings.HasPrefix(sid, "sess-")
@@ -522,7 +496,7 @@ func TestAuthRejectsWrongToken(t *testing.T) {
 	header := http.Header{"Authorization": {"Bearer wrong-token"}}
 	conn, _, err := websocket.DefaultDialer.Dial(url, header)
 	if err != nil {
-		return // handshake rejected outright is acceptable too
+		return
 	}
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))

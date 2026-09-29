@@ -71,11 +71,7 @@ def _owner(monkeypatch, default_latency=0.0435):
 
 
 def test_playback_survives_a_short_writer_scheduling_stall(monkeypatch, caplog):
-    """A 70ms scheduling/AEC stall emptied the observed 43.5ms device buffer.
-
-    This models buffer consumption, not OS scheduling or acoustic quality.
-    No PCM is dropped, repeated or modified to conceal the simulated gap.
-    """
+    """A 70ms scheduling/AEC stall emptied the observed 43.5ms device buffer."""
     audio = np.arange(44100, dtype=np.float32).reshape(-1, 1)
     results = []
     for requested in (0.0, 0.120):
@@ -123,7 +119,6 @@ def test_underflow_flags_accumulate_and_logs_are_rate_limited(monkeypatch, caplo
     sinks[0].write = lambda data: next(flags)
     monkeypatch.setattr(module.aec, "reference_write", lambda data, rate: None)
     frame = np.zeros((1764, 1), dtype=np.float32)
-    # Onset after idle isn't a mid-utterance underrun.
     assert stream.write(frame) is True
     assert "during playback" not in caplog.text
     assert stream.write(np.concatenate([frame, frame, frame])) is True

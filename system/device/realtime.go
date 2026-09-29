@@ -9,10 +9,8 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// validateRealtimeSet checks a realtime payload before any write: the provider
-// selector, and (when per-provider knobs are present) the target provider's
-// voice/reasoning. The target is the provider being set, or the current one when
-// `provider` is omitted. Returns a descriptive error; nothing is written.
+// validateRealtimeSet checks the provider and its knobs (against the payload's
+// provider, else the current one) without writing anything.
 func (s *Service) validateRealtimeSet(d domain.RealtimeSetData) error {
 	if err := config.ValidateRealtimeProvider(d.Provider); err != nil {
 		return err
@@ -38,10 +36,8 @@ func (s *Service) validateRealtimeSet(d domain.RealtimeSetData) error {
 	return nil
 }
 
-// applyRealtimeSet mutates the `realtime` block in c per the payload. Caller must
-// have run validateRealtimeSet first; this only writes. Empty/omitted fields leave
-// the current value unchanged; per-provider knobs land in the active provider's
-// sub-object. Must run inside WithLockSave.
+// applyRealtimeSet writes non-empty payload fields into c.Realtime. Run
+// validateRealtimeSet first; must run inside WithLockSave.
 func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if c.Realtime == nil {
 		c.Realtime = config.DefaultRealtimeConfig()
@@ -55,10 +51,8 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	if d.Provider != "" {
 		rt.Provider = strings.ToLower(strings.TrimSpace(d.Provider))
 	}
-	// Credentials live in the shared api_key/base_url fields (empty → HAL falls
-	// back to the LLM credentials), regardless of which provider is active —
-	// gptlive included (HAL reads the shared key; its base_url is never derived
-	// from llm_base_url, so an empty override means api.openai.com).
+	// Credentials are shared across providers; empty means HAL falls back to the
+	// LLM credentials (gptlive: empty base_url means api.openai.com).
 	if d.APIKey != "" {
 		rt.APIKey = d.APIKey
 	}
@@ -121,9 +115,8 @@ func applyRealtimeSet(c *config.Config, d domain.RealtimeSetData) {
 	}
 }
 
-// UpdateRealtimeConfig applies a realtime payload (MQTT realtime.set or the HTTP
-// `realtime` field) to config.json under the config lock, then restarts hal so it
-// reads the new block (HAL reads config.json at import).
+// UpdateRealtimeConfig persists a realtime payload and restarts HAL, which reads
+// config.json at import.
 func (s *Service) UpdateRealtimeConfig(d domain.RealtimeSetData) error {
 	if err := s.validateRealtimeSet(d); err != nil {
 		return err

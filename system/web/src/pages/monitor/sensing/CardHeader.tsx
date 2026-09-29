@@ -1,6 +1,6 @@
 import { S } from "../styles";
 
-// Status pill used in card headers. Color tier carries quick health signal.
+// Status pill used in card headers.
 export function Pill({ text, color }: { text: string; color: string }) {
   return (
     <span style={{

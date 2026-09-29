@@ -3,9 +3,7 @@ import { Wifi, Eye, EyeOff, Settings, Check, RefreshCw } from "lucide-react";
 import { C, ConfiguredHint, PasswordField, SectionCard, SkeletonBlock, LABEL_STYLE, INPUT_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 import type { NetworkItem } from "@/types";
 
-// Small uppercase group label that separates the Device and Wi-Fi field groups
-// inside the merged (V2) card, so the single card still reads as two distinct
-// sections without needing two separate cards.
+// Small uppercase label separating field groups inside one card.
 function GroupLabel({ children, first = false }: { children: React.ReactNode; first?: boolean }) {
   return (
     <div style={{
@@ -20,16 +18,10 @@ function GroupLabel({ children, first = false }: { children: React.ReactNode; fi
   );
 }
 
-// 802.11 caps SSID at 32 bytes (not 32 chars). Each Chinese UTF-8 char is
-// 3 bytes, so a short-looking SSID can still overflow. Counting bytes here
-// matches the backend's len([]byte(ssid)) check in network.SetupNetwork.
+// 802.11 caps SSID at 32 bytes (not chars); matches the backend check.
 const SSID_MAX_BYTES = 32;
 const ssidByteLength = (s: string) => new TextEncoder().encode(s).length;
 
-// Placeholder bar shown while useWifiConnected's first probe decides whether the
-// device is already on Wi-Fi. Mirrors INPUT_STYLE's box (height ≈ 40px from
-// 14px text + 10px×2 padding + border, radius 10) so the real network/password
-// fields drop in without a layout jump. Theme-aware via C.surface / C.border.
 const SKELETON_FIELD: React.CSSProperties = {
   width: "100%",
   height: 40,
@@ -55,65 +47,27 @@ export function WifiSection({
   setPassword: (v: string) => void;
   loadingList: boolean;
   uniqueNetworks: NetworkItem[];
-  /** Re-run `iw scan` on the device. Wired to the "Refresh list" button next
-   *  to the picker: right after a soft reset, wlan0 comes up in AP mode with
-   *  no cached scan results, so the FIRST scan often returns empty. Letting
-   *  the operator retry manually is simpler than backend warmup + timing
-   *  guesses. Also useful for a weak-signal SSID (e.g. "Glinks 1") that a
-   *  single scan window missed — a second scan often catches it. */
+  /** Re-run `iw scan` on the device. */
   refreshNetworks?: () => void;
-  /** True while useWifiConnected's first probe is still deciding whether the
-   *  device is already on home Wi-Fi. We show a skeleton for the whole Wi-Fi
-   *  group during this window so the step doesn't flash the empty "Choose your
-   *  Wi-Fi" picker for a beat before collapsing into the connected state. */
+  /** True while useWifiConnected's first probe is still deciding whether the device is already on home Wi-Fi. */
   checkingConnection?: boolean;
-  /** True when the device has internet while joined to no SSID — in practice an
-   *  ethernet cable, though a USB modem or tether looks the same and behaves the
-   *  same for our purposes. Only ever true on devices that actually have such a
-   *  connection right now, so a Wi-Fi-only device never sees this. The picker
-   *  stays available (the operator may still want Wi-Fi as well), but leaving it
-   *  empty is now a valid choice, so we say so instead of letting the step look
-   *  unfinished. */
+  /** True when online without any SSID (wired uplink). */
   wiredUplink?: boolean;
-  /** True when ConfigPublicResponse.has_network_password=true: hide the
-   *  password input + show "configured" indicator. Operator can rotate via
-   *  /edit or by clicking "update" → toggles back into the input. */
+  /** Hides the password input and shows a "configured" indicator. */
   passwordConfigured?: boolean;
-  /** The SSID the device is CURRENTLY joined to (from useWifiConnected /
-   *  GET /api/network/current). When set, the device already left the setup AP
-   *  and is on home Wi-Fi — this is the state after the AP→STA join reloads the
-   *  page — so we show a read-only "Connected to <ssid>" row instead of
-   *  re-prompting the operator to pick a network + type a password they already
-   *  entered. Switching networks is a /setting#wifi concern, not a setup one. */
+  /** SSID the device is currently joined to; shows a read-only "Connected" row. */
   connectedSsid?: string;
-  /** Device admin password. Only passed (and only rendered) when the device
-   *  has no admin password on file yet — i.e. first-time setup. Shown in clear
-   *  text on purpose (no hide toggle, no confirm): it's set once here and the
-   *  operator needs to see what they're typing since they'll sign in with it.
-   *  Caller gates this on `!hasAdminPassword`. */
+  /** Device admin password; only rendered on first-time setup. */
   adminPassword?: string;
   setAdminPassword?: (v: string) => void;
 }) {
   const showAdminPassword = setAdminPassword !== undefined;
-  // When the device reports it's already on home Wi-Fi, collapse the picker
-  // into a read-only "connected" confirmation. Setup has no way back to the
-  // picker from here by design — switching networks mid-setup isn't a flow this
-  // wizard supports, and the operator can change it later from /setting#wifi
-  // (pages/settings/WifiSection.tsx, which always renders the full picker).
   const showConnected = !!connectedSsid;
-  // Device password is revealed by default (it's set once and the operator
-  // needs to read it back), with an eye toggle to hide if someone's watching.
   const [adminVisible, setAdminVisible] = useState(true);
   const bytes = ssidByteLength(ssid);
   const overLimit = bytes > SSID_MAX_BYTES;
-  // "bytes" is jargon to a normal user, so only surface the counter once the
-  // SSID actually exceeds the 802.11 limit — at that point the number is
-  // actionable ("trim it down"). Below the limit we stay silent.
   const showCounter = overLimit;
   return (
-    // When the admin password is folded in (V2), the card covers two groups, so
-    // it gets a neutral title/icon + a description that mentions both. When it's
-    // just Wi-Fi (V1), it keeps the Wi-Fi title/icon and Wi-Fi-only copy.
     <SectionCard
       id="wifi"
       active={active}
@@ -123,13 +77,6 @@ export function WifiSection({
         ? "Your robot is connected to Wi-Fi."
         : "Choose your Wi-Fi and enter its password."}
     >
-      {/* Device admin password — kept mounted but hidden so its state (empty)
-          still submits. Operators no longer see or type this: the backend
-          defaults an empty AdminPassword to the 4 characters after the dash in
-          the device's hardware ID (see handler.Setup). The Login page tells the
-          operator where to read that suffix (sticker on the bottom of device).
-          V1 (isV1) still shows the password in its dedicated Device step; only
-          the V2 merged flow hides it. */}
       {showAdminPassword && (
         <>
           <div style={{ display: "none" }}>
@@ -163,12 +110,6 @@ export function WifiSection({
         </>
       )}
       {checkingConnection ? (
-        // First useWifiConnected probe still deciding: skeleton the whole Wi-Fi
-        // group (network + password) so we never flash the empty picker before
-        // resolving into either the connected state or the real picker. Bars
-        // mirror the real input box (height/radius/border from INPUT_STYLE) so
-        // nothing jumps when they resolve; C.surface + C.border keep them
-        // theme-aware (light + dark), matching SkeletonBlock's static style.
         <>
           <div style={{ marginBottom: FIELD_GAP }}>
             {!showAdminPassword && <label style={LABEL_STYLE}>Wi-Fi network</label>}
@@ -180,10 +121,6 @@ export function WifiSection({
           </div>
         </>
       ) : showConnected ? (
-        // Device is already on home Wi-Fi (post-join page reload). Show the
-        // live network as a done state instead of an empty picker + password
-        // the operator would otherwise be forced to re-enter. Read-only —
-        // network switching lives in /setting#wifi, not in the setup wizard.
         <div style={{ marginBottom: FIELD_GAP }}>
           {!showAdminPassword && (
             <label style={LABEL_STYLE}>Wi-Fi network</label>
@@ -203,9 +140,6 @@ export function WifiSection({
       ) : (
         <>
           {wiredUplink && !ssid && (
-            // Online without any SSID = wired. Say so, otherwise the empty
-            // picker reads as an unfinished step and the operator hunts for a
-            // network the device does not need.
             <div style={{
               display: "flex", alignItems: "center",
               gap: 8, marginBottom: FIELD_GAP, padding: "10px 13px",
@@ -226,13 +160,6 @@ export function WifiSection({
                 Wi-Fi network
               </label>
             )}
-            {/* Flex row: input/select fills, Refresh button sits inline on the
-                right. Kept as sibling of the input (not overlaid absolute like
-                the password eye) so it's discoverable in both branches — the
-                dropdown case AND the empty-list "Enter Wi-Fi name" fallback,
-                where scan usually just needs one more shot to catch the
-                target SSID. Rendered regardless of showAdminPassword so the
-                first-time-setup form still has it. */}
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {loadingList ? (

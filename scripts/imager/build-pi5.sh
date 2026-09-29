@@ -1,127 +1,8 @@
 #!/bin/bash
-# =============================================================================
-# build.sh — Golden Image Builder for Raspberry Pi 4B / Pi 5
-# =============================================================================
-#
-# PURPOSE
-#   Produces a production-ready golden.img that boots straight into AP/hotspot
-#   mode. Flash to SD card, insert into Pi 5, power on — done.
-#
-# TWO-PHASE BUILD (for fast iteration)
-#   The build is split into a BASE phase and an OVERLAY phase.
-#   Phase 1 (base) is slow (~20 min) and only runs when /output/base.img
-#   does not exist. Phase 2 (overlay) is fast (~1 min) and always runs.
-#
-#   To force a full rebuild: delete /output/base.img
-#   To iterate on backend/web: just re-run — only Phase 2 executes.
-#   base.img is stamped with the DEVICE_TYPE + RPI_MODEL it was built for
-#   (/output/base.img.built-for); a build for a different one aborts with
-#   instructions rather than silently reusing the wrong cache.
-#
-# PHASE 1 — BASE IMAGE (skipped when /output/base.img exists)
-#   1.  Download or use cached Raspberry Pi OS Lite (arm64, Trixie/Debian 13)
-#   2.  Read partition offsets from the source image
-#   3.  Copy source rootfs + boot to /work (before any modification)
-#   4.  Create a fresh blank output image (8 G by default)
-#   5.  Format: FAT32 boot partition + Btrfs root partition
-#   6.  Create Btrfs @ subvolume (root)
-#   7.  Mount subvolume and boot partition
-#   8.  Restore rootfs from /work backup into the new image
-#   9.  Disable RPi OS firstrun (prevents it overwriting our user setup)
-#  10.  Create user system/12345 with sudo, home dir, correct groups
-#  11.  Enable SSH (ssh flag file + systemd symlink)
-#  12.  Disable NetworkManager — use wpa_supplicant + dhcpcd instead
-#  13.  Set Wi-Fi regulatory country (modprobe, crda, raspi-config, firstrun)
-#  14.  Enable persistent journal (survives reboots for debugging)
-#  15.  Set hostname
-#  16.  Set keyboard layout (US) and locale (en_US.UTF-8)
-#  17.  Write /etc/fstab with Btrfs UUID (must be before chroot)
-#  18.  Patch cmdline.txt for Btrfs root (rootfstype=btrfs rootflags=subvol=@)
-#  19.  Enter chroot (arm64 via qemu):
-#         - Install packages (btrfs-progs, hostapd, dnsmasq, nginx, etc.)
-#         - Verify btrfs binary works (shared libs check)
-#         - Generate locale
-#         - stage_rpi5_wifi_stability: disable IPv6 (legacy RPi 5 workaround)
-#         - stage_enable_spi: dtparam=spi=on + dtparam=i2c_arm=on in config.txt
-#         - stage_backend_units: systemd services (bootstrap, os-server, hal) + software-update
-#         - stage_pulseaudio: PulseAudio echo cancellation (WebRTC AEC for mic/speaker)
-#         - stage_hal_uv: install uv (Python package manager for HAL)
-#         - stage_nginx: write nginx config with backend/hal/openclaw upstreams
-#         - stage_ap: hostapd, dnsmasq, dhcpcd, device-ap/sta-mode scripts
-#         - stage_nodejs_openclaw: Node.js 22 + OpenClaw gateway
-#         - stage_agent_runtimes: pre-bake the Hermes CLI + its (disabled)
-#           gateway unit, and — for lamp / intern-v2 — the codex, claude,
-#           picoclaw and opencode CLIs, so switch-runtime skips the slow
-#           download on device
-#  20.  Install btrfs-resize-once service
-#  21.  Install fr-snapshot + fr-rollback
-#       → Save as /output/base.img
-#
-# PHASE 2 — OVERLAY (always runs — fast)
-#   Copy base.img → golden.img, mount, chroot:
-#         - stage_ota_metadata: fetch build versions from GCS
-#         - stage_backend: download bootstrap-server + os-server binaries
-#         - stage_hal: download HAL Python app + uv sync
-#         - stage_device_profile: install devices.<type> artifact, then copy its
-#           rootfs/ overlay onto / (this is where /opt/hal/.env tuning lives)
-#         - stage_default_agent: bake f_r_default_agent + apply the SSH policy
-#           that follows DEFAULT_AGENT
-#         - stage_web: download web UI zip
-#   Take initial @factory snapshot (baked into image at build time)
-#   QC checks (verify binaries, configs, services, subvolumes)
-#
-# BOOT SEQUENCE (on Pi after flash)
-#   1. Kernel mounts Btrfs @ subvolume as root
-#   2. firstrun-wifi.service: unblocks rfkill, sets Wi-Fi country (runs once)
-#   3. btrfs-resize-once.service: resizes partition + Btrfs to full SD (runs once, self-destructs)
-#      @factory is the build-time white board — never overwritten
-#   4. User runs 'sudo device-ap-mode' to start AP hotspot "<device_type>-xxxx" at 192.168.100.1
-#   5. nginx serves setup web UI, bootstrap/os-server/hal backends running
-#
-# BTRFS SUBVOLUME LAYOUT
-#   @               — initial live root
-#   @factory        — read-only snapshot, created by fr-snapshot
-#   @restore-<ts>   — writable snapshot of @factory, created by fr-rollback
-#
-# FACTORY RESET FLOW
-#   sudo fr-snapshot    → snapshot current root -> @factory (save known-good state)
-#   sudo fr-rollback    → delete old @restore-* subvolumes
-#                          snapshot @factory -> @restore-<ts>
-#                          set @restore-<ts> as btrfs default subvolume
-#                          update cmdline.txt rootflags=subvol=@restore-<ts>
-#                          reboot
-#
-# REQUIREMENTS (Docker build host)
-#   Docker with --privileged (for losetup, mount, btrfs)
-#   qemu-user-static (for arm64 chroot on x86 host)
-#   Internet access (for apt inside chroot + OTA downloads)
-#
-# USAGE
-#   # Build Docker image
-#   docker build -t pi-builder .
-#
-#   # Run (internet required for chroot apt + OTA)
-#   docker run --rm --privileged \
-#     -v $(pwd)/input:/input \
-#     -v $(pwd)/output:/output \
-#     pi-builder
-#
-#   # Flash to SD card (macOS)
-#   diskutil unmountDisk /dev/diskN
-#   sudo dd if=output/golden.img of=/dev/rdiskN bs=8m status=progress
-#   sync && diskutil eject /dev/diskN
-#
-# ON-PI COMMANDS
-#   sudo fr-snapshot              — save current state as @factory
-#   sudo fr-rollback              — restore @factory and reboot
-#   sudo device-ap-mode           — switch to hotspot mode
-#   sudo device-sta-mode          — switch to station (client) mode
-#   sudo connect-wifi SSID PASS   — connect to WiFi (switches to STA mode)
-#   sudo software-update <bootstrap|os-server|hal|openclaw|web>  — OTA update a component
-# =============================================================================
+# Build a golden Raspberry Pi 4B/5 image (Btrfs root + @factory snapshot): cached base.img (Phase 1) + overlay (Phase 2).
+# Usage: docker run --rm --privileged -v $(pwd)/input:/input -v $(pwd)/output:/output pi-builder  (rm /output/base.img to rebuild base)
 set -euo pipefail
 
-# ── config — edit before building ────────────────────────────────────────────
 RPI_MODEL="${RPI_MODEL:-5}"  # Target board: 5 = Raspberry Pi 5, 4 = Raspberry Pi 4B
 WIFI_COUNTRY="US"           # Wi-Fi regulatory country code
 PI_HOSTNAME="autonomous"    # Hostname of the Pi
@@ -129,27 +10,13 @@ PI_TIMEZONE="America/New_York"
 USERNAME="system"           # Linux user created on the image
 PASSWORD="12345"            # Password for the user
 OUT_IMG_SIZE="8G"           # Output image size (expands to full SD on first boot)
-# OTA metadata URL — per-deployment value, passed in by the Makefile (-e). No
-# hardcoded default: fail fast if the caller did not provide one. Baked into the
-# image's /root/config/bootstrap.json below.
 OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — build via 'make build OTA_METADATA_URL=...'}"
 OTA_SIGNING_PUBLIC_KEY="${OTA_SIGNING_PUBLIC_KEY:-}"
-# Device profile baked into this golden image: 1 device type = 1 image. The
-# matching devices.<type> artifact (ROBOT.md + SOUL.md) is fetched from OTA
-# metadata and staged into DEVICES_DIR/<type>. Forwarded by the Makefile (-e).
-# REQUIRED, no default — a golden image must declare which device class it is.
+# One device type per image; its devices.<type> artifact is staged into DEVICES_DIR/<type>.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE is required — build via 'make build DEVICE_TYPE=...'}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
-# Per-image default agent runtime — bakes /root/config/f_r_default_agent, read
-# by SeedAgentRuntimeFromGateway (system/device/runtime.go) with PRIORITY over
-# ROBOT.md gateway.default, and — unlike gateway.default — it survives a
-# Factory Reset (not in factoryreset.go's deviceWipePaths). So an image built
-# with DEFAULT_AGENT re-seeds to the SAME runtime after an F_R instead of
-# falling back to the device-type-wide ROBOT.md value shared by every build.
-# Also gates SSH for intern-v2 — see the SSH stage in the overlay phase.
-# OPTIONAL — unset (the default) bakes nothing and behavior is unchanged:
-# seeding falls through to ROBOT.md gateway.default exactly as before.
-# Mirrors build-orangepi.sh; forwarded by the Makefile (-e) for both targets.
+# Optional: bakes /root/config/f_r_default_agent, which overrides ROBOT.md gateway.default and
+# survives Factory Reset. Also gates SSH for intern-v2 (overlay phase).
 DEFAULT_AGENT="${DEFAULT_AGENT:-}"
 # Optional assembly within the device package; empty/standard keeps legacy defaults.
 VARIANT="${VARIANT:-}"
@@ -160,11 +27,9 @@ fi
 AP_BAND="${AP_BAND:-2.4}"   # 2.4 or 5 (5 GHz needs supported regulatory domain + chip)
 AP_CHANNEL="${AP_CHANNEL:-}" # default: 6 for 2.4 GHz, 36 for 5 GHz
 COUNTRY_CODE="US"           # Regulatory country code for hostapd
-# ─────────────────────────────────────────────────────────────────────────────
 
 MNT="/mnt/pi"
-# Pi 5 uses Trixie (Debian 13); Pi 4 uses Bookworm (Debian 12) for broader compatibility.
-# Cache files are named per-OS so Pi 4 and Pi 5 builds don't collide in /input/.
+# Pi 5 = Trixie, Pi 4 = Bookworm; per-OS cache filenames keep /input/ from colliding.
 if [ "${RPI_MODEL}" = "4" ]; then
   RPI_IMG_URL="https://downloads.raspberrypi.com/raspios_lite_arm64/images/raspios_lite_arm64-2024-11-19/2024-11-19-raspios-bookworm-arm64-lite.img.xz"
   RPI_IMG_XZ="/input/raspios-bookworm.img.xz"
@@ -178,20 +43,14 @@ BASE_IMG="/output/base.img"           # cached base image (Phase 1 output, kept 
 ORIG_ROOT="/mnt/orig_root"            # mount point for source root partition
 ORIG_BOOT="/mnt/orig_boot"            # mount point for source boot partition
 
-# Btrfs mount options:
-#   noatime    — don't update access times (reduces SD card writes)
-#   compress=zstd:1 — transparent compression, level 1 (fast, saves ~30% space)
-# Build-time mount options: commit=5 for frequent flushing (prevents data loss
-# on loop devices). The on-device fstab uses Btrfs default commit=30.
+# Build mounts use commit=5 to flush often on loop devices; fstab keeps the default commit=30.
 BTRFS_BUILD_OPTS="defaults,noatime,compress=zstd:1,commit=5"
-# On-device mount options written to fstab
 BTRFS_FSTAB_OPTS="defaults,noatime,compress=zstd:1"
 
 LOOP_DEV="" LOOP_BOOT="" LOOP_ROOT=""
 OUT_LOOP_DEV="" OUT_LOOP_BOOT="" OUT_LOOP_ROOT=""
 
-# cleanup() — called automatically on EXIT (success or failure)
-# Unmounts all bind mounts and detaches loop devices to leave Docker clean
+# Unmount everything and detach loop devices on EXIT.
 cleanup() {
   echo "==> Cleanup..."
   umount -lf ${MNT}/proc          2>/dev/null || true
@@ -216,20 +75,7 @@ losetup -D 2>/dev/null || true
 
 mkdir -p ${MNT} ${ORIG_ROOT} ${ORIG_BOOT} /output /work
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PHASE 1: BASE IMAGE (only built when /output/base.img does not exist)
-#   Includes: OS download, partitioning, user/network/system config, chroot
-#   package installs, AP setup, Node.js/OpenClaw, systemd units, fr-snapshot/
-#   fr-rollback. Excludes: OTA metadata fetch, backend binary downloads,
-#   web UI download — those are applied in Phase 2 (overlay).
-# ══════════════════════════════════════════════════════════════════════════════
-# ── base.img cache guard ─────────────────────────────────────────────────────
-# base.img is a single cached file, but Phase 1 bakes both DEVICE_TYPE-specific
-# content (nginx conf name, hostapd SSID, dnsmasq drop-in, os-server
-# Environment=DEVICE_TYPE, the pre-baked runtime CLIs) and board-specific content
-# (Pi 4 = Bookworm, Pi 5 = Trixie, plus the Pi-5-only stages). Reusing a cache
-# built for a different device type or board silently ships a wrong image, so
-# stamp what it was built for and refuse a mismatched reuse.
+# base.img bakes device-type- and board-specific content; refuse to reuse a cache built for another target.
 BASE_STAMP="${BASE_IMG}.built-for"
 BASE_STAMP_WANT="${DEVICE_TYPE}/rpi${RPI_MODEL}"
 if [[ -f "${BASE_IMG}" ]]; then
@@ -246,10 +92,7 @@ fi
 if [[ ! -f "${BASE_IMG}" ]]; then
 echo "==> base.img not found — building base image from scratch..."
 
-# ── 1. download or use cached source image ───────────────────────────────────
-# The source image is Raspberry Pi OS Lite (arm64, Trixie/Debian 13).
-# If already downloaded to /input/raspios.img.xz it is reused to save time.
-# The image is copied to /work before extraction to avoid modifying the cache.
+# Extract a copy so the cached .xz stays intact.
 if [[ ! -f "${RPI_IMG_XZ}" ]]; then
   echo "==> Downloading RPi OS Lite..."
   mkdir -p /input
@@ -266,12 +109,7 @@ xz -d /work/raspios.img.xz || {
 }
 [[ -f "${RPI_IMG}" ]] || { echo "FATAL: ${RPI_IMG} not found after extraction"; exit 1; }
 
-# ── 2. read source image partition offsets ───────────────────────────────────
-# The RPi OS image has two partitions:
-#   p1: FAT32 boot (firmware, cmdline.txt, config.txt, kernel)
-#   p2: ext4 root filesystem
-# We attach the image as a loop device and read partition byte offsets so we
-# can attach each partition as a separate loop device (no kpartx needed).
+# Attach each source partition as its own loop device via byte offsets (no kpartx).
 echo "==> Reading source image layout..."
 LOOP_DEV=$(losetup --find --show ${RPI_IMG})
 BOOT_START=$(parted -s ${LOOP_DEV} unit B print | awk '/^ 1/{gsub(/B/,""); print $2}')
@@ -281,11 +119,7 @@ echo "    Boot: ${BOOT_START}B size ${BOOT_SIZE}B  Root: ${ROOT_START}B"
 LOOP_BOOT=$(losetup --find --show --offset ${BOOT_START} --sizelimit ${BOOT_SIZE} ${RPI_IMG})
 LOOP_ROOT=$(losetup --find --show --offset ${ROOT_START} ${RPI_IMG})
 
-# ── 3. copy original content before touching anything ────────────────────────
-# We rsync the source partitions to /work BEFORE reformatting anything.
-# This is the safe order: copy first, then reformat.
-# --no-acls: Docker's overlayfs doesn't support ACLs, skip to avoid errors.
-# Excludes: /home (empty in base image), /var/log/journal (large, not needed).
+# Copy source partitions out before reformatting; --no-acls because Docker overlayfs lacks ACLs.
 echo "==> Copying source rootfs to /work..."
 mount -o ro ${LOOP_ROOT} ${ORIG_ROOT}
 mount -o ro ${LOOP_BOOT} ${ORIG_BOOT}
@@ -299,11 +133,7 @@ losetup -d ${LOOP_ROOT}; LOOP_ROOT=""
 losetup -d ${LOOP_BOOT}; LOOP_BOOT=""
 losetup -d ${LOOP_DEV};  LOOP_DEV=""
 
-# ── 4. create blank output image ─────────────────────────────────────────────
-# We create a fresh raw image (not modifying the source) with two partitions:
-#   p1: 512 MiB FAT32 boot  — required by Pi bootloader, cannot be Btrfs
-#   p2: rest    Btrfs root  — will be expanded to full SD on first boot
-# Using msdos (MBR) partition table for maximum Pi compatibility.
+# p1: 512 MiB FAT32 boot (Pi firmware can't read Btrfs); p2: Btrfs root, grown to full SD on first boot.
 echo "==> Creating ${OUT_IMG_SIZE} base image..."
 qemu-img create -f raw ${BASE_IMG} ${OUT_IMG_SIZE}
 OUT_LOOP_DEV=$(losetup --find --show ${BASE_IMG})
@@ -317,91 +147,55 @@ OUT_ROOT_START=$(parted -s ${OUT_LOOP_DEV} unit B print | awk '/^ 2/{gsub(/B/,""
 OUT_LOOP_BOOT=$(losetup --find --show --offset ${OUT_BOOT_START} --sizelimit ${OUT_BOOT_SIZE} ${BASE_IMG})
 OUT_LOOP_ROOT=$(losetup --find --show --offset ${OUT_ROOT_START} ${BASE_IMG})
 
-# ── 5. format partitions ─────────────────────────────────────────────────────
-# Boot partition must be FAT32 (Pi bootloader requirement).
-# Root partition is Btrfs with label "rootfs".
 echo "==> Formatting boot (FAT32) and root (Btrfs)..."
 mkfs.fat -F 32 -n BOOT ${OUT_LOOP_BOOT}
 mkfs.btrfs -L rootfs ${OUT_LOOP_ROOT}
 
-# ── 6. create Btrfs subvolume @ ──────────────────────────────────────────────
-# Btrfs uses subvolumes to enable snapshots. We create @ as the root subvolume.
-# The kernel is told to mount subvol=@ via cmdline.txt (step 17).
-# This separation (top-level → @) allows fr-snapshot/fr-rollback to swap
-# the entire OS by replacing @ without touching the boot partition.
+# Root lives in subvolume @ so fr-snapshot/fr-rollback can swap it without touching boot.
 echo "==> Creating Btrfs @ subvolume..."
 mount ${OUT_LOOP_ROOT} ${MNT}
 btrfs subvolume create ${MNT}/@
 umount ${MNT}
 
-# ── 7. mount subvolume and boot partition ────────────────────────────────────
-# Mount @ with production Btrfs options (noatime, zstd compression, 120s commit).
-# Also create essential directories that need to exist before rsync.
 echo "==> Mounting @ and boot partition..."
 mount -o ${BTRFS_BUILD_OPTS},subvol=@ ${OUT_LOOP_ROOT} ${MNT}
 mkdir -p ${MNT}/{home,boot/firmware,tmp,proc,sys,dev}
 mount ${OUT_LOOP_BOOT} ${MNT}/boot/firmware
 
-# ── 8. restore rootfs from backup ────────────────────────────────────────────
-# Copy the source RPi OS rootfs (step 3 backup) into the new Btrfs image.
-# This gives us a fully functional Debian Trixie base to build on top of.
 echo "==> Restoring rootfs..."
 rsync -aAX --no-acls /work/rootfs_backup/ ${MNT}/
 rsync -aAX            /work/boot_backup/  ${MNT}/boot/firmware/
 sync
 
-# ── 9. disable RPi OS firstrun ───────────────────────────────────────────────
-# RPi OS ships a firstrun.sh that runs on first boot to create the default
-# "pi" user and configure the system interactively. We disable it because:
-#   - We create our own user (step 10)
-#   - It would overwrite our custom configuration
-#   - It ends with a reboot which we don't want during our setup
+# Disable RPi OS firstrun: it would create its own user, overwrite our config and reboot.
 echo "==> Disabling RPi OS firstrun..."
 rm -f ${MNT}/boot/firmware/firstrun.sh
-# Mask ALL RPi OS first-boot services — Trixie has multiple:
-#   raspberrypi-sys-mods — old firstrun mechanism
-#   userconfig           — Trixie's "Please enter new username" wizard
-#   piwiz                — graphical first-boot wizard (if installed)
-# Masking (symlink to /dev/null) is stronger than just removing the .wants symlink —
-# it prevents the service from being started even manually or by other services.
+# Mask (not just disable) Trixie's first-boot wizards so nothing can start them.
 for SVC in raspberrypi-sys-mods userconfig piwiz; do
   ln -sf /dev/null ${MNT}/etc/systemd/system/${SVC}.service 2>/dev/null || true
 done
-# Remove the systemd.run= kernel parameter that triggers firstrun on boot
-# Note: avoid sed -i on FAT32 — its temp-file + rename corrupts vfat metadata
-# and causes the kernel to remount the partition read-only.
+# Drop systemd.run= from cmdline. Avoid sed -i on FAT32: its temp-file rename corrupts vfat
+# metadata and the kernel remounts the partition read-only.
 if [[ -f ${MNT}/boot/firmware/cmdline.txt ]]; then
   CMDLINE=$(sed 's| systemd\.run[^ ]*||g' ${MNT}/boot/firmware/cmdline.txt)
   echo "${CMDLINE}" > ${MNT}/boot/firmware/cmdline.txt
 fi
 
-# ── 10. create user ──────────────────────────────────────────────────────────
-# Create user "system" with password "12345" and uid/gid 1000.
-# Why remove pi and system first:
-#   - "pi" is the RPi OS default user we don't want
-#   - "system" may exist as a Debian system account (uid < 1000) causing conflict
-# userconf.txt is an RPi OS mechanism: if present on /boot/firmware at first
-# boot, it creates the user listed there — acts as a safety net alongside our
-# direct passwd/shadow edits.
+# Replace RPi OS 'pi' and any Debian 'system' account with our uid 1000 user; userconf.txt is a first-boot fallback.
 echo "==> Creating user ${USERNAME}..."
 HASH=$(openssl passwd -6 "${PASSWORD}")
-# Remove conflicting entries from passwd, shadow, group
 sed -i '/^pi:/d;/^system:/d'     ${MNT}/etc/passwd 2>/dev/null || true
 sed -i '/^pi:/d;/^system:/d'     ${MNT}/etc/shadow 2>/dev/null || true
 sed -i '/^pi:/d;/^system:/d'     ${MNT}/etc/group  2>/dev/null || true
 rm -rf ${MNT}/home/pi 2>/dev/null || true
-# Write user entries directly (uid=1000, gid=1000, home=/home/system, shell=bash)
 echo "${USERNAME}:x:1000:1000:,,,:/home/${USERNAME}:/bin/bash" >> ${MNT}/etc/passwd
 echo "${USERNAME}:${HASH}:19000:0:99999:7:::"                  >> ${MNT}/etc/shadow
 echo "${USERNAME}:x:1000:"                                      >> ${MNT}/etc/group
-# RPi OS firstrun backup mechanism
 echo "${USERNAME}:${HASH}" > ${MNT}/boot/firmware/userconf.txt
-# Home directory populated from /etc/skel (.bashrc, .profile, .bash_logout)
 mkdir -p ${MNT}/home/${USERNAME}
 cp -rp ${MNT}/etc/skel/. ${MNT}/home/${USERNAME}/ 2>/dev/null || true
 chown -R 1000:1000 ${MNT}/home/${USERNAME}
 chmod 755 ${MNT}/home/${USERNAME}
-# Add to hardware/system groups for GPIO, USB serial, video, networking access
 for GRP in sudo adm video gpio plugdev input netdev dialout; do
   grep -q "^${GRP}:" ${MNT}/etc/group && \
     grep -q "${USERNAME}" <<< $(grep "^${GRP}:" ${MNT}/etc/group) || \
@@ -411,17 +205,13 @@ done
 echo "${USERNAME} ALL=(ALL) NOPASSWD: ALL" > ${MNT}/etc/sudoers.d/010_${USERNAME}-nopasswd
 chmod 440 ${MNT}/etc/sudoers.d/010_${USERNAME}-nopasswd
 
-# ── 11. enable SSH ────────────────────────────────────────────────────────────
-# Two methods for belt-and-suspenders SSH enablement:
-#   1. Empty ssh file on /boot/firmware — RPi OS enables sshd when it sees this
-#   2. Direct systemd symlink — ensures sshd starts even without RPi OS hook
+# Enable SSH two ways: /boot/firmware/ssh flag file and a direct systemd symlink.
 echo "==> Enabling SSH..."
 touch ${MNT}/boot/firmware/ssh
 mkdir -p ${MNT}/etc/systemd/system/multi-user.target.wants
 ln -sf /lib/systemd/system/ssh.service \
        ${MNT}/etc/systemd/system/multi-user.target.wants/ssh.service 2>/dev/null || true
-# Remove any host keys from the base image so each device generates its own.
-# Shared keys across devices would allow MITM attacks between them.
+# Security: strip base host keys so every device generates its own (shared keys allow MITM).
 rm -f ${MNT}/etc/ssh/ssh_host_*
 # Install a first-boot service that generates unique host keys before sshd starts.
 cat > ${MNT}/etc/systemd/system/ssh-keygen-once.service <<'UNIT'
@@ -441,14 +231,7 @@ UNIT
 ln -sf /etc/systemd/system/ssh-keygen-once.service \
        ${MNT}/etc/systemd/system/multi-user.target.wants/ssh-keygen-once.service
 
-# ── 12. disable NetworkManager ───────────────────────────────────────────────
-# RPi OS Trixie ships NetworkManager by default. We replace it with:
-#   wpa_supplicant@wlan0 — manages Wi-Fi association in STA mode
-#   dhcpcd5             — gets IP address via DHCP in STA mode
-# Reason: NM conflicts with hostapd in AP mode and makes AP/STA switching
-# unreliable. wpa_supplicant + dhcpcd is simpler and more predictable.
-# We mask NM services (symlink to /dev/null) rather than just disabling,
-# so they cannot be accidentally started even by other services.
+# Mask NetworkManager: it conflicts with hostapd; wpa_supplicant + dhcpcd handle STA mode.
 echo "==> Disabling NetworkManager (using wpa_supplicant + dhcpcd)..."
 mkdir -p ${MNT}/etc/systemd/system
 ln -sf /dev/null ${MNT}/etc/systemd/system/NetworkManager.service
@@ -456,19 +239,8 @@ ln -sf /dev/null ${MNT}/etc/systemd/system/NetworkManager-wait-online.service
 ln -sf /dev/null ${MNT}/etc/systemd/system/NetworkManager-dispatcher.service
 rm -rf ${MNT}/etc/NetworkManager/system-connections/ 2>/dev/null || true
 
-# ── 13. Wi-Fi regulatory country ─────────────────────────────────────────────
-# Wi-Fi is blocked by rfkill on RPi OS until a country code is set.
-# We set it via multiple mechanisms to ensure at least one takes effect:
-#
-#   /etc/default/raspi-config  — RPi OS rfkill service reads COUNTRY= from here
-#   /etc/default/crda          — older regulatory daemon reads REGDOMAIN=
-#   /etc/modprobe.d/cfg80211   — kernel reads this at cfg80211 module load time
-#
-# firstrun-wifi.sh runs once on first boot (via sysinit.target, very early):
-#   - rfkill unblock wifi               — unblocks the radio right now
-#   - echo 0 > /var/lib/systemd/rfkill/*:wlan  — persists unblocked state
-#   - raspi-config nonint do_wifi_country US   — sets country in all RPi places
-# The service is ConditionPathExists-guarded and self-destructs after running.
+# Wi-Fi stays rfkill-blocked until a country is set; set it via raspi-config, crda and cfg80211.
+# firstrun-wifi.sh unblocks rfkill once on first boot, then deletes itself.
 echo "==> Setting Wi-Fi country ${WIFI_COUNTRY}..."
 cat > ${MNT}/etc/default/raspi-config <<RCFG
 RPICFG_TO_DISABLE=1
@@ -507,10 +279,6 @@ mkdir -p ${MNT}/etc/systemd/system/sysinit.target.wants
 ln -sf /etc/systemd/system/firstrun-wifi.service \
        ${MNT}/etc/systemd/system/sysinit.target.wants/firstrun-wifi.service
 
-# ── 14. persistent journal ───────────────────────────────────────────────────
-# By default RPi OS uses volatile journal (lost on reboot).
-# Persistent journal lets you debug boot failures with journalctl -b -1.
-# Storage=persistent tells systemd-journald to write to /var/log/journal.
 echo "==> Enabling persistent journal..."
 mkdir -p ${MNT}/var/log/journal
 mkdir -p ${MNT}/etc/systemd/journald.conf.d
@@ -520,7 +288,6 @@ Storage=persistent
 SystemMaxUse=100M
 JRN
 
-# ── 15. hostname ──────────────────────────────────────────────────────────────
 echo "==> Setting hostname ${PI_HOSTNAME}..."
 echo "${PI_HOSTNAME}" > ${MNT}/etc/hostname
 cat > ${MNT}/etc/hosts <<HOSTS
@@ -531,12 +298,7 @@ ff02::1     ip6-allnodes
 ff02::2     ip6-allrouters
 HOSTS
 
-# ── 16. keyboard and locale ───────────────────────────────────────────────────
-# Two separate keyboard configs are needed:
-#   /etc/default/keyboard  — XKB config used by X11/Wayland and console-setup
-#   /etc/vconsole.conf     — systemd-vconsole-setup reads this for tty keymap
-#                            Without this, ~ | \ don't work in terminal
-# locale.gen lists locales to compile; locale-gen is run in chroot (step 18).
+# /etc/vconsole.conf sets the tty keymap (otherwise ~ | \ break); locale-gen runs later in chroot.
 echo "==> Setting keyboard / locale..."
 cat > ${MNT}/etc/default/keyboard <<KB
 XKBMODEL="pc105"
@@ -553,12 +315,7 @@ LC_ALL=en_US.UTF-8
 LANGUAGE=en_US.UTF-8
 DEFLOC
 
-# ── 17. fstab ─────────────────────────────────────────────────────────────────
-# IMPORTANT: fstab must be written BEFORE entering chroot.
-# When apt installs packages inside chroot, it triggers update-initramfs which
-# reads /etc/fstab to determine the root filesystem type. If fstab still shows
-# the original PARTUUID/ext4, initramfs gets built incorrectly and boot fails
-# with "Couldn't identify type of root file system" warnings.
+# fstab must be written BEFORE the chroot: apt triggers update-initramfs, which reads fstab for the root fs type.
 echo "==> Writing fstab (before chroot so initramfs builds correctly)..."
 ROOT_UUID=$(blkid -s UUID -o value ${OUT_LOOP_ROOT})
 BOOT_UUID=$(blkid -s UUID -o value ${OUT_LOOP_BOOT})
@@ -569,14 +326,7 @@ UUID=${BOOT_UUID}  /boot/firmware  vfat   defaults                  0  2
 tmpfs              /tmp            tmpfs  defaults,nosuid,nodev      0  0
 EOF
 
-# ── 18. cmdline.txt ───────────────────────────────────────────────────────────
-# Tell the kernel to mount Btrfs instead of ext4 and use the @ subvolume.
-# We:
-#   1. Replace root=PARTUUID=... with root=UUID=... (Btrfs uses UUID not PARTUUID)
-#   2. Remove any existing rootfstype= and rootflags= parameters
-#   3. Append rootfstype=btrfs rootflags=subvol=@
-# Note: tr -s ' ' collapses multiple spaces left by the sed removals.
-# Note: avoid sed -i on FAT32 — use read-then-write to prevent vfat remount-ro.
+# Point the kernel at the Btrfs UUID + subvol=@ (read-then-write: no sed -i on FAT32).
 echo "==> Patching cmdline.txt for Btrfs..."
 CMDLINE_FILE="${MNT}/boot/firmware/cmdline.txt"
 CMDLINE_TXT=$(cat ${CMDLINE_FILE})
@@ -585,23 +335,13 @@ CMDLINE_TXT=$(echo "${CMDLINE_TXT}" | sed "s|rootfstype=[^ ]*||g; s|rootflags=[^
 CMDLINE_TXT=$(echo "${CMDLINE_TXT}" | tr -s ' ' | sed 's/ *$//')
 echo "${CMDLINE_TXT} rootfstype=btrfs rootflags=subvol=@" > ${CMDLINE_FILE}
 
-# ── 19. chroot — install packages and run application stages ─────────────────
-# We chroot into the arm64 image using qemu-aarch64-static as the interpreter.
-# This allows running arm64 binaries (apt, locale-gen, etc.) on the x86 host.
-#
-# resolv.conf is temporarily replaced with the host's so apt can reach the
-# internet. It is restored after the chroot exits.
-#
-# Packages are installed WITHOUT --no-install-recommends to ensure all shared
-# library dependencies are included. This is critical for btrfs-progs —
-# without its recommended deps, /usr/bin/btrfs fails with
-# "cannot execute: required file not found" at runtime on the Pi.
+# Chroot via qemu-aarch64-static; host resolv.conf is swapped in for apt and restored afterwards.
+# Install WITH recommends: btrfs-progs needs them or /usr/bin/btrfs fails on the Pi.
 echo "==> Entering chroot (arm64 via qemu)..."
 echo "${PI_TIMEZONE}" > ${MNT}/etc/timezone
 ln -sf /usr/share/zoneinfo/${PI_TIMEZONE} ${MNT}/etc/localtime
 
-# Copy build resources into chroot so they are visible inside (Docker volume mounts
-# are not visible inside chroot). Cleaned up after chroot exits.
+# Docker volume mounts aren't visible inside chroot; copy /resources in (removed afterwards).
 if [ -d /resources ]; then
   cp -r /resources ${MNT}/resources
 fi
@@ -613,11 +353,7 @@ mount --bind /dev  ${MNT}/dev
 cp ${MNT}/etc/resolv.conf ${MNT}/etc/resolv.conf.bak 2>/dev/null || true
 cp /etc/resolv.conf ${MNT}/etc/resolv.conf
 
-# Silence debconf "unable to initialize frontend: Dialog" warnings.
-# debconf falls back to Noninteractive which is what we want — these lines
-# just prevent the noisy warning output during apt installs.
-# Pre-seed debconf to prevent interactive prompts for keyboard-configuration
-# and set Noninteractive frontend as default.
+# Pre-seed debconf: Noninteractive frontend, no keyboard-configuration prompts.
 chroot ${MNT} debconf-set-selections 2>/dev/null <<'DBCONF' || true
 debconf debconf/frontend select Noninteractive
 keyboard-configuration keyboard-configuration/layoutcode string us
@@ -629,8 +365,7 @@ cat > ${MNT}/etc/apt/apt.conf.d/99-${DEVICE_TYPE}-silent <<'APT'
 Dpkg::Use-Pty "false";
 APT
 
-# libgpiod SONAME bumped 2 → 3 between Bookworm (Pi 4) and Trixie (Pi 5).
-# Pi 4 branch has only libgpiod2; Pi 5 branch has only libgpiod3.
+# libgpiod SONAME: Bookworm (Pi 4) ships libgpiod2, Trixie (Pi 5) libgpiod3.
 if [ "${RPI_MODEL}" = "5" ]; then
   LIBGPIOD_PKG="libgpiod3"
 else
@@ -660,19 +395,15 @@ DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get install -y \
   openresolv \
   avahi-daemon avahi-utils libnss-mdns \
   bluez
-# Purge NetworkManager and its dependencies completely
 DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get purge -y --auto-remove \
   network-manager network-manager-gnome 2>/dev/null || true
-# Purge cloud-init — it ships with Trixie but interferes with our custom
-# fstab/partition setup and can stall boot waiting for metadata services.
+# Purge cloud-init: it fights our fstab/partition setup and can stall boot.
 DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get purge -y --auto-remove \
   cloud-init 2>/dev/null || true
 rm -rf ${MNT}/etc/cloud ${MNT}/var/lib/cloud
 DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} apt-get clean
 
-# Hard verify btrfs binary works inside chroot.
-# If this fails, fr-snapshot/fr-rollback will fail on the Pi.
-# Most common cause: missing shared libs (install without --no-install-recommends fixes this).
+# Fail fast if btrfs can't run in chroot (usually missing shared libs); fr-snapshot/fr-rollback depend on it.
 echo "==> Verifying /usr/bin/btrfs..."
 chroot ${MNT} /usr/bin/btrfs version || {
   echo "FATAL: /usr/bin/btrfs cannot execute inside chroot"
@@ -682,24 +413,19 @@ chroot ${MNT} /usr/bin/btrfs version || {
 }
 echo "==> btrfs OK"
 
-# Ensure initramfs includes btrfs module for root mount.
 echo "==> Rebuilding initramfs with btrfs support..."
 
 # Force MODULES=most and override any conf.d/ snippets that could reset it.
 sed -i 's/^MODULES=.*/MODULES=most/' ${MNT}/etc/initramfs-tools/initramfs.conf
 grep -q '^MODULES=' ${MNT}/etc/initramfs-tools/initramfs.conf || \
   echo 'MODULES=most' >> ${MNT}/etc/initramfs-tools/initramfs.conf
-# Comment out any conf.d override that sets MODULES=dep
 find ${MNT}/etc/initramfs-tools/conf.d/ -type f -exec grep -l '^MODULES=' {} \; 2>/dev/null | \
   while read f; do echo "==> Commenting MODULES override in $(basename $f)"; sed -i 's/^MODULES=/#&/' "$f"; done
 
-# List btrfs explicitly in modules file.
 grep -q '^btrfs$' ${MNT}/etc/initramfs-tools/modules 2>/dev/null || \
   echo 'btrfs' >> ${MNT}/etc/initramfs-tools/modules
 
-# Install a hook that force-adds btrfs via manual_add_modules.
-# This is the most reliable method — it bypasses MODULES= logic entirely and
-# guarantees the module is copied into the initramfs.
+# Hook forces btrfs into the initramfs via manual_add_modules, bypassing MODULES= logic.
 cat > ${MNT}/etc/initramfs-tools/hooks/btrfs-force <<'HOOKEOF'
 #!/bin/sh
 set -e
@@ -711,7 +437,6 @@ manual_add_modules btrfs
 HOOKEOF
 chmod 755 ${MNT}/etc/initramfs-tools/hooks/btrfs-force
 
-# Verify the kernel module file exists before rebuilding.
 for KDIR in ${MNT}/lib/modules/*/; do
   [ -d "${KDIR}" ] || continue
   KVER=$(basename "${KDIR}")
@@ -730,8 +455,7 @@ grep -v '^#' ${MNT}/etc/initramfs-tools/modules | grep -v '^$' || true
 
 chroot ${MNT} update-initramfs -u -k all
 
-# Verify btrfs is in the initramfs by checking the archive directly.
-# Avoids lsinitramfs chroot issues and SIGPIPE from piping through head.
+# Inspect the initrd archive directly (avoids lsinitramfs chroot issues and SIGPIPE from head).
 BTRFS_IN_INITRD=false
 for INITRD in ${MNT}/boot/initrd.img-*; do
   [ -f "${INITRD}" ] || continue
@@ -755,12 +479,8 @@ if [ "${BTRFS_IN_INITRD}" = "false" ]; then
   echo "WARNING: btrfs module not found in any initramfs — boot may fail"
 fi
 
-# Ensure auto_initramfs=1 is present so the Pi firmware automatically
-# loads the correct initramfs for each kernel variant (initramfs_2712 for
-# Pi 5, initramfs8 for Pi 4/3). This is the only reliable way — explicit
-# "initramfs <file> followkernel" directives only keep the LAST line,
-# so a Pi 5 would get the v8 initramfs (wrong modules → btrfs fails).
-# Stock Raspberry Pi OS already sets auto_initramfs=1; this is a safety net.
+# Pi firmware: auto_initramfs=1 loads the per-kernel initramfs (2712 vs v8). Explicit 'initramfs'
+# lines keep only the last one, so a Pi 5 could get the v8 initramfs and fail the btrfs root mount.
 if ! grep -q '^auto_initramfs=1' ${MNT}/boot/firmware/config.txt; then
   echo "" >> ${MNT}/boot/firmware/config.txt
   echo "# Auto-load correct initramfs per kernel (required for btrfs root mount)" >> ${MNT}/boot/firmware/config.txt
@@ -769,21 +489,16 @@ if ! grep -q '^auto_initramfs=1' ${MNT}/boot/firmware/config.txt; then
 else
   echo "==> auto_initramfs=1 already present in config.txt"
 fi
-# Remove any explicit initramfs lines that would override auto_initramfs
 if grep -q '^initramfs ' ${MNT}/boot/firmware/config.txt; then
   sed -i '/^initramfs /d' ${MNT}/boot/firmware/config.txt
   echo "==> Removed explicit initramfs directives (auto_initramfs handles it)"
 fi
 
-# Generate locale — must be done inside chroot so locale files exist on the Pi.
-# Without this, every login shows "LC_ALL: cannot change locale (en_US.UTF-8)".
+# locale-gen must run in chroot or every login warns "cannot change locale".
 chroot ${MNT} /usr/sbin/locale-gen en_US.UTF-8 || true
 chroot ${MNT} /usr/sbin/update-locale LANG=en_US.UTF-8 LC_ALL=en_US.UTF-8 || true
 
-# ── application stages (inside chroot) ───────────────────────────────────────
-# All stages run in a single chroot bash session to avoid repeated qemu overhead.
-# The heredoc delimiter CHROOT_STAGES is unquoted so ${VAR} from the outer
-# script are expanded — this passes config values into the chroot environment.
+# One chroot session for all stages; unquoted delimiter so outer ${VAR}s expand inside.
 chroot ${MNT} /bin/bash <<CHROOT_STAGES
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
@@ -1643,11 +1358,7 @@ systemctl daemon-reload
 echo "[stage] All stages complete"
 CHROOT_STAGES
 
-# ── install canonical software-update ────────────────────────────────────────
-# The on-device OTA updater is one file in the repo (scripts/provision/
-# software-update), staged into /input by the imager Makefile and installed
-# here from the host — NOT written by heredoc inside the chroot. setup.sh
-# inlines the same file at release time, so all fleets carry one version.
+# software-update is the canonical repo file staged into /input by the Makefile (setup.sh inlines the same file).
 echo "[stage] install /usr/local/bin/software-update (canonical)"
 if [ ! -f /input/software-update ]; then
   echo "ERROR: /input/software-update missing — run via 'make build' (it stages the file)" >&2
@@ -1655,14 +1366,10 @@ if [ ! -f /input/software-update ]; then
 fi
 install -m 0755 /input/software-update "${MNT}/usr/local/bin/software-update"
 
-# Restore resolv.conf and clean up chroot artifacts
 mv ${MNT}/etc/resolv.conf.bak ${MNT}/etc/resolv.conf 2>/dev/null || true
 
-# Hand /etc/resolv.conf over to resolvconf so the static fallback in
-# /etc/resolvconf.conf (1.1.1.1 / 8.8.8.8) is always present even with no
-# DHCP lease (e.g. AP mode). Only rewrite when the restored file is a plain
-# file with no nameservers — leave RPi OS / systemd-resolved-managed setups
-# alone. resolvconf -u will run on first boot when dhcpcd starts.
+# If the restored resolv.conf has no nameservers, hand it to resolvconf so its static fallback
+# DNS applies (e.g. AP mode with no DHCP lease).
 if [ -e ${MNT}/etc/resolv.conf ] && [ ! -L ${MNT}/etc/resolv.conf ]; then
   if ! grep -qE '^[[:space:]]*nameserver[[:space:]]+' ${MNT}/etc/resolv.conf 2>/dev/null; then
     echo "==> Linking /etc/resolv.conf -> /run/resolvconf/resolv.conf in image"
@@ -1672,14 +1379,11 @@ if [ -e ${MNT}/etc/resolv.conf ] && [ ! -L ${MNT}/etc/resolv.conf ]; then
   fi
 fi
 
-# Kill any processes still running inside the chroot (e.g. sshd, dbus-daemon
-# spawned by apt post-install triggers). If these survive into the golden image
-# they hold ports/sockets on first boot and block systemd from starting services.
+# Kill processes left by apt triggers (sshd, dbus); they would hold sockets and block services on first boot.
 echo "==> Killing stale chroot processes..."
 for pid in $(lsof -t +D ${MNT} 2>/dev/null || true); do
   kill -9 "$pid" 2>/dev/null || true
 done
-# Also kill anything whose root is the chroot mount
 fuser -k -M ${MNT} 2>/dev/null || true
 # Remove stale PID files that could confuse systemd on first boot
 rm -f ${MNT}/run/sshd.pid ${MNT}/run/dbus/pid 2>/dev/null || true
@@ -1691,20 +1395,8 @@ umount ${MNT}/proc
 rm -f ${MNT}/usr/bin/qemu-aarch64-static
 rm -rf ${MNT}/resources
 
-# ── 20. btrfs-resize-once service ────────────────────────────────────────────
-# This service runs ONCE on first boot after flashing to SD card.
-# Purpose: the golden.img is 8G but the SD card may be 32/64/128G+.
-# The service expands the Btrfs partition and filesystem to fill the SD card,
-# then immediately starts AP mode so the device is ready to use.
-#
-# Why growpart instead of parted?
-#   parted -s shows an interactive "Partition in use, continue?" prompt even
-#   with -s flag when the partition is mounted. growpart is specifically
-#   designed for resizing mounted partitions with no prompts.
-#
-# Self-destructs by:
-#   1. systemctl disable (removes symlink so it won't run again)
-#   2. rm -f itself (ConditionPathExists check also prevents re-run)
+# First-boot service: grows the Btrfs partition/filesystem to the full SD, starts AP mode, then disables itself.
+# growpart (not parted) because parted prompts on mounted partitions even with -s.
 echo "==> Installing btrfs-resize-once service..."
 cat > ${MNT}/usr/local/bin/btrfs-resize-once <<'SCRIPT'
 #!/bin/bash
@@ -1790,24 +1482,8 @@ UNIT
 ln -sf /etc/systemd/system/btrfs-resize-once.service \
        ${MNT}/etc/systemd/system/multi-user.target.wants/btrfs-resize-once.service
 
-# ── 21. fr-snapshot and fr-rollback ──────────────────────────────────────────
-# These scripts implement the factory reset feature using Btrfs snapshots.
-#
-# fr-snapshot: saves the current system state as a read-only @factory snapshot
-#   - Detects the currently mounted root subvolume (@ or @restore-<ts>)
-#   - Uses 'btrfs subvolume show' to verify it is a real subvolume (not just dir)
-#   - If @factory already exists as a valid subvolume, deletes it first
-#   - Creates @factory as read-only (-r flag) so it cannot be accidentally modified
-#
-# fr-rollback: restores the system to the @factory snapshot state
-#   - Pre-flight: verifies btrfs binary works (shared libs present)
-#   - Prints subvolume list so failures are diagnosable from journal
-#   - Deletes old @restore-* subvolumes (skips currently mounted root)
-#   - Snapshots @factory -> @restore-<ts> (writable copy)
-#   - Sets @restore-<ts> as btrfs default subvolume (by ID)
-#   - Updates cmdline.txt rootflags to point to @restore-<ts>
-#   - Reboots — kernel mounts @restore-<ts> as /
-#   - Safe to run repeatedly: never deletes the currently mounted root
+# fr-snapshot saves the current root as read-only @factory; fr-rollback snapshots @factory to
+# @restore-<ts>, sets it as btrfs default and reboots (never deletes the mounted root).
 echo "==> Installing fr-snapshot and fr-rollback..."
 
 cat > ${MNT}/usr/local/bin/fr-snapshot <<'SCRIPT'
@@ -1964,8 +1640,6 @@ SCRIPT
 chmod 700 ${MNT}/usr/local/bin/fr-snapshot
 chmod 700 ${MNT}/usr/local/bin/fr-rollback
 
-# ── save base image ─────────────────────────────────────────────────────────
-# Unmount everything. Phase 1 builds directly into base.img, no copy needed.
 echo "==> Finalizing base image..."
 btrfs filesystem sync ${MNT} 2>/dev/null || true
 sync
@@ -1982,15 +1656,9 @@ else
   echo "==> Using cached ${BASE_IMG}, skipping base build..."
 fi  # end PHASE 1
 
-# ══════════════════════════════════════════════════════════════════════════════
-# PHASE 2: OVERLAY (always runs — applies frequently changing parts)
-#   OTA metadata fetch, backend binary downloads, web UI download.
-#   Then: @factory snapshot + QC checks.
-# ══════════════════════════════════════════════════════════════════════════════
 echo "==> Phase 2: applying overlay (OTA + backend + web)..."
 cp ${BASE_IMG} ${OUT_IMG}
 
-# Attach golden.img and read partition layout
 OUT_LOOP_DEV=$(losetup --find --show ${OUT_IMG})
 OUT_BOOT_START=$(parted -s ${OUT_LOOP_DEV} unit B print | awk '/^ 1/{gsub(/B/,""); print $2}')
 OUT_BOOT_SIZE=$( parted -s ${OUT_LOOP_DEV} unit B print | awk '/^ 1/{gsub(/B/,""); print $4}')
@@ -1998,11 +1666,9 @@ OUT_ROOT_START=$(parted -s ${OUT_LOOP_DEV} unit B print | awk '/^ 2/{gsub(/B/,""
 OUT_LOOP_BOOT=$(losetup --find --show --offset ${OUT_BOOT_START} --sizelimit ${OUT_BOOT_SIZE} ${OUT_IMG})
 OUT_LOOP_ROOT=$(losetup --find --show --offset ${OUT_ROOT_START} ${OUT_IMG})
 
-# Mount Btrfs @ subvolume + boot
 mount -o ${BTRFS_BUILD_OPTS},subvol=@ ${OUT_LOOP_ROOT} ${MNT}
 mount ${OUT_LOOP_BOOT} ${MNT}/boot/firmware
 
-# Set up chroot environment for overlay stages
 cp /usr/bin/qemu-aarch64-static ${MNT}/usr/bin/qemu-aarch64-static
 mount --bind /proc ${MNT}/proc
 mount --bind /sys  ${MNT}/sys
@@ -2010,9 +1676,7 @@ mount --bind /dev  ${MNT}/dev
 cp ${MNT}/etc/resolv.conf ${MNT}/etc/resolv.conf.bak 2>/dev/null || true
 cp /etc/resolv.conf ${MNT}/etc/resolv.conf
 
-# ── overlay chroot: OTA metadata + backend binaries + web UI ─────────────────
-# Ensure jq/curl/unzip are available — they should be in the base image from
-# Phase 1 apt install, but a stale cached base.img might be missing them.
+# A stale cached base.img may lack jq/curl/unzip.
 DEBIAN_FRONTEND=noninteractive TERM=xterm chroot ${MNT} bash -c \
   'command -v jq &>/dev/null && command -v curl &>/dev/null && command -v unzip &>/dev/null || \
    { apt-get update -qq && apt-get install -y jq curl unzip ca-certificates; apt-get clean; }'
@@ -2340,48 +2004,33 @@ fi
 echo "[overlay] All overlay stages complete"
 OVERLAY_STAGES
 
-# Clean up overlay chroot
 mv ${MNT}/etc/resolv.conf.bak ${MNT}/etc/resolv.conf 2>/dev/null || true
 umount ${MNT}/dev
 umount ${MNT}/sys
 umount ${MNT}/proc
 rm -f ${MNT}/usr/bin/qemu-aarch64-static
 
-# ── 22. take initial @factory snapshot ───────────────────────────────────────
-# Take the factory snapshot at build time (not on first boot).
-# This ensures a known-good factory state is always present on the image,
-# even before fr-snapshot has ever been run on the Pi.
-# The snapshot is read-only (-r) so it cannot be accidentally modified.
-#
-# Mount top-level (subvolid=5) WHILE subvol=@ is still mounted. Btrfs
-# allows simultaneous mounts of different subvolumes. This avoids the
-# unmount-remount cycle that fails in Docker --privileged (the kernel can
-# auto-detach loop devices once the last filesystem is unmounted).
+# Take @factory at build time. Mount top-level (subvolid=5) while @ is still mounted: an unmount-remount
+# cycle fails under Docker --privileged because the kernel can auto-detach the loop device.
 echo "==> Taking initial @factory snapshot..."
-# Flush Btrfs transactions before snapshot to ensure all data is committed
 btrfs filesystem sync ${MNT}
 sync
 mkdir -p /mnt/btrfs-top
 mount -t btrfs -o subvolid=5 ${OUT_LOOP_ROOT} /mnt/btrfs-top
 btrfs subvolume snapshot -r /mnt/btrfs-top/@ /mnt/btrfs-top/@factory
 
-# ── 23. unmount ───────────────────────────────────────────────────────────────
 echo "==> Flushing Btrfs and unmounting..."
-# Flush Btrfs transaction log before unmount to ensure all metadata is on disk
 btrfs filesystem sync /mnt/btrfs-top 2>/dev/null || true
 sync
 umount ${MNT}/boot/firmware
 umount ${MNT}
 umount /mnt/btrfs-top
 
-# ── 24. QC checks ────────────────────────────────────────────────────────────
-# Verify critical files and subvolumes exist in the image before declaring success.
 echo "==> Running QC checks..."
 QC_FAIL=0
 mkdir -p /mnt/btrfs-top
 mount -o subvolid=5 ${OUT_LOOP_ROOT} /mnt/btrfs-top
 
-# Check Btrfs subvolumes
 for SUB in @ @factory; do
   if btrfs subvolume show "/mnt/btrfs-top/$SUB" > /dev/null 2>&1; then
     echo "  [OK] subvolume $SUB"
@@ -2390,11 +2039,9 @@ for SUB in @ @factory; do
   fi
 done
 
-# Mount @ for file checks
 mount -o ${BTRFS_BUILD_OPTS},subvol=@ ${OUT_LOOP_ROOT} ${MNT}
 mount ${OUT_LOOP_BOOT} ${MNT}/boot/firmware
 
-# Check critical binaries
 for BIN in /sbin/init \
            /usr/local/bin/os-server /usr/local/bin/bootstrap-server \
            /usr/local/bin/fr-snapshot /usr/local/bin/fr-rollback \
@@ -2408,7 +2055,6 @@ for BIN in /sbin/init \
   fi
 done
 
-# Check critical config files
 for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/${DEVICE_TYPE}.conf \
            /boot/firmware/cmdline.txt; do
   if [ -f "${MNT}${CFG}" ]; then
@@ -2418,7 +2064,6 @@ for CFG in /etc/fstab /etc/hostapd/hostapd.conf /etc/nginx/conf.d/${DEVICE_TYPE}
   fi
 done
 
-# Check systemd services are enabled
 for SVC in bootstrap os-server hal nginx openclaw btrfs-resize-once firstrun-wifi; do
   if [ -L "${MNT}/etc/systemd/system/multi-user.target.wants/${SVC}.service" ] || \
      [ -L "${MNT}/etc/systemd/system/sysinit.target.wants/${SVC}.service" ]; then
@@ -2428,7 +2073,6 @@ for SVC in bootstrap os-server hal nginx openclaw btrfs-resize-once firstrun-wif
   fi
 done
 
-# Verify cmdline.txt has Btrfs params
 if grep -q "rootfstype=btrfs" "${MNT}/boot/firmware/cmdline.txt" && \
    grep -q "rootflags=subvol=@" "${MNT}/boot/firmware/cmdline.txt"; then
   echo "  [OK] cmdline.txt Btrfs params"
@@ -2436,16 +2080,13 @@ else
   echo "  [FAIL] cmdline.txt missing Btrfs params"; QC_FAIL=1
 fi
 
-# Verify web UI was installed
 if [ -f "${MNT}/usr/share/nginx/html/setup/index.html" ]; then
   echo "  [OK] web UI installed"
 else
   echo "  [FAIL] web UI missing"; QC_FAIL=1
 fi
 
-# Verify the device rootfs overlay actually landed on / — this is where the
-# device's /opt/hal/.env tuning lives (ALSA names, VAD/camera thresholds), and a
-# silent miss ships an image whose HAL runs on code defaults.
+# The device rootfs overlay carries /opt/hal/.env tuning; a silent miss ships HAL running on code defaults.
 DEV_ROOTFS="${MNT}${DEVICES_DIR}/${DEVICE_TYPE}/rootfs"
 if [ -d "${DEV_ROOTFS}" ]; then
   OVERLAY_MISS=0
@@ -2462,7 +2103,6 @@ else
   echo "  [WARN] device profile '${DEVICE_TYPE}' ships no rootfs/ overlay"
 fi
 
-# Verify the baked default agent runtime matches what this build was invoked with
 if [ -n "${DEFAULT_AGENT}" ]; then
   if [ "$(cat "${MNT}/root/config/f_r_default_agent" 2>/dev/null)" = "${DEFAULT_AGENT}" ]; then
     echo "  [OK] f_r_default_agent=${DEFAULT_AGENT}"
@@ -2471,8 +2111,6 @@ if [ -n "${DEFAULT_AGENT}" ]; then
   fi
 fi
 
-# Verify pre-baked agent runtime CLIs. Hermes is baked for every device type;
-# the rest only for the ones whose web UI exposes the runtime picker.
 if [ -d "${MNT}/usr/local/lib/hermes-agent" ]; then
   echo "  [OK] hermes pre-baked"
 else

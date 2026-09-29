@@ -9,11 +9,7 @@ export interface WifiLoadedState {
   password: boolean;
 }
 
-// Settings-panel Wi-Fi tab. Mirrors the setup wizard's picker+refresh UX so
-// operators changing networks from /setting#wifi get the same "scan → dropdown
-// → refresh" flow as first-time setup — no more blind typing of the SSID.
-// SSID is a locked field by default (device already has one); clicking the
-// pencil unlocks it and swaps in the scan-backed dropdown.
+// Settings-panel Wi-Fi tab.
 export function WifiSection({
   active, wifiLoaded,
   ssid, setSsid, password, setPassword,
@@ -26,9 +22,6 @@ export function WifiSection({
   const [unlocked, setUnlocked] = useState(false);
   const readOnly = wifiLoaded.ssid && !unlocked;
   const [originalSsid, setOriginalSsid] = useState<string | null>(null);
-  // Snapshot the current SSID the first time the field locks in so Cancel can
-  // restore it if the operator abandoned an edit — same behavior as
-  // LockedField.useLockToggle.
   useEffect(() => {
     if (wifiLoaded.ssid && originalSsid === null) {
       setOriginalSsid(ssid);
@@ -53,9 +46,6 @@ export function WifiSection({
     }
   }, []);
 
-  // First scan runs when the operator unlocks the SSID field — no point
-  // hitting the device with `iw scan` while the read-only display is showing
-  // the current network and no picker is visible.
   useEffect(() => {
     if (unlocked && networks.length === 0 && !loadingList) {
       runScan();

@@ -2,10 +2,7 @@ package syspath
 
 import "testing"
 
-// The device (OrangePi) contract: every accessor must return the literal it
-// replaced when its env var is unset. envOr treats "" as unset, so setting each
-// var to "" makes this run unconditionally — a dev who exports CODEX_HOME in
-// their shell profile still gets the guard instead of a silent skip.
+// Device contract: every accessor returns its on-device default when its env var is unset ("").
 func TestDeviceDefaults(t *testing.T) {
 	cases := []struct {
 		env  string
@@ -32,12 +29,7 @@ func TestDeviceDefaults(t *testing.T) {
 	}
 }
 
-// AgentRuntimeHome is the one accessor that is not a bare env lookup, so the
-// device contract has to be asserted per runtime: on a board every runtime must
-// still resolve to /root/.<runtime> with nothing set. Codex additionally has to
-// track CODEX_HOME rather than OS_AGENT_HOME — off-device those two point at
-// different places (a real codex install vs. throwaway state), and composing
-// them would name a directory HAL never writes a snapshot to.
+// AgentRuntimeHome resolves to /root/.<runtime> on device; codex tracks CODEX_HOME, not OS_AGENT_HOME.
 func TestAgentRuntimeHome(t *testing.T) {
 	t.Setenv("OS_AGENT_HOME", "")
 	t.Setenv("CODEX_HOME", "")
@@ -57,18 +49,16 @@ func TestAgentRuntimeHome(t *testing.T) {
 	}
 }
 
-// The board must keep reporting to the backend: unset (and any value other than
-// the explicit "off") has to stay on, or a fleet upgrade would silently take
-// every device off its uplink. Only `make os-dev`'s explicit "off" disables it.
+// Backend reporting stays on unless explicitly "off" (make os-dev); typos fail safe to on.
 func TestBackendUplink(t *testing.T) {
 	for _, c := range []struct {
 		env  string
 		want bool
 	}{
-		{"", true},         // unset — the device default
-		{"on", true},       // what a deliberate off-device opt-in sets
-		{"off", false},     // what make os-dev sets
-		{"anything", true}, // a typo must fail SAFE for the board, i.e. stay on
+		{"", true},
+		{"on", true},
+		{"off", false},
+		{"anything", true},
 	} {
 		t.Setenv("OS_BACKEND_UPLINK", c.env)
 		if got := BackendUplink(); got != c.want {

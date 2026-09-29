@@ -36,8 +36,9 @@ HAL / clients
 - **`dlserver`** (`:8001`) — loads the ML models, serves the perception endpoints.
 - **`lbserver`** (`:7999`) — round-robin proxy over one or more `dlserver`
   instances; terminates RSA+AES encryption so `dlserver` stays plaintext.
-- **`nginx`** (`:8899`) — public front door; maps the device-facing `/lelamp/`
-  prefix onto the internal `/hal/` prefix and upgrades WebSockets.
+- **`nginx`** (`:8899`) — public front door; passes `/hal/...` (the prefix
+  current HAL defaults use, e.g. `/hal/api/dl/ser/recognize`) straight through,
+  maps the legacy `/lelamp/` prefix onto `/hal/`, and upgrades WebSockets.
 
 For single-node dev you can hit `dlserver:8001` directly with encryption off.
 
@@ -66,9 +67,9 @@ the server only computes the embedding (the endpoint is embed-only and defaults
 to `preprocess=false`; pass `true` only to upload raw audio for server-side
 cleaning). HAL also sets `use_sliding_window`: enroll sends `false` so the whole
 reference is embedded in a single shot (one clean vector), while recognize sends
-`true` to slide overlapping windows and vote per chunk. The embed response (and
-`/health`) also report an
-`embed_model_version` fingerprint of the loaded weights, so HAL can tell when the
+`true` to slide overlapping windows and vote per chunk. The embed response
+(`embed_model_version`) and `/health` (`audio_embedder_version`) also report a
+fingerprint of the loaded weights, so HAL can tell when the
 server model changed and re-embed its stored voice profiles instead of matching
 against stale vectors (see
 [`robots/lamp/docs/speaker-enrollment.md`](../robots/lamp/docs/speaker-enrollment.md)). Exact endpoints

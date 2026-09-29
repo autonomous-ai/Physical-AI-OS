@@ -1,9 +1,4 @@
-"""
-Abstract STT (Speech-to-Text) provider interface.
-
-VoiceService handles local VAD, mic, echo cancellation.
-STT providers only handle the remote transcription connection.
-"""
+"""Abstract STT (Speech-to-Text) provider interface."""
 
 import logging
 from abc import ABC, abstractmethod

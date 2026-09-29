@@ -1,9 +1,4 @@
-"""POSTER V2 emotion predictor (7-class, RAF-DB).
-
-Pure emotion classification from a face crop — no face detection.
-Input: 224x224 RGB face crop scaled to [0, 1]. ImageNet normalization
-and softmax are baked into the ONNX graph.
-"""
+"""POSTER V2 emotion predictor (7-class, RAF-DB); input 224x224 RGB in [0, 1], normalization baked in."""
 
 from pathlib import Path
 

@@ -102,7 +102,6 @@ class TestSpatialGestures(unittest.TestCase):
             order = range(8) if direction == 1 else range(11, 3, -1)
             samples = [(1 + i * .04, (1 << pad) | (1 << (pad + direction)))
                        for i, pad in enumerate(order)]
-            # Holding the final pad cannot retrigger or become a button hold.
             samples.append((5, 0))
             events = [e for e in replay(samples) if e.kind in ACTIONS]
             self.assertEqual([e.kind for e in events], ["swipe"])
@@ -149,7 +148,6 @@ class TestSpatialGestures(unittest.TestCase):
             MPR121Config(bus=0, electrodes=(0, 1), swipe_axis=(0, 2))
 
     def test_recorded_hardware_traces_at_10ms_poll(self):
-        # Relative seconds and raw electrode masks from the actual Lamp.
         traces = [
             [(0.000000, 0x00f), (0.068565, 0x00d), (0.080512, 0x000)],
             [(0.000000, 0xc00), (0.032394, 0xe00), (0.108233, 0xf00), (0.140405, 0xd00), (0.151704, 0x780), (0.194663, 0x3c0), (0.223980, 0x1c0), (0.235201, 0x1e0), (0.246512, 0x0f0), (0.268403, 0x070), (0.279260, 0x078), (0.290454, 0x038), (0.301521, 0x03c), (0.323502, 0x01c), (0.338959, 0x01e), (0.350452, 0x00f), (0.372375, 0x007), (0.384148, 0x003), (0.395206, 0x001), (0.407554, 0x000)],
@@ -200,9 +198,7 @@ class TestSpatialGestures(unittest.TestCase):
 
 class TestFastSwipeSkipsPads(unittest.TestCase):
     def test_fast_swipe_that_skips_pads_still_resolves(self):
-        # Recorded on lamp-0c4e (2026-09-17 10:31:05): a fast left-to-right swipe
-        # whose pads 7 and 8 dwelt ~12 ms, shorter than poll + footprint filter,
-        # so the stable centroid leaped 5.5 -> 9.0. It must still be a swipe.
+        # Recorded on lamp-0c4e: pads dwelt ~12 ms, so the centroid leaped 5.5 -> 9.0.
         samples = [(0.000, 0x00c), (0.061, 0x038), (0.074, 0x060), (0.097, 0x380), (0.109, 0x600), (0.122, 0x000)]
         for phase in (0, .0025, .005, .0075):
             detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=tuple(range(12))))
@@ -218,6 +214,5 @@ class TestFastSwipeSkipsPads(unittest.TestCase):
             self.assertEqual([e.direction for e in events if e.kind == "swipe"], [1], phase)
 
     def test_second_finger_far_away_before_travel_is_not_a_swipe(self):
-        # Hold pad 1, then land a second finger on pad 8: the centroid leaps without travel.
         samples = [(1, 0x002), (1.1, 0x102), (1.3, 0x000)]
         self.assertNotIn("swipe", kinds(replay(samples)))

@@ -11,31 +11,23 @@ import (
 
 // OTA security modes reported to operators.
 const (
-	// SecurityModeVerified means a signing public key is pinned on this device,
-	// so metadata signatures and artifact checksums are enforced.
+	// SecurityModeVerified means a signing key is pinned and signatures/checksums are enforced.
 	SecurityModeVerified = "verified"
-	// SecurityModeLegacy means no key is pinned: the worker reads the unsigned
-	// top-level component entries as a migration bridge.
+	// SecurityModeLegacy means no key is pinned; unsigned top-level entries are read.
 	SecurityModeLegacy = "legacy"
 )
 
 // SecurityStatus is the operator-visible OTA trust posture of this device.
-// Logs answered this before; the fleet needs it as a queryable surface so a
-// device stuck in legacy mode is visible without shelling in.
 type SecurityStatus struct {
 	// Mode is SecurityModeVerified or SecurityModeLegacy.
 	Mode string `json:"mode"`
 	// MetadataFormat is the signed envelope format this worker accepts.
 	MetadataFormat string `json:"metadata_format"`
-	// KeyFingerprint identifies the pinned public key (first 16 hex characters
-	// of its SHA-256) so operators can tell which key a device trusts without
-	// exposing the key itself. Empty in legacy mode.
+	// KeyFingerprint is the first 16 hex chars of the pinned key's SHA-256; empty in legacy mode.
 	KeyFingerprint string `json:"key_fingerprint,omitempty"`
 	// ArtifactChecksums reports whether component SHA-256 digests are required.
-	// They are only enforceable when the metadata carrying them is authentic.
 	ArtifactChecksums bool `json:"artifact_checksums"`
-	// LastMetadataFetch describes the most recent metadata fetch, or nil when
-	// no fetch has completed since this worker started.
+	// LastMetadataFetch is nil until a fetch completes.
 	LastMetadataFetch *MetadataFetchResult `json:"last_metadata_fetch,omitempty"`
 }
 
@@ -87,10 +79,7 @@ func (b *Bootstrap) securityStatus() SecurityStatus {
 	return status
 }
 
-// publicKeyFingerprint returns a short, stable identifier for a provisioned
-// key. It hashes the raw key bytes when the value decodes, and the configured
-// string otherwise, so a malformed key still yields a comparable fingerprint
-// instead of an empty field.
+// publicKeyFingerprint returns a short key identifier; malformed keys hash the raw string.
 func publicKeyFingerprint(encodedPublicKey string) string {
 	encodedPublicKey = strings.TrimSpace(encodedPublicKey)
 	raw, err := base64.StdEncoding.DecodeString(encodedPublicKey)

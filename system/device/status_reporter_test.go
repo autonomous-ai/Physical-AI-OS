@@ -41,8 +41,7 @@ func TestInstalledSkillsForPing(t *testing.T) {
 	}
 }
 
-// The ping carries the setup-critical LocalIP, so a listing failure must never
-// break it — the field is simply omitted.
+// A skill listing failure must not break the ping; the field is omitted.
 func TestInstalledSkillsForPingIsBestEffort(t *testing.T) {
 	cases := []struct {
 		label string

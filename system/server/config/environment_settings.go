@@ -46,8 +46,7 @@ func (r *EnvironmentComfortRule) UnmarshalJSON(data []byte) error {
 }
 
 // ChangeThreshold returns the fixed floor or a fraction of the acknowledged
-// baseline, whichever is larger. This is a product notification gate, not an
-// uncertainty interval; accuracy does not establish within-device temporal noise.
+// baseline, whichever is larger.
 func (r EnvironmentMetricRule) ChangeThreshold(baseline float64) float64 {
 	return math.Max(r.Delta, math.Abs(baseline)*(r.RelativeDeltaPct/100))
 }
@@ -69,8 +68,6 @@ func DefaultEnvironmentConfig() EnvironmentConfig {
 	return EnvironmentConfig{
 		Enabled: true, InitialReport: true, EvaluateIntervalS: 10, SustainS: 60, CooldownS: 1800,
 		RetryIntervalS: 60, MaxSampleAgeS: 10,
-		// Provisional notification policy, not sensor accuracy or health limits.
-		// Rationale and field-validation plan: robots/lamp/docs/environment-sensing.md.
 		Metrics: map[string]EnvironmentMetricRule{
 			"pm1_0_ug_m3":   {Delta: 10, RelativeDeltaPct: 20, WarmupS: 60},
 			"pm2_5_ug_m3":   {Delta: 10, RelativeDeltaPct: 20, WarmupS: 60, Comfort: &EnvironmentComfortRule{Above: bound(35), Hysteresis: 5, SustainS: 300}},
@@ -85,9 +82,7 @@ func DefaultEnvironmentConfig() EnvironmentConfig {
 	}
 }
 
-// UnmarshalJSON fills omitted top-level fields with defaults. A supplied metrics
-// map replaces the default map, allowing an operator to monitor a subset.
-// Supplied rules without relative_delta_pct or comfort retain legacy behavior.
+// UnmarshalJSON fills omitted top-level fields with defaults.
 func (c *EnvironmentConfig) UnmarshalJSON(data []byte) error {
 	type plain EnvironmentConfig
 	v := plain(DefaultEnvironmentConfig())

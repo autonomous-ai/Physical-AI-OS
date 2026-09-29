@@ -1,23 +1,5 @@
-// Lightweight UI i18n for the web frontend, mirroring the Go backend's
-// system/lib/i18n conventions:
-//
-//   - Same BCP-47 language constants (en / vi / zh-CN / zh-TW) plus the
-//     alias codes (zh, zh-Hans, zh-Hant) the STT config accepts, normalised
-//     onto the canonical codes for lookups — see lib/i18n/lang.go.
-//   - A single active language, set once from the device config's
-//     `stt_language` field (the same source Go's i18n.Lang() reads from
-//     config.STTLanguage). setLanguage() ⇔ Go SetConfig; getLanguage() ⇔ Lang().
-//   - Lookup falls back to English when a string is missing for the active
-//     language — Go uses the same fallbackLang = LangEN rule.
-//
-// This is intentionally hand-rolled (no i18next dependency): the frontend has
-// no other i18n today, the string set is small, and matching the Go module's
-// shape keeps the two consistent for anyone working across both.
-
 import { useSyncExternalStore } from "react";
 
-// BCP-47 codes. Canonical set mirrors lib/i18n/lang.go. Aliases are accepted
-// on input and normalised onto the canonical codes.
 export const LANG = {
   EN: "en",
   VI: "vi",
@@ -29,10 +11,7 @@ export type Lang = (typeof LANG)[keyof typeof LANG];
 
 const FALLBACK_LANG: Lang = LANG.EN;
 
-// Normalise an STT-config language code (which may be an alias like "zh",
-// "zh-Hans", "zh-Hant", or carry a region like "en-US") onto one of the
-// canonical content languages. Mirrors the alias handling documented in
-// lib/i18n/lang.go. Unknown codes fall back to English.
+// Normalises an STT language code or alias onto a canonical Lang (unknown -> English).
 export function normalizeLang(code: string | undefined | null): Lang {
   if (!code) return FALLBACK_LANG;
   const c = code.toLowerCase();
@@ -43,17 +22,10 @@ export function normalizeLang(code: string | undefined | null): Lang {
   return FALLBACK_LANG;
 }
 
-// ── Active language store ───────────────────────────────────────────────────
-// A tiny observable so React components re-render when the language resolves
-// from the (async) device config. Go's i18n is a process singleton; the web
-// equivalent needs reactivity, hence useSyncExternalStore below.
-
 let active: Lang = FALLBACK_LANG;
 const listeners = new Set<() => void>();
 
-// setLanguage wires the active language, typically from the device config's
-// stt_language right after it loads. Accepts raw/alias codes; normalises.
-// Mirrors Go i18n.SetConfig. No-op when the resolved language is unchanged.
+// Sets the active language from a raw or alias code; no-op when unchanged.
 export function setLanguage(code: string | undefined | null): void {
   const next = normalizeLang(code);
   if (next === active) return;
@@ -61,8 +33,7 @@ export function setLanguage(code: string | undefined | null): void {
   for (const l of listeners) l();
 }
 
-// getLanguage returns the active canonical language. Mirrors Go i18n.Lang(),
-// except it returns the English fallback rather than "" before it's set.
+// getLanguage returns the active canonical language.
 export function getLanguage(): Lang {
   return active;
 }
@@ -72,15 +43,9 @@ function subscribe(cb: () => void): () => void {
   return () => listeners.delete(cb);
 }
 
-// ── String catalogue ────────────────────────────────────────────────────────
-// Keyed by a dotted id, then by language. English is mandatory (it's the
-// fallback); other languages are optional and fall back to English per key.
-// Keep keys scoped by feature (chat.*) so the catalogue stays navigable.
-
 type Catalogue = Record<string, Partial<Record<Lang, string>> & { en: string }>;
 
 const strings: Catalogue = {
-  // Empty chat screen
   "chat.empty.title": {
     en: "Chat with Assistant",
     vi: "Trò chuyện với Assistant",
@@ -94,7 +59,6 @@ const strings: Catalogue = {
     "zh-TW": "隨便問，或試試以下建議",
   },
 
-  // Suggestion chips
   "chat.suggest.music": {
     en: "Play a relaxing song",
     vi: "Mở một bài nhạc thư giãn",
@@ -120,7 +84,6 @@ const strings: Catalogue = {
     "zh-TW": "你能做什麼？",
   },
 
-  // Assistant presence (top bar status line)
   "chat.status.thinking": {
     en: "Assistant is thinking…",
     vi: "Assistant đang suy nghĩ…",
@@ -134,7 +97,6 @@ const strings: Catalogue = {
     "zh-TW": "助手 · 在線",
   },
 
-  // History panel — relative timestamps. {n} is substituted with the count.
   "chat.time.now": {
     en: "now",
     vi: "vừa xong",
@@ -167,10 +129,7 @@ const strings: Catalogue = {
   },
 };
 
-// t looks up a string by key in the active language, falling back to English
-// when the key has no entry for that language (mirrors Go's fallbackLang).
-// An unknown key returns the key itself so missing strings are visible rather
-// than blank. `params` substitutes `{name}` placeholders (e.g. {n}).
+// Looks up `key` in the active language, falling back to English, then to the key; `params` fills `{name}` placeholders.
 export function t(key: string, params?: Record<string, string | number>, lang?: Lang): string {
   const entry = strings[key];
   if (!entry) return key;
@@ -182,8 +141,7 @@ export function t(key: string, params?: Record<string, string | number>, lang?: 
   return out;
 }
 
-// useT subscribes a component to language changes and returns a bound t() that
-// re-renders when the active language resolves from the device config.
+// Returns a t() bound to the active language; re-renders when it changes.
 export function useT(): (key: string, params?: Record<string, string | number>) => string {
   const lang = useSyncExternalStore(subscribe, getLanguage, getLanguage);
   return (key, params) => t(key, params, lang);

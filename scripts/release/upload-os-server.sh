@@ -7,9 +7,6 @@ source "${RELEASE_DIR}/ota-metadata.sh"
 OS_BIN="${ROOT_DIR}/system/os-server"
 VERSION_FILE="${ROOT_DIR}/system/${VERSION_FILE:-VERSION_OS_SERVER}"
 
-# Bucket and path: ${BUCKET_PREFIX}/ota/os-server/[semver].zip
-
-# Auto-increment semver (patch) before build
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
   IFS='.' read -r major minor patch <<< "$version"
@@ -43,7 +40,6 @@ echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")
 
-# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - backend key
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

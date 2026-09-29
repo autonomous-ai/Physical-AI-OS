@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// writeDeviceMD writes a minimal ROBOT.md under a temp DEVICES_DIR, mirroring
-// system/device's own test helper (unexported there, so duplicated here).
+// writeDeviceMD writes a minimal ROBOT.md under a temp DEVICES_DIR.
 func writeDeviceMD(t *testing.T, deviceType, body string) {
 	t.Helper()
 	root := t.TempDir()
@@ -22,19 +21,6 @@ func writeDeviceMD(t *testing.T, deviceType, body string) {
 		t.Fatalf("write: %v", err)
 	}
 }
-
-// These tests exist because of a real bug caught in review of PR #167:
-// system/server/wire_gen.go constructs the gateway via agent.ProvideGateway
-// (which calls resolveRuntime) BEFORE device.ProvideService runs
-// device.SeedAgentRuntimeFromGateway. If resolveRuntime resolved the
-// empty-config.agent_runtime fallback independently of the seed function, a
-// fresh boot (or post-Factory-Reset boot) on an image with a baked
-// f_r_default_agent would construct its in-memory gateway from ROBOT.md
-// gateway.default while config.json simultaneously got seeded to a DIFFERENT
-// value — config and the actually-running backend would disagree until the
-// next restart. The fix routes both resolveRuntime and
-// SeedAgentRuntimeFromGateway through the single device.ResolveDefaultAgent,
-// so they cannot resolve differently regardless of Wire's provider order.
 
 func TestResolveRuntime_PrefersConfigAgentRuntimeOverDeviceMD(t *testing.T) {
 	t.Setenv("DEVICE_TYPE", "intern-v2")
@@ -61,7 +47,7 @@ gateway:
   default: hermes
 ---
 `)
-	cfg := &config.Config{} // AgentRuntime empty, no f_r_default_agent baked in this test env
+	cfg := &config.Config{}
 
 	effective, raw, source := resolveRuntime(cfg)
 

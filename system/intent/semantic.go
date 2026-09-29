@@ -13,9 +13,8 @@ type SemanticResolver interface {
 	Resolve(context.Context, string, []jev.Candidate, jev.Options) jev.Selection
 }
 
-// MatchWithFallback executes complete canonical commands locally. Contextual
-// requests reach the optional resolver before any hardware action. Once execution is attempted its result stays
-// handled, including failure, so the main agent cannot repeat a partial action.
+// MatchWithFallback runs canonical commands locally, else asks resolver before any action.
+// Once execution is attempted the result stays handled, even on failure.
 func MatchWithFallback(ctx context.Context, text string, resolver SemanticResolver, options jev.Options) *Result {
 	if ctx.Err() != nil {
 		return nil
@@ -46,8 +45,7 @@ func semanticCandidates() []jev.Candidate {
 	var candidates []jev.Candidate
 	for _, candidate := range jev.Candidates() {
 		for _, r := range rules {
-			// Legacy local rules allow an unknown body; semantic execution
-			// instead requires positive evidence for each capability.
+			// Semantic execution requires positive evidence for each capability.
 			if r.name == candidate.ID && semanticCapEnabled(r.capability) {
 				candidates = append(candidates, candidate)
 				break
@@ -57,7 +55,7 @@ func semanticCandidates() []jev.Candidate {
 	return candidates
 }
 
-// Hardware-free rules remain available even when the body is unknown.
+// semanticCapEnabled keeps hardware-free rules available when the body is unknown.
 func semanticCapEnabled(capability string) bool {
 	return capability == "" || deviceCaps[capability]
 }
@@ -89,8 +87,7 @@ func semanticCommand(selection jev.Selection, offered []jev.Candidate) *command 
 	return nil
 }
 
-// Translate validated enum values into code-owned input for the existing rule.
-// Never pass the user's utterance or a provider-generated HAL payload to exec.
+// semanticExecutionText maps validated enum values to code-owned rule input; never the raw utterance.
 func semanticExecutionText(selection jev.Selection) (string, bool) {
 	switch selection.Intent {
 	case "led_color":

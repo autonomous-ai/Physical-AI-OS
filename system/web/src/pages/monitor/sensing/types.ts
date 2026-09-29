@@ -1,4 +1,3 @@
-// Raw per-side ergo data from perception-service (passed through by the device).
 export interface PoseSide {
   score?: number;
   risk_level?: number;
@@ -57,7 +56,6 @@ export interface Perception {
   seconds_since_check?: number | null;
   occurrence_count?: number;
   echo_suppression?: boolean;
-  // Pose perception (added with the silent-sampler refactor).
   ergo_score?: number | null;
   ergo_risk_level?: number | null;
   seconds_since_sample?: number | null;

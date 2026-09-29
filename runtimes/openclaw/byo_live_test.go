@@ -1,15 +1,6 @@
 package openclaw
 
 // Live check for #198: resolveModels against a real OpenAI-compatible server.
-//
-// Skipped unless BYO_LIVE_URL points at one, so `go test ./...` stays hermetic:
-//
-//	BYO_LIVE_URL=http://172.168.20.12:11434/v1 go test ./runtimes/openclaw/ -run Live -v
-//
-// The unit tests cover the shapes with a httptest server. This one exists
-// because "Ollama serves the OpenAI listing" was an assumption in the PR
-// description, and an assumption about someone else's wire format is worth
-// one real call.
 
 import (
 	"context"
@@ -44,8 +35,7 @@ func TestLiveBYOEndpointListsItsOwnModels(t *testing.T) {
 	if len(resp.Models) == 0 {
 		t.Fatal("no models returned; a BYO endpoint serving none must be an error, not an empty catalog")
 	}
-	// The bug this closes: the brain used to advertise the hosted catalog's
-	// model keys at an endpoint that has never heard of them.
+	// The bug this closes: the brain used to advertise the hosted catalog's model keys at an endpoint that has never heard of them.
 	for _, m := range resp.Models {
 		if strings.HasPrefix(m.Key, "claude-") {
 			t.Errorf("model %q came from the hosted catalog, not from %s", m.Key, url)
@@ -54,7 +44,6 @@ func TestLiveBYOEndpointListsItsOwnModels(t *testing.T) {
 	if resp.DefaultModel != resp.Models[0].Key {
 		t.Errorf("DefaultModel %q is not the first listed model %q", resp.DefaultModel, resp.Models[0].Key)
 	}
-	// openai-completions is what every BYO server in the PR description speaks.
 	if resp.API != "openai-completions" {
 		t.Errorf("API = %q, want openai-completions", resp.API)
 	}
@@ -66,10 +55,9 @@ func TestLiveBYOEndpointListsItsOwnModels(t *testing.T) {
 }
 
 func TestLiveHostedPathIsUnchanged(t *testing.T) {
-	liveURL(t) // same gate: this makes a network call too
+	liveURL(t)
 
-	// A shipped device must not drift onto the discovery path. These are the
-	// values a device can actually hold, including the malformed ones.
+	// A shipped device must not drift onto the discovery path.
 	for _, base := range []string{
 		"",
 		"   ",

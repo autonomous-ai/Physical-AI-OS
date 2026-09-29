@@ -1,16 +1,5 @@
-// Package healthwatch monitors HAL component health and auto-recovers
-// from ALSA microphone failures that can cause SIGABRT crashes.
-//
-// Root cause context: When the ALSA mic stream (PaAlsaStreamComponent_Initialize)
-// fails continuously, starting a heavy servo animation like happy_wiggle can
-// trigger a double fault → SIGABRT in the HAL Python process.
-// This watcher detects sensing degradation early and restarts the voice
-// pipeline before that happens.
-//
-// Guard against false positives during HAL restart:
-// Recovery is only triggered when voice was previously confirmed healthy
-// (voice: true) and then sensing goes false. This prevents premature
-// restarts during normal HAL startup or systemd-triggered restarts.
+// Package healthwatch monitors HAL health and restarts the voice pipeline on ALSA mic
+// failures before they escalate into a HAL SIGABRT.
 package healthwatch
 
 import (
@@ -34,15 +23,14 @@ const (
 	restartCooldown = 30 * time.Second
 )
 
-// Service polls HAL /health and auto-restarts the voice pipeline
-// when ALSA/sensing failures are detected.
+// Service polls HAL /health and auto-restarts the voice pipeline on sensing failures.
 type Service struct {
 	bus       *monitor.Bus
 	cfg       *config.Config
 	statusLED *statusled.Service
 }
 
-// ProvideService constructs a HealthWatchService.
+// ProvideService constructs the health watch Service.
 func ProvideService(bus *monitor.Bus, cfg *config.Config, sled *statusled.Service) *Service {
 	return &Service{
 		bus:       bus,
@@ -60,19 +48,12 @@ func (s *Service) Start(ctx context.Context) {
 
 	consecutiveFails := 0
 	var lastRestart time.Time
-	// voiceWasRunning is true once we confirm voice:true from HAL.
-	// Recovery is only triggered after voice was running — this prevents
-	// false positives when HAL just restarted (systemd or cold boot)
-	// and voice hasn't been started yet by the os-server.
+	// Recover only after voice was confirmed running, to avoid false positives at HAL startup.
 	voiceWasRunning := false
-	// wasUnreachable tracks HAL downtime so we can announce recovery via TTS.
+	// wasUnreachable tracks HAL downtime to announce recovery.
 	wasUnreachable := false
 
-	// Which optional bodies this device actually has — resolved once. The
-	// hardware check below must only require a component the device declares,
-	// else a device that lacks it (e.g. intern-v2 has no servo) would be flagged
-	// "hardware failure" forever for hardware it was never built with. Fail-open
-	// (nil caps → require all, matching legacy Lamp behavior).
+	// Only require hardware the device declares (fail-open on nil caps).
 	devType := s.cfg.DeviceTypeOrDefault()
 	hasMotion := device.Has(devType, device.CapMotion)
 	hasLight := device.Has(devType, device.CapLight)
@@ -85,24 +66,18 @@ func (s *Service) Start(ctx context.Context) {
 		case <-ticker.C:
 			h, err := hal.GetHealth()
 			if err != nil {
-				// HAL is down (crash / systemd restart in progress).
-				// Don't touch consecutiveFails — HAL being unreachable
-				// is not an ALSA error. When it comes back, voiceWasRunning
-				// stays true so we can still detect ALSA re-failure after
-				// restart if it happens again.
+				// HAL down is not an ALSA error; leave consecutiveFails alone.
 				slog.Debug("HAL unreachable", "component", "healthwatch", "error", err)
 				s.statusLED.Set(statusled.StateHALDown)
 				wasUnreachable = true
 				continue
 			}
 
-			// Track when voice is first confirmed running.
 			if h.Voice && !voiceWasRunning {
 				slog.Info("voice pipeline confirmed running", "component", "healthwatch")
 				voiceWasRunning = true
 			}
 
-			// HAL recovered from downtime — flash purple then clear.
 			if wasUnreachable {
 				s.statusLED.Set(statusled.StateHALDown) // now HAL is up, purple actually shows
 				go func() {
@@ -113,9 +88,7 @@ func (s *Service) Start(ctx context.Context) {
 				s.statusLED.Clear(statusled.StateHALDown)
 			}
 
-			// Hardware component check — servo/led/audio/voice, each required
-			// only if the device declares that capability (camera and sensing
-			// excluded — may be off by scene preset).
+			// Camera and sensing are excluded (a scene preset may turn them off).
 			servoOK := !hasMotion || h.Servo
 			if hasMotion {
 				if ss, err := hal.GetServoStatus(); err == nil {
@@ -138,19 +111,16 @@ func (s *Service) Start(ctx context.Context) {
 					"servo", servoOK, "led", ledOK, "audio", audioOK, "voice", voiceOK)
 			}
 
-			// Announce via TTS once voice+TTS are ready.
 			if wasUnreachable && h.Voice && h.TTS {
 				wasUnreachable = false
 				slog.Info("HAL recovered from downtime, announcing via TTS", "component", "healthwatch")
 				go s.speakRecovery()
 			} else if wasUnreachable && (h.Voice || h.TTS) {
-				// Still waiting for both voice and TTS to be ready
 			} else {
 				wasUnreachable = false
 			}
 
 			if h.Sensing {
-				// Sensing is healthy — reset failure counter.
 				if consecutiveFails >= failThreshold {
 					slog.Info("ALSA/sensing recovered", "component", "healthwatch")
 					s.bus.Push(domain.MonitorEvent{
@@ -162,10 +132,7 @@ func (s *Service) Start(ctx context.Context) {
 				continue
 			}
 
-			// sensing: false — but only act if voice was running before.
-			// If voice was never running (e.g. HAL just restarted and
-			// the os-server hasn't called /voice/start yet), sensing=false is expected
-			// and we should not interfere.
+			// sensing=false before voice ever started is expected; don't interfere.
 			if !voiceWasRunning {
 				slog.Debug("sensing false but voice never ran — skipping (HAL startup?)", "component", "healthwatch")
 				continue
@@ -184,7 +151,6 @@ func (s *Service) Start(ctx context.Context) {
 				continue
 			}
 
-			// Threshold reached — emit event visible in Flow Monitor.
 			s.bus.Push(domain.MonitorEvent{
 				Type:    "hw_alsa_error",
 				Summary: fmt.Sprintf("ALSA mic stream failing (%d consecutive)", consecutiveFails),
@@ -203,18 +169,13 @@ func (s *Service) Start(ctx context.Context) {
 
 			s.restartVoice()
 			lastRestart = time.Now()
-			// Reset so we don't keep restarting on every poll after cooldown.
-			// voiceWasRunning stays true — we'll re-confirm after restart.
 			voiceWasRunning = false
 		}
 	}
 }
 
-// speakRecovery announces over TTS that the device is back after a HAL
-// downtime. Phrase pool lives in lib/i18n (PhraseRecovery).
+// speakRecovery announces over TTS that the device is back after HAL downtime.
 func (s *Service) speakRecovery() {
-	// SpeakCached: fixed pool, self-caches into hal's WAV cache on first
-	// render so replays skip the TTS provider.
 	phrase := i18n.Pick(i18n.PhraseRecovery)
 	if err := hal.SpeakCached(phrase); err != nil {
 		slog.Warn("recovery TTS failed", "component", "healthwatch", "error", err)
@@ -223,23 +184,15 @@ func (s *Service) speakRecovery() {
 	slog.Info("recovery TTS sent", "component", "healthwatch")
 }
 
-// restartVoice stops the HAL voice pipeline and restarts it.
-// This clears the stuck ALSA stream state before it can cause a SIGABRT.
-//
-// HAL picks its STT provider at start time:
-//   - Deepgram if deepgram_api_key is set
-//   - AutonomousSTT (llm_api_key + llm_base_url) as fallback
-//
-// We always send all three keys so HAL can choose.
+// restartVoice stops and restarts the HAL voice pipeline to clear stuck ALSA state.
+// All STT keys are sent so HAL can choose its provider.
 func (s *Service) restartVoice() {
 	slog.Info("restarting HAL voice pipeline to recover ALSA", "component", "healthwatch")
 
-	// Stop first — ignore errors (pipeline may already be stopped).
 	_ = hal.StopVoicePipeline()
 
 	time.Sleep(2 * time.Second)
 
-	// Always attempt restart — HAL falls back to AutonomousSTT if no Deepgram key.
 	if err := hal.StartVoice(hal.VoiceStartConfig{
 		DeepgramKey: s.cfg.DeepgramAPIKey,
 		LLMKey:      s.cfg.LLMAPIKey,

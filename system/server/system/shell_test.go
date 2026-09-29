@@ -51,7 +51,6 @@ func TestLoadAgentEnvAbsentOrEmpty(t *testing.T) {
 	if got := loadAgentEnv(filepath.Join(t.TempDir(), "nope.env")); got != nil {
 		t.Fatalf("missing file should yield nil, got %v", got)
 	}
-	// A file with no valid KEY=VALUE lines yields nil (no bare IS_SANDBOX).
 	dir := t.TempDir()
 	path := filepath.Join(dir, "blank.env")
 	if err := os.WriteFile(path, []byte("# only a comment\n\n"), 0o600); err != nil {

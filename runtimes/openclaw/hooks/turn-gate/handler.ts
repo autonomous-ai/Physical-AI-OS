@@ -9,18 +9,8 @@ const handler = async (event: any): Promise<void> => {
   // Skip sensing events — Lamp sets busy proactively in sendChat for those
   if (text.startsWith("[sensing:") || !text.trim()) return;
 
-  // Skip OpenClaw heartbeat / memory-flush turns. These runs do NOT emit
-  // lifecycle.end SSE, so if we set busy=true here Lamp wedges for the full
-  // 5-min busyTTL (see docs/debug/busy-stuck.md).
-  //
-  // Detected by body content: OpenClaw heartbeat prompts always end with
-  // the literal sentinel "HEARTBEAT_OK" (see HEARTBEAT_PROMPT in the
-  // runtime: `${HEARTBEAT_CONTEXT_PROMPT} If nothing needs attention, reply
-  // HEARTBEAT_OK.`). Earlier attempts at field-based detection
-  // (channelId/messageChannel/target/isHeartbeat) failed because the
-  // message:preprocessed event.context does not expose any of those at the
-  // hook layer. Lamp side already uses the same string match — see
-  // `handler_events.go:689 isHeartbeatRun`.
+  // Skip heartbeat turns (body ends with HEARTBEAT_OK): they emit no lifecycle.end, so busy would wedge for
+  // the 5-min busyTTL. The hook context exposes no heartbeat field, hence the string match.
   if (text.includes("HEARTBEAT_OK")) return;
 
   const req = http.request({

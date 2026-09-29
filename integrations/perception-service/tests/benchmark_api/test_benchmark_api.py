@@ -1,16 +1,6 @@
 """HTTP benchmark: concurrent requests across all endpoints with increasing load.
 
-Fires requests at all available API endpoints simultaneously,
-then scales up the concurrency to find throughput limits.
-
-Requires:
-    * ``DL_BACKEND_URL``  -- e.g. ``http://127.0.0.1:8001``
-    * ``DL_API_KEY``      -- sent as ``X-API-Key``
-    * Audio fixtures under ``tests/fixtures/audio/``
-    * Image fixtures under ``tests/fixtures/images/``
-
-Run with:
-    pytest tests/benchmark_api/test_benchmark_api.py -v -s
+Requires DL_BACKEND_URL, DL_API_KEY and audio/image fixtures. Example: ``pytest tests/benchmark_api/test_benchmark_api.py -v -s``
 """
 
 from __future__ import annotations
@@ -99,11 +89,6 @@ class RequestResult:
     error_type: str | None = None  # timeout | connection | server
 
 
-# ---------------------------------------------------------------------------
-# Endpoint definitions
-# ---------------------------------------------------------------------------
-
-
 @functools.cache
 def _pose_payload() -> dict[str, Any]:
     return {"image_b64": _make_frame_b64()}
@@ -179,11 +164,6 @@ ALL_ENDPOINTS: list[EndpointSpec] = [
 ]
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _probe_endpoint(ep: EndpointSpec) -> bool:
     try:
         with httpx.Client() as client:
@@ -251,18 +231,12 @@ def _run_concurrent_batch(
     endpoints: list[EndpointSpec],
     n_per_endpoint: int,
 ) -> list[RequestResult]:
-    """Distribute tasks across up to MAX_PROCESSES processes.
-
-    Each process fans out its share of tasks via threads, giving true
-    multi-process concurrency (separate GILs, TCP stacks) while keeping
-    the process count bounded.
-    """
+    """Distribute tasks across up to MAX_PROCESSES processes, each fanning out via threads."""
     from concurrent.futures import ProcessPoolExecutor
 
     all_tasks = [ep for ep in endpoints for _ in range(n_per_endpoint)]
     n_procs = min(len(all_tasks), MAX_PROCESSES)
 
-    # Split tasks into roughly equal chunks for each process
     chunks: list[list[EndpointSpec]] = [[] for _ in range(n_procs)]
     for i, task in enumerate(all_tasks):
         chunks[i % n_procs].append(task)
@@ -353,11 +327,6 @@ def _assert_error_rate(results: list[RequestResult], label: str) -> None:
         )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def available_endpoints() -> list[EndpointSpec]:
     eps = [ep for ep in ALL_ENDPOINTS if _probe_endpoint(ep)]
@@ -386,10 +355,6 @@ ser_endpoint = _make_single_ep_fixture("ser")
 audio_embed_endpoint = _make_single_ep_fixture("audio_embed")
 object_detect_endpoint = _make_single_ep_fixture("object_detect")
 
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 MAX_ERROR_RATE = 0.05
 CONCURRENCY_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128]

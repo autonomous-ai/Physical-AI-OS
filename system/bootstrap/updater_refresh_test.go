@@ -25,8 +25,6 @@ func TestUpdaterURLFrom(t *testing.T) {
 			want: "https://storage.googleapis.com/s3-autonomous-upgrade-3/os/software-update",
 		},
 		{
-			// A query string on the metadata feed must not be carried onto a
-			// different object.
 			name: "query is dropped",
 			in:   "https://cdn.autonomous.ai/os/ota/metadata.json?v=3",
 			want: "https://cdn.autonomous.ai/os/software-update",
@@ -37,8 +35,6 @@ func TestUpdaterURLFrom(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			// Nothing to derive from: refuse rather than guess at the host root,
-			// where an unrelated file could be served.
 			name:    "no namespace to derive from",
 			in:      "https://cdn.autonomous.ai/metadata.json",
 			wantErr: true,
@@ -69,8 +65,7 @@ func TestUpdaterURLFrom(t *testing.T) {
 	}
 }
 
-// installUpdater writes to the fixed updaterPath, so the syntax gate is tested
-// through the same helper with a temp destination swapped in.
+// withTempUpdaterPath swaps updaterPath for a temp destination.
 func withTempUpdaterPath(t *testing.T, contents string) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -88,9 +83,7 @@ func TestInstallUpdaterRejectsBrokenSyntax(t *testing.T) {
 	good := "#!/usr/bin/env bash\necho ok\n"
 	dest := withTempUpdaterPath(t, good)
 
-	// A truncated download: `if` with no `fi`. This is the case that must never
-	// reach disk — a device whose updater does not parse cannot be repaired
-	// remotely.
+	// A truncated download (`if` without `fi`) must never reach disk.
 	truncated := []byte("#!/usr/bin/env bash\nif [ -f /tmp/x ]; then\n  echo half\n")
 	if err := installUpdater(context.Background(), truncated); err == nil {
 		t.Fatal("expected bash -n to reject a truncated script")
@@ -104,7 +97,6 @@ func TestInstallUpdaterRejectsBrokenSyntax(t *testing.T) {
 		t.Errorf("existing updater was replaced by a broken download:\n%s", after)
 	}
 
-	// No staging file may survive a rejected install.
 	entries, err := os.ReadDir(filepath.Dir(dest))
 	if err != nil {
 		t.Fatalf("read dir: %v", err)
@@ -134,8 +126,6 @@ func TestInstallUpdaterReplacesAndKeepsItExecutable(t *testing.T) {
 		t.Errorf("got %q, want %q", got, want)
 	}
 
-	// The rename must publish a file that is already runnable; a 0600 temp
-	// promoted into place would break every later exec.
 	info, err := os.Stat(dest)
 	if err != nil {
 		t.Fatalf("stat updater: %v", err)

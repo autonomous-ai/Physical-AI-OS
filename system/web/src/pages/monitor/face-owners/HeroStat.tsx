@@ -1,9 +1,6 @@
 import type { ReactNode } from "react";
 
-// HeroStat is a compact tile in the page hero showing one headline number
-// (Enrolled / Here now / Unknown voices / Unknown faces). Presentational only —
-// values are passed in from already-fetched state. `tone` tints the icon chip +
-// value so each metric reads with its own identity color at a glance.
+// HeroStat is a compact tile in the page hero showing one headline number (Enrolled / Here now / Unknown voices / Unknown faces).
 export function HeroStat({ icon, label, value, tone = "neutral", pulse }: {
   icon: ReactNode;
   label: string;

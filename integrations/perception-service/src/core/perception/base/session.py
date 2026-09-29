@@ -46,12 +46,7 @@ class PerceptionSessionBase(Generic[INPUT_T, OUTPUT_T, CONFIG_T], ABC):
         self._post_config_update()
 
     def update_config(self, **kwargs: Any) -> None:
-        """Update config fields. Only non-Omit values are applied.
-
-        Subclasses should override with explicit typed kwargs and call
-        super().update_config(**kwargs) to get the Omit filtering.
-
-        """
+        """Update config fields; only non-Omit values are applied."""
         for k, v in kwargs.items():
             if not isinstance(v, Omit):
                 setattr(self._config, k, v)

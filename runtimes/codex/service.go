@@ -1,21 +1,5 @@
 // Package codex implements domain.AgentGateway against the OpenAI Codex CLI
-// reached over a persistent WebSocket to a thin local bridge. See
-// docs/agentic/codex.md for the protocol mapping and the runtime boundaries
-// with OpenClaw / Hermes / PicoClaw.
-//
-// Codex has no server mode, so the codex systemd unit runs a bridge
-// (presync-materialized /root/.codex/bridge.py) that spawns ONE `codex exec
-// --json` subprocess per turn (resuming the persisted thread id) and exposes
-// the socket at WSURL. os-server only acts as a client: it sends user turns
-// as `message.send`, and translates the forwarded Codex exec JSONL events
-// (thread.started / item.* / turn.completed / turn.failed) into the same
-// domain.WSEvent shape that the OpenClaw handler at server/agent/delivery/
-// http/handler_events.go consumes — so the downstream pipeline (HAL TTS,
-// [HW:/...] markers, monitor SSE, sensing drain, Telegram fan-out) stays
-// untouched.
-//
-// Gateway events carry request_id/run_id through queued turns. Older bridges
-// without correlation fields use the adapter's ordered pending-run queue.
+// reached over a persistent WebSocket to a thin local bridge.
 package codex
 
 import (
@@ -36,8 +20,7 @@ import (
 )
 
 // dispatchFn is the event sink shape shared by the read loop and wsDispatch.
-// Named so atomic.Value always sees ONE concrete type (storing a bare nil func
-// literal would panic on the type switch).
+// Named so atomic.Value always stores one concrete type.
 type dispatchFn func(domain.WSEvent)
 
 // Compile-time check: *CodexService implements domain.AgentGateway.
@@ -80,17 +63,14 @@ type CodexService struct {
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
 
-	// Persistent WebSocket. wsConn is set once connected and nil'd on drop.
+	// Persistent WebSocket.
 	wsMu           sync.Mutex
 	wsConn         *websocket.Conn
 	wsConnected    atomic.Bool
 	wsConnectedAt  atomic.Int64 // unix seconds when the socket last became ready
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
-	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRuns retains every queued outbound
-	// request/run pair; tagged gateway frames select their originating pair,
-	// while older bridges consume FIFO. currentRunID identifies streamed output.
+	// Turn lifecycle.
 	activeTurn        atomic.Bool
 	busySince         atomic.Int64
 	pendingMu         sync.Mutex
@@ -102,18 +82,13 @@ type CodexService struct {
 	currentRunID      atomic.Value // string
 	reqCounter        atomic.Int64
 	// wsDispatch is the live connection's event sink, published by runWSConn so
-	// paths OUTSIDE the read loop can still end a turn. Only the read loop has
-	// the dispatch closure otherwise, and the busy-TTL expiry — which decides a
-	// turn is dead — runs on the sensing path with no closure in hand.
+	// paths OUTSIDE the read loop can still end a turn.
 	wsDispatch atomic.Value // dispatchFn
 
-	// Session state. sessionUUID is the Claude-assigned session_id captured from
-	// any inbound frame.
+	// Session state.
 	sessionUUID atomic.Value // string
 
-	// turnMu guards the per-turn accumulation state below. The translator runs
-	// on the single WS read goroutine, but clearTurn is also called from the
-	// client teardown path, so the shared state stays lock-protected.
+	// turnMu guards the per-turn accumulation state below.
 	turnMu sync.Mutex
 	// assistantParts collects agent_message texts of the in-flight turn; joined
 	// into the final reply at turn.completed (codex exec does not stream deltas).
@@ -124,11 +99,7 @@ type CodexService struct {
 
 	// lastContextTokens is the live context size (Responses-API input_tokens,
 	// which already includes the cached prefix) reported by
-	// the most recent turn.completed. ShouldRotateSession keys on it rather
-	// than on the totalTokens the shared handler passes, which folds in this
-	// turn's OUTPUT — turn volume, not context. Codex-local on purpose: the
-	// other backends keep the handler's existing number until there is device
-	// evidence they need otherwise.
+	// the most recent turn.completed.
 	lastContextTokens atomic.Int64
 
 	// mcpMu serializes config.toml [mcp_servers] read-modify-write cycles (mcp.go).
@@ -177,19 +148,13 @@ type CodexService struct {
 
 	// Telegram coding-sessions (telegram_coding.go / coding_sessions.go): a chat
 	// can attach to a folder's interactive `codex` thread and continue it over
-	// Telegram (per-turn `codex exec resume` in the folder's cwd). codingSel maps
-	// chatID → selection (persisted to codingSelPath so it survives restarts);
-	// codingList caches the last /sessions listing so /use <n> can index it;
-	// codingFolder holds a per-folder mutex serializing turns so two Telegram
-	// turns never touch the same thread at once.
+	// Telegram (per-turn `codex exec resume` in the folder's cwd).
 	codingMu     sync.Mutex
 	codingSel    map[string]codingTarget
 	codingList   map[string][]codingSession
 	codingFolder map[string]*sync.Mutex
 
-	// Coding-session test seams. Zero values select production defaults:
-	// /root/.codex/sessions, the presync .env, /root/.codex's selection file, a
-	// real `codex exec` run, and a /proc-based interactive-TUI check.
+	// Coding-session test seams.
 	codexSessionsDirPath string
 	codingEnvFilePath    string
 	codingSelPath        string
@@ -197,33 +162,26 @@ type CodexService struct {
 	folderHasLiveCodex   func(folder string) bool
 
 	// Channel senders (Telegram Bot API): proactive alerts + reply DMs for
-	// Telegram-originated turns. The inbound counterpart is the device-owned
-	// getUpdates poll loop started from StartWS — see telegram_poll.go.
+	// Telegram-originated turns.
 	channels []domain.ChannelSender
 
-	// Telegram inbound test seams (telegram_poll.go). Zero values select the
-	// production defaults: api.telegram.org, the /root/.codex state files, and
-	// the real sendChat-backed send step.
+	// Telegram inbound test seams (telegram_poll.go).
 	telegramAPIBase     string
 	telegramOffsetPath  string
 	telegramTargetsPath string
 	telegramSendTurn    func(text, reqID, runID string) error
 
-	// Slack inbound test seams (slack.go / slack_sender.go). Zero values select
-	// the production defaults: slack.com/api and the real sendChat-backed send step.
+	// Slack inbound test seams (slack.go / slack_sender.go).
 	slackAPIBase  string
 	slackSendTurn func(text, reqID, runID string) error
 
-	// Discord inbound test seams (discord.go). Zero values select the
-	// production defaults: the real sendChat-backed send step and the live
-	// discordgo session's ChannelMessageSend.
+	// Discord inbound test seams (discord.go).
 	discordSendTurn    func(text, reqID, runID string) error
 	discordSendMessage func(channelID, text string) error
 
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook: when the device
 	// declares the `expression` capability, every visible turn flashes a "thinking"
-	// face before the reply lands. Resolved once at construction from the shared
-	// hook registry (skills.SupportedHooks). See emotion_ack.go.
+	// face before the reply lands.
 	ackHookEnabled bool
 
 	// Pending chat traces (idempotencyKey ↔ message text for MatchPendingByMessage).
@@ -261,8 +219,7 @@ type poseBucketInfo struct {
 	markedAt  time.Time
 }
 
-// ProvideService constructs the Codex service. Wired via system/agent/factory.go
-// when config.AgentRuntime == "codex".
+// ProvideService constructs the Codex service.
 func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *CodexService {
 	s := &CodexService{
 		config:         cfg,
@@ -295,11 +252,10 @@ func (s *CodexService) IsReady() bool { return s.wsConnected.Load() }
 func (s *CodexService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 
 // AgentUptime — Codex does not report process uptime over the wire, so we
-// have no value independent of the local WS reconnect cycle. Returns 0 (unknown).
+// have no value independent of the local WS reconnect cycle.
 func (s *CodexService) AgentUptime() int64 { return 0 }
 
-// markOutboundChat / IsRecentOutboundChat mirror openclaw.CodexService. Used by the
-// session.message handler to skip echoes of Device-injected user messages.
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.CodexService.
 func (s *CodexService) markOutboundChat(text string) {
 	if text == "" {
 		return

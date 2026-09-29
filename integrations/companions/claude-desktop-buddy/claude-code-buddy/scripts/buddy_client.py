@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Shared stdlib client for claude-code-buddy hooks.
-
-Talks to the claude-desktop-buddy Go daemon running on the device
-over its HTTP API (port 5002). Pushes semantic events (/notify, /usage) and
-checks liveness (/health). Also holds the Claude Code usage helpers shared by
-the Stop hook.
-
-All network helpers swallow errors and return False rather than raising:
-these run inside Claude Code hooks and must never crash the host process.
-"""
+"""Stdlib HTTP client for the device buddy daemon (:5002); network helpers never raise."""
 
 import json
 import os
@@ -19,8 +10,6 @@ from datetime import datetime, timezone
 CONFIG_PATH = os.path.expanduser("~/.config/claude-code-buddy.json")
 BUDDY_PORT = 5002
 
-
-# --- config ---------------------------------------------------------------
 
 def load_config():
     """Load the Mac-side config, or return an empty dict on any error."""
@@ -41,11 +30,7 @@ def save_config(cfg):
 
 
 def default_device(cfg):
-    """Resolve the default device dict.
-
-    Match `default_host` against each device's `host` or `last_known_ip`;
-    fall back to the first device; else None.
-    """
+    """Return the device matching `default_host`, else the first device, else None."""
     devices = cfg.get("devices", [])
     if not devices:
         return None
@@ -65,17 +50,10 @@ def device_addr(dev):
 
 
 def auth_headers(dev):
-    """Authorization header for a device, or {} if no password is stored.
-
-    The device gates its LAN endpoints with the admin password (the same one
-    used to log into the web UI), presented as a Bearer token. Discovery
-    (/health) stays open, so only the activity/approval calls need this.
-    """
+    """Bearer header with the device admin password, or {} if none is stored."""
     pw = (dev or {}).get("password")
     return {"Authorization": f"Bearer {pw}"} if pw else {}
 
-
-# --- HTTP transport -------------------------------------------------------
 
 def health(addr, timeout=0.5):
     """True if GET http://<addr>:5002/health reports status == 'ok'."""
@@ -91,10 +69,7 @@ def health(addr, timeout=0.5):
 
 
 def send(path, payload, dev=None):
-    """POST JSON to the device daemon. Returns True on HTTP 200, else False.
-
-    Never raises — failures are swallowed so hooks stay safe.
-    """
+    """POST JSON to the device daemon; True on HTTP 200, else False."""
     if dev is None:
         dev = default_device(load_config())
     addr = device_addr(dev)
@@ -114,15 +89,7 @@ def send(path, payload, dev=None):
 
 
 def request_approval(payload, dev=None, timeout=55):
-    """Long-poll the device for a Claude Code permission decision.
-
-    POSTs to /claude-code/approval-request and BLOCKS until the on-device agent
-    resolves it (the user answers by voice) or the server times out. Returns
-    "allow" | "deny" | "timeout", or None on any transport error.
-
-    Never raises — the permission hook must fail safe (defer to the native
-    dialog), never crash Claude Code.
-    """
+    """Long-poll for a permission decision: "allow" | "deny" | "timeout", or None on error."""
     if dev is None:
         dev = default_device(load_config())
     addr = device_addr(dev)
@@ -143,8 +110,6 @@ def request_approval(payload, dev=None, timeout=55):
         return None
 
 
-# --- Claude Code usage helpers --------------------------------------------
-
 def _find_strings(obj):
     if isinstance(obj, str):
         yield obj
@@ -157,11 +122,7 @@ def _find_strings(obj):
 
 
 def get_token():
-    """Find the Claude Code OAuth token (sk-ant-oat...).
-
-    Scans ~/.claude/.credentials.json recursively, then falls back to the
-    macOS Keychain.
-    """
+    """Return the Claude Code OAuth token from ~/.claude/.credentials.json or the macOS Keychain."""
     cred_path = os.path.expanduser("~/.claude/.credentials.json")
     if os.path.exists(cred_path):
         try:

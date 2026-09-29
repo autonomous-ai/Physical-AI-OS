@@ -34,8 +34,7 @@ func (s *Server) captureHarnessQuestion(frame harness.Frame, peer harness.Result
 	return nil
 }
 
-// Command receipts close the answer's response address only. They are neither
-// task results nor permission to speak; the original input owns its summary.
+// Command receipts close the answer's response address only.
 // Caller holds harnessResultsMu, shared with final-result publication.
 func (s *Server) deliverHarnessAnswerReceipts(peer harness.ResultContext) {
 	if s.agentHandler == nil {

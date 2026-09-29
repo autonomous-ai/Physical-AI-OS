@@ -1,9 +1,4 @@
-"""Tests for camera device resolution by hardware name (HAL_CAMERA_NAME).
-
-The resolver mirrors audio's pick-by-name: prefer the stable /dev/v4l/by-id
-capture symlink, fall back to the sysfs name scan (skipping UVC metadata
-sibling nodes), and finally to the legacy index.
-"""
+"""Tests for camera device resolution by hardware name (HAL_CAMERA_NAME)."""
 import pytest
 
 pytest.importorskip("cv2")
@@ -37,8 +32,7 @@ def test_by_id_capture_symlink_preferred(tmp_path):
 
 
 def test_sysfs_fallback_skips_metadata_sibling(tmp_path):
-    # UVC cams expose a metadata node with the SAME name; its index attr is
-    # non-zero and it cannot capture — the resolver must skip it.
+    # UVC metadata node shares the name but cannot capture; the resolver must skip it.
     sysfs = _make_sysfs(
         tmp_path,
         {

@@ -1,24 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently patch bluebubbles.py so the webhook handler drops messages
-whose SENDER address is a short code (3–6 digits, no `+`, no `@`) — the
-telltale shape of a carrier / hotline SMS gateway.
-
-Why this exists on top of imessage_only_service_filter.py:
-BlueBubbles sometimes delivers a webhook payload WITHOUT the `service`
-field. The existing filter checks `if _svc and _svc != "imessage"` — when
-`_svc == ""` the condition short-circuits and lets the message through.
-VinaPhone's 888 spam thread (2026-09-22) hit this exact gap: no `service`
-key on the payload, no `sms;` prefix on the chat GUID, and the sender
-"888" reached the agent, which happily replied to a spam bot.
-
-Fix: after the two existing drops (service, sms chat_guid prefix), read
-the sender/handle address (same fields the handler resolves later) and
-drop if it looks like a short code — bare digits, length < 7. Real iMessage
-handles are either an email (contains "@") or an E.164 phone number
-(starts with "+", ≥ 8 digits with country code), so this can't false-positive
-on a legitimate iPhone contact.
-
-Isolated to bluebubbles.py — no other channel is touched."""
+"""Idempotently patch bluebubbles.py to drop messages whose sender is a short code (3–6 digits, no `+`/`@`)."""
 import sys
 from pathlib import Path
 
@@ -34,11 +15,7 @@ if MARKER in src:
     print("ALREADY_PATCHED")
     sys.exit(0)
 
-# Anchor: insert immediately after the SMS chat_guid prefix drop that
-# imessage_only_service_filter.py / sms_prefix_drop.py wrote. That block
-# ends with the RELAXED comment, which is a stable marker we already own.
-# If either upstream patch failed to apply we exit early — no point
-# hardening the third layer when the first two aren't there.
+# Anchor: insert immediately after the SMS chat_guid prefix drop that imessage_only_service_filter.py / sms_prefix_drop.py wrote.
 ANCHOR = "        # _IMESSAGE_ONLY_FILTER_RELAXED — chat-guid prefix check removed. Rely on the `service`\n        # field check above; SMS traffic reliably carries service=\"SMS\".\n"
 
 INSERTION = '''

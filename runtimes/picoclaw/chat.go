@@ -10,14 +10,13 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SendChatMessage sends a user message to PicoClaw. Returns the run ID the
-// caller uses to correlate flow/monitor events with the resulting turn.
+// SendChatMessage sends a user message to PicoClaw.
 func (s *PicoclawService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "user")
 }
 
 // SendSystemChatMessage flags the flow event as system-originated (skill watcher,
-// wake greeting, /compact). Wire payload is identical to SendChatMessage.
+// wake greeting, /compact).
 func (s *PicoclawService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "system")
 }
@@ -26,8 +25,7 @@ func (s *PicoclawService) SendChatMessageWithImages(message string, imagesBase64
 	return s.sendChat(message, imagesBase64, "", "", "user")
 }
 
-// NextChatRunID allocates the run / req id pair. Same shape as openclaw/hermes so
-// logs / monitor stay identical across backends.
+// NextChatRunID allocates the run / req id pair.
 func (s *PicoclawService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
@@ -43,8 +41,7 @@ func (s *PicoclawService) SendChatMessageWithImagesAndRun(message string, images
 }
 
 // SendSlashCommandWithRun — PicoClaw has no per-channel "deliver:false" flag, so
-// slash commands look the same as any other user input on the wire. We still tag
-// the flow source so logs distinguish web-monitor input from voice.
+// slash commands look the same as any other user input on the wire.
 func (s *PicoclawService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, nil, reqID, runID, "user_slash")
 }
@@ -53,9 +50,7 @@ func (s *PicoclawService) SendSlashCommandWithImagesAndRun(message string, image
 	return s.sendChat(message, imagesBase64, reqID, runID, "user_slash")
 }
 
-// sendChat allocates IDs and admits one request at a time. Busy requests retain
-// their original payload locally; idle requests record their trace and write a
-// message.send frame. The reply arrives asynchronously on the read loop.
+// sendChat allocates IDs and admits one request at a time.
 func (s *PicoclawService) sendChat(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
@@ -75,8 +70,9 @@ func (s *PicoclawService) sendChat(message string, imagesBase64 []string, fixedR
 	return s.sendChatNow(message, imagesBase64, fixedReqID, fixedRunID, sourceType)
 }
 
-// sendChatNow requires sendMu and an idle turn. Never retry a failed socket write:
-// PicoClaw has no idempotency or request correlation on its response protocol.
+// sendChatNow requires sendMu and an idle turn.
+// Never retry a failed socket write: PicoClaw has no idempotency or request correlation on its
+// response protocol.
 func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	if !s.wsConnected.Load() {
 		return "", errDisconnectedBeforeSend
@@ -90,8 +86,6 @@ func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fix
 		reqID, runID = s.NextChatRunID()
 	}
 
-	// Strip [snapshot: ...] paths from presence events so the agent doesn't waste
-	// tokens on file paths it has no tools to access (matches openclaw/hermes).
 	wsMessage := message
 	if strings.Contains(message, "[sensing:presence.enter]") || strings.Contains(message, "[sensing:presence.leave]") {
 		wsMessage = strings.TrimSpace(reSnapshotPath.ReplaceAllString(message, ""))
@@ -105,12 +99,7 @@ func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fix
 		"message": previewMsg,
 	}, runID)
 
-	// Build the outbound frame. Image attachments are best-effort: the text
-	// content is always sent so the turn proceeds even if PicoClaw ignores the
-	// attachment shape.
 	payload := map[string]any{"content": wsMessage}
-	// One attachment entry per image: the frame already carries a LIST, so a
-	// chat client that attached several photos sends them in a single turn.
 	hasImage := len(imagesBase64) > 0
 	if hasImage {
 		attachments := make([]map[string]any, 0, len(imagesBase64))
@@ -138,7 +127,7 @@ func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fix
 
 	// Mark busy + stash the runID BEFORE the write so the first inbound frame of
 	// this turn adopts it (ensureTurnStarted) and sensing-while-busy gates catch
-	// the in-flight turn. Cleared by emitFinal/handleError (or busyTTL).
+	// the in-flight turn.
 	s.busySince.Store(time.Now().UnixMilli())
 	s.activeTurn.Store(true)
 	s.setPendingRunID(runID)
@@ -160,7 +149,6 @@ func (s *PicoclawService) sendChatNow(message string, imagesBase64 []string, fix
 	s.monitorBus.Push(domain.MonitorEvent{Type: "chat_send", Summary: message, RunID: runID})
 
 	if err := s.sendFrame(frame); err != nil {
-		// Roll back busy so the next sensing/voice round can proceed.
 		s.activeTurn.Store(false)
 		s.clearTurn()
 		s.RemovePendingChatTraceByRunID(runID)

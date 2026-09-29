@@ -29,9 +29,8 @@ final class HelperLifecycleTests: XCTestCase {
         }
         try child.run()
         await fulfillment(of: [ready], timeout: 5)
-        // This exercises the AppKit termination path, not only bridge parsing.
-        // Returning terminateLater from a main-queue EOF handler used to block
-        // the MainActor cleanup task forever in AppKit's nested run loop.
+        // Exercises AppKit termination: terminateLater from a main-queue EOF handler
+        // used to block MainActor cleanup forever in the nested run loop.
         try input.fileHandleForWriting.close()
         let deadline = Date().addingTimeInterval(2)
         while child.isRunning && Date() < deadline {

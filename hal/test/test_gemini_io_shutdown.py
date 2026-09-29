@@ -18,7 +18,6 @@ def test_completed_receive_error_is_delivered_when_loop_stops(code):
     failure = APIError(code, {})
 
     async def receive():
-        # Close and receive failure can become ready in the same loop iteration.
         loop.stop()
         raise failure
 

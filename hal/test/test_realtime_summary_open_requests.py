@@ -1,10 +1,4 @@
-"""The realtime summary's pending tasks must expire (issues #419 / #421).
-
-Expiry is per bullet, keyed on the `[<ISO-8601>]` stamp the summariser writes
-at the head of each open request. summary.md is rewritten on every session
-that has new entries, so its mtime never gets old on an active device; a
-stamp-less bullet falls back to that file age, but a stamped one must not.
-"""
+"""The realtime summary's pending tasks must expire (issues #419 / #421)."""
 
 from datetime import datetime, timezone
 from pathlib import Path
@@ -16,8 +10,7 @@ from hal.realtime.context_manager.openclaw import OpenClawContextManager
 TTL = 3600
 NOW = datetime(2026, 9, 15, 12, 0, 0, tzinfo=timezone.utc).timestamp()
 
-# Two minutes / four minutes before NOW — well inside the TTL. One carries the
-# full offset the prompt asks for, the other is naive (treated as UTC).
+# Well inside the TTL; one offset-aware, one naive (treated as UTC).
 FRESH_A = "2026-09-15T11:56:02+00:00"
 FRESH_B = "2026-09-15T11:58"
 # Two hours before NOW — past the TTL.
@@ -46,8 +39,7 @@ def test_fresh_summary_is_untouched():
 
 
 def test_stale_summary_drops_only_the_open_requests_section():
-    # The file was just rewritten (file_age_s=0) — the case that never expired
-    # on an active device when the TTL was keyed on mtime alone.
+    # Just rewritten (file_age_s=0): the TTL must not key on mtime alone.
     out = expire_open_requests(summary_with(STALE_A, STALE_B), now_s=NOW, file_age_s=0, ttl_s=TTL)
     assert "request 0" not in out
     assert "request 1" not in out
@@ -65,7 +57,7 @@ def test_only_expired_bullets_are_dropped():
 
 
 def test_unstamped_bullet_falls_back_to_file_age():
-    unstamped = summary_with("t")  # `[t]` is not a timestamp
+    unstamped = summary_with("t")
     assert expire_open_requests(unstamped, now_s=NOW, file_age_s=TTL - 1, ttl_s=TTL) == unstamped
     out = expire_open_requests(unstamped, now_s=NOW, file_age_s=TTL, ttl_s=TTL)
     assert "request 0" not in out
@@ -88,8 +80,7 @@ def test_section_at_end_of_summary_is_dropped():
 
 
 def test_refeed_fails_open_when_summary_vanishes_between_read_and_stat():
-    """POST /api/agent/memory/reset can delete summary.md concurrently — the
-    stat() call that follows read_text() must not raise past this helper."""
+    """A concurrently deleted summary.md does not raise."""
     manager = object.__new__(OpenClawContextManager)
     fake_path = MagicMock(spec=Path)
     fake_path.read_text.return_value = summary_with(FRESH_A)

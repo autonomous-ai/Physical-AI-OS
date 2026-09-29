@@ -9,8 +9,6 @@ import (
 	jev "go.autonomous.ai/os/system/lib/jevskills"
 )
 
-// newPreloader belongs to the runtime bridge, so all OS-managed chat channels
-// share the same bounded selector without an additional OS dispatch decision.
 // jevEnabled is the runtime build switch. Enable only after native validation.
 const jevEnabled = false
 
@@ -24,8 +22,7 @@ func newPreloader(cfg Config) func(context.Context, string) string {
 	return router.Context
 }
 
-// prepareSkill makes a turn-local copy. Retries reuse the prepared payload;
-// neither the original request nor a persistent system prompt is rewritten.
+// prepareSkill makes a turn-local copy.
 func (s *Server) prepareSkill(ctx context.Context, p turnPayload) turnPayload {
 	if s.preloadContext == nil || p.preloadChecked {
 		return p
@@ -48,12 +45,8 @@ func (p turnPayload) promptWithSkill() string {
 	return p.preload + "\n\n" + p.Content
 }
 
-// Native policy is authoritative. A custom skill/permission policy is left to
-// the native loader instead of approximating its inheritance or wildcard rules.
-// Unreadable settings also abstain. Files are rechecked for each decision.
+// Native policy is authoritative.
 func nativePreloadAllowed(cfg Config) bool {
-	// Default-path overrides name the same policy files checked below. Other
-	// roots are left to native discovery instead of selecting from a stale catalog.
 	for key, expected := range map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(cfg.Home, ".claude")} {
 		if value := os.Getenv(key); value != "" {
 			actual, err := filepath.Abs(value)
@@ -70,8 +63,7 @@ func nativePreloadAllowed(cfg Config) bool {
 		return false
 	}
 	for {
-		// Covered static roots are scanned together; ambiguous names defer.
-		// Unknown roots remain native-owned.
+		// Covered static roots are scanned together; unknown roots stay native-owned.
 		for _, catalog := range []string{filepath.Join(dir, ".claude", "skills")} {
 			covered := false
 			for _, root := range nativeSkillDirs(cfg) {

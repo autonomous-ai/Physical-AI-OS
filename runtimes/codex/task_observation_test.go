@@ -15,7 +15,6 @@ func TestObservationLossIncludesOnlyUnfinishedTransmittedTasks(t *testing.T) {
 	if got := s.unfinishedTaskRunIDs(); !reflect.DeepEqual(got, want) {
 		t.Fatalf("unfinished evidence = %v, want %v", got, want)
 	}
-	// A normal terminal removes current correlation before delivering its event.
 	s.finishCurrentCorrelation()
 	if got := s.unfinishedTaskRunIDs(); !reflect.DeepEqual(got, []string{"queued"}) {
 		t.Fatalf("completed run remained unfinished: %v", got)

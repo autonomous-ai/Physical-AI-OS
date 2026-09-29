@@ -1,7 +1,6 @@
 import { cva } from "class-variance-authority"
 
-// Kept in a sibling module (not tabs.tsx) so the component file only exports
-// components — React Fast Refresh bails on a file that mixes the two.
+// Separate module so the component file only exports components (Fast Refresh).
 export const tabsListVariants = cva(
   "rounded-lg p-[3px] group-data-[orientation=horizontal]/tabs:h-9 data-[variant=line]:rounded-none group/tabs-list text-muted-foreground inline-flex w-fit items-center justify-center group-data-[orientation=vertical]/tabs:h-fit group-data-[orientation=vertical]/tabs:flex-col",
   {

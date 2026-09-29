@@ -11,7 +11,6 @@ from hal.realtime.orchestrator import RealtimeOrchestrator
 def test_native_voice_only_for_gemini_tts_on_gemini_live(monkeypatch):
     monkeypatch.setattr(hal_config, "REALTIME_PROVIDER", "gemini", raising=False)
     assert native_voice(SimpleNamespace(_provider="gemini", _voice="Puck")) == "Puck"
-    # A voice saved under another provider falls back like the TTS backend does.
     assert native_voice(SimpleNamespace(_provider="gemini", _voice="Rachel")) == "Kore"
     assert native_voice(SimpleNamespace(_provider="elevenlabs", _voice="Puck")) is None
     assert native_voice(None) is None

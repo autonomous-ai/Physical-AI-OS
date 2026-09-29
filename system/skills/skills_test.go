@@ -51,17 +51,12 @@ func TestSupported_FailOpenPreservesLegacyOnly(t *testing.T) {
 	}
 }
 
-// A reduced device drops only the hardware skills it can't support; platform
-// skills (no capability requirement) always survive.
+// A reduced device drops unsupported hardware skills; platform skills survive.
 func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
-	// A speaker-only box (like intern-v2): audio + sensing, no
-	// motion/light/display/vision/presence/media.
+	// Speaker-only box (like intern-v2): audio + sensing.
 	got := Supported(map[string]bool{"audio": true, "sensing": true})
 
-	// Camera people-perception (face-enroll, guard) needs `presence`, which this
-	// box lacks — so they prune. Voice people-perception (speaker-recognizer,
-	// user-emotion-detection) gates on `audio` (the mic), which this box HAS — so
-	// they survive (see the kept list below).
+	// Camera people-perception needs presence (pruned); voice people-perception needs audio (kept).
 	for _, gone := range []string{"servo-control", "servo-tracking", "led-control", "display", "emotion", "scene", "camera", "music", "face-enroll", "guard", "computer-use", "environment"} {
 		if contains(got, gone) {
 			t.Errorf("expected %q pruned (device lacks its capability)", gone)
@@ -79,9 +74,7 @@ func TestSupported_ReducedDevicePrunesHardware(t *testing.T) {
 	}
 }
 
-// Every capability referenced by the map must be a real ROBOT.md capability key
-// (guards against typos drifting the map out of sync with the schema), and every
-// mapped skill must exist in the catalog.
+// Map capabilities must be real ROBOT.md keys and mapped skills must exist.
 func TestCapability_Consistency(t *testing.T) {
 	known := map[string]bool{
 		"audio": true, "vision": true, "sensing": true, "presence": true,
@@ -103,9 +96,7 @@ func TestCapability_Consistency(t *testing.T) {
 	}
 }
 
-// user-emotion-detection is one skill over two sensors (face + voice). It must
-// survive on a device with EITHER the mic (audio) or the camera people-layer
-// (presence) — and only fully prune when the device has neither.
+// user-emotion-detection survives with either audio or presence.
 func TestSupported_UserEmotionDetectionAnyOfSensor(t *testing.T) {
 	cases := []struct {
 		name string
@@ -122,7 +113,6 @@ func TestSupported_UserEmotionDetectionAnyOfSensor(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s: user-emotion-detection present=%v, want %v", tc.name, got, tc.want)
 		}
-		// speaker-recognizer is voice-only: present iff the device has a mic.
 		wantSpeaker := tc.caps["audio"]
 		if gotSpeaker := contains(Supported(tc.caps), "speaker-recognizer"); gotSpeaker != wantSpeaker {
 			t.Errorf("%s: speaker-recognizer present=%v, want %v (audio=%v)", tc.name, gotSpeaker, wantSpeaker, tc.caps["audio"])

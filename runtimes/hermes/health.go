@@ -18,13 +18,7 @@ import (
 
 const healthPollInterval = 10 * time.Second
 
-// StartWS — naming carried over from the domain.AgentGateway interface for
-// parity with openclaw, but under Hermes there is no persistent WebSocket.
-// We instead:
-//  1. Record the handler so per-request SSE consumers can dispatch into it.
-//  2. Spin a /health poller that drives IsReady / ConnectedAt / status LED.
-//  3. Block on ctx.Done() to satisfy the same call shape as openclaw's
-//     reconnect loop (server.go invokes this inside a goroutine).
+// StartWS — naming carried over from the domain.AgentGateway interface for parity with openclaw, but under Hermes there is no persistent WebSocket.
 func (s *HermesService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	s.steeringMu.Lock()
 	s.runtimeCtx = ctx
@@ -38,13 +32,9 @@ func (s *HermesService) StartWS(ctx context.Context, handler domain.AgentEventHa
 }
 
 // runHealthLoop polls /health on healthPollInterval until ctx is done.
-// First success unlocks the gateway-down LED + emits ws_ready flow event.
-// A success after a failure (i.e. reconnect) triggers the i18n reconnect
-// TTS so the user knows the agent is back, matching openclaw.
 func (s *HermesService) runHealthLoop(ctx context.Context) {
 	tick := time.NewTicker(healthPollInterval)
 	defer tick.Stop()
-	// Run one probe immediately so IsReady() doesn't sit false for 10s.
 	s.probeHealth(ctx)
 	for {
 		select {
@@ -56,9 +46,7 @@ func (s *HermesService) runHealthLoop(ctx context.Context) {
 	}
 }
 
-// probeHealth issues GET /health and updates connection state. /health/detailed
-// is fetched on transition to ready=true so we can capture uptime_s if Hermes
-// publishes it.
+// probeHealth issues GET /health and updates connection state. /health/detailed is fetched on transition to ready=true so we can capture uptime_s if Hermes publishes it.
 func (s *HermesService) probeHealth(ctx context.Context) {
 	url := strings.TrimRight(BaseURL, "/") + "/health"
 	probeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
@@ -85,9 +73,7 @@ func (s *HermesService) probeHealth(ctx context.Context) {
 		slog.Warn("hermes health non-2xx", "component", "hermes", "status", resp.StatusCode)
 	}
 	if ok {
-		// Upgrade only between executions. Once native history is in use,
-		// a transient capability failure must never downgrade to Responses'
-		// separate conversation chain and silently lose that history.
+		// Upgrade only between executions.
 		s.steeringMu.Lock()
 		if !s.nativeRunSteering.Load() && s.inFlightStreams.Load() == 0 {
 			s.nativeRunSteering.Store(s.discoverRunSteering(probeCtx))
@@ -100,8 +86,7 @@ func (s *HermesService) probeHealth(ctx context.Context) {
 	}
 }
 
-// transitionReady applies the new readiness state, updates statusled, and
-// emits the one-shot reconnect TTS on re-up.
+// transitionReady applies the new readiness state, updates statusled, and emits the one-shot reconnect TTS on re-up.
 func (s *HermesService) transitionReady(now bool) {
 	was := s.ready.Swap(now)
 	if now == was {
@@ -119,15 +104,10 @@ func (s *HermesService) transitionReady(now bool) {
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Clear(statusled.StateAgentDown)
 		}
-		// First-connect TTS skipped (boot greeting handled elsewhere). Only
-		// announce on subsequent reconnects — same gate as openclaw uses on
-		// wsHasConnected.Swap(true).
 		if s.hasConnected.Swap(true) {
 			go func() {
 				phrase := i18n.Pick(i18n.PhraseReconnect)
-				// SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
-				// be fed to the realtime voice agent as history; fixed pool
-				// self-caches into hal's WAV cache so replays skip the provider.
+				// SpeakCached: system filler must not enter realtime voice history.
 				if err := hal.SpeakCached(phrase); err != nil {
 					slog.Warn("reconnect TTS failed", "component", "hermes", "error", err)
 				}
@@ -144,10 +124,9 @@ func (s *HermesService) transitionReady(now bool) {
 }
 
 // maybeFetchUptime hits /health/detailed and captures uptime_s if present.
-// Best-effort: never modifies ready state — that's owned by the basic probe.
 func (s *HermesService) maybeFetchUptime(ctx context.Context) {
 	if s.agentStartedAt.Load() > 0 {
-		return // already captured
+		return
 	}
 	url := strings.TrimRight(BaseURL, "/") + "/health/detailed"
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)

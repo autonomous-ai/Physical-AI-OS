@@ -15,14 +15,11 @@ import (
 
 const (
 	// connectorRefreshInterval is how often the loop scans every registered
-	// ConnectorWriter for expiring entries. Tight enough that a 1-hour token
-	// refreshes well before lapsing (combined with the 10-minute skew below),
-	// cheap because the common case finds nothing to do.
+	// ConnectorWriter for expiring entries.
 	connectorRefreshInterval = 3 * time.Minute
 
 	// connectorRefreshSkew refreshes a token once it has less than this
-	// remaining. Same value the OAuth path uses, kept consistent so behaviour
-	// is predictable across both loops.
+	// remaining.
 	connectorRefreshSkew = 10 * time.Minute
 
 	// connectorRefreshTimeout bounds a single refresh round-trip to the backend.
@@ -33,9 +30,7 @@ const (
 )
 
 // connectorRefreshResult is the subset of the backend response we apply
-// locally. The backend proxies the rotation to the connector's token endpoint;
-// it may return a rotated refresh_token (replaces the stored one) or omit it
-// (existing refresh_token preserved).
+// locally.
 type connectorRefreshResult struct {
 	AccessToken  string `json:"access_token"`
 	RefreshToken string `json:"refresh_token"`
@@ -44,10 +39,9 @@ type connectorRefreshResult struct {
 	Scope        string `json:"scope"`
 }
 
-// StartConnectorRefreshLoop runs until ctx is cancelled, periodically scanning
-// the writer registry for tokens nearing expiry and refreshing them through the
-// backend `/connector/refresh-token` endpoint. Per-tick panic recovery mirrors
-// the OAuth refresh loop: a single bad iteration kills the tick, not the loop.
+// StartConnectorRefreshLoop runs until ctx is cancelled, periodically
+// scanning the writer registry for tokens nearing expiry and refreshing them
+// through the backend `/connector/refresh-token` endpoint.
 func (h *DeviceMQTTHandler) StartConnectorRefreshLoop(ctx context.Context) {
 	h.safeConnectorRefreshTick(ctx) // eager first pass on boot
 	ticker := time.NewTicker(connectorRefreshInterval)
@@ -73,8 +67,7 @@ func (h *DeviceMQTTHandler) safeConnectorRefreshTick(ctx context.Context) {
 
 // refreshExpiringConnectors iterates every registered writer, asks for its
 // refreshable entries, and proactively rotates any that fall inside the skew
-// window. Each writer's failures are logged and skipped — a single connector
-// must not block the others.
+// window.
 func (h *DeviceMQTTHandler) refreshExpiringConnectors(ctx context.Context) {
 	now := time.Now()
 	for _, w := range h.refreshableConnectorWriters() {
@@ -107,10 +100,7 @@ func (h *DeviceMQTTHandler) refreshExpiringConnectors(ctx context.Context) {
 }
 
 // connectorNeedsRefresh reports whether the entry should be proactively
-// refreshed. Only entries that carry a refresh_token are eligible (caller has
-// already filtered). expires_at == 0 means "unknown" (BE didn't send
-// expires_in, or token is non-expiring) and is skipped — no use hammering BE
-// for tokens we can't reason about.
+// refreshed.
 func connectorNeedsRefresh(t ConnectorRefreshTarget, now time.Time, skew time.Duration) bool {
 	if t.RefreshToken == "" || t.ExpiresAt == 0 {
 		return false
@@ -120,19 +110,12 @@ func connectorNeedsRefresh(t ConnectorRefreshTarget, now time.Time, skew time.Du
 
 // entryLoader is implemented by the per-connector MCP writer
 // (mcpConnectorWriter) which keeps a full on-disk entry per connector.
-// loadRefreshedCreds uses it to preserve fields the BE refresh response does
-// NOT re-send — credentials map, client_id, scopes — so a token rotation
-// doesn't blank them on disk. Writers without a token file (default writer →
-// connectors.json) don't implement it and fall through to the minimal-creds
-// path below.
 type entryLoader interface {
 	loadEntry(connector string) (ConnectorCreds, bool, error)
 }
 
-// loadRefreshedCreds builds the ConnectorCreds the writer needs for a re-Write.
-// Reads the current on-disk entry (to preserve fields BE doesn't re-send) then
-// layers in the freshly rotated access_token + token_type + expires_at (+
-// refresh_token if rotated).
+// loadRefreshedCreds builds the ConnectorCreds the writer needs for a
+// re-Write.
 func (h *DeviceMQTTHandler) loadRefreshedCreds(w ConnectorWriter, connector string, res connectorRefreshResult, refreshedAt time.Time) (ConnectorCreds, bool, error) {
 	if el, ok := w.(entryLoader); ok {
 		base, present, err := el.loadEntry(connector)
@@ -151,8 +134,6 @@ func (h *DeviceMQTTHandler) loadRefreshedCreds(w ConnectorWriter, connector stri
 		base.ObtainedAt = refreshedAt.Unix()
 		return base, true, nil
 	}
-	// Fallback for generic writers: minimal creds. The writer's Write unions
-	// with on-disk state, so zero scopes/client_id here are tolerable.
 	return ConnectorCreds{
 		Connector:    connector,
 		AccessToken:  res.AccessToken,
@@ -171,9 +152,7 @@ func firstNonEmpty(a, b string) string {
 }
 
 // requestConnectorTokenRefresh POSTs the refresh_token to the backend and
-// returns the fresh token. The backend proxies the call to the connector's
-// token endpoint — the device never touches the provider directly. Auth
-// mirrors the OAuth refresh path: Bearer <LLMAPIKey> + X-Device-ID.
+// returns the fresh token.
 func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, connector, refreshToken string) (connectorRefreshResult, error) {
 	var out connectorRefreshResult
 
@@ -181,8 +160,6 @@ func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, co
 	if base == "" {
 		return out, errors.New("LLMBaseURL not configured")
 	}
-	// LLMBaseURL carries a trailing /v1 for OpenAI-compat LLM calls; autonomous
-	// endpoints sit one level above. Mirror oauth_refresh.requestTokenRefresh.
 	base = strings.TrimSuffix(base, "/v1")
 
 	payload, err := json.Marshal(map[string]string{"connector": connector, "refresh_token": refreshToken})

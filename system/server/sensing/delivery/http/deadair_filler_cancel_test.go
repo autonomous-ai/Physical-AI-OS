@@ -5,10 +5,7 @@ import (
 	"time"
 )
 
-// The click mutes turns without aborting them, so a cancelled turn keeps
-// reaching tool boundaries and OnToolEnd kept re-arming "one moment" for a
-// reply that would never be spoken — device-observed as the lamp promising to
-// answer the question the user had just dropped.
+// A cancelled turn must not keep re-arming fillers at tool boundaries.
 func TestCancelAllActiveEndsEveryInFlightRun(t *testing.T) {
 	fm := NewFillerManager()
 	fm.MarkVoiceRun("device-chat-54-1787885628360", "")
@@ -28,8 +25,7 @@ func TestCancelAllActiveEndsEveryInFlightRun(t *testing.T) {
 	}
 }
 
-// A cancelled run must stay dead: the turn is still executing, so tool
-// boundaries keep arriving after the click.
+// A cancelled run stays dead as tool boundaries keep arriving.
 func TestToolEndAfterCancelAllDoesNotRearm(t *testing.T) {
 	fm := NewFillerManager()
 	runID := "device-chat-54-1787885628360"
@@ -47,9 +43,7 @@ func TestToolEndAfterCancelAllDoesNotRearm(t *testing.T) {
 	}
 }
 
-// The Opening filler of whatever the user says NEXT is armed after the click,
-// so a run registered afterwards must be unaffected — this is what makes
-// "click, then ask something else" still sound normal.
+// A run registered after the click is unaffected.
 func TestRunStartedAfterCancelAllStillArms(t *testing.T) {
 	fm := NewFillerManager()
 	fm.MarkVoiceRun("device-chat-54-1787885628360", "")
@@ -79,8 +73,7 @@ func TestCancelAllActiveOnIdleManagerIsANoop(t *testing.T) {
 	}
 }
 
-// Guards the iteration-under-lock split in CancelAllActive: the run ids are
-// collected while holding fm.mu, then Cancel takes the lock again per run.
+// Guards the collect-then-cancel locking split in CancelAllActive.
 func TestCancelAllActiveIsSafeAlongsideConcurrentToolEnds(t *testing.T) {
 	fm := NewFillerManager()
 	for _, runID := range []string{"run-a", "run-b", "run-c"} {
@@ -103,10 +96,7 @@ func TestCancelAllActiveIsSafeAlongsideConcurrentToolEnds(t *testing.T) {
 	}
 }
 
-// The opening filler fires while HAL is still waiting for this request's
-// response, so it cannot be tagged with the run id HAL does not have yet. HAL
-// sends its own interaction id up for exactly this reason; a filler tagged
-// with an unresolvable owner is dropped from the metrics as unattributed audio.
+// The opening filler is owned by HAL's interaction id, not the run id.
 func TestFillerOwnerPrefersTheInteractionID(t *testing.T) {
 	if got := fillerOwner("vi-abc123", "device-chat-7-1788422075499"); got != "vi-abc123" {
 		t.Errorf("fillerOwner = %q, want the interaction id", got)
@@ -119,8 +109,7 @@ func TestFillerOwnerPrefersTheInteractionID(t *testing.T) {
 	}
 }
 
-// A filler fired later in the same turn must carry the same owner as the
-// opening one, or half a turn's audio lands unattributed.
+// Later fillers in a turn carry the same owner as the opening one.
 func TestLaterFillersReuseTheTurnsInteractionID(t *testing.T) {
 	fm := NewFillerManager()
 	fm.MarkVoiceRun("device-chat-7-1788422075499", "vi-abc123")

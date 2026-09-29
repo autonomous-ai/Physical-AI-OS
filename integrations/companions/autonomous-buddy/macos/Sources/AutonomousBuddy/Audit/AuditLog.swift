@@ -3,8 +3,7 @@ import Foundation
 actor AuditLog {
     private let url: URL
 
-    // fileURL is the canonical on-disk audit log location, exposed so the menu
-    // bar's "Show audit log…" item can open it without instantiating an actor.
+    // Exposed so the menu bar can open the log without instantiating the actor.
     static var fileURL: URL {
         let fm = FileManager.default
         let dir = fm.urls(for: .applicationSupportDirectory, in: .userDomainMask).first!
@@ -38,7 +37,6 @@ actor AuditLog {
             try handle.seekToEnd()
             try handle.write(contentsOf: line)
         } catch {
-            // Silently fail; audit log is best-effort.
         }
     }
 }

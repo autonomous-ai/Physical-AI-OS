@@ -68,12 +68,15 @@ across:
 
 - `integrations/perception-service/docs/` — `deployment.md`, `configuration.md`,
   `perceptions.md`, `README.md`
-- `docs/face-emotion/` + `docs/vi/face-emotion/` (EN + VI)
-- `docs/pose/` + `docs/vi/pose/` (EN + VI)
+- `docs/face-emotion/` + `docs/vi/face-emotion/` (EN + VI) — these doc sets have
+  since been removed; facial emotion is now covered in
+  [perceptions.md § Facial emotion (FER)](perceptions.md#2-facial-emotion-fer)
+- `docs/pose/` + `docs/vi/pose/` (EN + VI) — since removed; see
+  [perceptions.md § Pose estimation](perceptions.md#3-pose-estimation)
 - `skills/speaker-recognizer/reference/api.md`, `skills/wellbeing/reference/posture.md`
 
 Fixed as part of this pass: the relative link to `deployment.md` in
-`emoaffectnet-setup.md` (EN + VI) had the wrong depth (`../../` reached `docs/`,
+`emoaffectnet-setup.md` (EN + VI, part of the since-removed `docs/face-emotion/` set) had the wrong depth (`../../` reached `docs/`,
 not the repo root) — corrected to `../../../integrations/perception-service/docs/deployment.md`.
 
 `integrations/README.md` intentionally keeps the phrase "formerly `dlbackend`"

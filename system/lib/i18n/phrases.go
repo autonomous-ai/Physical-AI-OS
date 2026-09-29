@@ -2,32 +2,23 @@ package i18n
 
 import "math/rand"
 
-// Phrase names a short TTS template that can vary by STT language.
-// Adding a new phrase means adding an entry under every supported
-// language in the phrases table — missing entries silently fall back
-// to English.
+// Phrase names a short TTS template; add it for every language or it falls back to English.
 type Phrase string
 
 const (
-	// Random pools — consumed via Pick. One entry chosen per fire.
+	// Random pools, consumed via Pick.
 	PhraseMumble    Phrase = "ambient.mumble"
 	PhraseRecovery  Phrase = "healthwatch.recovery"
 	PhraseReconnect Phrase = "openclaw.reconnect"
 
-	// Single strings — consumed via One. Format templates (e.g. %s)
-	// go through One + fmt.Sprintf at the call site.
+	// Single strings and format templates, consumed via One.
 	PhraseBrainRestart  Phrase = "sensing.brain_restart"
 	PhraseCompactNotice Phrase = "openclaw.compact_notice"
 	PhraseTrackFailFmt  Phrase = "tracking.track_fail_fmt"
-	// Spoken when the backend replaces the agent reply with its plan-limit
-	// banner. Delivered via hal.SpeakCached so the WAV self-caches on the
-	// first successful render and replays from hal's persistent cache when
-	// the TTS provider is itself rate-limited (both ride the same quota).
+	// Plan-limit notice; spoken via hal.SpeakCached so it plays even when TTS is rate-limited.
 	PhraseLLMLimit Phrase = "agent.llm_limit"
 
-	// Chitchat replies — consumed via PickIn(phrase, inputLang) from the
-	// local intent matcher. The reply lang follows the matched input phrase
-	// (so "hi" → English reply) rather than the configured Lang().
+	// Chitchat replies, consumed via PickIn in the matched input's language.
 	PhraseChitchatGreeting      Phrase = "chitchat.greeting"
 	PhraseChitchatFarewell      Phrase = "chitchat.farewell"
 	PhraseChitchatThanks        Phrase = "chitchat.thanks"
@@ -37,22 +28,12 @@ const (
 	PhraseChitchatPresenceCheck Phrase = "chitchat.presence_check"
 )
 
-// fallbackLang is used when the active STT language has no entry for
-// the requested phrase. English keeps the widest TTS provider coverage.
+// fallbackLang is used when the active language has no entry for a phrase.
 const fallbackLang = LangEN
 
-// phrases is the single source of truth for hardcoded TTS templates.
-// Shape is phrase → lang → slice; single-string entries store a
-// one-element slice so Pick and One can share the same table.
-//
-// Audio tags ([sigh], [whisper], [chuckle], [laughs softly], [gasp])
-// follow the SOUL.md whitelist — OpenAI strips them via the tts_openai
-// whitelist, ElevenLabs interprets them. Either way they don't read
-// aloud.
+// phrases maps phrase -> lang -> variants; audio tags must stay within the SOUL.md whitelist.
 var phrases = map[Phrase]map[string][]string{
-	// Shared idle self-talk: brief, playful, and independent of the robot's body.
-	// No sensor claims, listening acknowledgements, or requests for a reply.
-	// Audition with the device voice; text alone cannot guarantee delivery.
+	// Idle self-talk: no sensor claims, listening acknowledgements or requests for a reply.
 	PhraseMumble: {
 		LangEN: {
 			"Mm…",
@@ -215,10 +196,7 @@ var phrases = map[Phrase]map[string][]string{
 	},
 }
 
-// PickIn is like Pick but uses the explicit `lang` argument rather than the
-// configured Lang(). Used by the local intent matcher where the reply lang
-// must follow the matched input phrase's lang (e.g. "hi" → English reply,
-// "chào" → Vietnamese reply) independent of global config.
+// PickIn is like Pick but uses lang instead of the configured Lang().
 func PickIn(p Phrase, lang string) string {
 	pool := poolFor(p, lang)
 	if len(pool) == 0 {
@@ -227,9 +205,7 @@ func PickIn(p Phrase, lang string) string {
 	return applyName(pool[rand.Intn(len(pool))])
 }
 
-// AllVariantsAcrossLangs returns every reply variant for phrase p across all
-// languages — used by the WAV pre-render boot path so the cache covers every
-// possible chitchat reply ahead of time.
+// AllVariantsAcrossLangs returns every variant of p across all languages (for WAV pre-render).
 func AllVariantsAcrossLangs(p Phrase) []string {
 	byLang, ok := phrases[p]
 	if !ok {
@@ -242,9 +218,7 @@ func AllVariantsAcrossLangs(p Phrase) []string {
 	return applyNameAll(out)
 }
 
-// Pick returns one entry at random from the active language's pool for
-// the phrase. Falls back to English when the active language is missing
-// or empty. Returns "" when the phrase is unknown.
+// Pick returns a random variant in the active language (English fallback); "" when unknown.
 func Pick(p Phrase) string {
 	pool := poolFor(p, Lang())
 	if len(pool) == 0 {
@@ -253,8 +227,7 @@ func Pick(p Phrase) string {
 	return applyName(pool[rand.Intn(len(pool))])
 }
 
-// One returns the first entry in the active language's pool — used for
-// single-string phrases and fmt templates. Same fallback rules as Pick.
+// One returns the first variant in the active language, with Pick's fallback rules.
 func One(p Phrase) string {
 	pool := poolFor(p, Lang())
 	if len(pool) == 0 {

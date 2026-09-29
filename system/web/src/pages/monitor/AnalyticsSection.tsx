@@ -3,8 +3,6 @@ import { Bar, Line } from "react-chartjs-2";
 import { S } from "./styles";
 import { API } from "./types";
 
-// ─── Analytics types ─────────────────────────────────────────────────────────
-
 interface VersionMetrics {
   turnCount: number;
   durationAvg: number;
@@ -58,16 +56,13 @@ const chartScaleDefaults = {
   ticks: { color: CHART_COLORS.tickColor, font: { size: 10 } },
 };
 
-// Version palette chosen to NOT collide with state colors (green/amber/red)
-// used elsewhere in the UI — these are identity slots for chart series, not
-// signals of "good/bad". Order: sky → indigo → violet → fuchsia → pink → orange.
 const VERSION_COLORS = [
-  { border: "rgba(56,189,248,0.85)",  bg: "rgba(56,189,248,0.15)"  }, // sky
-  { border: "rgba(129,140,248,0.85)", bg: "rgba(129,140,248,0.15)" }, // indigo
-  { border: "rgba(167,139,250,0.85)", bg: "rgba(167,139,250,0.15)" }, // violet
-  { border: "rgba(232,121,249,0.85)", bg: "rgba(232,121,249,0.15)" }, // fuchsia
-  { border: "rgba(244,114,182,0.85)", bg: "rgba(244,114,182,0.15)" }, // pink
-  { border: "rgba(251,146,60,0.85)",  bg: "rgba(251,146,60,0.15)"  }, // orange
+  { border: "rgba(56,189,248,0.85)",  bg: "rgba(56,189,248,0.15)"  },
+  { border: "rgba(129,140,248,0.85)", bg: "rgba(129,140,248,0.15)" },
+  { border: "rgba(167,139,250,0.85)", bg: "rgba(167,139,250,0.15)" },
+  { border: "rgba(232,121,249,0.85)", bg: "rgba(232,121,249,0.15)" },
+  { border: "rgba(244,114,182,0.85)", bg: "rgba(244,114,182,0.15)" },
+  { border: "rgba(251,146,60,0.85)",  bg: "rgba(251,146,60,0.15)"  },
 ];
 
 function vColor(i: number) {
@@ -76,7 +71,6 @@ function vColor(i: number) {
 
 export function AnalyticsSection() {
   const [preset, setPreset] = useState<Preset>("7d");
-  // Lazy initializers: the clock is read once on mount, not on every render.
   const [customFrom, setCustomFrom] = useState(() => fmtDate(new Date(Date.now() - 7 * 86400000)));
   const [customTo, setCustomTo] = useState(() => fmtDate(new Date()));
   const [analytics, setAnalytics] = useState<AnalyticsData | null>(null);
@@ -102,14 +96,10 @@ export function AnalyticsSection() {
   useEffect(() => { fetchAnalytics(); }, [fetchAnalytics]);
 
   const dates = analytics?.dates ?? [];
-  // Memoized so the empty-array fallbacks keep a stable identity — otherwise the
-  // memos below that depend on them would recompute on every render.
   const allVersions = useMemo(() => analytics?.versions ?? [], [analytics]);
   const allRows = useMemo(() => analytics?.rows ?? [], [analytics]);
   const labels = dates.map((d) => d.slice(5));
 
-  // Cap to the 10 most recent versions — old versions clutter the legend and
-  // dilute chart colors. "Most recent" = max date each version appears on.
   const VERSION_LIMIT = 5;
   const versions = useMemo(() => {
     if (allVersions.length <= VERSION_LIMIT) return allVersions;
@@ -124,7 +114,6 @@ export function AnalyticsSection() {
       .slice(0, VERSION_LIMIT);
   }, [allVersions, allRows]);
 
-  // Filter rows to only the kept versions so summary totals match what's plotted.
   const versionSet = useMemo(() => new Set(versions), [versions]);
   const rows = useMemo(() => allRows.filter((r) => versionSet.has(r.version)), [allRows, versionSet]);
 
@@ -199,8 +188,6 @@ export function AnalyticsSection() {
   ) => {
     const type = opts?.type ?? "line";
     return versions.map((ver, vi) => ({
-      // arrow functions have .name === "" so fall back to the caller-provided
-      // singleLabel for the single-version case.
       label: multiVersion ? `v${ver}` : (opts?.singleLabel ?? "Value"),
       data: dates.map((d) => val(d, ver, fn)),
       ...(type === "bar"
@@ -237,7 +224,6 @@ export function AnalyticsSection() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
-      {/* Range bar — split into two rows so presets+actions and legend each get their own line. */}
       <div style={{ ...S.card, display: "flex", flexDirection: "column", gap: 8 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontSize: 11, color: "var(--lm-text-muted)", fontWeight: 600 }}>RANGE</span>
@@ -315,7 +301,6 @@ export function AnalyticsSection() {
         )}
       </div>
 
-      {/* Summary cards */}
       <div className="lm-grid-4">
         <div style={summaryCardStyle}>
           <span style={{ fontSize: 22, fontWeight: 700, color: "var(--lm-amber)" }}>{totalTurns}</span>
@@ -344,7 +329,6 @@ export function AnalyticsSection() {
 
       {rows.length > 0 && (
         <>
-          {/* Row 1: Turn count + Duration */}
           <div className="lm-grid-2">
             <div style={{ ...S.card, height: 280 }}>
               <div style={S.cardLabel}>Turn Count per Day {multiVersion && "— by version"}</div>
@@ -367,7 +351,6 @@ export function AnalyticsSection() {
             </div>
           </div>
 
-          {/* Row 2: Tokens billed bar + Tokens per turn */}
           <div className="lm-grid-2">
             <div style={{ ...S.card, height: 280 }}>
               <div style={S.cardLabel}>Billed Tokens {multiVersion && "— by version"}</div>
@@ -403,7 +386,6 @@ export function AnalyticsSection() {
             </div>
           </div>
 
-          {/* Row 3: Inner steps — average reasoning steps per turn (agent loop iterations) */}
           <div style={{ ...S.card, height: 280 }}>
             <div
               style={S.cardLabel}

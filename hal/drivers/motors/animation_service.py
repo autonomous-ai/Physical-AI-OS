@@ -10,10 +10,8 @@ from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
 logger = logging.getLogger(__name__)
 
-# Default interpolation duration for move_to (seconds)
 DEFAULT_MOVE_DURATION = 2.0
 
-# Zero/hold position in raw encoder units — the physical resting pose after release.
 ZERO_RAW = {
     "base_yaw":    2025,
     "base_pitch":  2674,
@@ -33,11 +31,8 @@ STARTUP_RAW = {
     "wrist_pitch": 2056,
 }
 
-# Gravity-rest position in raw encoder units — where release() parks the arm
-# before cutting torque, so it settles instead of dropping. Currently identical
-# to ZERO_RAW; kept separate because the two answer different questions (hold a
-# presentable pose with torque ON vs. leave gravity nothing to pull once torque
-# goes OFF) and have diverged before.
+# Gravity-rest position in raw encoder units — where release() parks the arm before
+# cutting torque, so it settles instead of dropping.
 REST_RAW = {
     "base_yaw":    2029,
     "base_pitch":  2030,
@@ -46,12 +41,8 @@ REST_RAW = {
     "wrist_pitch": 1770,
 }
 
-# Duration for the startup/resume move (seconds)
 STARTUP_MOVE_DURATION = 5.0
 
-# Playback timing (speed ceiling, time column, stretch + resample) is shared
-# with the mock driver so the simulator plays a recording exactly as the body
-# does — see hal/drivers/motors/recording_timing.py.
 from hal.drivers.motors.recording_timing import (  # noqa: E402
     RECORDING_TIME_COLUMN,
     SERVO_MAX_DPS,
@@ -63,17 +54,11 @@ from hal.drivers.motors.recording_timing import (  # noqa: E402
 # (server lifespan Phase 3 joins the servo init thread).
 SERVO_CMD_STARTUP_MOVE = "__startup_move__"
 
-# Recordings that hold final pose instead of returning to idle
-# (e.g. sleepy — lamp stays still until woken by presence/wake-word)
 NO_IDLE_RECORDINGS = {EMO_SLEEPY}
 
 
 def _motor_positions_from_bus(robot: LeLampFollower) -> Dict[str, float]:
-    """Read Present_Position only — same numeric scale as CSV, no camera/LED path.
-
-    get_observation() also reads cameras; async_read can block or stall on device.
-    If sync_read hangs, the animation thread stops (symptom: HTTP 200 but no motion).
-    """
+    """Read Present_Position only — same numeric scale as CSV, no camera/LED path."""
     t0 = time.perf_counter()
     raw = robot.bus.sync_read("Present_Position")
     dt = time.perf_counter() - t0
@@ -94,24 +79,17 @@ class AnimationService:
         # time (see _load_recording). aim/nudge take theirs per call from the
         # route; playback has no route to carry it, so the service holds it.
         self._safety_policy = safety_policy
-        # Body geometry for the stability gate (ROBOT.md urdf_ref); None = ungated.
         self._geometry = geometry
-        self._hold_until: float = 0.0  # timestamp until which to hold pose before returning to idle
+        self._hold_until: float = 0.0
         self._no_idle_recordings = NO_IDLE_RECORDINGS
-        # disable_torque_on_disconnect=False: dropping torque is what `release()`
-        # does, deliberately and on request ("arm limp"). A shutdown is not that
-        # — it happens on every HAL restart, and cutting torque there would let
-        # the arm fall under its own weight for the ~20s until HAL is back.
-        # The flag never mattered while nothing called stop(); the shutdown path
-        # does now, so make the intent explicit rather than inherit a default
-        # that would turn each restart into a release.
+        # disable_torque_on_disconnect=False: dropping torque is what `release()` does,
+        # deliberately and on request ("arm limp").
         self.robot_config = LeLampFollowerConfig(
             port=port, id=lamp_id, disable_torque_on_disconnect=False
         )
         self.robot: LeLampFollower = None
         self.recordings_dir = os.path.join(os.path.dirname(__file__), "..", "..", "recordings")
 
-        # State management
         self._recording_cache: Dict[str, List[Dict[str, float]]] = {}
         self._current_state: Optional[Dict[str, float]] = None
         self._current_recording: Optional[str] = None
@@ -121,17 +99,14 @@ class AnimationService:
         self._interpolation_total_frames: int = 0  # denominator for progress; must match _interpolation_frames initial value
         self._interpolation_target: Optional[Dict[str, float]] = None
 
-        # Music groove: loop while music is playing
         self._music_playing = False
         self._music_recording = SERVO_MUSIC_GROOVE
 
         # Deterministic stop. Set by halt(), checked every frame by the move and
-        # playback loops; they return where they are, leaving the last goal
-        # written and torque ON. Cleared by the next commanded motion, so a halt
-        # stops what is in flight without wedging the driver.
+        # playback loops; they return where they are, leaving the last goal written and
+        # torque ON.
         self._halt = threading.Event()
 
-        # Custom event handling
         self._running = threading.Event()
         self._event_queue = []
         self._event_lock = threading.Lock()
@@ -140,62 +115,32 @@ class AnimationService:
         # Serial bus lock — all bus access (read/write/ping) must hold this lock
         self.bus_lock = threading.RLock()
 
-        # One-shot duration override for the next _handle_play interpolation (resume slow-start).
-        # Set before dispatch; consumed and cleared inside _handle_play.
         self._resume_duration: Optional[float] = None
 
         # Freeze flag — when set, _continue_playback() skips servo writes so camera can capture a stable frame
         self._frozen = threading.Event()
 
-        # Last move_to_raw write time (raw register writes bypass
-        # robot.send_action, so they need their own stamp — see last_servo_write)
         self._raw_write_monotonic = 0.0
 
         # Hold mode — suppresses idle/ambient animations but allows emotion dispatch.
-        # Set by /servo/hold, cleared by /servo/resume. Also set by scene
-        # presets (focus/reading) that want the lamp to stay put while still
-        # letting scene-change emotions (greeting/sleepy/stretching) play.
+        # Set by /servo/hold, cleared by /servo/resume.
         self._hold_mode = False
-        # True only when the hold came from an EXPLICIT /servo/hold (agent
-        # command like "face the wall and stay there"). Then even scene-change
-        # emotions must not move the servo — a trailing [HW:/emotion:greeting]
-        # in the same reply used to play its animation right after aim+hold
-        # and park the arm at the greeting pose instead of the commanded one.
-        # Scene-preset holds keep the scene-change exemption (greeting/sleepy/
-        # stretching legitimately transition a focus/reading scene).
+        # True only when the hold came from an EXPLICIT /servo/hold (agent command like
+        # "face the wall and stay there").
         self._hold_explicit = False
 
-        # Tracking lock — stricter than hold_mode: absolutely no servo writes
-        # from the animation loop, and in-progress recordings are dropped so
-        # they don't fight the tracker or resume jerking when tracking ends.
-        #
-        # Two ways to hold it, because there are two kinds of owner:
-        #   * the flag, assigned directly (`svc._tracking_active = True`) by code
-        #     that owns the body for a bounded stretch — aim.servo_ownership.
-        #   * the counter, held by a WRITER for as long as its thread is alive.
-        #
-        # The counter exists because the flag alone described the wrong span.
-        # `_track_loop` set it on entry and cleared it on exit, but the thing
-        # actually writing the bus is `ServoFollower._worker`, which outlives
-        # that loop. Between the clear and the worker stopping, the lock read
-        # free while the follower was still writing every joint at 30fps.
-        #
-        # Device-traced 2026-08-25: five subsystems wrote elbow_pitch in one
-        # minute — the follower 130 times at a fixed goal, idle 37, gaze 32,
-        # look.aim 16. Gaze declines to move a body someone else owns, asked,
-        # was told the body was free, and had every correction overwritten
-        # 33ms later. It reported the servo as failing to reach its target.
+        # Tracking lock — stricter than hold_mode: absolutely no servo writes from the
+        # animation loop, and in-progress recordings are dropped so they don't fight the
+        # tracker or resume jerking when tracking ends.
         self._tracking_flag = False
         self._body_owners = 0
         self._body_owner_lock = threading.Lock()
 
-        # Backstop: the flag half of the lock has exactly one legitimate holder
-        # (a live tracking session, whose follower also holds a counter slot),
-        # so flag-set-with-no-writer is an impossible state. See #312 for the
-        # twelve minutes it lasted the one time it happened.
+        # Backstop: the flag half of the lock has exactly one legitimate holder (a live
+        # tracking session, whose follower also holds a counter slot), so
+        # flag-set-with-no-writer is an impossible state.
         self._tracking_wedge = TrackingWedgeWatchdog()
 
-        # When True, idle recording finished and pose is held — loop sleeps longer to save CPU
         self._idle_settled = False
 
     @property
@@ -205,32 +150,18 @@ class AnimationService:
 
     @_tracking_active.setter
     def _tracking_active(self, value: bool) -> None:
-        # Assignment sets the FLAG only. It cannot release a writer that is still
-        # running, which is what `_track_loop` clearing it used to do.
         self._tracking_flag = bool(value)
 
-    # Goal_Speed register on the STS3215. 0 means "no limit".
     _GOAL_SPEED_REG = 46
-    # What the servos behave as WITHOUT this register ever being written. They
-    # read 0 (no limit) but move as if capped — device-measured, base_yaw does
-    # 16 deg/s untouched and 115 deg/s straight after writing that same 0 back.
-    # So "put it back how it was" cannot be done by writing 0; it needs the
-    # value that reproduces the original pace. 0.062 deg/s per unit measured,
-    # so ~175 is the ~16 deg/s the arm has always run at.
+    # Unwritten servos read 0 but run ~16 deg/s; writing 0 lifts the cap entirely, so
+    # restoring needs ~175 (0.062 deg/s per unit, device-measured).
     @property
     def UNWRITTEN_SPEED_EQUIVALENT(self) -> int:
         """What base_yaw rests at — the same value startup writes. 0 = no cap."""
         return self._SERVO_REST_SPEED.get(1, 0)
 
     def set_joint_speed(self, motor_name: str, speed: int) -> bool:
-        """Cap one joint's velocity, or lift the cap with 0. Never raises.
-
-        Deliberately not applied at startup for every joint: writing it there
-        would change how the whole robot moves — idle, emotions, every recorded
-        animation — which is a far larger decision than any one caller should
-        make on its own. Callers that need a particular pace set it around their
-        own work and put it back.
-        """
+        """Cap one joint's velocity, or lift the cap with 0. Never raises."""
         try:
             with self.bus_lock:
                 motor = self.robot.bus.motors.get(motor_name)
@@ -248,9 +179,6 @@ class AnimationService:
     def acquire_body(self) -> None:
         """Claim the body for as long as the caller keeps writing to it.
 
-        For owners whose lifetime is a THREAD rather than a block: the follow
-        worker holds this from the moment it starts until it stops, so the lock
-        covers every frame it writes rather than only the loop that spawned it.
         Re-entrant by count, so nested or overlapping owners each release once.
         """
         with self._body_owner_lock:
@@ -260,74 +188,20 @@ class AnimationService:
         with self._body_owner_lock:
             self._body_owners = max(0, self._body_owners - 1)
 
-    # P gain — upstream default is 16 for all. Higher values cause jerky motion,
-    # so this stays at 16 except where a joint has been measured to need more.
-    #
-    # elbow_pitch (3) is the exception. It carries the most gravity torque of any
+    # P gain — upstream default is 16 for all. It carries the most gravity torque of any
     # joint (the whole forearm plus head), and with P=16 and no integral term the
-    # commanded torque — proportional to error — could not overcome gravity plus
-    # static friction for a SMALL error. It did not move a little; it did not move
-    # at all. Device-measured 2026-08-25, lifting the elbow, 3 trials each:
-    #
-    #                  +3 deg    +6 deg   +10 deg
-    #   P=16 I=0        0/3       2/3       3/3
-    #   P=32 I=10       3/3       3/3       3/3
-    #
-    # Which is why the servo page always looked fine — a slider drag is a big
-    # move, comfortably over the threshold — while gaze, whose corrections are
-    # 6-13 deg, sat in the dead band and silently did nothing for an afternoon.
-    # wrist_pitch (5) joined elbow_pitch (3) once it started carrying a real
-    # share of the vertical correction. Same failure, same fix: it sat at +9.7
-    # with ~43 deg of travel above it, was asked for 3 deg, and did not move.
-    # Not a limit — the deadband. base_pitch (2) is deliberately left alone; it
-    # lands every ask it is given, and adding integral to a joint that already
-    # works risks hunting for no gain.
+    # commanded torque.
     _SERVO_PGAIN = {1: 16, 2: 16, 3: 32, 4: 16, 5: 32}
 
-    # I gain — 0 everywhere by default, which is what the servos ship with. An
-    # integral term is what lets a joint keep pushing on a small error instead of
-    # settling for whatever P alone can deliver, so it is the half of the fix that
-    # addresses stiction rather than droop. Only elbow_pitch has been measured to
-    # need it; the other joints are left alone rather than retuned on a guess.
+    # I gain — 0 everywhere by default, which is what the servos ship with.
     _SERVO_IGAIN = {3: 10, 5: 10}
 
-    # Resting Goal_Speed, written at startup so a joint the search retunes always
-    # starts from a known value. 0 means NO velocity limit.
-    #
-    # It has to be 0 rather than a number that looks like the old pace. Untouched,
-    # this register imposes no cap at all — base_yaw merely crossed a LARGE error
-    # slowly, because of its P gain, while still following small steps as fast as
-    # it liked. Animations are exactly small steps at 30fps, so any real cap
-    # throttles them. A first attempt used 175, chosen because it reproduced the
-    # ~20 deg/s seen on a point-to-point move, and that turned out to clamp idle
-    # and every emotion to a crawl — a global slowdown, from a value picked to be
-    # a no-op.
-    #
-    # There is no setting that reproduces "never written": writing the register
-    # at all clears whatever the servo powers up with (16 deg/s untouched, 115
-    # after writing the same 0 back). So the choice is cap-everything or
-    # cap-nothing, and animations need cap-nothing.
-    #
-    # The search still caps ITSELF to ~80 deg/s while sweeping, which against an
-    # uncapped base is a reduction rather than a licence.
-    #
-    # Only base_yaw, because only base_yaw is ever retuned. A joint nobody
-    # touches needs no backstop.
+    # Resting Goal_Speed, written at startup so a joint the search retunes always starts
+    # from a known value.
     _SERVO_REST_SPEED = {1: 0}
 
     def _configure_servos_raw(self, energize: bool = True):
-        """Configure servos directly via scservo_sdk, bypassing lerobot.
-
-        energize=False leaves Torque_Enable at 0: the gains and mode are still
-        written, but the body stays limp. Used when HAL restarts on a sleeping
-        device — a sleeping lamp rests with torque off, and switching it on just
-        to switch it off again a second later is a visible twitch for no gain.
-
-        lerobot's bus.write() requires a fully successful connect() handshake.
-        When servos are offline, connect() fails and bus.write() raises
-        DeviceNotConnectedError. This method writes directly to the serial bus
-        to configure whichever servos are actually online.
-        """
+        """Configure servos directly via scservo_sdk, bypassing lerobot."""
         with self.bus_lock:
             ph = self.robot.bus.port_handler
             pk = self.robot.bus.packet_handler
@@ -337,21 +211,16 @@ class AnimationService:
                 pgain = self._SERVO_PGAIN.get(sid, 32)
                 igain = self._SERVO_IGAIN.get(sid, 0)
                 rest_speed = self._SERVO_REST_SPEED.get(sid)
-                # Ping first
                 _, result, _ = pk.ping(ph, sid)
                 if result != COMM_SUCCESS:
                     logger.warning(f"{motor_name} (ID {sid}): offline, skipping")
                     continue
                 pk.write1ByteTxRx(ph, sid, 40, 0)   # Torque_Enable = 0
-                pk.write1ByteTxRx(ph, sid, 33, 0)   # Operating_Mode = position
-                pk.write1ByteTxRx(ph, sid, 21, pgain)  # P_Coefficient
-                pk.write1ByteTxRx(ph, sid, 23, igain)  # I_Coefficient
-                pk.write1ByteTxRx(ph, sid, 22, 32)  # D_Coefficient
+                pk.write1ByteTxRx(ph, sid, 33, 0)
+                pk.write1ByteTxRx(ph, sid, 21, pgain)
+                pk.write1ByteTxRx(ph, sid, 23, igain)
+                pk.write1ByteTxRx(ph, sid, 22, 32)
                 # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
-                # Outside the energize gate on purpose: this is configuration,
-                # like the gains above it, and a device that restarted asleep
-                # must still come back with a known speed rather than whatever
-                # cap a killed sweep left in the register.
                 if rest_speed is not None:
                     pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
                 if energize:
@@ -363,15 +232,7 @@ class AnimationService:
                 )
 
     def start(self, skip_wake: bool = False):
-        """skip_wake: come up without the startup pose + idle loop.
-
-        Used when HAL restarts on a device that was asleep (OTA, deploy). The
-        wake move takes 5s of visible motion and the idle loop keeps the body
-        going after it — so a sleeping lamp would stand up, breathe, and only
-        then be told to go back to sleep once lifespan finishes. The sleep flag
-        is restored at import, before this runs, so the whole performance can
-        simply be skipped instead of undone afterwards.
-        """
+        """skip_wake: come up without the startup pose + idle loop."""
         self.robot = LeLampFollower(self.robot_config)
         try:
             self.robot.connect(calibrate=False)
@@ -386,10 +247,7 @@ class AnimationService:
 
         logger.info(f"Animation service connected to {self.port}")
 
-        # Start the event thread first, then queue wake move + idle. The startup
-        # move is the first event so any command dispatched during it queues
-        # behind — same physical order as the old synchronous version, but
-        # start() returns in ~0.3s instead of ~5.5s.
+        # Start the event thread first, then queue wake move + idle.
         self._running.set()
         self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self._event_thread.start()
@@ -398,25 +256,19 @@ class AnimationService:
             return
         self.dispatch(SERVO_CMD_STARTUP_MOVE, None)
 
-        # Auto-play idle (same as upstream) so lamp moves immediately after boot
         self.dispatch(SERVO_CMD_PLAY, self.idle_recording)
 
     def stop(self, timeout: float = 5.0):
-        # Stop event processing
         self._running.clear()
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=timeout)
-        
+
         if self.robot:
             self.robot.disconnect()
             self.robot = None
 
     def _sync_state_from_hardware(self) -> None:
-        """Set _current_state from Present_Position for all joints.
-
-        Required before interpolating to a recording: partial state with missing keys
-        was treated as 0°, causing violent corrections and mechanical jam / overload.
-        """
+        """Set _current_state from Present_Position for all joints."""
         if not self.robot:
             return
         try:
@@ -426,26 +278,19 @@ class AnimationService:
                 self._current_state = pos
         except Exception as e:
             logger.warning(f"sync state from hardware failed: {e}")
-    
+
     def dispatch(self, event_type: str, payload: Any):
         """Dispatch an event - same interface as ServiceBase"""
         if not self._running.is_set():
             print(f"Animation service is not running, ignoring event {event_type}")
             return
-        
+
         with self._event_lock:
             self._event_queue.append((event_type, payload))
-    
-    def _event_loop(self):
-        """Custom event loop that supports interruption.
 
-        Runs at self.fps throughout. Idle used to step at 5 Hz to save CPU, but
-        frames are sampled at self.fps, so stepping slower stretched idle 6x and
-        delivered breathing as five visible jerks a second — the reduction cost
-        more in smoothness than it saved in CPU.
-        """
+    def _event_loop(self):
+        """Custom event loop that supports interruption."""
         while self._running.is_set():
-            # Check for events
             with self._event_lock:
                 if self._event_queue:
                     event_type, payload = self._event_queue.pop(0)
@@ -468,23 +313,19 @@ class AnimationService:
                 )
                 self._tracking_flag = False
 
-            # Continue current playback
             self._continue_playback()
 
             time.sleep(1.0 / self.fps)
-    
+
     def _handle_startup_move(self):
         """Wake move to startup pose + hardware state sync.
 
         _sync_state_from_hardware must run after the move: the following idle
-        interpolation starts from _current_state, and missing/stale joints
-        treated as 0° cause violent corrections and servo stall.
+        interpolation starts from _current_state, and missing/stale joints treated as 0°
+        cause violent corrections and servo stall.
         """
-        # Move all joints to wake/startup position (includes wrist_pitch outside calib range).
-        # should_abort ties the move to _running: a stop/restart of the event
-        # loop (aim_servo, shutdown release) interrupts it within one frame, so
-        # join() succeeds instead of timing out into a second event thread, and
-        # no goal writes land after a torque-off.
+        # Move all joints to wake/startup position (includes wrist_pitch outside calib
+        # range).
         try:
             self.move_to_raw(
                 STARTUP_RAW,
@@ -509,35 +350,20 @@ class AnimationService:
             print(f"Unknown event type: {event_type}")
 
     def _handle_music_start(self, recording_name: Optional[str] = None):
-        """Start grooving to music -- loops recording until music stops.
-
-        recording_name: one of music_groove, music_jazz, music_classical,
-                        music_hiphop, music_rock, music_waltz,
-                        music_chill, music_hype.
-                        Falls back to music_groove when None or unknown.
-        """
+        """Start grooving to music -- loops recording until music stops."""
         self._music_recording = recording_name if recording_name else SERVO_MUSIC_GROOVE
         self._music_playing = True
         self._handle_play(self._music_recording)
 
     def _handle_music_stop(self):
-        """Stop music groove — interrupt immediately and return to idle.
-
-        No-op when nothing was grooving. routes/music.audio_stop() calls
-        _on_music_complete() outside its `music_service.playing` guard, and
-        that path also double-fires (explicit /audio/stop plus the music
-        thread's finally), so this used to run up to twice on every single
-        click — which stopped nothing but restarted idle from frame 0, yanking
-        the arm out of mid-loop. Restoring idle is only meaningful if music
-        actually took the body away from it.
-        """
+        """Stop music groove — interrupt immediately and return to idle."""
         was_playing = self._music_playing
         self._music_playing = False
         if not was_playing:
             return
-        self._hold_until = 0.0  # skip hold, go to idle right away
+        self._hold_until = 0.0
         self._handle_play(self.idle_recording)
-    
+
     def _handle_play(self, recording_name: str):
         """Start playing a recording with interpolation from current state"""
         self._begin_motion()
@@ -548,20 +374,16 @@ class AnimationService:
             print("Robot not connected")
             return
 
-        # Load the recording
         actions = self._load_recording(recording_name)
         if actions is None:
             return
-        
+
         print(f"Starting {recording_name} with interpolation")
-        
-        # Set up new playback
+
         self._current_recording = recording_name
         self._current_actions = actions
         self._current_frame_index = 0
-        
-        # If we have a current state, set up interpolation to the first frame.
-        # _resume_duration overrides self.duration once (set by resume endpoint for slow-start).
+
         if self._current_state is not None:
             effective_duration = self._resume_duration if self._resume_duration is not None else self.duration
             self._resume_duration = None
@@ -572,7 +394,7 @@ class AnimationService:
         else:
             self._interpolation_frames = 0
             self._interpolation_target = None
-    
+
     def freeze(self):
         """Pause servo writes so camera can capture a stable frame."""
         self._frozen.set()
@@ -583,14 +405,9 @@ class AnimationService:
 
     @property
     def is_frozen(self) -> bool:
-        """True while a camera consumer wants the servos still. Honored by the
-        animation loop AND by the tracker's servo worker (tracker_service)."""
+        """True while a camera consumer wants the servos still."""
         return self._frozen.is_set()
 
-    # Recordings whose movement is gentle enough to be inaudible on the
-    # sensing mic — exempt from is_actively_moving. Idle breathing is exempt
-    # implicitly (via _idle_settled); extend this set through
-    # HAL_QUIET_RECORDINGS (comma-separated names) as more are measured.
     _QUIET_RECORDINGS: frozenset = frozenset(
         r.strip()
         for r in os.environ.get("HAL_QUIET_RECORDINGS", "").split(",")
@@ -599,14 +416,7 @@ class AnimationService:
 
     @property
     def is_actively_moving(self) -> bool:
-        """True while the arm makes AUDIBLE movement: the vision tracker owns
-        the servos, or a recording is playing and hasn't settled into the
-        idle loop yet (covers emotion/scanning plays and the swing back to
-        idle). Two exemptions: idle breathing (settled — writes servo
-        positions continuously but is acoustically silent, ~11 RMS measured
-        vs 500+ for real animations) and recordings listed in
-        HAL_QUIET_RECORDINGS. Used by SoundPerception so the lamp doesn't
-        startle at its own joints."""
+        """True while the arm makes AUDIBLE movement."""
         if self._tracking_active:
             return True
         rec = self._current_recording
@@ -616,11 +426,10 @@ class AnimationService:
 
     @property
     def last_servo_write(self) -> float:
-        """Monotonic timestamp of the last servo motion command, across ALL
-        write paths: robot.send_action (animation loop, tracker worker,
-        move_to, motors_service) and move_to_raw (direct register writes).
-        0.0 when nothing has moved yet. Used by capture_still to wait for a
-        frame taken after the arm went quiet."""
+        """Monotonic timestamp of the last servo motion command, across ALL write paths:
+        robot.send_action (animation loop, tracker worker, move_to, motors_service) and
+        move_to_raw (direct register writes).
+        """
         via_action = getattr(self.robot, "last_write_monotonic", 0.0) if self.robot else 0.0
         return max(via_action, self._raw_write_monotonic)
 
@@ -633,10 +442,8 @@ class AnimationService:
         if self._frozen.is_set():
             return
 
-        # Halt: drop the recording where it is and stop writing. Same shape as
-        # the tracking drop below, and deliberately BEFORE it — a halt outranks
-        # every other reason to keep playing. No goal is written, so the servos
-        # hold the last frame that landed.
+        # Halt: drop the recording where it is and stop writing. No goal is written, so
+        # the servos hold the last frame that landed.
         if self._halt.is_set():
             logger.info("[halt] dropped recording %r mid-playback", self._current_recording)
             self._idle_settled = True
@@ -647,11 +454,7 @@ class AnimationService:
             self._interpolation_target = None
             return
 
-        # Tracking lock: tracker owns the servo. Drop any in-progress
-        # recording (including the interpolation phase before its first
-        # frame) so nothing fights the tracker or resumes jerking when
-        # tracking ends. This is stricter than hold_mode — /servo/hold
-        # and focus scenes still let emotion animations play.
+        # Tracking lock: tracker owns the servo.
         if self._tracking_active:
             if self._current_recording is not None:
                 logger.info(
@@ -667,14 +470,11 @@ class AnimationService:
             return
 
         try:
-            # Handle interpolation to first frame
             if self._interpolation_frames > 0 and self._interpolation_target is not None:
-                # Calculate interpolation progress — use stored total so the denominator
-                # matches the initial _interpolation_frames value, not always self.duration.
                 denom = self._interpolation_total_frames if self._interpolation_total_frames > 0 else int(self.duration * self.fps)
                 progress = 1.0 - (self._interpolation_frames / denom)
                 progress = max(0.0, min(1.0, progress))
-                
+
                 target = self._interpolation_target
                 interpolated_action = {}
                 for joint in target.keys():
@@ -695,7 +495,6 @@ class AnimationService:
                 self._interpolation_frames -= 1
                 return
 
-            # Play current frame
             if self._current_frame_index < len(self._current_actions):
                 action = self._current_actions[self._current_frame_index]
                 with self.bus_lock:
@@ -703,12 +502,9 @@ class AnimationService:
                 self._current_state = action.copy()
                 self._current_frame_index += 1
             else:
-                # Recording finished
                 if self._music_playing and self._current_recording == self._music_recording:
-                    # Loop music groove while music is playing
                     self._current_frame_index = 0
                 elif self._current_recording in self._no_idle_recordings:
-                    # Hold final pose indefinitely (e.g. sleepy — wake via new play command)
                     if not getattr(self, '_holding_logged', False):
                         logger.info("Holding final pose for '%s' — no idle fallback", self._current_recording)
                         self._holding_logged = True
@@ -721,18 +517,16 @@ class AnimationService:
                         self._hold_logged = True
                     return
                 elif self._current_recording != self.idle_recording:
-                    # Hold pose before returning to idle — skip hold when music is playing
                     if not self._music_playing:
                         if self.hold_s > 0 and self._hold_until == 0.0:
                             self._hold_until = time.time() + self.hold_s
                             return
                         if self._hold_until > 0.0:
                             if time.time() < self._hold_until:
-                                return  # still holding
+                                return
                             self._hold_until = 0.0
                     else:
-                        self._hold_until = 0.0  # clear any stale hold
-                    # Interpolate back to idle (or music groove if music started)
+                        self._hold_until = 0.0
                     if self._music_playing:
                         next_rec = self._music_recording
                     else:
@@ -748,46 +542,35 @@ class AnimationService:
                             self._interpolation_total_frames = total
                             self._interpolation_target = next_actions[0]
                 elif self._hold_mode:
-                    # Hold mode active while idle finished — hold pose, reduce FPS
                     self._idle_settled = True
                     return
                 else:
-                    # Loop idle recording at reduced FPS to save CPU
                     self._idle_settled = True
                     self._current_frame_index = 0
-                    
+
         except Exception as e:
             logger.exception("playback error: %s", e)
-            # Reset to safe state
             self._current_recording = None
             self._current_actions = []
             self._current_frame_index = 0
-    
+
     def get_available_recordings(self) -> List[str]:
         """Get list of recording names available for this lamp ID"""
         if not os.path.exists(self.recordings_dir):
             return []
-        
+
         recordings = []
         suffix = f".csv"
-        
+
         for filename in os.listdir(self.recordings_dir):
             if filename.endswith(suffix):
-                # Remove the lamp_id suffix to get the recording name
                 recording_name = filename[:-len(suffix)]
                 recordings.append(recording_name)
-        
-        return sorted(recordings)
-    
-    def _load_recording(self, recording_name: str) -> Optional[List[Dict[str, float]]]:
-        """Load a recording from cache or file, resampled for playback.
 
-        Frames are returned on the event loop's 1/fps grid with over-speed
-        segments stretched — over-speed against the servo's own limit and the
-        declared motion.max_speed, whichever is lower — see recording_timing.resample_recording. Playback stays a
-        plain frame-per-tick walk.
-        """
-        # Check cache first
+        return sorted(recordings)
+
+    def _load_recording(self, recording_name: str) -> Optional[List[Dict[str, float]]]:
+        """Load a recording from cache or file, resampled for playback."""
         if recording_name in self._recording_cache:
             return self._recording_cache[recording_name]
 
@@ -804,14 +587,11 @@ class AnimationService:
                 actions = []
                 times = []
                 for row in csv_reader:
-                    # Extract action data (exclude timestamp column)
                     action = {key: float(value) for key, value in row.items() if key != RECORDING_TIME_COLUMN}
                     actions.append(action)
                     raw_t = row.get(RECORDING_TIME_COLUMN)
                     times.append(float(raw_t) if raw_t not in (None, "") else None)
 
-            # Without a usable time axis there is nothing to resample against:
-            # play the frames as authored rather than invent timing for them.
             if len(actions) < 2 or any(t is None for t in times):
                 if actions and any(t is None for t in times):
                     logger.warning(
@@ -828,25 +608,12 @@ class AnimationService:
                 self._geometry,
             )
 
-            # Cache the recording
             self._recording_cache[recording_name] = actions
             return actions
 
         except Exception as e:
             logger.error(f"Error loading recording {recording_name}: {e}")
             return None
-
-    # --- Deterministic stop -------------------------------------------------
-    #
-    # Three different things are called "stop" around here, so to be explicit:
-    #   stop()    — service lifecycle: tear the event loop down.
-    #   release() — travel to gravity-rest, THEN cut torque. Moves first.
-    #   halt()    — this one. Abort what is in flight, hold position, torque ON.
-    #
-    # The mechanism is the abort check the frame loops already had for shutdown
-    # (`not self._running.is_set()`); halt just gives it a second reason to fire.
-    # A loop that returns mid-interpolation leaves the last goal it wrote on the
-    # servos, so "stop" and "hold" are the same act — nothing extra to command.
 
     def _motion_aborted(self) -> bool:
         """True when an in-flight move or playback must stop THIS frame."""
@@ -855,19 +622,16 @@ class AnimationService:
     def _begin_motion(self) -> None:
         """Clear a previous halt so a newly commanded motion can run.
 
-        Called by the commanded-motion entry points, never by the loops
-        themselves: a halt has to outlive the move it interrupted, or the very
-        next frame would clear it.
+        Called by the commanded-motion entry points, never by the loops themselves: a
+        halt has to outlive the move it interrupted, or the very next frame would clear
+        it.
         """
         self._halt.clear()
 
     def halt(self) -> None:
         """Abort any move/recording in flight and hold position. Torque stays ON."""
         self._halt.set()
-        # Pin the servos where they are. The aborted loop already left a goal
-        # written, but a halt with nothing in flight (the common case — an
-        # operator hitting stop on an idle body) must still be a no-op that
-        # cannot drift, and re-writing the present position is that no-op.
+        # Pin the servos where they are.
         try:
             with self.bus_lock:
                 current = _motor_positions_from_bus(self.robot) if self.robot else {}
@@ -885,35 +649,17 @@ class AnimationService:
         duration: float = DEFAULT_MOVE_DURATION,
         should_abort: Optional[Callable[[], bool]] = None,
     ):
-        """Smoothly move servos to target positions using software interpolation.
-
-        Instead of sending the target in one shot (which causes jerky instant jumps),
-        this method reads the current position and interpolates at self.fps over the
-        given duration — the same approach used for animation playback.
-
-        Args:
-            target_positions: dict of joint positions, e.g. {"base_yaw.pos": 0.0, ...}
-            duration: time in seconds to reach the target (default 2.0)
-            should_abort: checked every frame; True stops the move mid-flight.
-                Defaults to _motion_aborted, which also treats a cleared
-                _running as an abort. A caller that clears _running ITSELF to
-                take exclusive control of the bus (aim does exactly that) must
-                pass its own predicate, or it aborts its own move at frame 1.
-                Mirrors move_to_raw, which has taken this argument since the
-                stop-that-holds work; move_to was left without it.
-        """
+        """Smoothly move servos to target positions using software interpolation."""
         if not self.robot:
             raise RuntimeError("Robot not connected")
         self._begin_motion()
 
-        # Read current positions (bus-only; avoid get_observation camera reads)
         try:
             with self.bus_lock:
                 current = _motor_positions_from_bus(self.robot)
             if not current:
                 raise ValueError("empty Present_Position read")
         except Exception:
-            # Fallback: use last known state or jump directly
             if self._current_state:
                 current = self._current_state.copy()
             else:
@@ -948,7 +694,6 @@ class AnimationService:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        # Send final target exactly
         try:
             with self.bus_lock:
                 self.robot.send_action(target_positions)
@@ -967,24 +712,9 @@ class AnimationService:
         self._current_state = target_positions.copy()
 
     def move_and_hold(self, target_positions: Dict[str, float], duration: float = DEFAULT_MOVE_DURATION):
-        """Take over the servo for an explicit /servo/move or /servo/nudge.
-
-        Clearing the active recording makes the animation loop go passive
-        (_continue_playback returns early when there is no recording), so a
-        concurrently-playing emotion animation STOPS and can no longer overwrite
-        the commanded pose frame-by-frame — the race that made `nudge`/`move`
-        silently lose to an in-flight emotion. After the move the servo holds the
-        commanded pose until the next play/emotion/idle command (or stays held
-        when /servo/hold is active).
-        """
-        # Preempt: drop any recording the event loop is playing so it stops
-        # sending its frames. _continue_playback short-circuits on empty state.
-        #
-        # Logged because this leaves the body with NOTHING playing and
-        # `_idle_settled` set — idle does not come back on its own, so a lamp
-        # that goes still after a move has to be traceable to the move that
-        # did it. Both silent drop paths (this and the tracking branch above)
-        # were invisible while chasing a motionless lamp on 03/09/2026.
+        """Take over the servo for an explicit /servo/move or /servo/nudge."""
+        # Preempt: drop any recording the event loop is playing so it stops sending its
+        # frames.
         if self._current_recording is not None:
             logger.info(
                 "[preempt] dropped recording %r for a direct move",
@@ -1002,7 +732,6 @@ class AnimationService:
         else:
             with self.bus_lock:
                 self.robot.send_action(target_positions)
-            # Keep _current_state in sync so the next play interpolates from here.
             try:
                 with self.bus_lock:
                     pos = _motor_positions_from_bus(self.robot)
@@ -1018,31 +747,21 @@ class AnimationService:
     ):
         """Smoothly move servos to raw encoder positions via direct STS3215 register writes.
 
-        Bypasses lerobot calibration range limits entirely. Use for release/collapse
-        positions that exceed the calibrated range_min/max. Caller pre-computes raw
-        encoder targets so no bus.calibration access is needed here.
-
-        Args:
-            target_raw: motor_name → raw encoder value (0-4095), e.g. {"base_pitch": 1456}
-            duration: seconds to reach the target
-            should_abort: checked every frame; True stops the move mid-flight.
-                The release/park path passes None — parking must always finish.
+        The release/park path passes None — parking must always finish.
         """
         if not self.robot:
             raise RuntimeError("Robot not connected")
 
-        GOAL_POSITION_REG = 42     # STS3215: Goal_Position (2 bytes, LSB first)
-        PRESENT_POSITION_REG = 56  # STS3215: Present_Position (2 bytes)
+        GOAL_POSITION_REG = 42
+        PRESENT_POSITION_REG = 56
 
         ph = self.robot.bus.port_handler
         pk = self.robot.bus.packet_handler
 
-        # Read current raw positions directly (bypasses normalization)
         current_raw: Dict[str, int] = {}
         with self.bus_lock:
             for motor_name, motor_obj in self.robot.bus.motors.items():
                 data, result, _ = pk.read2ByteTxRx(ph, motor_obj.id, PRESENT_POSITION_REG)
-                # result==0 means COMM_SUCCESS in scservo_sdk
                 current_raw[motor_name] = data if result == 0 else target_raw.get(motor_name, 2048)
 
         total_frames = max(1, int(duration * self.fps))
@@ -1068,7 +787,6 @@ class AnimationService:
             if sleep_time > 0:
                 time.sleep(sleep_time)
 
-        # Final exact write
         with self.bus_lock:
             for motor_name, raw in target_raw.items():
                 motor_obj = self.robot.bus.motors.get(motor_name)
@@ -1083,13 +801,6 @@ class AnimationService:
                 self._current_state = pos
         except Exception as e:
             logger.warning("move_to_raw: could not read state after move: %s", e)
-
-    # -----------------------------------------------------------------------
-    # Public accessors — MotionService contract (hal/drivers/motors/base.py)
-    #
-    # Routes call these instead of reaching into .robot / .bus / .bus_lock.
-    # Keeps all lerobot/scservo internals inside this class.
-    # -----------------------------------------------------------------------
 
     @property
     def is_connected(self) -> bool:
@@ -1123,9 +834,10 @@ class AnimationService:
 
     @property
     def motion_mode(self) -> Optional[str]:
-        """Zero wins over hold: zero_pose() parks the body, hold() only freezes
-        it. A released body also reports None — release() cuts torque without
-        setting either flag."""
+        """Zero wins over hold: zero_pose() parks the body, hold() only freezes it. A
+        released body also reports None — release() cuts torque without setting either
+        flag.
+        """
         if getattr(self, "_zero_mode", False):
             return "zero"
         if self._hold_mode:
@@ -1145,11 +857,8 @@ class AnimationService:
     def add_recording(self, name: str, actions: List[Dict[str, float]]) -> None:
         """Invalidate the cache for a recording (used after upload).
 
-        `actions` arrives stripped of its timestamp column, so caching it here
-        would store frames that never went through resample_recording — the
-        uploaded copy would play at raw frame rate while the identical file read
-        from disk played correctly. The upload route writes the CSV before
-        calling this, so dropping the entry lets the normal load path pick it up.
+        `actions` arrives stripped of its timestamp column, so caching it here would
+        store frames that never went through resample_recording.
         """
         self._recording_cache.pop(name, None)
 
@@ -1266,22 +975,15 @@ class AnimationService:
         from hal.safety.policy import min_move_duration
 
         preset = AIM_PRESETS.get(direction)
-        # Only an explicit center owns yaw — the fallback below lands on center too.
         explicit_center = direction == AIM_CENTER
         if preset is None:
-            # Unknown direction (the LLM reached for a word that isn't a preset,
-            # e.g. "front") — aim the neutral center pose instead of failing the
-            # whole HW node.
             logger.warning("Unknown aim direction %r — defaulting to center", direction)
             direction = AIM_CENTER
             preset = AIM_PRESETS[AIM_CENTER]
 
-        # Left/right only change yaw; other directions set all joints but
-        # keep current yaw. This is the lamp's 5-DOF kinematic convention.
         if direction in (AIM_LEFT, AIM_RIGHT):
             positions = {**current_positions, "base_yaw.pos": preset["base_yaw.pos"]}
         elif explicit_center:
-            # Without this, left/right is a one-way trip.
             positions = dict(preset)
         else:
             positions = {**preset, "base_yaw.pos": current_positions.get("base_yaw.pos", preset["base_yaw.pos"])}

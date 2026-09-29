@@ -1,13 +1,5 @@
 #!/usr/bin/env python3
-"""Notification hook: ping the device when Claude needs the user.
-
-Fires on Claude Code's `Notification` event — i.e. when Claude needs approval
-to run a tool (a yes/no prompt) or the input has been left idle. Handy when
-you've wandered off and forgot to hit enter.
-
-Rate-limited to once per 8s so a burst of prompts doesn't machine-gun the
-device.
-"""
+"""Notification hook: ping the device when Claude needs the user (rate-limited to 8s)."""
 
 import json
 import os
@@ -15,8 +7,6 @@ import re
 import sys
 import time
 
-# The hook is launched with this script's dir on sys.path, so the sibling
-# shared module imports directly.
 from buddy_client import default_device, load_config, send
 
 COOLDOWN_PATH = os.path.expanduser("~/.config/claude-code-buddy-notify.last")
@@ -42,12 +32,7 @@ def mark_ran():
 
 
 def pretty_tool(name):
-    """Shorten tool names for the device.
-
-    MCP tools arrive as 'mcp__<server>__<tool>' which is far too long — keep
-    just the last '__' segment with underscores spaced out (e.g.
-    'mcp__claude_ai_Google_Drive__authenticate' -> 'authenticate').
-    """
+    """Shorten a tool name, e.g. 'mcp__claude_ai_Google_Drive__authenticate' -> 'authenticate'."""
     name = name.strip()
     if name.startswith("mcp__"):
         name = name.split("__")[-1] or name
@@ -55,12 +40,11 @@ def pretty_tool(name):
 
 
 def parse_message(message):
-    """Return (title, subtitle) — a clean headline + one short line."""
+    """Return (title, subtitle) for a notification message."""
     msg = (message or "").strip()
     low = msg.lower()
     m = PERMISSION_RE.search(msg)
     if m:
-        # "Claude needs your permission to use Bash" -> ("Approve?", "Bash")
         return "Approve?", pretty_tool(m.group(1))
     if "permission" in low or "approve" in low or "allow" in low:
         return "Approve?", "needs your ok"
@@ -88,8 +72,7 @@ def main():
 
     title, subtitle = parse_message(event.get("message", "Claude needs you"))
 
-    # Mark the cycle as ran before sending (same as on-stop-done): the cooldown
-    # throttles the ping regardless of whether the device is reachable.
+    # Cooldown applies whether or not the device is reachable.
     mark_ran()
     send("/claude-code/notify", {
         "title": title,

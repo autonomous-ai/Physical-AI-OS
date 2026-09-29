@@ -179,7 +179,6 @@ func TestParseCodexResult(t *testing.T) {
 		t.Fatalf("ok: reply=%q id=%q terr=%q", reply, id, terr)
 	}
 
-	// item_type discriminator variant + two agent messages accumulate.
 	multi := []byte(`{"type":"thread.started","thread_id":"th-2"}
 {"type":"item.completed","item":{"item_type":"agent_message","text":"part1"}}
 {"type":"item.completed","item":{"item_type":"agent_message","text":"part2"}}
@@ -188,7 +187,6 @@ func TestParseCodexResult(t *testing.T) {
 		t.Fatalf("multi: reply=%q id=%q", reply, id)
 	}
 
-	// Failed turn with no reply → turnErr surfaces the error message.
 	failed := []byte(`{"type":"thread.started","thread_id":"th-3"}
 {"type":"error","message":"404 boom"}`)
 	if reply, id, terr := parseCodexResult(failed); reply != "" || id != "th-3" || terr != "404 boom" {

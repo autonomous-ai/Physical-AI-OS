@@ -11,7 +11,6 @@ if [[ ! -d "$SKILLS_DIR" ]]; then
   exit 1
 fi
 
-# Local hash cache to skip unchanged skills (whole folder).
 HASH_CACHE="${RELEASE_DIR}/.skill-hashes"
 touch "$HASH_CACHE"
 
@@ -27,9 +26,7 @@ for skill_dir in "$SKILLS_DIR"/*/; do
   skill_name="$(basename "$skill_dir")"
 
   zip_path="${WORK_DIR}/${skill_name}.zip"
-  # Build deterministic zip + hash via embedded Python so the same
-  # content always produces the same bytes (regardless of upload host's
-  # mtimes / locale). No external "zip" tool dependency.
+    # Deterministic zip so identical content always hashes the same.
   skill_hash="$(python3 - "$skill_dir" "$zip_path" <<'PY'
 import hashlib
 import os
@@ -103,7 +100,6 @@ PY
 
   echo "${skill_name}|${skill_hash}" >> "$ENTRIES_FILE"
 
-  # Skip if combined hash unchanged since last upload.
   cached_hash="$(grep "^${skill_name}:" "$HASH_CACHE" 2>/dev/null | cut -d: -f2 || true)"
   if [[ "$cached_hash" == "$skill_hash" ]]; then
     skipped=$((skipped + 1))
@@ -124,8 +120,6 @@ done
 
 echo "Done: uploaded ${count} skill zip(s), skipped ${skipped} unchanged. gs://${GCS_BUCKET}/${GCS_PREFIX}/"
 
-# Update OTA metadata with per-skill { version }. Pi watcher reads this
-# and refetches any skill whose version changed.
 METADATA_GCS="gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

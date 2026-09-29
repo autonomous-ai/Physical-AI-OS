@@ -13,9 +13,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Service is the top-level coordinator for the buddy feature. Composed of a
-// pairing-code generator, a persistent pairing store, an in-memory connection
-// registry, and a dispatcher.
+// Service coordinates buddy pairing, persistence, connection and dispatch.
 type Service struct {
 	statusMu      sync.Mutex
 	instanceID    string
@@ -29,8 +27,7 @@ type Service struct {
 	agentSeq      map[string]uint64
 }
 
-// ProvideService wires the buddy subsystem. It loads any existing pairing from
-// disk so a previously-paired buddy can reconnect after a device restart.
+// ProvideService wires the buddy subsystem and loads any persisted pairing.
 func ProvideService() (*Service, error) {
 	store := NewStore(BuddiesFilePath)
 	if err := store.Load(); err != nil {
@@ -54,8 +51,7 @@ func (s *Service) IssuePairingCode() (string, time.Duration) {
 	return s.pairing.Issue()
 }
 
-// ConfirmPairing validates a submitted code and persists a new pairing record,
-// returning the long-lived token + buddy ID for the buddy to use.
+// ConfirmPairing validates a code and persists a new pairing record (token + buddy ID).
 func (s *Service) ConfirmPairing(name, fingerprint, osVersion, code string) (*PairingRecord, error) {
 	s.statusMu.Lock()
 	defer s.statusMu.Unlock()
@@ -140,20 +136,9 @@ func (s *Service) Dispatch(ctx context.Context, cmd Command) (json.RawMessage, e
 	return s.dispatcher.Dispatch(ctx, cmd)
 }
 
-// Greet fires a `ping` command immediately after the buddy WS connects. The
-// goal is purely UX: the buddy's Activity window shows one ✓ row right away,
-// so the user gets visual confirmation that the device can actually reach this
-// Mac. Without this, the Activity window stays empty until the first real
-// command, which can be minutes later — leaving the user to wonder whether
-// pairing actually worked.
-//
-// Best-effort: a failure here is logged but does not affect the WS connection.
-// Caller should invoke from a goroutine because Dispatch blocks until the
-// buddy responds or times out.
+// Greet sends a best-effort `ping` right after the buddy connects so its Activity
+// window confirms reachability. Blocks on Dispatch; call from a goroutine.
 func (s *Service) Greet(buddyID string) {
-	// Self-identify by device type, not a hardcoded "lamp" (one image, many
-	// devices). DEVICE_TYPE is guaranteed set post-boot (server fail-louds on an
-	// unresolved type); the "device" fallback only guards this best-effort path.
 	deviceType := strings.ToLower(os.Getenv("DEVICE_TYPE"))
 	if deviceType == "" {
 		deviceType = "device"

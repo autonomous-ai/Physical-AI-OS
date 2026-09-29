@@ -12,38 +12,17 @@ import type { ScheduleDraft } from "./scheduleDraft";
 import { describeLastRun, skippedRunMessage } from "./scheduleRunStatus";
 import type { LastRunTone } from "./scheduleRunStatus";
 
-// A skipped run is neutral amber, never the red failure colour: the device
-// chose not to run the task because a connector is missing — see
-// scheduleRunStatus.ts.
 const LAST_RUN_TONE_COLOR: Record<LastRunTone, string> = {
   success: C.green,
   failure: C.red,
   neutral: C.amber,
 };
 
-// Scheduled tasks on the device itself — list, create, edit, pause, delete,
-// plus a local "Run now" per row.
-//
-// The cloud stays AUTHORITATIVE. Edits made here are PROPOSALS: each one is
-// queued on the device (system/schedule/intent.go), published as
-// schedule.mutate, and applied by the backend under an idempotency key and a
-// compare-and-swap. What comes back is an ordinary full-state schedule.sync,
-// which remains the single path by which this device's schedules.json changes.
-//
-// Two consequences are visible in this UI and are deliberate:
-//
-//   - a row can be marked "Syncing" / "Removing" while its proposal is in
-//     flight, and on an offline device it stays that way until reconnect;
-//   - a newly created task is NOT armed until the backend confirms it, so it
-//     shows as pending rather than counting down to a next run.
-
-// 0=Sunday..6=Saturday — matches the wire's convention (Go's time.Weekday),
-// NOT ISO-8601 (where Monday=1). The two conventions only disagree on
-// Sunday, so this table is indexed directly by the raw wire value.
+// Edits here are proposals: the cloud stays authoritative and confirms via schedule.sync.
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 
 function weekdayLabel(d: number): string {
-  const idx = d === 7 ? 0 : d; // 7 is an accepted alias for Sunday (0)
+  const idx = d === 7 ? 0 : d;
   return WEEKDAY_LABELS[idx] ?? `day ${d}`;
 }
 
@@ -58,9 +37,7 @@ function ordinal(n: number): string {
   }
 }
 
-// formatMs renders an INTERVAL DURATION IN MILLISECONDS (every_ms — the
-// backend has already shipped a 1000x seconds/milliseconds bug on this exact
-// field once, see spec.go's EveryMs doc comment) as a short human phrase.
+// Formats an interval in MILLISECONDS (every_ms) as a short phrase.
 function formatMs(ms: number): string {
   const minute = 60_000, hour = 3_600_000, day = 86_400_000;
   if (ms >= day && ms % day === 0) {
@@ -78,24 +55,7 @@ function formatMs(ms: number): string {
   return `${Math.round(ms / 1000)} second${Math.round(ms / 1000) === 1 ? "" : "s"}`;
 }
 
-// formatDeviceTime renders an RFC3339 instant in the device's own timezone
-// (not the viewing browser's) — next_run_at/last_run_at were computed in the
-// device's tz (schedule.Store.Timezone), so displaying them in any other zone
-// would show a wall-clock time that doesn't match what the device itself will
-// actually do. Returns null for a missing/unparseable instant so callers can
-// choose their own fallback copy ("Never" vs "Not scheduled" read differently).
-// snapToScheduledTime rewrites a next-run instant onto the wall-clock time the
-// user actually chose.
-//
-// The device applies a deterministic jitter of up to +/-5 minutes to every
-// wall-clock occurrence, to stop a fleet firing on the same second. That is
-// invisible plumbing — but next_run_at carries it, so a task set for 1:25 PM
-// reported "1:27 PM" and read as a bug to everyone who saw it. The jitter still
-// governs when the task really fires; only the DISPLAY is snapped back.
-//
-// Picks the configured time closest to the reported instant rather than
-// assuming the first: with several times a day, the jittered value can land
-// nearer a later entry, and it can cross midnight in either direction.
+// Snaps a jittered next-run instant back onto the configured wall-clock time (display only; the device jitters by +/-5 min).
 function snapToScheduledTime(
   iso: string | undefined,
   cadence: ScheduleCadence,
@@ -107,8 +67,6 @@ function snapToScheduledTime(
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return iso;
 
-  // Read the instant's own wall clock in the device's zone, so the comparison
-  // is against the same clock the user typed into.
   let hh: number, mm: number;
   try {
     const parts = new Intl.DateTimeFormat("en-GB", {
@@ -128,7 +86,7 @@ function snapToScheduledTime(
     const [th, tm] = t.split(":").map(Number);
     if (!Number.isFinite(th) || !Number.isFinite(tm)) continue;
     const target = th * 60 + tm;
-    // Circular distance, so 23:58 vs 00:01 is 3 minutes rather than 1437.
+    // Circular distance, so 23:58 vs 00:01 is 3 minutes.
     const raw = Math.abs(target - actual);
     const delta = Math.min(raw, 1440 - raw);
     if (delta < bestDelta) {
@@ -136,8 +94,7 @@ function snapToScheduledTime(
       best = t;
     }
   }
-  // Only snap within the jitter band. Anything further apart is not jitter, and
-  // silently relabelling it would hide a genuinely wrong next-run time.
+  // Only snap within the jitter band.
   if (best === undefined || bestDelta > 5) return iso;
 
   const [bh, bm] = best.split(":").map(Number);
@@ -158,9 +115,6 @@ function formatDeviceTime(iso: string | undefined, tz: string): string | null {
   }
 }
 
-// cadenceSummary renders one schedule's cadence as a single short line. Kept
-// deliberately simple — this renders on a small device screen, not a full
-// calendar editor (there is no editor at all: see the file doc comment).
 /** "09:00" / "09:00, 13:00 and 17:00" — empty when the cadence has no time. */
 function timesLabel(cadence: ScheduleCadence): string {
   const times = resolveCadenceTimes(cadence);
@@ -203,7 +157,6 @@ export function ScheduledSection({ active }: { active: boolean }) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState<string | null>(null);
-  // null = editor closed; "new" = creating; otherwise the id being edited.
   const [editing, setEditing] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
 
@@ -224,10 +177,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
     void refresh();
   }, [refresh]);
 
-  // The chat composer's "New scheduled task" links here with ?new=1 so the
-  // create form is already open on arrival. The flag is consumed once (the URL
-  // is rewritten) so a later reload does not silently reopen the editor over
-  // whatever the user is doing.
+  // ?new=1 opens the create form once; the URL is rewritten so a reload does not reopen it.
   useEffect(() => {
     if (!active) return;
     const params = new URLSearchParams(window.location.search);
@@ -241,10 +191,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
     );
   }, [active]);
 
-  // While a proposal is in flight the row shows "Syncing"; the backend's
-  // confirmation arrives asynchronously over MQTT, so poll briefly to pick it
-  // up. Only while something is actually pending — a settled list does no
-  // polling at all, which is what keeps an idle Settings page quiet.
+  // Poll only while a proposal is pending.
   const hasPending = schedules.some((s) => s.pending);
   useEffect(() => {
     if (!hasPending) return;
@@ -284,8 +231,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
     }
   }
 
-  // Pause/resume is an ordinary update of `enabled` — the same proposal path
-  // as any other edit, so it is subject to the same confirmation.
+  // Pause/resume is an ordinary update of `enabled`
   async function handleToggleEnabled(sch: ScheduleItem) {
     try {
       await updateSchedule(sch.id, { enabled: !sch.enabled });
@@ -299,17 +245,12 @@ export function ScheduledSection({ active }: { active: boolean }) {
     setRunning(sch.id);
     try {
       const result = await runScheduleNow(sch.id);
-      // Reflect the outcome locally rather than refetching the whole list —
-      // RunNow only ever touches last-run bookkeeping (never cadence or
-      // next_run_at, see Runner.RunNow's doc comment on the device), so this
-      // is a complete, precise update, not an approximation.
       setSchedules((prev) => prev.map((s) => s.id === sch.id
         ? { ...s, last_run_at: result.started_at, last_run_status: result.status, last_run_summary: result.summary }
         : s));
       if (result.status === "success") {
         toast.success(`Ran "${sch.name}".`);
       } else if (result.status === "skipped") {
-        // Not an error: the task needs a connector this device doesn't have.
         toast.warning(skippedRunMessage(sch.name, result.summary));
       } else {
         toast.error(`"${sch.name}" failed: ${result.summary}`);
@@ -385,9 +326,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
           }
           const lastRun = formatDeviceTime(sch.last_run_at, timezone) ?? "Never";
           const lastRunView = describeLastRun(sch.last_run_status, sch.last_run_summary);
-          // A pending CREATE has no next run to show: the device deliberately
-          // does not arm a task the backend has not confirmed, so "Not
-          // scheduled" would be misleading and a countdown would be a lie.
+          // A pending create is not armed yet, so it has no next run.
           const nextRun = sch.pending === "create"
             ? "Waiting to sync"
             : !sch.enabled
@@ -449,9 +388,6 @@ export function ScheduledSection({ active }: { active: boolean }) {
                   <button
                     type="button"
                     onClick={() => handleRunNow(sch)}
-                    // A pending create has no server-side row yet, so there is
-                    // nothing for the runner to look up — offering "Run now"
-                    // would only produce a confusing 404.
                     disabled={isRunning || sch.pending === "create"}
                     style={{
                       ...BTN,

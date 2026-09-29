@@ -5,10 +5,7 @@ import type { ServoState } from "./types";
 import { StatusDot } from "./components";
 import { usePolling } from "../../hooks/usePolling";
 
-// Minimum gap between live-drag writes, in ms. The servo bus is a 6.4 Mbit
-// serial line shared with the animation loop, and a range input fires far
-// faster than it can answer; ~12 writes/s is smooth to the eye and leaves the
-// bus room to breathe.
+// Minimum gap between live-drag writes (shared 6.4 Mbit servo bus).
 const LIVE_THROTTLE_MS = 80;
 
 interface ServoDetail {
@@ -25,19 +22,11 @@ export function ServoSection() {
   const [actionMsg, setActionMsg] = useState<string | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  // Manual move target — populated to 0 for each known joint, editable via sliders.
-  // `Sync from current` reads live angles into this map.
   const [moveTargets, setMoveTargets] = useState<Record<string, number>>({});
   const [moveDuration, setMoveDuration] = useState<number>(2.0);
   const [moving, setMoving] = useState(false);
-  // Live drag: send each slider change straight to the servo instead of waiting
-  // for the Move button. Aiming the head is a "look at it and stop when it's
-  // right" job, and a 2s interpolated move per attempt makes that unusable.
   const [liveDrag, setLiveDrag] = useState(false);
-  // Throttle state for live drag. A range input fires on every pixel, which is
-  // far more than the serial bus can absorb; without this the queue backs up and
-  // the head keeps moving after the mouse stops. Trailing send guarantees the
-  // final resting value lands even if it arrived inside a throttle window.
+  // Throttle live drag; a trailing send guarantees the final value lands.
   const liveLastSent = useRef(0);
   const liveTrailing = useRef<ReturnType<typeof setTimeout> | null>(null);
   const liveInFlight = useRef(false);
@@ -51,8 +40,7 @@ export function ServoSection() {
       if (sr) setServo(sr);
       if (st?.servos) setServos(st.servos);
     } catch {
-      // Best-effort refresh: keep the last known servo readout rather than
-      // clearing the panel when HAL is mid-restart.
+      // Keep the last readout while HAL restarts.
     }
   }, []);
 
@@ -151,8 +139,6 @@ export function ServoSection() {
     setTimeout(refresh, 500);
   };
 
-  // Seed moveTargets the first time the servo list arrives so sliders render at 0
-  // for every known joint. After that, the user owns the values.
   useEffect(() => {
     if (!servos) return;
     setMoveTargets((prev) => {
@@ -173,9 +159,7 @@ export function ServoSection() {
     flash("Synced sliders to current pose");
   };
 
-  // One joint, duration 0. Zero duration is not just "fast": it takes the
-  // send_action path in move_and_hold instead of the interpolating one, so a
-  // drag lands as a single bus write and never queues a 2s tween behind itself.
+  // Duration 0 takes the send_action path: one bus write, no queued tween.
   const sendLive = useCallback((joint: string, value: number) => {
     const fire = async () => {
       if (liveInFlight.current) return;
@@ -188,8 +172,7 @@ export function ServoSection() {
           body: JSON.stringify({ positions: { [joint]: value }, duration: 0 }),
         });
       } catch {
-        // A dropped frame mid-drag is not worth a toast — the next one corrects
-        // it, and the trailing send below always delivers the final value.
+        // A dropped frame is corrected by the next one and the trailing send.
       } finally {
         liveInFlight.current = false;
       }
@@ -256,10 +239,8 @@ export function ServoSection() {
   return (
     <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
 
-      {/* Row 1: Servos status + Aim + Motor Control + Animations — all 4 cards side-by-side */}
       <div className="lm-grid-4">
 
-        {/* Servos status — list collapses to a single column inside the 1/4 width slot */}
         <div style={S.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
@@ -289,7 +270,6 @@ export function ServoSection() {
           )}
         </div>
 
-        {/* Aim Direction */}
         <div style={{ ...S.card, alignSelf: "start" }}>
           <div style={S.cardLabel}>Aim Direction</div>
           <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginBottom: 10 }}>
@@ -304,8 +284,6 @@ export function ServoSection() {
           ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>No directions configured</span>}
         </div>
 
-        {/* Motor Control — 2-col grid keeps button column at uniform width so all
-            4 buttons line up vertically, regardless of label length. */}
         <div style={{ ...S.card, alignSelf: "start" }}>
           <div style={S.cardLabel}>Motor Control</div>
           <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginBottom: 10 }}>
@@ -324,7 +302,6 @@ export function ServoSection() {
           </div>
         </div>
 
-        {/* Animations: chips wrap inside the column; upload button moves to its own row */}
         <div style={{ ...S.card, alignSelf: "start" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 6 }}>
             <div style={S.cardLabel}>Animations</div>
@@ -362,7 +339,6 @@ export function ServoSection() {
         </div>
       </div>
 
-      {/* Manual Move — direct /servo/move call with per-joint sliders + smooth duration. */}
       <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -441,7 +417,6 @@ export function ServoSection() {
         ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading joints…</span>}
       </div>
 
-      {/* Toast — pinned bottom-right so action feedback doesn't shift the page. */}
       {actionMsg && (
         <div style={{
           position: "fixed",
@@ -463,8 +438,7 @@ export function ServoSection() {
   );
 }
 
-// Per-servo row — flat single-row grid so every joint name, ID, bar, and
-// angle value lines up vertically across all servos.
+// Per-servo row on a flat grid so columns align across servos.
 function ServoCard({ joint, info }: { joint: string; info: ServoDetail }) {
   return (
     <div style={{
@@ -501,9 +475,6 @@ function ServoCard({ joint, info }: { joint: string; info: ServoDetail }) {
           </span>
         </>
       ) : (
-        // Error / offline — let the message span both bar and value columns
-        // and wrap fully so things like "read fail Goal_Velocity (timeout 50ms)"
-        // stay readable instead of being truncated to "read fa…".
         <span style={{
           gridColumn: "span 2",
           fontSize: 10.5, fontWeight: 500,
@@ -520,7 +491,7 @@ function ServoCard({ joint, info }: { joint: string; info: ServoDetail }) {
   );
 }
 
-// JointSlider: one row for /servo/move target — slider + numeric input + delta vs actual.
+// One /servo/move target row: slider, numeric input and delta vs actual.
 function JointSlider({ joint, value, actual, onChange }: {
   joint: string;
   value: number;
@@ -598,8 +569,7 @@ function ChipButton({ children, onClick, active }: {
   );
 }
 
-// ControlButton: rendered as two grid cells (button + hint) so a parent
-// 2-column grid can keep all buttons vertically aligned regardless of label.
+// Renders two grid cells (button + hint) so buttons align in a 2-column grid.
 function ControlButton({ onClick, color, title, hint }: {
   onClick: () => void;
   color: string;
@@ -610,9 +580,6 @@ function ControlButton({ onClick, color, title, hint }: {
     <>
       <button
         onClick={onClick}
-        // Stronger bg + border than before so this clearly reads as a button,
-        // not a label. The previous 0.08/0.33 alpha pair was nearly invisible
-        // in light theme.
         style={{
           fontSize: 12, padding: "8px 14px", borderRadius: 6, width: "100%",
           background: `color-mix(in srgb, ${color} 18%, transparent)`,

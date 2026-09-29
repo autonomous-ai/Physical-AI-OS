@@ -3,11 +3,6 @@ import { Terminal } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import "@xterm/xterm/css/xterm.css";
 
-// Multi-tab interactive shell. Each tab owns its own xterm + WebSocket + PTY,
-// so backgrounded tabs keep their bash running (history, env, current dir).
-// Tabs are kept mounted (hidden via display:none) so switching is instant
-// and doesn't trigger a reconnect.
-
 interface SessionMeta {
   id: string;
 }
@@ -15,10 +10,7 @@ type Status = "connecting" | "open" | "closed";
 
 const MAX_TABS = 6;
 
-// Stable id generator — used only as React key. Display name is derived from
-// tab position at render time so the sequence stays 1..N (e.g. close shell 2
-// → shell 3 renumbers to "shell 2"). Counter lives in a ref so React 18
-// StrictMode's double-invoke of state initializers doesn't skip numbers.
+// Random id used only as a React key.
 function newId() { return Math.random().toString(36).slice(2, 9); }
 
 export function CliSection() {
@@ -47,7 +39,6 @@ export function CliSection() {
 
   return (
     <div style={{ display: "flex", flexDirection: "column", height: "100%", gap: 8 }}>
-      {/* Tab bar */}
       <div style={{
         display: "flex", alignItems: "center", gap: 4, flexShrink: 0,
         flexWrap: "wrap",
@@ -79,7 +70,6 @@ export function CliSection() {
         </span>
       </div>
 
-      {/* Stacked terminals — only the active one is visible. */}
       <div style={{ flex: 1, minHeight: 0, position: "relative" }}>
         {sessions.map((s) => (
           <TerminalSession
@@ -126,9 +116,7 @@ function TabPill({ name, active, onSelect, onClose }: {
   );
 }
 
-// TerminalSession owns one xterm + WS lifecycle. Mounted once; hidden via
-// display:none when not active so the underlying PTY (with its scrollback +
-// shell state) keeps running in the background.
+// TerminalSession owns one xterm + WS lifecycle.
 function TerminalSession({ visible }: { visible: boolean }) {
   const hostRef = useRef<HTMLDivElement>(null);
   const termRef = useRef<Terminal | null>(null);
@@ -136,7 +124,6 @@ function TerminalSession({ visible }: { visible: boolean }) {
   const wsRef = useRef<WebSocket | null>(null);
   const [status, setStatus] = useState<Status>("connecting");
 
-  // Refit + resize signal — used on tab switch (visible flip) AND on container resize.
   const refit = useCallback(() => {
     const f = fitRef.current;
     const t = termRef.current;
@@ -222,8 +209,7 @@ function TerminalSession({ visible }: { visible: boolean }) {
     };
   }, [refit]);
 
-  // When the tab becomes visible, re-fit and focus — xterm computes geometry
-  // wrong when measured inside a display:none container.
+  // xterm mis-measures inside display:none, so re-fit when visible.
   useEffect(() => {
     if (!visible) return;
     const t = setTimeout(() => {
@@ -239,7 +225,6 @@ function TerminalSession({ visible }: { visible: boolean }) {
       display: visible ? "flex" : "none",
       flexDirection: "column", gap: 6,
     }}>
-      {/* Per-session status row + reconnect when closed */}
       <div style={{
         display: "flex", alignItems: "center", gap: 8, flexShrink: 0,
         fontSize: 11, color: "var(--lm-text-muted)",

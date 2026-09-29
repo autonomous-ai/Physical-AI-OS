@@ -8,10 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SetSessionKey stores the session UUID. Hermes server is the source of truth
-// (X-Hermes-Session-Id header on responses), so the SSE consumer is the usual
-// caller; openclaw-style callers that try to overwrite it are honored but the
-// next response will refresh.
+// SetSessionKey stores the session UUID.
 func (s *HermesService) SetSessionKey(key string) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "hermes", "key", key)

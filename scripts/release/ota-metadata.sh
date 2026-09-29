@@ -1,6 +1,5 @@
 #!/usr/bin/env bash
-# Shared signed OTA metadata helpers. Source from release scripts; do not run
-# this file directly. The signing private key must remain outside the repo.
+# Signed OTA metadata helpers; source from release scripts. Keep the signing key outside the repo.
 
 ota_base64_decode() {
   base64 --decode 2>/dev/null || base64 -D
@@ -19,8 +18,7 @@ ota_metadata_unpack() {
 }
 
 # ota_metadata_sign <payload> <envelope>
-# OTA_SIGNING_PRIVATE_KEY is a PEM Ed25519 key path; OTA_SIGNING_KEY_ID labels
-# the key for operators and is not used as a trust decision on devices.
+# OTA_SIGNING_PRIVATE_KEY: PEM Ed25519 key path; OTA_SIGNING_KEY_ID is a label only.
 ota_metadata_sign() {
   local payload="$1" envelope="$2" signature payload_b64 signature_b64
   if [ -z "${OTA_SIGNING_PRIVATE_KEY:-}" ]; then
@@ -37,12 +35,8 @@ ota_metadata_sign() {
     || { echo "ERROR: sign OTA metadata" >&2; return 1; }
   payload_b64=$(base64 <"$payload" | tr -d '\n')
   signature_b64=$(base64 <"$signature" | tr -d '\n')
-  # Keep the payload's component entries at the top level for already deployed
-  # workers. New workers use only .signed after verifying it. Set
-  # OTA_METADATA_SIGNED_ONLY=1 to drop that compatibility copy once the fleet
-  # has migrated: the published document then carries nothing a legacy worker
-  # can consume, so an unmigrated device stops updating instead of updating
-  # from an unauthenticated source.
+    # Top-level entries are a compat copy for legacy workers; OTA_METADATA_SIGNED_ONLY=1
+    # drops it so unmigrated devices stop updating rather than trust unsigned data.
   local base='.'
   if [ "${OTA_METADATA_SIGNED_ONLY:-0}" = "1" ]; then
     base='{}'

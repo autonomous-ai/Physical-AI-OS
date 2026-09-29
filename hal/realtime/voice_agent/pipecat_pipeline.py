@@ -1,27 +1,6 @@
-"""The Pipecat side of the `pipecat_v1` provider.
+"""The Pipecat side of the `pipecat_v1` provider (every `pipecat` import lives here).
 
-Everything that imports `pipecat` lives here, so `pipecat_v1.py` (the
-`VoiceAgentBase` contract: threads, queues, turn and generation bookkeeping)
-stays importable and unit-testable on a host without the package.
-
-Shape of the pipeline, one per provider session::
-
-    queue_frame ─▶ HALSTTService ─▶ user aggregator ─▶ OpenAILLMService ─▶ EventSink ─▶ assistant aggregator
-                   (device STT)      (VAD / turns)      (text + tools)       (→ agent)
-
-- Audio enters through `PipelineWorker.queue_frame` as `InputAudioRawFrame`;
-  there is no transport. HAL owns the mic and the speaker.
-- Turn detection is the user aggregator's. Live mode: Silero VAD starts the
-  turn, Smart Turn v3 (or a silence timeout) ends it. Turn-based mode: HAL has
-  already bracketed the utterance, so the agent *proposes* the start on the
-  first frame and the stop on `commit_audio`, and the aggregator finalizes as
-  soon as the STT final lands.
-- The LLM only ever produces text. Tool calls are bridged to the orchestrator:
-  the handler emits `FunctionCallOutput` and waits for the matching
-  `FunctionCallResultInput`, whose `trigger_response` becomes Pipecat's
-  `run_llm`.
-- `EventSink` turns pipeline frames into plain method calls on the agent
-  (`_ev_*`), which is where the HAL event contract is produced.
+queue_frame -> HALSTTService -> user aggregator -> OpenAILLMService -> EventSink -> assistant aggregator
 """
 
 from __future__ import annotations
@@ -88,17 +67,8 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-# Appended to the system instruction when delegate_to_main is registered, and
-# re-injected as a system message right before every user utterance
-# (PipelineHandle.remind_tools). The orchestrator's instructions put the tool
-# rules first and then ~10k tokens of identity / memory / history behind them;
-# on lamp-ee17 (2026-09-18) Qwen 3.6-35B-A3B answered "please play some music"
-# with "You got it, what vibe?" instead of delegating whenever that boot's
-# realtime-memory summary was long, while the same pipeline with a shorter
-# summary delegated. A short rule adjacent to the utterance restores the
-# priority for a model that weighs recency; ~60 tokens per turn. It rides as a
-# USER-role line (like HAL's `[TURN CONTEXT]`): the Qwen relay rejects a system
-# message anywhere but first ("System message must be at the beginning", 400).
+# Re-injected before every utterance: Qwen skipped delegation behind a long prompt.
+# USER role because the Qwen relay rejects a non-first system message (400).
 _TOOL_RULE = (
     "[RULE] "
     "Any request to play, stop, move, turn, look, find, change, set, control, "
@@ -110,13 +80,7 @@ _TOOL_TAIL = "\n\n## FINAL RULE (highest priority)\n" + _TOOL_RULE
 
 
 class _CommittedTurnStopStrategy(ExternalUserTurnStopStrategy):
-    """Turn-based mode: the turn is over the moment the committed STT final lands.
-
-    HAL already decided end-of-speech (its own VAD) and the agent closed the STT
-    session on commit, so the final transcript that follows IS the whole turn.
-    The stock strategy would still wait its aggregation `timeout` (0.5 s) for
-    more text; that wait is pure latency here.
-    """
+    """Turn-based mode: the turn ends the moment the committed STT final lands (no aggregation wait)."""
 
     async def _handle_transcription(self, frame: TranscriptionFrame):
         await super()._handle_transcription(frame)
@@ -125,17 +89,7 @@ class _CommittedTurnStopStrategy(ExternalUserTurnStopStrategy):
 
 
 class _BusyAwareMinWordsStrategy(MinWordsUserTurnStartStrategy):
-    """MinWords keyed on the agent's LLM state instead of `BotStartedSpeakingFrame`.
-
-    The stock strategy applies `min_words` only while the bot is speaking, and
-    it learns that from the output transport's BotStarted/StoppedSpeaking
-    frames — which this pipeline has none of (HAL owns the speaker), so it
-    degraded to "one word opens a turn". A one-word burst right after a
-    question then interrupted the reply mid-generation (lamp-ee17,
-    2026-09-18). The window that needs protecting is exactly "the model is
-    generating", which the agent knows; outside it a single word still opens a
-    turn, so "yes" / "stop" keep working.
-    """
+    """MinWords keyed on the agent's LLM-busy state (no BotStartedSpeakingFrame here: HAL owns the speaker)."""
 
     def __init__(self, agent: PipecatV1Agent, *, min_words: int, **kwargs: Any) -> None:
         super().__init__(min_words=min_words, **kwargs)
@@ -193,11 +147,7 @@ class EventSink(FrameProcessor):
 
 
 class PipelineHandle:
-    """Thread-safe control surface over one running pipeline.
-
-    Built and run on the agent's private asyncio loop; every method here may be
-    called from the agent's send/recv threads.
-    """
+    """Thread-safe control surface over one running pipeline (callable from send/recv threads)."""
 
     def __init__(
         self,
@@ -256,8 +206,7 @@ class PipelineHandle:
         )
 
     def remind_tools(self) -> None:
-        """Re-state the action rule right before the utterance the aggregator is
-        about to append (see _TOOL_RULE). No-op without delegate_to_main."""
+        """Re-state the action rule before the next utterance (see _TOOL_RULE); no-op without delegate_to_main."""
         if not self._remind:
             return
         self._submit(
@@ -337,9 +286,7 @@ def _user_params(agent: PipecatV1Agent, cfg: PipecatV1Config, *, live: bool) -> 
         )
     else:
         stop = SpeechTimeoutUserTurnStopStrategy(user_speech_timeout=cfg.silence_timeout_s)
-    # Start on transcribed words rather than the VAD onset when configured: a
-    # far-field mic with residual echo produces one-word bursts that would
-    # otherwise open a turn and cancel the reply being generated.
+    # Far-field echo produces one-word bursts that would cancel the reply; start on words instead.
     start = [_BusyAwareMinWordsStrategy(agent, min_words=cfg.min_words)] if cfg.min_words > 0 else None
     return LLMUserAggregatorParams(
         vad_analyzer=vad,
@@ -356,11 +303,7 @@ async def build_and_run(
     stt_provider: STTProvider,
     live: bool,
 ) -> PipelineHandle:
-    """Build the pipeline on the current loop and start running it.
-
-    Returns once the worker is scheduled; the agent waits for `_ev_started`
-    (the pipeline's `StartFrame`) before declaring the session connected.
-    """
+    """Build the pipeline on the current loop and start it; the agent waits for `_ev_started`."""
     loop = asyncio.get_running_loop()
 
     stt = HALSTTService(
@@ -383,21 +326,18 @@ async def build_and_run(
             system_instruction=instructions or None,
             temperature=cfg.temperature,
             max_tokens=cfg.max_tokens,
-            # Qwen3 emits `reasoning` before `content` by default; Pipecat only
-            # streams `content`, so thinking would be seconds of dead air.
+            # Qwen3 emits `reasoning` before `content`; Pipecat streams only `content` (dead air).
             extra={"extra_body": {"chat_template_kwargs": {"enable_thinking": False}}}
             if cfg.disable_thinking
             else {},
         ),
-        # A tool result that never comes (orchestrator gone) must not wedge the
-        # LLM forever; the agent's own wait is shorter and answers with an error.
+        # A tool result that never comes must not wedge the LLM; the agent's own wait is shorter.
         function_call_timeout_secs=cfg.tool_result_timeout_s + 5.0,
     )
     for tool in tools:
         llm.register_function(tool["name"], _make_tool_handler(agent, tool["name"]))
 
-    # The system prompt rides on the service (`system_instruction`); an initial
-    # system message in the context is deprecated since Pipecat 1.9.
+    # Initial system message in context is deprecated since Pipecat 1.9.
     context = LLMContext(
         [],
         tools=ToolsSchema(standard_tools=[_tool_schema(t) for t in tools]) if tools else NOT_GIVEN,
@@ -422,8 +362,7 @@ async def build_and_run(
     runner = WorkerRunner(
         handle_sigint=False, handle_sigterm=False, check_dangling_tasks=False
     )
-    # ErrorFrames travel UPSTREAM (push_error), so the sink downstream of the
-    # LLM never sees one; the worker reports them here instead.
+    # ErrorFrames travel upstream, so the sink never sees them.
     @worker.event_handler("on_pipeline_error")
     async def _on_pipeline_error(_worker, frame):
         agent._ev_error(str(frame.error), bool(frame.fatal))

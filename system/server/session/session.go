@@ -20,19 +20,14 @@ import (
 )
 
 // CookieName is the browser cookie that carries the HMAC-signed session token
-// after a successful POST /api/login. httpOnly + SameSite=Strict keeps it off
-// JS reach and out of cross-site requests.
+// after a successful POST /api/login.
 const CookieName = "os_session"
 
-// TTL is how long an issued session stays valid. Single-user device, stateless
-// HMAC — no per-session revoke. Rotate config.SessionSecret to nuke every
-// outstanding session at once.
+// TTL is how long an issued session stays valid.
 const TTL = 30 * 24 * time.Hour
 
 // ensureSecret writes a random 32-byte hex secret into cfg.SessionSecret when
 // it's empty so freshly upgraded devices auto-bootstrap signing material.
-// Returns the decoded bytes for immediate signing and persists to disk via
-// cfg.Save.
 func ensureSecret(cfg *config.Config) ([]byte, error) {
 	if cfg.SessionSecret != "" {
 		key, err := hex.DecodeString(cfg.SessionSecret)
@@ -52,9 +47,7 @@ func ensureSecret(cfg *config.Config) ([]byte, error) {
 	return buf, nil
 }
 
-// sign returns a stateless `<exp>.<sig>` token. exp is unix seconds at expiry;
-// sig is base64(HMAC-SHA256(secret, exp)). Verify recomputes the HMAC and
-// rejects on mismatch or past expiry.
+// sign returns a stateless `<exp>.<sig>` token.
 func sign(secret []byte, expiresAt time.Time) string {
 	exp := strconv.FormatInt(expiresAt.Unix(), 10)
 	mac := hmac.New(sha256.New, secret)
@@ -64,8 +57,7 @@ func sign(secret []byte, expiresAt time.Time) string {
 }
 
 // verify returns nil iff token is well-formed, HMAC matches under secret, and
-// the embedded expiry is still in the future. Constant-time compare keeps
-// signature checking safe under timing attacks.
+// the embedded expiry is still in the future.
 func verify(secret []byte, token string, now time.Time) error {
 	parts := strings.SplitN(token, ".", 2)
 	if len(parts) != 2 {
@@ -87,12 +79,7 @@ func verify(secret []byte, token string, now time.Time) error {
 	return nil
 }
 
-// Issue signs a fresh session token and writes Set-Cookie. Called by
-// /api/login on success and by /api/device/setup when an AdminPassword was
-// provided (auto-login after first provision). Cookie is httpOnly +
-// SameSite=Strict + Path=/ so the browser attaches it to every /api/* request
-// automatically. No `Secure` flag — devices serve plain HTTP over LAN, so
-// requiring HTTPS would break the only access path.
+// Issue signs a fresh session token and writes Set-Cookie.
 func Issue(c *gin.Context, cfg *config.Config) error {
 	secret, err := ensureSecret(cfg)
 	if err != nil {
@@ -113,9 +100,7 @@ func Issue(c *gin.Context, cfg *config.Config) error {
 	return nil
 }
 
-// Clear expires the cookie. MaxAge=-1 tells the browser to drop it
-// immediately. Stateless tokens mean any exfiltrated copy still validates
-// until natural expiry — rotate cfg.SessionSecret if that matters.
+// Clear expires the cookie.
 func Clear(c *gin.Context) {
 	http.SetCookie(c.Writer, &http.Cookie{
 		Name:     CookieName,
@@ -148,8 +133,7 @@ func VerifyToken(token string, cfg *config.Config) bool {
 }
 
 // HasValid returns true if the request carries a os_session cookie that
-// verifies under the current secret and hasn't expired. Used by
-// adminAuthMiddleware to accept browser sessions alongside Bearer tokens.
+// verifies under the current secret and hasn't expired.
 func HasValid(c *gin.Context, cfg *config.Config) bool {
 	if cfg.SessionSecret == "" {
 		return false

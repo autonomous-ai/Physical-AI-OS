@@ -11,9 +11,7 @@ class GeminiThinkingLevel(StrEnum):
 
 
 class GeminiVoice(StrEnum):
-    # All 30 prebuilt voices, the same set Gemini TTS offers
-    # (hal/drivers/voice/tts/gemini.py GeminiTTSBackend.VOICES), so a Gemini
-    # TTS voice can also be the Live session's native voice.
+    # Same 30 prebuilt voices as Gemini TTS (GeminiTTSBackend.VOICES).
     PUCK = "Puck"
     CHARON = "Charon"
     KORE = "Kore"

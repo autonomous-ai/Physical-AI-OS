@@ -1,21 +1,10 @@
-"""ALSA arecord-backed input stream.
-
-Drop-in replacement for sounddevice.InputStream that uses arecord directly.
-Needed on devices where PortAudio's hw: interface bypasses ALSA's sample-rate
-conversion and produces corrupted audio.
-"""
+"""ALSA arecord-backed input stream."""
 
 import subprocess
 
 
 class ArecordStream:
-    """Drop-in replacement for sd.InputStream using arecord subprocess.
-
-    Records directly via ALSA plughw which handles sample-rate conversion
-    natively — the same path as `arecord -D plughw:X,0`. sounddevice uses
-    PortAudio's hw: interface which bypasses ALSA SRC, producing corrupted
-    audio at rates the hardware doesn't natively support.
-    """
+    """Drop-in replacement for sd.InputStream using arecord subprocess."""
 
     def __init__(self, alsa_device: str, rate: int, channels: int, blocksize: int, np):
         self._device = alsa_device
@@ -24,7 +13,7 @@ class ArecordStream:
         self._blocksize = blocksize
         self._np = np
         self._proc = None
-        self._bytes_per_frame = 2 * channels  # int16 = 2 bytes
+        self._bytes_per_frame = 2 * channels
 
     def __enter__(self):
         # Capture stderr (don't DEVNULL it): when arecord dies, its ALSA error

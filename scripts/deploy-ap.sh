@@ -1,21 +1,6 @@
 #!/usr/bin/env bash
-# Deploy os-server binary to a device currently in AP (provisioning) mode.
-#
-# WHY THIS SCRIPT: when the device is in AP mode, its LAN IP is gone —
-# your Mac is on the device's own hotspot (192.168.100.x), so the usual
-# LAN-IP deploy path doesn't apply. This script scp's the pre-built binary
-# to 192.168.100.1 (the AP static) and swaps it in.
-#
-# PRE-REQ:
-#   1) Build the binary WHILE STILL ON INTERNET:
-#        make os-build
-#   2) Then join the device's AP hotspot on your Mac.
-#   3) Run this script.
-#
-# USAGE:
-#   scripts/deploy-ap.sh              # binary + restart os-server
-#   scripts/deploy-ap.sh --web        # also rebuild + deploy web dist
-#   scripts/deploy-ap.sh --host 192.168.100.1   # override target (default)
+# Deploy the pre-built os-server binary to a device in AP mode (Mac joined to its hotspot).
+# Usage: scripts/deploy-ap.sh [--web] [--host 192.168.100.1]   (run `make os-build` before leaving internet)
 set -euo pipefail
 
 HOST="192.168.100.1"
@@ -51,8 +36,6 @@ if [[ $DEPLOY_WEB -eq 1 && ! -d "$WEB_DIST" ]]; then
   exit 1
 fi
 
-# Preflight: verify we can actually reach the AP host. If Mac isn't on the
-# hotspot yet, fail fast with an actionable message instead of a 30s SSH hang.
 echo "=== Preflight: reach $HOST ==="
 if ! ping -c 1 -W 2 "$HOST" >/dev/null 2>&1; then
   echo "ERROR: $HOST unreachable. Join the device's AP hotspot on your Mac first." >&2
@@ -86,8 +69,6 @@ REMOTE_CMD+='  systemctl restart os-server &&
   sleep 2 &&
   systemctl is-active os-server
 '
-# The AP portal's os-server restart briefly drops the HTTP socket the SSH
-# session is orthogonal to, so this ssh stays connected across the restart.
 SSHPASS="$PASS" "$SSHPASS_BIN" -e ssh "${SSH_OPTS[@]}" "$USER@$HOST" \
   "echo $PASS | sudo -S sh -c \"$REMOTE_CMD\""
 

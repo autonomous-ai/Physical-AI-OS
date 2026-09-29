@@ -38,9 +38,7 @@ func Load(path string) (*State, error) {
 	return &s, nil
 }
 
-// Save atomically writes state to file. A power loss cannot expose a partially
-// written JSON document at path: the fully synced temporary file is renamed
-// only after its contents have been durably flushed.
+// Save atomically writes state (synced temp file, then rename).
 func Save(path string, s *State) error {
 	if s.Components == nil {
 		s.Components = map[string]string{}

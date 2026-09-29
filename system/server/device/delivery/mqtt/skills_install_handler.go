@@ -16,10 +16,7 @@ import (
 // same skills dir would race on shared subpaths.
 var skillsInstallMu sync.Mutex
 
-// handleSkillsInstall handles kind="skills.install". Acks "starting", then
-// downloads the role's skills.zip and extracts it into the openclaw skills dir
-// asynchronously. Cumulative (other roles' skills preserved) and no gateway
-// restart (skills.load.watch picks new files up per session).
+// handleSkillsInstall handles kind="skills.install".
 func (h *DeviceMQTTHandler) handleSkillsInstall(env domain.MQTTDataCommand) error {
 	var req domain.MQTTSkillsInstallData
 	if err := json.Unmarshal(env.Data, &req); err != nil {

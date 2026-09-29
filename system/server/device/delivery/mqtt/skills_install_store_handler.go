@@ -12,17 +12,8 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// handleSkillsInstallStore handles kind="skills.install_store" — the MQTT twin of
-// POST /api/agent/skills/install (the web UI's Install button). The device
-// downloads the catalog's `.skill` archive and the ACTIVE runtime extracts it
-// into its own skills dir via AgentGateway.InstallSkillArchive, so this works on
-// every backend rather than just openclaw.
-//
-// Kept separate from kind "skills.install", which is the older and genuinely
-// different feature: a whole ROLE bundle written straight into OpenclawConfigDir.
-//
-// ASYNCHRONOUS, unlike skills.save: the download crosses the network, which must
-// not block the MQTT dispatch path, so the device acks "starting" first.
+// handleSkillsInstallStore handles kind="skills.install_store" — the MQTT
+// twin of POST /api/agent/skills/install (the web UI's Install button).
 func (h *DeviceMQTTHandler) handleSkillsInstallStore(env domain.MQTTDataCommand) error {
 	var req domain.MQTTSkillsInstallStoreData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
@@ -36,9 +27,7 @@ func (h *DeviceMQTTHandler) handleSkillsInstallStore(env domain.MQTTDataCommand)
 		return h.publishDataResult(env.Kind, "failure", "validate_id: "+err.Error(), nil)
 	}
 
-	// Shared with skills.install and skills.save: all three write into the same
-	// skills dir. TryLock keeps the dispatch path free rather than queueing behind
-	// a download that can take tens of seconds.
+	// Shared with skills.install/save (same dir); TryLock keeps dispatch free.
 	if !skillsInstallMu.TryLock() {
 		return h.publishDataResult(env.Kind, "failure",
 			"another skills install is already in progress; try again later", nil)
@@ -55,9 +44,8 @@ func (h *DeviceMQTTHandler) handleSkillsInstallStore(env domain.MQTTDataCommand)
 	return nil
 }
 
-// runSkillsInstallStore downloads the catalog archive into a temp dir, hands it to the
-// active runtime, and publishes the terminal status. Mirrors the HTTP
-// InstallSkill handler step for step so the two paths can't diverge.
+// runSkillsInstallStore downloads the catalog archive into a temp dir, hands
+// it to the active runtime, and publishes the terminal status.
 func (h *DeviceMQTTHandler) runSkillsInstallStore(kind, id, fallbackName string) {
 	runtimeName := h.agentGateway.Name()
 	slog.Info("skills.install_store: start", "component", "mqtt", "id", id, "runtime", runtimeName)
@@ -92,8 +80,6 @@ func (h *DeviceMQTTHandler) runSkillsInstallStore(kind, id, fallbackName string)
 		return
 	}
 
-	// The archive's own wrapping folder names the skill, so the installed name is
-	// read back off disk rather than trusted from the payload.
 	name := filepath.Base(dir)
 	slog.Info("skills.install_store: success", "component", "mqtt",
 		"id", id, "runtime", runtimeName, "skill", name, "dir", dir)

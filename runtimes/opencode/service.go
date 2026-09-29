@@ -1,24 +1,5 @@
 // Package opencode implements domain.AgentGateway against the opencode CLI
-// reached over a persistent WebSocket to a thin local bridge. See
-// docs/agentic/opencode.md for the protocol mapping and the runtime boundaries
-// with OpenClaw / Hermes / PicoClaw.
-//
-// The opencode CLI is driven per-turn, so the opencode systemd unit runs a Go
-// bridge (compiled into os-server: `os-server opencode-gatewayd`) that spawns
-// ONE `opencode run --format json` subprocess per turn (resuming the persisted
-// session id via --session) and exposes the socket at WSURL. os-server only
-// acts as a client: it sends user turns as `message.send`, and translates the
-// forwarded opencode run JSONL events (step_start / text / tool_use /
-// step_finish / message.updated / session.idle / session.error) into the same
-// domain.WSEvent shape that the OpenClaw handler at server/agent/delivery/
-// http/handler_events.go consumes — so the downstream pipeline (HAL TTS,
-// [HW:/...] markers, monitor SSE, sensing drain, Telegram fan-out) stays
-// untouched.
-//
-// Like PicoClaw, there is no per-frame runId on the wire: the reply text arrives
-// as discrete `text` events accumulated across the turn and surfaced whole at
-// `session.idle`, and turns are correlated by a single in-flight runID (the
-// bridge serializes turns; `opencode run` handles one turn per process).
+// reached over a persistent WebSocket to a thin local bridge.
 package opencode
 
 import (
@@ -78,17 +59,14 @@ type OpenCodeService struct {
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
 
-	// Persistent WebSocket. wsConn is set once connected and nil'd on drop.
+	// Persistent WebSocket.
 	wsMu           sync.Mutex
 	wsConn         *websocket.Conn
 	wsConnected    atomic.Bool
 	wsConnectedAt  atomic.Int64 // unix seconds when the socket last became ready
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
-	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRuns preserves every outbound request
-	// in socket-write order, adopted as each serialized turn begins;
-	// currentRunID is the runID of the turn currently being streamed back.
+	// Turn lifecycle.
 	activeTurn           atomic.Bool
 	busySince            atomic.Int64
 	pendingMu            sync.Mutex
@@ -100,13 +78,10 @@ type OpenCodeService struct {
 	currentRunID         atomic.Value // string
 	reqCounter           atomic.Int64
 
-	// Session state. sessionUUID is the opencode session id captured from the
-	// sessionID field on any inbound frame.
+	// Session state.
 	sessionUUID atomic.Value // string
 
-	// turnMu guards the per-turn accumulation state below. The translator runs
-	// on the single WS read goroutine, but clearTurn is also called from the
-	// client teardown path, so the shared state stays lock-protected.
+	// turnMu guards the per-turn accumulation state below.
 	turnMu sync.Mutex
 	// assistantParts collects the `text` event contents of the in-flight turn;
 	// joined into the final reply at session.idle (no token delta stream).
@@ -164,53 +139,39 @@ type OpenCodeService struct {
 
 	// Telegram coding-sessions (telegram_coding.go / coding_sessions.go): a chat
 	// can attach to a folder's interactive `opencode` session and continue it over
-	// Telegram (per-turn `opencode run --session <id> --dir <folder>`). codingSel
-	// maps chatID → selection (persisted to codingSelPath so it survives restarts);
-	// codingList caches the last /sessions listing so /use <n> can index it;
-	// codingFolder holds a per-folder mutex serializing turns so two Telegram
-	// turns never touch the same session at once.
+	// Telegram (per-turn `opencode run --session <id> --dir <folder>`).
 	codingMu     sync.Mutex
 	codingSel    map[string]codingTarget
 	codingList   map[string][]codingSession
 	codingFolder map[string]*sync.Mutex
 
-	// Coding-session test seams. Zero values select production defaults: the
-	// presync .env, /root/.opencode's selection file, a real `opencode run`, and a
-	// /proc-based interactive-TUI check. (There is no sessions-dir seam: opencode
-	// stores sessions internally, so discovery is degraded — see coding_sessions.go.)
+	// Coding-session test seams.
 	codingEnvFilePath     string
 	codingSelPath         string
 	codingRunner          func(ctx context.Context, folder, threadID, prompt string) (reply, newThreadID string, err error)
 	folderHasLiveOpenCode func(folder string) bool
 
 	// Channel senders (Telegram Bot API): proactive alerts + reply DMs for
-	// Telegram-originated turns. The inbound counterpart is the device-owned
-	// getUpdates poll loop started from StartWS — see telegram_poll.go.
+	// Telegram-originated turns.
 	channels []domain.ChannelSender
 
-	// Telegram inbound test seams (telegram_poll.go). Zero values select the
-	// production defaults: api.telegram.org, the /root/.opencode state files, and
-	// the real sendChat-backed send step.
+	// Telegram inbound test seams (telegram_poll.go).
 	telegramAPIBase     string
 	telegramOffsetPath  string
 	telegramTargetsPath string
 	telegramSendTurn    func(text, reqID, runID string) error
 
-	// Slack inbound test seams (slack.go / slack_sender.go). Zero values select
-	// the production defaults: slack.com/api and the real sendChat-backed send step.
+	// Slack inbound test seams (slack.go / slack_sender.go).
 	slackAPIBase  string
 	slackSendTurn func(text, reqID, runID string) error
 
-	// Discord inbound test seams (discord.go). Zero values select the
-	// production defaults: the real sendChat-backed send step and the live
-	// discordgo session's ChannelMessageSend.
+	// Discord inbound test seams (discord.go).
 	discordSendTurn    func(text, reqID, runID string) error
 	discordSendMessage func(channelID, text string) error
 
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook: when the device
 	// declares the `expression` capability, every visible turn flashes a "thinking"
-	// face before the reply lands. Resolved once at construction from the shared
-	// hook registry (skills.SupportedHooks). See emotion_ack.go.
+	// face before the reply lands.
 	ackHookEnabled bool
 
 	// Pending chat traces (idempotencyKey ↔ message text for MatchPendingByMessage).
@@ -242,8 +203,7 @@ type poseBucketInfo struct {
 	markedAt  time.Time
 }
 
-// ProvideService constructs the OpenCode service. Wired via system/agent/factory.go
-// when config.AgentRuntime == "opencode".
+// ProvideService constructs the OpenCode service.
 func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *OpenCodeService {
 	s := &OpenCodeService{
 		config:         cfg,
@@ -276,11 +236,10 @@ func (s *OpenCodeService) IsReady() bool { return s.wsConnected.Load() }
 func (s *OpenCodeService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 
 // AgentUptime — OpenCode does not report process uptime over the wire, so we
-// have no value independent of the local WS reconnect cycle. Returns 0 (unknown).
+// have no value independent of the local WS reconnect cycle.
 func (s *OpenCodeService) AgentUptime() int64 { return 0 }
 
-// markOutboundChat / IsRecentOutboundChat mirror openclaw.OpenCodeService. Used by the
-// session.message handler to skip echoes of Device-injected user messages.
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.OpenCodeService.
 func (s *OpenCodeService) markOutboundChat(text string) {
 	if text == "" {
 		return

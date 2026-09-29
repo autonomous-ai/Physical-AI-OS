@@ -91,23 +91,23 @@ lấy từ feed. Payload đã decode có dạng:
   "os-server": {
     "version": "1.2.3",
     "min_version": "1.2.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3/os-server-1.2.3.zip",
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3.zip",
     "sha256": "<64 ký tự hex thường>"
   },
   "bootstrap": {
     "version": "1.0.5",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/bootstrap/1.0.5.zip"
   },
   "web": {
     "version": "0.9.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0/setup-0.9.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0.zip"
   },
   "openclaw": {
     "version": "2026.6.10"
   },
   "hal": {
     "version": "1.0.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/hal/1.0.0/hal-1.0.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/hal/1.0.0.zip"
   }
 }
 ```
@@ -130,7 +130,7 @@ Có thể đổi thư mục hoặc ID:
 make ota-keygen OTA_SIGNING_KEY_DIR=/secure/ota-keys OTA_SIGNING_KEY_ID=prod-2026-08
 ```
 
-**Domain types** — `domain/ota.go`:
+**Domain types** — `system/domain/ota.go`:
 
 ```go
 const (
@@ -212,55 +212,36 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | 3 | Setup nginx | Tải web bundle, cấu hình reverse proxy + captive portal |
 | 4 | Setup WiFi AP | Cấu hình hostapd, dnsmasq, bật AP mode cho provisioning |
 
-### Stage 2b: Cài HAL Runtime (MỚI)
+### Stage 2b: Cài HAL Runtime (`stage_hal`)
 
 ```bash
-stage_install_hal() {
-    echo "=== Stage 2b: Install HAL Runtime ==="
+stage_hal() {
+    HAL_DIR="/opt/hal"
+    mkdir -p "$HAL_DIR"
 
-    # 1. Cài Python dependencies hệ thống
-    apt-get install -y python3 python3-pip python3-venv
+    # 1. Tải zip theo metadata .hal.url (đối chiếu .hal.sha256)
+    curl -fsSL -o /tmp/hal.zip "$HAL_URL"
+    unzip -o -q /tmp/hal.zip -d "$HAL_DIR"
 
-    # 2. Tạo thư mục cài đặt
-    mkdir -p /opt/hal
+    # 2. Thư viện audio, PulseAudio AEC + socket anonymous, udev rule giữ PulseAudio tránh codec loa
 
-    # 3. Tải từ OTA metadata
-    HAL_URL=$(echo "$OTA_JSON" | jq -r '.hal.url')
-    HAL_VERSION=$(echo "$OTA_JSON" | jq -r '.hal.version')
+    # 3. Tạo lại venv bằng uv (tự tải Python 3.12 standalone)
+    rm -rf "$HAL_DIR/.venv"
+    cd "$HAL_DIR" && uv sync --python 3.12 --extra hardware --extra aec --extra pipecat
 
-    curl -fsSL "$HAL_URL" -o /tmp/hal.zip
-    unzip -o /tmp/hal.zip -d /opt/hal/
-    rm /tmp/hal.zip
+    # 4. Ghi $HAL_DIR/.env (HAL_MODE=production, DEVICE_TYPE, DEVICES_DIR) nếu chưa có
 
-    # 4. Cài Python dependencies trong venv
-    python3 -m venv /opt/hal/venv
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt
-
-    # 5. Tạo systemd service
-    cat > /etc/systemd/system/hal.service << 'UNIT'
-[Unit]
-Description=HAL Python Runtime — Hardware Drivers
-After=network.target
-
+    # 5. systemd unit
+    cat >/etc/systemd/system/hal.service <<EOF
 [Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/hal
-ExecStart=/opt/hal/venv/bin/python -m hal.server
+WorkingDirectory=$HAL_DIR
+EnvironmentFile=$HAL_DIR/.env
+Environment="PYTHONPATH=/opt"
+ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001 --timeout-graceful-shutdown 5
 Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-    systemctl daemon-reload
-    systemctl enable hal.service
-    systemctl start hal.service
-
-    echo "HAL $HAL_VERSION installed at /opt/hal/"
+...
+EOF
+    systemctl daemon-reload && systemctl enable hal && systemctl restart hal
 }
 ```
 
@@ -553,7 +534,7 @@ mới rename vào vị trí chính thức. Nếu state cũ bị lỗi định d�
 legacy bị gián đoạn), bootstrap giữ lại thành `state.json.corrupt-<timestamp>`,
 log cảnh báo và tiếp tục với state rỗng thay vì không khởi động OTA polling.
 
-### Luồng xử lý chính (`bootstrap/bootstrap.go`)
+### Luồng xử lý chính (`system/bootstrap/bootstrap.go`)
 
 ```
 checkLoop():
@@ -563,10 +544,12 @@ checkLoop():
 
 checkOnce():
   1. Tải OTA metadata JSON
-  2. Với mỗi key [os-server, bootstrap, web, hal]:
+  2. Với mỗi key [os-server, bootstrap, web, hal, buddy, openclaw, codex,
+     claudecode, opencode, picoclaw, hermes]:
      → reconcile(key, metadata[key])
-  GHI CHÚ: OpenClaw OTA tạm thời bị tắt (reconcileOpenClawFromNpm đã comment out)
-  3. Lưu state
+     (hermes chỉ khi entry có `commit` — hermesPinned)
+  3. reconcileDevice() cho entry lồng devices.<device_type>
+  4. Lưu state (chỉ khi có thay đổi)
 
 reconcile(key, target):
   1. Phát hiện version hiện tại đã cài
@@ -682,7 +665,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `web` | Đọc file `/usr/share/nginx/html/setup/VERSION` |
 | `device` | Đọc `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Chạy `openclaw --version`, trích xuất semver bằng regex |
-| `hal` | Chạy `/opt/hal/venv/bin/python -m hal --version` HOẶC đọc `/opt/hal/VERSION` |
+| `hal` | Đọc file `/opt/hal/VERSION_HAL` |
 | `codex` / `claudecode` / `opencode` | Chạy `<cli> --version`, lấy semver ở dòng đầu (`cliSemver`) |
 | `picoclaw` | Đọc `/usr/local/lib/os-runtimes/picoclaw/installed-version` — output `version` của nó không có semver |
 | `hermes` | Chạy `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), lấy semver ở dòng đầu (`cliSemver`) |
@@ -695,7 +678,7 @@ resolve từ `metadata.devices.<device_type>` lồng nhau thay vì danh sách co
 | `bootstrap` | Spawn detached `software-update bootstrap` (tự cập nhật, sống sót sau restart) |
 | `web` | Chạy `software-update web` |
 | `device` | Chạy `software-update device` cho profile `devices.<device_type>` đã resolve; rootfs overlay được áp dụng nhưng vẫn giữ `.env` HAL local của thiết bị |
-| `openclaw` | ~~Chạy `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (tạm thời tắt) |
+| `openclaw` | Chạy `software-update openclaw` (npm install đúng version trong metadata → restart `openclaw`); chỉ khi binary `openclaw` có trong PATH |
 | `hal` | Chạy `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Chạy `software-update <key>` — CHỈ trên thiết bị có `agent_runtime` đúng bằng runtime đó |
 | `hermes` | Chạy `software-update hermes` — chỉ khi `agent_runtime` là hermes, entry metadata có `commit`, VÀ updater trên máy là bản biết pin (`updaterSupportsHermesPin`: có đọc `.hermes.commit`). Entry chưa pin (không có `commit`) bị cả loop lẫn `/versions` bỏ qua, nên nút trên web không hiện — `hermes update` sẽ lên upstream HEAD và không bao giờ đạt sàn. |
@@ -940,21 +923,30 @@ cố định nên nó CÓ backup `.previous`: `software-update rollback opencode
 được, khác claudecode. Publish bằng `make upload-opencode <semver-trần>`, thả
 bằng `make promote-opencode`.
 
-### Xử lý Hermes (chỉ SSH — KHÔNG pin được nên không bao giờ auto-apply)
+### Xử lý Hermes (chỉ auto-apply khi entry được pin theo commit)
 
 Hermes cài kiểu git; `runtimes/hermes/install.sh` ghi
 `/usr/local/lib/hermes-agent/.install_method=git` chính là để updater upstream
 nhận ra. Updater đó **không nhận version đích** — `hermes update` luôn nhảy lên
-HEAD của upstream. Nên `hermes.version` publish ra chỉ quyết định *khi nào* fleet
-update (qua `min_version`), không quyết định *bản nào*.
+HEAD của upstream — nên nhánh này có hai mode như mô tả ở trên: entry **pinned**
+(`hermes.commit`) chạy installer upstream tại đúng commit đó, entry **unpinned**
+quay về `hermes update`. Bootstrap chỉ auto-apply entry pinned (`hermesPinned` +
+`updaterSupportsHermesPin` trong `system/bootstrap/bootstrap.go`); entry unpinned
+bị loop và `/versions` bỏ qua, chỉ áp dụng được bằng cách chạy
+`software-update hermes` qua SSH.
 
 ```bash
 "hermes")
-    hermes update                       # upstream không có tham số version
-    hermes --version                    # abort nếu không chạy được
-    # Version thực tế != version metadata → CẢNH BÁO, không fail: trên thiết bị
-    # không có gì pin được nó.
-    systemctl restart hermes-gateway    # unit là hermes-gateway.service, không phải hermes.service
+    HERMES_COMMIT=$(jq -r '.hermes.commit // empty' metadata)
+    if [ -n "$HERMES_COMMIT" ]; then
+        update_hermes_pinned "$HERMES_COMMIT"   # các stage installer tại commit, --force-commit
+    else
+        hermes update                          # unpinned: HEAD upstream
+    fi
+    hermes --version                           # abort nếu không chạy được
+    # Version thực tế != version metadata → pinned: FAIL (cặp metadata sai);
+    # unpinned: chỉ CẢNH BÁO.
+    systemctl restart hermes-gateway           # chỉ khi unit tồn tại; sau đó restart os-server
     ;;
 ```
 
@@ -1013,10 +1005,10 @@ Code HAL runtime được **copy** từ project upstream open-source vào mono-r
 
 **Các bước thực hiện:**
 1. Clone `humancomputerlab/lelamp_runtime` về thư mục tạm
-2. Copy driver code (`services/motors.py`, `services/rgb.py`, `services/audio.py`, `services/service_base.py`) vào `hal/services/`
+2. Copy driver code (`services/motors.py`, `services/rgb.py`, `services/audio.py`, `services/service_base.py`) vào `hal/drivers/` (nay là `hal/drivers/motors/`, `hal/drivers/rgb/`, `hal/drivers/voice/`, `hal/drivers/base.py`)
 3. Xoá toàn bộ code LiveKit, OpenAI, conversation
 4. Thêm `hal/server.py` — HTTP API server mới (FastAPI)
-5. Thêm `hal/services/display.py` — DisplayService mới cho GC9A01
+5. Thêm `hal/drivers/display/display_service.py` — DisplayService mới cho GC9A01
 6. Tạo `hal/UPSTREAM.md` ghi commit hash nguồn và ngày copy
 7. Test trên thiết bị với phần cứng thật
 
@@ -1025,55 +1017,55 @@ Code HAL runtime được **copy** từ project upstream open-source vào mono-r
 HAL nằm trong repo này dưới dạng subfolder Python, cùng với Go và TypeScript:
 
 ```
-autonomous/
-├── system/          # Go code (fork từ lobster)
-│   ├── cmd/              # Go entrypoints
+autonomous-os/
+├── system/               # Go os-server + bootstrap worker
+│   ├── cmd/              # Go entrypoints (os-server, bootstrap)
 │   ├── server/           # Go HTTP layer
-│   ├── internal/         # Go business logic
 │   ├── bootstrap/        # Go OTA worker
-│   └── domain/           # Struct dùng chung
-├── system/web/      # TypeScript/React SPA (copy từ lobster, đổi intern→lamp)
-├── hal/               # Python hardware drivers (MỚI)
-│   ├── __init__.py       # Package init, expose __version__
-│   ├── server.py         # HTTP API server (FastAPI) — MỚI, không từ upstream
-│   ├── system/
-│   │   ├── motors.py     # MotorsService — 5x Feetech servo (từ upstream)
-│   │   ├── rgb.py        # RGBService — 64x WS2812 LED (từ upstream)
-│   │   ├── audio.py      # Audio — amixer, playback (từ upstream)
-│   │   ├── display.py    # DisplayService — GC9A01 LCD (MỚI, không từ upstream)
-│   │   └── service_base.py  # Event-driven ServiceBase (từ upstream)
-│   ├── config.py         # Runtime config
-│   ├── requirements.txt  # Python dependencies
-│   ├── VERSION           # Version string
+│   ├── domain/           # Struct dùng chung
+│   └── web/              # TypeScript/React SPA
+├── runtimes/             # Các agent runtime thay thế được (openclaw, hermes, codex, …)
+├── hal/                  # Python hardware runtime
+│   ├── server.py         # FastAPI app (hal.server:app) — không từ upstream
+│   ├── routes/           # Module route FastAPI (servo, led, camera, audio, display, …)
+│   ├── drivers/
+│   │   ├── base.py       # Event-driven ServiceBase (từ upstream)
+│   │   ├── motors/       # MotorsService — Feetech servos (từ upstream)
+│   │   ├── rgb/          # RGBService — WS2812 LEDs (từ upstream)
+│   │   ├── voice/        # Audio, STT, TTS
+│   │   └── display/      # DisplayService — GC9A01 LCD (display_service.py, không từ upstream)
+│   ├── config.py         # Runtime config (env vars)
+│   ├── pyproject.toml    # Python dependencies (uv; khoá trong uv.lock)
+│   ├── VERSION_HAL       # Version string dạng text
 │   └── UPSTREAM.md       # Track commit nguồn từ humancomputerlab/lelamp_runtime
-├── resources/
-│   └── openclaw-skills/  # SKILL.md files
+├── skills/               # Các file SKILL.md của agent
 ├── scripts/
-│   └── setup.sh
+│   └── provision/setup.sh
 ├── go.mod
 ├── Makefile
 └── CLAUDE.md
 ```
 
-3 ngôn ngữ (Go, Python, TypeScript), 3 folder, 1 repo. Mỗi cái build riêng, quản lý chung.
+3 ngôn ngữ (Go, Python, TypeScript), 1 repo. Mỗi cái build riêng, quản lý chung.
 
 ### HAL OTA Package
 
-Để phân phối qua OTA, HAL được zip từ folder `hal/`:
+Để phân phối qua OTA, `scripts/release/upload-hal.sh` zip nội dung folder `hal/` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`):
 
 ```
-hal-{version}.zip
-├── hal/                  # Full Python package
-├── requirements.txt
-└── VERSION
+hal-{version}.zip         # nội dung hal/ nằm ở gốc zip → giải nén vào /opt/hal
+├── server.py, routes/, drivers/, …
+├── pyproject.toml, uv.lock
+└── VERSION_HAL
 ```
 
 ### HAL HTTP API (FastAPI trên port 5001)
 
-HAL Python runtime expose HTTP API trên `127.0.0.1:5001`. OS Server (Go, port 5000) bridge request từ OpenClaw skills đến API này. Nginx proxy `/hw/*` chỉ cho caller trên cùng máy — client bên ngoài nhận 403. Swagger UI tại `/hw/docs` không truy cập được từ LAN.
+HAL Python runtime expose HTTP API trên `127.0.0.1:5001`. Agent skill trên thiết bị gọi thẳng qua loopback; web UI đi qua reverse proxy `/api/hardware/*` của OS Server (có admin auth, `system/server/proxy.go`). Nginx proxy `/hw/*` chỉ cho caller trên cùng máy — client bên ngoài nhận 403. Swagger UI tại `/hw/docs` không truy cập được từ LAN.
 
 ```
-OpenClaw LLM → curl 127.0.0.1:5000/api/servo → OS Server → http://127.0.0.1:5001/servo → HAL Python → Phần cứng
+Agent skill → curl http://127.0.0.1:5001/servo/play → HAL Python → Phần cứng
+Web UI       → /api/hardware/servo/play → OS Server (admin auth) → http://127.0.0.1:5001/servo/play → HAL Python
 Bên ngoài    → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 ```
 
@@ -1101,46 +1093,15 @@ Bên ngoài    → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 
 ## 7. Scripts Upload / Publish
 
-### `scripts/release/upload-hal.sh` (MỚI)
+### `scripts/release/upload-hal.sh`
 
-```bash
-#!/usr/bin/env bash
-# Upload HAL runtime lên OTA
+Chạy qua `make upload-hal`. Script source `ota-config.sh` / `ota-metadata.sh`, rồi:
 
-set -euo pipefail
-
-VERSION_FILE="VERSION_HAL"
-BUCKET="s3-autonomous-upgrade-3"
-OTA_PATH="os/ota/hal"
-METADATA_PATH="os/ota/metadata.json"
-
-# Tự tăng patch version
-CURRENT=$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0.0")
-MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-MINOR=$(echo "$CURRENT" | cut -d. -f2)
-PATCH=$(echo "$CURRENT" | cut -d. -f3)
-NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-echo "$NEW_VERSION" > "$VERSION_FILE"
-
-# Đóng gói
-echo "Packaging HAL $NEW_VERSION..."
-cd path/to/hal-source
-echo "$NEW_VERSION" > VERSION
-zip -r "/tmp/hal-${NEW_VERSION}.zip" hal/ requirements.txt VERSION
-
-# Upload zip
-gsutil cp "/tmp/hal-${NEW_VERSION}.zip" \
-    "gs://${BUCKET}/${OTA_PATH}/${NEW_VERSION}/hal-${NEW_VERSION}.zip"
-
-# Cập nhật metadata
-DOWNLOAD_URL="https://storage.googleapis.com/${BUCKET}/${OTA_PATH}/${NEW_VERSION}/hal-${NEW_VERSION}.zip"
-gsutil cp "gs://${BUCKET}/${METADATA_PATH}" /tmp/metadata.json
-jq --arg v "$NEW_VERSION" --arg u "$DOWNLOAD_URL" \
-    '.hal = {"version": $v, "url": $u}' /tmp/metadata.json > /tmp/metadata-updated.json
-gsutil cp /tmp/metadata-updated.json "gs://${BUCKET}/${METADATA_PATH}"
-
-echo "HAL $NEW_VERSION published."
-```
+1. `uv lock --project hal --python 3.12 --check` — từ chối publish khi lockfile lỗi thời.
+2. Tăng patch version trong `hal/VERSION_HAL` (khởi tạo `1.0.0` nếu chưa có).
+3. Zip nội dung `hal/` thành `hal-<version>.zip` (loại `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`).
+4. Upload lên `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/hal/<version>.zip` (no-cache).
+5. Giải nén `ota/metadata.json` đã ký, set `hal.version`, `hal.url`, `hal.sha256`, `hal.updated_at` (giữ nguyên `min_version` đang có — nâng bằng `promote-ota.sh`), ký lại và upload.
 
 ### Tất cả upload scripts
 
@@ -1149,7 +1110,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-os-server.sh` | OS Server binary | Build → zip → GCS → update metadata |
 | `scripts/release/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
 | `scripts/release/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
-| `scripts/release/upload-hal.sh` | HAL Python runtime (MỚI) | Package → zip → GCS → update metadata |
+| `scripts/release/upload-hal.sh` | HAL Python runtime | Lock check → zip → GCS → update metadata |
 | `scripts/release/upload-setup.sh` | Script setup | Upload lên GCS |
 | `scripts/release/upload-setup-ap.sh` | Script setup AP | Upload lên GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload lên GCS |
@@ -1197,9 +1158,9 @@ os-build:
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS_OS)" -o os-server ./cmd/os-server
 ```
 
-### HAL (VERSION file)
+### HAL (file VERSION_HAL)
 
-Version của HAL là file text `VERSION` trong thư mục gốc package. Bootstrap đọc qua file hoặc `python -m hal --version`.
+Version của HAL là file text `hal/VERSION_HAL` (cài thành `/opt/hal/VERSION_HAL`), bootstrap đọc trực tiếp file này. Không sửa tay khi release — `make upload-hal` (`scripts/release/upload-hal.sh`) tự tăng patch version.
 
 ---
 
@@ -1222,10 +1183,10 @@ Version của HAL là file text `VERSION` trong thư mục gốc package. Bootst
 - [x] **HAL source**: Mono-repo. Driver code copy từ `humancomputerlab/lelamp_runtime` vào `hal/`, bỏ LiveKit/OpenAI, thêm HTTP API + DisplayService. Track upstream thủ công qua `hal/UPSTREAM.md`.
 - [x] **HAL HTTP port**: `5001` (OS Server là `5000`).
 - [x] **Bridge protocol**: HTTP proxy đơn giản. HAL chạy FastAPI trên `127.0.0.1:5001`, OS Server proxy từ port 5000.
-- [ ] **Python version**: Pin Python 3.11+? Yêu cầu Python hiện tại của HAL?
+- [x] **Python version**: Pin Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` dùng `uv sync --python 3.12`).
 - [x] **Đóng gói HAL**: Tạo venv trên thiết bị qua `uv sync --python 3.12 --extra hardware`, thêm `--extra reachy` cho Reachy Mini hoặc `--extra aec --extra pipecat` cho thiết bị khác. OTA tạo venv mới bằng cache dùng chung, giữ `.env` và runtime cũ để rollback.
-- [ ] **Display driver**: DisplayService (GC9A01) — nằm trong HAL Python? Hay module mới?
-- [ ] **HAL config**: HAL cần config file riêng? Hay cấu hình qua OS Server?
+- [x] **Display driver**: DisplayService (GC9A01) là một phần của HAL Python tại `hal/drivers/display/display_service.py`.
+- [x] **HAL config**: Dựa trên biến môi trường (`config.py` đọc env vars). Hỗ trợ file `.env` qua `python-dotenv`. Không cần config file riêng.
 
 ---
 

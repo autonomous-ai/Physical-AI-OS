@@ -11,9 +11,6 @@ import GwConfig from "@/pages/GwConfig";
 import { checkInternet, getDeviceConfig, getSetupStatus, safeSearch, scrubLocationSecrets, setApiToken } from "@/lib/api";
 import { setLanguage } from "@/lib/i18n";
 
-// Detect Tailscale access by either:
-//  - CGNAT IPv4 in 100.64.0.0/10 (100.64.0.0 – 100.127.255.255), or
-//  - MagicDNS hostname (anything ending in `.ts.net`).
 function isTailscaleHost(host: string): boolean {
   if (host.endsWith(".ts.net")) return true;
   const m = host.match(/^(\d+)\.(\d+)\./);
@@ -23,30 +20,7 @@ function isTailscaleHost(host: string): boolean {
   return a === 100 && b >= 64 && b <= 127;
 }
 
-// Setup gate: provisioned → continue mode (Voice/Face enroll, TTS preview),
-// else initial mode (the form that actually submits setup). When the user
-// lands on the AP IP (192.168.4.1) but the device already has a real LAN IP
-// (e.g. they bookmarked the AP URL after first setup), bounce them to the
-// LAN address so the rest of the page works. `#force` in the URL hash
-// forces initial mode for testing.
-//
-// "Provisioned" is read from the device (`set_up_completed` on the open
-// setup-status endpoint), NOT inferred from connectivity. It used to be
-// inferred: the provisioning AP has no uplink, so "the device has internet"
-// implied it had already left AP mode and been set up. Ethernet breaks that
-// invariant — a brand-new device with a cable in it has internet from first
-// boot, so it opened the CONTINUE wizard, whose Wi-Fi step is a read-only
-// "you're online" row and whose forward button is a plain Next. There was no
-// Setup button anywhere on the page, so nothing ever POSTed
-// /api/device/setup and the device could not be provisioned over ethernet at
-// all. The wired device belongs in the *initial* wizard exactly like a Wi-Fi
-// one; the only difference is that its Wi-Fi step arrives already satisfied
-// (`wiredUplink`), so the operator goes straight to the Setup button.
-//
-// The connectivity check stays as a second condition — a provisioned device
-// that can't reach the internet still gets the initial form — so this only
-// ever tightens the continue path, never widens it. An older os-server that
-// doesn't publish the flag falls back to the old inference.
+// Setup gate: provisioned -> continue mode, else initial mode; bounces the AP IP to the LAN IP.
 function SetupGate() {
   const force = typeof window !== "undefined" && window.location.hash === "#force";
   const [provisioned, setProvisioned] = useState<boolean | null>(force ? false : null);
@@ -60,29 +34,12 @@ function SetupGate() {
       const ok = await checkInternet().catch(() => false);
       if (cancelled) return;
       if (!ok) { setProvisioned(false); return; }
-      // Online: see if we should redirect to the actual LAN IP first.
-      // Skip redirect when the user is already reaching the device via its
-      // Tailscale IP (CGNAT 100.64.0.0/10) — that's a deliberate remote-access
-      // path, not the AP-IP-after-setup case we're trying to fix.
       try {
         const s = status ?? await getSetupStatus();
         if (cancelled) return;
         const here = window.location.hostname;
-        // IP-only: we deliberately do NOT special-case the `.local` mDNS host.
-        // The whole flow standardizes on the raw LAN IP because `.local`
-        // silently fails on mDNS-blocking routers, so even when the browser
-        // happens to be on `<type>-<id>.local` we still bounce to the IP — the
-        // single reliable address. Only Tailscale (CGNAT) is skipped: that's a
-        // deliberate remote-access path where the IP bounce doesn't apply.
-        // safeSearch() keeps stripping secrets (llm_api_key, …) from the URL;
-        // continue mode rehydrates them from saved config (has_llm_api_key),
-        // so dropping them here is safe and avoids leaking secrets in the bar.
         if (s.lan_ip && s.lan_ip !== here && !isTailscaleHost(here)) {
-          // Carry the hash across the origin hop. It names the step the parent
-          // deep-linked to (#voice / #face / …); dropping it lands the operator
-          // on Wi-Fi with no way to recover the requested tab, since the hash is
-          // the only record of it. scrubLocationSecrets() preserves it for the
-          // same reason — see lib/api.ts.
+          // Carry the hash across the origin hop; it is the only record of the deep-linked step.
           window.location.replace(
             `http://${s.lan_ip}${window.location.pathname}${safeSearch()}${window.location.hash}`,
           );
@@ -93,28 +50,12 @@ function SetupGate() {
     })();
     return () => { cancelled = true; };
   }, [force]);
-  // Mode still resolving. Render the skeleton rather than null: the deep-link
-  // hash (#voice / #face) can only be honored once `mode` decides which steps
-  // exist, so this is exactly the window where guessing a tab would be wrong.
+  // Skeleton, not null: the deep-link hash can only be honored once `mode` resolves.
   if (provisioned === null) return <SetupSkeleton />;
   return <Setup mode={provisioned ? "continue" : "initial"} />;
 }
 
-// AuthGate wraps protected routes. Hits GET /api/device/config to probe
-// session state and route accordingly:
-//
-//   - 200 + has_admin_password=true  → render children (authed)
-//   - 200 + has_admin_password=false → /setup (provisioned but admin not set —
-//                                       migration window for devices upgrading
-//                                       from pre-Login-UI builds)
-//   - 401                            → /login (session missing/expired,
-//                                       admin is configured)
-//   - 503                            → /setup (admin auth not configured =
-//                                       fresh device, never been set up)
-//   - anything else                  → render children (network blip
-//                                       shouldn't lock the user out; the next
-//                                       admin call will surface the real
-//                                       error)
+// Probes GET /api/device/config and routes to children, /setup or /login.
 function AuthGate({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const [state, setState] = useState<"checking" | "ok" | "login" | "setup">("checking");
@@ -124,8 +65,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
       try {
         const cfg = await getDeviceConfig();
         if (cancelled) return;
-        // Resolve the UI language from the device's STT language, the same
-        // source the Go backend's i18n.Lang() reads from (config.STTLanguage).
         setLanguage(cfg.stt_language);
         if (!cfg.has_admin_password) {
           setState("setup");
@@ -147,9 +86,6 @@ function AuthGate({ children }: { children: React.ReactNode }) {
     return <Navigate to={`/setup${safeSearch()}`} replace />;
   }
   if (state === "login") {
-    // Carry a password link through the auth redirect while keeping it out of
-    // `next`. This lets /setting?password=…#voice resume at Voice after the
-    // automatic login, without nesting a credential in the return URL.
     const password = new URLSearchParams(location.search).get("password");
     const next = location.pathname + safeSearch(location.search) + location.hash;
     const params = new URLSearchParams({ next });
@@ -159,11 +95,7 @@ function AuthGate({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-// RootRedirect lands operators on the right page for their auth state.
-// Probes /api/device/config via AuthGate; on success it navigates to /monitor
-// (the canonical "logged-in landing"). Unauthed → /login. Fresh → /setup.
-// Lives at `/` so opening the root URL doesn't drop straight into the Setup
-// form regardless of auth state.
+// Sends `/` to /monitor, /login or /setup based on auth state.
 function RootRedirect() {
   return (
     <AuthGate>
@@ -172,45 +104,32 @@ function RootRedirect() {
   );
 }
 
-// Legacy /edit → /setting redirect that carries the query string + hash over, so
-// links like /edit?debug=true#face still land on the right Settings tab in debug
-// mode. (<Navigate to="/setting"> alone would drop ?debug=true and the hash.)
+// Legacy /edit -> /setting redirect that keeps the query string and hash.
 function EditRedirect() {
   const location = useLocation();
   return <Navigate to={`/setting${location.search}${location.hash}`} replace />;
 }
 
-// Keep one-click password links and any selected monitor fragment intact when
-// resolving the legacy dashboard path to its canonical route.
+// Legacy dashboard path -> canonical route, keeping query and hash.
 function DashboardRedirect() {
   const location = useLocation();
   return <Navigate to={`/monitor${location.search}${location.hash}`} replace />;
 }
 
-// On every mount, scrub secret query params from the URL so they don't
-// survive in browser history or address bar after the page reads them.
+// Scrubs secret query params from the URL after they are read.
 function useScrubSecrets() {
   useEffect(() => {
     scrubLocationSecrets();
   }, []);
 }
 
-// Pick up the bearer (llm_api_key) from the URL query and seed it into the
-// Bearer header used by /api/* calls. Also exchanges it for a session cookie
-// on the current origin so refresh / new tab keeps the user authed without
-// needing the URL params again. Used by the post-setup AP→.local redirect:
-// HTTP cookies are per-origin so the os_session set on 192.168.100.1
-// doesn't carry to lamp-xxxx.local; useScrubSecrets() runs AFTER this
-// to wipe the secret out of the address bar / browser history.
+// Seeds the Bearer from `llm_api_key` in the URL and exchanges it for a session cookie.
 function useBearerFromQuery() {
   useEffect(() => {
     if (typeof window === "undefined") return;
     const token = new URLSearchParams(window.location.search).get("llm_api_key");
     if (!token) return;
     setApiToken(token);
-    // Issue session cookie on this origin. adminAuthMiddleware already
-    // validates the Bearer the patched fetch attaches; the cookie's purpose
-    // is to outlive the in-memory token for refresh / new-tab continuity.
     fetch("/api/login/exchange", { method: "POST" }).catch(() => {
       /* not fatal — Bearer still rides every /api/* call in this tab */
     });
@@ -218,9 +137,7 @@ function useBearerFromQuery() {
 }
 
 function App() {
-  // Order matters: pick up the URL bearer BEFORE useScrubSecrets() strips
-  // `llm_api_key` from window.location. Both run as useEffects after the
-  // first commit so declaration order = execution order.
+  // Order matters: read the URL bearer before useScrubSecrets() strips it.
   useBearerFromQuery();
   useScrubSecrets();
   return (
@@ -228,28 +145,12 @@ function App() {
       <Routes>
         <Route path="/" element={<RootRedirect />} />
         <Route path="/setup" element={<SetupGate />} />
-        {/* Standalone Wi-Fi re-provision page for the AP portal. Deliberately
-            separate from /setup so it doesn't carry the wizard's LLM/channel
-            state or validation — just SSID + password, hits the AP-gated
-            POST /api/device/wifi-provision. Served at http://192.168.100.1/wifi
-            during hotspot mode. */}
         <Route path="/wifi" element={<WifiProvision />} />
         <Route path="/login" element={<Login />} />
-        {/* Monitor + Settings share ONE shell instance. Both paths are child
-            routes of a single layout route whose element renders <Monitor/>.
-            React Router keeps the layout element mounted while only the matched
-            child path changes, so the sidebar does NOT remount when switching
-            between /monitor and /setting (no full-page flash). Monitor derives
-            its area ("monitor" | "setting") from useLocation().pathname. */}
         <Route element={<AuthGate><Monitor /></AuthGate>}>
           <Route path="/monitor" element={null} />
           <Route path="/setting" element={null} />
         </Route>
-        {/* /edit was a standalone settings page that rendered the same
-            SettingsPanel as the /setting tab inside Monitor. The page was
-            removed; redirect legacy links (incl. the Setup "update →" hint and
-            any bookmarks) to the in-Monitor settings shell, preserving the
-            query string (e.g. ?debug=true). */}
         <Route path="/edit" element={<EditRedirect />} />
         <Route path="/gw-config" element={<AuthGate><GwConfig /></AuthGate>} />
         <Route path="/dashboard" element={<DashboardRedirect />} />

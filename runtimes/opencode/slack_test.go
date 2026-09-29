@@ -112,7 +112,6 @@ func TestSlackRunMapRoundTrip(t *testing.T) {
 	s := &OpenCodeService{slackRuns: make(map[string]slackRun)}
 
 	s.markSlackRun("run-1", slackRun{channel: "C42", threadTS: "1.99", messageTS: "1.50"})
-	// Peek is non-consuming.
 	if !s.IsSlackOriginRun("run-1") {
 		t.Errorf("IsSlackOriginRun should be true before consume")
 	}
@@ -123,18 +122,15 @@ func TestSlackRunMapRoundTrip(t *testing.T) {
 	if !ok || o.channel != "C42" || o.threadTS != "1.99" || o.messageTS != "1.50" {
 		t.Fatalf("consumeSlackRun = (%+v,%v), want {C42,1.99,1.50},true", o, ok)
 	}
-	// Cleared after consume.
 	if s.IsSlackOriginRun("run-1") {
 		t.Errorf("origin not cleared after consume")
 	}
 	if _, ok := s.consumeSlackRun("run-1"); ok {
 		t.Errorf("second consume should miss")
 	}
-	// Unknown run is a miss.
 	if s.IsSlackOriginRun("nope") {
 		t.Errorf("unknown run reported as slack origin")
 	}
-	// markSlackRun ignores an empty channel (can't route a reply without it).
 	s.markSlackRun("run-2", slackRun{})
 	if s.IsSlackOriginRun("run-2") {
 		t.Errorf("empty-channel origin should not be recorded")
@@ -191,8 +187,6 @@ func TestHandleInboundSlack(t *testing.T) {
 		silentRuns:   make(map[string]bool),
 		slackAPIBase: srv.URL,
 	}
-	// Stub only the final send step: busy-wait, run marking and silent marking
-	// stay real (they are what this test asserts).
 	s.slackSendTurn = func(text, reqID, runID string) error {
 		injected <- sent{text: text, reqID: reqID, runID: runID}
 		return nil
@@ -215,11 +209,9 @@ func TestHandleInboundSlack(t *testing.T) {
 		t.Errorf("injected text = %q, want %q", got.text, want)
 	}
 
-	// Run marked silent (no TTS) and tracked with thread_ts fallback = message ts.
 	if !s.IsSilentRun(got.runID) {
 		t.Errorf("run %q not marked silent — Slack replies must not hit TTS", got.runID)
 	}
-	// Ack reaction added (eyes) on the user's message.
 	ack := waitCall(t, calls)
 	if ack.method != "/reactions.add" || ack.payload["name"] != "eyes" || ack.payload["timestamp"] != "1.50" {
 		t.Errorf("ack call = %+v, want reactions.add eyes on ts 1.50", ack)
@@ -284,7 +276,6 @@ func TestSlackReplyRoutingEmitFinal(t *testing.T) {
 		t.Errorf("slack run not consumed by emitFinal")
 	}
 
-	// Two calls, in order: clear ack reaction, then post the stripped reply.
 	first := waitCall(t, calls)
 	if first.method != "/reactions.remove" || first.payload["name"] != "eyes" {
 		t.Errorf("first call = %+v, want reactions.remove eyes", first)
@@ -328,7 +319,6 @@ func TestSlackRunConsumedOnError(t *testing.T) {
 	if s.IsSlackOriginRun(runID) {
 		t.Errorf("slack run not consumed by handleError")
 	}
-	// The reaction clear is async; wait for it, then assert no postMessage.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		mu.Lock()

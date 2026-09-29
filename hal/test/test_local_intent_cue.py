@@ -21,7 +21,6 @@ def test_local_completion_only_releases_owned_cue(monkeypatch, emotion, active, 
     clear, restore = Mock(), Mock()
     monkeypatch.setattr(realtime_turn, "_thinking_cue_clear", clear)
     monkeypatch.setattr(led, "restore_led", restore)
-    # No playback/TTS callback is required: muted and silent replies finish here.
     turn_dispatch._note_dispatch_outcome("local-turn", SendResult(delivered=True, handled_locally=True))
     assert clear.call_count == clear_count
     assert restore.call_count == restore_count

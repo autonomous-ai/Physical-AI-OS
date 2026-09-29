@@ -137,7 +137,6 @@ func TestHarnessResultOriginalInstanceReconcilesAfterDaemonRestart(t *testing.T)
 	if len(s.harnessResults.Results()) != 0 {
 		t.Fatal("result completed without original receipt")
 	}
-	// Receipt retains original instance, independently of the live transport.
 	s.bindHarnessResultReceipt(serverReceipt("a"), current)
 	s.processHarnessResults(current)
 	rows := s.harnessResults.Results()
@@ -202,13 +201,11 @@ func TestHarnessResultRestartRetainsInboxWithoutRevivingSpeech(t *testing.T) {
 	if err := s.captureHarnessResult(serverGroup("a"), p); err != nil {
 		t.Fatal(err)
 	}
-	// Persist/reopen the inbox with no current speaker owner.
 	root, err := filepath.EvalSymlinks(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
 	}
 	path := filepath.Join(root, "restart.json")
-	// Reserve/stage in another file, then initialize a fresh server against it.
 	store, err := harness.OpenResultStore(path)
 	if err != nil {
 		t.Fatal(err)
@@ -425,8 +422,6 @@ func TestHarnessResultRestartRestoresOnlyProvenDisplayOnce(t *testing.T) {
 
 func TestHarnessResultUnresolvedRestoredRouteStillProtectsNewTask(t *testing.T) {
 	s, _ := resultServer(t)
-	// This address belongs to a still-pending external history input. Unlike a
-	// proven completed display result, it can still receive an old remote summary.
 	s.restoreHarnessResultRoute(harness.ResultInput{AgentID: "agent", RunID: "waiting-a", IdempotencyKey: "a", Channel: "web", ExpiresAt: time.Now().Add(time.Minute)})
 	s.registerHarnessDispatch("agent", "new-c", true, true, harness.Frame{"idempotencyKey": "c"})
 	if !s.harnessOverlapAgents["agent"] || !s.harnessReplies["new-c"].overlapped {

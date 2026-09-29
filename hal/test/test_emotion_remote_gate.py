@@ -1,10 +1,4 @@
-"""RemoteEmotionRecognizer against new and old perception servers.
-
-HAL always asks for raw probabilities. A new server returns them and HAL gates;
-an old server ignores `raw`, gates itself and returns no probabilities, and HAL
-must then take its label as-is. Either way a failed gate is None — the caller
-records that as no reading.
-"""
+"""RemoteEmotionRecognizer against new and old perception servers."""
 
 import json
 import threading
@@ -25,8 +19,7 @@ CROP = np.zeros((40, 30, 3), dtype=np.uint8)
 
 
 class _StubDebug:
-    """Records every save_failure/save_prediction call's kwargs, for pinning
-    which fields make it into result.json without touching the filesystem."""
+    """Records save_failure/save_prediction kwargs without touching the filesystem."""
 
     def __init__(self):
         self.failures: list[tuple[str, dict]] = []
@@ -101,7 +94,6 @@ def test_hal_thresholds_are_what_decide(monkeypatch):
 
 
 def test_old_server_label_is_trusted(monkeypatch):
-    # Old server: ignored `raw`, gated with its own map, sent no probabilities.
     _serve(monkeypatch, [_det("Sad", 0.75)])
     result = _recognizer().recognize(CROP)
     assert (result["emotion"], result["gate"]) == ("Sad", "server")
@@ -115,8 +107,6 @@ def test_null_probabilities_is_treated_as_old_server(monkeypatch):
 
 
 def test_failed_hal_gate_is_saved_with_gate_hal(monkeypatch):
-    # Pins the fix: a reading that fails the HAL bar is recorded with
-    # gate="hal" in the debug failure folder, not silently omitted.
     _serve(monkeypatch, [_det("Sad", 0.75, {"Neutral": 0.15, "Sad": 0.75, "Happy": 0.10})])
     debug = _StubDebug()
     r = _recognizer(debug=debug)
@@ -128,15 +118,9 @@ def test_failed_hal_gate_is_saved_with_gate_hal(monkeypatch):
 
 
 def test_process_face_records_gate_in_debug_prediction(monkeypatch):
-    # Pins the fix: a successful reading's gate ("hal" or "server") reaches
-    # save_prediction, which is what result.json is built from — not just
-    # the return value of recognize().
     _serve(monkeypatch, [_det("Sad", 0.85, {"Neutral": 0.10, "Sad": 0.85, "Happy": 0.05})])
     debug = _StubDebug()
 
-    # Minimal EmotionPerception carrying only what _process_face reads,
-    # following the object.__new__ pattern in test_emotion_occupancy.py —
-    # no network, no config, no real debug logger.
     p = object.__new__(EmotionPerception)
     p._recognizer = _recognizer(debug=debug)
     p._debug = debug

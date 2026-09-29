@@ -1,27 +1,6 @@
 #!/usr/bin/env bash
-# spike-web.sh — serve the web UI on a Reachy Mini via nginx.
-#
-# RUNS ON THE ROBOT. Pulls the `web` component from OTA metadata, installs
-# nginx, writes a spike vhost, and reloads.
-#
-# Why nginx at all: os-server binds 127.0.0.1:5000 and serves no static files
-# (there is no StaticFS/embed.FS anywhere in system/). nginx is what serves the
-# bundle and proxies /api to os-server — without it the bundle is dead weight.
-#
-# This used to run `make web-build` on a Mac and rsync system/web/dist. That
-# needed node and the repo on the developer's machine and shipped whatever was
-# checked out there, which is not what the fleet serves.
-#
-# This is NOT the production nginx config. scripts/provision/setup.sh writes the
-# real one (captive portal, /gw OpenClaw upgrade, admin shell routes). This
-# vhost is the minimum that makes the UI usable during a spike, so the two must
-# not be confused: the production file lands in /etc/nginx/conf.d/<type>.conf,
-# this one in sites-available/reachy-spike.
-#
-# Usage:
-#   sudo bash spike-web.sh              # install + serve
-#   sudo bash spike-web.sh --stop       # disable the vhost (nginx stays installed)
-#   sudo bash spike-web.sh --uninstall  # disable + drop the bundle
+# spike-web.sh — serve the OTA web bundle via a spike-only nginx vhost on a Reachy Mini.
+# Usage: sudo bash spike-web.sh [--stop|--uninstall]
 set -euo pipefail
 
 SPIKE_TAG="spike-web"
@@ -61,9 +40,7 @@ if ! [ -x /usr/sbin/nginx ] && ! command -v nginx >/dev/null; then
   apt-get update -qq
   apt-get install -y --no-install-recommends nginx || die "nginx install failed"
 fi
-# Debian's default vhost also claims :80 default_server, and two default_servers
-# is a config error. Kept out of --stop's undo on purpose: restoring a default
-# page nobody wants is not cleanup.
+# Debian's default vhost also claims default_server on :80.
 rm -f /etc/nginx/sites-enabled/default
 
 say "2/4  Install the bundle from OTA"
@@ -71,7 +48,6 @@ rm -rf "${WEB_ROOT:?}"
 mkdir -p "$WEB_ROOT"
 ota_unpack web "$WEB_ROOT"
 [ -f "$WEB_ROOT/index.html" ] || die "no index.html in the web package — wrong artifact?"
-# nginx runs as www-data and must be able to traverse every parent directory.
 chmod 755 /usr/share/nginx /usr/share/nginx/html "$WEB_ROOT" 2>/dev/null || true
 
 say "3/4  Write the spike vhost"

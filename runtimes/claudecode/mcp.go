@@ -8,17 +8,6 @@ import (
 	"path/filepath"
 )
 
-// MCP connector writes for the Claude Code backend. Claude Code natively loads
-// project-scoped MCP servers from <workspace>/.mcp.json ({"mcpServers": {...}}),
-// and presync asserts `enableAllProjectMcpServers: true` in the workspace
-// settings so entries written here are trusted without an interactive approval
-// prompt. .mcp.json is read at Claude session start, so both writes restart the
-// bridge to apply.
-//
-// The entry shape is passed through verbatim: the canonical connector entries
-// carried by MCPReconcile ({command,args,env} / {type,url,headers}) are the same
-// de-facto MCP config schema .mcp.json uses.
-
 // mcpConfigPath returns the workspace .mcp.json location.
 func mcpConfigPath() string {
 	return filepath.Join(claudecodeWorkspaceDir, ".mcp.json")
@@ -54,8 +43,7 @@ func (s *ClaudeCodeService) WriteMCPEntry(name string, entry map[string]any) err
 	return nil
 }
 
-// RemoveMCPEntry deletes mcpServers.<name>. Returns removed=false (idempotent,
-// no restart) when the entry was already absent.
+// RemoveMCPEntry deletes mcpServers.<name>.
 func (s *ClaudeCodeService) RemoveMCPEntry(name string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -82,8 +70,7 @@ func (s *ClaudeCodeService) RemoveMCPEntry(name string) (bool, error) {
 }
 
 // ReadMCPEntries returns the mcpServers map from workspace/.mcp.json — used by
-// MCPReconcile to clone connectors when switching runtimes. Empty (not an error)
-// when the file is absent.
+// MCPReconcile to clone connectors when switching runtimes.
 func ReadMCPEntries() (map[string]map[string]any, error) {
 	root, err := readMCPFile()
 	if err != nil {

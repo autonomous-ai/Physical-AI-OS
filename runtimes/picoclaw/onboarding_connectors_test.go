@@ -6,10 +6,7 @@ import (
 )
 
 // TestAgentsMDBlock_RoutesConnectorsSkill guards the connectors-routing rule in
-// PicoClaw's AGENTS.md block. Without it the agent doesn't know the device's
-// Gmail/Calendar/etc. credentials are already on disk (via the connectors skill)
-// and falls back to raw shell (apt/mutt/send_email.py) — the same regression
-// fixed for openclaw/hermes/claudecode/codex/opencode.
+// PicoClaw's AGENTS.md block.
 func TestAgentsMDBlock_RoutesConnectorsSkill(t *testing.T) {
 	if !strings.Contains(agentsMDBlock, "`connectors` skill") {
 		t.Fatalf("agentsMDBlock missing connectors-skill routing rule:\n%s", agentsMDBlock)

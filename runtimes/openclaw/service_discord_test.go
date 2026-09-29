@@ -47,7 +47,6 @@ func TestApplyDiscordChannelConfig_NoGuild(t *testing.T) {
 	if _, ok := m["guilds"]; ok {
 		t.Errorf("guilds must not be set without a guild id")
 	}
-	// DM wiring still present.
 	if m["dmPolicy"] != "allowlist" {
 		t.Errorf("dmPolicy = %v, want allowlist", m["dmPolicy"])
 	}

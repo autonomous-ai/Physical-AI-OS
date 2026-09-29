@@ -11,24 +11,14 @@ def get_or_default(x: T | None, default: T) -> T:
 
 
 def deep_hash(v: Any) -> int:
-    """Recursively convert a value to a stable hash.
-
-    Handles nested dicts, lists, sets, tuples, numpy arrays, and
-    other common types. Falls back to ``id(v)`` for truly opaque objects.
-    """
+    """Recursively convert a value to a stable hash (``id(v)`` for opaque objects)."""
     return hash(_to_hashable(v))
 
 
 def _to_hashable(v: Any) -> Any:
     """Recursively convert a value to a hashable representation.
 
-    - ``dict``  -> sorted tuple of ``(key, hashable_value)`` pairs
-    - ``list``  -> tuple of hashable values
-    - ``set``   -> frozenset
-    - ``tuple`` -> tuple of hashable values (in case it contains unhashable items)
-    - Objects with ``tobytes``/``shape``/``dtype`` (numpy arrays) -> ``(shape, dtype, bytes)``
-    - Already-hashable scalars (str, int, float, bool, None) -> unchanged
-    - Anything else -> ``id(v)`` (object identity)
+    Arrays hash by ``(shape, dtype, bytes)``; unhashable opaque objects fall back to ``id(v)``.
     """
     if v is None or isinstance(v, (str, int, float, bool, bytes)):
         return v

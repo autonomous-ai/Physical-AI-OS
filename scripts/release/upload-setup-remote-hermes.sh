@@ -1,13 +1,5 @@
 #!/usr/bin/env bash
-# Publish scripts/tools/setup-remote-hermes.sh to the CDN at
-#   {CDN}/tools/setup-remote-hermes.sh
-# so the "How do I get the URL + API Key?" popup on the device Runtime page
-# resolves to a fresh copy. Unversioned static tool — every publish
-# overwrites the same object. Cache-control is short (5 min) so the next
-# revision reaches operators without a filename bump.
-#
-# Requires the intern-gcs service account to be active in gcloud (same one
-# used by every other upload-*.sh here).
+# Publish scripts/tools/setup-remote-hermes.sh to {CDN}/tools/ (unversioned, 5 min cache).
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"

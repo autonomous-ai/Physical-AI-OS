@@ -42,7 +42,6 @@ def test_gemini_backend_streams_pcm_through_relay():
         f"{GeminiTTSBackend.DEFAULT_MODEL}:streamGenerateContent?alt=sse"
     )
     assert headers["x-goog-api-key"] == "k"
-    # Re-feeding _base_url (as routes/voice.py does on config apply) must not stack the relay path.
     assert create_backend(PROVIDER_GEMINI, "k", backend._base_url)._base_url == backend._base_url
     assert body["contents"][0]["parts"][0]["text"] == "Hello"
     voice = body["generationConfig"]["speechConfig"]["voiceConfig"]["prebuiltVoiceConfig"]["voiceName"]

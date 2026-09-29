@@ -1,24 +1,7 @@
-"""OpenAI Realtime voice agent implementation — queue-based threading, fully sync.
+"""OpenAI Realtime (GA API) voice agent: queue-based threading, fully sync.
 
-Speaks the GA Realtime API (`openai.resources.realtime`, openai >= 3.x): session
-shape `type: realtime` + `audio.input/output`, event names
-`response.output_audio.delta` / `response.output_audio_transcript.delta`.
-
-Contract parity with gemini_live.py — everything the live pump and the turn
-path key on is emitted here too:
-  - every output and the TurnDoneEvent carry the provider user-turn key
-    (`user_turn_id`), frozen per response so a late input transcription can
-    never re-own an earlier reply;
-  - server VAD (`speech_started` / `speech_stopped`) and input transcription
-    surface as UserSpeechOutput (LIVE_MODE only, like Gemini);
-  - a barge-in drains the recv queue, emits InterruptedOutput(server_interrupt),
-    bumps the output generation and truncates the assistant item on the server
-    so the model's context matches what the user actually heard;
-  - OutputEvent.gen is bumped per response and per interruption so
-    VoiceAgentBase.receive() drops audio from a cancelled reply;
-  - note_server_activity() on every inbound event feeds the silent-turn
-    watchdog (a reasoning-heavy or tool turn is not "silent" on the wire);
-  - a per-turn token/cost line goes to openai_usage.log.
+Contract parity with gemini_live.py: per-response `user_turn_id`, gen bump per response and
+interruption, and barge-in truncates the assistant item to what was actually heard.
 """
 
 import base64
@@ -63,18 +46,10 @@ from hal.realtime.utils import (
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
 logger = logging.getLogger(__name__)
-# Per-turn token/cost lines go to their own file (openai_usage.log) via a
-# dedicated child logger configured in server_support/log_setup.py
-# (propagate=False), so they don't mix into server.log or gemini_usage.log.
 usage_logger = logging.getLogger("hal.realtime.usage.openai")
 
-# OpenAI Realtime pricing, USD per 1M tokens, keyed (direction, modality), PER
-# MODEL. Source: developers.openai.com/api/docs/pricing (verified 2026-09-16).
-# "cached" is the discounted rate for the prompt-cache hit reported in
-# input_token_details.cached_tokens. Keys are matched IN ORDER as a SUBSTRING of
-# self._config.model: "mini" first so "gpt-realtime-2-mini" never resolves to the
-# full-size "gpt-realtime-2" row, and "gpt-realtime-2" before "gpt-realtime" so
-# the dated GA model does not fall through to the older text-out rate.
+# USD per 1M tokens (verified 2026-09-16). Substring match IN ORDER: "mini" before full-size,
+# "gpt-realtime-2" before "gpt-realtime".
 _OPENAI_RATES: tuple[tuple[str, dict[tuple[str, str], float]], ...] = (
     ("mini", {
         ("in", "TEXT"): 0.60, ("in", "AUDIO"): 10.0,
@@ -92,26 +67,17 @@ _OPENAI_RATES: tuple[tuple[str, dict[tuple[str, str], float]], ...] = (
         ("cached", "TEXT"): 0.40, ("cached", "AUDIO"): 0.40,
     }),
 )
-# Unknown model → the table with the highest text-out rate, so an untabled
-# model logs a cost CEILING rather than an under-report (same rule as Gemini).
+# Unknown model -> highest text-out table, so cost is a ceiling, not an under-report.
 _OPENAI_RATES_FALLBACK: dict[tuple[str, str], float] = max(
     (table for _, table in _OPENAI_RATES), key=lambda r: r[("out", "TEXT")]
 )
 
-# LIVE_VAD_START_SENSITIVITY → server_vad `threshold` (API default 0.5). "low"
-# sensitivity = an onset needs LOUDER evidence = higher threshold — the OpenAI
-# counterpart of Gemini's START_SENSITIVITY_LOW echo defence (see
-# GeminiLiveAgent._activity_detection). HAL_OPENAI_VAD_THRESHOLD overrides.
+# "low" sensitivity = higher threshold (API default 0.5); HAL_OPENAI_VAD_THRESHOLD overrides.
 _VAD_THRESHOLDS: dict[str, float] = {"low": 0.7, "high": 0.3}
 
-# Client event_id stamped on our best-effort `conversation.item.truncate`. The
-# server answers a truncate past the real audio length with an `error` event;
-# that must never tear the session down, so errors carrying this id are benign.
+# Errors carrying this event_id (truncate past real length) are benign.
 _TRUNCATE_EVENT_ID: str = "hal-truncate"
-# Realtime API error codes that describe a harmless client race, not a broken
-# session: committing an empty buffer (local VAD ended a turn shorter than the
-# 100 ms minimum), creating a response while one is active (server VAD and a
-# client commit crossed), cancelling a response that already finished.
+# Harmless client races, not a broken session.
 _BENIGN_ERROR_CODES: frozenset[str] = frozenset({
     "input_audio_buffer_commit_empty",
     "conversation_already_has_active_response",
@@ -122,8 +88,7 @@ _MAX_USER_ITEMS: int = 16
 
 
 def _openai_rates_for(model: str) -> dict[tuple[str, str], float]:
-    """Resolve the per-1M-token rate table for a model name (ordered substring
-    match); unknown models fall back to the most expensive table (cost = ceiling)."""
+    """Resolve the per-1M-token rate table for a model (ordered substring match; unknown = ceiling)."""
     for key, table in _OPENAI_RATES:
         if key in model:
             return table
@@ -133,16 +98,7 @@ def _openai_rates_for(model: str) -> dict[tuple[str, str], float]:
 class OpenAIRealtimeAgent(VoiceAgentBase):
     """OpenAI Realtime provider.
 
-    Base-class hooks deliberately left at their defaults, with the reason:
-      - `end_turn()` stays a no-op: OpenAI sends `response.done` even for a
-        function-call-only response, so `_turn_done` is always released by the
-        recv loop and the next `response.create` never deadlocks. Forcing it
-        would race a still-active response into
-        `conversation_already_has_active_response`.
-      - `requires_fresh_session` stays False: a `function_call_output` item can
-        be recorded without a response, so an unacknowledged tool call never
-        poisons the session the way it does on Gemini (1008).
-      - `output_sample_rate` stays the input rate: PCM in and out are both 24 kHz.
+    end_turn() stays a no-op: response.done arrives even for function-call-only responses.
     """
 
     def __init__(
@@ -157,14 +113,10 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             base_url=config.base_url,
         )
         self._connection: RealtimeConnection | None = None
-        # Serializes all access to self._connection across the send/recv threads.
-        # Reentrant: a send op holds it while triggering _safe_response_create,
-        # which re-acquires it on the same thread. The blocking recv iteration
-        # runs OUTSIDE the lock (on a snapshot) so sends aren't starved during a
-        # turn — only connection swaps, writes, and teardown are serialized. The
-        # recv thread takes it briefly for its own writes (item truncate).
+        # Reentrant: a send op re-acquires it in _safe_response_create. The blocking recv iteration
+        # runs outside the lock on a snapshot so sends aren't starved.
         self._conn_lock: threading.RLock = threading.RLock()
-        # Per-turn timing markers (monotonic so NTP cannot skew them).
+        # Monotonic so NTP cannot skew them.
         self._speech_ended_at: float | None = None
         self._commit_sent_at: float | None = None
         self._first_audio_received: bool = False
@@ -173,30 +125,17 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         self._queue_poll_s: float = config.queue_poll_s
         self._response_wait_s: float = config.response_wait_s
         self._last_reconnect_at: float = 0.0
-        # Exponential backoff (see gemini_live): grow the reconnect throttle on
-        # consecutive failures so the self-reconnecting recv loop doesn't hammer a
-        # persistently-failing endpoint; reset to base on success.
         self._reconnect_backoff: float = config.reconnect_delay_s
         self._reconnect_backoff_max: float = 60.0
-        # Signals that the model is idle (no active response). Set by default,
-        # cleared when response.create() is called, set again on response.done.
+        # Set = model idle; cleared on response.create(), set again on response.done.
         self._turn_done: threading.Event = threading.Event()
         self._turn_done.set()
-        # Output generation: bumped per response and per interruption so
-        # VoiceAgentBase.receive() can drop audio from a superseded reply.
+        # Bumped per response and per interruption so receive() drops superseded audio.
         self._turn_gen: int = 0
-        # Live-mode input ownership (same shape as gemini_live): the key of the
-        # user turn currently being captured and whether its UserSpeechOutput
-        # has been emitted yet.
         self._live_user_turn_id: str = ""
         self._live_speech_emitted: bool = False
-        # Provider transcript of the utterance in flight, handed to
-        # FunctionCallOutput.user_transcript (the delegate message source).
         self._user_transcript: str = ""
-        # OpenAI ids every user audio item; remembering which live turn each
-        # item belongs to lets a transcription that lands after the NEXT
-        # speech_started still be attributed to the input it transcribes.
-        # Value: (turn_id, transcript text already emitted for that item).
+        # item_id -> (turn_id, transcript emitted) so a late transcription finds its input turn.
         self._user_items: dict[str, tuple[str, str]] = {}
 
     @property
@@ -204,18 +143,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
     def sample_rate(self) -> int:
         return self._config.sample_rate
 
-    # --- Session config ---
-
     def _turn_detection(self) -> dict[str, Any] | None:
-        """Provider-side VAD settings, or None for manual (client-bracketed) turns.
-
-        Only sends the knobs that are set, so the API default stands for the
-        rest. server_vad: LIVE_VAD_START_SENSITIVITY → threshold (or the
-        explicit HAL_OPENAI_VAD_THRESHOLD), LIVE_VAD_PREFIX_PADDING_MS →
-        prefix_padding_ms, LIVE_VAD_SILENCE_MS → silence_duration_ms.
-        semantic_vad has no threshold; LIVE_VAD_END_SENSITIVITY → eagerness
-        (how quickly the model decides the user is done).
-        """
+        """Provider-side VAD settings, or None for manual (client-bracketed) turns (only set knobs are sent)."""
         td_type: OpenAITurnDetectionType | None = self._config.turn_detection_type
         if td_type is None:
             return None
@@ -247,25 +176,18 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         """The `session.update` payload (GA shape)."""
         audio_input: dict[str, Any] = {
             "format": {"type": "audio/pcm", "rate": self._config.sample_rate},
-            # None is meaningful: it switches server VAD OFF for manual turns.
+            # None switches server VAD off for manual turns.
             "turn_detection": self._turn_detection(),
-            # Input transcription is the ONLY source of the user's words on
-            # this side: UserSpeechOutput.transcript, live history and the
-            # delegate message all come from it. Off by default in the API.
+            # Input transcription is the only source of the user's words on this side (API default off).
             "transcription": self._transcription(),
         }
         if self._config.noise_reduction in ("near_field", "far_field"):
-            # Filters the buffer before VAD and the model — fewer false VAD
-            # onsets from room noise / echo residue, better perception.
             audio_input["noise_reduction"] = {"type": self._config.noise_reduction}
 
         session: dict[str, Any] = {
             "type": "realtime",
             "instructions": self._config.instructions,
-            # Audio only: the transcript stream is the text source. Adding
-            # "text" would make the model emit response.output_text.delta AS
-            # WELL, and speaking both double-speaks the reply (the Gemini
-            # part.text / output_transcription double-reply bug).
+            # Audio only: adding "text" would double-speak the reply.
             "output_modalities": ["audio"],
             "audio": {
                 "input": audio_input,
@@ -296,8 +218,6 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             # The API wants ISO-639-1; the device setting may be a BCP-47 tag.
             cfg["language"] = lang.split("-", 1)[0].lower()
         return cfg
-
-    # --- Sync internals ---
 
     def _sync_connect(self) -> None:
         # A reopened session must not inherit input ownership from the old one.
@@ -363,9 +283,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         "output": input.output,
                     }
                 )
-                # Fire-and-forget tools (trigger_response=False) only record the
-                # result; they must NOT spawn a fresh response or the model would
-                # speak a second time and add a full round-trip of latency.
+                # Fire-and-forget tools must not spawn a fresh response (the model would speak twice).
                 if input.trigger_response:
                     self._safe_response_create()
 
@@ -374,12 +292,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             if self._connection is None:
                 return
             if self._config.turn_detection_type is not None:
-                # Server VAD owns turn-taking: it commits the buffer and creates
-                # the response on its own speech_stopped. A client commit here
-                # would land on an already-committed (empty) buffer and a second
-                # response.create would collide with the server's. Same rule as
-                # GeminiLiveAgent._async_commit, which only sends activityEnd
-                # when automatic activity detection is off.
+                # Server VAD commits and creates the response itself; a client commit would collide.
                 logger.debug("[realtime] Commit skipped — server VAD brackets the turn")
                 return
             self._connection.input_audio_buffer.commit()
@@ -392,11 +305,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             self._safe_response_create()
 
     def _safe_response_create(self) -> None:
-        """Wait for any active response to finish, then create a new one.
-
-        The wait runs before taking the connection lock so the recv thread can
-        keep draining events (and set _turn_done) without contending with us.
-        """
+        """Wait for any active response to finish, then create a new one (wait happens outside the lock)."""
         if not self._turn_done.wait(timeout=self._response_wait_s):
             logger.warning("[realtime] Timed out waiting for active response to finish — forcing new response")
         with self._conn_lock:
@@ -406,8 +315,6 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             self._speech_ended_at = time.monotonic()
             self._connection.response.create()
 
-    # --- Live-mode input ownership ---
-
     def _observe_user_speech(
         self,
         *,
@@ -416,12 +323,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         transcript: str = "",
         transcript_finished: bool = False,
     ) -> None:
-        """Publish one input key, enriching it only with an actual VAD endpoint.
-
-        `turn_id` pins the observation to an EARLIER input (a transcription that
-        lands after the next speech_started); the live capture state is left
-        alone in that case.
-        """
+        """Publish one input key; `turn_id` pins the observation to an earlier input."""
         if not app_config.LIVE_MODE:
             return
         if turn_id is not None and turn_id != getattr(self, "_live_user_turn_id", ""):
@@ -473,12 +375,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             del items[next(iter(items))]
 
     def _on_input_transcript(self, item_id: str | None, text: str, *, finished: bool) -> None:
-        """Route an input transcription chunk to the input turn it belongs to.
-
-        A `completed` event carries the WHOLE transcript; only the part not
-        already streamed as deltas is emitted so a consumer that concatenates
-        chunks (live history) never sees the utterance twice.
-        """
+        """Route an input transcription chunk to its input turn (`completed` emits only the unstreamed part)."""
         items: dict[str, tuple[str, str]] = getattr(self, "_user_items", None) or {}
         known = items.get(item_id or "")
         turn_id, emitted = known if known is not None else (None, "")
@@ -498,8 +395,6 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 turn_id=turn_id, transcript=chunk, transcript_finished=finished,
             )
 
-    # --- Interruption ---
-
     def _output_rate(self) -> int:
         cfg = getattr(self, "_config", None)
         return cfg.sample_rate if cfg is not None else 24000
@@ -512,15 +407,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         item: tuple[str, int] | None,
         received_ms: float,
     ) -> None:
-        """The user barged in (or the response was cancelled): stop playback now.
-
-        Mirrors gemini_live's `interrupted` branch — drop everything still
-        queued from the cancelled reply, keep input metadata and completion
-        evidence, then announce the interruption so the live pump stops the
-        speaker — and adds the OpenAI-specific step: truncate the assistant's
-        audio item on the server to what was actually delivered, so the model
-        does not believe the user heard words that never played.
-        """
+        """The user barged in: drop queued output, announce the interruption, and truncate the server item."""
         dropped = 0
         dropped_ms = 0.0
         metadata: list[OutputEvent] = []
@@ -539,8 +426,6 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 elif isinstance(queued.output, AudioOutput):
                     dropped_ms += len(queued.output.audio) * 1000.0 / self._output_rate()
             elif app_config.LIVE_MODE and isinstance(queued, TurnDoneEvent):
-                # Preserve metric evidence, never replay a control terminal
-                # that the original interruption path dropped.
                 metadata.append(OutputEvent(
                     gen=getattr(self, "_turn_gen", 0),
                     output=ExecutionOutput(
@@ -550,8 +435,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 ))
         for queued in metadata:
             self._recv_queue.put(queued)
-        # Anything from the cancelled reply still in flight is now older than
-        # what follows; receive() drops it by generation.
+        # Cancelled-reply output is now older than what follows; receive() drops it by generation.
         self._turn_gen = getattr(self, "_turn_gen", 0) + 1
         if app_config.LIVE_MODE:
             self._recv_queue.put(OutputEvent(
@@ -562,10 +446,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 ),
             ))
         if item is not None and conn is not None:
-            # Best effort: received minus still-queued approximates delivered.
-            # HAL's own playback buffer makes this an over-estimate by a few
-            # hundred ms; a value past the real length only yields a benign
-            # `error` tagged with _TRUNCATE_EVENT_ID.
+            # received - queued over-estimates delivered; an overshoot only yields a benign error.
             self._truncate_item(conn, item, max(0, int(received_ms - dropped_ms)))
         self._first_audio_received = False
         self._turn_done.set()
@@ -590,18 +471,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         except Exception as e:  # a failed truncate must never end the turn
             logger.warning("[realtime] conversation.item.truncate failed: %s", e)
 
-    # --- Usage ---
-
     def _log_usage(self, response: Any) -> None:
-        """Per-turn token bill (see gemini_live for the reading guide).
-
-        input_tokens is the input CONTEXT billed this turn — it grows as a
-        long-lived session accumulates history and should drop right after an
-        idle session recycle (orchestrator._mark_turn_start). cached is the
-        prompt-cache hit, re-billed at the discounted rate; cached=0 every turn
-        means the cache is not hitting (session churn) — that's the cost red
-        flag. Grep "[realtime] OpenAI usage" in openai_usage.log.
-        """
+        """Log the per-turn token bill to openai_usage.log (cached=0 every turn means session churn)."""
         usage = getattr(response, "usage", None)
         if usage is None:
             return
@@ -621,8 +492,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 c = tok * rates.get((direction, mod), 0.0) / 1_000_000
                 cost += c
                 parts.append("%s_%s=%d($%.5f)" % (direction, mod.lower(), tok, c))
-        # Tokens OpenAI counted but did not tag text/audio (image input) —
-        # unpriced here, so est is a floor.
+        # Untagged tokens (image input) are unpriced, so est is a floor.
         unattr_in = (getattr(usage, "input_tokens", 0) or 0) - attributed["in"]
         unattr_out = (getattr(usage, "output_tokens", 0) or 0) - attributed["out"]
         cached = getattr(in_details, "cached_tokens", 0) or 0
@@ -644,52 +514,31 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
             getattr(usage, "total_tokens", 0) or 0, cost, max(0.0, cost - saving),
         )
 
-    # --- Receive ---
-
     def _sync_receive_turn(self, conn: RealtimeConnection) -> bool:
-        """Read one full turn from `conn`, put outputs on _recv_queue.
+        """Read one full turn from the `conn` snapshot onto _recv_queue.
 
-        Iterates on the caller-supplied connection snapshot (not self._connection)
-        so a concurrent reconnect that swaps the connection can't be read mid-turn.
-
-        Returns True when the turn ended normally (a `response.done` was seen),
-        False when the event iteration ended WITHOUT one — i.e. a clean connection
-        close / session recycle. The caller uses this to decide whether to fail the
-        turn fast; returning the flag (instead of inspecting `_turn_done`) avoids a
-        race where a normal completion is mistaken for a mid-turn drop and a
-        spurious TurnDoneEvent ends the NEXT turn.
+        Returns True if `response.done` was seen, False on a clean close/recycle mid-turn.
         """
-        # A new receive turn is a new generation; a barge-in bumps it again.
         self._turn_gen = getattr(self, "_turn_gen", 0) + 1
         self._first_audio_received = False
-        # Ownership of THIS response: frozen at response.created (or at the
-        # first output if that was missed) so a transcription that arrives
-        # later can never re-attribute the reply to a newer input.
+        # Frozen at response.created so a later transcription can't re-own the reply.
         response_user_turn_id: str | None = None
         active_response_id: str | None = None
         cancelled_response_id: str | None = None
         execution_interrupted = False
-        # The assistant audio item being streamed and how much of it we have
-        # received, for the truncate on barge-in.
         active_item: tuple[str, int] | None = None
         received_ms = 0.0
         transcript_chunks = 0
 
         for event in conn:
-            # Liveness for the silent-turn watchdog: a turn busy reasoning or
-            # running a tool sends plenty we never queue (rate limits, item
-            # lifecycle, transcription) — see VoiceAgentBase.note_server_activity.
+            # Liveness for the silent-turn watchdog (see VoiceAgentBase.note_server_activity).
             self.note_server_activity()
             etype: str = getattr(event, "type", "")
 
             match etype:
-                # ---- user side -------------------------------------------
                 case "input_audio_buffer.speech_started":
                     if active_response_id is not None and not execution_interrupted:
-                        # Barge-in. With interrupt_response (API default) the
-                        # server cancels the response itself; the local queue
-                        # is ours to flush, right now, before the new input
-                        # takes over the live key.
+                        # Barge-in: the server cancels the response; flush the local queue now.
                         execution_interrupted = True
                         cancelled_response_id = active_response_id
                         owner = (response_user_turn_id if response_user_turn_id is not None
@@ -709,8 +558,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     self._observe_user_speech(endpoint_at=self._speech_ended_at)
 
                 case "input_audio_buffer.committed":
-                    # Manual turns have no speech_started; this is where the
-                    # user item id becomes known.
+                    # Manual turns have no speech_started; the user item id becomes known here.
                     item_id = getattr(event, "item_id", None)
                     items: dict[str, tuple[str, str]] = getattr(self, "_user_items", None) or {}
                     if item_id and item_id not in items:
@@ -735,7 +583,6 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         getattr(event, "error", None),
                     )
 
-                # ---- model side ------------------------------------------
                 case "response.created":
                     active_response_id = getattr(getattr(event, "response", None), "id", None) or ""
                     if response_user_turn_id is None:
@@ -770,8 +617,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     if response_user_turn_id is None:
                         response_user_turn_id = getattr(self, "_live_user_turn_id", "")
                     if not transcript_chunks:
-                        # First words of a reply: reset the live TTS queue so
-                        # this response never plays behind a stale one.
+                        # Reset the live TTS queue so this response never plays behind a stale one.
                         self._recv_queue.put(OutputEvent(
                             gen=getattr(self, "_turn_gen", 0),
                             output=InterruptedOutput(
@@ -791,9 +637,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     )
 
                 case "response.output_text.delta":
-                    # The session is audio-only (see _build_session), so this
-                    # should not fire; if it does, the audio transcript is the
-                    # source of truth and emitting both double-speaks the reply.
+                    # Audio-only session: emitting text too would double-speak the reply.
                     continue
 
                 case "response.function_call_arguments.done":
@@ -823,9 +667,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     logger.debug("[realtime] Response complete (status=%s)", status)
                     self._log_usage(response)
                     if status == "cancelled" and not execution_interrupted:
-                        # Cancelled without a speech_started of ours (a
-                        # client response.cancel, or semantic VAD deciding
-                        # mid-reply): flush and announce now.
+                        # Cancelled without our speech_started (client cancel or semantic VAD): flush now.
                         execution_interrupted = True
                         owner = (response_user_turn_id if response_user_turn_id is not None
                                  else getattr(self, "_live_user_turn_id", ""))
@@ -845,8 +687,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     if response_user_turn_id is None or (
                         getattr(self, "_live_user_turn_id", "") == response_user_turn_id
                     ):
-                        # This input has been answered; a later unsolicited
-                        # reply must not be attributed to it.
+                        # Answered: a later unsolicited reply must not be attributed to this input.
                         self._live_user_turn_id = ""
                         self._live_speech_emitted = False
                         self._user_transcript = ""
@@ -862,12 +703,9 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     raise OpenAIRealtimeError(f"Realtime API error: {err}")
 
                 case _:
-                    # session.*, rate_limits.updated, conversation.item.*,
-                    # response.output_item.*, response.content_part.*,
-                    # response.output_audio.done, ... — lifecycle only.
                     pass
 
-        # Iteration ended without a response.done — connection closed cleanly.
+        # Iteration ended without response.done: connection closed cleanly.
         return False
 
     def _log_first_audio_latency(self) -> None:
@@ -889,11 +727,8 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         self._speech_ended_at = None
         self._commit_sent_at = None
 
-    # --- Reconnect ---
-
     def _ensure_connected(self) -> None:
-        """Reconnect if not connected. Throttled by an exponential backoff that grows
-        on consecutive failures (reset to base on success)."""
+        """Reconnect if not connected, throttled by exponential backoff (reset on success)."""
         if self._stop_event.is_set():
             return
         if self._connected.is_set():
@@ -910,8 +745,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         with self._conn_lock:
             if self._stop_event.is_set():
                 return
-            # Another thread may have reconnected while we waited for the lock —
-            # don't tear a healthy connection back down.
+            # Another thread may have reconnected while we waited for the lock.
             if self._connected.is_set():
                 return
             self._turn_done.set()  # unblock any waiting commit
@@ -920,7 +754,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 self._sync_disconnect()
                 self._sync_connect()
                 self._connected.set()
-                self._reconnect_backoff = self._reconnect_delay_s  # success → reset
+                self._reconnect_backoff = self._reconnect_delay_s
             except Exception as e:
                 self._reconnect_backoff = min(
                     self._reconnect_backoff * 2, self._reconnect_backoff_max
@@ -931,18 +765,9 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                 )
 
     def _fail_fast_turn(self, reason: str) -> None:
-        """End the current turn immediately on a recv error.
+        """End the current turn immediately on a recv error so the main agent answers without dead air.
 
-        Without this, any backend failure (a Realtime API `error` event, a
-        dropped socket, an unexpected exception) leaves the consumer blocked in
-        receive() for the full REALTIME_RECV_QUEUE_TIMEOUT_S before the turn
-        falls back to the main agent. Pushing a TurnDoneEvent unblocks receive()
-        now so the main agent answers without the dead-air wait. A benign idle
-        close is not an error here — it ends the `for event in conn` iteration
-        cleanly — so only real errors reach this path. Only fires while a turn is
-        actually awaiting output (_turn_done clear); a stray sentinel between
-        turns would just be dropped by flush_output() at the next turn start.
-        Late output from a successful reconnect is likewise flushed next turn.
+        Only fires while a turn is awaiting output (_turn_done clear).
         """
         if self._turn_done.is_set():
             return  # no turn awaiting output — nothing to unblock
@@ -956,17 +781,11 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
         )
 
     def _drop_connection(self, conn: RealtimeConnection | None) -> None:
-        """Mark the connection dead — only if `conn` is still the current one.
-
-        Both loops call this on error; the identity check stops one thread from
-        nulling a connection the other thread just re-established.
-        """
+        """Mark the connection dead only if `conn` is still current (both loops call this)."""
         with self._conn_lock:
             if conn is None or self._connection is conn:
                 self._connected.clear()
                 self._connection = None
-
-    # --- VoiceAgentBase implementation ---
 
     @override
     def _do_connect(self) -> None:
@@ -997,7 +816,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                         self._sync_commit(event.queued_at)
                     elif isinstance(event, InputEvent) and event.input is not None:
                         self._sync_send_input(event.input)
-                    break  # Success
+                    break
                 except Exception as e:
                     if self._stop_event.is_set():
                         break
@@ -1008,10 +827,7 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
     def _recv_loop(self) -> None:
         while not self._stop_event.is_set():
             if not self._connected.is_set():
-                # Proactively reconnect (throttled) so the session self-heals while
-                # disconnected even with no audio flowing — without this, once
-                # voice_service stops feeding audio (available=False after a dropped
-                # session) nothing would ever trigger a reconnect. Mirrors gemini_live.
+                # Reconnect proactively so the session self-heals with no audio flowing.
                 self._ensure_connected()
                 if not self._connected.is_set():
                     self._connected.wait(timeout=self._queue_poll_s)
@@ -1032,15 +848,11 @@ class OpenAIRealtimeAgent(VoiceAgentBase):
                     completed: bool = self._sync_receive_turn(conn)
                     if self._stop_event.is_set():
                         break
-                    # `completed` is False when the event iteration ended WITHOUT a
-                    # response.done (a clean connection close / session recycle). If
-                    # that lands mid-turn the committed turn is lost, so end it now
-                    # instead of waiting out the receive timeout. Do NOT fail-fast on
-                    # a normal completion: that would race the next turn's commit and
-                    # could push a spurious TurnDoneEvent that ends turn N+1 empty.
+                    # Fail fast only when the turn ended without response.done; on a normal completion
+                    # it would race the next commit and end turn N+1 empty.
                     if not completed:
                         self._fail_fast_turn("connection closed mid-turn")
-                    break  # Success
+                    break
                 except OpenAIRealtimeError as e:
                     if self._stop_event.is_set():
                         break

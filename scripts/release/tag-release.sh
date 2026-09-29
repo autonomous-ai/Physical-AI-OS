@@ -1,11 +1,6 @@
 #!/usr/bin/env bash
-# Creates an annotated git tag whose message embeds the current OTA metadata
-# snapshot from CDN, then pushes to origin. Lets buyers map the version
-# string on the board ("os-server --version") back to a specific commit +
-# component version set in the public repo (GPL v3 §6 compliance).
-#
-# Usage:
-#   scripts/release/tag-release.sh v0.0.8
+# Create and push an annotated tag embedding the current OTA metadata snapshot (GPL v3 §6).
+# Usage: scripts/release/tag-release.sh v0.0.8
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"

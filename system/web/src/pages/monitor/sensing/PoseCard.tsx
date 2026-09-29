@@ -9,25 +9,16 @@ import type { Perception } from "./types";
 export function PoseCard({ pose }: { pose: Perception }) {
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   return <>
-      {/* Pose / Posture — tumbling time window rendered as a raw sample
-          table (newest first). See hal pose.py + motion.py: samples
-          accumulate until POSE_WINDOW_DURATION_S elapses, then motion.py
-          evaluates the aggregate, optionally folds a posture nudge into
-          motion.activity, and always resets the window. */}
       {pose ? (() => {
         const status = posePillStatus(pose);
-        const samples = [...(pose.samples ?? [])].reverse(); // newest first
-        // Prefer running over summary for mid-window visibility — summary
-        // is only populated for one tick at the cycle boundary, but the
-        // user wants to see "is this window going to fire?" the whole time.
+        const samples = [...(pose.samples ?? [])].reverse();
+        // Prefer running over summary: summary only exists for one tick at the window boundary.
         const live = pose.running ?? pose.summary;
         const threshold = pose.bad_ratio_threshold ?? 0.6;
         const minSamples = pose.window_min_samples ?? 3;
         const samplesNow = pose.samples_in_buffer ?? 0;
         const winDurMin = Math.round((pose.window_duration_s ?? 600) / 60);
         const winAgeMin = Math.round((pose.window_age_s ?? 0) / 60);
-        // "Would fire?" — gates the motion-side fold uses, ignoring the
-        // is_window_complete check so we can predict before the cycle ends.
         const wouldFire = !!(live && samplesNow >= minSamples && live.bad_ratio >= threshold);
         return (
           <div style={S.card}>
@@ -54,7 +45,6 @@ export function PoseCard({ pose }: { pose: Perception }) {
             {samples.length === 0 ? (
               <span style={{ color: "var(--lm-text-muted)", fontSize: 11 }}>No samples yet</span>
             ) : (() => {
-              // 11 columns: img, time, score, risk, neck, trunk, L u-arm, R u-arm, L l-arm, R l-arm, wrists
               const cols = "104px 92px 42px 56px 90px 90px 90px 90px 90px 90px 64px";
               const fmtCell = (sub: number | undefined, angle: number | undefined): string => {
                 if (sub == null) return "-";
@@ -78,11 +68,6 @@ export function PoseCard({ pose }: { pose: Perception }) {
                     const ss = String(d.getSeconds()).padStart(2, "0");
                     const L = s.left?.body_scores ?? {};
                     const R = s.right?.body_scores ?? {};
-                    // Thumbnail per row links to that sample's annotated JPEG.
-                    // HAL keeps the file under snapshots/<int(ts)>.jpg
-                    // until rotation prunes it (24h / 50MB caps), so older
-                    // rows gracefully 404 once they age out (onError hides).
-                    // loading="lazy" defers fetches that are offscreen.
                     const snapUrl = poseSnapshotUrl(s.ts);
                     return (
                       <div key={`${s.ts}-${idx}`} style={{ display: "grid", gridTemplateColumns: cols, gap: 6, whiteSpace: "nowrap", alignItems: "center", paddingTop: 2, paddingBottom: 2 }}>

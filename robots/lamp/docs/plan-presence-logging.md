@@ -67,11 +67,11 @@ No logic changes. Benefits indirectly from stable `current_user`.
 
 ## Next steps (when implementing)
 
-1. Read `hal/drivers/sensing/perceptions/motion.py` — locate the 5-min dedup boundary and the `motion.activity` fire point.
+1. Read `hal/drivers/sensing/perceptions/processors/motion.py` — locate the 5-min dedup boundary and the `motion.activity` fire point.
 2. Read `hal/drivers/sensing/perceptions/processors/faceid/perception.py` in detail — map out the full state machine for session_start + effective_user transitions.
 3. Draft patches and list diffs before applying. Confirm with user before editing.
 
 ## Related
 
 - Memory: `project_presence_injection_rules.md`
-- `docs/motion-activity-whitelist.md`, `docs/sensing-behavior.md` (may need small update)
+- `robots/lamp/docs/motion-activity-whitelist.md`, `robots/lamp/docs/sensing-behavior.md` (may need small update)

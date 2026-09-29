@@ -1,9 +1,4 @@
-"""Serialize live barge-in with pending reply enqueueing.
-
-Only provider-confirmed interruption cancels a reply; local energy detection
-ducks playback reversibly. Provider user-turn identities prevent late fragments
-from restarting a cancelled reply.
-"""
+"""Serialize live barge-in with pending reply enqueueing."""
 from collections import deque
 from threading import RLock
 

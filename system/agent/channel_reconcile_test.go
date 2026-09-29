@@ -45,7 +45,7 @@ func TestReconcileFirstObservationRecordsBaselineNoReapply(t *testing.T) {
 	gw := &fakeGateway{supported: []string{domain.ChannelTelegram, domain.ChannelSlack}}
 	cfg := &config.Config{
 		AgentRuntime:           "hermes",
-		ChannelsAppliedRuntime: "", // never set → first observation (upgrade boot)
+		ChannelsAppliedRuntime: "",
 		TelegramBotToken:       "t",
 		SlackBotToken:          "s",
 	}
@@ -62,11 +62,10 @@ func TestReconcileFirstObservationRecordsBaselineNoReapply(t *testing.T) {
 func TestReconcileReappliesSupportedAndCollectsUnsupported(t *testing.T) {
 	t.Chdir(t.TempDir()) // WithLockSave writes config/config.json relative to cwd
 
-	// Gateway supports telegram+slack but NOT discord — exercises both paths.
 	gw := &fakeGateway{supported: []string{domain.ChannelTelegram, domain.ChannelSlack}}
 	cfg := &config.Config{
 		AgentRuntime:           "hermes",
-		ChannelsAppliedRuntime: "openclaw", // changed → reconcile fires
+		ChannelsAppliedRuntime: "openclaw",
 		TelegramBotToken:       "t",
 		SlackBotToken:          "s",
 		DiscordBotToken:        "d",
@@ -88,7 +87,6 @@ func TestReconcileReappliesSupportedAndCollectsUnsupported(t *testing.T) {
 		t.Errorf("marker = %q, want advanced to hermes", cfg.ChannelsAppliedRuntime)
 	}
 
-	// Second run is a no-op now that the marker matches.
 	before := len(gw.addCalls)
 	r.Reconcile()
 	if len(gw.addCalls) != before {

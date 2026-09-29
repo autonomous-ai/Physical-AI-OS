@@ -1,32 +1,4 @@
-"""Passive learning of where the user usually is.
-
-The remembered bearing used to learn only from `look` questions that happened to
-end near-perfectly centred: two samples in a full day of device testing, against
-a six-hour confidence half-life. It decayed faster than it learned, so the one
-thing that could rescue a look when nobody is visible was never confident enough
-to be consulted.
-
-This watches, on a slow cadence, for a person close enough to plausibly be the
-user and folds that sighting in. It never moves the lamp — it only reads the
-camera and the servo positions, so it cannot interrupt anything.
-
-Two accuracy rules, both about not teaching the lamp something false:
-
-  * The bearing tolerates a horizontal offset, recovered as `yaw + dx x scale`,
-    but only a bounded one — that correction leans on the very FOV constant the
-    aim was rewritten to stop trusting.
-  * Only a FACE is learned from, never a `person` box. A body fills the frame
-    whenever the camera is aimed low, so learning from one memorises the pose
-    that was pointing at the desk and calls it "where the user is". A face in
-    frame proves the opposite by construction: this posture sees a head, so
-    restoring it will see one again.
-
-The POSTURE is recorded wherever in frame the face sat. The vertical gate that
-once guarded it was written for person boxes, where a centred torso said nothing
-about whether the head was in frame; keeping it for faces was self-defeating,
-because while the camera is aimed low every face sits near the top edge, so
-every sighting failed the gate and nothing was ever stored to restore.
-"""
+"""Passive learning of where the user usually is."""
 
 from __future__ import annotations
 
@@ -87,7 +59,6 @@ def _save_snapshot(frame: Any, box: Any, label: str) -> Optional[str]:
             return None
         directory = _snapshot_dir()
         os.makedirs(directory, exist_ok=True)
-        # Sorts chronologically, which is what _prune relies on.
         name = time.strftime("%Y%m%d-%H%M%S") + ".jpg"
         path = os.path.join(directory, name)
         with open(path, "wb") as f:
@@ -111,8 +82,6 @@ def _sample_once() -> bool:
     svc = getattr(state, "animation_service", None)
     if cap is None or svc is None:
         return False
-    # The body is busy aiming or tracking; its pose is mid-flight and means
-    # nothing, and the detector is in use.
     if getattr(svc, "_tracking_active", False):
         return False
 
@@ -131,14 +100,8 @@ def _sample_once() -> bool:
         box = None
         kind = ""
         conf = None
-        rejected = None  # kept only so the snapshot can show what was dismissed
-        # FACE only, never `person`. A person box says where a body is, and a
-        # body fills the frame whenever the camera is aimed low — so learning
-        # from it memorises the pose that was pointing at the desk and calls it
-        # "where the user is". Device-observed: 22 samples, confidence 0.99, and
-        # a stored posture with wrist_pitch -78 that could not see a face at all.
-        # A face in frame proves the opposite by construction: this pose sees a
-        # head, so restoring it will see one again.
+        rejected = None
+        # FACE only, never `person`.
         for target in ("face",):
             try:
                 found = detector.detect(
@@ -185,28 +148,11 @@ def _sample_once() -> bool:
         return False
 
     bearing = yaw + dx_frac * float(config.LOOK_AIM_FOV_DEG)
-    # Posture is recorded whenever a FACE was the thing seen, wherever it sat in
-    # frame. The vertical gate that used to stand here was written for `person`
-    # boxes, where a centred torso said nothing about whether the head was in
-    # frame — a posture learned from one could be aimed at a chest. A face
-    # carries its own proof: this posture sees a head.
-    #
-    # Keeping the gate for faces was self-defeating. While the camera is aimed
-    # low every face sits near the top edge, so every sighting failed the gate,
-    # so no posture was ever stored, so there was nothing to restore and the
-    # camera stayed low — device-observed dy of -15.8% then -41.2%, two
-    # sightings, `joints=1`, a remembered "pose" containing only a yaw. A
-    # posture that catches the user at the frame edge is imperfect; it is also
-    # incomparably better than one pointing at the desk, and the estimate's EMA
-    # walks it toward centre as the framing it enables improves.
     pose = dict(positions)
     pose["base_yaw.pos"] = bearing
 
     recorded = user_bearing.record_sighting(bearing, pose=pose)
     if recorded:
-        # dy rides along in the caption because how far off centre the face sat
-        # is what tells a reader whether this posture is a good one — the log
-        # line below already carries it, the picture did not.
         _save_snapshot(
             frame, box,
             f"recorded {kind}{_conf_txt(conf)} dx={dx_frac * 100:+.1f}% "
@@ -217,15 +163,12 @@ def _sample_once() -> bool:
             kind, dx_frac * 100.0, dy_frac * 100.0, bearing,
         )
         return True
-    # Rejected by the estimate's own rate limit — still worth a picture.
     _save_snapshot(frame, box, f"not folded in (too soon) {kind} dx={dx_frac * 100:+.1f}%")
     return False
 
 
 def _loop() -> None:
     interval = max(30.0, float(config.BEARING_SAMPLE_INTERVAL_S))
-    # Offset the first sample so it does not land in the middle of start-up,
-    # when the camera and detector are still warming.
     if _stop.wait(min(60.0, interval)):
         return
     while not _stop.is_set():
@@ -238,17 +181,7 @@ def _loop() -> None:
 
 
 def sample_now() -> bool:
-    """Take a sighting immediately, instead of waiting for the next tick.
-
-    For callers who have just made the arm point at somebody and would otherwise
-    throw that away — a search that stopped on a subject knows WHERE it stopped,
-    but not whether they are centred, and record_sighting cannot be given an
-    off-centre yaw without silently biasing the estimate. So the honest move is
-    to let the sampler look for itself: it already checks framing, privacy and
-    whether the body is free.
-
-    Returns whether a sighting was actually recorded.
-    """
+    """Take a sighting immediately, instead of waiting for the next tick."""
     try:
         return _sample_once()
     except Exception as e:

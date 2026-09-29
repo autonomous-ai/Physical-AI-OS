@@ -1,11 +1,4 @@
-"""Tests for the media-owner selector: ROBOT.md `owner:` → handover class.
-
-Pure logic, no hardware and no daemon. Mirrors test_motion_factory.py: the
-registry contract, the resolve rules, and a conformance check that the Pollen
-implementation satisfies the MediaOwner protocol without importing it (the
-module pulls in `requests`, which is fine, but the point is to assert shape from
-source rather than by constructing anything that talks to a robot).
-"""
+"""Tests for the media-owner selector: ROBOT.md `owner:` → handover class."""
 import ast
 import os
 import unittest
@@ -18,18 +11,14 @@ HAL = os.path.normpath(os.path.join(HERE, ".."))
 
 class TestResolve(unittest.TestCase):
     def test_absent_owner_resolves_to_none(self):
-        # The normal case: HAL opens the hardware itself, nothing to borrow.
         self.assertIsNone(resolve_media_owner(None))
 
     def test_unknown_owner_fails_loud(self):
-        # No required/optional split here, unlike the driver factories: an owner
-        # that does not exist cannot hand anything over, and continuing means
-        # opening hardware someone else holds — a "device busy" far from cause.
         with self.assertRaises(RuntimeError) as ctx:
             resolve_media_owner("nonexistent_daemon")
         msg = str(ctx.exception)
         self.assertIn("nonexistent_daemon", msg)
-        self.assertIn("pollen_daemon", msg)  # names the registered set
+        self.assertIn("pollen_daemon", msg)
 
     def test_pollen_daemon_is_registered(self):
         self.assertIn("pollen_daemon", MEDIA_OWNERS)
@@ -50,12 +39,7 @@ class TestResolve(unittest.TestCase):
 
 class TestProtocolConformance(unittest.TestCase):
     def test_pollen_implements_media_owner_surface(self):
-        """Every registered owner defines the full MediaOwner surface.
-
-        Read from source: a missing method would otherwise only surface at
-        shutdown on a real robot, where the cost is the daemon never getting
-        its camera and microphone back.
-        """
+        """Every registered owner defines the full MediaOwner surface."""
         required = {"release", "acquire"}
         for name, (module_path, class_name) in MEDIA_OWNERS.items():
             path = os.path.join(HAL, *module_path.split(".")[1:]) + ".py"

@@ -13,9 +13,7 @@ import (
 	"claude-desktop-buddy/httpapi"
 )
 
-// compactPreview returns the first max bytes of data, replacing control
-// characters and the trailing newline with spaces so the snippet renders
-// cleanly inside a journal log line.
+// compactPreview returns the first max bytes of data with control characters replaced by spaces.
 func compactPreview(data []byte, max int) string {
 	if len(data) > max {
 		data = data[:max]
@@ -39,25 +37,15 @@ type Config struct {
 	HALURL             string `json:"hal_url"`
 	DeviceURL          string `json:"device_url"`
 	ApprovalTimeoutSec int    `json:"approval_timeout_sec"`
-	// NarrationLang picks the language used by the Narrator (UC-9
-	// activity status announcements). Supported values live in
-	// narrationStrings (i18n.go); unsupported values fall back to
-	// English at runtime via supportedLang().
+	// NarrationLang selects the narrator language; unsupported values fall back to English.
 	NarrationLang string `json:"narration_lang"`
-	// CodeApprovalTTLSec bounds how long a Claude Code reverse-approval request
-	// blocks (long-poll) before falling back to "timeout" so the hook defers to
-	// Claude Code's native dialog. Should stay under the plugin hook's own
-	// timeout (60s) so the server answers first.
+	// CodeApprovalTTLSec bounds a Claude Code approval long-poll; keep it under the hook's 60s timeout.
 	CodeApprovalTTLSec int `json:"code_approval_ttl_sec"`
-	// OSConfigPath points at the OS server's config.json, the source of truth
-	// for the admin password (admin_password_hash) used to gate the LAN-facing
-	// HTTP endpoints. Defaults to a config.json sibling of buddy.json.
+	// OSConfigPath is the OS server config.json holding the admin password hash; defaults to a sibling of buddy.json.
 	OSConfigPath string `json:"os_config_path"`
 }
 
-// Run loads config and starts the daemon: BlueZ agent, bridge, narrator, state
-// machine, BLE server, the transient-state ticker, and the HTTP API. It blocks
-// for the life of the process. Logging is set up by the entrypoint (main.go).
+// Run loads config, starts the daemon (BlueZ agent, BLE, state machine, narrator, HTTP API) and blocks.
 func Run(configPath string) {
 	cfg := loadConfig(configPath)
 	if !cfg.Enabled {
@@ -67,9 +55,7 @@ func Run(configPath string) {
 
 	cfg.DeviceName = resolveDeviceName(cfg.DeviceName, cfg.DeviceURL)
 
-	// Register a BlueZ agent so LE Secure Connections pairing can complete.
-	// Without an agent, BlueZ rejects pairing requests and Claude Desktop's
-	// Hardware Buddy picker won't see (or won't connect to) the device.
+	// BlueZ rejects pairing without a registered agent.
 	if err := registerBluezAgent(); err != nil {
 		log.Printf("[buddy] WARN: register agent failed: %v (pairing will likely fail)", err)
 	}
@@ -77,55 +63,34 @@ func Run(configPath string) {
 	bridge := NewBridge(cfg.HALURL, cfg.DeviceURL)
 	startTime := time.Now()
 
-	// Narrator (UC-9): short TTS announcements on state changes and
-	// per-tool-use blocks. Shares the device's TTS endpoint with the rest
-	// of the voice pipeline so the device's own mute / music-busy logic
-	// applies.
 	narrator := NewNarrator(cfg.NarrationLang, bridge.speakTTS)
-	// Warm the TTS cache once the device has had a chance to come up.
-	// Fire-and-forget; prerender requests are queued by the device and any
-	// 503 / 409 responses are ignored so we don't block startup.
 	go func() {
 		time.Sleep(8 * time.Second)
 		narrator.Warmup(bridge.prerenderTTS)
 		log.Println("[narrator] prerender warmup dispatched")
 	}()
 
-	// State machine with bridge callback. We wrap bridge.OnStateChange
-	// so narration triggers fire alongside LED/display reactions
-	// without making bridge.go aware of the narrator.
-	// Restore lifetime approval / denial counters so /status reports
-	// the right numbers right after a restart.
 	persisted := LoadStats()
 
 	sm := NewStateMachine(func(old, next BuddyState, hb *Heartbeat) {
 		bridge.OnStateChange(old, next, hb)
 		switch {
 		case old == StateSleep && next != StateSleep:
-			// Fresh BLE session — announce connect and reset turn dedupe
-			// so the first activity gets full narration.
 			narrator.StartTurn()
 			narrator.Say(NarrateConnected)
 		case old != StateSleep && next == StateSleep:
 			narrator.Say(NarrateDisconnected)
 		case old != StateBusy && next == StateBusy:
-			// Fresh activity window — reset per-turn dedupe so tool /
-			// thinking narrations can fire again, then announce.
 			narrator.StartTurn()
 			narrator.Say(NarrateBusyStart)
 		case old == StateBusy && next == StateIdle:
 			narrator.Say(NarrateDone)
-			// Done = quick celebratory emotion. The device coordinates the
-			// servo + LED together via /emotion so the device visibly
-			// "exhales" between turns.
 			bridge.expressEmotion("happy", 0.7)
 		}
 	})
 	sm.SeedStats(persisted.Approved, persisted.Denied)
 
-	// BLE server — assign to package-level `ble` so the onMessage closure
-	// captures the same variable the closure body dereferences. Using `:=`
-	// here would shadow the package var and leave the closure seeing nil.
+	// Assign the package-level ble (not :=) so the onMessage closure doesn't see nil.
 	ble = NewBLEServer(cfg.DeviceName, func(data []byte) {
 		handleBLEMessage(data, sm, ble, bridge, narrator, cfg.DeviceName, startTime)
 	}, func(connected bool) {
@@ -135,7 +100,6 @@ func Run(configPath string) {
 		}
 	})
 
-	// Transient state expiry ticker
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
@@ -144,12 +108,6 @@ func Run(configPath string) {
 		}
 	}()
 
-	// Composition root: wire the concrete use case + adapters into the httpapi
-	// delivery layer. Each is defined in its own file by role (status_provider,
-	// approval_service, activity_sink).
-	// Claude Code reverse approval: the plugin's permission hook long-polls the
-	// daemon, which cues the device (LED + sensing event) so the agent asks the
-	// user, then relays the voice yes/no back as the hook's return value.
 	codeApprovals := NewCodeApprovals(bridge, time.Duration(cfg.CodeApprovalTTLSec)*time.Second)
 
 	httpSrv := httpapi.New(
@@ -166,7 +124,6 @@ func Run(configPath string) {
 		}
 	}()
 
-	// Start BLE (blocking — advertising loop)
 	log.Printf("[buddy] starting Claude Desktop Buddy plugin (%s)", cfg.DeviceName)
 	log.Printf("[buddy] HAL: %s, Device: %s, HTTP: :%d", cfg.HALURL, cfg.DeviceURL, cfg.HTTPPort)
 
@@ -174,15 +131,12 @@ func Run(configPath string) {
 		log.Fatalf("[buddy] BLE start error: %v", err)
 	}
 
-	// Mark as connected once BLE is advertising
-	// Actual connection detection happens via heartbeat receipt
 	log.Println("[buddy] BLE advertising started, waiting for Claude Desktop connection...")
 
-	// Keep main goroutine alive
 	select {}
 }
 
-// ble is declared as package var so handleBLEMessage can reference it via closure
+// ble is package-level so handleBLEMessage can reach it from the closure.
 var ble *BLEServer
 
 // xfer holds the single active folder-push transfer from Claude Desktop.
@@ -191,18 +145,7 @@ var xfer Transfer
 func handleBLEMessage(data []byte, sm *StateMachine, bleSrv *BLEServer, bridge *Bridge, narrator *Narrator, deviceName string, startTime time.Time) {
 	msg, lost, err := ParseOrSalvage(data)
 	if err != nil {
-		// BLE write-without-response has no ACK, so BlueZ silently drops
-		// packets under load. Three failure modes show up here, all
-		// unrecoverable, all worth tagging so the journal hints at why:
-		//   - prefix-lost: the line doesn't start with '{', so the original
-		//     payload's head is gone. Salvage already tried known openers
-		//     and failed.
-		//   - truncated: starts with '{' but doesn't end with '}'. Tail of
-		//     the line dropped, brackets never closed.
-		//   - mid-corruption: brackets line up but a chunk inside an
-		//     `entries` / `content` array got dropped, so unmarshal
-		//     trips on a stray character mid-payload.
-		// Abort any in-progress char transfer because we lost framing.
+		// Write-without-response drops packets; framing is lost, so abort any char transfer.
 		preview := compactPreview(data, 80)
 		category := "mid-corruption"
 		switch {
@@ -216,27 +159,18 @@ func handleBLEMessage(data []byte, sm *StateMachine, bleSrv *BLEServer, bridge *
 		return
 	}
 	if lost > 0 {
-		// Claude Desktop writes BLE chunks via Write-Without-Response, which
-		// has no ATT_CONFIRM, so BlueZ silently drops packets under load. When
-		// that happens we salvage the tail of the line. The dropped bytes are
-		// gone — affected file transfers will be incomplete but the session
-		// stays alive for the remaining chunks.
+		// Write-without-response drops packets under load; salvage the line tail and keep the session alive.
 		log.Printf("[ble] WARN: dropped %d corrupted prefix bytes (BLE packet loss)", lost)
 		xfer.Abort()
 	}
 
 	switch m := msg.(type) {
 	case *Heartbeat:
-		// First heartbeat means Desktop is connected
 		if !sm.Connected() {
 			sm.SetConnected(true)
 			log.Println("[ble] Claude Desktop connected")
 		}
-		// Claude Desktop pings ~every second while a task runs; logging
-		// each one floods the journal. Only emit when something the
-		// operator actually cares about changed (running count, msg
-		// text, waiting count, or prompt arrival/clear). Token counts
-		// drift on every ping and are intentionally excluded.
+		// Desktop pings ~1/s; only log when a meaningful field changes.
 		if prev := sm.LastHeartbeat(); heartbeatChanged(prev, m) {
 			log.Printf("[ble] heartbeat total=%d running=%d waiting=%d tokens=%d today=%d msg=%q entries=%d prompt=%v",
 				m.Total, m.Running, m.Waiting, m.Tokens, m.TokensToday, m.Msg, len(m.Entries), m.Prompt != nil)
@@ -245,19 +179,10 @@ func handleBLEMessage(data []byte, sm *StateMachine, bleSrv *BLEServer, bridge *
 
 	case *TimeSync:
 		log.Printf("[ble] time sync: epoch=%d, offset=%d", m.Time[0], m.Time[1])
-		// Ack not required for time sync (no cmd field)
 
 	case *Event:
-		// Stream of chat turns and other events from Claude Desktop.
-		// Log the full content (no truncation) so downstream consumers
-		// reading the journal — and us during integration work — see
-		// everything Claude Desktop sent.
 		log.Printf("[ble] event evt=%q role=%q content=%q", m.Evt, m.Role, m.TurnText())
-		// Fan out to the OS server so use cases (TTS, display, etc.) can subscribe.
 		bridge.OnEvent(m)
-		// UC-9 narration: a new user turn resets per-turn throttle;
-		// assistant turns are inspected block-by-block so tool_use and
-		// thinking blocks become short TTS announcements.
 		if m.Evt == "turn" {
 			switch m.Role {
 			case "user":
@@ -273,7 +198,6 @@ func handleBLEMessage(data []byte, sm *StateMachine, bleSrv *BLEServer, bridge *
 				}
 			}
 		}
-		// No ack required (no cmd field).
 
 	case *Command:
 		log.Printf("[ble] command: %s", m.Cmd)
@@ -302,7 +226,6 @@ func handleBLEMessage(data []byte, sm *StateMachine, bleSrv *BLEServer, bridge *
 			}
 			sm.SetConnected(false)
 
-		// Folder-push streaming protocol — persist to disk under CharsRoot.
 		case "char_begin":
 			ok := true
 			if err := xfer.Begin(m.Name, m.Total); err != nil {
@@ -378,29 +301,14 @@ func loadConfig(path string) Config {
 		log.Printf("[buddy] loaded config from %s", path)
 	}
 
-	// Default the OS config path to a config.json sibling of buddy.json so a
-	// standard install (/root/config/{buddy,config}.json) needs no extra key.
 	if cfg.OSConfigPath == "" {
 		cfg.OSConfigPath = filepath.Join(filepath.Dir(path), "config.json")
 	}
 	return cfg
 }
 
-// resolveDeviceName expands the {MAC} placeholder in name by fetching the
-// hardware MAC suffix from the OS server's /api/system/network. Buddy may start before
-// the OS server is ready, so we retry transport errors for a short window. Names
-// without the placeholder pass through untouched.
-//
-// MAC suffix is preferred over device_id because it's hardware-derived
-// (last 4 chars of Pi serial, or eth0 MAC on non-Pi boards) and available
-// before /device/setup runs, whereas DeviceID is empty pre-provisioning.
-// Matching the mDNS hostname (`<device_type>-xxxx.local`) also makes the BLE name
-// recognisable to users who already know their device by its .local name.
-//
-// The suffix is truncated to 4 chars so the resolved name fits in the
-// 31-byte primary BLE advertisement alongside the 128-bit Nordic UART
-// service UUID. With a long name the system pushes it to the scan
-// response, which some scanners only fetch via active scan and may miss.
+// resolveDeviceName expands the {MAC} placeholder in name using the OS server's MAC suffix, retrying while it starts.
+// The suffix is 4 chars so the name fits the 31-byte advertisement alongside the 128-bit service UUID.
 func resolveDeviceName(name, deviceURL string) string {
 	if name == "" {
 		name = "Claude-{MAC}"
@@ -428,12 +336,7 @@ func resolveDeviceName(name, deviceURL string) string {
 	return strings.ReplaceAll(name, "{MAC}", short)
 }
 
-// shortMAC returns a compact lowercase form of the device id suitable for the
-// BLE local name: `<device_type>-<4hex>` (e.g. "Lamp-A1B2" → "lamp-a1b2",
-// "intern-3C4D" → "intern-3c4d"). The hardware suffix is truncated to 4 chars
-// so the name stays short for the BLE advertisement; the device-type prefix is
-// kept so the name is brand-free and matches the mDNS hostname
-// (`<device_type>-xxxx.local`).
+// shortMAC returns the lowercase `<device_type>-<4hex>` BLE name, e.g. "Lamp-A1B2" -> "lamp-a1b2".
 func shortMAC(mac string) string {
 	if mac == "" {
 		return "unk"
@@ -454,11 +357,7 @@ func shortMAC(mac string) string {
 
 const fetchAttempts = 15
 
-// fetchMAC returns (mac, reason). reason is one of:
-//
-//	"" on success, "empty" if the OS server answered with an empty mac (hardware
-//	serial/MAC unreadable), or a transport-level failure summary if all
-//	retries failed.
+// fetchMAC returns the MAC suffix, or a reason ("empty" or a transport error summary) on failure.
 func fetchMAC(deviceURL string) (string, string) {
 	client := &http.Client{Timeout: 3 * time.Second}
 	url := deviceURL + "/api/system/network"
@@ -480,9 +379,7 @@ func fetchMAC(deviceURL string) (string, string) {
 	return "", lastErr
 }
 
-// tryFetchMAC returns (mac, ok, errStr). ok=true means the OS server answered with
-// a parseable response (mac may still be empty if hardware ID is unset).
-// ok=false means transport/decode failure — caller should retry.
+// tryFetchMAC fetches the MAC once; ok=false means a transport/decode failure worth retrying.
 func tryFetchMAC(client *http.Client, url string) (string, bool, string) {
 	resp, err := client.Get(url)
 	if err != nil {
@@ -503,11 +400,7 @@ func tryFetchMAC(client *http.Client, url string) (string, bool, string) {
 	return wrap.Data.MAC, true, ""
 }
 
-// heartbeatChanged reports whether enough fields differ between the
-// previous and current Heartbeat to warrant a new journal entry. We
-// deliberately ignore Tokens / TokensToday because they tick on every
-// ping; the operator cares about running count, status text, waiting
-// queue, and whether a permission prompt arrived or cleared.
+// heartbeatChanged reports whether a heartbeat differs enough to log; token counts are ignored.
 func heartbeatChanged(prev, curr *Heartbeat) bool {
 	if prev == nil {
 		return true

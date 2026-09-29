@@ -5,14 +5,7 @@ import { X, ArrowLeft } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 
-// Shared popup shell for the Skills modals. Same visual language as the
-// face-owners modals (amber-tinted header wash, lm-pop entrance, portal to
-// <body> with the `lm-root ${themeClass}` re-scope so --lm-* tokens resolve).
-// Pulled out here so the three Skills surfaces stay one screen of JSX each.
-
-// Mount order of the shells currently on screen, innermost last. Module-level
-// because the shells are portalled siblings that never see each other through
-// React context.
+// Mount order of on-screen shells, innermost last (portalled siblings share no context).
 const shellStack: symbol[] = [];
 
 export function ModalShell({
@@ -25,24 +18,18 @@ export function ModalShell({
   /** Max width in px — the shell always shrinks to fit narrow viewports. */
   width?: number;
   onClose: () => void;
-  /** When set, a back arrow appears left of the icon and Escape goes back
-   *  instead of closing — so a drill-down doesn't dump the whole modal. */
+  /** When set, a back arrow appears left of the icon and Escape goes back instead of closing — so a drill-down doesn't dump the whole modal. */
   onBack?: () => void;
   children: ReactNode;
   footer?: ReactNode;
   /** 0 lets the body own its own padding (e.g. a full-bleed split pane). */
   bodyPadding?: number;
-  /** Rendered in the header immediately LEFT of the close button. Anything
-   *  anchored here must open DOWNWARD: the dialog clips to its own rounded box
-   *  (overflow: hidden), so a menu opening upward would be cut off. */
+  /** Rendered left of the close button; menus here must open downward (the dialog clips). */
   headerActions?: ReactNode;
 }) {
   const [, , themeClass] = useTheme();
 
-  // Register in the shell stack for the whole mounted lifetime. Deliberately
-  // separate from the key handler below and keyed on nothing: re-running it when
-  // an onClose identity changes would re-push this shell above a child that is
-  // actually on top.
+  // Register once for the mounted lifetime; re-running would reorder the stack.
   const idRef = useRef<symbol | null>(null);
   if (idRef.current === null) idRef.current = Symbol("modal-shell");
   useEffect(() => {
@@ -54,10 +41,7 @@ export function ModalShell({
     };
   }, []);
 
-  // Escape closes (or steps back). Bound on the document so it works regardless
-  // of what inside the modal has focus — but only for the TOP-MOST shell, or one
-  // keypress would dismiss a stack (Manage skills hosts Write/Upload on top of
-  // itself) instead of just its front layer.
+  // Escape is handled only by the top-most shell.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key !== "Escape") return;
@@ -112,8 +96,6 @@ export function ModalShell({
                 }}
               ><ArrowLeft size={14} /></button>
             )}
-            {/* alignSelf, not alignItems on the row: the back button beside it
-                should stay vertically centred. */}
             <Icon size={16} style={{ color: "var(--lm-amber)", flexShrink: 0, alignSelf: "flex-start", marginTop: 3 }} />
             <div style={{ minWidth: 0 }}>
               <div style={{ fontSize: 14.5, fontWeight: 600, color: "var(--lm-text)" }}>{title}</div>

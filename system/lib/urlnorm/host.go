@@ -9,11 +9,8 @@ import (
 // (*.autonomous.ai in production, *.autonomousdev.xyz in staging).
 var autonomousHosts = []string{"autonomous.ai", "autonomousdev.xyz"}
 
-// IsAutonomousHost reports whether baseURL points at an Autonomous-operated
-// host. Strict by design: empty, unparseable or host-less input is false, so a
-// caller about to send device data there never does it on a guess. (openclaw's
-// BYO check, isAutonomousEndpoint, answers true for those instead — its safe
-// default is "keep the hosted path", the opposite question.)
+// IsAutonomousHost reports whether baseURL points at an Autonomous-operated host.
+// Strict: empty, unparseable or host-less input is false.
 func IsAutonomousHost(baseURL string) bool {
 	u, err := url.Parse(strings.TrimSpace(baseURL))
 	if err != nil || u.Host == "" {

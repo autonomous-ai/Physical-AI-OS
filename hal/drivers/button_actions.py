@@ -1,15 +1,4 @@
-"""Shared button/touch actions.
-
-Reused by any input device that maps to the same three gestures:
-- single_click_action(): stop object tracking and speaker / unmute mic + speaker + announce listening
-- triple_click_action(): map a resolved click gesture to reboot_action()
-- hold_release_action(): map a resolved hold duration to sleep / shutdown / factory reset
-
-Callers (GPIO button, touchpad, future remotes) only need to detect the
-gesture and invoke the matching function — the destructive sequencing
-(TTS announce → servo park → shutdown/reboot) lives here so every input
-path gets the same safe behavior.
-"""
+"""Shared button/touch actions."""
 
 import logging
 import random
@@ -40,25 +29,10 @@ from hal.drivers.button_gestures import (
 
 logger = logging.getLogger(__name__)
 
-# OS server sensing endpoint. Head-pat notify is fire-and-forget — the
-# OS server appends a NO_REPLY hint so the agent records the event in
-# conversation history without speaking back.
 OS_SENSING_URL = "http://127.0.0.1:5000/api/sensing/event"
 
-# OS server speech-cancel endpoint. stop_tts() only silences what HAL already
-# holds (the sentence playing plus the pre-synthesised queue); the OS server
-# keeps handing over the sentences of every turn still in flight, so without
-# this call the device goes quiet for one sentence and then talks on. The OS
-# server marks those turns as no-longer-allowed-to-speak — they keep running,
-# they just lose the speaker. Turns started AFTER the click are unaffected, so
-# the user can click and immediately say something new.
 OS_SPEECH_CANCEL_URL = "http://127.0.0.1:5000/api/agent/speech/cancel"
 
-# Agent-notify batching for petting. Every notify is a full LLM turn on the
-# OS server side (the NO_REPLY hint suppresses speech, not the turn), and the
-# local phrase playback alone would allow one notify every ~2-4s during a
-# sustained petting session. One turn per window carries the same
-# information; extra pats ride along as a count on the next notify.
 HEAD_PAT_NOTIFY_WINDOW_S = 60.0
 _head_pat_lock = threading.Lock()
 _head_pat_last_notify_ts: float = 0.0
@@ -66,17 +40,9 @@ _head_pat_suppressed: int = 0
 
 
 def _notify_head_pat(spoken: str):
-    """Tell the OS server that the device was just stroked. Called from the
-    head-pat TTS thread *after* speak_cached actually played a phrase.
-    TTS-busy strokes are dropped silently and never notify, which is the
-    right behaviour: the agent only learns about petting moments the user
-    actually heard a response to. At most one notify per
-    HEAD_PAT_NOTIFY_WINDOW_S — pats in between are batched into a count.
-
-    `spoken` is the exact phrase the agent just said (incl. eleven_v3 audio
-    tags like [laughs] / [whispers]) so the agent can read its own tone
-    and weave it into memory — "I laughed and said tickles" lands
-    differently than "I sighed and asked them to stop"."""
+    """Tell the OS server that the device was just stroked. Called from the head-pat TTS
+    thread *after* speak_cached actually played a phrase.
+    """
     global _head_pat_last_notify_ts, _head_pat_suppressed
     with _head_pat_lock:
         now = time.monotonic()
@@ -102,13 +68,11 @@ def _notify_head_pat(spoken: str):
 def _cancel_agent_speech(source: str):
     """Tell the OS server to stop speaking for every turn currently in flight.
 
-    Fire-and-forget on its own thread: the click's felt latency is the whole
-    point of the gesture (see the sca-trace timings below), and a stalled OS
-    server must not delay the local stop. The local stop_tts() runs anyway, so
-    a lost call degrades to "quiet for one sentence" rather than to nothing."""
+    Fire-and-forget on its own thread: the click's felt latency is the whole point of
+    the gesture (see the sca-trace timings below), and a stalled OS server must not
+    delay the local stop.
+    """
 
-    # Voice metrics: the explicit stop boundary (different semantics from the
-    # automatic supersession one — see hal/telemetry/voice_metrics.py).
     try:
         from hal.telemetry import voice_metrics
 
@@ -134,9 +98,7 @@ def _current_lang() -> str:
 
 
 def _phrase(key: str) -> str:
-    """Return the localized phrase for `key` based on the device's stt_language.
-    Falls back to DEFAULT_LANG when the config can't be read or the
-    language is empty/unknown."""
+    """Return the localized phrase for `key` based on the device's stt_language."""
     pool = PHRASES_BY_LANG.get(key, {})
     return pool.get(_current_lang()) or pool.get(DEFAULT_LANG, "")
 
@@ -153,15 +115,10 @@ def _random_head_pat_phrase() -> str:
 
 
 def _announce_listening(capture_state=None):
-    """Speak the localized listening cue, preempting any in-flight TTS.
-    speak_cached() uses a non-blocking acquire — if the service is busy
-    and the current speech wasn't marked interruptible, the cue is
-    silently dropped. stop() flips stop_event but only the playback loop
-    checks it; if the previous speech is in the render phase (live TTS
-    round-trip, 2-5s), the lock won't free until render + short play
-    break finish. Retry with backoff so the cue lands as soon as the
-    lock releases. ~6s total cap covers a worst-case fresh render before
-    giving up silently."""
+    """Speak the localized listening cue, preempting any in-flight TTS. speak_cached() uses
+    a non-blocking acquire — if the service is busy and the current speech wasn't marked
+    interruptible, the cue is silently dropped.
+    """
     text = _phrase(PHRASE_LISTENING)
     if capture_state is None:
         capture_state = getattr(state.tts_service, "input_capture_state", (False, 0))
@@ -174,11 +131,9 @@ def _announce_listening(capture_state=None):
             return
     else:
         state.tts_service.stop()
-    # First attempt is immediate: when TTS is idle (the common case — mic
-    # unmute path) the cue plays with zero added delay. Backoff only kicks
-    # in when the lock is still held by winding-down playback.
-    # interruptible=True so any follow-up speech (agent reply, gesture
-    # announce) preempts a stale cue instead of being busy-skipped.
+    # First attempt is immediate: when TTS is idle (the common case — mic unmute path)
+    # the cue plays with zero added delay. Backoff only kicks in when the lock is still
+    # held by winding-down playback.
     for delay in (0, 0.15, 0.4, 0.8, 1.6, 3.0):
         if delay:
             time.sleep(delay)
@@ -199,14 +154,9 @@ def _tts_available() -> bool:
 
 
 def _wake_if_sleepy(source: str):
-    """If the device is currently sleeping, fire a stretching wake emotion so a
-    click pulls her out of sleep before the listening cue lands. Calls
-    the /emotion handler in-process — it clears `_sleeping`, cancels the
-    sleepy auto-release timer, plays the wake animation, and auto-deactivates
-    any active scene (e.g. Night mode).
-
-    Called from single_click_action and from swipe_action, so the log line says
-    which gesture woke her rather than assuming a click."""
+    """If the device is currently sleeping, fire a stretching wake emotion so a click pulls
+    her out of sleep before the listening cue lands.
+    """
     if not state._sleeping:
         return
     logger.info("%s -- waking from sleep", source)
@@ -221,9 +171,8 @@ def _wake_if_sleepy(source: str):
 def _speak_gesture_ack(text: str, source: str):
     """Speak a short confirmation for a resolved physical gesture, off-thread.
 
-    Non-interrupting by design — a gesture ack must never truncate a reply the
-    user is listening to. Silent no-op when TTS is unavailable or the speaker is
-    muted, which is also correct: a muted speaker means the user chose silence.
+    Non-interrupting by design — a gesture ack must never truncate a reply the user is
+    listening to.
     """
     if not text or not _tts_available():
         return
@@ -235,12 +184,11 @@ def _speak_gesture_ack(text: str, source: str):
 
 
 def play_ack_chime(source: str = "button"):
-    """Instant audible acknowledgment (~120ms ping) that a physical gesture
-    registered. Humans need sub-200ms feedback to feel 'it heard me' — the
-    spoken cue can never get there (it waits out gesture disambiguation
-    windows), the chime can. Neutral by design: valid ack for a tap, the
-    first stroke of a pet, or the start of a triple-click burst. Silent
-    no-op when TTS is unavailable or the speaker is muted."""
+    """Instant audible acknowledgment (~120ms ping) that a physical gesture registered.
+
+    spoken cue can never get there (it waits out gesture disambiguation windows), the
+    chime can.
+    """
     tts = state.tts_service
     if tts is None:
         return
@@ -251,15 +199,9 @@ def play_ack_chime(source: str = "button"):
 
 
 def announce_listening_cue(source: str = "button"):
-    """Fire the listening-cue TTS off-thread. Split from single_click_action
-    so callers that resolve gestures in two steps (GPIO button: floor-grab
-    on release, cue after the click window) can defer just the audible part
-    — a cue talking over the user mid-triple-click disrupts their rhythm."""
-    # Same HW kill-switch guard as single_click_action: gpio_button.py's
-    # _on_click_timeout calls this DIRECTLY (bypassing single_click_action)
-    # after the click window closes, so the guard has to live here too or
-    # "I'm listening" still fires while the mic is physically off. Guarding
-    # only single_click_action leaves the GPIO-button path leaky.
+    """Fire the listening-cue TTS off-thread."""
+    # Same HW kill-switch guard as single_click_action. Guarding only
+    # single_click_action leaves the GPIO-button path leaky.
     if state._hw_mic_switch_muted is True:
         logger.info("%s listening cue skipped -- HW mic switch is off", source)
         return
@@ -274,9 +216,6 @@ def announce_listening_cue(source: str = "button"):
 
 def _stop_active_tracking(source: str):
     """Stop object tracking when a single click asks the device for attention."""
-    # A look-aim moves the head without going through TrackerService, so the
-    # is_tracking guard below would miss it — the user would press the button to
-    # stop the lamp moving and it would keep turning. Abort it unconditionally.
     try:
         from hal.drivers.motors.range_demo import request_abort as _abort_demo
         from hal.drivers.tracking.aim import request_abort as _abort_aim
@@ -284,9 +223,6 @@ def _stop_active_tracking(source: str):
 
         _abort_aim()
         _abort_search()
-        # The range demo moves the body AND narrates it, so a click that only
-        # stopped the arm would leave the lamp describing legs it is no longer
-        # performing.
         _abort_demo()
     except Exception as e:
         logger.debug("%s single click -- aim/search/demo abort unavailable: %s", source, e)
@@ -303,13 +239,7 @@ def _stop_active_tracking(source: str):
 
 
 def _grant_wakeword_focus(source: str):
-    """Let a single click stand in for the wake phrase.
-
-    With wake word enabled, an utterance is only dispatched to the agent when
-    it starts with the wake phrase or falls inside the follow-up window. The
-    click already announced "I'm listening", so it has to open that window
-    itself — otherwise the user answers the cue and nothing happens. No-op
-    when wake word is disabled: every utterance dispatches already."""
+    """Let a single click stand in for the wake phrase."""
     voice = state.voice_service
     if not voice:
         return
@@ -322,29 +252,14 @@ def _grant_wakeword_focus(source: str):
 
 def single_click_action(source: str = "button", announce: bool = True, chime: bool = True,
                         unmute_output: bool = True):
-    """Stop active tracking and in-flight speech / unmute mic + speaker.
-
-    Then open the wake-word window (if wake word is on) and announce the
-    listening cue.
-    announce=False skips the cue (caller fires announce_listening_cue later).
-    chime=False skips the ack ping (caller already chimed at gesture start).
-    unmute_output=False leaves speaker restoration to the privacy switch."""
-    # A touch proves someone is at the device, even when the gesture itself is
-    # refused below. Runs before the wake: presence only records the moment and
-    # leaves the strip to sleep until the wake emotion takes over.
+    """Stop active tracking and in-flight speech / unmute mic + speaker."""
     state.note_user_activity(source)
     # Stopping movement is safe even with the hardware mic kill switch off: it
     # does not wake or unmute the microphone, but still lets the user cancel an
     # active follow session with the same direct-attention gesture.
     _stop_active_tracking(source)
-    # Hardware mic-mute switch is the authority: while it is physically off,
-    # taps on the GPIO button / TTP223 touchpad must NOT wake, unmute, or
-    # announce — the whole gesture flow would violate the kill-switch promise.
-    # Skip silently (no chime, no cue): the red mic-muted LED is already the
-    # visual "off" indicator; a chime here would read as "action accepted"
-    # when nothing happened. privacy_button.py's own unmute-path call flips the
-    # flag to False BEFORE calling this, so the slide switch's own unmute is
-    # not blocked. None = device has no HW switch (Lamp) → always fall through.
+    # Hardware mic-mute switch is the authority: while it is physically off, taps on the
+    # GPIO button / TTP223 touchpad must NOT wake, unmute, or announce.
     if state._hw_mic_switch_muted is True:
         logger.info("%s single click ignored -- HW mic switch is off", source)
         return
@@ -353,32 +268,20 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
     from hal.routes.voice import stop_tts, unmute_mic
 
     t_start = time.monotonic()
-    # Dispatched first and off-thread so the mute reaches the OS server while
-    # the local wake/unmute steps below are still running. Fired on both
-    # branches, not just the stopping-speaker one: a click that unmutes the mic
-    # is the user taking the floor too, and a backlog of turns queued up while
-    # the mic was muted must not start talking over them.
+    # Dispatched first and off-thread so the mute reaches the OS server while the local
+    # wake/unmute steps below are still running.
     _cancel_agent_speech(source)
-    # Stamp the music cancel watermark BEFORE audio_stop(): the cancelled turn
-    # keeps running server-side and its pending music tool call can land on
-    # /audio/play right after this, which a bare stop cannot beat. Stamping
-    # first closes that window (routes/music.audio_play refuses inside it).
     state.note_music_cancel()
-    # Stop music on BOTH branches below. This is the "give me the floor"
-    # gesture, and the mic-muted branch used to unmute the mic while leaving
-    # music playing — a click that visibly did nothing about the loudest thing
-    # in the room. Also kills a play still in its yt-dlp resolve phase, since
-    # MusicService.playing stays True while the music thread holds the lock.
+    # Stop music on BOTH branches below. Also kills a play still in its yt-dlp resolve
+    # phase, since MusicService.playing stays True while the music thread holds the
+    # lock.
     audio_stop()
     _wake_if_sleepy(source)
     logger.info("[sca-trace] wake done +%.0fms", (time.monotonic() - t_start) * 1000)
 
-    # A single click is a "give me the floor" gesture, so relax a user/scene
-    # speaker mute too — otherwise the listening cue stays silent and the reply
-    # the user just asked for would be inaudible. Skip while a voice enrollment
-    # is recording: that mute is a transient guard against TTS bleeding into the
-    # captured WAV (see routes/speaker.py record-enroll), not a user preference.
-    # Must run before the _tts_available() check below so the cue can play.
+    # A single click is a "give me the floor" gesture, so relax a user/scene speaker
+    # mute too — otherwise the listening cue stays silent and the reply the user just
+    # asked for would be inaudible.
     if unmute_output and state._speaker_muted and not state._enrolling:
         logger.info("%s single click -- unmuting speaker", source)
         t = time.monotonic()
@@ -386,14 +289,9 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         logger.info("[sca-trace] unmute_speaker done +%.0fms", (time.monotonic() - t) * 1000)
 
     if state._mic_muted:
-        # Hardware physical switch/button is the source of truth for mute state:
-        # a click unmutes regardless of who set the mute (web UI, API, touchpad
-        # double tap, sleep auto-mute). This keeps the web UI in sync with the
-        # physical control — a slide switched back ON matches what the operator
-        # expects, and the earlier "leave deliberate mute in place" guard
-        # (b79dec4a6, 2026-08-27) caused announce_listening_cue below to fire
-        # while the mic actually stayed muted, which the operator reads as a
-        # broken toggle.
+        # Hardware physical switch/button is the source of truth for mute state: a click
+        # unmutes regardless of who set the mute (web UI, API, touchpad double tap,
+        # sleep auto-mute).
         logger.info("%s single click -- unmuting mic", source)
         t = time.monotonic()
         unmute_mic()
@@ -408,11 +306,9 @@ def single_click_action(source: str = "button", announce: bool = True, chime: bo
         t = time.monotonic()
         play_ack_chime(source)
         logger.info("[sca-trace] chime done +%.0fms", (time.monotonic() - t) * 1000)
-    # Announce the listening cue so the user hears confirmation of the
-    # click — both for unmute (mic just opened) and for stop-speaker (the
-    # device was talking, user wants the floor). The cue itself preempts
-    # in-flight TTS via stop() + speak_cached retry, so calling stop_tts()
-    # above is fine — _announce_listening handles the lock handoff.
+    # Announce the listening cue so the user hears confirmation of the click — both for
+    # unmute (mic just opened) and for stop-speaker (the device was talking, user wants
+    # the floor).
     if announce:
         t = time.monotonic()
         announce_listening_cue(source)
@@ -431,9 +327,6 @@ def reboot_action(source: str = "button"):
     logger.info("%s reboot action", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_REBOOT))
-        # speak_cached is async; reboot kicks the OS before audio plays
-        # without this. ~5s covers the cached "Rebooting now" clip
-        # (matches the shutdown-action delay).
         time.sleep(5)
     reboot_os()
 
@@ -445,10 +338,7 @@ def triple_click_action(source: str = "button"):
 
 
 def head_pat_action(source: str = "touch"):
-    """Speak a random pet response. Non-interrupting: if TTS is busy
-    (the device already talking), drop silently so petting mid-speech doesn't
-    truncate her sentence. After the phrase actually plays, ping the OS server
-    so the agent records the petting moment (silent — NO_REPLY)."""
+    """Speak a random pet response."""
     state.note_user_activity(source)
     text = _random_head_pat_phrase()
     logger.info("%s head pat -- %r", source, text)
@@ -469,44 +359,20 @@ def head_pat_action(source: str = "touch"):
 def swipe_action(source: str = "touch"):
     """Map a resolved touchpad swipe to sleep. Always sleep — one meaning.
 
-    Direction is not read, and neither is device state. Both were considered and
-    dropped:
-
-    * **Direction** — the surface yields one usable traversal gesture, and
-      keying sleep to one direction and wake to the other would make a swipe the
-      "wrong" way do nothing, with no feedback saying why. Left-to-right and
-      right-to-left are the same gesture here.
-    * **State** — an earlier version woke a sleeping device instead of sleeping
-      it. That made one gesture mean two things depending on a state the user
-      cannot see, and waking is already covered by tap and double tap, which is
-      the behaviour the device shipped with. A swipe on a sleeping lamp now
-      reaches `sleep_action`, which returns early on "already sleeping".
-
-    Non-destructive by construction: sleep is reversible with a single tap.
-    Shutdown / reboot / factory-reset stay on the mechanical button, because
-    FastMode cannot measure a hold and a mis-detected swipe must never be able
-    to strand the device.
+    Shutdown / reboot / factory-reset stay on the mechanical button, because FastMode
+    cannot measure a hold and a mis-detected swipe must never be able to strand the
+    device.
     """
     logger.info("%s swipe -- sleeping", source)
     sleep_action(source)
 
 
 def mic_toggle_action(source: str = "touch"):
-    """Map a resolved double tap to the mic mute toggle.
-
-    Respect the configured hardware switch when present. The mic-muted LED
-    reflects the resulting state, and both routes below repaint it themselves.
-    """
+    """Map a resolved double tap to the mic mute toggle."""
     state.note_user_activity(source)
-    # The HW kill switch is the authority when configured. Devices without one
-    # report None and fall through; touch gestures cannot override a muted
-    # physical switch. Guarding here as well as in unmute_mic
-    # keeps the refusal quiet rather than raising the route's 409.
     if state._hw_mic_switch_muted is True:
         logger.info("%s double tap ignored -- HW mic switch is off", source)
         return
-    # A voice enrollment is recording into a WAV. Toggling the mic mid-capture
-    # truncates it, and the user gets a silently corrupt enrollment.
     if state._enrolling:
         logger.info("%s double tap ignored -- voice enrollment in progress", source)
         return
@@ -528,17 +394,8 @@ def mic_toggle_action(source: str = "touch"):
         return
 
     # Speak the resulting STATE, after the flip, so the voice and the LED agree.
-    # Drawn from a pool in the lamp's own voice rather than one fixed line — the
-    # same sentence every time is what reads as a machine. Every line in both
-    # pools still says which way the toggle went; see the note in i18n.py.
-    # Muting the microphone does not touch the speaker, so this is audible on
-    # both legs. Spoken AFTER the state change deliberately: if the toggle
-    # raised, the user should not be told about a mute that did not happen.
-    #
-    # Off-thread and non-interrupting, like head_pat_action: this must not add
-    # latency to the mute itself, and it must not talk over a reply in flight.
-    # When TTS is busy the confirmation drops and the mic-muted LED carries the
-    # feedback alone — the same trade the pet giggle makes.
+    # Off-thread and non-interrupting, like head_pat_action: this must not add latency
+    # to the mute itself, and it must not talk over a reply in flight.
     _speak_gesture_ack(_random_from(pool), source)
 
 
@@ -555,8 +412,6 @@ def sleep_action(source: str = "button"):
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_SLEEP))
-        # Like reboot/shutdown, allow the cached announcement to play before
-        # sleepy mutes the speaker and stops any active TTS.
         time.sleep(5)
 
     try:
@@ -584,13 +439,8 @@ def shutdown_action(source: str = "button"):
     """Announce, release servos, then shut down the operating system."""
     logger.info("%s shutdown action", source)
 
-    # Suppress the lifespan-shutdown re-announce — we're about to speak the
-    # PHRASE_SHUTDOWN line, and systemd's SIGTERM will arrive a few seconds
-    # later. Without this flag, server.py lifespan would say "shutting down"
-    # again on top of the cached clip still playing.
     state._shutdown_announced = True
 
-    # Step 1: TTS announce.
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_SHUTDOWN))
         time.sleep(5)
@@ -605,17 +455,14 @@ def shutdown_action(source: str = "button"):
     except Exception as e:
         logger.warning(f"Servo release before shutdown failed: {e}")
 
-    # Step 3: shutdown OS.
     shutdown_os()
 
 
 def hold_release_action(held_s: float, source: str = "button", *, factory_reset: bool = True):
     """Map a released hold duration to its explicit device action.
 
-    Input drivers supply released hold durations. This mapping shares the
-    sleep/shutdown/factory-reset decision tree across GPIO and MPR121 inputs.
-    Inputs that must not factory-reset (MPR121) pass factory_reset=False and
-    keep any longer hold at shutdown.
+    Inputs that must not factory-reset (MPR121) pass factory_reset=False and keep any
+    longer hold at shutdown.
     """
     if factory_reset and held_s >= FACTORY_RESET_DURATION:
         factory_reset_action(source)
@@ -657,26 +504,12 @@ def _factory_reset_phrase() -> str:
 
 
 def factory_reset_action(source: str = "button"):
-    """Announce + POST /api/system/factory-reset on the OS server. The OS server
-    wipes per-device state (config, API keys, enrollments, WiFi) and reboots
-    into AP setup mode. HAL does NOT touch state itself — single source of
-    truth for what gets wiped lives in the OS server's deviceWipePaths.
-
-    Authoritative because of physical presence: a deliberate configured hold + the
-    /api/system/factory-reset endpoint allows loopback origin without Bearer
-    (see os-server server.go adminOrLoopbackAuth)."""
+    """Announce + POST /api/system/factory-reset on the OS server."""
     logger.info("%s factory-reset hold -- triggering soft reset", source)
     logger.info("%s LED: red solid (factory-reset armed)", source)
 
-    # Suppress the lifespan-shutdown re-announce — same reason as
-    # shutdown_action: os-server's reboot ~5s later will SIGTERM hal
-    # and the lifespan handler would otherwise speak PHRASE_SHUTDOWN on top
-    # of the factory-reset clip still playing.
     state._shutdown_announced = True
 
-    # Step 1: TTS announce so the user knows the gesture registered. Brief —
-    # the reboot lands ~5s after the OS server accepts the POST, we want the
-    # announce + 3s settle window to fit inside that.
     if _tts_available():
         state.tts_service.speak_cached(_factory_reset_phrase())
         time.sleep(3)
@@ -733,12 +566,7 @@ def dispatch_led(color, *, still_current=None):
 
 
 class HoldLEDFeedback:
-    """Consume accepted hold tiers without blocking the hardware poll loop.
-
-    A single worker owns RGB calls, including commit colors. Release cancels
-    future blinking immediately; commit waits for any in-flight RGB call so an
-    old blink cannot overwrite the ensuing sleep/shutdown/reset action.
-    """
+    """Consume accepted hold tiers without blocking the hardware poll loop."""
 
     def __init__(self):
         self._condition = threading.Condition()

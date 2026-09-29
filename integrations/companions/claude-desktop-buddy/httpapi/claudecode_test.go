@@ -12,8 +12,6 @@ import (
 	"time"
 )
 
-// --- minimal port stubs ---
-
 type stubStatus struct{}
 
 func (stubStatus) Status() Status { return Status{State: "idle"} }
@@ -71,9 +69,7 @@ func (s *stubCode) set(id, d string) error {
 
 func (s *stubCode) Pending() []CodeApprovalRequest { return nil }
 
-// allowAuth admits every request — used by tests that exercise handler logic,
-// not the auth gate. tokenAuth admits only a fixed secret, used by the guard
-// test below.
+// allowAuth admits every request; tokenAuth admits only a fixed secret.
 type allowAuth struct{}
 
 func (allowAuth) Authorize(string) bool { return true }
@@ -98,8 +94,7 @@ func post(t *testing.T, url, body string) (*http.Response, string) {
 	return resp, string(b)
 }
 
-// The hook long-polls /approval-request; the agent's /approve unblocks it and the
-// decision ("allow") is handed back. This is the core reverse-channel round-trip.
+// The approval long-poll returns the decision posted to /approve.
 func TestApprovalRequest_AllowViaApprove(t *testing.T) {
 	code := newStubCode()
 	ts := newTestServer(code)
@@ -176,8 +171,7 @@ func TestApprove_NonLoopbackForbidden(t *testing.T) {
 	}
 }
 
-// The LAN-facing endpoints must reject callers without the admin-password
-// Bearer token, and admit the one carrying it.
+// LAN endpoints require the admin Bearer token.
 func TestGuard_RequiresAdminToken(t *testing.T) {
 	s := New(0, tokenAuth("s3cret"), stubStatus{}, stubApproval{}, stubActivity{}, newStubCode())
 	ts := httptest.NewServer(s.routes())

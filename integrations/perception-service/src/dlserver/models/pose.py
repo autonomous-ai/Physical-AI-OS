@@ -8,8 +8,6 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Tag
 from core.models.pose import PoseDetection
 from core.types import Omit, omit
 
-# --- WebSocket messages ---
-
 
 class PoseFrameRequest(BaseModel):
     type: Literal["frame"] = "frame"
@@ -37,9 +35,6 @@ PoseRequest = Annotated[
     | Annotated[PoseHeartBeatRequest, Tag("heartbeat")],
     Discriminator("type"),
 ]
-
-
-# --- HTTP request/response ---
 
 
 class PoseEstimateRequest(BaseModel):

@@ -47,7 +47,7 @@ def test_live_cleanup_and_output_reset_only_stop_live_playback(monkeypatch, main
 def test_new_addressed_speech_interrupts_main_once(monkeypatch, kpi, addressed, expected_stops):
     monkeypatch.setattr(config, "REALTIME_PROVIDER", "gemini")
     spoken = _pump(monkeypatch, kpi, [([
-        InterruptedOutput(),  # model output reset, not new user speech
+        InterruptedOutput(),
         UserSpeechOutput(turn_id="noise", transcript=""),
         UserSpeechOutput(turn_id="new", transcript="Stop"),
         UserSpeechOutput(turn_id="new", transcript="Stop please"),

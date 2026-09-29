@@ -2,9 +2,7 @@ package buddy
 
 import "claude-desktop-buddy/httpapi"
 
-// StatusReader adapts the StateMachine to httpapi.StatusProvider: a thin read
-// model that maps internal buddy state to the transport-agnostic snapshot the
-// HTTP layer serves at GET /status.
+// StatusReader adapts StateMachine to httpapi.StatusProvider.
 type StatusReader struct{ sm *StateMachine }
 
 func NewStatusReader(sm *StateMachine) StatusReader { return StatusReader{sm: sm} }

@@ -2,8 +2,7 @@ package domain
 
 import "testing"
 
-// stubGateway embeds AgentGateway so we only implement the method under test;
-// any other call would panic (none happen here).
+// stubGateway implements only SupportedChannels; other calls panic.
 type stubGateway struct {
 	AgentGateway
 	supported []string

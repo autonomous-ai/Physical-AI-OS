@@ -43,8 +43,6 @@ def test_a_clear_that_takes_is_logged_as_such():
     assert svc.logger.info.called
 
 
-# The 03/09/2026 fault: /led/off returned ok four times while the ring stayed
-# lit, with nothing in the log to show for it.
 def test_a_clear_that_does_not_take_is_an_error():
     svc = _service(_Driver(color=(0, 2, 2), sticky=True))
     svc.clear()
@@ -59,7 +57,6 @@ def test_clearing_an_already_dark_strip_says_nothing():
     svc.logger.info.assert_not_called()
 
 
-# Diagnostics must never be the reason a clear raises.
 # The check must survive the pattern it exists for: pixel 0 dark, rest lit.
 def test_a_dark_first_pixel_does_not_silence_the_check():
     class _Ring(_Driver):

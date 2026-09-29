@@ -52,7 +52,6 @@ func TestHarnessVoiceGestureLocalAuthAndDeduplication(t *testing.T) {
 }
 
 func TestHarnessVoiceGestureDisableIsIdempotentOffline(t *testing.T) {
-	// A real unpaired service proves exiting needs neither a connection nor focus.
 	transport, err := harness.NewService(t.TempDir(), harness.Callbacks{})
 	if err != nil {
 		t.Fatal(err)

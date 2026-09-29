@@ -10,23 +10,16 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// failingTransport stands in for the 5 s client timeout without waiting 5 s:
-// every request fails at the transport, which is the same error path a timeout
-// takes (`client.Post` returns err, no response).
+// failingTransport fails every request at the transport, the same path as a client timeout.
 type failingTransport struct{}
 
 func (failingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("context deadline exceeded (Client.Timeout exceeded while awaiting headers)")
 }
 
-// A hardware POST that failed at the transport used to `return false` BEFORE
-// reaching any flow.Log, so a 40 s body movement left no trace in the monitor
-// at all — device-chat-44 emitted a marker, HAL swept the room, and the flow
-// log showed nothing (#342 defects H, K). A failure must be an event.
+// A transport-failed hardware POST must still log a flow event (#342 defects H, K).
 func TestATransportFailureIsLoggedAsAFlowEvent(t *testing.T) {
-	// No flow.Init: the ring buffer fills regardless, and Init would start
-	// the JSONL writer, which drops local/flow_events_*.jsonl into whatever
-	// directory the test runs from.
+	// No flow.Init: it would start the JSONL writer in the test's working directory.
 	h := &AgentHandler{
 		monitorBus: monitor.ProvideBus(),
 		config:     &config.Config{DeviceType: "lamp"},

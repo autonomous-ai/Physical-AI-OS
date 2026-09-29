@@ -4,9 +4,7 @@ from enum import StrEnum
 
 
 class AgentGateway(StrEnum):
-    # Mirrors the Go side's domain.AgentRuntimes — every runtime os-server can
-    # activate MUST be listed here, or HAL's voice auto-start dies with
-    # "'<name>' is not a valid AgentGateway" (device-hit with codex 2026-07-07).
+    # Mirrors Go domain.AgentRuntimes; a missing runtime breaks HAL voice auto-start.
     OPENCLAW = "openclaw"
     HERMES = "hermes"
     PICOCLAW = "picoclaw"

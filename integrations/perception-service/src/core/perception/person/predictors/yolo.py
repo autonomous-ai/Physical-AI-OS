@@ -1,8 +1,4 @@
-"""YOLO-based person detector for action recognition preprocessing.
-
-Detects person bounding boxes in a frame and exposes ``detect_largest_crop``
-to extract the crop of the largest person for downstream action recognition.
-"""
+"""YOLO-based person detector for action recognition preprocessing."""
 
 from typing import Any
 
@@ -21,17 +17,9 @@ _PERSON_CLASS_ID = 0
 
 
 class YOLOPersonDetector(PersonDetector):
-    """YOLO-based person detector.
+    """YOLO-based person detector (ultralytics); rate limiting is the caller's job.
 
-    Loads an ultralytics YOLO model once and runs inference to locate people
-    in BGR frames.  Rate-limiting is handled by the caller, so this class
-    runs on every frame it receives.
-
-    Usage::
-
-        detector = YOLOPersonDetector(model_name="yolo12x.pt")
-        detector.start()
-        crop = detector.detect_largest_crop(frame)   # ndarray or None
+    Example: ``YOLOPersonDetector(model_name="yolo12x.pt").start()``
     """
 
     DEFAULT_MODEL_NAME: str = "yolo12x.pt"

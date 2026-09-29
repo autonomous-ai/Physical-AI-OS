@@ -1,14 +1,4 @@
-// Package musicsuggestion provides per-user music suggestion history logging.
-//
-// Tracks what was suggested, when, and whether the user accepted or rejected.
-//
-// Usage:
-//
-//	musicsuggestion.Init()
-//	seq := musicsuggestion.Log("gray", "mood:tired", "", "How about some calm piano?")
-//	musicsuggestion.UpdateStatus("gray", time.Now().Format("2006-01-02"), seq, "accepted")
-//	events := musicsuggestion.Query("gray", "2026-04-17", 50)
-//	last := musicsuggestion.LastSuggestion("gray")
+// Package musicsuggestion logs per-user music suggestions and their outcome.
 package musicsuggestion
 
 import (
@@ -53,7 +43,7 @@ func Init() {
 	go cleanOldLogs()
 }
 
-// Log records a suggestion event. Returns the sequence number for later status update.
+// Log records a suggestion and returns its sequence number.
 func Log(user, trigger, query, message string) int64 {
 	now := time.Now()
 	seq := now.UnixNano()
@@ -77,14 +67,13 @@ func Log(user, trigger, query, message string) int64 {
 	return seq
 }
 
-// UpdateStatus rewrites the matching event's status in today's (or specified day's) JSONL.
+// UpdateStatus rewrites the status of event seq in the day's file.
 func UpdateStatus(user, day string, seq int64, status string) bool {
 	path := filePath(user, day)
 
 	global.mu.Lock()
 	defer global.mu.Unlock()
 
-	// Close open file handle if it points to the same file we're rewriting.
 	if global.file != nil && global.day == day && global.user == user {
 		_ = global.file.Close()
 		global.file = nil
@@ -128,7 +117,6 @@ func UpdateStatus(user, day string, seq int64, status string) bool {
 // Query reads suggestion events for a given user and day.
 func Query(user string, day string, n int) []Event {
 	global.mu.Lock()
-	// Flush before reading so we see the latest data.
 	if global.file != nil && global.day == day && global.user == user {
 		_ = global.file.Sync()
 	}
@@ -162,7 +150,7 @@ func Query(user string, day string, n int) []Event {
 	return events
 }
 
-// LastSuggestion returns the most recent suggestion for a user (searches today and yesterday).
+// LastSuggestion returns the user's most recent suggestion (today or yesterday).
 func LastSuggestion(user string) *Event {
 	now := time.Now()
 	for _, day := range []string{now.Format("2006-01-02"), now.AddDate(0, 0, -1).Format("2006-01-02")} {

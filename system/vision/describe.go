@@ -1,18 +1,5 @@
 // Package vision turns camera frames into text descriptions with a vision
 // LLM, so image-bearing turns can reach a text-only main model.
-//
-// Why this exists: the main agent model (Auto-AI behind the campaign-api
-// smart-agent-router) is text-only. A raw image can never reach it — an image
-// block returned by the agent's read tool is silently dropped by the runtime
-// (the agent then answers blind and hallucinates), and a chat.send attachment
-// 404s at the router when it picks a no-vision backend ("No endpoints found
-// that support image input"). Telegram photos work because openclaw's
-// imageModel describes them first; this package gives the sensing/web-chat
-// path the same describe-first treatment, one layer up, so every image source
-// (HAL look-frame handoff, web monitor chat) converges on one fix.
-//
-// Once the smart-agent-router routes by modality (image → vision backend),
-// callers can send attachments directly and this package can be removed.
 package vision
 
 import (
@@ -32,55 +19,24 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// DefaultImageModel is the fallback vision model when the catalog
-// (GET {llm_base}/models) is unreachable — normally the catalog's
-// `default_image_model` wins (same model openclaw's imageModel uses for
-// Telegram photos).
+// DefaultImageModel is the fallback when the catalog has no default_image_model.
 const DefaultImageModel = "qwen/qwen3.6-plus"
 
-// catalogTTL bounds how often the model catalog is re-fetched for the
-// vision-capability gate — matches openclaw's ModelSyncInterval so a BE
-// catalog flip propagates on the same cadence as the rest of the device.
+// catalogTTL matches openclaw's ModelSyncInterval.
 const catalogTTL = 30 * time.Minute
 
-// DescribeTimeout bounds the TOTAL describe budget across all attempts. It
-// runs inline in the sensing handler before the agent forward, so it delays
-// the turn by at most this long. Keep it under HAL's image-turn POST timeout
-// (90s in sensing_sender.py) so the HAL client outlives describe + agent
-// forward.
+// DescribeTimeout bounds all describe attempts. Keep it under HAL's 90s
+// image-turn POST timeout (sensing_sender.py).
 const DescribeTimeout = 80 * time.Second
 
-// Per-attempt timeouts for DescribeWithRetry; they sum to DescribeTimeout.
-// Sized from device measurements 2026-07-06 (Go client, 768px frame, same
-// endpoint): latency is CONTENT-dependent — scene images answer in 8–20s,
-// but TEXT-DENSE images (the "read this label" use case) take 23–38s because
-// qwen3.6-plus reasons over the text; /no_think and max_tokens caps barely
-// help. The old 20s/15s (and 30s/25s) ladders sat inside that band, so every
-// text-reading turn timed out while probes with scene images passed. 45s
-// clears the measured text-dense tail with margin; the 35s retry still gets
-// a fresh connection for genuinely hung requests while staying above the
-// text-dense floor.
+// Per-attempt timeouts summing to DescribeTimeout; text-dense images measured
+// at 23-38s, so each attempt must stay above that.
 var describeAttemptTimeouts = [...]time.Duration{45 * time.Second, 35 * time.Second}
 
-// describeMaxTokens is the output budget for one describe call. It must cover
-// the model's REASONING as well as the description: qwen3.6-plus (the catalog's
-// default_image_model) thinks before it writes, and the thinking is billed to
-// the same budget while producing no content block. Overrun it and the response
-// is HTTP 200 with `content: []` and `stop_reason: "max_tokens"` — a
-// deterministic empty answer, not a transient failure.
-//
-// Sized from device measurements 2026-08-24 (lamp-0c89, one 118 KB look frame,
-// same prompt, 11 calls): the OLD 500 budget was cut every time (out=501). Total
-// output on a successful call ranged 868–1677 tokens — nearly 2x spread on the
-// SAME image — so the ceiling has to clear the tail, not the median. At 2000,
-// 4/5 calls succeeded and the fifth was cut at exactly 2001; at 4000, 5/5
-// succeeded with the worst case at 1617, leaving ~2.4x headroom. Text-dense
-// frames ("read this label") were not in the sample and plausibly cost more,
-// which is the other reason not to trim this to the observed maximum.
+// describeMaxTokens must cover reasoning plus the description; measured output
+// ranged 868-1677 tokens, and overruns return empty content.
 const describeMaxTokens = 4000
 
-// Emphasis on the user's request so the description surfaces what the answer
-// needs (label text, object identity, counts) instead of a generic caption.
 const describePrompt = "Describe this photo concisely but completely: main objects, any readable " +
 	"text/labels, people, colors, and layout. It was just captured by a device camera " +
 	"to answer the user's request below, so emphasize whatever is relevant to that " +
@@ -96,9 +52,7 @@ var (
 	catalogFetchedAt time.Time
 )
 
-// fetchCatalog returns the cached model catalog, refreshing it at most every
-// catalogTTL. fetch is injected so tests don't hit the network (production
-// callers pass openclaw.FetchModelsFromAPI via the package-level hook below).
+// fetchCatalog returns the cached model catalog, refreshing at most every catalogTTL.
 func fetchCatalog() *domain.LLMModelsListResponse {
 	catalogMu.Lock()
 	defer catalogMu.Unlock()
@@ -119,14 +73,8 @@ func fetchCatalog() *domain.LLMModelsListResponse {
 // fetchModels is swappable for tests.
 var fetchModels = openclaw.FetchModelsFromAPI
 
-// ModelSupportsVision reports whether the device's ACTIVE main model declares
-// image input in the upstream catalog. The sensing handler uses this as the
-// describe-first gate: a vision-capable main model should receive the raw
-// attachment (full pixels, no extra hop), a text-only one gets the qwen
-// description instead. Catalog-driven on purpose — the moment the backend
-// flips the model's `input` to include "image", devices switch to direct
-// attachments within one catalog TTL, no code change. Unknown model or
-// unreachable catalog → false (describe-first, the safe default).
+// ModelSupportsVision reports whether the active main model declares image input
+// in the catalog; false when unknown or unreachable.
 func ModelSupportsVision(cfg *config.Config) bool {
 	catalog := fetchCatalog()
 	if catalog == nil {
@@ -163,8 +111,7 @@ func imageModel() string {
 // off at the output budget.
 const stopReasonMaxTokens = "max_tokens"
 
-// errBudget reports a response cut off at describeMaxTokens before the model
-// wrote any content. Retrying it is pointless — see DescribeWithRetry.
+// errBudget reports a response cut off at describeMaxTokens with no content.
 type errBudget struct {
 	tokens int
 	limit  int
@@ -176,17 +123,9 @@ func (e errBudget) Error() string {
 		e.limit, e.tokens, stopReasonMaxTokens)
 }
 
-// DescribeWithRetry runs Describe once per describeAttemptTimeouts entry,
-// returning the first success. Uses context.Background() on purpose: the
-// description must complete even if the HAL client gives up on the sensing
-// HTTP request early (its POST timeout can be shorter than a slow describe).
-// On total failure the error carries every attempt's failure.
-//
-// A budget overrun (errBudget) stops the loop instead of retrying: the retry
-// sends an identical request with an identical budget, so it fails identically.
-// Device-observed 2026-08-24 — both attempts returned the same empty response
-// and the turn paid 26s of dead air for a foregone conclusion. Every other
-// failure (timeout, 5xx, dead connection) still gets its retry.
+// DescribeWithRetry runs Describe per describeAttemptTimeouts entry on a
+// background context (so it outlives an early HAL disconnect). A budget
+// overrun is not retried since the identical retry would fail identically.
 func DescribeWithRetry(cfg *config.Config, imageB64 string, question string) (string, error) {
 	var errs []string
 	for i, timeout := range describeAttemptTimeouts {
@@ -205,11 +144,8 @@ func DescribeWithRetry(cfg *config.Config, imageB64 string, question string) (st
 	return "", fmt.Errorf("%s", strings.Join(errs, "; "))
 }
 
-// Describe sends the base64 JPEG to the vision model via the anthropic-messages
-// endpoint derived from the device's LLM config and returns the description.
-// The request shape matches what the Anthropic SDK produces (HAL's summarizer
-// uses the same endpoint successfully): POST {llm_base minus /v1}/v1/messages
-// with an x-api-key header.
+// Describe returns a vision-model description of a base64 JPEG via the
+// anthropic-messages endpoint ({llm_base minus /v1}/v1/messages).
 func Describe(ctx context.Context, cfg *config.Config, imageB64 string, question string) (string, error) {
 	if len(question) > 500 {
 		question = question[:500]
@@ -229,8 +165,7 @@ func DescribeDesktop(ctx context.Context, cfg *config.Config, imageB64 string, q
 	if len([]rune(question)) > 2000 {
 		return "", fmt.Errorf("desktop question exceeds 2000 characters")
 	}
-	// Catalog refresh uses the existing shared cache and legacy HTTP client.
-	// Do not let that lookup extend the caller's desktop observation deadline.
+	// Do not let the catalog lookup extend the caller's deadline.
 	models := make(chan string, 1)
 	go func() { models <- imageModel() }()
 	var model string
@@ -326,10 +261,6 @@ func describeImage(ctx context.Context, cfg *config.Config, imageB64, prompt, mo
 			return strings.TrimSpace(c.Text), nil
 		}
 	}
-	// No text block. Carry stop_reason and the token count: without them the
-	// error reads the same whether the model was cut off mid-reasoning or
-	// genuinely returned nothing, and telling those apart meant reproducing the
-	// call by hand (device debug 2026-08-24).
 	if out.StopReason == stopReasonMaxTokens {
 		return "", errBudget{tokens: out.Usage.OutputTokens, limit: describeMaxTokens}
 	}

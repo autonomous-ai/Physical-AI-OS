@@ -22,11 +22,7 @@ var (
 )
 
 // runPresync executes the EMBEDDED presync hook (PresyncScript — the same
-// script switch-runtime runs right before codex starts). Running it from
-// EnsureOnboarding on every boot gives Codex the same self-heal property
-// hermes has: a device that boots straight into codex, or an llm_* change
-// while codex is active, gets config.toml/.env re-synced from config.json
-// without waiting for the next runtime switch.
+// script switch-runtime runs right before codex starts).
 func (s *CodexService) runPresync() error {
 	f, err := os.CreateTemp("", "codex-presync-*.sh")
 	if err != nil {

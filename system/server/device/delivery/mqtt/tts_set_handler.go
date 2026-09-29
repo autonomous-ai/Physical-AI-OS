@@ -35,7 +35,6 @@ func (h *DeviceMQTTHandler) handleTTSSet(env domain.MQTTDataCommand) error {
 	}
 	slog.Info("tts.set: received", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 
-	// Ack immediately so BFF knows the device received the command.
 	h.publishTTSSetAck("starting", "", nil)
 
 	go func() {
@@ -44,7 +43,6 @@ func (h *DeviceMQTTHandler) handleTTSSet(env domain.MQTTDataCommand) error {
 			h.publishTTSSetAck("failure", err.Error(), &req)
 			return
 		}
-		// UpdateVoiceConfig persists settings and schedules the HAL update.
 		slog.Info("tts.set: applied", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 		h.publishTTSSetAck("success", "", &req)
 	}()

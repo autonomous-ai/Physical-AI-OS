@@ -6,10 +6,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// The web UI's log tabs must keep resolving to the board's files/units with no
-// env set — the three sources that became env-driven are the ones a laptop can
-// actually serve, and getting their defaults wrong would blank the tabs on a
-// real device instead.
+// Log tabs resolve to the board's files/units when no env is set.
 func TestResolveLogSourceBoardDefaults(t *testing.T) {
 	for _, k := range []string{"OS_LOG_FILE", "OS_HAL_LOG_FILE", "OS_AGENT_BRIDGE_LOG"} {
 		t.Setenv(k, "")
@@ -32,8 +29,7 @@ func TestResolveLogSourceBoardDefaults(t *testing.T) {
 	}
 }
 
-// Off-device the same tabs follow the env, so the UI reads the files the dev
-// targets actually write. Sources with no laptop equivalent stay unchanged.
+// Off-device the log tabs follow the env.
 func TestResolveLogSourceOffDevice(t *testing.T) {
 	t.Setenv("OS_LOG_FILE", "/tmp/os/os-server.log")
 	t.Setenv("OS_HAL_LOG_FILE", "/tmp/sim/log/server.log")

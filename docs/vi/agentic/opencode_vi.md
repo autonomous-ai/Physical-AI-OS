@@ -154,6 +154,14 @@ cục** (`~/.config/opencode/AGENTS.md`), và capability-gate skills. Thay đổ
 chỉ-markdown không bao giờ restart gateway — mỗi `opencode run` đọc lại
 workspace; chỉ presync đổi config hoặc self-heal unit mới restart.
 
+> **Lỗ hổng đã biết — không có heartbeat driver.** Khối `HEAopencodeBEAT.md` (dùng
+> nguyên văn chung với openclaw/picoclaw) giả định có heartbeat poll định kỳ của
+> gateway để chạy knowledge synthesis và people sync `KNOWLEDGE.md` → `USER.md`.
+> opencode không có heartbeat driver (không gì trong `runtimes/opencode/` đọc `HEAopencodeBEAT.md`
+> theo lịch), nên khối đó ở đây không có tác dụng: `memory/*.md` hằng ngày không
+> được chưng cất vào `KNOWLEDGE.md`, và thông tin về người chỉ vào `USER.md` khi
+> agent tự ghi trong một turn.
+
 **Khối persona inline (AGENTS.md).** opencode tự nạp `AGENTS.md` vào context
 (project `AGENTS.md` trong workspace `--dir` + `~/.config/opencode/AGENTS.md`
 toàn cục). Giống codex, persona được inline THẲNG VÀO `AGENTS.md` của workspace
@@ -341,8 +349,10 @@ cũng clone các MCP server của runtime trước qua `MCPReconcile` (đường
 
 `ResetAgent` (do `server/system/factoryreset.go` gọi trên gateway đang active)
 không giữ lại gì — opencode.json/.env được presync regenerate ở lần switch kế:
-**stop** `opencode.service` (+ verify inactive, poll 5s), **disable** nó (reboot
-mặc định về openclaw), **xoá** thư mục state của bridge `/root/.opencode` **và**
+**stop** `opencode.service` (+ verify inactive, poll 5s), **disable** nó (
+(reboot resolve về runtime mặc định của thiết bị — `f_r_default_agent`, nếu không
+thì ROBOT.md `gateway.default`, vd. hermes trên Lamp — chỉ về openclaw khi cả hai
+đều không set)), **xoá** thư mục state của bridge `/root/.opencode` **và**
 các thư mục XDG của opencode `~/.config/opencode` (opencode.json, AGENTS.md,
 skills/) + `~/.local/share/opencode` (auth.json, sessions) và marker
 `.openclaw-migrated` (để presync §1 re-migrate ở lần switch kế) — rồi tạo lại các

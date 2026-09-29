@@ -12,9 +12,9 @@ Kill "Step 1, 2, 3, 4" sequential framing trong SKILL.md. Replace bằng group "
 
 **Đụng:**
 - Backend `handler.go` + `service_events.go`: rewrite emotion.detected inject
-- `user-emotion-detection/SKILL.md`, `mood/SKILL.md`, `music-suggestion/SKILL.md`: drop step numbering
-- `wellbeing/SKILL.md`: gộp 3 reads (history + patterns stat + days count) vào 1 bash, bỏ load `habit/SKILL.md`
-- `sensing/SKILL.md`: cập nhật event matrix
+- `skills/user-emotion-detection/SKILL.md`, `skills/mood/SKILL.md`, `skills/music-suggestion/SKILL.md`: drop step numbering
+- `skills/wellbeing/SKILL.md`: gộp 3 reads (history + patterns stat + days count) vào 1 bash, bỏ load `skills/habit/SKILL.md`
+- `skills/sensing/SKILL.md`: cập nhật event matrix
 - Cleanup `<say>...</say>` wrapper khỏi 2 skill (consistency với 19 skill khác)
 
 **Verified trên Pi:**
@@ -77,8 +77,8 @@ Read batch chạy ~700-950ms cho 3-5 reads concurrent (với `& wait`). Write ba
 **HW marker pattern** (đã có sẵn cho `/emotion`, `/audio/play`, `/dm`...): agent nhúng `[HW:/path:{json}]` vào TEXT reply. Lamp parse marker từ text, fire HTTP POST trong goroutine background, strip marker khỏi TTS. Agent không "thấy" như tool call → không có tool round-trip → không có post-write think pass.
 
 **Đụng:**
-- `system/server/openclaw/delivery/sse/handler_hw.go`: route Lamp-bound markers (path bắt đầu `/wellbeing/`) tới `http://127.0.0.1:5000/api/...` thay vì lelamp `5001`. Thêm flow log `hw_wellbeing`.
-- `lamp/resources/openclaw-skills/wellbeing/SKILL.md`: "What to write" rewrite — instruct `[HW:/wellbeing/log:{action,notes,user}]` thay curl exec. Giữ curl làm fallback nếu HW marker bị reject.
+- `system/server/agent/delivery/http/handler_hw.go`: route Lamp-bound markers (path bắt đầu `/wellbeing/`) tới `http://127.0.0.1:5000/api/...` thay vì lelamp `5001`. Thêm flow log `hw_wellbeing`.
+- `skills/wellbeing/SKILL.md`: "What to write" rewrite — instruct `[HW:/wellbeing/log:{action,notes,user}]` thay curl exec. Giữ curl làm fallback nếu HW marker bị reject.
 
 **Gotcha — regex limit:** `hwMarkerRe` = `\[HW:(/[^:]+):(\{[^}]*\})\]` cấm `}` trong body. Wellbeing log body flat (`{action,notes,user}`) → OK. Nếu `notes` chứa `}` regex break — agent cần escape hoặc fallback curl.
 
@@ -97,9 +97,9 @@ Read batch chạy ~700-950ms cho 3-5 reads concurrent (với `& wait`). Write ba
 
 Pattern y nguyên wellbeing, áp dụng cho 3-skill chain (`user-emotion-detection` + `mood` + `music-suggestion`). Chia 4 commit độc lập:
 
-1. **commit 1/4** — Phase 2 pre-inject. Backend `BuildEmotionContext(detectedEmotion, user)` trong `skillcontext/emotion.go` → digest `[emotion_context: {mapped_mood, recent_signals, prior_decision, is_decision_stale, audio_playing, last_suggestion_age_min, audio_recent, music_pattern_for_hour, suggestion_worthy}]`. 3 SKILL.md đổi "What to read" → use context block với fallback bash batch. Decision rules vẫn ở agent (5 rules synthesis, threshold cooldown, genre pick, phrasing).
+1. **commit 1/4** — Phase 2 pre-inject. Backend `BuildEmotionContext(detectedEmotion, user)` trong `system/skillcontext/emotion.go` → digest `[emotion_context: {mapped_mood, recent_signals, prior_decision, is_decision_stale, audio_playing, last_suggestion_age_min, audio_recent, music_pattern_for_hour, suggestion_worthy}]`. 3 SKILL.md đổi "What to read" → use context block với fallback bash batch. Decision rules vẫn ở agent (5 rules synthesis, threshold cooldown, genre pick, phrasing).
 2. **commit 2/4** — Phase 3a HW route. `handler_hw.go` extend prefix list từ chỉ `/wellbeing/` → `/wellbeing/`, `/mood/`, `/music-suggestion/`. Thêm flow event types `hw_mood`, `hw_music_suggestion`. Backend-only no-op.
-3. **commit 3/4** — Phase 3b SKILL.md HW marker. `mood/SKILL.md` (signal + decision đều dùng `[HW:/mood/log:{...}]`, kind trong body), `music-suggestion/SKILL.md` (`[HW:/music-suggestion/log:{...}]`), `user-emotion-detection/SKILL.md` (signal cũng dùng HW marker với `mapped_mood` từ context). Curl POST giữ làm fallback nếu marker regex bị reject (notes/reasoning chứa `}`).
+3. **commit 3/4** — Phase 3b SKILL.md HW marker. `skills/mood/SKILL.md` (signal + decision đều dùng `[HW:/mood/log:{...}]`, kind trong body), `skills/music-suggestion/SKILL.md` (`[HW:/music-suggestion/log:{...}]`), `skills/user-emotion-detection/SKILL.md` (signal cũng dùng HW marker với `mapped_mood` từ context). Curl POST giữ làm fallback nếu marker regex bị reject (notes/reasoning chứa `}`).
 4. **commit 4/4** — UI flow events. `types.ts` + `helpers.ts` + `FlowDiagram.tsx` add `hw_mood`, `hw_music_suggestion` (stack với hw_wellbeing ở Lamp-side column).
 
 **Estimated speedup emotion turn:**

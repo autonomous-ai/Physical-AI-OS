@@ -1,59 +1,8 @@
 #!/usr/bin/env python
-"""Push a calibration file into the servos' EEPROM — non-interactive.
+"""Push a calibration file into the servos' EEPROM and verify by read-back (never moves).
 
-Why this tool exists
---------------------
-`homing_offset` does NOT live in the JSON file at runtime. It lives in each servo's
-EEPROM (STS3215 control table address 31) and the servo applies it in hardware:
-
-    Present_Position = Actual_Position - Homing_Offset
-
-The runtime never writes it: the services call `connect(calibrate=False)`, so
-`write_calibration()` is only reachable from the interactive `hal.calibrate` flow. A JSON
-file sitting on the SD card therefore has NO effect on the servo's zero — only
-`range_min`/`range_max` are read from it (software normalization).
-
-Consequence: a freshly assembled unit ships with factory `Homing_Offset = 0` and moves to
-the wrong poses no matter which JSON it is pointed at. It must be pushed once.
-
-What this does
---------------
-Writes `homing_offset` + `range_min`/`range_max` from a calibration file into the motors,
-then reads them back to prove the write landed. Compared to `hal.calibrate`:
-
-  * no interactive prompt and no jogging the arm by hand,
-  * torque is disabled first — that also clears the `Lock` register, which the servo
-    requires before it will accept EEPROM writes (`hal.calibrate`'s ENTER branch skips
-    this, so its write can be silently rejected),
-  * the result is verified instead of assumed.
-
-Only servo configuration registers are touched. This never commands a movement.
-
-This does NOT replace hand calibration. `homing_offset` depends on which spline tooth a
-horn landed on, so it belongs to one physical arm — writing another arm's file moves the
-servos to visibly wrong poses. New arms are calibrated by hand
-(`python -m hal.calibrate --id <device>`, press `c`), and so is any arm that had a servo
-replaced: the new servo's horn lands on its own tooth, so the old numbers no longer fit it.
-
-What this is actually for:
-
-  * `--dry-run` — read what the servos hold. This is the only way to see the EEPROM side;
-    the file on disk says nothing about it.
-  * restoring a unit to numbers you captured from it earlier, e.g. undoing a push of the
-    wrong file (the `BEFORE` table this prints is the only record — keep it).
-
-There is deliberately no default source — `--file` or `--id` is required.
-
-Usage (on the device, HAL stopped so the serial port is free):
-
-    sudo systemctl stop hal
-    cd /opt/hal
-    # inspect only — never writes
-    sudo ./.venv/bin/python3 -m hal.servo_eeprom --dry-run --id hal
-    # restore a unit from its own file
-    sudo ./.venv/bin/python3 -m hal.servo_eeprom \
-        --file /var/lib/hal/calibration/robots/hal_follower/lamp-abcd.json
-    sudo systemctl start hal
+homing_offset is per-unit: never push another arm's file. --dry-run only reads.
+Example: sudo ./.venv/bin/python3 -m hal.servo_eeprom --dry-run --id hal
 """
 
 import argparse
@@ -110,7 +59,6 @@ def apply_calibration(port: str, calib_id: str, file_path: str | None, dry_run: 
     config = LeLampFollowerConfig(port=port, id=calib_id)
     robot = LeLampFollower(config)
 
-    # --file wins; otherwise use whatever the config resolved for this id.
     if file_path:
         target = _load_calibration_file(file_path)
         source = file_path
@@ -148,9 +96,7 @@ def apply_calibration(port: str, calib_id: str, file_path: str | None, dry_run: 
             print("\nNothing to do — the servos already hold these values.")
             return 0
 
-        # disable_torque() also writes Lock=0, which unlocks the EEPROM area. Without it the
-        # servo can silently reject the writes below. It leaves the arm limp, which is the
-        # same state HAL leaves it in when stopped.
+        # disable_torque() also writes Lock=0; without it the servo can silently reject EEPROM writes.
         print("\nDisabling torque (unlocks the servo EEPROM; the arm goes limp)...")
         bus.disable_torque()
 
@@ -199,9 +145,7 @@ def main() -> int:
     )
     args = parser.parse_args()
 
-    # No default source on purpose. homing_offset is per-unit, so the dangerous action —
-    # pushing the shared hal.json onto some other arm — must never be the easiest thing to
-    # type. Make the caller name what they are writing.
+    # No default source on purpose: homing_offset is per-unit.
     if not args.file and not args.calib_id:
         parser.error(
             "pass --file <path> (usually this unit's own calibration) or --id <device>.\n"

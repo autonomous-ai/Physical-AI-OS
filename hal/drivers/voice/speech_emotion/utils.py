@@ -1,8 +1,4 @@
-"""Pure helpers for the speech emotion pipeline.
-
-Kept free of I/O and threading so they can be unit-tested without spinning
-up the service or hitting perception-service.
-"""
+"""Pure helpers for the speech emotion pipeline."""
 
 from __future__ import annotations
 
@@ -44,12 +40,7 @@ def hedge_for(bucket: str) -> str:
 
 
 def format_message(label: SpeechEmotionLabel, confidence: float, bucket: str) -> str:
-    """Hedged sensing message — symmetric with face emotion processor.
-
-    Skill parsers on the OS server extract the raw label via regex on the
-    "Speech emotion detected: <Label>." prefix; everything inside the
-    parentheses is human-readable hint for the agent.
-    """
+    """Hedged sensing message — symmetric with face emotion processor."""
     nice = label.value.capitalize() or "Unknown"
     return (
         f"Speech emotion detected: {nice}. "
@@ -58,11 +49,7 @@ def format_message(label: SpeechEmotionLabel, confidence: float, bucket: str) ->
     )
 
 def wav_to_pcm16(wav_bytes: bytes) -> tuple[npt.NDArray[np.int16], int]:
-    """Decode a WAV blob into (mono int16 samples, sample_rate).
-
-    Multi-channel inputs are collapsed to mono by averaging.
-    Raises ValueError if the WAV is malformed or not 16-bit PCM.
-    """
+    """Decode a WAV blob into (mono int16 samples, sample_rate)."""
     with wave.open(io.BytesIO(wav_bytes), "rb") as w:
         sample_rate = w.getframerate()
         sample_width = w.getsampwidth()
@@ -113,17 +100,8 @@ def compute_trim_and_voiced(
     """Single-pass RMS analysis: trim head/tail silence AND compute voiced
     metrics on the padded-trim range from the same RMS envelope.
 
-    Returns ``(trimmed_samples, voiced_seconds, voiced_ratio)``.
-    Empty input or no frame above ``trim_rms`` → ``(empty, 0.0, 0.0)``.
-
-    Two thresholds are used by design:
-      * ``trim_rms`` (strict) decides head/tail boundary — must be confident
-        the frame is voiced before we anchor the trim there.
-      * ``voiced_rms`` (lenient) counts how many frames inside the trim
-        range carry energy — meant to also pick up whisper/breathy.
-
-    ``voiced_ratio`` denominator is the padded-trim span (not the full
-    input), so a long silence prefix doesn't artificially deflate ratio.
+    Two thresholds are used by design: * ``trim_rms`` (strict) decides head/tail
+    boundary — must be confident the frame is voiced before we anchor the trim there.
     """
     if samples.size == 0:
         return samples[:0], 0.0, 0.0
@@ -147,9 +125,6 @@ def compute_trim_and_voiced(
     end = min(samples.size, (pad_last + 1) * frame_samples)
     trimmed = samples[start:end]
 
-    # Reuse the same RMS array — count voiced frames only inside the
-    # padded-trim range so the ratio reflects content density, not the
-    # leading/trailing silence that we already removed.
     span_rms = rms[pad_first : pad_last + 1]
     voiced_count = int(np.count_nonzero(span_rms >= voiced_rms))
     frame_s = frame_ms / 1000.0
@@ -168,10 +143,8 @@ def select_voiced_span(
 ) -> npt.NDArray[np.int16]:
     """Return the contiguous ``max_s`` span with the most voiced frames.
 
-    Clips no longer than ``max_s`` are returned unchanged. The span is a plain
-    slice — voiced pieces are never stitched together, because cutting gaps
-    out of speech changes what the model hears. Ties go to the latest span
-    (closest to "now").
+    The span is a plain slice — voiced pieces are never stitched together, because
+    cutting gaps out of speech changes what the model hears.
     """
     max_samples = int(sample_rate * max_s)
     if samples.size <= max_samples:
@@ -183,11 +156,9 @@ def select_voiced_span(
         return samples[-max_samples:]
     voiced = (rms >= voiced_rms).astype(np.int64)
     csum = np.concatenate(([0], np.cumsum(voiced)))
-    counts = csum[win:] - csum[:-win]  # counts[i] = voiced frames in [i, i + win)
-    best = int(counts.size - 1 - np.argmax(counts[::-1]))  # last index of the max
+    counts = csum[win:] - csum[:-win]
+    best = int(counts.size - 1 - np.argmax(counts[::-1]))
     if best == counts.size - 1:
-        # The latest span; anchor it to the true end so the partial trailing
-        # frame dropped by compute_frame_rms is kept.
         return samples[-max_samples:]
     start = best * frame_samples
     return samples[start : start + max_samples]

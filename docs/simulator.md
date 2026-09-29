@@ -298,7 +298,7 @@ Mid-sentence is rejected — a device name inside a sentence is people talking
 *about* the device.
 
 After an authorized turn a follow-up window opens
-(`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, code default **20s**; the lamp image sets 60)
+(`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, code default **20s**; the lamp image's `robots/lamp/rootfs/opt/hal/.env` also sets 20)
 and **resets after every authorized turn**, so a continuous conversation never
 needs the name again. Set `"wakeword": false` for always-listening.
 
@@ -337,7 +337,7 @@ it is physically correct.
 Flow Monitor, Settings, Logs — the same SPA that runs on a board.
 
 os-server serves **no HTML**: on a device nginx serves `web/dist` and proxies
-`/api` and `/hw` to `:5000`. `make web-dev` puts Vite in nginx's place, with
+`/api` to `:5000` (and `/hw/` to HAL on `127.0.0.1:5001`). `make web-dev` puts Vite in nginx's place, with
 `LAMP_PROXY` naming the device the SPA talks to. A `.env` in `system/web/` still
 wins (vite.config reads it before `process.env`), so pointing at a real Pi is
 unchanged.

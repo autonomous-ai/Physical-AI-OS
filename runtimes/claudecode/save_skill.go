@@ -7,15 +7,9 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// Skill authoring / installing / listing for Claude Code. Mirrors
-// runtimes/openclaw/save_skill.go — the rendering, extraction and tree walk are
-// shared in system/skills; only the target directory differs per backend.
-//
-// That directory is Claude Code's user-scope skills root (`~/.claude/skills`), the same tree
-// migrateSkillsToUserScope moves legacy workspace skills into.
-//
-// The runtime is NOT restarted for any of these: Claude Code discovers skills per
-// session, the same contract the skill watcher relies on.
+// Skill authoring / installing / listing for Claude Code.
+// The runtime is NOT restarted for any of these: Claude Code discovers skills per session, the same
+// contract the skill watcher relies on.
 
 // SaveSkill writes a user-authored skill as <name>/SKILL.md.
 func (s *ClaudeCodeService) SaveSkill(draft domain.SkillDraft) (string, error) {

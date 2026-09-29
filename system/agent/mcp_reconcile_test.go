@@ -9,9 +9,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// fakeMCPGateway records WriteMCPEntry calls so the clone routing can be asserted
-// without touching a real gateway config or restarting anything. Embeds the
-// interface so only the methods under test need implementing.
+// fakeMCPGateway records WriteMCPEntry calls.
 type fakeMCPGateway struct {
 	domain.AgentGateway
 	written  map[string]map[string]any
@@ -77,8 +75,8 @@ func TestMCPReconcileClonesOpenclawToNewRuntime(t *testing.T) {
 
 	gw := &fakeMCPGateway{}
 	cfg := &config.Config{
-		AgentRuntime:      "hermes",   // switched into hermes
-		MCPAppliedRuntime: "openclaw", // previously on openclaw → clone fires
+		AgentRuntime:      "hermes",
+		MCPAppliedRuntime: "openclaw",
 		OpenclawConfigDir: ocDir,
 	}
 	(&MCPReconcile{cfg: cfg, gw: gw}).Reconcile()
@@ -86,8 +84,6 @@ func TestMCPReconcileClonesOpenclawToNewRuntime(t *testing.T) {
 	if len(gw.written) != 2 {
 		t.Fatalf("cloned %d entries, want 2: %+v", len(gw.written), gw.written)
 	}
-	// HTTP connector keeps the canonical {type:"http", url, headers}; the gateway's
-	// own WriteMCPEntry (hermes) does the type→enabled translation, not the reconcile.
 	notion := gw.written["notion"]
 	if notion["type"] != "http" || notion["url"] != "https://mcp.notion.com/mcp" {
 		t.Errorf("notion entry not canonical: %+v", notion)
@@ -119,7 +115,7 @@ func TestMCPReconcileCloneErrorLeavesMarker(t *testing.T) {
 func TestMCPReconcileNoEntriesAdvancesMarker(t *testing.T) {
 	t.Chdir(t.TempDir())
 
-	ocDir := t.TempDir() // openclaw.json absent → no entries
+	ocDir := t.TempDir()
 	gw := &fakeMCPGateway{}
 	cfg := &config.Config{AgentRuntime: "hermes", MCPAppliedRuntime: "openclaw", OpenclawConfigDir: ocDir}
 	(&MCPReconcile{cfg: cfg, gw: gw}).Reconcile()
@@ -175,11 +171,9 @@ mcp_servers:
 }
 
 func TestReadMCPEntries_UnknownRuntimeAndMissingFile(t *testing.T) {
-	// External runtime → no device-managed MCP.
 	if e, err := readMCPEntries("picoclaw", &config.Config{}); err != nil || len(e) != 0 {
 		t.Errorf("picoclaw: got (%v, %v), want (empty, nil)", e, err)
 	}
-	// Openclaw config absent → empty, not error.
 	cfg := &config.Config{OpenclawConfigDir: t.TempDir()}
 	if e, err := readMCPEntries(domain.AgentRuntimeOpenClaw, cfg); err != nil || len(e) != 0 {
 		t.Errorf("missing openclaw.json: got (%v, %v), want (empty, nil)", e, err)

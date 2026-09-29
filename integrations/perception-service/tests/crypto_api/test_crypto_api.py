@@ -1,10 +1,6 @@
-"""Integration tests: encrypted API calls through the LB to a live DL backend.
+"""Integration tests: encrypted API calls through the LB (CRYPTO__ENABLED=true) to a live DL backend.
 
-Requires DL_BACKEND_URL and DL_API_KEY in .env (or environment).
-The LB must be running with CRYPTO__ENABLED=true and the public key endpoint
-must be reachable.
-
-Run with: pytest tests/crypto_api/test_crypto_api.py -v
+Requires DL_BACKEND_URL and DL_API_KEY. Require-encryption tests need CRYPTO_REQUIRE_ENCRYPTION=true.
 """
 
 import base64
@@ -31,11 +27,6 @@ GCM_NONCE_SIZE = 12
 pytestmark = pytest.mark.skipif(
     not DL_BACKEND_URL, reason="DL_BACKEND_URL not set — skipping remote API tests"
 )
-
-
-# ---------------------------------------------------------------------------
-# Client-side crypto session (standalone, no server imports)
-# ---------------------------------------------------------------------------
 
 
 class CryptoSession:
@@ -85,11 +76,6 @@ class CryptoSession:
         return self.decrypt_fields(msg["nonce"], msg["cipher_data"]).decode()
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-
 def _http_url(path: str) -> str:
     return f"{DL_BACKEND_URL}{path}"
 
@@ -118,11 +104,6 @@ def _make_face_frame_b64(width: int = 320, height: int = 240) -> str:
     return base64.b64encode(buf.tobytes()).decode()
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="module")
 def crypto_session() -> CryptoSession:
     """Fetch public key from LB and create a client crypto session."""
@@ -132,22 +113,12 @@ def crypto_session() -> CryptoSession:
     return CryptoSession(resp.text)
 
 
-# ---------------------------------------------------------------------------
-# Public key endpoint
-# ---------------------------------------------------------------------------
-
-
 class TestPublicKey:
     def test_returns_valid_pem(self):
         resp = httpx.get(_http_url("/api/crypto/public-key"), headers=AUTH_HEADERS)
         assert resp.status_code == 200
         assert resp.text.startswith("-----BEGIN PUBLIC KEY-----")
         assert resp.text.strip().endswith("-----END PUBLIC KEY-----")
-
-
-# ---------------------------------------------------------------------------
-# Encrypted HTTP: Emotion recognition
-# ---------------------------------------------------------------------------
 
 
 class TestEncryptedEmotionHTTP:
@@ -187,11 +158,6 @@ class TestEncryptedEmotionHTTP:
         assert decrypted["detections"] == []
 
 
-# ---------------------------------------------------------------------------
-# Encrypted WebSocket: Action analysis
-# ---------------------------------------------------------------------------
-
-
 class TestEncryptedActionWS:
     @pytest_asyncio.fixture()
     async def ws_session(self, crypto_session):
@@ -212,7 +178,6 @@ class TestEncryptedActionWS:
     async def test_encrypted_config_and_frame(self, ws_session):
         ws, session = ws_session
 
-        # Send config
         config_msg = json.dumps({
             "type": "config",
             "task": "action",
@@ -224,7 +189,6 @@ class TestEncryptedActionWS:
         resp = json.loads(session.unwrap_ws_message(raw))
         assert resp["status"] == "config_updated"
 
-        # Send frame
         frame_msg = json.dumps({
             "type": "frame",
             "task": "action",
@@ -249,11 +213,6 @@ class TestEncryptedActionWS:
             raw = await ws.recv()
             resp = json.loads(session.unwrap_ws_message(raw))
             assert "detected_classes" in resp
-
-
-# ---------------------------------------------------------------------------
-# Encrypted WebSocket: Emotion analysis
-# ---------------------------------------------------------------------------
 
 
 class TestEncryptedEmotionWS:
@@ -294,11 +253,6 @@ class TestEncryptedEmotionWS:
         raw = await ws.recv()
         resp = json.loads(session.unwrap_ws_message(raw))
         assert resp == {"status": "ok"}
-
-
-# ---------------------------------------------------------------------------
-# Encrypted WebSocket: Pose estimation
-# ---------------------------------------------------------------------------
 
 
 class TestEncryptedPoseWS:
@@ -357,13 +311,6 @@ class TestEncryptedPoseWS:
         assert resp == {"status": "ok"}
 
 
-# ---------------------------------------------------------------------------
-# Require encryption (CRYPTO__REQUIRE_ENCRYPTION=true)
-#
-# These tests only pass when the LB has require_encryption=true.
-# Set CRYPTO_REQUIRE_ENCRYPTION=true in env to enable them.
-# ---------------------------------------------------------------------------
-
 REQUIRE_ENCRYPTION = os.getenv("CRYPTO_REQUIRE_ENCRYPTION", "").lower() in ("1", "true", "yes")
 
 require_encryption_mark = pytest.mark.skipif(
@@ -418,7 +365,6 @@ class TestRequireEncryptionWS:
                 _ws_url("/hal/api/dl/action-analysis/ws"),
                 additional_headers=AUTH_HEADERS,
             ) as ws:
-                # Send a plain frame without key exchange
                 await ws.send(json.dumps({
                     "type": "frame",
                     "task": "action",
@@ -432,7 +378,6 @@ class TestRequireEncryptionWS:
             _ws_url("/hal/api/dl/action-analysis/ws"),
             additional_headers=AUTH_HEADERS,
         ) as ws:
-            # Key exchange first
             await ws.send(json.dumps({
                 "type": "key_exchange",
                 "encrypted_key": crypto_session.encrypted_key_b64,
@@ -440,7 +385,6 @@ class TestRequireEncryptionWS:
             resp = json.loads(await ws.recv())
             assert resp["status"] == "key_exchange_ok"
 
-            # Encrypted frame should work
             frame_msg = json.dumps({
                 "type": "frame",
                 "task": "action",

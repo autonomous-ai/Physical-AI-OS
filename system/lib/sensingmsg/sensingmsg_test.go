@@ -23,10 +23,7 @@ func TestBuildPresenceEnterCarriesCurrentUser(t *testing.T) {
 }
 
 func TestBuildPresenceEnterUnknownUserIsLabelledUnknown(t *testing.T) {
-	// A stranger (or a face that has not resolved yet) must still carry the
-	// tag — greeting routes key "speak no name" off current_user=unknown, so
-	// an absent tag would be read as "no constraint" and let the agent fall
-	// back to the persona name.
+	// Strangers must still carry the tag; greeting routes key "no name" off current_user=unknown.
 	got := Build("presence.enter", "Person detected — new: stranger (stranger_3); faces in frame: 1 (stranger_3)", "", "")
 	if !strings.Contains(got, "[context: current_user=unknown]") {
 		t.Fatalf("presence.enter with no user = %q, want current_user=unknown", got)
@@ -51,10 +48,7 @@ func TestBuildPresenceEnterNewFriendCarriesPresenceContext(t *testing.T) {
 }
 
 func TestBuildPresenceEnterStrangerJoiningPresentFriendSkipsPresenceContext(t *testing.T) {
-	// The friend is still current_user (inside her forget window) but the
-	// arrival is a stranger. The block describes HER last leave, which the
-	// agent read as "Long re-entering after ~28 min away" and greeted the
-	// wrong situation (orange-lamp, 2026-09-16). Only a NEW friend gets it.
+	// A stranger arriving while a friend is still current_user must not get the friend's block.
 	got := Build("presence.enter",
 		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
 		"long", "")
@@ -75,10 +69,7 @@ func TestBuildPresenceEnterLoneStrangerInsideFriendWindowSkipsPresenceContext(t 
 }
 
 func TestBuildPresenceEnterStrangerJoiningPresentFriendCarriesInlineRule(t *testing.T) {
-	// Hermes only loads sensing/SKILL.md when the model chooses to call
-	// skill_view; on orange-lamp (2026-09-16) it skipped that and answered a
-	// visitor's arrival with "Hey, welcome back" to the user. The rule has to
-	// ride inline, the way presence.leave and environment.update already do.
+	// The rule must ride inline; runtimes may skip loading sensing/SKILL.md.
 	got := Build("presence.enter",
 		"Person detected — new: stranger (stranger_1); already present: long (friend); faces in frame: 2 (long, stranger_1)",
 		"long", "")

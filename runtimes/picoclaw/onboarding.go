@@ -18,44 +18,22 @@ import (
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh picoclaw-only
 // device (one that never ran openclaw, so presync.sh §0 had nothing to copy) still
 // gets the living-learnings doc the AGENTS.md block tells the agent to read.
-// Identical template to runtimes/openclaw/resources/KNOWLEDGE.md.
 //
 //go:embed resources/KNOWLEDGE.md
 var knowledgeFS embed.FS
 
-// Onboarding (PicoClaw). Mirrors runtimes/openclaw/onboarding.go, but trimmed to
-// what PicoClaw actually owns on-device:
-//
-//   - The PicoClaw runtime is installed + provisioned out-of-process by
-//     runtimes/picoclaw/install.sh + presync.sh (binary, `picoclaw onboard`,
-//     `picoclaw migrate`, model/channel config). Those run during the
-//     switch-runtime flow, NOT here.
-//   - This file owns the OS-managed blocks in the workspace markdown — AGENTS.md
-//     (prompt rules), SOUL.md (per-device-type persona), HEARTBEAT.md (daily
-//     knowledge-synthesis) — plus the KNOWLEDGE.md seed, the same contract openclaw
-//     has, so a plain os-server OTA keeps them current. PicoClaw reads AGENTS.md on
-//     the legacy path (presync deletes AGENT.md so that path is active and
-//     IDENTITY.md is read). When any block changes, the gateway is restarted.
-//
-// The block is OpenClaw-derived but stripped of OpenClaw-only bits (the
-// hooks/handler.ts paragraph and `openclaw --version`); everything else is
-// backend-agnostic prompt discipline (skills selection, memory rules, priority).
+// Onboarding (PicoClaw).
+// Those run during the switch-runtime flow, NOT here.
 
 const (
 	// osMandatoryMarker delimits the OS-managed block so it can be stripped +
-	// re-injected cleanly on update. MUST match the marker used in the block below.
+	// re-injected cleanly on update.
 	osMandatoryMarker = "<!-- OS DO NOT REMOVE -->"
 
 	// picoclawWorkspaceDir is PicoClaw's workspace (HOME=/root → ~/.picoclaw).
-	// TODO(picoclaw-config-dir): there is no PicoclawConfigDir in server/config yet
-	// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
-	// the data dir ever needs to be overridable.
 	picoclawWorkspaceDir = "/root/.picoclaw/workspace"
 
 	// agentsMDBlock is the OS-managed block injected into workspace/AGENTS.md.
-	// Derived from runtimes/openclaw/onboarding.go agentsMDBlock with OpenClaw-only
-	// content removed (hooks/handler.ts; `openclaw --version`; the injected
-	// `<available_skills>` wording).
 	agentsMDBlock = `<!-- OS DO NOT REMOVE -->
 **MANDATORY (skills):** Before any skill-driven action, determine the skill scope without doing broad filesystem scans. For ordinary chat, simple Q&A, or meta discussion with no action/event/hardware behavior, do NOT read a SKILL.md — answer normally.
   - If the message contains ` + "`[skills: a, b, c]`" + `, treat it as an authoritative whitelist — read ONLY those ` + "`skills/<name>/SKILL.md`" + ` files. Do NOT scan other skill directories "just in case".
@@ -90,22 +68,7 @@ Follow the instructions in whichever file you read.
 ---`
 
 	// heartbeatMDBlock is the OS-managed knowledge-synthesis block injected at the top
-	// of workspace/HEARTBEAT.md. Backend-agnostic — verbatim from openclaw.
-	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the
-	// gateway's periodic heartbeat poll (~every 30 min while the device is on).
-	//
-	// It is deliberately CATCH-UP driven, not clock driven. The synthesis used to be
-	// gated on "current time >= 21:00", which silently never fired on a device that
-	// is switched off at the end of the working day — the common case for a desk
-	// lamp. Device-observed 2026-09-03 on lamp-ac82: three days of flow logs ended
-	// 18:39 / 17:57 / 17:34, and memory/2026-08-24.md was never distilled into
-	// KNOWLEDGE.md because 21:00 never arrived. Comparing "days with memory" against
-	// "days already distilled" instead means the first heartbeat after the device is
-	// switched on clears whatever backlog accumulated, on any schedule.
-	//
-	// Keep this block byte-identical across openclaw/codex/opencode/picoclaw: it is
-	// matched verbatim by ensureHeartbeatMDBlock, and a runtime switch must not
-	// silently drop the people sync.
+	// of workspace/HEARTBEAT.md. Keep byte-identical across runtimes: it is matched verbatim.
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
 **Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
 
@@ -124,9 +87,7 @@ Follow the instructions in whichever file you read.
 ---`
 )
 
-// SetupAgent runs onboarding. The runtime itself is
-// installed + provisioned out-of-process by install.sh/presync.sh; what os-server
-// owns at setup time is the workspace reconciliation EnsureOnboarding does.
+// SetupAgent runs onboarding.
 func (s *PicoclawService) SetupAgent(_ domain.SetupRequest) error {
 	return s.EnsureOnboarding()
 }
@@ -134,23 +95,14 @@ func (s *PicoclawService) SetupAgent(_ domain.SetupRequest) error {
 // EnsureOnboarding reconciles the device-side PicoClaw workspace on boot/config-change
 // (server/config_watch.go, same path openclaw/hermes use): seed KNOWLEDGE.md if
 // absent, capability-gate skills, refresh the OS-managed SOUL/AGENTS/HEARTBEAT blocks,
-// and restart the gateway if any block changed. Runtime install + model/channel config
-// are owned by install.sh/presync.sh (see file header).
+// and restart the gateway if any block changed.
 func (s *PicoclawService) EnsureOnboarding() error {
-	// Seed KNOWLEDGE.md from the embedded template only if absent. presync.sh §0
-	// copies openclaw's living KNOWLEDGE.md (with accumulated learnings) when
-	// migrating; this fallback covers the fresh picoclaw-only device where there was
-	// no openclaw copy. Never overwrites an existing file.
+	// Seed KNOWLEDGE.md from the embedded template only if absent.
+	// Never overwrites an existing file.
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(picoclawWorkspaceDir, "KNOWLEDGE.md"))
 
-	// Capability-gate skills: drop platform skills this device can't use (e.g.
-	// servo-control on a motionless device), keeping picoclaw's built-ins. Skill dirs
-	// are read per-turn from disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
-	// Re-sync all supported skills at boot/config reconciliation, mirroring
-	// OpenClaw. The watcher only reacts to metadata changes after it starts, so
-	// this self-heals a stale local skill when os-server starts after a CDN update.
 	changedSkills := s.downloadSkills()
 
 	needRestart := false
@@ -176,10 +128,8 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Materialize + register the os-server-observer hook so channel (Telegram)
-	// turns surface in Flow Monitor and drive [HW:/…] markers — parity with the
-	// Hermes observer hook (runtimes/hermes/hooks.go). Best-effort: a hook failure
-	// must not block onboarding (workspace reconcile above already succeeded).
+	// Best-effort: a hook failure must not block onboarding (workspace reconcile above already
+	// succeeded).
 	if hookChanged, err := s.ensureObserverHook(); err != nil {
 		slog.Error("ensure observer hook failed", "component", "picoclaw-onboarding", "error", err)
 	} else if hookChanged {
@@ -192,8 +142,6 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Restart the gateway so it re-reads the changed workspace prompt files
-	// (systemctl restart — see service_gateway.go for why not /reload).
 	if needRestart {
 		slog.Info("restarting picoclaw gateway to pick up workspace changes", "component", "picoclaw-onboarding")
 		if err := restartPicoclawGateway(); err != nil {
@@ -201,27 +149,16 @@ func (s *PicoclawService) EnsureOnboarding() error {
 		}
 	}
 
-	// Notify after a possible restart so the bridge is available to deliver the
-	// re-read request for skills that changed on disk.
 	s.notifySkillChanges(changedSkills)
 
-	// TODO(picoclaw-onboarding-parity): openclaw additionally pins messages.queue.mode
-	// (picoclaw has its own steering_mode — verify before mirroring). (openclaw.json-
-	// specific steps — hooks/logging/controlUi — are N/A for picoclaw's config.json;
-	// skill capability-gating is done above via pruneUnsupportedSkills.)
 	return nil
 }
 
 // ensureAgentsMDBlock injects/refreshes the OS-managed block in workspace/AGENTS.md.
-// Returns true if the file was modified. Mirrors openclaw's ensureAgentsMDBlock.
 func (s *PicoclawService) ensureAgentsMDBlock() (bool, error) {
 	agentsFile := filepath.Join(picoclawWorkspaceDir, "AGENTS.md")
 
 	if _, err := os.Stat(agentsFile); os.IsNotExist(err) {
-		// TODO(picoclaw-agents-template): openclaw regenerates a base AGENTS.md via
-		// `openclaw setup` when it is missing. PicoClaw's AGENTS.md comes from
-		// `picoclaw migrate` (presync.sh §0) instead, and there is no equivalent
-		// regenerate command, so skip injection rather than write to an empty file.
 		slog.Warn("AGENTS.md missing — skipping block injection (no picoclaw regenerate)",
 			"component", "picoclaw-onboarding", "path", agentsFile)
 		return false, nil
@@ -243,7 +180,6 @@ func (s *PicoclawService) ensureAgentsMDBlock() (bool, error) {
 		text = stripMarkedBlock(text)
 	}
 
-	// Inject below the "Your workspace" line; prepend to the top if it isn't found.
 	lines := strings.Split(text, "\n")
 	result := make([]string, 0, len(lines)+2)
 	injected := false
@@ -267,8 +203,6 @@ func (s *PicoclawService) ensureAgentsMDBlock() (bool, error) {
 
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at the
 // top of workspace/SOUL.md; owner content below the closing `---` is preserved.
-// Mirrors openclaw's ensureSoulMDBlock. The soul is resolved per device_type from
-// ROBOT.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
 func (s *PicoclawService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(picoclawWorkspaceDir, "SOUL.md")
 
@@ -304,8 +238,7 @@ func (s *PicoclawService) ensureSoulMDBlock() (bool, error) {
 	}
 
 	// Discard a managed default soul left in the remaining text so it is not preserved
-	// as fake owner content and duplicated below the device block. Keep an owner-added
-	// `## Personal` section if present.
+	// as fake owner content and duplicated below the device block.
 	trimmed := strings.TrimLeft(text, " \t\r\n")
 	if isDefaultSoulHeading(trimmed) {
 		if idx := strings.Index(text, "## Personal"); idx >= 0 {
@@ -333,13 +266,12 @@ func (s *PicoclawService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// robots/<type>/ROBOT.md. Mirrors openclaw's deviceSoulCore: absent → no override;
-// http(s) → download; otherwise a path relative to robots/<type>/.
+// robots/<type>/ROBOT.md.
 func (s *PicoclawService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
-		return nil, false, nil // soulless body: no override
+		return nil, false, nil
 	}
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		b, derr := downloadSoul(ref)
@@ -360,7 +292,7 @@ func (s *PicoclawService) deviceSoulCore() (content []byte, hasSoul bool, err er
 }
 
 // devicesDir returns the root holding per-device profile folders
-// (robots/<type>/{DEVICE,SOUL}.md). Override with DEVICES_DIR. Mirrors openclaw.
+// (robots/<type>/{DEVICE,SOUL}.md).
 func devicesDir() string {
 	if d := strings.TrimSpace(os.Getenv("DEVICES_DIR")); d != "" {
 		return d
@@ -384,13 +316,12 @@ func downloadSoul(url string) ([]byte, error) {
 
 // isDefaultSoulHeading reports whether trimmed begins with a managed soul template
 // heading that must not be preserved as owner content below the device block.
-// Mirrors openclaw's isDefaultSoulHeading.
 func isDefaultSoulHeading(trimmed string) bool {
 	return strings.HasPrefix(trimmed, "# Soul") || strings.HasPrefix(trimmed, "# SOUL.md")
 }
 
 // ensureHeartbeatMDBlock injects the knowledge-synthesis block at the top of
-// workspace/HEARTBEAT.md. Returns true if modified. Mirrors openclaw.
+// workspace/HEARTBEAT.md.
 func (s *PicoclawService) ensureHeartbeatMDBlock() (bool, error) {
 	heartbeatFile := filepath.Join(picoclawWorkspaceDir, "HEARTBEAT.md")
 
@@ -416,10 +347,7 @@ func (s *PicoclawService) ensureHeartbeatMDBlock() (bool, error) {
 }
 
 // picoclawBuiltinSkills are PicoClaw's own bundled skills (created by `picoclaw
-// onboard`). They have no platform capability mapping in skills.Capability, are
-// lightweight + generally useful, so they are ALWAYS kept regardless of device
-// capabilities. Only the capability-gated platform skills (the migrated openclaw
-// catalog) are pruned. Keep in sync with what `picoclaw onboard` ships.
+// onboard`).
 var picoclawBuiltinSkills = map[string]bool{
 	"agent-browser": true,
 	"github":        true,
@@ -430,14 +358,7 @@ var picoclawBuiltinSkills = map[string]bool{
 	"weather":       true,
 }
 
-// pruneUnsupportedSkills removes skill dirs the device can't use. A skill survives
-// when it is EITHER (a) supported by this device's capabilities (skills.Supported —
-// the same gate openclaw uses) OR (b) a picoclaw built-in (picoclawBuiltinSkills).
-// Everything else under workspace/skills is removed. Fail-open: when ROBOT.md
-// declares no capabilities, skills.Supported returns the full catalog, so nothing
-// capability-gated is pruned. Mirrors openclaw's onboarding prune, but iterates the
-// on-disk dirs (picoclaw has extra built-ins outside skills.Catalog) instead of the
-// catalog.
+// pruneUnsupportedSkills removes skill dirs the device can't use.
 func (s *PicoclawService) pruneUnsupportedSkills() {
 	skillsDir := filepath.Join(picoclawWorkspaceDir, "skills")
 	entries, err := os.ReadDir(skillsDir)
@@ -468,8 +389,7 @@ func (s *PicoclawService) pruneUnsupportedSkills() {
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already
-// exist (never overwrites — KNOWLEDGE.md is a living doc). Copied from
-// runtimes/openclaw/onboarding.go (package-private there).
+// exist (never overwrites — KNOWLEDGE.md is a living doc).
 func seedFileIfAbsent(efs embed.FS, src, dst string) {
 	if _, err := os.Stat(dst); err == nil {
 		return // already exists, never overwrite
@@ -491,7 +411,6 @@ func seedFileIfAbsent(efs embed.FS, src, dst string) {
 }
 
 // stripMarkedBlock removes the block between the marker and the next --- separator.
-// Copied from runtimes/openclaw/onboarding.go (package-private there).
 func stripMarkedBlock(text string) string {
 	lines := strings.Split(text, "\n")
 	var cleaned []string

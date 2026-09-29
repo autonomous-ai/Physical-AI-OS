@@ -54,12 +54,10 @@ def coco_to_h36m(
     h36m_kps: npt.NDArray[np.float32] = np.zeros((N, 17, 2), dtype=np.float32)
     h36m_scores: npt.NDArray[np.float32] = np.zeros((N, 17), dtype=np.float32)
 
-    # Direct mappings
     for h36m_idx, coco_idx in COCO_TO_H36M_DIRECT.items():
         h36m_kps[:, h36m_idx] = keypoints[:, coco_idx]
         h36m_scores[:, h36m_idx] = scores[:, coco_idx]
 
-    # Interpolated joints
     # Pelvis = midpoint(COCO Left Hip, COCO Right Hip)
     h36m_kps[:, H36MJoint.PELVIS] = (keypoints[:, COCOJoint.L_HIP] + keypoints[:, COCOJoint.R_HIP]) / 2
     h36m_scores[:, H36MJoint.PELVIS] = np.minimum(scores[:, COCOJoint.L_HIP], scores[:, COCOJoint.R_HIP])
@@ -79,10 +77,6 @@ def coco_to_h36m(
     return h36m_kps, h36m_scores
 
 
-# ---------------------------------------------------------------------------
-# Converter registry: (source_graph, target_graph) -> converter function
-# ---------------------------------------------------------------------------
-
 CONVERTER_REGISTRY: dict[tuple[GraphEnum, GraphEnum], GraphConverter] = {
     (GraphEnum.COCO, GraphEnum.H36M): coco_to_h36m,
 }
@@ -92,11 +86,7 @@ def get_graph_converter(
     source: GraphEnum,
     target: GraphEnum,
 ) -> GraphConverter | None:
-    """Look up a converter function for source → target graph type.
-
-    Returns None if source == target (no conversion needed).
-    Raises ValueError if no converter is registered for the pair.
-    """
+    """Look up a converter for source -> target; None if equal, ValueError if unregistered."""
     if source == target:
         return None
     converter: GraphConverter | None = CONVERTER_REGISTRY.get((source, target))

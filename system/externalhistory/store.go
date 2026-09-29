@@ -123,8 +123,7 @@ func New(dir string) (*Store, error) {
 	return s, nil
 }
 
-// persist commits the file before updating memory. A failed write never advances
-// the in-memory state; callers must treat every persistence error as a failure.
+// persist commits to disk before updating memory; a failed write never advances state.
 func (s *Store) persist(r Record) error {
 	data, err := json.Marshal(r)
 	if err != nil {
@@ -176,8 +175,7 @@ func (s *Store) Begin(r Record) (Record, error) {
 	return s.record(r, false)
 }
 
-// RecordCompleted atomically journals an exchange that has already been answered.
-// Unlike Begin/Complete, a crash cannot leave this exchange waiting for its answer.
+// RecordCompleted atomically journals an already-answered exchange.
 func (s *Store) RecordCompleted(r Record) (Record, error) {
 	return s.record(r, true)
 }
@@ -196,8 +194,7 @@ func (s *Store) record(r Record, completedTurn bool) (Record, error) {
 		return old, nil
 	}
 	now := time.Now().UTC()
-	// Deduplication retains recent completed turns for up to 30 days, bounded
-	// by capacity. Unfinished turns are never evicted to make room.
+	// Completed turns are deduplicated for up to 30 days; unfinished turns are never evicted.
 	var completed []Record
 	for id, old := range s.records {
 		if old.State != StateDone {

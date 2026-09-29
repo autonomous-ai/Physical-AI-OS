@@ -14,34 +14,15 @@ import (
 	"path/filepath"
 )
 
-// The on-device `software-update` script is NOT an OTA component: nothing in
-// metadata.json describes it, so a device keeps whatever copy its image shipped
-// with, forever. Every fix to the updater therefore needed an operator to SSH in
-// and run the curl/`bash -n`/install one-liner from docs/bootstrap-ota.md by
-// hand — on every device.
-//
-// Bootstrap is the right place to automate that, and the script itself is the
-// wrong one. Bash reads a script lazily as it executes, so a running
-// `software-update` that overwrote its own path would start executing the new
-// bytes at whatever offset it had reached. Bootstrap, by contrast, refreshes the
-// file strictly BETWEEN runs, and — being an OTA component itself — can still be
-// fixed remotely if this logic ever needs to change.
-//
-// Failure is never fatal here: a device that cannot reach the network, or that
-// is served a truncated file, keeps the updater it already had. The one outcome
-// this must never produce is a device with no working updater.
+// software-update is not an OTA component, so bootstrap refreshes it strictly between
+// runs (bash reads scripts lazily; a self-overwrite would corrupt a running update).
+// Failure is never fatal: the device keeps the updater it already had.
 
-// updaterPath is where the provisioning scripts install the updater. A var, not
-// a const, purely so tests can point the install at a temp directory instead of
-// writing to a real /usr/local/bin.
+// updaterPath is a var so tests can redirect the install.
 var updaterPath = "/usr/local/bin/software-update"
 
-// updaterURLFrom derives the published updater URL from the metadata URL, so
-// there is no second knob to configure and no way for the two to point at
-// different releases. `make upload-setup` publishes the raw script one level
-// above the OTA namespace:
-//
-//	{base}/ota/metadata.json  →  {base}/software-update
+// updaterURLFrom derives the updater URL from the metadata URL.
+// Example: {base}/ota/metadata.json -> {base}/software-update
 func updaterURLFrom(metadataURL string) (string, error) {
 	u, err := url.Parse(metadataURL)
 	if err != nil {
@@ -50,7 +31,6 @@ func updaterURLFrom(metadataURL string) (string, error) {
 	if u.Scheme == "" || u.Host == "" {
 		return "", fmt.Errorf("metadata url %q is not absolute", metadataURL)
 	}
-	// /os/ota/metadata.json → /os
 	base := path.Dir(path.Dir(u.Path))
 	if base == "." || base == "/" {
 		return "", fmt.Errorf("metadata url %q has no namespace to derive from", metadataURL)
@@ -62,11 +42,6 @@ func updaterURLFrom(metadataURL string) (string, error) {
 }
 
 // updateInFlight reports whether a force update is installing right now.
-//
-// The automatic path needs no such check — refreshUpdater is called at the top
-// of checkOnce, on the same goroutine that later execs the updater, so those two
-// can never overlap. A force update arrives on an HTTP handler's goroutine
-// instead, and that one genuinely can land mid-poll.
 func updateInFlight() bool {
 	busy := false
 	inFlight.Range(func(_, _ any) bool {
@@ -76,23 +51,16 @@ func updateInFlight() bool {
 	return busy
 }
 
-// refreshUpdater brings /usr/local/bin/software-update up to the published copy.
-//
-// Call it only between updater runs — see the package comment above. It is a
-// no-op when the bytes already match, so the steady state costs one conditional
-// GET per poll and no disk write.
+// refreshUpdater brings software-update up to the published copy; no-op when unchanged.
 func (b *Bootstrap) refreshUpdater(ctx context.Context) {
-	// An update in progress means the script is currently executing. Replacing
-	// it now is exactly the lazy-read hazard this design avoids; the next poll
-	// will pick it up.
+	// The script is executing during an update; replacing it now hits the lazy-read hazard.
 	if updateInFlight() {
 		return
 	}
 
 	current, err := os.ReadFile(updaterPath)
 	if err != nil {
-		// No updater on this device at all: that is a provisioning problem, not
-		// something to fix by dropping an unrequested root-owned script in.
+		// No updater installed is a provisioning problem; never drop one in.
 		return
 	}
 
@@ -119,9 +87,7 @@ func (b *Bootstrap) refreshUpdater(ctx context.Context) {
 	slog.Info("updater refreshed", "component", "bootstrap", "url", src, "bytes", len(published))
 }
 
-// fetchUpdater downloads the published script. The size cap is a guard against
-// a proxy or captive portal serving something enormous in place of the script,
-// which would otherwise be read entirely into memory on a device with 1-2 GB.
+// fetchUpdater downloads the published script, size-capped against captive portals.
 func (b *Bootstrap) fetchUpdater(ctx context.Context, src string) ([]byte, error) {
 	const maxUpdaterBytes = 1 << 20 // 1 MiB; the real script is ~40 KB
 
@@ -129,8 +95,7 @@ func (b *Bootstrap) fetchUpdater(ctx context.Context, src string) ([]byte, error
 	if err != nil {
 		return nil, fmt.Errorf("build request: %w", err)
 	}
-	// The updater is republished in place, so a cached copy would hide the very
-	// fix this exists to deliver.
+	// The updater is republished in place; a cached copy would hide the fix.
 	req.Header.Set("Cache-Control", "no-cache")
 
 	resp, err := b.client.Do(req)
@@ -156,17 +121,9 @@ func (b *Bootstrap) fetchUpdater(ctx context.Context, src string) ([]byte, error
 	return data, nil
 }
 
-// installUpdater validates the downloaded script and puts it in place.
-//
-// Two properties matter and both are load-bearing:
-//
-//   - `bash -n` runs BEFORE anything replaces the live file. A truncated
-//     download is syntactically broken far more often than not, and a device
-//     whose updater no longer parses cannot be repaired remotely.
-//   - the temp file is written in the SAME directory and renamed, so the
-//     replacement is atomic. A copy-in-place would leave a window where
-//     /usr/local/bin/software-update is half-written, and that is precisely the
-//     window in which bootstrap or an operator might exec it.
+// installUpdater validates the script and installs it atomically.
+// `bash -n` runs before replacing the live file, and the temp file is renamed in the
+// same directory so software-update is never half-written.
 func installUpdater(ctx context.Context, data []byte) error {
 	dir := filepath.Dir(updaterPath)
 
@@ -175,9 +132,6 @@ func installUpdater(ctx context.Context, data []byte) error {
 		return fmt.Errorf("create temp: %w", err)
 	}
 	tmpName := tmp.Name()
-	// Any early return below must not leave the staging file behind; after a
-	// successful rename the path no longer exists and Remove is a harmless
-	// no-op.
 	defer func() { _ = os.Remove(tmpName) }()
 
 	if _, err := tmp.Write(data); err != nil {
@@ -187,9 +141,7 @@ func installUpdater(ctx context.Context, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("close temp: %w", err)
 	}
-	// CreateTemp makes the file 0600; the updater is exec'd, so it needs 0755
-	// before the rename rather than after (the rename must publish a file that
-	// is already runnable).
+	// Must be executable before the rename publishes it.
 	if err := os.Chmod(tmpName, 0o755); err != nil {
 		return fmt.Errorf("chmod temp: %w", err)
 	}

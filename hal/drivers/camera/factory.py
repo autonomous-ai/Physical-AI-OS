@@ -1,19 +1,4 @@
-"""Camera driver factory — resolve a ROBOT.md `driver:` name to a device class.
-
-Mirrors hal/drivers/motors/factory.py. The camera is the second capability where
-one contract has genuinely different hardware paths behind it: Lamp's UVC webcam
-is opened by OpenCV over V4L2, while Reachy Mini's CSI sensor lives behind
-libcamera and cannot be read that way at all (the raw Bayer node hands OpenCV
-timeouts forever). Both satisfy `VideoCaptureDeviceBase`, so routes, sensing and
-the tracker stay hardware-neutral; only this table knows which one to build.
-
-Behavior:
-  - driver absent (None)          → default "opencv" (schema v1 compat)
-  - driver known + importable     → return the class
-  - driver known + ImportError    → return None (caller degrades / fails loud)
-  - driver unknown + required     → RuntimeError (deploy fault, fail loud)
-  - driver unknown + optional     → return None + warning
-"""
+"""Camera driver factory — resolve a ROBOT.md `driver:` name to a device class."""
 from __future__ import annotations
 
 import importlib
@@ -22,13 +7,8 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger("hal.camera.factory")
 
-# Registry: driver name → (module_path, class_name)
-# Add new camera backends here as they are implemented.
 CAMERA_DRIVERS: dict[str, Tuple[str, str]] = {
-    # UVC / V4L2 webcams read through OpenCV. Carries the USB-specific healing
-    # (ISP freeze watchdog, colour-corruption recovery, USB power-cycle).
     "opencv": ("hal.drivers.camera.video_capture_device", "LocalVideoCaptureDevice"),
-    # Raspberry Pi CSI sensors behind libcamera, via an rpicam-vid MJPEG pipe.
     "rpicam": ("hal.drivers.camera.rpicam_capture_device", "RpicamVideoCaptureDevice"),
     "virtual": ("hal.drivers.camera.virtual_capture_device", "VirtualVideoCaptureDevice"),
     # Simulation only (HAL_SIM_MEDIA=host): the developer machine's webcam via
@@ -50,8 +30,6 @@ def resolve_camera_class(driver: Optional[str], required: bool) -> Optional[type
         and the capability is optional. Raises on unknown + required.
     """
     if driver is None:
-        # Not a warning: every device that predates this selector is a UVC
-        # webcam, and saying so on each boot would be noise.
         driver = "opencv"
 
     entry = CAMERA_DRIVERS.get(driver)

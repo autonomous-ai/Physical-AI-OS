@@ -36,7 +36,6 @@ from hal.presets import (
 
 router = APIRouter()
 
-# --- Music style detection ---
 
 _MUSIC_STYLE_KEYWORDS: list[tuple[str, list[str]]] = [
     (SERVO_MUSIC_JAZZ, ["jazz", "swing", "blues", "soul", "funk", "bossa nova"]),
@@ -76,16 +75,9 @@ _MUSIC_STYLE_EMOTION: dict[str, str] = {
 }
 
 
-# --- Pre-play backchannel ---
-#
-# yt-dlp resolve + ffmpeg startup takes 1-3s before audio actually plays.
-# A short cached TTS line fills that gap so the device sounds responsive.
-# Phrase pools live in hal/i18n.py (MUSIC_BACKCHANNEL_POOLS) — split
-# by (language, provider_is_elevenlabs). Edit copy there, not here.
+# yt-dlp + ffmpeg take 1-3s to start; a cached TTS line fills the gap (pools in hal/i18n.py).
 
-# Index of the last spoken phrase — excluded from the next pick so the device
-# never repeats itself back-to-back. -1 = nothing spoken yet (first call
-# picks freely).
+# Excluded from the next pick; -1 = nothing spoken yet.
 _last_backchannel_idx: int = -1
 
 
@@ -99,9 +91,7 @@ def _active_stt_language() -> str:
 
 
 def _backchannel_pool() -> list[str]:
-    """Return the phrase pool for the active language × TTS provider.
-    Unknown language falls back to DEFAULT_LANG; unknown provider falls
-    back to the plain (no audio-tag) pool."""
+    """Phrase pool for the active language x TTS provider (falls back to DEFAULT_LANG / plain pool)."""
     is_elevenlabs = getattr(state.tts_service, "_provider", "") == PROVIDER_ELEVENLABS
     lang = _active_stt_language()
     pool = MUSIC_BACKCHANNEL_POOLS.get((lang, is_elevenlabs))
@@ -111,14 +101,7 @@ def _backchannel_pool() -> list[str]:
 
 
 def _fire_music_backchannel() -> None:
-    """Speak a random short cue if all gates pass.
-
-    Skip when:
-      - speaker is muted
-      - TTS is already speaking (would queue or be skipped by the lock)
-      - music is currently playing (replacing track — backchannel feels redundant)
-      - voice_service is mid-STT-session (firing TTS would cut the user off)
-    """
+    """Speak a random short cue unless muted, speaking, playing music, or mid-STT."""
     global _last_backchannel_idx
     if state._speaker_muted:
         return
@@ -144,10 +127,7 @@ def _fire_music_backchannel() -> None:
 
 
 def _announce_quiet_hours() -> None:
-    """Speak the localized 'it's quiet hours' notice so a music request
-    suppressed by audio.quiet_hours isn't a silent failure — the user hears WHY
-    nothing played, in the device's stt_language (i18n PHRASE_QUIET_HOURS).
-    Best-effort: skipped if TTS is unavailable or already speaking, never raises."""
+    """Speak the localized quiet-hours notice so a suppressed music request isn't silent (best-effort)."""
     tts = state.tts_service
     if tts is None or not getattr(tts, "available", False) or tts.speaking:
         return
@@ -179,8 +159,7 @@ def _on_music_complete():
     # from explicit /audio/stop + thread finally).
     state._on_music_play_end()
 
-    # Sleep is the terminal LED state. A late music completion must not take
-    # the no-user-state fallback below and start the idle breathing effect.
+    # Sleep is terminal: a late music end must not start idle breathing.
     if state._sleeping:
         state.logger.info("Music stop: LED restore skipped -- sleepy owns the strip")
     else:
@@ -189,11 +168,7 @@ def _on_music_complete():
         if user_state is not None and user_state.get("type") != "off":
             state._restore_user_led()
         elif state.rgb_service:
-            # No user state — settle on the ambient resting look, not on the
-            # `idle` preset: with AMBIENT_RESTING_LED black (default off) the
-            # end of a song must leave the strip dark, and starting a breathing
-            # thread on black would burn SPI writes for nothing. Same rule the
-            # other release paths follow (led.restore_led, _restore_user_led).
+            # Settle on the ambient resting look, not the `idle` preset.
             from hal.presets import AMBIENT_RESTING_LED, ambient_resting_is_dark
 
             try:
@@ -220,14 +195,7 @@ def audio_play(req: MusicPlayRequest):
     if state._speaker_muted:
         state.logger.info("POST /audio/play: suppressed -- speaker muted (query='%s')", req.query[:80])
         return {"status": "suppressed"}
-    # Safety gate (SAFETY.md audio.quiet_hours): no loud discretionary output
-    # during the window. Deterministic, real wall-clock; spoken replies (TTS) are
-    # unaffected — only music is suppressed.
-    # Cancel gate: a single click kills the turn's speaker output, but the turn
-    # itself keeps running on the Go side (speech/cancel is a TTS-only
-    # watermark) and its pending music tool call still lands here seconds later.
-    # Refuse it — otherwise music the user just cancelled starts anyway once
-    # yt-dlp finishes resolving. See app_state.MUSIC_CANCEL_GUARD_S.
+    # Safety gate (SAFETY.md audio.quiet_hours) and cancel gate (see app_state.MUSIC_CANCEL_GUARD_S).
     if state.music_cancel_active():
         state.logger.info("POST /audio/play: suppressed -- cancelled by recent click (query='%s')", req.query[:80])
         return {"status": "suppressed"}
@@ -241,12 +209,6 @@ def audio_play(req: MusicPlayRequest):
         raise HTTPException(
             503, "Music service not available -- missing sounddevice or numpy"
         )
-
-    # [2026-05-11] DISABLED — random short cue ("On it!") was duplicating /
-    # replacing the agent's main TTS reply now that Go no longer suppresses
-    # TTS on /audio/play. Music service's wait_for_tts() will serialize the
-    # agent's full reply ahead of ffmpeg. Rollback: uncomment to restore cue.
-    # _fire_music_backchannel()
 
     from hal.drivers.voice.music_service import canonicalize_person
 
@@ -290,8 +252,7 @@ def mute_speaker():
     if privacy.speaker_muted:
         privacy.speaker_before = True
     if state._sleepy_auto_muted_speaker:
-        # An explicit mute replaces sleep's temporary ownership, even when
-        # output is already silent. Wake must preserve this user choice.
+        # An explicit mute replaces sleep's temporary ownership; wake must preserve it.
         state._sleepy_auto_muted_speaker = False
         state._persist_sleep_state()
     if state._speaker_muted:

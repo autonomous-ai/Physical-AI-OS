@@ -19,8 +19,7 @@ from hal.drivers.voice.tts.tempo import change_tempo
 
 logger = logging.getLogger("hal.voice.tts")
 
-# Audio direction tags like "[laughs]" — expressive models interpret them, but a chunk
-# with ONLY tags (no words) has no speakable content and ElevenLabs 400s it.
+# Chunks with only audio tags (e.g. "[laughs]") have no speakable text; ElevenLabs 400s them.
 _AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 
 
@@ -32,76 +31,57 @@ class ElevenLabsTTSBackend(TTSBackend):
     supports_synthesis_cancellation = True
     ELEVENLABS_PATH = "/elevenlabs"
 
-    # Voice name -> voice_id mapping, grouped by trained language.
-    # Curated for companion AI — warm, friendly, expressive. Top picks marked (*).
-    #
-    # ElevenLabs expressive models are multilingual — voices can speak across
-    # languages — but voices trained on a language sound substantially more
-    # natural in that language (accent, prosody). The web UI filters this
-    # by stt_language so VN/CN owners don't have to scroll past 22 American
-    # voices to find one that fits.
-    #
-    # zh-CN and zh-TW share the same voice pool — script (Simplified vs
-    # Traditional) differs in TEXT, not in speaker. Jin has a Taiwan accent
-    # which the web UI may want to surface for zh-TW pickers.
-    # "zh" below is an internal meta-bucket (not a stt_language code) —
-    # both LANG_ZH_CN and LANG_ZH_TW share this voice pool since
-    # voice IDs are script-agnostic.
+    # Voice name -> voice_id mapping, grouped by trained language. The web UI filters
+    # this by stt_language so VN/CN owners don't have to scroll past 22 American voices
+    # to find one that fits.
+    # "zh" is an internal bucket (not a stt_language code) shared by zh-CN and zh-TW.
     _LANG_BUCKET_ZH = "zh"
 
     VOICE_IDS_BY_LANG = {
         LANG_EN: {
-            # Female — premade
-            "Rachel": "21m00Tcm4TlvDq8ikWAM",       # (*) warm, natural American
-            "Sarah": "EXAVITQu4vr4xnSDxMaL",        # (*) friendly, clear American
-            "Nicole": "piTKgcLEGmPE4e6mEKli",       # soft, inspirational
-            # Female — community (conversational, young, American)
-            "Terra": "aFueGIISJUmscc05ZNfD",         # (*) bubbly, friendly — 14k clones
-            "Maria": "vZzlAds9NzvLsFSWp0qk",        # (*) soft, calm, expressive — 48k clones
-            "Sophie": "AEW6JTgnyoPaoB9zlK3S",       # (*) sparky, energetic, young
-            "Piper": "rzgrf9VyEb0LLa824k8Q",        # spirited, upbeat, dynamic
-            "Mia": "052jzHJceQiZr7ltnY0C",          # lively, warm, expressive
-            "Kimmy": "TmK7x2BFDD7TOVlR69J2",        # youthful, sweet, natural charm
-            "Brianna": "2NzqTfQARqdn4tcBKTSh",      # soft, sincere, intimate
-            "Ally": "qmm0vRXCIew16ilYAeiI",         # bubbly, fun, caring
-            "Tori": "lAxf5ma5HGtzxC434SWT",         # confident, warm, encouraging
-            # Male — premade
-            "Brian": "nPczCjzI2devNBz1zQrb",        # (*) cheerful, relatable American
-            "Adam": "pNInz6obpgDQGcFmaJgB",         # (*) warm, emotional depth
-            "Daniel": "onwK4e9ZLuTAKqWW03F9",       # (*) well-paced, clear
+            "Rachel": "21m00Tcm4TlvDq8ikWAM",
+            "Sarah": "EXAVITQu4vr4xnSDxMaL",
+            "Nicole": "piTKgcLEGmPE4e6mEKli",
+            "Terra": "aFueGIISJUmscc05ZNfD",
+            "Maria": "vZzlAds9NzvLsFSWp0qk",
+            "Sophie": "AEW6JTgnyoPaoB9zlK3S",
+            "Piper": "rzgrf9VyEb0LLa824k8Q",
+            "Mia": "052jzHJceQiZr7ltnY0C",
+            "Kimmy": "TmK7x2BFDD7TOVlR69J2",
+            "Brianna": "2NzqTfQARqdn4tcBKTSh",
+            "Ally": "qmm0vRXCIew16ilYAeiI",
+            "Tori": "lAxf5ma5HGtzxC434SWT",
+            "Brian": "nPczCjzI2devNBz1zQrb",
+            "Adam": "pNInz6obpgDQGcFmaJgB",
+            "Daniel": "onwK4e9ZLuTAKqWW03F9",
             "George": "JBFqnCBsd6RMkjVDRZzb",
-            "James": "ZQe5CZNOzWyzPSCn5a3c",        # calm British
-            "Liam": "TX3LPaxmHKxFdv7VOQHJ",        # energetic American
+            "James": "ZQe5CZNOzWyzPSCn5a3c",
+            "Liam": "TX3LPaxmHKxFdv7VOQHJ",
             "Charlie": "IKne3meq5aSn9XLyUdCD",
             "Sam": "yoZ06aMxZJJ28mfd3POQ",
-            # Male — community (conversational, young, American)
-            "Sean": "FgARTjeugpFkVodK0Ovq",         # (*) casual, optimized for conversation — 1.9k clones
-            "Kael": "RxsTyZQJnPygpas5IyzL",         # (*) energetic, trendy, youthful — 1.8k clones
-            "Brooks": "sUzXYdokj3o9QQ91yPRF",       # (*) bright, affable, friendly smile — 1.5k clones
-            "Erion": "BSgaLWMIhbNhOCIH1apf",        # unique, friendly, casual — 1.3k clones
+            "Sean": "FgARTjeugpFkVodK0Ovq",
+            "Kael": "RxsTyZQJnPygpas5IyzL",
+            "Brooks": "sUzXYdokj3o9QQ91yPRF",
+            "Erion": "BSgaLWMIhbNhOCIH1apf",
         },
         LANG_VI: {
-            "Ngan": "a3AkyqGG4v8Pg7SWQ0Y3",         # (*) Female, bubbly, friendly, authentic
-            "Linh": "L5c6tGA8OiORYKxez5Zu",         # (*) Female, soft, calm, beautifully expressive
-            "Huyen": "foH7s9fX31wFFH2yqrFa",        # Female, calm, friendly, clear (Da Nang)
-            "Freya": "rXOGzMiqbmjugMpzKMEx",        # Female, young, soft, cute (Northern accent)
-            "Nathan": "u8EWWYyBDfXFxHak7WM3",       # (*) Male, soft-spoken, gentle, sing-song Central
-            "Quan": "puBBfOSRT9Dbk3FUJQGd",         # Male, warm, thoughtful Central tone
+            "Ngan": "a3AkyqGG4v8Pg7SWQ0Y3",
+            "Linh": "L5c6tGA8OiORYKxez5Zu",
+            "Huyen": "foH7s9fX31wFFH2yqrFa",
+            "Freya": "rXOGzMiqbmjugMpzKMEx",
+            "Nathan": "u8EWWYyBDfXFxHak7WM3",
+            "Quan": "puBBfOSRT9Dbk3FUJQGd",
         },
         _LANG_BUCKET_ZH: {
-            "Amy": "bhJUNIXWQQ94l8eI2VUf",          # (*) Female, relaxed, friendly Beijing tone
-            "Sage": "APSIkVZudNbPAwyPoeVO",         # (*) Female, warm, soothing narrative voice
-            "Xiaoxi": "9DMBSOAnMDPiFAsz1ZGK",       # Female, neutral, friendly, approachable
-            "Yun": "YxbjaPemDJV2xlfvkiIG",          # Female, elegant, sweet, gentle
-            "Evan Zhao": "MI36FIkp9wRP7cpWKPTl",    # (*) Male, calm, trustworthy, warm
-            "Jin": "vZZLclMx4wouUtKBRfZn",          # Male, casual, Taiwan-influenced (good for zh-TW)
+            "Amy": "bhJUNIXWQQ94l8eI2VUf",
+            "Sage": "APSIkVZudNbPAwyPoeVO",
+            "Xiaoxi": "9DMBSOAnMDPiFAsz1ZGK",
+            "Yun": "YxbjaPemDJV2xlfvkiIG",
+            "Evan Zhao": "MI36FIkp9wRP7cpWKPTl",
+            "Jin": "vZZLclMx4wouUtKBRfZn",
         },
     }
 
-    # Flat name -> voice_id lookup, derived from VOICE_IDS_BY_LANG. Keeps
-    # the resolve path self.VOICE_IDS.get(voice, voice) cheap and unaware
-    # of language, so any saved tts_voice still resolves regardless of
-    # which language the owner is currently set to.
     VOICE_IDS = {
         name: vid
         for lang_voices in VOICE_IDS_BY_LANG.values()
@@ -110,11 +90,7 @@ class ElevenLabsTTSBackend(TTSBackend):
 
     @classmethod
     def voices_for_language(cls, lang: str) -> list:
-        """Return curated voice names for a given stt_language code.
-        Empty / unknown lang → flat list of all voices (so the picker
-        keeps working when stt_language is "auto"). zh-CN and zh-TW
-        both map to the shared "zh" bucket since voice IDs are
-        script-agnostic."""
+        """Return curated voice names for a given stt_language code."""
         if not lang:
             return list(cls.VOICE_IDS.keys())
         bucket = LANG_EN
@@ -129,10 +105,6 @@ class ElevenLabsTTSBackend(TTSBackend):
             pool = cls.VOICE_IDS_BY_LANG[LANG_EN]
         return list(pool.keys())
 
-    # Direct ElevenLabs API hosts. The api.us / api.eu splits are the
-    # regional endpoints ElevenLabs docs advertise; everything else
-    # (autonomous.ai proxy, private mirrors) still gets the `/elevenlabs`
-    # prefix so proxy routing keeps working.
     _DIRECT_HOSTS = frozenset({
         "api.elevenlabs.io",
         "api.us.elevenlabs.io",
@@ -149,13 +121,6 @@ class ElevenLabsTTSBackend(TTSBackend):
 
     def __init__(self, api_key: str, base_url: Optional[str] = None):
         self._api_key = api_key
-        # The `/elevenlabs` sub-path is autonomous.ai proxy routing
-        # (campaign-api routes `<base>/elevenlabs/text-to-speech/...` to the
-        # provider). A BYO operator pointing directly at api.elevenlabs.io
-        # should NOT get the extra prefix — the real API is
-        # `<base>/text-to-speech/...`, and appending `/elevenlabs` gives a 404
-        # ("/v1/elevenlabs/text-to-speech/..."). Detect the direct-API host
-        # and skip the prefix.
         resolved = _ensure_openai_v1(base_url or "")
         if self._is_direct_elevenlabs(resolved):
             self._base_url = resolved
@@ -164,8 +129,6 @@ class ElevenLabsTTSBackend(TTSBackend):
         self._client = None
         try:
             import httpx
-            # Persistent client reuses TCP/TLS across speaks -- saves ~100-500ms per
-            # call vs httpx.stream() module-level which builds a fresh Client+TLS each time.
             self._client = httpx.Client(
                 timeout=30.0,
                 limits=httpx.Limits(max_keepalive_connections=4, keepalive_expiry=300.0),
@@ -200,16 +163,10 @@ class ElevenLabsTTSBackend(TTSBackend):
         cancelled=None,
     ) -> Iterator[bytes]:
         el_model = model if model.startswith("eleven_") else self.DEFAULT_MODEL
-        # Resolve voice name to voice_id (pass through if already an ID)
         voice_id = self.VOICE_IDS.get(voice, voice)
-        # Skip non-speakable chunks: ElevenLabs 400s on empty / whitespace-only /
-        # audio-tag-only text (sentence splitting can emit a bare "[laughs]" or a
-        # trailing empty fragment). No words = nothing to synth — yield nothing
-        # instead of a failed request. Device-confirmed: "", " ", "[laughs]" → 400.
         if not _AUDIO_TAG_RE.sub("", text or "").strip():
             logger.debug("ElevenLabs TTS: skipping non-speakable chunk: %r", text)
             return
-        # output_format is a query param, not body — pcm_24000 = 24kHz 16-bit mono
         url = f"{self._base_url}/text-to-speech/{voice_id}/stream?output_format=pcm_24000"
         headers = {
             "xi-api-key": self._api_key,
@@ -219,10 +176,7 @@ class ElevenLabsTTSBackend(TTSBackend):
             "text": text,
             "model_id": el_model,
         }
-        # Send normal speed explicitly too: omission inherits the voice's
-        # stored settings, which may use a different speaking speed.
-        # Keep the full HAL speed range and pitch-preserving playback policy
-        # when upgrading the default model, including explicit v3 overrides.
+        # v3/v4 get speed 1.0 explicitly (omitting it inherits the voice's stored speed); tempo is applied locally.
         local_tempo = el_model in ("eleven_v3", "eleven_v4", "eleven_v4_turbo")
         body["voice_settings"] = {
             "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
@@ -242,8 +196,6 @@ class ElevenLabsTTSBackend(TTSBackend):
                 logger.info("[tts-timing] stage=http_headers request=%s elapsed_ms=%.1f status=%d",
                             timing_id, (time.perf_counter() - started_at) * 1000, response.status_code)
                 if response.status_code >= 400:
-                    # raise_for_status alone swallows the body — log the real reason
-                    # + the offending text so the next 400 (other cause) is diagnosable.
                     try:
                         detail = response.read().decode(errors="replace")[:300]
                     except Exception:
@@ -252,11 +204,6 @@ class ElevenLabsTTSBackend(TTSBackend):
                         "ElevenLabs TTS %d voice=%s model=%s speed=%s text=%r: %s",
                         response.status_code, voice_id, el_model, speed, text[:80], detail,
                     )
-                    # Rate limit (429) or quota exhausted (401/402 with a quota body):
-                    # raise a dedicated error so the service announces it to the user
-                    # via a prerendered notice instead of retrying pointlessly and
-                    # failing silently. 401 alone is usually a bad key, so only treat
-                    # it as quota when the body says so.
                     if response.status_code == 429 or (
                         response.status_code in (401, 402)
                         and "quota" in detail.lower()
@@ -267,8 +214,6 @@ class ElevenLabsTTSBackend(TTSBackend):
                         )
                     response.raise_for_status()
                 def measured_chunks():
-                    # Preserve the previous 4096-byte output boundaries while observing
-                    # bytes before HTTPX's application-level chunk accumulation.
                     pending = bytearray()
                     first_network = True
                     first_buffered = True
@@ -296,8 +241,6 @@ class ElevenLabsTTSBackend(TTSBackend):
 
                 yield from measured_chunks()
 
-        # Start the filter before the HTTP generator is consumed. ffmpeg startup
-        # overlaps network/provider wait rather than delaying the first PCM bytes.
         chunks = fetch_chunks()
         if local_tempo:
             logger.info("TTS %s local tempo: speed=%.2f provider_speed=1.00", el_model, speed)

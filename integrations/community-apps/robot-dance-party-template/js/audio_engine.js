@@ -1,10 +1,5 @@
-// audio_engine.js — Web Audio API analysis + BPM detection
-//
-// FFT analysis (bass/mid/high/energy) + energy-based beat detection run
-// inline per frame. BPM estimation uses realtime-bpm-analyzer (CDN) when
-// available, falls back to median-interval estimation if CDN is unreachable.
+// audio_engine.js — Web Audio FFT analysis, beat detection and BPM estimation.
 
-// Lazy-loaded from CDN on first use
 let _bpmLib = null;
 async function loadBpmLib() {
   if (_bpmLib) return _bpmLib;
@@ -24,31 +19,24 @@ export class AudioEngine extends EventTarget {
     this.source = null;
     this.audioEl = null;
 
-    // BPM analyzer (realtime-bpm-analyzer AudioWorklet, if available)
     this._bpmAnalyzer = null;
     this._lowpass = null;
 
-    // FFT data buffers
     this.freqData = null;
     this.timeData = null;
 
-    // Beat detection state (energy-based onset)
     this._prevEnergy = 0;
     this._energyHistory = new Float32Array(30); // ~0.5s window — shorter = average stays lower = more sensitive
     this._historyIdx = 0;
     this._lastBeatTime = 0;
 
-    // Fallback BPM estimation (used when realtime-bpm-analyzer unavailable)
     this._beatIntervals = [];
 
-    // BPM value (updated by analyzer or fallback)
     this.bpm = 0;
 
-    // Beat sensitivity: fraction above rolling average to trigger beat
-    // Slider maps [20..90] → [0.20..0.02], default 55 → 0.08
+      // Fraction above rolling average that counts as a beat; slider [20..90] → [0.20..0.02].
     this.sensitivity = 0.08;
 
-    // Band energies (exposed for dance engine)
     this.bass = 0;
     this.mid = 0;
     this.high = 0;
@@ -71,7 +59,6 @@ export class AudioEngine extends EventTarget {
     this.freqData = new Uint8Array(this.analyser.frequencyBinCount);
     this.timeData = new Uint8Array(this.analyser.fftSize);
 
-    // Try loading realtime-bpm-analyzer from CDN
     const lib = await loadBpmLib();
     if (lib) {
       try {
@@ -92,28 +79,23 @@ export class AudioEngine extends EventTarget {
     }
   }
 
-  // Wire source through both the FFT analyser and the BPM analyzer (if available)
   _connectSource(source, toDestination) {
-    // FFT analysis chain
     source.connect(this.analyser);
     if (toDestination) {
       this.analyser.connect(this.ctx.destination);
     }
 
-    // BPM analyzer chain (parallel path through lowpass filter)
     if (this._bpmAnalyzer && this._lowpass) {
       source.connect(this._lowpass).connect(this._bpmAnalyzer.node);
     }
   }
 
-  // Load audio file and connect to analyser
   async loadFile(file) {
     this.stop();
     await this._initContext();
     this.isMicMode = false;
 
-    // Must create a fresh <audio> element each time —
-    // createMediaElementSource can only bind once per element.
+      // createMediaElementSource can only bind once per element, so use a fresh <audio>.
     this.audioEl = document.createElement('audio');
     this.audioEl.addEventListener('ended', () => {
       this.isPlaying = false;
@@ -135,7 +117,7 @@ export class AudioEngine extends EventTarget {
     }, { once: true });
   }
 
-  // Load audio from URL (downloaded YouTube audio served by start_server.py)
+    // Load audio from URL (downloaded YouTube audio served by start_server.py).
   async loadUrl(url, title) {
     this.stop();
     await this._initContext();
@@ -163,7 +145,6 @@ export class AudioEngine extends EventTarget {
     }, { once: true });
   }
 
-  // Connect microphone
   async loadMic() {
     this.stop();
     await this._initContext();
@@ -173,14 +154,12 @@ export class AudioEngine extends EventTarget {
 
     this.source = this.ctx.createMediaStreamSource(stream);
 
-    // Boost mic gain
     const gain = this.ctx.createGain();
     gain.gain.value = 2.0;
     this.source.connect(gain);
     gain.connect(this.analyser);
     // Don't connect to destination (feedback prevention)
 
-    // BPM analyzer (parallel path from gain node)
     if (this._bpmAnalyzer && this._lowpass) {
       gain.connect(this._lowpass).connect(this._bpmAnalyzer.node);
     }
@@ -191,7 +170,7 @@ export class AudioEngine extends EventTarget {
     this._emit('playing', { name: 'Microphone', duration: Infinity });
   }
 
-  // Capture system/tab audio via getDisplayMedia (Chrome)
+    // Capture system/tab audio via getDisplayMedia (Chrome only).
   async loadTabAudio() {
     this.stop();
     await this._initContext();
@@ -221,7 +200,6 @@ export class AudioEngine extends EventTarget {
     });
   }
 
-  // Transport controls
   pause() {
     if (this.isMicMode) return;
     if (this.audioEl) this.audioEl.pause();
@@ -255,8 +233,6 @@ export class AudioEngine extends EventTarget {
     return this.audioEl?.duration || 0;
   }
 
-  // --- Per-frame analysis (called from dance loop) ---
-
   analyze(timestamp) {
     if (!this.analyser || !this.isPlaying) {
       return { bass: 0, mid: 0, high: 0, energy: 0, isBeat: false, bpm: 0 };
@@ -265,7 +241,6 @@ export class AudioEngine extends EventTarget {
     this.analyser.getByteFrequencyData(this.freqData);
     this.analyser.getByteTimeDomainData(this.timeData);
 
-    // --- Frequency band energies ---
     const bins = this.freqData.length;
     const bassEnd = Math.floor(bins * 0.06);    // ~0-250 Hz
     const midEnd = Math.floor(bins * 0.35);     // ~250-3.5kHz
@@ -280,11 +255,8 @@ export class AudioEngine extends EventTarget {
     this.mid = midSum / ((midEnd - bassEnd) || 1);
     this.high = highSum / ((highEnd - midEnd) || 1);
 
-    // Weighted total (bass-heavy)
     this.energy = (this.bass * 2.5 + this.mid * 1.0 + this.high * 0.5) / 4;
 
-    // --- Beat detection ---
-    // Rolling average as baseline
     this._energyHistory[this._historyIdx % this._energyHistory.length] = this.energy;
     this._historyIdx++;
     let avgEnergy = 0;
@@ -292,7 +264,6 @@ export class AudioEngine extends EventTarget {
     for (let i = 0; i < filled; i++) avgEnergy += this._energyHistory[i];
     avgEnergy /= filled;
 
-    // Beat = current energy exceeds rolling average by sensitivity fraction + cooldown
     const minInterval = 200; // ~300 BPM max
     const isBeat = this.energy > avgEnergy * (1 + this.sensitivity)
       && this.energy > 15
@@ -301,7 +272,6 @@ export class AudioEngine extends EventTarget {
     if (isBeat) {
       this._lastBeatTime = timestamp;
 
-      // Fallback BPM: median-interval estimation when analyzer unavailable
       if (!this._bpmAnalyzer && this._lastBeatTime > 0) {
         const prev = this._beatIntervals.length > 0
           ? timestamp - this._beatIntervals._lastTs : 0;

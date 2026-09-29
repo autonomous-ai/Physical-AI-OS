@@ -12,17 +12,14 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// Mirrors what the device's `system/buddy/ws.go` and `system/buddy/dispatcher.go` will look like.
-
 var upgrader = websocket.Upgrader{
 	ReadBufferSize:  4096,
 	WriteBufferSize: 4096,
-	// Buddy connects from same Mac (localhost) — keep permissive for dev.
+	// Dev only: buddy connects from the same Mac.
 	CheckOrigin: func(r *http.Request) bool { return true },
 }
 
-// HandleWS upgrades the request to WebSocket, validates the bearer token, then runs a
-// reader loop that routes incoming responses to whoever is waiting in Dispatch().
+// HandleWS upgrades to WebSocket, validates the bearer token and routes responses to Dispatch waiters.
 func (s *State) HandleWS(w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {
@@ -44,9 +41,6 @@ func (s *State) HandleWS(w http.ResponseWriter, r *http.Request) {
 	s.setWS(ws)
 	logf("✓ buddy connected: %s", record.BuddyID)
 
-	// Hello ping (mirrors production `Service.Greet`) — fires one ping right
-	// after connect so the buddy's Activity window shows a ✓ row immediately,
-	// confirming end-to-end reachability without waiting for a real command.
 	go s.greet(record.BuddyID)
 
 	defer func() {
@@ -78,9 +72,7 @@ func (s *State) HandleWS(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// HandleCommand accepts a command over HTTP and forwards it to the connected buddy.
-// Mirrors what device production will expose at /api/buddy/command (with admin auth added).
-// Used by the mock REPL AND by external "brain" callers (curl, OpenClaw skill, etc.).
+// HandleCommand forwards an HTTP-submitted command to the connected buddy.
 func (s *State) HandleCommand(w http.ResponseWriter, r *http.Request) {
 	var req struct {
 		ID        string         `json:"id"`
@@ -123,10 +115,7 @@ func (s *State) HandleCommand(w http.ResponseWriter, r *http.Request) {
 	_, _ = w.Write(raw)
 }
 
-// greet fires a single `ping` command after a buddy connects so the buddy app
-// gets immediate visible feedback (one ✓ row in its Activity window). Runs in
-// its own goroutine because Dispatch blocks on the WS read loop that the
-// caller goroutine is about to start.
+// greet sends one `ping` after connect; runs in its own goroutine because Dispatch blocks on the WS read loop.
 func (s *State) greet(buddyID string) {
 	cmd := newCommand("ping", map[string]any{"from": "mock-device", "hello": true})
 	ctx, cancel := context.WithTimeout(context.Background(), 7*time.Second)
@@ -138,8 +127,7 @@ func (s *State) greet(buddyID string) {
 	logf("hello ping ok for %s", buddyID)
 }
 
-// Dispatch sends a command to the buddy over the open WS and waits for the response with the
-// matching ID. Caller decides the overall timeout via ctx.
+// Dispatch sends a command over the WS and waits for the matching response; ctx sets the timeout.
 func (s *State) Dispatch(ctx context.Context, cmd Command) (json.RawMessage, error) {
 	ws := s.currentWS()
 	if ws == nil {

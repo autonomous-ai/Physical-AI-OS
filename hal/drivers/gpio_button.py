@@ -1,32 +1,4 @@
-"""GPIO button handler with device-declared wiring.
-
-Each handler owns one configured line. Standard buttons support five actions:
-- Single click: stop speaker / unmute mic (fires immediately on release)
-- Triple click: reboot OS (resolved after the click window)
-- Hold + release (2–5s):   sleepy emotion
-- Hold + release (5–10s):  shutdown OS
-- Hold + release (10s+):   factory-reset (wipe state, reboot to AP setup)
-
-Destructive actions commit ON RELEASE, not on a timer firing while held,
-so the user can cancel mid-hold by releasing before crossing a threshold
-(or keep holding past 10s to escalate from shutdown → factory-reset).
-
-The silent part of the single-click action (stop speaker / unmute mic)
-fires on the FIRST tap of a burst without waiting for the click window —
-it's non-destructive, so eager firing just cuts barge-in latency. The
-audible listening cue waits for the window to resolve so it never talks
-over a triple-click in progress. Double-click and 4+ rapid clicks add
-nothing on top of the floor-grab — destructive actions (reboot/shutdown/
-factory-reset) need a deliberate gesture so a user panic-clicking the
-button to interrupt TTS doesn't accidentally reboot.
-
-A dedicated factory_reset button ignores clicks and commits reset only on
-release after its configured hold threshold; feedback and action selection
-stay in the shared action module.
-
-The actual action logic lives in `button_actions.py` so other input
-devices (touchpad, remote) can reuse the same gestures.
-"""
+"""GPIO button handler with device-declared wiring."""
 
 import logging
 import threading
@@ -162,10 +134,7 @@ class GPIOButtonHandler:
     def _on_edge(self, chip, gpio, level, tick):
         if self._stopped or level not in (0, 1):
             return
-        # Per-edge debounce. Track press/release ticks independently so a
-        # quick click (rising edge soon after the falling edge) isn't
-        # dropped, while bouncy repeats of the same edge are filtered out.
-        # OrangePi's gpiochip1 reports more contact bounce than the Pi.
+        # Per-edge debounce.
         if level == 0:
             if tick - self._last_press_tick < self._debounce_ns:
                 return
@@ -176,11 +145,7 @@ class GPIOButtonHandler:
             self._last_release_tick = tick
 
         if level == 0:
-            # Button pressed (falling edge). All destructive actions commit
-            # on release based on hold duration — no timer fires while held,
-            # so the user can always cancel by releasing before the next
-            # threshold (or escalate from shutdown → factory-reset by
-            # holding past 10s). LED feedback runs in a watcher thread.
+            # Button pressed (falling edge). LED feedback runs in a watcher thread.
             with self._hold_lock:
                 if self._stopped or self._pressed:
                     return
@@ -199,7 +164,6 @@ class GPIOButtonHandler:
             ).start()
             return
 
-        # Button released (rising edge).
         if not self._pressed:
             # Stale release edge (matching press was debounce-dropped).
             # _press_start may be from minutes ago — refusing to act is
@@ -217,15 +181,14 @@ class GPIOButtonHandler:
         held = time.monotonic() - self._press_start
         if button_hold_tier(held, behavior=self._behavior, hold_s=self._hold_s,
                             factory_reset=self._factory_reset):
-            self._click_count = 0  # destructive, terminal: scrub any pending clicks
+            self._click_count = 0
             if self._click_timer:
                 self._click_timer.cancel()
                 self._click_timer = None
 
-            # Edge handling only supplies the released-duration signal. The
-            # action library owns which semantic action that duration selects.
-            # It may wait for a cue or release servos, so keep the GPIO callback
-            # short and never block subsequent hardware edges.
+            # Edge handling only supplies the released-duration signal. It may wait for
+            # a cue or release servos, so keep the GPIO callback short and never block
+            # subsequent hardware edges.
             threading.Thread(
                 target=self._run_hold_action,
                 args=(held,),
@@ -239,15 +202,6 @@ class GPIOButtonHandler:
                         self._source, held, self._hold_s)
             return
 
-        # Short tap → count toward triple-click resolution. The SILENT part
-        # of the single-click action (stop speaker / unmute mic) fires
-        # IMMEDIATELY on the first tap of a burst — it's a non-destructive
-        # "give me the floor" gesture, so firing now cuts perceived barge-in
-        # latency by 0.4s. The audible listening cue is deferred until the
-        # click window resolves: a cue talking over the user mid-triple-click
-        # disrupts their rhythm, and a resolved triple should only speak the
-        # reboot announce. If the burst turns out to be a triple, the silent
-        # floor-grab side effects are harmless — the OS reboots moments later.
         self._click_count += 1
         if self._click_count == 1:
             # Off-thread: stop_tts/audio_stop/unmute do blocking I/O; the
@@ -279,10 +233,6 @@ class GPIOButtonHandler:
             triple_click_action(source=self._source)
             return
         if count != 1:
-            # count == 2 → likely a slipped/panic double-tap of single
-            # count >= 4 → panic-click; never trigger destructive actions
+            # Double or 4+ clicks: never trigger destructive actions.
             logger.info("GPIO button %d clicks -- ignored (only 1=stop, 3=reboot)", count)
-        # Any non-triple burst already grabbed the floor silently on its
-        # first tap — now that it's resolved, speak the deferred cue so the
-        # user hears confirmation exactly once per burst.
         announce_listening_cue(source=self._source)

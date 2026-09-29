@@ -6,8 +6,7 @@ import { fmtIsoAgo } from "./format";
 import { FAMILIAR_VISIT_THRESHOLD } from "./types";
 import type { FaceStrangerStat } from "./types";
 
-// Unknown Faces — visit stats per stranger_id. Read-only card; all data is
-// passed in from already-fetched state.
+// Unknown Faces: visit stats per stranger_id.
 export function UnknownFacesCard({
   faceStrangers, faceStrangersError, monCard, cardHeader,
 }: {
@@ -34,8 +33,6 @@ export function UnknownFacesCard({
       )}
 
       {!faceStrangersError && faceStrangers && faceStrangers.length > 0 && (
-        // Local scroll — list can grow unbounded as new strangers are tracked,
-        // and the surrounding 3-col row should stay aligned with sibling cards.
         <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }} className="lm-hide-scroll lm-scroll-fade">
           {faceStrangers.map((s) => {
             const familiar = s.count >= FAMILIAR_VISIT_THRESHOLD;

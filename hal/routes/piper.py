@@ -1,19 +1,6 @@
-"""Piper install + voice download, driven from the admin UI.
+"""Piper install + voice download from the admin UI.
 
-Piper is not part of any OTA component, so a device that shipped before it
-existed has no /opt/piper. Rather than grow the image or the HAL package by
-~90 MB for every unit — including the ones that will never switch off the
-hosted voice — the operator asks for it and the device fetches it then.
-
-Two steps, in order: install the engine, then download a voice.
-
-Neither step runs inside this process. Both are handed to `piper_download.py`
-as a transient systemd unit, and the two sides agree through a job file rather
-than shared memory. The reason is that hal.service gets restarted for things
-with nothing to do with downloading — saving any voice setting makes os-server
-restart it — and its KillMode is control-group, so an in-process thread died
-mid-transfer and took the record of the job with it. The page then reverted to
-"Download 63 MB" as though nothing had been clicked.
+Runs `piper_download.py` as a transient systemd unit (survives HAL restart); state via a job file.
 """
 
 import json
@@ -39,22 +26,13 @@ PIPER_DIR = os.environ.get("HAL_PIPER_DIR", "/opt/piper")
 VOICES_DIR = os.environ.get("HAL_PIPER_VOICES", os.path.join(PIPER_DIR, "voices"))
 BIN_PATH = os.path.join(PIPER_DIR, "piper")
 
-# Shared with the worker. On the SD card, not in /tmp or /var/log: those are RAM
-# on this board, and a job record that vanishes on reboot is exactly what this
-# file exists to prevent.
+# On the SD card: /tmp and /var/log are RAM on this board.
 JOB_FILE = os.environ.get("HAL_PIPER_JOB", "/var/lib/autonomous/piper-job.json")
 WORKER = os.path.join(os.path.dirname(os.path.abspath(__file__)), "piper_download.py")
-# Prefix, not the unit name: each run gets its own. A fixed name collides with
-# the run before it — a finished unit sits in `inactive` for a moment before
-# --collect reaps it, and systemd-run refuses a name that still exists. That
-# failure fell through to the in-process fallback, which then died with the next
-# HAL restart and surfaced as "download stopped unexpectedly" for no visible
-# reason. A unique name has no such window.
+# Prefix: each run gets a unique unit name (systemd-run refuses a name still reaping).
 SYSTEMD_UNIT_PREFIX = "autonomous-piper-download"
 
-# How long a claim may sit with no worker having written to the file before it
-# is called a failed start. Generous: it covers systemd-run plus a Python
-# interpreter starting on a loaded board.
+# Max time a claim may sit without a worker write before it counts as a failed start.
 CLAIM_GRACE_S = 45.0
 
 _IDLE = {
@@ -77,13 +55,7 @@ def _alive(pid: int) -> bool:
 
 
 def _read_job() -> dict:
-    """The job as the worker last left it, with dead workers reported as such.
-
-    A record claiming to be active is only believed while the process behind it
-    exists. Without that check a worker killed by anything other than its own
-    error handler — OOM, power loss mid-transfer — would leave the page showing
-    a download that stopped moving, forever.
-    """
+    """The job as the worker last left it; an "active" record with a dead pid is reported failed."""
     try:
         with open(JOB_FILE, "r", encoding="utf-8") as fh:
             raw = json.load(fh)
@@ -98,8 +70,6 @@ def _read_job() -> dict:
             return job
         reason = "download stopped unexpectedly"
     else:
-        # No pid yet: the claim is written before the worker starts, so this is
-        # normal for a moment, and a failed start after that.
         if time.time() - float(raw.get("claimed_at") or 0) < CLAIM_GRACE_S:
             return job
         reason = "download failed to start"
@@ -119,15 +89,7 @@ def _write_job(rec: dict) -> None:
 
 
 def _claim(kind: str, target: str) -> bool:
-    """Record a job as running before its worker exists. False if one already is.
-
-    Claiming here rather than in the worker closes a race the UI cannot recover
-    from: the POST returns as soon as the worker is spawned and the page re-reads
-    status immediately, and the page only polls *while* a job is active. If its
-    first read landed before the worker's first write it would conclude nothing
-    started and stop looking, and a several-minute download would run to
-    completion invisibly.
-    """
+    """Record a job as running before its worker exists; False if one already is."""
     with _claim_lock:
         if _read_job()["active"]:
             return False
@@ -139,12 +101,7 @@ def _claim(kind: str, target: str) -> bool:
 
 
 def _spawn(spec: dict) -> None:
-    """Start the worker outside hal.service's control group.
-
-    systemd-run is what puts it there. The fallback keeps a development host
-    working, where systemd may be absent — it runs the same worker as an
-    ordinary child, which does still die when HAL is restarted.
-    """
+    """Start the worker outside hal.service's cgroup via systemd-run (plain child as dev fallback)."""
     argv = [sys.executable, WORKER, JOB_FILE, json.dumps(spec)]
     unit = f"{SYSTEMD_UNIT_PREFIX}-{time.time_ns()}"
     try:
@@ -156,8 +113,6 @@ def _spawn(spec: dict) -> None:
         logger.info("Piper: %s %s started as %s", spec["kind"], spec["target"], unit)
         return
     except subprocess.CalledProcessError as e:
-        # Report what systemd actually said. Falling back silently is how a
-        # download ends up inside HAL's control group without anyone knowing.
         detail = (e.stderr or b"").decode("utf-8", "replace").strip() or e
         logger.warning("Piper: systemd-run failed (%s), running in-process "
                        "— this download will not survive a HAL restart", detail)
@@ -196,13 +151,7 @@ def _discard_voice_files(name: str) -> None:
 
 
 def _sweep_orphans() -> None:
-    """Drop sidecars and .part files with no model beside them, once at start.
-
-    Skips whatever a running job is working on. Downloads outlive HAL now, so
-    this runs *while* a transfer may be in progress, and deleting the .part file
-    from under a live worker would break exactly the case the design exists to
-    protect.
-    """
+    """Drop sidecars and .part files with no model beside them, skipping a running job's files."""
     job = _read_job()
     busy_with = job["target"] if job["active"] and job["kind"] == "voice" else ""
     try:
@@ -256,16 +205,13 @@ class VoiceRequest(BaseModel):
 
 @router.post("/voice/piper/install")
 def piper_install():
-    """Install the engine. Idempotent: already-installed is a success, not an
-    error, so the UI can call it without first checking."""
+    """Install the engine; idempotent (already-installed is success)."""
     if os.path.isfile(BIN_PATH):
         return {"status": "ok", "already": True}
     if not _claim("engine", "piper"):
         return {"status": "busy", "job": _read_job()}
     _spawn({"kind": "engine", "target": "piper", "url": BINARY_URL,
             "dir": PIPER_DIR, "voices_dir": VOICES_DIR})
-    # The claimed job travels back with the response so the UI can show the
-    # download the instant the button is pressed, with no second round trip.
     return {"status": "started", "job": _read_job()}
 
 
@@ -283,9 +229,7 @@ def piper_voice(req: VoiceRequest):
     _spawn({
         "kind": "voice", "target": name,
         "steps": [
-            # The sidecar first: it is a few KB but carries the sample rate, and
-            # a model without it would load at the wrong rate and sound pitched,
-            # which is far more confusing than a failed download.
+            # Sidecar first: it carries the sample rate; a model without it plays pitched.
             {"url": json_url, "dest": os.path.join(VOICES_DIR, f"{name}.onnx.json"),
              "from": 0, "to": 3, "track": False},
             {"url": onnx_url, "dest": os.path.join(VOICES_DIR, f"{name}.onnx"),
@@ -297,12 +241,7 @@ def piper_voice(req: VoiceRequest):
 
 @router.post("/voice/piper/voice/remove")
 def piper_voice_remove(req: VoiceRequest):
-    """Delete one downloaded voice and free its ~63 MB.
-
-    Restricted to catalogue names for the same reason downloads are: the name
-    arrives from the admin UI, and building a path out of arbitrary input would
-    turn this into a way to delete any file the service can reach.
-    """
+    """Delete one downloaded voice (catalogue names only)."""
     name = (req.name or "").strip()
     if name not in CATALOG:
         return {"status": "error", "message": f"unknown voice {name!r}"}
@@ -310,12 +249,7 @@ def piper_voice_remove(req: VoiceRequest):
         return {"status": "ok", "already": True}
     if _read_job()["active"]:
         return {"status": "busy", "job": _read_job()}
-    # HAL is not told which voice is configured — os-server sends it with each
-    # /voice/speak call — so this cannot refuse "the one in use". What it can
-    # guarantee is the invariant that actually matters: never delete the last
-    # model and leave the device unable to speak at all. Removing any other
-    # voice is survivable, because an unknown voice falls back to one that is
-    # installed. The UI additionally hides Remove on the in-use row.
+    # Never delete the last model; the device must keep a voice.
     if len(_installed_voices()) <= 1:
         return {
             "status": "error",

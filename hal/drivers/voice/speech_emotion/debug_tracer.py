@@ -1,44 +1,4 @@
-"""SER-DEBUG — TEMPORARY DIAGNOSTIC TRACER — REMOVE BEFORE DEPLOY.
-
-Throwaway diagnostic aid for tuning speech emotion recognition, modelled on
-the SPEAKER-DEBUG block in ``speaker_recognizer.py`` (and on the facial-emotion
-debug logs). It traces every SER utterance to disk — the submitted audio, the
-prefilter decision and every metric behind it, the HTTP request/response, the
-label + confidence, the per-stage latency/CPU/memory, and the flush/emit
-decision that finally reaches the OS server.
-
-TO REMOVE FOR PRODUCTION: delete this file and every line tagged ``SER-DEBUG``
-in ``service.py`` / ``emotion2vec.py`` (``grep -rn "SER-DEBUG"`` in this
-package). Nothing else imports it. It is OFF by default (production-safe); set
-``HAL_SER_DEBUG=true`` to enable it during development.
-
-Env knobs (all optional):
-    HAL_SER_DEBUG              "true" to enable (OFF by default)
-    HAL_SER_DEBUG_DIR          output root (default: ./speech_emotion_logs beside this file)
-    HAL_SER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0 = unbounded)
-
-Layout — one dir per traced event, named ``<timestamp>_<class-id>_<confidence>``
-exactly like the speaker/face logs, with ``<timestamp>_FAIL-<reason>`` when the
-event never produced a class at all:
-
-    <root>/recognize/<ts>_<label>_<conf>/     one utterance: submit -> HTTP -> buffer
-    <root>/recognize/<ts>_FAIL-<reason>/      dropped before any label existed
-    <root>/emit/<ts>_<label>_<conf>/          one flush decision for one user
-    <root>/emit/<ts>_FAIL-<reason>/           flush produced nothing to send
-
-Each dir holds:
-    input.wav        the WAV as submitted (what the mic session produced)
-    prefiltered.wav  the trimmed WAV actually uploaded (absent when the
-                     prefilter dropped the sample before re-encoding)
-    result.json      everything about the decision: context, prefilter metrics,
-                     HTTP exchange, label/confidence/threshold, and the final
-                     verdict (``accepted`` / ``dropped`` + ``drop_reason``)
-    profile.json     per-stage wall-clock / CPU / RSS for the call, kept in its
-                     own file so neither it nor result.json buries the other
-
-NOTE: ``speech_emotion_logs/`` lands inside the source tree — don't commit it
-(it is git-ignored, and this whole block is meant to be removed before deploy).
-"""
+"""SER-DEBUG — TEMPORARY DIAGNOSTIC TRACER — REMOVE BEFORE DEPLOY."""
 
 from __future__ import annotations
 
@@ -72,8 +32,6 @@ def audio_stats(wav_bytes: Optional[bytes]) -> dict[str, Any]:
             out["duration_s"] = round(float(samples.size) / sample_rate, 3)
         if samples.size:
             f = samples.astype(np.float64)
-            # Normalized to [0, 1] so the numbers read the same as the speaker
-            # tracer's, which works on float32 audio.
             out["rms"] = round(float(np.sqrt(np.mean(f ** 2))) / 32768.0, 6)
             out["peak"] = round(float(np.max(np.abs(f))) / 32768.0, 6)
     except Exception as e:  # a debug helper must never break the service
@@ -81,47 +39,16 @@ def audio_stats(wav_bytes: Optional[bytes]) -> dict[str, Any]:
     return out
 
 
-# ---------------------------------------------------------------------------
-# SER-DEBUG: per-stage latency / CPU / memory profiler.
-#
-# Same idea as the speaker tracer's profiler, kept independent so neither block
-# depends on the other being present. Stages form a TREE — a stage opened
-# inside another becomes its child — so ``prefilter.silero_vad`` and
-# ``api_call.request`` are attributed separately instead of collapsing into one
-# opaque total:
-#
-#   recognize                 the engine call as a whole
-#     +- prefilter            RMS trim + Silero gate
-#     |    +- decode_wav / rms_trim / silero_vad / encode_wav
-#     +- encode_b64           WAV -> base64 (+ encryption wrap)
-#     +- api_call
-#          +- request       << the HTTP round-trip itself
-#          +- decode         response parse (+ decrypt)
-#   persist_wav               buffered-sample WAV write
-#
-# RSS is SAMPLED on a background thread (~20 ms) and each stage reports the
-# PEAK inside its own window: endpoint-only sampling reports 0.0 for a stage
-# that allocates and frees within its window, and negative for one that runs
-# while an earlier allocation is released. ``rss_peak_delta_mb`` is the memory
-# number to read; ``rss_end_delta_mb`` is what the stage KEPT and is
-# legitimately negative when the allocator hands pages back. RSS and cpu_ms are
-# PROCESS-wide, so a concurrent HAL thread lands in these numbers — read one
-# stage as an upper bound and prefer the shape across several calls.
 _rss_mode: Optional[str] = None
 _rss_proc: Any = None
 
 
 def _rss_bytes() -> Optional[int]:
-    """SER-DEBUG: process RSS in bytes; None if unmeasurable.
-
-    ``psutil``/``statm`` report CURRENT RSS (deltas may be negative);
-    ``rusage`` is the macOS-without-psutil fallback and is a HIGH-WATER mark,
-    so its deltas are growth-only.
-    """
+    """SER-DEBUG: process RSS in bytes; None if unmeasurable."""
     global _rss_mode, _rss_proc
     if _rss_mode is None:
         try:
-            import psutil  # optional; present on-device via the HAL deps
+            import psutil
 
             _rss_proc = psutil.Process()
             _rss_mode = "psutil"
@@ -131,14 +58,13 @@ def _rss_bytes() -> Optional[int]:
         if _rss_mode == "psutil":
             return int(_rss_proc.memory_info().rss)
         if _rss_mode == "statm":
-            with open("/proc/self/statm", "r") as fh:  # field 1 = resident pages
+            with open("/proc/self/statm", "r") as fh:
                 return int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
         if _rss_mode == "rusage":
             import resource
             import sys
 
             maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            # ru_maxrss is bytes on Darwin/BSD, kilobytes on Linux.
             return int(maxrss) if sys.platform == "darwin" else int(maxrss) * 1024
     except Exception:
         return None
@@ -210,8 +136,6 @@ class _StageNode:
                 rss_peak if self.rss_peak_b is None else max(self.rss_peak_b, rss_peak)
             )
             if rss_before is not None:
-                # MAX, not sum: for a repeated stage the useful number is the
-                # worst single occurrence, not a total that grows with count.
                 growth = max(0, rss_peak - rss_before)
                 self.rss_peak_delta_b = (
                     growth if self.rss_peak_delta_b is None
@@ -223,16 +147,12 @@ class _StageNode:
         d: dict[str, Any] = {
             "stage": self.name,
             "ms": round(self.ms, 2),
-            # This node's OWN time — the parent's glue, not its children's work.
             "self_ms": round(max(0.0, self.ms - sum(k.ms for k in kids)), 2),
             "cpu_ms": round(self.cpu_ms, 2),
-            # >100% = used more than one core; ~0% = blocked, not working.
             "cpu_pct": (round(self.cpu_ms / self.ms * 100.0, 1) if self.ms > 0 else None),
             "thread_cpu_ms": round(self.thread_cpu_ms, 2),
-            # THE memory number: peak inside this stage minus RSS at entry.
             "rss_peak_delta_mb": _mb(self.rss_peak_delta_b),
             "rss_peak_mb": _mb(self.rss_peak_b),
-            # What it KEPT — legitimately negative when pages go back to the OS.
             "rss_end_delta_mb": _mb(self.rss_end_delta_b),
             "rss_after_mb": _mb(self.rss_after_b),
         }
@@ -248,7 +168,7 @@ class _StageProfiler:
     """SER-DEBUG: nested per-stage latency / CPU / memory. Never raises."""
 
     _SAMPLE_INTERVAL_S = 0.02
-    _MAX_SAMPLES = 20000        # ~400 s of sampling; backstop, not a real limit
+    _MAX_SAMPLES = 20000
     _MAX_LIFETIME_S = 300.0     # sampler self-terminates if a call never ends
 
     def __init__(self, label: str) -> None:
@@ -257,8 +177,6 @@ class _StageProfiler:
         self._cpu0 = time.process_time()
         self._rss0 = _rss_bytes()
         self._root = _StageNode(label)
-        # Open-stage stack: a stage entered while another is open becomes its
-        # child. This is what makes the output a tree instead of a flat list.
         self._stack: list[_StageNode] = [self._root]
         self._samples: list[tuple[float, int]] = []
         self._stop = threading.Event()
@@ -298,7 +216,7 @@ class _StageProfiler:
         for p in points:
             if p is not None and (best is None or p > best):
                 best = p
-        for t, rss in list(self._samples):  # snapshot; sampler only appends
+        for t, rss in list(self._samples):
             if t0 <= t <= t1 and (best is None or rss > best):
                 best = rss
         return best
@@ -315,9 +233,6 @@ class _StageProfiler:
         try:
             yield
         finally:
-            # `finally`, so a stage that REJECTS (prefilter drop, HTTP error)
-            # still reports its cost — a reject pays for the same work as a
-            # pass, and is exactly what we tune.
             t1 = time.perf_counter()
             cpu_ms = (time.process_time() - cpu0) * 1000.0
             thread_ms = (time.thread_time() - thread0) * 1000.0
@@ -390,14 +305,7 @@ class _StageProfiler:
 
 
 class _Call:
-    """SER-DEBUG: one in-flight traced event, owned by the calling thread.
-
-    The service opens it, the engine adds stages / metrics / attachments as the
-    utterance moves through the pipeline, and the service closes it — so one
-    utterance produces exactly one trace dir even though the code that knows
-    the audio, the HTTP exchange and the buffering verdict lives in three
-    different places.
-    """
+    """SER-DEBUG: one in-flight traced event, owned by the calling thread."""
 
     __slots__ = ("kind", "stamp", "t0", "result", "wavs", "reason", "prof")
 
@@ -415,13 +323,7 @@ class SerDebugTracer:
     """SER-DEBUG: writes per-event trace dirs. Self-contained; never raises."""
 
     def __init__(self) -> None:
-        # OFF by default (production-safe). Set HAL_SER_DEBUG=true to enable
-        # during development — any env source works (shell `export`, systemd
-        # `Environment=`, docker `-e`). Read once at construction, so restart
-        # HAL after changing it.
         self.enabled = os.environ.get("HAL_SER_DEBUG", "false").lower() == "true"
-        # Default: a `speech_emotion_logs/` dir right next to this file, so
-        # traces are trivial to inspect. Override with HAL_SER_DEBUG_DIR.
         _default_dir = Path(__file__).resolve().parent / "speech_emotion_logs"
         self._base = Path(os.environ.get("HAL_SER_DEBUG_DIR", str(_default_dir)))
         try:
@@ -430,8 +332,6 @@ class SerDebugTracer:
             self._max = 1000
         self._local = threading.local()
         if self.enabled:
-            # Prefer the source-tree dir; if it's read-only (device deploy),
-            # fall back to a writable temp dir instead of silently disabling.
             if not self._try_mkdir(self._base):
                 import tempfile
 
@@ -446,8 +346,6 @@ class SerDebugTracer:
                     self.enabled = False
             if self.enabled:
                 logger.info("SER-DEBUG tracing ON -> %s", self._base)
-
-    # --- helpers ----------------------------------------------------------
 
     @staticmethod
     def _try_mkdir(p: Path) -> bool:
@@ -470,16 +368,8 @@ class SerDebugTracer:
         s = re.sub(r"[^A-Za-z0-9_.-]+", "_", str(value)).strip("_")
         return s[:48] or "na"
 
-    # --- per-call API (service opens, engine fills in, service closes) ----
-
     def begin(self, kind: str, **context: Any) -> None:
-        """Open a traced event on THIS thread. No-op when tracing is off.
-
-        Any previously-open call on the same thread is dropped (its profiler
-        sampler stopped) rather than written — an unfinished call means the
-        pipeline raised past its ``finish()``, and half a trace is worse than
-        none.
-        """
+        """Open a traced event on THIS thread. No-op when tracing is off."""
         if not self.enabled:
             return
         prev = getattr(self._local, "call", None)
@@ -518,9 +408,8 @@ class SerDebugTracer:
     def fail(self, reason: str, **fields: Any) -> None:
         """Mark WHY this call produced no label. First reason wins.
 
-        First wins because the earliest gate is the one that actually decided:
-        a prefilter drop must not be relabelled by whatever the caller reports
-        afterwards.
+        First wins because the earliest gate is the one that actually decided: a
+        prefilter drop must not be relabelled by whatever the caller reports afterwards.
         """
         call = getattr(self._local, "call", None)
         if call is None:
@@ -530,11 +419,7 @@ class SerDebugTracer:
         call.result.update(fields)
 
     def stage(self, name: str) -> Any:
-        """Context manager timing one stage; a ``nullcontext`` when off.
-
-        Used at every call site so the production path costs one attribute
-        lookup and a ``nullcontext``.
-        """
+        """Context manager timing one stage; a ``nullcontext`` when off."""
         call = getattr(self._local, "call", None)
         return call.prof.stage(name) if call is not None else nullcontext()
 
@@ -545,11 +430,7 @@ class SerDebugTracer:
         confidence: Optional[float] = None,
         **fields: Any,
     ) -> None:
-        """Close the open call and write its dir. Safe to call unconditionally.
-
-        ``cls``/``confidence`` name the dir (``<ts>_<label>_<conf>``); when
-        neither survives, the dir is ``<ts>_FAIL-<reason>`` instead.
-        """
+        """Close the open call and write its dir. Safe to call unconditionally."""
         call = getattr(self._local, "call", None)
         if call is None:
             return
@@ -571,8 +452,6 @@ class SerDebugTracer:
         except Exception as e:  # a debug tracer must never break the service
             logger.debug("SER-DEBUG finish failed: %s", e)
 
-    # --- standalone API (no open call — submit-time drops, flush decisions) --
-
     def record(
         self,
         kind: str,
@@ -590,8 +469,6 @@ class SerDebugTracer:
             kind, stamp=self._stamp(), cls=cls, confidence=confidence,
             reason=reason, result=result or {}, wavs=wavs or {}, profile=None,
         )
-
-    # --- writer -----------------------------------------------------------
 
     def _write(
         self,
@@ -627,8 +504,6 @@ class SerDebugTracer:
             payload.update(result)
             (out / "result.json").write_text(json.dumps(payload, indent=2, default=str))
 
-            # Latency/memory goes in its OWN file — result.json is already dense
-            # with the decision, and mixing timings in makes both harder to read.
             if profile:
                 (out / "profile.json").write_text(
                     json.dumps(profile, indent=2, default=str)
@@ -656,6 +531,4 @@ class SerDebugTracer:
             pass
 
 
-# Module-level singleton: the service and the engine trace into the SAME call,
-# which is what lets one utterance produce one dir spanning both files.
 tracer = SerDebugTracer()

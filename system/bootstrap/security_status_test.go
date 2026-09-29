@@ -60,8 +60,7 @@ func TestSecurityStatusRecordsLastFetchOutcome(t *testing.T) {
 		t.Fatalf("unexpected success record: %+v", last)
 	}
 
-	// A later failure must replace the earlier success, otherwise a device
-	// whose feed went stale would keep reporting a healthy verification.
+	// A later failure must replace the earlier success.
 	b.security.record(false, errors.New("fetch metadata: status 404"))
 	last = b.securityStatus().LastMetadataFetch
 	if last == nil || last.Verified {
@@ -72,8 +71,7 @@ func TestSecurityStatusRecordsLastFetchOutcome(t *testing.T) {
 	}
 }
 
-// Signed-only feeds (the post-migration cutover) carry no top-level component
-// entries at all; verification must still succeed on them.
+// Signed-only feeds carry no top-level entries; verification must still succeed.
 func TestVerifyOTAMetadataAcceptsSignedOnlyDocument(t *testing.T) {
 	publicKey, privateKey, err := ed25519.GenerateKey(rand.Reader)
 	if err != nil {

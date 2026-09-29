@@ -1,10 +1,4 @@
-"""Backchannel/filler-only turns are dropped, real requests are not.
-
-A turn whose entire transcript is acknowledgment/filler ("okay", "one sec")
-carries no request; the realtime model tends to stay silent on it and the turn
-falls through to a dead main-agent turn. is_nonactionable_transcript drops it
-deterministically. Whole-utterance match only.
-"""
+"""Backchannel/filler-only turns are dropped, real requests are not."""
 
 from hal.drivers.voice._internal.realtime_turn import is_nonactionable_transcript
 
@@ -22,7 +16,6 @@ def test_keeps_real_requests():
 
 
 def test_empty_is_not_dropped_here():
-    # Empty transcript is handled by the noise/require-transcript path, not here.
     assert not is_nonactionable_transcript("")
     assert not is_nonactionable_transcript("   ")
 

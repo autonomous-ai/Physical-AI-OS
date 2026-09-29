@@ -27,8 +27,6 @@ def _no_effect(monkeypatch, service):
     monkeypatch.setattr(state, "_active_scene", None)
 
 
-# The regression: a lit ring whose pixel 0 happens to be dark reported "off",
-# which is how a visibly green lamp looked switched off from the API.
 def test_a_lit_ring_with_a_dark_first_pixel_is_not_reported_off(monkeypatch):
     pixels = [(0, 0, 0)] + [(0, 2, 2)] * 31
     _no_effect(monkeypatch, _Ring(pixels))
@@ -73,7 +71,6 @@ def test_a_dithered_ring_reports_the_brightest_pixel(monkeypatch):
     assert resp["brightness"] == round(2 / 255.0, 3)
 
 
-# A status query must never become a 500 because a driver cannot read back.
 def test_a_driver_that_cannot_read_back_reports_dark_instead_of_raising():
     class _Broken:
         led_count = 8
@@ -88,9 +85,6 @@ def test_a_driver_that_cannot_read_back_reports_dark_instead_of_raising():
         assert _read_ring(_Broken()) == []
 
 
-# --- an effect over a black base ---------------------------------------------
-
-
 def _with_effect(monkeypatch, service, base_color):
     thread = mock.Mock()
     thread.is_alive.return_value = True
@@ -101,9 +95,6 @@ def _with_effect(monkeypatch, service, base_color):
     monkeypatch.setattr(state, "_active_scene", None)
 
 
-# The documented hazard (robots/lamp/docs/led-control.md): an effect thread
-# breathing a BLACK base burns SPI writes and used to report on=true while the
-# lamp was visibly dark.
 def test_an_effect_painting_nothing_is_not_reported_as_lit(monkeypatch):
     _with_effect(monkeypatch, _Ring([(0, 0, 0)] * 32), (0, 0, 0))
 
@@ -120,7 +111,5 @@ def test_an_effect_actually_painting_is_reported_as_lit(monkeypatch):
     resp = get_led_color()
 
     assert resp["on"] is True
-    # `color` stays the effect's base while one runs — os-server's ambient loop
-    # keys off it, and mid-animation samples would make it flap.
     assert resp["color"] == [0, 8, 0]
     assert resp["uniform"] is False

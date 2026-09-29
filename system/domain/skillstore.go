@@ -1,21 +1,13 @@
 package domain
 
-// Types for the Autonomous Agent Skills catalog (`bff-web-service`, documented
-// in agent-skills-public-api.md). The device proxies the catalog's public read
-// endpoints so the web UI never talks to it directly — see
-// system/server/agent/delivery/http/handler_skills.go.
-
-// SkillDraft is a user-authored skill submitted by the web UI's "Write skill"
-// form. It maps onto a SKILL.md: Name + Description become the YAML
-// front-matter, Instructions becomes the markdown body.
+// SkillDraft is a user-authored skill; it maps onto SKILL.md front-matter plus body.
 type SkillDraft struct {
 	Name         string `json:"name" binding:"required"`
 	Description  string `json:"description" binding:"required"`
 	Instructions string `json:"instructions" binding:"required"`
 }
 
-// SkillNode is one entry in an installed skill's file tree. children is set
-// only on directories; a node with no children is a file.
+// SkillNode is one entry in an installed skill's file tree; Children is set only on directories.
 type SkillNode struct {
 	Name string `json:"name"`
 	// Path is relative to the skills root, e.g. "music/reference/tempo.md".
@@ -25,43 +17,25 @@ type SkillNode struct {
 	Children []SkillNode `json:"children,omitempty"`
 }
 
-// InstalledSkill is one skill present in the active runtime's skills dir.
-// Name is the directory name (rendered as "/music" in the UI), Description is
-// read from the SKILL.md front-matter when present.
+// InstalledSkill is one skill in the active runtime's skills dir; Name is the directory name.
 type InstalledSkill struct {
 	Name        string      `json:"name"`
 	Description string      `json:"description,omitempty"`
 	Files       []SkillNode `json:"files"`
-	// StoreAvailability is the result of comparing this directory name with the
-	// current skill-store catalog. It is "in_store", "device_only", or
-	// "unknown" when the catalog could not be read completely. This describes
-	// availability in the catalog, not how the skill was originally installed.
+	// StoreAvailability is "in_store", "device_only", or "unknown" (catalog unreadable).
 	StoreAvailability string `json:"store_availability,omitempty"`
-	// UpdatedAt is the NEWEST modification time in the skill's tree, as Unix
-	// seconds — the skill directory's own mtime only moves when files are added
-	// or removed, so it would call an edited SKILL.md unchanged. 0 when nothing
-	// in the tree could be stat'd, which the UI renders as unknown rather than
-	// as the epoch.
+	// UpdatedAt is the newest mtime in the skill's tree (Unix seconds); 0 = unknown.
 	UpdatedAt int64 `json:"updated_at,omitempty"`
 }
 
-// SkillSummary is one installed skill flattened for the device's status
-// uplinks — the MQTT `info` response and the HTTP backend ping both carry a
-// `skills` array of these.
-//
-// Deliberately name+description only, NOT the file tree InstalledSkill also
-// holds: both uplinks are periodic (the ping every 15s), so shipping full
-// per-skill trees that often would be pure waste. Consumers that want the tree
-// ask for it on demand (GET /api/agent/skills/files).
-//
-// One type for both uplinks so their wire shape can never drift apart.
+// SkillSummary is an installed skill flattened for the periodic status uplinks (MQTT info, backend ping).
+// It omits the file tree on purpose to keep periodic payloads small.
 type SkillSummary struct {
 	Name        string `json:"name"`
 	Description string `json:"description,omitempty"`
 }
 
-// SummarizeSkills flattens a ListSkills result for the status uplinks. Returns
-// nil for an empty list so the `skills` field is omitted rather than sent as [].
+// SummarizeSkills flattens a ListSkills result; returns nil for an empty list so `skills` is omitted.
 func SummarizeSkills(list []InstalledSkill) []SkillSummary {
 	if len(list) == 0 {
 		return nil
@@ -80,8 +54,7 @@ type StoreSkillChangelog struct {
 	Changes []string `json:"changes"`
 }
 
-// StoreSkill mirrors the catalog's `Skill` schema. Field names match the
-// upstream snake_case JSON so the payload passes through unmapped.
+// StoreSkill mirrors the catalog's `Skill` schema (upstream snake_case JSON).
 type StoreSkill struct {
 	ID            string                `json:"id"`
 	Name          string                `json:"name"`
@@ -110,9 +83,7 @@ type StoreSkillList struct {
 	Total int64        `json:"total"`
 }
 
-// SkillBundleFile is one file extracted from a downloaded `.skill` archive.
-// Text content is inlined so the web UI can render it without a second
-// round-trip; binary or oversized files carry metadata only.
+// SkillBundleFile is one file from a `.skill` archive; binary or oversized files carry metadata only.
 type SkillBundleFile struct {
 	// Path is the entry path inside the archive, e.g. "my-skill/SKILL.md".
 	Path string `json:"path"`

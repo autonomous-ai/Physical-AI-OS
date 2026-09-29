@@ -19,15 +19,13 @@ func TestRenderSkillMarkdown(t *testing.T) {
 	}
 }
 
-// A newline in the description would terminate the unquoted YAML scalar and
-// corrupt the front-matter block, so it must be flattened.
+// A newline in the description must be flattened.
 func TestRenderSkillMarkdownFlattensDescription(t *testing.T) {
 	got := RenderSkillMarkdown("x", "line one\nline two\t  spaced", "body")
 
 	if !strings.Contains(got, "description: line one line two spaced\n") {
 		t.Fatalf("description not flattened to one line:\n%s", got)
 	}
-	// Exactly the three front-matter delimiters, nothing extra.
 	if n := strings.Count(got, "---\n"); n != 2 {
 		t.Errorf("front-matter delimiters = %d, want 2:\n%s", n, got)
 	}
@@ -107,8 +105,6 @@ func TestWriteAuthoredSkillRefusesToOverwrite(t *testing.T) {
 	}
 }
 
-// ─── Install ─────────────────────────────────────────────────────────────────
-
 func makeZip(t *testing.T, path string, entries map[string]string) {
 	t.Helper()
 	f, err := os.Create(path)
@@ -131,8 +127,7 @@ func makeZip(t *testing.T, path string, entries map[string]string) {
 	}
 }
 
-// The catalog's `.skill` archives wrap everything in a single <name>/ dir; that
-// segment names the skill and must be stripped, not nested twice.
+// A single wrapping <name>/ dir names the skill and is stripped.
 func TestInstallSkillArchiveStripsWrappingDir(t *testing.T) {
 	tmp := t.TempDir()
 	archive := filepath.Join(tmp, "a.zip")
@@ -160,7 +155,6 @@ func TestInstallSkillArchiveStripsWrappingDir(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "reference", "notes.md")); err != nil {
 		t.Errorf("nested file missing: %v", err)
 	}
-	// No staging leftovers.
 	if _, err := os.Stat(dir + ".new"); !os.IsNotExist(err) {
 		t.Error("staging dir was left behind")
 	}
@@ -215,8 +209,7 @@ func TestInstallSkillArchiveReplacesExisting(t *testing.T) {
 func TestInstallSkillArchiveRejectsTraversal(t *testing.T) {
 	tmp := t.TempDir()
 	archive := filepath.Join(tmp, "evil.zip")
-	// Two top-level segments so no wrapping dir is stripped; the ".." then has
-	// to be caught by the per-entry guard.
+	// Two top-level segments so the per-entry guard must catch "..".
 	makeZip(t, archive, map[string]string{
 		"SKILL.md":      "ok",
 		"../escaped.md": "pwned",
@@ -244,8 +237,6 @@ func TestInstallSkillArchiveEmpty(t *testing.T) {
 	}
 }
 
-// ─── Uninstall ───────────────────────────────────────────────────────────────
-
 func TestDeleteSkill(t *testing.T) {
 	dir := t.TempDir()
 	seedSkill(t, dir, "music", map[string]string{
@@ -264,14 +255,12 @@ func TestDeleteSkill(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(dir, "music")); !os.IsNotExist(err) {
 		t.Error("skill dir survived the delete")
 	}
-	// Neighbours untouched.
 	if _, err := os.Stat(filepath.Join(dir, "voice", "SKILL.md")); err != nil {
 		t.Errorf("unrelated skill was affected: %v", err)
 	}
 }
 
-// Not idempotent on purpose: a stale caller must see the mismatch instead of a
-// success for a deletion that never happened.
+// A missing skill is an error, not a silent success.
 func TestDeleteSkillMissing(t *testing.T) {
 	if _, err := DeleteSkill(t.TempDir(), "nope"); !errors.Is(err, ErrSkillNotFound) {
 		t.Fatalf("err = %v, want ErrSkillNotFound", err)
@@ -280,7 +269,6 @@ func TestDeleteSkillMissing(t *testing.T) {
 
 func TestDeleteSkillRejectsBadName(t *testing.T) {
 	dir := t.TempDir()
-	// A sibling of the skills dir that traversal must never reach.
 	outside := filepath.Join(dir, "outside.md")
 	if err := os.WriteFile(outside, []byte("keep"), 0644); err != nil {
 		t.Fatal(err)
@@ -296,8 +284,7 @@ func TestDeleteSkillRejectsBadName(t *testing.T) {
 	}
 }
 
-// A plain file where a skill dir should be is refused, not deleted — the caller
-// named something that isn't a skill.
+// A plain file where a skill dir should be is refused, not deleted.
 func TestDeleteSkillRefusesNonDirectory(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, "music"), []byte("not a skill"), 0644); err != nil {
@@ -321,7 +308,6 @@ func TestDeleteSkillFrom(t *testing.T) {
 	seedSkill(t, imported, "music", map[string]string{"SKILL.md": "IMPORTED"})
 	seedSkill(t, imported, "voice", map[string]string{"SKILL.md": "VOICE"})
 
-	// First root wins — same precedence as ListInstalledFrom.
 	if _, err := DeleteSkillFrom("music", authored, imported); err != nil {
 		t.Fatalf("delete music: %v", err)
 	}
@@ -332,7 +318,6 @@ func TestDeleteSkillFrom(t *testing.T) {
 		t.Error("imported copy must be left alone when the first root had it")
 	}
 
-	// Only in the second root — still found.
 	if _, err := DeleteSkillFrom("voice", authored, imported); err != nil {
 		t.Fatalf("delete voice: %v", err)
 	}
@@ -365,8 +350,6 @@ func TestSlugifySkillName(t *testing.T) {
 		{"trailing---", "trailing"},
 		{"---leading", "leading"},
 		{"tiếng việt", "ti-ng-vi-t"},
-		// Nothing usable survives → "", which the caller turns into a validation
-		// error rather than inventing a name.
 		{"", ""},
 		{"   ", ""},
 		{"...", ""},
@@ -379,8 +362,7 @@ func TestSlugifySkillName(t *testing.T) {
 	}
 }
 
-// Whatever the slug produces must be accepted by the validator that guards every
-// write — otherwise a fallback name could slip past one and fail at the other.
+// Slug output must pass the validator.
 func TestSlugifySkillNameOutputIsValid(t *testing.T) {
 	for _, in := range []string{
 		"My Skill", "design-critique.skill", "UPPER", "a b c",
@@ -397,8 +379,6 @@ func TestSlugifySkillNameOutputIsValid(t *testing.T) {
 	}
 }
 
-// ─── Front-matter + bare-.md install ────────────────────────────────────────
-
 func TestParseSkillFrontMatter(t *testing.T) {
 	name, desc, err := ParseSkillFrontMatter([]byte(
 		"---\nname: weekly-report\ndescription: Sums up the week.\n---\n\nbody"))
@@ -410,8 +390,7 @@ func TestParseSkillFrontMatter(t *testing.T) {
 	}
 }
 
-// The upstream format allows extra keys — anthropics/skills' algorithmic-art
-// carries `license:` — so an unknown key must not make a valid skill unreadable.
+// Unknown front-matter keys must not make a valid skill unreadable.
 func TestParseSkillFrontMatterToleratesExtraKeys(t *testing.T) {
 	name, desc, err := ParseSkillFrontMatter([]byte(
 		"---\nname: algorithmic-art\ndescription: Creating algorithmic art with p5.js.\n" +
@@ -471,7 +450,6 @@ func TestInstallSkillMarkdown(t *testing.T) {
 	if err != nil {
 		t.Fatalf("install: %v", err)
 	}
-	// Directory comes from the front-matter name, not from any filename.
 	if want := filepath.Join(dir, "weekly-report"); path != want {
 		t.Fatalf("path = %q, want %q", path, want)
 	}
@@ -491,7 +469,6 @@ func TestInstallSkillMarkdown(t *testing.T) {
 
 func TestInstallSkillMarkdownRejectsBadFrontMatter(t *testing.T) {
 	dir := t.TempDir()
-	// Valid YAML block but the name isn't a legal slug.
 	if _, err := InstallSkillMarkdown(dir, []byte("---\nname: Not A Slug\ndescription: d\n---\n")); !errors.Is(err, ErrInvalidSkillName) {
 		t.Errorf("bad slug: err = %v, want ErrInvalidSkillName", err)
 	}
@@ -530,7 +507,6 @@ func TestInstallSkillArchiveRequiresSkillMD(t *testing.T) {
 	if _, _, err := InstallSkillArchive(archive, skillsDir, "my-skill"); !errors.Is(err, ErrMissingSkillMD) {
 		t.Fatalf("err = %v, want ErrMissingSkillMD", err)
 	}
-	// A rejected archive must leave nothing behind, staging included.
 	for _, p := range []string{
 		filepath.Join(skillsDir, "my-skill"),
 		filepath.Join(skillsDir, "my-skill.new"),

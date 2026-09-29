@@ -87,7 +87,7 @@ def test_edge_restarts_configured_settle_then_reads_current_level(hardware):
     timer.assert_called_with(0.12, handler._reconcile)
     timer.return_value.cancel.assert_called_once_with()
     handler._apply_state_locked.assert_not_called()
-    gpio.gpio_read.return_value = 1  # Current level wins over edge payload.
+    gpio.gpio_read.return_value = 1
     timer.call_args.args[1]()
     handler._apply_state_locked.assert_called_once_with(True)
     gpio.gpio_read.assert_called_with(12, 43)

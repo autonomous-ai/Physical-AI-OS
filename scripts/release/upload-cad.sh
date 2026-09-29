@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Upload a CAD file to Mega.nz and print a public share link.
-#
-# Usage:
-#   scripts/release/upload-cad.sh <local-file> [remote-dir]
-#
-# Examples:
-#   scripts/release/upload-cad.sh robots/lamp/hardware/cad/lamp-v3.stp
-#   scripts/release/upload-cad.sh robots/lamp/hardware/cad/lamp-v3.stp /lamp-cad
-#
-# Requirements:
-#   - MEGAcmd installed (brew install --cask megacmd)
-#   - Logged in once with: mega-login <email> <password>
+# Upload a CAD file to Mega.nz and print a public link (needs MEGAcmd and a prior mega-login).
+# Usage: scripts/release/upload-cad.sh <local-file> [remote-dir]
 set -euo pipefail
 
 LOCAL_FILE="${1:-}"

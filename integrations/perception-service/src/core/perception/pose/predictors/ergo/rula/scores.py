@@ -6,10 +6,6 @@ investigation of work-related upper limb disorders."
 
 from core.models.pose import RiskLevel
 
-# ---------------------------------------------------------------------------
-# Scoring functions (angle → individual body-part score)
-# ---------------------------------------------------------------------------
-
 
 def score_upper_arm(angle: float) -> int:
     """+1: [-20,20], +2: <-20 or (20,45], +3: (45,90], +4: >90."""
@@ -67,11 +63,7 @@ def score_trunk(angle: float) -> int:
         return 4
 
 
-# ---------------------------------------------------------------------------
-# Lookup tables (McAtamney & Corlett 1993)
-# ---------------------------------------------------------------------------
-
-# Table A: [upper_arm-1][lower_arm-1][wrist-1][wrist_twist-1]
+# Lookup tables (McAtamney & Corlett 1993). Table A: [upper_arm-1][lower_arm-1][wrist-1][wrist_twist-1]
 TABLE_A: list[list[list[list[int]]]] = [
     [
         [[1, 2], [2, 2], [2, 3], [3, 3]],

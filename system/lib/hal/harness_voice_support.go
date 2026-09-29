@@ -9,8 +9,7 @@ import (
 	"time"
 )
 
-// SupportsHarnessVoiceMode checks configured input support, not transient sensor health.
-// Older HALs, malformed replies and unavailable HALs cannot authorize the mode.
+// SupportsHarnessVoiceMode reports configured input support; old, malformed or unreachable HALs yield false.
 func SupportsHarnessVoiceMode(parent context.Context) (bool, error) {
 	ctx, cancel := context.WithTimeout(parent, time.Second)
 	defer cancel()

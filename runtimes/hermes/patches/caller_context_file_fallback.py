@@ -1,12 +1,5 @@
 #!/usr/bin/env python3
-"""Extend the BlueBubbles system_prompt injection so it reads the caller
-context from a file when the env var is empty. systemd EnvironmentFile does
-not support multi-line values, so a multi-paragraph shop prompt saved
-through the UI never lands in $BLUEBUBBLES_CALLER_CONTEXT — presync writes
-it to ~/.hermes/bluebubbles_caller_context.txt instead, and this patch
-teaches the injection to pick it up from there.
-
-Idempotent: does nothing if the fallback marker is already present."""
+"""Make the BlueBubbles system_prompt injection fall back to a caller-context file when the env var is empty."""
 import re
 import sys
 from pathlib import Path

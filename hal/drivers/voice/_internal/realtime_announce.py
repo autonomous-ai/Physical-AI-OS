@@ -1,11 +1,4 @@
-"""Speak a Harness update through the realtime model (device-initiated turn).
-
-The realtime model turns raw Harness output (markdown, file paths, long lists)
-into a few spoken sentences in its own voice. This module builds the text it
-receives and plays its reply the same way run_realtime_turn plays a normal one:
-native model audio straight to the speaker, or text sentences through TTS.
-Pure helper: it touches only the orchestrator / TTS handles passed in.
-"""
+"""Speak a Harness update through the realtime model (device-initiated turn)."""
 
 import logging
 import re
@@ -20,6 +13,9 @@ from hal.realtime.models import TextOutput as RTTextOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 from hal.drivers.voice._internal.realtime_turn import (
+    realtime_speech_text,
+    realtime_visible_text,
+    split_delivery_sentence,
     SENTENCE_ENDS,
     _reply_language_name,
     split_completed_prefix,
@@ -35,7 +31,7 @@ _ENVELOPE_TAG_RE = re.compile(r"<(/?)\s*(harness_update|instructions|content)\b"
 class AnnouncementItem(NamedTuple):
     """One queued Harness update as the renderer sees it."""
 
-    kind: str  # "result" | "question" | "progress"
+    kind: str
     text: str
     outcome: str = ""
     age_s: float = 0.0
@@ -102,13 +98,7 @@ def play_realtime_announcement(
     owner: str,
     stop_event: threading.Event,
 ) -> AnnouncementResult:
-    """Send the envelope and speak the model's reply; never raises.
-
-    `owner` is the Harness run that owns the speech, so the user's cancel
-    gesture on that run silences it like any other reply. A signal instead of
-    speech (delegate / reject / look) means nothing was said: the caller falls
-    back to its own renderer.
-    """
+    """Send the envelope and speak the model's reply; never raises."""
     native = hal_config.REALTIME_NATIVE_AUDIO
     native_started = False
     chimed = False
@@ -127,8 +117,8 @@ def play_realtime_announcement(
 
     def speak(sentence: str) -> None:
         nonlocal first_sent
-        sentence = leak_filter.filter_text(strip_markers(sentence)).strip()
-        if not sentence:
+        sentence = leak_filter.filter_text(realtime_speech_text(sentence, tts, strip_markers)).strip()
+        if not realtime_visible_text(sentence, tts, strip_markers):
             return
         chime_once()
         if not first_sent:
@@ -170,11 +160,12 @@ def play_realtime_announcement(
                 if native:
                     continue
                 sentence_buf += output.text
-                ready, tail = split_completed_prefix(sentence_buf)
+                delivery = getattr(tts, "_provider", None) == "elevenlabs"
+                ready, tail = split_delivery_sentence(sentence_buf) if delivery else split_completed_prefix(sentence_buf)
                 if ready:
                     speak(ready)
                     sentence_buf = tail
-                elif strip_markers(sentence_buf).rstrip().endswith(SENTENCE_ENDS):
+                elif not delivery and realtime_visible_text(sentence_buf, tts, strip_markers).rstrip().endswith(SENTENCE_ENDS):
                     speak(sentence_buf)
                     sentence_buf = ""
         if not native and not stop_event.is_set() and sentence_buf.strip():
@@ -185,7 +176,6 @@ def play_realtime_announcement(
         if native_started:
             tts.native_play_end(clean_transcript(strip_markers("".join(text_parts)), reply_lang))
     if stop_event.is_set():
-        # The user started talking; their turn owns the speaker now.
         if tts.realtime_speaking:
             tts.stop_realtime_reply(turn_id=owner)
         spoken = native_started or first_sent

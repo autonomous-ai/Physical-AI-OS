@@ -1,12 +1,6 @@
 #!/usr/bin/env swift
 //
-// gen-app-icon.swift — placeholder app icon generator for Autonomous Buddy.
-//
-// Renders a 1024×1024 PNG with an SF Symbol lightbulb on a warm rounded
-// background, suitable as the master PNG for `iconutil -c icns`. Output path
-// is the single CLI arg (defaults to dist/AppIcon-master.png).
-//
-// Not meant to be a final brand icon — replace with a designed PNG when ready.
+// gen-app-icon.swift — placeholder 1024×1024 master PNG for `iconutil -c icns`.
 // Run: `swift macos/scripts/gen-app-icon.swift <output.png>`
 
 import AppKit
@@ -23,7 +17,6 @@ let CORNER: CGFloat = 220   // matches macOS Big Sur+ app icon corner radius
 let canvas = NSImage(size: NSSize(width: SIZE, height: SIZE))
 canvas.lockFocus()
 
-// 1) Rounded background — warm amber gradient evoking a lamp glow.
 let bgRect = NSRect(x: 0, y: 0, width: SIZE, height: SIZE)
 let bgPath = NSBezierPath(roundedRect: bgRect, xRadius: CORNER, yRadius: CORNER)
 bgPath.addClip()
@@ -32,7 +25,6 @@ let gradient = NSGradient(starting: NSColor(red: 0.99, green: 0.86, blue: 0.45, 
                           ending:   NSColor(red: 0.95, green: 0.62, blue: 0.20, alpha: 1))!
 gradient.draw(in: bgRect, angle: -90)
 
-// 2) Lightbulb SF Symbol — render in white centred.
 let config = NSImage.SymbolConfiguration(pointSize: 640, weight: .medium, scale: .large)
 guard let symbolBase = NSImage(systemSymbolName: "lightbulb.fill",
                                accessibilityDescription: "Autonomous Buddy")?
@@ -50,7 +42,6 @@ let tinted = NSImage(size: symbolSize, flipped: false) { rect in
     return true
 }
 
-// Centre the tinted symbol with a slight downward optical adjustment.
 let sx = (SIZE - symbolSize.width) / 2
 let sy = (SIZE - symbolSize.height) / 2 - 20
 tinted.draw(at: NSPoint(x: sx, y: sy),
@@ -60,7 +51,6 @@ tinted.draw(at: NSPoint(x: sx, y: sy),
 
 canvas.unlockFocus()
 
-// 3) Encode PNG.
 guard let tiff = canvas.tiffRepresentation,
       let rep = NSBitmapImageRep(data: tiff),
       let png = rep.representation(using: .png, properties: [:]) else {

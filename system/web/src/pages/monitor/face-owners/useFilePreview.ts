@@ -2,20 +2,15 @@ import { useRef, useState } from "react";
 import { hwUrl } from "@/lib/api";
 import { HW } from "../types";
 
-// Folder-tree expand state, inline text preview, audio playback, and file open
-// routing for the per-person file gallery. Self-contained — no dependency on the
-// owners list or any refresh.
+// Folder-tree expand state, inline text preview, audio playback, and file open routing for the per-person file gallery.
 export function useFilePreview() {
-  // Folder toggle state: "label:mood" => expanded
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
-  // File preview state: { label, path, content }
   const [preview, setPreview] = useState<{ label: string; path: string; content: string } | null>(null);
   const [previewLoading, setPreviewLoading] = useState(false);
 
   const toggleDir = (key: string) => setExpanded((prev) => ({ ...prev, [key]: !prev[key] }));
 
-  // Audio playback state
-  const [playingAudio, setPlayingAudio] = useState<string | null>(null); // "label/path"
+  const [playingAudio, setPlayingAudio] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
   const playAudio = (label: string, filepath: string) => {
@@ -63,7 +58,6 @@ export function useFilePreview() {
       downloadFile(label, filepath);
       return;
     }
-    // Already showing this file? close it
     if (preview?.label === label && preview?.path === filepath) {
       setPreview(null);
       return;

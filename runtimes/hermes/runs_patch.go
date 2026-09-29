@@ -16,7 +16,6 @@ import (
 var nativeRunsPatch string
 
 // ensureNativeRunsPatch repairs the known local Hermes API tool/cache event gap.
-// Remote gateways belong to their host; OS onboarding never patches them.
 func (s *HermesService) ensureNativeRunsPatch() (bool, error) {
 	u, err := url.Parse(BaseURL)
 	if err != nil {

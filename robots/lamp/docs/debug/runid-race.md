@@ -48,7 +48,7 @@ func (s *Service) SetPendingChatTrace(runID string) {
 }
 ```
 
-Paired with `system/server/openclaw/delivery/sse/handler.go:404-411`:
+Paired with `system/server/agent/delivery/http/handler.go:404-411`:
 
 ```go
 if payload.Stream == "lifecycle" && payload.Data.Phase == "start" && isLampSession {

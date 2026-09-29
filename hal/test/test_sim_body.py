@@ -1,12 +1,4 @@
-"""The mock body: HAL's pieces without hardware under them.
-
-These are the tests that make `robots/sim` a real path rather than a promise —
-the board override resolves and refuses what it should, the declaration parses
-and plans the same mounts a real body would, and the mock motion driver
-satisfies the same protocol the Feetech and Pollen drivers do.
-
-No robot, no serial port, no lerobot: `python -m unittest hal.test.test_sim_body`.
-"""
+"""The mock body: HAL's pieces without hardware under them."""
 import importlib.util
 import os
 import unittest
@@ -20,8 +12,7 @@ DEVICES_DIR = os.path.join(REPO_ROOT, "robots")
 
 
 def _load(name, relpath):
-    """Import a module by path — hal.drivers.motors' package import is lazy but
-    its siblings still pull hardware deps, and this test must run anywhere."""
+    """Import a module by path, avoiding hardware deps in sibling imports."""
     spec = importlib.util.spec_from_file_location(name, os.path.join(REPO_ROOT, relpath))
     mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(mod)
@@ -65,14 +56,11 @@ class TestBoardOverride(unittest.TestCase):
         self.assertIn("boards.json", str(ctx.exception))
 
     def test_detection_is_untouched_when_unset(self):
-        # detect_board_id matches lowercased substrings, as read_device_tree_model
-        # supplies them — callers pass an already-lowercased model.
         self.assertEqual(board.detect_board_id("raspberry pi 5 model b rev 1.0"), "raspberry_pi_5")
         self.assertEqual(board.detect_board_id("some unknown board"), board.DEFAULT_BOARD_ID)
 
     def test_sim_board_cannot_be_detected_on_real_hardware(self):
-        """The sim entry is reachable only through the override: no real
-        device-tree model contains its match string."""
+        """The sim entry is reachable only through the override."""
         for model in ("raspberry pi 5 model b rev 1.0",
                       "raspberry pi compute module 4 rev 1.1",
                       "orangepi 4 pro sun60iw2"):
@@ -99,12 +87,9 @@ class TestSimDeclaration(unittest.TestCase):
         with open(os.path.join(DEVICES_DIR, "sim", "SAFETY.md")) as fh:
             policy = parse_safety(fh.read())
         self.assertEqual(policy.motion.max_speed, 60)
-        # A too-fast move is stretched in time, never truncated — the same clamp
-        # a real body gets, which is the point of declaring bounds on a fixture.
         # 90 degrees in 0.5 s is 180 deg/s; at a 60 deg/s ceiling it takes 1.5 s.
         stretched = min_move_duration(policy, {"base_yaw.pos": 90.0}, {"base_yaw.pos": 0.0}, 0.5)
         self.assertAlmostEqual(stretched, 1.5, places=3)
-        # A move already within the ceiling is left alone.
         self.assertEqual(min_move_duration(policy, {"base_yaw.pos": 10.0}, {"base_yaw.pos": 0.0}, 2.0), 2.0)
 
 
@@ -134,13 +119,7 @@ class TestMockMotionService(unittest.TestCase):
         self.assertEqual(unknown["elbow_pitch.pos"], AIM_PRESETS[AIM_CENTER]["elbow_pitch.pos"])
 
     def test_aim_clears_a_previous_halt(self):
-        """A still emotion halts the body (POST /emotion listening); the aim
-        that follows must still move.
-
-        On the physical driver AnimationService.aim goes through move_to, whose
-        _begin_motion clears the halt. The mock travels directly, so it has to
-        clear the flag itself — otherwise every aim after a still emotion is a
-        silent no-op while the route keeps answering "ok"."""
+        """An aim clears a halt left by a still emotion."""
         from hal.presets import AIM_PRESETS
 
         self.m.halt()
@@ -149,12 +128,7 @@ class TestMockMotionService(unittest.TestCase):
                          "halt swallowed the aim")
 
     def test_release_travels_before_torque_off(self):
-        """The mock reproduces the honest behavior of the real driver: release
-        reaches rest first, so it is not a stop.
-
-        Rest is where gravity puts a limp arm: the pitch joints drop to their
-        stops, while yaw keeps whatever it was pointing at — nothing pulls the
-        arm around a vertical axis."""
+        """Release reaches rest first, so it is not a stop."""
         self.m.move_to({"base_yaw.pos": 40.0, "base_pitch.pos": 25.0})
         self.assertEqual(self.m.release(), {})
         settled = self.m.get_positions()
@@ -164,8 +138,7 @@ class TestMockMotionService(unittest.TestCase):
         self.assertIn("release", [c[0] for c in self.m.calls])
 
     def test_halt_holds_position_and_keeps_torque(self):
-        """halt() is the deterministic stop: it holds. Nothing moves, torque
-        stays on. This is the whole difference from release()."""
+        """halt() holds position with torque on."""
         self.m.move_to({"base_yaw.pos": 30.0})
         before = self.m.get_positions()
         self.m.halt()
@@ -181,7 +154,6 @@ class TestMockMotionService(unittest.TestCase):
         self.assertEqual(self.m.get_positions()["base_yaw.pos"], parked)
         self.assertTrue(self.m._torque)
         self.m.release()
-        # halt kept the pose with torque on; release goes limp and the arm falls.
         self.assertLess(
             self.m.get_positions()["base_pitch.pos"], parked_pitch,
             "release left the arm holding its pitch — that is a halt",
@@ -189,8 +161,7 @@ class TestMockMotionService(unittest.TestCase):
         self.assertFalse(self.m._torque)
 
     def test_halt_is_idempotent_and_cleared_by_the_next_move(self):
-        """A halt must survive the move it interrupted but must not wedge the
-        driver: the next commanded move clears it."""
+        """A halt survives its interrupted move; the next move clears it."""
         self.m.halt()
         self.m.halt()
         self.assertTrue(self.m._halted)

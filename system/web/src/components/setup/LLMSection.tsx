@@ -17,9 +17,6 @@ export function LLMSection({
   llmApiKey: string; setLlmApiKey: (v: string) => void;
   llmUrl: string; setLlmUrl: (v: string) => void;
   llmModel: string; setLlmModel: (v: string) => void;
-  // Which brain the device is on. Omit both to render the plain editable form
-  // (the first-run setup flow, where there is no Autonomous set to fall back to
-  // and nothing to choose between yet).
   mode?: LlmMode;
   onModeChange?: (m: LlmMode) => void;
 }) {
@@ -50,10 +47,6 @@ export function LLMSection({
         </div>
       )}
 
-      {/* Read-only on Autonomous. These are the credentials the device is sold
-          with; letting them be edited in place is how they used to get lost —
-          and an operator who wants their own provider is choosing Custom, not
-          quietly overwriting this one. The key is never shown either way. */}
       {locked ? (
         <>
           <Field label="API Key" id="llm_api_key" value="•••••••• (included)" onChange={() => {}} readOnly />
@@ -62,9 +55,6 @@ export function LLMSection({
         </>
       ) : (
         <>
-          {/* SecretUpdateField handles both empty (Setup) and configured
-              (Settings) states inline — a Pencil icon unlocks the input to
-              rotate the key without leaving the page. */}
           <SecretUpdateField
             label="API Key"
             id="llm_api_key"

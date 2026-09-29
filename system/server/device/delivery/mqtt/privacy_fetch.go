@@ -16,9 +16,7 @@ import (
 )
 
 // privacyFetchTimeout bounds the REST round-trip to the backend's
-// /devices/get-message endpoint. Generous enough for cold-start TLS +
-// backend lookup, tight enough that a stuck request can't pile up
-// goroutines if the backend goes dark.
+// /devices/get-message endpoint.
 const privacyFetchTimeout = 30 * time.Second
 
 // privacyFetchPath is appended to config.LLMBaseURL (with the trailing /v1
@@ -26,20 +24,16 @@ const privacyFetchTimeout = 30 * time.Second
 // base, same as /oauth/refresh and /connector/refresh-token).
 const privacyFetchPath = "/devices/get-message"
 
-// privacyFetchEnvelope mirrors the inner MQTT data envelope shape so the
-// REST response can be slotted into env.Data without per-kind code
-// awareness. Backend returns `{cmd, kind, data}` here; the device only
-// cares about `data`, but Cmd/Kind are kept for cross-check.
+// privacyFetchEnvelope mirrors the inner MQTT data envelope shape so the REST
+// response can be slotted into env.Data without per-kind code awareness.
 type privacyFetchEnvelope struct {
 	Cmd  string          `json:"cmd"`
 	Kind string          `json:"kind"`
 	Data json.RawMessage `json:"data"`
 }
 
-// privacyFetchResponse is the outer envelope returned by the backend.
-// Matches the standard lamp API response format:
-//
-//	{ "status": 1, "data": {<envelope>}, "message": "..." }
+// privacyFetchResponse is the outer envelope returned by the backend
+// ({status, data, message}).
 type privacyFetchResponse struct {
 	Status  int                  `json:"status"`
 	Message string               `json:"message,omitempty"`
@@ -47,34 +41,14 @@ type privacyFetchResponse struct {
 }
 
 // handlePrivacyEnvelope acknowledges a privacy-typed MQTT envelope, then
-// kicks off an async REST fetch to retrieve the sensitive Data block from
-// the backend. Once Data is in hand, it's threaded through the normal
-// dispatchData switch — per-kind handlers see exactly what they would have
-// seen via the legacy inline path.
-//
-// Why a separate path: when Data carries OAuth tokens, API keys, or other
-// secrets, the broker (currently plain MQTT) and any party with broker
-// credentials can read it. Privacy envelopes keep only Kind on the broker;
-// the Data block traverses TLS straight from the backend to the device,
-// never landing on the broker.
-//
-// Lifecycle:
-//
-//	server → device  : {cmd:"data", kind:<k>, type:"privacy"}
-//	device → server  : {kind:<k>, status:"received"}          (immediate ack)
-//	device → backend : GET <base>/devices/get-message?kind=<k>
-//	backend → device : {status:1, data:{cmd, kind, data:{...}}}
-//	device           : dispatchData(env with Data populated)
-//	device → server  : <handler-specific status: success | failure | ...>
+// kicks off an async REST fetch to retrieve the sensitive Data block from the
+// backend.
 func (h *DeviceMQTTHandler) handlePrivacyEnvelope(env domain.MQTTDataCommand) error {
 	if env.Kind == "" {
 		slog.Error("privacy: envelope missing kind", "component", "mqtt")
 		return h.publishDataResult("", "failure", "privacy envelope missing kind", nil)
 	}
 
-	// Ack immediately so the backend stops retrying and can start tracking
-	// the in-flight fetch. Best-effort: a publish failure here is logged but
-	// the fetch still proceeds.
 	if err := h.publishDataResult(env.Kind, domain.MQTTStatusReceived, "", nil); err != nil {
 		slog.Error("privacy: received ack publish failed", "component", "mqtt", "kind", env.Kind, "error", err)
 	}
@@ -84,9 +58,7 @@ func (h *DeviceMQTTHandler) handlePrivacyEnvelope(env domain.MQTTDataCommand) er
 }
 
 // fetchAndDispatchPrivacy runs the REST fetch + dispatch in a goroutine so
-// the broker callback isn't blocked on HTTP. Failures here publish a
-// terminal "failure" status so the backend can correlate and surface to
-// the user; per-kind success is owned by the downstream handler.
+// the broker callback isn't blocked on HTTP.
 func (h *DeviceMQTTHandler) fetchAndDispatchPrivacy(env domain.MQTTDataCommand) {
 	ctx, cancel := context.WithTimeout(context.Background(), privacyFetchTimeout)
 	defer cancel()
@@ -100,10 +72,6 @@ func (h *DeviceMQTTHandler) fetchAndDispatchPrivacy(env domain.MQTTDataCommand) 
 		return
 	}
 
-	// Length only — the fetched blob is the reason we route through the
-	// privacy path in the first place (credentials, OAuth tokens). The
-	// per-kind handler downstream logs safe metadata (channel name,
-	// config_keys) so operators can still see something went through.
 	slog.Info("privacy envelope: data fetched",
 		"component", "mqtt", "kind", env.Kind, "channel_hint", env.Channel,
 		"data_len", len(data))
@@ -117,24 +85,13 @@ func (h *DeviceMQTTHandler) fetchAndDispatchPrivacy(env domain.MQTTDataCommand) 
 	}
 }
 
-// fetchPrivacyData performs the REST GET against the backend, returning
-// the inner Data block ready to be slotted into MQTTDataCommand.Data.
-//
-// Auth: Authorization: Bearer <LLMAPIKey> + X-Device-ID — same pattern as
-// the oauth/connector refresh paths, so the same per-device credential is
-// reused.
-//
-// `channel` disambiguates generic kinds ("add_channel", "channel.refresh_config")
-// whose queued data on the backend is per-channel. When empty the URL keeps
-// the legacy ?kind=<k> shape so backends that don't yet key on channel keep
-// working unchanged.
+// fetchPrivacyData performs the REST GET against the backend, returning the
+// inner Data block ready to be slotted into MQTTDataCommand.Data.
 func (h *DeviceMQTTHandler) fetchPrivacyData(ctx context.Context, kind, channel string) (json.RawMessage, error) {
 	base := strings.TrimRight(strings.TrimSpace(h.config.LLMBaseURL), "/")
 	if base == "" {
 		return nil, errors.New("LLMBaseURL not configured")
 	}
-	// LLMBaseURL carries a trailing /v1 for OpenAI-compat LLM calls; autonomous
-	// endpoints sit one level above. Mirror oauth_refresh.requestTokenRefresh.
 	base = strings.TrimSuffix(base, "/v1")
 	endpoint := base + privacyFetchPath + "?kind=" + url.QueryEscape(kind)
 	if channel != "" {

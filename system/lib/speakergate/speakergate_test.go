@@ -47,8 +47,7 @@ func TestPassiveEventWaitsForTheSpeaker(t *testing.T) {
 	}
 }
 
-// A user talking over the device is the barge-in the preemption rule exists
-// for, and a fire alert must not queue behind an answer.
+// Voice barge-in and fire alerts must replay immediately.
 func TestExemptEventsInterruptTheSpeaker(t *testing.T) {
 	withSpeaker(t, func() bool { return true })
 	for _, evType := range []string{"voice", "voice_command", "voice_followup",
@@ -59,8 +58,7 @@ func TestExemptEventsInterruptTheSpeaker(t *testing.T) {
 	}
 }
 
-// One exempt event releases the whole batch: holding the rest back would
-// reorder the queue behind it.
+// One exempt event releases the whole batch to preserve queue order.
 func TestMixedBatchIsNotDeferred(t *testing.T) {
 	withSpeaker(t, func() bool { return true })
 	if DeferReplay([]string{"presence.enter", "voice"}, func() {}) {
@@ -82,9 +80,7 @@ func TestReplayProceedsAfterMaxWait(t *testing.T) {
 	}
 }
 
-// The waiter must release its slot before retrying, so a drain that re-enters
-// DeferReplay can open a fresh one instead of returning "deferred" with
-// nobody polling.
+// The waiter must release its slot before retrying so a re-entrant drain can open a fresh one.
 func TestReentrantDeferralOpensANewWaiter(t *testing.T) {
 	var busy atomic.Bool
 	busy.Store(true)

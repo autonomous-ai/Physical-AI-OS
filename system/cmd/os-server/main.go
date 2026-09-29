@@ -22,11 +22,7 @@ import (
 )
 
 func main() {
-	// Subcommand dispatch before flag parsing: `os-server codex-gatewayd` /
-	// `os-server claudecode-gatewayd` / `os-server opencode-gatewayd` run the
-	// backend WS bridges (systemd units codex.service / claudecode.service /
-	// opencode.service) instead of the API server — the bridges ship inside this
-	// binary so they OTA-update with it.
+	// Subcommands run the backend WS bridges shipped inside this binary.
 	if len(os.Args) > 1 && os.Args[1] == "codex-gatewayd" {
 		os.Exit(gatewayd.Main())
 	}
@@ -36,9 +32,6 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "opencode-gatewayd" {
 		os.Exit(ocgatewayd.Main())
 	}
-	// `os-server claude-sessions` is the terminal coding-session picker (cc.go)
-	// — installed on the device as the /usr/local/bin/claude-sessions wrapper
-	// by the claudecode presync.
 	if len(os.Args) > 1 && os.Args[1] == "claude-sessions" {
 		os.Exit(ccMain(os.Args[2:]))
 	}
@@ -57,16 +50,13 @@ func main() {
 		os.Exit(waitHALMain())
 	}
 
-	// Load shared env file before logger init (so GELF_* env vars are visible).
-	// Missing file is non-fatal — env may also be supplied by systemd.
+	// Load before logger init so GELF_* vars are visible; missing file is fine.
 	_ = godotenv.Load("/opt/hal/.env")
 
 	cleanup := logger.Init(syspath.LogFile())
 	defer cleanup()
 
-	// CLI version discovery is optional metadata, but cold Node/Python probes
-	// compete with HAL for storage. Start the API/agent normally and admit
-	// these probes after HAL readiness, with a fallback if HAL is unavailable.
+	// CLI version probes wait for HAL readiness so they don't compete for storage at boot.
 	probeCtx, cancelProbes := context.WithCancel(context.Background())
 	defer cancelProbes()
 	versioncache.ConfigureStartup(probeCtx, func(ctx context.Context) bool {

@@ -132,20 +132,26 @@ touches:
 | `/etc/dhcpcd.conf` | **Edit** (removes old `interface wlan0` block, appends new AP block) | Partial — original block is not backed up |
 | `wpa_supplicant.service` (global) | **Masked** (only `wpa_supplicant@wlan0` instance is used) | Yes — `systemctl unmask wpa_supplicant` |
 
-### Risk Assessment
+### Risk Assessment (settled: Pollen OS uses NetworkManager)
 
-- **If Pollen OS uses `dhcpcd` + `wpa_supplicant`** (classic Raspberry Pi OS
-  stack): setup.sh is designed for this stack. WiFi will work, AP mode will
-  work, and `device-sta-mode` / `device-ap-mode` scripts handle switching. Low
-  risk.
+Recon on 2026-07-29 ([first-boot-plan.md §1.2](first-boot-plan.md)) found
+`NetworkManager` **active**, `wpa_supplicant` active and `dhcpcd` inactive, with
+Pollen's own `Glinks` (STA) and `Hotspot` (AP) NM profiles. The NetworkManager
+case therefore applies to the real device:
 
-- **If Pollen OS uses `NetworkManager`** (newer Bookworm default): setup.sh
-  stops and disables NetworkManager. This breaks Pollen's own WiFi management.
-  The robot may lose network connectivity until you either complete the
-  Autonomous setup flow or manually re-enable NetworkManager. **Check which
-  stack Pollen uses before running setup.sh on the real device.**
+> **Warning:** the shared `scripts/provision/setup.sh` has no Reachy
+> NetworkManager branch yet. It targets the dhcpcd + wpa_supplicant stack and
+> its AP-mode switch runs `systemctl stop NetworkManager`. This breaks Pollen's
+> own WiFi management; the robot can lose network connectivity until you either
+> complete the Autonomous setup flow or manually re-enable NetworkManager. **Do
+> not run `setup.sh` on a Reachy Mini** until an `nmcli`-based branch exists.
+> The supported bring-up today is `robots/reachy-mini/install.sh` (→ `spike.sh`),
+> which installs alongside Pollen and does not touch the network stack.
 
-### How to Check (Before Running setup.sh)
+The table above describes the dhcpcd stack that `setup.sh` expects; it is kept
+for reference and for recovering a unit on which it was run anyway.
+
+### How to Re-check
 
 ```bash
 ssh pollen@reachy-mini.local

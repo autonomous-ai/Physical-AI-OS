@@ -11,10 +11,6 @@ import (
 
 var errWakeWordEnabledRequired = errors.New("enabled is required")
 
-// handleWakeWordGate applies a wakeword.gate downlink. It follows the async
-// config-command convention: acknowledge receipt, persist the top-level flag
-// and restart HAL, then publish the terminal outcome.
-
 func (h *DeviceMQTTHandler) publishWakeWordGateAck(status, errMsg string, data *domain.WakeWordGateData) {
 	ack := domain.MQTTWakeWordGateAck{
 		MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()),

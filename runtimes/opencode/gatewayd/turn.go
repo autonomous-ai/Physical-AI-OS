@@ -18,8 +18,6 @@ import (
 )
 
 // turnResult is the bounded per-run result of one `opencode run` subprocess.
-// (threadID/threadStarted are internal names for opencode's sessionID / whether
-// a sessionID was seen — kept for parity with the shared bridge structure.)
 type turnResult struct {
 	rc            int
 	threadStarted bool
@@ -31,15 +29,7 @@ type turnResult struct {
 	errText       string   // error text pulled from session.error/error JSON frames
 	heldFrames    [][]byte // terminal failure frames held back during a resumed attempt
 	// sessionID is the opencode session id seen in the streamed JSON frames of
-	// this run. Captured in-memory only — persisted to disk (session.json) ONLY
-	// by runTurn's success branch. Deferring persistence prevents a failed turn
-	// (auth error, LLM backend hiccup, opencode CLI crash) from stranding the
-	// operator on a corrupted session that opencode's SQLite state can no
-	// longer resume (observed 2026-07-23: initial install saw one auth-failed
-	// turn during LLM_API_KEY race, sessionID was persisted eagerly, every
-	// subsequent --session <id> resume returned "UnknownError - Unexpected
-	// server error" indefinitely with no error hint that resumeFailed could
-	// match).
+	// this run.
 	sessionID string
 }
 
@@ -66,8 +56,6 @@ func (s *Server) turnWorker(ctx context.Context) {
 // runTurn executes one message.send: decode attachments, spawn opencode run
 // (resuming the stored session when present), retry once fresh if the resume
 // target is gone, and surface terminal failures as bridge.error frames.
-// During a resumed attempt, terminal failure frames are held back (see
-// pumpStdout) so a fresh retry does not leave the client's turn already ended.
 func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	payload = s.prepareSkill(ctx, payload)
 	images := s.decodeAttachments(payload)
@@ -84,15 +72,11 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	res := s.execTurn(ctx, payload.promptWithSkill(), images, resumeID)
 	if resumeID != "" {
 		if resumeFailed(res) {
-			// Drop the held terminal failure frames: forwarding them would end the
-			// device turn early and the fresh retry's events would re-open an
-			// uncorrelated turn on the translator side.
 			log.Printf("%s resume of thread %s failed (rc=%d) — retrying fresh (%d failure frames dropped)",
 				logPrefix, resumeID, res.rc, len(res.heldFrames))
 			s.clearSession()
 			res = s.execTurn(ctx, payload.promptWithSkill(), images, "")
 		} else {
-			// Resumed attempt is terminal (no fresh retry) — release what was held.
 			for _, frame := range res.heldFrames {
 				s.send(frame)
 			}
@@ -104,7 +88,6 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 		// Same escape as the codex gatewayd: rotation rides on a COMPLETED
 		// turn, so a thread whose every resume hangs can never be rotated and
 		// the device stays wedged across restarts (the thread id is on disk).
-		// Dropping it here makes the next turn start fresh.
 		if resumeID != "" {
 			log.Printf("%s resumed thread %s timed out after %s — dropping it so the next turn starts fresh",
 				logPrefix, resumeID, s.cfg.TurnTimeout)
@@ -124,17 +107,12 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 		}
 		s.sendError(errMsg)
 	default:
-		// Clean exit = turn complete. Persist the session id NOW (not eagerly
-		// from pumpStdout) so a failed turn's session id never lands on disk —
-		// that's the fix for the "corrupt session" bug where an initial
-		// auth-failed turn's sessionID would strand every subsequent resume on
-		// opencode's SQLite bad state. See turnResult.sessionID for context.
+		// Persist the session id only after success so a failed turn's session never lands on
+		// disk and strands every later resume.
 		if res.sessionID != "" {
 			s.storeThreadID(res.sessionID)
 		}
-		// opencode run emits no single terminal event (device-verified), so
-		// synthesize the session.idle the translator maps to emitFinal —
-		// delivering the accumulated reply + usage exactly once.
+		// opencode run emits no terminal event, so synthesize the session.idle the translator finalizes on.
 		s.sendJSON(map[string]any{"type": "session.idle", "sessionID": res.sessionID})
 	}
 
@@ -154,7 +132,7 @@ func resumeFailed(res turnResult) bool {
 		return false
 	}
 	if res.rc == 0 && res.turnEnded {
-		return false // run succeeded — nothing to retry
+		return false
 	}
 	if !res.threadStarted {
 		return true
@@ -168,18 +146,12 @@ func resumeFailed(res turnResult) bool {
 	return false
 }
 
-// buildArgv builds the `opencode run` command line. The prompt is always the
-// final positional argument; image paths ride repeated --file flags.
-//
-// `--session <id>` is a flag (not a subcommand), so there is no flag-ordering
-// trap like codex's `exec resume`. Model/provider come from opencode.json
-// (presync-owned) — never --model here. `--auto` is opencode's headless
-// permission bypass (the shipped flag; the dev-branch `--dangerously-skip-permissions`
-// is not present in released builds).
+// buildArgv builds the `opencode run` command line.
+// Model/provider come from opencode.json (presync-owned) — never --model here.
 func (s *Server) buildArgv(prompt string, images []string, resumeID string) []string {
 	argv := []string{s.cfg.Bin, "run",
 		"--format", "json",
-		"--auto", // auto-approve permissions not explicitly denied (opencode's headless-run bypass)
+		"--auto", // headless permission bypass
 		"--dir", s.cfg.Workspace}
 	if resumeID != "" {
 		argv = append(argv, "--session", resumeID)
@@ -187,17 +159,11 @@ func (s *Server) buildArgv(prompt string, images []string, resumeID string) []st
 	for _, img := range images {
 		argv = append(argv, "--file", img)
 	}
-	// End-of-options marker so a user-controlled prompt that starts with "-"
-	// (e.g. "--help", "--dir /etc") is taken as the positional message, not
-	// smuggled in as an opencode flag. Device-verified: opencode 1.18.4 routes
-	// post-"--" args to the message positional. Image paths are our own generated
-	// /root/.opencode/attachments/*.jpg names, so they never need this guard.
+	// "--" keeps a user prompt starting with "-" from being parsed as an opencode flag.
 	return append(argv, "--", prompt)
 }
 
-// turnEnv is os.Environ() with HOME asserted (deduped). opencode reads its
-// config from XDG (~/.config/opencode) under HOME; there is no home-dir
-// override env like codex's CODEX_HOME.
+// turnEnv is os.Environ() with HOME asserted (deduped).
 func (s *Server) turnEnv() []string {
 	env := os.Environ()
 	out := make([]string, 0, len(env)+1)
@@ -264,17 +230,13 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	res.rc = cmd.ProcessState.ExitCode()
 	if err != nil && res.rc == 0 {
-		res.rc = -1 // killed / wait error without a real exit code
+		res.rc = -1
 	}
 	if tctx.Err() == context.DeadlineExceeded {
 		log.Printf("%s turn timed out after %s — killed process group",
 			logPrefix, s.cfg.TurnTimeout)
 		res.timedOut = true
 	}
-	// `opencode run` is a per-turn subprocess with no single terminal event
-	// (device-verified 1.18.4: a turn ends with step_finish reason=stop, then the
-	// process exits). A clean exit (rc=0) IS the turn's terminal success — runTurn
-	// synthesizes the session.idle the translator finalizes on.
 	if res.rc == 0 && !res.timedOut {
 		res.turnEnded = true
 	}
@@ -285,13 +247,6 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 // pumpStdout forwards each JSON stdout line verbatim to the client while
 // watching for the opencode sessionID (persist session) and terminal turn
 // events (session.idle = success, session.error/error = failure).
-//
-// opencode has no `thread.started`: the sessionID field is present on every
-// JSONL line, so we capture it from the first line that carries one. When
-// holdFailures is set (resumed attempt), terminal failure frames (session.error
-// and the top-level error event) are stashed in res.heldFrames instead of
-// forwarded: the caller drops them when it retries fresh, or forwards them when
-// the resumed attempt is terminal. Other frames still flow normally.
 func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
@@ -316,10 +271,6 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 		if json.Unmarshal([]byte(line), &evt) == nil {
 			if evt.SessionID != "" {
 				res.threadStarted = true
-				// Capture in-memory only. Persistence to session.json is
-				// deferred to runTurn's success branch — see the sessionID
-				// field comment on turnResult for why we no longer persist
-				// eagerly here.
 				res.sessionID = evt.SessionID
 			}
 			switch {
@@ -327,8 +278,6 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool) {
 				evt.Type == "session.status" && evt.Status == "idle":
 				res.turnEnded = true
 			case evt.Type == "session.error", evt.Type == "error":
-				// Terminal error info rides the JSON frame (not stderr) — stash the
-				// raw error text so resumeFailed's missing-session hints can match it.
 				res.errText = tail(res.errText+string(evt.Error)+" "+evt.Message+"\n", stderrTailMax)
 				hold = holdFailures
 			}
@@ -361,8 +310,6 @@ func tail(s string, max int) string {
 	}
 	return s
 }
-
-// -- image attachments -------------------------------------------------------
 
 // decodeAttachments writes data-URL images to files and returns their paths;
 // opencode run takes image/file attachments via repeated --file flags, so paths
@@ -415,8 +362,6 @@ func (s *Server) pruneAttachments() {
 		}
 	}
 }
-
-// -- session persistence -----------------------------------------------------
 
 // loadSession reads the persisted opencode session id (absent/corrupt file -> "").
 func (s *Server) loadSession() string {

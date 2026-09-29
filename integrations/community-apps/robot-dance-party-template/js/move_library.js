@@ -1,11 +1,4 @@
-// move_library.js — Dance move definitions for Autonomous OS robots
-//
-// Uses /servo/move with absolute joint positions for dance poses.
-// Joint ranges: [-90, 90] for all joints.
-// Key joints for dance: base_yaw (head turn), base_pitch (head tilt),
-// elbow_pitch (arm bend), wrist_pitch (wrist angle).
-//
-// Moves are organized as 8-beat sequences at three energy levels.
+// move_library.js — 8-beat dance sequences per energy level (joint range [-90, 90]).
 
 // Shorthand: create servo positions object from (yaw, pitch, elbow, wristPitch)
 function pose(yaw, pitch, elbow = 0, wristPitch = -20) {
@@ -18,11 +11,9 @@ function pose(yaw, pitch, elbow = 0, wristPitch = -20) {
   };
 }
 
-// Center/home pose (from AIM_PRESETS)
 const HOME = pose(3, -20, 32, 0);
 
 const SEQUENCES = {
-  // High energy — fast, wide swings, vivid colors
   high: [
     [
       { positions: pose(-60, -10, 40, 10),  duration: 200, led: [255, 0, 100] },
@@ -56,7 +47,6 @@ const SEQUENCES = {
     ],
   ],
 
-  // Medium energy — moderate swings, warm colors
   medium: [
     [
       { positions: pose(-30, -10, 35, -5),  duration: 300, led: [180, 80, 0] },
@@ -90,7 +80,6 @@ const SEQUENCES = {
     ],
   ],
 
-  // Low energy — gentle sway, cool colors
   low: [
     [
       { positions: pose(-15, -15, 30, -5),  duration: 500, led: [0, 40, 80] },
@@ -115,7 +104,6 @@ const SEQUENCES = {
   ],
 };
 
-// Round-robin indices per energy level
 const _seqIndex = { high: 0, medium: 0, low: 0 };
 
 export function selectSequence(energyLevel) {
@@ -130,7 +118,7 @@ export function getMoveAtBeat(sequence, beatIndex) {
   return sequence[beatIndex % sequence.length];
 }
 
-// Classify energy level from raw energy value (0-255 scale)
+// Classify energy level from raw energy value (0-255 scale).
 export function classifyEnergy(energy) {
   if (energy > 140) return 'high';
   if (energy > 80) return 'medium';
@@ -146,13 +134,11 @@ export function spectrumColor(bass, mid, high) {
   ];
 }
 
-// Brighten a color for beat flash
 export function flashColor(color, intensity) {
   const boost = 60 + intensity * 80;
   return color.map(c => Math.min(c + boost, 255));
 }
 
-// Dim a color for between-beat ambient
 export function dimColor(color, factor = 0.35) {
   return color.map(c => Math.floor(c * factor));
 }

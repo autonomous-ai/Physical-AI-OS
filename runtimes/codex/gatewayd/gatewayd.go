@@ -1,21 +1,4 @@
 // Package gatewayd bridges a local WebSocket to a persistent Codex App Server.
-//
-// Protocol (client = os-server runtimes/codex):
-//
-//	client -> gatewayd: {"type":"message.send","id":..,"payload":{"content":..,
-//	                     "attachments":[{"type":"image","url":"data:<mt>;base64,<b64>"}]}}
-//	                    {"type":"session.new"}  -> forget thread (runs after queued
-//	                     turns), next turn is fresh
-//	                    {"type":"ping","id":X}  -> {"type":"pong","id":X}
-//	gatewayd -> client: codex `--json` JSONL events forwarded VERBATIM
-//	                    (thread.started/item.*/turn.completed/turn.failed/..),
-//	                    plus {"type":"pong"}, {"type":"bridge.status",..} and
-//	                    {"type":"bridge.error","error":".."}.
-//
-// A message received while a turn is active is submitted with turn/steer. This
-// is intentionally different from the old per-turn codex exec worker: it lets
-// direct voice and web-chat input join the current model turn instead of
-// waiting behind it. Passive sensing stays subject to the OS safety queue.
 package gatewayd
 
 import (
@@ -43,12 +26,9 @@ const (
 
 // resumeErrHints are case-insensitive substrings in stderr/stdout meaning the
 // resumed thread/session no longer exists (so a fresh retry is warranted).
-// "no rollout found" is codex rust-v0.142.5's verbatim missing-thread error
-// ("thread/resume failed: no rollout found for thread id <id>").
 var resumeErrHints = []string{"no rollout found", "no conversation", "not found", "session"}
 
-// Config holds every tunable. Main() fills it from environment variables
-// (read once at start); tests construct it directly with temp paths.
+// Config holds every tunable.
 type Config struct {
 	JevConfigPath string
 	JevEnabled    bool
@@ -76,8 +56,6 @@ func configFromEnv() Config {
 	if f, err := strconv.ParseFloat(envOr("CODEX_TURN_TIMEOUT_S", "600"), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
 	}
-	// CODEX_HOME anchors the per-file defaults, so setting it alone relocates
-	// the whole state dir (the client side resolves the same var via syspath).
 	home := envOr("CODEX_HOME", "/root/.codex")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
@@ -133,9 +111,9 @@ func New(cfg Config, ln net.Listener) *Server {
 	}
 }
 
-// Serve blocks until ctx is cancelled or the listener fails. It owns the
-// turn-worker goroutine; on ctx cancellation any in-flight subprocess is
-// killed (process group) and open connections are dropped.
+// Serve blocks until ctx is cancelled or the listener fails.
+// It owns the turn-worker goroutine; on ctx cancellation any in-flight subprocess is killed
+// (process group) and open connections are dropped.
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -185,9 +163,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// Main is the blocking entry point for `os-server codex-gatewayd`. It reads
-// config from the environment, listens on 127.0.0.1:CODEX_PORT and shuts
-// down gracefully on SIGTERM/SIGINT.
+// Main is the blocking entry point for `os-server codex-gatewayd`.
 func Main() int {
 	cfg := configFromEnv()
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", cfg.Port))

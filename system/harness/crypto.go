@@ -68,7 +68,6 @@ func openSealed(key []byte, n uint64, aad, cipher []byte) ([]byte, error) {
 	return a.Open(nil, nonce, cipher, aad)
 }
 
-// expand_message_xmd(SHA-512), L=64, matches noble hashToRistretto255's DST.
 func normalizeCode(code string) string {
 	return strings.Map(func(r rune) rune {
 		if unicode.IsSpace(r) || r == '-' || r == '·' || r == '_' {
@@ -85,6 +84,8 @@ func normalizeCode(code string) string {
 		return r
 	}, strings.ToUpper(code))
 }
+
+// expand_message_xmd(SHA-512), L=64, matches noble hashToRistretto255's DST.
 func cpaceGenerator(code string, pairID []byte, ci string) *ristretto255.Element {
 	const dst = "e2e-cpace-ristretto255-v1"
 	msg := lv([]byte(dst), []byte(normalizeCode(code)), pairID, []byte(ci))

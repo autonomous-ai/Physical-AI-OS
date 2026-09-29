@@ -1,36 +1,4 @@
-"""LOOK-DEBUG: per-look trace dirs for the aim -> capture -> answer flow.
-
-Modelled on the SPEAKER-DEBUG tracer in
-`hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — same shape, same
-guarantees: OFF by default, self-contained, and it never raises. A tracing bug
-must not cost the user an answer.
-
-Why it exists: the flow spans three modules and two services, so when a visual
-question goes wrong ("it captured the ceiling", "it said it couldn't see") there
-is no single place that shows what actually happened. This puts the trigger, the
-aim decision, the exact frame that was sent, the question and the spoken answer
-in one directory per look.
-
-Env knobs (all optional):
-  HAL_LOOK_DEBUG              "true" to enable (OFF by default)
-  HAL_LOOK_DEBUG_DIR          output root (default: ./look_logs next to this file)
-  HAL_LOOK_DEBUG_MAX_ENTRIES  dir cap, oldest pruned (default 200; 0 = unbounded)
-  HAL_LOOK_DEBUG_FRAMES       "false" to skip the per-step step_NN.jpg frames
-
-Layout — one dir per look, named so failures are greppable at a glance:
-  <root>/<ts>_OK_centred/            aim reached centre
-  <root>/<ts>_OK_deadline/           captured, but the aim ran out of time
-  <root>/<ts>_FAIL-no_subject/       nothing found to aim at
-  <root>/<ts>_FAIL-no_camera/        ...
-each holding:
-  capture.jpg   the exact frame handed to the model (absent if capture failed)
-  result.json   trigger, aim metrics, question, answer, and any error
-
-The trace spans two modules because the answer is not known when the frame is
-taken: the orchestrator opens it at the `look` call, turn_dispatch closes it once
-the turn has an answer. State is module-level for the same reason
-`realtime_look_frame_path` is — one look is in flight at a time.
-"""
+"""LOOK-DEBUG: per-look trace dirs for the aim -> capture -> answer flow."""
 
 from __future__ import annotations
 
@@ -101,22 +69,16 @@ def _prune() -> None:
         pass
 
 
-# One visual question calls `look` TWICE by design: the first captures and
-# replays the turn, the replayed turn re-triggers it and lands on the reuse
-# path. Both are the same look, so the second must not open a new trace — doing
-# so discarded the aim data and the captured frame and wrote the result out as
-# "reused_frame".
-#
-# A trace older than this was orphaned by a turn that never completed; only then
-# is it safe to replace.
+# One visual question calls `look` TWICE by design: the first captures and replays the
+# turn, the replayed turn re-triggers it and lands on the reuse path.
 STALE_TRACE_S: float = 120.0
 
 
 def start(trigger: str = "look tool") -> None:
     """Open a trace at the moment the `look` tool fires.
 
-    Re-entrant: the turn replay calls this again for the SAME look, and that
-    must extend the open trace rather than replace it.
+    Re-entrant: the turn replay calls this again for the SAME look, and that must extend
+    the open trace rather than replace it.
     """
     global _current
     if not _init():
@@ -164,25 +126,7 @@ def note_event(msg: str) -> None:
 def encode_annotated(frame: Any, box: Any = None, label: str = "",
                      both_axes: bool = False,
                      centre_lines: bool = True) -> Optional[bytes]:
-    """JPEG of `frame` with the detection drawn on. Shared by the look aim, the
-    bearing sampler, the gaze pitch loop and the search sweep.
-
-    Green box and green line mark the detection; the red line is frame centre.
-    The gap between them IS dx, the quantity the aim servos on.
-
-    `both_axes` adds the horizontal pair as well, for a reader that corrects
-    dy — the gaze pitch loop. It is OPT-IN rather than always on: the aim can
-    only move yaw, so a horizontal line in its view marks an error it has no way
-    to act on, and a debug frame earns its keep by showing the one quantity its
-    reader is servoing on, not every quantity that exists.
-
-    `centre_lines` turns that dx pair OFF, for the one caller whose image is
-    shown to a PERSON rather than read by an engineer: the search sweep's "here
-    is your keyboard". Somebody who is not correcting an error has no use for
-    dx, and once the search has centred on the box the two lines land on top of
-    each other down the middle of the picture. The box is the answer; the lines
-    are the working.
-    """
+    """JPEG of `frame` with the detection drawn on."""
     if frame is None:
         return None
     try:
@@ -217,16 +161,7 @@ def _frames_enabled() -> bool:
 
 
 def note_step_frame(n: int, frame: Any, box: Any = None, label: str = "") -> None:
-    """Buffer a JPEG of what the detector actually saw on this step.
-
-    Encoded immediately rather than holding the raw arrays: a look can run six
-    iterations and each 1280x432 BGR frame is ~1.6MB, so buffering raw would
-    cost ~10MB per look for something written once at the end. JPEG is ~80KB.
-
-    `box` is the detector's (x, y, w, h) and is drawn on, because the useful
-    question is not "was something detected" but "was it the right something" —
-    a confident lock on the wrong person looks identical in the numbers.
-    """
+    """Buffer a JPEG of what the detector actually saw on this step."""
     if not _init() or not _frames_enabled() or frame is None:
         return
     try:
@@ -241,12 +176,7 @@ def note_step_frame(n: int, frame: Any, box: Any = None, label: str = "") -> Non
 
 
 def stage_ms(name: str, ms: float) -> None:
-    """Accumulate elapsed time under a named stage.
-
-    Additive rather than set-once: per-iteration stages (detect, move) run
-    several times in one look, and the useful number is the total spent there
-    plus how many times it ran.
-    """
+    """Accumulate elapsed time under a named stage."""
     if not _init():
         return
     with _lock:
@@ -260,9 +190,9 @@ def stage_ms(name: str, ms: float) -> None:
 
 @contextlib.contextmanager
 def stage(name: str):
-    """Time one stage of the look. Never swallows the exception, and still
-    records the time when the stage raises — a stage that failed slowly is
-    exactly the one worth seeing."""
+    """Time one stage of the look. Never swallows the exception, and still records the time
+    when the stage raises — a stage that failed slowly is exactly the one worth seeing.
+    """
     t0 = time.monotonic()
     try:
         yield
@@ -289,11 +219,8 @@ def note_aim(result: Any) -> None:
                                    else round(end - start, 2)),
             "yaw_commanded_deg": getattr(result, "yaw_moved_deg", None),
             "final_dx_frac": getattr(result, "final_dx_frac", None),
-            # Did it go looking where it remembered the user? None here means
-            # nothing was ever stored — a different failure from "looked and missed".
             "bearing_steps": getattr(result, "bearing_steps", None),
             "bearing_consulted": getattr(result, "bearing_consulted", None),
-            # Blow-by-blow: what it saw, where, and what it commanded.
             "steps": getattr(result, "steps", None),
         })
         note_event(f"aim: {getattr(result, 'reason', '?')}")
@@ -310,24 +237,12 @@ def note_capture(frame_path: Optional[str]) -> None:
 
 
 def _take_profile(trace: Dict[str, Any]) -> Optional[Dict[str, Any]]:
-    """Build the timing breakdown and REMOVE the raw stages from the trace.
-
-    Kept in its own profile.json rather than result.json, matching the
-    speaker_logs convention — result.json is already dense with the look's
-    decision, and neither file should bury the other.
-
-    `waiting_on_model_ms` is the residual: total minus everything the device
-    did itself. It is the number that separates "the lamp is slow" from "the
-    lamp finished in 3s and then sat waiting for Gemini".
-    """
+    """Build the timing breakdown and REMOVE the raw stages from the trace."""
     stages: Dict[str, Any] = trace.pop("stages", None) or {}
     total: float = float(trace.get("total_ms") or 0)
     if not stages:
         return None
 
-    # Sub-stages are nested inside their roll-up ("aim.detect" inside
-    # "aim.total"), so counting both would double-charge the device and drive
-    # the residual negative. Charge the roll-up; keep the children as breakdown.
     def _is_child(name: str) -> bool:
         prefix, _, leaf = name.rpartition(".")
         return bool(prefix) and leaf != "total" and f"{prefix}.total" in stages
@@ -372,11 +287,7 @@ def _log_profile(profile: Dict[str, Any]) -> None:
 
 
 def finish(status: str, question: str = "", answer: str = "", error: str = "") -> None:
-    """Close the trace once the turn has an answer, and write it to disk.
-
-    `status` becomes part of the directory name so a failure is visible from
-    `ls` alone.
-    """
+    """Close the trace once the turn has an answer, and write it to disk."""
     global _current
     if not _init():
         return

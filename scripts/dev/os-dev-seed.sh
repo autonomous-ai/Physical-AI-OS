@@ -1,10 +1,5 @@
 #!/usr/bin/env bash
-# os-dev-seed — prepare the off-device state dir for `make os-dev`.
-#
-# Creates <state dir>/config/config.json with the three keys a laptop run needs
-# and cannot infer, then leaves the file alone on later runs (a dev's own edits
-# survive). Nothing here installs a runtime: codex, its skills and AGENTS.md are
-# expected to be in place already.
+# Prepare the off-device state dir for `make os-dev`: seed config/config.json once, never overwrite.
 set -euo pipefail
 
 STATE_DIR="${1:?usage: os-dev-seed.sh <state-dir> <device-type> <agent-runtime> <codex-home>}"
@@ -18,20 +13,13 @@ mkdir -p "$STATE_DIR/config"
 CONFIG_JSON="$STATE_DIR/config/config.json"
 CONFIG_EXAMPLE="$(dirname "$0")/config.example.json"
 
-# No config yet: copy the template and carry on. The defaults below fill in
-# everything a laptop run can infer (base URL, model, admin password hash), so
-# the only key left for the developer is llm_api_key — named in the NOTE at the
-# end of this run. Stopping here instead used to cost a round trip for a file
-# whose content this script already knows.
 if [ ! -f "$CONFIG_JSON" ]; then
   cp "$CONFIG_EXAMPLE" "$CONFIG_JSON"
   chmod 600 "$CONFIG_JSON"
   log "created $CONFIG_JSON from $(basename "$CONFIG_EXAMPLE")"
 fi
 
-# set_up_completed gates the whole startup sequence (server/config_watch.go):
-# presync + EnsureOnboarding never run while it is false, so an off-device run
-# would boot with an empty workspace and no explanation.
+# set_up_completed gates presync + EnsureOnboarding (server/config_watch.go).
 python3 - "$CONFIG_JSON" "$DEVICE_TYPE" "$AGENT_RUNTIME" <<'PY'
 import json, os, sys
 path, device_type, runtime = sys.argv[1:4]
@@ -81,19 +69,12 @@ for m in missing:
     print(f"[os-dev-seed] NOTE: {m}")
 PY
 
-# presync.sh regenerates config.toml from config.json on every boot and keeps
-# only [mcp_servers.*]. Back up a hand-written one once so pointing CODEX_HOME
-# at a real install is not a one-way door.
+# presync.sh regenerates config.toml on every boot; back up a hand-written one once.
 if [ "$AGENT_RUNTIME" = "codex" ] && [ -f "$CODEX_HOME/config.toml" ] && [ ! -f "$CODEX_HOME/config.toml.pre-os-dev" ]; then
   cp "$CODEX_HOME/config.toml" "$CODEX_HOME/config.toml.pre-os-dev"
   log "backed up $CODEX_HOME/config.toml → config.toml.pre-os-dev (presync rewrites it)"
 fi
 
-# bootstrap.json carries metadata_url, the ONLY thing os-server reads from that
-# file (skill zip base + skill watcher). Without it downloadSkills logs
-# "no ota_metadata_url configured" and the workspace stays skill-less. The bucket
-# values come from the release scripts' single edit point, so the dev URL cannot
-# drift from what upload-skills.sh publishes. Seeded once — a dev's edit survives.
 BOOTSTRAP_JSON="$STATE_DIR/config/bootstrap.json"
 if [ ! -f "$BOOTSTRAP_JSON" ]; then
   # shellcheck source=/dev/null

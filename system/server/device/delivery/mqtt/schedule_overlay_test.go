@@ -10,9 +10,7 @@ func confirmedItem(id, name string, rev uint64) scheduleListItem {
 	return scheduleListItem{ID: id, Name: name, Rev: rev, Enabled: true}
 }
 
-// A create the backend has not confirmed must still be VISIBLE — otherwise the
-// user taps "save", nothing appears, and it reads as a failure. It must also be
-// clearly marked pending, because it is not armed yet.
+// An unconfirmed create is visible and marked pending.
 func TestOverlayPendingIntents_CreateAppearsAsPending(t *testing.T) {
 	items := []scheduleListItem{confirmedItem("sched-1", "Existing", 4)}
 	intents := []schedule.Intent{{
@@ -32,8 +30,6 @@ func TestOverlayPendingIntents_CreateAppearsAsPending(t *testing.T) {
 	if created.Name != "Brand new" {
 		t.Errorf("name = %q", created.Name)
 	}
-	// No backend id exists yet, so the row is keyed by intent — the UI needs
-	// something stable to render and act on in the meantime.
 	if created.ID != "intent:int-1" {
 		t.Errorf("id = %q, want intent:int-1", created.ID)
 	}
@@ -42,8 +38,7 @@ func TestOverlayPendingIntents_CreateAppearsAsPending(t *testing.T) {
 	}
 }
 
-// A pending update shows the PROPOSED values, not the stored ones — the user
-// should see what they just typed, flagged as not yet confirmed.
+// A pending update shows the proposed values.
 func TestOverlayPendingIntents_UpdateShowsProposedValues(t *testing.T) {
 	items := []scheduleListItem{confirmedItem("sched-1", "Old name", 4)}
 	intents := []schedule.Intent{{
@@ -74,8 +69,7 @@ func TestOverlayPendingIntents_UpdateShowsProposedValues(t *testing.T) {
 	}
 }
 
-// A pending delete keeps the row — it is still running until the backend
-// agrees to remove it, and hiding it would tell the user it had stopped.
+// A pending delete keeps the row.
 func TestOverlayPendingIntents_DeleteKeepsRowMarked(t *testing.T) {
 	items := []scheduleListItem{confirmedItem("sched-1", "Doomed", 2)}
 	intents := []schedule.Intent{{IntentID: "int-3", Op: "delete", ScheduleID: "sched-1", BaseRev: 2}}
@@ -92,8 +86,7 @@ func TestOverlayPendingIntents_DeleteKeepsRowMarked(t *testing.T) {
 	}
 }
 
-// An intent whose target has already been removed by a sync must be skipped
-// rather than resurrecting a row or panicking on a missing index.
+// An intent whose target is gone is skipped.
 func TestOverlayPendingIntents_IgnoresIntentsForVanishedRows(t *testing.T) {
 	items := []scheduleListItem{confirmedItem("sched-1", "Still here", 1)}
 	intents := []schedule.Intent{

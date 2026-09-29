@@ -301,8 +301,12 @@ maps to `RpicamVideoCaptureDevice`
 
 ### 2.3 setup.sh (New, Reachy-Specific)
 
-Write `robots/reachy-mini/setup.sh` (or modify shared `scripts/provision/setup.sh`
-with `DEVICE_TYPE` branching). Recon settled the branch: **NetworkManager** —
+Not written yet. There is no `robots/reachy-mini/setup.sh`: the only installer
+in that folder is `robots/reachy-mini/install.sh`, which fetches the OTA device
+package and hands over to `spike.sh` (installs alongside Pollen, no network
+changes). Production provisioning needs a `DEVICE_TYPE=reachy-mini` branch in
+the shared `scripts/provision/setup.sh`, which today still stops NetworkManager
+(see [recovery.md](recovery.md#risk-assessment-settled-pollen-os-uses-networkmanager)). Recon settled the branch: **NetworkManager** —
 take the "If NM" column, and reuse Pollen's existing `Hotspot` profile instead of
 creating a parallel AP stack.
 
@@ -528,7 +532,7 @@ Only after spike works:
 
 ```bash
 ssh pollen@<IP>
-DEVICE_TYPE=reachy-mini bash setup.sh   # the new one
+DEVICE_TYPE=reachy-mini bash setup.sh   # scripts/provision/setup.sh, once its NM branch exists
 # Reboot
 sudo reboot
 # Verify AP mode comes up

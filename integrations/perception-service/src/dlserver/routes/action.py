@@ -25,12 +25,7 @@ _request_adapter = TypeAdapter(ActionRequest)
 async def action_analysis_ws(websocket: WebSocket):
     """WebSocket endpoint for streaming action recognition.
 
-    Accepts JSON messages with a "type" field:
-    - {"type": "frame", "frame_b64": "<base64>"} — feed a frame
-    - {"type": "config", "whitelist": ["action1", ...]} — update whitelist
-    - {"type": "config", "whitelist": null} — reset to default whitelist
-
-    API key is validated from the X-API-Key header on connect.
+    Message types: ``frame``, ``config`` (``whitelist``; null resets). Requires X-API-Key.
     """
     if not await verify_ws_api_key(websocket):
         return

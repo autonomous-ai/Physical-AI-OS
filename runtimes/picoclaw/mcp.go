@@ -8,32 +8,16 @@ import (
 	"path/filepath"
 )
 
-// PicoClaw MCP wiring. Unlike OpenClaw (top-level mcp.servers in openclaw.json) and
-// Hermes (top-level mcp_servers in config.yaml), PicoClaw nests servers under
-// tools.mcp.servers in /root/.picoclaw/config.json, and the whole subsystem is gated
-// by tools.mcp.enabled which defaults to FALSE — so an unqualified write is silently
-// ignored. Both facts are handled here; see docs/agentic/picoclaw.md §MCP.
-
 // picoclawConfigPath returns PicoClaw's structure config.json — the parent of the
-// workspace dir (HOME=/root → /root/.picoclaw/config.json). Secrets live in
-// .security.yml, which we never touch here.
+// workspace dir (HOME=/root → /root/.picoclaw/config.json).
+// Secrets live in .security.yml, which we never touch here.
 func picoclawConfigPath() string {
 	return filepath.Join(filepath.Dir(picoclawWorkspaceDir), "config.json")
 }
 
 // WriteMCPEntry upserts tools.mcp.servers.<name> in config.json and restarts the
-// gateway so PicoClaw picks up the server. entry is the canonical (OpenClaw-shaped)
-// server-config map the connector writer produces — {type:"http", url, headers} for
-// hosted MCP, or {command, args, env} for stdio.
-//
-// Two PicoClaw-specific rules are enforced (see file header):
-//  1. The entry lands under tools.mcp.servers, created if absent.
-//  2. tools.mcp.enabled is asserted true — otherwise the server is silently ignored.
-//
-// The entry is passed through with enabled:true asserted (PicoClaw's per-server active
-// flag). The type key is KEPT verbatim: PicoClaw's transport values (stdio/sse/http)
-// already match the OpenClaw shape, and an explicit type:"http" avoids PicoClaw's
-// empty-type→sse inference. The read-modify-write cycle is serialized under mcpMu.
+// gateway so PicoClaw picks up the server.
+// tools.mcp.enabled is asserted true; PicoClaw silently ignores servers otherwise.
 func (s *PicoclawService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -57,11 +41,9 @@ func (s *PicoclawService) WriteMCPEntry(name string, entry map[string]any) error
 	return nil
 }
 
-// RemoveMCPEntry deletes tools.mcp.servers.<name> from config.json. Returns
-// removed=false (no write, no restart) when the entry was already absent or the
-// config file does not exist yet. tools.mcp.enabled is left on — other servers may
-// still be wired, and an enabled-but-empty MCP block loads nothing. Mirrors
-// OpenclawService.RemoveMCPEntry.
+// RemoveMCPEntry deletes tools.mcp.servers.<name> from config.json.
+// tools.mcp.enabled is left on — other servers may still be wired, and an enabled-but-empty MCP
+// block loads nothing.
 func (s *PicoclawService) RemoveMCPEntry(name string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -95,8 +77,7 @@ func (s *PicoclawService) RemoveMCPEntry(name string) (bool, error) {
 }
 
 // applyMCPServerWrite upserts tools.mcp.servers.<name> in the decoded config map and
-// asserts the tools.mcp.enabled gate (default false). Pure map mutation — no I/O — so
-// the nesting + gate rules are unit-testable without the hardcoded config path.
+// asserts the tools.mcp.enabled gate (default false).
 func applyMCPServerWrite(cfg map[string]any, name string, entry map[string]any) {
 	tools := ensurePicoMap(cfg, "tools")
 	mcp := ensurePicoMap(tools, "mcp")
@@ -106,8 +87,6 @@ func applyMCPServerWrite(cfg map[string]any, name string, entry map[string]any) 
 }
 
 // applyMCPServerRemove deletes tools.mcp.servers.<name> from the decoded config map.
-// Returns false (no mutation) when the tools.mcp.servers path or the named entry is
-// absent. tools.mcp.enabled is deliberately left on — other servers may remain.
 func applyMCPServerRemove(cfg map[string]any, name string) bool {
 	tools, _ := cfg["tools"].(map[string]any)
 	mcp, _ := tools["mcp"].(map[string]any)
@@ -124,9 +103,7 @@ func applyMCPServerRemove(cfg map[string]any, name string) bool {
 
 // toPicoclawMCPEntry copies the canonical OpenClaw-shaped server entry and asserts
 // enabled:true (PicoClaw's per-server active flag; also re-enables a previously
-// disabled entry on re-write). Unlike Hermes' translator the type key is kept: it
-// maps 1-for-1 onto PicoClaw's transport field and guards against the empty-type→sse
-// default. url/headers (http) and command/args/env (stdio) pass through unchanged.
+// disabled entry on re-write). The type key is kept to avoid PicoClaw's empty-type→sse inference.
 func toPicoclawMCPEntry(entry map[string]any) map[string]any {
 	out := make(map[string]any, len(entry)+1)
 	for k, v := range entry {
@@ -136,9 +113,7 @@ func toPicoclawMCPEntry(entry map[string]any) map[string]any {
 	return out
 }
 
-// readPicoclawConfig loads config.json into a generic map. Errors (including
-// not-exist) are returned so connector writes surface a clear failure rather than
-// silently no-op'ing on an un-provisioned device.
+// readPicoclawConfig loads config.json into a generic map.
 func readPicoclawConfig(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -151,10 +126,7 @@ func readPicoclawConfig(path string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// writePicoclawConfig marshals + atomically writes config.json. PicoClaw runs as root
-// and owns /root/.picoclaw, so no chown is needed (unlike openclaw's runtime user).
-// presync.sh re-asserts channel_list/model_list structure idempotently on the next
-// boot, so any key reordering from the map marshal self-heals.
+// writePicoclawConfig marshals + atomically writes config.json.
 func writePicoclawConfig(path string, cfg map[string]any) error {
 	written, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
@@ -167,7 +139,7 @@ func writePicoclawConfig(path string, cfg map[string]any) error {
 }
 
 // ensurePicoMap returns parent[key] as a map[string]any, creating it when absent or
-// of the wrong type. Mirrors openclaw.ensureMap for the JSON-decoded config tree.
+// of the wrong type.
 func ensurePicoMap(parent map[string]any, key string) map[string]any {
 	if existing, ok := parent[key].(map[string]any); ok && existing != nil {
 		return existing
@@ -178,9 +150,9 @@ func ensurePicoMap(parent map[string]any, key string) map[string]any {
 }
 
 // atomicWritePicoFile writes data to a temp file in the same dir then renames it over
-// path, so a crash mid-write never leaves a truncated config.json. Mirrors
-// hermes.atomicWriteFile (kept local to avoid a cross-package dependency); no chown
-// because PicoClaw runs as root.
+// path, so a crash mid-write never leaves a truncated config.json.
+// Mirrors hermes.atomicWriteFile (kept local to avoid a cross-package dependency); no chown because
+// PicoClaw runs as root.
 func atomicWritePicoFile(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".picoclaw-*.tmp")
 	if err != nil {

@@ -7,12 +7,8 @@ import (
 	"strings"
 )
 
-// userProfileFieldNames are USER.md's SINGULAR fields — the ones that describe
-// exactly one value each, so a second copy is a contradiction rather than extra
-// detail. Everything else in USER.md (Context notes, observations) is additive
-// and keeps the normal entry-merge.
-//
-// Matched case-insensitively.
+// userProfileFieldNames are USER.md's singular fields (matched case-insensitively); a second
+// copy is a contradiction, everything else entry-merges.
 var userProfileFieldNames = []string{
 	"Name",
 	"What to call them",
@@ -20,14 +16,10 @@ var userProfileFieldNames = []string{
 	"Timezone",
 }
 
-// userFieldEntryRe matches an entry carrying a "**Field:** value" bullet. The
-// value group may be empty so an UNFILLED template slot still matches — that is
-// the slot we fill in place. identityFieldRe deliberately requires a value and
-// would skip them.
+// userFieldEntryRe matches a "**Field:** value" bullet, including an empty value (unfilled slot).
 var userFieldEntryRe = regexp.MustCompile(`^\*\*(.+?):\*\*\s*(.*)$`)
 
-// hasRealFieldValue reports whether a field's value is filled rather than an
-// empty slot or an italic placeholder hint.
+// hasRealFieldValue reports whether a field value is filled, not empty or a placeholder hint.
 func hasRealFieldValue(v string) bool {
 	v = strings.TrimSpace(v)
 	return v != "" && !strings.HasPrefix(v, "_(") && !strings.HasPrefix(v, "*(")
@@ -42,8 +34,7 @@ func isUserProfileField(name string) bool {
 	return false
 }
 
-// userFieldOf returns the profile-field name an entry carries, or "" when the
-// entry is not a bullet for one of the singular fields.
+// userFieldOf returns the singular field name an entry carries, or "".
 func userFieldOf(entry string) string {
 	mt := userFieldEntryRe.FindStringSubmatch(strings.TrimSpace(entry))
 	if mt == nil {
@@ -56,11 +47,8 @@ func userFieldOf(entry string) string {
 	return name
 }
 
-// partitionUserFields splits entries into the filled singular-field values and
-// everything else. Field bullets are removed from the remainder — filled or
-// empty — because applyUserFields owns their placement; leaving them in would
-// let the entry-merge append a second bullet for a field that already exists,
-// which is the duplication this whole path exists to stop.
+// partitionUserFields splits entries into filled singular-field values and the rest; field
+// bullets are removed from the rest so entry-merge cannot duplicate them.
 func partitionUserFields(entries []string) ([]IdentityField, []string) {
 	byName := map[string]string{}
 	var rest []string
@@ -72,8 +60,7 @@ func partitionUserFields(entries []string) ([]IdentityField, []string) {
 		}
 		mt := userFieldEntryRe.FindStringSubmatch(strings.TrimSpace(e))
 		if v := strings.TrimSpace(mt[2]); hasRealFieldValue(v) {
-			// Last filled value wins within one file: on a previously-merged
-			// file the appended copy is the newer of the duplicates.
+			// Last filled value wins (the appended copy is newer).
 			byName[strings.ToLower(field)] = v
 		}
 	}
@@ -87,18 +74,8 @@ func partitionUserFields(entries []string) ([]IdentityField, []string) {
 	return fields, rest
 }
 
-// mergeUserFields applies incoming field values over existing ones: one value
-// per field, incoming wins.
-//
-// This is the half writeMemoryEntries could never do. Entry-merge is a
-// dedupe-UNION, so "**Name:** Leo" and "**Name:** Long" are two distinct strings
-// and both survive — a profile could gain a name but never retire one, and the
-// stale one kept being read first. Switching runtimes then propagated the pair.
-//
-// An absent or unfilled incoming field NEVER blanks a filled destination: a
-// source runtime that simply has no profile yet must not erase the one the
-// device already learned. partitionUserFields drops unfilled values, so this
-// falls out of "only what is present is applied".
+// mergeUserFields applies incoming field values over existing ones (incoming wins). An absent
+// or unfilled incoming field never blanks a filled destination.
 func mergeUserFields(existing, incoming []IdentityField) []IdentityField {
 	value := map[string]string{}
 	for _, f := range existing {
@@ -116,19 +93,8 @@ func mergeUserFields(existing, incoming []IdentityField) []IdentityField {
 	return out
 }
 
-// applyUserFields writes each field into entries IN PLACE, at the position its
-// bullet already occupies, and drops any later bullet for the same field. A
-// field with no bullet yet is appended.
-//
-// USER.md is a FORM, not a log: the template ships blank slots ("- **Name:**")
-// under an instruction to fill them in. So the right move is to fill the slot
-// where it stands, not to prune it and write the value elsewhere — that keeps
-// the template's shape, ordering and prompts completely intact while still
-// leaving exactly one bullet per field. Mirrors setIdentityField, which does the
-// same for IDENTITY.md.
-//
-// Slots for fields we have no value for are left untouched: that is the form
-// still asking to be filled, and the agent reads it every turn.
+// applyUserFields fills each field's existing bullet in place, drops later duplicates (the
+// retirement), and appends fields with no slot; empty slots without a value stay as is.
 func applyUserFields(entries []string, fields []IdentityField) []string {
 	rendered := map[string]string{}
 	for _, f := range fields {
@@ -146,22 +112,16 @@ func applyUserFields(entries []string, fields []IdentityField) []string {
 		key := strings.ToLower(field)
 		text, have := rendered[key]
 		if !have {
-			// No value for this field — keep the empty slot exactly as it is.
 			out = append(out, e)
 			continue
 		}
 		if placed[key] {
-			// A later duplicate bullet for a field already written above: the
-			// retired value ("**Name:** Leo", appended beneath the blank slot by
-			// earlier entry-merges). This is the retirement.
 			continue
 		}
 		out = append(out, text)
 		placed[key] = true
 	}
 
-	// A field with no slot in this file (a runtime whose template differs) is
-	// appended, in canonical order.
 	for _, f := range fields {
 		key := strings.ToLower(f.name)
 		if !placed[key] {
@@ -171,20 +131,8 @@ func applyUserFields(entries []string, fields []IdentityField) []string {
 	return out
 }
 
-// writeUserProfile is writeMemoryEntries specialised for USER.md: the singular
-// profile fields are filled in place (see applyUserFields) while the free-form
-// remainder keeps the normal dedupe-union entry merge.
-//
-// The template itself is carried through untouched — the "Update this as you go"
-// instruction, the Context prompts, the "not building a dossier" guardrail, the
-// unfilled slots, the Related link. USER.md is a bootstrap file, so all of it
-// reaches the agent on every turn, and it holds the only instruction telling the
-// agent to maintain this file at all. mergeEntries dedupes by normalized text,
-// so it costs one copy however many migrations run.
-//
-// The char limit bounds the free-form remainder only. The fields are a handful
-// of short lines and are the point of the file — they must never be the thing
-// that overflows out.
+// writeUserProfile is writeMemoryEntries for USER.md: singular fields fill in place, the rest
+// entry-merges; the template is preserved and the char limit applies to the free-form rest only.
 func (b *baseMigrator) writeUserProfile(kind string, incoming []string, destination string, limit int, dstFormat entryFormat) {
 	existingRaw := parseEntries(destination)
 	existingFields, _ := partitionUserFields(existingRaw)
@@ -194,8 +142,7 @@ func (b *baseMigrator) writeUserProfile(kind string, incoming []string, destinat
 	withFields := applyUserFields(existingRaw, fields)
 	merged, stats, overflowed := mergeEntries(withFields, incomingRest, limit)
 
-	// A field whose value changed, or a retired duplicate that was dropped, is a
-	// real edit even when no new free-form entry landed.
+	// A changed field or dropped duplicate is a real edit even without new entries.
 	structureChanged := !sameEntries(withFields, existingRaw)
 
 	details := map[string]any{

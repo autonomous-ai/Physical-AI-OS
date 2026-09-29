@@ -11,9 +11,7 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 )
 
-// Regex for stripForTTS — precompiled once at package init. Compiling per-call
-// costs ~7 MustCompile per TTS message; at wake-word → reply latency this adds
-// measurable overhead.
+// Regex for stripForTTS — precompiled once at package init.
 var (
 	reEmoji      = regexp.MustCompile(`[\x{1F300}-\x{1F9FF}\x{2600}-\x{27BF}\x{FE00}-\x{FE0F}\x{200D}\x{20E3}\x{E0020}-\x{E007F}]`)
 	reMDBold     = regexp.MustCompile(`\*{1,3}([^*]+)\*{1,3}`)
@@ -24,11 +22,7 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
-// StartHALVoice starts the voice pipeline on HAL with API keys from
-// config. sttKey / ttsKey + sttBaseURL / ttsBaseURL are split out from
-// llmKey / llmBaseURL so households with separate STT / TTS accounts can
-// configure each independently. Pass empty for any of them to make HAL
-// fall back to the LLM equivalent.
+// StartHALVoice starts the HAL voice pipeline; STT/TTS keys and base URLs may differ from the LLM ones.
 func (s *OpenclawService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
@@ -82,8 +76,7 @@ func (s *OpenclawService) SetVolume(pct int) error {
 	return nil
 }
 
-// StopTTS interrupts active TTS playback and music on HAL immediately,
-// freeing the speaker so the voice mic can receive new commands.
+// StopTTS interrupts active TTS playback and music on HAL immediately, freeing the speaker so the voice mic can receive new commands.
 func (s *OpenclawService) StopTTS() error {
 	if err := hal.StopTTS(); err != nil {
 		return err
@@ -96,27 +89,11 @@ func (s *OpenclawService) StopTTS() error {
 	return nil
 }
 
-// Speak says text out loud and nothing else — no agent turn, no session entry,
-// no tokens. See domain.AgentGateway.Speak for the full contract; the only
-// per-runtime difference is the log component, which is why every backend's
-// implementation is this same delegation to hal.Speak.
-//
-// hal.Speak, NOT hal.SpeakReply: SpeakReply sets realtime_feedback so the
-// spoken text is fed back to the realtime voice agent as history, which is
-// right for the agent's own reply and wrong for a canned line the agent never
-// produced. This is the same path hardcoded fillers and system notices take.
-//
-// The returned error means HAL REFUSED THE TEXT (transport failure, or a
-// rejection such as the 1..2000 character bound it enforces without
-// truncating). A nil error means HAL accepted it for playback — not that audio
-// was produced, and certainly not that anyone heard it.
+// Speak says text out loud and nothing else — no agent turn, no session entry, no tokens.
 func (s *OpenclawService) Speak(text string) error {
-	// Same normalisation the agent's own TTS gets: emoji and markdown read
-	// aloud as noise. It can only ever shorten the string, so it cannot push a
-	// caller-validated length back over HAL's cap.
 	text = stripForTTS(text)
 	if text == "" {
-		return nil // nothing to say; HAL rejects an empty string outright
+		return nil
 	}
 	if err := hal.Speak(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
@@ -127,15 +104,12 @@ func (s *OpenclawService) Speak(text string) error {
 }
 
 // SendToHALTTS posts response text to HAL for TTS playback.
-// Text must already be stripped of HW markers by the caller (SSE handler).
 func (s *OpenclawService) SendToHALTTS(text string) error {
 	text = stripForTTS(text)
 	if text == "" {
 		return nil
 	}
-	// SpeakReply (not Speak): this is the agent's actual reply, so feed it back
-	// to the realtime voice agent as history. Hardcoded fillers must NOT route
-	// through here — they use hal.Speak directly so they never reach realtime.
+	// SpeakReply (not Speak): this is the agent's actual reply, so feed it back to the realtime voice agent as history.
 	if err := hal.SpeakReply(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
 	}
@@ -149,12 +123,7 @@ func (s *OpenclawService) SendToHALTTS(text string) error {
 	return nil
 }
 
-// SendToHALTTSQueue posts response text to HAL's /voice/speak-queue
-// endpoint. If the speaker is idle the audio plays immediately (same as
-// SendToHALTTS); if a previous speak is still in flight Python queues +
-// pre-synthesizes this text and chains it onto the same open ALSA stream so
-// the user hears the agent's sentence-streamed reply as one continuous
-// utterance.
+// SendToHALTTSQueue posts response text to HAL's /voice/speak-queue endpoint.
 func (s *OpenclawService) SendToHALTTSQueue(text string) error {
 	text = stripForTTS(text)
 	if text == "" {

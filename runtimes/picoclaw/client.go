@@ -23,12 +23,9 @@ import (
 var errDisconnectedBeforeSend = errors.New("picoclaw websocket disconnected before send")
 
 const (
-	// reconnectBackoff is the fixed wait between reconnect attempts. PicoClaw is
-	// local so a short, constant backoff is fine (matches openclaw).
+	// reconnectBackoff is the fixed wait between reconnect attempts.
 	reconnectBackoff = 5 * time.Second
-	// readDeadline bounds how long the read loop blocks waiting for a frame. It
-	// is refreshed on every inbound frame (including pong) so a healthy-but-idle
-	// socket is kept alive by the keepalive ping below.
+	// readDeadline bounds how long the read loop blocks waiting for a frame.
 	readDeadline = 90 * time.Second
 	// pingInterval is how often we send an application-level ping so the server
 	// keeps the connection warm and our readDeadline keeps getting fed.
@@ -36,8 +33,7 @@ const (
 )
 
 // StartWS connects to the PicoClaw WebSocket and runs the read loop, calling
-// handler for each translated event. Runs until ctx is cancelled, auto-
-// reconnecting on drop. Mirrors the openclaw.PicoclawService.StartWS shape.
+// handler for each translated event.
 func (s *PicoclawService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	for {
 		select {
@@ -49,14 +45,9 @@ func (s *PicoclawService) StartWS(ctx context.Context, handler domain.AgentEvent
 		if ctx.Err() != nil {
 			return
 		}
-		// Skip the cyan status overlay during AP/provisioning mode (no creds yet).
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Set(statusled.StateAgentDown)
 		}
-		// Safety reflex: the gateway link just dropped, so any in-flight servo
-		// object-tracking is now chasing a target it can no longer get vision
-		// updates for. Stop it (best-effort, idempotent). Only devices that can
-		// servo-track have anything to stop.
 		if s.config.SetUpCompleted && device.Has(s.config.DeviceTypeOrDefault(), device.CapMotion) {
 			if err := hal.StopServoTracking(); err != nil {
 				slog.Warn("stop servo tracking on ws disconnect failed", "component", "picoclaw", "error", err)
@@ -130,10 +121,7 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 	flow.Log("ws_ready", map[string]any{"backend": "picoclaw"})
 	slog.Info("PicoClaw connected", "component", "picoclaw", "url", url)
 
-	// On reconnect (not first boot), announce via TTS so the user knows the agent
-	// is back. SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
-	// be fed to the realtime voice agent as history; fixed pool self-caches into
-	// hal's WAV cache so replays skip the provider.
+	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
@@ -143,7 +131,6 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 		}()
 	}
 
-	// Keepalive ping loop — bounded to this connection's lifetime.
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	go s.keepAlive(pingCtx)
@@ -152,14 +139,11 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 		if handler == nil {
 			return
 		}
-		// Best-effort: drop handler errors but keep reading (matches openclaw).
 		if err := handler(ctx, evt); err != nil {
 			slog.Error("ws handler error", "component", "picoclaw", "event", evt.Event, "error", err)
 		}
 	}
 
-	// Only locally unsent requests survive a disconnect. Start them without
-	// waiting for an unrelated turn to finish on the new connection.
 	s.drainPendingEvents()
 
 	for {
@@ -180,9 +164,7 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 	}
 }
 
-// keepAlive sends an application-level ping every pingInterval. PicoClaw replies
-// with a pong frame (ignored by the translator) which refreshes the read
-// deadline and keeps an idle socket alive.
+// keepAlive sends an application-level ping every pingInterval.
 func (s *PicoclawService) keepAlive(ctx context.Context) {
 	tick := time.NewTicker(pingInterval)
 	defer tick.Stop()
@@ -195,16 +177,13 @@ func (s *PicoclawService) keepAlive(ctx context.Context) {
 				"type": "ping",
 				"id":   fmt.Sprintf("ping-%d", s.reqCounter.Add(1)),
 			}); err != nil {
-				// Write failure means the socket is gone; the read loop will see
-				// the same error and trigger reconnect. Nothing to do here.
 				return
 			}
 		}
 	}
 }
 
-// sendFrame marshals v and writes it to the WebSocket under wsMu. Returns an
-// error when the socket is not connected.
+// sendFrame marshals v and writes it to the WebSocket under wsMu.
 func (s *PicoclawService) sendFrame(v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -220,13 +199,13 @@ func (s *PicoclawService) sendFrame(v any) error {
 	s.wsMu.Unlock()
 	if err != nil {
 		s.wsConnected.Store(false)
-		_ = conn.Close() // Wake the read loop so uncertain writes trigger reconnect.
+		_ = conn.Close()
 		return fmt.Errorf("write frame: %w", err)
 	}
 	return nil
 }
 
-// sleepCtx sleeps for d or until ctx is cancelled. Returns false if cancelled.
+// sleepCtx sleeps for d or until ctx is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

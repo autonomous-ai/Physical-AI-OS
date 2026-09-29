@@ -10,12 +10,6 @@ import (
 	"go.autonomous.ai/os/system/schedule"
 )
 
-// handleTimezoneSet applies a `timezone.set` downlink — set the device's IANA
-// timezone. Same flow as realtime.set: ack immediately, apply async (rewrite
-// /etc/localtime + /etc/timezone, persist config.json), then ack the outcome.
-// Takes effect without a HAL restart (HAL's clock helpers read /etc/timezone
-// fresh per call). See domain.TimezoneSetData for the downlink contract.
-
 func (h *DeviceMQTTHandler) publishTimezoneSetAck(status, errMsg string, data *domain.TimezoneSetData) {
 	ack := domain.MQTTTimezoneSetAck{
 		MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()),
@@ -39,7 +33,6 @@ func (h *DeviceMQTTHandler) handleTimezoneSet(env domain.MQTTDataCommand) error 
 
 	slog.Info("timezone.set: received", "component", "mqtt", "timezone", req.Timezone)
 
-	// Ack immediately so BFF knows the device received the command.
 	h.publishTimezoneSetAck("starting", "", nil)
 
 	go func() {
@@ -50,13 +43,6 @@ func (h *DeviceMQTTHandler) handleTimezoneSet(env domain.MQTTDataCommand) error 
 		}
 		slog.Info("timezone.set: applied", "component", "mqtt", "timezone", req.Timezone)
 
-		// Re-anchor the scheduler to the new zone. The runner resolves every
-		// wall-clock cadence against Store.Timezone(), which is otherwise
-		// written ONLY by an inbound schedule.sync — so without this the
-		// device keeps firing on the old zone until some unrelated edit
-		// happens to trigger a sync. Observed live: a task set for 11:00 kept
-		// its 11:00 UTC anchor after a move to Asia/Saigon and was due to fire
-		// at 18:02 local.
 		h.resyncSchedulesForTimezone(req.Timezone)
 
 		h.publishTimezoneSetAck("success", "", &req)
@@ -65,19 +51,8 @@ func (h *DeviceMQTTHandler) handleTimezoneSet(env domain.MQTTDataCommand) error 
 	return nil
 }
 
-// resyncSchedulesForTimezone re-points the schedule store at tz and recomputes
-// every next run, then reports the new times upward on the same
-// `schedule.sync` result envelope the cloud already understands — so the app's
-// "Next run in N hours" corrects itself without waiting for another sync.
-//
-// Reuses schedule.SyncSchedules with the schedules ALREADY in the store rather
-// than recomputing by hand: that is the one code path that knows how to pair a
-// timezone with a next-run computation, and duplicating it here is how the two
-// would drift.
-//
-// Best-effort throughout. The timezone itself is already applied and acked by
-// the time this runs, so a failure here costs a stale next_run_at until the
-// next sync — it must never turn a successful timezone change into a failed one.
+// resyncSchedulesForTimezone re-points the schedule store at tz, recomputes
+// every next run and reports them on a schedule.sync result. Best-effort.
 func (h *DeviceMQTTHandler) resyncSchedulesForTimezone(timezone string) {
 	changed, err := h.scheduleStore.SetTimezone(timezone)
 	if err != nil {
@@ -86,8 +61,6 @@ func (h *DeviceMQTTHandler) resyncSchedulesForTimezone(timezone string) {
 		return
 	}
 	if !changed {
-		// A repeat of the zone the store already had: nothing to recompute,
-		// and re-publishing would be noise on every duplicate downlink.
 		return
 	}
 

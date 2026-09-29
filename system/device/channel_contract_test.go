@@ -15,11 +15,8 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// Runtime implementations import device, so importing them here to call
-// SupportedChannels would create an import cycle. Read the domain's channel
-// constants instead: newly declared channels must obey PATCH semantics even
-// before every runtime supports them. Parse declarations, not source spelling
-// or a duplicate allowlist that could silently miss a new channel.
+// declaredContractChannels parses the domain channel constants (importing
+// runtimes here would create an import cycle).
 func declaredContractChannels(t *testing.T) []string {
 	t.Helper()
 	paths, err := filepath.Glob("../domain/*.go")
@@ -73,9 +70,7 @@ func declaredContractChannels(t *testing.T) []string {
 	return result
 }
 
-// Probe channelFields rather than maintaining a second list of credentials.
-// Any new string field included in the snapshot is seeded automatically, even
-// when its config name does not match the channel name (e.g. a bridge provider).
+// populatedChannelContractConfig seeds every string field channelFields reports.
 func populatedChannelContractConfig(t *testing.T, channel string) *config.Config {
 	t.Helper()
 	c := baseConfig()

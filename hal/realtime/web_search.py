@@ -1,20 +1,6 @@
-"""Grounded web search for the on-device Pipecat provider.
+"""Grounded web search for the Pipecat provider via the campaign-api Google-Search relay.
 
-The Qwen relay behind `pipecat_v1` has no hosted search tool (unlike Gemini
-Live's `google_search` grounding and GPT-Live's Responses `web_search`), so
-public live facts used to cost a full `delegate_to_main` round-trip. This
-module backs a client-side `web_search` function tool instead: one POST to the
-campaign-api Google-Search relay (a Gemini Interactions endpoint given the
-`google_search` tool), which returns an already-grounded ANSWER, not a list of
-links — the realtime model only has to rephrase it in the user's language.
-
-Request:  {"model": ..., "input": <question>, "tools": [{"type": "google_search"}]}
-Response: an Interaction — `status`, and `steps[]` (or `outputs[]`) holding
-          `google_search_call` (the queries), `google_search_result`, `thought`
-          and `model_output` → `content[] {type: "text", text, annotations[]}`.
-
-`parse_interaction` is pure so the response shape is pinned by tests without
-a network; `grounded_search` adds the HTTP call and the error envelope.
+`parse_interaction` is pure; `grounded_search` adds the HTTP call and error envelope.
 """
 
 from __future__ import annotations
@@ -29,15 +15,13 @@ import requests
 
 logger = logging.getLogger(__name__)
 
-# Answer text is fed back to a voice model; a long grounded essay only costs
-# tokens and time, so it is cut at a sentence boundary after this many chars.
+# Cut at a sentence boundary after this many chars (voice answers).
 MAX_ANSWER_CHARS: int = 1200
 MAX_SOURCES: int = 5
 
 
 class WebSearchError(Exception):
-    """The search could not produce an answer (transport, HTTP, or an empty
-    / failed interaction). The message is safe to hand back to the model."""
+    """The search produced no answer; the message is safe to hand back to the model."""
 
 
 @dataclass
@@ -57,9 +41,7 @@ _BLANK_LINES = re.compile(r"\n{2,}")
 
 
 def strip_markdown(text: str) -> str:
-    """Flatten the markdown Gemini writes (`**Spain**`, headings, bullets,
-    links) into plain prose. The voice model would otherwise echo the
-    asterisks, and TTS would read them aloud."""
+    """Flatten Gemini markdown into plain prose so TTS doesn't read the markup."""
     text = _MD_LINK.sub(r"\1", text)
     text = _MD_HEADING.sub("", text)
     text = _MD_BULLET.sub("", text)
@@ -73,7 +55,6 @@ def _truncate(text: str, limit: int) -> str:
     if len(text) <= limit:
         return text
     cut = text[:limit]
-    # Prefer the last sentence end inside the window; fall back to a hard cut.
     for mark in (". ", "! ", "? ", ".\n", "!\n", "?\n"):
         idx = cut.rfind(mark)
         if idx > limit // 2:
@@ -82,17 +63,12 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def parse_interaction(payload: dict[str, Any]) -> SearchResult:
-    """Extract the grounded answer from an Interaction response.
-
-    Raises WebSearchError when the interaction did not complete or carries no
-    text — the caller turns that into the tool's error envelope.
-    """
+    """Extract the grounded answer from an Interaction; raises WebSearchError if none."""
     status = str(payload.get("status") or "").lower()
     if status and status != "completed":
         raise WebSearchError(f"search interaction ended with status {status!r}")
 
-    # The relay answers with `steps`; the canonical Interactions API names the
-    # same list `outputs`. Read whichever is present.
+    # The relay answers with `steps`; the canonical Interactions API uses `outputs`.
     steps: list[Any] = payload.get("steps") or payload.get("outputs") or []
     if not isinstance(steps, list):
         raise WebSearchError("search interaction has no steps")
@@ -139,11 +115,9 @@ def grounded_search(
     model: str,
     timeout_s: float,
 ) -> SearchResult:
-    """POST the question to the Google-Search relay and return its grounded
-    answer. Blocking: the orchestrator calls this from the turn's output loop
-    while the pipeline's tool future waits, so `timeout_s` must stay below
-    `HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S` or the model gets the bridge's generic
-    "no result" first.
+    """POST the question to the Google-Search relay and return its grounded answer (blocking).
+
+    `timeout_s` must stay below HAL_PIPECAT_TOOL_RESULT_TIMEOUT_S.
     """
     if not url:
         raise WebSearchError("search endpoint not configured")

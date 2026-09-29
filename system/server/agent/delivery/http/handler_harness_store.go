@@ -2,9 +2,8 @@ package http
 
 import "go.autonomous.ai/os/system/domain"
 
-// DeliverHarnessPreparationProgress displays a polled Store snapshot while its
-// original main-agent turn is active. It never takes response ownership or
-// speaks: main-agent guidance remains available even when preparation fails.
+// DeliverHarnessPreparationProgress displays a polled Store snapshot while its original turn is
+// active. It never takes response ownership or speaks.
 func (h *AgentHandler) DeliverHarnessPreparationProgress(runID, operationID, text string) bool {
 	if runID == "" || text == "" {
 		return false
@@ -29,8 +28,7 @@ func (h *AgentHandler) DeliverHarnessPreparationProgress(runID, operationID, tex
 	if _, ownsReply := h.harnessReplies[runID]; ownsReply {
 		return false
 	}
-	// Bound retained progress to active turns. Polls with identical visible
-	// content are not assistant token deltas and must not append repeatedly.
+	// Bound progress to active turns; identical polls must not append repeatedly.
 	for id := range h.harnessPreparationProgress {
 		if !activeRuns[id] {
 			delete(h.harnessPreparationProgress, id)

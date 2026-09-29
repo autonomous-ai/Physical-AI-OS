@@ -165,7 +165,6 @@ func TestSSETerminalStopsBeforeTrailingData(t *testing.T) {
 }
 
 // Readiness can drop after a drain detached A/B and a newer C was queued.
-// Synchronous rejection must put A back before both B and C.
 func TestNotReadyReplayPreservesDetachedOrder(t *testing.T) {
 	s := &HermesService{monitorBus: monitor.ProvideBus()}
 	a := pendingEvent{eventType: "web_chat", msg: "A", fixedRunID: "run-A"}

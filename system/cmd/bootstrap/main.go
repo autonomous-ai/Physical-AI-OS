@@ -23,8 +23,7 @@ func main() {
 		return
 	}
 
-	// Load shared env file before logger init (so GELF_* env vars are visible).
-	// Missing file is non-fatal — env may also be supplied by systemd.
+	// Load before logger init so GELF_* vars are visible; missing file is fine.
 	_ = godotenv.Load("/opt/hal/.env")
 
 	cleanup := logger.Init("/var/log/bootstrap.log")

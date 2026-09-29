@@ -1,18 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Publish a new openclaw version to OTA metadata. Pi watcher reads
-# metadata.json's openclaw.version and (when added) runs `npm install
-# -g openclaw@<version>` + restarts the service. This script ONLY
-# updates the metadata field — it doesn't touch GCS otherwise.
-#
-# Usage:
-#   ./scripts/release/upload-openclaw.sh <version_str>
-#
-# Example:
-#   ./scripts/release/upload-openclaw.sh 1.2.3
-#
-# Other keys in metadata.json (skills, etc.) are preserved.
+# Publish an openclaw version to OTA metadata (metadata only, no GCS artifact).
+# Usage: ./scripts/release/upload-openclaw.sh <version_str>
 
 if [[ -z "${1:-}" ]]; then
   echo "Usage: $0 <openclaw-version>" >&2
@@ -29,7 +19,6 @@ METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP"' EXIT
 
-# Pull existing metadata; if missing, bootstrap with an empty object.
 if ! gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
   echo "Note: $METADATA_GCS not found — bootstrapping with empty object."
   printf '{}' > "$PAYLOAD_TMP"

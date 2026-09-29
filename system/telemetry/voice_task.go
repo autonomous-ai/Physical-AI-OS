@@ -5,8 +5,7 @@ import (
 	"time"
 )
 
-// ReportTaskLifecycleEnd distinguishes normal completion from aborted/error
-// terminal frames. A lifecycle "end" alone does not guarantee execution success.
+// ReportTaskLifecycleEnd reports a lifecycle end, distinguishing completion from aborted/error.
 func ReportTaskLifecycleEnd(runID string, aborted, hasError bool) {
 	if aborted || hasError {
 		ReportTaskExecution(runID, "", "failed", "lifecycle_end_error")
@@ -15,9 +14,7 @@ func ReportTaskLifecycleEnd(runID string, aborted, hasError bool) {
 	ReportTaskExecution(runID, "", "completed", "lifecycle_end")
 }
 
-// TaskGroup classifies task sources, excluding internal notifications that do
-// not request execution. Other sensing types are eligible only after routing
-// policy selects them for dispatch; callers enforce that acceptance boundary.
+// TaskGroup classifies a task source; internal notifications return "".
 func TaskGroup(eventType string) string {
 	switch eventType {
 	case "voice", "voice_command", "voice_followup":
@@ -31,10 +28,7 @@ func TaskGroup(eventType string) string {
 	}
 }
 
-// ReportTaskStarted records a source-specific denominator. Repeating it with
-// the assigned run ID binds the same turn without adding another turn.
-// Voice/chat receipt is measured immediately; sensing is measured only once
-// selected for dispatch, after filtering and queued-event coalescing.
+// ReportTaskStarted records a source-specific start; repeating with runID binds the same turn.
 func ReportTaskStarted(eventType, interactionID, runID string) string {
 	group := TaskGroup(eventType)
 	if group == "" {
@@ -42,7 +36,7 @@ func ReportTaskStarted(eventType, interactionID, runID string) string {
 	}
 	if interactionID == "" {
 		if group == "sensing" && runID != "" {
-			// A requeued dispatch attempt retains the same cohort identity.
+			// A requeued dispatch keeps the same cohort identity.
 			interactionID = "os-sensing-" + runID
 		} else {
 			interactionID = "os-" + group + "-" + rand.Text()
@@ -62,16 +56,13 @@ func ReportTaskStarted(eventType, interactionID, runID string) string {
 	return interactionID
 }
 
-// ReportTaskExecution records an execution boundary, not answer correctness.
-// The legacy event name is shared by voice, chat and sensing to avoid emitting
-// duplicate terminal events. Consumers join to their source-specific start
-// cohort by run_id or interaction_id; standalone backend runs are not scored.
+// ReportTaskExecution records an execution boundary (not answer correctness), joined to
+// its start cohort by run_id or interaction_id.
 func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 	if runID == "" && interactionID == "" {
 		return
 	}
-	// Keep this payload content-free even if a future caller supplies an
-	// unexpected value: errors, transcripts and tool results must not escape.
+	// Keep the payload content-free: no errors, transcripts or tool results.
 	switch evidence {
 	case "harness_correlated_summary":
 		if outcome != "completed" && outcome != "failed" && outcome != "cancelled" {
@@ -108,7 +99,6 @@ func ReportTaskExecution(runID, interactionID, outcome, evidence string) {
 }
 
 // ReportTaskObservationLost records discarded unfinished transport correlations.
-// It does not assert that the remote execution failed or alter runtime lifecycle.
 func ReportTaskObservationLost(runIDs ...string) {
 	seen := make(map[string]bool, len(runIDs))
 	for _, runID := range runIDs {

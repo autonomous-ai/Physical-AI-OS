@@ -1,6 +1,5 @@
 #!/bin/bash
-# Migrate openclaw service from /root/openclaw → /root/.openclaw
-# Run on each Pi that was installed before the path migration.
+# Migrate the openclaw service from /root/openclaw to /root/.openclaw (run on each older Pi).
 
 set -e
 

@@ -2,54 +2,25 @@ import { useState } from "react";
 import { FileText, Download } from "lucide-react";
 import { agentFileUrl } from "@/lib/api";
 
-// Files the agent produced, surfaced under its reply.
-//
-// The chat can send a file INTO a turn, but an agent that makes one can only
-// name it: ask for a photo and the reply carries an absolute device path
-// (`/root/.openclaw/media/hal-snapshots/snap_*.jpg` — see skills/camera), which
-// is unusable in a browser. So the reply text is scanned for such paths and each
-// one is rendered as an image or a download chip pointing at
-// GET /api/agent/file.
-//
-// Detection is CLIENT-side on purpose: it costs no change to the turn pipeline,
-// and it applies to conversations already in localStorage, which a server-side
-// scan at turn-end could never reach. Enforcement stays server-side — the roots
-// below only stop the UI from firing requests for paths that could never be
-// served; the backend re-validates every one of them.
-
-// Roots that GET /api/agent/file will serve (handler_file.go
-// defaultAgentFileRoots). Duplicated here as a filter, never as a permission.
+// Device paths the agent named, rendered as images or download chips.
 const ROOTS = String.raw`(?:/root/\.[a-z0-9_-]+/(?:media|workspace)|/tmp)`;
 
-// Served extensions, split by how they are shown.
 const IMAGE_EXT = ["jpg", "jpeg", "png", "gif", "webp"];
 const OTHER_EXT = ["pdf", "txt", "md", "csv", "wav", "mp3", "mp4", "webm"];
 
-// One absolute path under a served root, ending in a served extension. The
-// character class stops at whatever normally terminates a path in prose or
-// markdown — whitespace, quotes, brackets, backticks.
 const FILE_RE = new RegExp(
   `${ROOTS}/[^\\s"'\`)<>\\]]+\\.(${[...IMAGE_EXT, ...OTHER_EXT].join("|")})\\b`,
   "gi",
 );
 
-/** The parts of a tool chip that can name a file. Structural on purpose — the
- *  full ToolChip type lives in ChatSection and this needs three fields of it. */
+/** The parts of a tool chip that can name a file. */
 interface FileBearingTool {
   args?: Record<string, unknown>;
   detail?: string;
   result?: string;
 }
 
-// Device paths named anywhere in the turn, de-duplicated, in the order found.
-//
-// The reply text alone is NOT enough, which the first device test made obvious:
-// asked to send a photo, the agent called its `message` tool with
-// `{"action":"send","media":"/root/.openclaw/media/…jpg"}` and its spoken reply
-// mentioned no path at all — from the chat's side the file was invisible. Tool
-// args carry it (the server logs them untruncated in `detail.args`; only the
-// chip's DISPLAY is shortened), and a `curl /camera/snapshot` puts it in the
-// tool result instead. All three are searched.
+// Device paths named anywhere in the turn (reply text and tool args), de-duplicated, in order.
 function extractAgentFiles(text: string, tools?: FileBearingTool[]): string[] {
   const haystacks: string[] = [text || ""];
   for (const t of tools ?? []) {
@@ -65,7 +36,6 @@ function extractAgentFiles(text: string, tools?: FileBearingTool[]): string[] {
   const seen = new Set<string>();
   for (const hay of haystacks) {
     for (const m of hay.matchAll(FILE_RE)) {
-      // Trailing punctuation belongs to the sentence, not the filename.
       seen.add(m[0].replace(/[.,;:]+$/, ""));
     }
   }
@@ -83,9 +53,6 @@ export function AgentFiles({ text, tools }: { text: string; tools?: FileBearingT
 }
 
 function AgentFile({ path }: { path: string }) {
-  // A path can be named but gone (temp file cleaned up), or refused by the
-  // backend. Either way the attachment disappears and the path stays readable
-  // as text in the reply above — nothing breaks, nothing shouts an error.
   const [failed, setFailed] = useState(false);
   if (failed) return null;
 

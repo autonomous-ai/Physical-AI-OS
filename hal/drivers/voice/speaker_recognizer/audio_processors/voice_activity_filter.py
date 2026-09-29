@@ -1,20 +1,4 @@
-"""Voice activity detection filter — strips non-voice and gates low-quality audio.
-
-Uses TEN-VAD via the vendored :mod:`hal.drivers.voice.ten_vad_lite` package
-(numpy + onnxruntime, ~300 KB FP32 ONNX model — the original, never a quantized
-variant). This is the gate: if it raises PreprocessRejected, HAL treats the clip
-as audio-level rejected and never sends it to the embedding server.
-
-Replaces the previous torch ``silero-vad`` implementation. Same class name, same
-constructor signature, same rejection semantics — only the speech-probability
-source changed, so ``factory.py`` and every caller are unaffected. The win is
-dependency + footprint: no torch in this path, ~43 MB resident instead of
-~169 MB, ~25x faster cold start, and a model that has an aarch64 story
-(onnxruntime wheels) where upstream TEN-VAD's prebuilt ``libten_vad`` does not.
-
-The ``Resampler`` earlier in the pipeline already guarantees the 16 kHz that
-TEN-VAD requires.
-"""
+"""Voice activity detection filter — strips non-voice and gates low-quality audio."""
 
 from typing import Any
 
@@ -32,7 +16,6 @@ from .exceptions import (
     PreprocessRejected,
 )
 
-# --- Defaults ---
 DEFAULT_MIN_DURATION_SEC: float = 0.5
 # Lowered from 0.4 (the silero-era value): the speaker-band gate below removes
 # non-speech from *inside* the kept span, which splits segments and mechanically
@@ -41,44 +24,20 @@ DEFAULT_MIN_VOICE_RATIO: float = 0.25
 DEFAULT_MIN_SPEECH_SEC: float = 0.2
 DEFAULT_MIN_SILENCE_SEC: float = 0.3
 DEFAULT_SPEECH_PAD_SEC: float = 0.1
-# TEN-VAD speech-probability threshold. A segment's onset triggers at this value
-# and its offset at (threshold - 0.15) — the same hysteresis silero used, so
-# HAL_SPEAKER_PROC_VAD_SPEECH_PROB_THRESHOLD keeps its meaning. TEN-VAD is
-# calibrated close to silero at 0.5 but is not the same model; a threshold sweep
-# put its best operating point at 0.45-0.5.
+# TEN-VAD speech-probability threshold.
 DEFAULT_SPEECH_PROB_THRESHOLD: float = 0.5
 
 # TEN-VAD is trained for 16 kHz only (16 ms hops). The Resampler upstream in the
 # pipeline already normalises to this rate.
 REQUIRED_SAMPLE_RATE: int = 16000
 
-# --- False-positive suppression (see ten_vad_lite/gates.py) ---
-# Every VAD fires on doors, taps and room tone. That costs more than one bad
-# frame here, because _strip_nonvoice keeps first-speech-to-last-speech: a 0.6 s
-# false positive five seconds after the utterance drags five seconds of silence
-# into the clip. The two gates together raised the share of the kept span that is
-# really speech from 0.67 to 0.79, and got the accept/reject verdict right on
-# 22 of 22 clips, measured against a hand-corrected diarisation reference.
-#
-# They are a pair: the band gate cannot reject uniformly loud noise, and the
-# level gate cannot reject a loud transient. Assumes one dominant speaker per
-# clip — true for recognition, wrong for long-form multi-speaker audio. Set
-# speaker_band=False for plain TEN-VAD.
+# Every VAD fires on doors, taps and room tone.
 DEFAULT_SPEAKER_BAND: bool = True
 DEFAULT_MAX_LEVEL_DROP_DB: float | None = 20.0
 
 
 class VoiceActivityFilter(AudioProcessorBase):
-    """Strip leading/trailing non-voice regions and reject low-quality audio.
-
-    Uses TEN-VAD (ONNX, CPU) to detect speech segments. Internal silence between
-    speech regions is kept (matching WeSpeaker convention).
-
-    Raises PreprocessRejected if:
-    - VAD removes all speech
-    - Remaining audio is too short
-    - Voice ratio is below threshold
-    """
+    """Strip leading/trailing non-voice regions and reject low-quality audio."""
 
     def __init__(
         self,
@@ -137,16 +96,9 @@ class VoiceActivityFilter(AudioProcessorBase):
             )
             return []
         try:
-            # The pipeline carries float32 in [-1, 1]; the model front-end works
-            # on the int16 scale, so convert explicitly rather than relying on
-            # range sniffing.
             samples = np.asarray(waveform, dtype=np.float32) * np.float32(32768.0)
-            # gpu_lock is held across inference for the same reason the silero
-            # stage held it: AudioProcessorBase.process() releases its own lock
-            # before _process_impl, so concurrent recognize()/enroll() calls
-            # reach this method in parallel — and one TenVad owns one
-            # onnxruntime session plus mutable LSTM-state buffers, which is not
-            # thread-safe. Serialising here keeps a shared instance correct.
+            # gpu_lock is held across inference for the same reason the silero stage
+            # held it.
             with gpu_lock:
                 ts = self._model.get_speech_timestamps(
                     samples,
@@ -182,7 +134,6 @@ class VoiceActivityFilter(AudioProcessorBase):
 
         stripped: npt.NDArray[np.float32] = waveform[first_start:last_end]
 
-        # Merge overlapping intervals to compute voice ratio accurately
         intervals: list[tuple[int, int]] = []
         for ts in segs:
             s: int = max(first_start, int(ts.get("start", 0)))

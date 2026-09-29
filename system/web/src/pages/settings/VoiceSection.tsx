@@ -7,10 +7,7 @@ import { hwUrl } from "@/lib/api";
 
 type EnrollReply = { status?: string; detail?: string; message?: string };
 
-// Voice enroll — remote-trigger the device's /speaker/record-enroll. The device captures
-// via its own mic; web only does countdown UI. Sharing label with face enroll
-// keeps both biometrics in one per-user folder. State stays local since
-// nothing outside this section reads it.
+// Voice enroll: remote-triggers the device's /speaker/record-enroll; the web only shows the countdown.
 export function VoiceSection({
   active, sttLanguage, faceOwners, loadFaceOwners,
 }: {
@@ -77,8 +74,7 @@ export function VoiceSection({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ name: voiceLabel.trim().toLowerCase(), duration_sec: VOICE_DURATION_SEC }),
       })
-        // A crash upstream answers in plain text ("Internal Server Error"), so
-        // parsing blind reported a JSON syntax error instead of the real cause.
+        // Upstream crashes answer in plain text, so don't parse blindly.
         .then(async (r) => {
           const body = await r.text();
           try {

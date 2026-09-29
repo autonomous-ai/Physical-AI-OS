@@ -26,7 +26,7 @@ OpenClaw heartbeat turn (target=none) ──────────────
 
 Files:
 - Hook source: `runtimes/openclaw/hooks/turn-gate/handler.ts`
-- Lamp handler: `system/server/openclaw/delivery/sse/handler_api_monitor.go` (`SetBusy`)
+- Lamp handler: `system/server/agent/delivery/http/handler_api_monitor.go` (`SetBusy`)
 - Auto-clear: `runtimes/openclaw/service_events.go` (`busyTTL`, `IsBusy`, `drainPendingEvents`)
 
 ## Confirm (3 commands)
@@ -72,6 +72,6 @@ As `tokenCount` approaches threshold, `memoryFlush check` fires `isHeartbeat=tru
 
 ## Related
 
-- `docs/debug/sensing-pipeline.md` §8 — short pointer.
-- `docs/debug/openclaw-selfreplay.md` — different stuck pattern (NO_REPLY → UUID self-fire).
-- `docs/debug/sleep-stuck.md` — sleep gate wedge (different layer).
+- `robots/lamp/docs/debug/sensing-pipeline.md` §8 — short pointer.
+- `robots/lamp/docs/debug/openclaw-selfreplay.md` — different stuck pattern (NO_REPLY → UUID self-fire).
+- `robots/lamp/docs/debug/sleep-stuck.md` — sleep gate wedge (different layer).

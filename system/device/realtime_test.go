@@ -7,9 +7,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// gptlive lands its model/voice in the gptlive sub-object (created on demand)
-// while credentials stay on the shared realtime api_key/base_url — no
-// provider-routed credentials, unlike the removed qwen path.
+// gptlive model/voice land in its sub-object; credentials stay on shared fields.
 func TestApplyRealtimeSetGPTLive(t *testing.T) {
 	c := baseConfig()
 	c.Realtime = &config.RealtimeConfig{Provider: "gemini"} // no sub-objects at all
@@ -50,9 +48,7 @@ func TestApplyRealtimeSetGPTLive(t *testing.T) {
 	}
 }
 
-// validateRealtimeSet rejects a reasoning value for gptlive (no knob) but
-// accepts a listed voice, both when the provider is sent and when it is the
-// current one.
+// gptlive rejects reasoning but accepts a listed voice, explicit or current provider.
 func TestValidateRealtimeSetGPTLive(t *testing.T) {
 	s := &Service{config: baseConfig()}
 	s.config.Realtime = &config.RealtimeConfig{Provider: "gptlive"}
@@ -74,9 +70,7 @@ func TestValidateRealtimeSetGPTLive(t *testing.T) {
 	}
 }
 
-// pipecat_v1 lands its model in the pipecat_v1 sub-object (created on demand);
-// credentials stay on the shared realtime fields; voice/reasoning are rejected
-// up front, so the apply never sees them.
+// pipecat_v1 model lands in its sub-object; credentials stay on shared fields.
 func TestApplyRealtimeSetPipecatV1(t *testing.T) {
 	c := baseConfig()
 	c.Realtime = &config.RealtimeConfig{Provider: "gemini"}
@@ -113,10 +107,7 @@ func TestApplyRealtimeSetPipecatV1(t *testing.T) {
 	}
 }
 
-// web_search is a pipecat_v1-only knob: it lands in the sub-object as an
-// explicit override (so a later re-save keeps it), resolves through
-// RealtimeWebSearch with the HAL default (on) when unset, is left alone when
-// omitted, and is rejected for any other provider — explicit or current.
+// web_search is a pipecat_v1-only override that defaults on and survives re-saves.
 func TestApplyRealtimeSetPipecatV1WebSearch(t *testing.T) {
 	c := baseConfig()
 	c.Realtime = &config.RealtimeConfig{Provider: "pipecat_v1"}

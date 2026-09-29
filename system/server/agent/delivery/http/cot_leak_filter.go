@@ -1,37 +1,10 @@
 package http
 
-// Go port of HAL hal/drivers/voice/_internal/cot_leak_filter.py — filter
-// chain-of-thought leaks out of agent reply text before it reaches TTS, the
-// web chat (full_text), and channel fan-out (Telegram DM/broadcast, Slack).
-//
-// DeepSeek-style models running behind openclaw/hermes sometimes emit their
-// whole English planning monologue as plain assistant text ahead of the real
-// reply ("The `[emotion_context]` shows `mapped_mood: "sad"` ... Route =
-// **music**. I need to log the signal ... [nhẹ nhàng] Có vẻ hơi trầm ...").
-// The HAL filter only guards the realtime (Gemini Live) transcript path; this
-// port guards the main-agent path in os-server.
-//
-// Same three tiers as the Python filter (keep the two in sync when hardening
-// either side):
-//   - TRIGGER markers — meta-discourse that can never occur in a reply spoken
-//     TO the user. Always dropped; they switch the turn into CoT mode.
-//   - SECONDARY markers — meta terms a reply could legitimately contain.
-//     Dropped only once CoT mode is already on.
-//   - CoT-mode continuation — English-looking sentences (only when the reply
-//     language is not English), quoted draft fragments, bare plan runts, and
-//     fuzzy near-duplicates of already-kept sentences.
-//
-// Go-side addition over the Python original: snake_case identifiers
-// (emotion_context, user_info, telegram_id, ...) join the TRIGGER tier — the
-// DeepSeek leak corpus opens with context-field analysis instead of the
-// "The user is/wants..." phrasing the Gemini corpus starts with, and a
-// snake_case token never occurs in a sentence meant to be spoken aloud.
-//
-// Language handling mirrors the Python filter, except the constructor takes
-// the config.json stt_language BCP-47 code ("vi", "zh-CN", ...) directly
-// instead of a human-readable name. "" (unset) is treated as English → only
-// the marker tiers apply, so a legitimate English reply is never at risk from
-// the heuristics.
+// Go port of hal/drivers/voice/_internal/cot_leak_filter.py (keep in sync):
+// drops chain-of-thought leaks from agent reply text before TTS/chat/channels.
+// Tiers: TRIGGER markers (always dropped, enter CoT mode), SECONDARY markers
+// (dropped in CoT mode), and CoT-mode heuristics. Go adds snake_case
+// identifiers to TRIGGER.
 
 import (
 	"regexp"
@@ -39,24 +12,20 @@ import (
 	"unicode"
 )
 
-// cotTriggerRe: unambiguous CoT. "the user/the speaker" is verb-bound so a
-// legitimate reply mentioning "the user manual" does not trip it. The trailing
-// alternation is the snake_case-identifier addition (see file comment).
+// cotTriggerRe matches unambiguous CoT; "the user" is verb-bound to spare "the user manual".
 var cotTriggerRe = regexp.MustCompile(
 	`(?i)(?:\bthe (?:user|speaker)s? (?:is|are|was|were|wants?|wanted|asks?` +
 		`|asked|insists?|insisted|seems?|seemed|says?|said|repeats?|repeated` +
 		`|claims?|claimed|mentions?|mentioned|requests?|requested|greets?|greeted` +
 		`|needs?|needed)\b` +
 		`|phrasing draft|delivery guidance|spoken delivery` +
-		// Song-selection planning labels and speaker-identity bookkeeping can
-		// leak without "the user". Anchor these to avoid ordinary song/device discussion.
+		// Anchored to avoid matching ordinary song/device talk.
 		`|^\s*they named (?:a|the) song\s*:` +
 		`|^\s*speaker(?: identity)? is unknown\b` +
 		`|\b[a-z][a-z0-9]*(?:_[a-z0-9]+)+\b)`,
 )
 
-// cotSecondaryRe: meta terms a legit reply could contain (dev users ask the
-// device about itself) — only dropped once CoT mode is already on.
+// cotSecondaryRe matches meta terms a legit reply could contain; dropped only in CoT mode.
 var cotSecondaryRe = regexp.MustCompile(
 	`(?i)(?:\bpersonas?\b|\bsystem prompts?\b|language lock|\baudio tags?\b` +
 		`|\bemotion tool\b|via tool call` +
@@ -65,12 +34,10 @@ var cotSecondaryRe = regexp.MustCompile(
 		`|\b\d+ (?:sentences?|words)\b)`,
 )
 
-// cotLabelRe: all-ASCII label sentence ending in a colon ("Length Check:").
-// Only meaningful when the reply language is NOT English.
+// cotLabelRe matches ASCII label sentences like "Length Check:" (non-English replies only).
 var cotLabelRe = regexp.MustCompile(`^[\x20-\x7e]{1,40}:$`)
 
-// cotOpenerRe: sentence-initial planning openers. Only meaningful when the
-// reply language is NOT English.
+// cotOpenerRe matches sentence-initial planning openers (non-English replies only).
 var cotOpenerRe = regexp.MustCompile(
 	`(?i)^\s*(?:users? (?:want|wants|is|are|asked|insists?)\b` +
 		`|i (?:need|should|must|will|can(?:not|'t)?) \b` +
@@ -79,13 +46,8 @@ var cotOpenerRe = regexp.MustCompile(
 
 const cotQuotes = "\"'“”‘’«»「」『』【】＂＇"
 
-// Quoted spans inside a sentence don't decide its language: the leak corpus
-// has English planning sentences that embed the reply language in quotes
-// ("The search query 'cách dùng select trong itron os' didn't yield...") —
-// with the quoted Vietnamese counted, the non-ASCII ratio calls the whole
-// sentence non-English and the CoT line survives. RE2 has no lookarounds, so
-// straight single-quote spans use boundary capture groups instead of the
-// Python filter's (?<!\w)'…'(?!\w) — contractions ("didn't") can't open one.
+// Quoted spans are excluded from language detection. RE2 lacks lookarounds, so
+// single-quote spans use boundary groups; contractions ("didn't") can't open one.
 var cotQuotedSpanRe = regexp.MustCompile(
 	`"[^"]*"|“[^”]*”|‘[^’]*’|«[^»]*»|「[^」]*」|『[^』]*』`,
 )
@@ -104,18 +66,14 @@ var cotNonASCIIRe = regexp.MustCompile(`[^\x00-\x7f]`)
 // Leading audio/emotion tags like "[caring] " don't decide the language.
 var cotLeadingTagsRe = regexp.MustCompile(`^(?:\s*\[[^\]]{1,30}\])+\s*`)
 
-// CJK/Hangul/Kana have no spaces — tokenize per character so the fuzzy dedup
-// works for Chinese/Japanese/Korean; everything else tokenizes per word.
-// `[^\P{L}...]` = any letter that is not in the CJK ranges.
+// CJK/Hangul/Kana tokenize per character; other letters per word.
 const cotCJKRange = `぀-ヿ㐀-䶿一-鿿豈-﫿가-힯`
 
 var cotTokenRe = regexp.MustCompile(`[` + cotCJKRange + `]|[0-9]+|[^\P{L}` + cotCJKRange + `]+`)
 
 var cotEnWordRe = regexp.MustCompile(`[A-Za-z]+`)
 
-// For Latin-script non-English languages (French, German, Indonesian, ...) an
-// ASCII-only sentence may BE the answer, so English detection additionally
-// requires English function words.
+// Latin-script non-English replies need English stopwords to count as English.
 var cotEnStopwords = func() map[string]bool {
 	m := map[string]bool{}
 	for _, w := range strings.Fields(
@@ -126,12 +84,8 @@ var cotEnStopwords = func() map[string]bool {
 	return m
 }()
 
-// cotSplitSentences mirrors the Python _SENTENCE_SPLIT regex without
-// lookarounds (RE2 has none): split after sentence enders (ASCII + fullwidth,
-// colons included so planning labels separate from their payload) followed by
-// whitespace, at newlines, and when an ASCII ender is glued straight onto an
-// uppercase or non-ASCII start ("Finalize response.Khả năng..."). Decimals
-// ("3.5") and lowercase glue ("Node.js") stay intact.
+// cotSplitSentences mirrors the Python _SENTENCE_SPLIT regex without lookarounds.
+// Splits at enders+space, newlines, and ender glued to uppercase/non-ASCII; "3.5" and "Node.js" stay intact.
 func cotSplitSentences(text string) []string {
 	var out []string
 	var cur strings.Builder
@@ -196,22 +150,18 @@ func cotJaccard(a, b map[string]struct{}) float64 {
 	return float64(inter) / float64(len(a)+len(b)-inter)
 }
 
-// cotLeakFilter is the per-turn stateful filter. Feed it reply text in
-// arrival order; reuse one instance across a streamed prefix + remainder so
-// CoT mode and the fuzzy-dedup memory carry over.
+// cotLeakFilter is the per-turn stateful filter; reuse one instance per turn so
+// CoT mode and dedup memory carry across streamed chunks.
 type cotLeakFilter struct {
 	nonEnglish     bool
 	nonASCIIScript bool
 	cotMode        bool
 	seen           []map[string]struct{}
-	// dropped collects the sentences removed so far; callers decide how to
-	// log them (the seed pass at lifecycle:end resets it to avoid re-logging
-	// drops already reported at stream time).
+	// dropped collects removed sentences for the caller to log.
 	dropped []string
 }
 
-// newCoTLeakFilter builds a filter for the given config.json stt_language
-// code ("vi", "en", "zh-CN", ...). "" is treated as English.
+// newCoTLeakFilter builds a filter for an stt_language code ("vi", "zh-CN"); "" means English.
 func newCoTLeakFilter(langCode string) *cotLeakFilter {
 	code := strings.ToLower(strings.TrimSpace(langCode))
 	primary := code
@@ -221,8 +171,6 @@ func newCoTLeakFilter(langCode string) *cotLeakFilter {
 	f := &cotLeakFilter{
 		nonEnglish: code != "" && primary != "en",
 	}
-	// Languages whose real answers are dense in non-ASCII letters — there,
-	// any ASCII-only multi-word sentence inside CoT mode is safely English.
 	switch primary {
 	case "vi", "zh", "ja", "ko", "th":
 		f.nonASCIIScript = true
@@ -232,9 +180,6 @@ func newCoTLeakFilter(langCode string) *cotLeakFilter {
 
 func (f *cotLeakFilter) looksEnglish(sentence string) bool {
 	s := strings.TrimSpace(cotLeadingTagsRe.ReplaceAllString(sentence, ""))
-	// Judge the sentence by its own voice, not by what it quotes: quoted
-	// reply-language text inside an English planning sentence must not
-	// rescue it.
 	s = cotStripQuotedSpans(s)
 	letters, nonASCII := 0, 0
 	for _, r := range s {
@@ -248,14 +193,12 @@ func (f *cotLeakFilter) looksEnglish(sentence string) bool {
 	if letters == 0 {
 		return false
 	}
-	// Ratio, not any(): "non-cliché" has one é but is English planning text,
-	// while real Vietnamese runs ~30%+ diacritics and CJK ~100%.
+	// Ratio, not any(): "non-cliché" is English; Vietnamese runs ~30%+ non-ASCII.
 	if float64(nonASCII)/float64(letters) > 0.05 {
 		return false
 	}
 	words := cotEnWordRe.FindAllString(s, -1)
 	if len(words) < 3 {
-		// Bare interjections ("OK!", "Ha ha") survive.
 		return false
 	}
 	if f.nonASCIIScript {
@@ -296,21 +239,17 @@ func (f *cotLeakFilter) isLeak(sentence string) bool {
 	if f.nonEnglish && f.looksEnglish(s) {
 		return true
 	}
-	// Leaked turns carry the answer as a QUOTED phrasing draft before the
-	// real thing — drop the quoted draft too or the answer is spoken twice.
+	// Quoted drafts of the answer would otherwise be spoken twice.
 	runes := []rune(s)
 	if strings.ContainsRune(cotQuotes, runes[0]) || strings.ContainsRune(cotQuotes, runes[len(runes)-1]) {
 		return true
 	}
-	// Bare plan fragments ("1.", "Stop.", "Finalize response.") — ASCII runts
-	// up to two tokens. Pure audio tags ("[confused]") are exempt: they steer
-	// TTS delivery, not content.
+	// Bare ASCII plan runts (<=2 tokens); pure audio tags are exempt.
 	bare := strings.TrimSpace(cotLeadingTagsRe.ReplaceAllString(s, ""))
 	if bare != "" && !cotNonASCIIRe.MatchString(bare) && len(cotWordSet(bare)) <= 2 {
 		return true
 	}
-	// Fuzzy near-duplicate of a sentence already kept this turn — drafts
-	// differ from the final answer by a word or two, so exact dedup misses.
+	// Fuzzy near-duplicate of an already-kept sentence.
 	words := cotWordSet(s)
 	if len(words) > 0 {
 		for _, seen := range f.seen {
@@ -322,8 +261,7 @@ func (f *cotLeakFilter) isLeak(sentence string) bool {
 	return false
 }
 
-// filterText drops CoT sentences from text, keeping the rest in order.
-// Dropped sentences accumulate in f.dropped for the caller to log.
+// filterText drops CoT sentences from text, appending them to f.dropped.
 func (f *cotLeakFilter) filterText(text string) string {
 	if text == "" {
 		return text

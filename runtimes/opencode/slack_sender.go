@@ -9,12 +9,7 @@ import (
 	"time"
 )
 
-// Slack Web API client for the OpenCode runtime, mirroring hermes'
-// slack_sender.go minus the streaming methods (chat.startStream /
-// appendStream / stopStream / assistant status) — opencode posts the reply once.
-
-// slackAPIBaseDefault is the production Slack Web API host. Tests override the
-// service field slackAPIBase with an httptest URL (same seam as telegramAPIBase).
+// slackAPIBaseDefault is the production Slack Web API host.
 const slackAPIBaseDefault = "https://slack.com/api"
 
 // slackAckReaction is the emoji added to an inbound message while the turn
@@ -29,11 +24,7 @@ type slackAPIResponse struct {
 	TS    string `json:"ts"`
 }
 
-// slackAPI performs a JSON POST to a Slack Web API method. Slack returns HTTP
-// 200 with {"ok":false,"error":...} on logical failures, so the body is always
-// parsed. benignErrors are treated as success (e.g. already_reacted /
-// no_reaction). The bot token is read fresh from Device config per call, so
-// saving or rotating it needs no restart (same rule as telegram).
+// slackAPI performs a JSON POST to a Slack Web API method.
 func (s *OpenCodeService) slackAPI(method string, payload map[string]any, benignErrors ...string) (slackAPIResponse, error) {
 	var out slackAPIResponse
 	if s.config.SlackBotToken == "" {
@@ -87,8 +78,6 @@ func (s *OpenCodeService) postSlackMessage(channel, threadTS, text string) error
 }
 
 // setSlackReaction adds (add=true) or removes a reaction emoji on a message.
-// Benign double add/remove ("already_reacted" / "no_reaction") is treated as
-// success.
 func (s *OpenCodeService) setSlackReaction(add bool, channel, ts, name string) error {
 	if channel == "" || ts == "" {
 		return nil
@@ -115,7 +104,5 @@ func (t *SlackSender) IsConfigured() bool {
 }
 
 func (t *SlackSender) Send(msg string, _ string) error {
-	// Image attachments are not supported on the Slack proactive path (the
-	// reply path is text-only too). Drop the image, send the text.
 	return t.svc.postSlackMessage(t.svc.config.SlackUserID, "", msg)
 }

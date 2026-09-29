@@ -10,16 +10,10 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
-// telegram, discord and slack are ALL device-owned (telegram_poll.go
-// getUpdates loop / discord.go discordgo session / slack.go MQTT bridge);
-// whatsapp returns domain.ErrChannelNotSupported.
-
 func (s *ClaudeCodeService) HasWhatsappSession(_ string) bool { return false }
 
 // PairWhatsapp — WhatsApp pairing requires a Baileys-style plugin which lives
-// only in OpenClaw. Returns a one-shot failure event so the caller's drain loop
-// exits cleanly.
+// only in OpenClaw.
 func (s *ClaudeCodeService) PairWhatsapp(_ context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 1)
 	ch <- domain.PairingEvent{
@@ -30,13 +24,9 @@ func (s *ClaudeCodeService) PairWhatsapp(_ context.Context) <-chan domain.Pairin
 	return ch
 }
 
-// ResetAgent lives in reset.go — it stops the bridge, wipes the workspace +
-// Claude Code session/channel state, and disables the unit (real work, not a stub).
-
 // RestartAgent restarts the claudecode bridge via systemctl so callers that need
 // a full reload (workspace / .env / .mcp.json re-read — all loaded at Claude
-// session start) get it. Delegates to restartClaudeCodeGateway
-// (service_gateway.go), which no-ops gracefully when systemctl is unavailable.
+// session start) get it.
 func (s *ClaudeCodeService) RestartAgent() error {
 	slog.Info("RestartAgent: restarting claudecode bridge", "component", "claudecode")
 	return restartClaudeCodeGateway()
@@ -44,23 +34,13 @@ func (s *ClaudeCodeService) RestartAgent() error {
 
 // RefreshModelsConfig — the model is selected via ANTHROPIC_MODEL in
 // /root/.claudecode/.env, which presync owns (synced from config.json
-// llm_model). Returns ErrNotSupportedByRuntime so the caller falls back to
-// EnsureOnboarding, whose embedded presync re-reads llm_* from config.json and
-// the hash gate restarts the bridge — i.e. the change is applied, just not by
-// this method.
+// llm_model).
 func (s *ClaudeCodeService) RefreshModelsConfig() error {
 	return domain.ErrNotSupportedByRuntime
 }
 
-// EnsureOnboarding lives in onboarding.go — it re-runs the embedded presync
-// (env + channel + bridge sync), keeps the OS-managed workspace blocks current,
-// and restarts the bridge when anything changed.
-
 // FetchChatHistory — Claude Code keeps its transcript as internal session JSONL
 // under ~/.claude/projects; there is no stable read API for it.
-// TODO(claudecode-history): translate the session JSONL into the monitor's
-// history shape if the web chat view ever needs backfill. Returns empty so
-// callers degrade gracefully.
 func (s *ClaudeCodeService) FetchChatHistory(_ string, _ int) (json.RawMessage, error) {
 	return nil, nil
 }
@@ -68,7 +48,6 @@ func (s *ClaudeCodeService) FetchChatHistory(_ string, _ int) (json.RawMessage, 
 // GetConfigJSON returns the workspace project settings
 // (workspace/.claude/settings.json) — the only JSON config the backend owns that
 // is safe to expose (no secrets; ANTHROPIC_* keys live in .env, never returned).
-// Read-only; feeds the gw-config debug UI. Returns {} when absent.
 func (s *ClaudeCodeService) GetConfigJSON() (json.RawMessage, error) {
 	path := filepath.Join(claudecodeWorkspaceDir, ".claude", "settings.json")
 	data, err := os.ReadFile(path)
@@ -81,24 +60,14 @@ func (s *ClaudeCodeService) GetConfigJSON() (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
-// WatchIdentity + UpdateIdentityName live in identity.go — Claude Code's
-// IDENTITY.md is a 1-for-1 copy of OpenClaw's (imported into context via the
-// CLAUDE.md @import line), so it watches/rewrites the `**Name:**` card line just
-// like OpenClaw does.
-
-// StartSkillWatcher lives in skill_watcher.go — it polls OTA metadata and
-// auto-updates the user-level ~/.claude/skills from the CDN (capability-gated).
-
 // StartModelSync — the model registry is fixed (ANTHROPIC_MODEL env, presync-
-// owned). No-op.
+// owned).
 func (s *ClaudeCodeService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
 
 // UpdatePrimaryModel — the model is pinned in .env (ANTHROPIC_MODEL) by
-// presync (from config.json llm_model), not patched per-call. Same fallback
-// contract as RefreshModelsConfig: sentinel → EnsureOnboarding presync
-// applies it.
+// presync (from config.json llm_model), not patched per-call.
 func (s *ClaudeCodeService) UpdatePrimaryModel(_ string) error {
 	return domain.ErrNotSupportedByRuntime
 }
@@ -108,8 +77,7 @@ func (s *ClaudeCodeService) StartPrimaryModelWatch(ctx context.Context) {
 	<-ctx.Done()
 }
 
-// GetConfiguredChannel — device config is the source of truth. Prefers
-// telegram, then discord, then the generic label.
+// GetConfiguredChannel — device config is the source of truth.
 func (s *ClaudeCodeService) GetConfiguredChannel() string {
 	if s.config.TelegramBotToken != "" {
 		return "telegram"
@@ -119,10 +87,3 @@ func (s *ClaudeCodeService) GetConfiguredChannel() string {
 	}
 	return "channel"
 }
-
-// CompactSession + ShouldRotateSession + NewSession live in rotation.go —
-// the session-lifecycle policy (turn-count rotation for persona re-anchor +
-// token safety net, session.new frame to the bridge).
-
-// WriteMCPEntry + RemoveMCPEntry live in mcp.go — Claude Code natively reads
-// workspace/.mcp.json, so MCP connector writes are real on this backend.

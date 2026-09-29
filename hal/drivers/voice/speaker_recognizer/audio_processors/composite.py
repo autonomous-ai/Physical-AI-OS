@@ -6,10 +6,7 @@ from .base import Audio, AudioProcessorBase
 
 
 class CompositeAudioProcessor(AudioProcessorBase):
-    """Chains multiple AudioProcessorBase instances sequentially.
-
-    Since this is also an AudioProcessorBase, composites can be nested.
-    """
+    """Chains multiple AudioProcessorBase instances sequentially."""
 
     def __init__(self, processors: list[AudioProcessorBase]) -> None:
         super().__init__()

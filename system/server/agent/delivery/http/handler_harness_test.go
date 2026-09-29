@@ -173,9 +173,7 @@ func TestHarnessResponsesKeepOriginalText(t *testing.T) {
 }
 
 func TestHarnessVoiceRunLosesSpeakerAfterClick(t *testing.T) {
-	// Harness ids have no creation stamp; registration must date the run so a
-	// click that follows mutes its reply even when that reply is the first
-	// time deliverTTS sees the id.
+	// Registration must date a Harness run so a later click mutes its reply.
 	h := &AgentHandler{monitorBus: monitor.ProvideBus()}
 	h.MarkHarnessResponseRun("device-harness-abc", false, false)
 	time.Sleep(2 * time.Millisecond)
@@ -183,8 +181,7 @@ func TestHarnessVoiceRunLosesSpeakerAfterClick(t *testing.T) {
 	if !h.isSpeechCancelled("device-harness-abc") {
 		t.Fatal("Harness run registered before the click still owns the speaker")
 	}
-	// The watermark is inclusive (<=) at millisecond resolution, so a run
-	// registered in the same ms as the click still counts as cancelled.
+	// The watermark is inclusive (<=) at ms resolution: a same-ms registration counts as cancelled.
 	time.Sleep(2 * time.Millisecond)
 	h.MarkHarnessResponseRun("device-harness-later", false, false)
 	if h.isSpeechCancelled("device-harness-later") {

@@ -38,7 +38,6 @@ final class DeviceDiscovery {
             let host = name.hasSuffix(".local") ? name : "\(name).local"
             devices.append(DeviceInfo(name: name, host: host, port: 80, discoveredAt: now))
         }
-        // Dedup + sort for stable ordering
         let unique = Array(Set(devices)).sorted { $0.host < $1.host }
         DispatchQueue.main.async { [weak self] in
             self?.onDevicesChanged?(unique)

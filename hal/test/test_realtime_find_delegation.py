@@ -1,11 +1,4 @@
-"""Finding a physical object is a device action, in ANY phrasing.
-
-Compliance cannot be unit-tested — this pins the rule TEXT so it cannot be
-edited out of one prompt and left in the others. Device-observed 2026-09-15
-(lamp-ac82, clean memory): "Tìm cây bút cho tôi" delegated to /servo/search,
-"Bạn có thấy cây bút của tôi đâu không?" was answered by Gemini itself with a
-guess. Same request, different grammar, opposite route.
-"""
+"""Finding a physical object is a device action, in ANY phrasing."""
 
 import pytest
 
@@ -19,7 +12,6 @@ PROMPTS = (
     "system_prompt_gptlive.md",
 )
 
-# The phrases the rule must list — the ones that were kept, not delegated.
 QUESTION_SHAPED = (
     "can you help me find my pen",
     "do you see my pen anywhere",
@@ -33,7 +25,6 @@ def test_delegate_description_names_finding_as_a_device_action():
     for phrase in QUESTION_SHAPED:
         assert phrase in text, phrase
     assert "never a conversation" in text
-    # The three ways it was observed to dodge the delegation.
     assert "questions about what it looks like" in text
     assert "offers to look" in text
     assert "claims about what you can see" in text
@@ -50,7 +41,6 @@ def test_every_prompt_carries_the_finding_bullet(name):
     text = (RESOURCES_DIR / name).read_text(encoding="utf-8")
     assert "**Finding things is an action" in text, name
     assert "can you help me find my pen" in text, name
-    # A question is still an action when it asks the device to do something.
     assert "still an action" in text, name
 
 

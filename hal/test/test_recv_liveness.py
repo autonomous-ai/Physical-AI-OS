@@ -1,9 +1,4 @@
-"""Silent-turn watchdog: a turn that is still working must not be killed.
-
-A grounded turn produces no output until its search returns, which is
-indistinguishable from a model that chose not to answer — unless you look at
-whether the server is still sending anything at all.
-"""
+"""Silent-turn watchdog: a turn that is still working must not be killed."""
 
 import threading
 import time

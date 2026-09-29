@@ -11,8 +11,7 @@ func tempIntentStore(t *testing.T) *IntentStore {
 	return NewIntentStore(filepath.Join(t.TempDir(), "schedule-intents.json"))
 }
 
-// A missing queue file is first boot, not an error — the same tolerance
-// schedules.json has.
+// A missing queue file is an empty queue, not an error.
 func TestIntentStore_MissingFileIsEmpty(t *testing.T) {
 	if got := tempIntentStore(t).List(); len(got) != 0 {
 		t.Fatalf("List() = %d intents, want 0", len(got))
@@ -35,8 +34,6 @@ func TestIntentStore_AppendListRemoveRoundTrip(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("List() = %d, want 2", len(got))
 	}
-	// Submission order matters: intents are applied in the order the user made
-	// them, so an edit that follows a create must not overtake it.
 	if got[0].IntentID != "a" || got[1].IntentID != "b" {
 		t.Errorf("order = %s,%s want a,b", got[0].IntentID, got[1].IntentID)
 	}
@@ -53,8 +50,7 @@ func TestIntentStore_AppendListRemoveRoundTrip(t *testing.T) {
 	}
 }
 
-// The queue must survive a reboot — that is its entire reason for being on
-// disk rather than in memory.
+// The queue must survive a new IntentStore instance (reboot).
 func TestIntentStore_PersistsAcrossInstances(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "schedule-intents.json")
@@ -92,8 +88,7 @@ func TestIntentStore_MarkSentStampsAttempts(t *testing.T) {
 	}
 }
 
-// Each user action gets its own key; reusing one would make two distinct edits
-// collapse into one server-side.
+// Each call yields a unique hex key.
 func TestNewIntentID_IsUniqueAndHex(t *testing.T) {
 	seen := map[string]bool{}
 	for i := 0; i < 100; i++ {
@@ -132,8 +127,7 @@ func TestValidateSpec_AcceptsEachRepeatKind(t *testing.T) {
 	}
 }
 
-// Each of these would be stored and synced happily and then never fire, which
-// is the failure mode this validation exists to make impossible.
+// Each cadence here would be stored but never fire.
 func TestValidateSpec_RejectsUnrunnableCadences(t *testing.T) {
 	for _, tc := range []struct {
 		name string

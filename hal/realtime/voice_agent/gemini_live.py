@@ -54,17 +54,9 @@ from hal.realtime.voice_agent.base import (
 )
 
 logger = logging.getLogger(__name__)
-# Per-turn token/cost lines go to their own file (gemini_usage.log) via a
-# dedicated logger configured in server_support/log_setup.py (propagate=False),
-# so they don't mix into server.log.
 usage_logger = logging.getLogger("hal.realtime.usage")
 
-# Gemini Live pricing, USD per 1M tokens, keyed (direction, modality), PER MODEL.
-# Source: ai.google.dev/gemini-api/docs/pricing (verified 2026-06-29). Audio rates
-# happen to match across these models ($3 in / $12 out) — only text differs — but
-# the table is explicit per model so adding a new model is one entry and a wrong
-# audio rate can't hide behind a shared default. Keys match as a SUBSTRING of
-# self._config.model so a dated preview suffix (…-preview-12-2025) still resolves.
+# USD per 1M tokens (verified 2026-06-29); keys match as a substring of the model name.
 _GEMINI_RATES: dict[str, dict[tuple[str, str], float]] = {
     "gemini-2.5-flash-native-audio": {
         ("in", "TEXT"): 0.50, ("in", "AUDIO"): 3.0,
@@ -74,26 +66,20 @@ _GEMINI_RATES: dict[str, dict[tuple[str, str], float]] = {
         ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
         ("out", "TEXT"): 4.5, ("out", "AUDIO"): 12.0,
     },
-    # Promo rates through 2026-12-31 (ai.google.dev pricing, verified 2026-09-17);
-    # Google announced they double afterwards. Covers both `gemini-3.8-live` and
-    # `gemini-3.8-live-extended-thinking` (substring match).
+    # Promo rates through 2026-12-31 (verified 2026-09-17); Google says they double afterwards.
     "gemini-3.8-live": {
         ("in", "TEXT"): 0.75, ("in", "AUDIO"): 3.0,
         ("out", "TEXT"): 4.5, ("out", "AUDIO"): 12.0,
     },
 }
-# Unknown model → fall back to the entry with the highest text-out rate (the
-# dominant text cost), so a future/untabled model logs a cost CEILING rather than
-# an under-report. Avoids the old `"native-audio" in model` heuristic mis-pricing
-# a hypothetical 3.x native-audio model at 2.5 rates.
+# Unknown model -> highest text-out table, so cost is a ceiling, not an under-report.
 _GEMINI_RATES_FALLBACK: dict[tuple[str, str], float] = max(
     _GEMINI_RATES.values(), key=lambda r: r[("out", "TEXT")]
 )
 
 
 def _gemini_rates_for(model: str) -> dict[tuple[str, str], float]:
-    """Resolve the per-1M-token rate table for a model name (substring match);
-    unknown models fall back to the most expensive table (cost = ceiling)."""
+    """Resolve the per-1M-token rate table for a model (substring match; unknown = ceiling)."""
     for key, table in _GEMINI_RATES.items():
         if key in model:
             return table
@@ -112,16 +98,8 @@ class GeminiLiveAgent(VoiceAgentBase):
         if config.base_url:
             client_kwargs["http_options"] = types.HttpOptions(base_url=config.base_url)
         self._client: genai.Client = genai.Client(**client_kwargs)
-        # Keep the Live WS alive across IDLE gaps — ONLY for native-audio (the
-        # model with the idle-resume bug; see gemini_needs_idle_workaround). The
-        # browser raw-WS client survives long silence on this same proxy, so the
-        # idle death is client-side. DISABLING pings entirely (ping_interval=None)
-        # was WRONG: with no outbound traffic the NAT/proxy path drops the idle TCP
-        # (WS 1006) and the next spoken turn lands on a dead session → WS 1011.
-        # Instead KEEP pinging every 20s (outbound traffic holds the path open like
-        # the browser's TCP keepalive) but ping_timeout=None so a missing pong (the
-        # proxy doesn't pong) never self-closes. 3.1 doesn't need this → leave the
-        # SDK defaults. google-genai spreads this dict into websockets.connect(...).
+        # Native-audio only (idle-resume bug): ping every 20s to hold the NAT path open,
+        # but ping_timeout=None because the proxy never pongs.
         if gemini_needs_idle_workaround(config.model):
             try:
                 self._client._api_client._websocket_ssl_ctx["ping_interval"] = 20
@@ -133,21 +111,14 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._loop: asyncio.AbstractEventLoop | None = None
         self._io_thread: threading.Thread | None = None
         self._resumption_handle: str | None = None
-        # Per-turn timing markers. These intentionally use monotonic time so
-        # NTP adjustments cannot skew latency diagnostics.
         self._last_audio_sent_at: float | None = None
         self._activity_end_sent_at: float | None = None
         self._first_audio_received: bool = False
         self._vad_disabled: bool = not config.vad_enabled
         self._turn_gen: int = 0
         self._activity_started: bool = False
-        # Gemini rejects send_realtime_input while a tool call it emitted is still
-        # unanswered, and closes the session with 1008 ("The operation was
-        # aborted") — a deliberate policy close, not a transport drop. Track the
-        # call_ids currently in flight and drop all normal client input while the
-        # set is non-empty. A fire-and-forget tool (trigger_response=False) is
-        # deliberately not acknowledged to Gemini, so that session must be
-        # replaced before another turn rather than locally clearing the call.
+        # Gemini closes with 1008 on client input while its tool call is unanswered: gate input
+        # while this set is non-empty. Unacked fire-and-forget tools force a fresh session instead.
         self._pending_tool_calls: set[str] = set()
         self._pending_tool_names: dict[str, str] = {}
         self._cancelled_look_calls: set[str] = set()
@@ -159,10 +130,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
         self._last_reconnect_at: float = 0.0
-        # Exponential backoff: the recv loop self-reconnects when disconnected, so a
-        # persistent failure (e.g. Gemini usage-limit 4029) would otherwise hammer
-        # the endpoint every reconnect_delay_s. Grow the throttle on each failed
-        # reconnect (capped), reset to the base on success.
+        # Exponential backoff so a persistent failure (e.g. usage-limit 4029) doesn't hammer the endpoint.
         self._reconnect_backoff: float = config.reconnect_delay_s
         self._reconnect_backoff_max: float = 60.0
         self._max_retries: int = config.max_retries
@@ -170,8 +138,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._recv_timeout_s: float = config.recv_timeout_s
         self._queue_poll_s: float = config.queue_poll_s
         self._join_timeout_s: float = config.join_timeout_s
-        # Signals that the model is idle (no active turn). Set by default,
-        # cleared when activityEnd is sent, set again on turn_complete.
+        # Set = model idle; cleared on activityEnd, set again on turn_complete.
         self._turn_done: threading.Event = threading.Event()
         self._turn_done.set()
 
@@ -182,8 +149,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     @property
     def output_sample_rate(self) -> int:
-        # Gemini Live always streams native audio output at 24 kHz, regardless of
-        # the 16 kHz input rate (`sample_rate`).
+        # Gemini Live always outputs 24 kHz, regardless of the 16 kHz input rate.
         return 24000
 
     @property
@@ -201,28 +167,13 @@ class GeminiLiveAgent(VoiceAgentBase):
     @property
     @override
     def supports_announce(self) -> bool:
-        """Turn-based sessions on models that accept text turns.
-
-        2.5 native-audio is excluded for the same reason send_text drops text
-        there (wire-shape guard, WS 1011). Live mode is excluded because the
-        open uplink and the live pump own the session and its output queue.
-        """
+        """Turn-based sessions on models that accept text turns (not 2.5 native-audio, not live mode)."""
         return not app_config.LIVE_MODE and not gemini_needs_idle_workaround()
 
     def _activity_detection(self) -> types.AutomaticActivityDetection:
-        """Provider-side VAD settings for this session.
+        """Provider-side VAD settings for this session (unset fields keep the provider default).
 
-        Only the `disabled` flag matters on the turn-based path, which brackets
-        turns itself. In live mode the rest decide whether OUR OWN ECHO opens a
-        turn: at the 4-10 dB ERLE this hardware achieves, the residual reaching
-        the uplink is quieter but still speech-shaped, and a VAD keys on speech
-        presence rather than level. Left at the API defaults the model
-        interrupted itself on almost every reply (device-observed 2026-09-08 on
-        lamp-ee17). A LOW start sensitivity plus a prefix-padding floor makes an
-        onset need more evidence than a short echo burst carries.
-
-        Every field is omitted when unset, so the provider's own default stands
-        rather than us guessing a value for it.
+        Live mode: LOW start sensitivity + prefix padding keep our own echo from opening a turn.
         """
         kwargs: dict[str, Any] = {"disabled": self._vad_disabled}
         if self._vad_disabled:
@@ -271,14 +222,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                 thinking_budget=budget, include_thoughts=False
             )
         elif "3.8-live" in self._config.model and "extended-thinking" not in self._config.model:
-            # `gemini-3.8-live` (no reasoning) rejects thinkingLevel outright:
-            # "thinkingLevel is not supported (omit from setup)".
+            # `gemini-3.8-live` rejects thinkingLevel outright.
             thinking_config = None
         else:
             level = self._config.thinking_level
             if "extended-thinking" in self._config.model and level == GeminiThinkingLevel.MINIMAL:
-                # 3.8 extended-thinking accepts LOW/MEDIUM/HIGH only; a MINIMAL
-                # carried over from a 3.1 config.json would fail the setup.
+                # 3.8 extended-thinking accepts LOW/MEDIUM/HIGH only.
                 logger.info("[realtime] thinking_level MINIMAL unsupported on %s — using LOW", self._config.model)
                 level = GeminiThinkingLevel.LOW
             thinking_config = types.ThinkingConfig(
@@ -286,13 +235,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
         live_config: types.LiveConnectConfig = types.LiveConnectConfig(
-            # AUDIO always. TEXT-only was tried on device 2026-09-08 and the
-            # model REFUSES it: WS 1007 "The requested combination of response
-            # modalities (TEXT) is not supported by the model.
-            # models/gemini-3.1-flash-live-preview". So when our own TTS speaks
-            # the reply (REALTIME_NATIVE_AUDIO=false) the generated audio is
-            # received and DISCARDED by the consumer — billed but unused. There
-            # is no cheaper wire shape available on this model.
+            # AUDIO always: TEXT-only is refused (WS 1007), so with our own TTS the audio is discarded.
             response_modalities=[types.Modality.AUDIO],
             speech_config=types.SpeechConfig(
                 voice_config=types.VoiceConfig(
@@ -310,9 +253,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     types.LanguageHints(language_codes=lang_codes) if lang_codes else None
                 ),
             ),
-            # Always on: with AUDIO the only modality, this transcript is the
-            # ONLY way to get the reply as text, which is what our TTS speaks
-            # when native audio is off.
+            # The only way to get the reply as text with AUDIO-only modality.
             output_audio_transcription=types.AudioTranscriptionConfig(),
             realtime_input_config=types.RealtimeInputConfig(
                 automatic_activity_detection=self._activity_detection(),
@@ -322,10 +263,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
         live_tools: list[types.Tool] = []
         if self._tools:
-            # extended-thinking accepts ONLY NON_BLOCKING tool declarations;
-            # a BLOCKING one makes it error mid-turn and speak a canned
-            # "I'm sorry, an error occurred." after every tool call. Other live
-            # models take BLOCKING (the default), so leave behavior unset there.
+            # Extended-thinking accepts ONLY NON_BLOCKING tools; BLOCKING errors mid-turn.
             behavior = (
                 types.Behavior.NON_BLOCKING
                 if "extended-thinking" in self._config.model
@@ -345,8 +283,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                     name="complete_response",
                     description=(
                         "Confirm a finished direct answer ONLY for a greeting, general knowledge, "
-                        "a completed public lookup, or a visual question answered from look. "
-                        "Never use for an action, music playback, stored memory or past conversations, "
+                        "a completed public lookup, a visual question answered from look, or recall "
+                        "of this conversation (question number, score, what was just asked or said). "
+                        "Never use for an action, music playback, stored memory or earlier sessions, "
                         "account access, Harness/code work, a promise/filler, an error or unresolved work. "
                         "Those require delegate_to_main, even if you already said you would help. "
                         "Call only AFTER delivering the actual answer; a receipt such as "
@@ -369,8 +308,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
         return live_config
-
-    # --- Async internals (run on private event loop) ---
 
     async def _async_connect(self) -> None:
         # A reopened session must not inherit input ownership or playback acks.
@@ -396,8 +333,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     async def _async_disconnect(self) -> None:
         exit_stack = self._exit_stack
-        # Clear shared state before awaiting provider cleanup. A close can stall
-        # on a bad proxy, but no sender/receiver should see its stale session.
+        # Clear shared state before awaiting cleanup; a close can stall on a bad proxy.
         self._exit_stack = None
         self._session = None
         if exit_stack is not None:
@@ -406,12 +342,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     @staticmethod
     def _run_io_loop(loop: asyncio.AbstractEventLoop) -> None:
-        """Run and own a Gemini IO loop until teardown cancels its tasks.
-
-        The owning thread closes the loop only after all pending coroutines have
-        been cancelled. Closing it from the rebuild thread while a receive()
-        coroutine is still pending leaves a live ``gemini-io`` thread behind.
-        """
+        """Run and own a Gemini IO loop until teardown cancels its tasks (only the owner closes it)."""
         asyncio.set_event_loop(loop)
         try:
             loop.run_forever()
@@ -419,10 +350,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             pending = asyncio.all_tasks(loop)
             for task in pending:
                 task.cancel()
-            # Even with no pending tasks, a completed receive may still have
-            # its run_coroutine_threadsafe completion callback queued. Pump
-            # the loop before closing so the waiting thread receives its
-            # result/error instead of leaking an unretrieved task exception.
+            # Pump the loop before closing so a queued completion callback delivers its result.
             loop.run_until_complete(
                 asyncio.gather(*pending, return_exceptions=True)
             )
@@ -446,7 +374,6 @@ class GeminiLiveAgent(VoiceAgentBase):
         try:
             loop.call_soon_threadsafe(_cancel_tasks_and_stop)
         except RuntimeError:
-            # The loop already stopped/closed; its owner is already unwinding.
             pass
         if io_thread is not None and io_thread is not threading.current_thread():
             io_thread.join(timeout=self._join_timeout_s)
@@ -485,26 +412,10 @@ class GeminiLiveAgent(VoiceAgentBase):
             return
         audio_session = self._session if session is None else session
 
-        # if isinstance(_input, AudioInput):
-        #     detail = f"{len(_input.audio)} samples"
-        # elif isinstance(_input, ImageInput):
-        #     detail = f"{_input.image.shape}"
-        # elif isinstance(_input, TextInput):
-        #     detail = f"{len(_input.text)} chars"
-        # elif isinstance(_input, FunctionCallResultInput):
-        #     detail = f"call_id={_input.call_id}"
-        # else:
-        #     detail = "unknown input type"
-
-        # logger.info("Sending %s to Gemini Live: %s", type(_input).__name__, detail)
-
         if isinstance(_input, AnnounceInput) and (
             self._tool_call_pending() or self._activity_started
         ):
-            # A tool call or an open user activity owns the session: sending a
-            # text turn now would be rejected (1008) or split the user's turn.
-            # End the announcement at once so the caller falls back instead of
-            # waiting out the receive timeout.
+            # A tool call or open user activity owns the session (1008 / split turn): end at once.
             logger.info(
                 "[realtime] Announcement dropped (tool pending=%s, activity open=%s)",
                 self._tool_call_pending(), self._activity_started,
@@ -515,8 +426,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if isinstance(_input, AudioInput):
                 self._gated_audio_frames += 1
             elif isinstance(_input, ImageInput) and getattr(self, "supports_look_continuation", False):
-                # A sibling async tool can still be pending after look's ACK.
-                # Keep one current frame until all tool responses reach the wire.
+                # A sibling async tool can still be pending after look's ACK; keep one current frame.
                 self._pending_image = _input
                 logger.info("[realtime] Holding look frame until pending tool acknowledgements finish")
             else:
@@ -527,7 +437,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
             return
         if isinstance(_input, AudioInput):
-            # When VAD is disabled, send activityStart before first audio
             if self._vad_disabled and not self._activity_started:
                 await audio_session.send_realtime_input(
                     activity_start=types.ActivityStart()
@@ -546,8 +455,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
             if session is not None:
                 self.validate_audio_session(session)
-            # This is updated per frame; once AudioCommitEvent is processed it
-            # represents the final frame that reached the provider.
             self._last_audio_sent_at = time.monotonic()
         elif isinstance(_input, TextInput):
             await self._session.send_client_content(
@@ -558,9 +465,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 turn_complete=False,
             )
         elif isinstance(_input, AnnounceInput):
-            # A complete text turn: the model answers it like a user turn. The
-            # next commit waits on _turn_done, so it cannot interleave with
-            # this response; turn_complete sets it again.
+            # The next commit waits on _turn_done, so this response cannot interleave with it.
             self._turn_done.clear()
             await self._session.send_client_content(
                 turns=types.Content(
@@ -601,9 +506,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if not isinstance(parsed, dict):
                 parsed = {"result": parsed}
             if _input.image is not None:
-                # Keep a captured frame attached to its original async look.
-                # A separate realtime video frame after activityEnd may only
-                # enter the next user turn, leaving this tool without an image.
+                # A separate video frame after activityEnd would only enter the next user turn.
                 if (not self.supports_look_continuation
                         or _input.call_id not in self._pending_tool_calls
                         or getattr(self, "_pending_tool_names", {}).get(_input.call_id) != "look"
@@ -613,9 +516,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 ok, encoded = cv2.imencode(".jpg", _input.image)
                 if not ok:
                     raise ValueError("Could not encode look image")
-                # google-genai 2.12.1 send_tool_response leaves bytes in parts
-                # unencoded and raises TypeError. Use the documented wire shape
-                # only for this multimodal result; other ACKs retain the SDK.
+                # google-genai 2.12.1 send_tool_response leaves bytes unencoded (TypeError); use the wire shape.
                 response = {
                     "id": _input.call_id, "name": "look", "response": parsed,
                     "parts": [{"inlineData": {
@@ -632,9 +533,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if self._session is target_session:
                     await self._finish_tool_ack(_input.call_id)
                 return
-            # NON_BLOCKING declarations do not imply scheduling support. The
-            # deployed 3.8 extended-thinking backend closes with 1007 when a
-            # FunctionResponse includes scheduling (device-observed 2026-09-21).
+            # 3.8 extended-thinking closes with 1007 when a FunctionResponse includes scheduling.
             await self._session.send_tool_response(
                 function_responses=[types.FunctionResponse(
                     id=_input.call_id,
@@ -642,9 +541,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     response=parsed,
                 )]
             )
-            # Gemini accepted the response, so this call is resolved. Keeping the
-            # gate until after the await avoids racing subsequent client input
-            # against the tool response on the wire.
+            # Keep the gate until after the await so client input can't race the tool response.
             await self._finish_tool_ack(_input.call_id)
 
     async def _finish_tool_ack(self, call_id: str) -> None:
@@ -666,8 +563,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         return True
 
     async def _async_end_audio_stream(self, session: object) -> None:
-        # Recheck after queueing: a tool or transport swap can occur while the
-        # sender drains earlier audio. Never replay EOS onto a replacement.
+        # A tool or transport swap can occur while draining; never replay EOS onto a replacement.
         self.validate_audio_session(session)
         if self._vad_disabled or self.requires_fresh_session:
             return
@@ -731,8 +627,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 transcript_finished=transcript_finished,
                 user_turn_id=self._live_user_turn_id,
                 endpoint_at=endpoint_at,
-                # This stamp drives existing voice cues, but is only the
-                # RECEIVE time, not speech end on the input audio timeline.
+                # Only the RECEIVE time, not speech end on the input audio timeline.
                 method="server_vad_receive" if endpoint_at is not None else "provider_transcript",
             ),
         ))
@@ -742,13 +637,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         if self._session is None:
             return
         self._first_audio_received = False
-        # A new receive turn is a new generation. NOT sufficient on its own:
-        # `interrupted` does NOT end this loop (only turn_complete and
-        # generation_complete return), so a barge-in has to bump it too or the
-        # audio before and after the interruption would share a generation.
-        #
-        # getattr: tests drive this loop on agents built without __init__, the
-        # same way _idle_parked / _requires_fresh_session are read elsewhere.
+        # New receive turn = new generation; `interrupted` doesn't end this loop, so barge-in bumps it too.
         self._turn_gen = getattr(self, "_turn_gen", 0) + 1
         logger.info("[realtime] Gemini turn %d receive loop start", self._turn_gen)
         valid_transcription_chunk_cnt = 0
@@ -760,13 +649,9 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._replay_commit_signal = replay_signal
         pending_message: asyncio.Task | None = None
         response_user_turn_id: str | None = None
-        # NON_BLOCKING tools (extended-thinking) let the model speak a filler,
-        # send turn_complete, THEN emit the tool call. Ending the turn at
-        # turn_complete drops that late delegate/reject (#453). Hold the loop a
-        # short grace after the terminal to catch a trailing tool call, cut short
-        # when a routing call arrives. Filler output is still queued immediately.
+        # NON_BLOCKING tools can arrive after turn_complete (#453): hold a short grace for a trailing call.
         _grace_s: float = app_config.REALTIME_NONBLOCKING_TOOL_GRACE_S
-        # getattr: tests drive this loop on agents built without __init__ (no _config).
+        # getattr: tests drive this loop on agents built without __init__.
         _grace_model: str = getattr(getattr(self, "_config", None), "model", "") or ""
         _requires_outcome = "extended-thinking" in _grace_model
         _grace_on: bool = _grace_s > 0 and _requires_outcome
@@ -853,9 +738,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _continuation_check.cancel()
                 await asyncio.gather(_continuation_check, return_exceptions=True)
             request = getattr(self, "_user_transcript", "") or _turn_transcript
-            # A later answer needs its own bounded classification window. The
-            # first terminal may have had no speech, or its check expired while
-            # a real tool was working.
             _outcome_deadline = min(
                 time.monotonic() + app_config.REALTIME_OUTCOME_TIMEOUT_S,
                 _last_continuation_output_until,
@@ -880,10 +762,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if getattr(self, "_reject_followup_barrier", False):
                 return False
             if interaction_status == "IDLE":
-                # Extended Thinking has finished the whole interaction, not
-                # merely a filler utterance. Do not let a second model's
-                # availability override this provider execution boundary.
-                # Empty output or unresolved local work still needs recovery.
+                # Extended Thinking finished the whole interaction; empty output still needs recovery.
                 return (_requires_outcome and not _routing_received
                         and not execution_interrupted and not delayed_playback_ack
                         and (not _spoken_response.strip() or bool(self._pending_tool_calls)
@@ -919,10 +798,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                     except asyncio.TimeoutError:
                         logger.warning("[realtime] Continuation outcome check timed out")
                         continuation_complete = None
-                    # A completed initial answer keeps the old duplicate guard.
-                    # Only an empty initial response or a confirmed incomplete
-                    # reply followed by a checked, terminal-ended continuation can
-                    # be released, and a trailing delegate always wins first.
                     if continuation_complete is True:
                         for event in _continuation:
                             self._recv_queue.put(event)
@@ -939,8 +814,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                             _continuation_bytes, len(_continuation_text))
             confirmed = independently_complete if independently_complete is not None else _outcome_received
             if (_continuation or _continuation_overflow) and independently_complete is not True:
-                # A provider confirmation must not claim that withheld speech
-                # reached the user when the independent check was unavailable.
                 confirmed = False
             return (_requires_outcome and not _routing_received and not confirmed
                     and not execution_interrupted and not delayed_playback_ack)
@@ -1006,8 +879,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._live_speech_emitted = False
 
         async def read_message(timeout: float | None, check=None):
-            # Keep a single socket read alive across a replay commit or an
-            # outcome-check wakeup. Cancelling it would lose the SDK iterator.
+            # Keep one socket read alive across replay/outcome wakeups; cancelling loses the SDK iterator.
             nonlocal pending_message
             if pending_message is None:
                 pending_message = asyncio.create_task(_receiver.__anext__())
@@ -1043,9 +915,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         while True:
             if replay_signal.is_set():
                 replay_signal.clear()
-                # A successful explicit look replay replaces the filler response
-                # even when the provider does not emit interrupted. Retire its
-                # classification and deadlines before accepting replay output.
+                # A successful look replay replaces the filler even without `interrupted`.
                 try:
                     for check in (_outcome_check, _continuation_check):
                         if check is not None:
@@ -1088,8 +958,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         return
                     message = await read_message(remaining)
                 elif _deferred_finalize is not None:
-                    # Progress buys time only for an unfinished outcome. A real
-                    # completed answer still observes the ordinary routing grace.
+                    # Progress buys time only for an unfinished outcome.
                     progress_deadline = _progress_until
                     routing_deadline = (
                         min(_grace_deadline, _progress_until)
@@ -1124,9 +993,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     continue
             except StopAsyncIteration:
                 if _deferred_finalize is not None or replay_response or interaction_status == "IN_PROGRESS":
-                    # The SDK receive() iterator ends at turn_complete, not at
-                    # socket close. Read the next iterator on the SAME session
-                    # while preserving this logical turn and its deadline.
+                    # SDK receive() ends at turn_complete, not socket close; keep reading the same session.
                     _receiver = self._session.receive().__aiter__()
                     await asyncio.sleep(0)
                     continue
@@ -1147,11 +1014,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     await _finalize_generation_complete()
                     return
                 raise
-            # Liveness for the silent-turn watchdog: most of what arrives here
-            # never reaches _recv_queue (thought parts, grounding metadata,
-            # usage-only frames), and without this a turn that is busy grounding
-            # is indistinguishable from one the model abandoned. See
-            # RealtimeVoiceAgent.note_server_activity.
+            # Liveness for the silent-turn watchdog (see note_server_activity).
             self.note_server_activity()
             if app_config.LIVE_MODE and getattr(self, "_reject_followup_barrier", False):
                 content = message.server_content
@@ -1175,9 +1038,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     _continuation_overflow = False
                     self._awaiting_playback_turn_complete = False
                 else:
-                    # ACK-triggered speech has no new user owner. Keep the
-                    # barrier across receive iterators and protocol terminals;
-                    # do not feed it to continuation/outcome/fallback machinery.
+                    # ACK-triggered speech has no new user owner; keep the barrier across iterators.
                     cancellation = getattr(message, "tool_call_cancellation", None)
                     if cancellation is not None:
                         self._invalidate_look_images(getattr(cancellation, "ids", ()) or ())
@@ -1211,18 +1072,8 @@ class GeminiLiveAgent(VoiceAgentBase):
             elif activity_type == "ACTIVITY_END":
                 self._observe_user_speech(endpoint_at=time.monotonic())
             if message.usage_metadata:
-                # Per-turn token bill. prompt_token_count is the input CONTEXT
-                # billed this turn — it grows as a long-lived session accumulates
-                # history and should drop sharply right after an idle session
-                # recycle (see orchestrator._mark_turn_start). Grep
-                # "[realtime] Gemini usage" to confirm the reset is cutting cost.
-                # Checked FIRST: Gemini ships usage_metadata on the SAME message as
-                # turn_complete, and the server_content branch returns on
-                # turn_complete — so a check placed after it never runs.
+                # Checked FIRST: usage_metadata ships on the same message as turn_complete.
                 um = message.usage_metadata
-                # Per-model rate table (see _GEMINI_RATES above). Resolved by model
-                # name so 2.5 native-audio (cheaper text) and 3.1 Live are billed at
-                # their own rates; unknown models fall back to a cost ceiling.
                 rates = _gemini_rates_for(self._config.model)
                 parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
                 for direction, details in (
@@ -1236,16 +1087,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                         c = tok * rates.get((direction, mod), 0.0) / 1_000_000
                         cost += c
                         parts.append("%s_%s=%d($%.5f)" % (direction, mod.lower(), tok, c))
-                # Tokens Google counted but didn't tag with a modality (system /
-                # thinking) — unpriced here, so est is a floor.
+                # Untagged tokens (system/thinking) are unpriced, so est is a floor.
                 unattr_in = (um.prompt_token_count or 0) - attributed["in"]
                 unattr_out = (um.response_token_count or 0) - attributed["out"]
-                # Implicit context caching (on by default for Gemini 2.5+/3.1) re-bills
-                # the cached prefix — our ~8k-token system-instruction floor — at a 90%
-                # discount. `cost` above charges every prompt token at full rate, so
-                # subtract the saving on cached tokens to get the REAL estimate. cached
-                # tokens are text-in (the floor is text). cached=0 every turn means the
-                # cache is not hitting (e.g. session churn) — that's the cost red flag.
+                # Implicit caching bills the cached prefix at a 90% discount; cached=0 every turn means churn.
                 cached = getattr(um, "cached_content_token_count", 0) or 0
                 cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
                 usage_logger.info(
@@ -1263,11 +1108,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             if message.server_content:
                 content = message.server_content
 
-                # Diagnostic: did Google Search grounding fire this turn? Grounding
-                # chunks (web content) get injected into the session context and
-                # re-billed as input every later turn — the suspected cause of a
-                # sudden persistent in_text jump. Logs the queries + chunk count so
-                # we can correlate a search with the cost bump.
                 gm = getattr(content, "grounding_metadata", None)
                 if gm is not None:
                     queries = list(getattr(gm, "web_search_queries", None) or [])
@@ -1292,16 +1132,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         queries[:3], len(chunks),
                     )
                     _log_timing("grounding_received")
-                    # chunks=0 on turns that clearly ran a search (measured on
-                    # lamp-0c89 04/09/2026: 2 of 3 grounded turns) has two very
-                    # different causes and the count alone cannot separate them:
-                    # the search really returned nothing, or the metadata reached
-                    # us stripped (the proxy forwards web_search_queries, so the
-                    # object itself survives — the question is what else does).
-                    # This dumps every field of the metadata verbatim, once per
-                    # turn, so the next grounded turn answers it from evidence.
-                    # Off by default: it is verbose and only useful while
-                    # investigating. HAL_REALTIME_GROUNDING_DEBUG=true to arm.
+                    # Verbose grounding dump for chunks=0 investigations (HAL_REALTIME_GROUNDING_DEBUG=true).
                     if app_config.REALTIME_GROUNDING_DEBUG:
                         try:
                             fields = {
@@ -1335,9 +1166,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     elif (content.interrupted or content.turn_complete
                           or getattr(content, "generation_complete", False)
                           or getattr(content, "interaction_status", None) == "IDLE"):
-                        # The cancelled filler may end with interrupted, a late
-                        # terminal, both, or neither. Retire that boundary here;
-                        # never discard the replay's own TurnDoneEvent.
+                        # Retire the cancelled filler's boundary; never discard the replay's own TurnDoneEvent.
                         if content.turn_complete:
                             replay_boundary_pending = False
                         continue
@@ -1349,8 +1178,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                     interaction_status = status
                     logger.info("[realtime] interaction_status=%s gen=%s", status, self._turn_gen)
                     if first_status:
-                        # The SDK terminal may precede this status. Retire its
-                        # provisional filler classification, not the user's turn.
                         for check in (_outcome_check, _continuation_check):
                             if check is not None:
                                 check.cancel()
@@ -1403,9 +1230,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         transcript_finished=getattr(_in_tx, "finished", False) is True,
                     )
 
-                # The initial response streams immediately. Post-terminal output
-                # stays off-speaker until an incomplete initial reply and a valid
-                # continuation are confirmed without a trailing routing tool.
+                # Post-terminal output stays off-speaker until a valid continuation is confirmed.
                 accept_speech = (not execution_interrupted and not _routing_received
                                  and not _empty_terminal_pending and not reject_in_message
                                  and (interaction_status is not None or (
@@ -1416,8 +1241,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                         and not content.interrupted and not _continuation_overflow
                         and not reject_in_message):
                     # Hold post-terminal speech until the routing grace ends.
-                    # It can be the real answer after a filler, or unwanted ACK
-                    # chatter. Never let it reach the speaker before deciding.
                     if (_empty_terminal_pending and response_user_turn_id is None
                             and (content.model_turn or content.output_transcription)):
                         response_user_turn_id = getattr(self, "_live_user_turn_id", "")
@@ -1438,8 +1261,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                         _continuation.clear()
                         logger.warning("[realtime] Continuation buffer limit reached; preserving fallback")
                     elif held_outputs:
-                        # Audio/text chunks, unlike metadata heartbeats, prove
-                        # that a continuation is still being generated.
                         _continuation_active_until = (
                             time.monotonic() + app_config.REALTIME_RECV_QUEUE_TIMEOUT_S)
                         _last_continuation_output_until = _continuation_active_until
@@ -1447,7 +1268,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                         if not _continuation:
                             _log_timing("first_continuation_held")
                         _continuation.extend(OutputEvent(gen=self._turn_gen, output=o) for o in held_outputs)
-                        # New chunks invalidate a check of an earlier terminal.
                         if _continuation_check is not None:
                             _continuation_check.cancel()
                             await asyncio.gather(_continuation_check, return_exceptions=True)
@@ -1460,16 +1280,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if has_model_output:
                     self._awaiting_playback_turn_complete = False
                 if response_user_turn_id is None and has_model_output:
-                    # Transcription can arrive after model output. Freeze unknown
-                    # ownership instead of attributing that response to a later input.
+                    # Freeze unknown ownership instead of attributing this response to a later input.
                     response_user_turn_id = getattr(self, "_live_user_turn_id", "")
 
                 if content.model_turn and content.model_turn.parts and accept_speech:
                     for part in content.model_turn.parts:
-                        # Skip reasoning parts: Gemini flags thought parts with
-                        # part.thought=True. Emitting them would speak/show the
-                        # model's internal reasoning. Belt-and-suspenders with
-                        # include_thoughts=False in the live config.
+                        # Skip thought parts (part.thought=True) so reasoning is never spoken.
                         if getattr(part, "thought", False):
                             continue
                         if part.inline_data and part.inline_data.data:
@@ -1512,16 +1328,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 )
                             )
                         elif part.text:
-                            # In AUDIO modality with output_audio_transcription
-                            # enabled (always, see _build_config), the spoken reply
-                            # arrives via output_transcription below. Gemini also
-                            # occasionally puts the SAME reply into a model_turn text
-                            # part (same quirk as thought parts leaking, filtered
-                            # above) — emitting it here too double-speaks the whole
-                            # turn (verified on-device 2026-06-29: text part arrived
-                            # BEFORE first audio, then output_transcription repeated
-                            # it). Skip it; output_transcription is the source of
-                            # truth for the spoken text + [HANDLED] transcript.
+                            # Skip model_turn text: it duplicates output_transcription and would double-speak the reply.
                             continue
 
                 if _in_tx is not None and _in_tx.text:
@@ -1558,8 +1365,7 @@ class GeminiLiveAgent(VoiceAgentBase):
 
                 if content.interrupted:
                     self._invalidate_look_images(self._pending_tool_calls)
-                    # A late sibling ACK must not flush the old frame into the
-                    # new user's interaction. Tool ids still need normal ACKs.
+                    # A late sibling ACK must not flush the old frame into the new user's interaction.
                     self._pending_image = None
                     execution_interrupted = True
                     logger.info(content)
@@ -1602,8 +1408,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ):
                                 metadata.append(queued)
                             elif app_config.LIVE_MODE and isinstance(queued, TurnDoneEvent):
-                                # Preserve metric evidence, never replay a control
-                                # terminal that the original interruption path dropped.
                                 metadata.append(OutputEvent(
                                     gen=self._turn_gen,
                                     output=ExecutionOutput(
@@ -1637,9 +1441,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     _continuation_text = ""
                     _continuation_bytes = 0
 
-                # A silent terminal is not an accepted answer. Extended Thinking
-                # may report IN_PROGRESS next, then speech followed by rejection.
-                # Keep only this post-empty-terminal path off-speaker until IDLE.
+                # A silent terminal is not an answer; keep post-empty-terminal output off-speaker until IDLE.
                 if (app_config.LIVE_MODE and _requires_outcome
                         and interaction_status is None and not _initial_speech
                         and not content.interrupted and (content.turn_complete
@@ -1656,8 +1458,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                         self, "_awaiting_playback_turn_complete", False
                     )
                     logger.debug("[realtime] Turn complete")
-                    # Hold for a trailing NON_BLOCKING tool call (#453) before
-                    # ending the turn; _finalize_turn_complete emits TurnDoneEvent.
+                    # Hold for a trailing NON_BLOCKING tool call (#453).
                     if _grace_on and not delayed_playback_ack:
                         if _deferred_finalize is None:
                             _grace_deadline = time.monotonic() + _grace_s
@@ -1674,15 +1475,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                 if (interaction_status is None and not reject_in_message
                         and getattr(content, "generation_complete", False)):
                     _continuation_active_until = 0.0
-                    # Gemini Live can defer turn_complete until its assumed
-                    # real-time audio playback ends. HAL plays the received
-                    # response itself, so waiting for that acknowledgement
-                    # makes an already-spoken turn block until the consumer's
-                    # silent-output watchdog expires. BLOCKING models can finish
-                    # now; NON_BLOCKING models still need the tool grace below.
+                    # HAL plays audio itself, so don't wait for Gemini's playback-deferred turn_complete.
                     logger.debug("[realtime] Generation complete")
-                    # Audio generation can finish before a NON_BLOCKING tool
-                    # arrives. Neither terminal may bypass or extend the grace.
                     if _grace_on:
                         if _deferred_finalize is None:
                             _grace_deadline = time.monotonic() + _grace_s
@@ -1699,18 +1493,11 @@ class GeminiLiveAgent(VoiceAgentBase):
                                        "reject_turn", "end_conversation", "express_emotion"}
                        for fc in message.tool_call.function_calls):
                     _note_progress()
-                # A tool call this turn — even one arriving after turn_complete on
-                # a NON_BLOCKING model (the #453 case the grace window catches).
-                # Close the audio gate before the events are queued: the consumer
-                # runs on another thread and can dispatch a result immediately, so
-                # registering the call_ids afterwards could race a clear and leave
-                # a phantom entry pending until the deadline.
+                # Close the audio gate before queueing events; registering after could race a clear.
                 self._pending_tool_calls.update(
                     fc.id or "" for fc in message.tool_call.function_calls
                 )
                 # FunctionResponse requires the original name as well as the id.
-                # Keep this provider metadata here rather than making each tool
-                # handler reconstruct it (missing names produce model error replies).
                 if not hasattr(self, "_pending_tool_names"):
                     self._pending_tool_names = {}
                 self._pending_tool_names.update(
@@ -1728,9 +1515,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     if _requires_outcome and fc.name == "complete_response":
                         _continuation_active_until = 0.0
                         await _check_continuation()
-                        # An explicit direct-answer outcome, never an inferred
-                        # success from audio or a terminal alone. Ack normally;
-                        # this backend does not support scheduling=SILENT.
+                        # This backend does not support scheduling=SILENT.
                         await self._session.send_tool_response(function_responses=[
                             types.FunctionResponse(id=fc.id, name=fc.name,
                                                    response={"result": "recorded"})
@@ -1740,9 +1525,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             logger.info("[realtime] complete_response is advisory; awaiting server IDLE")
                             continue
                         if not (_spoken_response.strip() or _continuation_text.strip()):
-                            # NON_BLOCKING tools can arrive before their answer.
-                            # A receipt without speech must not mute the answer
-                            # still in flight or count as completed execution.
+                            # A receipt without speech must not mute an answer still in flight.
                             logger.info(
                                 "[realtime] Early complete_response acknowledged — "
                                 "awaiting answer text before confirming completion"
@@ -1750,15 +1533,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                             continue
                         _outcome_received = True
                         _direct_answer_confirmed = True
-                        # The plain ACK can prompt another spoken answer. Once
-                        # confirmed, retain routing events but suppress that
-                        # post-confirmation speech until this turn finalizes.
-                        # Keep the grace open: a delegate can follow this call in
-                        # another frame (device-observed 2026-09-21, +39ms).
+                        # Keep the grace open: a delegate can follow in another frame (+39ms observed).
                         continue
                     if app_config.LIVE_MODE and fc.name == "reject_turn":
-                        # Publish before the consumer can ACK. A plain ACK can
-                        # cause provider speech in a later receive iteration.
+                        # Publish before the consumer can ACK.
                         self._reject_followup_barrier = True
                     if fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}:
                         _outcome_received = True
@@ -1767,10 +1545,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             and isinstance(fc.args, dict)
                             and isinstance(fc.args.get("message"), str)
                             and fc.args["message"].strip()):
-                        # Publish quarantine BEFORE the tool: its consumer may
-                        # release the next capture immediately. Even a silent
-                        # handoff can produce late spoken output after its ACK;
-                        # it must not become the next capture's response.
+                        # Publish quarantine BEFORE the tool: late spoken output must not answer the next capture.
                         self._requires_fresh_session = True
                     self._recv_queue.put(
                         OutputEvent(
@@ -1802,16 +1577,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                     fc.name in {"delegate_to_main", "reject_turn", "end_conversation"}
                     for fc in message.tool_call.function_calls
                 ):
-                    # Routing tools finish the consumer turn. Auxiliary tools
-                    # (such as emotion) must not hide a subsequent delegate.
                     _log_timing("deferred_wait_expired")
                     await _deferred_finalize()
                     return
 
             if interaction_status == "IDLE":
-                # Process any co-delivered routing tool before closing. IDLE
-                # ends execution, not proof of semantic correctness. The
-                # legacy classifier is only for sessions without this signal.
+                # IDLE ends execution, not proof of correctness.
                 _progress_until = 0.0
                 if (_empty_terminal_pending and not _routing_received
                         and not execution_interrupted and not _continuation_overflow
@@ -1836,11 +1607,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 raise ConnectionClosed(None, None)
 
-    # --- Reconnect ---
-
     def _ensure_connected(self) -> None:
-        """Reconnect if not connected. Throttled by an exponential backoff that grows
-        on consecutive failures (reset to base on success)."""
+        """Reconnect if not connected, throttled by exponential backoff (reset on success)."""
         if self._stop_event.is_set():
             return
         if self._connected.is_set():
@@ -1853,24 +1621,16 @@ class GeminiLiveAgent(VoiceAgentBase):
 
     @override
     def end_turn(self) -> None:
-        """Release the next turn's commit gate when a turn ends without a
-        `turn_complete` (e.g. the model ended on a delegate tool call). The recv
-        loop is unaffected — it keeps reading this turn in the background until the
-        real turn_complete / timeout; any late output is flushed next turn."""
+        """Release the next turn's commit gate when a turn ends without `turn_complete` (e.g. on a delegate)."""
         self._turn_done.set()
 
     @override
     def force_reconnect(self) -> None:
-        """Recover a zombie session: close the live session so the recv loop —
-        which may be blocked in `async for session.receive()` on a dead socket —
-        unblocks and rebuilds a fresh session via _ensure_connected. Resets the
-        reconnect throttle so reconnect happens immediately, not after
-        reconnect_delay_s."""
+        """Recover a zombie session: close it so the recv loop rebuilds immediately."""
         logger.warning("[realtime] Forcing reconnect — session looks zombie (silent)")
         self._connected.clear()
         self._activity_started = False
-        # A fresh session inherits no tool calls — dropping the gate here keeps a
-        # call that died with the old socket from muting the new one.
+        # A fresh session inherits no tool calls.
         self._clear_pending_tool_calls()
         self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
@@ -1882,18 +1642,14 @@ class GeminiLiveAgent(VoiceAgentBase):
             except Exception as e:
                 logger.warning("[realtime] force_reconnect disconnect failed: %s", e)
         self._session = None
-        # The recv/send loops' _ensure_connected now rebuilds a fresh session.
 
     def _reconnect(self) -> None:
-        # A worker can observe a transport-close exception during teardown. It
-        # belongs to the old agent and must never revive it after its loop has
-        # been released.
+        # A teardown-time close must never revive the old agent.
         if self._stop_event.is_set():
             return
         self._connected.clear()
         self._activity_started = False
-        # A fresh session inherits no tool calls — dropping the gate here keeps a
-        # call that died with the old socket from muting the new one.
+        # A fresh session inherits no tool calls.
         self._clear_pending_tool_calls()
         self._requires_fresh_session = False
         self._turn_done.set()  # unblock any waiting commit
@@ -1907,8 +1663,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             self._connected.set()
             self._reconnect_backoff = self._reconnect_delay_s  # success → reset backoff
         except Exception as e:
-            # Grow backoff so a persistent failure (e.g. usage-limit 4029) doesn't
-            # hammer the endpoint every base delay.
             self._reconnect_backoff = min(
                 self._reconnect_backoff * 2, self._reconnect_backoff_max
             )
@@ -1918,17 +1672,9 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
 
     def _fail_fast_turn(self, reason: str) -> None:
-        """End the current turn immediately on a non-idle recv error.
+        """End the current turn immediately on a non-idle recv error so the main agent answers now.
 
-        Without this, any backend failure (proxy go_away, quota / resource
-        exhausted, unexpected WS close — anything that is NOT a benign idle
-        close 1000) leaves the consumer blocked in receive() for the full
-        REALTIME_RECV_QUEUE_TIMEOUT_S before the turn falls back to the main
-        agent. Pushing a TurnDoneEvent unblocks receive() now so the main agent
-        answers without the dead-air wait. Only fires while a turn is actually
-        awaiting output (_turn_done clear); a stray sentinel between turns would
-        just be dropped by flush_output() at the next turn start anyway. Late
-        output from a successful reconnect is likewise flushed next turn.
+        Only fires while a turn is awaiting output (_turn_done clear).
         """
         if self._turn_done.is_set():
             return  # no turn awaiting output — nothing to unblock
@@ -1945,8 +1691,6 @@ class GeminiLiveAgent(VoiceAgentBase):
             "(skipping receive timeout wait)",
             reason,
         )
-
-    # --- VoiceAgentBase implementation ---
 
     def _submit_and_wait(self, coro: Any, timeout: float = 30.0) -> Any:
         """Submit a coroutine to the IO thread's loop and block until done."""
@@ -1970,9 +1714,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         try:
             self._submit_and_wait(self._async_connect())
         except Exception:
-            # Connection setup happens after the loop/thread are already live.
-            # Roll both back on a failed handshake (e.g. proxy WS 1011) instead
-            # of leaking an idle gemini-io thread and event loop.
+            # Roll back the loop/thread on a failed handshake (e.g. WS 1011).
             logger.warning("[realtime] Gemini connect failed — cleaning up IO loop")
             self._do_disconnect()
             raise
@@ -1982,9 +1724,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         if self._loop is None:
             return
         try:
-            # A bounded graceful close normally wakes receive() immediately.
-            # If a proxy/SDK close stalls, finally cancels every loop task and
-            # stops the owner thread rather than waiting for recv_timeout_s.
+            # If a proxy/SDK close stalls, finally cancels every loop task.
             self._submit_and_wait(
                 self._async_disconnect(), timeout=self._join_timeout_s
             )
@@ -2043,10 +1783,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                             self._async_send_input(event.input, session=session),
                             timeout=self._send_timeout_s,
                         )
-                    break  # Success
+                    break
                 except AudioTurnSessionChanged:
-                    # A reconnect cannot retry only the tail of captured speech.
-                    # Wake the bound consumer; it owns the complete replay buffer.
+                    # A reconnect cannot retry only the tail of captured speech; the consumer replays it.
                     if isinstance(event, BoundAudioCommitEvent):
                         self._recv_queue.put(TurnDoneEvent())
                     break
@@ -2075,12 +1814,7 @@ class GeminiLiveAgent(VoiceAgentBase):
             if self._loop is None:
                 break
             if not self._connected.is_set():
-                # Proactively reconnect (throttled by reconnect_delay_s) so the
-                # session SELF-HEALS while disconnected even with NO audio flowing.
-                # Critical after a usage-limit (4029) close: voice_service stops
-                # feeding audio (orchestrator.available=False once disconnected), so
-                # the send loop never triggers a reconnect — without this the session
-                # would stay dead forever even after the limit is lifted.
+                # Self-heal while disconnected even with no audio (critical after a 4029 close).
                 self._ensure_connected()
                 if not self._connected.is_set():
                     _ = self._connected.wait(timeout=self._queue_poll_s)
@@ -2095,7 +1829,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._submit_and_wait(
                         self._async_receive_turn(), timeout=self._recv_timeout_s
                     )
-                    break  # Success — turn received
+                    break
                 except ConnectionClosed as e:
                     if self._stop_event.is_set():
                         break
@@ -2104,29 +1838,19 @@ class GeminiLiveAgent(VoiceAgentBase):
                         logger.info("[realtime] Session closed normally (idle) — reconnecting")
                     else:
                         logger.warning("[realtime] Recv failed (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
-                    # Fail-fast on ANY close, including a benign idle-1000: if it
-                    # lands mid-turn the fresh session has no committed audio and
-                    # will never answer, so end the turn now instead of waiting out
-                    # the receive timeout. No-op when genuinely idle between turns
-                    # (_turn_done already set).
+                    # Fail fast on ANY close, including idle-1000 mid-turn; no-op when idle.
                     self._fail_fast_turn(f"ws close {code}")
                     self._connected.clear()
                     self._session = None
                 except genai_errors.APIError as e:
                     if self._stop_event.is_set():
                         break
-                    # The genai SDK surfaces a normal WS close (code 1000 — idle /
-                    # session-duration timeout) as an APIError whose str is
-                    # "1000 None", not as ConnectionClosed. Mirror the 1000 special
-                    # case in the ConnectionClosed branch above: log at INFO so a
-                    # benign idle-reconnect doesn't show up as a red WARNING.
+                    # The SDK surfaces a normal close (1000) as APIError "1000 None".
                     code_str: str = str(e).split(" ", 1)[0]
                     if code_str == "1000":
                         logger.info("[realtime] Session closed normally (idle) — reconnecting")
                     else:
                         logger.warning("[realtime] Recv API error (attempt %d/%d): %s", attempt + 1, self._max_retries, e)
-                    # Fail-fast on ANY close (see ConnectionClosed branch): a mid-turn
-                    # idle-1000 loses the turn on the fresh session. No-op when idle.
                     self._fail_fast_turn(f"api {code_str}")
                     self._connected.clear()
                     self._session = None

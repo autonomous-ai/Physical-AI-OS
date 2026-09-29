@@ -6,31 +6,22 @@ stage_prerequisites() {
     git dash xvfb chromium chromium-sandbox || true
   systemctl stop hostapd dnsmasq nginx 2>/dev/null || true
   systemctl unmask hostapd dnsmasq 2>/dev/null || true
-  # Node.js 22 for OpenClaw CLI
   if ! command -v node &>/dev/null || ! node -v 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
     echo "[stage] Install Node.js 22 (NodeSource)"
     curl -fsSL https://deb.nodesource.com/setup_22.x | bash -
     apt install -y nodejs
   fi
-  # Keep wpa_supplicant running so STA (e.g. Pi Imager WiFi) stays connected during setup.
-  # Global wpa_supplicant is stopped/masked only when we switch to AP in device-ap-mode.
+  # Keep wpa_supplicant running so STA stays connected during setup.
 }
 
 stage_openclaw() {
-  # OpenClaw is installed from npm registry; OTA upgrades go through
-  # `npm install -g openclaw@<version>` driven by the lamp watcher
-  # against metadata.openclaw.version. Override OPENCLAW_VERSION here
-  # to pin a specific version on first install (otherwise pulls latest;
-  # the watcher will reconcile to the OTA target on its next tick).
+  # OPENCLAW_VERSION pins the first install; the watcher reconciles to the OTA target later.
   OPENCLAW_VERSION="${OPENCLAW_VERSION:-latest}"
   echo "[stage] Install OpenClaw (npm registry, version=${OPENCLAW_VERSION})"
   npm install -g "openclaw@${OPENCLAW_VERSION}"
   openclaw --version || true
 
-  # OpenClaw shares its state dir with Lamp at /root/.openclaw — Lamp
-  # writes openclaw.json + the gateway auth token there, OpenClaw reads
-  # it from the same path. They MUST agree or every WS connect fails
-  # with "token_mismatch" / WS close 1008.
+  # Must match the state dir os-server writes the token to, or WS closes 1008 token_mismatch.
   mkdir -p /root/.openclaw /var/log/openclaw
 
   CHROME_PATH=$(command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || true)

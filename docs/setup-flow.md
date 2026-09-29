@@ -41,15 +41,16 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
 
 ```json
 {
-  "network_ssid": "MyWiFi",
-  "network_password": "...",
-  "llm_provider": "anthropic",
+  "device_id": "lamp-a1b2",
+  "ssid": "MyWiFi",
+  "password": "...",
   "llm_api_key": "sk-...",
   "llm_base_url": "https://api.anthropic.com",
   "llm_model": "claude-haiku-4-5-20251001",
-  "channel_type": "telegram",
-  "channel_token": "...",
-  "channel_id": "...",
+  "channel": "telegram",
+  "telegram_bot_token": "...",
+  "telegram_user_id": "...",
+  "admin_password": "...",
   "mqtt_endpoint": "broker.example.com",
   "mqtt_port": 8883,
   "mqtt_username": "...",
@@ -60,15 +61,17 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
 }
 ```
 
+Fields come from `SetupRequest` in `system/domain/device.go`. `device_id`, `llm_api_key` and `llm_base_url` carry `validate:"required"`; everything else is optional. `ssid` may be empty (wired/ethernet path, see below). `channel` is `telegram` (default when empty), `slack`, `discord` or `imessage`; the matching credential fields are `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, or `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Optional voice overrides: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
+
 **Response:** Returns immediately `{"status": 1}`. Setup runs async in a goroutine after 2s delay.
 
-**Messaging channel:** The entire Telegram, Slack, or Discord configuration is optional during initial setup. Omitting it does not block setup; configure a channel later with `POST /api/device/channel`. Credentials supplied to `POST /api/device/setup` keep the existing setup path but are not channel-validated there; `POST /api/device/channel` validates the credentials required by its selected channel.
+**Messaging channel:** The entire Telegram, Slack, Discord, or iMessage configuration is optional during initial setup. Omitting it does not block setup; configure a channel later with `POST /api/device/channel`. Credentials supplied to `POST /api/device/setup` keep the existing setup path but are not channel-validated there; `POST /api/device/channel` validates the credentials required by its selected channel.
 
 **Admin password default:** `admin_password` is optional. When empty on a first-time setup (`SetUpCompleted=false` and no `AdminPasswordHash` on file), the handler defaults it to the 4-char hardware suffix from `device.GetDeviceMac()` — the same suffix `scripts/provision/setup-ap.sh` uses for the AP SSID (`<DEVICE_TYPE>-<xxxx>`). The suffix is printed on the sticker at the bottom of the device, so operators can sign into the admin UI without picking a password. The V2 Setup Web UI hides the DEVICE PASSWORD field entirely and relies on this default; V1's dedicated Device step still asks the operator to pick one. Fails 400 (`device hardware ID unreadable`) when `GetDeviceMac()` returns empty (no `DEVICE_TYPE` env, no serial, no eth MAC) — silent fallback would give every unidentified device the same well-known password.
 
 ### POST /api/device/channel
 
-Change messaging channel after setup is complete. Accepts `telegram`, `slack`, `discord`.
+Change messaging channel after setup is complete. Accepts `telegram`, `slack`, `discord`, `imessage`. A channel the active runtime cannot run is rejected with `400 <channel> not supported on the active runtime` (today `imessage` is Hermes-only).
 
 **WhatsApp is rejected here** (`400 whatsapp pairing not supported via HTTP; use MQTT add_channel`) — WhatsApp pairing streams a rotating QR back to the caller, which HTTP's fire-and-forget shape can't carry. The canonical path is the MQTT `add_channel` command (see `docs/mqtt.md`) which publishes one fd_channel message per pairing event. Re-pairing without re-bootstrapping uses the MQTT `whatsapp_pair` command.
 
@@ -642,21 +645,19 @@ After `SetUpCompleted = true`:
 
 ## Config
 
-Config stored at `config/config.json`. Managed by `server/config/config.go`.
+Config stored at `config/config.json`. Managed by `system/server/config/config.go`.
 
 | Field | Description |
 |-------|-------------|
 | `SetUpCompleted` | `true` when setup is done |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
-| `LLMProvider` | anthropic, openai, google, ... |
-| `LLMApiKey` | LLM API key |
-| `LLMBaseUrl` | LLM API base URL |
+| `LLMAPIKey` | LLM API key |
+| `LLMBaseURL` | LLM API base URL |
 | `LLMModel` | Model name |
-| `ChannelType` | telegram, slack |
-| `ChannelToken` | Channel bot token |
-| `ChannelID` | Channel/chat ID |
-| `DeepgramApiKey` | Deepgram STT API key |
+| `Channel` | telegram (default when empty), slack, discord, whatsapp, imessage |
+| `TelegramBotToken` / `TelegramUserID` | Telegram credentials (Slack/Discord/WhatsApp/BlueBubbles have their own `Slack*`, `Discord*`, `WhatsappUserID`, `Bluebubbles*` fields) |
+| `DeepgramAPIKey` | Deepgram STT API key |
 | `LocalIntent` | Enable/disable local intent matching (default: true) |
 | `MQTTEndpoint` | MQTT broker host |
 | `MQTTPort` | MQTT broker port |

@@ -13,16 +13,7 @@ import (
 )
 
 // telegramTargetsFile is os-server's own list of Telegram chats to Broadcast
-// proactive alerts (sensing/guard) to. The device-owned receive loop
-// (telegram_poll.go) upserts the chat id of every accepted DM here, so the
-// first message from the allowlisted user makes Broadcast reach their chat;
-// operators can also seed it by hand. SendToUser / SendToUserWithMedia work
-// with an explicit chat ID whenever config.TelegramBotToken is set. The path
-// lives under OpenCode's own data dir (/root/.opencode, wiped by factory reset) —
-// the previous /root/.lumi path was a leftover copied from picoclaw, itself
-// inherited from the pre-fork Lumi repo.
-//
-// Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
+// proactive alerts (sensing/guard) to.
 const telegramTargetsFile = "/root/.opencode/telegram_targets.json"
 
 type telegramTargetEntry struct {
@@ -46,8 +37,9 @@ func (s *OpenCodeService) telegramTargetsFilePath() string {
 }
 
 // upsertTelegramTarget records chatID in the targets store so outbound
-// Broadcast reaches the chat the user wrote from. Called by the inbound poll
-// loop (telegram_poll.go) on every accepted message; idempotent, atomic write.
+// Broadcast reaches the chat the user wrote from.
+// Called by the inbound poll loop (telegram_poll.go) on every accepted message; idempotent, atomic
+// write.
 func (s *OpenCodeService) upsertTelegramTarget(chatID, chatType string) {
 	if chatID == "" {
 		return
@@ -57,12 +49,11 @@ func (s *OpenCodeService) upsertTelegramTarget(chatID, chatType string) {
 	path := s.telegramTargetsFilePath()
 	var content telegramTargetsFileContent
 	if data, err := os.ReadFile(path); err == nil {
-		// Corrupt file → rewrite from scratch with just this target.
 		_ = json.Unmarshal(data, &content)
 	}
 	for _, t := range content.Targets {
 		if t.ChatID == chatID {
-			return // already known
+			return
 		}
 	}
 	content.Targets = append(content.Targets, telegramTargetEntry{ChatID: chatID, Type: chatType})
@@ -87,15 +78,13 @@ func (s *OpenCodeService) upsertTelegramTarget(chatID, chatType string) {
 	slog.Info("telegram target upserted", "component", "opencode", "chatID", chatID, "type", chatType)
 }
 
-// GetTelegramBotToken returns the bot token from Device config. There is no
-// agent-side config to consult under OpenCode.
+// GetTelegramBotToken returns the bot token from Device config.
 func (s *OpenCodeService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
 // GetTelegramTargets reads the target store (populated by the receive loop's
-// upsertTelegramTarget, or operator-seeded). Returns nil + nil (no error) when
-// the file doesn't exist — the state before the first accepted DM.
+// upsertTelegramTarget, or operator-seeded).
 func (s *OpenCodeService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(s.telegramTargetsFilePath())

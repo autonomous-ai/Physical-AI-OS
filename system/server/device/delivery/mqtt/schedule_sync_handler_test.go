@@ -111,12 +111,7 @@ func TestApplyScheduleSync_InvalidTimezoneFallsBackButStillApplies(t *testing.T)
 	}
 }
 
-// I2 (phase-5 review): a real, enabled schedule that turns out to be
-// un-computable (here: a malformed "time") must not silently vanish from the
-// device with no trace — schedule.SyncSchedules logs a slog.Warn (id +
-// repeat) on this path. Behaviorally, the sync must still apply (replace the
-// store) and ack success for the OTHER schedules; this one is simply omitted
-// from next_run_at rather than failing the whole sync.
+// An un-computable schedule is omitted from next_run_at; the sync still applies.
 func TestApplyScheduleSync_UncomputableScheduleStillAppliesButOmitsNextRun(t *testing.T) {
 	store := schedule.NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	now := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
@@ -143,9 +138,7 @@ func TestApplyScheduleSync_UncomputableScheduleStillAppliesButOmitsNextRun(t *te
 	}
 }
 
-// scheduleTimezone was inlined into schedule.SyncSchedules — this now checks
-// the shared helper (schedule.ResolveTimezone) that applyScheduleSync
-// delegates to under the hood, via SyncSchedules.
+// Checks schedule.ResolveTimezone as used by applyScheduleSync.
 func TestScheduleTimezoneResolution(t *testing.T) {
 	if loc, err := schedule.ResolveTimezone(""); err != nil || loc != time.UTC {
 		t.Errorf("ResolveTimezone(\"\") = %v, %v; want UTC, nil", loc, err)
@@ -158,11 +151,7 @@ func TestScheduleTimezoneResolution(t *testing.T) {
 	}
 }
 
-// I3 (phase-5 review): no test previously parsed actual wire JSON. This
-// unmarshals a literal envelope using the CANONICAL field names the
-// controller ruling settled on — "every_ms" (not "interval_seconds") and the
-// 0=Sunday..6=Saturday weekday convention (matching the tagged backend proto
-// and Go's own time.Weekday) — and asserts every field lands correctly.
+// Parses a literal wire envelope with the canonical field names.
 func TestScheduleSyncPayload_ParsesCanonicalWireJSON(t *testing.T) {
 	raw := `{
 		"timezone": "Asia/Ho_Chi_Minh",
@@ -262,13 +251,7 @@ func TestScheduleSyncPayload_ParsesCanonicalWireJSON(t *testing.T) {
 	}
 }
 
-// TestBuildScheduleRunReportData_IncludesNextRunAtWhenSet is the CRITICAL-2
-// regression from the final review: fire() computes and persists the next
-// occurrence but, before this fix, never forwarded it onto the schedule.run
-// ack — the web UI's cadence column showed "in 16 hours" until a schedule's
-// first fire and then permanently "now" for the rest of its life
-// (formatCadence.ts treats any non-positive diff as "now"). next_run_at must
-// be present on the wire and parse as RFC3339.
+// next_run_at must be forwarded on the schedule.run ack as RFC3339.
 func TestBuildScheduleRunReportData_IncludesNextRunAtWhenSet(t *testing.T) {
 	next := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
 	rr := schedule.RunReport{
@@ -300,10 +283,7 @@ func TestBuildScheduleRunReportData_IncludesNextRunAtWhenSet(t *testing.T) {
 	}
 }
 
-// TestBuildScheduleRunReportData_OmitsNextRunAtWhenZero covers the two paths
-// that never advance NextRunAt: a failed fire (I5 — must not burn the
-// occurrence) and a manual "Run now" (must not perturb the regular cadence).
-// Neither should fabricate a next_run_at key.
+// A failed fire and a manual "Run now" never advance NextRunAt, so no key.
 func TestBuildScheduleRunReportData_OmitsNextRunAtWhenZero(t *testing.T) {
 	rr := schedule.RunReport{ScheduleID: "s1", Status: "failure", Summary: "boom"}
 

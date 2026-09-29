@@ -8,11 +8,7 @@ import uuid
 logger = logging.getLogger("hal.voice")
 
 def needs_more_time(text: str) -> bool:
-    """Conservative EN/VI hesitation hints, not a semantic classifier.
-
-    Keep fillers in the transcript: removing them before this check loses the
-    speaker's signal that they are still composing their request.
-    """
+    """Conservative EN/VI hesitation hints, not a semantic classifier."""
     words = re.findall(r"[^\W_]+", text.casefold())
     tail = " ".join(words[-5:])
     return bool(re.search(
@@ -30,12 +26,7 @@ def is_greeting(text: str) -> bool:
 
 
 class TurnEndpoint:
-    """One capture's state; the detector itself is shared across captures.
-
-    Only run this after the legacy silence candidate fires. Speech/text/final changes
-    invalidate both provisional completion and an in-flight model result.
-    A bounded timeout also covers a missing, failed or stalled optional model.
-    """
+    """One capture's state; the detector itself is shared across captures."""
 
     def __init__(self, detector, *, fallback_s=2.5, max_pause_s=6.0):
         self.detector = detector
@@ -50,8 +41,6 @@ class TurnEndpoint:
         self.reason = ""
 
     def should_close(self, *, now, last_speech, text, pcm, final_at=0.0):
-        # A final may confirm exactly the preceding partial. It still marks
-        # new evidence: re-evaluate the current audio, not the old prediction.
         key = (last_speech, text, final_at)
         if key != self._key:
             if self._key is not None and final_at != self._key[2]:
@@ -88,8 +77,5 @@ class TurnEndpoint:
         # semantic decision. Incomplete model predictions wait to max_pause_s.
         self.reason = "turn_fallback"
         if self.detector is not None and not self.detector.failed and now - self._candidate_at < 0.5:
-            # Without an STT final the legacy candidate starts at the fallback
-            # deadline itself. Give the asynchronous model one bounded chance
-            # to answer rather than submitting and immediately closing.
             return False
         return silence >= self.fallback_s

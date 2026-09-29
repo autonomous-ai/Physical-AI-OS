@@ -57,7 +57,6 @@ func TestApplyMCPServerWrite_NestsUnderToolsMCPAndEnablesGate(t *testing.T) {
 		t.Errorf("server url = %#v", notion["url"])
 	}
 
-	// Unrelated config is preserved.
 	if _, ok := cfg["channel_list"]; !ok {
 		t.Error("channel_list was dropped")
 	}
@@ -78,7 +77,6 @@ func TestApplyMCPServerWrite_StdioPassthrough(t *testing.T) {
 	if figma["enabled"] != true {
 		t.Errorf("enabled = %#v, want true", figma["enabled"])
 	}
-	// No type key for stdio — picoclaw infers stdio from command.
 	if _, ok := figma["type"]; ok {
 		t.Error("stdio entry should not carry a type key")
 	}
@@ -88,7 +86,7 @@ func TestApplyMCPServerWrite_UpsertAndGateStaysOn(t *testing.T) {
 	cfg := map[string]any{}
 	applyMCPServerWrite(cfg, "notion", map[string]any{"type": "http", "url": "a"})
 	applyMCPServerWrite(cfg, "linear", map[string]any{"type": "http", "url": "b"})
-	applyMCPServerWrite(cfg, "notion", map[string]any{"type": "http", "url": "c"}) // overwrite
+	applyMCPServerWrite(cfg, "notion", map[string]any{"type": "http", "url": "c"})
 
 	servers := mcpServers(t, cfg)
 	if len(servers) != 2 {
@@ -114,7 +112,6 @@ func TestApplyMCPServerRemove(t *testing.T) {
 	if _, ok := servers["linear"]; !ok {
 		t.Error("linear was wrongly removed")
 	}
-	// Gate stays on while another server remains.
 	if cfg["tools"].(map[string]any)["mcp"].(map[string]any)["enabled"] != true {
 		t.Error("tools.mcp.enabled was cleared")
 	}
@@ -125,7 +122,6 @@ func TestApplyMCPServerRemove_AbsentIsNoop(t *testing.T) {
 	if applyMCPServerRemove(map[string]any{}, "notion") {
 		t.Error("remove on empty config returned true")
 	}
-	// tools.mcp.servers present but no such server.
 	cfg := map[string]any{}
 	applyMCPServerWrite(cfg, "linear", map[string]any{"type": "http", "url": "b"})
 	if applyMCPServerRemove(cfg, "notion") {
@@ -160,7 +156,6 @@ func TestRoundTripConfigHelpers(t *testing.T) {
 	if _, ok := mcpServers(t, reloaded)["notion"]; !ok {
 		t.Error("notion missing after round-trip")
 	}
-	// Marshal to confirm the JSON path is exactly tools.mcp.servers.notion.
 	raw, _ := json.Marshal(reloaded)
 	var probe struct {
 		Tools struct {

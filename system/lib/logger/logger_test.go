@@ -120,8 +120,7 @@ type capturedGELF struct {
 	body          string
 }
 
-// gelfCollector records every request so a test can assert where a record went
-// and with which credential.
+// gelfCollector records every request for assertions.
 type gelfCollector struct {
 	*httptest.Server
 	mu   sync.Mutex
@@ -155,9 +154,7 @@ func (c *gelfCollector) received() []capturedGELF {
 	return append([]capturedGELF(nil), c.reqs...)
 }
 
-// initTestLogger runs the real Init with GELF_URL set to gelfEnvURL ("" = the
-// relay path) and returns a func that flushes the sender and restores globals.
-// Records are only guaranteed delivered once that func has run.
+// initTestLogger runs Init with GELF_URL=gelfEnvURL ("" = relay) and returns a flush-and-restore func.
 func initTestLogger(t *testing.T, gelfEnvURL string) func() {
 	t.Helper()
 	t.Setenv("GELF_URL", gelfEnvURL)
@@ -243,8 +240,7 @@ func TestGELFRelayArmsLoggersCreatedBeforeIt(t *testing.T) {
 	collector := newGELFCollector(t)
 	done := initTestLogger(t, "")
 
-	// Package-level loggers are built long before config.json loads, so they
-	// hold handler copies made while the relay was still dormant.
+	// Package-level loggers hold handler copies made before the relay was configured.
 	early := slog.Default().With("component", "early")
 	EnableGELFRelay(collector.URL, "lobster-key")
 	early.Info("from early logger")

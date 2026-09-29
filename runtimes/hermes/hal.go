@@ -22,8 +22,7 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
-// StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only
-// talks to the HAL daemon on the Pi.
+// StartHALVoice starts the HAL voice pipeline.
 func (s *HermesService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
@@ -85,27 +84,11 @@ func (s *HermesService) StopTTS() error {
 	return nil
 }
 
-// Speak says text out loud and nothing else — no agent turn, no session entry,
-// no tokens. See domain.AgentGateway.Speak for the full contract; the only
-// per-runtime difference is the log component, which is why every backend's
-// implementation is this same delegation to hal.Speak.
-//
-// hal.Speak, NOT hal.SpeakReply: SpeakReply sets realtime_feedback so the
-// spoken text is fed back to the realtime voice agent as history, which is
-// right for the agent's own reply and wrong for a canned line the agent never
-// produced. This is the same path hardcoded fillers and system notices take.
-//
-// The returned error means HAL REFUSED THE TEXT (transport failure, or a
-// rejection such as the 1..2000 character bound it enforces without
-// truncating). A nil error means HAL accepted it for playback — not that audio
-// was produced, and certainly not that anyone heard it.
+// Speak says text out loud and nothing else — no agent turn, no session entry, no tokens.
 func (s *HermesService) Speak(text string) error {
-	// Same normalisation the agent's own TTS gets: emoji and markdown read
-	// aloud as noise. It can only ever shorten the string, so it cannot push a
-	// caller-validated length back over HAL's cap.
 	text = stripForTTS(text)
 	if text == "" {
-		return nil // nothing to say; HAL rejects an empty string outright
+		return nil
 	}
 	if err := hal.Speak(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
@@ -120,8 +103,6 @@ func (s *HermesService) SendToHALTTS(text string) error {
 	if text == "" {
 		return nil
 	}
-	// SpeakReply (not Speak): the agent's actual reply, fed back to the realtime
-	// voice agent as history. Hardcoded fillers use hal.Speak so they don't.
 	if err := hal.SpeakReply(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
 	}

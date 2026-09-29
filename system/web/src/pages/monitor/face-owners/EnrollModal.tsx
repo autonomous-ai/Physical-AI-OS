@@ -2,9 +2,7 @@ import type { CSSProperties, RefObject } from "react";
 import { createPortal } from "react-dom";
 import { UserPlus, X, AtSign, Hash, ImagePlus, Loader2 } from "lucide-react";
 
-// Add New User modal. Fully controlled — every enroll* value + setter, the file
-// ref, the preview URL, and the submit handler live in the parent and are passed
-// in, so the enroll logic (handleEnroll, the object-URL effect) stays untouched.
+// Add New User modal.
 export function EnrollModal({
   themeClass,
   enrollName, setEnrollName,
@@ -49,17 +47,12 @@ export function EnrollModal({
         style={{
           width: "min(440px, 100%)", maxHeight: "90vh",
           display: "flex", flexDirection: "column",
-          // Lift the surface above the dark overlay: a slightly lighter base
-          // (--lm-surface) with a soft amber sheen up top, a brighter hairline
-          // border, and a deeper shadow so the modal reads as a raised panel
-          // rather than blending into the scrim.
           background: "linear-gradient(180deg, color-mix(in srgb, var(--lm-amber) 4%, transparent), transparent 130px), var(--lm-surface)",
           border: "1px solid var(--lm-border-hi)",
           borderRadius: 14, boxShadow: "0 24px 64px -20px rgba(0,0,0,0.7), 0 2px 8px rgba(0,0,0,0.4)",
           overflow: "hidden",
         }}
       >
-        {/* Header — title + close, pinned above the scrollable body. */}
         <div style={{
           flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "space-between",
           gap: 12, padding: "16px 18px", borderBottom: "1px solid var(--lm-border)",
@@ -81,7 +74,6 @@ export function EnrollModal({
           </button>
         </div>
       <div style={{ display: "flex", flexDirection: "column", gap: 16, padding: "18px", overflowY: "auto" }}>
-        {/* Name — the only required field, flagged with an amber asterisk. */}
         <div>
           <label htmlFor="enroll-name" style={fieldLabel}>
             Name <span style={{ color: "var(--lm-amber)" }}>*</span>
@@ -97,8 +89,6 @@ export function EnrollModal({
           />
         </div>
 
-        {/* Telegram identity — grouped + labelled optional so it reads as one
-            concern, with icon prefixes to hint each field's meaning. */}
         <div>
           <label style={fieldLabel}>Telegram <span style={{ fontWeight: 400, textTransform: "none", letterSpacing: 0, color: "var(--lm-text-muted)" }}>· optional</span></label>
           <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
@@ -127,9 +117,6 @@ export function EnrollModal({
           </div>
         </div>
 
-        {/* Photo — styled dropzone replacing the raw native file input. Shows
-            a preview thumbnail (with a remove ✕) once a face is chosen, and
-            accepts drag-and-drop. The hidden native input keeps logic intact. */}
         <div>
           <label style={fieldLabel}>
             Photo <span style={{ color: "var(--lm-amber)" }}>*</span>
@@ -184,8 +171,6 @@ export function EnrollModal({
                 color: enrollDragging || enrollFile ? "var(--lm-amber)" : "var(--lm-text-dim)",
               }}
             >
-              {/* Icon chip — gives the dropzone visual weight so it reads as a
-                  real target, not a thin strip. */}
               <span style={{
                 flexShrink: 0, width: 34, height: 34, borderRadius: 8,
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -203,7 +188,6 @@ export function EnrollModal({
                   <span style={{ fontSize: 10.5, color: "var(--lm-text-muted)" }}>or drag it here</span>
                 )}
               </span>
-              {/* Highlighted Browse / Change chip. */}
               <span style={{
                 flexShrink: 0, fontSize: 11, fontWeight: 600, padding: "5px 11px", borderRadius: 7,
                 background: "var(--lm-amber-dim)", border: "1px solid var(--lm-amber-glow)",
