@@ -1,21 +1,4 @@
-"""Piper TTS backend — synthesis on the device, no network, no quota.
-
-Piper is an ONNX voice model driven by a small C++ binary. It runs on this
-board's CPU at roughly 4x realtime, which matters twice over:
-
-  - There is no shared rate limit to queue behind. A cloud provider caps
-    concurrent requests across the whole fleet; here every unit synthesises
-    its own audio, so concurrency scales with units sold and costs nothing.
-  - Time-to-first-audio drops, because the network round trip disappears.
-    That is the number a speaker feels, not total synthesis time.
-
-The trade is quality: Piper is clearly behind a hosted neural voice. It is
-meant as the default voice, with a hosted provider left available for users
-who want the better one.
-
-Install layout (see docs): binary at PIPER_BIN, voices in PIPER_VOICES_DIR as
-<name>.onnx plus the matching <name>.onnx.json.
-"""
+"""Piper TTS backend — synthesis on the device, no network, no quota."""
 
 import json
 import logging
@@ -32,22 +15,12 @@ logger = logging.getLogger("hal.voice.tts")
 
 PIPER_BIN = os.environ.get("HAL_PIPER_BIN", "/opt/piper/piper")
 PIPER_VOICES_DIR = os.environ.get("HAL_PIPER_VOICES", "/opt/piper/voices")
-# Public domain, so shipping it carries no obligation. Kept in step with
-# piper_catalog.DEFAULT_VOICE — lessac, the old value here, is a Blizzard
-# research licence and is deliberately not in the catalogue.
 PIPER_DEFAULT_VOICE = os.environ.get("HAL_PIPER_VOICE", "en_US-ljspeech-medium")
 
-# Piper ships its own espeak-ng and phonemize libraries next to the binary and
-# does not rpath them, so the loader needs pointing at that directory.
 _PIPER_LIB_DIR = os.path.dirname(PIPER_BIN)
 
-# Piper models are 22.05 kHz; the TTS service resamples from whatever a backend
-# reports, so this is read from the model rather than forced to the 24 kHz the
-# hosted providers happen to use.
 _FALLBACK_SAMPLE_RATE = 22050
 
-# Performance tags understood by hosted providers, meaningless to Piper.
-# Mirrors the list in openai.py::_strip_audio_tags.
 _AUDIO_TAG_RE = re.compile(
     r"\[(?:laugh|sigh|whisper|gasp|gulp|nervous|excited|frustrated|sorrowful|calm)[^\]]*\]",
     re.IGNORECASE,
@@ -55,8 +28,7 @@ _AUDIO_TAG_RE = re.compile(
 
 
 def _default_length_scale() -> float:
-    """The length scale the warm spare is spawned with. Guessing wrong only
-    costs a cold start, so it follows the configured speed the service uses."""
+    """The length scale the warm spare is spawned with."""
     try:
         import hal.config as _cfg
         speed = float(getattr(_cfg, "TTS_SPEED", 1.0) or 1.0)
@@ -74,13 +46,7 @@ class PiperTTSBackend(TTSBackend):
         self._default_voice = voice or PIPER_DEFAULT_VOICE
         self._rate_cache: dict = {}
         self._warned_voices: set = set()
-        # Voice of the utterance in flight, so sample_rate reports its rate.
         self._current_voice: str = ""
-        # A pre-spawned process that has already loaded the model and is blocked
-        # on stdin. Loading the 63 MB model costs ~700 ms and measurably
-        # dominated time-to-first-audio for short replies ("Okay." took 775 ms,
-        # of which ~700 was load). Paying it between utterances instead of
-        # during one is the whole trick.
         self._spare: Optional[subprocess.Popen] = None
         self._spare_key: tuple = ()
         self._spare_lock = threading.Lock()
@@ -89,9 +55,6 @@ class PiperTTSBackend(TTSBackend):
                 "Piper TTS backend ready (bin=%s, voice=%s, rate=%dHz)",
                 self._bin, self._default_voice, self.sample_rate,
             )
-            # Warm the first process at construction, off the hot path. Without
-            # this the very first thing the device says pays the model load —
-            # and the first utterance after boot is the one a user judges.
             threading.Thread(
                 target=self._prewarm,
                 args=(self._model_path(self._default_voice), _default_length_scale()),
@@ -103,11 +66,8 @@ class PiperTTSBackend(TTSBackend):
                 self._bin, os.path.exists(self._bin), self._model_path(self._default_voice),
             )
 
-    # ── discovery ────────────────────────────────────────────────────────────
-
     def _model_path(self, voice: str) -> str:
-        """Resolve a voice name to its .onnx. Absolute paths pass through, so a
-        deployment can point at a model outside the managed voices directory."""
+        """Resolve a voice name to its .onnx."""
         voice = (voice or self._default_voice).strip()
         if os.path.isabs(voice):
             return voice
@@ -118,9 +78,7 @@ class PiperTTSBackend(TTSBackend):
     def _any_installed_voice(self) -> str:
         """Any model actually present, newest-installed order not required.
 
-        Used as the last fallback so a device that has *a* voice is never
-        silent. Speaking in the wrong voice is a visible, self-explaining
-        fault; a robot that says nothing reads as broken hardware.
+        Used as the last fallback so a device that has *a* voice is never silent.
         """
         try:
             names = sorted(
@@ -134,12 +92,7 @@ class PiperTTSBackend(TTSBackend):
 
     @property
     def available(self) -> bool:
-        """Binary present, plus at least one voice — not specifically the
-        configured one. The operator can save a voice before its download
-        finishes, or pick one and have the file removed underneath; gating on
-        the exact name would take the whole backend offline, and the service
-        answers that with a 503 that looks like the API died rather than like
-        one missing file."""
+        """Binary present, plus at least one voice — not specifically the configured one."""
         have_bin = (
             (os.path.isfile(self._bin) and os.access(self._bin, os.X_OK))
             or shutil.which(self._bin) is not None
@@ -152,10 +105,7 @@ class PiperTTSBackend(TTSBackend):
         )
 
     def rate_for(self, voice: str = "") -> int:
-        """Sample rate of a specific model. Piper voices are not all 22.05 kHz —
-        the x_low and low tiers are 16 kHz — so reading the default model's rate
-        while speaking a different one would resample against the wrong source
-        and shift the pitch."""
+        """Sample rate of a specific model."""
         model = self._model_path(voice)
         return self._rate_of(model)
 
@@ -171,7 +121,7 @@ class PiperTTSBackend(TTSBackend):
         try:
             with open(model + ".json", "r", encoding="utf-8") as fh:
                 rate = int(json.load(fh)["audio"]["sample_rate"])
-        except Exception as e:  # missing or malformed sidecar
+        except Exception as e:
             logger.warning("Piper: cannot read sample rate from %s.json (%s), assuming %d",
                            model, e, rate)
         self._rate_cache[model] = rate
@@ -179,16 +129,11 @@ class PiperTTSBackend(TTSBackend):
 
     @property
     def volume_boost(self) -> float:
-        """1.0, not the 2.5 the hosted backends use. Piper already peaks at full
-        scale (measured: peak 1.00, RMS 0.13), so any boost is pure clipping —
-        the service multiplies then clips, so 2.5 would flat-top every vowel."""
+        """1.0, not the 2.5 the hosted backends use."""
         return 1.0
 
-    # ── process pool of one ──────────────────────────────────────────────────
-
     def _spawn(self, model_path: str, length_scale: float) -> subprocess.Popen:
-        """Start Piper and let it load the model. It then blocks reading stdin,
-        so the returned process is idle and ready to synthesise immediately."""
+        """Start Piper and let it load the model."""
         env = dict(os.environ)
         if _PIPER_LIB_DIR:
             env["LD_LIBRARY_PATH"] = (
@@ -216,9 +161,9 @@ class PiperTTSBackend(TTSBackend):
             self._spare, self._spare_key = proc, key
 
     def _take_process(self, model_path: str, length_scale: float) -> subprocess.Popen:
-        """Hand out the warm process if it matches, then immediately start its
-        replacement so the next utterance is warm too. Length scale is a command
-        line argument, so a spare is only reusable at the same speed."""
+        """Hand out the warm process if it matches, then immediately start its replacement
+        so the next utterance is warm too.
+        """
         key = (model_path, round(length_scale, 3))
         proc = None
         with self._spare_lock:
@@ -229,8 +174,6 @@ class PiperTTSBackend(TTSBackend):
         threading.Thread(target=self._prewarm, args=key, daemon=True).start()
         return proc
 
-    # ── synthesis ────────────────────────────────────────────────────────────
-
     def stream_pcm(
         self,
         text: str,
@@ -239,15 +182,7 @@ class PiperTTSBackend(TTSBackend):
         speed: float,
         instructions: Optional[str] = None,
     ) -> Iterator[bytes]:
-        """Yield raw PCM int16 chunks as Piper produces them.
-
-        `model` and `instructions` are ignored: a Piper voice IS the model, and
-        there is no prompt channel to style it. `voice` selects the .onnx.
-        """
-        # Strip the ElevenLabs-style performance tags the rest of the stack
-        # emits ("[laugh]", "[whisper]"). A hosted model interprets them; Piper
-        # has no such channel and would read the word "laugh" out loud, which
-        # is exactly how a correct voice comes to sound broken.
+        """Yield raw PCM int16 chunks as Piper produces them."""
         text = _AUDIO_TAG_RE.sub("", (text or "")).strip()
         if not text:
             return
@@ -255,10 +190,6 @@ class PiperTTSBackend(TTSBackend):
         self._current_voice = voice or self._default_voice
         model_path = self._model_path(voice)
         if not os.path.isfile(model_path):
-            # Once per distinct name, not once per utterance. A device
-            # configured with a hosted provider's voice name ("Rachel") hits
-            # this on every sentence, and the warning drowns the log it is
-            # supposed to help with — /var/log is a RAM disk here.
             if voice not in self._warned_voices:
                 self._warned_voices.add(voice)
                 logger.warning("Piper: voice %r not found at %s, using %s instead",
@@ -272,8 +203,6 @@ class PiperTTSBackend(TTSBackend):
             model_path = self._model_path(fallback)
             self._current_voice = fallback
 
-        # Piper expresses tempo as length scale — the inverse of speed. Guard
-        # against a zero or negative speed reaching the process as a divide.
         length_scale = 1.0 / speed if speed and speed > 0 else 1.0
 
         proc = self._take_process(model_path, length_scale)
@@ -294,8 +223,6 @@ class PiperTTSBackend(TTSBackend):
         threading.Thread(target=_drain, daemon=True).start()
 
         try:
-            # One utterance per process: close stdin so Piper knows the input is
-            # complete and flushes the tail of the audio.
             proc.stdin.write(text.encode("utf-8") + b"\n")  # type: ignore[union-attr]
             proc.stdin.close()  # type: ignore[union-attr]
 
@@ -318,8 +245,5 @@ class PiperTTSBackend(TTSBackend):
             except subprocess.TimeoutExpired:
                 proc.kill()
                 proc.wait(timeout=2)
-            # A negative return code means a signal, which here always means we
-            # sent it — barge-in killing a half-spoken sentence, or shutdown
-            # reaping the warm spare. Neither is a fault worth a warning.
             if proc.returncode not in (0, None) and proc.returncode > 0 and stderr_tail:
                 logger.warning("Piper exited %s: %s", proc.returncode, "; ".join(stderr_tail))

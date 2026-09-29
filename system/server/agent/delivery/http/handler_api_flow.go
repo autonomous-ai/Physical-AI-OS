@@ -51,8 +51,7 @@ func readAllJSONLines(path string) ([]string, error) {
 	return lines, nil
 }
 
-// recentFlowFromJSONL reads the last n lines from flow JSONL for a given date (YYYY-MM-DD)
-// and converts them to MonitorEvents.
+// recentFlowFromJSONL converts the last n flow lines for date (YYYY-MM-DD) to MonitorEvents.
 func recentFlowFromJSONL(day string, n int, channelName string) []domain.MonitorEvent {
 	path := filepath.Join("local", fmt.Sprintf("flow_events_%s.jsonl", day))
 	lines, err := readAllJSONLines(path)
@@ -60,7 +59,6 @@ func recentFlowFromJSONL(day string, n int, channelName string) []domain.Monitor
 		return nil
 	}
 
-	// Take last n lines
 	if len(lines) > n {
 		lines = lines[len(lines)-n:]
 	}
@@ -101,11 +99,7 @@ func (h *AgentHandler) FlowEvents(c *gin.Context) {
 }
 
 // MoodHistory returns mood-relevant sensing events for music suggestion context.
-// Query params:
-//
-//	user=<name>            (default: current user)
-//	date=YYYY-MM-DD        (default today)
-//	last=<n>               (default 100, max 500)
+// Query: user (default current user), date=YYYY-MM-DD (default today), last=n (default 100, max 500).
 func (h *AgentHandler) FlowStream(c *gin.Context) {
 	c.Header("Content-Type", "text/event-stream")
 	c.Header("Cache-Control", "no-cache")
@@ -147,7 +141,6 @@ func (h *AgentHandler) FlowStream(c *gin.Context) {
 func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 	evType := "flow_" + string(fe.Kind)
 
-	// Promote well-known nodes to their own event type for turn grouping
 	switch fe.Node {
 	case "sensing_input":
 		if fe.Kind == "enter" {
@@ -168,7 +161,6 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 		summary += fmt.Sprintf(" (%dms)", fe.DurationMs)
 	}
 
-	// Build summary from data for well-known nodes
 	if fe.Node == "sensing_input" && fe.Kind == "enter" && fe.Data != nil {
 		if msg, ok := fe.Data["message"].(string); ok {
 			typ, _ := fe.Data["type"].(string)
@@ -179,23 +171,13 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 		source, _ := fe.Data["source"].(string)
 		msg, _ := fe.Data["message"].(string)
 		if source == "channel" {
-			// If the flow event names its channel explicitly, honor that —
-			// GetConfiguredChannel is a single-string global fallback, so on a
-			// device with multiple channels enabled (e.g. Telegram token still
-			// present from an earlier setup + BlueBubbles now active) it can
-			// mis-label a BlueBubbles turn as [telegram]. See intern-v2 20.159:
-			// Telegram token remained after adding iMessage, so every iMessage
-			// turn rendered as TELEGRAM in the Flow panel.
+			// Prefer the event's explicit channel: GetConfiguredChannel is a single global
+			// fallback that mislabels turns on multi-channel devices (intern-v2 20.159).
 			if perEventChannel, _ := fe.Data["channel"].(string); perEventChannel != "" {
 				channelName = perEventChannel
 			}
-			// Label routing mirrors handler_events.go goroutine:
-			//  1. sender filled → "[telegram:Gray]" (real channel user)
-			//  2. message is device-internal prefix → "[voice]" / "[emotion]"
-			//     / ... (sensing or voice event the device posted via chat.send
-			//     that OpenClaw merged into a UUID host turn via steer)
-			//  3. otherwise fall back to channelName (or "[…]" when no msg
-			//     yet — first emit before chat.history goroutine returns)
+			// Label: sender → "[telegram:Gray]"; device-internal prefix → "[voice]"/...;
+			// otherwise channelName (mirrors handler_events.go).
 			sender, _ := fe.Data["sender"].(string)
 			switch {
 			case sender != "":
@@ -215,8 +197,7 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 				summary = "[chat]"
 			}
 		} else {
-			// system/user: caller already encodes its label inside message
-			// (e.g. "[system] Bạn vừa thức dậy..."), so don't double-wrap.
+			// system/user messages already carry their label; don't double-wrap.
 			label := source
 			if label == "" {
 				label = channelName
@@ -246,8 +227,7 @@ func flowEventToMonitor(fe flow.Event, channelName string) domain.MonitorEvent {
 }
 
 // FlowLogs serves the daily flow JSONL log file for download.
-// Query params: ?date=YYYY-MM-DD (default today); ?last=N (optional) — if set, only the last N lines
-// are returned (same tail as GET /openclaw/flow-events?last=N). Omit ?last for the full day file.
+// Query: date=YYYY-MM-DD (default today), last=N (optional tail; omit for the full file).
 func (h *AgentHandler) FlowLogs(c *gin.Context) {
 	date := c.Query("date")
 	if date == "" {

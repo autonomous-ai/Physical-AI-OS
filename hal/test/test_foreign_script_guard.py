@@ -18,7 +18,6 @@ def test_english_kept():
 
 
 def test_matching_language_kept():
-    # A Vietnamese device may speak Vietnamese; a Japanese device Japanese.
     assert not reply_is_foreign_script("Đúng vậy nhé", "Vietnamese")
     assert not reply_is_foreign_script("こんにちは", "Japanese")
 

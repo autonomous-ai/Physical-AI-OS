@@ -78,13 +78,11 @@ requests.post(f"{HAL}/led/off")
 
 ### Distribution
 
-Plugins install from any git URL — HuggingFace Spaces, GitHub, GitLab, Gitea,
-or self-hosted repos:
+Plugins install from any git URL — GitHub, GitLab, Gitea, a Hugging Face
+Space repo, or self-hosted repos. There is no in-app plugin store today (see
+*Web UI* below):
 
 ```bash
-# Install from HuggingFace
-POST /api/plugin/install {"url": "https://huggingface.co/spaces/user/my-plugin"}
-
 # Install from GitHub
 POST /api/plugin/install {"url": "https://github.com/user/my-plugin"}
 
@@ -97,7 +95,6 @@ POST /api/plugin/install {"url": "https://git.example.com/my-plugin.git"}
 All endpoints require admin authentication.
 
 ```
-GET    /api/plugin/browse        — discover community plugins (proxies HuggingFace Spaces API)
 POST   /api/plugin/install       — clone git repo, create venv, generate systemd unit
 GET    /api/plugin               — list installed plugins with status
 POST   /api/plugin/:name/start   — start plugin (systemctl start)
@@ -105,12 +102,18 @@ POST   /api/plugin/:name/stop    — stop plugin (systemctl stop)
 DELETE /api/plugin/:name         — uninstall (stop + remove files + systemd unit)
 ```
 
+`GET /api/plugin/browse` (a Hugging Face Spaces proxy for the
+`autonomous-os-plugin` tag) is **parked, not registered** (#213): the handler is
+commented out in `system/server/plugin/delivery/http/handler.go` and the route in
+`system/server/server.go`, pending a `plugins` collection in the OS's own catalog.
+
 ### Systemd Integration
 
 Each plugin runs as a systemd service (`os-plugin-<name>.service`):
 
 - `Restart=on-failure` — automatic crash recovery
-- `MemoryMax=256M` — resource limits on constrained devices
+- `MemoryMax=256M` — memory limit on constrained devices (the only resource
+  limit in the generated unit, `system/plugin/service.go` `writeSystemdUnit`)
 - `WorkingDirectory` set to plugin dir
 - `HAL_URL` env var injected
 
@@ -119,23 +122,24 @@ Each plugin runs as a systemd service (`os-plugin-<name>.service`):
 **Settings > Plugins** tab provides:
 - **Installed** — list of installed plugins with status (running/stopped/failed),
   Start/Stop/Uninstall controls
-- **Browse** — discover community plugins from HuggingFace Spaces tagged
-  `autonomous-os-plugin`, one-click install. Backend proxies HF API to avoid
-  CORS (`GET /api/plugin/browse`)
-- **Install from URL** — paste any git URL for non-HF plugins (GitHub, GitLab, etc.)
+- **Install from URL** — paste any git URL (GitHub, GitLab, etc.)
+
+The former **Browse** pane (Hugging Face Spaces discovery) is parked with the
+browse endpoint (#213) and not rendered (`system/web/src/pages/settings/PluginsSection.tsx`).
 
 ## Roadmap
 
-### v1 — Pipeline + Store (implemented)
+### v1 — Pipeline (implemented)
 
 Git URL → venv → systemd unit → HAL HTTP. Full plugin lifecycle:
-- Install from any git URL (HuggingFace, GitHub, GitLab, etc.)
+- Install from any git URL (GitHub, GitLab, Hugging Face, etc.)
 - systemd lifecycle (start/stop/restart on crash)
-- Plugin store — browse community plugins from HuggingFace Spaces
-  (`autonomous-os-plugin` tag), one-click install
-- Manual URL install for non-HF plugins
-- Web UI management (Installed / Browse / Install from URL)
-- Plugin template on HuggingFace for community forking
+- Web UI management (Installed / Install from URL)
+- Plugin template in `integrations/community-apps/plugin-template/`
+
+The Hugging Face Spaces plugin store (browse + one-click install) was a
+prototype and is parked (#213); plugin discovery is planned to move to the OS's
+own catalog next to skills.
 
 ### v2 — SDK + Agent Integration
 
@@ -170,12 +174,12 @@ Git URL → venv → systemd unit → HAL HTTP. Full plugin lifecycle:
 - **Trust model: local execution = full trust.** Installing a plugin means
   trusting its author. Same model as Pollen's app ecosystem.
 - Plugins access HAL via HTTP — no direct filesystem access to HAL internals
-- systemd resource limits (`MemoryMax`, `CPUQuota`) prevent resource exhaustion
+- systemd `MemoryMax=256M` caps plugin memory (no `CPUQuota` is set today)
 - Future: container/seccomp sandboxing if ecosystem scales
 
 ## Template
 
-Fork `integrations/plugin-template/` to start building. It contains a working
+Fork `integrations/community-apps/plugin-template/` to start building. It contains a working
 hello-world plugin with LED + voice demo.
 
 ## References
@@ -184,4 +188,4 @@ hello-world plugin with LED + voice demo.
 - HAL API routes: `hal/routes/`
 - Device capabilities: `robots/contract/capabilities.md`
 - Plugin template: `integrations/community-apps/plugin-template/`
-- HuggingFace template: https://huggingface.co/spaces/autonomous-os/autonomous-os-hello-robot
+- Former Hugging Face template (prototype, from the parked store): https://huggingface.co/spaces/autonomous-os/autonomous-os-hello-robot

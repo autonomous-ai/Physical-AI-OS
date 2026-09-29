@@ -6,8 +6,7 @@ import (
 	"path/filepath"
 )
 
-// atomicWrite writes data to path via a temp file + rename so a crash mid-write
-// never leaves a truncated config file. Mirrors the pattern in hermes/mcp.go.
+// atomicWrite writes data via temp file + rename so a crash never leaves a truncated config.
 func atomicWrite(path string, data []byte, perm os.FileMode) error {
 	dir := filepath.Dir(path)
 	if err := os.MkdirAll(dir, 0o755); err != nil {

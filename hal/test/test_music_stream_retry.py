@@ -1,10 +1,4 @@
-"""Regression tests for retrying a music stream that dies right after starting.
-
-A 403 on the YouTube media URL leaves yt-dlp with nothing to pipe, but ffmpeg
-limps along on the partial buffer: it survives the start probe and only exits a
-second or two later. That is still a startup failure and must be retried — it
-used to be misread as a track that ended on its own.
-"""
+"""Regression tests for retrying a music stream that dies right after starting."""
 
 import io
 import time
@@ -36,10 +30,7 @@ class _FakeProc:
 
 
 def _service(monkeypatch, attempts):
-    """MusicService whose stream attempts are driven by `attempts`.
-
-    Each entry is (ffmpeg_rc, alive_s) for one _start_stream call.
-    """
+    """MusicService whose stream attempts are driven by `attempts`."""
     monkeypatch.setattr(music_service, "MUSIC_RETRY_BACKOFF_S", 0.01)
     logged = []
     monkeypatch.setattr(
@@ -55,7 +46,7 @@ def _service(monkeypatch, attempts):
         rc, alive_s = attempts[len(starts)]
         starts.append(audio_url)
         svc._ffmpeg_proc = _FakeProc(rc=rc, alive_s=alive_s, stderr=b"Invalid data")
-        svc._ytdlp_proc = _FakeProc(rc=1)  # yt-dlp died on the 403
+        svc._ytdlp_proc = _FakeProc(rc=1)
         svc._aplay_proc = _FakeProc(rc=0)
         return True
 
@@ -64,7 +55,7 @@ def _service(monkeypatch, attempts):
 
 
 def _run(svc):
-    svc._lock.acquire()  # play() normally holds the lock for the whole run
+    svc._lock.acquire()
     svc._play_sync("some song")
 
 
@@ -89,8 +80,7 @@ def test_all_attempts_dying_early_reports_error(monkeypatch):
 
 
 def test_death_after_real_playback_is_not_retried(monkeypatch):
-    """A stream that played through the failure window is a real end, not a
-    startup failure — restarting the song from the top would be worse."""
+    """A stream that played past the failure window is not restarted."""
     svc, starts, logged = _service(monkeypatch, attempts=[(1, 0.2), (0, 0.3)])
     monkeypatch.setattr(music_service, "MUSIC_STREAM_FAIL_S", 0.05)
 

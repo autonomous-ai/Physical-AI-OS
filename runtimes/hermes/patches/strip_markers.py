@@ -1,14 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently patch /usr/local/lib/hermes-agent/gateway/platforms/bluebubbles.py
-to strip Hermes internal markers (tool call syntax, turn notices, format-fail
-prefixes) from the outgoing message body before it is sent to BlueBubbles.
-
-Isolated to bluebubbles.py so ONLY iMessage channel is affected — Telegram,
-Slack, Discord etc. call their own send() methods in their own plugin files
-and are not touched.
-
-Idempotent: reruns of this script no-op once the marker `_STRIP_HERMES_MARKERS_APPLIED`
-is present."""
+"""Idempotently patch bluebubbles.py to strip Hermes internal markers from outgoing message bodies."""
 import ast
 import re
 import sys
@@ -73,7 +64,6 @@ def _strip_hermes_internal_markers(text: str) -> str:
     return out
 '''
 
-# ---- 1. read current file ------------------------------------------------
 if not TARGET.exists():
     print(f"NOT_FOUND: {TARGET}", file=sys.stderr)
     sys.exit(2)
@@ -83,17 +73,12 @@ if MARKER in src:
     print("ALREADY_PATCHED")
     sys.exit(0)
 
-# ---- 2. locate the `async def send(` method's format_message line --------
-# We inject a strip call right after `text = self.format_message(content)`.
 send_line_re = re.compile(r'(\n        text = self\.format_message\(content\)\n)')
 if not send_line_re.search(src):
     print("SEND_ANCHOR_NOT_FOUND — plugin layout changed, refusing to patch", file=sys.stderr)
     sys.exit(3)
 
-# ---- 3. insert strip helper at module top-of-code (after imports) --------
-# Find last `import` line, insert helper after that block.
 lines = src.split('\n')
-# AST end positions preserve parenthesized imports and future imports.
 imports = [node for node in ast.parse(src).body
            if isinstance(node, (ast.Import, ast.ImportFrom))]
 insert_at = max((node.end_lineno for node in imports), default=0)
@@ -103,10 +88,6 @@ if not insert_at:
 new_lines = lines[:insert_at] + [STRIP_FUNC] + lines[insert_at:]
 src2 = '\n'.join(new_lines)
 
-# ---- 4. inject the strip call inside send() -----------------------------
-# Match the exact line so we insert the strip call immediately after it, before
-# the `if not text` guard. If the strip empties the text, the guard catches it
-# and we return the same "requires text" error path — consistent with today.
 patched = re.sub(
     r'(\n        text = self\.format_message\(content\)\n)',
     r'\1        text = _strip_hermes_internal_markers(text)\n',
@@ -117,7 +98,6 @@ if patched == src2:
     print("STRIP_INJECTION_FAILED", file=sys.stderr)
     sys.exit(5)
 
-# ---- 5. atomic write ----------------------------------------------------
 compile(patched, str(TARGET), "exec")
 tmp = TARGET.with_suffix('.py.tmp')
 tmp.write_text(patched)

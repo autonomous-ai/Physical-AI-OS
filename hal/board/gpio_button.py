@@ -15,7 +15,7 @@ class ButtonInputConfig:
     name: str = "primary"
     behavior: str = "standard"
     hold_s: float = 5.0
-    # Standard buttons only: False keeps a 10s+ hold at shutdown (device has a dedicated reset button).
+    # False keeps a 10s+ hold at shutdown (device has a dedicated reset button).
     factory_reset: bool = True
 
 
@@ -67,10 +67,9 @@ def _board_buttons(values):
 
 
 def load_button_configs(device_dir: str, board_id: str) -> list[ButtonInputConfig]:
-    """Load one or more inputs; absent file/board keeps exactly one legacy button.
+    """Load one or more inputs; absent file/board keeps one legacy button.
 
-    GPIO lines are chip-relative offsets, not physical header pin numbers.
-    The shared driver uses pull-up and active-low wiring.
+    GPIO lines are chip-relative offsets (pull-up, active-low).
     """
     fallback = [ButtonInputConfig(PROFILES[board_id].button)]
     path = Path(device_dir) / "gpio_button.json"

@@ -14,9 +14,7 @@ type runExpiry struct {
 
 var _ domain.RunExpirer = (*HermesService)(nil)
 
-// ExpireRun targets an existing native run without creating a model turn or
-// representing an OS deadline as a user stop. Terminal cleanup remains owned by
-// the managed reader and emits lifecycle.error after bounded remote settlement.
+// ExpireRun targets an existing native run without creating a model turn or representing an OS deadline as a user stop.
 func (s *HermesService) ExpireRun(ctx context.Context, runID, reason string) error {
 	if runID == "" || reason == "" {
 		return errors.New("run expiry requires run ID and reason")
@@ -45,8 +43,6 @@ func expireManagedOwner(active *managedTurn, request runExpiry) error {
 	if err := request.ctx.Err(); err != nil {
 		return err
 	}
-	// A newer web request can share the original audible owner. Check both the
-	// owner and latest admitted request so an old deadline cannot stop new work.
 	if active == nil || active.owner != request.runID || len(active.requests) == 0 || active.requests[len(active.requests)-1].runID != request.runID {
 		return errors.New("run expiry refused: requested run is no longer the active owner")
 	}

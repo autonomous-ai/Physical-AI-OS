@@ -17,51 +17,32 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// Pairing-flow tunables. Mirrors lobster `lib/openclaw/pairing.go`.
+// Pairing-flow tunables.
 const (
 	whatsappPairingTimeout = 90 * time.Second
 	whatsappPairingMaxQRs  = 5
 	whatsappQRTTL          = 20 * time.Second
-	// whatsappPostPairSyncDelay is how long we wait after the CLI prints
-	// "✅ Linked" before emitting `success`. Baileys' post-pair sync (pre-keys,
-	// history, contacts, presence) runs in the openclaw daemon AFTER the login
-	// CLI exits and is not visible to us — so we approximate "messages ready"
-	// with this fixed delay. Empirically 5 minutes covers the worst case.
+	// whatsappPostPairSyncDelay is how long we wait after the CLI prints "✅ Linked" before emitting `success`.
 	whatsappPostPairSyncDelay = 5 * time.Minute
 
-	// whatsappPluginPackage is the npm package name for the externalized
-	// WhatsApp plugin (used on openclaw 2026.5.x+; earlier bundled releases
-	// already ship the channel and `plugins enable` succeeds directly).
+	// whatsappPluginPackage is the npm package for the externalized WhatsApp plugin (openclaw 2026.5.x+).
 	whatsappPluginPackage = "@openclaw/whatsapp"
 
-	// discordPluginPackage / slackPluginPackage / whatsappPluginPackage above are
-	// the BASE npm names for the externalized channel plugins (slack/discord are
-	// external on openclaw 2026.5.x+; only telegram is stock). ensureChannelPlugin
-	// pins the install to the running gateway version at runtime (see below), so
-	// these stay version-less here — the version is resolved from GetOpenClawVersion()
-	// to match what provisioning installs (`@openclaw/<chan>@<version>`), avoiding
-	// both a stale hardcoded pin (downgrade) and an unpinned `latest` (upgrade skew).
+	// Base npm names for externalized channel plugins; ensureChannelPlugin pins the version to the running gateway.
 	discordPluginPackage = "@openclaw/discord"
 	slackPluginPackage   = "@openclaw/slack"
 
-	// channelPluginInstallTimeout bounds enable+install of a channel plugin when
-	// invoked outside an existing request context (the setup path). Enable is
-	// instant when the plugin is already provisioned; the budget covers a cold
-	// npm install on a device that is missing it.
+	// channelPluginInstallTimeout bounds enable+install of a channel plugin when invoked outside an existing request context (the setup path).
 	channelPluginInstallTimeout = 5 * time.Minute
 )
 
-// Per-process mutex: only one pairing flow runs at a time. The CLI binds
-// Baileys to a single session; concurrent invocations race over openclaw.json
-// and the credentials dir.
+// Per-process mutex: only one pairing flow runs at a time.
 var (
 	whatsappPairingMu     sync.Mutex
 	whatsappPairingActive bool
 )
 
-// HasWhatsappSession reports whether a Baileys session exists on disk for the
-// given account. Empty account resolves to "default". Used to skip pairing
-// when the gateway can auto-resume an existing link.
+// HasWhatsappSession reports whether a Baileys session exists on disk for the given account.
 func (s *OpenclawService) HasWhatsappSession(account string) bool {
 	if account == "" {
 		account = "default"
@@ -71,14 +52,7 @@ func (s *OpenclawService) HasWhatsappSession(account string) bool {
 	return err == nil && info.Size() > 0
 }
 
-// PairWhatsapp runs `openclaw channels login --channel whatsapp` and emits
-// PairingEvents on the returned channel. The channel is closed once the
-// subprocess exits or the wall-clock cap fires. At most one pairing flow may
-// be active; concurrent calls return a one-event channel containing
-// PairingStatusFailure with error "pairing_already_in_progress".
-//
-// Caller MUST drain the channel; goroutine writes are buffered (capacity 8)
-// but will block once buffer fills.
+// PairWhatsapp runs `openclaw channels login --channel whatsapp` and emits PairingEvents on the returned channel.
 func (s *OpenclawService) PairWhatsapp(ctx context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 8)
 
@@ -105,9 +79,7 @@ func (s *OpenclawService) PairWhatsapp(ctx context.Context) <-chan domain.Pairin
 	return ch
 }
 
-// runPairingProcess spawns the login CLI, scans its stdout for QR blocks and
-// terminal markers, and emits PairingEvents. Returns when the subprocess exits
-// or the context is cancelled.
+// runPairingProcess spawns the login CLI, scans its stdout for QR blocks and terminal markers, and emits PairingEvents.
 func (s *OpenclawService) runPairingProcess(ctx context.Context, ch chan<- domain.PairingEvent) {
 	runCtx, cancel := context.WithTimeout(ctx, whatsappPairingTimeout)
 	defer cancel()
@@ -136,12 +108,6 @@ func (s *OpenclawService) runPairingProcess(ctx context.Context, ch chan<- domai
 
 	err := <-waitErr
 	if linked {
-		// CLI confirmed QR scan, but Baileys' post-pair sync (pre-keys,
-		// history, contacts) still runs in the openclaw daemon for some time
-		// after the CLI exits. Wait a fixed window before declaring success
-		// so the operator sees `success` only when WhatsApp messages can
-		// actually be sent. Use the parent ctx (not runCtx, bounded by the
-		// QR-scan timeout) so the post-scan delay isn't truncated.
 		select {
 		case <-time.After(whatsappPostPairSyncDelay):
 		case <-ctx.Done():
@@ -161,10 +127,7 @@ func (s *OpenclawService) runPairingProcess(ctx context.Context, ch chan<- domai
 	}
 }
 
-// scanPairingStdout reads lines from the CLI process and emits intermediate
-// PairingEvents (pairing_qr, intermediate timeouts on QR overflow). Returns
-// true when the CLI prints "✅ Linked" — the caller is then responsible for
-// waiting out the Baileys post-pair sync before emitting `success`.
+// scanPairingStdout reads lines from the CLI process and emits intermediate PairingEvents (pairing_qr, intermediate timeouts on QR overflow).
 func scanPairingStdout(r io.Reader, ch chan<- domain.PairingEvent) bool {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, 0, 64*1024), 1<<20)
@@ -218,7 +181,6 @@ func scanPairingStdout(r io.Reader, ch chan<- domain.PairingEvent) bool {
 }
 
 // isQRLine reports whether a line is a row of the QR ASCII rendering.
-// Heuristic: only the four block runes Baileys uses ('█' '▀' '▄' ' '), length ≥30.
 func isQRLine(line string) bool {
 	if len(line) < 30 {
 		return false
@@ -234,9 +196,7 @@ func isQRLine(line string) bool {
 	return true
 }
 
-// runOpenclawCLI shells out to the openclaw CLI and surfaces stdout/stderr in
-// the error message. Used for `channels add`, `plugins install`, `plugins
-// enable` from the WhatsApp add_channel path.
+// runOpenclawCLI shells out to the openclaw CLI and surfaces stdout/stderr in the error message.
 func runOpenclawCLI(ctx context.Context, args ...string) error {
 	cmd := exec.CommandContext(ctx, "openclaw", args...)
 	out, err := cmd.CombinedOutput()
@@ -250,18 +210,7 @@ func runOpenclawCLI(ctx context.Context, args ...string) error {
 	return nil
 }
 
-// ensureChannelPlugin enables a channel's openclaw plugin, installing it first
-// when enable fails (the externalized-plugin model on openclaw 2026.5.x+).
-// Enable is cheap when the plugin is already present (provisioned via OTA), so
-// this is a no-op fast path on healthy devices and a self-heal on devices that
-// are missing the plugin. Generalizes the WhatsApp add path so Slack/Discord
-// reuse the same idiom.
-//
-// basePkg is the version-less npm name (e.g. "@openclaw/slack"); the install is
-// pinned to the running gateway version (GetOpenClawVersion) so it matches what
-// provisioning installs (`@openclaw/<chan>@<version>`) — avoiding a `latest`
-// that is newer than the gateway. Falls back to the unpinned name only when the
-// version is unknown (probe failed).
+// ensureChannelPlugin enables a channel's openclaw plugin, installing it first when enable fails (the externalized-plugin model on openclaw 2026.5.x+).
 func ensureChannelPlugin(ctx context.Context, channel, basePkg string) error {
 	if err := runOpenclawCLI(ctx, "plugins", "enable", channel); err == nil {
 		return nil
@@ -280,13 +229,10 @@ func ensureChannelPlugin(ctx context.Context, channel, basePkg string) error {
 	return nil
 }
 
-// applyWhatsappChannelConfig overlays the canonical channels.whatsapp block
-// onto the map produced by `openclaw channels add` (which seeds defaults like
-// accounts.default, mediaMaxMb). Pre-existing keys are preserved.
+// applyWhatsappChannelConfig overlays the canonical channels.whatsapp block onto the map produced by `openclaw channels add` (which seeds defaults like accounts.default, mediaMaxMb).
 func applyWhatsappChannelConfig(whatsappMap map[string]any, userID string) {
 	whatsappMap["enabled"] = true
 	if userID == "" {
-		// ValidateChannel rejects this, but stay defensive.
 		whatsappMap["dmPolicy"] = "pairing"
 		return
 	}

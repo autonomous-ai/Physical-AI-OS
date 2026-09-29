@@ -15,5 +15,5 @@ def test_wake_focus_route(monkeypatch):
     assert grant_wake_focus("boot_greeting")["status"] == "ok"
     voice.grant_wakeword_focus.assert_called_with("boot_greeting")
 
-    voice.grant_wakeword_focus.return_value = False  # wake word off / timeout 0
+    voice.grant_wakeword_focus.return_value = False
     assert grant_wake_focus()["status"] == "skipped"

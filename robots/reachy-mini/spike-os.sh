@@ -1,32 +1,6 @@
 #!/usr/bin/env bash
-# spike-os.sh — install os-server on a Reachy Mini.
-#
-# RUNS ON THE ROBOT. Pulls the `os-server` component from OTA metadata, seeds a
-# minimal config, and runs it under systemd.
-#
-# This used to cross-compile the Go binary on a Mac and scp it over. That was
-# wrong twice: it required a Go toolchain and the repo on the developer's
-# machine, and it shipped whatever happened to be in someone's working tree —
-# not what the fleet runs, so a bug reproduced here said nothing about the
-# build anyone else had. Everything now comes from the OTA feed, the same
-# source the imager and scripts/provision/setup.sh read.
-#
-# Why root + WorkingDirectory=/root: config.Load reads the RELATIVE path
-# config/config.json (system/server/config/config.go), so /root is what makes it
-# /root/config/config.json — the same file HAL reads through OS_CONFIG_PATH.
-# Running from anywhere else silently splits the two services onto different
-# configs. The logger also writes /var/log/os-server.log, which needs root.
-#
-# The web UI is a separate step: os-server binds 127.0.0.1:5000 and serves no
-# static files. Until spike-web.sh installs nginx, reach the API from the robot
-# itself, or tunnel it:
-#
-#   ssh -L 5000:localhost:5000 pollen@reachy-mini.local
-#
-# Usage:
-#   sudo bash spike-os.sh              # install + start
-#   sudo bash spike-os.sh --stop
-#   sudo bash spike-os.sh --uninstall  # stop + remove the unit and binary
+# spike-os.sh — install os-server on a Reachy Mini from OTA (runs on the robot).
+# Usage: sudo bash spike-os.sh [--stop|--uninstall]
 set -euo pipefail
 
 SPIKE_TAG="spike-os"
@@ -49,7 +23,6 @@ ensure_root "$@"
 if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   say "Stopping os-server"
   stop_unit "$SERVICE"
-  # Legacy path: earlier versions of this script ran os-server in tmux.
   tmux kill-session -t os 2>/dev/null || true
   pkill -f "$BIN_DIR/os-server" 2>/dev/null || true
   if [ "$UNINSTALL" = "1" ]; then
@@ -64,31 +37,13 @@ if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
 fi
 
 say "1/4  Seed $CONFIG_DIR (config.json + bootstrap.json)"
-# bootstrap.json before os-server starts, not at the bootstrap step: os-server
-# reads OTAMetadataURL from that file and nowhere else, and the agent runtimes'
-# skill watchers take the URL from it to fetch skills. Start os-server without
-# it and skills stay empty — silently, since an unset URL is treated as "not
-# provisioned yet" rather than an error. See ensure_bootstrap_config.
+# bootstrap.json must exist before os-server starts: it is the only source of OTAMetadataURL.
 ensure_bootstrap_config
-# Minimal config: the only fail-loud startup guard is device_type (server.go:
-# "device_type unresolved … refusing to assume 'lamp'"). The rest the web setup
-# flow fills in. Never overwrite an existing config — it holds provisioning
-# state, keys and channels.
-#
-# openclaw_config_dir must be seeded explicitly. A key absent from config.json
-# does NOT pick up the Default() value in system/server/config/config.go — Load
-# and ProvideConfig unmarshal onto a zero-valued struct, so a missing key means
-# the empty string, not /root/.openclaw. Every gateway-token read is
-# filepath.Join(OpenclawConfigDir, "openclaw.json"), which with an empty dir
-# resolves to the RELATIVE "openclaw.json" → /root/openclaw.json under
-# WorkingDirectory=/root. That path never exists, so the token is never found,
-# the agent websocket reconnects every 5s forever and WaitForAgentReady never
-# returns. It fails silently: the join yields a valid path, just the wrong one.
+# Never overwrite an existing config (provisioning state). openclaw_config_dir must be explicit:
+# a missing key unmarshals to "" rather than Default(), so the gateway token is never found.
 mkdir -p "$CONFIG_DIR"
 if [ -f "$CONFIG_DIR/config.json" ]; then
-  # Backfill only the missing key. Configs seeded by earlier runs of this script
-  # carry the same hole, so "keep what is there" alone would leave this robot
-  # broken even after a re-run.
+# Backfill configs seeded by earlier runs that lack the key.
   if jq -e 'has("openclaw_config_dir") and .openclaw_config_dir != ""' \
       "$CONFIG_DIR/config.json" >/dev/null 2>&1; then
     info "config.json already present — keeping it"
@@ -113,10 +68,7 @@ JSON
 fi
 
 say "2/4  Check the AP-mode hazard before enabling at boot"
-# os-server calls SwitchToAPMode() at startup whenever set_up_completed is false
-# (system/server/config_watch.go). On a provisioned image that tears down the
-# WiFi station — over SSH that means losing the robot until someone attaches a
-# keyboard. Refuse rather than find out after the reboot.
+# os-server switches to AP mode at startup when setup is incomplete, which drops WiFi/SSH.
 if grep -q '"set_up_completed"[[:space:]]*:[[:space:]]*true' "$CONFIG_DIR/config.json" 2>/dev/null; then
   info "set_up_completed=true — no AP switch at boot"
 elif [ -x /usr/local/bin/device-ap-mode ]; then

@@ -65,7 +65,7 @@ xóa nó.
 system/web/
 ├── src/
 │   ├── pages/
-│   │   ├── Monitor.tsx        # Dashboard monitor (file chính)
+│   │   ├── monitor/           # Dashboard monitor (index.tsx = khung + polling; mỗi section một file)
 │   │   └── ...                # Các trang setup
 │   ├── components/
 │   │   └── ui/                # shadcn/ui components
@@ -313,7 +313,7 @@ sẽ cấu hình thiết bị trỏ tới model nó không nạp được.
 
 ## 4. Polling & Data Sources
 
-Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST seed + stream live.
+Monitor poll API system/HW của section đang mở mỗi **5 giây** (`usePolling` trong `system/web/src/pages/monitor/index.tsx`; `GET /api/agent/status` ở sidebar chạy mỗi 10 giây, và một số card tự poll theo nhịp riêng). Flow được cấp dữ liệu bởi stream live theo file (`GET /api/agent/flow-stream`), mỗi frame là snapshot đầy đủ của 500 event mới nhất.
 
 ### 4.1 OS Server (Go, port 5000, prefix `/api`)
 
@@ -322,33 +322,34 @@ Monitor poll API system/HW mỗi **3 giây**. Flow dùng hybrid theo file: REST 
 | `GET /api/system/info` | CPU load, RAM (KB), nhiệt độ, uptime, goroutines, version, deviceId, capabilities (tên các capability đã khai báo — cả Monitor lẫn trang Edit/Settings đều ẩn/hiện tab phần cứng theo danh sách này; xem hook dùng chung `useCapabilities`) |
 | `GET /api/system/network` | SSID, IP, public IP, Tailscale IP, signal (dBm), internet (bool), pingMs (RTT của probe internet, 0 = chưa đo) |
 | `GET /api/agent/status` | tên runtime đang active, connected (bool), sessionKey (bool), version, emotion, uptime (uptime kết nối runtime phía OS server, giây), agentUptime (uptime tiến trình runtime khi runtime cung cấp, giây — không reset khi OS server restart). Hàng Agent trong card Versions probe phiên bản CLI bất đồng bộ và retry khi boot tạm thời lỗi. |
-| `GET /api/agent/recent` | Các flow event mới nhất từ JSONL của ngày hiện tại (`local/flow_events_<date>.jsonl`) |
-| `GET /api/agent/flow-events?date=YYYY-MM-DD&last=500` | API flow theo file dùng cho seed/history của Flow |
-| `GET /api/agent/flow-stream` | Stream live theo file (SSE) khi JSONL thay đổi |
+| `GET /api/agent/recent` | 500 flow event cuối từ JSONL của ngày hiện tại (`local/flow_events_<date>.jsonl`) |
+| `GET /api/agent/flow-events?date=YYYY-MM-DD&last=500` | API flow theo file (`last` mặc định 500, tối đa 10000); dùng để seed history cho section Chat |
+| `GET /api/agent/flow-stream` | Stream live theo file (SSE): mỗi lần JSONL đổi, gửi 500 event mới nhất dưới dạng một snapshot đầy đủ; section Flow thay toàn bộ danh sách event bằng snapshot đó |
 | `GET /api/agent/events` | SSE từ monitor bus, giữ để tương thích |
 | `POST /api/agent/restart` | Recovery "start + enable + restart": backend gọi best-effort `systemctl enable <unit>` (để fix vẫn còn sau reboot) rồi gọi `RestartAgent()` của runtime (chạy `systemctl restart <unit>` — start nếu đang stopped). Là nút icon restart nhỏ ở góc phải-dưới card Agent Gateway. |
-| `POST /api/system/force-update` | Kích hoạt kiểm tra OTA qua bootstrap worker (proxy tới `localhost:8080/force-check`) |
 | `GET /api/system/ota-versions` | Trả `{current, target, min_version, update_available, held_by_floor}` cho từng component (proxy bootstrap `/versions`, gồm device profile đang cài từ `devices.<device_type>`, kèm alias `agent` cho CLI của runtime đang chạy). Card Versions hiện nút `update` ở mọi chỗ `update_available` = true (`held_by_floor` vẫn được trả về nhưng KHÔNG dùng để quyết định nút: nút cài bản đã publish lên chính máy này, giống `software-update <key>` qua SSH, còn sàn chỉ dùng để staging rollout tự động) |
 | `GET /api/system/ota-updating` | Các component worker đang cài ngay lúc này (`{updating: [...]}`, kèm alias `agent`). Cố ý làm rẻ — không fetch metadata — vì card Versions poll nó mỗi 2 giây trong lúc cài và hiện `updating…` ở dòng đó thay cho nút |
-| `POST /api/system/software-update/:target` | Kiểm tra OTA cho một component. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn; `device` cài profile `devices.<device_type>` đã resolve. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw`) để trình duyệt không cần biết runtime nào; `hermes` trả 400 (không pin được nên bootstrap không bao giờ auto-apply). Giới hạn 1 lần / target / 30 giây |
+| `POST /api/system/software-update/:target` | Cài OTA cho một component (trigger OTA duy nhất từ web; os-server gọi bootstrap `POST localhost:8080/force-update/<target>`). `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap tự cập nhật bằng cách chạy installer nền, nên có thể restart worker thay thế an toàn; `device` cài profile `devices.<device_type>` đã resolve. **`agent` là target ảo** — os-server tự phân giải sang CLI của runtime đang chạy (`codex`/`claudecode`/`opencode`/`picoclaw` hoặc `hermes`) để trình duyệt không cần biết runtime nào. Hermes nằm trong allowlist, nhưng dòng của nó chỉ có nút `update` khi entry metadata đã pin theo commit (entry chưa pin không được `/versions` báo về). Giới hạn 1 lần / target / 30 giây |
 | `POST /api/system/reboot` | Request reboot cần admin auth. OS server trả `202` trước, rồi gọi action reboot có cue của HAL. |
 | `POST /api/system/shutdown` | Request shutdown cần admin auth. OS server trả `202` trước, rồi gọi action shutdown có cue và release servo của HAL. |
 
 > **Lưu ý format**: OS server API trả `{ status: 1, data: <payload>, message: null }` khi thành công.
 
-### 4.2 HAL (Python/FastAPI, port 5001, prefix `/hw`)
+### 4.2 HAL (Python/FastAPI, port 5001, qua os-server `/api/hardware/*`)
+
+Web UI không bao giờ gọi nginx `/hw/*`: mọi request tới HAL đi qua reverse proxy có bảo vệ admin của os-server `/api/hardware/<path>` (`HW` trong `system/web/src/pages/monitor/types.ts`), proxy này chuyển tiếp tới HAL `:5001/<path>` qua loopback. Ở các phần khác của tài liệu, `/hw/<path>` chỉ cùng route HAL đó.
 
 | Endpoint | Dữ liệu |
 |----------|---------|
-| `GET /hw/health` | Trạng thái 8 hardware: servo, led, camera, audio, sensing, voice, tts, display |
-| `GET /hw/presence` | state, enabled, seconds_since_motion |
-| `GET /hw/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
-| `GET /hw/servo` | available_recordings, current, bus_connected, robot_connected |
-| `POST /hw/servo/upload` | Upload recording CSV (`timestamp` + cột `<joint>.pos`) để thêm/replace animation |
-| `GET /hw/display` | mode, hardware, available_expressions |
-| `GET /hw/audio/volume` | control, volume (0–100) |
-| `GET /hw/voice/mic-level` | SSE stream (~10Hz): level (RMS mic nói, thang int16), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (mic tiếng ồn — mẫu SoundPerception gần nhất, null khi sensing tắt), tts_speaking / music_playing (trạng thái phát live — audio card tắt "Speaking…/Playing music" theo stream thay vì đợi poll status 5s) |
-| `GET /hw/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
+| `GET /api/hardware/health` | Trạng thái 8 hardware: servo, led, camera, audio, sensing, voice, tts, display |
+| `GET /api/hardware/presence` | state, enabled, seconds_since_motion |
+| `GET /api/hardware/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
+| `GET /api/hardware/servo` | available_recordings, current, bus_connected, robot_connected |
+| `POST /api/hardware/servo/upload` | Upload recording CSV (`timestamp` + cột `<joint>.pos`) để thêm/replace animation |
+| `GET /api/hardware/display` | mode, hardware, available_expressions |
+| `GET /api/hardware/audio/volume` | control, volume (0–100) |
+| `GET /api/hardware/voice/mic-level` | SSE stream (~10Hz): level (RMS mic nói, thang int16), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (mic tiếng ồn — mẫu SoundPerception gần nhất, null khi sensing tắt), tts_speaking / music_playing (trạng thái phát live — audio card tắt "Speaking…/Playing music" theo stream thay vì đợi poll status 5s) |
+| `GET /api/hardware/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
 
 ---
 
@@ -504,7 +505,6 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 - **Web** (teal): inject lúc build từ `package.json` qua Vite `define` (`__WEB_VERSION__`)
 - **OS server** (amber): từ `GET /api/system/info` → field `version` (Go ldflags)
 - **HAL** (blue): từ `GET /api/system/info` → field `halVersion`. OS server tự gọi `:5001/version` của HAL qua loopback mỗi phút 1 lần (cache) rồi re-expose qua API của OS server, browser không cần truy cập trực tiếp `/hw/*` (nginx chặn `/hw/` chỉ cho loopback).
-- **Force Update** button: gọi `POST /api/system/force-update` → bootstrap kiểm tra OTA. Hiện "Checking…" khi đang xử lý, sau đó "Triggered"/"Failed" trong 3 giây.
 
 ### 5.3 System Section
 
@@ -515,7 +515,7 @@ Dưới nav items và trạng thái OpenClaw, sidebar hiển thị version của
 
 **CPU History / RAM History** — Sparkline chart (area + line):
 - Lưu 60 điểm lịch sử (`HISTORY_LEN = 60`)
-- Cập nhật mỗi 3 giây
+- Cập nhật mỗi 5 giây
 
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
@@ -534,12 +534,10 @@ Flow feed hybrid theo file:
 
 Mỗi event hiển thị: type badge, phase (nếu có), runId (8 ký tự đầu), timestamp, summary text, error (nếu có).
 
-- Load ban đầu/history qua `GET /api/agent/flow-events`.
-- Update live qua `GET /api/agent/flow-stream` (SSE bắn khi file đổi).
-- Chỉ fallback poll 2 giây khi stream bị ngắt.
+- Cả load ban đầu lẫn update live đều đến từ `GET /api/agent/flow-stream` (SSE bắn khi file đổi); mỗi frame là snapshot đầy đủ của 500 event mới nhất và thay thế danh sách. Stream chỉ mở khi section Flow hoặc Chat đang active và đóng khi tab bị ẩn; không có poll fallback.
 - Turn/event hiển thị được suy ra hoàn toàn từ JSONL flow log.
 
-**Turn Pipeline (SVG)** — `FlowDiagram` trong `system/web/src/pages/Monitor.tsx`. Bố cục đầy đủ (ba vùng OS server / HAL / OpenClaw, lưới cột OpenClaw, Cron thuộc OS server, hàng HAL thẳng Tool, bảng tọa độ) nằm trong **`docs/flow-monitor.md`**; tóm tắt tiếng Việt: **`docs/vi/flow-monitor_vi.md`**.
+**Turn Pipeline (SVG)** — `FlowDiagram` trong `system/web/src/pages/monitor/FlowSection/FlowDiagram.tsx`. Bố cục đầy đủ (ba vùng OS server / HAL / OpenClaw, lưới cột OpenClaw, Cron thuộc OS server, hàng HAL thẳng Tool, bảng tọa độ) nằm trong **`docs/flow-monitor.md`**; tóm tắt tiếng Việt: **`docs/vi/flow-monitor_vi.md`**.
 
 Hành vi gom nhóm Turn Pipeline:
 - Turn vẫn bắt đầu từ các event input/trigger (`sensing_input`, `chat_input`, `schedule_trigger`, ...).
@@ -559,19 +557,18 @@ Hành vi gom nhóm Turn Pipeline:
 - Header Flow Panel dùng icon Lucide nhất quán (brand `Hexagon`, `Summary→ClipboardList`, `Canvas→LayoutDashboard`, `Bundle→PackageOpen`, `Full day→CalendarDays`, `Clear→Trash2`) — không còn emoji.
 - **Chip current-user** — khi thiết bị nhận diện một người đã enroll, chip header hiển thị **tên + ảnh khuôn mặt** của người đó (ảnh enroll đầu tiên qua `GET /face/photo/<label>/<file>`, poll `/face/owners` mỗi 30s để map tên→tên file); khi `unknown` hoặc ảnh thiếu/lỗi thì fallback về icon Lucide `UserRound` chung chung. Tên lấy từ `GET /identity/current-user` (poll mỗi 5s), **không** phải `/face/current-user`: endpoint đó chỉ trả lời "camera đang thấy ai", nên chip bị trống mỗi khi không có ai trong khung hình — và trống vĩnh viễn trên thiết bị không có camera — kể cả ngay sau khi speaker-ID vừa nhận ra một người đã enroll. HAL giải theo thứ tự face-rồi-voice, nên chip hiển thị user từ khuôn mặt bất cứ khi nào camera có người, và người vừa nói trong các trường hợp còn lại. Giá trị là nhãn đã chuẩn hoá (`long`), nên `capitalize` của chip và việc tra ảnh hoạt động y hệt nhau cho cả hai giác quan — tiền tố `Speaker - ` trong transcript không bao giờ lọt tới đây. Tooltip cho biết danh tính đến từ giác quan nào (*nhìn thấy* hay *nghe thấy*).
 - Header Flow Panel: `↓ Bundle`, `full day`, `🗑 Log`.
-- `↓ Bundle` = **một lần bấm tải hai file**: JSONL server (fetch + blob, `flow-logs?last=500`) và JSON snapshot trong browser (`events` + `groupIntoTurns` → `lamp_flow_ui_snapshot_*.json`).
+- `↓ Bundle` = **một lần bấm tải hai file**: JSONL server (fetch + blob, `GET /api/agent/flow-logs?last=10000`; server kẹp `last` về 2000 nên file là `flow_<date>_last2000.jsonl`) và JSON snapshot trong browser (`events` + `groupIntoTurns` → `flow_ui_snapshot_*.json`).
 - `full day` = cả file JSONL trong ngày.
 - Nút `🗑 Log` sẽ hỏi xác nhận trước, gọi `DELETE /api/agent/flow-logs` để truncate flow log, rồi xóa events đang hiển thị trong Flow UI.
 - **Modal Filters** (`FlowSection/FiltersModal.tsx`) — header của danh sách turn chỉ giữ ô tìm kiếm text và nút **Filters** (gắn badge `Filters · N` với số nhóm filter đang bật). Bấm nút mở một modal căn giữa chứa toàn bộ bộ lọc: **Sources** (quick-toggle Mic / Cam / Btn / CH / Web / Cron / Sys, kèm Dropped khi có), **Sort** (Newest / Oldest / Slowest / Fastest / ↑↓ Tokens), **Sub-types** (toggle theo từng type kèm shortcut All-on / Enable-all), và **Time range** (preset nhanh Last 15m / 1h / 6h / Today, cùng hai pill From/To có nhãn và icon đồng hồ nối bằng mũi tên; native `<input type="time">` được bỏ chrome qua `.lm-time-input` và bound đang bật sẽ tô màu amber). Footer có **Reset all** và **Done**. Modal được render bên trong cây FlowSection (dưới `.lm-root`) nên token `--lm-*` hoạt động ở cả dark và light mode; đóng bằng click overlay, nút ✕, **Done**, hoặc `Esc`. Mọi state filter nằm ở `FlowSection/index.tsx` và truyền vào qua props, nên việc mở/đóng không bao giờ reset filter.
 - **Icon Lucide cho sub-types** — các chip source và sub-type dùng icon Lucide (`TYPE_LUCIDE` trong `FlowSection/types.ts`, ví dụ `voice→Mic`, `cmd→Mic2`, `motion→Eye`, `activity→Activity`, `voice_emo→Speech`, `emotion→Smile`, `web→Monitor`, `sys→Settings`) thay cho emoji, kế thừa `currentColor` và độ mờ on/off của chip.
-- Danh sách Turn history: hiển thị **tất cả turn** trong ngày (mới nhất ở trên), suy ra từ **10 000 event** cuối — đủ cho cả ngày hoạt động bình thường.
-- Bộ nhớ event của Flow được giới hạn 10 000 events.
+- Danh sách Turn history: hiển thị tất cả turn (mới nhất ở trên) suy ra từ các event đang có trong bộ nhớ — tức 500 event mới nhất mà flow stream gửi, không phải cả ngày (dùng **`full day`** để xem cả ngày).
+- Bộ nhớ event của Flow được giới hạn `FLOW_EVENTS_MAX` = 10 000 event, nhưng snapshot của stream chỉ có 500 nên thực tế không chạm tới giới hạn này.
 - Heuristic ghép turn Telegram: nếu turn Telegram fallback (không có text input thật) đứng ngay trước turn có output agent trong vòng 30 giây, Monitor sẽ ghép thành 1 turn để câu trả lời đi cùng input Telegram.
 
 ### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream từ `GET /hw/camera/stream` (downscaled + throttled; mặc định ~10fps, ~320px chiều ngang). Thẻ `<img>` remount bằng kết nối mới (cache-buster `streamEpoch` tăng lên) mỗi khi camera chuyển sang enabled — qua nút Enable hoặc auto-enable phát hiện bởi polling — nên video live trở lại ngay, khỏi refresh trang. Lỗi stream xảy ra ngay sau enable (loop capture của HAL cần ~1-2s để có frame đầu) không bị latch: nó tự retry sau khoảng trễ ngắn tới khi load được frame.
-- **Display Eyes (GC9A01)**: Snapshot màn hình tròn 1.28" từ `GET /hw/display/snapshot`, hiển thị dạng hình tròn với amber glow. Có nút Refresh.
 - **Camera Snapshot**: Ảnh tĩnh từ `GET /hw/camera/snapshot`, có nút Capture để chụp mới.
 
 ### 5.6 Logs Section
@@ -633,14 +630,14 @@ Dropdown **New** cũng có **Create with Agent**. Chọn mục này sẽ đóng 
 
 **Catalog skill (Browse skills)**
 
-Catalog là public read API của `bff-web-service` (`agent-skills-public-api.md`), được bọc phía device bởi `system/server/agent/delivery/http/handler_skills.go`. Cả hai chặng đều đi qua os-server, không bao giờ từ browser — cùng lý do với `GET /api/plugin/browse`: khỏi CORS và host catalog nằm phía server. Base URL mặc định `https://apiv2.autonomous.ai`, override bằng `SKILL_STORE_BASE_URL`; mọi call upstream đều kèm header `location: en-US` mà middleware của catalog bắt buộc.
+Catalog là public read API của `bff-web-service` (`agent-skills-public-api.md`), được bọc phía device bởi `system/server/agent/delivery/http/handler_skills.go`. Cả hai chặng đều đi qua os-server, không bao giờ từ browser — cùng lý do với `GET /api/plugin/browse` (hiện đang tạm gác, bị comment trong `system/server/server.go`): khỏi CORS và host catalog nằm phía server. Base URL mặc định `https://apiv2.autonomous.ai`, override bằng `SKILL_STORE_BASE_URL`; mọi call upstream đều kèm header `location: en-US` mà middleware của catalog bắt buộc.
 
 | Endpoint device | Upstream | Ghi chú |
 |-----------------|----------|---------|
 | `GET /api/agent/skills/browse` | `GET /api/v1/agent-skills` | Forward `keyword` / `category_id` / `plan` / `page` / `limit`. `status` **cố ý không** forward — upstream không phân biệt được "chưa set" với `0`, gửi lên là lọc mất listing. Trả `{data: [Skill], total}` (`domain.StoreSkillList`). |
 | `GET /api/agent/skills/bundle?id=<id>` | `GET /api/v1/agent-skills/:id/download` | Tải file `.skill` về thư mục temp, unzip tại đó, rồi trả `domain.SkillBundle` — danh sách file kèm nội dung UTF-8 inline. Thư mục temp bị xoá trước khi ghi response: đây là **preview**, không cài gì cả. |
 
-Catalog trả lỗi nghiệp vụ dưới dạng **HTTP 200 với `status` khác 1**, nên proxy kiểm tra status trong envelope chứ không chỉ nhìn HTTP code, và đẩy message upstream ra thành `502`. Id đi bằng query param thay vì path segment để route không đụng route tĩnh anh em `skills/browse`.
+Catalog trả lỗi nghiệp vụ dưới dạng **HTTP 200 với `status` khác 1**, nên proxy kiểm tra status trong envelope chứ không chỉ nhìn HTTP code, và đẩy message upstream ra thành `502`. Id đi bằng query param thay vì path segment để route không đụng route tĩnh anh em `/api/agent/skills/browse`.
 
 Phần giải nén được siết: chặn zip-slip (bất kỳ entry `..` hoặc absolute nào cũng làm hỏng cả bundle), lọc `.DS_Store` / `__MACOSX/`, và giới hạn 16 MB mỗi archive, 2 MB mỗi file, 512 KB inline text (file dài hơn bị đánh dấu `truncated`), 500 file. Entry không phải UTF-8 trả về với cờ `binary`, chỉ có metadata.
 
@@ -794,7 +791,7 @@ def get_led_color():
 
 ---
 
-## 7. Reusable Components (nội bộ Monitor.tsx)
+## 7. Reusable Components (`system/web/src/pages/monitor/components.tsx`)
 
 | Component | Mô tả |
 |-----------|-------|

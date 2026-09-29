@@ -18,41 +18,35 @@ import (
 )
 
 const (
-	// wifiInterface is the WiFi NIC. Use it only for genuinely WiFi-specific
-	// operations — scanning, association, SSID/link readout, wpa_supplicant.
-	// It is NOT "the interface the device reaches the network through": a device
-	// on ethernet routes through eth0/end0 and wlan0 may hold no address at all.
-	// Use PrimaryInterface() for anything address- or reachability-related.
+	// wifiInterface is the WiFi NIC, for WiFi-specific operations only;
+	// use PrimaryInterface() for address/reachability.
 	wifiInterface = "wlan0"
 
-	// Network monitor: after N consecutive ping failures, set LED to WorkingNoInternet.
-	// Use forgiving timeouts/counts so brief WiFi hiccups don't flip to no-internet.
+	// Network monitor: forgiving timeouts so brief WiFi hiccups don't flip to no-internet.
 	networkMonitorPingTarget    = "8.8.8.8"
 	networkMonitorFailsRequired = 5
 	networkMonitorInterval      = 5 * time.Second
 	networkMonitorPingTimeout   = 3 * time.Second
 )
 
-// Service provides network scan, current network, and setup. When wifiManager is non-nil (production Pi),
-// it uses iw for scan and delegates current/setup to the wifi manager (no NetworkManager).
+// Service provides WiFi scan, current network, setup and connectivity monitoring.
 type Service struct {
 	config   *config.Config
 	networks []domain.Network
 
-	// network monitor state (guarded by networkMonitorMu)
 	networkMonitorMu          sync.Mutex
 	networkMonitorConsecutive int
 
-	// connectivity callbacks; set once by StartNetworkMonitor before the goroutine starts.
+	// Set once by StartNetworkMonitor before the goroutine starts.
 	onConnectivityLost     func()
 	onConnectivityRestored func()
 
-	// Serialize recovery with explicit provisioning and reset operations.
+	// Serializes recovery with provisioning and reset operations.
 	operationMu sync.Mutex
 	recovery    wifiRecovery
 }
 
-// ProvideService returns a network service. Pass nil for wifiManager when not using WiFi manager (e.g. dev with NM).
+// ProvideService returns a network service.
 func ProvideService(config *config.Config) *Service {
 	return &Service{
 		config:   config,
@@ -60,7 +54,7 @@ func ProvideService(config *config.Config) *Service {
 	}
 }
 
-// ListNetworks returns visible WiFi networks. When using wifi manager, runs iw dev wlan0 scan (STA mode only).
+// ListNetworks returns visible WiFi networks (STA mode only).
 func (s *Service) ListNetworks() ([]domain.Network, error) {
 	return s.listNetworksIW()
 }
@@ -83,9 +77,7 @@ func (s *Service) listNetworksIW() ([]domain.Network, error) {
 
 var (
 	reBSS = regexp.MustCompile(`BSS ([0-9a-f:]+)`)
-	// Anchor with ^ so we match only "SSID: ..." lines, not "HESSID: ..." (802.11u
-	// metadata) which contains the substring "SSID:" and was overwriting the real
-	// SSID with the BSSID for routers that broadcast HESSID.
+	// Anchored so "HESSID:" lines don't match.
 	reSSID   = regexp.MustCompile(`^SSID: (.+)`)
 	reSignal = regexp.MustCompile(`signal: ([\d.-]+)`)
 	reTxRate = regexp.MustCompile(`tx bitrate:\s*([\d.]+)\s*MBit/s`)
@@ -93,13 +85,7 @@ var (
 	reInet   = regexp.MustCompile(`inet (\d+\.\d+\.\d+\.\d+)`)
 )
 
-// decodeIWSSIDEscape reverses the byte-escape format that `iw` (and wpa_cli)
-// emit for SSIDs containing non-printable / non-ASCII bytes — required for
-// Chinese (UTF-8 3-byte chars) and other non-Latin SSIDs. iw prints those
-// bytes as `\xNN` and leading/trailing space as `\ `; printable ASCII passes
-// through unchanged. Without decoding, the scan list shows literal `\xE4...`
-// and the post-connect SSID comparison in SetupNetwork fails byte-equality
-// even when WiFi associated correctly.
+// decodeIWSSIDEscape decodes iw/wpa_cli `\xNN` and `\ ` escapes to raw SSID bytes.
 func decodeIWSSIDEscape(s string) string {
 	if !strings.Contains(s, `\`) {
 		return s
@@ -155,9 +141,7 @@ func parseIWScan(out string) []domain.Network {
 			current.channel = 0
 			continue
 		}
-		// First SSID line wins per BSS block; defensive guard against any other
-		// future SSID-prefixed line (e.g. nested Neighbor Report fields) that
-		// might match after the real SSID.
+		// First SSID line wins per BSS block.
 		if m := reSSID.FindStringSubmatch(line); len(m) > 1 && current.ssid == "" {
 			current.ssid = decodeIWSSIDEscape(strings.TrimSpace(m[1]))
 			continue
@@ -186,14 +170,8 @@ func parseIWScan(out string) []domain.Network {
 	return list
 }
 
-// PrimaryInterface returns the interface carrying the default route — "end0"/"eth0"
-// when the device is on ethernet, "wlan0" when it is on WiFi. When several default
-// routes exist (both links up), `ip route show default` lists them by ascending
-// metric, so the first line is the one traffic actually takes.
-//
-// Falls back to the WiFi interface when there is no default route at all, which is
-// exactly the AP-mode case: wlan0 then holds the AP's own 192.168.100.1 and callers
-// already recognise that address as "still provisioning".
+// PrimaryInterface returns the default-route interface (lowest metric), or wlan0
+// when there is none (AP mode).
 func PrimaryInterface() string {
 	out, err := exec.Command("ip", "route", "show", "default").Output()
 	if err != nil {
@@ -205,10 +183,8 @@ func PrimaryInterface() string {
 	return wifiInterface
 }
 
-// parseDefaultRouteIface pulls the device name out of `ip route show default`
-// output, e.g. "default via 192.168.1.1 dev end0 proto dhcp src 192.168.1.50
-// metric 202". Returns the first line's device — with both links up the kernel
-// prints the lowest-metric (actually used) route first. Empty when no route.
+// parseDefaultRouteIface returns the device of the first `ip route show default` line.
+// Example: "default via 192.168.1.1 dev end0 ..." -> "end0"
 func parseDefaultRouteIface(out string) string {
 	for _, line := range strings.Split(out, "\n") {
 		fields := strings.Fields(line)
@@ -221,11 +197,7 @@ func parseDefaultRouteIface(out string) string {
 	return ""
 }
 
-// GetCurrentIP returns the IPv4 address of the interface the device actually
-// reaches the network through (see PrimaryInterface), or empty string if none.
-// Not hardcoded to wlan0: a device provisioned over ethernet has no wlan0 address,
-// and reporting "" there would blind the web UI's post-setup redirect, the status
-// reporter's LocalIP and buddy pairing.
+// GetCurrentIP returns the IPv4 address of PrimaryInterface, or "".
 func (s *Service) GetCurrentIP() (string, error) {
 	iface := PrimaryInterface()
 	cmd := exec.Command("ip", "-4", "addr", "show", iface)
@@ -240,7 +212,7 @@ func (s *Service) GetCurrentIP() (string, error) {
 	return "", nil
 }
 
-// CurrentNetwork returns the currently connected network using iwgetid -r wlan0.
+// CurrentNetwork returns the currently connected WiFi network.
 func (s *Service) CurrentNetwork() (*domain.Network, error) {
 	ssid := ReadCurrentSSID()
 	if ssid == "" {
@@ -259,10 +231,7 @@ func (s *Service) CurrentNetwork() (*domain.Network, error) {
 	}, nil
 }
 
-// readCurrentLink parses `iw dev <iface> link` for the associated AP's
-// signal strength (dBm) and tx bitrate (Mbps, rounded). Returns (0, 0) when
-// the interface is not associated or parsing fails — callers treat 0 as
-// "unknown". Single shell-out keeps the two values consistent.
+// readCurrentLink returns signal (dBm) and tx bitrate (Mbps); (0, 0) when unknown.
 func readCurrentLink() (signal int, linkRate int) {
 	out, err := exec.Command("iw", "dev", wifiInterface, "link").Output()
 	if err != nil {
@@ -280,23 +249,13 @@ func readCurrentLink() (signal int, linkRate int) {
 	return signal, linkRate
 }
 
-// ReadCurrentSSID resolves the current SSID via a fallback chain — iwgetid
-// alone has been observed to return empty on some Pi images even with an
-// active connection (driver / utility version skew). Try the most direct
-// tool first, then fall back to iw and wpa_cli so the polling loop in
-// SetupNetwork can confirm the association without timing out. Exported so the
-// system.info MQTT probe reuses the same chain instead of calling iwgetid alone.
+// ReadCurrentSSID returns the current SSID via iwgetid, then iw, then wpa_cli.
 func ReadCurrentSSID() string {
 	if out, err := exec.Command("iwgetid", "-r", wifiInterface).Output(); err == nil {
 		if s := strings.TrimSpace(string(out)); s != "" {
 			return s
 		}
 	}
-	// `iw dev <iface> link` lines like:
-	//   Connected to aa:bb:...
-	//   SSID: Glinks
-	// Non-ASCII bytes come back as `\xNN` escapes — decode so the value
-	// matches the raw UTF-8 the user typed (e.g. Chinese SSIDs).
 	if out, err := exec.Command("iw", "dev", wifiInterface, "link").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
@@ -307,8 +266,6 @@ func ReadCurrentSSID() string {
 			}
 		}
 	}
-	// `wpa_cli -i <iface> status` lines include `ssid=Glinks`. wpa_cli
-	// uses the same `\xNN` escape format as iw for non-printable bytes.
 	if out, err := exec.Command("wpa_cli", "-i", wifiInterface, "status").Output(); err == nil {
 		for _, line := range strings.Split(string(out), "\n") {
 			line = strings.TrimSpace(line)
@@ -322,11 +279,10 @@ func ReadCurrentSSID() string {
 	return ""
 }
 
-// rePingTime extracts the round-trip time from ping's reply line
-// ("64 bytes from 8.8.8.8: icmp_seq=1 ttl=117 time=23.4 ms").
+// rePingTime extracts the RTT from a ping reply line.
 var rePingTime = regexp.MustCompile(`time=([0-9.]+) ms`)
 
-// CheckInternet pings 8.8.8.8. Unchanged.
+// CheckInternet pings 8.8.8.8.
 func (s *Service) CheckInternet() (bool, error) {
 	if _, err := s.pingRTT(); err != nil {
 		return false, fmt.Errorf("connected but no internet: ping 8.8.8.8 failed: %w", err)
@@ -334,17 +290,13 @@ func (s *Service) CheckInternet() (bool, error) {
 	return true, nil
 }
 
-// CheckInternetRTT is CheckInternet plus the measured round-trip time in ms
-// (0 when the reply line couldn't be parsed). One ping serves both answers, so
-// callers that want latency don't pay a second probe.
+// CheckInternetRTT is CheckInternet plus the RTT in ms (0 if unparsed).
 func (s *Service) CheckInternetRTT() (ok bool, rttMs float64) {
 	rtt, err := s.pingRTT()
 	return err == nil, rtt
 }
 
-// pingRTT runs the single-shot internet probe and parses the reply's time=
-// value. Returns rtt 0 with nil error when the ping succeeded but the output
-// didn't match (BusyBox/locale variants) — reachability still counts.
+// pingRTT runs one probe; rtt 0 with nil error when output didn't parse.
 func (s *Service) pingRTT() (float64, error) {
 	out, err := exec.Command("ping", "-c", "1", "-W", "5", "8.8.8.8").CombinedOutput()
 	if err != nil {
@@ -357,7 +309,7 @@ func (s *Service) pingRTT() (float64, error) {
 	return 0, nil
 }
 
-// pingNetworkMonitor runs a short ping with networkMonitorPingTimeout. Used by network monitor only.
+// pingNetworkMonitor runs a short ping for the network monitor.
 func (s *Service) pingNetworkMonitor(target string) bool {
 	sec := int(networkMonitorPingTimeout.Seconds())
 	if sec < 1 {
@@ -367,10 +319,8 @@ func (s *Service) pingNetworkMonitor(target string) bool {
 	return cmd.Run() == nil
 }
 
-// StartNetworkMonitor runs the network monitor loop in a goroutine. Call only when in STA mode (after setup).
-// After networkMonitorFailsRequired consecutive failures, onLost is called (if non-nil).
-// When internet is restored after a confirmed outage, onRestored is called (if non-nil).
-// Exits when ctx is cancelled.
+// StartNetworkMonitor runs the monitor loop until ctx ends; call only in STA mode.
+// onLost fires after consecutive failures, onRestored after a confirmed outage.
 func (s *Service) StartNetworkMonitor(ctx context.Context, onLost, onRestored func()) {
 	s.onConnectivityLost = onLost
 	s.onConnectivityRestored = onRestored
@@ -396,7 +346,7 @@ func (s *Service) runNetworkMonitorTick(ctx context.Context) {
 	if ctx.Err() != nil {
 		return
 	}
-	// First-time setup and factory reset own the network until setup completes.
+	// Setup and factory reset own the network until setup completes.
 	if !s.config.SetUpCompleted {
 		s.networkMonitorMu.Lock()
 		s.networkMonitorConsecutive = 0
@@ -445,9 +395,7 @@ func wifiReconnectSkipReason(configuredSSID, primaryIface string) string {
 	return ""
 }
 
-// ResetNetwork resets the network to the default state (clears credentials and writes minimal
-// wpa_supplicant config). Restarts wpa_supplicant so it reloads the empty config and disconnects;
-// if already in AP mode (wpa_supplicant masked), restart may fail and is ignored.
+// ResetNetwork clears credentials, writes a minimal wpa_supplicant config and restarts it.
 func (s *Service) ResetNetwork() error {
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
@@ -458,8 +406,7 @@ func (s *Service) ResetNetwork() error {
 	_ = os.Remove(wpaSupplicantConf)
 	minimal := "ctrl_interface=DIR=/run/wpa_supplicant\nupdate_config=1\ncountry=US\nfast_reauth=1\nap_scan=1"
 	_ = os.WriteFile(wpaSupplicantConf, []byte(minimal), 0600)
-	// Restart wpa_supplicant so it reloads the config and disconnects from WiFi.
-	// Ignore error: when in AP mode, wpa_supplicant is masked and restart fails.
+	// Restart fails in AP mode (service masked); ignore.
 	_ = exec.Command("systemctl", "restart", "wpa_supplicant@wlan0").Run()
 	return s.config.Save()
 }
@@ -474,20 +421,12 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 	if ssid == "" {
 		return false, fmt.Errorf("ssid is required")
 	}
-	// 802.11 caps SSID at 32 bytes. Counted in bytes, not chars — 1 Chinese
-	// UTF-8 char = 3 bytes, so an SSID that "looks" short can still overflow.
-	// Without this check, wpa_supplicant silently rejects the config and the
-	// 60s polling loop returns a generic "no internet or SSID did not match"
-	// error that's nearly impossible to debug from the web UI.
+	// 802.11 caps SSID at 32 bytes (not chars).
 	if n := len(ssid); n > 32 {
 		return false, fmt.Errorf("ssid too long: %d bytes, max 32 (802.11 limit)", n)
 	}
 
-	// Fast path: re-running setup with the SAME ssid+password we're already
-	// connected to. connect-wifi rewrites wpa_supplicant.conf and restarts
-	// the service even when the config wouldn't change, which costs a 6-10s
-	// disconnect window and floods the polling loop with "does not match"
-	// debug logs. Skip the disruption when nothing actually needs to change.
+	// Fast path: skip reconnecting when ssid+password are unchanged.
 	if password == s.config.NetworkPassword {
 		if cur, _ := s.CurrentNetwork(); cur != nil && cur.SSID == ssid {
 			if ok, _ := s.CheckInternet(); ok {
@@ -513,14 +452,11 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		return false, fmt.Errorf("connect-wifi: %w: %s", err, string(out))
 	}
 	slog.Debug("connect-wifi output", "component", "network", "output", string(out))
-	// Wait up to 60s for internet and matching SSID
 	success := false
 	for i := 0; i < 60; i++ {
 		slog.Debug("checking internet", "component", "network", "attempt", i)
-		// Check internet
 		if ok, _ := s.CheckInternet(); ok {
 			slog.Debug("internet ok", "component", "network", "attempt", i)
-			// Check SSID
 			curNet, _ := s.CurrentNetwork()
 			slog.Debug("current network", "component", "network", "network", curNet)
 			if curNet != nil && curNet.SSID == ssid {
@@ -547,18 +483,14 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		slog.Error("save config failed", "component", "network", "error", err)
 	}
 	slog.Info("network setup success", "component", "network")
-	// Kick the NTP daemon now that internet is up. Devices without an RTC
-	// battery boot with a stale clock (base-image build date); NTP can't sync
-	// in AP mode (no internet). Without this, the first LLM call after setup
-	// fails with CERT_NOT_YET_VALID because the TLS cert predates the clock.
-	// Images may ship chrony OR systemd-timesyncd — try both, non-fatal.
+	// Devices without an RTC boot with a stale clock; force NTP so TLS doesn't fail.
+	// Images ship chrony or systemd-timesyncd; try both, non-fatal.
 	if out, err := exec.Command("chronyc", "makestep").CombinedOutput(); err != nil {
 		slog.Warn("chronyc makestep failed, trying systemd-timesyncd", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
 		if out2, err2 := exec.Command("systemctl", "restart", "systemd-timesyncd").CombinedOutput(); err2 != nil {
 			slog.Warn("systemd-timesyncd restart failed", "component", "network", "error", err2, "output", strings.TrimSpace(string(out2)))
 		}
 	}
-	// Poll until NTPSynchronized=yes (max ~10 s); non-fatal if it times out.
 	for i := range 10 {
 		time.Sleep(time.Second)
 		out, err := exec.Command("timedatectl", "show", "-p", "NTPSynchronized", "--value").Output()
@@ -573,15 +505,8 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 	return true, nil
 }
 
-// LeaveAPMode tears down the provisioning AP without joining any WiFi — the path
-// a device takes when it is set up over ethernet and never receives credentials.
-//
-// It delegates to the same device-sta-mode script the WiFi path reaches as the
-// last step of connect-wifi, so AP teardown keeps exactly one implementation:
-// stop hostapd + dnsmasq, drop the captive-portal DNS wildcard, return wlan0 to
-// managed mode and hand wlan0 back to dhcpcd. Without this call a wired setup
-// would leave the device broadcasting its open setup hotspot forever, since
-// nothing else on that path ever runs device-sta-mode.
+// LeaveAPMode tears down the provisioning AP without joining WiFi (wired setup),
+// via the same device-sta-mode script connect-wifi uses.
 func (s *Service) LeaveAPMode() error {
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()
@@ -594,7 +519,7 @@ func (s *Service) LeaveAPMode() error {
 	return nil
 }
 
-// SwitchToAPMode runs device-ap-mode to return to provisioning (AP) mode for reconfiguring WiFi.
+// SwitchToAPMode runs device-ap-mode to return to provisioning mode.
 func (s *Service) SwitchToAPMode() error {
 	s.operationMu.Lock()
 	defer s.operationMu.Unlock()

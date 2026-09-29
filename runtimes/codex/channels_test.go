@@ -8,11 +8,6 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// Channels are device-owned under Codex: telegram via the getUpdates receive
-// loop (telegram_poll.go), slack via the HTTP-mode proxy path (slack.go) and
-// discord via the gateway bot session (discord.go). The channel API accepts
-// those three and refuses everything else.
-
 func TestCodexSupportedChannels(t *testing.T) {
 	got := (&CodexService{}).SupportedChannels()
 	if len(got) != 3 || got[0] != domain.ChannelTelegram || got[1] != domain.ChannelSlack || got[2] != domain.ChannelDiscord {
@@ -28,8 +23,6 @@ func TestCodexAddChannel(t *testing.T) {
 	if err := s.AddChannel(context.Background(), domain.AddChannelRequest{Channel: domain.ChannelSlack, SlackBotToken: "x"}); err != nil {
 		t.Errorf("AddChannel(slack) err = %v, want nil (creds in config.json drive the bridge)", err)
 	}
-	// Discord succeeds only with the creds the receive path needs (the accept
-	// filter is closed when the allowlist is empty — no fake success).
 	if err := s.AddChannel(context.Background(), domain.AddChannelRequest{
 		Channel: domain.ChannelDiscord, DiscordBotToken: "x", DiscordUserID: "42",
 	}); err != nil {

@@ -1,37 +1,7 @@
-"""Pipecat v1 provider — an on-device Pipecat pipeline behind the VoiceAgentBase contract.
+"""Pipecat v1 provider: an on-device Pipecat pipeline behind the VoiceAgentBase contract (text out).
 
-Unlike the other providers this one has no vendor session: the "server" is a
-Pipecat pipeline running on a private asyncio loop inside HAL (see
-`pipecat_pipeline.py`). Audio goes in, **text** comes out; HAL's own TTS speaks
-it. VAD and STT are the pipeline's, the LLM is any OpenAI-compatible chat
-endpoint (default: the campaign-api Qwen relay), and the orchestrator's tools
-(`delegate_to_main`, `reject_turn`, `express_emotion`, `end_conversation`,
-`web_search`) are bridged one-for-one.
-
-Both HAL modes are served by the same class:
-
-- `HAL_LIVE_MODE=false` (turn-based): HAL's VAD brackets the utterance and
-  calls `append_audio` × N then `commit_audio`. The agent proposes the user
-  turn start on the first frame and the stop on commit, closes the per-turn
-  STT session so the server flushes the final, and the aggregator runs the
-  LLM the moment that final lands.
-- `HAL_LIVE_MODE=true`: audio streams continuously and never commits. Silero
-  VAD opens turns, Smart Turn v3 (or a silence timeout) closes them, and an
-  onset while the model is answering interrupts it.
-
-Contract details (see `realtime-agent-integration.md` §3):
-
-- `OutputEvent.gen` is the user-turn generation: bumped when a user turn
-  starts and on an interruption, never per response, so a tool-result
-  follow-up stays in its turn and `end_turn()` can fence a whole turn.
-- `end_turn()` (the orchestrator has delegated / rejected and stopped reading)
-  raises `_newest_output_gen` past the current generation, so anything the
-  fenced turn still produces — the model's reply to the "delegated" tool
-  result — is dropped by `receive()` instead of being spoken as a stale reply
-  on the next turn.
-- `TurnDoneEvent` follows the response end only when no tool call is in
-  flight; a call whose result came back with `run_llm=False` ends the turn
-  itself, one with `run_llm=True` hands it to the follow-up response.
+Invariants: `OutputEvent.gen` bumps per user turn and on interruption, never per response;
+`end_turn()` fences the current generation so its late output is dropped by `receive()`.
 """
 
 from __future__ import annotations
@@ -73,17 +43,9 @@ from hal.realtime.models import (
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
 logger = logging.getLogger(__name__)
-# Per-turn latency / token lines, own file (server_support/log_setup.py).
 usage_logger = logging.getLogger("hal.realtime.usage.pipecat")
 
-# Tools whose result must NEVER run the model again. The orchestrator ends the
-# turn right after acknowledging these (`end_turn()` + DelegateSignal /
-# RejectSignal) and stops reading, so a follow-up reply could only ever be
-# spoken as a stale answer on the NEXT turn — device-observed in the smoke
-# run: "How are you?" answered with the music-genre follow-up of the previous
-# delegation. The orchestrator still sends trigger_response=True for them (a
-# Gemini pending-tool-call quarantine rule, not a wish for a reply), so the
-# decision is made here, by name, where it is deterministic.
+# Results of these tools must never run the model again (a follow-up would be spoken on the NEXT turn).
 _NO_FOLLOWUP_TOOLS: frozenset[str] = frozenset({"delegate_to_main", "reject_turn"})
 
 
@@ -115,24 +77,16 @@ class PipecatV1Agent(VoiceAgentBase):
         self._loop_thread: threading.Thread | None = None
         self._handle: Any = None  # pipecat_pipeline.PipelineHandle
         self._started: threading.Event = threading.Event()
-        # Reconnect throttle (same shape as the other providers).
         self._reconnect_backoff: float = config.reconnect_delay_s
         self._reconnect_backoff_max: float = 60.0
         self._last_reconnect_at: float = 0.0
         self._conn_lock: threading.RLock = threading.RLock()
-        # --- turn / generation bookkeeping (pipeline loop thread + send thread) ---
         self._gen: int = 0  # user-turn generation (see module docstring)
         self._fenced_gen: int = -1  # generations end_turn() closed (see end_turn)
         self._user_turn_id: str = ""
         self._user_transcript: str = ""
-        # Live mode: the transcript already emitted for the current turn.
-        # STT hypotheses are cumulative (Flux `Update`, nova interims) while
-        # the live pump concatenates `UserSpeechOutput.transcript` chunks, so
-        # only the new part of each FINAL is emitted (like the OpenAI
-        # provider's deltas). Interims are never emitted: a mid-utterance
-        # rewrite ("place a music" → "play some music") cannot be retracted
-        # from a `+=` consumer and ended up in the [HANDLED] text on
-        # lamp-ee17 (2026-09-18). They still feed MinWords and liveness.
+        # Live mode: only the new part of each cumulative FINAL is emitted; interims never are
+        # (a `+=` consumer cannot retract a rewrite).
         self._emitted_transcript: str = ""
         self._manual_turn_open: bool = False  # turn-based mode: frames since last commit
         self._reset_pending: bool = False  # emit output_reset before the next reply
@@ -145,8 +99,6 @@ class PipecatV1Agent(VoiceAgentBase):
         # Tool bridge: tool_call_id -> asyncio.Future[(output_json, run_llm)].
         self._tool_futures: dict[str, asyncio.Future] = {}
         self._tool_names: dict[str, str] = {}
-
-    # --- VoiceAgentBase properties -------------------------------------------
 
     @property
     @override
@@ -165,11 +117,8 @@ class PipecatV1Agent(VoiceAgentBase):
 
     @property
     def llm_busy(self) -> bool:
-        """The model is generating or a tool call is in flight (see
-        `_BusyAwareMinWordsStrategy`)."""
+        """The model is generating or a tool call is in flight."""
         return self._response_open or bool(self._pending_calls)
-
-    # --- connect / disconnect ----------------------------------------------------
 
     def _ensure_stt_provider(self) -> STTProvider:
         if self._stt_provider is not None:
@@ -283,8 +232,6 @@ class PipecatV1Agent(VoiceAgentBase):
         with self._conn_lock:
             self._sync_disconnect()
 
-    # --- reconnect --------------------------------------------------------------
-
     def _ensure_connected(self) -> None:
         if self._stop_event.is_set() or self._connected.is_set():
             return
@@ -328,17 +275,13 @@ class PipecatV1Agent(VoiceAgentBase):
             "[realtime] pipecat_v1 %s — ending turn now, falling back to main", reason
         )
 
-    # --- send side ----------------------------------------------------------------
-
     def _sync_send_input(self, inp: InputBase) -> None:
         handle = self._handle
         if handle is None:
             return
         if isinstance(inp, AudioInput):
             if not self._live and not self._manual_turn_open:
-                # Turn-based mode: HAL's VAD already fired — the first frame of
-                # the utterance opens the user turn (and interrupts a reply
-                # still streaming from the previous one).
+                # Turn-based: the first frame opens the user turn (and interrupts a streaming reply).
                 self._manual_turn_open = True
                 handle.propose_user_turn_start()
                 handle.remind_tools()
@@ -353,18 +296,8 @@ class PipecatV1Agent(VoiceAgentBase):
             logger.warning("[realtime] pipecat_v1 has no image input — frame dropped")
 
     def _start_announcement(self, handle: Any, text: str) -> None:
-        """Open a device-initiated turn: a new generation with no user audio.
-
-        The generation bump matters: end_turn() may have fenced the previous
-        turn's generation, and an announcement carrying it would be dropped by
-        receive() as stale output.
-        """
-        # A committed user turn, its reply or a tool call owns the pipeline;
-        # announcing now would interleave with it. End at once so the caller
-        # falls back. An open but UNcommitted manual turn is not checked: a
-        # capture dropped as noise never commits and leaves it open until the
-        # next real turn, and the orchestrator only announces once no capture
-        # is in flight (turn_in_flight), so that turn is abandoned.
+        """Open a device-initiated turn: a new generation (a fenced one would be dropped as stale)."""
+        # A committed turn, reply or tool call owns the pipeline: end at once so the caller falls back.
         if self._turn_awaiting or self._response_open or self._pending_calls:
             logger.info("[realtime] pipecat_v1 announcement dropped — pipeline busy")
             self._recv_queue.put(TurnDoneEvent(user_turn_id=self._user_turn_id))
@@ -386,15 +319,13 @@ class PipecatV1Agent(VoiceAgentBase):
         if handle is None:
             return
         if self._live:
-            # A live session never commits; a stray one is harmless.
             logger.debug("[realtime] pipecat_v1 commit ignored in live mode")
             return
         self._turn_awaiting = True
         self._turn_started_at = time.monotonic()
         self._first_text_at = 0.0
         if not self._manual_turn_open:
-            # Commit with no audio: nothing to transcribe — end the turn now
-            # rather than letting the consumer wait out its receive timeout.
+            # Commit with no audio: end the turn now instead of waiting out the receive timeout.
             self._recv_queue.put(TurnDoneEvent(user_turn_id=self._user_turn_id))
             self._turn_awaiting = False
             return
@@ -404,13 +335,7 @@ class PipecatV1Agent(VoiceAgentBase):
 
     @override
     def end_turn(self) -> None:
-        """Fence the current user turn: drop whatever it still produces.
-
-        Called after delegate / reject, when the orchestrator has stopped
-        reading. The tool result it just sent may still trigger a follow-up
-        reply; that reply carries this turn's generation and must never be
-        spoken on the next turn.
-        """
+        """Fence the current user turn so any follow-up it still produces is dropped (after delegate/reject)."""
         self._newest_output_gen = max(self._newest_output_gen, self._gen + 1)
         self._fenced_gen = max(self._fenced_gen, self._gen)
         self._turn_awaiting = False
@@ -437,8 +362,6 @@ class PipecatV1Agent(VoiceAgentBase):
 
     @override
     def _recv_loop(self) -> None:
-        # Outputs reach _recv_queue straight from the pipeline loop (EventSink);
-        # this thread only watches the pipeline's health and heals it.
         while not self._stop_event.is_set():
             if not self._connected.is_set():
                 self._ensure_connected()
@@ -450,8 +373,6 @@ class PipecatV1Agent(VoiceAgentBase):
                 self._drop_pipeline("pipeline run ended")
                 continue
             self._stop_event.wait(timeout=self._config.queue_poll_s)
-
-    # --- tool bridge (pipeline loop ↔ orchestrator) ------------------------------------
 
     def _begin_tool_call(self, name: str, arguments: str, call_id: str) -> asyncio.Future:
         """Pipeline thread: publish the call, hand back a future for its result."""
@@ -473,8 +394,7 @@ class PipecatV1Agent(VoiceAgentBase):
                 ),
             )
         )
-        # The orchestrator answers every call it handles; one it never sees
-        # (turn already abandoned) must not hold the LLM forever.
+        # A call the orchestrator never sees must not hold the LLM forever.
         loop.call_later(
             self._config.tool_result_timeout_s, self._timeout_tool_call, call_id
         )
@@ -517,15 +437,12 @@ class PipecatV1Agent(VoiceAgentBase):
         for future in futures.values():
             loop.call_soon_threadsafe(lambda f=future: f.done() or f.cancel())
 
-    # --- pipeline events (called on the pipeline loop thread by EventSink) ---------------
-
     def _ev_started(self) -> None:
         self._started.set()
 
     def _ev_user_turn_started(self) -> None:
         if self._live and self._handle is not None:
-            # Lands in the context before the aggregator appends this turn's
-            # transcript (which happens at turn stop).
+            # Lands before the aggregator appends this turn's transcript.
             self._handle.remind_tools()
         self._gen += 1
         self._user_turn_id = f"pipecat-{uuid.uuid4().hex[:12]}"
@@ -551,8 +468,6 @@ class PipecatV1Agent(VoiceAgentBase):
 
     def _ev_user_turn_stopped(self) -> None:
         if self._live:
-            # Latency is measured from end-of-speech, like the commit on the
-            # turn-based path.
             self._turn_started_at = time.monotonic()
             self._recv_queue.put(
                 OutputEvent(
@@ -567,8 +482,6 @@ class PipecatV1Agent(VoiceAgentBase):
             )
 
     def _ev_transcript(self, text: str, is_final: bool) -> None:
-        # STT recv thread. The provider's view of the user's words: the
-        # delegate message source, and live-mode evidence for the pump.
         self.note_server_activity()
         if is_final:
             self._user_transcript = (self._user_transcript + " " + text).strip()
@@ -591,12 +504,9 @@ class PipecatV1Agent(VoiceAgentBase):
             logger.info("[realtime] pipecat_v1 <<< user said: %r", text[:200])
 
     def _transcript_delta(self, text: str) -> str:
-        """The part of a cumulative STT final not emitted yet for this turn.
+        """The part of a cumulative STT final not yet emitted for this turn.
 
-        A final that extends the emitted text yields its suffix (with the
-        punctuation intact). A rewrite ("Hey Lam" → "Hey, Lam.") yields the
-        words after the longest common word prefix, so the pump's `+=` history
-        never repeats the utterance; a shorter rewrite yields nothing.
+        A rewrite yields the words after the longest common word prefix; a shorter one yields nothing.
         """
         emitted = self._emitted_transcript
         if not emitted:
@@ -617,12 +527,9 @@ class PipecatV1Agent(VoiceAgentBase):
         return (" " + chunk) if chunk else ""
 
     def _ev_stt_turn_finalized(self, had_text: bool) -> None:
-        # STT sender thread, turn-based mode: the committed session closed.
         if had_text or self._live:
             return
-        # Nothing was transcribed — the aggregator has nothing to run. End the
-        # turn now so HAL falls back with its own transcript instead of waiting
-        # out REALTIME_RECV_QUEUE_TIMEOUT_S.
+        # Nothing transcribed: end the turn so HAL falls back with its own transcript.
         if self._turn_awaiting:
             self._turn_awaiting = False
             logger.info("[realtime] pipecat_v1 empty transcript — ending turn")
@@ -699,16 +606,12 @@ class PipecatV1Agent(VoiceAgentBase):
             )
             logger.info("[realtime] pipecat_v1 reply interrupted by the user (gen=%d)", self._gen)
             self._emit_turn_done(completed=False)
-        # Turn-based mode: the interruption IS the next turn's first frame and
-        # the orchestrator stopped reading the old turn long ago — a TurnDone
-        # here could only land on the new turn and end it empty.
+        # Turn-based: a TurnDone on interruption would end the NEW turn empty.
 
     def _emit_turn_done(self, *, completed: bool) -> None:
         self._turn_awaiting = False
         if self._gen <= self._fenced_gen:
-            # The consumer already left this turn (end_turn). Its terminal is
-            # not gen-filtered by receive(), so queued late it would end the
-            # NEXT turn empty — swallow it.
+            # The consumer already left this turn; a late terminal would end the next turn empty.
             return
         self._recv_queue.put(
             TurnDoneEvent(execution_completed=completed, user_turn_id=self._user_turn_id)
@@ -719,9 +622,7 @@ class PipecatV1Agent(VoiceAgentBase):
         if fatal:
             self._drop_pipeline("fatal pipeline error")
         elif self._response_open or self._pending_calls:
-            # The response that was streaming is gone; unblock the consumer
-            # now (execution_completed=False → main-agent fallback) instead
-            # of letting the response end frame report a completed turn.
+            # Unblock the consumer now (execution_completed=False -> main-agent fallback).
             self._response_open = False
             self._pending_calls.clear()
             self._emit_turn_done(completed=False)

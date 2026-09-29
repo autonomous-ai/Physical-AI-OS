@@ -14,15 +14,7 @@ import (
 	"time"
 )
 
-// Runtime-agnostic skill-sync plumbing shared by every backend's skill watcher
-// (runtimes/openclaw/skill_watcher.go, runtimes/hermes/skill_watcher.go). The
-// per-backend watchers differ only in WHERE skills land and HOW the agent is
-// notified; the CDN fetch / atomic extract / content-hash logic is identical, so
-// it lives here once. Keep the two watchers thin and parallel against this.
-
-// FetchSkillVersions reads per-skill versions from OTA metadata at otaMetadataURL.
-// Returns map[skillName]version, or (nil, nil) when the URL is empty (device not
-// provisioned) or the metadata carries no "skills" section.
+// FetchSkillVersions returns skill name -> version from OTA metadata; (nil, nil) if unprovisioned.
 func FetchSkillVersions(otaMetadataURL string) (map[string]string, error) {
 	if strings.TrimSpace(otaMetadataURL) == "" {
 		return nil, nil
@@ -60,8 +52,7 @@ func FetchSkillVersions(otaMetadataURL string) (map[string]string, error) {
 	return result, nil
 }
 
-// DownloadToTempFile fetches url and writes it to a temp file, returning its path.
-// Caller must os.Remove the returned path when done.
+// DownloadToTempFile fetches url into a temp file; the caller removes it.
 func DownloadToTempFile(url, pattern string) (string, error) {
 	client := &http.Client{Timeout: 60 * time.Second}
 	req, err := http.NewRequest("GET", url, nil)
@@ -93,9 +84,7 @@ func DownloadToTempFile(url, pattern string) (string, error) {
 	return f.Name(), nil
 }
 
-// FolderHash computes a deterministic sha256 of dir's content tree (paths + file
-// bytes, walked in lexical order). Returns "" if dir doesn't exist or can't be
-// walked — caller treats empty as "no prior content".
+// FolderHash returns a deterministic sha256 of dir's paths and bytes; "" if dir is missing.
 func FolderHash(dir string) (string, error) {
 	h := sha256.New()
 	err := filepath.Walk(dir, func(path string, info os.FileInfo, walkErr error) error {
@@ -106,7 +95,6 @@ func FolderHash(dir string) (string, error) {
 		if err != nil {
 			return err
 		}
-		// Include relative path so file moves register as changes.
 		h.Write([]byte(rel))
 		h.Write([]byte{0})
 		if info.IsDir() {
@@ -129,13 +117,8 @@ func FolderHash(dir string) (string, error) {
 	return hex.EncodeToString(h.Sum(nil)), nil
 }
 
-// ExtractSkillZip atomically replaces targetDir with the contents of archivePath:
-//  1. clean <targetDir>.new/
-//  2. unzip archive into it (path-traversal guarded)
-//  3. on full success, remove targetDir and rename <targetDir>.new → targetDir
-//
-// Failure at any step leaves targetDir untouched, so a corrupt download can't blow
-// away a working skill.
+// ExtractSkillZip atomically replaces targetDir via <targetDir>.new; on failure
+// targetDir is untouched.
 func ExtractSkillZip(archivePath, targetDir string) error {
 	tmpDir := targetDir + ".new"
 	if err := os.RemoveAll(tmpDir); err != nil {
@@ -161,8 +144,7 @@ func ExtractSkillZip(archivePath, targetDir string) error {
 	return nil
 }
 
-// unzipInto extracts every file in archivePath to dest with a path-traversal
-// guard. Forces 0644 / 0755 perms (we don't trust modes from the upload host).
+// unzipInto extracts archivePath into dest with a traversal guard and forced 0644/0755 perms.
 func unzipInto(archivePath, dest string) error {
 	r, err := zip.OpenReader(archivePath)
 	if err != nil {
@@ -177,12 +159,10 @@ func unzipInto(archivePath, dest string) error {
 	cleanDest = filepath.Clean(cleanDest) + string(os.PathSeparator)
 
 	for _, f := range r.File {
-		// Reject absolute / parent-traversing paths.
 		if filepath.IsAbs(f.Name) || strings.Contains(f.Name, "..") {
 			return fmt.Errorf("invalid zip entry %q", f.Name)
 		}
 		target := filepath.Join(dest, f.Name)
-		// Belt-and-suspenders containment check after Join.
 		absTarget, err := filepath.Abs(target)
 		if err != nil {
 			return fmt.Errorf("abs target %s: %w", target, err)

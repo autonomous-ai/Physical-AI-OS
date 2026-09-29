@@ -295,7 +295,7 @@ Cụm wake được chấp nhận ở **đầu hoặc cuối bất kỳ câu nà
 từ chối — tên thiết bị nằm giữa câu là người ta đang nói *về* thiết bị.
 
 Sau một lượt được phép, cửa sổ follow-up mở ra
-(`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default code **20s**; image của lamp đặt 60) và
+(`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default code **20s**; `robots/lamp/rootfs/opt/hal/.env` của image lamp cũng đặt 20) và
 **reset sau mỗi lượt được phép**, nên nói liên tục thì không bao giờ phải gọi lại
 tên. Đặt `"wakeword": false` để always-listening.
 
@@ -331,7 +331,7 @@ khẳng định rằng nó đúng về cơ khí.
 Flow Monitor, Settings, Logs — đúng SPA chạy trên board.
 
 os-server **không serve HTML**: trên thiết bị, nginx serve `web/dist` và proxy
-`/api`, `/hw` xuống `:5000`. `make web-dev` đặt Vite vào đúng vai nginx, với
+`/api` xuống `:5000` (còn `/hw/` tới HAL ở `127.0.0.1:5001`). `make web-dev` đặt Vite vào đúng vai nginx, với
 `LAMP_PROXY` là thiết bị mà SPA nói chuyện cùng. File `.env` trong `system/web/`
 vẫn thắng (vite.config đọc nó trước `process.env`), nên trỏ vào Pi thật không đổi
 gì.

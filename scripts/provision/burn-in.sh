@@ -1,22 +1,6 @@
 #!/usr/bin/env bash
-# burn-in.sh — hardware acceptance test, run on the device before it ships.
-#
-# Catches the failures that look like software bugs for days: bad DRAM, a dying
-# card, a thermal or power problem. Written after a unit shipped with ~50 MB of
-# stuck-at-0 DRAM and spent a day masquerading as a kernel bug, a filesystem
-# bug, and an agent crash in turn.
-#
-#   sudo ./burn-in.sh              full run  (~20-30 min, factory bench)
-#   sudo ./burn-in.sh --quick      short run (~4-6 min, first boot / spot check)
-#   sudo ./burn-in.sh --ram 4096 --passes 2
-#
-# Exit: 0 = PASS, 1 = FAIL, 2 = could not run (not root, missing tool).
-# Results land in /var/lib/autonomous/burn-in.{log,json} for the fleet report.
-#
-# Coverage honesty: memtester can only test memory it is allowed to allocate,
-# so the kernel's own pages are never covered. This is a strong screen, not a
-# proof. A unit that fails here is definitely bad; one that passes is probably
-# fine.
+# Hardware acceptance test (RAM, storage, thermal) run on the device before it ships.
+# Usage: sudo ./burn-in.sh [--quick] [--ram MB] [--passes N]   Exit: 0 PASS, 1 FAIL, 2 could not run.
 
 set -uo pipefail
 
@@ -25,9 +9,7 @@ RESULT_DIR="/var/lib/autonomous"
 LOG="${RESULT_DIR}/burn-in.log"
 JSON="${RESULT_DIR}/burn-in.json"
 
-# Cap how many mismatch lines reach the screen and the log. A properly broken
-# DIMM emits them by the million — enough to fill a RAM-backed /var/log and
-# take the device down mid-test, which would destroy the evidence we came for.
+# Cap mismatch lines: a bad DIMM emits millions and can fill a RAM-backed /var/log.
 MAX_FAIL_LINES=20
 
 QUICK=0
@@ -36,10 +18,8 @@ PASSES=""
 SOAK_S=""
 SKIP_STORAGE=0
 SKIP_THERMAL=0
-# Bad memory ends the run by default; see the fail-fast block after the RAM test.
 FAIL_FAST=1
 
-# ── Presentation ─────────────────────────────────────────────────────────────
 if [ -t 1 ]; then
   C_RST=$'\033[0m'; C_DIM=$'\033[90m'; C_RED=$'\033[31m'
   C_GRN=$'\033[32m'; C_YEL=$'\033[33m'; C_BLD=$'\033[1m'
@@ -48,8 +28,6 @@ else
 fi
 
 ts()   { date '+%H:%M:%S'; }
-# Every line is timestamped and tee'd, so the operator watches it live and the
-# same stream survives in the log for whoever reads it later.
 say()  { printf '%s[%s]%s %s\n' "$C_DIM" "$(ts)" "$C_RST" "$*" | tee -a "$LOG"; }
 head2(){ printf '\n%s══ %s %s\n' "$C_BLD" "$*" "$C_RST" | tee -a "$LOG"; }
 ok()   { printf '%s[%s]%s   %sPASS%s  %s\n' "$C_DIM" "$(ts)" "$C_RST" "$C_GRN" "$C_RST" "$*" | tee -a "$LOG"; }
@@ -90,9 +68,7 @@ command -v memtester >/dev/null 2>&1 || die "memtester not installed"
 mkdir -p "$RESULT_DIR" || die "cannot create $RESULT_DIR"
 : > "$LOG"
 
-# ── Sizing ───────────────────────────────────────────────────────────────────
-# Default to most of what is actually free. Leaving ~1 GB keeps the running
-# services alive: an OOM kill mid-test reads as a hardware fault and isn't one.
+# Leave ~1 GB free: an OOM kill mid-test would read as a hardware fault.
 AVAIL_MB=$(awk '/MemAvailable/ {printf "%d", $2/1024}' /proc/meminfo)
 if [ -z "$RAM_MB" ]; then
   if [ "$QUICK" -eq 1 ]; then
@@ -105,7 +81,6 @@ fi
 [ -z "$PASSES" ] && { [ "$QUICK" -eq 1 ] && PASSES=1 || PASSES=1; }
 [ -z "$SOAK_S" ] && { [ "$QUICK" -eq 1 ] && SOAK_S=30 || SOAK_S=120; }
 
-# ── Header ───────────────────────────────────────────────────────────────────
 DEVICE_ID=$(python3 -c "import json;print(json.load(open('/root/config/config.json')).get('device_id',''))" 2>/dev/null || true)
 DEVICE_TYPE=$(grep -ho 'DEVICE_TYPE=[^ "]*' /etc/systemd/system/os-server.service /opt/hal/.env 2>/dev/null | head -1 | cut -d= -f2)
 ROOT_DEV=$(findmnt -no SOURCE / 2>/dev/null)
@@ -122,8 +97,7 @@ FAIL_RAM=0; FAIL_STORAGE=0; FAIL_THERMAL=0
 RAM_ERRORS=0; MAX_TEMP=0
 STATUS_STORAGE="PASS"; STATUS_THERMAL="PASS"
 
-# write_result snapshots the verdict to disk. Called as soon as memory is known
-# and again at the end, so an unstable board still leaves a usable record.
+# Persist the verdict early so an unstable board still leaves a record.
 write_result() {
   local verdict
   verdict=$([ $((FAIL_RAM + FAIL_STORAGE + FAIL_THERMAL)) -eq 0 ] && echo PASS || echo FAIL)
@@ -144,8 +118,7 @@ EOF
   sync 2>/dev/null || true
 }
 
-# ── 1. Memory ────────────────────────────────────────────────────────────────
-# The headline test. Everything else here is quick by comparison.
+# 1. Memory
 head2 "1/3  MEMORY"
 say "memtester ${RAM_MB}M ${PASSES} — each line below appears as that subtest finishes"
 say "this is the slow one; expect roughly 8 min per GB per pass"
@@ -153,19 +126,13 @@ say "this is the slow one; expect roughly 8 min per GB per pass"
 FAILCOUNT_FILE=$(mktemp)
 echo 0 > "$FAILCOUNT_FILE"
 
-# Heartbeat: memtester emits a whole subtest per line and some take minutes, so
-# without this the operator cannot tell a slow test from a hung one.
 ( while true; do sleep 60; printf '%s[%s]%s   %s…still running%s\n' \
     "$C_DIM" "$(ts)" "$C_RST" "$C_DIM" "$C_RST"; done ) &
 HEARTBEAT=$!
 trap 'kill "$HEARTBEAT" 2>/dev/null; rm -f "$FAILCOUNT_FILE"' EXIT INT TERM
 
 set -o pipefail
-# memtester animates progress in place: a \|/- spinner for some subtests and a
-# "setting N/testing N" counter for others, both drawn with backspaces. Dropping
-# the backspaces alone would unroll every frame onto one multi-megabyte line, so
-# the spinner glyphs and the counter frames are collapsed away too, leaving one
-# tidy line per subtest. FAILURE lines are untouched — they are the payload.
+# Collapse memtester's backspace-drawn spinners/counters to one line per subtest; FAILURE lines untouched.
 stdbuf -oL memtester "${RAM_MB}M" "$PASSES" 2>&1 \
   | stdbuf -oL tr -d '\010' \
   | stdbuf -oL sed -E 's@[\|/\\-]{3,}@@g; s/( *(sett|test)ing +[0-9]+)+/ /g; s/ {2,}/ /g; s/ +$//' \
@@ -193,20 +160,16 @@ else
   ok "memory: ${RAM_MB} MB x${PASSES} clean"
 fi
 
-# Persist the verdict the moment it is known. A board that just failed a memory
-# test can hang or panic at any point after, and the result has to survive that.
 write_result
 
-# Stop here on bad memory. The unit is already rejected, so later stages add no
-# information — and they routinely take the machine down mid-test, which costs
-# the log we came for. --no-fail-fast when you deliberately want the full sweep.
+# Stop on bad memory; later stages often crash the board. --no-fail-fast runs the full sweep.
 if [ "$FAIL_RAM" -eq 1 ] && [ "$FAIL_FAST" -eq 1 ]; then
   warn "skipping storage and thermal — verdict already decided by memory"
   SKIP_STORAGE=1
   SKIP_THERMAL=1
 fi
 
-# ── 2. Storage ───────────────────────────────────────────────────────────────
+# 2. Storage
 head2 "2/3  STORAGE"
 if [ "$SKIP_STORAGE" -eq 1 ]; then
   warn "not run"; STATUS_STORAGE="SKIP"
@@ -221,8 +184,7 @@ else
     *)     STATUS_STORAGE="FAIL"; FAIL_STORAGE=1; bad "filesystem state '${FS_STATE}' — run fsck before shipping" ;;
   esac
 
-  # Write, flush, drop caches, read back. Dropping the cache is the point: a
-  # read that comes from RAM proves nothing about the card.
+  # Drop caches so the read-back hits the card, not RAM.
   SCRATCH="${RESULT_DIR}/.burnin-scratch"
   say "write/verify 256 MB to ${ROOT_DEV} (cache dropped between)"
   if dd if=/dev/urandom of="$SCRATCH" bs=1M count=256 conv=fsync status=none 2>/dev/null; then
@@ -244,16 +206,12 @@ else
   [ "${DISK_PCT:-0}" -gt 90 ] && { warn "root filesystem ${DISK_PCT}% full"; } || say "root usage ${DISK_PCT}%"
 fi
 
-# ── 3. Thermal + load ────────────────────────────────────────────────────────
+# 3. Thermal + load
 head2 "3/3  THERMAL SOAK"
 if [ "$SKIP_THERMAL" -eq 1 ]; then
   warn "not run"; STATUS_THERMAL="SKIP"
 else
-  # Limits come from the silicon, not from a number someone picked. Each zone
-  # publishes its own trip points: "passive" is where the kernel starts
-  # throttling (by design, not a fault) and "critical" is where it powers off.
-  # An earlier hardcoded 85°C sat between two passive points and failed a
-  # perfectly good board that was throttling exactly as intended.
+  # Use each zone's own passive/critical trip points, not a hardcoded limit.
   zone_trip() {  # zone_dir, trip type → °C, empty if the zone declares none
     local d="$1" want="$2" t ty best=""
     for t in "$d"/trip_point_*_temp; do
@@ -281,8 +239,6 @@ else
   else
     CPU_CRIT=$(zone_trip "${CPU_ZONE%/}" critical); [ -z "$CPU_CRIT" ] && CPU_CRIT=105
     CPU_PASS=$(zone_trip "${CPU_ZONE%/}" passive)
-    # Fail only near the shutdown point. Between the throttle point and here the
-    # cooling is working — loudly, but working.
     CPU_FAIL_AT=$((CPU_CRIT - 5))
     SKIN_CRIT=""
     [ -n "$SKIN_ZONE" ] && SKIN_CRIT=$(zone_trip "${SKIN_ZONE%/}" critical)
@@ -321,8 +277,7 @@ else
       STATUS_THERMAL="FAIL"; FAIL_THERMAL=1
       bad "skin peak ${MAX_SKIN}°C ≥ ${SKIN_CRIT}°C — the enclosure gets too hot to hold."
     elif [ -n "$CPU_PASS" ] && [ "$MAX_TEMP" -ge "$CPU_PASS" ]; then
-      # Throttling under an all-core synthetic soak is normal; no real workload
-      # on this device sustains it. Worth recording, not worth rejecting a unit.
+      # Throttling under an all-core soak is normal; record, don't reject.
       ok "cpu peak ${MAX_TEMP}°C — throttling above ${CPU_PASS}°C as designed, ${CPU_CRIT}°C is the limit"
     else
       ok "cpu peak ${MAX_TEMP}°C${SKIN_ZONE:+ · skin ${MAX_SKIN}°C}"
@@ -330,7 +285,7 @@ else
   fi
 fi
 
-# ── Verdict ──────────────────────────────────────────────────────────────────
+# Verdict
 TOTAL_FAIL=$((FAIL_RAM + FAIL_STORAGE + FAIL_THERMAL))
 head2 "RESULT"
 printf '  %-10s %s\n' "memory"  "$([ $FAIL_RAM     -eq 0 ] && echo "${C_GRN}PASS${C_RST}" || echo "${C_RED}FAIL${C_RST}  ${RAM_ERRORS} mismatches")" | tee -a "$LOG"

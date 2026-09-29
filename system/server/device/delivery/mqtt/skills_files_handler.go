@@ -12,28 +12,10 @@ import (
 )
 
 // mqttMaxFileTextBytes caps the inlined text of a single file on this uplink.
-//
-// The HTTP twin inlines up to 512 KB per file, which is fine over a LAN socket
-// but not over MQTT. This was previously set to 5 KiB on an assumption that the
-// broker couldn't reliably carry more — disproved by a direct test against the
-// production broker (sds-mqtt.autonomous.ai), which delivered payloads up to
-// 256 KB intact with no drops. 30 KiB covers a full real-world SKILL.md (the
-// wellbeing skill is 27,267 bytes) with headroom, well under the broker's
-// actual ceiling. Anything longer still comes back flagged `truncated`.
 const mqttMaxFileTextBytes = 30 << 10
 
-// handleSkillsFiles handles kind="skills.files" — the MQTT twin of
-// GET /api/agent/skills/files. That endpoint is LAN-only and admin-gated, so the
-// backend (and through it a mobile app) has no way to inspect a skill the
-// `skills` uplink advertised. This is that way in.
-//
-// Two modes, because MQTT is not a bulk transport and a full skill can be
-// megabytes:
-//
-//	{"name":"music"}                         → the file LIST, no contents
-//	{"name":"music","path":"music/SKILL.md"}  → that ONE file, contents inlined
-//
-// Synchronous: reading a skill dir is local disk, measured in milliseconds.
+// handleSkillsFiles handles kind="skills.files" — the MQTT twin of GET
+// /api/agent/skills/files.
 func (h *DeviceMQTTHandler) handleSkillsFiles(env domain.MQTTDataCommand) error {
 	var req domain.MQTTSkillsFilesData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
@@ -48,9 +30,8 @@ func (h *DeviceMQTTHandler) handleSkillsFiles(env domain.MQTTDataCommand) error 
 	runtimeName := h.agentGateway.Name()
 
 	if req.Path != "" {
-		// Do not load the entire skill merely to return one requested document.
-		// Reference-heavy skills can hold many megabytes of files; that work used
-		// to delay the MQTT response even though its payload contains one file.
+		// Do not load the entire skill merely to return one requested
+		// document.
 		file, err := h.agentGateway.ReadSkillFile(req.Name, req.Path)
 		if err != nil {
 			if errors.Is(err, skills.ErrSkillFileNotFound) {
@@ -106,8 +87,6 @@ func (h *DeviceMQTTHandler) handleSkillsFiles(env domain.MQTTDataCommand) error 
 		})
 	}
 
-	// List mode: strip every body so the payload stays bounded no matter how
-	// big the skill is.
 	return h.publishDataResult(env.Kind, "success", "", map[string]interface{}{
 		"name":    req.Name,
 		"runtime": runtimeName,
@@ -115,9 +94,8 @@ func (h *DeviceMQTTHandler) handleSkillsFiles(env domain.MQTTDataCommand) error 
 	})
 }
 
-// stripSkillFileText drops every inlined body, leaving path/size/binary metadata.
-// List mode must be bounded: a skill's combined text can far exceed what a broker
-// will carry, and a caller asking for the list hasn't asked for contents.
+// stripSkillFileText drops every inlined body, leaving path/size/binary
+// metadata.
 func stripSkillFileText(files []domain.SkillBundleFile) []domain.SkillBundleFile {
 	out := make([]domain.SkillBundleFile, 0, len(files))
 	for _, f := range files {

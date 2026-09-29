@@ -2,9 +2,7 @@ package network
 
 import "testing"
 
-// TestParseDefaultRouteIface covers the route-table shapes that decide which
-// interface the device reports as its own — the wired case is the one that used
-// to be impossible, because the interface was hardcoded to wlan0.
+// TestParseDefaultRouteIface covers route-table shapes for PrimaryInterface.
 func TestParseDefaultRouteIface(t *testing.T) {
 	tests := []struct {
 		name string
@@ -22,17 +20,12 @@ func TestParseDefaultRouteIface(t *testing.T) {
 			want: "end0",
 		},
 		{
-			// Both links up: dhcpcd gives wired the lower metric, and `ip route`
-			// prints ascending by metric, so the first line is the route traffic
-			// actually takes.
 			name: "both up, wired wins on metric",
 			out: "default via 192.168.1.1 dev end0 proto dhcp src 192.168.1.42 metric 202\n" +
 				"default via 192.168.1.1 dev wlan0 proto dhcp src 192.168.1.50 metric 303\n",
 			want: "end0",
 		},
 		{
-			// AP mode: hostapd is up, there is no upstream, so no default route.
-			// Caller falls back to the WiFi interface, which holds 192.168.100.1.
 			name: "no default route",
 			out:  "",
 			want: "",
@@ -73,32 +66,24 @@ func TestWifiReconnectSkipReason(t *testing.T) {
 			wantSkip:     false,
 		},
 		{
-			// A dropped WiFi link leaves no default route, and PrimaryInterface
-			// falls back to wlan0 — this is exactly the outage the escalation
-			// was written for, so it must NOT be skipped.
 			name:         "wifi device, link dropped, no default route",
 			ssid:         "home-wifi",
 			primaryIface: "wlan0",
 			wantSkip:     false,
 		},
 		{
-			// Provisioned over ethernet: nothing to re-associate to.
 			name:         "wired setup, no credentials on file",
 			ssid:         "",
 			primaryIface: "end0",
 			wantSkip:     true,
 		},
 		{
-			// Cable pulled from a wired-only device: still nothing to
-			// re-associate to, so WiFi recovery would not help.
 			name:         "wired setup, cable pulled, fallback to wlan0",
 			ssid:         "",
 			primaryIface: "wlan0",
 			wantSkip:     true,
 		},
 		{
-			// Both links configured. Traffic goes out the cable, so bouncing
-			// wlan0 cannot fix this outage or switching to a hotspot would not help.
 			name:         "wifi configured but routing over ethernet",
 			ssid:         "home-wifi",
 			primaryIface: "end0",

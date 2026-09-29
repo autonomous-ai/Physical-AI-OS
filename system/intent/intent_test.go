@@ -8,9 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// Regression: "Deactivate focus mode" used to fall through scene_off (which
-// only knew "turn off"/"disable") into scene_focus, re-activating the scene
-// the user asked to leave.
+// "Deactivate focus mode" must not re-activate the scene.
 func TestSceneOffPhrasings(t *testing.T) {
 	for _, text := range []string{
 		"Deactivate focus mode",
@@ -50,9 +48,7 @@ func TestSceneActivationStillMatches(t *testing.T) {
 	}
 }
 
-// Regression: "unmute speaker" used to match the mute_speaker rule because
-// anyOf did a bare substring search ("unmute speaker" contains "mute
-// speaker") and no unmute rule existed — the device muted on an unmute ask.
+// "unmute speaker" must not match the mute rule.
 func TestMuteUnmuteSpeaker(t *testing.T) {
 	cases := map[string]string{
 		"unmute speaker":            "unmute_speaker",
@@ -72,8 +68,7 @@ func TestMuteUnmuteSpeaker(t *testing.T) {
 	}
 }
 
-// Off-phrasings scene_off doesn't recognize must NOT activate a scene —
-// falling through to the agent (nil) is the correct behavior.
+// Unrecognized off-phrasings fall through to the agent instead of activating a scene.
 func TestSceneOffNeverActivates(t *testing.T) {
 	for _, text := range []string{
 		"kill focus mode",
@@ -105,10 +100,7 @@ func TestLocalChitchatAttentionAliasesDoNotDependOnVoiceWakeWordGate(t *testing.
 	}
 }
 
-// TestChitchatWholeWordOnly locks the fix for a substring match that answered
-// ordinary sentences as greetings: "hi" sits inside "this", "his", "machine",
-// so "What is this?" was replied to with "Hi there!" locally and never reached
-// the agent.
+// "hi" must not match inside "this" or "his".
 func TestChitchatWholeWordOnly(t *testing.T) {
 	SetChitchatEnabled(true)
 	t.Cleanup(func() { SetChitchatEnabled(true) })
@@ -133,9 +125,7 @@ func TestChitchatWholeWordOnly(t *testing.T) {
 	}
 }
 
-// TestChitchatDisabled covers the realtime case: the voice agent answers social
-// talk itself, so os-server must not also fire a canned reply — while command
-// intents keep working.
+// With chitchat off, command intents still work.
 func TestChitchatDisabled(t *testing.T) {
 	SetChitchatEnabled(false)
 	t.Cleanup(func() { SetChitchatEnabled(true) })
@@ -148,8 +138,6 @@ func TestChitchatDisabled(t *testing.T) {
 	}
 }
 
-// indexPhrase underpins tracking target selection, which needs to know WHERE a
-// keyword sits, not just whether it is present.
 func TestIndexPhrase(t *testing.T) {
 	cases := []struct {
 		text, kw string
@@ -172,15 +160,9 @@ func TestIndexPhrase(t *testing.T) {
 	}
 }
 
-// Regression: extractTrackTarget walked its keyword table in declaration order
-// with a bare strings.Contains, so the pronoun entry ("me"/"us"/"user", table
-// position 3) swallowed every request before "keyboard" (position 14) was ever
-// tested — and matched inside unrelated words. Captured on green-lamp
-// 2026-09-08: three turns asking the lamp to watch a keyboard all fired
-// POST /servo/track {"target":["person"]}.
+// Object nouns beat pronouns and matches are whole-word (issue #308).
 func TestExtractTrackTarget(t *testing.T) {
 	cases := map[string]string{
-		// The two real device transcripts that carry a tracking verb.
 		"so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way.": "keyboard",
 		"let me know when you are ready to track my fingers on my keyboard to type for the word. angry.":                      "keyboard",
 
@@ -206,9 +188,7 @@ func TestExtractTrackTarget(t *testing.T) {
 	}
 }
 
-// extractTrackTarget does NOT gate on the verb — hasTrackVerb does, inside the
-// rule's match func. So a bare mention of a noun must not fire the rule even
-// though the extractor would happily find a target in it.
+// A noun without a tracking verb must not fire the rule.
 func TestTrackRuleNeedsAVerb(t *testing.T) {
 	for _, text := range []string{
 		"yes, i have a keyboard there. so now you are tracking me and see if i type the word angry right.",
@@ -238,9 +218,7 @@ func TestTrackVerbEnd(t *testing.T) {
 
 const envSentence = "so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way."
 
-// The preamble appears and disappears BETWEEN turns of one conversation — it
-// depends on the turn's route, not the conversation — so the same sentence must
-// resolve identically in every envelope HAL can emit.
+// The same sentence resolves identically in every HAL envelope.
 func TestEnvelopeInvariance(t *testing.T) {
 	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
 	envelopes := map[string]string{
@@ -258,9 +236,7 @@ func TestEnvelopeInvariance(t *testing.T) {
 	}
 }
 
-// A file path must never supply the target: "sensing_face" holds the whole word
-// "face" between two non-word characters, and os-server does not strip these
-// markers until handler.go:689 — long after the intent match at handler.go:215.
+// A snapshot path must never supply the target.
 func TestSnapshotPathIsNotATarget(t *testing.T) {
 	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
 	for _, msg := range []string{
@@ -273,9 +249,7 @@ func TestSnapshotPathIsNotATarget(t *testing.T) {
 	}
 }
 
-// The summary is primary: STT is locked to one language while the user may
-// speak another, and the command rules are English-only. Matching the
-// transcript alone would silently disable local intent for those users.
+// The summary wins over a garbled transcript.
 func TestSummaryWinsOverGarbledTranscript(t *testing.T) {
 	r := MatchCommands("[voice-instruction] turn off the light and play some relaxing music\n[transcript] ton of delay and play some relate music")
 	if r == nil || r.Rule != "led_off" {
@@ -283,19 +257,14 @@ func TestSummaryWinsOverGarbledTranscript(t *testing.T) {
 	}
 }
 
-// No cross-field match: a verb in one field must not combine with a target in
-// the other. Neither field alone is a tracking command here.
+// A verb in one field must not combine with a target in the other.
 func TestNoCrossFieldMatch(t *testing.T) {
 	if r := MatchCommands("[voice-instruction] the user asked about tracking in general\n[transcript] i have a keyboard here"); r != nil {
 		t.Errorf("cross-field match fired %s / %q", r.Rule, r.TTSText)
 	}
 }
 
-// The three defects that SURVIVE Task 2 and are exactly what matching the
-// envelope fields separately fixes: a verb and a target taken from DIFFERENT
-// fields, a target taken from a file path, and "me" in a summary — where it
-// means the lamp, not the speaker (green-lamp 10:47:58 emitted "User wants to
-// connect me with their clock"). None of these is a command, so none may fire.
+// Cross-field, file-path and summary "me" targets must never fire.
 func TestFieldSeparationDefects(t *testing.T) {
 	cases := map[string]string{
 		"verb in summary, noun in transcript": "[voice-instruction] the user asked me to track something\n[transcript] there is a keyboard on the desk",
@@ -309,15 +278,9 @@ func TestFieldSeparationDefects(t *testing.T) {
 	}
 }
 
-// End-to-end guard for the three turns captured on green-lamp 2026-09-08, taken
-// verbatim from /root/local/flow_events_2026-09-08.jsonl. All three answered
-// "Tracking person." and fired POST /servo/track {"target":["person"]}.
-// See https://github.com/autonomous-ai/autonomous-os/issues/308
+// Captured green-lamp turns that wrongly tracked "person" (issue #308).
 func TestCapturedKeyboardTurns(t *testing.T) {
 	routeIntentHAL(t, func(w http.ResponseWriter, r *http.Request) {})
-	// 10:42:37 — local-intent-1788838957072
-	// "keyboard" sits 20 chars EARLIER than "me" and still lost, on table
-	// position alone.
 	r := MatchCommands("unknown speaker: [voice:voice_100] so now i am going to type the word angry on my keyboard. you watch me and tell me if i am tapping in the right way. (audio saved at /tmp/hal-unknown-voice/voice_100/incoming_1788838954624_577940c2.wav)")
 	if r == nil || r.Rule != "servo_track" {
 		t.Fatalf("10:42:37 turn = %v, want servo_track", r)
@@ -326,25 +289,13 @@ func TestCapturedKeyboardTurns(t *testing.T) {
 		t.Errorf("10:42:37 actions = %v, want [%s]", r.Actions, want)
 	}
 
-	// 10:46:53 — local-intent-1788839213186. "let me know" is filler, not a
-	// request to be tracked.
+	// "let me know" is filler, not a tracking request.
 	r = MatchCommands("[voice-instruction] user is asking if the lamp is ready to track their fingers typing the word 'angry'. this follows previous turns about the lamp looking down at the keyboard.\n[transcript] let me know when you are ready to track my fingers on my keyboard to type for the word. angry.")
 	if r == nil || r.TTSText != "Tracking keyboard." {
 		t.Errorf("10:46:53 turn = %v, want TTS \"Tracking keyboard.\"", r)
 	}
 
-	// 10:46:19 — local-intent-1788839179672. The transcript alone is
-	// conversational ("you are tracking me"), with no imperative verb, so it
-	// matches nothing. The SUMMARY names both the verb and the keyboard, and
-	// the summary is the primary field — so the turn resolves to the keyboard
-	// rather than to the person, which is the whole point of the fix.
-	//
-	// Note what this does NOT do: the agent never sees the turn, so nothing
-	// checks whether the user typed "angry" correctly. Aiming at the keyboard
-	// is the right hardware action; verifying the spelling is a separate
-	// request that the local rule still swallows. Making conversational turns
-	// fall through to the agent means requiring an imperative in
-	// trackVerbEnd — deliberately out of scope here.
+	// The summary names verb and keyboard, so the turn resolves to the keyboard.
 	r = MatchCommands("[voice-instruction] user wants lamp to track their typing and confirm if they type 'angry' correctly. lamp previously mentioned not seeing the keyboard, but user is re-requesting based on lamp's 'peeking down' comment.\n[transcript] yes, i have a keyboard there. so now you are tracking me and see if i type the word angry right.")
 	if r == nil || r.TTSText != "Tracking keyboard." {
 		t.Errorf("10:46:19 turn = %v, want TTS \"Tracking keyboard.\"", r)

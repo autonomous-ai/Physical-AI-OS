@@ -137,7 +137,6 @@ func TestPersonaInline_SoulRemovedStripsBlock(t *testing.T) {
 		t.Errorf("original AGENTS.md content not restored:\ngot:  %q\nwant: %q", got, personaTestAgents)
 	}
 
-	// And a further call stays a no-op.
 	modified, err = ensurePersonaInlineBlockIn(dir)
 	if err != nil {
 		t.Fatalf("post-strip call: %v", err)

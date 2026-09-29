@@ -17,11 +17,7 @@ import (
 	"time"
 )
 
-// This opt-in integration test runs the production handler, HAL HTTP route and
-// announcer queue, sanitized fallback and TTS worker. Cloud/realtime rendering
-// is disabled; synthesis and the audio device are deterministic fixtures;
-// nonzero PCM proves worker playback, not that a physical speaker was audible.
-// It does not exercise OpenHarness transport or the durable result ledger.
+// Opt-in integration test: production handler, HAL route, announcer and TTS worker with deterministic audio fixtures.
 func TestHarnessGroupedResultHALPlaybackIntegration(t *testing.T) {
 	python := os.Getenv("HARNESS_HAL_TEST_PYTHON")
 	if python == "" {
@@ -34,8 +30,7 @@ func TestHarnessGroupedResultHALPlaybackIntegration(t *testing.T) {
 			old := fmt.Sprintf("device-chat-1-%d", time.Now().Add(-time.Second).UnixMilli())
 			h.MarkHarnessResponseRun(old, false, false)
 			h.CancelSpeech()
-			// A real cancel watermark is taken first. The new device timestamp must be
-			// strictly greater even on a fast machine whose clock has not ticked yet.
+			// The new device timestamp must be strictly greater than the real cancel watermark.
 			latest := fmt.Sprintf("device-chat-2-%d", h.speechWatermarkMs.Load()+1)
 			h.MarkHarnessResponseRun(latest, false, false)
 			ids := []string{old, latest}
@@ -46,7 +41,6 @@ func TestHarnessGroupedResultHALPlaybackIntegration(t *testing.T) {
 				ids = []string{latest}
 			}
 			if scenario == "cancel-after-B" {
-				// Use an actual later cancellation, rather than writing the watermark.
 				deadline := time.NewTimer(2 * time.Millisecond)
 				<-deadline.C
 				h.CancelSpeech()
@@ -74,8 +68,7 @@ func TestHarnessGroupedResultHALPlaybackIntegration(t *testing.T) {
 			} else if err != nil {
 				t.Fatal(err)
 			}
-			// Match the production caller's admission gate: replay does not call the
-			// speech sink again after the shared result's member routes are completed.
+			// Match the production admission gate: replay doesn't re-call the speech sink once routes complete.
 			if h.DeliverHarnessGroupedResult("playback-result", "completed", fullText, ids) {
 				t.Fatal("replay was admitted for another speech submission")
 			}

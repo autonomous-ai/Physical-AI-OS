@@ -1,9 +1,4 @@
-"""Learned-policy route handlers.
-
-The initial implementation is deliberately dry-run only.  It logs and exposes
-the request shape, but it neither imports LeRobot nor sends a target to a
-servo.  This makes the interface safe to ship before a policy executor exists.
-"""
+"""Learned-policy route handlers (dry-run only: never imports LeRobot or moves a servo)."""
 from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state

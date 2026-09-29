@@ -49,8 +49,6 @@ func (s *Server) guardHarnessPreparationWait(kind string, reply *harnessReplyReq
 		if s.harnessPreparationWaits == nil {
 			s.harnessPreparationWaits = make(map[string]*harnessPreparationWait)
 		}
-		// Retain expired routes long enough to reject late callbacks without an
-		// unbounded cache. The helper's persisted budget survives OS restarts.
 		for id, old := range s.harnessPreparationWaits {
 			if now.Sub(old.deadline) > 24*time.Hour {
 				delete(s.harnessPreparationWaits, id)

@@ -1,22 +1,4 @@
-"""Media owner factory — resolve a ROBOT.md `owner:` name to a handover class.
-
-Mirrors hal/drivers/motors/factory.py and hal/drivers/camera/factory.py. Those
-answer "which implementation opens this hardware"; this one answers "who has to
-let go of it first". Same rule in all three: the device declares a name, the
-registry maps it to a class, and nothing outside this table knows which body is
-running.
-
-Behavior:
-  - owner absent (None)           → None (HAL owns the hardware; the normal case)
-  - owner known + importable      → return the class
-  - owner known + ImportError     → return None + warning (HAL boots degraded)
-  - owner unknown                 → RuntimeError (deploy fault, fail loud)
-
-Unknown always fails loud, with no required/optional split: a capability naming
-an owner that does not exist cannot be honoured, and carrying on means opening
-hardware someone else still holds — a "device busy" failure much further away
-from its cause.
-"""
+"""Media owner factory — resolve a ROBOT.md `owner:` name to a handover class."""
 from __future__ import annotations
 
 import importlib
@@ -25,7 +7,6 @@ from typing import Optional, Tuple
 
 logger = logging.getLogger("hal.media_owner.factory")
 
-# Registry: owner name → (module_path, class_name)
 MEDIA_OWNERS: dict[str, Tuple[str, str]] = {
     # Pollen Robotics' reachy_mini daemon (Reachy Mini). Holds /dev/video* and
     # both ALSA PCMs for its own app runtime; keeps running, and keeps driving

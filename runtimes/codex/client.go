@@ -19,17 +19,13 @@ import (
 	"go.autonomous.ai/os/system/statusled"
 )
 
-// This sentinel means no socket write was attempted. Other transport failures
-// have an uncertain delivery outcome and must never be automatically replayed.
+// This sentinel means no socket write was attempted; other send failures must never be replayed.
 var errDisconnectedBeforeSend = errors.New("codex websocket not connected")
 
 const (
-	// reconnectBackoff is the fixed wait between reconnect attempts. Codex is
-	// local so a short, constant backoff is fine (matches openclaw).
+	// reconnectBackoff is the fixed wait between reconnect attempts.
 	reconnectBackoff = 5 * time.Second
-	// readDeadline bounds how long the read loop blocks waiting for a frame. It
-	// is refreshed on every inbound frame (including pong) so a healthy-but-idle
-	// socket is kept alive by the keepalive ping below.
+	// readDeadline bounds how long the read loop blocks waiting for a frame.
 	readDeadline = 90 * time.Second
 	// pingInterval is how often we send an application-level ping so the server
 	// keeps the connection warm and our readDeadline keeps getting fed.
@@ -37,18 +33,12 @@ const (
 )
 
 // StartWS connects to the Codex WebSocket and runs the read loop, calling
-// handler for each translated event. Runs until ctx is cancelled, auto-
-// reconnecting on drop. Mirrors the openclaw.CodexService.StartWS shape.
+// handler for each translated event.
 func (s *CodexService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	// Device-owned Telegram inbound: ONE poll goroutine for the whole gateway
 	// lifetime (outside the reconnect loop, so it survives WS drops; ctx-bound
-	// so it dies with the gateway). Started here — not at construction — so it
-	// only runs while codex is the ACTIVE runtime, which is what guarantees no
-	// getUpdates conflict with other runtimes' pollers. See telegram_poll.go.
+	// so it dies with the gateway).
 	go s.startTelegramPoll(ctx)
-	// Device-owned Discord inbound: same lifecycle rule as the telegram loop —
-	// the gateway bot session runs only while codex is the ACTIVE runtime and
-	// dies with the gateway ctx. See discord.go.
 	go s.startDiscordBot(ctx)
 	for {
 		select {
@@ -60,14 +50,9 @@ func (s *CodexService) StartWS(ctx context.Context, handler domain.AgentEventHan
 		if ctx.Err() != nil {
 			return
 		}
-		// Skip the cyan status overlay during AP/provisioning mode (no creds yet).
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Set(statusled.StateAgentDown)
 		}
-		// Safety reflex: the gateway link just dropped, so any in-flight servo
-		// object-tracking is now chasing a target it can no longer get vision
-		// updates for. Stop it (best-effort, idempotent). Only devices that can
-		// servo-track have anything to stop.
 		if s.config.SetUpCompleted && device.Has(s.config.DeviceTypeOrDefault(), device.CapMotion) {
 			if err := hal.StopServoTracking(); err != nil {
 				slog.Warn("stop servo tracking on ws disconnect failed", "component", "codex", "error", err)
@@ -132,10 +117,7 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	flow.Log("ws_ready", map[string]any{"backend": "codex"})
 	slog.Info("Codex connected", "component", "codex", "url", WSURL)
 
-	// On reconnect (not first boot), announce via TTS so the user knows the agent
-	// is back. SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
-	// be fed to the realtime voice agent as history; fixed pool self-caches into
-	// hal's WAV cache so replays skip the provider.
+	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
@@ -145,7 +127,6 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 		}()
 	}
 
-	// Keepalive ping loop — bounded to this connection's lifetime.
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	go s.keepAlive(pingCtx)
@@ -154,31 +135,23 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 		if handler == nil {
 			return
 		}
-		// Best-effort: drop handler errors but keep reading (matches openclaw).
 		if err := handler(ctx, evt); err != nil {
 			slog.Error("ws handler error", "component", "codex", "event", evt.Event, "error", err)
 		}
 	}
 	// Publish it for the paths that must end a turn from outside this loop (see
-	// failStuckTurn). Cleared on the way out so a dead connection's handler is
-	// never used to answer a later turn.
+	// failStuckTurn).
+	// Cleared on the way out so a dead connection's handler is never used to answer a later turn.
 	s.wsDispatch.Store(dispatchFn(dispatch))
 	defer s.wsDispatch.Store(dispatchFn(nil))
-	// A gateway restart drops the socket while os-server itself stays alive.
-	// End the correlated turn before the generic disconnect cleanup clears its
-	// IDs; otherwise the monitor and web chat retain a permanently ACTIVE turn.
-	// Server shutdown cancels ctx, where no live client can receive this event.
+	// End the correlated turn before the disconnect cleanup clears its IDs.
 	defer func() {
 		if ctx.Err() == nil {
 			s.failDisconnectedTurn(dispatch)
 		}
 	}()
 
-	// A reconnect may be the only new idle edge: no earlier turn is guaranteed
-	// to finish after a gateway restart. Drain only locally buffered, unsent
-	// events once the connection and event sink are ready. Already transmitted
-	// pendingRuns remain correlation records, never a replay source; a surviving
-	// gateway turn keeps these new events behind it in the gateway's FIFO.
+	// Drain only locally buffered, unsent events; sent pendingRuns are never replayed.
 	go s.drainPendingEvents()
 
 	for {
@@ -196,9 +169,7 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	}
 }
 
-// keepAlive sends an application-level ping every pingInterval. Codex replies
-// with a pong frame (ignored by the translator) which refreshes the read
-// deadline and keeps an idle socket alive.
+// keepAlive sends an application-level ping every pingInterval.
 func (s *CodexService) keepAlive(ctx context.Context) {
 	tick := time.NewTicker(pingInterval)
 	defer tick.Stop()
@@ -211,16 +182,13 @@ func (s *CodexService) keepAlive(ctx context.Context) {
 				"type": "ping",
 				"id":   fmt.Sprintf("ping-%d", s.reqCounter.Add(1)),
 			}); err != nil {
-				// Write failure means the socket is gone; the read loop will see
-				// the same error and trigger reconnect. Nothing to do here.
 				return
 			}
 		}
 	}
 }
 
-// sendFrame marshals v and writes it to the WebSocket under wsMu. Returns an
-// error when the socket is not connected.
+// sendFrame marshals v and writes it to the WebSocket under wsMu.
 func (s *CodexService) sendFrame(v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -240,7 +208,7 @@ func (s *CodexService) sendFrame(v any) error {
 	return nil
 }
 
-// sleepCtx sleeps for d or until ctx is cancelled. Returns false if cancelled.
+// sleepCtx sleeps for d or until ctx is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

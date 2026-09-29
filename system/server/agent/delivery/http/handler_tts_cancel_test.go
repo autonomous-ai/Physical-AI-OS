@@ -13,10 +13,7 @@ func newCancelTestHandler() *AgentHandler {
 	}
 }
 
-// Device-observed regression (19/8): the TTS path holds the device run id while
-// HW dispatch can still be holding the backend UUID for the SAME turn. Judging
-// them separately muted the reply but let the servo and LED markers through, so
-// the device went quiet and kept moving.
+// The TTS run id and HW backend UUID of one turn must be judged together so servo/LED mute too.
 func TestCancelVerdictIsSameForBackendUUIDAndDeviceRunID(t *testing.T) {
 	h := newCancelTestHandler()
 	deviceID := deviceRunID(5, time.Now().Add(-2*time.Second))
@@ -33,15 +30,11 @@ func TestCancelVerdictIsSameForBackendUUIDAndDeviceRunID(t *testing.T) {
 	}
 }
 
-// An unmapped UUID (turn started after the click, mapping not recorded yet)
-// must still be allowed to act — otherwise a cancel would freeze the body of
-// every later turn too.
+// An unmapped UUID (turn started after the click) must still be allowed to act.
 func TestUnmappedBackendUUIDAfterCancelStillActs(t *testing.T) {
 	h := newCancelTestHandler()
 	h.CancelSpeech()
-	// An id with no readable creation time is dated by when it was first seen,
-	// and a tie with the mark counts as cancelled (conservative). Step past the
-	// mark so this exercises "seen later", not the same-millisecond tie.
+	// Step past the mark so this tests "seen later", not the same-ms tie.
 	time.Sleep(2 * time.Millisecond)
 	if h.isSpeechCancelled("0198f2c1-dead-7c3d-9e10-5f6a7b8c9d0e") {
 		t.Errorf("unmapped run first seen after the cancel must not be muted")
@@ -52,9 +45,7 @@ func deviceRunID(seq int, at time.Time) string {
 	return fmt.Sprintf("device-chat-%d-%d", seq, at.UnixMilli())
 }
 
-// The scenario the feature exists for: several turns are already in flight,
-// the user clicks, then immediately says something new. Every older turn must
-// lose the speaker; the new one must keep it.
+// In-flight turns lose the speaker on click; a new turn afterwards keeps it.
 func TestCancelSpeechMutesBacklogButNotNewTurns(t *testing.T) {
 	h := newCancelTestHandler()
 	now := time.Now()
@@ -84,8 +75,7 @@ func TestCancelSpeechMutesBacklogButNotNewTurns(t *testing.T) {
 	}
 }
 
-// A second click must mute the turns started since the first one, so holding
-// the watermark monotone is not enough on its own — it has to move forward.
+// A second click must move the watermark forward to mute turns since the first.
 func TestCancelSpeechWatermarkAdvances(t *testing.T) {
 	h := newCancelTestHandler()
 
@@ -102,8 +92,7 @@ func TestCancelSpeechWatermarkAdvances(t *testing.T) {
 	}
 }
 
-// Channel runs carry no timestamp. A sequence-numbered id must never be read
-// as a 1970 date — that would mute every Telegram turn forever.
+// Sequence-numbered channel run ids must never be read as 1970 timestamps.
 func TestChannelRunIDsUseFirstSeenNotSequence(t *testing.T) {
 	h := newCancelTestHandler()
 
@@ -122,8 +111,7 @@ func TestChannelRunIDsUseFirstSeenNotSequence(t *testing.T) {
 	}
 }
 
-// An empty runID has no turn to attribute the speech to; muting it would take
-// the speaker away from OS-level notices that pass through the same path.
+// An empty runID must not be muted: OS-level notices share this path.
 func TestCancelSpeechIgnoresEmptyRunID(t *testing.T) {
 	h := newCancelTestHandler()
 	h.CancelSpeech()

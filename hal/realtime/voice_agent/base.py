@@ -49,16 +49,7 @@ class BoundAudioCommitEvent(AudioCommitEvent):
 
 
 class VoiceAgentBase(ABC):
-    """Sync interface for a realtime voice agent.
-
-    Lifecycle: connect → (append_audio / commit_audio / send + receive) → disconnect.
-
-    Internally each provider runs two threads:
-      - _send_loop: drains _send_queue → API (reconnects on error)
-      - _recv_loop: API → _recv_queue (reconnects on error)
-
-    Public methods are non-blocking (queue puts) except connect/disconnect/receive.
-    """
+    """Sync interface for a realtime voice agent (send/recv threads; public methods are non-blocking)."""
 
     def __init__(self, tools: list[dict[str, Any]] | None = None):
         self._tools: list[dict[str, Any]] = tools or []
@@ -68,20 +59,14 @@ class VoiceAgentBase(ABC):
         self._stop_event = threading.Event()
         self._send_thread: threading.Thread | None = None
         self._recv_thread: threading.Thread | None = None
-        # Armed by skip_next_turn_done() (look replay): swallow ONE stale
-        # TurnDoneEvent that arrives before any real output. See receive().
+        # Armed by skip_next_turn_done() (look replay): swallow one stale TurnDoneEvent.
         self._newest_output_gen: int = 0
         self._skip_stale_turn_done: bool = False
         self.execution_completed: bool = False
         self.execution_turn_id: str = ""
-        # Per-turn override of the receive() silent-turn watchdog. Set by the
-        # orchestrator on `look` turns: Gemini's forced thinking over a
-        # text-dense image can stay silent >8s right before the answer
-        # (device-observed 2026-07-06 — watchdog killed the turn seconds
-        # after express_emotion fired). Cleared when receive() exits.
+        # Per-turn watchdog override for `look` turns (Gemini can think silently >8s); cleared on exit.
         self._recv_timeout_override_s: float | None = None
-        # monotonic() of the last message the SERVER sent us, whatever it was.
-        # Liveness, not output — see note_server_activity / receive().
+        # Liveness, not output (see note_server_activity).
         self._last_server_msg_at: float = 0.0
         self._committed_at: float = 0.0
         self._progress_deadline_at: float = 0.0
@@ -104,12 +89,7 @@ class VoiceAgentBase(ABC):
 
     @property
     def requires_fresh_session(self) -> bool:
-        """Whether the provider session must be replaced before another turn.
-
-        Providers normally return ``False``. Gemini overrides this after an
-        unresolved function call because its Live API refuses further client
-        input on that session.
-        """
+        """Whether the provider session must be replaced before another turn (Gemini after an unresolved call)."""
         return False
 
     @property
@@ -119,8 +99,7 @@ class VoiceAgentBase(ABC):
 
     @property
     def output_sample_rate(self) -> int:
-        """Sample rate of the model's OWN audio output (Hz), for native playback.
-        Defaults to the input rate; providers override when they differ."""
+        """Sample rate of the model's own audio output (Hz); defaults to the input rate."""
         return self.sample_rate
 
     def connect(self) -> None:
@@ -141,10 +120,7 @@ class VoiceAgentBase(ABC):
         """Stop loops and disconnect."""
         self._stop_event.set()
         self._connected.clear()
-        # Close the provider transport before joining worker threads. A receive
-        # worker may be blocked in a long provider read; waiting for it first
-        # delays the very close that would wake it up and can leave it behind
-        # during an agent rebuild.
+        # Close the transport before joining threads; a blocked receive only wakes on close.
         try:
             self._do_disconnect()
         finally:
@@ -181,11 +157,7 @@ class VoiceAgentBase(ABC):
             self._send_queue.put(event)
 
     def allow_progress_until(self, deadline: float) -> None:
-        """Let verified provider work survive the receive gap until a deadline.
-
-        Callers supply an absolute, turn-scoped deadline. Repeated search or
-        tool updates must not buy a fresh timeout on every message.
-        """
+        """Let verified provider work survive the receive gap until an absolute turn-scoped deadline."""
         self._progress_deadline_at = deadline
 
     def allow_output_until(self, deadline: float) -> None:
@@ -193,16 +165,7 @@ class VoiceAgentBase(ABC):
         self._output_deadline_at = deadline
 
     def flush_output(self) -> None:
-        """Drop any output events left on the recv queue from a previous turn.
-
-        Provider responses land on `_recv_queue` asynchronously and can lag the
-        caller's local-VAD turn cadence. If the queue is not cleared, the next
-        turn's `receive()` reads a STALE prior response (read in milliseconds,
-        well before this turn's real reply) and speaks it — the "agent talks on
-        its own after a noise blip" + double-reply bug. Call right before
-        `commit_audio()` so every turn starts from an empty queue and only ever
-        reads its own response.
-        """
+        """Drop output events left from a previous turn; call right before `commit_audio()`."""
         dropped = 0
         while True:
             try:
@@ -223,20 +186,11 @@ class VoiceAgentBase(ABC):
 
     @property
     def supports_announce(self) -> bool:
-        """Whether this provider can speak a device-initiated AnnounceInput.
-
-        False by default: the caller then renders the announcement without the
-        realtime model (text summarizer + TTS). Providers opt in only where a
-        text input can open a response of its own on the current wire.
-        """
+        """Whether this provider can speak a device-initiated AnnounceInput."""
         return False
 
     def announce(self, text: str) -> bool:
-        """Queue a device-initiated spoken reply; read it with receive().
-
-        Returns False when the provider cannot announce right now. The caller
-        must flush_output() first so receive() reads only this response.
-        """
+        """Queue a device-initiated spoken reply (flush_output() first); False if not possible now."""
         if not self.supports_announce or not self.available:
             return False
         self._committed_at = time.monotonic()
@@ -246,69 +200,31 @@ class VoiceAgentBase(ABC):
         return True
 
     def end_turn(self) -> None:
-        """Mark the current turn finished from the consumer's side.
+        """Mark the current turn finished from the consumer's side (no-op by default).
 
-        Default no-op. Gemini's manual-VAD path gates the NEXT turn's commit on a
-        `_turn_done` event that only the model's `turn_complete` sets. When a turn
-        ends with a tool call (e.g. delegate_to_main) the model sends no
-        turn_complete, so without this the next commit blocks on `_turn_done.wait`
-        for the full 10s timeout. The orchestrator calls this after a delegate so
-        the following turn commits immediately.
+        Gemini sends no turn_complete after a tool call; without this the next commit waits 10s.
         """
 
     def skip_next_turn_done(self) -> None:
-        """Arm receive() to swallow ONE TurnDoneEvent that arrives before any
-        real output.
-
-        Look replay: the orchestrator cancels the model's tool-call turn by
-        re-committing the user's audio, but the server's turn_complete for the
-        CANCELLED turn lands on the recv queue a few hundred ms later — after
-        flush_output() already ran for the replay — and receive() would break
-        on it, ending the replayed turn empty (device-observed: replay died
-        ~340ms after commit). The flag disarms on the first real output, so a
-        turn_complete that follows actual content (the live turn's own) is
-        never swallowed.
-        """
+        """Arm receive() to swallow ONE TurnDoneEvent that arrives before any real output (look replay)."""
         self._skip_stale_turn_done = True
 
     def note_server_activity(self) -> None:
-        """Record that the server just sent us something, output or not.
-
-        The silent-turn watchdog in receive() cannot tell a model that decided
-        not to answer from one that is busy — grounding a search, thinking —
-        because both look identical from the queue: nothing arrives. They are
-        NOT identical on the wire, though. A working turn keeps producing
-        messages we deliberately drop before the queue (thought parts, grounding
-        metadata, usage-only frames), while a turn the model abandoned goes
-        completely quiet. Providers call this on every inbound message so the
-        watchdog can use that difference instead of guessing.
-        """
+        """Record that the server sent something, so the watchdog can tell working turns from silent ones."""
         self._last_server_msg_at = time.monotonic()
 
     def extend_recv_timeout(self, seconds: float) -> None:
-        """Raise the silent-turn watchdog for the CURRENT turn only.
-
-        Look turns: the model may think silently well past the default gap
-        window while reading a text-dense image; the orchestrator calls this
-        when a `look` fires so receive() waits longer before declaring the
-        model silent. Reset automatically when receive() exits.
-        """
+        """Raise the silent-turn watchdog for the current turn only (reset when receive() exits)."""
         self._recv_timeout_override_s = seconds
 
     def receive(
         self, *, stop_on_done: bool = True, stop_event: threading.Event | None = None,
     ) -> Generator[OutputBase, None, None]:
-        """Sync generator — yields OutputBase items from _recv_queue.
+        """Sync generator yielding OutputBase items from _recv_queue.
 
-        When stop_on_done=True (default), stops at the first TurnDoneEvent.
-        When stop_on_done=False, skips TurnDoneEvents and keeps yielding across turns.
-        stop_event is checked at most every 100 ms of queue wait; cancellation
-        does not complete a turn.
+        stop_on_done stops at the first TurnDoneEvent; stop_event is polled every 100 ms.
         """
-        # Tracks whether this generator ran to a NORMAL end (turn done or
-        # silence timeout). A look replay abandons the generator mid-turn
-        # (GeneratorExit) — the extended watchdog must survive into the
-        # replayed turn, so only a normal end clears the override.
+        # Only a normal end clears the override; a look replay abandons the generator mid-turn.
         self.execution_completed = False
         self.execution_turn_id = ""
         turn_ended = False
@@ -326,15 +242,12 @@ class VoiceAgentBase(ABC):
                     getattr(self, "_progress_deadline_at", 0.0),
                     getattr(self, "_output_deadline_at", 0.0),
                 ) - time.monotonic()
-                # Leave a small scheduling margin for the provider to enqueue
-                # its bounded fallback (including handoff context) at expiry.
                 queue_timeout = min(recv_timeout, progress_remaining + 0.1) if progress_remaining > 0 else recv_timeout
                 try:
                     if stop_event is None:
                         event = self._recv_queue.get(timeout=queue_timeout)
                     else:
-                        # Poll only cancellation. Keep the original queue-wait
-                        # deadline so each poll is not a new receive timeout.
+                        # Keep the original deadline so each poll is not a new receive timeout.
                         deadline = time.monotonic() + queue_timeout
                         while True:
                             if stop_event.is_set():
@@ -356,19 +269,8 @@ class VoiceAgentBase(ABC):
                         getattr(self, "_output_deadline_at", 0.0),
                     ):
                         continue
-                    # No OUTPUT within the gap window. Usually the model staying
-                    # silent on a noise / non-directed turn, which is correct —
-                    # end quietly and let the main agent have it.
-                    #
-                    # But a turn can also be silent because it is WORKING: a
-                    # Google Search grounding produces no output until the search
-                    # returns, and killing it here throws away an answer the
-                    # model was about to give and forwards the turn to the main
-                    # agent, which is far slower (and the abandoned search is
-                    # still billed, and its chunks still land in the session
-                    # context). Tell the two apart by liveness on the wire: a
-                    # working turn keeps sending messages we drop before the
-                    # queue, a silent one sends nothing at all.
+                    # No output within the gap: silent turn vs working turn (e.g. search grounding),
+                    # told apart by liveness on the wire.
                     since_msg: float = time.monotonic() - self._last_server_msg_at
                     waited: float = time.monotonic() - turn_started
                     if (
@@ -392,9 +294,7 @@ class VoiceAgentBase(ABC):
                         since_msg if self._last_server_msg_at > 0 else -1.0,
                     )
                     now = time.monotonic()
-                    # Enqueuing capture is not proof that the transport sent it.
-                    # Expose bounded metadata to distinguish a stuck sender/tool
-                    # gate from a connected provider that has stopped replying.
+                    # Enqueued capture is not proof it was sent.
                     sent_at = getattr(self, "_last_audio_sent_at", None)
                     sender = getattr(self, "_send_thread", None)
                     send_queue = getattr(self, "_send_queue", None)
@@ -450,18 +350,9 @@ class VoiceAgentBase(ABC):
                         isinstance(event.output, InterruptedOutput)
                         and event.output.reason == "server_interrupt"
                     ):
-                        # Input metadata survives cancelled response generations
-                        # and does not make a stale response terminal current.
                         yield event.output
                         continue
-                    # Drop output belonging to a superseded generation. The
-                    # provider bumps OutputEvent.gen at every turn boundary,
-                    # including an interruption, so anything still queued from
-                    # a cancelled reply is older than what we have already
-                    # yielded and must never reach the speaker. Filtered HERE
-                    # rather than in each consumer so every caller — turn path
-                    # and live pump alike — gets it for free; providers that
-                    # never set gen leave it 0 and nothing is ever dropped.
+                    # Drop output from a superseded generation (gen bumps at every turn boundary).
                     if event.gen < getattr(self, "_newest_output_gen", 0):
                         stale += 1
                         continue
@@ -477,15 +368,11 @@ class VoiceAgentBase(ABC):
                     self._skip_stale_turn_done = False  # real output → next done is live
                     yield event.output
         finally:
-            # Clear the per-turn watchdog override only on a NORMAL turn end;
-            # an abandoned generator (look replay re-commit) keeps it for the
-            # replayed turn.
+            # Clear the override only on a normal turn end (see above).
             if turn_ended:
                 self._recv_timeout_override_s = None
                 self._progress_deadline_at = 0.0
                 self._output_deadline_at = 0.0
-
-    # --- Abstract: provider-specific implementation ---
 
     @abstractmethod
     def _do_connect(self) -> None:

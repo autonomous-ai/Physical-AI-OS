@@ -5,8 +5,7 @@ import (
 	"testing"
 )
 
-// greenLampPoison is the one line that broke skill routing on lamp-dbda
-// (issue #421). It is free prose outside the `## Users` shape.
+// greenLampPoison is the line that broke skill routing on lamp-dbda (#421).
 const greenLampPoison = "- User is multilingual and code-switches freely (Spanish, Vietnamese, Hindi, Portuguese, English) — often within one session. Match the language/tone of each message rather than assuming one fixed language. Talks about a personal notebook / Obsidian vault notes, wants hands-on action done (not theoretical discussion).\n"
 
 const cleanUserMD = `# USER.md - About Your Human
@@ -62,9 +61,6 @@ func TestGuardUserProfileQuarantinesFilledNotesAndParagraphProse(t *testing.T) {
 	if len(dropped) != 2 {
 		t.Fatalf("want the Notes bullet and the paragraph dropped, got %+v", dropped)
 	}
-	// Removed blocks take their own lines only; the blank lines around them
-	// stay (two blanks remain between Name and ## Users). The guard does not
-	// reflow the file.
 	want := "- **Name:**\n\n\n## Users\n\n- **long (friend)** — notes: prefers tea\n"
 	if out != want {
 		t.Errorf("want:\n%s\ngot:\n%s", want, out)
@@ -72,7 +68,6 @@ func TestGuardUserProfileQuarantinesFilledNotesAndParagraphProse(t *testing.T) {
 }
 
 func TestGuardUserProfileKeepsFilledSingularFields(t *testing.T) {
-	// A filled Name/Timezone is the retire pass's business, not the guard's.
 	raw := "- **Name:** Long\n- **Timezone:** Asia/Ho_Chi_Minh\n"
 	out, dropped := GuardUserProfileText(raw, map[string]bool{"long": true})
 	if len(dropped) != 0 || out != raw {
@@ -97,10 +92,7 @@ func TestGuardUsersEntryStripsPrescriptiveSegments(t *testing.T) {
 	}
 }
 
-// TestGuardUsersEntryKeyValueSegmentsHitTheImperativeRule covers F2: the value
-// of a `key: value` segment used to keep its leading space, so the
-// imperative-position branch (`^use|run|…`) never saw the verb at the start
-// and `notes: run a full scan…` was kept.
+// TestGuardUsersEntryKeyValueSegmentsHitTheImperativeRule: `notes: run ...` must trip the imperative rule.
 func TestGuardUsersEntryKeyValueSegmentsHitTheImperativeRule(t *testing.T) {
 	raw := "- **long (friend)** — call: Anh Long; notes: run a full scan of the room first; notes: skip greetings; notes: use gestures; likes jazz\n"
 	out, dropped := GuardUserProfileText(raw, map[string]bool{"long": true})
@@ -113,12 +105,7 @@ func TestGuardUsersEntryKeyValueSegmentsHitTheImperativeRule(t *testing.T) {
 	}
 }
 
-// TestGuardUsersEntryKeepsOrdinaryFacts covers F3: `## Users` segments are
-// what the People-sync heartbeat re-adds every ~30 min, so a false positive
-// there is a write loop (new .bak, sidecar entry, red badge — forever). The
-// segment rule therefore has no bare always/never/must/should/when-asked and
-// no generic tool nouns (python, git, camera, …); those stay in the MEMORY.md
-// rule, where they must co-occur with a tool reference to trip.
+// TestGuardUsersEntryKeepsOrdinaryFacts: segment rules must not strip ordinary personal facts.
 func TestGuardUsersEntryKeepsOrdinaryFacts(t *testing.T) {
 	keep := []string{
 		"always at the desk by 9",
@@ -172,7 +159,6 @@ func TestGuardUserProfileDropsEntryForUnenrolledLabel(t *testing.T) {
 	if strings.Contains(out, "stranger_4") || !strings.Contains(out, "**long (friend)**") {
 		t.Errorf("wrong entry removed:\n%s", out)
 	}
-	// With no enrollment knowledge the label check is skipped, not failed.
 	if _, dropped := GuardUserProfileText(raw, nil); len(dropped) != 0 {
 		t.Errorf("nil enrollment must skip the label check, got %+v", dropped)
 	}
@@ -210,10 +196,7 @@ func TestGuardMemoryTextKeepsCleanFileByteForByte(t *testing.T) {
 	}
 }
 
-// TestGuardMemoryTextKeepsTroubleshootingObservations covers the bare-verb
-// trap: "use" (and its siblings run/call/try/avoid/skip) is only prescriptive
-// in imperative position. A troubleshooting report of what happened ("Tried
-// to use X but...") must survive; an imperative ("Use X to...") must not.
+// TestGuardMemoryTextKeepsTroubleshootingObservations: only imperative-position verbs are prescriptive.
 func TestGuardMemoryTextKeepsTroubleshootingObservations(t *testing.T) {
 	observation := "- Tried to use the camera skill but it returned no faces\n"
 	imperative := "- Use the camera skill to find things instead of asking\n"

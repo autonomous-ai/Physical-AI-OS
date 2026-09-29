@@ -20,9 +20,7 @@ enum PairingStoreError: LocalizedError {
 }
 
 // File-backed (~/Library/Application Support/AutonomousBuddy/pairing.json, mode 0600).
-// Earlier Keychain-backed implementation triggered an unapprovable password
-// prompt on macOS Ventura for ad-hoc-signed builds; switch to file storage
-// until we ship a Developer ID signed build.
+// Keychain prompted unapprovably for ad-hoc-signed builds on Ventura.
 final class PairingStore {
     private let fileURL: URL
 

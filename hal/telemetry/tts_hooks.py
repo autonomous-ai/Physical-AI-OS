@@ -1,10 +1,4 @@
-"""Playback hooks handed to every TTSService instance.
-
-Lives here, not at a construction site, because TTSService is built in more
-than one place: at boot (hal/server.py) and again on every /voice/start, which
-hot-swaps the service when the provider or voice changes. A hook wired at only
-one of those silently stops measuring after the first swap — audio keeps
-playing, the metrics just go blind.
+"""Playback hooks for every TTSService instance (built at boot and on every /voice/start).
 
 Measurement only; never raises into the audio path.
 """

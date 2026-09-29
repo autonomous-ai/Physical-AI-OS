@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// fakeConnectors is the test double for ConnectorChecker: a fixed set of
-// installed connector codes, plus a record of every code the runner asked
-// about so a test can prove the guard was (or was not) consulted at all.
+// fakeConnectors is a ConnectorChecker double that records every code asked about.
 type fakeConnectors struct {
 	installed map[string]bool
 	asked     []string
@@ -30,8 +28,7 @@ func installed(codes ...string) *fakeConnectors {
 	return &fakeConnectors{installed: m}
 }
 
-// dailyWithRequires is a due-able daily schedule carrying the given
-// requirement list — the shape a template-created task arrives in.
+// dailyWithRequires returns a due-able daily schedule with the given requirements.
 func dailyWithRequires(requires ...string) Schedule {
 	return Schedule{
 		ID: "s1", Name: "Inbox digest", Instructions: "Summarize my unread email", Enabled: true,
@@ -40,10 +37,7 @@ func dailyWithRequires(requires ...string) Schedule {
 	}
 }
 
-// TestScheduleRequiresParsesFromSyncWire pins the wire key: the backend sends
-// the connector codes a template task needs as "requires" on each
-// schedule.sync element, and they must land on the stored Schedule in the
-// order sent (the skip summary reports them in that order).
+// TestScheduleRequiresParsesFromSyncWire checks "requires" parses in wire order.
 func TestScheduleRequiresParsesFromSyncWire(t *testing.T) {
 	const wire = `{
 		"id": "s1",
@@ -64,9 +58,7 @@ func TestScheduleRequiresParsesFromSyncWire(t *testing.T) {
 	}
 }
 
-// TestScheduleWithoutRequiresOnWireHasNone is the compatibility half: every
-// row that predates the field (and every custom task) arrives without the key
-// and must carry no requirement at all.
+// TestScheduleWithoutRequiresOnWireHasNone checks rows without the key carry no requirement.
 func TestScheduleWithoutRequiresOnWireHasNone(t *testing.T) {
 	const wire = `{"id": "s1", "name": "x", "instructions": "y", "enabled": true,
 		"schedule": {"repeat": "daily", "time": "08:00"}}`
@@ -79,10 +71,7 @@ func TestScheduleWithoutRequiresOnWireHasNone(t *testing.T) {
 	}
 }
 
-// TestScheduleRequiresSurvivesStoreRoundTripAndIsOmittedWhenEmpty checks the
-// field persists across the atomic write + reload, AND that a row without
-// requirements gains no "requires" key on disk — upgrading a device must not
-// rewrite every stored row.
+// TestScheduleRequiresSurvivesStoreRoundTripAndIsOmittedWhenEmpty checks persistence and omitempty.
 func TestScheduleRequiresSurvivesStoreRoundTripAndIsOmittedWhenEmpty(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schedules.json")
 	store := NewStore(path)
@@ -107,10 +96,7 @@ func TestScheduleRequiresSurvivesStoreRoundTripAndIsOmittedWhenEmpty(t *testing.
 	}
 }
 
-// TestReplace_RequiresFollowsTheWireNotThePriorRow: requires is backend-owned
-// wire data, not device-local bookkeeping, so a full-state schedule.sync that
-// no longer lists a requirement must clear it rather than have the old list
-// carried forward (the way LastRunAt is).
+// TestReplace_RequiresFollowsTheWireNotThePriorRow checks requires is not carried forward on sync.
 func TestReplace_RequiresFollowsTheWireNotThePriorRow(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Replace([]Schedule{dailyWithRequires("gmail")}); err != nil {
@@ -125,10 +111,7 @@ func TestReplace_RequiresFollowsTheWireNotThePriorRow(t *testing.T) {
 	}
 }
 
-// The headline behaviour: a due task whose required connector is not
-// installed never reaches the gateway, is reported as "skipped" with the
-// exact summary format, and — unlike a failure — advances NextRunAt, with the
-// fresh occurrence carried on the report.
+// A missing required connector skips the run, reports "skipped" and advances NextRunAt.
 func TestRunner_SkipsWhenRequiredConnectorMissing(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail"))
@@ -168,8 +151,6 @@ func TestRunner_SkipsWhenRequiredConnectorMissing(t *testing.T) {
 		t.Errorf("LastRunStatus = %q, want skipped", got.LastRunStatus)
 	}
 
-	// Advanced, not retried: the next tick inside the old catch-up window
-	// must neither fire nor report again.
 	r.tick(now.Add(time.Minute))
 	if len(reports) != 1 || len(gw.sent) != 0 {
 		t.Fatalf("skipped occurrence was retried: reports=%d sent=%v", len(reports), gw.sent)
@@ -194,8 +175,7 @@ func TestRunner_RunsWhenAllRequiredConnectorsInstalled(t *testing.T) {
 	}
 }
 
-// Custom tasks and every pre-existing row carry no requirement: they run as
-// today even when nothing at all is installed, and the checker is never asked.
+// Tasks without requirements run normally and never consult the checker.
 func TestRunner_EmptyRequiresRunsNormally(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires())
@@ -215,8 +195,7 @@ func TestRunner_EmptyRequiresRunsNormally(t *testing.T) {
 	}
 }
 
-// A nil checker means no guard at all — the Runner's zero configuration keeps
-// today's behaviour even for a task that lists requirements.
+// A nil checker disables the guard.
 func TestRunner_NilCheckerDisablesGuard(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail"))
@@ -230,9 +209,7 @@ func TestRunner_NilCheckerDisablesGuard(t *testing.T) {
 	}
 }
 
-// Summary lists ONLY the missing codes, in requires order, joined by ", ".
-// Blank entries and repeats in the wire list are ignored rather than
-// rendered as "missing connector: , gmail, gmail".
+// The skip summary lists only missing codes in requires order, ignoring blanks and repeats.
 func TestRunner_SkipSummaryListsMissingCodesInRequiresOrder(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1",
@@ -252,9 +229,7 @@ func TestRunner_SkipSummaryListsMissingCodesInRequiresOrder(t *testing.T) {
 	}
 }
 
-// The failure-ack suppression (one failure ack per occurrence) must not
-// swallow a skip: an occurrence whose failure was already acked, and whose
-// connector then disappears before the retry, still reports the skip.
+// Failure-ack suppression must not swallow a later skip of the same occurrence.
 func TestRunner_SkipIsReportedEvenAfterAFailureAckInTheSameOccurrence(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail"))
@@ -265,12 +240,12 @@ func TestRunner_SkipIsReportedEvenAfterAFailureAckInTheSameOccurrence(t *testing
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 	r.SetConnectorChecker(checker)
 
-	r.tick(scheduledAt) // send fails -> the occurrence's one failure ack
+	r.tick(scheduledAt)
 	if len(reports) != 1 || reports[0].Status != "failure" {
 		t.Fatalf("reports = %+v, want one failure ack", reports)
 	}
 
-	delete(checker.installed, "gmail") // user disconnects Gmail before the retry
+	delete(checker.installed, "gmail")
 	r.tick(scheduledAt.Add(time.Minute))
 	if len(reports) != 2 || reports[1].Status != "skipped" {
 		t.Fatalf("reports = %+v, want the skip reported after the suppressed-failure state", reports)
@@ -281,8 +256,7 @@ func TestRunner_SkipIsReportedEvenAfterAFailureAckInTheSameOccurrence(t *testing
 	}
 }
 
-// Every skipped occurrence reports once — two consecutive days skipped are
-// two acks, not one suppressed into the other.
+// Each skipped occurrence reports once.
 func TestRunner_EachSkippedOccurrenceReportsOnce(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail"))
@@ -301,10 +275,7 @@ func TestRunner_EachSkippedOccurrenceReportsOnce(t *testing.T) {
 	}
 }
 
-// A skip never touches the gateway, so the single-flight rule (which exists
-// to keep two turns/voices apart) has nothing to protect: a skip due while the
-// agent is busy is recorded at its due time instead of being deferred — and
-// possibly aged past the catch-up window without ever being reported.
+// A skip is recorded at its due time even while the agent is busy.
 func TestRunner_SkipIsRecordedEvenWhileAgentBusy(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail"))
@@ -323,9 +294,7 @@ func TestRunner_SkipIsRecordedEvenWhileAgentBusy(t *testing.T) {
 	}
 }
 
-// "Run now" on a task whose connector is missing: no gateway call, a skipped
-// report, LastRunStatus recorded — and NextRunAt untouched, exactly as for a
-// normal manual run.
+// RunNow skips on a missing connector without touching NextRunAt.
 func TestRunNow_SkipsWhenRequiredConnectorMissing(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
@@ -367,8 +336,7 @@ func TestRunNow_SkipsWhenRequiredConnectorMissing(t *testing.T) {
 	}
 }
 
-// Same reasoning as the ticker: a manual skip needs no agent, so it answers
-// immediately instead of "agent busy, try again".
+// A manual skip answers immediately even while the agent is busy.
 func TestRunNow_SkipAnswersEvenWhileAgentBusy(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Replace([]Schedule{dailyWithRequires("gmail")}); err != nil {
@@ -385,10 +353,7 @@ func TestRunNow_SkipAnswersEvenWhileAgentBusy(t *testing.T) {
 	}
 }
 
-// A one-shot ("once") task whose connector is missing is skipped exactly
-// once and then spent: the skip consumes the only occurrence, NextRunAt goes
-// to zero (never due), and no later tick fires or reports it again — the same
-// end state a successful once reaches, rather than I5's retry loop.
+// A skipped once schedule reports once and is never due again.
 func TestRunner_SkippedOnceScheduleIsReportedOnceAndNeverDueAgain(t *testing.T) {
 	store := newTestStore(t)
 	at := time.Date(2026, 8, 26, 8, 0, 0, 0, time.UTC)
@@ -426,8 +391,7 @@ func TestRunner_SkippedOnceScheduleIsReportedOnceAndNeverDueAgain(t *testing.T) 
 	}
 }
 
-// The device's own Settings page renders WHY a run was skipped, from the
-// persisted summary — so the ticker's skip must store it alongside the status.
+// The ticker's skip persists its summary.
 func TestRunner_SkipPersistsItsSummary(t *testing.T) {
 	store := newTestStore(t)
 	scheduledAt := seedJitteredSchedule(t, store, time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC), "device-1", dailyWithRequires("gmail", "slack"))
@@ -442,7 +406,7 @@ func TestRunner_SkipPersistsItsSummary(t *testing.T) {
 	}
 }
 
-// Same for "Run now", which records through SetLastRun instead.
+// RunNow's skip persists its summary.
 func TestRunNow_SkipPersistsItsSummary(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Replace([]Schedule{dailyWithRequires("gmail")}); err != nil {
@@ -462,8 +426,7 @@ func TestRunNow_SkipPersistsItsSummary(t *testing.T) {
 	}
 }
 
-// Every last-run setter records the summary together with the status, in the
-// same write, so the two can never disagree on disk.
+// Every last-run setter records summary together with status.
 func TestStore_LastRunSettersRecordSummary(t *testing.T) {
 	store := newTestStore(t)
 	if err := store.Replace([]Schedule{{ID: "a"}, {ID: "b"}, {ID: "c"}}); err != nil {
@@ -489,9 +452,7 @@ func TestStore_LastRunSettersRecordSummary(t *testing.T) {
 	}
 }
 
-// LastRunSummary is device-local bookkeeping like LastRunStatus (the wire
-// never carries it), so a schedule.sync must carry it forward — otherwise the
-// Settings page would show "Skipped" with its reason wiped by the next sync.
+// LastRunSummary is carried forward across a schedule.sync.
 func TestReplace_PreservesLastRunSummary(t *testing.T) {
 	store := newTestStore(t)
 	seeded := dailyWithRequires("gmail")

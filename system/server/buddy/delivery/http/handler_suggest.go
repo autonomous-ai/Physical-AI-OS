@@ -45,8 +45,6 @@ func (h *BuddyHandler) Suggest(c *gin.Context) {
 		respond(buddyjev.Result{Reason: "unavailable"})
 		return
 	}
-	// Serialize the whole observation/decision so competing suggestions cannot
-	// invalidate one another's snapshots before inference has even finished.
 	if !h.suggestGate.TryLock() {
 		respond(buddyjev.Result{Reason: "busy"})
 		return
@@ -99,8 +97,6 @@ func executeSuggestion(parent context.Context, req suggestionRequest, opts buddy
 	if response.Result.ExpiresInMS <= 0 || response.Result.ExpiresInMS > 30000 {
 		return buddyjev.Result{Reason: "stale_observation"}
 	}
-	// The TTL was computed on the Mac before transmission. Subtracting the full
-	// round trip is conservative and prevents spending an already expired ref.
 	response.Result.ExpiresInMS -= int(time.Since(started).Milliseconds())
 	if response.Result.ExpiresInMS <= 0 {
 		return buddyjev.Result{Reason: "stale_observation"}

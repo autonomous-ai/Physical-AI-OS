@@ -49,9 +49,6 @@ class TestStackChanServer(unittest.TestCase):
                 "HAL_STRANGERS_DIR": directory + "/strangers",
                 "OS_CONFIG_PATH": directory + "/missing-config.json",
             })
-            # Exercise the documented profile env-file path, not an unrelated
-            # set of hand-built process variables. Only bench connection values
-            # change; board, device and transport defaults come from the profile.
             profile_env = dotenv_values(
                 REPO_ROOT / "robots/_experimental/stackchan/rootfs/opt/hal/.env"
             )
@@ -134,7 +131,6 @@ class TestStackChanServer(unittest.TestCase):
                                              "motion.timed_move", "motion.home_degrees.v1"],
                         }))
                         self.assertEqual(json.loads(ws.recv(timeout=2))["type"], "hello.accepted")
-                        # Starting the host and authenticating must not move the body.
                         with self.assertRaises(TimeoutError):
                             ws.recv(timeout=0.1)
                         commands, peer_errors = [], []

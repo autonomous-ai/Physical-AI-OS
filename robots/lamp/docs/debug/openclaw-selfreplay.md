@@ -40,7 +40,7 @@ Replay-length scales with context size — longer sessions produce longer replay
 
 - **Doubles sensing token cost** — each passive event charges twice for prompt + output.
 - **Triggers hallucinated side-effects** on the replay turn. In the 2026-04-21 case the replay ran `POST /api/mood/log {kind:"signal",mood:"sad",user:"unknown"}` even though:
-  - the event was a `presence.enter`, which `sensing/SKILL.md` explicitly forbids from calling tools, and
+  - the event was a `presence.enter`, which `skills/sensing/SKILL.md` explicitly forbids from calling tools, and
   - the mood "sad" was fabricated with no `emotion.detected` trigger in that turn.
 - **Confuses flow correlation** — monitor UI shows two turns for one real event; runId tracking races between Lamp idempotency key and OpenClaw UUID.
 

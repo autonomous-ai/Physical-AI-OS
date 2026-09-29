@@ -9,7 +9,6 @@ import (
 )
 
 // Command matches the JSON shape the buddy expects on its WebSocket.
-// Identical to what the device will use in `system/buddy/types.go`.
 type Command struct {
 	ID        string         `json:"id"`
 	Action    string         `json:"action"`
@@ -66,8 +65,6 @@ func parseREPL(line string) (Command, bool) {
 			"title": fallback(rest, "Device"),
 			"body":  "Test from mock-device",
 		}), true
-
-	// --- Vision / mouse / clipboard / accessibility ---
 
 	case "screenshot":
 		// usage: screenshot [scale]   e.g. "screenshot 0.5"
@@ -189,11 +186,9 @@ func parseREPL(line string) (Command, bool) {
 
 	case "click_button":
 		// usage: click_button <label> [app=X]
-		// e.g. "click_button Admit"  or  "click_button Submit app=Safari"
 		if rest == "" {
 			return Command{}, false
 		}
-		// Split off optional app=... at the end
 		var label, appName string
 		if idx := strings.Index(rest, " app="); idx >= 0 {
 			label = strings.TrimSpace(rest[:idx])

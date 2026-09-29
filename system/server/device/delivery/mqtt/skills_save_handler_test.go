@@ -50,9 +50,7 @@ func TestParseSkillsSaveDataRejectsIncomplete(t *testing.T) {
 	}
 }
 
-// The name SHAPE is deliberately NOT checked here — SaveSkill owns that via
-// skills.ValidateSkillName, so the HTTP and MQTT paths can't drift on what a
-// legal name is. Parsing accepts it; the gateway is what rejects it.
+// Name shape is left to SaveSkill (skills.ValidateSkillName).
 func TestParseSkillsSaveDataDefersNameShapeToGateway(t *testing.T) {
 	draft, errMsg := parseSkillsSaveData(json.RawMessage(
 		`{"name":"NOT a slug","description":"d","instructions":"i"}`))
@@ -62,7 +60,6 @@ func TestParseSkillsSaveDataDefersNameShapeToGateway(t *testing.T) {
 	if draft.Name != "NOT a slug" {
 		t.Errorf("name = %q, want it passed through verbatim", draft.Name)
 	}
-	// And the shared validator is what says no.
 	if err := skills.ValidateSkillName(draft.Name); err == nil {
 		t.Error("skills.ValidateSkillName should reject this name")
 	}
@@ -88,8 +85,7 @@ func TestClassifySkillsSaveError(t *testing.T) {
 	}
 }
 
-// skills.save must be its own kind — reusing skills.install would conflate
-// "write this one authored skill" with "fetch a whole role bundle from the CDN".
+// skills.save is its own kind, distinct from skills.install.
 func TestSkillsSaveKindIsDistinct(t *testing.T) {
 	if domain.KindSkillsSave == domain.KindSkillsInstall {
 		t.Fatal("skills.save and skills.install must be distinct kinds")
@@ -99,10 +95,7 @@ func TestSkillsSaveKindIsDistinct(t *testing.T) {
 	}
 }
 
-// ─── skills.install_store (catalog install) ────────────────────────────────────────
-
-// skills.install_store must be its own kind — skills.install is the older, different
-// feature (a whole ROLE bundle straight into the openclaw dir).
+// skills.install_store is its own kind, distinct from skills.install.
 func TestSkillsInstallStoreKindIsDistinct(t *testing.T) {
 	if domain.KindSkillsInstallStore == domain.KindSkillsInstall {
 		t.Fatal("skills.install_store must not reuse the role-bundle kind")
@@ -168,8 +161,7 @@ func TestClassifySkillsInstallStoreError(t *testing.T) {
 	}
 }
 
-// The catalog id lands in an upstream URL path, so separators must be rejected
-// before the request is built.
+// Catalog ids with separators are rejected before the request is built.
 func TestValidateStoreSkillIDGuardsPath(t *testing.T) {
 	if err := skills.ValidateStoreSkillID("6a195e59e438b1a9f06299d0"); err != nil {
 		t.Errorf("a normal catalog id must pass: %v", err)

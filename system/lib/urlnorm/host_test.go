@@ -11,8 +11,7 @@ func TestIsAutonomousHost(t *testing.T) {
 		{"https://DEVICE-API.Autonomous.AI/api/v1/ai/v1", true},
 		{"https://device-api.staging.autonomousdev.xyz/api/v1/ai/v1", true},
 		{"https://autonomous.ai/v1", true},
-		// Unlike the openclaw BYO check, uncertainty answers false: a caller that
-		// sends data to this host must not do it on a guess.
+		// Uncertainty answers false: callers must not send data on a guess.
 		{"", false},
 		{"::not a url::", false},
 		{"not-a-url-either", false},

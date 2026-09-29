@@ -71,9 +71,9 @@ to be re-added.
 
 ## Files changed
 
-- `lamp/web/src/pages/monitor/FlowSection/helpers.ts` — `aggregateEvents()`
+- `system/web/src/pages/monitor/FlowSection/helpers.ts` — `aggregateEvents()`
   + `PipelineRow` type
-- `lamp/web/src/pages/monitor/FlowSection/FlowDiagram.tsx` — new
+- `system/web/src/pages/monitor/FlowSection/FlowDiagram.tsx` — new
   pipeline rect + foreignObject row list; `agent_thinking` and
   `tool_exec` node circles skipped (FlowStage entries kept for edge
   anchors and visited tracking; `llm_first_token` FlowStage was

@@ -2,33 +2,22 @@ import type { DisplayEvent } from "../types";
 import type { ActiveFlowStage, Turn, NodeInfoMap } from "./types";
 import { FLOW_NODES, CHANNEL_FALLBACK_MESSAGE, isChatType } from "./types";
 
-// Flow events arrive as dynamic JSON over SSE: the key set differs per event
-// type and the device nests forwarded payloads under `data` (docs/flow-monitor.md).
-// Typing this `unknown` would force a narrowing dance at ~45 read sites in turn
-// stitching for no safety gain — every read below is already an optional chain
-// with a `??` fallback. One named alias, one documented escape hatch.
+// Dynamic per-event JSON over SSE; every read is an optional chain with a fallback.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FlowEventDetail = Record<string, any>;
 
-// Known external messaging channel types. Turn types matching these are channel-initiated turns.
 const CHANNEL_TYPES = new Set(["telegram", "discord", "slack", "wechat", "channel"]);
 function isChannelType(type: string): boolean {
   return CHANNEL_TYPES.has(type);
 }
 
-// The device emits motion.activity/emotion.detected/speech_emotion.detected/pose.ergo_risk
-// with domain-specific prefixes ([activity]/[emotion]/[speech_emotion]/[posture])
-// instead of [sensing:*] so SOUL.md's [sensing:*] rule doesn't force the sensing
-// skill into context. Parsing here supports all domain-specific sensing prefixes.
 const SENSING_PREFIX_RE = /^\s*\[(?:sensing:([^\]]+)|(activity|emotion|speech_emotion|posture))\]/i;
 
-// Returns the internal sensing type ("motion.activity", "emotion.detected",
-// "speech_emotion.detected", "presence.enter", …) from a message prefix, or
-// null if the message doesn't start with one.
+// Returns the internal sensing type ("motion.activity", "emotion.detected", "speech_emotion.detected", "presence.enter", …) from a message prefix, or null if the message doesn't start with one.
 export function extractSensingType(msg: string): string | null {
   const m = msg.match(SENSING_PREFIX_RE);
   if (!m) return null;
-  if (m[1]) return m[1];                                       // [sensing:<type>]
+  if (m[1]) return m[1];
   if (m[2] === "activity") return "motion.activity";
   if (m[2] === "emotion") return "emotion.detected";
   if (m[2] === "speech_emotion") return "speech_emotion.detected";
@@ -41,25 +30,17 @@ export function hasSensingPrefix(msg: string): boolean {
   return SENSING_PREFIX_RE.test(msg);
 }
 
-// Same as hasSensingPrefix but without the ^ anchor — matches anywhere in the
-// string. Useful for node-host echo detection where the prefix may be embedded.
 const SENSING_PREFIX_ANYWHERE_RE = /\[(?:sensing:[^\]]+|activity|emotion|speech_emotion|posture)\]/i;
 export function containsSensingPrefix(msg: string): boolean {
   return SENSING_PREFIX_ANYWHERE_RE.test(msg);
 }
 
-// True when a tool command addresses one of HAL's camera endpoints. This is
-// deliberately narrower than a plain "camera" text match so prose in an agent
-// command cannot light up the hardware node.
+// True when a tool command addresses one of HAL's camera endpoints.
 export function isCameraAPICommand(value: string): boolean {
   return /\/camera(?:[/?\s"']|$)/.test(value);
 }
 
-// Keep the runtime list in step with the two Go copies — camera_snapshot.go
-// (builds the URL) and sensing handler.go (serves it) — and with
-// hal/config.py `_AGENT_CONFIG_DIRS`, which decides where HAL writes. opencode
-// was missing from all three non-HAL copies, so snapshots on that runtime were
-// written and then never displayed.
+// Keep the runtime list in step with camera_snapshot.go, the sensing handler and hal/config.py _AGENT_CONFIG_DIRS.
 const AGENT_SNAPSHOT_PATH_RE = /\/root\/\.(openclaw|hermes|picoclaw|codex|claudecode|opencode)\/(workspace|media\/hal-snapshots)\/([A-Za-z0-9][A-Za-z0-9._-]*\.(?:jpg|jpeg))\b/g;
 
 function agentSnapshotURL(path: string): string | null {
@@ -70,8 +51,6 @@ function agentSnapshotURL(path: string): string | null {
 }
 
 // Extract UI-safe, server-served snapshot URLs from the camera tool result.
-// The backend emits these after validating their runtime path. The fallback
-// also recognizes old in-memory events that still contain the raw result path.
 export function cameraSnapshotURLs(events: DisplayEvent[]): string[] {
   const urls = new Set<string>();
   for (const ev of events) {
@@ -87,42 +66,22 @@ export function cameraSnapshotURLs(events: DisplayEvent[]): string[] {
   return [...urls];
 }
 
-// PipelineRow describes one row in the OpenClaw event pipeline visualization.
-// Consecutive deltas of the same stream type are merged into a single row;
-// every tool call and every operational stream event (compaction/error/etc.)
-// becomes its own row so rare events stand out.
 export interface PipelineRow {
   /** Underlying OpenClaw stream type — drives row color/label. */
   kind: "thinking" | "assistant" | "tool" | "tool_result"
     | "lifecycle_start" | "lifecycle_end"
     | "agent_first_token" | "thinking_first_token"
     | "compaction" | "error" | "other";
-  label: string;        // e.g. "thinking", "tool · bash", "lifecycle:start"
-  detail?: string;      // optional secondary text (tool args summary, error msg)
-  startMs: number;      // first event timestamp
-  endMs: number;        // last event timestamp (== startMs for one-shot rows)
-  durationMs: number;   // endMs - startMs
-  chunks: number;       // number of merged source events (1 for one-shot rows)
-  chars: number;        // total streamed text length (0 for non-text events)
+  label: string;
+  detail?: string;
+  startMs: number;
+  endMs: number;
+  durationMs: number;
+  chunks: number;
+  chars: number;
 }
 
-// Aggregate the raw turn events into a sequential list of pipeline rows. The
-// caller is expected to pass the FULL turn events (already filtered by
-// runId), in chronological order. Output preserves the original order so the
-// UI can render top-to-bottom = first-to-last.
-//
-// Aggregation rules:
-// - Consecutive `thinking` deltas → one row "thinking" (chunks/chars/dur).
-// - Consecutive `assistant_delta` events → one row "assistant".
-// - Each `tool_call` (any phase) → its own row labeled "tool · <name>". A
-//   `result` phase is emitted as a "tool_result" row attached to the
-//   preceding tool start (linked by run_id+name).
-// - `flow_event:lifecycle_start` / `lifecycle_end` → one-shot rows.
-// - Operational streams (compaction, error, item, plan, approval,
-//   command_output, patch) → one row each, kind="compaction"|"error"|"other".
-// - Other flow events (chat_send, hw_*, tts_send, …) are NOT aggregated
-//   into the pipeline — they belong to the surrounding flow nodes
-//   (Agent Call, OS Hook, etc.) and would clutter the pipeline.
+// Aggregate the raw turn events into a sequential list of pipeline rows.
 export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
   const rows: PipelineRow[] = [];
 
@@ -141,7 +100,6 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
   for (const ev of events) {
     const fnode = flowEventNode(ev);
 
-    // Streaming deltas: merge into the trailing row if the kind matches.
     let kind: PipelineRow["kind"] | null = null;
     if (ev.type === "thinking") kind = "thinking";
     else if (ev.type === "assistant_delta") kind = "assistant";
@@ -169,11 +127,7 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Tool call events. OS-server flow.Log("tool_call") fires twice per phase
-    // for each tool (once from the `agent` stream without args, once from
-    // `session.tool` with args + source) — collapse those duplicates by
-    // merging into the trailing row when the preceding event was the same
-    // tool name+phase within 1 second.
+    // tool_call is logged twice per phase (agent stream + session.tool); merge the duplicates.
     const isTool = ev.type === "tool_call" || fnode === "tool_call";
     if (isTool) {
       const d = ev.detail as FlowEventDetail | undefined;
@@ -192,13 +146,9 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
             argsSummary = parsed?.command ?? JSON.stringify(parsed);
           } catch { argsSummary = String(argsObj); }
         }
-        // Deduplicate the agent-stream + session.tool double-emit: if the
-        // last row is a `tool · <same name>` start within 1 second, fold
-        // this event into it (prefer the variant that carries args).
         const last = rows[rows.length - 1];
         if (last && last.kind === "tool" && last.label === `tool · ${toolName}` && (t - last.startMs) < 1000 && last.durationMs === 0) {
           if (argsSummary && !last.detail) last.detail = argsSummary;
-          // keep last.startMs (earliest); update endMs if newer
           if (t > last.endMs) last.endMs = t;
           continue;
         }
@@ -209,7 +159,6 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
           startMs: t, endMs: t, durationMs: 0, chunks: 1, chars: 0,
         });
       } else if (phase === "result" || phase === "end") {
-        // Attach duration to the most recent tool row of the same name.
         for (let i = rows.length - 1; i >= 0; i--) {
           const r = rows[i];
           if (r.kind === "tool" && r.label === `tool · ${toolName}`) {
@@ -222,8 +171,6 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Lifecycle markers — show start/end as one-shot rows so the pipeline
-    // boundaries are explicit even if no deltas arrived in between.
     if (fnode === "lifecycle_start" || fnode === "lifecycle_end") {
       const t = ts(ev);
       rows.push({
@@ -234,14 +181,6 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Persisted first-token marker (JSONL projection of monitorBus deltas).
-    // Raw assistant_delta / thinking events only live in monitorBus (RAM),
-    // so for past turns reloaded from JSONL the pipeline rect would
-    // otherwise show no signal that the LLM started streaming text. Render
-    // as a one-shot marker row matching the lifecycle:start convention.
-    // last_token markers are also emitted by the backend but intentionally
-    // ignored here — lifecycle:end already covers the stream's right edge,
-    // so a second marker would just be noise.
     if (fnode === "agent_first_token" || fnode === "thinking_first_token") {
       const t = ts(ev);
       const label = fnode.startsWith("thinking_")
@@ -255,7 +194,6 @@ export function aggregateEvents(events: DisplayEvent[]): PipelineRow[] {
       continue;
     }
 
-    // Operational streams (rare, but worth surfacing in the pipeline).
     if (fnode === "compaction" || ev.type === "compaction") {
       rows.push({ kind: "compaction", label: "compaction", startMs: ts(ev), endMs: ts(ev), durationMs: 0, chunks: 1, chars: 0 });
       continue;
@@ -296,14 +234,12 @@ export function extractEventRunId(ev: DisplayEvent): string | undefined {
 }
 
 export function parseChannelSummary(summary: string): string {
-  // Match any channel prefix: [telegram], [discord], [slack], [channel], [telegram:sender], etc.
   const m = summary.match(/^\[[^\]]+\]\s*(.*)/);
   if (!m) return summary.trim();
   return (m[1] ?? "").trim();
 }
 
-// Only our dedicated history runs carry this envelope. Never interpret tags
-// inside an ordinary user message as a background synchronization turn.
+// Only our dedicated history runs carry this envelope.
 export function externalHistory(turn: Turn): { source: string; agentName: string; input: string; output: string } | null {
   if (!turn.runId?.startsWith("device-chat-context-")) return null;
   for (const event of turn.events) {
@@ -337,8 +273,7 @@ function externalResponseText(ev: DisplayEvent): string {
   return typeof text === "string" ? text.trim() : "";
 }
 
-// A persisted Harness reply proves output, not speaker playback. Keep its
-// presentation separate from turn completion and pending-chat recovery.
+// A persisted Harness reply proves output, not speaker playback.
 export function harnessOutputPresentation(turn: Turn, output: string): {
   label: "Harness" | "Shared result";
   resultRunId?: string;
@@ -412,33 +347,13 @@ export function sensingInputBracketType(ev: DisplayEvent): string | null {
   return m ? m[1] : null;
 }
 
-/**
- * Same run_id can include motion (camera) then voice in one session; merge keeps the first segment's type (often "motion").
- * For the turn badge, prefer voice / voice_command when any utterance is present — that is the user's intent.
- */
+/** Same run_id can include motion (camera) then voice in one session; merge keeps the first segment's type (often "motion"). */
 export function refineTurnTypeFromSensingInputs(turn: Turn): void {
   if (turn.type.startsWith("ambient:") || turn.type === "schedule") {
     return;
   }
 
-  // OpenClaw heartbeat runs (reply = HEARTBEAT_OK, tagged by the OS server via
-  // the heartbeat_run flow event). Classify EARLY: their chat_input can carry a
-  // stale copy of the previous turn's message (history-fetch race on old
-  // events), which would otherwise mislabel them as sensing/channel and render
-  // a doppelganger of the real turn.
-  //
-  // But a heartbeat that MERGED with a real device turn is not a heartbeat.
-  // OpenClaw steer-batches a pending self-fire into an arriving message, so one
-  // trace can hold both. That only shows when the turn has no reply of its own:
-  // a `voice_agent_handled` turn deliberately returns NO_REPLY (the realtime
-  // model already spoke), so HEARTBEAT_OK becomes the run's reply, this rule
-  // claims the turn, and the user's question renders as a silent heartbeat with
-  // only its snapshot visible. Device 2026-08-19: 12 of 45 heartbeat runs that
-  // day were real turns masked this way.
-  //
-  // A real `sensing_input` WITH content is the discriminator — a genuine
-  // self-fire has none, because its stale copy arrives as `chat_input`, which is
-  // exactly the case the rule above was written for.
+  // Classify heartbeat runs early: their chat_input can carry a stale copy of the previous message.
   const hasDeviceInput = turn.events.some((ev) => {
     const isSensingInput = ev.type === "sensing_input"
       || ((ev.type === "flow_enter" || ev.type === "flow_event")
@@ -458,9 +373,6 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
     }
   }
 
-  // Reclassify channel turns that are actually sensing events routed via OpenClaw channel.
-  // node-host is the device's own WebSocket identity in OpenClaw — it sends sensing events AND
-  // voice commands via chat.send, so sender=node-host alone doesn't mean "system".
   if (isChannelType(turn.type)) {
     let hasRealUser = false;
     let sensingType: string | null = null;
@@ -476,12 +388,8 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
         if (sensType || /you just woke up/i.test(msg)) hasSystemMsg = true;
       }
     }
-    if (hasRealUser) return; // keep as channel type
+    if (hasRealUser) return;
     if (sensingType) { turn.type = sensingType; return; }
-    // Cron-fired turns: primary signal is the cron_fire flow event emitted by
-    // the OS server at lifecycle_start when it correlates an OpenClaw event:"cron"
-    // (action:"started"). Fallback to the systemEvent wrapper string match if
-    // the event was dropped (OpenClaw broadcasts cron with dropIfSlow:true).
     let isCron = false;
     let cronLabel = "cron";
     for (const ev of turn.events) {
@@ -495,7 +403,6 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
         const d = ev.detail as FlowEventDetail | undefined;
         const msg = d?.message ?? d?.data?.message ?? ev.summary ?? "";
         const sender = d?.sender ?? d?.data?.sender ?? "";
-        // Fallback signal + sub-label parsed from text.
         if (!isCron && (!sender || sender === "") && /scheduled reminder/i.test(msg)) {
           isCron = true;
         }
@@ -507,15 +414,9 @@ export function refineTurnTypeFromSensingInputs(turn: Turn): void {
     }
     if (isCron) { turn.type = cronLabel; return; }
     if (hasSystemMsg) { turn.type = "system"; return; }
-    // node-host but normal message (e.g. voice command relayed via chat.send) — keep as channel type
     return;
   }
 
-  // web_chat / mqtt_chat / voice_command / voice are first-class types from the
-  // handler. Chat wins (a chat UI is the most specific origin) → voice_command
-  // → voice. web_chat and mqtt_chat are the SAME turn behaviour server-side
-  // (see sensingmsg.IsChat); the badge keeps them apart so it's obvious whether
-  // the message was typed in the monitor or pushed over MQTT (phone app).
   let sawChat = "";
   let sawVoice = false;
   let sawVoiceCommand = false;
@@ -576,9 +477,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       const d = ev.detail as FlowEventDetail | undefined;
       const msg = d?.message ?? d?.data?.message ?? ev.summary ?? "";
       const sender = d?.sender ?? d?.data?.sender ?? "";
-      // Skip node-host echo — the device's own chat.send echoed back via session.message.
-      // These duplicate the sensing_input / voice_pipeline turn that already exists.
-      // Detect by: sender is node-host + message contains device-injected directives.
       if (sender === "node-host" && (containsSensingPrefix(msg) || /\[MANDATORY:/.test(msg) || /\[Follow /.test(msg) || /\[REPLY RULE:/.test(msg) || /\[context: current_user=/.test(msg))) {
         return null;
       }
@@ -586,7 +484,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       if (sensType) {
         return { type: sensType, path: "agent", boundary: "chat" as const };
       }
-      // Extract channel name from summary prefix: [telegram], [discord], [slack], etc.
       const chMatch = ev.summary.match(/^\[([^\]:]+)/);
       return { type: chMatch ? chMatch[1] : "channel", path: "agent", boundary: "chat" };
     }
@@ -611,23 +508,17 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     const start = isTurnStart(ev);
     if (start) {
       const shouldForceSplit = Boolean(start.forceNewTurn);
-      // Split if current turn is already done — don't append new turn's events to a finished turn.
       const currentDone = current?.status === "done" || current?.status === "error";
       if (!shouldForceSplit && !currentDone && current && current.runId && evRunId && current.runId === evRunId) {
         current.events.push(ev);
-        // Channel chat_input fires twice: first as a placeholder ({run_id,source}
-        // only, summary "[chat]") before chat.history resolves the real msg/sender,
-        // then again with the real content. The placeholder pins turn.type="chat"
-        // and refineTurnTypeFromSensingInputs ignores it (not in CHANNEL_TYPES),
-        // so upgrade here when isTurnStart has now resolved a specific type.
+        // Channel chat_input fires twice (placeholder, then real); upgrade the placeholder's type.
         if (current.type === "chat" || current.type === "unknown") {
           current.type = start.type;
         }
         continue;
       }
       if (current) turns.push(current);
-      // If another turn already claimed this runId, suffix with seq to keep IDs unique.
-      // This prevents duplicate-id bugs in selection (click turn A, turn B stays highlighted).
+      // Suffix duplicate run ids with seq so turn ids stay unique.
       let turnId = evRunId || `turn-${ev._seq}`;
       if (evRunId && turns.some((t) => t.id === evRunId)) {
         turnId = `${evRunId}:${ev._seq}`;
@@ -676,8 +567,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
 
     // Split turn when a new lifecycle_start arrives after the turn already saw a lifecycle_end.
-    // This handles multiple OpenClaw agent turns mapped to the same device run_id
-    // (e.g. sensing + telegram arriving close together while trace is still active).
     const isLifecycleStart = (ev.type === "lifecycle" && ev.phase === "start") ||
       (ev.type === "flow_event" && ev.detail?.node === "lifecycle_start");
     const hasLifecycleEnd = current.events.some((e) =>
@@ -698,14 +587,12 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
 
     current.events.push(ev);
-    // Capture queued_for_ms when a sensing_input replay event lands inside the turn
     if (current.queuedForMs === undefined &&
         (ev.type === "sensing_input" || (ev.type === "flow_enter" && ev.detail?.node === "sensing_input"))) {
       const d = ev.detail as FlowEventDetail | undefined;
       const v = d?.data?.queued_for_ms ?? d?.queued_for_ms;
       if (typeof v === "number") current.queuedForMs = v;
     }
-    // Classify unknown turns from chat_input events
     if (current.type === "unknown" && (ev.type === "chat_input" || (ev.type === "flow_event" && ev.detail?.node === "chat_input"))) {
       const d = ev.detail as FlowEventDetail | undefined;
       const msg = d?.message ?? d?.data?.message ?? ev.summary ?? "";
@@ -721,7 +608,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       current.runId = evRunId;
       current.id = evRunId;
     }
-    // Re-check type on every event so sensing-via-channel turns reclassify immediately
     refineTurnTypeFromSensingInputs(current);
 
     if (ev.type === "intent_match" || (ev.type === "flow_event" && ev.detail?.node === "intent_match")) {
@@ -746,12 +632,7 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       current.status = "done";
       current.endTime = ev.time;
     }
-    // chat_final_empty: OpenClaw sent state:"final" with empty Message for a
-    // device-format runId that never opened a lifecycle. Factual close event —
-    // no interpretation. (Legacy `turn_steered` is back-compat for old JSONL.)
-    // chat_final_ok: same shape but non-empty Message — slash commands
-    // (/status, /new, /compact) dispatched pre-LLM by OpenClaw return a
-    // payload without ever opening a lifecycle.
+    // chat_final_empty / chat_final_ok close a run that never opened a lifecycle (turn_steered is legacy).
     if (ev.type === "flow_event" && (ev.detail?.node === "chat_final_empty" || ev.detail?.node === "chat_final_ok" || ev.detail?.node === "turn_steered")) {
       current.status = "done";
       current.endTime = ev.time;
@@ -763,7 +644,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
   if (current) turns.push(current);
 
-  // Merge fragmented segments that share the same run_id
   const merged: Turn[] = [];
   const runIndex = new Map<string, number>();
   for (const turn of turns) {
@@ -787,11 +667,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     base.events.push(...turn.events);
     if (base.status !== "error" && turn.status === "error") base.status = "error";
     else if (base.status === "active" && turn.status === "done") base.status = "done";
-    // chat_final_empty may arrive in a later fragment (events of an interleaving
-    // turn split chat-N's events), so promote "active → done" here too.
-    // The fragment may not carry status="done" itself (when it was created
-    // via the runId-switch branch the status-update block is skipped), so also
-    // scan its raw events for the chat_final_empty (or legacy turn_steered) marker.
     else if (base.status === "active" && turn.events.some(
       (e) => e.type === "flow_event" && (e.detail?.node === "chat_final_empty" || e.detail?.node === "turn_steered"))) {
       base.status = "done";
@@ -804,13 +679,9 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   }
   for (const turn of merged) {
     turn.events.sort((a, b) => a._seq - b._seq);
-    // Resolve persisted Harness results after run-ID merging: a late response
-    // can be the first event of a fragment and skip the sequential status pass.
     const ownEvents = turn.runId
       ? turn.events.filter((event) => extractEventRunId(event) === turn.runId)
       : [];
-    // Classification belongs to this input, never to a neighboring run or its
-    // history sync. Keep the event type intact for routing and grouping.
     for (const event of ownEvents) {
       const detail = event.detail as FlowEventDetail | undefined;
       if (detail?.node !== "sensing_input" && detail?.node !== "realtime_response") continue;
@@ -842,7 +713,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
   }
 
-  // Merge adjacent Telegram fallback + agent output fragments
   const stitched: Turn[] = [];
   for (const turn of merged) {
     const prev = stitched[stitched.length - 1];
@@ -850,8 +720,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       stitched.push(turn);
       continue;
     }
-    // Explicitly linked follow-ups and Harness routes retain their own input.
-    // A final Harness response is never an unowned reply to a nearby turn.
     if (turn.mergedIntoRunId || prev.mergedIntoRunId ||
         turn.path === "harness" || prev.path === "harness" ||
         turn.path === "realtime" || prev.path === "realtime" ||
@@ -898,11 +766,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     if (isChannelType(turn.type) && (!turnHasChatInputEvent(turn))) {
       turn.type = "unknown";
     }
-    // chat_input without resolved message is still a channel turn — keep it.
-    // Done turn with no recognizable input source → unknown,
-    // but only if the type is still generic (channel/unknown). Preserve
-    // specific types that were already resolved from sensing data
-    // (e.g. voice, motion, presence.enter) arriving via chat_send.
     if (turn.status === "done" && !turnHasSensingInput(turn) && !turnHasRealChannelInput(turn) && !turnHasVoicePipeline(turn)) {
       if (isChannelType(turn.type) || turn.type === "unknown") {
         turn.type = "unknown";
@@ -910,13 +773,9 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     }
   }
 
-  // A steer acknowledgement is not completion. Follow the shared run until
-  // this input receives its own terminal event. Missing parents remain active.
   const turnsByRunId = new Map(stitched.filter((turn) => turn.runId).map((turn) => [turn.runId, turn]));
   for (const turn of stitched) {
     if (!turn.mergedIntoRunId) continue;
-    // A terminal event can be the first event of an interleaved fragment,
-    // bypassing the status update in the sequential grouping pass above.
     const ownTerminal = [...turn.events].reverse().find((event) =>
       (event.type === "lifecycle" && (event.phase === "end" || event.phase === "error")) ||
       (event.type === "flow_event" && (event.detail?.node === "lifecycle_end" || event.detail?.node === "lifecycle_error")));
@@ -943,7 +802,6 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
     if (externalHistory(turn)) turn.type = "history_sync";
   }
 
-  // Detect session breaks
   for (let i = 1; i < stitched.length; i++) {
     const prev = stitched[i - 1];
     const curr = stitched[i];
@@ -957,8 +815,7 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   return stitched.reverse();
 }
 
-// Child runs own delivery after steering. Keep those events beside the shared
-// execution without replaying the child's input or synthetic lifecycle.
+// Child runs own delivery after steering.
 export function sharedTurnEvents(parent: Turn, child: Turn): DisplayEvent[] {
   if (parent === child) return child.events;
   const downstream = child.events.filter((event) => {
@@ -966,8 +823,7 @@ export function sharedTurnEvents(parent: Turn, child: Turn): DisplayEvent[] {
     return node.startsWith("harness_") || node.startsWith("tts") || node.startsWith("hw_") ||
       ["assistant", "assistant_delta", "agent_response", "agent_first_token", "chat_response", "telegram_alert_broadcast", "error", "lifecycle_error"].includes(node);
   });
-  // Identical assistant chunks already present on the host represent the same
-  // shared final. Compare contents, not run IDs or timestamps.
+  // Identical assistant chunks already present on the host represent the same shared final.
   const responseKey = (event: DisplayEvent) => JSON.stringify([
     event.detail?.node ?? event.type, event.summary,
     (event.detail as FlowEventDetail | undefined)?.data,
@@ -1002,7 +858,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     pushUnique(info.agent_response, line);
   };
 
-  // Sensing → lifecycle timing (used for agent_call node info below)
   let sensingEnterTs = 0;
   let lifecycleStartTs = 0;
   for (const ev of events) {
@@ -1021,8 +876,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       const sType = m?.[1] ?? "";
       const d = ev.detail as FlowEventDetail | undefined;
       const dtype = d?.type ?? d?.data?.type ?? "";
-      // Both chat origins land in the same webchat_input pipeline node — the
-      // node is "text typed by the user", not "the browser".
       const isWeb = isChatType(sType) || isChatType(dtype);
       if (isWeb) {
         info.webchat_input.push(`"${m?.[2] ?? ev.summary}"`);
@@ -1066,7 +919,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       const parts = [`"${msg}" → ${tts}`];
       if (rule) parts.push(`rule: ${rule}`);
       for (const a of actions) {
-        // Convert "POST /path {body}" to full curl command
         const m = a.match(/^(POST|GET|PUT|DELETE)\s+(\/\S+)\s*(.*)?$/);
         if (m) {
           const [, method, path, body] = m;
@@ -1087,23 +939,16 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       const chatMsg = d?.data?.message ?? d?.message ?? "";
       if (hasImage) info.agent_call.push(`📷 image attached (~${Math.round(imgBytes * 3 / 4 / 1024)}KB)`);
       if (chatMsg) {
-        // Extract all [snapshot: /path] entries
         const snapAllRe = /\[snapshot:\s*([^\]]+)\]/g;
         let snapM;
         while ((snapM = snapAllRe.exec(chatMsg)) !== null) {
           info.agent_call.push(`🖼 snapshot: ${snapM[1].trim()}`);
         }
-        // Replace any earlier 📩 from sensing_input with the exact text sent to OpenClaw.
-        // Show the chat_send message VERBATIM — no strip — so the user can visually verify
-        // whether the backend stripped [snapshot: ...] before sending to the LLM.
         const idx = info.agent_call.findIndex((l) => l.startsWith("📩"));
         if (idx >= 0) info.agent_call[idx] = `📩 ${chatMsg}`;
         else info.agent_call.push(`📩 ${chatMsg}`);
       }
     }
-    // Show input message on agent_call node (fallback if chat_send hasn't fired yet).
-    // Backend strips [snapshot:...] from chat_send text; sensing_input retains the full
-    // text so snapshots (🖼 lines) come from here.
     if (ev.type === "sensing_input" || (ev.type === "flow_enter" && ev.detail?.node === "sensing_input")) {
       const d = ev.detail as FlowEventDetail | undefined;
       const msg = d?.data?.message ?? d?.message ?? ev.summary ?? "";
@@ -1130,7 +975,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "tool_call" || (ev.type === "flow_event" && ev.detail?.node === "tool_call")) {
       const d = ev.detail as FlowEventDetail | undefined;
       const phase = d?.phase ?? d?.data?.phase ?? "";
-      // Only show tool start (has args), skip update/result phases
       if (phase !== "start" && phase !== "") continue;
       const rawArgs = d?.args ?? d?.data?.args ?? "";
       let argsSummary = "";
@@ -1147,7 +991,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       if (argsSummary) {
         const entry = `🔧 ${argsSummary}`;
         if (!info.tool_exec.includes(entry)) info.tool_exec.push(entry);
-        // Also surface emotion/led/servo tool calls in their HW nodes with LLM source label
         if (/\/emotion/.test(argsSummary)) pushUnique(info.hw_emotion, `🤖 LLM tool → ${argsSummary}`);
         else if (/\/led|\/scene/.test(argsSummary)) pushUnique(info.hw_led, `🤖 LLM tool → ${argsSummary}`);
         else if (isCameraAPICommand(argsSummary)) pushUnique(info.hw_camera, `🤖 LLM tool → ${argsSummary}`);
@@ -1163,7 +1006,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
         info.agent_thinking.push("reasoning…");
       }
     }
-    // Thinking from chat.history (fallback when streaming too fast)
     if (ev.type === "flow_event" && ev.detail?.node === "agent_thinking") {
       const d = ev.detail as FlowEventDetail | undefined;
       const text = d?.data?.text ?? d?.text ?? "";
@@ -1199,12 +1041,9 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
         info.agent_response.push(`"${text}"`);
       }
     }
-    // tts_muted: reply text already shown via tts_send on the same run — only note the muted playback
     if (ev.type === "flow_event" && ev.detail?.node === "tts_muted") {
       if (info.tts_speak.length < 3) info.tts_speak.push("🔇 speaker muted — reply not spoken");
     }
-    // tts_cancelled: the user took the floor back with a single click. The turn
-    // kept running and its text is on screen — it just lost the speaker.
     if (ev.type === "flow_event" && ev.detail?.node === "tts_cancelled") {
       if (info.tts_speak.length < 3) info.tts_speak.push("✋ cancelled by click — reply not spoken");
     }
@@ -1244,8 +1083,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       if (inTok || outTok) pushLLMTokens(`tokens: ${fmtToken(inTok)} in / ${fmtToken(outTok)} out`);
       if (cacheRead || cacheWrite) pushLLMTokens(`cache: ${fmtToken(cacheRead)} read / ${fmtToken(cacheWrite)} write`);
       if (total) pushLLMTokens(`total: ${fmtToken(total)}`);
-      // Billed tokens: the Autonomous backend charges cached reads at FULL
-      // price, so billed == total (no 0.1x discount math).
       const billed = inTok + cacheWrite + cacheRead + outTok;
       if (billed) pushLLMTokens(`billed: ${fmtToken(billed)}`);
     }
@@ -1268,7 +1105,7 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       const tts = d?.data?.tts ?? d?.tts ?? "";
       if (tts && info.tts_speak.length < 3) info.tts_speak.push(`💡 ${tts}`);
     }
-    // HW marker events: extract path+body from either flow_event (detail.data) or direct event (summary = "/path body")
+    // HW marker events: path + body from flow_event detail.data or a direct event summary.
     const parseHWEvent = (ev: DisplayEvent, fallbackPath: string): { path: string; body: string } => {
       const d = ev.detail as FlowEventDetail | undefined;
       if (d?.data?.path && d?.data?.args) return { path: d.data.path, body: d.data.args };
@@ -1308,7 +1145,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "hw_wellbeing" || (ev.type === "flow_event" && ev.detail?.node === "hw_wellbeing")) {
       const { path, body } = parseHWEvent(ev, "/wellbeing/log");
       if (body && body.startsWith("{")) {
-        // Wellbeing log goes to the OS server (port 5000), not the device (5001), via the /api/ prefix.
         pushUnique(info.hw_wellbeing, `⚡ HW marker → curl -s -X POST http://127.0.0.1:5000/api${path} -H "Content-Type: application/json" -d '${body}'`);
         const m = body.match(/"action"\s*:\s*"([^"]+)"/);
         pushUnique(info.os_gate, `💧 → wellbeing ${m ? m[1] : path}`);
@@ -1358,9 +1194,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "hw_cancelled") {
       pushUnique(info.os_gate, "✋ → HW marker cancelled (click)");
     }
-    // Not a cancellation: the OS tried to fire the marker and the POST failed
-    // at the transport (the 5 s client timeout, a refused connection). Kept
-    // apart from the click so a timeout never reads as the user's doing.
     if (ev.type === "flow_event" && ev.detail?.node === "hw_failed") {
       const d = ev.detail as FlowEventDetail | undefined;
       const path = typeof d?.data?.path === "string" ? d.data.path : "";
@@ -1377,7 +1210,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       pushUnique(info.os_gate, "📢 → broadcast");
     }
   }
-  // After processing all events: if lifecycle_end was seen but no response/no_reply, mark silent
   const hasLifecycleEnd = events.some((e) =>
     (e.type === "lifecycle" && e.phase === "end") ||
     (e.type === "flow_event" && e.detail?.node === "lifecycle_end"));
@@ -1386,7 +1218,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     info.agent_response.push("💤 no output — processed silently");
   }
 
-  // --- Per-node duration from timestamp deltas ---
   const fmtDur = (ms: number) => ms >= 60_000 ? `${(ms / 60_000).toFixed(1)}m`
     : ms >= 1000 ? `${(ms / 1000).toFixed(1)}s` : `${ms}ms`;
 
@@ -1396,8 +1227,8 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
   let nFirstToolTs = 0, nLastToolResultTs = 0;
   let nToolTotalMs = 0, nToolStartTs = 0;
   let nIntentMatchTs = 0;
-  let nSensingExitDur = 0; // duration_ms from flow_exit:sensing_input
-  let nLastBatchResultTs = 0, nInterToolMs = 0; // inter-tool LLM thinking
+  let nSensingExitDur = 0;
+  let nLastBatchResultTs = 0, nInterToolMs = 0;
 
   for (const ev of events) {
     const ts = new Date(ev.time).getTime();
@@ -1425,9 +1256,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end") {
       nLifecycleEndTs = ts;
     }
-    // First thinking or assistant delta = LLM started streaming (warmup edge).
-    // Replaces the legacy `llm_first_token` flow event marker with a direct
-    // observation of the actual first stream delta.
     {
       const isLiveDelta = ev.type === "thinking" || ev.type === "assistant_delta";
       const isMarker = ev.type === "flow_event"
@@ -1459,14 +1287,12 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     }
   }
 
-  // sensing_input exit duration → mic/cam input node
   if (nSensingExitDur > 0) {
     const dur = fmtDur(nSensingExitDur);
     if (info.mic_input.length > 0) info.mic_input.unshift(`⏱ ${dur}`);
     else if (info.cam_input.length > 0) info.cam_input.unshift(`⏱ ${dur}`);
   }
 
-  // intent_check: sensing → chat_send or intent_match (whichever comes first)
   if (nSensingTs || nChatInputTs) {
     const from = nSensingTs || nChatInputTs;
     const to = nIntentMatchTs || nChatSendTs;
@@ -1476,20 +1302,6 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     }
   }
 
-  // local_match: intent_match duration (instant, but show if > 0)
-  // (local_match is triggered by intent_match, timing is included in intent_check)
-
-  // agent_call has no duration of its own — it's the act of the OS server writing
-  // chat.send to the WS, which is sub-millisecond on localhost. The 1-2s
-  // commonly seen between chat_send and lifecycle_start is OpenClaw's
-  // internal init (queue + hooks + skill load + prompt build), shown on
-  // the pipeline header summary as "init Xs". Don't add a ⏱ here so the
-  // node info doesn't mislabel that time as belonging to agent_call.
-
-  // agent_thinking: post-warmup streaming time. Use first thinking/assistant
-  // delta timestamp as start when available (warmup edge — observed directly
-  // from the stream, no marker event needed); otherwise fall back to
-  // lifecycle_start.
   const thinkStartTs = nLlmFirstTokenTs || nLifecycleStartTs;
   if (thinkStartTs) {
     const to = nFirstToolTs || nLifecycleEndTs;
@@ -1504,23 +1316,19 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
     }
   }
 
-  // tool_exec: total tool execution time
   if (nToolTotalMs > 0) {
     info.tool_exec.unshift(`⏱ ${fmtDur(nToolTotalMs)}`);
   }
 
-  // agent_response: last tool_result → lifecycle_end (or lifecycle_start → lifecycle_end if no tools)
   if (nLastToolResultTs && nLifecycleEndTs && nLifecycleEndTs > nLastToolResultTs) {
     const ms = nLifecycleEndTs - nLastToolResultTs;
     if (ms > 0) info.agent_response.unshift(`⏱ ${fmtDur(ms)}`);
   }
 
-  // tts_speak: lifecycle_end → tts_send
   if (nLifecycleEndTs && nTtsTs) {
     const ms = nTtsTs - nLifecycleEndTs;
     if (ms > 0 && ms < 30_000) info.tts_speak.unshift(`⏱ ${fmtDur(ms)}`);
   } else if (nIntentMatchTs && nTtsTs) {
-    // Local path: intent_match → tts
     const ms = nTtsTs - nIntentMatchTs;
     if (ms > 0 && ms < 30_000) info.tts_speak.unshift(`⏱ ${fmtDur(ms)}`);
   }
@@ -1535,10 +1343,7 @@ export function turnDurationMs(turn: Turn): number {
   return ms > 0 ? ms : 0;
 }
 
-// Extract billed tokens from a turn's token_usage event.
-// Billed = input + cache_write + cache_read + output: the Autonomous backend
-// bills cached reads at FULL price, so no Anthropic-style 0.1x discount here —
-// a discounted number would not match the token count users see in billing.
+// Billed tokens = input + cache_write + cache_read + output (cached reads are billed at full price).
 export function turnBilledTokens(turn: Turn): number {
   for (const ev of turn.events) {
     if (ev.type === "flow_event" && ev.detail?.node === "token_usage") {
@@ -1581,15 +1386,10 @@ export function turnIO(turn: Turn): {
         const m = ev.summary.match(/^\[([^\]]+)\]\s*(.*)/);
         input = dataMsg || (m ? m[2] : "") || ev.summary;
       }
-      // Debug audio clip (speech_emotion) — carried as a servable URL in the
-      // sensing_input detail by the OS server backend, never in the message text
-      // (audio is never sent to the LLM). Surfaced as a click-to-play player.
       const audioUrl = d?.data?.audio ?? d?.audio;
       if (typeof audioUrl === "string" && audioUrl && !audioUrls.includes(audioUrl)) {
         audioUrls.push(audioUrl);
       }
-      // Extract snapshot paths from sensing_input (backend strips [snapshot:...] from chat_send
-      // text, so sensing_input is the authoritative source for the Monitor turn-item thumbnails).
       if (typeof dataMsg === "string") {
         const snapRe = /\[snapshot:\s*(?:\/tmp\/(?:lamp|hal)-(?:sensing|emotion|motion)-snapshots|\/var\/lib\/hal\/snapshots)\/((?:sensing|emotion|motion)_[^\]]+\.jpg)\]/g;
         let snapMatch;
@@ -1597,13 +1397,7 @@ export function turnIO(turn: Turn): {
           const url = `/api/sensing/snapshot/${snapMatch[1]}`;
           if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
         }
-        // Pose bucket markers (motion.activity only) — emitted by HAL
-        // when a posture nudge folds into the turn. The device strips them from
-        // the LLM-facing text but they survive in the sensing_input JSONL.
-        // Pattern aligned with Go-side rePoseBucketMarker — accept any char
-        // except ']' so future debug ids that include underscores or hyphens
-        // continue to parse. In practice bucket_id is always a numeric
-        // timestamp.
+        // Pattern aligned with Go rePoseBucketMarker.
         const bm = dataMsg.match(/\[pose_bucket:\s*([^\]]+)\]/);
         if (bm) {
           const wm = dataMsg.match(/\[pose_worst:\s*([^\]]+)\]/);
@@ -1635,8 +1429,6 @@ export function turnIO(turn: Turn): {
     if (ev.type === "chat_send" || (ev.type === "flow_event" && ev.detail?.node === "chat_send")) {
       const d = ev.detail as FlowEventDetail | undefined;
       const raw = (d?.data?.message ?? d?.message ?? ev.summary ?? "").trim();
-      // Extract all snapshot paths → convert to API URLs.
-      // Accepts sensing_*.jpg (presence), emotion_*.jpg (FER), motion_*.jpg (activity) across all 4 dirs.
       const snapRe = /\[snapshot:\s*(?:\/tmp\/(?:lamp|hal)-(?:sensing|emotion|motion)-snapshots|\/var\/lib\/hal\/snapshots)\/((?:sensing|emotion|motion)_[^\]]+\.jpg)\]/g;
       let snapMatch;
       while ((snapMatch = snapRe.exec(raw)) !== null) {
@@ -1644,7 +1436,6 @@ export function turnIO(turn: Turn): {
         if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
       }
       if (!input) {
-        // Strip the sensing prefix ([sensing:<type>], [activity], [emotion], or [speech_emotion]) to get the payload body.
         const m = raw.match(/^\s*\[(?:sensing:[^\]]+|activity|emotion|speech_emotion)\]\s*(.*)$/is);
         const extracted = (m?.[1] ?? "").replace(/\n?\[snapshot:[^\]]+\]/g, "").trim();
         if (extracted) input = extracted;
@@ -1664,10 +1455,6 @@ export function turnIO(turn: Turn): {
     }
     if (!outputFromIntent && sameRun && (ev.type === "tts" || (ev.type === "flow_event" && (ev.detail?.node === "tts_send" || ev.detail?.node === "tts_suppressed")))) {
       const d = ev.detail as FlowEventDetail | undefined;
-      // Prefer full_text: tts_send.text is only the remainder when sentence 1
-      // was streamed mid-turn (logged separately as tts_stream_send, which the
-      // web never reads). full_text carries the complete reply. Fall back to
-      // text for older JSONL / tts_suppressed (which already logs full text).
       output = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? ev.summary ?? output;
     }
     if (turnRunId && evRunId === turnRunId && externalResponseText(ev)) {
@@ -1682,17 +1469,10 @@ export function turnIO(turn: Turn): {
       const d = ev.detail as FlowEventDetail | undefined;
       output = d?.message ?? ev.summary ?? "";
     }
-    // Slash command success: state:"final" with payload but no lifecycle.
-    // Backend persists the message in chat_final_ok so this path doesn't
-    // depend on SSE chat_response (which may not be replayed for old turns).
-    // The flow event JSON puts the payload under `data.message` (top-level
-    // fields are kind/node/ts/seq/trace_id), so read d.data.message first
-    // and fall back to d.message for any flat shape variant.
     if (!output && sameRun && ev.type === "flow_event" && ev.detail?.node === "chat_final_ok") {
       const d = ev.detail as FlowEventDetail | undefined;
       output = d?.data?.message ?? d?.message ?? "";
     }
-    // Detect no_reply from flow event (persisted in JSONL, unlike SSE chat_response)
     if (!output && sameRun && ev.type === "flow_event" && ev.detail?.node === "no_reply") {
       output = "[no reply]";
     }
@@ -1714,11 +1494,6 @@ export function turnIO(turn: Turn): {
       }
     }
   }
-  // Frames the AGENT produced during the turn — /camera/snapshot, /api/vision/look,
-  // and the search sweep's centred, boxed frame — belong on the card as much as
-  // the sensing frame that opened it. Until now they were only drawn inside the
-  // flow diagram SVG, so "find my keyboard" answered on the card with no picture
-  // while the picture sat one click away.
   for (const url of cameraSnapshotURLs(turn.events)) {
     if (!snapshotUrls.includes(url)) snapshotUrls.push(url);
   }
@@ -1730,12 +1505,7 @@ export function turnIO(turn: Turn): {
   return { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket };
 }
 
-// Scan a turn for the backend-injected `[context: current_user=X]` tag and
-// return X (or null if not present). The handler adds this tag to
-// motion.activity, emotion.detected, and speech_emotion.detected messages so
-// downstream skills attribute rows to the right user — showing it on the
-// Flow card makes user-attribution visible at a glance (which is specially
-// useful when stranger flicker or multi-friend scenes are being debugged).
+// Returns X from the backend-injected `[context: current_user=X]` tag, or null.
 export function turnCurrentUser(turn: Turn): string | null {
   const re = /\[context:\s*current_user=([^\]]+)\]/i;
   for (const ev of turn.events) {
@@ -1792,7 +1562,7 @@ export function turnTokenStats(turn: Turn): { inTok: number; outTok: number; cac
   return { inTok, outTok, cacheRead, cacheWrite, total };
 }
 
-// Display/filter names are projections; never change the event's routing type.
+// Display/filter name; never changes the event's routing type.
 export function turnDisplayType(turn: Turn): string {
   if (externalHistory(turn)) return "history_sync";
   if (turn.type === "voice_agent_handled") {

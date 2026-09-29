@@ -7,9 +7,7 @@ import (
 	"time"
 )
 
-// A write that fails mid-way must leave the previous file intact — Replace
-// writes to a temp file in the same directory, then renames, so a failure
-// before the rename can never touch the real file.
+// A failed write must leave the previous file intact (temp file + rename).
 func TestStore_ReplaceIsAtomic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "schedules.json")
@@ -20,8 +18,7 @@ func TestStore_ReplaceIsAtomic(t *testing.T) {
 		t.Fatalf("seed replace: %v", err)
 	}
 
-	// Make the directory read-only so CreateTemp for the next Replace fails
-	// before it ever gets to rename.
+	// Read-only dir makes CreateTemp fail before rename.
 	if err := os.Chmod(dir, 0555); err != nil {
 		t.Fatalf("chmod: %v", err)
 	}
@@ -44,7 +41,7 @@ func TestStore_ReplaceIsAtomic(t *testing.T) {
 	}
 }
 
-// First boot has no schedules.json yet. That is not an error.
+// A missing schedules.json is not an error.
 func TestStore_LoadMissingFileReturnsEmptyNotError(t *testing.T) {
 	dir := t.TempDir()
 	store := NewStore(filepath.Join(dir, "does-not-exist", "schedules.json"))
@@ -58,8 +55,7 @@ func TestStore_LoadMissingFileReturnsEmptyNotError(t *testing.T) {
 	}
 }
 
-// A truncated file after power loss must degrade to "no schedules", because
-// the next schedule.sync repairs it — never panic, never a fatal boot error.
+// A corrupt file degrades to no schedules without panicking.
 func TestStore_LoadCorruptFileReturnsEmptyAndDoesNotPanic(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "schedules.json")
@@ -147,7 +143,6 @@ func TestStore_ReplaceWithTimezonePersistsBoth(t *testing.T) {
 		t.Errorf("Timezone() = %v, want Asia/Ho_Chi_Minh", loc)
 	}
 
-	// A plain Replace afterwards must preserve that timezone.
 	if err := store.Replace([]Schedule{{ID: "a"}, {ID: "b"}}); err != nil {
 		t.Fatalf("replace: %v", err)
 	}

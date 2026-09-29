@@ -15,9 +15,7 @@ const gatewayRestartTimeout = 60 * time.Second
 // restartCodexGateway restarts the codex systemd unit (the bridge),
 // which in turn respawns the Codex child — the only way to make Claude
 // re-read CLAUDE.md / SOUL.md / .env / .mcp.json, all of which are loaded at
-// session start. Called after EnsureOnboarding rewrites an OS-managed workspace
-// block or presync changes the launch config. When systemctl is unavailable
-// (non-root / dev box) we log and skip rather than hard-fail.
+// session start.
 func restartCodexGateway() error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayRestartTimeout)
 	defer cancel()

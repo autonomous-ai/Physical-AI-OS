@@ -132,7 +132,6 @@ func TestSyncJevPluginSpillBudget(t *testing.T) {
 				t.Fatal(err)
 			}
 			spill := cfg["hooks"].(map[string]any)["output_spill"].(map[string]any)
-			// YAML decoders may represent integers with different concrete Go types.
 			raw, _ := json.Marshal(spill["max_chars"])
 			var got int
 			if err := json.Unmarshal(raw, &got); err != nil || got != tc.want {

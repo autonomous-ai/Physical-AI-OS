@@ -30,7 +30,6 @@ def test_gemini_tts_auto_native_preserves_first_busy_frames(monkeypatch, kpi):
     from hal import config
     monkeypatch.setattr(config, 'REALTIME_PROVIDER', 'gemini')
     tts = speaker()
-    # Native mode must also activate from Gemini TTS, without the manual flag.
     _pump(monkeypatch, kpi, [([frame(1), frame(2), frame(3)], 'reply', True)],
           native=False, tts=tts)
     assert played(tts) == [1, 2, 3]

@@ -1,9 +1,4 @@
-"""Recordings may not reach far enough off the base axis to tip the body (#271).
-
-The gate is two per-body declarations meeting: the ceiling from SAFETY.md
-(`motion.max_cog_offset_mm`) and the geometry from ROBOT.md (`urdf_ref`). These
-tests use the REAL committed lamp files, so a change to either is caught here.
-"""
+"""Recordings may not reach far enough off the base axis to tip the body (#271)."""
 import csv
 from pathlib import Path
 
@@ -38,8 +33,6 @@ def _frames(path):
         ]
 
 
-# --- the declarations themselves -------------------------------------------
-
 def test_lamp_declares_both_halves_of_the_gate():
     """Either half alone is inert; the committed profile must carry both."""
     profile = (LAMP_DIR / "ROBOT.md").read_text()
@@ -71,15 +64,12 @@ def test_a_branching_urdf_is_refused_rather_than_guessed():
     assert parse_urdf(forked) is None
 
 
-# --- the geometry ----------------------------------------------------------
-
 def test_rest_pose_sits_near_the_axis():
     assert cog_offset_mm(REST, GEOMETRY) < 20.0
 
 
 def test_extending_the_arm_moves_the_cog_out():
-    # Measured directions: -base_pitch and +elbow_pitch each push mass forward.
-    # They partly cancel, which is why they have to be probed one at a time.
+    # -base_pitch and +elbow_pitch both push mass forward and partly cancel, so probe one at a time.
     assert cog_offset_mm({**REST, "base_pitch": -60.0}, GEOMETRY) > cog_offset_mm(REST, GEOMETRY)
     assert cog_offset_mm({**REST, "elbow_pitch": 60.0}, GEOMETRY) > cog_offset_mm(REST, GEOMETRY)
 
@@ -97,8 +87,6 @@ def test_pos_suffix_is_accepted():
     )
 
 
-# --- the gate --------------------------------------------------------------
-
 def test_every_shipped_recording_passes_the_declared_ceiling():
     """The ceiling must not reject the library it was derived from."""
     policy = parse_safety((LAMP_DIR / "SAFETY.md").read_text())
@@ -110,12 +98,7 @@ def test_every_shipped_recording_passes_the_declared_ceiling():
 
 
 def test_the_pose_that_tipped_the_lamp_is_refused():
-    """From the animacy clip that put lamp-0c89 on its side (#271).
-
-    Note what the pose is NOT: the per-joint extremes of that clip never occur
-    in the same frame. This is the actual worst frame, and its arm is folded
-    forward (elbow 53.8) with the base barely pitched (6.9).
-    """
+    """From the animacy clip that put lamp-0c89 on its side (#271)."""
     tipping = {
         "base_yaw.pos": -7.3,
         "base_pitch.pos": 6.9,
@@ -148,8 +131,6 @@ def test_a_clip_near_the_limit_warns_while_still_playing(caplog):
     assert "close to the limit" in caplog.text
 
 
-# --- presence-driven, per SAFETY-SPEC.md ------------------------------------
-
 def test_no_declared_ceiling_is_pass_through():
     """The engine never invents a limit nobody declared."""
     check_stable([{**REST, "elbow_pitch": 89.0}], "ungated", _policy(None), GEOMETRY)
@@ -164,11 +145,7 @@ def test_a_ceiling_without_geometry_warns_and_passes_through(caplog):
 
 
 def test_another_bodys_joints_are_skipped_not_scored(caplog):
-    """A Reachy frame must not be scored against the lamp's chain.
-
-    Every unknown joint would read as 0 deg and return a comfortable number for
-    a pose that was never evaluated.
-    """
+    """A Reachy frame must not be scored against the lamp's chain."""
     reachy = {"head_yaw.pos": 40.0, "head_pitch.pos": -30.0, "antenna_left.pos": 60.0}
     with caplog.at_level("INFO", logger="hal.motion.stability"):
         check_stable([reachy], "reachy_clip", _policy(22), GEOMETRY)

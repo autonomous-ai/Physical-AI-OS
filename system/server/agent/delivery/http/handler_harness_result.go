@@ -15,10 +15,8 @@ import (
 // ErrHarnessResultSpeechSuppressed identifies a local policy refusal before submission.
 var ErrHarnessResultSpeechSuppressed = errors.New("Harness result speech suppressed")
 
-// DeliverHarnessGroupedResult closes a validated result's member routes together.
-// The durable correlation ledger owns result identity and replay deduplication;
-// this sink publishes one answer and explicit references on the other runs.
-// It never submits speech or fabricates an independent answer for each input.
+// DeliverHarnessGroupedResult closes a validated result's member routes together: one answer
+// plus references on the other runs; never speaks or fabricates a per-input answer.
 func (h *AgentHandler) DeliverHarnessGroupedResult(resultID, outcome, text string, runIDs []string) bool {
 	if resultID == "" || text == "" || len(runIDs) == 0 {
 		return false
@@ -63,10 +61,8 @@ func (h *AgentHandler) DeliverHarnessGroupedResult(resultID, outcome, text strin
 	return true
 }
 
-// harnessResultRunOrderLocked selects a local presentation/speech owner without
-// changing the producer's immutable membership. Device timestamps are the turn's
-// actual creation time; registration time breaks ties for unstamped run IDs.
-// The caller holds harnessRepliesMu and has validated every member.
+// harnessResultRunOrderLocked picks the presentation/speech owner by device timestamp, then
+// registration time. Caller holds harnessRepliesMu.
 func (h *AgentHandler) harnessResultRunOrderLocked(runIDs []string) []string {
 	ordered := append([]string(nil), runIDs...)
 	times := make(map[string]int64, len(ordered))
@@ -86,10 +82,8 @@ func (h *AgentHandler) harnessResultRunOrderLocked(runIDs []string) []string {
 	return ordered
 }
 
-// SpeakHarnessGroupedResult submits exactly one synchronous HAL request. Nil
-// means HAL accepted the request, never proof of playback. The caller must claim
-// its durable outbox before calling and must not retry an uncertain submission.
-// HAL's announcer renders the text for speech; displays keep it unchanged.
+// SpeakHarnessGroupedResult submits exactly one synchronous HAL request (nil = accepted, not played).
+// Caller must claim its durable outbox first and must not retry an uncertain submission.
 func (h *AgentHandler) SpeakHarnessGroupedResult(text, outcome string, runIDs []string) error {
 	return h.speakHarnessGroupedResult(text, runIDs, func(text, owner string) error {
 		return hal.AnnounceHarnessUpdate(hal.HarnessUpdateResult, text, owner, outcome)
@@ -113,15 +107,13 @@ func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, s
 	runIDs = h.harnessResultRunOrderLocked(runIDs)
 	h.harnessRepliesMu.Unlock()
 	owner := runIDs[0]
-	// An earlier member may have lost the speaker before the user supplied a
-	// new input. The merged answer belongs to that newest input's speech turn;
-	// never let cancellation of an older member cancel the newer request too.
+	// The merged answer belongs to the newest input's speech turn; cancelling an older
+	// member must not cancel it.
 	if h.isHarnessSpeechCancelled(owner) {
 		flow.Log("tts_cancelled", map[string]any{"run_id": owner, "source": h.speechCancelSource(owner)}, owner)
 		return fmt.Errorf("%w: latest member %q lost the speaker", ErrHarnessResultSpeechSuppressed, owner)
 	}
-	// Immutable correlated results are never replaced by a local notice; the
-	// announcer's spoken rendering is not a replacement for the displayed text.
+	// Correlated results are immutable; never replace them with a local notice.
 	if isLLMLimitText(text) {
 		return fmt.Errorf("%w: usage-limit banner is display-only", ErrHarnessResultSpeechSuppressed)
 	}
@@ -134,9 +126,8 @@ func (h *AgentHandler) speakHarnessGroupedResult(text string, runIDs []string, s
 	return err
 }
 
-// DeliverHarnessQuestion exposes a structured question without consuming the result
-// route. Deduplication is per original run and question ID, including replay
-// after another question; final result ownership stays with the result ledger.
+// DeliverHarnessQuestion exposes a structured question without consuming the result route
+// (deduplicated per run and question ID).
 func (h *AgentHandler) DeliverHarnessQuestion(runID, questionID, text string) bool {
 	if runID == "" || questionID == "" || text == "" {
 		return false

@@ -1,25 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Publish a new OpenCode CLI version to OTA metadata. Mirrors
-# upload-openclaw.sh / upload-codex.sh — this script ONLY updates the metadata
-# field, it doesn't touch GCS otherwise (the artifact comes from the official
-# opencode.ai installer; the device fetches it directly, no url/sha256 here).
-#
-# VERSION FORMAT: the bare semver (e.g. 1.18.4) — what `opencode --version`
-# prints and what the official installer takes via `--version`.
-#
-# Usage:
-#   ./scripts/release/upload-opencode.sh <version_str>
-#
-# Example:
-#   ./scripts/release/upload-opencode.sh 1.18.4
-#
-# Bumping `version` alone does NOT push the fleet: the bootstrap worker only
-# auto-applies up to `min_version`. Release it with:
-#   make promote-opencode
-#
-# Other keys in metadata.json (skills, openclaw, codex, …) are preserved.
+# Publish an OpenCode CLI version (bare semver) to OTA metadata; roll out with `make promote-opencode`.
+# Usage: ./scripts/release/upload-opencode.sh <version_str>
 
 if [[ -z "${1:-}" ]]; then
   echo "Usage: $0 <opencode-version>" >&2
@@ -28,8 +11,7 @@ if [[ -z "${1:-}" ]]; then
 fi
 VERSION="$1"
 
-# The value published here is compared against `opencode --version` output, so a
-# "v"-prefixed string would never match and would re-trigger the update forever.
+# Compared against `opencode --version`; a "v" prefix would never match and loop updates.
 if [[ "$VERSION" == v* ]]; then
   echo "ERROR: pass the bare semver (1.18.4), not a v-prefixed tag ($VERSION)." >&2
   exit 1
@@ -43,7 +25,6 @@ METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP"' EXIT
 
-# Pull existing metadata; if missing, bootstrap with an empty object.
 if ! gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
   echo "Note: $METADATA_GCS not found — bootstrapping with empty object."
   printf '{}' > "$PAYLOAD_TMP"

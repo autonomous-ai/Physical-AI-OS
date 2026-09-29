@@ -9,9 +9,7 @@ import (
 	"time"
 )
 
-// resetMu serialises resets so two calls can never share or overwrite a backup
-// dir — a double-clicked POST lands in the same second, and the first backup
-// is the only copy of the poisoned file a #421 post-mortem has.
+// resetMu serialises resets so two calls never share or overwrite a backup dir.
 var resetMu sync.Mutex
 
 // ResetReport lists what ResetMemoryFiles backed up and cleared.
@@ -36,21 +34,8 @@ const userProfileResetForm = `- _Learn about the person you're helping. Update t
 // (see hal/config.py REALTIME_MEMORY_PATH and context_manager/base.py).
 var realtimeMemoryFiles = []string{"summary.md", "device_summary.md", "memory.jsonl", "memory_raw.jsonl"}
 
-// ResetMemoryFiles is the no-SSH recovery for a self-poisoned memory (#421).
-// For EVERY installed runtime it copies USER.md, MEMORY.md, KNOWLEDGE.md and
-// the realtime memory files into <workspace>/.memory-reset-<stamp>-<rand>/
-// (a fresh dir per call, so a rerun never overwrites an earlier backup), then
-// resets USER.md to the blank form (emptied for Hermes, whose file is
-// §-delimited entries, not markdown) and removes the rest — onboarding re-seeds
-// KNOWLEDGE.md from its template on its next pass, HAL recreates the realtime
-// files on the next turn. Every runtime, because persona is multi-homed: a copy
-// left behind migrates back on the next switch.
-//
-// Files only. Session history (OpenClaw sessions, Hermes state.db) is not
-// touched — follow with /new if the poison is also in the conversation.
-//
-// On error the partial progress so far is returned in the report alongside the
-// wrapped error, so the caller can log what was already backed up and cleared.
+// ResetMemoryFiles backs up and clears USER.md, MEMORY.md, KNOWLEDGE.md and realtime memory for
+// every installed runtime (#421); session history is untouched. On error the partial report is returned.
 func ResetMemoryFiles(opts Options) (ResetReport, error) {
 	resetMu.Lock()
 	defer resetMu.Unlock()
@@ -71,18 +56,14 @@ func ResetMemoryFiles(opts Options) (ResetReport, error) {
 			continue
 		}
 		if st, err := os.Stat(root); err != nil || !st.IsDir() {
-			continue // runtime not installed on this device
+			continue
 		}
 		user := a.userProfilePath(opts)
 		targets := []string{user, a.memoryFilePath(opts), filepath.Join(filepath.Dir(user), "KNOWLEDGE.md")}
 		for _, f := range realtimeMemoryFiles {
 			targets = append(targets, filepath.Join(root, "realtime", f))
 		}
-		// The backup dir is created lazily — only once this runtime has a
-		// file to back up — and unique per call (MkdirTemp), so an absent
-		// runtime leaves nothing behind and a rerun cannot reuse a dir. It is
-		// recorded in the report as soon as it exists so the error path still
-		// tells the operator where the partial backup went.
+		// Backup dir is created lazily and unique per call; recorded immediately for the error path.
 		bak := ""
 		for _, p := range targets {
 			data, err := os.ReadFile(p)
@@ -120,10 +101,8 @@ func ResetMemoryFiles(opts Options) (ResetReport, error) {
 	return rep, nil
 }
 
-// writeBackup writes a backup copy and fsyncs it before returning. The original
-// is unlinked right after and both live on an SD card — the backup is the whole
-// point of the file, so it must be on disk, not in the page cache, before the
-// original goes. O_EXCL: the dir is fresh per call, so a collision is a bug.
+// writeBackup writes and fsyncs a backup before the original is removed (SD card);
+// O_EXCL because the dir is fresh per call.
 func writeBackup(dst string, data []byte) error {
 	f, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0o644)
 	if err != nil {

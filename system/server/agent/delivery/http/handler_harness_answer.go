@@ -6,9 +6,8 @@ import (
 	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
-// DeliverHarnessAnswerReceipt closes only the command's response address. An
-// accepted answer belongs to the original task and is not a new task result.
-// Neither accepted nor rejected receipts submit speech or modify the parent.
+// DeliverHarnessAnswerReceipt closes only the command's response address; receipts never
+// submit speech or modify the parent task.
 func (h *AgentHandler) DeliverHarnessAnswerReceipt(runID, parentRunID, state string) bool {
 	if runID == "" || runID == parentRunID || (state != "completed" && state != "rejected") {
 		return false

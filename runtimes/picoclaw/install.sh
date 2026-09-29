@@ -1,44 +1,10 @@
 #!/usr/bin/env bash
 # runtimes/picoclaw/install.sh — installer for the PicoClaw agentic backend.
-#
-# Published to the CDN at ${RUNTIMES_BASE_URL}/picoclaw/install.sh and fetched by
-# /usr/local/bin/switch-runtime the first time a device switches to picoclaw. It
-# is self-contained: nothing in the imager or os-server knows about picoclaw.
-#
-# This installer is self-sufficient: a direct `bash install.sh` fully configures
-# AND starts PicoClaw — it does not rely on switch-runtime to run the presync hook
-# or to enable the unit afterwards. It still drops the presync hook so later
-# runtime switches re-sync the latest model/channel config from config.json.
-#
-# What it does:
-#   1. install the PicoClaw binary (pinned release, arm64) to /usr/local/bin;
-#   2. `picoclaw onboard` to create /root/.picoclaw (workspace + a baseline
-#      config.json + .security.yml the presync hook then patches);
-#   3. install + start the gateway as a SYSTEM service. `picoclaw gateway` only
-#      runs in the foreground, so unlike hermes (which ships its own
-#      `gateway install --system`) we write the systemd unit ourselves — the
-#      default unit name picoclaw.service matches the runtime name, so
-#      switch-runtime needs NO /usr/local/lib/os-runtimes/picoclaw/service file;
-#   4. drop /usr/local/bin/runtime-picoclaw-presync ownership to os-server and run
-#      it once: it OWNS the model wiring (config.json agents.defaults + model_list,
-#      .security.yml api_keys) AND the channel wiring (config.json channel_list +
-#      .security.yml channel tokens), and — when the .openclaw-migrated marker is
-#      absent (first install OR after a factory reset wiped /root/.picoclaw) — runs
-#      `picoclaw migrate --workspace-only --force` to carry persona/memory/skills over from OpenClaw.
-#      See presync.sh.
-#
-# UNIT NAME: picoclaw.service (== runtime name). No service-name declaration file
-#    is needed (switch_runtime.sh defaults the unit to the runtime name).
-#
-# ⚠️ VERIFY ON DEVICE: `picoclaw gateway` must listen on 127.0.0.1:18790 and serve
-#    the WebSocket at /pico/ws/ to match runtimes/picoclaw/constants.go WSURL, and
-#    the bearer token must equal constants.go Token (seeded into .security.yml
-#    channel_list.pico.settings.token by the presync hook).
 set -euo pipefail
 
-# Tee all output to a log under /root/.picoclaw (persistent rootfs), NOT /var/log
-# — on these boards /var/log is a volatile zram mount wiped on reboot, which would
-# lose the install log exactly when you need it. Override with PICO_LOG=... if needed.
+# Tee all output to a log under /root/.picoclaw (persistent rootfs), NOT /var/log — on these boards
+# /var/log is a volatile zram mount wiped on reboot, which would lose the install log exactly when
+# you need it.
 PICO_LOG="${PICO_LOG:-/root/.picoclaw/install.log}"
 mkdir -p "$(dirname "$PICO_LOG")"
 exec > >(tee -a "$PICO_LOG") 2>&1
@@ -48,16 +14,13 @@ PICO_BIN="/usr/local/bin/picoclaw"
 PICO_DIR="/root/.picoclaw"
 PICO_CONFIG="$PICO_DIR/config.json"
 
-# Pin the release the device installs. Bump here (and re-OTA os-server) to upgrade.
-# The asset is published per-arch as picoclaw-linux-<arch> on GitHub releases.
 PICO_VERSION="${PICO_VERSION:-v0.3.1-fixvision}"
 PICO_REPO="${PICO_REPO:-autonomous-ai/picoclaw}"
 
 echo "[install-picoclaw] prerequisites (jq, yq, curl)"
 apt-get update || true
 apt-get install -y jq curl || true
-# yq is required by the presync hook's .security.yml (YAML) edits. install it the
-# same way the hermes installer does (static binary per arch).
+# yq is required by the presync hook's .security.yml (YAML) edits.
 if ! command -v yq >/dev/null 2>&1; then
   case "$(uname -m)" in
     x86_64)        YQ_BIN="yq_linux_amd64" ;;
@@ -87,11 +50,8 @@ if [ ! -x "$PICO_BIN" ]; then
 fi
 "$PICO_BIN" --version || true
 
-# onboard creates /root/.picoclaw itself (workspace + a baseline config.json /
-# .security.yml) — no explicit mkdir needed. It is non-interactive. Run it only
-# when there is no config yet, so a reinstall over an existing (possibly
-# migrated/customized) install does not reset the baseline — the presync hook owns
-# keeping config.json/.security.yml correct.
+# onboard creates /root/.picoclaw itself (workspace + a baseline config.json / .security.yml) — no
+# explicit mkdir needed.
 echo "[install-picoclaw] onboard (create workspace + baseline config) if absent"
 if [ ! -f "$PICO_CONFIG" ]; then
   HOME=/root "$PICO_BIN" onboard || {
@@ -103,19 +63,11 @@ else
 fi
 
 # OpenClaw persona/memory/skill import (`picoclaw migrate --workspace-only --force`) is owned by the
-# presync hook now — it runs the migrate when the .openclaw-migrated marker is absent
-# (first install OR after a factory reset wiped /root/.picoclaw), then asserts the
-# model/channel config on top. Owning it there (not here) is what lets a plain
-# os-server OTA refresh the logic: this installer only re-runs on a first install /
-# failed verify. See presync.sh §0. (openclaw is stopped by the presync hook right
-# before migrate to avoid racing its on-disk state.)
+# presync hook now — it runs the migrate when the .openclaw-migrated marker is absent (first install
+# OR after a factory reset wiped /root/.picoclaw), then asserts the model/channel config on top.
 
-# Model + channel wiring (config.json agents.defaults/model_list/channel_list and
-# .security.yml api_keys/channel tokens) is owned ENTIRELY by the presync hook, NOT
-# patched here. The hook is materialized to /usr/local/bin/runtime-picoclaw-presync
-# by os-server BEFORE this installer runs. Running it now configures this fresh
-# install; switch-runtime re-runs it before every later start, so the config
-# self-heals (e.g. after a factory reset reset the baseline).
+# Model + channel wiring (config.json agents.defaults/model_list/channel_list and .security.yml
+# api_keys/channel tokens) is owned ENTIRELY by the presync hook, NOT patched here.
 PRESYNC_HOOK="/usr/local/bin/runtime-picoclaw-presync"
 if [ -x "$PRESYNC_HOOK" ]; then
   echo "[install-picoclaw] migrate + patch model/channel config now (via $PRESYNC_HOOK)"
@@ -125,10 +77,6 @@ else
   echo "[install-picoclaw] WARN: $PRESYNC_HOOK absent — os-server did not materialize it (standalone/offline run?); PicoClaw model/channel config NOT set"
 fi
 
-# `picoclaw gateway` runs in the foreground only, so wrap it in a systemd unit so
-# switch-runtime can enable/disable/verify it like any other backend. Unit name ==
-# runtime name (picoclaw.service), so no service-name declaration file is needed.
-# HOME=/root so the gateway resolves its data dir at /root/.picoclaw.
 echo "[install-picoclaw] write systemd unit picoclaw.service"
 cat >/etc/systemd/system/picoclaw.service <<UNIT
 [Unit]
@@ -153,9 +101,6 @@ echo "[install-picoclaw] enable + start picoclaw.service"
 systemctl enable --now picoclaw.service
 systemctl status picoclaw.service --no-pager || true
 
-# Drop a verify hook so switch-runtime can distinguish a real install from an
-# orphaned picoclaw.service whose binary is gone/broken — when it fails,
-# switch-runtime reinstalls instead of skipping. Keep it cheap + offline.
 echo "[install-picoclaw] declare verify hook for switch-runtime (command -v picoclaw)"
 mkdir -p /usr/local/lib/os-runtimes/picoclaw
 cat >/usr/local/lib/os-runtimes/picoclaw/verify <<'VERIFY'

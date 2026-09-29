@@ -7,15 +7,6 @@ import (
 	"strings"
 )
 
-// Systemd self-heal for the claudecode bridge unit. A device that reached
-// claudecode WITHOUT switch-runtime (e.g. a hand-edited config.json
-// agent_runtime=claudecode) has no unit, so IsReady()'s WS connect — and the
-// setup WaitForAgentReady gate — would fail forever. EnsureOnboarding installs
-// it on demand (the bridge ships inside the os-server binary as the
-// claudecode-gatewayd subcommand and presync materializes .env/channels, so
-// unit + presync is all a hand-switched device needs). Mirrors
-// hermes.ensureGatewayUnit.
-
 const claudecodeUnitName = "claudecode"
 const claudecodeUnitPath = "/etc/systemd/system/claudecode.service"
 
@@ -40,9 +31,7 @@ RestartSec=3
 WantedBy=multi-user.target
 `
 
-// ensureGatewayUnit writes the systemd unit when it is missing. Returns true
-// when it was installed this call (EnsureOnboarding then restarts). No-op on a
-// non-root / no-systemctl box (dev machine).
+// ensureGatewayUnit writes the systemd unit when it is missing.
 func (s *ClaudeCodeService) ensureGatewayUnit() bool {
 	if os.Geteuid() != 0 {
 		return false
@@ -51,7 +40,7 @@ func (s *ClaudeCodeService) ensureGatewayUnit() bool {
 		return false
 	}
 	if _, err := os.Stat(claudecodeUnitPath); err == nil {
-		return false // unit present
+		return false
 	}
 	if err := os.WriteFile(claudecodeUnitPath, []byte(claudecodeUnitContent), 0o644); err != nil {
 		slog.Warn("write claudecode unit failed", "component", "claudecode", "error", err)
@@ -65,9 +54,7 @@ func (s *ClaudeCodeService) ensureGatewayUnit() bool {
 	return true
 }
 
-// gatewayActive reports whether the claudecode unit is currently active. On a
-// box without systemctl it returns true so EnsureOnboarding does not loop on
-// restarts it cannot perform.
+// gatewayActive reports whether the claudecode unit is currently active.
 func gatewayActive() bool {
 	if _, err := exec.LookPath("systemctl"); err != nil {
 		return true
@@ -77,7 +64,6 @@ func gatewayActive() bool {
 
 // enableClaudeCodeGateway re-enables the unit so the bridge survives a reboot —
 // factory reset disables it, and a freshly self-healed unit is not enabled.
-// Best-effort.
 func enableClaudeCodeGateway() {
 	if os.Geteuid() != 0 {
 		return

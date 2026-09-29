@@ -1,37 +1,7 @@
 #!/usr/bin/env bash
-# install.sh — one-command bring-up of Autonomous OS on a Reachy Mini.
-#
-# SSH into your robot, then:
-#
-#   curl -fsSL https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/robots/reachy-mini/install.sh | sudo bash
-#
-# That is all a Reachy Mini needs. No repo to clone, no Go or Node toolchain, no
-# build step, nothing copied from your laptop.
-#
-# What it does: fetches the released reachy-mini device package from the OTA
-# feed — which ships the spike scripts along with ROBOT.md and the rootfs
-# overlay — and hands over to spike.sh, which installs HAL, os-server, the web
-# UI, the agent gateway and the OTA worker, each behind a systemd unit.
-#
-# Why the scripts come from OTA rather than from this repo: it keeps the whole
-# install on ONE released snapshot. Pulling scripts from git main while pulling
-# binaries from the OTA feed is how you end up running an installer that expects
-# a build nobody has published yet. This file is the only piece fetched from
-# git, and it is deliberately small enough to read in full before you pipe it to
-# a shell.
-#
-# It installs ALONGSIDE the Pollen software that shipped with the robot; it does
-# not replace it. The Pollen daemon keeps running and keeps owning motion. HAL
-# borrows the camera and microphone from it and hands them back on shutdown.
-#
-# Options (environment):
-#   OTA_METADATA_URL=…   install from another feed (staging, a fork)
-#   OTA_SIGNING_PUBLIC_KEY=…  pin a base64 Ed25519 key for verified OTA
-#   DEVICE_TYPE=…        another device profile (default: reachy-mini)
-#
-# Anything after `bash -s --` is passed to spike.sh, e.g.:
-#   curl -fsSL …/install.sh | sudo bash -s -- --skip agent
-#   curl -fsSL …/install.sh | sudo bash -s -- --uninstall
+# install.sh — one-command Autonomous OS bring-up on a Reachy Mini (run on the robot).
+# Usage: curl -fsSL https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/robots/reachy-mini/install.sh | sudo bash [-s -- SPIKE_ARGS|--force]
+# Env: OTA_METADATA_URL, OTA_SIGNING_PUBLIC_KEY, DEVICE_TYPE.
 set -euo pipefail
 
 DEVICE_TYPE="${DEVICE_TYPE:-reachy-mini}"
@@ -40,9 +10,7 @@ OTA_METADATA_URL="${OTA_METADATA_URL:-https://cdn.autonomous.ai/os/ota/metadata.
 tag() { printf '[install] %s\n' "$1" >&2; }
 fail() { printf '[install] ERROR: %s\n' "$1" >&2; exit 1; }
 
-# --force is ours, not spike.sh's, so filter it out of the argument list rather
-# than rewriting it in place: substituting it for an empty string would leave a
-# blank argument that spike.sh rejects as an unknown flag.
+# Filter --force out (do not blank it) so spike.sh does not see an unknown flag.
 FORCE=0
 ARGS=()
 for a in "$@"; do
@@ -52,16 +20,7 @@ set -- ${ARGS[@]+"${ARGS[@]}"}
 
 [ "$(id -u)" -eq 0 ] || fail "run as root — pipe to 'sudo bash', not 'bash'"
 
-# Refuse to run anywhere but a Reachy Mini. A one-liner published in a README
-# gets pasted into the wrong terminal eventually, and this one is not harmless
-# there: it apt-installs packages, overwrites /etc/asound.conf for the whole
-# machine, writes /opt and /root/config, and enables five systemd units. On a
-# laptop it merely fails; on some other Linux box it succeeds and leaves a mess.
-#
-# The marker is the Pollen daemon, since that is what the install actually
-# depends on: motion goes through it, and HAL borrows the camera and microphone
-# from it. Its systemd unit is checked as well as its port, so the guard still
-# passes while the daemon happens to be restarting.
+# Guard: refuse to modify a non-Reachy host (detected via the Pollen daemon unit or port).
 if [ "$FORCE" = "0" ]; then
   if systemctl list-unit-files reachy-mini-daemon.service >/dev/null 2>&1 \
      && systemctl cat reachy-mini-daemon.service >/dev/null 2>&1; then
@@ -83,8 +42,6 @@ fi
 tag "device : $DEVICE_TYPE"
 tag "feed   : $OTA_METADATA_URL"
 
-# jq is not on the shipped Pollen OS; curl and unzip are. Install what is
-# missing before anything depends on it.
 missing=()
 for t in curl unzip jq; do command -v "$t" >/dev/null || missing+=("$t"); done
 if [ ${#missing[@]} -gt 0 ]; then
@@ -94,9 +51,7 @@ if [ ${#missing[@]} -gt 0 ]; then
     || fail "could not install ${missing[*]}"
 fi
 
-# An existing installation may have a provisioning-pinned key.  In that case
-# this bootstrap installer must consume only the authenticated .signed payload;
-# a first install without a key remains fully compatible with legacy feeds.
+# With a pinned key, consume only the verified .signed payload.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
 OTA_SIGNING_PUBLIC_KEY="${OTA_SIGNING_PUBLIC_KEY:-$(jq -r '.signing_public_key // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)}"
 verify_ota_metadata() {
@@ -125,12 +80,9 @@ verify_ota_metadata() {
 tag "reading the OTA feed"
 META="$(mktemp)"
 trap 'rm -f "$META"' EXIT
-# no-cache: the CDN edge-caches these, and a stale read installs yesterday's
-# build while reporting today's version.
+# no-cache: CDN edge caching can serve a stale build.
 curl -fsSL -H 'Cache-Control: no-cache' -H 'Pragma: no-cache' -o "$META" "$OTA_METADATA_URL" \
   || fail "could not fetch $OTA_METADATA_URL"
-# A captive portal answers 200 with HTML. Catch that here rather than let jq
-# return empty strings that turn into a confusing "no url for device".
 jq -e . "$META" >/dev/null 2>&1 || fail "$OTA_METADATA_URL did not return JSON (captive portal?)"
 
 if [ -n "$OTA_SIGNING_PUBLIC_KEY" ]; then
@@ -160,10 +112,7 @@ curl -fsSL -H 'Cache-Control: no-cache' -o "$STAGING/pkg.zip" "$PKG_URL" \
   || fail "device package SHA-256 mismatch"
 unzip -o -q "$STAGING/pkg.zip" -d "$STAGING" || fail "the device package is not a readable zip"
 
-# Two generations of this package exist. The older one ships a spike.sh that
-# runs FROM A MAC (ssh + rsync + local Go/Node builds) — running it here would
-# fail in confusing ways. spike-lib.sh only exists in the run-on-the-robot
-# generation, so it is the marker to gate on, not spike.sh.
+# spike-lib.sh marks the run-on-robot package generation; older ones ran from a Mac.
 if [ ! -f "$STAGING/spike-lib.sh" ]; then
   [ -f "$STAGING/spike.sh" ] \
     && fail "device package $PKG_VER ships the older Mac-side scripts, which cannot run here.
@@ -174,15 +123,9 @@ fi
 
 tag "handing over to spike.sh"
 echo >&2
-# Pass the feed down so every step installs from the same place this script
-# read, even when the robot's bootstrap.json points somewhere else.
 OTA_METADATA_URL="$OTA_METADATA_URL" OTA_SIGNING_PUBLIC_KEY="$OTA_SIGNING_PUBLIC_KEY" DEVICE_TYPE="$DEVICE_TYPE" \
   bash "$STAGING/spike.sh" "$@"
 
-# The staging copy is temporary, but spike.sh's first step installs the same
-# package to /opt/devices — so the scripts survive there for later use. Say so:
-# otherwise the only way anyone knows how to undo this is to run the installer
-# again, and that reinstalls instead.
 cat >&2 <<EOF
 
 [install] The scripts now live at /opt/devices/$DEVICE_TYPE/ — use them to

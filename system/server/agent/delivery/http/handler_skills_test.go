@@ -83,8 +83,7 @@ func TestExtractSkillBundle(t *testing.T) {
 		}
 	}
 
-	// The entries must actually land on disk — the endpoint's contract is
-	// "download to temp, unzip there, then read".
+	// The entries must actually land on disk.
 	if _, err := os.Stat(filepath.Join(dir, "unpacked", "my-skill", "SKILL.md")); err != nil {
 		t.Errorf("expected SKILL.md unpacked on disk: %v", err)
 	}
@@ -166,8 +165,7 @@ func TestBrowseSkills(t *testing.T) {
 	}
 }
 
-// A catalog business failure arrives as HTTP 200 with a non-1 status — the
-// proxy must surface it as an error, not as an empty success.
+// A catalog HTTP 200 with a non-1 status must surface as an error.
 func TestBrowseSkillsUpstreamBusinessError(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
@@ -194,7 +192,6 @@ func TestBrowseSkillsUpstreamBusinessError(t *testing.T) {
 func TestSkillBundle(t *testing.T) {
 	gin.SetMode(gin.TestMode)
 
-	// Build the archive the fake catalog will serve from /download.
 	dir := t.TempDir()
 	zipPath := filepath.Join(dir, "skill.zip")
 	writeZip(t, zipPath, map[string]string{"design-critique/SKILL.md": "# Design Critique\n"})
@@ -264,11 +261,7 @@ func TestSkillBundleRejectsBadID(t *testing.T) {
 	}
 }
 
-// ─── Authoring + install (per-runtime via AgentGateway) ──────────────────────
-
-// fakeGateway implements only the two skill methods the handlers touch; the
-// rest of domain.AgentGateway is unused here, so the handler is exercised
-// through the same abstraction a real runtime sits behind.
+// fakeGateway implements only the skill methods the handlers touch.
 type fakeGateway struct {
 	domain.AgentGateway
 	name        string
@@ -333,8 +326,7 @@ func TestSaveSkill(t *testing.T) {
 	}
 }
 
-// A runtime with no skills dir must fail loudly (501) rather than look like a
-// successful save.
+// A runtime with no skills dir must fail with 501, not look like a successful save.
 func TestSaveSkillNotSupported(t *testing.T) {
 	gw := &fakeGateway{name: "Hermes", saveErr: domain.ErrNotSupportedByRuntime}
 	rec, c := postJSON(t, "/api/agent/skills", `{"name":"x","description":"d","instructions":"i"}`)
@@ -377,7 +369,6 @@ func TestSaveSkillRequiresAllFields(t *testing.T) {
 }
 
 func TestInstallSkill(t *testing.T) {
-	// Fake catalog serving a real archive from /download.
 	dir := t.TempDir()
 	zipPath := filepath.Join(dir, "skill.zip")
 	writeZip(t, zipPath, map[string]string{"design-critique/SKILL.md": "body"})
@@ -567,8 +558,7 @@ func TestReadSkillFilesHandler(t *testing.T) {
 	if gw.gotReadName != "music" {
 		t.Errorf("name = %q", gw.gotReadName)
 	}
-	// Same SkillBundle envelope the store preview returns, so one component
-	// renders both detail views.
+	// Same SkillBundle envelope as the store preview.
 	if !strings.Contains(rec.Body.String(), `"id":"music"`) ||
 		!strings.Contains(rec.Body.String(), `"music/SKILL.md"`) {
 		t.Errorf("unexpected body: %s", rec.Body.String())
@@ -634,8 +624,7 @@ func TestDeleteSkillHandler(t *testing.T) {
 	}
 }
 
-// A stale list pointing at an already-removed skill is a 404, not a silent 200 —
-// the caller has to learn its view was out of date.
+// Uninstalling an already-removed skill is a 404, not a silent 200.
 func TestDeleteSkillHandlerMissingIs404(t *testing.T) {
 	gw := &fakeGateway{name: "OpenClaw", deleteErr: skills.ErrSkillNotFound}
 	rec, c := getReq(t, "/api/agent/skills?name=gone")
@@ -678,8 +667,6 @@ func TestDeleteSkillHandlerGuards(t *testing.T) {
 		t.Errorf("runtime name not surfaced: %s", rec.Body.String())
 	}
 }
-
-// ─── Upload ─────────────────────────────────────────────────────────────────
 
 // postMultipart builds a multipart request with one `file` part.
 func postMultipart(t *testing.T, path, filename string, content []byte) (*httptest.ResponseRecorder, *gin.Context) {
@@ -727,8 +714,7 @@ func TestUploadSkill(t *testing.T) {
 	if gw.gotArchive == "" {
 		t.Fatal("gateway did not receive an archive path")
 	}
-	// Filename stem is slugified for the fallback, so a spaced filename can't
-	// fail name validation on a flat archive.
+	// Filename stem is slugified for the fallback name.
 	if gw.gotFallback != "my-skill" {
 		t.Errorf("fallback = %q, want my-skill", gw.gotFallback)
 	}
@@ -766,8 +752,7 @@ func TestUploadSkillGuards(t *testing.T) {
 	}
 }
 
-// A file that isn't a zip must fail as a bad request, not a 500 — the operator
-// picked the wrong file.
+// A non-zip upload is a 400, not a 500.
 func TestUploadSkillRejectsNonArchive(t *testing.T) {
 	gw := &fakeGateway{name: "OpenClaw", installErr: skills.ErrEmptyArchive}
 	rec, c := postMultipart(t, "/api/agent/skills/upload", "notes.txt", []byte("just text"))
@@ -798,8 +783,7 @@ func (f *fakeGateway) InstallSkillMarkdown(content []byte) (string, error) {
 	return f.mdDir, f.mdErr
 }
 
-// A bare .md upload takes the markdown path: the file's front-matter names the
-// skill, so the archive path (and its filename-derived fallback) is not involved.
+// A bare .md upload takes the markdown path; its front-matter names the skill.
 func TestUploadSkillMarkdown(t *testing.T) {
 	md := []byte("---\nname: weekly-report\ndescription: Sums up the week.\n---\nbody")
 	gw := &fakeGateway{name: "OpenClaw", mdDir: "/skills/weekly-report"}

@@ -9,7 +9,6 @@ const webVersion = fs.existsSync(versionFile)
   ? fs.readFileSync(versionFile, "utf-8").trim()
   : "dev";
 
-// https://vite.dev/config/
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, __dirname, "LAMP_");
   const proxy = env.LAMP_PROXY || process.env.LAMP_PROXY;
@@ -19,11 +18,8 @@ export default defineConfig(({ mode }) => {
     },
     plugins: [react(), tailwindcss()],
     server: {
-      // Listen on all interfaces so Vite prints the Network (local IP) URL.
-      // host: true,
       proxy: proxy ? {
-        // ws: true is required so /api/system/shell (xterm.js PTY WebSocket)
-        // is upgraded through the proxy to the Pi.
+        // ws: true so the shell WebSocket (/api/system/shell) is proxied.
         "/api": { target: proxy, ws: true, changeOrigin: true },
         "/hw":  { target: proxy, ws: true, changeOrigin: true },
       } : undefined,

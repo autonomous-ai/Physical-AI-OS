@@ -90,8 +90,6 @@ func (s *Server) registerHarnessVoiceRoutes(group *gin.RouterGroup) {
 		if err := bindHarnessVoiceJSON(c, &req); err != nil {
 			return
 		}
-		// An answer is a new turn. The controller validates the live question and
-		// uses the existing asynchronous Harness response path for its result.
 		runID := newHarnessVoiceRunID("")
 		interactionID := telemetry.ReportTaskStarted("web_chat", "", runID)
 		err := s.harnessVoice.Answer(c.Request.Context(), req.QuestionRequestID, req.Answers, runID, req.FocusRevision)
@@ -122,7 +120,6 @@ func newHarnessVoiceRunID(interactionID string) string {
 	if interactionID == "" {
 		var nonce [16]byte
 		if _, err := rand.Read(nonce[:]); err != nil {
-			// crypto/rand failure is fatal on supported Go platforms.
 			panic(err)
 		}
 		interactionID = hex.EncodeToString(nonce[:])
@@ -131,9 +128,8 @@ func newHarnessVoiceRunID(interactionID string) string {
 	return "device-harness-" + hex.EncodeToString(digest[:16])
 }
 
-// handleHarnessVoice runs before local intents and main-runtime readiness/busy
-// checks. Only HAL's explicit capture snapshot opts in; typed/MQTT chat and
-// ambient sensing keep their existing routes.
+// handleHarnessVoice runs before local intents and main-runtime
+// readiness/busy checks.
 func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEventRequest) bool {
 	if req.HarnessVoice == nil || (req.Type != "voice" && req.Type != "voice_command" && req.Type != "voice_followup") {
 		return false
@@ -164,8 +160,7 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 	start := flow.Start("sensing_input", map[string]any{
 		"type": req.Type, "message": req.Message, "interaction_id": interactionID, "route": "harness_only",
 	}, runID)
-	// Return promptly: HAL's sender times out at five seconds. The controller
-	// reserves one mutation and deduplicates retries by this stable local run ID.
+	// Return promptly: HAL's sender times out at five seconds.
 	parent := s.harnessVoiceCtx
 	if parent == nil {
 		parent = context.Background()
@@ -186,7 +181,6 @@ func (s *Server) handleHarnessVoice(c *gin.Context, req sensinghttp.SensingEvent
 			slog.Warn("Harness voice dispatch", "component", "harness", "run_id", runID, "error", err)
 			var uncertain *harness.DeliveryUnknownError
 			if errors.As(err, &uncertain) {
-				// Keep the original route pending: the real result can still arrive.
 				if s.agentHandler != nil && s.hasHarnessReply(state.AgentID, runID) {
 					s.agentHandler.DeliverHarnessProgress(runID, err.Error())
 					s.deliverHarnessVoiceMessage("harness-notice", runID+"-notice", err.Error())
@@ -206,7 +200,6 @@ func (s *Server) deliverHarnessVoiceMessage(agentID, runID, text string) {
 		agentID = "harness-voice"
 	}
 	if !s.hasHarnessReply(agentID, runID) {
-		// A preflight failure is a local notice, not another remote task.
 		s.registerHarnessRoute(agentID, runID, false, false, "", true)
 	}
 	if s.agentHandler != nil {

@@ -15,8 +15,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// telegramMaxMediaGroup is the upper bound imposed by Telegram's
-// sendMediaGroup endpoint. Bot API rejects requests with more attachments.
+// telegramMaxMediaGroup is the upper bound imposed by Telegram's sendMediaGroup endpoint.
 const telegramMaxMediaGroup = 10
 
 // TelegramSender delivers messages via Telegram Bot API.
@@ -71,7 +70,6 @@ func (t *TelegramSender) Send(msg string, imagePath string) error {
 }
 
 // SendToUser sends a message to a specific Telegram user by their numeric user ID.
-// If telegramID is empty the message is silently dropped.
 func (t *TelegramSender) SendToUser(telegramID string, msg string, imagePath string) error {
 	if telegramID == "" {
 		return nil
@@ -107,11 +105,7 @@ func (t *TelegramSender) SendToUser(telegramID string, msg string, imagePath str
 	return nil
 }
 
-// SendToUserWithMedia delivers a multi-image DM via Telegram's
-// sendMediaGroup. The caption rides on the first photo (Telegram only
-// honors caption on the first InputMediaPhoto). Missing or unreadable
-// files are skipped silently; if all paths fail to read the call falls
-// back to a text-only sendMessage so the user still gets the nudge.
+// SendToUserWithMedia delivers a multi-image DM via Telegram's sendMediaGroup.
 func (t *TelegramSender) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
 	if telegramID == "" {
 		return nil

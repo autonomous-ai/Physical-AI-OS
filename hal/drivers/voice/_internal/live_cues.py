@@ -77,11 +77,7 @@ class LiveVoiceCues:
             self._pending = self._executor.submit(apply)
 
     def input(self, key, endpoint_at=None, *, transcript="", transcript_finished=False):
-        """Use recognized words and addressing evidence, never raw mic activity.
-
-        A provider endpoint alone is insufficient: noise can trigger VAD too.
-        Transcript completion can drive emotion but is not a metric endpoint.
-        """
+        """Use recognized words and addressing evidence, never raw mic activity."""
         with self._lock:
             if self._closed or not key or key in self._retired:
                 return

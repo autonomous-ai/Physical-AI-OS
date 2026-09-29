@@ -31,7 +31,6 @@ func TestShouldRotateSession(t *testing.T) {
 func TestConversationRotation(t *testing.T) {
 	s := &HermesService{}
 
-	// Seeded name is boot-fresh: base + suffix, and stable until rotation.
 	n1 := s.conversationName()
 	if !strings.HasPrefix(n1, Conversation+"-") {
 		t.Fatalf("seed name %q should start with %q-", n1, Conversation)
@@ -43,7 +42,6 @@ func TestConversationRotation(t *testing.T) {
 		t.Errorf("conversationName must be stable until rotation")
 	}
 
-	// Rotation changes the name and clears the response-chain pointer.
 	s.lastResponseID.Store("resp_old")
 	s.rotateConversation()
 	n2 := s.conversationName()

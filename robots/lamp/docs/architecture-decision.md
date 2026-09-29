@@ -87,7 +87,7 @@ Works **without OpenClaw**. If the AI is down, the device still boots, shows sta
 | MQTT communication | Auto-reconnect, message dispatch to backend |
 | Internet monitoring | Connectivity check, auto-recovery |
 | **Autonomous sensing** | Lightweight sensing loop: camera (presence, light level), mic (sound level, silence, voice tone), time (schedules), plug-in sensors. Emits events to OpenClaw when significant changes detected. |
-| **Ambient life** | Idle behaviors that make Lamp feel alive: breathing LED (sine-wave brightness), color drift (warm palette rotation), micro-movements (safe servo recordings), TTS self-talk. Auto-pauses on interaction, resumes after 10s quiet. |
+| **Ambient life** | Idle behaviors that make Lamp feel alive: breathing LED (sine-wave brightness), color drift (warm palette rotation), micro-movements (safe servo recordings), TTS self-talk. Auto-pauses on interaction, resumes after 60s quiet. |
 
 ### Autonomous Sensing Loop (Layer 1.5)
 
@@ -108,11 +108,11 @@ Sensing Loop (Lamp Server, always running):
 **Rule-based actions** (no AI needed): auto-dim on leave, brightness adjust on darkness, idle animations.
 **AI-driven actions** (OpenClaw decides): greetings, mood response, empathetic reactions, schedule-aware suggestions.
 
-Lamp Server modules (in `lamp/` subdirectory):
+Lamp Server modules (under `system/`; `runtimes/` is at the repo root):
 
 - `server/server.go` — Gin HTTP server on port 5000
 - `server/config/` — JSON config with reload
-- `internal/resetbutton/` — GPIO long-press detection
+- ~~`internal/resetbutton/`~~ — removed; GPIO button click/hold gestures are now handled by HAL (`hal/drivers/gpio_button.py`, `hal/drivers/button_actions.py`)
 - `system/network/` — WiFi AP/STA management
 - `runtimes/openclaw/` — OpenClaw config generation and WebSocket
 - `system/beclient/` — Backend status reporter
@@ -133,9 +133,8 @@ How it works:
 1. SKILL.md files are placed in `workspace/skills/`
 2. OpenClaw auto-discovers them (`skills.load.watch: true`)
 3. The LLM reads the SKILL.md description and understands available APIs
-4. The LLM calls the Lamp HTTP API via `curl` at `127.0.0.1:5000`
-5. The Lamp server bridges the request to the appropriate HAL Python service
-6. The Python service drives the hardware
+4. The LLM calls the HAL HTTP API via `curl` at `127.0.0.1:5001` for hardware (the Lamp server at `127.0.0.1:5000` serves system/agent APIs)
+5. The HAL Python service drives the hardware
 
 ### Skills
 
@@ -150,7 +149,9 @@ How it works:
 | `emotion` | `workspace/skills/emotion/SKILL.md` | Combined expression (servo + LED + display) |
 | `scene` | `workspace/skills/scene/SKILL.md` | 6 lighting presets |
 | `sensing` | `workspace/skills/sensing/SKILL.md` | Motion/sound events, presence |
-| `scheduling` | `workspace/skills/scheduling/SKILL.md` | Cron scheduler |
+| `scheduling` | `workspace/skills/scheduling/SKILL.md` | Cron scheduler (removed — no longer in `skills/`) |
+
+Source of truth for skills is the repo `skills/<name>/SKILL.md`; they are installed into the runtime workspace (`workspace/skills/`).
 
 ### HTTP API Endpoints (HAL FastAPI, :5001)
 
@@ -158,15 +159,19 @@ All hardware endpoints run on HAL. OpenClaw skills call `127.0.0.1:5001` directl
 
 | Endpoint | Method | Description |
 |---|---|---|
+| `/led` | GET | LED strip info |
+| `/led/color` | GET | Current LED color |
 | `/led/solid` | POST | Fill all LEDs with single RGB color |
 | `/led/paint` | POST | Set individual pixel colors (up to 64) |
 | `/led/off` | POST | Turn off all LEDs |
 | `/led/effect` | POST | Start effect (breathing, candle, rainbow, notification_flash, pulse) |
 | `/led/effect/stop` | POST | Stop current effect |
-| `/servo/play` | POST | Play animation (20 recordings: curious, nod, happy_wiggle, idle, sad, excited, shy, shock, headshake, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching) |
+| `/led/status` | POST | Status-LED effect |
+| `/led/restore` | POST | Restore the previous user LED state |
+| `/servo/play` | POST | Play a recording from `hal/recordings/` (list via `GET /servo`), e.g. curious, nod, happy_wiggle, idle, sad, excited, shy, shock, headshake, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching |
 | `/servo/move` | POST | Send joint positions with smooth interpolation |
 | `/servo/aim` | POST | Aim lamp head (center, desk, wall, left, right, up, down, user) |
-| `/servo/track` | POST/DELETE/GET/PUT | Vision-guided object tracking. See [vision-tracking.md](vision-tracking.md) |
+| `/servo/track` | POST/GET (+ `POST /servo/track/update`, `POST /servo/track/stop`) | Vision-guided object tracking. See [vision-tracking.md](vision-tracking.md) |
 | `/camera/snapshot` | GET | Capture single JPEG frame. `?save=true` saves to timestamped file, returns JSON path |
 | `/camera/stream` | GET | MJPEG live stream |
 | `/audio/volume` | GET/POST | Get/set speaker volume (0-100%) |
@@ -176,7 +181,7 @@ All hardware endpoints run on HAL. OpenClaw skills call `127.0.0.1:5001` directl
 | `/voice/status` | GET | Voice pipeline status |
 | `/display/eyes` | POST | Set eye expression + pupil position |
 | `/display/info` | POST | Show info text (time, weather, etc.) |
-| `/emotion` | POST | Combined expression (servo + LED + display) |
+| `/emotion` | POST | Combined expression (servo + LED + display); presets in `hal/presets.py` `EMOTION_PRESETS` (list via `GET /emotion/presets`) |
 | `/scene` | POST | Activate lighting scene (reading, focus, relax, movie, night, energize) |
 | `/presence` | GET | Presence state (present/idle/away) |
 
@@ -325,6 +330,8 @@ Dashboard layout with 4 sections:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Current implementation:** the Lamp-server bridge (`/api/led`, `/api/servo`, `/api/emotion`, …) shown above was the original design. Today OpenClaw skills call HAL directly at `127.0.0.1:5001` (e.g. `POST /led/solid`, `POST /servo/aim`, `POST /emotion`); the Lamp server (`:5000`) serves system/agent APIs only.
+
 ## 7. Emotion Skill — Key Differentiator
 
 The emotion skill is the most important new skill. It combines all hardware subsystems to create generative body language — making the lamp feel alive.
@@ -335,6 +342,8 @@ Instead of calling servo, LED, and audio separately, the LLM calls a single endp
 POST /api/emotion
 {"emotion": "curious", "intensity": 0.8}
 ```
+
+(Implemented as HAL `POST http://127.0.0.1:5001/emotion` with the same body.)
 
 The Lamp server translates this into coordinated hardware actions:
 
@@ -354,10 +363,8 @@ User speaks
     → OpenClaw processes voice input
       → LLM generates response + decides on actions
         → LLM reads relevant SKILL.md files
-          → LLM calls curl to Lamp HTTP API (127.0.0.1:5000)
-            → Lamp Server receives HTTP request
-              → Lamp bridges to HAL Python service
-                → Python service drives hardware
+          → LLM calls curl to HAL HTTP API (127.0.0.1:5001)
+            → HAL Python service drives hardware
                   → Servos move / LEDs change / Speaker outputs audio
 ```
 
@@ -369,8 +376,8 @@ User speaks
 | Camera HTTP handlers | `server/camera/delivery/` | Gin routes for `/api/camera/*`, bridges to camera module |
 | Audio HTTP handlers | `server/audio/delivery/` | Gin routes for `/api/audio/*`, bridges to audio / amixer |
 | Emotion HTTP handler | `server/emotion/delivery/` | Gin route for `/api/emotion`, coordinates servo + LED + audio |
-| OpenClaw skills | `resources/openclaw-skills/` | SKILL.md files for servo-control, camera, audio, emotion |
-| Python bridge layer | TBD | Communication layer between Go Lamp server and HAL Python services (HTTP, gRPC, or subprocess) |
+| OpenClaw skills | `skills/` (repo root) | SKILL.md files for servo-control, camera, audio, emotion |
+| Python bridge layer | Resolved: none — skills call HAL FastAPI (`:5001`) directly | Communication layer between Go Lamp server and HAL Python services (HTTP, gRPC, or subprocess) |
 
 ## 10. Open Questions
 

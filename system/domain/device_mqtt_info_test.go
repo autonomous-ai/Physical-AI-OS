@@ -9,8 +9,7 @@ import (
 
 func TestNewMQTTInfoResponseIncludesWakeWordState(t *testing.T) {
 	enabled := true
-	// cfg is a pointer: config.Config carries a sync.Mutex, so holding it by
-	// value in the table would copy the lock on every range iteration.
+	// Pointer: config.Config holds a sync.Mutex that must not be copied.
 	tests := []struct {
 		name string
 		cfg  *config.Config

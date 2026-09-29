@@ -15,8 +15,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// channelTurnRequest is the payload the Hermes os-server-observer hook POSTs for
-// every gateway turn. See runtimes/hermes/hooks/os-server-observer/handler.py.
+// channelTurnRequest is the payload POSTed by runtimes/hermes/hooks/os-server-observer for every gateway turn.
 type channelTurnRequest struct {
 	Event   string `json:"event"` // "agent:start" | "agent:end"
 	Context struct {
@@ -31,11 +30,8 @@ type channelTurnRequest struct {
 	} `json:"context"`
 }
 
-// channelHookSkipPlatforms are turns os-server already logs itself via sendChat:
-// its own /v1/responses calls (api_server), the device terminal (cli), and PicoClaw's
-// device-local WS channel (pico). Now that the PicoClaw observer forwards every
-// channel, skipping "pico" here is what prevents double-counting / double-firing.
-// Matched case-insensitively with separators stripped (skipPlatform).
+// channelHookSkipPlatforms are turns os-server already logs via sendChat (api_server, cli, pico);
+// skipping them prevents double-counting. Matched case-insensitively, separators stripped.
 var channelHookSkipPlatforms = map[string]bool{
 	"apiserver": true,
 	"api":       true,
@@ -44,8 +40,7 @@ var channelHookSkipPlatforms = map[string]bool{
 	"pico":      true,
 }
 
-// skipPlatform reports whether a turn from this platform should NOT be emitted as
-// a channel turn (it's a device-originated turn sendChat already logged).
+// skipPlatform reports whether a platform's turns are device-originated and already logged.
 func skipPlatform(platform string) bool {
 	norm := strings.NewReplacer("_", "", "-", "", " ", "").Replace(strings.ToLower(platform))
 	return norm == "" || channelHookSkipPlatforms[norm]
@@ -53,9 +48,8 @@ func skipPlatform(platform string) bool {
 
 const channelTurnTTL = 10 * time.Minute
 
-// channelHookTracker correlates a turn's agent:start with its agent:end so both
-// flow events share one run_id. Keyed by session_id — a channel session runs its
-// turns sequentially, so at most one is open per session at a time.
+// channelHookTracker pairs a turn's agent:start with agent:end under one run_id, keyed by
+// session_id (at most one open turn per session).
 type channelHookTracker struct {
 	mu   sync.Mutex
 	open map[string]openChannelTurn
@@ -100,18 +94,10 @@ func (t *channelHookTracker) pruneLocked() {
 	}
 }
 
-// ChannelTurn receives a turn notification from the Hermes gateway observer hook
-// and emits the Flow Monitor events for messaging-channel turns. This is what
-// makes Telegram/Slack/Discord turns visible under Hermes — the gateway owns the
-// channel I/O and never streams those turns to os-server, so without the hook
-// os-server is blind to them (OpenClaw gets the equivalent via session.message).
-// On agent:end it also fires any [HW:] markers in the reply so these channel turns
-// drive the local hardware, like the openclaw session.message path.
-// Channel-agnostic: the platform comes from the payload. Loopback-only; the hook
-// runs on-device.
+// ChannelTurn receives Hermes gateway observer hook notifications and emits Flow Monitor events
+// for messaging-channel turns, firing [HW:] markers on agent:end. Loopback-only.
 func (h *AgentHandler) ChannelTurn(c *gin.Context) {
-	// Always ACK 200 — a hook error must not make the gateway retry or stall the
-	// turn. Parsing/skip problems are logged, not surfaced.
+	// Always ACK 200: a hook error must not make the gateway retry or stall the turn.
 	defer c.JSON(http.StatusOK, gin.H{"status": 1, "data": nil, "message": nil})
 
 	var req channelTurnRequest
@@ -143,11 +129,9 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 			"sender":  sender,
 			"message": ctx.Message,
 		}, runID)
-		// Synthesise lifecycle_start so the AGENT pipeline node lights up, same
-		// anchor the openclaw session.message path emits.
+		// Synthesise lifecycle_start so the AGENT pipeline node lights up.
 		lcStart := map[string]any{"run_id": runID, "source": "channel_hook"}
-		// Fingerprint of the memory this turn runs with (sizes + sha8, no
-		// content) so a routing regression can be tied to a memory write.
+		// Memory fingerprint (sizes + sha8, no content).
 		if st := migratepersona.MemoryState(); st != nil {
 			lcStart["memory"] = st
 		}
@@ -161,22 +145,15 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 
 	case "agent:end":
 		runID := channelHook.end(ctx.Platform, sessionID)
-		// Close the lifecycle (RESP node → done), then carry the reply text. The
-		// gateway delivered the reply to the channel, not the device speaker, so —
-		// exactly like the openclaw channel path (handler_event_session_message.go)
-		// — it is logged as tts_suppressed, which is the node Flow Monitor renders
-		// as the turn's response in the persisted JSONL (chat_response alone only
-		// lives in the monitor SSE/RAM and is lost on reload).
+		// Logged as tts_suppressed (the reply went to the channel, not the speaker); that node is what
+		// persists as the turn's response in JSONL.
 		flow.Log("lifecycle_end", map[string]any{
 			"run_id": runID,
 			"source": "channel_hook",
 		}, runID)
 
-		// Fire [HW:] markers from the reply so Telegram/Discord turns drive the local
-		// hardware, like the openclaw session.message path (Slack runs via
-		// /v1/responses and is skipped above as api_server).
-		// CAVEAT: the gateway may truncate ctx.Response (~500 chars), clipping
-		// end-of-reply markers — raise the gateway truncation if that happens.
+		// Fire [HW:] markers so channel turns drive local hardware. CAVEAT: the gateway truncates
+		// ctx.Response (~500 chars), which can clip end-of-reply markers.
 		raw := prunedImageMarkerRe.ReplaceAllString(ctx.Response, "")
 		hwCalls, cleanText := extractHWCalls(raw)
 		cleanText = extractSayTag(cleanText)
@@ -208,7 +185,7 @@ func (h *AgentHandler) ChannelTurn(c *gin.Context) {
 				})
 			}
 		default:
-			// Render marker-stripped text so the UI bubble has no raw [HW:...].
+			// Marker-stripped text so the UI bubble has no raw [HW:...].
 			flow.Log("tts_suppressed", map[string]any{
 				"run_id": runID,
 				"reason": "channel_run",

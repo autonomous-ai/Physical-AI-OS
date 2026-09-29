@@ -25,8 +25,6 @@ func serviceRestartHandler(run func(context.Context, string, ...string) ([]byte,
 
 		ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 		defer cancel()
-		// A transient timer survives os-server's cgroup teardown and gives the
-		// HTTP response time to reach the browser before restarting the service.
 		output, err := run(ctx, "systemd-run", "--collect", "--on-active=2s", "systemctl", "restart", target)
 		if err != nil {
 			log.Printf("[service-restart] schedule %s restart: %v: %s", target, err, output)

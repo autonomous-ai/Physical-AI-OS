@@ -1,10 +1,4 @@
-"""Static checks on the simulator page's inline GLSL.
-
-The shaders are built by concatenating string literals. Dropping the `+` between
-two of them is not a JavaScript error - the rest of the shader parses as its own
-expression statement and is silently thrown away - so the page still loads and
-renders an untextured body with no explanation. Catch that here instead.
-"""
+"""Static checks on the simulator page's inline GLSL."""
 from __future__ import annotations
 
 import re

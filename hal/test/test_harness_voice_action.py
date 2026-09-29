@@ -54,7 +54,6 @@ class HarnessClientTests(unittest.TestCase):
             self.assertFalse(session.trust_env)
 
     def test_focus_step_accepts_lagging_focus_snapshot(self):
-        # 200 means the app already switched; a not-yet-refreshed focus is not a failure.
         with patch.object(client.requests, "Session") as factory:
             session = factory.return_value.__enter__.return_value
             session.post.return_value.status_code = 200
@@ -109,7 +108,6 @@ class HarnessActionTests(unittest.TestCase):
     def test_all_languages_and_config_lookup(self):
         expected_off = {"en": "Harness is off. You’re back with the assistant on your device.", "vi": "Đã tắt Harness, trở về trợ lý trên thiết bị.",
                         "zh-CN": "Harness 已关闭，已切回设备上的助手。", "zh-TW": "Harness 已關閉，已切回裝置上的助理。"}
-        # Use the project language constants (currently ISO language IDs).
         from hal.presets import LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
         for lang, expected in zip((LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW), expected_off.values()):
             self.assertEqual(localized_phrase(PHRASE_HARNESS_OFF, lang), expected)

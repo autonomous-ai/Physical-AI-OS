@@ -403,7 +403,6 @@ func TestManagedRequestsQueuedBeforeCreationSteerIntoOneRun(t *testing.T) {
 	case <-time.After(3 * time.Second):
 		t.Fatal("second queued request was not steered")
 	}
-	// The server has seen steering, so its preceding create write is visible.
 	if creates != 1 {
 		t.Fatalf("%d creates", creates)
 	}
@@ -518,7 +517,6 @@ func TestManagedStopContextFollowsConfirmedUserStopOnly(t *testing.T) {
 	if request.body.Input != "Read the camera." {
 		t.Fatal("mutated original correlation body")
 	}
-	// Preparation alone is not accepted admission: a failed POST retains notice.
 	if _, used = state.prepare(request); !used {
 		t.Fatal("notice consumed before admission")
 	}
@@ -550,17 +548,12 @@ func TestManagedStopContextPreservesImageAndOriginalBody(t *testing.T) {
 	}
 }
 
-// hermes-gateway restarting exactly when a run is created (presync config change
-// on lamp-0c4e 2026-09-16) yields a dial error. That prompt was never delivered,
-// so the conversation must stay usable: the request fails, the next one on the
-// SAME conversation is created once the gateway is back. Before the fix every
-// later turn failed with "unknown acceptance ... start a new session" until
-// os-server itself was restarted.
+// hermes-gateway restarting exactly when a run is created (presync config change on lamp-0c4e 2026-09-16) yields a dial error.
 func TestManagedDialFailureDoesNotPoisonConversation(t *testing.T) {
 	oldURL := BaseURL
 	dead := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
 	deadURL := dead.URL
-	dead.Close() // connection refused from now on
+	dead.Close()
 	var mu sync.Mutex
 	creates := 0
 	live := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -610,7 +603,7 @@ func TestManagedDialFailureDoesNotPoisonConversation(t *testing.T) {
 	if s.conversationName() != conversation {
 		t.Fatal("conversation rotated on a dial failure — the prompt was never delivered")
 	}
-	BaseURL = live.URL // gateway is back
+	BaseURL = live.URL
 	s.inFlightStreams.Add(1)
 	s.enqueueManagedRun("after-restart", streamRequest{Input: "next", Conversation: conversation}, "user")
 	waitPhase("after-restart", "end")

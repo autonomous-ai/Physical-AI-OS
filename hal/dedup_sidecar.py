@@ -1,15 +1,4 @@
-"""Boot-scoped sidecar persistence for TTL dedup maps.
-
-Several perceptions dedup outbound sensing events with a
-{(user, bucket): last_sent_ts} TTL map held in RAM. A HAL service restart
-(deploy/OTA) wipes that map, so the first flush afterwards re-fires the
-last-known event as if it were news — one wasted agent turn per emitter.
-This sidecar persists the map to tmpfs, scoped to the current kernel
-boot_id: a service restart restores it, a full device reboot starts fresh
-on purpose (same pattern as the motion/presence/scene/LED sidecars).
-
-Writes happen only on send/reset — a few per hour.
-"""
+"""Boot-scoped tmpfs persistence for TTL dedup maps (survives HAL restart, not reboot)."""
 
 import json
 import logging
@@ -57,8 +46,7 @@ class DedupStateSidecar:
             return {}
 
     def save(self, entries: dict[tuple[str, str], float]) -> None:
-        """Write the sidecar; an empty map unlinks it so a restart can't
-        resurrect state a reset just cleared."""
+        """Write the sidecar; an empty map unlinks it so a restart can't resurrect cleared state."""
         try:
             if not entries:
                 self._path.unlink(missing_ok=True)

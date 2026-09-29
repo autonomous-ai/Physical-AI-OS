@@ -9,7 +9,6 @@ import (
 )
 
 func TestInstallRoleSkillsInvalidRole(t *testing.T) {
-	// Path-escaping / malformed slugs must be rejected before any network call.
 	for _, role := range []string{"", "../etc", "Bad", "a/b", "x.y", "UP", "a b"} {
 		if _, err := InstallRoleSkills(t.TempDir(), role); !errors.Is(err, ErrInvalidRole) {
 			t.Errorf("role %q: want ErrInvalidRole, got %v", role, err)
@@ -51,14 +50,12 @@ func TestExtractDirFromZip(t *testing.T) {
 	if n != 2 {
 		t.Errorf("file count = %d, want 2", n)
 	}
-	// Prefix stripped: skills/foo/SKILL.md -> <dest>/foo/SKILL.md
 	if b, err := os.ReadFile(filepath.Join(dest, "foo", "SKILL.md")); err != nil || string(b) != "hello" {
 		t.Errorf("foo/SKILL.md: body=%q err=%v", b, err)
 	}
 	if _, err := os.Stat(filepath.Join(dest, "bar.txt")); err != nil {
 		t.Errorf("bar.txt missing: %v", err)
 	}
-	// Entries outside the prefix are not extracted.
 	if _, err := os.Stat(filepath.Join(dest, "ignore.txt")); !os.IsNotExist(err) {
 		t.Errorf("ignore.txt should not be extracted")
 	}

@@ -10,25 +10,16 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// handleSkillsSave handles kind="skills.save" — the MQTT twin of
-// POST /api/agent/skills. Both go through AgentGateway.SaveSkill, so a skill
-// pushed from the backend lands in exactly the same place as one authored in the
-// web UI's "Write skill" form, in whichever skills dir the ACTIVE runtime owns,
-// and honours the same no-overwrite rule.
-//
-// Unlike skills.install this is SYNCHRONOUS: writing one SKILL.md is a local
-// file write measured in milliseconds, so there is nothing to report progress on
-// and no reason for a two-phase starting/success dance.
+// handleSkillsSave handles kind="skills.save" — the MQTT twin of POST
+// /api/agent/skills.
 func (h *DeviceMQTTHandler) handleSkillsSave(env domain.MQTTDataCommand) error {
 	draft, errMsg := parseSkillsSaveData(env.Data)
 	if errMsg != "" {
 		return h.publishDataResult(env.Kind, "failure", errMsg, nil)
 	}
 
-	// Shares skillsInstallMu with skills.install: both write into the same skills
-	// dir, so a role-bundle extract must not interleave with this write. TryLock
-	// rather than Lock — an install can take tens of seconds and this runs on the
-	// MQTT dispatch path, which must not stall that long.
+	// Shares skillsInstallMu with skills.install (same skills dir). TryLock:
+	// the MQTT dispatch path must not stall behind a long install.
 	if !skillsInstallMu.TryLock() {
 		return h.publishDataResult(env.Kind, "failure",
 			"a skills install is in progress; try again later", nil)
@@ -62,14 +53,8 @@ func (h *DeviceMQTTHandler) handleSkillsSave(env domain.MQTTDataCommand) error {
 	return nil
 }
 
-// parseSkillsSaveData decodes + normalises a skills.save payload into the draft
-// the gateway takes. Returns a non-empty message when the payload is unusable.
-// Kept separate from the handler so the wire contract is testable without a
-// broker (publishDataResult needs a live MQTT client).
-//
-// Only presence is checked here; the NAME SHAPE is left to
-// skills.ValidateSkillName inside SaveSkill, so the HTTP and MQTT paths can never
-// drift on what a legal skill name is.
+// parseSkillsSaveData decodes + normalises a skills.save payload into the
+// draft the gateway takes.
 func parseSkillsSaveData(raw json.RawMessage) (domain.SkillDraft, string) {
 	var req domain.MQTTSkillsSaveData
 	if err := json.Unmarshal(raw, &req); err != nil {
@@ -87,9 +72,9 @@ func parseSkillsSaveData(raw json.RawMessage) (domain.SkillDraft, string) {
 	return draft, ""
 }
 
-// classifySkillsSaveError maps a SaveSkill failure to the `failed_step` label the
-// backend reads off the result, mirroring how skills.install reports its step.
-// Anything unrecognised is a plain write failure.
+// classifySkillsSaveError maps a SaveSkill failure to the `failed_step` label
+// the backend reads off the result, mirroring how skills.install reports its
+// step.
 func classifySkillsSaveError(err error) string {
 	switch {
 	case errors.Is(err, domain.ErrNotSupportedByRuntime):

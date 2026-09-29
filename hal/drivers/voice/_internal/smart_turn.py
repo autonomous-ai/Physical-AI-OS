@@ -1,9 +1,4 @@
-"""Optional Smart Turn inference on bounded PCM snapshots, outside capture.
-
-Pipecat and its bundled model are loaded on the worker's first request. The
-capture loop only submits snapshots and polls results; it owns turn timing and
-must change the request token whenever speech resumes or a new session starts.
-"""
+"""Optional Smart Turn inference on bounded PCM snapshots, outside capture."""
 
 import asyncio
 import logging
@@ -18,20 +13,12 @@ def _create_analyzer():
     from pipecat.audio.turn.smart_turn.local_smart_turn_v3 import LocalSmartTurnAnalyzerV3
 
     analyzer = LocalSmartTurnAnalyzerV3(sample_rate=16000, cpu_count=1)
-    # Pipecat normally applies this on its pipeline StartFrame; constructing
-    # the analyzer alone leaves the effective sample rate at zero.
     analyzer.set_sample_rate(16000)
     return analyzer, EndOfTurnState.COMPLETE
 
 
 class SmartTurnDetector:
-    """Single-flight detector with at most one request and one result.
-
-    ``available`` becomes true after model initialization; ``failed`` becomes
-    true on any import, loading or inference error. Both are false before the
-    first request. Failures disable this instance so callers can use their
-    bounded silence fallback without repeated imports or error logs.
-    """
+    """Single-flight detector with at most one request and one result."""
 
     def __init__(self):
         self._lock = threading.Lock()

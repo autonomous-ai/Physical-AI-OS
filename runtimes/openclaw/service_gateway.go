@@ -13,11 +13,7 @@ import (
 	"time"
 )
 
-// gatewayRestartTimeout bounds a single `systemctl restart openclaw` (or the
-// `openclaw gateway restart` fallback). systemd's restart is synchronous —
-// without a bound, a gateway that fails to re-bind its socket would block the
-// caller (which holds the connector writer mutex) indefinitely. Generous enough
-// for a healthy Pi restart (~30-60s) plus margin.
+// gatewayRestartTimeout bounds one gateway restart; the caller holds the connector writer mutex.
 const gatewayRestartTimeout = 90 * time.Second
 
 func generateGatewayToken() (string, error) {
@@ -29,16 +25,10 @@ func generateGatewayToken() (string, error) {
 }
 
 func (s *OpenclawService) onboardOpenclaw() error {
-	// openclaw default home is ~/.openclaw; OpenclawConfigDir must match this path.
-	// No env overrides needed — let openclaw use its standard paths.
 	cmd := exec.Command("bash", "-c", "openclaw onboard --non-interactive --accept-risk")
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		outStr := strings.TrimSpace(string(out))
-		// Factory reset disables openclaw.service so the gateway is not running when
-		// onboard executes. In this case onboard writes the config successfully but
-		// fails its end-of-run health check. Detect by the --skip-health hint in the
-		// output and retry without the health check, then re-enable the service.
 		if strings.Contains(outStr, "skip-health") {
 			slog.Warn("onboard health check failed (gateway not running), retrying with --skip-health",
 				"component", "openclaw", "output", outStr)
@@ -46,7 +36,6 @@ func (s *OpenclawService) onboardOpenclaw() error {
 			if err2 != nil {
 				return fmt.Errorf("openclaw onboard --skip-health: %w — output: %s", err2, strings.TrimSpace(string(out2)))
 			}
-			// Re-enable openclaw.service so it auto-starts on future reboots.
 			if _, pathErr := exec.LookPath("systemctl"); pathErr == nil {
 				if out3, err3 := exec.Command("systemctl", "enable", "openclaw").CombinedOutput(); err3 != nil {
 					slog.Warn("re-enable openclaw.service failed", "component", "openclaw",
@@ -60,9 +49,6 @@ func (s *OpenclawService) onboardOpenclaw() error {
 		}
 	}
 
-	// After onboard, ensure openclaw.json points workspace to our config dir's workspace.
-	// Since OpenclawConfigDir matches openclaw's default home (~/.openclaw), the workspace
-	// is already at the correct path; we only patch the field to be explicit.
 	configPath := fmt.Sprintf("%s/openclaw.json", s.config.OpenclawConfigDir)
 	workspacePath := fmt.Sprintf("%s/workspace", s.config.OpenclawConfigDir)
 	if configBytes, err := os.ReadFile(configPath); err == nil {
@@ -79,7 +65,6 @@ func (s *OpenclawService) onboardOpenclaw() error {
 				agentsMap["defaults"] = defaultsMap
 			}
 			defaultsMap["workspace"] = workspacePath
-			// Remove "tailscale" section from gateway if present
 			gateway, ok := configData["gateway"].(map[string]interface{})
 			if ok {
 				delete(gateway, "tailscale")

@@ -10,20 +10,8 @@ import (
 	"path/filepath"
 )
 
-// PicoClaw observer hook. Analogue of the Hermes os-server-observer hook
-// (runtimes/hermes/hooks.go): it makes channel (Telegram) turns visible in the
-// device Flow Monitor and drives [HW:/…] markers, by forwarding each turn to the
-// loopback /api/agent/channel-turn endpoint that the shared ChannelTurn handler
-// (server/agent/delivery/http/handler_channel_turn.go) already serves for Hermes.
-//
-// Two differences from Hermes:
-//  1. Transport — PicoClaw process hooks are a subprocess speaking NDJSON JSON-RPC
-//     over stdio (see resources/hooks/os-server-observer/observer.py), not an
-//     in-process Python `handle()` discovered by directory scan.
-//  2. Registration — PicoClaw does NOT scan a hooks dir; a hook is registered by a
-//     config.json entry under hooks.processes.<name> (gated by hooks.enabled, which
-//     defaults false — same shape as the tools.mcp gate). So os-server both
-//     materializes the script AND patches config.json, then restarts the gateway.
+// The observer hook forwards channel turns to /api/agent/channel-turn. PicoClaw does not scan a
+// hooks dir: it is registered under config.json hooks.processes (hooks.enabled defaults false).
 
 //go:embed resources/hooks/os-server-observer/observer.py
 var observerHookScript []byte
@@ -37,11 +25,9 @@ const (
 )
 
 // ensureObserverHook materializes observer.py into the PicoClaw hooks dir (with the
-// loopback URL substituted) and registers it in config.json. Returns true when the
-// script OR the config changed — the gateway loads hooks only at start, so the
-// caller (EnsureOnboarding) must restart it when this reports changed. Idempotent:
-// an unchanged boot rewrites nothing and reports false. Best-effort by contract:
-// EnsureOnboarding logs and continues on error so a hook problem can't block boot.
+// loopback URL substituted) and registers it in config.json.
+// Returns true when the script OR the config changed — the gateway loads hooks only at start, so
+// the caller (EnsureOnboarding) must restart it when this reports changed.
 func (s *PicoclawService) ensureObserverHook() (bool, error) {
 	url := s.observerHookURL()
 	script := bytes.ReplaceAll(observerHookScript, []byte(observerHookURLMark), []byte(url))
@@ -75,10 +61,7 @@ func (s *PicoclawService) observerHookURL() string {
 }
 
 // ensureObserverHookConfig upserts hooks.processes.os-server-observer in config.json
-// and asserts hooks.enabled=true (gate defaults false, like tools.mcp.enabled). The
-// read-modify-write is serialized under mcpMu — the shared guard for config.json RMW
-// (see mcp.go). Returns true only when the file actually changed, so a steady boot
-// forces no gateway restart.
+// and asserts hooks.enabled=true (gate defaults false, like tools.mcp.enabled).
 func (s *PicoclawService) ensureObserverHookConfig(url string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -104,9 +87,7 @@ func (s *PicoclawService) ensureObserverHookConfig(url string) (bool, error) {
 }
 
 // applyObserverHook upserts hooks.processes.os-server-observer in the decoded config
-// map and asserts the hooks.enabled gate. Pure map mutation — no I/O — so the nesting
-// + gate rules are unit-testable without the hardcoded config path (mirrors
-// applyMCPServerWrite in mcp.go).
+// map and asserts the hooks.enabled gate.
 func applyObserverHook(cfg map[string]any, scriptPath, url string) {
 	hooks := ensurePicoMap(cfg, "hooks")
 	hooks["enabled"] = true // global gate — must be on to load ANY hook
@@ -125,8 +106,7 @@ func applyObserverHook(cfg map[string]any, scriptPath, url string) {
 
 // writePicoFileIfChanged writes data to path (with perm) only when it differs from
 // the current content, so a steady boot neither churns the file nor forces a gateway
-// restart. Returns true when the file was (re)written. Mirrors hermes.writeIfChanged
-// but carries an explicit mode (observer.py is spawned, so keep it 0755).
+// restart.
 func writePicoFileIfChanged(path string, data []byte, perm os.FileMode) (bool, error) {
 	if cur, err := os.ReadFile(path); err == nil && bytes.Equal(cur, data) {
 		return false, nil

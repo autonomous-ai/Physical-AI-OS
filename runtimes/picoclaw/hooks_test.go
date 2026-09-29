@@ -50,7 +50,6 @@ func TestApplyObserverHook(t *testing.T) {
 	if obs, ok := entry["observe"].([]any); !ok || len(obs) != 2 {
 		t.Errorf("observe = %v, want [turn_start turn_end]", entry["observe"])
 	}
-	// Observe-only: no intercept (turn.end payload carries the reply text).
 	if _, present := entry["intercept"]; present {
 		t.Errorf("intercept should be absent (observe-only), got %v", entry["intercept"])
 	}

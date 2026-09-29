@@ -193,7 +193,7 @@ def test_timeout_keeps_identity_and_cannot_complete_execution(monkeypatch, kpi):
     _pump(monkeypatch, kpi, [
         ([UserSpeechOutput(turn_id="u1")], "", False),
         ([TextOutput(text="Finished.", user_turn_id="u1")], "u1", True),
-        ([], "u1", True),  # Duplicate provider terminal is idempotent.
+        ([], "u1", True),
     ])
     kpi.close_all()
     assert len(kpi.of(voice_metrics.EVENT_INTERACTION)) == 1
@@ -284,8 +284,7 @@ def test_endpoint_can_upgrade_before_playback_but_never_after(kpi):
 
 
 def test_live_execution_report_counts_missing_endpoint_and_pending(kpi):
-    # The reporter is a standalone repository script, not hal.scripts. Load
-    # its path explicitly so this test also works with hal/ as the working dir.
+    # Standalone repo script, not hal.scripts: load by path so any cwd works.
     spec = importlib.util.spec_from_file_location(
         "live_metrics_reporter",
         Path(__file__).resolve().parents[2] / "scripts/report_voice_task_metrics.py",
@@ -403,7 +402,6 @@ def test_pending_audio_ownership_survives_queue_pop_before_first_frame():
 
     class PendingFrames:
         def get(self, timeout):
-            # The drain popped the item, but synthesis has not delivered audio.
             observed.append(speaker.has_pending_speech("run:waiting"))
             return None
 

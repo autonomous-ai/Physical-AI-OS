@@ -10,10 +10,7 @@ import (
 	"time"
 )
 
-// TestResolveKind pins the one rule the whole feature rests on: everything
-// that is not exactly "speak" is an agent task. The empty case is the
-// load-bearing one — every schedule that existed before the kind field
-// deserializes to "" and must keep running through the agent.
+// TestResolveKind checks everything but "speak" (including empty) resolves to agent.
 func TestResolveKind(t *testing.T) {
 	cases := []struct {
 		name string
@@ -38,10 +35,7 @@ func TestResolveKind(t *testing.T) {
 	}
 }
 
-// TestScheduleKindParsesFromSyncWire proves the wire contract: the kind the
-// backend sends in schedule.sync lands on the stored Schedule. The payload
-// here is a verbatim schedule.sync "schedules" element, not a hand-built
-// struct, so a rename of the JSON tag would fail this test.
+// TestScheduleKindParsesFromSyncWire checks the wire "kind" key lands on Schedule.
 func TestScheduleKindParsesFromSyncWire(t *testing.T) {
 	const wire = `{
 		"id": "s1",
@@ -66,10 +60,7 @@ func TestScheduleKindParsesFromSyncWire(t *testing.T) {
 	}
 }
 
-// TestScheduleWithoutKindOnWireIsAgent is the compatibility guard. A
-// schedule.sync element from a backend that predates this field has no "kind"
-// key at all; it must deserialize to the agent behaviour rather than to
-// something unset-and-surprising.
+// TestScheduleWithoutKindOnWireIsAgent checks a missing kind resolves to agent.
 func TestScheduleWithoutKindOnWireIsAgent(t *testing.T) {
 	const wire = `{
 		"id": "s1",
@@ -93,10 +84,7 @@ func TestScheduleWithoutKindOnWireIsAgent(t *testing.T) {
 	}
 }
 
-// TestScheduleKindSurvivesStoreRoundTrip checks kind persists across the
-// atomic write + reload the device does on every sync and every restart.
-// Also asserts the omitempty half: an agent task's on-disk JSON must not gain
-// a "kind" key, so upgrading a device does not rewrite every stored row.
+// TestScheduleKindSurvivesStoreRoundTrip checks persistence and omitempty for agent rows.
 func TestScheduleKindSurvivesStoreRoundTrip(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schedules.json")
 	store := NewStore(path)
@@ -134,8 +122,7 @@ func TestScheduleKindSurvivesStoreRoundTrip(t *testing.T) {
 	}
 }
 
-// TestRunnerFiresSpeakScheduleThroughSpeakNotTheAgent is the headline
-// behaviour: a speak task reaches the speaker and never touches the agent.
+// TestRunnerFiresSpeakScheduleThroughSpeakNotTheAgent checks speak tasks use Speak only.
 func TestRunnerFiresSpeakScheduleThroughSpeakNotTheAgent(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -162,8 +149,6 @@ func TestRunnerFiresSpeakScheduleThroughSpeakNotTheAgent(t *testing.T) {
 	if reports[0].Status != "success" {
 		t.Fatalf("status = %q, want success", reports[0].Status)
 	}
-	// No agent turn ran, so there is no run id to correlate. Empty is the
-	// honest value here and must not be mistaken for a failure.
 	if reports[0].RunID != "" {
 		t.Fatalf("RunID = %q, want empty for a speak run", reports[0].RunID)
 	}
@@ -172,9 +157,7 @@ func TestRunnerFiresSpeakScheduleThroughSpeakNotTheAgent(t *testing.T) {
 	}
 }
 
-// TestRunnerFiresScheduleWithNoKindThroughTheAgent is THE regression guard for
-// this whole change: an existing schedule — one stored before the kind field
-// existed, so Kind is "" — must behave byte-for-byte as it does today.
+// TestRunnerFiresScheduleWithNoKindThroughTheAgent checks legacy rows (empty Kind) use the agent.
 func TestRunnerFiresScheduleWithNoKindThroughTheAgent(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -200,9 +183,7 @@ func TestRunnerFiresScheduleWithNoKindThroughTheAgent(t *testing.T) {
 	}
 }
 
-// TestRunnerFiresUnknownKindThroughTheAgent covers a device running firmware
-// older than the backend that wrote the row: degrade to the agent, never drop
-// the task on the floor.
+// TestRunnerFiresUnknownKindThroughTheAgent checks unknown kinds degrade to the agent.
 func TestRunnerFiresUnknownKindThroughTheAgent(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -224,10 +205,7 @@ func TestRunnerFiresUnknownKindThroughTheAgent(t *testing.T) {
 	}
 }
 
-// TestRunnerSpeakFailureDoesNotBurnTheOccurrence proves a failed speak follows
-// the SAME I5 retry rule as a failed agent send: report the failure, but leave
-// NextRunAt alone so the occurrence is retried on the next tick rather than
-// silently lost for the day.
+// TestRunnerSpeakFailureDoesNotBurnTheOccurrence checks a failed speak keeps NextRunAt (I5).
 func TestRunnerSpeakFailureDoesNotBurnTheOccurrence(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -256,9 +234,7 @@ func TestRunnerSpeakFailureDoesNotBurnTheOccurrence(t *testing.T) {
 	}
 }
 
-// TestRunnerDefersSpeakWhileAgentIsBusy documents the deliberate choice not to
-// exempt speak from single-flight. A speak task needs no model, but it does
-// need the speaker — barging in would talk over the agent's own reply.
+// TestRunnerDefersSpeakWhileAgentIsBusy checks speak honours single-flight (shared speaker).
 func TestRunnerDefersSpeakWhileAgentIsBusy(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -280,8 +256,7 @@ func TestRunnerDefersSpeakWhileAgentIsBusy(t *testing.T) {
 	}
 }
 
-// TestRunNowRespectsSpeakKind covers the manual "Run now" button, which shares
-// send() with the ticker but its own persistence rules.
+// TestRunNowRespectsSpeakKind checks RunNow routes speak tasks to Speak.
 func TestRunNowRespectsSpeakKind(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -306,9 +281,7 @@ func TestRunNowRespectsSpeakKind(t *testing.T) {
 	}
 }
 
-// TestValidateIntentPayloadEnforcesSpeakCharacterCap pins the device-side half
-// of the TTS bound. Over the cap, HAL rejects the text outright and says
-// NOTHING — so this must fail at the form, not at fire time.
+// TestValidateIntentPayloadEnforcesSpeakCharacterCap checks the MaxSpeakChars rune cap.
 func TestValidateIntentPayloadEnforcesSpeakCharacterCap(t *testing.T) {
 	spec := Spec{Repeat: RepeatDaily, Time: "08:00"}
 
@@ -328,8 +301,6 @@ func TestValidateIntentPayloadEnforcesSpeakCharacterCap(t *testing.T) {
 		t.Fatalf("%d characters must be rejected for a speak task", MaxSpeakChars+1)
 	}
 
-	// The cap counts CHARACTERS. A line of multi-byte runes well under the
-	// limit must not be refused just because its byte length exceeds it.
 	multiByte := &IntentPayload{
 		Name: "Nudge", Instructions: strings.Repeat("é", MaxSpeakChars-1),
 		Enabled: true, Kind: KindSpeak, Cadence: spec,
@@ -338,8 +309,6 @@ func TestValidateIntentPayloadEnforcesSpeakCharacterCap(t *testing.T) {
 		t.Fatalf("%d multi-byte runes are under the cap and must be accepted, got: %v", MaxSpeakChars-1, err)
 	}
 
-	// An AGENT task is not bounded here: its instructions are a prompt for the
-	// model, never handed to TTS verbatim.
 	agent := &IntentPayload{
 		Name: "Briefing", Instructions: strings.Repeat("a", MaxSpeakChars+500),
 		Enabled: true, Cadence: spec,
@@ -349,8 +318,7 @@ func TestValidateIntentPayloadEnforcesSpeakCharacterCap(t *testing.T) {
 	}
 }
 
-// readFile is a tiny local helper so this file can assert on the raw on-disk
-// JSON without importing os into every test above.
+// readFile returns the file contents as a string.
 func readFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	return string(b), err

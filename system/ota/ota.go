@@ -1,11 +1,5 @@
-// Package ota is os-server's client for the local bootstrap worker's OTA
-// endpoints (GET /versions, GET /updating, POST /force-update/<target>).
-//
-// It is the single implementation behind both callers: the web UI's Versions
-// card (HTTP handlers in system/server) and the cloud (MQTT kinds
-// system.ota_versions / system.software_update). Both therefore share the
-// target allowlist, the "agent" alias and — importantly — one per-target rate
-// limiter, so the web and the cloud cannot together fire back-to-back updates.
+// Package ota is os-server's client for the bootstrap worker's OTA endpoints,
+// shared by the web UI and the cloud (one allowlist and per-target rate limiter).
 package ota
 
 import (
@@ -24,26 +18,16 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// AgentTarget is the virtual target/key standing for "the configured runtime's
-// agent CLI". Callers (the Versions card, the cloud) know there is an agent CLI
-// but not WHICH one, so it is resolved here rather than shipped to them. It maps
-// to the OTA key of the configured runtime — they share the same names by
-// construction (domain.AgentRuntime* == domain.OTAKey* for the CLIs).
+// AgentTarget is the virtual target for the configured runtime's agent CLI.
 const AgentTarget = "agent"
 
-// MinTriggerInterval is the per-target rate limit of TriggerUpdate. Bootstrap's
-// downloader is idempotent but the resulting service restarts (os-server +
-// systemd reload + journal noise) are not free; 30 s is enough to absorb a
-// double-click without hiding genuine retries.
+// MinTriggerInterval is the per-target rate limit of TriggerUpdate.
 const MinTriggerInterval = 30 * time.Second
 
-// bootstrapBaseURL is the bootstrap worker's local HTTP API. A variable only so
-// tests can point it at an httptest server.
+// bootstrapBaseURL is the bootstrap worker's local API; a var for tests.
 var bootstrapBaseURL = "http://127.0.0.1:8080"
 
-// allowedTargets are the components an operator may force-update. Bootstrap
-// keeps its own allowlist (forceTargetAllowed); a disagreement surfaces as a
-// *BootstrapRefusedError rather than a silent success.
+// allowedTargets are the components an operator may force-update.
 var allowedTargets = map[string]bool{
 	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
 	domain.OTAKeyDevice: true,
@@ -51,39 +35,35 @@ var allowedTargets = map[string]bool{
 	domain.OTAKeyHermes: true,
 }
 
-// lastFire tracks the last time each (resolved) OTA target was triggered, so a
-// stuck/looping caller can't kick off back-to-back force-updates.
+// lastFire tracks the last trigger time per resolved target.
 var (
 	lastFire   = map[string]time.Time{}
 	lastFireMu sync.Mutex
 )
 
 var (
-	// ErrUnknownTarget: the target is not in the allowlist (HTTP 400).
+	// ErrUnknownTarget: target not in the allowlist (HTTP 400).
 	ErrUnknownTarget = errors.New("unknown target")
-	// ErrBuildRequest: the request to bootstrap could not be built (HTTP 500).
+	// ErrBuildRequest: request could not be built (HTTP 500).
 	ErrBuildRequest = errors.New("build request")
-	// ErrBootstrapUnreachable: bootstrap did not answer at all (HTTP 502).
+	// ErrBootstrapUnreachable: bootstrap did not answer (HTTP 502).
 	ErrBootstrapUnreachable = errors.New("bootstrap unreachable")
 )
 
-// RateLimitedError is returned by TriggerUpdate when the same target was fired
-// less than MinTriggerInterval ago (HTTP 429).
+// RateLimitedError: same target fired within MinTriggerInterval (HTTP 429).
 type RateLimitedError struct {
 	Target     string
 	RetryAfter time.Duration
 }
 
-// RetryAfterSeconds rounds RetryAfter up to whole seconds (never 0), the value
-// the Retry-After header and the error message carry.
+// RetryAfterSeconds rounds RetryAfter up to whole seconds (never 0).
 func (e *RateLimitedError) RetryAfterSeconds() int { return int(e.RetryAfter.Seconds()) + 1 }
 
 func (e *RateLimitedError) Error() string {
 	return fmt.Sprintf("software-update %s rate-limited, retry in %ds", e.Target, e.RetryAfterSeconds())
 }
 
-// BootstrapRefusedError is returned when bootstrap answered /force-update with a
-// non-200 status (HTTP 502).
+// BootstrapRefusedError: bootstrap answered /force-update with non-200 (HTTP 502).
 type BootstrapRefusedError struct {
 	Target string
 	Status string
@@ -94,8 +74,7 @@ func (e *BootstrapRefusedError) Error() string {
 	return fmt.Sprintf("bootstrap refused %s: %s %s", e.Target, e.Status, e.Body)
 }
 
-// ComponentVersion is one entry of Versions — mirrors bootstrap.ComponentVersion
-// (not imported to keep the bootstrap worker out of os-server's dependencies).
+// ComponentVersion mirrors bootstrap.ComponentVersion (not imported, to avoid the dependency).
 type ComponentVersion struct {
 	Current         string `json:"current"`
 	Target          string `json:"target"`
@@ -104,27 +83,17 @@ type ComponentVersion struct {
 	HeldByFloor     bool   `json:"held_by_floor"`
 }
 
-// ResolveTarget maps the virtual "agent" target to the configured runtime's OTA
-// key; any other target is returned unchanged.
+// ResolveTarget maps "agent" to the configured runtime's OTA key.
 func ResolveTarget(cfg *config.Config, target string) string {
 	if target == AgentTarget {
-		// Hermes included: bootstrap applies it once the metadata entry is
-		// commit-pinned (domain.OTAKeyHermes); an unpinned entry is simply not
-		// reported by /versions, so the button never appears for it.
 		return device.CurrentAgentRuntimeFromConfig(cfg)
 	}
 	return target
 }
 
-// TriggerUpdate installs the published version of one component now, via the
-// bootstrap worker — the equivalent of `software-update <target>` over SSH. The
-// staged-rollout floor (min_version) governs the AUTOMATIC worker only; an
-// operator updating one device on purpose is not subject to it.
-//
+// TriggerUpdate force-installs the published version of target via bootstrap.
 // target: os-server | bootstrap | web | hal | device | <agent CLI> | agent.
-// The resolved target (e.g. "hermes" for "agent") is returned even on error.
-// Bootstrap installs asynchronously: a nil error means "started", not "done" —
-// poll Updating / Versions for the outcome.
+// Returns the resolved target; nil error means "started", not "done".
 func TriggerUpdate(ctx context.Context, cfg *config.Config, target string) (string, error) {
 	resolved := ResolveTarget(cfg, target)
 	if !allowedTargets[resolved] {
@@ -141,11 +110,7 @@ func TriggerUpdate(ctx context.Context, cfg *config.Config, target string) (stri
 	lastFire[resolved] = time.Now()
 	lastFireMu.Unlock()
 
-	// force-update, NOT force-check: this stands for "run `software-update
-	// <target>` on this device", which installs the published version outright.
-	// force-check would re-run the AUTOMATIC decision instead, and that one
-	// respects min_version — so a component whose rollout floor has not been
-	// promoted would silently do nothing while the caller was told OK.
+	// force-update, not force-check: force-check respects min_version and could silently no-op.
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, bootstrapBaseURL+"/force-update/"+resolved, nil)
 	if err != nil {
 		return resolved, fmt.Errorf("%w: %v", ErrBuildRequest, err)
@@ -155,9 +120,7 @@ func TriggerUpdate(ctx context.Context, cfg *config.Config, target string) (stri
 		return resolved, fmt.Errorf("%w: %v", ErrBootstrapUnreachable, err)
 	}
 	defer resp.Body.Close()
-	// Propagate a refusal instead of reporting success: bootstrap keeps its own
-	// target allowlist, so the two can disagree (they did while the agent CLIs
-	// were being added).
+	// Bootstrap keeps its own allowlist; propagate a refusal.
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 4<<10))
 		return resolved, &BootstrapRefusedError{Target: resolved, Status: resp.Status, Body: strings.TrimSpace(string(body))}
@@ -165,11 +128,7 @@ func TriggerUpdate(ctx context.Context, cfg *config.Config, target string) (stri
 	return resolved, nil
 }
 
-// Versions reports, per component, what this device runs vs what the OTA feed
-// offers (entries shaped like ComponentVersion), proxied from bootstrap — it
-// owns metadata + version detection. One alias is added: "agent" duplicates the
-// entry of the configured runtime's CLI, so callers never need to know which
-// runtime this device runs.
+// Versions proxies bootstrap's /versions and adds an "agent" alias.
 func Versions(ctx context.Context, cfg *config.Config) (map[string]any, error) {
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Second)
 	defer cancel()
@@ -193,9 +152,6 @@ func Versions(ctx context.Context, cfg *config.Config) (map[string]any, error) {
 	if versions == nil {
 		versions = map[string]any{}
 	}
-	// The Agent row aliases the configured runtime's entry. Hermes appears here
-	// only when bootstrap reports it, i.e. the metadata entry is commit-pinned
-	// and the on-device updater can apply the pin (see domain.OTAKeyHermes).
 	if entry, ok := versions[device.CurrentAgentRuntimeFromConfig(cfg)]; ok {
 		versions[AgentTarget] = entry
 	}
@@ -219,9 +175,7 @@ func Component(versions map[string]any, key string) (ComponentVersion, bool) {
 	return cv, true
 }
 
-// Updating lists the components the bootstrap worker is installing right now.
-// Cheap by design (no metadata fetch) — the UI polls it every couple of seconds.
-// Mirrors the "agent" alias of Versions.
+// Updating lists the components bootstrap is installing right now.
 func Updating(ctx context.Context, cfg *config.Config) ([]string, error) {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
@@ -254,18 +208,14 @@ func Updating(ctx context.Context, cfg *config.Config) ([]string, error) {
 
 // WaitOptions tunes WaitUntilDone. Zero values take the defaults.
 type WaitOptions struct {
-	// Poll is the interval between Updating reads (default 3 s).
+	// Poll is the interval between Updating reads (default 3s).
 	Poll time.Duration
-	// AppearGrace: if the target has not shown up in Updating within this long
-	// after the trigger, the install is assumed to have finished (or never
-	// started) before the first poll saw it (default 15 s).
+	// AppearGrace: a target unseen this long after trigger counts as done (default 15s).
 	AppearGrace time.Duration
 }
 
-// WaitUntilDone blocks until bootstrap no longer lists target as updating, or
-// ctx ends (returned as ctx.Err()). Transient Updating errors are tolerated —
-// bootstrap itself restarts when it is the target. A target never seen within
-// AppearGrace (with bootstrap answering) counts as done.
+// WaitUntilDone blocks until target leaves Updating or ctx ends.
+// Transient errors are tolerated (bootstrap restarts when it is the target).
 func WaitUntilDone(ctx context.Context, cfg *config.Config, target string, opts WaitOptions) error {
 	if opts.Poll <= 0 {
 		opts.Poll = 3 * time.Second

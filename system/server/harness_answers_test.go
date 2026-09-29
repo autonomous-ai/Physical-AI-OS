@@ -93,7 +93,6 @@ func TestHarnessUnlinkedAnswerAndRestart(t *testing.T) {
 	receipt := serverReceipt("b")
 	receipt["receipt"].(map[string]any)["state"] = "completed"
 	s.bindHarnessResultReceipt(receipt, p)
-	// Simulate lost RAM routes; durable command receipt restores display only.
 	s.harnessReplies = nil
 	s.processHarnessResults(p)
 	if s.hasHarnessReply("agent", "run-b") || len(s.harnessResults.Inputs()) != 0 {

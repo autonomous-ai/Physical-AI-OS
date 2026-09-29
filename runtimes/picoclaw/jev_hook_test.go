@@ -82,8 +82,7 @@ func TestJevHookOptOut(t *testing.T) {
 	}
 }
 
-// Existing observer onboarding owns the global hook gate. Jev's explicit
-// per-plugin opt-out survives that lifecycle without disabling the observer.
+// Existing observer onboarding owns the global hook gate.
 func TestJevOptOutSurvivesObserverOnboarding(t *testing.T) {
 	cfg := map[string]any{"hooks": map[string]any{"enabled": false, "processes": map[string]any{"jev": map[string]any{"enabled": false}}}}
 	applyObserverHook(cfg, "observer.py", "localhost")

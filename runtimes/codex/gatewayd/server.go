@@ -73,10 +73,8 @@ type turnPayload struct {
 	} `json:"attachments"`
 }
 
-// op kinds processed by the single worker (strict FIFO). session.new rides the
-// same queue as turns so a mid-turn reset executes AFTER the in-flight/queued
-// turns — clearing the thread id immediately would be undone by the in-flight
-// turn's thread.started re-persisting the old id.
+// op kinds processed by the single worker (strict FIFO).
+// session.new is queued so a mid-turn reset runs after in-flight turns.
 const (
 	opTurn       = "turn"
 	opSessionNew = "session.new"
@@ -89,10 +87,8 @@ type op struct {
 }
 
 // handleWS upgrades the connection, enforces bearer auth (close 4401 on
-// failure) and runs the read loop. A new client replaces the previous one.
+// failure) and runs the read loop.
 func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
-	// The "/codex/ws/" mux pattern matches the whole subtree; only the two
-	// exact paths are valid WS endpoints (mirrors bridge.py WS_PATHS).
 	if r.URL.Path != "/codex/ws" && r.URL.Path != "/codex/ws/" {
 		http.NotFound(w, r)
 		return
@@ -139,10 +135,7 @@ func (s *Server) handleWS(w http.ResponseWriter, r *http.Request) {
 	log.Printf("%s client disconnected", logPrefix)
 }
 
-// handleFrame dispatches one inbound frame. message.send is only enqueued
-// here so pings keep flowing while a turn runs (worker serializes turns).
-// Replies go through s.send: this connection IS the current client (single
-// client invariant), so no per-frame connection plumbing is needed.
+// handleFrame dispatches one inbound frame.
 func (s *Server) handleFrame(data []byte) {
 	var frame inboundFrame
 	if err := json.Unmarshal(data, &frame); err != nil {
@@ -170,15 +163,11 @@ func (s *Server) handleFrame(data []byte) {
 		active := s.activeTurnID != "" || s.activeStarting
 		s.mu.Unlock()
 		if active {
-			// Keep the original turn correlation. A steered message joins that
-			// same reply rather than becoming a second independently completed turn.
 			s.steerAppTurn(payload)
 		} else {
 			s.enqueue(op{kind: opTurn, payload: payload})
 		}
 	case "session.new":
-		// Queued behind in-flight/queued turns (see op) — session_cleared is
-		// sent when it actually executes.
 		log.Printf("%s session.new queued — clears after in-flight/queued turns", logPrefix)
 		s.enqueue(op{kind: opSessionNew})
 	default:
@@ -186,10 +175,9 @@ func (s *Server) handleFrame(data []byte) {
 	}
 }
 
-// enqueue never blocks the read loop. A full queue rejects the queued request
-// with its own correlation fields; it must not emit an uncorrelated bridge.error
-// that would terminate the currently streaming turn. Legacy clients without
-// correlation fields retain the bridge.status compatibility response.
+// enqueue never blocks the read loop.
+// A full queue rejects the queued request with its own correlation fields; it must not emit an
+// uncorrelated bridge.error that would terminate the currently streaming turn.
 func (s *Server) enqueue(o op) {
 	select {
 	case s.ops <- o:
@@ -206,9 +194,9 @@ func (s *Server) enqueue(o op) {
 	}
 }
 
-// send forwards raw bytes to the connected client, if any. Write errors mark
-// the client gone but never fail the caller: a disconnect mid-turn must not
-// kill the turn — the subprocess finishes so the session stays consistent.
+// send forwards raw bytes to the connected client, if any.
+// Write errors mark the client gone but never fail the caller: a disconnect mid-turn must not kill
+// the turn — the subprocess finishes so the session stays consistent.
 func (s *Server) send(data []byte) {
 	s.mu.Lock()
 	client := s.client
@@ -249,7 +237,7 @@ func (s *Server) sendError(msg string) {
 }
 
 // runCorrelatedTurn scopes metadata to the worker's whole turn, including
-// resume fallback and terminal bridge errors. Control/status frames stay untagged.
+// resume fallback and terminal bridge errors.
 func (s *Server) runCorrelatedTurn(ctx context.Context, payload turnPayload) {
 	s.mu.Lock()
 	s.activeRequestID, s.activeRunID = payload.RequestID, payload.RunID
@@ -263,7 +251,7 @@ func (s *Server) runCorrelatedTurn(ctx context.Context, payload turnPayload) {
 }
 
 // runCorrelatedAppTurn owns correlation for the lifetime of the App Server
-// turn. Completion clears it in handleAppNotification, rather than on return.
+// turn.
 func (s *Server) runCorrelatedAppTurn(payload turnPayload) {
 	s.mu.Lock()
 	if s.activeTurnID != "" {
@@ -273,9 +261,6 @@ func (s *Server) runCorrelatedAppTurn(payload turnPayload) {
 	}
 	if s.activeStarting {
 		s.mu.Unlock()
-		// A thread/start response is imminent. Preserve the message until it
-		// yields a real turn id, then it will be steered rather than becoming a
-		// competing fresh turn.
 		go func() { time.Sleep(10 * time.Millisecond); s.enqueue(op{kind: opTurn, payload: payload}) }()
 		return
 	}

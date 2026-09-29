@@ -1,22 +1,10 @@
 import { MAX_SPEAK_CHARS, MAX_TIMES_PER_SCHEDULE, resolveCadenceTimes, resolveScheduleKind } from "@/lib/api";
 import type { ScheduleCadence, ScheduleItem, ScheduleKind, ScheduleWriteBody } from "@/lib/api";
 
-// Draft state + wire mapping for one scheduled task. Kept out of
-// ScheduleEditor.tsx so that file exports components only
-// (react-refresh/only-export-components).
-//
-// It mirrors the cadence rules the DEVICE enforces (system/schedule/intent.go's
-// ValidateSpec) rather than inventing its own, so a form that submits is one
-// the device will accept — the alternative is a round trip that fails with a
-// message the user cannot act on.
-
-// Matches minInterval in system/schedule/spec.go. The device floors anything
-// shorter, so offering a smaller option than this in the editor would silently
-// not do what it says.
+// Mirrors the device's ValidateSpec cadence rules (system/schedule/intent.go).
 const MIN_INTERVAL_MINUTES = 5;
 
-/** The cadence kinds the device accepts. Kept as a union (not string) so a
- *  typo in the form cannot produce a repeat the runner will refuse. */
+/** The cadence kinds the device accepts. */
 export type ScheduleRepeat = ScheduleCadence["repeat"];
 
 export type ScheduleDraft = {
@@ -37,28 +25,21 @@ export function draftFromSchedule(sch?: ScheduleItem): ScheduleDraft {
   return {
     name: sch?.name ?? "",
     instructions: sch?.instructions ?? "",
-    // Absent resolves to agent, so a task authored before this field opens on
-    // the behaviour it actually has rather than on a blank third state.
     kind: resolveScheduleKind(sch?.kind),
     enabled: sch?.enabled ?? true,
     repeat: cadence?.repeat ?? "daily",
-    // Falls back to the single `time` for a schedule authored before the list.
     times: (() => {
       const resolved = resolveCadenceTimes(cadence);
       return resolved.length > 0 ? resolved : ["08:00"];
     })(),
-    // 7 is an accepted alias for Sunday on the wire; normalise so the chip
-    // toggles compare equal.
     days: (cadence?.days ?? [1, 2, 3, 4, 5]).map((d) => (d === 7 ? 0 : d)),
     dayOfMonth: cadence?.day_of_month ?? 1,
     everyMs: cadence?.every_ms ?? 60 * 60_000,
   };
 }
 
-/** Builds the wire cadence, emitting ONLY the fields the chosen repeat uses —
- *  the same "repeat selects which fields matter" rule the device applies. */
-/** Sorted + deduped, so `time` is deterministic and matches what the backend
- *  will normalise this to — the form submits the value it will read back. */
+/** Builds the wire cadence, emitting ONLY the fields the chosen repeat uses — the same "repeat selects which fields matter" rule the device applies. */
+/** Sorted + deduped, so `time` is deterministic and matches what the backend will normalise this to — the form submits the value it will read back. */
 function times(d: ScheduleDraft): string[] {
   return [...new Set(d.times)].sort();
 }
@@ -94,8 +75,7 @@ export function validateDraft(d: ScheduleDraft): string | null {
   if (!d.instructions.trim()) {
     return d.kind === "speak" ? "Type what the robot should say." : "Tell the robot what to do.";
   }
-  // Mirrors ValidateIntentPayload in system/schedule/intent.go, so the form
-  // refuses what the device would refuse instead of queueing a doomed intent.
+  // Mirrors ValidateIntentPayload in system/schedule/intent.go.
   if (d.kind === "speak") {
     const n = [...d.instructions.trim()].length;
     if (n > MAX_SPEAK_CHARS) {

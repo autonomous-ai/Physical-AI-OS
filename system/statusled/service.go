@@ -1,7 +1,5 @@
-// Package statusled manages LED feedback states so users can see what the device is doing.
-// States have priority: connectivity > error > ota > booting > hal_down > agent_down > hardware.
-// All effect writes are transient (don't clobber user's saved LED state).
-// When a state clears, the strip is restored to user state — ambient resumes if no user state.
+// Package statusled shows prioritized device status states on the LED as transient effects,
+// restoring the user's LED state when they clear.
 package statusled
 
 import (
@@ -26,16 +24,9 @@ const (
 	StateHardware       State = "hardware"        // Hardware component failure (servo/led/audio/voice)
 )
 
-// The color/effect/speed for each state lives in HAL (STATUS_LED_PRESETS,
-// overridable per device via presets.json): this service owns the state machine
-// (WHEN a state shows), HAL owns the appearance (WHAT it looks like). We send the
-// state name; the State constant string values match the HAL preset keys.
+// HAL owns each state's look (STATUS_LED_PRESETS); State values match its preset keys.
 
-// priority determines which state wins when multiple are active.
-// WifiConnecting sits just above Booting: while the setup handler is
-// associating with home Wi-Fi, its blue-blink cue outranks the boot state
-// still bleeding through from server start, but any real fault (Error,
-// Connectivity loss surfacing later, OTA) still wins.
+// priority decides which active state wins (connectivity > error > ota > ... > hardware).
 var priority = map[State]int{
 	StateHardware:       1,
 	StateAgentDown:      2,
@@ -54,12 +45,8 @@ type Service struct {
 	hasLight bool // device declares the light capability — else status LED is a no-op
 }
 
-// ProvideService creates a StatusLED service. A device with no LED (no `light`
-// capability) gets a no-op service: status states are never painted, since there
-// is no strip to paint and the /led route isn't mounted. The caller (Wire binding)
-// resolves the capability at construction — statusled itself must not depend on
-// the device package, since device now depends on statusled for the setup-time
-// wifi_connecting cue (import cycle).
+// ProvideService creates the service; without an LED it is a no-op. hasLight is resolved
+// by the caller to avoid a device <-> statusled import cycle.
 func ProvideService(hasLight bool) *Service {
 	return &Service{
 		active:   make(map[State]bool),
@@ -89,11 +76,7 @@ func (s *Service) Clear(state State) {
 	defer s.mu.Unlock()
 
 	if _, was := s.active[state]; !was {
-		// State already inactive — don't fire another RestoreLED.
-		// Without this guard, callers that Clear unconditionally on every
-		// tick (e.g. healthwatch poll) would trigger /led/restore each
-		// tick, repainting the strip to off or to the user color
-		// indefinitely.
+		// Already inactive: skip RestoreLED (callers Clear on every tick).
 		return
 	}
 	delete(s.active, state)
@@ -103,13 +86,11 @@ func (s *Service) Clear(state State) {
 		slog.Info("status LED cleared", "component", "statusled", "state", state)
 		return
 	}
-	// Another state still active — show it
 	s.applyHighest()
 	slog.Info("status LED cleared, showing next", "component", "statusled", "cleared", state)
 }
 
-// applyHighest applies the LED effect for the highest-priority active state.
-// Must be called with s.mu held.
+// applyHighest applies the highest-priority active state. Caller must hold s.mu.
 func (s *Service) applyHighest() {
 	var best State
 	bestPri := 0
@@ -124,9 +105,7 @@ func (s *Service) applyHighest() {
 	}
 }
 
-// FlashReady fires a brief white flash to indicate the agent is ready/listening.
-// No-ops if a status state is already active (avoids interrupting error/processing indicators).
-// After 1s the flash stops and ambient resumes.
+// FlashReady briefly flashes white; no-op while a status state is active.
 func (s *Service) FlashReady() {
 	if !s.hasLight {
 		return

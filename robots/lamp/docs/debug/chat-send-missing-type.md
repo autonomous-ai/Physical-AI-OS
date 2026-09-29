@@ -26,9 +26,9 @@ Tất cả các system-level callers của `SendChatMessage` bị mờ type tron
 |---|---|---|---|
 | Skill watcher | `runtimes/openclaw/skill_watcher.go:100` | `[system] The following skills have been updated...` | system.skill_updated |
 | Wake greeting | `system/server/server.go:414` | `You just woke up. Greet the user briefly.` | system.wake |
-| Compact | `system/server/openclaw/delivery/sse/handler.go:725` | `/compact` | system.compact |
+| Compact | `system/server/agent/delivery/http/handler.go:725` | `/compact` | system.compact |
 
-So sánh với sensing events có structured type: `voice`, `voice_command`, `presence.enter`, `presence.leave`, `presence.away`, `motion.activity`, `emotion.detected` (`system/sensing/service.go:245-262`).
+So sánh với sensing events có structured type: `voice`, `voice_command`, `presence.enter`, `presence.leave`, `presence.away`, `motion.activity`, `emotion.detected` (`system/sensing/service.go:245-262`, since removed — the event types now live in `system/lib/sensingmsg/sensingmsg.go`).
 
 ## Fix idea
 

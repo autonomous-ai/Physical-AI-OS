@@ -7,11 +7,6 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// Tests for the claude.ai OAuth login flow, modeled on the WhatsApp pairing
-// flow's shape: feed a synthetic CLI transcript through the output scanner and
-// assert the emitted PairingEvents + extracted outcome. The subprocess itself
-// (script/pty spawn) is exercised on-device.
-
 // drainEvents runs scanLoginOutput on transcript and returns the scan outcome
 // plus every event it emitted.
 func drainEvents(t *testing.T, transcript string) (loginScan, []domain.PairingEvent) {
@@ -117,7 +112,6 @@ func TestScanLoginOutputFailureKeepsLastLine(t *testing.T) {
 func TestSubmitClaudeLoginCode(t *testing.T) {
 	s := &ClaudeCodeService{}
 
-	// No flow active → error.
 	if err := s.SubmitClaudeLoginCode("abc"); err == nil {
 		t.Error("SubmitClaudeLoginCode with no active login: err = nil, want error")
 	}
@@ -134,7 +128,6 @@ func TestSubmitClaudeLoginCode(t *testing.T) {
 	if err := s.SubmitClaudeLoginCode("   "); err == nil {
 		t.Error("SubmitClaudeLoginCode(blank): err = nil, want error")
 	}
-	// Active flow → code written with a raw-mode Enter (\r), trimmed.
 	if err := s.SubmitClaudeLoginCode(" code-123 \n"); err != nil {
 		t.Fatalf("SubmitClaudeLoginCode: %v", err)
 	}
@@ -173,8 +166,6 @@ func TestSplitPTYLines(t *testing.T) {
 	ch := make(chan domain.PairingEvent, 4)
 	scan := scanLoginOutput(strings.NewReader("a\rb\nc"), ch)
 	close(ch)
-	// No URL/token in the stream — just assert the final fragment (no trailing
-	// terminator) was still consumed as a line.
 	if scan.lastLine != "c" {
 		t.Errorf("lastLine = %q, want %q (EOF fragment must be scanned)", scan.lastLine, "c")
 	}

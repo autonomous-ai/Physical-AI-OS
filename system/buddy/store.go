@@ -10,8 +10,7 @@ import (
 	"time"
 )
 
-// BuddiesFilePath is the on-disk JSON file for the (currently single) paired buddy.
-// MVP is 1↔1 so this holds at most one record. Future multi-buddy will expand the schema.
+// BuddiesFilePath is the on-disk JSON file for the (single) paired buddy.
 const BuddiesFilePath = "config/buddies.json"
 
 // PairingRecord is what the device persists for each paired buddy.
@@ -24,8 +23,7 @@ type PairingRecord struct {
 	PairedAt    time.Time `json:"paired_at"`
 }
 
-// storeFile is the on-disk shape: {"records":[...]}. Wrapping in an object lets us
-// extend later (settings, audit log path, etc.) without a v2 schema break.
+// storeFile is the on-disk shape: {"records":[...]}.
 type storeFile struct {
 	Records []PairingRecord `json:"records"`
 }

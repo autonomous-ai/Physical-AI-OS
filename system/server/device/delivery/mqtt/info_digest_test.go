@@ -28,9 +28,7 @@ func (infoGateway) ListSkills() ([]domain.InstalledSkill, error) {
 	return nil, errors.New("not needed by this test")
 }
 
-// infoTestHandler wires handleInfo's real dependencies minimally (their probes
-// fail harmlessly off-device and are skipped, as on a device) and publishes
-// through the fake broker, so the test reads the actual info uplink.
+// infoTestHandler wires handleInfo minimally and publishes through the fake broker.
 func infoTestHandler(t *testing.T, storePath string) (*DeviceMQTTHandler, <-chan []byte) {
 	t.Helper()
 	t.Chdir(t.TempDir())
@@ -60,8 +58,7 @@ func publishInfo(t *testing.T, h *DeviceMQTTHandler, messages <-chan []byte) map
 	return msg
 }
 
-// The info uplink carries the digest of exactly what the schedule store (the
-// file the runner fires from) holds — here the spec's V1 rows.
+// The info uplink carries the digest of the schedule store's rows.
 func TestHandleInfo_ReportsTheStoresSchedulesDigest(t *testing.T) {
 	h, messages := infoTestHandler(t, filepath.Join(t.TempDir(), "schedules.json"))
 	if err := h.scheduleStore.Replace([]schedule.Schedule{
@@ -77,9 +74,7 @@ func TestHandleInfo_ReportsTheStoresSchedulesDigest(t *testing.T) {
 	}
 }
 
-// A device with no schedules.json at all (first boot, factory reset, lost
-// file) reports the EMPTY digest rather than nothing — that is precisely the
-// drift the backend needs to see in order to re-send its rows.
+// A missing schedules.json reports the EMPTY digest, not nothing.
 func TestHandleInfo_EmptyStoreReportsV0(t *testing.T) {
 	h, messages := infoTestHandler(t, filepath.Join(t.TempDir(), "schedules.json"))
 	msg := publishInfo(t, h, messages)
@@ -88,9 +83,7 @@ func TestHandleInfo_EmptyStoreReportsV0(t *testing.T) {
 	}
 }
 
-// A store that cannot be read is not "no schedules": the digest is omitted
-// (the backend then treats this uplink like old firmware and does nothing),
-// and the info uplink itself still goes out.
+// An unreadable store omits the digest but still sends the uplink.
 func TestHandleInfo_UnreadableStoreOmitsDigest(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "schedules.json")
 	if err := os.Mkdir(path, 0o700); err != nil { // a directory: every read fails
@@ -107,8 +100,7 @@ func TestHandleInfo_UnreadableStoreOmitsDigest(t *testing.T) {
 	}
 }
 
-// Every other reply embeds MQTTInfoResponse as its identity header; omitempty
-// keeps the new field out of all of them (and out of old-firmware payloads).
+// omitempty keeps the digest out of every other reply.
 func TestMQTTInfoResponse_SchedulesDigestIsOmitEmpty(t *testing.T) {
 	raw, err := json.Marshal(domain.MQTTInfoResponse{ID: "d"})
 	if err != nil {

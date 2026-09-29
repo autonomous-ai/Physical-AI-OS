@@ -10,14 +10,13 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SendChatMessage sends a user message to Codex. Returns the run ID the
-// caller uses to correlate flow/monitor events with the resulting turn.
+// SendChatMessage sends a user message to Codex.
 func (s *CodexService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "user")
 }
 
 // SendSystemChatMessage flags the flow event as system-originated (skill watcher,
-// wake greeting, /compact). Wire payload is identical to SendChatMessage.
+// wake greeting, /compact).
 func (s *CodexService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "system")
 }
@@ -26,8 +25,7 @@ func (s *CodexService) SendChatMessageWithImages(message string, imagesBase64 []
 	return s.sendChat(message, imagesBase64, "", "", "user")
 }
 
-// NextChatRunID allocates the run / req id pair. Same shape as openclaw/hermes so
-// logs / monitor stay identical across backends.
+// NextChatRunID allocates the run / req id pair.
 func (s *CodexService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
@@ -43,8 +41,7 @@ func (s *CodexService) SendChatMessageWithImagesAndRun(message string, imagesBas
 }
 
 // SendSlashCommandWithRun — Codex has no per-channel "deliver:false" flag, so
-// slash commands look the same as any other user input on the wire. We still tag
-// the flow source so logs distinguish web-monitor input from voice.
+// slash commands look the same as any other user input on the wire.
 func (s *CodexService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, nil, reqID, runID, "user_slash")
 }
@@ -55,8 +52,7 @@ func (s *CodexService) SendSlashCommandWithImagesAndRun(message string, imagesBa
 
 // sendChat allocates ids, marks busy, records the pending trace + runID, emits
 // chat_input / chat_send flow events for parity with openclaw, and writes the
-// message.send frame to the persistent WebSocket. The reply arrives on the read
-// loop and is translated there — this returns as soon as the frame is sent.
+// message.send frame to the persistent WebSocket.
 func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqID, fixedRunID, sourceType string) (string, error) {
 	s.sendChatMu.Lock()
 	defer s.sendChatMu.Unlock()
@@ -72,8 +68,6 @@ func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqI
 		reqID, runID = s.NextChatRunID()
 	}
 
-	// Strip [snapshot: ...] paths from presence events so the agent doesn't waste
-	// tokens on file paths it has no tools to access (matches openclaw/hermes).
 	wsMessage := message
 	if strings.Contains(message, "[sensing:presence.enter]") || strings.Contains(message, "[sensing:presence.leave]") {
 		wsMessage = strings.TrimSpace(reSnapshotPath.ReplaceAllString(message, ""))
@@ -87,12 +81,7 @@ func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqI
 		"message": previewMsg,
 	}, runID)
 
-	// Build the outbound frame. Image attachments are best-effort: the text
-	// content is always sent so the turn proceeds even if Codex ignores the
-	// attachment shape.
 	payload := map[string]any{"content": wsMessage, "source": sourceType}
-	// One attachment entry per image: the frame already carries a LIST, so a
-	// chat client that attached several photos sends them in a single turn.
 	hasImage := len(imagesBase64) > 0
 	if hasImage {
 		attachments := make([]map[string]any, 0, len(imagesBase64))
@@ -121,13 +110,11 @@ func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqI
 
 	// Mark busy + stash the runID BEFORE the write so the first inbound frame of
 	// this turn adopts it (ensureTurnStarted) and sensing-while-busy gates catch
-	// the in-flight turn. Cleared by emitFinal/handleError (or busyTTL).
+	// the in-flight turn.
 	s.busySince.Store(time.Now().UnixMilli())
 	s.activeTurn.Store(true)
 	s.addPendingRun(reqID, runID)
 
-	// Flash the "thinking" face for visible turns (OpenClaw emotion-acknowledge
-	// hook parity). Skips passive sensing + realtime-handled turns. See emotion_ack.go.
 	s.fireAckEmotion(runID, message)
 
 	s.SetPendingChatTrace(runID, message)
@@ -148,7 +135,6 @@ func (s *CodexService) sendChat(message string, imagesBase64 []string, fixedReqI
 	s.monitorBus.Push(domain.MonitorEvent{Type: "chat_send", Summary: message, RunID: runID})
 
 	if err := s.sendFrame(frame); err != nil {
-		// Roll back busy so the next sensing/voice round can proceed.
 		s.removePendingRun(reqID)
 		if s.getCurrentRunID() == "" && !s.hasPendingRuns() {
 			s.activeTurn.Store(false)

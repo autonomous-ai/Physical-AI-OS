@@ -11,9 +11,7 @@ func carryStore(t *testing.T) *Store {
 	return NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 }
 
-// wireShaped is what a schedule.sync actually produces: the backend-owned
-// fields populated, and every device-local bookkeeping field zero because the
-// wire has no representation for them.
+// wireShaped returns a schedule as schedule.sync produces it: local bookkeeping zeroed.
 func wireShaped(id, name string) Schedule {
 	return Schedule{
 		ID:      id,
@@ -23,8 +21,7 @@ func wireShaped(id, name string) Schedule {
 	}
 }
 
-// The bug this guards: a sync used to overwrite run history with the wire's
-// zeros, so the device forgot it had ever run a task.
+// A sync must not wipe run history.
 func TestReplace_PreservesRunHistoryAcrossSync(t *testing.T) {
 	s := carryStore(t)
 	ran := time.Date(2026, 8, 26, 21, 19, 20, 0, time.UTC)
@@ -36,7 +33,6 @@ func TestReplace_PreservesRunHistoryAcrossSync(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	// A later sync carries the same schedule, renamed, with zeroed bookkeeping.
 	if err := s.Replace([]Schedule{wireShaped("sched-1", "App-made task (renamed)")}); err != nil {
 		t.Fatalf("resync: %v", err)
 	}
@@ -51,15 +47,12 @@ func TestReplace_PreservesRunHistoryAcrossSync(t *testing.T) {
 	if got.LastRunStatus != "success" {
 		t.Errorf("last_run_status = %q, want it preserved as success", got.LastRunStatus)
 	}
-	// The backend-owned half must still be updated by the sync.
 	if got.Name != "App-made task (renamed)" {
 		t.Errorf("name = %q, want the synced value", got.Name)
 	}
 }
 
-// The consequential half. LastFailedOccurrence is what Runner.fire uses to
-// suppress repeated failure acks for one occurrence; zeroing it re-opens the
-// duplicate schedule_run rows that suppression exists to prevent.
+// A sync must not wipe LastFailedOccurrence (failure-ack suppression).
 func TestReplace_PreservesLastFailedOccurrence(t *testing.T) {
 	s := carryStore(t)
 	occurrence := time.Date(2026, 8, 27, 8, 0, 0, 0, time.UTC)
@@ -84,8 +77,7 @@ func TestReplace_PreservesLastFailedOccurrence(t *testing.T) {
 	}
 }
 
-// ReplaceWithTimezone is the path schedule.sync actually takes, so it needs the
-// same guarantee — and must still apply the timezone.
+// ReplaceWithTimezone preserves run history and applies the timezone.
 func TestReplaceWithTimezone_PreservesRunHistory(t *testing.T) {
 	s := carryStore(t)
 	ran := time.Date(2026, 8, 26, 12, 0, 0, 0, time.UTC)
@@ -110,8 +102,7 @@ func TestReplaceWithTimezone_PreservesRunHistory(t *testing.T) {
 	}
 }
 
-// A schedule the backend no longer sends is genuinely gone — carrying
-// bookkeeping must not resurrect it.
+// A schedule dropped by the backend is not resurrected.
 func TestReplace_DroppedScheduleStaysDropped(t *testing.T) {
 	s := carryStore(t)
 	seeded := wireShaped("sched-1", "Doomed")
@@ -133,7 +124,7 @@ func TestReplace_DroppedScheduleStaysDropped(t *testing.T) {
 	}
 }
 
-// A brand-new schedule has no prior state; it must not inherit a neighbour's.
+// A new schedule inherits no history.
 func TestReplace_NewScheduleGetsNoInheritedHistory(t *testing.T) {
 	s := carryStore(t)
 	seeded := wireShaped("sched-1", "Existing")
@@ -153,8 +144,7 @@ func TestReplace_NewScheduleGetsNoInheritedHistory(t *testing.T) {
 	}
 }
 
-// An explicit non-zero value from the caller must win over what is on disk —
-// otherwise the runner could never record a NEW run over an older one.
+// An explicit non-zero incoming value wins over the stored one.
 func TestReplace_IncomingValueWinsOverStored(t *testing.T) {
 	s := carryStore(t)
 	older := time.Date(2026, 8, 26, 9, 0, 0, 0, time.UTC)

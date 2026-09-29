@@ -1,8 +1,4 @@
-"""Optional MPR121 capacitive input using shared GPIO button gestures.
-
-I2C transport and register setup adapted from the user-supplied
-mpr121_opi_test.py. Only the device-declared bus/address is accessed.
-"""
+"""Optional MPR121 capacitive input using shared GPIO button gestures."""
 
 import ctypes
 import errno
@@ -176,13 +172,10 @@ class _GestureRecognizer:
         return events
 
 
-# The release grace joins a finger handoff without turning it into two taps.
 SWIPE_RELEASE_S = 0.120
 SWIPE_MAX_GAP_S = 0.150
-# Travel time is measured from cycle start (after the contact debounce) to the
-# last new pad, so a fast full-strip swipe (~90 ms raw on Lamp) measures ~50 ms.
-# Displacement >= 3 pads already proves motion; this only rejects a whole hand
-# landing within a poll or two.
+# Travel time is measured from cycle start (after the contact debounce) to the last new
+# pad, so a fast full-strip swipe (~90 ms raw on Lamp) measures ~50 ms.
 SWIPE_MIN_TRAVEL_S = 0.030
 
 
@@ -240,7 +233,6 @@ class _SpatialGestureRecognizer:
                         self._gesture_id, self._direction, self._peak, valid)
             if valid:
                 events.append(_GestureEvent("swipe", self._gesture_id, direction=self._direction))
-            # Restart the button detector only after the spatial cycle ends.
             self._button = self._button_factory(0)
             self._button.update(False, now)
         else:
@@ -326,11 +318,6 @@ class _SpatialGestureRecognizer:
                 new = positions - self._seen
                 displacement = center - self._origin
                 if new:
-                    # A far-off arrival is a second finger, not travel -- unless
-                    # the contact is already moving and the jump continues in
-                    # its direction: a fast swipe (~1 pad per poll) skips pads
-                    # whose dwell is shorter than the footprint filter, so the
-                    # centroid legitimately leaps 3-4 pads (measured on Lamp).
                     jump = center - self._last_center
                     if abs(jump) > 3 and not (self._moving and jump * self._direction > 0):
                         self._invalid = True
@@ -348,7 +335,6 @@ class _SpatialGestureRecognizer:
                     progress = displacement * self._direction
                     if arrivals and progress < self._peak - 1:
                         self._invalid = True
-                    # Releases alone shift the centroid but prove no travel.
                     if new:
                         self._peak = max(self._peak, progress)
                 self._last_center = center
@@ -359,8 +345,6 @@ class _SpatialGestureRecognizer:
                 button_events = self._button.update(True, edge_time)
                 events.extend(button_events)
                 if any(event.kind == "hold" for event in button_events):
-                    # Threshold-fired actions consume this entire contact,
-                    # including later travel, until a stable physical release.
                     self.cancel()
         elif self._cycle:
             if self._release_at is None:
@@ -383,9 +367,6 @@ def announce_listening_cue(*, source):
 
 def triple_click_action(*, source):
     # Disabled for MPR121: accidental triple taps must not reboot the device.
-    # Keep the shared action wiring here so it can be restored deliberately.
-    # from hal.drivers.button_actions import triple_click_action as action
-    # action(source=source)
     return
 
 
@@ -455,16 +436,12 @@ class MPR121Handler:
         for electrode in range(12):
             write(0x41 + 2 * electrode, config.touch_threshold)
             write(0x42 + 2 * electrode, config.release_threshold)
-        # Slow falling baseline tracking using NXP AN3944 quick-start values
-        # so the baseline does not quickly follow an approaching finger.
         for register, value in (
             (0x2B, 1), (0x2C, 1), (0x2D, 14), (0x2E, 0),
             (0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
             (0x33, 0), (0x34, 0), (0x35, 0),
-            # CONFIG2: CDT 0.5 us, SFI 10 samples, ESI 1 ms. The 10-sample
-            # second-level filter halves idle noise versus 4 samples and
-            # updates every ~10 ms, matching the poll period. Chip debounce
-            # stays 0: contact/footprint debounce is done in software.
+            # CONFIG2: CDT 0.5 us, SFI 10 samples, ESI 1 ms. Chip debounce stays 0:
+            # contact/footprint debounce is done in software.
             (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
         ):
             write(register, value)
@@ -513,8 +490,6 @@ class MPR121Handler:
         try:
             self._bus = I2CBus(self._config.bus)
             self._initialize()
-            # Allow conversions/autoconfiguration to settle before seeding the
-            # boot-held suppression from the first reported electrode state.
             time.sleep(0.1)
             from hal.drivers.harness.gestures import HarnessGestures
             self._harness_gestures = HarnessGestures()
@@ -529,7 +504,7 @@ class MPR121Handler:
             # permission, configuration and unexpected failures diagnosable.
             # Linux reports a non-acknowledging I2C slave as ENXIO or EREMOTEIO.
             if isinstance(exc, OSError) and exc.errno in {
-                errno.ENOENT, errno.ENODEV, errno.ENXIO, 121,  # Linux EREMOTEIO
+                errno.ENOENT, errno.ENODEV, errno.ENXIO, 121,
             }:
                 logger.warning(
                     "MPR121 event=unavailable bus=%d address=0x%02x errno=%d reason=%s; check I2C bus and wiring, then restart HAL",
@@ -673,8 +648,6 @@ class MPR121Handler:
                     continue
                 try:
                     logger.info("MPR121 event=action_begin gesture_id=%d action=%s count=%d held_s=%.3f", event.gesture_id, event.kind, event.count, event.held_s)
-                    # Once a shared action starts its own I/O/OS sequence, it
-                    # cannot be interrupted here. Only pending work is canceled.
                     self._execute(event)
                     logger.info("MPR121 event=action_complete gesture_id=%d action=%s", event.gesture_id, event.kind)
                 except Exception:

@@ -18,10 +18,7 @@ import (
 	"go.autonomous.ai/os/system/skillcontext/musicsuggestion"
 )
 
-// detectedEmotionRe pulls the label out of either an emotion.detected or
-// speech_emotion.detected message ("Emotion detected: Sad." /
-// "Speech emotion detected: Sad."). Case-insensitive + unanchored so the
-// "Speech " prefix is harmless — both formats end with the same anchor.
+// detectedEmotionRe extracts the label from "Emotion detected: Sad." or "Speech emotion detected: Sad.".
 var detectedEmotionRe = regexp.MustCompile(`(?i)Emotion detected:\s*([A-Za-z]+)`)
 
 // ExtractDetectedEmotion returns the emotion label from an emotion.detected
@@ -44,9 +41,6 @@ const (
 )
 
 // emotionContext is the digest the agent reads on emotion.detected events.
-// Mapping (Sad → sad, Fear → stressed, …), staleness, audio state, and habit
-// pattern matching are all pre-computed in os-server; the skills only apply
-// synthesis rules and pick phrasing.
 type emotionContext struct {
 	MappedMood           string               `json:"mapped_mood"`              // detected emotion → mood signal value (Sad → "sad", Fear → "stressed", ...)
 	RecentSignals        []signalDigest       `json:"recent_signals"`           // mood signals in the last emotionRecentSignalsWindow
@@ -83,12 +77,7 @@ type musicPatternDigest struct {
 	PeakHour       int    `json:"peak_hour"`
 }
 
-// emotionToMood mirrors user-emotion-detection/SKILL.md's mapping table so the
-// skill no longer has to look it up on the fly. Covers both the face FER
-// vocabulary (Happy/Sad/Angry/Fear/Surprise/Disgust/Neutral) and the
-// emotion2vec voice vocabulary (happy/sad/angry/fearful/surprised/disgusted/
-// neutral). The two are bucketed identically so the same downstream mood
-// route applies regardless of source.
+// emotionToMood maps face FER and emotion2vec voice labels to mood buckets.
 var emotionToMood = map[string]string{
 	"happy":     "happy",
 	"sad":       "sad",
@@ -111,12 +100,7 @@ var suggestionWorthyMoods = map[string]bool{
 	"bored":    true,
 }
 
-// BuildEmotionContext returns an `[emotion_context: ...]` block for
-// emotion.detected events. detectedEmotion is the raw FER label from the
-// triggering event (Happy / Sad / Angry / Fear / Surprise / Disgust /
-// Neutral). user is canonicalised the same way the existing inject does.
-//
-// Returns "" on hard failure so the SKILL.md fallback bash batch can run.
+// BuildEmotionContext returns an `[emotion_context: ...]` block, or "" on hard failure.
 func BuildEmotionContext(detectedEmotion, user string) string {
 	user = usercanon.Resolve(user)
 	if user == "" {
@@ -204,10 +188,7 @@ func lastSuggestionAgeMin(events []musicsuggestion.Event, now time.Time) int {
 	return int(now.Sub(time.Unix(int64(last.TS), 0)).Minutes())
 }
 
-// fetchAudioPlaying calls hal /audio/status with a tight timeout.
-// Schema (verified on Pi): {available, playing, title, speaker_muted}.
-// Returns false on any error so a missing/down hal cannot block the
-// agent turn.
+// fetchAudioPlaying reports whether HAL is playing audio; false on any error.
 func fetchAudioPlaying() bool {
 	client := &http.Client{Timeout: audioStatusTimeout}
 	resp, err := client.Get(hal.BaseURL + "/audio/status")
@@ -231,19 +212,7 @@ func fetchAudioPlaying() bool {
 	return payload.Playing
 }
 
-// fetchAudioRecent calls hal /audio/history?last=1 — without a person
-// filter. Verified on Pi (.38) that hal does not currently attribute
-// plays to a user (entry.person is always ""), so filtering by person
-// drops everything and audio_recent comes back nil for every user.
-// Until hal starts tagging plays, just take the latest global play —
-// music-suggestion uses this to nudge genre tone, which is approximate
-// enough that "the lamp's most recent play" is good signal.
-//
-// Schema (verified on Pi):
-//
-//	{"date":"today","person":"unknown","entries":[
-//	  {"ts","date","hour","query","title","duration_s","stopped_by","person"}
-//	],"count":<n>}
+// fetchAudioRecent returns HAL's latest global play (HAL does not tag plays by person).
 func fetchAudioRecent(_ string) *audioRecentDigest {
 	client := &http.Client{Timeout: audioHistoryTimeout}
 	url := hal.BaseURL + "/audio/history?last=1"
@@ -280,9 +249,7 @@ func fetchAudioRecent(_ string) *audioRecentDigest {
 	}
 }
 
-// readPatternsRaw returns patterns.json bytes if the file exists and its
-// mtime is within patternsFreshAge (matches the wellbeing skill's freshness
-// rule). Empty otherwise.
+// readPatternsRaw returns patterns.json if fresh (patternsFreshAge), else nil.
 func readPatternsRaw(user string) []byte {
 	path := filepath.Join(usersDir, user, patternsSubpath)
 	info, err := os.Stat(path)
@@ -299,8 +266,7 @@ func readPatternsRaw(user string) []byte {
 	return data
 }
 
-// matchMusicPatternForHour returns the music_patterns entry whose peak_hour
-// is within ±1 of the current hour, with strength >= moderate. Otherwise nil.
+// matchMusicPatternForHour returns a moderate+ music pattern with peak_hour within +/-1, or nil.
 func matchMusicPatternForHour(patternsRaw []byte, hour int) *musicPatternDigest {
 	if len(patternsRaw) == 0 {
 		return nil

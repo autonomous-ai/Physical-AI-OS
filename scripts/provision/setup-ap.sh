@@ -10,19 +10,13 @@ ensure_root() {
   fi
 }
 
-# Optional: AP band and channel. Pi 5 Bookworm: firmware config is /boot/firmware/config.txt;
-# ensure dtoverlay=disable-wifi is not set or WiFi will stay off.
 AP_BAND="${AP_BAND:-2.4}"       # 2.4 or 5 (5 GHz for better throughput)
 AP_CHANNEL="${AP_CHANNEL:-}"    # default: 6 (2.4 GHz) or 36 (5 GHz); override e.g. AP_CHANNEL=11 or 40
 
-# Device class — drives the AP SSID (<device_type>-<suffix>). REQUIRED, no
-# default: the network identity must reflect the device class, not a hardcoded
-# brand. Pass via env, e.g. DEVICE_TYPE=intern.
+# Required; drives the <device_type>-<suffix> SSID.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE must be set (e.g. DEVICE_TYPE=lamp) — no default}"
 
-# ----------------------------------------------------------
 # Prerequisites
-# ----------------------------------------------------------
 stage_prerequisites() {
   echo "[stage] Install AP packages"
   apt update
@@ -31,9 +25,7 @@ stage_prerequisites() {
   systemctl unmask hostapd dnsmasq 2>/dev/null || true
 }
 
-# ----------------------------------------------------------
 # Stage: Setup AP (hostapd + dnsmasq)
-# ----------------------------------------------------------
 stage_ap() {
   echo "[stage] Setup WiFi AP"
 
@@ -49,8 +41,7 @@ stage_ap() {
     mv /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf.bak 2>/dev/null || true
   fi
 
-  # Many Pi images keep wlan0 down until WiFi country is set. Create minimal config with country
-  # so the system enables wlan0; connect-wifi and hostapd use the same country.
+  # wlan0 stays down until the Wi-Fi country is set.
   COUNTRY_CODE="${COUNTRY_CODE:-US}"
   mkdir -p /etc/wpa_supplicant
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-wlan0.conf ]; then
@@ -63,7 +54,6 @@ EOF
     echo "[stage] Created /etc/wpa_supplicant/wpa_supplicant-wlan0.conf with country=$COUNTRY_CODE so wlan0 can appear"
   fi
 
-  # Ensure wpa_supplicant@wlan0 uses the intended config file.
   mkdir -p /etc/systemd/system/wpa_supplicant@wlan0.service.d
   cat >/etc/systemd/system/wpa_supplicant@wlan0.service.d/override.conf <<'WPADROP'
 [Service]
@@ -111,7 +101,6 @@ EOF
 DAEMON_CONF="/etc/hostapd/hostapd.conf"
 EOF
 
-  # dnsmasq: use .d drop-in so we don't break system config; bind range to wlan0 explicitly
   mkdir -p /etc/dnsmasq.d
   cat >/etc/dnsmasq.d/99-${DEVICE_TYPE}.conf <<EOF
 interface=wlan0
@@ -122,7 +111,6 @@ domain-needed
 bogus-priv
 no-resolv
 EOF
-  # Remove any conflicting global interface in main config (leave rest intact)
   if [ -f /etc/dnsmasq.conf ]; then
     sed -i 's|^interface=wlan0|#interface=wlan0  # use dnsmasq.d/99-${DEVICE_TYPE}.conf|' /etc/dnsmasq.conf 2>/dev/null || true
   fi
@@ -136,7 +124,6 @@ static ip_address=192.168.100.1/24
 nohook wpa_supplicant
 EOF
 
-  # AP mode scripts
   mkdir -p /usr/local/bin
 
   cat >/usr/local/bin/device-ap-mode <<'EOF'
@@ -313,7 +300,6 @@ EOF
 
   chmod +x /usr/local/bin/device-sta-mode
 
-  # connect-wifi: write wpa_supplicant config then switch to STA (used by backend /api/network/setup)
   cat >/usr/local/bin/connect-wifi <<'CONNECTWIFI'
 #!/bin/bash
 set -e
@@ -354,9 +340,7 @@ CONNECTWIFI
   chmod +x /usr/local/bin/connect-wifi
 }
 
-# ----------------------------------------------------------
 # Main
-# ----------------------------------------------------------
 ensure_root
 stage_prerequisites
 stage_ap

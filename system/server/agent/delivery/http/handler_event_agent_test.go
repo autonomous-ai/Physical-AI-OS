@@ -2,11 +2,7 @@ package http
 
 import "testing"
 
-// A substring test against raw shell text turned a documentation read into a
-// hardware event: `cat …/skills/emotion/SKILL.md` contains "/emotion", so the
-// monitor recorded hw_emotion + led_set for a turn in which the lamp did
-// nothing (#342 defect D, device-chat-13 seq 109). Anchoring on the HAL host
-// is what separates a call from a mention.
+// Reading a skill file that mentions /emotion must not count as a hardware event (#342).
 func TestReadingASkillFileIsNotAHardwareEvent(t *testing.T) {
 	for _, args := range []string{
 		`{"command":"/bin/bash -lc 'cat /root/skills/emotion/SKILL.md | head -100'"}`,
@@ -34,9 +30,7 @@ func TestARealHardwareCallIsResolvedToItsPath(t *testing.T) {
 	}
 }
 
-// The servo branch knew only /servo/aim and /servo/play, so the one turn that
-// actually swept (device-chat-9, a 42 s curl) showed an idle lamp in the
-// monitor. Every endpoint that moves the body has to be in the set.
+// Every body-moving servo endpoint counts as a servo event; reads do not.
 func TestEveryBodyMovingServoCallCountsAsAServoEvent(t *testing.T) {
 	for _, path := range []string{
 		"/servo/aim", "/servo/play", "/servo/search", "/servo/nudge", "/servo/demo",
@@ -54,8 +48,7 @@ func TestEveryBodyMovingServoCallCountsAsAServoEvent(t *testing.T) {
 	}
 }
 
-// The first HAL call in the text is the one that fires. A command that reads a
-// skill and THEN calls the endpoint must resolve to the call, not to nothing.
+// The first HAL call wins over an earlier mention in the same command.
 func TestTheCallWinsOverAMentionInTheSameCommand(t *testing.T) {
 	args := `{"command":"cat /root/skills/emotion/SKILL.md; curl -sX POST http://127.0.0.1:5001/emotion -d '{}'"}`
 	if got := hwPathFromToolArgs(args); got != "/emotion" {

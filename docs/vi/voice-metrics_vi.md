@@ -534,16 +534,140 @@ mảng `{key, value}` với `value` lưu dạng chuỗi — đúng hình dạng 
 gửi lên và web/mobile đang gửi. Nếu kho của bạn trải params thành cột thì sửa
 lại hàm trích xuất.
 
-Xem các truy vấn SQL đầy đủ (KPI-1, KPI-2, KPI-3, coverage) trong bản tiếng Anh:
-[`docs/voice-metrics.md`](../voice-metrics.md#warehouse-queries).
-
-Agent **chỉ có AA event tracking** vẫn query và report được, không cần SSH
-hay Flow Monitor. Query ba event dưới đây, giữ `event_timestamp`,
-`data.user_pseudo_id` và toàn bộ `data.event_params` dạng mảng key/value khi xuất
-JSONL. Đổi tên bảng/cách trích params theo schema warehouse thực tế.
+```sql
+-- Helper: pull one param out of the key/value array.
+-- BigQuery-style; replace with your warehouse's array accessor.
+CREATE TEMP FUNCTION param(params ANY TYPE, k STRING) AS (
+  (SELECT p.value FROM UNNEST(params) p WHERE p.key = k LIMIT 1)
+);
+```
 
 ```sql
--- BigQuery-style; thay khoảng thời gian và device cho báo cáo thực tế.
+-- KPI-1: acknowledged within 3s, with the eligible sample count.
+WITH rows AS (
+  SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
+    param(data.event_params, 'interaction_id')     AS interaction_id,
+    param(data.event_params, 'eligible')           AS eligible,
+    param(data.event_params, 'outcome')            AS outcome,
+    param(data.event_params, 'exclusion_reason')   AS exclusion_reason,
+    param(data.event_params, 'speech_endpoint_known') AS endpoint_known,
+    SAFE_CAST(param(data.event_params, 'task_revision') AS INT64) AS revision,
+    param(data.event_params, 'amends_event_id')    AS amends,
+    SAFE_CAST(param(data.event_params, 'ack_latency_ms') AS INT64) AS ack_ms,
+    event_timestamp
+  FROM event_tracking
+  WHERE event_name = 'voice_metrics_interaction'
+    AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+),
+-- One row per interaction: the latest verdict wins, so a correction
+-- (amends_event_id set) supersedes the row it amends.
+i AS (
+  SELECT * EXCEPT(rn) FROM (
+    SELECT *, ROW_NUMBER() OVER (
+      PARTITION BY device_id, interaction_id, ack_schema_version
+      ORDER BY COALESCE(revision, 0) DESC, IF(amends != '', 1, 0) DESC, event_timestamp DESC
+    ) AS rn
+    FROM rows
+  ) WHERE rn = 1
+)
+SELECT
+  ack_schema_version,
+  COUNT(*) AS observed_interactions,
+  COUNTIF(endpoint_known = 'true') AS endpoint_known_interactions,
+  COUNTIF(endpoint_known = 'false') AS endpoint_unknown_interactions,
+  COUNTIF(exclusion_reason = 'speech_endpoint_unavailable') AS endpoint_excluded_interactions,
+  COUNTIF(eligible = 'true') AS eligible_samples,
+  COUNTIF(eligible = 'true' AND outcome = 'no_ack') AS no_ack,
+  COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) AS acknowledged_within_3s,
+  CASE WHEN COUNTIF(eligible = 'true') = 0 THEN NULL      -- no eligible samples => N/A
+       ELSE ROUND(100 * COUNTIF(eligible = 'true' AND outcome = 'acknowledged' AND ack_ms <= 3000) / COUNTIF(eligible = 'true'), 2)
+  END AS kpi1_pct
+FROM i
+GROUP BY ack_schema_version;
+```
+
+```sql
+-- Actual answer latency, separate from processing acknowledgement.
+-- NO_REPLY tasks can legitimately have no spoken answer.
+WITH latest AS (
+  SELECT
+    user_pseudo_id AS device_id,
+    COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1) AS ack_schema_version,
+    param(data.event_params, 'eligible') AS eligible,
+    SAFE_CAST(param(data.event_params, 'answer_latency_ms') AS INT64) AS answer_ms,
+    ROW_NUMBER() OVER (
+      PARTITION BY user_pseudo_id, param(data.event_params, 'interaction_id'),
+        COALESCE(SAFE_CAST(param(data.event_params, 'ack_schema_version') AS INT64), 1)
+      ORDER BY COALESCE(SAFE_CAST(param(data.event_params, 'task_revision') AS INT64), 0) DESC,
+        IF(param(data.event_params, 'amends_event_id') != '', 1, 0) DESC, event_timestamp DESC
+    ) AS rn
+  FROM event_tracking
+  WHERE event_name = 'voice_metrics_interaction'
+    AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+)
+SELECT
+  ack_schema_version,
+  COUNT(*) AS eligible,
+  COUNTIF(answer_ms IS NULL) AS no_observed_answer,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(50)] AS median_answer_ms,
+  APPROX_QUANTILES(answer_ms, 100)[OFFSET(90)] AS p90_answer_ms
+FROM latest
+WHERE rn = 1 AND eligible = 'true'
+GROUP BY ack_schema_version;
+```
+
+```sql
+-- KPI-2: stale playback per suppression policy.
+WITH s AS (
+  SELECT
+    param(data.event_params, 'suppression_reason')  AS reason,
+    param(data.event_params, 'stale_observed')      AS stale,
+    param(data.event_params, 'observation_complete') AS complete,
+    SAFE_CAST(param(data.event_params, 'applicable_interactions') AS INT64) AS applicable
+  FROM event_tracking
+  WHERE event_name = 'voice_metrics_suppression'
+    AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+)
+SELECT
+  reason,
+  -- Confirmed stale playback counts even before observation is complete.
+  -- Only incomplete observations without stale playback are coverage loss.
+  COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')) AS eligible_samples,
+  COUNTIF(applicable > 0 AND stale = 'true') AS stale_played,
+  COUNTIF(applicable > 0 AND complete = 'false' AND stale = 'false') AS incomplete_observations,
+  CASE WHEN COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')) = 0 THEN NULL
+       ELSE ROUND(100 * COUNTIF(applicable > 0 AND stale = 'true')
+                      / COUNTIF(applicable > 0 AND (complete = 'true' OR stale = 'true')), 2)
+  END AS kpi2_pct
+FROM s
+GROUP BY reason;
+```
+
+```sql
+-- Telemetry coverage: a climbing loss counter means the rates above are
+-- computed on partial data.
+SELECT
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_dropped_total') AS INT64)) AS os_dropped,
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_failed_total')  AS INT64)) AS os_failed,
+  MAX(SAFE_CAST(param(data.event_params, 'hal_dropped_total')      AS INT64)) AS hal_dropped,
+  MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total')       AS INT64)) AS hal_failed,
+  MAX(SAFE_CAST(param(data.event_params, 'unknown_owner_playbacks') AS INT64)) AS unowned_playbacks
+FROM event_tracking
+WHERE event_name LIKE 'voice_metrics_%';
+```
+
+### Trích xuất và chấm KPI-3 từ kho dữ liệu
+
+Agent **chỉ có AA event tracking** vẫn làm được báo cáo này, không cần SSH vào
+thiết bị hay Flow Monitor. Xuất ba event dưới đây ra JSONL, giữ
+`event_timestamp`, `data.user_pseudo_id` (identity của thiết bị) và toàn bộ mảng
+key/value `data.event_params`. Đổi tên bảng và cách truy cập mảng theo schema
+warehouse thực tế; schema ở đây chỉ là giả định.
+
+```sql
+-- BigQuery-style AA-only export. Set the actual interval and optional device.
 SELECT event_name, event_timestamp, data
 FROM event_tracking
 WHERE event_name IN (
@@ -553,24 +677,28 @@ WHERE event_name IN (
 )
   AND event_timestamp >= UNIX_SECONDS(TIMESTAMP('2026-09-11 00:00:00+07'))
   AND event_timestamp <= UNIX_SECONDS(TIMESTAMP('2026-09-11 12:00:00+07'))
--- AND data.user_pseudo_id = '<device identity lưu trong AA>'
+-- AND data.user_pseudo_id = '<device identity stored in AA>'
 ORDER BY event_timestamp;
 ```
 
-Lấy đủ start, snapshot cập nhật và execution tới as-of. Không chỉ lấy event
-completed vì sẽ loại lượt chưa xong khỏi mẫu số. Nếu cohort cần chứa lượt bắt
-đầu trước mốc dưới của export, lấy cả start của lượt đó. Reporter không có
-CLI start-window; file đầu vào quyết định khoảng dữ liệu được chấm.
+Khoảng thời gian trong ví dụ chỉ để minh hoạ. Lấy đủ mọi bản cập nhật
+start/snapshot và bằng chứng execution tới thời điểm as-of mong muốn. Không chỉ
+xuất event execution đã completed vì sẽ loại lượt chưa xong khỏi mẫu số. Nếu
+lượt thuộc cohort báo cáo đã chọn thì lấy cả start trước mốc dưới của export.
+Reporter không có CLI start-window; phạm vi dữ liệu đầu vào quyết định khoảng
+được chấm.
+
+Dùng reporter trong repo làm bộ chấm chuẩn, tránh viết SQL chấm riêng dễ đếm
+trùng alias HAL/OS hoặc bỏ sót lượt chỉ có OS:
 
 ```bash
 python3 scripts/report_voice_task_metrics.py aa-export.jsonl --settle-seconds 0 > voice-task-report.json
 ```
 
 Với cutoff lịch sử, thêm `--now-ms <Unix milliseconds của cutoff>`. Reporter
-là bộ chấm chuẩn: gộp HAL/OS bằng device + interaction/run trước khi đếm, lấy
-start sớm nhất và revision HAL lớn nhất, ghép execution, giữ lỗi terminal,
-chặn memory-sync realtime. Không duy trì SQL chấm riêng dễ đếm trùng hoặc bỏ
-lượt chỉ có OS start. Field trong params cần giữ:
+gộp start theo device + interaction/run, lấy start sớm nhất và revision HAL
+lớn nhất, ghép bằng chứng execution, rồi áp dụng quy tắc lỗi terminal "dính"
+và quy tắc realtime ở trên. Các field cần có trong event params:
 
 | Event | Field dùng chấm tác vụ |
 |-------|------------------------|
@@ -578,16 +706,36 @@ lượt chỉ có OS start. Field trong params cần giữ:
 | `voice_metrics_task_started` | `schema_version`, `interaction_id`, `run_id`, `event_type`, `task_started_at_ms` |
 | `voice_metrics_task_execution` | `schema_version`, `interaction_id`, `run_id`, `outcome`, `evidence`, `execution_at_ms` |
 
-Báo **`completed_turns / eligible_mature_turns * 100`**, cả hai số đếm,
-`meets_target`, failed/unknown/incomplete và coverage bị loại. Mặc định 0 giây
-nghĩa là mọi lượt eligible đã bắt đầu tới as-of đều ở mẫu số; mẫu số rỗng là
-N/A. `completed` nghĩa là hoàn tất kỹ thuật không có lỗi kết thúc được ghi
-nhận, không chứng minh đúng yêu cầu user. Agent không có script phải áp dụng
-đúng quy tắc gộp identity/evidence ở trên; đếm riêng số dòng execution là sai.
-Tổng KPI dùng tổng completed chia tổng eligible, không lấy trung bình phần
-trăm. Identity trống phải báo riêng, không gộp thành device giả. Counter mất
-telemetry cộng dồn theo process, có thể reset khi restart: xem maxima và mốc
-reset, không cộng từng event.
+Báo **`completed_turns / eligible_mature_turns * 100`**, kèm cả hai số đếm,
+`meets_target`, số failed/unknown/incomplete và các trường hợp bị loại vì
+coverage. Với horizon mặc định 0 giây, mọi lượt eligible đã bắt đầu tới as-of
+đều nằm trong mẫu số. Mẫu số rỗng là N/A. `completed` nghĩa là hoàn tất về mặt
+kỹ thuật, không có lỗi kết thúc được ghi nhận; không có nghĩa là yêu cầu của
+user được làm đúng. Nếu không có script trong repo, phải áp dụng đúng quy tắc
+gộp identity và evidence đã mô tả ở trên; chỉ đếm số dòng
+`voice_metrics_task_execution` là sai.
+
+Đếm riêng các identity device/interaction trống trước khi chấm và sửa lại
+export; không gộp chúng thành một device bịa ra. Với KPI tổng, cộng số
+completed và eligible của mọi device rồi chia hai tổng đó; không lấy trung bình
+phần trăm. Với báo cáo local, file đầu vào quyết định khoảng thời gian (không
+có CLI start-window); giữ mọi bản cập nhật liên quan và phần đuôi execution.
+Row legacy không có timestamp start cần khoảng thời gian lúc export thì số đếm
+coverage mới có nghĩa. Counter mất telemetry cộng dồn theo process, có thể
+reset khi restart, và không được cộng theo từng event. Xem giá trị lớn nhất và
+các mốc reset:
+
+```sql
+SELECT data.user_pseudo_id AS device,
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_dropped_total') AS INT64)) AS os_dropped_max,
+  MAX(SAFE_CAST(param(data.event_params, 'telemetry_failed_total') AS INT64)) AS os_failed_max,
+  MAX(SAFE_CAST(param(data.event_params, 'hal_dropped_total') AS INT64)) AS hal_dropped_max,
+  MAX(SAFE_CAST(param(data.event_params, 'hal_failed_total') AS INT64)) AS hal_failed_max
+FROM event_tracking
+WHERE event_name IN ('voice_metrics_interaction', 'voice_metrics_task_started', 'voice_metrics_task_execution')
+  AND event_timestamp >= UNIX_SECONDS(TIMESTAMP_SUB(CURRENT_TIMESTAMP(), INTERVAL 7 DAY))
+GROUP BY device;
+```
 
 ## Log local trên thiết bị
 
@@ -595,9 +743,9 @@ Mọi event được ghi log **trước khi** gửi, và lỗi gửi cũng đư�
 kho mới là bản có thể thiếu.
 
 ```bash
-journalctl -u hal -f | grep '\[telemetry\]'        # HAL: mọi event + lỗi POST
-journalctl -u hal -f | grep '\[voice-metrics\]'       # quyết định ack / biên / stale
-journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: đã gửi, đã drop, đã lỗi
+journalctl -u hal -f | grep '\[telemetry\]'        # HAL: every event + POST failures
+journalctl -u hal -f | grep '\[voice-metrics\]'       # ack / boundary / stale decisions
+journalctl -u os-server -f | grep '\[telemetry\]'  # os-server: forwarded, dropped, failed
 ```
 
 Ghép các dòng bằng `interaction_id`, không dựa vào vị trí gần nhau.
@@ -671,7 +819,7 @@ là hostname thiết bị, `platform` là `device` (xem `system/lib/analytics`).
 ## Lệnh kiểm chứng
 
 ```bash
-go build ./...                                   # os-server + package tracking
+go build ./...                                   # os-server + tracking package
 go test ./system/telemetry/ ./system/server/telemetry/...
 make hal-lint
 cd hal && .venv/bin/python -m pytest test/test_voice_metrics.py -q
@@ -703,10 +851,16 @@ Kiểm tra local gồm test Go tập trung cho domain, intent, telemetry và han
 `test_gemini_generation_complete.py:52` có lỗi baseline nhận `InterruptedOutput`
 nhưng chờ `TextOutput`, đã tái hiện cả trên HEAD.
 
-Xem [các lệnh kiểm chứng đầy đủ trong bản Anh](../voice-metrics.md#device-validation--2026-09-11):
-focused Go test, 75 HAL pytest, 20 reporter unittest, HAL lint qua venv có
-pyflakes và build Linux ARM64 gắn version `0.1.88-voice-task`. Binary ARM64 cuối
-đã được cài lên device; os-server restart và active.
+Các lệnh dùng cho lần kiểm chứng này (venv tạm có pytest và pyflakes; binary
+ARM64 cuối đã được cài lên device, os-server restart và active):
+
+```bash
+go test ./system/domain ./system/intent ./system/telemetry ./system/server/telemetry/... ./system/server/agent/delivery/http ./system/server/sensing/delivery/http
+/tmp/voice-task-test-venv/bin/python -m pytest hal/test/test_realtime_execution_completed.py hal/test/test_voice_task_metrics.py hal/test/test_voice_metrics.py hal/test/test_voice_metrics_queries.py hal/test/test_voice_metrics_ownership.py -q
+python3 -m unittest discover -s scripts/tests -p 'test_report_voice_task_metrics.py'
+/tmp/voice-task-test-venv/bin/python hal/scripts/lint.py
+GOOS=linux GOARCH=arm64 go build -ldflags '-s -w -X go.autonomous.ai/os/system/server/config.OSVersion=0.1.88-voice-task' -o /tmp/os-server-voice-task ./system/cmd/os-server
+```
 
 ### Sửa cohort OS — kiểm tra trên device (2026-09-11)
 
@@ -728,7 +882,7 @@ Mặc định loại lượt smoke. Binary dự phòng trên device:
 test kiểm tra binding khi queue và lỗi not-ready. Build os-server Linux ARM64
 pass. Không tạo giả AA event cho dữ liệu lịch sử bị thiếu.
 
-Truy vấn KPI-1 trong bản EN trả cùng lúc `observed_interactions`,
+Truy vấn KPI-1 ở phần Truy vấn kho dữ liệu trả cùng lúc `observed_interactions`,
 `endpoint_known_interactions`, `endpoint_unknown_interactions`, `endpoint_excluded_interactions`, `eligible_samples`,
 `no_ack` và `kpi1_pct`, tách theo `ack_schema_version` (thiếu field = 1).
 Dedup theo device, interaction và schema; ưu tiên `task_revision` rồi amendment/thời gian;

@@ -5,12 +5,7 @@ import (
 	"log"
 )
 
-// HALActivitySink renders Claude Code activity on the device hardware via the
-// existing Bridge (HAL :5001). It implements httpapi.ActivitySink.
-//
-// First cut (test): log every event, and when `sound` is set, speak it over TTS.
-// LED / display / per-level i18n mapping comes later — for now we just want to
-// confirm the plugin → daemon → HAL voice path works end to end.
+// HALActivitySink implements httpapi.ActivitySink: logs each event and speaks `sound` via TTS.
 type HALActivitySink struct {
 	bridge *Bridge
 }

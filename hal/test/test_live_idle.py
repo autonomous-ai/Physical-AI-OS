@@ -85,13 +85,10 @@ def test_hardware_speech_near_idle_deadline_gets_bounded_transcript_grace(monkey
     service = object.__new__(VoiceService)
     service._live_gate = object()
     service._live_idle_speech_deadline = 0.0
-    # Same ordering as the device: confirmed speech, then the idle deadline,
-    # then a delayed provider transcript. No session end may split that speech.
+    # Device ordering: confirmed speech, idle deadline, then a delayed transcript.
     assert service._live_idle_pending_speech(115.1, 15.1, 114.9)
     assert service._live_idle_pending_speech(116, 16, 115.5)
-    # A constant noise candidate must not extend the original grace forever.
     assert not service._live_idle_pending_speech(130.2, 30.2, 130.1)
-    # A provider transcript/output renews the real idle window.
     assert not service._live_idle_pending_speech(131, 1, 130.1)
     assert service._live_idle_speech_deadline == 0
     assert service._live_idle_pending_speech(146, 16, 145.9)
@@ -105,7 +102,6 @@ def test_idle_grace_requires_recent_hardware_speech(monkeypatch):
     service._live_gate = object()
     service._live_idle_speech_deadline = 0.0
     assert not service._live_idle_pending_speech(116, 16, 100)
-    # Speech just ended: allow the configured server silence plus delivery.
     assert service._live_idle_pending_speech(116, 16, 114.5)
     service._live_gate = None
     assert not service._live_idle_pending_speech(117, 17, 116.9)
@@ -160,7 +156,6 @@ def test_live_capture_keeps_uploading_speech_until_delayed_transcript(monkeypatc
 
     def append_audio(frame):
         uploaded.append((clock.now, frame))
-        # Gemini delivers the utterance only after local speech has ended.
         if clock.now == 117.5:
             service._live_last_transcript_at = clock.now
 
@@ -181,8 +176,6 @@ def test_live_capture_keeps_uploading_speech_until_delayed_transcript(monkeypatc
 
     assert [timestamp for timestamp, _ in uploaded] == times
     assert service._live_last_transcript_at == 117.5
-    # Every captured frame, including the end of speech across the original
-    # idle deadline, reaches the provider unchanged and in order.
     for index, (_, frame) in enumerate(uploaded, start=1):
         assert np.all(np.frombuffer(frame, dtype=np.int16) == index)
     service._realtime.end_live_audio.assert_called_once()

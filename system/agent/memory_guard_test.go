@@ -57,9 +57,7 @@ func TestOnChangeSkipsTheGuardsOwnWrite(t *testing.T) {
 	content := "- **Name:**\n" + poison
 	g, path := seedGuard(t, content)
 
-	// Pretend the on-disk content is what the guard itself just wrote: the
-	// hash short-circuit must run BEFORE GuardMemoryFile, so the poison stays
-	// and nothing is backed up even though the file would otherwise be swept.
+	// The own-write hash short-circuit must run before GuardMemoryFile.
 	g.lastWritten[path] = migratepersona.Sha8([]byte(content))
 	g.onChange(path, "watch")
 	if got, _ := os.ReadFile(path); !strings.Contains(string(got), "Obsidian") {
@@ -69,7 +67,6 @@ func TestOnChangeSkipsTheGuardsOwnWrite(t *testing.T) {
 		t.Fatalf("own write must not be guarded, got %d backups", n)
 	}
 
-	// Forget the hash: now the same content is an agent write and is swept.
 	delete(g.lastWritten, path)
 	g.onChange(path, "watch")
 	if got, _ := os.ReadFile(path); strings.Contains(string(got), "Obsidian") {
@@ -79,7 +76,6 @@ func TestOnChangeSkipsTheGuardsOwnWrite(t *testing.T) {
 		t.Fatalf("want one backup after the agent write, got %d", n)
 	}
 
-	// The rename of our own rewrite lands as a watch event: no second pass.
 	g.onChange(path, "watch")
 	if n := countBackups(t, path); n != 1 {
 		t.Fatalf("own rewrite must not trigger a second pass, got %d backups", n)
@@ -92,15 +88,11 @@ func countBackups(t *testing.T, path string) int {
 	return len(m)
 }
 
-// TestReportRecordsTheHashItWroteNotWhatIsOnDisk covers F6: between the
-// guard's rename and report(), an agent can already have replaced the file.
-// Reading it back would record the AGENT's hash as our own write, and the
-// next watch event for that content would be skipped until the 10-min rescan.
+// TestReportRecordsTheHashItWroteNotWhatIsOnDisk: an agent write racing report() must still be swept.
 func TestReportRecordsTheHashItWroteNotWhatIsOnDisk(t *testing.T) {
 	g, path := seedGuard(t, "- **Name:**\n")
 	ours := "- **Name:**\n"
 	agent := "- **Name:**\n" + poison
-	// Simulate the race: the file on disk is already the agent's write.
 	if err := os.WriteFile(path, []byte(agent), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -109,7 +101,6 @@ func TestReportRecordsTheHashItWroteNotWhatIsOnDisk(t *testing.T) {
 	if got := g.lastWritten[path]; got != migratepersona.Sha8([]byte(ours)) {
 		t.Fatalf("lastWritten must be the hash of what the guard wrote, got %q (disk=%q)", got, migratepersona.Sha8([]byte(agent)))
 	}
-	// And so the agent's write is NOT mistaken for our own: onChange sweeps it.
 	g.onChange(path, "watch")
 	if got, _ := os.ReadFile(path); strings.Contains(string(got), "Obsidian") {
 		t.Fatalf("agent write in the race window must still be swept:\n%s", got)

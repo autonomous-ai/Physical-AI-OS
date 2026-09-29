@@ -294,6 +294,8 @@ All user-facing hardware interaction follows a single pattern:
 | `/api/audio/volume` | POST | Set speaker volume | audio |
 | `/api/audio/ambient` | POST | Play/stop ambient sounds | audio |
 
+> **Shipped implementation (differs from the design table above).** Hardware routes are served by the Python HAL (FastAPI) on `127.0.0.1:5001`, not by the Go server: e.g. `GET /led`, `GET /led/color`, `POST /led/solid`, `POST /led/paint`, `POST /led/effect`, `POST /led/off` (`hal/routes/led.py`), plus `/servo/*`, `/camera/*`, `/audio/*`, `/face/*`. Skills do not `curl` them directly for actuation: the agent emits inline `[HW:/path:{...}]` markers (e.g. `[HW:/led/solid:{"color":[255,165,0]}]`, see `skills/led-control/SKILL.md`), which os-server (`127.0.0.1:5000`) parses and forwards to HAL.
+
 ### LeLamp Runtime (Python) — Hardware Drivers Only
 
 The LeLamp open-source project provides proven Python drivers for servo motors, WS2812 LEDs, and audio I/O. In our architecture:
@@ -326,7 +328,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 | Config management | `server/config/` | Inherited |
 | LED driver (WS2812 SPI, pure Go) | `internal/led/` | Inherited, adapted |
 | LED state machine | `internal/led/engine.go` | Inherited |
-| LED skill (SKILL.md) | `resources/openclaw-skills/led-control/` | Inherited, adapted |
+| LED skill (SKILL.md) | `skills/led-control/` | Inherited, adapted |
 | Reset button | `internal/resetbutton/` | Inherited |
 | Network service | `system/network/` | Inherited |
 | OpenClaw service | `runtimes/openclaw/` | Inherited |
@@ -699,8 +701,8 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 - User looks focused and calm → Lamp holds current environment, suppresses all interruptions
 
 **Implementation**:
-- Emotion classifier runs via **perception-service WebSocket** (remote inference server), not on-device ONNX. HAL sends camera frames, receives emotion predictions.
-- `hal/drivers/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` connects to perception-service, fires `emotion.detected` sensing event with detected emotion (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
+- Emotion classifier runs on the **perception-service** (remote inference server), not on-device ONNX. HAL POSTs each detected face crop to its `/emotion-recognize` HTTP endpoint and receives emotion predictions.
+- `hal/drivers/sensing/perceptions/processors/emotion.py` — `RemoteEmotionRecognizer` calls perception-service; the emotion processor fires `emotion.detected` sensing event with detected emotion (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` maps detected facial emotion → mood signal via `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fuses signals (camera emotion, conversation context, voice tone) into mood decisions.
 - Mood decisions trigger downstream actions: `music-suggestion` (proactive music), `wellbeing` (break/hydration nudges), `emotion` (lamp expression).
@@ -729,7 +731,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 - Each activity is logged to per-user JSONL timeline via `POST /api/agent/wellbeing/log`.
 - On each event, skill reads recent history, computes time since last hydration/break reset, and nudges if thresholds exceeded.
 - Per-user tracking: `current_user` from sensing context tag, strangers share `"unknown"` timeline.
-- `lamp/resources/openclaw-skills/wellbeing/SKILL.md` — full workflow with threshold logic, dedup rules, and cooldowns.
+- `skills/wellbeing/SKILL.md` — full workflow with threshold logic, dedup rules, and cooldowns.
 
 **Resolved questions**:
 - [x] Reminder intervals → AI-driven thresholds computed from activity log (not fixed timers).
@@ -742,28 +744,25 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 **Status: Implemented** (2026-04)
 
 **Actor**: System (automatic, mood + sensing-driven)
-**Description**: Lamp proactively suggests music based on detected mood, sedentary activity, and listening history — without the user requesting it.
+**Description**: Lamp proactively suggests music based on detected mood and listening history — without the user requesting it.
 
 **Examples**:
 - User detected as stressed (facial emotion + conversation) → Lamp suggests calm piano
-- User doing sedentary work for a while → Lamp offers lo-fi/study beats
 - User detected as happy/excited → Lamp suggests upbeat music
 
 **Implementation**:
-- `lamp/resources/openclaw-skills/music-suggestion/SKILL.md` — dedicated proactive skill (separate from reactive `music/SKILL.md`).
-- **Two triggers**:
-  1. **Mood-driven**: After `mood/SKILL.md` logs a mood decision (sad, stressed, tired, excited, happy, bored) → music-suggestion fires.
-  2. **Sedentary-driven**: `motion.activity` with sedentary labels (using computer, writing, etc.) → direct suggestion trigger.
-- Checks before suggesting: audio already playing? recent suggestion cooldown (7 min)? stale mood decision (>30 min)?
-- Queries `GET /audio/history?person={name}` for personalized genre preference.
-- Genre mapping: stressed → soft jazz/classical, tired → calm piano, happy → upbeat pop, sedentary → lo-fi/ambient.
+- `skills/music-suggestion/SKILL.md` — dedicated proactive skill (separate from reactive `music/SKILL.md`).
+- **One trigger — mood**: `user-emotion-detection/SKILL.md` routes `emotion.detected` / `speech_emotion.detected` turns; when the synthesized mood is suggestion-worthy (sad, stressed, tired, excited, happy, bored) and the router picks `music`, music-suggestion speaks. `motion.activity` (sedentary, drink/break) routes to wellbeing only and never triggers a suggestion.
+- Checks before suggesting (pre-injected in `[emotion_context: ...]`, no read tool calls): audio already playing? recent suggestion cooldown (7 min, shared with check-in)? stale mood decision?
+- Uses the injected `audio_recent` / `music_pattern_for_hour` (fallback `GET /audio/history?person={name}`) for personalized genre preference.
+- Genre mapping: stressed → soft jazz/classical, tired → calm piano, happy → upbeat pop, bored → fun pop.
 - Always suggests first via TTS, plays only after user confirmation.
 - `[HW:/speak]` marker forces TTS on lamp speaker even for channel-origin sessions.
 
 **Resolved questions**:
 - [x] Music preferences → Queries `hw_audio` flow log + `/audio/history` for listening history.
 - [x] Ask first vs auto-play → Always suggest first, play only after confirmation.
-- [x] Sensing-triggered → Done: mood decisions + sedentary activity both trigger suggestions.
+- [x] Sensing-triggered → Done: mood decisions (camera / voice emotion) trigger suggestions; sedentary activity routes to wellbeing instead.
 - [ ] Phone call / video meeting detection → Not yet (requires UC-12 or screen awareness).
 
 #### UC-M4: Screen-Time Awareness & Gesture Support [NOT STARTED]
@@ -792,7 +791,7 @@ The Lamp server is forked from openclaw-lobster. Approximately 70-80% of Layer 1
 
 **Implementation**:
 - `hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
-- `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
+- `skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles stored per-user alongside face data in `/root/local/users/{name}/`.
 - Telegram identity linked during voice enrollment for DM targeting.
 

@@ -20,10 +20,7 @@ const (
 )
 
 // ConnectorCreds is the in-process, post-validation representation of a
-// connector.set.<code> payload. Separated from MQTTConnectorSetData so writers
-// don't need to know about JSON wire format and so the dispatcher can
-// normalize ExpiresIn → an absolute deadline before handing off (writers
-// shouldn't have to call time.Now()).
+// connector.set.<code> payload.
 type ConnectorCreds struct {
 	Connector    string
 	AuthType     string
@@ -40,9 +37,7 @@ type ConnectorCreds struct {
 	ObtainedAt   int64 // unix seconds when this device received the credentials
 }
 
-// ConnectorRefreshTarget is one entry the refresh loop can act on. Returned by
-// ConnectorWriter.RefreshableEntries so the loop doesn't need to know each
-// writer's on-disk schema.
+// ConnectorRefreshTarget is one entry the refresh loop can act on.
 type ConnectorRefreshTarget struct {
 	Connector    string
 	RefreshToken string
@@ -50,11 +45,8 @@ type ConnectorRefreshTarget struct {
 }
 
 // ConnectorWriter owns persistence (and any side-effects like writing an MCP
-// entry into openclaw.json) for connector credentials. The primary
-// implementation is the data-driven connectorWriter (connector_writer_generic.go),
-// which handles every connector except those claimed by a special writer (e.g.
-// the figma-api stdio mcpConnectorWriter). Implementations must be safe for
-// concurrent calls — typically guarded by a per-writer mutex around the file IO.
+// entry into openclaw.json) for connector credentials. Implementations must be
+// safe for concurrent calls.
 type ConnectorWriter interface {
 	// Write persists the credentials. Replaces any existing entry for the
 	// same connector. Idempotent on identical input.
@@ -65,22 +57,11 @@ type ConnectorWriter interface {
 	Remove(ctx context.Context, connector string) (removed bool, err error)
 
 	// RefreshableEntries returns the subset of stored entries that have a
-	// refresh_token AND refresh:true. The refresh loop reads ExpiresAt to
-	// decide whether to proactively rotate. Connectors that never expire (e.g.
-	// static api_key) return an empty slice here.
+	// refresh_token AND refresh:true.
 	RefreshableEntries() []ConnectorRefreshTarget
 }
 
-// ──────────────────────────────────────────────────────────────────────────
-// Shared file helpers — package-internal so every writer (the data-driven
-// connectorWriter and the figma-api mcpConnectorWriter, both targeting
-// <connector>_access_tokens.json) reuses the same schema + atomic-write
-// discipline.
-// ──────────────────────────────────────────────────────────────────────────
-
-// loadConnectorsFile reads a ConnectorsFile from disk. Missing or empty file
-// returns a freshly-versioned empty struct so callers can always
-// `file.Connectors[code] = …` without nil-checks.
+// loadConnectorsFile reads a ConnectorsFile from disk.
 func loadConnectorsFile(path string) (domain.ConnectorsFile, error) {
 	out := domain.ConnectorsFile{Version: connectorsSchemaVer, Connectors: map[string]domain.ConnectorEntry{}}
 	data, err := os.ReadFile(path)

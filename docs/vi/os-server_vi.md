@@ -37,7 +37,7 @@ hủy gesture đang chờ bật.
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
 | GET | `/api/health/live` | Liveness probe |
-| GET | `/api/health/readiness` | Readiness probe (agent gateway connected?) |
+| GET | `/api/health/readiness` | Readiness probe — hiện luôn trả `200 "OK"` (không kiểm tra agent gateway) |
 
 ### System
 
@@ -49,6 +49,10 @@ hủy gesture đang chờ bật.
 | GET | `/api/system/ota-security` | Trạng thái tin cậy OTA lấy từ bootstrap worker: `legacy` hay `verified`, fingerprint key đã pin, lần fetch metadata gần nhất (xem `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
 | POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
+| POST | `/api/system/software-update/:target` | Cần admin auth: cài ngay bản đã publish của một component qua bootstrap `POST 127.0.0.1:8080/force-update/<target>` (`agent` được phân giải sang key của runtime đang cấu hình). Giới hạn tần suất theo từng target |
+| POST | `/api/system/factory-reset` | Admin hoặc loopback: soft factory reset (xoá config/key/enrollment/thông tin WiFi, reset agent backend đang chạy) rồi reboot vào AP setup. Trả `202`; `409` nếu đang chạy, `429` trong thời gian cooldown |
+| POST | `/api/system/exec` | Chỉ loopback: chạy `{cmd}` bằng `sh -c` (timeout 30 giây), trả `{stdout, stderr, exit_code}` |
+| GET | `/api/system/shell` | WebSocket cần admin auth: PTY `/bin/bash` cho terminal xterm.js trên web |
 | POST | `/api/system/restart/:target` | Cần admin auth, chỉ restart service `hal` hoặc `os-server`. Trả `202` với `{target, scheduled: true}` khi systemd nhận lịch restart; target không hỗ trợ trả `400`, lỗi đặt lịch trả `500`. |
 
 Restart service dùng `systemd-run --collect --on-active=2s systemctl restart <target>`
@@ -144,6 +148,12 @@ SEN63C trước khi bật SEN55 + SCD41 thay thế. Xem [cảm biến môi trư�
 |--------|----------|-------|
 | POST | `/api/device/setup` | Cấu hình WiFi + LLM + channel + MQTT (async, trả về ngay) |
 | POST | `/api/device/channel` | Thay đổi messaging channel |
+| GET / PUT | `/api/device/config` | Cần admin auth. GET trả config thiết bị, secret chỉ còn dạng boolean `Has*`; PUT cập nhật từng field (lưu xuống disk) |
+| GET / POST | `/api/device/agent-runtime` | Cần admin auth. GET: `{current, options, ready, …}`; POST đổi agentic backend (`409` khi một lần đổi khác đang chạy; xem Device Ops Alerts bên dưới) |
+| GET / POST | `/api/device/mcp-tools` | Cần admin auth: liệt kê / thêm endpoint MCP tool từ xa |
+| DELETE | `/api/device/mcp-tools/:name` | Cần admin auth: xoá một MCP tool từ xa |
+| POST | `/api/device/connectors/pat` | Cần admin auth: lưu connector dạng credential tĩnh (PAT) qua cùng writer với MQTT `connector.set.<code>` |
+| GET / DELETE | `/api/device/connectors/:code` | Cần admin auth: trạng thái kết nối + field định danh không bí mật / xoá connector |
 
 ### Device Timezone (Múi giờ)
 
@@ -282,10 +292,74 @@ Nhãn `Unknown Speaker:` là metadata định danh, không phải điều kiện
 |--------|----------|-------|
 | GET | `/api/agent/status` | Trạng thái kết nối WS; gồm `uptime` (uptime WS phía OS server) và `agentUptime` (uptime tiến trình OpenClaw, không reset khi OS server restart) |
 | GET | `/api/agent/events` | SSE stream events real-time |
-| GET | `/api/agent/recent` | 100 events gần nhất (ring buffer) |
+| GET | `/api/agent/recent` | 500 flow event cuối, đọc từ JSONL của ngày hiện tại (`local/flow_events_<date>.jsonl`) |
 | POST | `/api/agent/speech/cancel` | Cử chỉ huỷ vật lý (single click, do HAL gọi — auth loopback-only để nút vẫn chạy khi chưa login). Bịt miệng mọi turn đang chạy và dừng playback ở HAL (`StopTTS`, đồng thời xoá luôn hàng đợi speak đã pre-synth). **Không** abort turn: turn vẫn chạy tiếp, tool vẫn fire, text vẫn về web chat và history — chỉ mất quyền dùng loa. Cài đặt bằng một watermark unix-ms đơn điệu (`speechWatermarkMs`): `deliverTTS` bỏ mọi câu trả lời thuộc turn được tạo tại hoặc trước mốc, kèm flow event `tts_cancelled`. Tuổi của turn đọc từ runID — id thiết bị kết thúc bằng timestamp tạo (`device-chat-7-<unix-ms>`, 13 chữ số), id kênh (`tg-<messageID>`) không có nên fallback về thời điểm đầu tiên run đó xin nói. Vì turn mới luôn nằm phía sau mốc, user click xong nói ngay được trong khi backlog cũ chạy nốt trong im lặng; watermark không bao giờ cần xoá. Cùng cái mốc đó cũng chặn luôn marker `[HW:]` của turn tại `fireHWCall` — servo và LED dừng theo, vì thiết bị vẫn cựa quậy sau khi bị bảo dừng thì user đọc là "nó phớt lờ mình". runID được đưa qua `resolveRunID` trước: đường TTS đã cầm id thiết bị trong khi đường HW có thể còn cầm UUID gốc của backend cho CÙNG một turn, và phán riêng lẻ thì câu trả lời bị bịt trong khi marker vẫn fire. Riêng `/dm`, `/broadcast`, `/speak` được miễn (cổng chặn đặt sau chúng): click nghĩa là "đừng nói với tôi", không được nuốt câu trả lời gửi cho user Telegram. Một watermark **thứ hai** (`autoSpeechWatermarkMs`) hoạt động y hệt nhưng do hệ thống đóng mốc: nó tiến lên mỗi khi HAL báo `voice_agent_handled` — realtime voice agent vừa trả lời thành tiếng một câu MỚI hơn — nên turn agent chính còn đang xử lý câu trước đó mất loa thay vì trả lời muộn bằng một giọng khác. `deliverTTS` bỏ câu trả lời cũ hơn **bất kỳ** mốc nào trong hai; `fireHWCall` **chỉ** xét mốc của cú click, vì phán đoán do máy đưa ra không được phép âm thầm huỷ hành động user đã yêu cầu. Opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong `/opt/hal/.env` của body. Mặc định TẮT, nên body chưa từng biết tới switch này không bị ảnh hưởng. Cú click cũng gọi `FillerManager.CancelAllActive()`. Filler nói thẳng xuống HAL, không đi qua `deliverTTS`, nên watermark một mình không với tới được — mà turn bị bịt tiếng thì vẫn chạy tiếp, nên mỗi lần nó xong một tool là lại re-arm thêm một câu "một giây nhé" cho một câu trả lời user vừa huỷ. Mọi run đang giữ trạng thái filler tại thời điểm đó đều nằm phía cũ của mốc nên bị bỏ hết; filler Opening của câu user nói TIẾP THEO được arm sau đó nên không bị ảnh hưởng. Câu trả lời bị bỏ vẫn được POST sang `POST /voice/realtime/history` của HAL: cú click lấy đi cái loa chứ không lấy đi câu trả lời, mà bản ghi của realtime về những gì agent chính đã đáp vốn treo ở lúc TTS phát xong (xem `docs/realtime-voice.md`). |
 | POST | `/api/agent/restart` | Recovery "start + enable + restart" cho runtime đang active. Các bước: (1) best-effort `systemctl enable <unit>` — `<unit>` lấy từ map runtime→unit (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — để fix vẫn còn sau reboot; (2) `agentGateway.RestartAgent()` gọi `systemctl restart <unit>` — tự START service ngay cả khi đang stopped. Response `{backend, enabled}`. Dùng bởi card Agent Gateway ở Overview để phục hồi gateway đã stopped+disabled, không cần SSH. Các caller restart nội bộ (config refresh, migration) vẫn bỏ qua bước enable. |
 | POST | `/api/agent/memory/reset` | Admin. Recovery không cần SSH cho memory bị tự đầu độc (#421): với **mọi** runtime đã cài, copy `USER.md`, `MEMORY.md`, `KNOWLEDGE.md` và `realtime/{summary.md,device_summary.md,memory.jsonl,memory_raw.jsonl}` vào `<workspace>/.memory-reset-<stamp>-<rand>/`, reset `USER.md` về form trống (Hermes thì làm rỗng) và xoá phần còn lại, rồi chạy lại onboarding để `KNOWLEDGE.md` được seed lại. Trả về `{backup_dirs, cleared, skipped}`. Chỉ đụng file — lịch sử phiên (session OpenClaw, `state.db` của Hermes) không bị đụng; làm tiếp `/new`. Phát flow event `memory_reset`. |
+
+
+### Auth
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/login` | `{password}` → kiểm tra bcrypt với `admin_password_hash` rồi đặt session cookie đã ký; mọi lỗi đều trả `401` |
+| POST | `/api/logout` | Xoá session cookie |
+| POST | `/api/login/exchange` | Cần admin auth (Bearer): cấp session cookie trên origin hiện tại (redirect AP → `.local` sau setup) |
+
+### Schedules
+
+Cần admin auth. Tạo/sửa/xoá không ghi thẳng `schedules.json`: mỗi lệnh xếp một đề xuất mà backend phải xác nhận (MQTT `schedule.mutate` / `schedule.mutate.ack`, xem `mqtt_vi.md`).
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/schedule/list` | Danh sách schedule từ `schedules.json` kèm timezone của store |
+| POST | `/api/schedule/:id/run` | Chạy ngay một schedule (cùng đường với MQTT `schedule.run`; không đổi nhịp) |
+| POST | `/api/schedule` | Đề xuất schedule mới |
+| PATCH | `/api/schedule/:id` | Đề xuất cập nhật |
+| DELETE | `/api/schedule/:id` | Đề xuất xoá |
+
+### Plugins
+
+Cần admin auth. `GET /api/plugin/browse` đang tạm gác (bị comment trong `system/server/server.go`).
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/plugin/install` | Clone plugin từ git URL, dựng venv và systemd unit (bất đồng bộ; poll danh sách) |
+| GET | `/api/plugin` | Các plugin đã cài |
+| POST | `/api/plugin/:name/start` · `/api/plugin/:name/stop` | Start / stop plugin |
+| DELETE | `/api/plugin/:name` | Gỡ plugin |
+
+### Buddy
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| POST | `/api/buddy/pair/start` | Cần admin auth: cấp mã ghép đôi 6 chữ số mới |
+| POST | `/api/buddy/pair/confirm` | Ẩn danh (mã chính là credential): đổi mã hợp lệ lấy token dài hạn |
+| GET | `/api/buddy/status` | Cần admin auth: trạng thái ghép đôi + kết nối |
+| DELETE | `/api/buddy` | Cần admin auth: thu hồi ghép đôi |
+| DELETE | `/api/buddy/self` | Bearer token của chính Buddy: huỷ ghép đôi từ trong app |
+| GET | `/api/buddy/ws` | WebSocket của Buddy (Bearer token kiểm tra với `buddies.json`) |
+| POST | `/api/buddy/command` · `observe` · `suggest` · `exec/:action` | Chỉ loopback (agent skill / marker `[HW:]`) |
+
+### Harness (ghép đôi và trạng thái)
+
+Xem [tích hợp Harness](harness_vi.md) về payload. Các route voice-mode, request, select-agent và results được mô tả ở phần khác của tài liệu này.
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/api/harness/status` | Admin hoặc loopback: trạng thái kết nối/ghép đôi (đã bỏ mã ghép đôi) |
+| GET | `/api/harness/pair/status` | Cần admin auth: trạng thái ghép đôi |
+| POST | `/api/harness/pair` | Cần admin auth: bắt đầu ghép đôi (`202`; `409` khi xung đột) |
+| POST | `/api/harness/pair/cancel` | Cần admin auth: huỷ ghép đôi |
+| DELETE | `/api/harness` | Cần admin auth: huỷ ghép đôi (đồng thời tắt Harness-only voice) |
+| GET | `/api/harness/ws` | WebSocket Harness |
+| GET | `/api/harness/voice-followup` | Chỉ loopback: `{active}` — true trong 2 phút sau một reply/kết quả Harness, để câu hỏi làm rõ ngắn bằng giọng nói vẫn đi tới agent đã ghép đôi |
+
+### Khác
+
+| Method | Endpoint | Mô tả |
+|--------|----------|-------|
+| GET | `/openapi.json` | Cần admin auth: proxy spec OpenAPI của HAL (cho HAL Swagger UI tại `/api/hardware/docs`) |
 
 ---
 
@@ -308,7 +382,7 @@ SSID, IP, version các thành phần) cùng kết quả hành động bên dư�
 
 | Sự kiện | Trigger |
 |---------|---------|
-| Đổi runtime | `hermes.setup` / `picoclaw.setup` (starting / success / failure) |
+| Đổi runtime | mọi `<runtime>.setup` — `openclaw`, `hermes`, `picoclaw`, `claudecode`, `codex`, `opencode` (starting / success / failure) |
 | Thêm / refresh channel | `add_channel`, `channel.refresh_config` (success / failure) |
 | Set / remove connector | `connector.set.*`, `connector.remove.*` (success / failure) |
 | OAuth refresh | vòng lặp refresh — chỉ báo khi đổi trạng thái ok↔fail theo từng provider |
@@ -797,7 +871,7 @@ make web-dev      # web UI trên :5173 (tuỳ chọn)
 ```
 
 os-server không serve HTML: trên board là nginx serve `web/dist` rồi proxy `/api`
-và `/hw` xuống nó. `make web-dev` đặt Vite vào đúng vai nginx, với `LAMP_PROXY`
+xuống nó (còn `/hw/` tới HAL ở `127.0.0.1:5001`, chỉ loopback). `make web-dev` đặt Vite vào đúng vai nginx, với `LAMP_PROXY`
 (mặc định `http://127.0.0.1:5000`) là thiết bị mà SPA nói chuyện cùng — file
 `.env` trong `web/` vẫn thắng, nên trỏ vào Pi thật thì không đổi gì. Mở
 **`http://localhost:5173/monitor`**; Vite chỉ bind `[::1]` nên `127.0.0.1:5173`

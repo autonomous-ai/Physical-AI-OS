@@ -14,7 +14,6 @@ def change_tempo(chunks: Iterable[bytes], speed: float, sample_rate: int,
         return
     if not 0.25 <= speed <= 4.0:
         raise ValueError("TTS tempo must be between 0.25 and 4.0")
-    # Each atempo stage stays in its high-quality 0.5..2 range.
     factors = []
     remaining = speed
     while remaining > 2:

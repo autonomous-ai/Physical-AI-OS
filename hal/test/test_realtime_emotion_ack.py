@@ -1,8 +1,4 @@
-"""Emotion tool results must acknowledge pending calls without recycling Gemini.
-
-The live-session fix acknowledges even after speech: withholding a tool result
-leaves Gemini pending and forces session recreation on the following input.
-"""
+"""Emotion tool results must always acknowledge the call, or Gemini stays pending and recycles the session."""
 
 from unittest import mock
 
@@ -32,9 +28,7 @@ def _sent_inputs(orch):
 
 
 def test_ack_sent_when_the_model_has_not_spoken_yet():
-    """The tool call is the model's whole generation — without the ack it waits
-    forever, the watchdog fires and the turn falls back to the main agent
-    (device-observed 2026-08-19)."""
+    """An idle emotion tool call is acked so the turn completes."""
     orch = _orchestrator_with_agent()
     with mock.patch.object(RealtimeOrchestrator, "_fire_emotion"):
         orch._handle_emotion_call(_call(), spoken=False)
@@ -53,8 +47,7 @@ def test_ack_still_resolves_tool_once_the_model_has_spoken():
 
 
 class _SyncThread:
-    """Runs the target inline. The real one is a daemon thread, so asserting on
-    it directly would race the assertion."""
+    """Run the thread target inline."""
 
     def __init__(self, target=None, args=(), daemon=None, **kwargs):
         self._target, self._args = target, args
@@ -77,8 +70,7 @@ def test_emotion_still_fires_in_both_cases():
 
 
 def test_spoken_is_keyword_only_and_required():
-    """A positional/defaulted flag would let a new call site silently pick the
-    deadlocking branch."""
+    """`spoken` is keyword-only and required."""
     orch = _orchestrator_with_agent()
     with mock.patch.object(RealtimeOrchestrator, "_fire_emotion"):
         try:
@@ -88,11 +80,8 @@ def test_spoken_is_keyword_only_and_required():
     raise AssertionError("spoken must be required")
 
 
-# --- Capture settle scaling --------------------------------------------------
-
 def test_capture_settle_scales_with_the_last_move():
-    """A timed-out aim exits right after a big swing and the arm is still
-    ringing; a flat 0.3s photographs that ring as blur."""
+    """Settle time scales with the aim's final swing."""
     from hal.realtime.orchestrator import _capture_settle_s
 
     still = _capture_settle_s(mock.Mock(last_move_deg=0.0))
@@ -101,8 +90,7 @@ def test_capture_settle_scales_with_the_last_move():
 
 
 def test_capture_settle_is_capped_so_latency_cannot_run_away():
-    """This delay is paid before the user hears an answer — a sharper frame is
-    not worth unbounded waiting."""
+    """The settle delay is capped."""
     from hal.realtime.orchestrator import CAPTURE_SETTLE_MAX_S, _capture_settle_s
 
     assert _capture_settle_s(mock.Mock(last_move_deg=500.0)) == CAPTURE_SETTLE_MAX_S

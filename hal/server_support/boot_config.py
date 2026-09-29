@@ -34,8 +34,7 @@ def _devices_dir() -> str:
 
 
 def _device_profile():
-    """This device's DeviceProfile. ROBOT.md is REQUIRED — a missing/unparseable
-    one is a deploy fault, so fail loudly (no legacy "mount everything" fallback)."""
+    """This device's DeviceProfile; ROBOT.md is required, so a missing one fails loudly."""
     from hal.board.device import load_device
     devices_dir = _devices_dir()
     try:

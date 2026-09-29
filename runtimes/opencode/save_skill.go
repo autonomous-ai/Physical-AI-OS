@@ -7,15 +7,9 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// Skill authoring / installing / listing for OpenCode. Mirrors
-// runtimes/openclaw/save_skill.go — the rendering, extraction and tree walk are
-// shared in system/skills; only the target directory differs per backend.
-//
-// That directory is opencode's native discovery root (`$XDG_CONFIG_HOME/opencode/skills`), the
-// same tree migrateSkillsToOpenCodeHome moves legacy workspace skills into.
-//
-// The runtime is NOT restarted for any of these: OpenCode discovers skills per
-// session, the same contract the skill watcher relies on.
+// Skill authoring / installing / listing for OpenCode.
+// The runtime is NOT restarted for any of these: OpenCode discovers skills per session, the same
+// contract the skill watcher relies on.
 
 // SaveSkill writes a user-authored skill as <name>/SKILL.md.
 func (s *OpenCodeService) SaveSkill(draft domain.SkillDraft) (string, error) {

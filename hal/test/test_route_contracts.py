@@ -1,9 +1,4 @@
-"""Public route declarations must retain their request/response contracts.
-
-Use the AST so CI can check declarations without importing hardware drivers.
-This catches the historical /emotion decorator landing on a zero-argument
-helper, which is valid Python and therefore passes a syntax-only gate.
-"""
+"""Public route declarations must retain their request/response contracts."""
 
 import ast
 from pathlib import Path
@@ -69,8 +64,6 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
 
 class DeviceInputManifestTests(unittest.TestCase):
     def test_mpr121_reports_resolved_wiring_without_driver_health(self):
-        # Execute the production endpoint with inert dependencies, avoiding HAL
-        # startup side effects and physical hardware on the test host.
         from types import SimpleNamespace
         path = Path(__file__).resolve().parents[1] / "runtime.py"
         node = next(n for n in ast.parse(path.read_text()).body

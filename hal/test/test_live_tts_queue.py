@@ -139,8 +139,7 @@ def test_explicit_stop_after_model_reset_cancels_preserved_main(monkeypatch, tmp
 
 def test_last_moment_queue_arrival_is_drained_when_worker_releases(monkeypatch, tmp_path):
     tts, voice, writes, stream = speaker(monkeypatch, tmp_path)
-    # Existing worker already observed an empty queue; HTTP arrives just before
-    # it releases the playback lock. The finalizer must hand over the lock.
+    # Worker saw an empty queue; HTTP arrives just before it releases the playback lock.
     assert tts._drain_pending_queue(stream) == 0
     enqueue(tts, voice, "late arrival")
     tts._release_or_drain_live_queue()
@@ -228,7 +227,6 @@ def test_late_input_preserves_own_live_tail_but_new_input_stops(
     tts, _, writes, stream = speaker(monkeypatch, tmp_path)
     # Queue workers run inline here; history owns a long-lived background loop.
     monkeypatch.setattr(voice_service, "LiveHistory", Mock())
-    # Keep the first sentence on the speaker while model text queues the tail.
     tts.speak = Mock(return_value=False)
     head = "The campaign boosted foot traffic at the pilot pubs."
     tail = " Plus, they are working with the Vintners' Federation."

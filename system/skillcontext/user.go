@@ -14,8 +14,7 @@ import (
 
 const userInfoTimeout = 600 * time.Millisecond
 
-// userInfo mirrors hal's GET /user/info?name=... payload.
-// Schema (verified on Pi): {name, is_friend, telegram_id, telegram_username}.
+// userInfo mirrors HAL's GET /user/info payload.
 type userInfo struct {
 	Name             string `json:"name"`
 	IsFriend         bool   `json:"is_friend"`
@@ -23,10 +22,7 @@ type userInfo struct {
 	TelegramUsername string `json:"telegram_username,omitempty"`
 }
 
-// BuildUserContext returns a `[user_info: {...}]` block so SKILLs do not have
-// to issue `curl /user/info?name={user}` for telegram_id / known-user routing.
-// Returns "" on hard failure or when user is empty/unknown so the agent can
-// still fall back to the original fetch.
+// BuildUserContext returns a `[user_info: {...}]` block, or "" when unknown or on failure.
 func BuildUserContext(user string) string {
 	user = usercanon.Resolve(user)
 	if user == "" || user == "unknown" {

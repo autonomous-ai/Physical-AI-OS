@@ -7,12 +7,12 @@ Nguồn: màu trong bảng là màu **lamp** thực sự hiển thị — `robot
 | `curious` | 0, 3, 3 | `#000303` cyan dịu | overlay | candle | 0.3 | curious |
 | `happy` | 3, 3, 0 | `#030300` vàng dịu | overlay | candle | 0.2 | happy_wiggle |
 | `sad` | 0, 1, 3 | `#000103` xanh dương dịu | overlay | breathing | 0.4 | sad |
-| `thinking` | 2, 0, 3 | `#020003` tím violet dịu | overlay | pulse | 0.3 | thinking_deep |
+| `thinking` | 2, 0, 3 | `#020003` tím violet dịu | overlay | pulse | 0.3 | — (xem ghi chú) |
 | `idle` | 1, 2, 3 | `#010203` xanh steel dịu | overlay | breathing | 0.2 | idle |
 | `excited` | 3, 1, 0 | `#030100` cam dịu | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` hồng rose dịu | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` trắng dịu | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing_fine (mở ở đỉnh) | 1.2 | — (xem ghi chú) |
+| `listening` | 0, 0, 3 | `#000003` xanh dương dịu | overlay | breathing_fine (mở ở đỉnh) | 0.3 (base 1.2) | — (xem ghi chú) |
 | `laugh` | 2, 3, 0 | `#020300` xanh chanh dịu | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` amber dịu | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` đen (tắt) | base | solid | — | sleepy |
@@ -105,15 +105,18 @@ Mở màn ở đỉnh chữa được độ trễ nhưng lòi ra thứ nằm dư
 
 Nên `listening` chạy `breathing_fine` (`hal/drivers/rgb/effects.py`): nhịp thở đi giữa `color` và một nấc dưới nó, còn phần lẻ ở giữa được thể hiện bằng cách nâng MỘT SỐ trong 32 pixel, rải theo bước nguyên tố cùng nhau với số pixel để strip đọc thành một vòng ở mức trung gian chứ không thành một cung sáng. Mắt gộp cả ring lại nên cue có thêm ~32 nấc nhỏ mỗi đơn vị. Peak không đổi, hue không đổi (kênh đang 0 thì vẫn 0), và không pixel nào tối — độ phân giải lấy từ 32 pixel thay vì từ 8 bit màu.
 
-## `listening` không có servo
+## `thinking` và `listening` không có servo
 
-Đây là preset duy nhất để `"servo": None` — chỉ LED, đèn đứng yên. `listening` chạy đúng lúc user đang nói, tiếng servo cộng rung thân máy lọt thẳng vào mic và làm bẩn STT.
+Cả hai đều để `"servo": None` — chỉ LED, đèn đứng yên:
 
-`thinking` thì **có** servo (`thinking_deep`), nhưng vẫn là ca đặc biệt ở phía LED: hook emotion-ack bắn nó ở **mỗi** message preprocessed, nên LED của nó nằm sau `_BACKGROUND_EMOTIONS` guard trong `hal/app_state.py` để cả cuộc hội thoại không bị sơn xanh lá liên tục.
+- `listening` chạy đúng lúc user đang nói; tiếng servo cộng rung thân máy lọt thẳng vào mic và làm bẩn STT.
+- `thinking` được hook emotion-ack bắn ở **mỗi** message preprocessed, nên có servo nghĩa là thân máy cựa quậy suốt cả cuộc hội thoại. Nó còn làm camera di chuyển: `thinking_deep.csv` quét wrist_pitch 34° và wrist_roll 32°, mà camera nằm trong đầu — nên khi tool `look` của realtime bắn (nó bắn trong lượt của model, tức là lúc `thinking` đang hiển thị) user phải đuổi theo một camera vừa di chuyển vừa xoay để giữ vật trong khung. Cũng vì hook đó mà LED của nó nằm sau `_BACKGROUND_EMOTIONS` guard trong `hal/app_state.py`, để cả cuộc hội thoại không bị sơn xanh lá liên tục.
+
+Trên lamp, `thinking` nhận `"servo": null` từ `robots/lamp/presets.json`; preset base trong `hal/presets.py` vẫn map nó tới `thinking_deep` cho thân máy nào muốn dùng.
 
 Trên lamp, `stretching` nhận `"servo": "idle"` từ cùng overlay. Emotion vẫn thực hiện đầy đủ transition thức dậy (xoá trạng thái sleep và khôi phục camera/audio), nhưng cú tap đánh thức Lamp giờ bắt đầu recording idle thay vì chuyển động stretching. Các loại robot khác vẫn giữ recording `stretching` mặc định.
 
-`listening.csv` vẫn giữ trong `hal/recordings/` dù không emotion nào map tới: `/servo/play` vẫn gọi tay được, và Reachy vẫn map nó (`hal/drivers/motors/reachy_service.py`).
+`listening.csv` và `thinking_deep.csv` vẫn giữ trong `hal/recordings/` dù không emotion nào map tới: `/servo/play` vẫn gọi tay được, và Reachy vẫn map chúng (`hal/drivers/motors/reachy_service.py`).
 
 Đường code chịu `servo: None` bình thường — `hal/routes/emotion.py` bỏ qua nhánh play và `POST /emotion` trả `"servo": null`, còn `listening` không schedule LED restore nào cả.
 

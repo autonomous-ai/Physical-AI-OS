@@ -7,7 +7,7 @@ enum ScreenRecordingCheck {
     }
 
     /// Triggers the system prompt the first time it's called.
-    /// After the user has denied once, only manual grant in System Settings → Privacy & Security → Screen Recording works.
+    /// After one denial, only a manual grant in System Settings works.
     @discardableResult
     static func requestPrompt() -> Bool {
         return CGRequestScreenCaptureAccess()

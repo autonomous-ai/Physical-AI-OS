@@ -6,12 +6,7 @@ import (
 	"time"
 )
 
-// MINOR (phase-5 review, round 2): a manual schedule always resolves to
-// "never fires" by design — every single schedule.sync would otherwise log a
-// warning for it, forever, drowning out the case the warning exists to catch.
-// The direct, testable behavioral contract here is that the sync still
-// applies cleanly and correctly omits it from next_run_at; whether the
-// warning itself fires is covered by TestExpectedNeverFires below.
+// A manual schedule syncs cleanly and is omitted from next_run_at.
 func TestSyncSchedules_ManualScheduleAppliesCleanly(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	now := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
@@ -30,8 +25,7 @@ func TestSyncSchedules_ManualScheduleAppliesCleanly(t *testing.T) {
 	}
 }
 
-// A spent "once" (At already passed) is normal for as long as the backend
-// keeps a fired once-schedule in the list — must not warn on every sync.
+// A spent once schedule syncs cleanly.
 func TestSyncSchedules_SpentOnceAppliesCleanly(t *testing.T) {
 	store := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	now := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
@@ -51,10 +45,7 @@ func TestSyncSchedules_SpentOnceAppliesCleanly(t *testing.T) {
 	}
 }
 
-// expectedNeverFires is the actual decision function behind the warning
-// suppression — table-tested directly so the exact boundary (manual always,
-// once only once it's actually spent, everything else still warns) is
-// pinned down precisely.
+// TestExpectedNeverFires pins which never-firing schedules are expected.
 func TestExpectedNeverFires(t *testing.T) {
 	now := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
 	past := now.Add(-time.Hour)

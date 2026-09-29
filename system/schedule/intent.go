@@ -13,26 +13,16 @@ import (
 	"unicode/utf8"
 )
 
-// Intent is one device-originated schedule change the user made locally, held
-// until the backend confirms it.
-//
-// WHY A SEPARATE FILE FROM schedules.json: schedules.json holds only what the
-// backend has confirmed, and the runner fires from schedules.json alone. That
-// is what makes "a task never runs before the cloud knows about it" a
-// structural property rather than a flag someone can forget to check — an
-// unconfirmed task is not merely marked un-runnable, it is not in the file the
-// runner reads at all.
+// Intent is one device-originated schedule change, held until the backend confirms it.
+// Kept out of schedules.json so the runner never fires an unconfirmed task.
 type Intent struct {
-	// IntentID is the idempotency key. Generated ONCE per user action and kept
-	// across every retry, so the backend's ledger can collapse the replays that
-	// a reconnect inevitably produces into a single applied mutation.
+	// IntentID is the idempotency key, generated once per user action and kept across retries.
 	IntentID string `json:"intent_id"`
 
 	Op         string `json:"op"`                    // "create" | "update" | "delete"
 	ScheduleID string `json:"schedule_id,omitempty"` // Target; empty for create
 
-	// BaseRev is the rev the user's edit was based on — the compare half of the
-	// backend's compare-and-swap. Meaningless for create.
+	// BaseRev is the rev the edit was based on (backend compare-and-swap); unused for create.
 	BaseRev uint64 `json:"base_rev,omitempty"`
 
 	// Payload is the proposed row for create/update; nil for delete.
@@ -43,23 +33,14 @@ type Intent struct {
 	Attempts   int       `json:"attempts,omitempty"`
 }
 
-// IntentPayload is the user-editable subset of a schedule. Deliberately not a
-// whole Schedule: id, rev, status and all run bookkeeping are backend-owned, so
-// they are absent here and the device has no way to propose them.
+// IntentPayload is the user-editable subset of a schedule; backend-owned fields are absent.
 type IntentPayload struct {
 	Name         string `json:"name"`
 	Instructions string `json:"instructions"`
 	Enabled      bool   `json:"enabled"`
 
-	// Kind is "agent" or "speak" — see Schedule.Kind. It MUST be carried here
-	// even though the local UI has no control for it yet, because an UPDATE
-	// proposal sends the whole mutable subset and the backend writes every
-	// field of it. Omit this and editing a speak task's NAME on the device
-	// would silently demote it to an agent task, which then reads the user's
-	// sentence aloud as a prompt instead of saying it.
-	//
-	// Empty is "agent" here exactly as everywhere else, so a device echoing
-	// back a pre-kind row it synced as "" is lossless rather than a downgrade.
+	// Kind must be carried on every update: the backend writes every field, so omitting it
+	// would demote a speak task to an agent task.
 	Kind string `json:"kind,omitempty"`
 
 	Timezone     string     `json:"timezone,omitempty"`
@@ -68,9 +49,7 @@ type IntentPayload struct {
 	EndAt        *time.Time `json:"end_at,omitempty"`
 }
 
-// NewIntentID returns a fresh random idempotency key. Not a UUID library —
-// 16 random bytes hex-encoded is the same 128 bits and keeps this package
-// dependency-free, which matters on a device image.
+// NewIntentID returns a random 128-bit hex idempotency key.
 func NewIntentID() (string, error) {
 	var b [16]byte
 	if _, err := rand.Read(b[:]); err != nil {
@@ -84,11 +63,7 @@ type intentFile struct {
 	Intents []Intent `json:"intents"`
 }
 
-// IntentStore persists pending intents to intents.json, a sibling of
-// schedules.json. Same atomic tmp+rename discipline as Store, and the same
-// tolerance for a missing or corrupt file: an unreadable queue degrades to
-// empty rather than blocking the device, because the backend remains
-// authoritative and the next schedule.sync repairs local state regardless.
+// IntentStore persists pending intents to intents.json (atomic writes; unreadable file = empty queue).
 type IntentStore struct {
 	mu   sync.Mutex
 	path string
@@ -167,10 +142,7 @@ func (s *IntentStore) List() []Intent {
 	return out
 }
 
-// Remove drops one intent by id. Called when the backend has reached a TERMINAL
-// verdict on it — applied OR rejected. A rejected intent must be dropped just
-// as surely as an applied one: leaving it queued would replay a proposal the
-// backend has already refused on every single reconnect, forever.
+// Remove drops one intent by id once the backend reaches a terminal verdict (applied or rejected).
 func (s *IntentStore) Remove(intentID string) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -185,8 +157,7 @@ func (s *IntentStore) Remove(intentID string) error {
 	return s.saveLocked(f)
 }
 
-// MarkSent stamps a send attempt, for backoff and for surfacing "not syncing"
-// in the UI when a device has been offline for a while.
+// MarkSent stamps a send attempt and increments Attempts.
 func (s *IntentStore) MarkSent(intentID string, at time.Time) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -202,12 +173,6 @@ func (s *IntentStore) MarkSent(intentID string, at time.Time) error {
 }
 
 // ValidateIntentPayload checks a locally-authored schedule before it is queued.
-//
-// The backend validates too, but this runs FIRST and matters on its own: a
-// proposal that fails server-side comes back as a rejection the user only sees
-// after a round trip, and if the device is offline that round trip may be hours
-// away. Catching it here turns "silently never happened" into an immediate,
-// fixable form error.
 func ValidateIntentPayload(p *IntentPayload) error {
 	if p == nil {
 		return fmt.Errorf("schedule is required")
@@ -219,11 +184,7 @@ func ValidateIntentPayload(p *IntentPayload) error {
 		return fmt.Errorf("instructions are required")
 	}
 	if ResolveKind(p.Kind) == KindSpeak {
-		// HAL's /voice/speak rejects anything longer and does NOT truncate, so
-		// an over-long line is not "mostly spoken" — it is complete silence,
-		// every time the task fires. Counted in RUNES, not bytes: the limit is
-		// a character limit, and counting bytes would refuse a perfectly legal
-		// line the moment it contained an accent or a non-Latin script.
+		// HAL rejects (does not truncate) over-long text; count runes, not bytes.
 		if n := utf8.RuneCountInString(p.Instructions); n > MaxSpeakChars {
 			return fmt.Errorf("spoken text must be at most %d characters, got %d", MaxSpeakChars, n)
 		}
@@ -231,16 +192,7 @@ func ValidateIntentPayload(p *IntentPayload) error {
 	return ValidateSpec(p.Cadence)
 }
 
-// ValidateSpec checks a cadence is internally consistent — that the fields
-// which actually matter for the chosen repeat are present and in range.
-//
-// Mirrors the "repeat selects which of the remaining fields matter" rule the
-// wire contract documents, so a cadence accepted here is one the runner can
-// definitely compute a next fire for. Anything else would be stored, synced,
-// and then silently never run.
-// validateClockTimes checks every wall-clock time a spec fires at. Goes
-// through effectiveTimes so a device-authored spec that sets only Time — the
-// shape every client sent before the times list — validates exactly as it did.
+// validateClockTimes checks every effective time a spec fires at (count and HH:MM form).
 func validateClockTimes(spec Spec) error {
 	times := spec.effectiveTimes()
 	if len(times) == 0 {
@@ -257,6 +209,7 @@ func validateClockTimes(spec Spec) error {
 	return nil
 }
 
+// ValidateSpec checks that the fields required by spec.Repeat are present and in range.
 func ValidateSpec(spec Spec) error {
 	switch spec.Repeat {
 	case "daily":
@@ -269,7 +222,6 @@ func ValidateSpec(spec Spec) error {
 			return fmt.Errorf("weekly schedules need at least one day")
 		}
 		for _, d := range spec.Days {
-			// 7 is accepted as an alias for Sunday, matching Spec.Days' doc.
 			if d < 0 || d > 7 {
 				return fmt.Errorf("day of week out of range: %d", d)
 			}
@@ -292,8 +244,6 @@ func ValidateSpec(spec Spec) error {
 		}
 		return nil
 	case "once":
-		// The fire time travels as the schedule's EndAt-sibling At; a "once"
-		// with no At can never fire.
 		if spec.At == nil || spec.At.IsZero() {
 			return fmt.Errorf("one-off schedules need a date and time")
 		}

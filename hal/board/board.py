@@ -1,18 +1,4 @@
-"""Board platform layer — the single source of truth for per-board wiring.
-
-Consolidates device-tree detection and per-board pin/transport config that was
-previously duplicated across rgb_service, gpio_button, and ttp223 (each opened
-/proc/device-tree/model and re-implemented its own `_is_*` checks).
-
-Drivers ask `board_profile()` for wiring; they never re-detect the board. This
-is the Autonomous equivalent of the Linux arch/ layer: generic driver code sits
-above, board-specific values live as DATA in `boards.json` (next to this module,
-the DTS / Android BoardConfig analogue), and a new board is one JSON entry — no
-code change. This module just loads that data into typed structs and classifies.
-
-Pure + testable: `detect_board_id()` takes an optional model string, so the whole
-classification can be unit-tested with no hardware and no /proc.
-"""
+"""Board platform layer: per-board wiring loaded from boards.json into typed profiles."""
 from __future__ import annotations
 
 import json
@@ -56,12 +42,7 @@ class ButtonConfig:
 class TouchConfig:
     chip: int
     lines: List[int]
-    # Lines in physical left-to-right order along the swipe axis. OPTIONAL and
-    # absent by default: line order is NOT spatial order on this board — the
-    # pads were relocated twice to escape noise, so line 98 carries S2's pad on
-    # S3's pin and line 100 carries S4's on a third. Only a labelled press-one-
-    # pad-at-a-time run can establish it (build-plan Phase 2.2). Absent means
-    # gesture classification falls back to declared line order and says so.
+    # Physical left-to-right line order; optional because line order is NOT spatial on this board.
     axis: Optional[List[int]] = None
 
 
@@ -73,19 +54,13 @@ class BoardProfile:
     touch: Optional[TouchConfig] = None
 
 
-# --- per-board wiring: loaded from boards.json (data, not code) -------------
-# A new board is a JSON entry; this module never hardcodes board values. The
-# data file ships inside the HAL package, so a missing/invalid one is a
-# packaging fault — fail loudly rather than guess wiring (see ROBOT-SPEC rule #3).
+# boards.json ships in the HAL package; a missing/invalid one fails loud (ROBOT-SPEC rule #3).
 
 
 def _load_boards(
     path: str = BOARDS_DATA_PATH,
 ) -> Tuple[Dict[str, BoardProfile], List[Tuple[List[str], str]], str]:
-    """Parse boards.json → (profiles, matchers, default_board_id). Pure given a path.
-
-    matchers preserve file order; each is (lowercased model substrings, board_id).
-    """
+    """Parse boards.json -> (profiles, matchers, default_board_id); matchers keep file order."""
     with open(path, "r") as f:
         data = json.load(f)
     profiles: Dict[str, BoardProfile] = {}
@@ -110,10 +85,7 @@ except (OSError, ValueError, KeyError, TypeError) as e:
     ) from e
 
 
-# HAL_BOARD forces a board id instead of reading /proc/device-tree/model. It
-# supports mock bodies and computers controlling remote bodies: a laptop has
-# no device tree. It is opt-in, must name a boards.json entry allowed by the
-# device profile, and is logged loudly. `host` never selects local GPIO wiring.
+# Opt-in board override for mock/remote bodies; must name a boards.json entry the device allows.
 BOARD_ENV_VAR = "HAL_BOARD"
 
 
@@ -131,13 +103,7 @@ def board_override() -> Optional[str]:
 
 
 def matched_board_id(model: Optional[str] = None) -> Optional[str]:
-    """The board whose `match` substrings appear in the device-tree model, or
-    None if the model matches no known board. Pure; testable.
-
-    Unlike detect_board_id this does NOT fall back to `default_board`: the
-    board-support gate must tell a genuine hardware match from a blind default,
-    so it needs to see the None.
-    """
+    """The board whose `match` substrings appear in the model, or None (no default fallback)."""
     if model is None:
         if forced := board_override():
             return forced
@@ -149,26 +115,15 @@ def matched_board_id(model: Optional[str] = None) -> Optional[str]:
 
 
 def detect_board_id(model: Optional[str] = None) -> str:
-    """Classify the board from the device-tree model string. Pure; testable.
+    """Classify the board from the device-tree model string (first match wins, else `default_board`).
 
-    Tests the lowercased `match` substrings from boards.json (first hit wins, in
-    file order — keep them non-overlapping). Unrecognized/empty model falls back
-    to `default_board`. e.g. 'pi 5'→Pi 5, 'pi 4'→Pi 4, 'sun60iw2'→OrangePi 4 Pro.
+    Example: 'sun60iw2' -> OrangePi 4 Pro.
     """
     return matched_board_id(model) or DEFAULT_BOARD_ID
 
 
 def assert_board_supported(declared: List[str], model: Optional[str] = None) -> str:
-    """Fail loud unless the physical board is one this device declares in
-    ROBOT.md `boards`. Returns the resolved board id.
-
-    Wrong hardware means wrong pin maps; actuating servos/LEDs against an
-    unverified board is a hardware fault, not graceful degradation
-    (ROBOT-SPEC rule #3). Two ways to abort:
-      - the model matches no boards.json entry → unidentifiable hardware, no
-        wiring profile can be trusted;
-      - it matches a real board the device does not declare → unsupported.
-    """
+    """Fail loud unless the physical board is declared in ROBOT.md `boards`; return its id."""
     if model is None:
         if forced := board_override():
             if declared and forced not in declared:

@@ -1,8 +1,4 @@
-"""The enrollment gate around starting the voice pipeline.
-
-ALSA capture is exclusive: while record-enroll holds the mic, any other
-start() steals the device and both sides fail with "Device or resource busy".
-"""
+"""The enrollment gate around starting the voice pipeline."""
 
 import hal.app_state as state
 
@@ -41,12 +37,7 @@ def test_start_is_a_no_op_when_the_pipeline_does_not_exist(monkeypatch):
 
 
 def test_every_caller_outside_record_enroll_goes_through_the_gate():
-    """Guard against a seventh call site reintroducing the race.
-
-    Only two direct voice_service.start() calls may exist: the one inside
-    start_voice_service itself, and record-enroll's own restore (it owns the
-    stop and runs after the flag is cleared).
-    """
+    """Guard against a seventh call site reintroducing the race."""
     import pathlib
     import re
 

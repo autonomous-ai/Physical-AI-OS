@@ -65,7 +65,7 @@ the page removes it.
 system/web/
 ├── src/
 │   ├── pages/
-│   │   ├── Monitor.tsx        # Dashboard monitor (main file)
+│   │   ├── monitor/           # Dashboard monitor (index.tsx = shell + polling; one file per section)
 │   │   └── ...                # Setup pages
 │   ├── components/
 │   │   └── ui/                # shadcn/ui components
@@ -322,7 +322,7 @@ saved but absent configures the device for a model it cannot load.
 
 ## 4. Polling & Data Sources
 
-Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid mode: REST seed + live stream.
+Monitor polls the active section's system/HW APIs every **5 seconds** (`usePolling` in `system/web/src/pages/monitor/index.tsx`; the sidebar's `GET /api/agent/status` runs every 10 s, and some cards poll on their own cadence). Flow is fed by the file-backed live stream (`GET /api/agent/flow-stream`), whose every frame is a full snapshot of the latest 500 events.
 
 ### 4.1 OS Server (Go, port 5000, prefix `/api`)
 
@@ -331,35 +331,36 @@ Monitor polls system/HW APIs every **3 seconds**. Flow uses file-backed hybrid m
 | `GET /api/system/info` | CPU load, RAM (KB), temperature, uptime, goroutines, version, deviceId, capabilities (declared capability names — both the Monitor and the Edit/Settings page gate hardware tabs on these; see the shared `useCapabilities` hook) |
 | `GET /api/system/network` | SSID, IP, public IP, Tailscale IP, signal (dBm), internet (bool), pingMs (internet probe RTT, 0 = unmeasured) |
 | `GET /api/agent/status` | active runtime name, connected (bool), sessionKey (bool), version, emotion, uptime (OS server connection uptime, secs), agentUptime (runtime process uptime when supplied, secs — survives OS server restarts). The Agent row in the Versions card probes its CLI version asynchronously and retries transient boot-time failures. |
-| `GET /api/agent/recent` | Latest flow events from today's JSONL file (`local/flow_events_<date>.jsonl`) |
-| `GET /api/agent/flow-events?date=YYYY-MM-DD&last=500` | File-backed flow events API used for Flow seed/history |
-| `GET /api/agent/flow-stream` | File-backed live stream (SSE) for Flow updates when JSONL changes |
+| `GET /api/agent/recent` | Last 500 flow events from today's JSONL file (`local/flow_events_<date>.jsonl`) |
+| `GET /api/agent/flow-events?date=YYYY-MM-DD&last=500` | File-backed flow events API (`last` defaults to 500, max 10000); used by the Chat section's history seed |
+| `GET /api/agent/flow-stream` | File-backed live stream (SSE): on every JSONL change it sends the latest 500 events as one full snapshot; the Flow section replaces its event list with it |
 | `GET /api/agent/events` | Monitor bus SSE endpoint (kept for compatibility) |
 | `GET /api/logs/tail?source=bootstrap&lines=N` | Authenticated Bootstrap log tail used to seed and manually refresh the Bootstrap Logs tab. |
 | `GET /api/logs/stream?source=bootstrap` | Authenticated SSE stream for live Bootstrap Logs-tab updates. |
 | `POST /api/agent/restart` | "Start + enable + restart" recovery: backend does best-effort `systemctl enable <unit>` (so the fix survives reboot) then calls the runtime's own `RestartAgent()` (which resolves to `systemctl restart <unit>` — starts if stopped). Powers the Agent Gateway card's small restart icon at bottom-right. |
-| `POST /api/system/force-update` | Triggers OTA check via bootstrap worker (proxies to `localhost:8080/force-check`) |
 | `GET /api/system/ota-versions` | Per-component `{current, target, min_version, update_available, held_by_floor}` (proxies bootstrap `/versions`, including the installed device profile from `devices.<device_type>`, plus an `agent` alias for the configured runtime's CLI). The Versions card shows an `update` button wherever `update_available` is true (`held_by_floor` is reported but NOT used for the button: the button installs the published version on this device, like `software-update <key>` over SSH, and the floor only stages the automatic fleet rollout) |
 | `GET /api/system/ota-updating` | Components the worker is installing right now (`{updating: [...]}`, plus the `agent` alias). Deliberately cheap — no metadata fetch — because the Versions card polls it every 2 s while an install runs and shows `updating…` on that row instead of the button |
-| `POST /api/system/software-update/:target` | Per-component OTA check. `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker; `device` installs the resolved `devices.<device_type>` profile. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) so the browser never needs to know which runtime runs; `hermes` returns 400 (it cannot be pinned, so bootstrap never auto-applies it). Rate-limited to one call per target per 30 s |
+| `POST /api/system/software-update/:target` | Per-component OTA install (the only web OTA trigger; os-server calls bootstrap `POST localhost:8080/force-update/<target>`). `target`: `os-server` \| `bootstrap` \| `web` \| `hal` \| `device` \| `agent`. Bootstrap self-updates by spawning the installer in the background, so its replacement can safely restart the worker; `device` installs the resolved `devices.<device_type>` profile. **`agent` is virtual** — os-server resolves it to the configured runtime's CLI (`codex`/`claudecode`/`opencode`/`picoclaw`) or `hermes`) so the browser never needs to know which runtime runs. Hermes is in the allowlist, but its row only gets an `update` button once its metadata entry is commit-pinned (an unpinned entry is not reported by `/versions`). Rate-limited to one call per target per 30 s |
 | `POST /api/system/reboot` | Admin-gated reboot request. OS server returns `202` first, then calls HAL's cue-aware reboot action. |
 | `POST /api/system/shutdown` | Admin-gated shutdown request. OS server returns `202` first, then calls HAL's cue-aware, servo-release shutdown action. |
 
 > **Note on format**: The OS server API returns `{ status: 1, data: <payload>, message: null }` on success.
 
-### 4.2 HAL (Python/FastAPI, port 5001, prefix `/hw`)
+### 4.2 HAL (Python/FastAPI, port 5001, via os-server `/api/hardware/*`)
+
+The web UI never calls nginx `/hw/*`: every HAL request goes through the admin-gated os-server reverse proxy `/api/hardware/<path>` (`HW` in `system/web/src/pages/monitor/types.ts`), which forwards to HAL `:5001/<path>` on loopback. Elsewhere in this doc, `/hw/<path>` names the same HAL route.
 
 | Endpoint | Data |
 |----------|------|
-| `GET /hw/health` | Status of 8 hardware: servo, led, camera, audio, sensing, voice, tts, display |
-| `GET /hw/presence` | state, enabled, seconds_since_motion |
-| `GET /hw/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
-| `GET /hw/servo` | available_recordings, current, bus_connected, robot_connected |
-| `POST /hw/servo/upload` | Upload a new servo recording CSV (`timestamp` + `<joint>.pos` columns) |
-| `GET /hw/display` | mode, hardware, available_expressions |
-| `GET /hw/audio/volume` | control, volume (0-100) |
-| `GET /hw/voice/mic-level` | SSE stream (~10Hz): level (voice-mic RMS, int16 scale), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (noise mic — last SoundPerception sample, null when sensing is down), tts_speaking / music_playing (live playback state — the audio card flips "Speaking…/Playing music" off the stream instead of waiting out the 5s status poll) |
-| `GET /hw/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
+| `GET /api/hardware/health` | Status of 8 hardware: servo, led, camera, audio, sensing, voice, tts, display |
+| `GET /api/hardware/presence` | state, enabled, seconds_since_motion |
+| `GET /api/hardware/voice/status` | voice_available, voice_listening, tts_available, tts_speaking |
+| `GET /api/hardware/servo` | available_recordings, current, bus_connected, robot_connected |
+| `POST /api/hardware/servo/upload` | Upload a new servo recording CSV (`timestamp` + `<joint>.pos` columns) |
+| `GET /api/hardware/display` | mode, hardware, available_expressions |
+| `GET /api/hardware/audio/volume` | control, volume (0-100) |
+| `GET /api/hardware/voice/mic-level` | SSE stream (~10Hz): level (voice-mic RMS, int16 scale), threshold (VAD), active, muted, sensing_level / sensing_age_s / sensing_threshold (noise mic — last SoundPerception sample, null when sensing is down), tts_speaking / music_playing (live playback state — the audio card flips "Speaking…/Playing music" off the stream instead of waiting out the 5s status poll) |
+| `GET /api/hardware/led/color` | led_count, color [R,G,B], hex (#rrggbb) |
 
 ---
 
@@ -520,7 +521,6 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 - **Web** (teal): injected at build time from `package.json` via Vite `define` (`__WEB_VERSION__`)
 - **OS server** (amber): from `GET /api/system/info` → `version` field (Go ldflags)
 - **HAL** (blue): from `GET /api/system/info` → `halVersion` field. The OS server calls HAL `:5001/version` on the loopback once per minute (cached) and re-exposes it through the OS server API, so the browser doesn't need direct access to `/hw/*` (nginx gates `/hw/` to loopback only).
-- **Force Update** button: triggers `POST /api/system/force-update` → bootstrap OTA check. Shows "Checking…" while busy, then "Triggered"/"Failed" feedback for 3 seconds.
 
 ### 5.3 System Section
 
@@ -531,7 +531,7 @@ Below the nav items and OpenClaw status, the sidebar shows versions for all thre
 
 **CPU History / RAM History** — Sparkline chart (area + line):
 - Stores 60 history points (`HISTORY_LEN = 60`)
-- Updates every 3 seconds
+- Updates every 5 seconds
 
 **Process**: goroutines, uptime, version, deviceId
 **Network Detail**: SSID, IP, signal, internet
@@ -550,12 +550,10 @@ File-backed hybrid feed:
 
 Each event displays: type badge, phase (if any), runId (first 8 chars), timestamp, summary text, error (if any).
 
-- Initial/history load via `GET /api/agent/flow-events`.
-- Live updates via `GET /api/agent/flow-stream` (SSE emitted on file change).
-- Fallback polling (2s) is used only if live stream disconnects.
+- Load and live updates both come from `GET /api/agent/flow-stream` (SSE emitted on file change); each frame is a full snapshot of the latest 500 events and replaces the list. The stream opens only while the Flow or Chat section is active and closes while the tab is hidden; there is no polling fallback.
 - Displayed turns/events are fully derived from JSONL flow logs.
 
-**Turn Pipeline (SVG)** — Implemented by `FlowDiagram` in `system/web/src/pages/Monitor.tsx`. Full layout (three clusters: OS server / HAL / OpenClaw, column grid, Cron vs OpenClaw, HAL row aligned with Tool, approximate coordinates) is documented in **`docs/flow-monitor.md`**; Vietnamese summary in **`docs/vi/flow-monitor_vi.md`**.
+**Turn Pipeline (SVG)** — Implemented by `FlowDiagram` in `system/web/src/pages/monitor/FlowSection/FlowDiagram.tsx`. Full layout (three clusters: OS server / HAL / OpenClaw, column grid, Cron vs OpenClaw, HAL row aligned with Tool, approximate coordinates) is documented in **`docs/flow-monitor.md`**; Vietnamese summary in **`docs/vi/flow-monitor_vi.md`**.
 
 Turn Pipeline grouping behavior:
 - Turns are still started by input/trigger events (`sensing_input`, `chat_input`, `schedule_trigger`, etc.).
@@ -575,19 +573,18 @@ Turn Pipeline grouping behavior:
 - Flow Panel header uses Lucide icons throughout (brand `Hexagon`, `Summary→ClipboardList`, `Canvas→LayoutDashboard`, `Bundle→PackageOpen`, `Full day→CalendarDays`, `Clear→Trash2`) for a consistent icon set — no emoji glyphs.
 - **Current-user chip** — when the device recognizes an enrolled person, the header chip shows that person's **name + face avatar** (first enrolled photo via `GET /face/photo/<label>/<file>`, with `/face/owners` polled every 30s to map name→filename); on `unknown` or a missing/broken photo it falls back to a generic Lucide `UserRound` glyph. The name comes from `GET /identity/current-user` (polled every 5s), **not** `/face/current-user`: that endpoint answers only "who does the camera see", so the chip stayed blank whenever nobody was in frame — and permanently on a device with no camera — even right after speaker-ID recognized an enrolled user. HAL resolves face-then-voice, so the chip shows the face user whenever the camera has one and the recognized speaker otherwise. The value is the normalized label (`long`), so the chip's `capitalize` and the photo lookup behave identically for both modalities — the `Speaker - ` transcript prefix never reaches it. The tooltip says which modality the identity came from (*seen* vs *heard*).
 - Flow Panel header actions include **`↓ Bundle`**, **`full day`**, **`🗑 Log`**.
-- **`↓ Bundle`** — one click saves **two files**: (1) server JSONL tail via `fetch` + blob (`GET /api/agent/flow-logs?last=500`), (2) UI snapshot JSON (`events` + `groupIntoTurns` → `lamp_flow_ui_snapshot_*.json`).
+- **`↓ Bundle`** — one click saves **two files**: (1) server JSONL tail via `fetch` + blob (`GET /api/agent/flow-logs?last=10000`; the server clamps `last` to 2000, so the file is `flow_<date>_last2000.jsonl`), (2) UI snapshot JSON (`events` + `groupIntoTurns` → `flow_ui_snapshot_*.json`).
 - **`full day`** — `GET /api/agent/flow-logs` without `last` (whole day JSONL).
 - `🗑 Log` asks for confirmation and calls `DELETE /api/agent/flow-logs` to truncate the server flow log, then clears current Flow UI events.
 - **Filters modal** (`FlowSection/FiltersModal.tsx`) — the turn-list header keeps only a free-text search box and a **Filters** button (badged `Filters · N` with the count of active filter groups). Clicking it opens a centered modal hosting the full filter set: **Sources** (Mic / Cam / Btn / CH / Web / Cron / Sys quick-toggles, plus Dropped when present), **Sort** (Newest / Oldest / Slowest / Fastest / ↑↓ Tokens), **Sub-types** (per-type toggles with an All-on / Enable-all shortcut), and **Time range** (quick presets Last 15m / 1h / 6h / Today, plus two labeled clock-prefixed From/To pills joined by an arrow; the native `<input type="time">` is de-chromed via `.lm-time-input` and the active bound tints amber). A footer offers **Reset all** and **Done**. The modal renders inside the FlowSection tree (under `.lm-root`) so `--lm-*` tokens resolve in dark and light mode; it closes on overlay click, the ✕, **Done**, or `Esc`. All filter state lives in `FlowSection/index.tsx` and is threaded in as props, so opening/closing never resets a filter.
 - **Lucide icons for sub-types** — the source and sub-type chips use Lucide icons (`TYPE_LUCIDE` in `FlowSection/types.ts`, e.g. `voice→Mic`, `cmd→Mic2`, `motion→Eye`, `activity→Activity`, `voice_emo→Speech`, `emotion→Smile`, `web→Monitor`, `sys→Settings`) instead of emoji glyphs, inheriting the chip's `currentColor` and on/off opacity treatment.
-- Turn history list shows **all turns** for the day (newest first), derived from the **last 10 000** flow events — covers a full day of typical activity.
-- Flow event memory is capped at 10 000 events.
+- Turn history list shows all turns (newest first) derived from the events in memory — the latest 500 the flow stream delivers, not the whole day (use **`full day`** for that).
+- Flow event memory is capped at `FLOW_EVENTS_MAX` = 10 000 events, but the stream snapshot is 500, so that cap is not reached in practice.
 - Telegram stitching heuristic: if a Telegram fallback input turn (without real input text) is immediately followed by an agent-output turn within 30s, Monitor stitches them into one turn so the reply stays with the original Telegram input.
 
 ### 5.5 Camera Section
 
 - **Camera Stream**: MJPEG live stream from `GET /hw/camera/stream` (downscaled + throttled; default ~10fps, ~320px width). The `<img>` remounts with a fresh connection (bumped `streamEpoch` cache-buster) whenever the camera transitions to enabled — via the Enable button or an auto-enable picked up by polling — so live video returns immediately without a page refresh. A stream error that lands right after enable (HAL's capture loop needs ~1-2s to deliver the first frame) is not latched: it auto-retries on a short delay until a frame loads.
-- **Display Eyes (GC9A01)**: Round 1.28" screen snapshot from `GET /hw/display/snapshot`, displayed as circle with amber glow. Has Refresh button.
 - **Camera Snapshot**: Static image from `GET /hw/camera/snapshot`, with Capture button to take new shot.
 
 ### 5.6 Logs Section
@@ -650,14 +647,14 @@ The **New** dropdown also includes **Create with Agent**. It closes Manage skill
 
 **Skill catalog (Browse skills)**
 
-The catalog is the public read API of `bff-web-service` (`agent-skills-public-api.md`), wrapped device-side by `system/server/agent/delivery/http/handler_skills.go`. Both hops go through os-server, never the browser — same rationale as `GET /api/plugin/browse`: no CORS round-trip and the catalog host stays server-side. Base URL defaults to `https://apiv2.autonomous.ai`, overridable with `SKILL_STORE_BASE_URL`; every upstream call carries the `location: en-US` header the catalog's middleware requires.
+The catalog is the public read API of `bff-web-service` (`agent-skills-public-api.md`), wrapped device-side by `system/server/agent/delivery/http/handler_skills.go`. Both hops go through os-server, never the browser — same rationale as the (currently parked, commented out in `system/server/server.go`) `GET /api/plugin/browse`: no CORS round-trip and the catalog host stays server-side. Base URL defaults to `https://apiv2.autonomous.ai`, overridable with `SKILL_STORE_BASE_URL`; every upstream call carries the `location: en-US` header the catalog's middleware requires.
 
 | Device endpoint | Upstream | Notes |
 |-----------------|----------|-------|
 | `GET /api/agent/skills/browse` | `GET /api/v1/agent-skills` | Forwards `keyword` / `category_id` / `plan` / `page` / `limit`. `status` is deliberately **not** forwarded — upstream can't tell "unset" from `0`, so sending it would silently filter the listing. Returns `{data: [Skill], total}` (`domain.StoreSkillList`). |
 | `GET /api/agent/skills/bundle?id=<id>` | `GET /api/v1/agent-skills/:id/download` | Downloads the `.skill` archive to a temp dir, unzips it there, and returns `domain.SkillBundle` — the file list with UTF-8 contents inlined. The temp dir is removed before the response is written: this is a **preview**, nothing is installed. |
 
-The catalog returns business failures as **HTTP 200 with a non-1 `status`**, so the proxy checks the envelope status, not just the HTTP code, and surfaces the upstream message as a `502`. The id rides a query param rather than a path segment so the route can't collide with the sibling static `skills/browse`.
+The catalog returns business failures as **HTTP 200 with a non-1 `status`**, so the proxy checks the envelope status, not just the HTTP code, and surfaces the upstream message as a `502`. The id rides a query param rather than a path segment so the route can't collide with the sibling static `/api/agent/skills/browse`.
 
 Extraction is hardened: zip-slip guarded (any `..` or absolute entry fails the whole bundle), `.DS_Store` / `__MACOSX/` filtered, and capped at 16 MB per archive, 2 MB per file, 512 KB inlined as text (longer files are marked `truncated`), 500 files. Non-UTF-8 entries come back flagged `binary` with metadata only.
 
@@ -811,7 +808,7 @@ def get_led_color():
 
 ---
 
-## 7. Reusable Components (internal to Monitor.tsx)
+## 7. Reusable Components (`system/web/src/pages/monitor/components.tsx`)
 
 | Component | Description |
 |-----------|-------------|

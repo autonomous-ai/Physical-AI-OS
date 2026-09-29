@@ -1,6 +1,5 @@
 import type { DisplayEvent } from "../types";
 
-// Maps a MonitorEvent type/node to a flow stage ID
 export type FlowStage =
   | "mic_input" | "cam_input" | "button_input" | "channel_input" | "webchat_input" | "intent_check" | "local_match"
   | "agent_call" | "agent_thinking" | "tool_exec" | "agent_response" | "tts_speak"
@@ -20,10 +19,9 @@ export interface FlowNodeDef {
   desc: string;
   triggers: string[];
   path: "main" | "fast" | "agent";
-  shape?: NodeShape; // default: circle
+  shape?: NodeShape;
 }
 
-// Group events into turns by runId
 export interface Turn {
   id: string;
   runId?: string;
@@ -33,7 +31,6 @@ export interface Turn {
   sessionBreak?: boolean;
   endTime?: string;
   type: string;
-  // Observed wake classification; independent of routing and event type.
   voiceTurnType?: "voice" | "voice_command" | "voice_followup";
   path: "local" | "agent" | "harness" | "realtime" | "dropped" | "queued" | "unknown";
   status: "active" | "done" | "error";
@@ -42,7 +39,6 @@ export interface Turn {
   mergedIntoRunId?: string;
 }
 
-// Runtime detail lines
 export type NodeInfoMap = Record<FlowStage, string[]> & { ambient: string[] };
 
 export const FLOW_NODES: FlowNodeDef[] = [
@@ -276,7 +272,6 @@ export const FLOW_NODES: FlowNodeDef[] = [
     ] },
 ];
 
-// Source type → icon map
 export const SOURCE_ICON: Record<string, string> = {
   voice: "🎤", voice_command: "🎙", sound: "🔊",
   motion: "👁", "motion.activity": "🏃", "presence.enter": "🙂", "presence.leave": "👋", "presence.away": "😴", "light.level": "🌡", "emotion.detected": "😊", "speech_emotion": "🗣", "speech_emotion.detected": "🗣", "pose.ergo_risk": "🪑", "touch.head_pat": "✋",
@@ -290,11 +285,6 @@ export const SOURCE_ICON: Record<string, string> = {
   "music.mood": "🎵",
 };
 
-// Lucide icon per turn sub-type, replacing the emoji in SOURCE_ICON for the
-// filter chips so the drawer reads as a crisp, theme-tinted icon set (the icons
-// inherit currentColor and the on/off opacity treatment) instead of full-color
-// emoji glyphs. Keyed by the same sub-type tokens; callers fall back to a
-// neutral dot when a type isn't mapped here.
 import type { LucideIcon } from "lucide-react";
 import {
   Mic, Mic2, Volume2, Eye, Activity, Smile, Hand, Armchair, Speech,
@@ -324,11 +314,9 @@ export const TYPE_LUCIDE: Record<string, LucideIcon> = {
   "ambient:breathing": Wind, "ambient:movement": Bot, "ambient:mumble": Speech,
   "ambient:idle": Moon,
   "music.mood": Music,
-  // presence aliases used by some event payloads
   enter: UserPlus, leave: UserMinus,
 };
 
-// Short display label per turn sub-type, used by the filter sub-type chips.
 export const TYPE_LABEL: Record<string, string> = {
   voice: "voice", voice_command: "cmd", voice_followup: "followup", voice_agent_handled: "handled", voice_command_handled: "voice_command_handled", voice_followup_handled: "voice_followup_handled", sound: "sound",
   motion: "motion", "motion.activity": "activity", "emotion.detected": "emotion",
@@ -341,10 +329,6 @@ export const TYPE_LABEL: Record<string, string> = {
   cron: "cron", "cron:music": "music", heartbeat: "heartbeat",
 };
 
-// Typed-chat turn types. Both are the same turn server-side (sensingmsg.IsChat:
-// TTS suppressed, no physical wake); they stay separate here so the turn badge
-// shows WHERE the message was typed — the monitor composer (web_chat) or an
-// MQTT chat.send from a phone app (mqtt_chat).
 export const CHAT_TYPES = ["web_chat", "mqtt_chat"] as const;
 export function isChatType(type: string): boolean {
   return (CHAT_TYPES as readonly string[]).includes(type);

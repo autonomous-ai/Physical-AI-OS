@@ -5,16 +5,6 @@ import type { ScheduleDraft, ScheduleRepeat } from "./scheduleDraft";
 import { MAX_SPEAK_CHARS, MAX_TIMES_PER_SCHEDULE } from "@/lib/api";
 import type { ScheduleKind } from "@/lib/api";
 
-// The create/edit form for a scheduled task on the device itself.
-//
-// Split out of ScheduledSection so the list stays readable: the list renders
-// rows and owns fetching, this owns one task's draft state and validation.
-//
-// It mirrors the cadence rules the DEVICE enforces (system/schedule/intent.go's
-// ValidateSpec) rather than inventing its own, so a form that submits is one
-// the device will accept — the alternative is a round trip that fails with a
-// message the user cannot act on.
-
 const WEEKDAYS = [
   { value: 1, label: "Mon" }, { value: 2, label: "Tue" }, { value: 3, label: "Wed" },
   { value: 4, label: "Thu" }, { value: 5, label: "Fri" }, { value: 6, label: "Sat" },
@@ -58,8 +48,7 @@ export function ScheduleEditor({
   const problem = validateDraft(draft);
 
   const speaking = draft.kind === "speak";
-  // Code points, not UTF-16 units, so an emoji counts as the single character
-  // the device's utf8.RuneCountInString will also count.
+  // Code points, matching the device's utf8.RuneCountInString.
   const spokenLength = speaking ? [...draft.instructions].length : 0;
   const overSpeakLimit = spokenLength > MAX_SPEAK_CHARS;
 
@@ -72,8 +61,7 @@ export function ScheduleEditor({
   const removeTimeAt = (i: number) =>
     setDraft((d) => ({ ...d, times: d.times.filter((_, idx) => idx !== i) }));
 
-  // Seeds an hour after the last row, so adding several does not pile up
-  // duplicates the user then has to correct one by one.
+  // Seeds an hour after the last row, so adding several does not pile up duplicates the user then has to correct one by one.
   const addTime = () =>
     setDraft((d) => {
       const last = d.times[d.times.length - 1] ?? "08:00";
@@ -168,7 +156,6 @@ export function ScheduleEditor({
                   value={t}
                   onChange={(e) => setTimeAt(i, e.target.value)}
                 />
-                {/* No remove on the last row: a cadence with no time cannot fire. */}
                 {draft.times.length > 1 && (
                   <button type="button" style={smallBtnStyle} onClick={() => removeTimeAt(i)}>
                     Remove

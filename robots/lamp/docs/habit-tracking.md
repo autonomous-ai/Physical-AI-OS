@@ -176,7 +176,7 @@ Validates: Step 1 (read history) → Step 2 (compute delta) → Step 3 (fire nud
 
 ### Seed today's wellbeing data
 
-Direct-append to today's file (same path lelamp writes to). Use `enter` early, `drink` early, `using computer` recent — produces a hydration delta well above the 5-min test threshold.
+Direct-append to today's file (same path lelamp writes to). Use `enter` early, `drink` early, `using computer` recent — produces a hydration delta well above `HYDRATION_THRESHOLD_MIN` (45 min in `skills/wellbeing/SKILL.md`).
 
 ```bash
 ssh pi@<lamp-ip> 'sudo bash' <<'EOF'
@@ -204,7 +204,7 @@ curl -s -X POST 'http://<lamp-ip>/api/sensing/event' \
 | Stage | Observed |
 |---|---|
 | Step 1 query | `GET /api/agent/wellbeing-history?user=gray&last=50` (no slice) |
-| Step 2 delta | hydration ~159 min vs 5-min threshold — exceeds |
+| Step 2 delta | hydration ~159 min vs threshold (5-min test value at the time; production is 45 min) — exceeds |
 | Step 3 decision | nudge hydration (priority over break) |
 | Step 3b invoke | `habit/SKILL.md` Flow A called |
 | Flow A guard | mtime check passes (file missing → cold path) |
@@ -239,10 +239,10 @@ The Users tab shows a **habit** badge per user when `patterns.json` exists. The 
 
 | File | Purpose |
 |------|---------|
-| `lamp/resources/openclaw-skills/habit/SKILL.md` | Skill definition — Flows A–D, algorithm, storage |
-| `runtimes/openclaw/resources/SOUL.md` | "Observing Habits" section — conversation intent logging |
-| `lamp/resources/openclaw-skills/wellbeing/SKILL.md` | Step 3b — invokes Flow A on nudge fire; uses patterns.json to enrich nudge phrasing |
-| `runtimes/openclaw/onboarding.go` | Registers habit in skills list |
+| `skills/habit/SKILL.md` | Skill definition — Flows A–D, algorithm, storage |
+| `robots/lamp/SOUL.md` | "Observing Habits" section — conversation intent logging |
+| `skills/wellbeing/SKILL.md` | Step 3b — invokes Flow A when a nudge fires and `bootstrap_needed=true`; uses patterns.json to enrich nudge phrasing |
+| `system/skills/catalog_gen.go` | Registers habit in the skill catalog |
 | `hal/models.py` | `habit_patterns` field in FacePersonDetail |
 | `hal/routes/sensing.py` | Checks habit/patterns.json in face/owners API |
-| `lamp/web/src/pages/monitor/FaceOwnersSection.tsx` | Habit badge + folder in Users tab |
+| `system/web/src/pages/monitor/face-owners/PersonCard.tsx` | Habit badge + folder in Users tab |

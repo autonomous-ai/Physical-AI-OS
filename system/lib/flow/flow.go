@@ -1,17 +1,5 @@
-// Package flow provides structured flow event emission, mirroring doggi's flow_events.py.
-//
-// Usage:
-//
-//	flow.Init(bus)                                        // once at startup
-//	t := flow.Start("sensing_input", map[string]any{...}) // node activated
-//	flow.End("sensing_input", t, map[string]any{...})     // node completed + duration
-//	flow.Log("intent_match", map[string]any{...})         // one-shot event
-//	flow.SetTrace(runID)                                  // tag subsequent events with turn ID
-//
-// Events are written to:
-//   - local/flow_events_YYYY-MM-DD.jsonl (daily JSONL, persistent)
-//   - in-memory ring buffer (last 200 events, via Recent())
-//   - monitor.Bus (real-time SSE broadcast, if Init was called with a non-nil bus)
+// Package flow emits structured flow events to daily JSONL, an in-memory ring and the monitor bus.
+// Example: t := flow.Start("sensing_input", data); flow.End("sensing_input", t, data)
 package flow
 
 import (
@@ -29,7 +17,7 @@ import (
 	"go.autonomous.ai/os/system/monitor"
 )
 
-// Kind mirrors doggi's flow_events.py vocabulary.
+// Kind is the flow event kind.
 type Kind string
 
 const (
@@ -63,16 +51,14 @@ type emitter struct {
 	file             *os.File
 	day              string // YYYY-MM-DD of current log file
 	traceID          string // active turn trace ID (serialized per turn)
-	traceActiveCount int    // reference count for active trace (for safe GetTrace()=="" heuristic)
+	traceActiveCount int    // reference count for the active trace
 	bus              *monitor.Bus
 	version          string // injected at Init, stamped on every event
 }
 
 var global = &emitter{}
 
-// Init attaches a monitor.Bus so flow events are also broadcast via SSE.
-// version is stamped on every event (typically config.OSVersion).
-// Must be called once at startup before any other flow calls.
+// Init attaches bus for SSE broadcast and stamps version on every event; call once at startup.
 func Init(bus *monitor.Bus, version string) {
 	global.mu.Lock()
 	global.bus = bus
@@ -94,7 +80,6 @@ func cleanOldLogs() {
 		if !strings.HasPrefix(name, "flow_events_") || !strings.HasSuffix(name, ".jsonl") {
 			continue
 		}
-		// extract date: flow_events_YYYY-MM-DD.jsonl
 		date := strings.TrimSuffix(strings.TrimPrefix(name, "flow_events_"), ".jsonl")
 		if date < cutoff {
 			path := filepath.Join(logsDir, name)
@@ -132,9 +117,8 @@ func firstStr(ss []string) string {
 	return ""
 }
 
-// SetTrace sets the global fallback trace ID for events that don't pass an explicit runID.
-// Deprecated for tracing: prefer passing runID directly to Start/End/Log.
-// Retained for the Telegram-detection heuristic (GetTrace() == "" means no device turn active).
+// SetTrace sets the fallback trace ID for events without an explicit runID.
+// Prefer passing runID to Start/End/Log; GetTrace() == "" means no device turn is active.
 func SetTrace(id string) {
 	global.mu.Lock()
 	global.traceID = id
@@ -185,7 +169,6 @@ func (e *emitter) emit(kind Kind, node string, durMs int64, data map[string]any,
 	version := e.version
 	e.mu.Unlock()
 
-	// Explicit per-event runID takes precedence over global trace
 	if overrideRunID != "" {
 		traceID = overrideRunID
 	}
@@ -202,7 +185,6 @@ func (e *emitter) emit(kind Kind, node string, durMs int64, data map[string]any,
 	}
 
 	e.mu.Lock()
-	// Append to ring buffer, trim to ringSize
 	e.ring = append(e.ring, evt)
 	if len(e.ring) > ringSize {
 		e.ring = e.ring[len(e.ring)-ringSize:]
@@ -211,8 +193,6 @@ func (e *emitter) emit(kind Kind, node string, durMs int64, data map[string]any,
 	bus := e.bus
 	e.mu.Unlock()
 
-	// Push to monitor bus so SSE subscribers see flow events in real-time.
-	// Type pattern: "flow_enter", "flow_exit", "flow_event" — UI can filter on "flow_" prefix.
 	if bus != nil {
 		summary := fmt.Sprintf("[%s] %s", kind, node)
 		if durMs > 0 {
@@ -239,7 +219,7 @@ func (e *emitter) writeJSONL(now time.Time, evt Event) {
 		name := filepath.Join(logsDir, fmt.Sprintf("flow_events_%s.jsonl", day))
 		f, err := os.OpenFile(name, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o644)
 		if err != nil {
-			return // silent fail — storage may not be writable (e.g. embedded target)
+			return // storage may be read-only
 		}
 		e.file = f
 		e.day = day

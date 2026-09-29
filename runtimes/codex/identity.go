@@ -13,14 +13,6 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// Codex's IDENTITY.md is copied 1-for-1 from OpenClaw (presync.sh §1 carries it
-// over on migrate; the format is identical — a `- **Name:** <value>` card line), so
-// the identity handling here mirrors runtimes/openclaw/service_identity.go exactly.
-// Only the watched path (Codex's workspace) and the log component differ. Wake
-// words come from the shared i18n.BuildVoiceWakeWords (same variants OpenClaw's
-// private buildWakeWords produced). Codex runs as root (HOME=/root), so unlike
-// OpenClaw there is no runtime-user chown step.
-
 // identityPath returns the workspace IDENTITY.md location.
 func identityPath() string {
 	return filepath.Join(codexWorkspaceDir, "IDENTITY.md")
@@ -28,7 +20,7 @@ func identityPath() string {
 
 // WatchIdentity polls IDENTITY.md in the Codex workspace and pushes updated wake
 // words to HAL whenever the agent's name changes (e.g. the user says "call yourself
-// Noah"). Mirrors openclaw.WatchIdentity.
+// Noah").
 func (s *CodexService) WatchIdentity(ctx context.Context) {
 	path := identityPath()
 	var lastName string
@@ -50,15 +42,14 @@ func (s *CodexService) WatchIdentity(ctx context.Context) {
 		words := i18n.BuildVoiceWakeWords(name)
 		slog.Info("agent renamed, updating wake words", "component", "codex", "name", name, "words", words)
 		hal.SetVoiceConfig(words)
-		i18n.SetDeviceName(name) // {name}/{Name} + chitchat strip follow the agent name too
+		i18n.SetDeviceName(name)
 	}
 }
 
 // UpdateIdentityName rewrites the `**Name:**` line in workspace/IDENTITY.md so
 // downstream consumers (parseIdentityName / WatchIdentity → wake words) see the new
-// agent name. Preserves any bullet prefix and everything else; appends a fresh
-// `- **Name:** <name>` line when none exists yet. Atomic tmp+rename so a mid-write
-// crash cannot truncate the file. Mirrors openclaw.UpdateIdentityName.
+// agent name.
+// Atomic tmp+rename so a mid-write crash cannot truncate the file.
 func (s *CodexService) UpdateIdentityName(name string) error {
 	name = strings.TrimSpace(name)
 	if name == "" {
@@ -99,8 +90,8 @@ func (s *CodexService) UpdateIdentityName(name string) error {
 	slog.Info("identity name updated", "component", "codex", "name", name, "path", path)
 
 	// Reflect the rename into the AGENTS.md persona inline block so the very
-	// next `codex exec` turn already sees the new name. Best-effort — the block
-	// is also refreshed on the next EnsureOnboarding.
+	// next `codex exec` turn already sees the new name.
+	// Best-effort — the block is also refreshed on the next EnsureOnboarding.
 	if _, err := s.ensurePersonaInlineBlock(); err != nil {
 		slog.Warn("refresh persona inline block after rename failed",
 			"component", "codex", "error", err)
@@ -109,9 +100,7 @@ func (s *CodexService) UpdateIdentityName(name string) error {
 }
 
 // rewriteIdentityName returns content with the first `**name:**` line's value
-// replaced by name. The line's leading prefix (e.g. "- ") is preserved; any trailing
-// description after the value is dropped. When no name line is found,
-// "- **Name:** <name>" is appended. Mirrors openclaw.rewriteIdentityName.
+// replaced by name.
 func rewriteIdentityName(content, name string) string {
 	lines := strings.Split(content, "\n")
 	for i, line := range lines {
@@ -120,9 +109,6 @@ func rewriteIdentityName(content, name string) string {
 			continue
 		}
 		lines[i] = line[:idx] + "**Name:** " + name
-		// Drop a following italic-parens placeholder hint like
-		// `  _(pick something you like)_` left over from the onboarding template —
-		// once the user picks a name, the hint is stale.
 		if i+1 < len(lines) && isItalicPlaceholder(lines[i+1]) {
 			lines = append(lines[:i+1], lines[i+2:]...)
 		}
@@ -136,8 +122,7 @@ func rewriteIdentityName(content, name string) string {
 }
 
 // isItalicPlaceholder returns true when line is a markdown italic note wrapped in
-// `_(...)_` or `*(...)*` (with optional leading whitespace). Used to detect and
-// remove the onboarding-template hint line after rename.
+// `_(...)_` or `*(...)*` (with optional leading whitespace).
 func isItalicPlaceholder(line string) bool {
 	t := strings.TrimSpace(line)
 	if len(t) < 4 {
@@ -148,7 +133,7 @@ func isItalicPlaceholder(line string) bool {
 }
 
 // parseIdentityName extracts the agent name from the `- **Name:** <value>` line in
-// IDENTITY.md. Mirrors openclaw.parseIdentityName (same trailing-description strip).
+// IDENTITY.md.
 func parseIdentityName(content string) string {
 	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)

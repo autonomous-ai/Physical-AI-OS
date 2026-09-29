@@ -1,9 +1,4 @@
-"""Regression tests for sleepy owning the LED strip.
-
-Sleep teardown is concurrent with TTS/music completion and pending emotion
-restores. None of those late callbacks may revive the mic-muted red indicator
-or the music idle fallback after sleepy has cleared the strip.
-"""
+"""Regression tests for sleepy owning the LED strip."""
 import threading
 import unittest
 from unittest import mock
@@ -82,8 +77,6 @@ class TestSleepyLED(unittest.TestCase):
         self.assertTrue(state._mic_muted)
         self.assertEqual(state.rgb_service.clear_calls, 1)
 
-        # A late TTS/music/emotion restore must leave the strip dark, even if
-        # the mic-muted indicator was already active before sleepy.
         state._mic_muted_led = True
         state._restore_user_led()
         state._start_mic_muted_effect()
@@ -105,8 +98,6 @@ class TestSleepyLED(unittest.TestCase):
         state._sleepy_auto_muted_mic = True
         state._mic_muted = True
         state._mic_muted_led = True
-        # Wake can happen while a feedback wave owns the strip. Its later
-        # completion must not resurrect the boot-time privacy indicator.
         state._tts_speaking = True
         with (
             mock.patch.object(state, "_hw_mic_switch_muted", False),
@@ -155,7 +146,6 @@ class TestSleepyLED(unittest.TestCase):
             mock.patch.object(button_actions, "_cancel_agent_speech"),
             mock.patch.object(button_actions, "_grant_wakeword_focus"),
         ):
-            # Use the real shared action, emotion route and sleep wake helper.
             button_actions.single_click_action("MPR121-test", announce=False, chime=False)
             self.assertFalse(state._sleeping)
             self.assertFalse(state._mic_muted)

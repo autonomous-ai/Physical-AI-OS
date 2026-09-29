@@ -11,11 +11,6 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// Hermetic Discord tests: no gateway connection is ever opened. The pure
-// accept filter / prefix builder / chunker are tested directly; injection and
-// reply routing are driven through the discordSendTurn / discordSendMessage
-// seams, mirroring slack_test.go.
-
 func TestAcceptDiscordMessage(t *testing.T) {
 	const bot = "B1"
 	cases := []struct {
@@ -113,7 +108,6 @@ func TestDiscordTurnText(t *testing.T) {
 	if got != want {
 		t.Errorf("discordTurnText = %q, want %q", got, want)
 	}
-	// Empty username falls back to "unknown" (mirrors tgUser.label()).
 	got = discordTurnText("", "42", "hi")
 	if got != "[discord] Message from unknown [id:42]:\nhi" {
 		t.Errorf("empty-username turn text = %q", got)
@@ -121,25 +115,21 @@ func TestDiscordTurnText(t *testing.T) {
 }
 
 func TestChunkDiscordMessage(t *testing.T) {
-	// Short text: one chunk, untouched.
 	if got := chunkDiscordMessage("hello", 2000); len(got) != 1 || got[0] != "hello" {
 		t.Errorf("short text chunks = %v", got)
 	}
 
-	// Exactly at the limit: one chunk.
 	exact := strings.Repeat("a", 10)
 	if got := chunkDiscordMessage(exact, 10); len(got) != 1 || got[0] != exact {
 		t.Errorf("exact-limit chunks = %v", got)
 	}
 
-	// One char over: hard split at the boundary (no newline available).
 	over := strings.Repeat("a", 11)
 	got := chunkDiscordMessage(over, 10)
 	if len(got) != 2 || got[0] != strings.Repeat("a", 10) || got[1] != "a" {
 		t.Errorf("boundary chunks = %v", got)
 	}
 
-	// Newline inside the window: split there so lines stay whole.
 	text := "first line\nsecond line"
 	got = chunkDiscordMessage(text, 15)
 	if len(got) != 2 || got[0] != "first line" || got[1] != "second line" {
@@ -154,7 +144,7 @@ func TestChunkDiscordMessage(t *testing.T) {
 	}
 
 	// Every chunk must fit within the limit.
-	long := strings.Repeat("word word word\n", 300) // ~4500 chars
+	long := strings.Repeat("word word word\n", 300)
 	for i, c := range chunkDiscordMessage(long, 2000) {
 		if n := len([]rune(c)); n > 2000 {
 			t.Errorf("chunk %d has %d runes, over the 2000 limit", i, n)
@@ -166,7 +156,6 @@ func TestDiscordRunMapRoundTrip(t *testing.T) {
 	s := &CodexService{discordRuns: make(map[string]string)}
 
 	s.markDiscordRun("run-1", "C42")
-	// Peek is non-consuming (the typing keeper polls it).
 	if !s.hasDiscordRun("run-1") || !s.hasDiscordRun("run-1") {
 		t.Errorf("hasDiscordRun should be true before consume (non-consuming peek)")
 	}
@@ -179,7 +168,6 @@ func TestDiscordRunMapRoundTrip(t *testing.T) {
 	if got := s.consumeDiscordRun("run-1"); got != "" {
 		t.Errorf("second consume = %q, want empty (miss)", got)
 	}
-	// Unroutable entries are skipped.
 	s.markDiscordRun("run-2", "")
 	if s.hasDiscordRun("run-2") {
 		t.Errorf("empty-channel run should not be recorded")
@@ -249,7 +237,6 @@ func TestDiscordReplyRoutingEmitFinal(t *testing.T) {
 
 	s.emitFinal(codexFrame{}, func(domain.WSEvent) {})
 
-	// Run consumed synchronously (before dispatch) so the typing keeper stops.
 	if s.hasDiscordRun(runID) {
 		t.Errorf("discord run not consumed by emitFinal")
 	}

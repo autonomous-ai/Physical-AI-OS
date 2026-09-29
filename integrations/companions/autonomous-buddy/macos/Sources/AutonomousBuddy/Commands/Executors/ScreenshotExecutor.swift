@@ -8,18 +8,14 @@ struct ListDisplaysExecutor: Executor {
     let action = "list_displays"
 
     func execute(params: [String: Any]) async throws -> [String: Any] {
-        // Use NSScreen rather than CGDisplayBounds. CGDisplayBounds reports each display's
-        // top-left in the "global display coordinate space", but for bottom-aligned multi-display
-        // setups it doesn't reflect the actual arrangement that CGEvent dispatches against.
-        // NSScreen.frame DOES carry arrangement (in bottom-left-origin space), and we y-flip
-        // ourselves using the primary (menu-bar / origin==.zero) screen as pivot.
+        // NSScreen.frame reflects real multi-display arrangement (CGDisplayBounds does not
+        // for bottom-aligned setups); y-flip around the primary screen.
         return try await MainActor.run {
             let screens = NSScreen.screens
             guard !screens.isEmpty else {
                 throw ExecutorError.actionFailed("no screens available")
             }
-            // Primary = the screen whose NSScreen origin is (0,0). That's the menu-bar screen
-            // which defines CGEvent's global y origin (top-left of it = CGEvent (0,0)).
+            // Primary = the NSScreen at origin (0,0); it defines CGEvent's global origin.
             let primary = screens.first(where: { $0.frame.origin == .zero }) ?? screens[0]
             let primaryTopY = primary.frame.origin.y + primary.frame.size.height
             let mainID = CGMainDisplayID()
@@ -123,8 +119,7 @@ struct ScreenshotExecutor: Executor {
             image = rawImage
         }
 
-        // JPEG q=0.8 gives ~5-10× smaller payload than PNG for typical desktop
-        // screenshots, with negligible perceptual loss for vision LLM input.
+        // JPEG q=0.8: ~5-10x smaller than PNG with negligible loss for vision LLMs.
         let jpegData = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(jpegData, UTType.jpeg.identifier as CFString, 1, nil) else {
             throw ExecutorError.actionFailed("could not create JPEG destination")

@@ -26,23 +26,7 @@ var shellUpgrader = websocket.Upgrader{
 }
 
 // ShellHandler upgrades the request to a WebSocket and pipes a /bin/bash PTY
-// in both directions. Frames from the client are stdin bytes by default; small
-// JSON envelopes with `type: "resize"` resize the PTY (rows/cols).
-//
-// agentEnvFile, when non-nil, is resolved per-connection to the active agent
-// runtime's launch env file (e.g. claudecode's /root/.claudecode/.env). Its
-// KEY=VALUE pairs are merged into the PTY env (plus IS_SANDBOX=1) so an
-// interactive `claude` in the web CLI reuses the campaign API key instead of
-// prompting login — the file is otherwise only injected into the gatewayd
-// service by systemd, so a bare login shell would not see it. Returning "" (or
-// a missing file) skips the injection.
-//
-// Client → server frames:
-//   - TextMessage starting with '{' and ending with '}' AND parseable as
-//     {"type":"resize","rows":N,"cols":M}  ⇒ window resize signal
-//   - Anything else (text or binary)       ⇒ raw stdin bytes
-//
-// Server → client frames: raw stdout/stderr bytes as binary messages.
+// in both directions.
 func ShellHandler(agentEnvFile func() string) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		shellSession(c, agentEnvFile)
@@ -57,7 +41,6 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 	}
 	defer ws.Close()
 
-	// Spawn an interactive login bash so the user gets aliases, $PATH, prompt.
 	cmd := exec.Command("/bin/bash", "-il")
 	cmd.Env = append(os.Environ(),
 		"TERM=xterm-256color",
@@ -83,7 +66,6 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 		_, _ = cmd.Process.Wait()
 	}()
 
-	// Initial size — client will send a resize frame on connect to override.
 	_ = pty.Setsize(ptmx, &pty.Winsize{Rows: 24, Cols: 80})
 
 	// One writer mutex: WebSocket connections require all writes to be serialized.
@@ -99,7 +81,6 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 	var closeOnce sync.Once
 	closeDone := func() { closeOnce.Do(func() { close(done) }) }
 
-	// PTY → WebSocket. Read in 4KB chunks; xterm.js handles ANSI just fine.
 	go func() {
 		defer closeDone()
 		buf := make([]byte, 4096)
@@ -119,7 +100,6 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 		}
 	}()
 
-	// WebSocket → PTY. Loop ends when the client closes or we get an error.
 	for {
 		select {
 		case <-done:
@@ -132,8 +112,6 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 			return
 		}
 
-		// Try to interpret as a control envelope (resize) — only for text frames
-		// that look like JSON. Anything else goes straight to PTY stdin.
 		if mt == websocket.TextMessage && len(data) > 1 && data[0] == '{' {
 			var env struct {
 				Type string `json:"type"`
@@ -160,12 +138,8 @@ func shellSession(c *gin.Context, agentEnvFile func() string) {
 	}
 }
 
-// loadAgentEnv parses a KEY=VALUE launch env file (blank/#/no-"=" lines
-// skipped, keys/values trimmed, surrounding double quotes stripped — same rules
-// as the gatewayd child env loader) and returns "KEY=VALUE" entries for the PTY
-// env. IS_SANDBOX=1 is appended when the file loads so a root `claude
-// --dangerously-skip-permissions` is allowed. An empty path or unreadable file
-// yields nil (no injection).
+// loadAgentEnv parses a KEY=VALUE launch env file (same rules as the gatewayd
+// child env loader) into PTY env entries; nil when absent.
 func loadAgentEnv(path string) []string {
 	if path == "" {
 		return nil
@@ -197,7 +171,5 @@ func loadAgentEnv(path string) []string {
 	if len(out) == 0 {
 		return nil
 	}
-	// The device runs as root; claude refuses --dangerously-skip-permissions
-	// under uid 0 unless IS_SANDBOX=1 (mirrors the gatewayd child env).
 	return append(out, "IS_SANDBOX=1")
 }

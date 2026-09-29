@@ -28,13 +28,11 @@ type StateMachine struct {
 	prevTokens   int
 	transientEnd time.Time // when heart/celebrate expires
 
-	// Approval tracking
 	pendingPrompt *Prompt
 	promptTime    time.Time
 	approvedCount int
 	deniedCount   int
 
-	// Callbacks
 	onStateChange func(old, new BuddyState, hb *Heartbeat)
 }
 
@@ -45,9 +43,7 @@ func NewStateMachine(onChange func(old, new BuddyState, hb *Heartbeat)) *StateMa
 	}
 }
 
-// SeedStats restores approved/denied counters from a previous run.
-// Call before serving traffic so /status reports the right numbers
-// after a restart.
+// SeedStats restores approved/denied counters; call before serving traffic.
 func (sm *StateMachine) SeedStats(approved, denied int) {
 	sm.mu.Lock()
 	sm.approvedCount = approved
@@ -121,7 +117,6 @@ func (sm *StateMachine) HandleHeartbeat(hb *Heartbeat) {
 		return
 	}
 
-	// Derive state from heartbeat fields
 	if hb.Prompt != nil {
 		sm.pendingPrompt = hb.Prompt
 		sm.promptTime = time.Now()
@@ -148,8 +143,7 @@ func (sm *StateMachine) Approved() {
 		sm.transition(StateIdle)
 	}
 	sm.mu.Unlock()
-	// Persist outside the lock — file I/O shouldn't block the BLE
-	// dispatch goroutine and the data is just a counter pair.
+	// Persist outside the lock so file I/O doesn't block BLE dispatch.
 	go SaveStats(PersistedStats{Approved: appr, Denied: deny})
 }
 
@@ -176,14 +170,12 @@ func (sm *StateMachine) transition(next BuddyState) {
 	}
 }
 
-// RunTransientExpiry checks if transient states have expired.
-// Call this from a ticker goroutine.
+// RunTransientExpiry expires transient states; call from a ticker.
 func (sm *StateMachine) CheckTransientExpiry() {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if (sm.current == StateHeart || sm.current == StateCelebrate) && time.Now().After(sm.transientEnd) {
-		// Re-derive from last heartbeat
 		if sm.lastHB != nil {
 			if sm.lastHB.Running > 0 {
 				sm.transition(StateBusy)

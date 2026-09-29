@@ -1,32 +1,7 @@
-"""Runtime CTS — the COMPATIBILITY.md rules only a live device can answer.
+"""Runtime CTS: checks a live device's mounted routes against its ROBOT.md (skipped unless CTS_HAL is set).
 
-`test_compatibility.py` reads `ROBOT.md` and proves a device is *described*
-correctly. It cannot prove the running device matches that description: a
-declaration passes the static suite whether or not any hardware ever booted it.
-This module closes that gap — it points at a provisioned device and compares
-what the device REPORTS MOUNTED against what its `ROBOT.md` DECLARES.
-
-Opt-in, so CI (which has no hardware) stays green:
-
-    CTS_HAL=http://lamp-ac82.local:5001 \\
-    CTS_OS=http://lamp-ac82.local:5000 \\
-      python3 -m unittest discover -s robots/contract/cts -v
-
-Environment:
-    CTS_HAL              HAL base URL. Unset → every test here skips.
-    CTS_OS               os-server base URL. Unset → the envelope rule skips.
-    CTS_TIMEOUT          per-request timeout in seconds (default 5).
-    CTS_STOP_BUDGET_MS   assert the deterministic stop returns within N ms.
-                         Unset → the latency is measured and printed, not
-                         asserted (COMPATIBILITY.md says "immediate" but names
-                         no number; see README §Not covered).
-    CTS_ALLOW_MOTION     set to 1 to also exercise stops that MOVE hardware.
-                         Off by default: `/servo/release` cuts torque, which
-                         drops a raised arm.
-
-Dependency-free on purpose (stdlib urllib): the suite must run on a bare
-python3 the same way CI runs the static half, and on a third party's machine
-that has only cloned the repo.
+Usage: CTS_HAL=http://<device>:5001 [CTS_OS=http://<device>:5000] python3 -m unittest discover -s robots/contract/cts -v
+Env: CTS_TIMEOUT, CTS_STOP_BUDGET_MS, CTS_DEVICES_DIR, CTS_ALLOW_MOTION=1 (runs /servo/release, drops a raised arm).
 """
 import json
 import os
@@ -42,11 +17,6 @@ sys.path.insert(0, ROOT)  # the hal package lives at the repo root
 
 from hal.board.device import load_device  # noqa: E402  (path set above)
 
-# Where the declarations live. Defaults to this checkout, but is overridable so
-# the suite can run ON the device itself — where HAL is already on loopback (no
-# port-forward needed) and the profile sits at /opt/devices/<type>:
-#   PYTHONPATH=/opt CTS_DEVICES_DIR=/opt/devices CTS_HAL=http://127.0.0.1:5001 \
-#     python3 -m unittest test_runtime -v
 DEVICES_DIR = os.environ.get("CTS_DEVICES_DIR") or os.path.join(ROOT, "robots")
 
 HAL = (os.environ.get("CTS_HAL") or "").rstrip("/")
@@ -55,16 +25,10 @@ TIMEOUT = float(os.environ.get("CTS_TIMEOUT") or 5)
 STOP_BUDGET_MS = os.environ.get("CTS_STOP_BUDGET_MS")
 ALLOW_MOTION = os.environ.get("CTS_ALLOW_MOTION") == "1"
 
-# Routes the HAL mounts regardless of declaration — they import cheaply and
-# other code calls into them in-process (hal/server.py `_ALWAYS_ROUTES`).
-# MUST NOT 16 ("mount a capability its ROBOT.md does not declare") is checked
-# against declared ∪ these, or every device would fail on `system`.
+# Mounted regardless of declaration (hal/server.py `_ALWAYS_ROUTES`).
 ALWAYS_ROUTES = {"audio", "emotion", "scene", "system", "bluetooth"}
 
-# Read-only probe per route: "mounted" is what the device claims, this is the
-# route actually answering. Paths are the real GET handlers in hal/routes/*.py
-# (absolute — only the bluetooth router carries a prefix). Routes absent from
-# this map are not probed; see README §Not covered.
+# Read-only GET probe per route; unlisted routes are not probed.
 ROUTE_PROBES = {
     "servo": "/servo",
     "led": "/led",
@@ -81,11 +45,7 @@ ROUTE_PROBES = {
 
 
 def _request(url, method="GET", timeout=None):
-    """Return (http_status, parsed_json_or_None, elapsed_ms).
-
-    Never raises: a 4xx/5xx is a result the assertions read, and an unreachable
-    host becomes status 0 so the operator gets a compliance verdict rather than
-    a urllib traceback (a typo'd CTS_HAL is the common case)."""
+    """Return (http_status, json_or_None, elapsed_ms); never raises, unreachable host -> status 0."""
     req = urllib.request.Request(url, method=method)
     started = time.perf_counter()
     try:
@@ -107,8 +67,7 @@ def _request(url, method="GET", timeout=None):
 
 @unittest.skipUnless(HAL, "set CTS_HAL=http://<device>:5001 to run the runtime CTS")
 class TestRuntimeConformance(unittest.TestCase):
-    """Live-device half of the CTS. Every assertion names the COMPATIBILITY.md
-    rule it enforces, so a failure report reads as a compliance verdict."""
+    """Live-device half of the CTS; assertions name the COMPATIBILITY.md rule enforced."""
 
     @classmethod
     def setUpClass(cls):
@@ -123,30 +82,23 @@ class TestRuntimeConformance(unittest.TestCase):
             cls.profile = load_device(str(dev_id), DEVICES_DIR)
 
     def setUp(self):
-        # One clear failure (test_device_is_reachable) instead of the same
-        # connection error repeated across every rule below.
         if not self.reachable and self.id().rsplit(".", 1)[-1] != "test_device_is_reachable":
             self.skipTest(f"device at {HAL} not reachable — see test_device_is_reachable")
 
     def test_device_is_reachable(self):
-        """Fails loud rather than skipping: the operator asked for a device run
-        by setting CTS_HAL, so a silent green here would be a false pass."""
+        """Fails rather than skips: CTS_HAL was set, so a silent pass would be false."""
         self.assertTrue(
             self.reachable,
             f"GET {HAL}/device returned {self.probe_status or 'no response'} — the device is "
             f"unreachable, or is not running an Autonomous HAL. Nothing below could be verified.")
 
     def _profile(self):
-        """The repo-side declaration for the device under test, or skip. A
-        device whose id has no folder here is running a fork's declaration —
-        the runtime rules still hold, but this checkout cannot verify them."""
+        """Return the repo-side declaration for the device under test, or skip."""
         if self.profile is None:
             self.skipTest(
                 f"device reports id={self.device.get('id')!r}, which has no robots/<id>/ROBOT.md "
                 f"in this checkout — cannot compare running device against its declaration")
         return self.profile
-
-    # ── MUST 1 — ships a ROBOT.md with schema, a stable id, a type, its boards ──
 
     def test_must1_identity_is_served(self):
         for field in ("id", "name", "type", "schema", "board"):
@@ -167,8 +119,6 @@ class TestRuntimeConformance(unittest.TestCase):
         self.assertEqual(self.device.get("id"), profile.id,
                          "MUST 1: the id the device serves differs from the one its ROBOT.md declares")
 
-    # ── MUST 5 — every declared `required` capability is up, or the boot failed loud ──
-
     def test_must5_required_routes_are_mounted(self):
         profile = self._profile()
         required = {r for r, req in profile.declared_routes().items() if req}
@@ -178,8 +128,7 @@ class TestRuntimeConformance(unittest.TestCase):
                          f"is serving requests — this is the silent half-boot the rule forbids")
 
     def test_must5_mounted_routes_answer(self):
-        """Mounted is a claim; answering is the fact. Probes a read-only GET on
-        every mounted route this suite knows an endpoint for."""
+        """Probe a read-only GET on every mounted route with a known endpoint."""
         unanswered = []
         for route in sorted(self.mounted):
             path = ROUTE_PROBES.get(route)
@@ -190,8 +139,6 @@ class TestRuntimeConformance(unittest.TestCase):
                 unanswered.append(f"{route} ({path} → {status})")
         self.assertFalse(unanswered,
                          f"MUST 5: mounted routes that do not answer: {unanswered}")
-
-    # ── MUST 2 / 3 — system capability, and a primary sense or output, at runtime ──
 
     def test_must2_system_capability_is_live(self):
         status, _, _ = _request(f"{HAL}/health")
@@ -207,8 +154,6 @@ class TestRuntimeConformance(unittest.TestCase):
         self.assertTrue(routes & self.mounted,
                         f"MUST 3: declares {sorted(primary)} but mounted none of its routes {sorted(routes)}")
 
-    # ── MUST NOT 16 — mount a capability its ROBOT.md does not declare ──
-
     def test_mustnot16_no_undeclared_route_is_mounted(self):
         profile = self._profile()
         declared = set(profile.declared_routes()) | ALWAYS_ROUTES
@@ -217,17 +162,8 @@ class TestRuntimeConformance(unittest.TestCase):
                          f"MUST NOT 16: {undeclared} are mounted but not declared in ROBOT.md — "
                          f"a skill could reach hardware the device never advertised")
 
-    # ── MUST NOT 15 / MUST 6 — a motion device ships a deterministic stop ──
-
     def test_mustnot15_motion_device_has_a_holding_stop(self):
-        """`POST /servo/stop` aborts what is in flight and HOLDS — torque stays
-        on, the body does not travel to a rest pose first.
-
-        The probe below (`/servo/track/stop`) only ends the vision tracker, so
-        it passes on a body that cannot stop a move at all. This is the one that
-        a rolling or legged body has to answer: a stop that parks first is not a
-        stop when the thing has wheels.
-        """
+        """`POST /servo/stop` aborts in-flight motion and holds position."""
         profile = self._profile()
         if "motion" not in profile.capabilities:
             self.skipTest("device declares no motion capability")
@@ -241,7 +177,6 @@ class TestRuntimeConformance(unittest.TestCase):
             self.assertLessEqual(elapsed_ms, float(STOP_BUDGET_MS),
                                  f"MUST 6: stop took {elapsed_ms:.0f} ms, over the "
                                  f"{STOP_BUDGET_MS} ms budget given in CTS_STOP_BUDGET_MS")
-        # It HOLDS: a stop that parks the body would show up here as movement.
         _, after, _ = _request(f"{HAL}/servo/position")
         if before and after:
             for joint, was in (before.get("positions") or {}).items():
@@ -254,14 +189,7 @@ class TestRuntimeConformance(unittest.TestCase):
                         f"a stop must hold, not travel to a rest pose")
 
     def test_must6_locomotion_body_has_a_holding_stop(self):
-        """A body that rolls or walks declares the `locomotion` route, and its
-        stop is the one that matters most: wheels coast, legs fall.
-
-        Same contract as `/servo/stop` above, different route, because a rolling
-        base has no servo joints to read — `/locomotion/stop` must answer, and
-        answer fast. Skipped on every body in the tree today; it exists so the
-        first one that declares `locomotion` cannot merge without it.
-        """
+        """A `locomotion` body must expose a fast `POST /locomotion/stop`."""
         profile = self._profile()
         if "locomotion" not in (profile.declared_routes() or {}):
             self.skipTest("device declares no locomotion route")
@@ -290,8 +218,7 @@ class TestRuntimeConformance(unittest.TestCase):
                                  f"{STOP_BUDGET_MS} ms budget given in CTS_STOP_BUDGET_MS")
 
     def test_mustnot15_torque_off_is_reachable(self):
-        """`/servo/release` is the hard stop (torque off). It DROPS a raised
-        arm, so it only runs when the operator opts in."""
+        """`/servo/release` (torque off) runs only with CTS_ALLOW_MOTION=1."""
         profile = self._profile()
         if "motion" not in profile.capabilities:
             self.skipTest("device declares no motion capability")
@@ -301,8 +228,6 @@ class TestRuntimeConformance(unittest.TestCase):
         self.assertLess(status, 400,
                         f"MUST NOT 15: POST /servo/release returned {status} — torque-off unreachable")
         print(f"\n    [cts] torque-off answered in {elapsed_ms:.0f} ms", end="")
-
-    # ── MUST 7 — the standard API envelope ──
 
     @unittest.skipUnless(OS_SERVER, "set CTS_OS=http://<device>:5000 to check the API envelope")
     def test_must7_success_envelope(self):

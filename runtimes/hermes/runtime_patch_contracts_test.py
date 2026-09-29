@@ -1,9 +1,4 @@
-"""Do not silently ship an embedded runtime patch without fixture tests.
-
-The companion suites must exercise the resulting upstream source (including
-compilation, repeated application, and unsupported anchors), not just compile
-the patch script. They run under the same CI unittest discovery command.
-"""
+"""Do not silently ship an embedded runtime patch without fixture tests."""
 
 import ast
 from pathlib import Path
@@ -36,8 +31,6 @@ class RuntimePatchContractCoverage(unittest.TestCase):
         for patch in sorted(patches):
             with self.subTest(patch=str(patch.relative_to(ROOT))):
                 ast.parse(patch.read_text(), filename=str(patch))
-                # Keep suites at this root so unittest discovery always runs
-                # them even when the patch lives in a non-package directory.
                 suite_path = ROOT / (patch.stem + "_test.py")
                 self.assertTrue(
                     suite_path.is_file(),

@@ -5,25 +5,14 @@ import (
 	"sync"
 )
 
-// Device/agent name injected into i18n strings so nothing hardcodes a device name.
-// Two placeholders:
-//
-//	{name} — lowercase, for input matchers   (e.g. "hi {name}"   -> "hi <name>")
-//	{Name} — display/title, for spoken text  (e.g. "{Name} đây"  -> "<Name> đây")
-//
-// Device-agnostic: each device supplies its own name — the agent name from
-// IDENTITY.md when known, its device_type at startup as the fallback — never a
-// compiled-in device name. Both placeholders resolve to the same name (lower /
-// title cased), so a device's strings render with its own identity.
+// Device name placeholders: {name} (lowercase, matchers) and {Name} (title case, spoken text).
 var (
 	deviceNameMu      sync.RWMutex
 	deviceNameLower   string
 	deviceNameDisplay string
 )
 
-// SetDeviceName sets the name used to fill {name}/{Name} across i18n strings and
-// rebuilds the chitchat wake-word strip list. Call at startup (device_type) and
-// on agent rename (IDENTITY.md name). "" is ignored.
+// SetDeviceName sets the {name}/{Name} value and rebuilds the wake-word strip list; "" is ignored.
 func SetDeviceName(name string) {
 	n := strings.ToLower(strings.TrimSpace(name))
 	if n == "" {
@@ -37,17 +26,14 @@ func SetDeviceName(name string) {
 	SetChitchatWakeWords(BuildChitchatWakeWords(n))
 }
 
-// DeviceName returns the current lowercase device/agent name. It starts as the
-// device type and is replaced when the active runtime loads or renames its
-// identity, matching the name HAL uses for its personalized wake phrases.
+// DeviceName returns the current lowercase device/agent name.
 func DeviceName() string {
 	deviceNameMu.RLock()
 	defer deviceNameMu.RUnlock()
 	return deviceNameLower
 }
 
-// applyName fills {Name}/{name} placeholders with the current device name. Safe
-// (no-op) on strings without placeholders and before any name is set.
+// applyName fills {Name}/{name} placeholders with the current device name.
 func applyName(s string) string {
 	deviceNameMu.RLock()
 	lower, disp := deviceNameLower, deviceNameDisplay
@@ -61,8 +47,7 @@ func applyName(s string) string {
 	return s
 }
 
-// applyNameAll returns a new slice with applyName applied to each element. nil in
-// -> nil out (preserves "no pool" semantics for callers that test for nil).
+// applyNameAll applies applyName to each element; nil stays nil.
 func applyNameAll(in []string) []string {
 	if in == nil {
 		return nil
