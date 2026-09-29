@@ -26,7 +26,7 @@ HAL (client)                  lbserver :7999                 dlserver :8001
 - Separate round-robin cursors for HTTP and WS, mutex-guarded.
 - HTTP: all methods proxied; backend unreachable → `502`.
 - WS: full-duplex proxy; backend unreachable → close `1011`.
-- Timeouts: `LB__HTTP_TIMEOUT` and `LB__WS_OPEN_TIMEOUT` (both default `120.0`).
+- Timeouts: `LB__HTTP_TIMEOUT` and `LB__WS_OPEN_TIMEOUT` (both default `30.0`).
 - Upstream path: each request is forwarded to `<backend>` + `LB__INTERNAL_PREFIX`
   (default empty) + the original path, so by default the LB hits the dlserver route
   unchanged.
@@ -125,8 +125,8 @@ plaintext.
 | `LB__BACKENDS` | `""` | Comma-separated dlserver URLs |
 | `LB__PORT` | `7999` | lbserver bind port |
 | `LB__HOST` | `0.0.0.0` | lbserver bind host |
-| `LB__HTTP_TIMEOUT` | `120.0` | Upstream HTTP timeout (s) |
-| `LB__WS_OPEN_TIMEOUT` | `120.0` | Upstream WS handshake timeout (s) |
+| `LB__HTTP_TIMEOUT` | `30.0` | Upstream HTTP timeout (s) |
+| `LB__WS_OPEN_TIMEOUT` | `30.0` | Upstream WS handshake timeout (s) |
 
 ## nginx front door
 

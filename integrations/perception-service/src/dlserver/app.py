@@ -44,7 +44,8 @@ from dlserver.utils.state import (
     set_pose_model,
 )
 from core.livez import router as livez_router
-from core.logging_ext import ResilientRotatingFileHandler
+from core.logging_ext import ResilientRotatingFileHandler, queued, uvicorn_file_log_config
+from core.stackdump import install_stack_dump, stack_dump_name
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -220,33 +221,16 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logging.basicConfig(level=logging.INFO, handlers=[handler])
+        file_handler = ResilientRotatingFileHandler(
+            str(log_path), maxBytes=1_048_576, backupCount=3
+        )
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        # Queued: logger.info() on the event loop only enqueues. A write that hangs
+        # on the log volume blocks the writer thread, not every request (#530).
+        logging.basicConfig(level=logging.INFO, handlers=[queued(file_handler)])
 
-        # "uvicorn" and "uvicorn.access" must share one handler: two rotating handlers
-        # on one path unlink each other's inode, and MooseFS then returns EIO on write.
-        return {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {
-                "default": {"format": LOG_FORMAT},
-            },
-            "handlers": {
-                "file": {
-                    "formatter": "default",
-                    "class": "core.logging_ext.ResilientRotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-            },
-            "loggers": {
-                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
-                "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
-            },
-        }
+        # Route uvicorn/fastapi logs to a separate file (one shared, queued handler).
+        return uvicorn_file_log_config(str(uvicorn_log_path), LOG_FORMAT)
     except InstanceAlreadyRunning:
         # Never fall back to console: a second instance would clobber the live one's logs.
         raise
@@ -268,6 +252,11 @@ def main() -> None:
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    try:
+        dump = install_stack_dump(stack_dump_name(args.log_dir, "dlserver"))
+        logger.info("Stack dump on SIGUSR1 → %s", dump)
+    except OSError as e:
+        logger.warning("Stack dump not installed: %s", e)
 
     if args.pid_file:
         try:

@@ -350,8 +350,10 @@ def face_photo(label: str, filename: str):
 
     norm = FacePerception.normalize_label(label)
     path = (USERS_DIR / norm / filename).resolve()
-    if not str(path).startswith(str(USERS_DIR.resolve())):
-        raise HTTPException(400, "invalid path")
+    try:
+        path.relative_to(USERS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "invalid path") from None
     if not path.is_file():
         raise HTTPException(404, "photo not found")
     return Response(content=path.read_bytes(), media_type="image/jpeg")
@@ -365,8 +367,10 @@ def face_file(label: str, filepath: str):
 
     norm = canonicalize_person(label)
     path = (USERS_DIR / norm / filepath).resolve()
-    if not str(path).startswith(str(USERS_DIR.resolve())):
-        raise HTTPException(400, "invalid path")
+    try:
+        path.relative_to(USERS_DIR.resolve())
+    except ValueError:
+        raise HTTPException(400, "invalid path") from None
     if not path.is_file():
         raise HTTPException(404, "file not found")
     mime_map = {".json": "application/json", ".jsonl": "application/json", ".wav": "audio/wav", ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".webm": "audio/webm", ".npy": "application/octet-stream"}

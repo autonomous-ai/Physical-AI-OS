@@ -84,6 +84,12 @@ một `Makefile`; hai tiến trình chạy bằng `python -m dlserver` và `pyth
 Cài đặt, single-node vs scale master/slave nhiều GPU, RunPod, Docker và TLS:
 [`integrations/perception-service/docs/deployment.md`](../../integrations/perception-service/docs/deployment.md).
 
+Code dlserver mới được triển khai bằng `make deploy-dlserver`: lệnh này khởi động
+code mới trên một cổng thứ hai, cùng GPU, và chỉ chuyển lbserver sang đó (state
+file + `SIGHUP`) khi mọi model đã tải xong, nên thiết bị không thấy lỗi nào. Thay
+đổi dependency vẫn dùng cách restart tại chỗ đã lên kế hoạch như trước. Chi tiết:
+[Zero-downtime deploy](../../integrations/perception-service/docs/deployment.md#zero-downtime-deploy-two-slots).
+
 ---
 
 > **Đồng bộ tài liệu:** trang này chỉ là tổng quan. Khi code đổi, cập nhật tài liệu

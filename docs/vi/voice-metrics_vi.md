@@ -733,3 +733,8 @@ Truy vấn KPI-1 trong bản EN trả cùng lúc `observed_interactions`,
 `no_ack` và `kpi1_pct`, tách theo `ack_schema_version` (thiếu field = 1).
 Dedup theo device, interaction và schema; ưu tiên `task_revision` rồi amendment/thời gian;
 `no_ack` hợp lệ vẫn trong mẫu số, không có mẫu hợp lệ trả NULL (N/A).
+
+Quyết định chỉ trả `<no speech>` đã kết thúc bình thường của Gemini ở đường
+turn text-to-TTS cũng dùng `rejected_non_user`: không được có tool, interruption,
+replay, delegate hay câu đã phát. Như vậy giữ đúng im lặng có chủ đích, không
+biến timeout hoặc `NO_REPLY` của main thành lý do loại khỏi KPI.

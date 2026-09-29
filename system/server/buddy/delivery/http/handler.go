@@ -28,10 +28,11 @@ type BuddyHandler struct {
 	service         *buddy.Service
 	suggestSelector *buddyjev.Selector
 	suggestGate     *sync.Mutex
+	pairConfirmGate pairingConfirmGate
 }
 
-func ProvideBuddyHandler(cfg *config.Config, svc *buddy.Service) BuddyHandler {
-	return BuddyHandler{config: cfg, service: svc, suggestSelector: buddyjev.New(nil), suggestGate: &sync.Mutex{}}
+func ProvideBuddyHandler(cfg *config.Config, svc *buddy.Service) *BuddyHandler {
+	return &BuddyHandler{config: cfg, service: svc, suggestSelector: buddyjev.New(nil), suggestGate: &sync.Mutex{}}
 }
 
 // Status returns the pairing + connection state.

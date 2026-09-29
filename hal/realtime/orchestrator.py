@@ -16,6 +16,7 @@ The caller (voice_service) drives the orchestrator:
 
 import json
 import logging
+import re
 import threading
 import time
 from collections.abc import Callable, Generator
@@ -57,7 +58,7 @@ from hal.realtime.models.signal import (
     LookReplaySignal,
     RejectSignal,
 )
-from hal.realtime.models.output import ExecutionOutput, InterruptedOutput, UserSpeechOutput
+from hal.realtime.models.output import AudioOutput, TextOutput, ExecutionOutput, InterruptedOutput, UserSpeechOutput
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged, VoiceAgentBase
 
@@ -1328,6 +1329,7 @@ class RealtimeOrchestrator:
         """
         self.execution_completed = False
         self.execution_turn_id = ""
+        self.intentional_silence = False
         if turn is not None:
             self._validate_audio_turn(turn)
         if self._agent is None:
@@ -1338,6 +1340,8 @@ class RealtimeOrchestrator:
         produced = False  # did this turn yield any real output (vs stay silent)?
         rejected = False
         replay_pending = False  # look-replay signalled — the turn continues
+        silence_text: list[str] = []
+        had_tool_or_interruption = False
         receive_kwargs: dict[str, Any] = {"stop_on_done": True}
         if stop_event is not None:
             receive_kwargs["stop_event"] = stop_event
@@ -1346,6 +1350,12 @@ class RealtimeOrchestrator:
                 return
             if turn is not None:
                 self._validate_audio_turn(turn)
+            if isinstance(output, (FunctionCallOutput, MainAgentFallbackOutput, InterruptedOutput)):
+                had_tool_or_interruption = True
+            if isinstance(output, TextOutput):
+                silence_text.append(output.text)
+            elif isinstance(output, AudioOutput) and output.transcript:
+                silence_text.append(output.transcript)
             if isinstance(output, MainAgentFallbackOutput):
                 # This is a local fail-safe, not a provider function call: there
                 # is no call ID to acknowledge. Preserve the user's request even
@@ -1557,6 +1567,16 @@ class RealtimeOrchestrator:
             and not rejected
         )
         self.execution_turn_id = getattr(execution_agent, "execution_turn_id", "")
+        # A complete explicit silence marker is different from an empty socket
+        # timeout. Never infer rejection from silence alone, partial markers,
+        # marker-prefixed answers, or a turn that performed tools. The manual
+        # text-to-TTS consumer decides whether anything was already spoken.
+        self.intentional_silence = bool(
+            self.execution_completed
+            and config.REALTIME_PROVIDER.strip().lower() == "gemini"
+            and not had_tool_or_interruption
+            and re.fullmatch(r"\s*(?:<\s*no\s+speech\s*>\s*)+", "".join(silence_text), re.IGNORECASE)
+        )
 
         # Look-replay pending: the logical turn CONTINUES (the caller is about
         # to re-commit this turn's audio on the SAME session). Don't stamp,

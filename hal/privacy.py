@@ -74,9 +74,9 @@ def apply(muted, config):
 
 
 def mic_locked():
-    """Extra privacy guards apply only to devices opting into peripheral locks."""
+    """The hardware microphone switch is authoritative on every device."""
     from hal import app_state as state
-    return (camera_muted or speaker_muted) and state._hw_mic_switch_muted is True
+    return state._hw_mic_switch_muted is True
 
 
 def prepare(config):

@@ -186,12 +186,18 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 // PostEvent receives a sensing event and sends it to the agent as a chat message.
 // Voice and text-only chat events first try local intent rules and Jev.
 func (h *SensingHandler) PostEvent(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSensingBodyBytes)
 	var req SensingEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
 	if err := validator.New().Struct(req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+
+	if err := validateEventAttachments(req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
@@ -1364,6 +1370,10 @@ type VoiceFileRemoveRequest struct {
 const usersDir = "/root/local/users"
 
 func (h *SensingHandler) RemoveVoiceFile(c *gin.Context) {
+	h.removeVoiceFile(c, usersDir)
+}
+
+func (h *SensingHandler) removeVoiceFile(c *gin.Context, root string) {
 	var req VoiceFileRemoveRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
@@ -1375,9 +1385,8 @@ func (h *SensingHandler) RemoveVoiceFile(c *gin.Context) {
 	}
 	name := strings.ToLower(strings.TrimSpace(req.Name))
 	file := strings.TrimSpace(req.File)
-	// Path traversal guard — file must be a bare filename, no separators
-	// or ".." components. The voice dir layout is flat.
-	if name == "" || file == "" || strings.ContainsAny(file, "/\\") || file == "." || file == ".." {
+	// Both profile and sample names must be single path components.
+	if !voicePathComponent(name) || !voicePathComponent(file) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid name or file"))
 		return
 	}
@@ -1390,31 +1399,54 @@ func (h *SensingHandler) RemoveVoiceFile(c *gin.Context) {
 		return
 	}
 
-	voiceDir := filepath.Join(usersDir, name, "voice")
+	voiceDir := filepath.Join(root, name, "voice")
 	target := filepath.Join(voiceDir, file)
-	// Belt-and-braces: resolved path must stay under voiceDir.
-	absVoice, err1 := filepath.Abs(voiceDir)
-	absTarget, err2 := filepath.Abs(target)
-	if err1 != nil || err2 != nil || !strings.HasPrefix(absTarget+string(filepath.Separator), absVoice+string(filepath.Separator)) {
-		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid path"))
+	voiceRoot, err := openVoiceDirectory(root, name)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, serializers.ResponseError("file not found"))
+		} else {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid voice directory"))
+		}
 		return
 	}
-	if _, err := os.Stat(target); err != nil {
-		c.JSON(http.StatusNotFound, serializers.ResponseError("file not found"))
+	defer voiceRoot.Close()
+	info, err := voiceRoot.Stat(file)
+	if err != nil {
+		if os.IsNotExist(err) {
+			c.JSON(http.StatusNotFound, serializers.ResponseError("file not found"))
+		} else {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid sample path"))
+		}
 		return
 	}
-	if err := os.Remove(target); err != nil {
+	if !info.Mode().IsRegular() {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("sample must be a regular file"))
+		return
+	}
+	if err := voiceRoot.Remove(file); err != nil {
 		slog.Warn("voice file remove failed", "component", "voice", "path", target, "error", err)
 		c.JSON(http.StatusInternalServerError, serializers.ResponseError("delete failed: "+err.Error()))
 		return
 	}
-	sidecar := strings.TrimSuffix(target, filepath.Ext(target)) + ".npy"
-	if err := os.Remove(sidecar); err != nil && !os.IsNotExist(err) {
+	// Remove the .npy sidecar too: the UI cannot delete a .npy directly, so an orphan would linger.
+	sidecar := strings.TrimSuffix(file, filepath.Ext(file)) + ".npy"
+	if err := voiceRoot.Remove(sidecar); err != nil && !os.IsNotExist(err) {
 		slog.Warn("voice sidecar remove failed", "component", "voice", "path", sidecar, "error", err)
 	}
 	slog.Info("voice file deleted", "component", "voice", "name", name, "file", file)
 
-	entries, _ := os.ReadDir(voiceDir)
+	directory, err := voiceRoot.Open(".")
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("cannot inspect remaining voice samples"))
+		return
+	}
+	entries, err := directory.ReadDir(-1)
+	directory.Close()
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, serializers.ResponseError("cannot inspect remaining voice samples"))
+		return
+	}
 	remainingWavs := []string{}
 	for _, e := range entries {
 		if e.IsDir() {

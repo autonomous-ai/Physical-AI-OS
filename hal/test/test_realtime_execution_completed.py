@@ -67,6 +67,8 @@ def test_openai_terminal_status_is_not_always_completion(status):
 @pytest.mark.parametrize("interrupted", [False, True])
 def test_gemini_generation_completion_requires_uninterrupted_turn(interrupted):
     agent = object.__new__(GeminiLiveAgent)
+    agent._pending_tool_calls = set()
+    agent._turn_gen = 0
     message = SimpleNamespace(
         usage_metadata=None, tool_call=None, session_resumption_update=None,
         go_away=None,

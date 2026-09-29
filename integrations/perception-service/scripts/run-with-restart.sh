@@ -5,8 +5,9 @@
 # --pid-file PATH:         the inner process PID is written here on each start.
 # --wrapper-pid-file PATH: this wrapper's own PID is written here once at startup.
 # --cooldown SECONDS:      wait between restarts (default: 5).
-# --probe-url URL:         liveness endpoint (/livez); after PROBE_FAILURES consecutive
-#                          failures the child is killed with -9 and restarted.
+# --probe-url URL:         liveness endpoint (/livez; must not check models, auth or
+#                          downstream services). After PROBE_FAILURES consecutive failures
+#                          the child gets SIGUSR1 + STACK_DUMP_WAIT s to dump stacks, then -9.
 # --log-dir PATH:          stdout/stderr/watchdog logs as plain files (a pipe can block
 #                          the writer forever and wedge the asyncio server).
 # SIGTERM to the wrapper stops the inner process and exits.
@@ -48,6 +49,7 @@ PROBE_TIMEOUT=${PROBE_TIMEOUT:-5}        # per-probe curl timeout
 PROBE_FAILURES=${PROBE_FAILURES:-6}      # consecutive failures before acting (~60s)
 PROBE_GRACE=${PROBE_GRACE:-180}          # seconds after start before probing at all;
                                          # dlserver needs ~2-3 min to load its models
+STACK_DUMP_WAIT=${STACK_DUMP_WAIT:-2}    # seconds between SIGUSR1 (stack dump) and SIGKILL
 
 # Rename aside on startup; safe because no process holds these files open yet.
 rotate_on_start() {
@@ -119,7 +121,12 @@ start_liveness_probe() {
                 fails=$(( fails + 1 ))
                 echo "[watchdog] probe failed ($fails/$PROBE_FAILURES): $PROBE_URL"
                 if (( fails >= PROBE_FAILURES )); then
-                    echo "[watchdog] unresponsive after $fails probes; SIGKILL $target"
+                    echo "[watchdog] unresponsive after $fails probes; SIGUSR1 $target for a stack dump"
+                    # A child with no SIGUSR1 handler just dies here, which is
+                    # what the SIGKILL below was about to do anyway.
+                    kill -USR1 "$target" 2>/dev/null || true
+                    sleep "$STACK_DUMP_WAIT"
+                    echo "[watchdog] SIGKILL $target"
                     kill -9 "$target" 2>/dev/null || true
                     return 0
                 fi

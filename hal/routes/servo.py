@@ -8,6 +8,7 @@ raw encoder values) leak into this file.
 
 import csv
 import io
+import math
 import os
 import re
 import time
@@ -227,7 +228,7 @@ def resume_servos():
     """Exit zero-hold mode and resume normal animation loop (plays idle)."""
     if _sleep_servo_locked():
         state.logger.info("servo/resume blocked -- device is sleeping")
-        return {"status": "ok"}
+        raise HTTPException(409, "Device is sleeping; motion was not started")
     svc = _svc()
     svc.resume()
     return {"status": "ok"}
@@ -246,7 +247,7 @@ def move_servo(req: ServoMoveRequest):
     """Send joint positions to servo motors with smooth interpolation."""
     if _sleep_servo_locked():
         state.logger.info("servo/move blocked -- device is sleeping")
-        return {"status": "ok", "requested": req.positions, "clamped": req.positions, "duration": req.duration}
+        raise HTTPException(409, "Device is sleeping; motion was not started")
     svc = _svc_connected()
     valid_joints = svc.get_joint_names()
     unknown = [j for j in req.positions if j not in valid_joints]
@@ -256,15 +257,24 @@ def move_servo(req: ServoMoveRequest):
         )
 
     # Safety gate (SAFETY.md motion.max_speed) — stretch the duration so no
-    # joint exceeds the ceiling. Best-effort read of current pose.
+    # joint exceeds the ceiling. A declared speed bound requires a known pose.
     current = {}
     try:
         current = svc.get_positions()
     except Exception as e:
         state.logger.warning("move: could not read current pose for speed clamp: %s", e)
-    eff_duration = min_move_duration(state.safety_policy, req.positions, current, req.duration)
+    policy = state.safety_policy
+    if policy and policy.motion and policy.motion.max_speed is not None:
+        try:
+            known_pose = all(math.isfinite(float(current[joint])) for joint in req.positions)
+        except (KeyError, TypeError, ValueError, OverflowError):
+            known_pose = False
+        if not known_pose:
+            raise HTTPException(503, "Cannot enforce motion speed limit without a valid current pose")
+    eff_duration = min_move_duration(policy, req.positions, current, req.duration)
 
     errors = {}
+    actual = {}
 
     try:
         svc.move_and_hold(req.positions, duration=eff_duration)
@@ -274,20 +284,23 @@ def move_servo(req: ServoMoveRequest):
     try:
         obs = svc.get_positions()
         for joint, target in req.positions.items():
-            actual = obs.get(joint)
-            if actual is not None:
-                error = abs(actual - target)
-                if error > 5.0:
-                    errors[joint] = (
-                        f"position error {error:.1f} deg (target={target:.1f}, actual={actual:.1f})"
-                    )
+            measured = float(obs[joint])
+            if not math.isfinite(measured):
+                raise ValueError(f"Non-finite position for {joint}")
+            actual[joint] = measured
+            error = abs(measured - target)
+            if error > 5.0:
+                errors[joint] = (
+                    f"position error {error:.1f} (target={target:.1f}, actual={measured:.1f})"
+                )
     except Exception as e:
         errors["read_position"] = str(e)
 
     return {
         "status": "error" if "move" in errors else "ok",
         "requested": req.positions,
-        "clamped": req.positions,
+        "clamped": None,
+        "actual": actual,
         "duration": eff_duration,
         "errors": errors if errors else None,
     }
@@ -340,7 +353,6 @@ def stop_servos():
         except Exception as e:
             state.logger.warning("stop: policy cancellation failed: %s", e)
 
-    svc = _svc_connected()
     # The tracker drives the bus from its own worker thread. Stop it first or it
     # keeps writing goals and the "stop" holds nothing — same ordering the
     # release path needs, and for the same reason.
@@ -350,6 +362,7 @@ def stop_servos():
             state.tracker_service.stop()
         except Exception as e:
             state.logger.warning(f"tracker stop during halt failed: {e}")
+    svc = _svc_connected()
     svc.halt()
     return {"status": "ok"}
 
@@ -382,11 +395,28 @@ def list_aim_directions():
     return {"directions": list(AIM_PRESETS.keys())}
 
 
+def _pose_reply(svc, direction: str, requested: dict[str, float]) -> dict:
+    """Report driver positions separately from the requested command target."""
+    positions = {}
+    errors = {}
+    try:
+        observed = svc.get_positions()
+        for joint in requested:
+            value = float(observed[joint])
+            if not math.isfinite(value):
+                raise ValueError(f"Non-finite position for {joint}")
+            positions[joint] = value
+    except Exception as exc:
+        errors["read_position"] = str(exc)
+    return {"status": "ok", "direction": direction, "requested": requested,
+            "positions": positions, "errors": errors or None}
+
+
 @router.post("/servo/aim", response_model=ServoAimResponse)
 def aim_servo(req: ServoAimRequest):
     """Aim the device head to a named direction."""
     if _sleep_servo_locked():
-        return {"status": "ok", "direction": req.direction, "positions": {}}
+        raise HTTPException(409, "Device is sleeping; motion was not started")
     svc = _svc_connected()
     try:
         current = svc.get_positions()
@@ -394,7 +424,7 @@ def aim_servo(req: ServoAimRequest):
         raise HTTPException(500, f"Failed to read current position: {e}")
     try:
         positions = svc.aim(req.direction, req.duration, current, state.safety_policy)
-        return {"status": "ok", "direction": req.direction, "positions": positions}
+        return _pose_reply(svc, req.direction, positions)
     except ValueError as e:
         raise HTTPException(400, str(e))
     except Exception as e:
@@ -516,12 +546,12 @@ def reset_user_bearing():
 def nudge_servo(req: ServoNudgeRequest):
     """Move servo by relative degrees from current position."""
     if _sleep_servo_locked():
-        return {"status": "ok", "direction": f"nudge yaw={req.yaw} pitch={req.pitch}", "positions": {}}
+        raise HTTPException(409, "Device is sleeping; motion was not started")
     svc = _svc_connected()
     try:
         current = svc.get_positions()
         positions = svc.nudge(req.yaw, req.pitch, req.duration, current, state.safety_policy)
-        return {"status": "ok", "direction": f"nudge yaw={req.yaw} pitch={req.pitch}", "positions": positions}
+        return _pose_reply(svc, f"nudge yaw={req.yaw} pitch={req.pitch}", positions)
     except Exception as e:
         raise HTTPException(500, f"Servo nudge failed: {e}")
 
@@ -531,7 +561,7 @@ def start_tracking(req: ServoTrackRequest):
     """Start tracking an object by bounding box. Servo follows the object in real-time."""
     if _sleep_servo_locked():
         state.logger.info("servo/track blocked -- device is sleeping")
-        return {"status": "ok", "tracking": False, "target": None, "bbox": None, "confidence": None}
+        raise HTTPException(409, "Device is sleeping; tracking was not started")
     if not state.tracker_service:
         raise HTTPException(503, "Tracker service not available")
     if not state.animation_service:

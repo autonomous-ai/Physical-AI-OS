@@ -13,9 +13,14 @@ The host's session `skillsSnapshot.resolvedSkills`, intersected with the
 advertised `skillsSnapshot.prompt`, provides the native-filtered roster. The
 session ID must match the active hook context. No snapshot means no preload.
 Fresh config and file checks must honor operator disables, agent filters and
-tool/sandbox policies. Limit initial support to simple OS workspace skills;
-leave metadata-dependent skills to the native loader rather than reproducing
-native dependency or platform evaluation.
+tool/sandbox policies. Accept canonical native-resolved paths from workspace,
+bundled, managed and plugin sources, without independently scanning directories.
+Preserve native snapshot precedence for duplicate names. Continue limiting
+preload to simple frontmatter: metadata-dependent skills defer to the native
+loader rather than reproducing dependency, platform, skill-key or invocation
+evaluation from a potentially stale snapshot. Missing/unreadable files skip
+only their own candidate. The serialized request budget is 256 KiB, replacing
+the 32-candidate cutoff; exceeding it defers without truncating candidates.
 
 OpenClaw's persisted prompt can include preloaded context. OS run correlation
 must strip only the exact, bounded, JSON-valid integration envelope before

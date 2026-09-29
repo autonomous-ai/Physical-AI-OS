@@ -19,6 +19,7 @@ type PairingCodeStore struct {
 type pendingCode struct {
 	code      string
 	expiresAt time.Time
+	misses    int
 }
 
 func NewPairingCodeStore(ttl time.Duration) *PairingCodeStore {
@@ -47,6 +48,10 @@ func (p *PairingCodeStore) Consume(submitted string) bool {
 		return false
 	}
 	if p.active.code != submitted {
+		p.active.misses++
+		if p.active.misses >= 5 {
+			p.active = nil
+		}
 		return false
 	}
 	p.active = nil
