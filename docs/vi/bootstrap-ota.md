@@ -1,5 +1,7 @@
 # Bootstrap & OTA
 
+Image OrangePi trì hoãn tác vụ đếm cập nhật cho MOTD của vendor (`orangepi-apt-updates`) 120 giây sau boot để giảm tranh chấp đọc storage với HAL. Chỉ dòng cron chính xác `@reboot root /usr/lib/orangepi/orangepi-apt-updates` được đổi; lịch đếm hằng ngày và lịch cập nhật APT/bảo mật giữ nguyên. Device hiện có có thể áp dụng bằng `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` sau khi chép script lên device. Helper chạy lại không đổi thêm, bỏ qua dòng thiếu/đã tùy chỉnh và lưu bản gốc tại `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Chép bản gốc về `/etc/cron.d/orangepi-updates` để hoàn tác. Đây là thay đổi cấu hình image/device, không nằm trong OTA chỉ cập nhật HAL.
+
 ## 1. Tổng Quan
 
 Thiết bị chạy **5 thành phần phần mềm** trên board được hỗ trợ (Raspberry Pi 4, Pi 5, hoặc OrangePi). Tất cả được cài đặt qua script setup ban đầu và cập nhật tự động qua OTA worker chạy nền.

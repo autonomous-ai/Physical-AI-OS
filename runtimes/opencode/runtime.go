@@ -52,8 +52,8 @@ func PopulateOpenCodeVersion() {
 
 // probeOpenCodeVersion runs a single probe; ok is false on failure/timeout or
 // when no semver token is present, signalling the caller to retry.
-func probeOpenCodeVersion() (version string, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), opencodeVersionProbeTimeout)
+func probeOpenCodeVersion(ctx context.Context) (version string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, opencodeVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, opencodeBinary, "--version")
 	if err != nil {

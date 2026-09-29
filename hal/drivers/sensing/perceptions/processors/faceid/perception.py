@@ -11,6 +11,7 @@ import re
 import shutil
 import threading
 import time
+from collections import deque
 from copy import copy
 from pathlib import Path
 from typing import Any, Callable, override
@@ -39,10 +40,10 @@ from .constants import (
 from .enter_message import (
     FrameFacts,
     build_enter_message,
-    copresence_ticks,
     frame_labels,
 )
 from .recognizer import FaceRecognizer
+from .stranger_gaze import StrangerGazeTick, face_facing_lamp, gaze_confirmed
 
 logger = logging.getLogger(__name__)
 
@@ -126,9 +127,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         self._people_data_dict: dict[str, PersonData] = {}
         self._last_stranger_enter_ts: float = 0.0
         self._last_presence_save_ts: float = 0.0
-        # Consecutive ticks a friend and a non-friend box shared the frame —
-        # the guard on the "already present" segment of presence.enter.
-        self._copresence_ticks: int = 0
         self._load_presence_state()
         self._owners: set[str] = set()
         self._strangers: set[str] = set()
@@ -136,15 +134,16 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         self._any_stranger_logged: bool = False
         self._stranger_visit_counts: dict[str, Any] = self._load_stranger_stats()
 
-        # Stranger snapshot buffer — flushed every FACE_STRANGER_FLUSH_S
-        # Each entry: (raw_frame, annotations[(bbox, kind, label), ...])
-        self._stranger_flush_interval: float = config.FACE_STRANGER_FLUSH_S
-        self._stranger_snapshots_buffers: list[cv2.typing.MatLike] = []
-        # Parallel to the snapshots: what each buffered frame showed, so the
-        # flushed event describes the picture it carries, not the flush tick.
-        self._stranger_facts_buffer: list[FrameFacts] = []
-        self._stranger_ids_buffer: set[str] = set()
-        self._last_stranger_flush_ts: float = 0.0
+        # Strangers who became new this visit and have not been greeted yet,
+        # mapped to the familiar-stranger snapshot their greeting carries (or
+        # None). A stranger is greeted only once they look at the lamp (#531).
+        self._ungreeted_strangers: dict[str, str | None] = {}
+        # The last FACE_STRANGER_GAZE_TICKS ticks an ungreeted stranger was in
+        # frame (no older than FACE_STRANGER_GAZE_WINDOW_S): the annotated
+        # snapshot, who faced the lamp on it, and when.
+        self._stranger_gaze_ticks: deque[StrangerGazeTick] = deque(
+            maxlen=config.FACE_STRANGER_GAZE_TICKS
+        )
 
         self._callbacks: set[Callable[[FaceDetectionData], None]] = set()
 
@@ -438,7 +437,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                 logger.debug("[face] no faces detected")
                 self._face_present = False
                 self._faces_n = 0
-                self._copresence_ticks = 0
                 self._check_leaves(cur_ts)
                 return
             else:
@@ -456,8 +454,6 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             logger.info(
                 f"Detected friends={list(owners_seen)} and strangers={list(strangers_seen)}"
             )
-
-            self._copresence_ticks = copresence_ticks(self._copresence_ticks, faces)
 
             new_owners: set[str] = set()
             new_strangers: set[str] = set()
@@ -504,17 +500,11 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             if self._face_present and self._presense_service is not None:
                 self._presense_service.on_motion()
 
-            # Strangers: always buffer snapshots; flush decides when to send
             annotated_frame = self._annotate_frame(frame, faces)
             current_facts = self._frame_facts(faces, owners_seen, new_owners)
             annotated_frames_to_send: list[cv2.typing.MatLike] = []
             if len(new_owners) > 0:
                 annotated_frames_to_send.append(annotated_frame)
-            else:
-                if new_strangers:
-                    self._stranger_snapshots_buffers.append(annotated_frame)
-                    self._stranger_facts_buffer.append(current_facts)
-                    self._stranger_ids_buffer.update(new_strangers)
 
             familiar_paths: dict[str, str] = {}
             if new_strangers:
@@ -543,14 +533,20 @@ class FacePerception(Perception[cv2.typing.MatLike]):
                                 e,
                             )
 
-            flushed_stranger_snapshots, flushed_stranger_ids, flushed_facts = (
-                self._flush_stranger_buffer(cur_ts)
-            )
-
-            annotated_frames_to_send = (
-                annotated_frames_to_send + flushed_stranger_snapshots
-            )
-            stranger_ids_to_send = new_strangers.union(flushed_stranger_ids)
+            # A stranger new on the same tick as a friend rides the friend's
+            # enter, as before. Any other new stranger waits until they look
+            # at the lamp (#531).
+            stranger_ids_to_send: set[str] = set()
+            if new_owners:
+                stranger_ids_to_send = set(new_strangers)
+            else:
+                for sid in new_strangers:
+                    self._ungreeted_strangers[sid] = familiar_paths.get(sid)
+                greeted, gaze_frames, familiar_paths = self._stranger_gaze_greeting(
+                    frame, faces, annotated_frame, cur_ts
+                )
+                stranger_ids_to_send = greeted
+                annotated_frames_to_send = gaze_frames
 
             # Stranger-only enter floor: embedding flicker mints a fresh
             # stranger_N id every few seconds for the same unrecognizable
@@ -576,16 +572,11 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             if annotated_frames_to_send:
                 if not new_owners and stranger_ids_to_send:
                     self._last_stranger_enter_ts = cur_ts
-                # Describe the frame the agent will see: a new friend sends the
-                # current frame at once; a stranger-only enter sends the
-                # buffered snapshots, whose newest frame may be several ticks
-                # old by now — its own facts go with it.
-                facts = current_facts if new_owners else flushed_facts[-1]
                 message = build_enter_message(
                     new_friends=new_owners,
                     new_strangers=stranger_ids_to_send,
-                    present_friends=facts.present_friends,
-                    frame_labels=facts.labels,
+                    present_friends=current_facts.present_friends,
+                    frame_labels=current_facts.labels,
                 )
                 for sid, img_path in familiar_paths.items():
                     message += (
@@ -715,6 +706,9 @@ class FacePerception(Perception[cv2.typing.MatLike]):
 
             for id in deleted_ids:
                 del self._people_data_dict[id]
+                _ = self._ungreeted_strangers.pop(id, None)
+            if not self._ungreeted_strangers:
+                self._stranger_gaze_ticks.clear()
 
             current_strangers = [
                 p
@@ -959,7 +953,8 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             # save ts, which would otherwise leave a <30s window where a
             # restart loses the first post-reset sighting and re-enters again.
             self._last_presence_save_ts = 0.0
-            _ = self._flush_stranger_buffer(time.time())
+            self._ungreeted_strangers.clear()
+            self._stranger_gaze_ticks.clear()
             # Clearing the people map is not enough: the shared observable holds
             # a COPY of the last computed answer, refreshed only when a frame is
             # processed. Consumers that read it directly (MotionPerception dedup
@@ -1006,45 +1001,68 @@ class FacePerception(Perception[cv2.typing.MatLike]):
     ) -> FrameFacts:
         """Labels of every box in this frame plus the friends already present.
 
-        ``present_friends`` are friends boxed in THIS frame who did not just
-        arrive — the co-presence signal the sensing skill keys on. A
-        stranger-only enter waits until friend and non-friend boxes have
-        coexisted for FACE_COPRESENCE_MIN_TICKS ticks; a new friend is a
-        positive match and needs no such corroboration. Never derived from
-        current_user(): that is presence-window state and reads the same
-        whether momo is sitting here or left two minutes ago.
+        ``present_friends`` are friends matched in THIS frame who did not just
+        arrive — the co-presence signal the sensing skill keys on. Never
+        derived from current_user(): that is presence-window state and reads
+        the same whether momo is sitting here or left two minutes ago.
         """
-        present_friends = sorted(owners_seen - new_owners)
-        if (
-            not new_owners
-            and self._copresence_ticks < config.FACE_COPRESENCE_MIN_TICKS
+        return FrameFacts(
+            labels=frame_labels(faces),
+            present_friends=sorted(owners_seen - new_owners),
+        )
+
+    def _stranger_gaze_greeting(
+        self,
+        frame: cv2.typing.MatLike,
+        faces: list[Face],
+        annotated_frame: cv2.typing.MatLike,
+        cur_ts: float,
+    ) -> tuple[set[str], list[cv2.typing.MatLike], dict[str, str]]:
+        """Record this tick's gaze for ungreeted strangers; return who to greet.
+
+        Returns (stranger ids to greet, buffered snapshots newest last,
+        familiar-stranger snapshot paths). All empty until an ungreeted
+        stranger has faced the lamp on enough buffered ticks. Caller holds
+        _state_lock.
+        """
+        waiting = [
+            f
+            for f in faces
+            if f.kind == PersonKind.STRANGER and f.person_id in self._ungreeted_strangers
+        ]
+        if not waiting:
+            return set(), [], {}
+        frame_h, frame_w = frame.shape[:2]
+        facing = frozenset(
+            f.person_id for f in waiting if face_facing_lamp(f, frame_w, frame_h)
+        )
+        # A vote older than the window says nothing about looking now (#531).
+        while (
+            self._stranger_gaze_ticks
+            and cur_ts - self._stranger_gaze_ticks[0].ts
+            > config.FACE_STRANGER_GAZE_WINDOW_S
         ):
-            present_friends = []
-        return FrameFacts(labels=frame_labels(faces), present_friends=present_friends)
-
-    def _flush_stranger_buffer(
-        self, cur_ts: float
-    ) -> tuple[list[cv2.typing.MatLike], set[str], list[FrameFacts]]:
-        """Flush buffered stranger snapshots if the interval has elapsed.
-
-        Returns (snapshots, flushed_ids, facts) with facts[i] describing
-        snapshots[i]. All empty if not yet time to flush.
-        """
-        with self._state_lock:
-            if (cur_ts - self._last_stranger_flush_ts) < self._stranger_flush_interval:
-                return [], set(), []
-
-            snapshots = copy(self._stranger_snapshots_buffers)
-            facts = copy(self._stranger_facts_buffer)
-            ids = copy(self._stranger_ids_buffer)
-            self._stranger_snapshots_buffers.clear()
-            self._stranger_facts_buffer.clear()
-            self._stranger_ids_buffer.clear()
-            self._last_stranger_flush_ts = cur_ts
-            logger.info(
-                "[face] flushing %d stranger snapshot(s) for %s", len(snapshots), ids
-            )
-            return snapshots, ids, facts
+            _ = self._stranger_gaze_ticks.popleft()
+        self._stranger_gaze_ticks.append(
+            StrangerGazeTick(annotated_frame, facing, cur_ts)
+        )
+        ticks = [t.facing for t in self._stranger_gaze_ticks]
+        in_frame = sorted({f.person_id for f in waiting})
+        logger.info(
+            "[face] stranger gaze: %s",
+            ", ".join(f"{sid} {sum(sid in t for t in ticks)}/{len(ticks)}" for sid in in_frame),
+        )
+        greet = {sid for sid in in_frame if gaze_confirmed(ticks, sid)}
+        if not greet:
+            return set(), [], {}
+        frames = [t.frame for t in self._stranger_gaze_ticks]
+        self._stranger_gaze_ticks.clear()
+        familiar = {
+            sid: path
+            for sid in greet
+            if (path := self._ungreeted_strangers.pop(sid)) is not None
+        }
+        return greet, frames, familiar
 
     def _send_enter_event(
         self,
@@ -1054,8 +1072,8 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         """Send a presence.enter event with annotated snapshots.
 
         Args:
-            frames: Annotated frames to attach — the current frame plus any
-                buffered stranger snapshots from the flush window.
+            frames: Annotated frames to attach — the current frame for a new
+                friend, or the buffered stranger gaze ticks (newest last).
             message: Event text from ``enter_message.build_enter_message``,
                 optionally followed by the familiar-stranger hint.
         """

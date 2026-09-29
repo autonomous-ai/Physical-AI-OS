@@ -237,8 +237,8 @@ export interface CurrentNetwork {
 
 /** GET /api/network/current — the SSID the device is presently joined to.
  *  Returns null when wlan0 isn't associated (e.g. still running the setup AP). */
-export async function getCurrentNetwork(): Promise<CurrentNetwork | null> {
-  return apiRequest<CurrentNetwork | null>(`${API_BASE}/api/network/current`);
+export async function getCurrentNetwork(signal?: AbortSignal): Promise<CurrentNetwork | null> {
+  return apiRequest<CurrentNetwork | null>(`${API_BASE}/api/network/current`, { signal, cache: "no-store" });
 }
 
 export async function setupNetwork(ssid: string, password: string): Promise<string> {

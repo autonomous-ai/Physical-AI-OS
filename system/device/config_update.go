@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"time"
 
 	"golang.org/x/crypto/bcrypt"
 
@@ -551,14 +552,6 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 // UpdateConfig save. config.mu is already released, so the gateway calls below
 // acquire their own locks without deadlock risk (consistent lock order).
 func (s *Service) fireConfigSideEffects(ch updateChanges) {
-	if ch.wifi {
-		go func() {
-			slog.Info("reconnecting to new WiFi", "component", "device", "ssid", ch.newSSID)
-			if _, err := s.networkService.SetupNetwork(ch.newSSID, ch.newPassword); err != nil {
-				slog.Error("WiFi reconnect failed", "component", "device", "error", err)
-			}
-		}()
-	}
 	// Channel/token edits via the Settings form only land in config.json, but the
 	// gateway keeps messaging tokens in its OWN config (written by AddChannel:
 	// `openclaw channels add` + plugin enable) and reads from there first. So a
@@ -601,6 +594,27 @@ func (s *Service) fireConfigSideEffects(ch updateChanges) {
 		// The common case, and the one that used to bounce hal for nothing.
 		s.applyTTSConfig(s.config)
 	}
+	// Schedule only after synchronous side effects finish, so their latency
+	// cannot consume the response grace period before the HTTP handler returns.
+	if ch.wifi {
+		scheduleConfigWiFiReconnect(ch, s.networkService.SetupNetwork)
+	}
+}
+
+// Give the Settings response time to reach clients before AP/STA teardown.
+// A successful save acknowledges persistence; association still happens later.
+const configWiFiResponseGrace = 2 * time.Second
+
+func scheduleConfigWiFiReconnect(ch updateChanges, reconnect func(string, string) (bool, error)) *time.Timer {
+	if !ch.wifi {
+		return nil
+	}
+	return time.AfterFunc(configWiFiResponseGrace, func() {
+		slog.Info("reconnecting to new WiFi", "component", "device", "ssid", ch.newSSID)
+		if _, err := reconnect(ch.newSSID, ch.newPassword); err != nil {
+			slog.Error("WiFi reconnect failed", "component", "device", "error", err)
+		}
+	})
 }
 
 // syncLLMToGateway pushes a model/thinking/baseURL change into the active

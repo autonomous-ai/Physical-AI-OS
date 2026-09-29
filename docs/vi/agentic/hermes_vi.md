@@ -1,5 +1,7 @@
 # Hermes — backend agent
 
+**Ưu tiên phần cứng lúc khởi động:** Installer và onboarding quản lý `/etc/systemd/system/hermes-gateway.service.d/20-hardware-startup.conf`, thêm `ExecStartPre=-/usr/local/bin/os-server --wait-hal-ready` mà không thay lệnh gateway của upstream. Hermes chờ HAL `/health` thành công rồi mới import, giảm tranh chấp storage lúc cold boot. Helper kiểm tra ngay, thử lại mỗi giây và tiếp tục sau tối đa 60 giây nếu HAL vẫn chưa sẵn sàng. HTTP của OS khởi động độc lập; chat Hermes có thể sẵn sàng sau phần cứng. Binary OS cũ từ chối flag chưa hỗ trợ `--wait-hal-ready` trước khi khởi tạo service; dấu `-` cho phép systemd tiếp tục sau khi lệnh thoát. Lệnh restart của OS chờ tối đa 180 giây để đủ thời gian drain gateway, chờ HAL 60 giây và phần khởi động còn lại. Khi HAL đã sẵn sàng, restart gateway chỉ thêm một lần kiểm tra local. Phần Go chỉ reload systemd khi file được quản lý thay đổi; cập nhật riêng OS áp dụng cơ chế chờ cho các lần start gateway tiếp theo.
+
 Jev preload kèm `lookup_name` có category và hướng dẫn dùng nguyên tên đó khi đọc reference (ví dụ `openclaw-imports/computer-use`). Skill bundled trùng tên ngắn vẫn có thể tồn tại; preload không xóa nó hay tự xử lý lời gọi tên ngắn mơ hồ thay model.
 
 Hermes là một trong các **backend agent có thể hoán đổi** mà os-server chạy phía
@@ -1092,23 +1094,33 @@ HTTP loopback để test local. BFF cần hỗ trợ
 và các skill chủ động hoặc hỗ trợ. Thiếu tham số hành động không ngăn việc chọn
 skill: skill được chọn có thể làm rõ các tham số sau đó.
 
-Chỉ gửi tin nhắn hiện tại và tên/mô tả skill nền tảng OS. Roster quét
-`skills/openclaw-imports` trong Hermes home đang hoạt động, dùng các helper gốc
-của `agent.skill_utils`: `iter_skill_index_files`, `parse_frontmatter`,
-`get_disabled_skill_names`, `skill_matches_platform` và
-`skill_matches_environment`.
-Cách này tránh việc `skills_list()` loại tên trùng theo kết quả đầu tiên khiến
-skill OS bị skill bundled cùng tên che mất. Loại các category skill bundled,
-authored và plugin khác. Giới hạn lượng metadata đọc tại máy; không gửi lịch sử
-hội thoại hoặc nội dung skill. Mô tả mỗi ứng viên tối đa 500 ký tự. API gốc
-`skill_view` dùng đường dẫn đầy đủ `openclaw-imports/<thư mục tương đối>` để tránh
-trùng tên.
+Chỉ gửi tin nhắn hiện tại và tên/mô tả skill đủ điều kiện.
+Roster kết hợp hai nguồn trong context Hermes hiện tại:
 
-Nếu có quá 32 ứng viên đủ điều kiện, bỏ qua Jev hoàn toàn thay vì cắt bớt catalog.
-Tin nhắn rỗng, dài quá 8.000 byte UTF-8, lệnh slash, thông báo `[system]` hoặc có lựa chọn `[skills:...]`
-rõ ràng cũng bỏ qua router. Worker catalog kế thừa context Hermes của lượt hiện
-tại để giữ bộ lọc skill theo phiên/kênh. Đây là thử nghiệm nạp trước skill nền
-tảng OS; Hermes tiếp tục tìm các skill khác theo cách bình thường.
+- Skill OS: quét `skills/openclaw-imports` bằng helper metadata và bộ lọc
+  disabled, platform, environment gốc của `agent.skill_utils`. Giữ đường dẫn
+  `openclaw-imports/<thư mục tương đối>` để skill bundled trùng tên không che
+  mất hoặc thay thế skill OS.
+- Skill runtime: dùng `skills_list()` gốc cho skill bundled, tự tạo (gồm
+  `session-recall`), external/project và plugin mà Hermes nhìn thấy. Giữ bộ lọc
+  và tên tra cứu gốc; bỏ entry thuộc category OS vì đã quét riêng ở trên.
+  Khi trùng tên, ưu tiên entry OS đủ điều kiện; các trường hợp khác giữ thứ tự
+  chọn của catalog native.
+
+Nếu catalog native lỗi, để Hermes tự tìm skill thay vì route trên roster thiếu.
+Giới hạn lượng metadata đọc; không gửi lịch sử hội thoại hoặc nội dung skill.
+Mô tả mỗi ứng viên tối đa 500 ký tự. Trước khi nạp, kiểm tra lại skill được chọn
+trong catalog kết hợp hiện tại rồi dùng `skill_view` gốc; cả hai nguồn dùng cùng
+các kiểm tra preload.
+
+Bỏ giới hạn 32 skill. Toàn bộ JSON request đã serialize (gồm prompt và câu hỏi)
+có ngân sách cục bộ 256 KiB, không phải giới hạn được công bố của provider.
+Nếu vượt, log `skipped reason=catalog_budget` rồi để Hermes tự tìm skill,
+không cắt roster và không gửi request. Vẫn giữ ngân sách 3 giây, response tối đa
+64 KiB và các ngưỡng confidence; không đảm bảo catalog lớn sẽ hoàn tất trong
+ngân sách đó. Tin nhắn rỗng, dài quá 8.000 byte UTF-8, lệnh slash, thông báo
+`[system]` hoặc lựa chọn `[skills:...]` rõ ràng cũng bỏ qua router. Worker catalog
+kế thừa context Hermes của lượt hiện tại để giữ bộ lọc skill theo phiên/kênh.
 
 Chỉ chọn khi xác suất choice ít nhất 0,70, cách ứng viên kế tiếp ít nhất 0,20,
 và fit ít nhất 0,60. Đây là ngưỡng tạm thời để nạp trước skill, không phải cấp
@@ -1129,7 +1141,7 @@ và lỗi, thay vì gộp chung thành `deferred`:
 | `preloaded` | Quyết định hợp lệ vượt qua mọi ngưỡng chấp nhận và đã nạp nội dung skill qua API gốc cho lượt này |
 | `abstained` | Quyết định hợp lệ chọn `none` hoặc không đạt `low_choice`, `low_margin`, hay `low_fit` |
 | `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, `config_error`, `skill_unavailable`, `skill_load_failed`, hoặc `preload_timeout` |
-| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, hoặc `no_candidates` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, `no_candidates`, hoặc `catalog_budget` |
 | `timeout` | Hết thời gian chờ quyết định |
 
 Log có `session_id`, `turn_id`, `task_id` đã kiểm tra định dạng khi Hermes cung cấp,
@@ -1171,9 +1183,9 @@ Thuật toán dựa trên [cookbook chọn skill của TypeSafe](https://docs.ty
 | Phần | Plugin tham chiếu | Plugin OS |
 |---|---|---|
 | Hook | `pre_llm_call`, trả context tùy chọn cho tin nhắn user | Cùng hook; nạp nội dung skill được chấp nhận qua API gốc vào context tạm thời của lượt hiện tại; không sửa system prompt |
-| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Đọc metadata có giới hạn từ file `openclaw-imports` với bộ lọc điều kiện gốc của Hermes, mô tả tối đa 500 ký tự, không gửi nội dung skill; tra cứu bằng đường dẫn đầy đủ tránh trùng tên |
+| Dữ liệu skill | Quét filesystem; shortlist có mô tả đầy đủ và tối đa 700 ký tự nội dung | Quét metadata OS và `skills_list()` gốc Hermes (skill runtime và plugin); ưu tiên OS khi trùng tên; mô tả tối đa 500 ký tự, không gửi nội dung skill |
 | Quyết định | Bước 1 xếp hạng và xét có cần skill; bước 2 đánh giá lại shortlist 3 skill mỗi nhóm | Một request với choice, `none` và fit từng ứng viên |
-| Catalog lớn | Chia nhóm 240 lựa chọn | Bỏ qua nếu quá 32 skill đủ điều kiện |
+| Catalog lớn | Chia nhóm 240 lựa chọn | Gửi đầy đủ catalog trong ngân sách JSON request cục bộ 256 KiB; vượt thì bỏ qua, không cắt roster |
 | Ngưỡng | Bản catalog: gate 0,30 và fit người thắng 0,40; upstream mới còn xử lý choice/fit bất đồng | Choice 0,70, margin 0,20, fit 0,60; ngưỡng nạp trước tạm thời, chưa hiệu chỉnh bằng dữ liệu tác vụ này |
 | Latency | Budget hook mặc định 10 giây, cache đáp án và client có retry | Budget chẩn đoán tạm thời 3 giây, không retry/cache, bỏ qua khi bận và có cooldown |
 | Credential | API TypeSafe với key riêng | Credential proxy OS dùng chung |

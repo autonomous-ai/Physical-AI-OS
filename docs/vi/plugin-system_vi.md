@@ -26,6 +26,8 @@ HAL là kernel — plugin là userspace. OS điều phối mọi truy cập ph�
 Plugin cùng tồn tại với HAL và agent runtime. HAL tuần tự hóa truy cập phần
 cứng nên nhiều plugin có thể chạy đồng thời mà không xung đột tài nguyên.
 
+Endpoint cài đặt và quản lý vòng đời plugin cần quyền admin. Tên manifest và thao tác quản lý cho phép chữ cái, chữ số, gạch dưới, gạch ngang và dấu chấm (kể cả tên cũ có chữ hoa). Tên rỗng, `.` và `..`, đường dẫn, khoảng trắng, glob và chỉ thị unit-file bị từ chối trước thao tác filesystem. URL cài đặt bắt đầu bằng `-` bị từ chối; Git nhận `--` trước URL để không hiểu URL là tùy chọn. Plugin vẫn chạy mã bên thứ ba được tin cậy; kiểm tra tên không phải sandbox.
+
 ## Định Dạng Plugin
 
 Plugin là một thư mục (git repo) chứa:

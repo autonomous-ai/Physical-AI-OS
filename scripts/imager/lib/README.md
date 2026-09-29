@@ -1,6 +1,10 @@
-# imager/lib — shared bash libraries (planned)
+# imager/lib — image helpers
 
-Currently empty. Reserved for the upcoming refactor that extracts the chroot
+`defer_orangepi_update_count.py` postpones only the vendor boot-time MOTD
+package-count scan by 120 seconds. It accepts `--root` for mounted images and
+can also run on an existing device; daily/package update schedules are unchanged.
+
+The shared bash libraries below are planned for a refactor that extracts the chroot
 stages out of the inline heredocs in `build.sh` (Pi 5) and `build-orangepi.sh`
 (OPi 4 Pro) into a sourceable bash file so the two builders stop drifting.
 

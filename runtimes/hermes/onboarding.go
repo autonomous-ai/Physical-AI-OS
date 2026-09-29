@@ -591,9 +591,17 @@ func stripSoulMarkedBlock(text, marker string, match func(body string) bool) str
 }
 
 func restartHermesGateway() error {
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	return restartHermesGatewayWithRunner(func(ctx context.Context) ([]byte, error) {
+		return exec.CommandContext(ctx, "systemctl", "restart", hermesGatewayUnit).CombinedOutput()
+	})
+}
+
+func restartHermesGatewayWithRunner(run func(context.Context) ([]byte, error)) error {
+	// Allow gateway drain (up to 70s), the HAL pre-start wait (60s), and
+	// systemd startup overhead before declaring the restart failed.
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Minute)
 	defer cancel()
-	out, err := exec.CommandContext(ctx, "systemctl", "restart", hermesGatewayUnit).CombinedOutput()
+	out, err := run(ctx)
 	if err != nil {
 		return fmt.Errorf("systemctl restart %s: %s: %w", hermesGatewayUnit, strings.TrimSpace(string(out)), err)
 	}

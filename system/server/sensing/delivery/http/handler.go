@@ -221,12 +221,18 @@ func ProvideSensingHandler(gw domain.AgentGateway, bus *monitor.Bus, cfg *config
 // PostEvent receives a sensing event and sends it to the agent as a chat message.
 // Voice and text-only chat events first try local intent rules and Jev.
 func (h *SensingHandler) PostEvent(c *gin.Context) {
+	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, maxSensingBodyBytes)
 	var req SensingEventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
 	if err := validator.New().Struct(req); err != nil {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
+		return
+	}
+
+	if err := validateEventAttachments(req); err != nil {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}

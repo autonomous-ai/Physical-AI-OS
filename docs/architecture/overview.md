@@ -3,7 +3,15 @@
 Autonomous is a layered stack. Each layer exposes an interface to the layer above and
 depends only on the one below, so any layer can be replaced without touching the others.
 
-![Autonomous OS stack, top down: 25 skills, six swappable agent runtimes, 14 Go system packages, the realtime voice agent, 13 HAL capabilities, a deterministic safety gate below them (brightness, quiet hours, explicit-move speed, thermal today), in-tree drivers and board profiles, the vendor Linux kernel, and the bodies — each row labelled with its repo folder.](autonomous-stack.png)
+![Autonomous OS stack, top down: 25 skills, six swappable agent runtimes, 14 Go system packages, the realtime voice agent, 13 HAL capabilities, a deterministic safety gate below them (brightness, quiet hours, explicit-move speed, thermal today), in-tree drivers and board profiles, the vendor Linux kernel, and the bodies — each row labelled with its repo folder.](autonomous-stack-dark.svg)
+
+The README uses the static [dark stack diagram](autonomous-stack-dark.svg). It preserves the labels, layer order and distinct hue of each layer from [the source diagram](autonomous-stack.svg), with brighter text on a dark background. Dashed boxes still mark extension points. There is no sequential animation: stack order is not a request execution trace. When the source diagram changes, update this presentation variant to keep every label aligned.
+
+## Three routes on one SVG
+
+[platform-flows.svg](platform-flows.svg) shares the device, realtime, main runtime and spoken-output blocks across three examples: direct conversation, music playback and volume through the music/audio skills → OS dispatch or HAL API → drivers, and a computer task through Harness. The final Harness result returns through OS to HAL rather than through the main runtime again. The music example uses `music` for playback plus its emotion marker and `audio` for volume. Mic capture is voice input; music LED feedback is HAL behavior on RGB bodies, subject to sleep/TTS priority, not another required skill. Hardware support depends on the body; local intent shortcuts and other routing alternatives are outside this illustration.
+
+The self-contained SVG has no scripts or external assets. Its 18-second CSS loop highlights each route in turn and animates music LED feedback and planes rising from their outlined original positions. All labels and paths remain visible without animation; reduced-motion viewers disable the effects. GitHub README displays the static SVG, so download and open it in a browser for motion. Edit the SVG directly. The README keeps the static stack diagram below it. Timing is illustrative, not measured.
 
 ## Layers
 

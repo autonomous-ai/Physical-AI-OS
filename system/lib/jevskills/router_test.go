@@ -226,8 +226,8 @@ func TestCatalogConservativeLimits(t *testing.T) {
 	for i := 0; i < 32; i++ {
 		writeSkill(t, root, fmt.Sprintf("extra%d", i), fmt.Sprintf("---\nname: extra%d\ndescription: okay\n---\nBody\n", i))
 	}
-	if _, err = r.catalog(context.Background()); err == nil {
-		t.Fatal("must not truncate >32 eligible skills")
+	if items, err = r.catalog(context.Background()); err != nil || len(items) != 33 {
+		t.Fatalf("must retain all 33 eligible skills: %d %v", len(items), err)
 	}
 }
 
@@ -315,5 +315,104 @@ func TestAuthoritativeVoiceSelectionAndContextualAbstention(t *testing.T) {
 	}
 	if calls.Load() != 1 || received != "turn off the lamp" {
 		t.Fatalf("classifier received transcript or routing metadata: calls=%d prompt=%q", calls.Load(), received)
+	}
+}
+
+func TestCatalogWireBudget(t *testing.T) {
+	r, _, calls := fixture(t, accepted)
+	items := make([]skill, 300)
+	for i := range items {
+		items[i] = skill{Name: fmt.Sprintf("s%d", i), Description: strings.Repeat("x", 500)}
+	}
+	if _, err := r.decide(context.Background(), "http://127.0.0.1/jev/decisions", "mock", "recall yesterday", items); err != errCatalogBudget {
+		t.Fatalf("budget: %v", err)
+	}
+	if calls.Load() != 0 {
+		t.Fatal("oversized request reached provider")
+	}
+}
+
+func TestCatalogMultipleNativeRoots(t *testing.T) {
+	r, root, _ := fixture(t, accepted)
+	other := filepath.Join(t.TempDir(), "skills")
+	writeSkill(t, other, "recall", "---\nname: recall\ndescription: Recall yesterday\n---\nUse session history.\n")
+	missing := filepath.Join(t.TempDir(), "missing")
+	r.opts.AdditionalRoots = func() []string { return []string{root, other, missing} }
+	items, err := r.catalog(context.Background())
+	if err != nil || len(items) != 2 {
+		t.Fatalf("native roots: %d %v", len(items), err)
+	}
+	r.opts.NativeSidecars = []string{"agents/openai.yaml"}
+	sidecar := filepath.Join(other, "recall", "agents", "openai.yaml")
+	if err := os.MkdirAll(filepath.Dir(sidecar), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(sidecar, []byte("policy:\n  allow_implicit_invocation: false\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	items, err = r.catalog(context.Background())
+	if err != nil || len(items) != 1 || items[0].Name != "lamp" {
+		t.Fatalf("native invocation sidecar ignored: %#v %v", items, err)
+	}
+	// An unsupported namesake must block, not expose the other root's copy.
+	writeSkill(t, other, "lamp", "---\nname: lamp\ndescription: Native only\ncontext: fork\n---\nBody\n")
+	if _, err := r.catalog(context.Background()); err == nil {
+		t.Fatal("ambiguous native-only name accepted")
+	}
+}
+
+func TestProjectSkillDirsStopsAtRepositoryBoundary(t *testing.T) {
+	root := t.TempDir()
+	repo := filepath.Join(root, "repo")
+	cwd := filepath.Join(repo, "nested")
+	if err := os.MkdirAll(cwd, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if dirs := ProjectSkillDirs(cwd, ".agents"); len(dirs) != 1 || dirs[0] != filepath.Join(cwd, ".agents", "skills") {
+		t.Fatalf("non-repo ancestors included: %v", dirs)
+	}
+	// A worktree .git file is a valid boundary as well as a .git directory.
+	if err := os.WriteFile(filepath.Join(repo, ".git"), []byte("gitdir: /unused"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	dirs := ProjectSkillDirs(cwd, ".agents", ".claude")
+	if len(dirs) != 4 || dirs[2] != filepath.Join(repo, ".agents", "skills") {
+		t.Fatalf("repo roots: %v", dirs)
+	}
+}
+
+func TestLargeCatalogRoutesNativeSkill(t *testing.T) {
+	r, root, calls := fixture(t, func(w http.ResponseWriter, req *http.Request) {
+		var body struct {
+			State struct{ Candidates []candidate }
+		}
+		if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+			t.Fatal(err)
+		}
+		if len(body.State.Candidates) != 86 {
+			t.Errorf("truncated roster: %d", len(body.State.Candidates))
+		}
+		probs, fits := map[string]float64{"none": .01}, make([]float64, len(body.State.Candidates))
+		selected := ""
+		for i, c := range body.State.Candidates {
+			probs[c.ID] = 0
+			fits[i] = .01
+			if strings.HasPrefix(c.Description, "session-recall:") {
+				selected = c.ID
+				probs[c.ID] = .99
+				fits[i] = .99
+			}
+		}
+		_, _ = w.Write(decision(selected, probs, fits...))
+	})
+	other := filepath.Join(t.TempDir(), "skills")
+	writeSkill(t, other, "session-recall", "---\nname: session-recall\ndescription: Recall past conversations\n---\nRead real session history.\n")
+	for i := 0; i < 84; i++ {
+		writeSkill(t, root, fmt.Sprintf("extra%d", i), fmt.Sprintf("---\nname: extra%d\ndescription: Other skill\n---\nBody\n", i))
+	}
+	r.opts.AdditionalRoots = func() []string { return []string{other} }
+	result := r.Context(context.Background(), "What did we discuss yesterday?")
+	if !strings.Contains(result, "Read real session history.") || calls.Load() != 1 {
+		t.Fatalf("native skill not preloaded: %q calls=%d", result, calls.Load())
 	}
 }

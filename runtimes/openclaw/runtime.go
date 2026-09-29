@@ -75,8 +75,8 @@ func PopulateOpenClawVersion() {
 // probeOpenClawVersion runs a single `openclaw --version` probe and returns the
 // normalized semver. ok is false when the command fails/times out or the output
 // carries no semver token, signalling PopulateOpenClawVersion to retry.
-func probeOpenClawVersion() (version string, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), openclawVersionProbeTimeout)
+func probeOpenClawVersion(ctx context.Context) (version string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, openclawVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, "openclaw", "--version")
 	if err != nil {

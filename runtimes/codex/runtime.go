@@ -51,8 +51,8 @@ func PopulateCodexVersion() {
 
 // probeCodexVersion runs one version probe. A failed command, timeout, or
 // unparseable output returns ok=false so PopulateCodexVersion can retry.
-func probeCodexVersion() (version string, ok bool) {
-	ctx, cancel := context.WithTimeout(context.Background(), codexVersionProbeTimeout)
+func probeCodexVersion(ctx context.Context) (version string, ok bool) {
+	ctx, cancel := context.WithTimeout(ctx, codexVersionProbeTimeout)
 	defer cancel()
 	out, err := system.Run(ctx, codexBinary, "--version")
 	if err != nil {

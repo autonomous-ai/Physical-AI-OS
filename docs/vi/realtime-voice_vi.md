@@ -908,6 +908,12 @@ và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm kh
 khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
 `EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
 Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+HAL chuẩn bị trước bộ lọc tham chiếu khi đã biết tần số loa và mic lúc khởi tạo
+audio, bất kể thiết bị nào mở trước. Nhờ vậy lần import SciPy đầu tiên diễn ra
+trước đường phát filler/câu trả lời đầu; chỉ thêm việc lúc khởi tạo, không phát
+audio giả hay ghi ack. Khi đổi tần số đầu ra, bộ lọc mới cũng được chuẩn bị.
+Bước chuẩn bị từ 50 ms trở lên được log cùng tần số nguồn và thời gian. Vẫn giữ
+đường dự phòng trước lần ghi đầu cho route chưa chuẩn bị.
 Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
 import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
@@ -3129,7 +3135,7 @@ Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó
 
 Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
 
-Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
+Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input, lấy trạng thái trước khi input giữ cửa sổ focus của chính nó. Input đầu tiên không tự gắn nhãn follow-up; input tiếp theo có thể dùng cửa sổ vừa mở. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
 
 Chẩn đoán: `[realtime][timing]` ghi lúc đưa audio commit vào hàng đợi, progress đầu tiên được xác nhận, nhận grounding, bắt đầu giữ continuation, phát/bỏ continuation, hết thời gian chờ và receive timeout. Thời gian dùng đồng hồ monotonic tính từ commit gần nhất được đưa vào hàng đợi (không phải lúc người dùng nói xong), kèm generation và thời gian progress/output còn lại. Event đến muộn có thể xuất hiện sau commit mới; các trường này không chứng minh request nào đã khởi tạo search. `Google Search metadata received (search start unknown)` đánh dấu lúc nhận metadata grounding, không phải lúc bắt đầu search. Provider không cung cấp mốc bắt đầu search ở đây; không suy ra thời gian chạy search từ log này.
 

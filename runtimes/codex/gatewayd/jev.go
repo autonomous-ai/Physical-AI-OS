@@ -20,8 +20,9 @@ func newPreloader(cfg Config) func(context.Context, string) string {
 		return nil
 	}
 	router := jev.New(jev.Options{Runtime: "codex", ConfigPath: cfg.JevConfigPath,
-		SkillsDir: filepath.Join(cfg.CodexHome, "skills"), Disabled: !cfg.JevEnabled,
-		Eligible: func(_ string, _ map[string]any) bool { return nativePreloadAllowed(cfg) }})
+		SkillsDir: filepath.Join(cfg.CodexHome, "skills"), Disabled: !cfg.JevEnabled, AdditionalRoots: func() []string { return nativeSkillDirs(cfg) },
+		NativeSidecars: []string{"agents/openai.yaml"},
+		Allowed:        func() bool { return nativePreloadAllowed(cfg) }})
 	return router.Context
 }
 
@@ -77,10 +78,17 @@ func nativePreloadAllowed(cfg Config) bool {
 		return false
 	}
 	for {
-		// A project catalog may override the installed skill of the same name.
-		// Leave its discovery and precedence to the runtime's native loader.
+		// Covered static roots are scanned together; ambiguous names defer.
+		// Unknown roots remain native-owned.
 		for _, catalog := range []string{filepath.Join(dir, ".agents", "skills"), filepath.Join(dir, ".codex", "skills")} {
-			if filepath.Clean(catalog) == filepath.Clean(filepath.Join(cfg.CodexHome, "skills")) {
+			covered := false
+			for _, root := range nativeSkillDirs(cfg) {
+				if filepath.Clean(catalog) == filepath.Clean(root) {
+					covered = true
+					break
+				}
+			}
+			if covered {
 				continue
 			}
 			if _, err := os.Lstat(catalog); err == nil || !os.IsNotExist(err) {
@@ -113,4 +121,11 @@ func nativePreloadAllowed(cfg Config) bool {
 		}
 	}
 	return true
+}
+
+// nativeSkillDirs lists only documented static discovery roots. Plugin registries
+// and dynamic invocation remain owned by the runtime.
+func nativeSkillDirs(cfg Config) []string {
+	roots := []string{filepath.Join(cfg.CodexHome, "skills"), filepath.Join(cfg.CodexHome, "skills", ".system"), filepath.Join(cfg.Home, ".agents", "skills"), "/etc/codex/skills"}
+	return append(roots, jev.ProjectSkillDirs(cfg.Workspace, ".agents")...)
 }

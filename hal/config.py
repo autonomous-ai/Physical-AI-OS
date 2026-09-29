@@ -157,7 +157,29 @@ FACE_STRANGER_FORGET_S = float(os.environ.get("HAL_FACE_STRANGER_FORGET_S", "180
 # person, and a fresh id is always "new" — without this floor that's an agent
 # turn every FACE_COOLDOWN_S (10s). Friend enters are not affected.
 FACE_STRANGER_ENTER_FLOOR_S = float(os.environ.get("HAL_FACE_STRANGER_ENTER_FLOOR_S", "300.0"))
-FACE_STRANGER_FLUSH_S = float(os.environ.get("HAL_FACE_STRANGER_FLUSH_S", "10.0"))
+# A stranger is greeted only once they look at the lamp (#531): greeting someone
+# turned away — talking to a colleague, reading a monitor — is odd. Face ID ticks
+# every HAL_SENSING_INTERVAL (2 s), too slow for gaze wake's 1.5 s window, so the
+# vote counts face-ID ticks: the stranger must face the lamp (gaze wake's cone,
+# size floor and edge rules) on FACE_STRANGER_GAZE_MIN_FACING of the last
+# FACE_STRANGER_GAZE_TICKS ticks they were in frame, within
+# FACE_STRANGER_GAZE_WINDOW_S. One glance or one noisy yaw
+# does not greet. Never held or timed out: someone who never looks is never
+# greeted, and is still logged, snapshotted and counted as today.
+FACE_STRANGER_GAZE_TICKS = int(os.environ.get("HAL_FACE_STRANGER_GAZE_TICKS", "3"))
+FACE_STRANGER_GAZE_MIN_FACING = int(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_MIN_FACING", "2")
+)
+# How far back those ticks may reach. The vote means "looked at the lamp for a
+# few seconds", not "glanced twice in one visit": without an age limit, a glance
+# at 10:00 and another at 10:15 (same visit, still ungreeted) add up to a
+# greeting, with a 15-minute-old frame attached. 10 s holds the 3 ticks (6 s at
+# HAL_SENSING_INTERVAL 2 s) plus slack for a tick skipped while the shared
+# perception workers are busy. Ticks, not an unbroken run: a face that blurs to
+# unsure for one tick must not reset someone who is looking.
+FACE_STRANGER_GAZE_WINDOW_S = float(
+    os.environ.get("HAL_FACE_STRANGER_GAZE_WINDOW_S", "10.0")
+)
 # An enrolled face can grant voice focus on presence.enter. Keep stranger-only
 # enters agent-visible without granting focus unless a deployment explicitly
 # opts into guest-first conversation.
@@ -247,19 +269,6 @@ FACE_STRANGER_MIN_TICKS = int(os.environ.get("HAL_FACE_STRANGER_MIN_TICKS", "2")
 FACE_STRANGER_CORROBORATION_S = float(
     os.environ.get("HAL_FACE_STRANGER_CORROBORATION_S", "6.0")
 )
-# A stranger-only presence.enter lists the friends boxed in the same frame
-# ("already present: momo (friend)") so the agent talks to the user instead of
-# greeting the visitor over the user's shoulder (#426). Friend and non-friend
-# boxes must have coexisted for this many consecutive sensing ticks first: a
-# face on a monitor, a reflection or a one-tick glitch next to the user must
-# not turn "hello" into "looks like you've got company". 2 lines up with
-# FACE_STRANGER_MIN_TICKS — the unknown face is held as unsure for that long
-# before it mints, those ticks count, so a real visitor is listed on the very
-# enter that announces them. A friend arriving is a positive match and is
-# never gated by this. Strictly consecutive, no gap tolerance — unlike
-# FACE_STRANGER_CORROBORATION_S — so a tick where the friend blurs to unsure
-# resets it; that fails safe (plain stranger greeting), never the other way.
-FACE_COPRESENCE_MIN_TICKS = int(os.environ.get("HAL_FACE_COPRESENCE_MIN_TICKS", "2"))
 # Similarity a live face must reach against a user's ENROLLED UPLOADS to be
 # that user. The uploads are a phone photo matched against the device camera —
 # different sensor, lighting, distance — so the same person scores lower here

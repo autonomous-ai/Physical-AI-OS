@@ -236,6 +236,10 @@ resize2fs "${PART}"
 log "Mounting at ${MNT}…"
 mount "${PART}" "${MNT}"
 
+# The vendor MOTD update count scans apt metadata at every boot. Let hardware
+# become ready before that optional disk-heavy scan; daily updates are untouched.
+python3 "$(dirname "${BASH_SOURCE[0]}")/lib/defer_orangepi_update_count.py" --root "${MNT}"
+
 # ─────────────────────────────────────────────────────────────────────────────
 # Phase 2 — Chroot: apt install, Node, OpenClaw, uv, systemd units, configs
 # ─────────────────────────────────────────────────────────────────────────────

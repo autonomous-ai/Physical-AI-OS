@@ -7,7 +7,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 | Device | Role | Where |
 |---|---|---|
 | **GPIO button** | A primary mechanical button for click and hold actions, plus a dedicated reset button on OrangePi. Destructive hold actions require release. | Both Pi 4/5 and OrangePi sun60 |
-| **TTP223 capacitive touchpad** | Two touch pads arranged as a "dog head" surface for petting + soft stop/unmute. No destructive gestures because the IC's FastMode prevents reliable hold detection. | OrangePi sun60 only (4 Pro / A733) |
+| **TTP223 capacitive touchpad** | Headpad for petting only: tap, double tap, swipe and back-and-forth strokes all give the same PET response. Control gestures belong to GPIO/MPR121. | OrangePi sun60 only (4 Pro / A733) |
 | **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including shutdown. Triple-tap reboot is disabled. Never factory-resets. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
@@ -116,10 +116,10 @@ Deploy the updated HAL before uploading JSON with these new fields.
 
 | Gesture | Primary GPIO button | TTP223 touchpad |
 |---|---|---|
-| **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | Same after the 1.2 s tap-vs-pet decision resolves — active tracking stops, then the mic/speaker action and cue run. The initial touch still stops in-flight TTS and plays its ack chime immediately. |
-| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | Pet response. With `HAL_TOUCH_SWIPE` on (the default), repeated taps in one place — fast or slow, one finger or several — are a **double tap** → mic mute toggle; pet then means the finger revisited a pad |
-| **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | n/a — TTP223 stops at 2 (any further taps absorbed by cooldown) |
-| **Swipe** across the pads | n/a | **`HAL_TOUCH_SWIPE`, default on.** One contact running monotonically over all three pads, gaps above the movement floor → **sleep**. Direction is not used — left-to-right and right-to-left are the same gesture — and neither is device state. Wake stays on tap / double tap. |
+| **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | PET response after the decision window; first contact keeps its ack chime and does not interrupt speech. |
+| **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | PET response for both fast and slow double taps; no mic toggle. |
+| **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | No special triple-tap action; contacts join the pet burst or are absorbed by its cooldown. |
+| **Swipe** across the pads | n/a | PET response in either direction; no sleep action. |
 | **Hold 2–5 s, then release** | Speak the localized sleep announcement, then enter `sleepy`: LED off, camera/mic/speaker off; servo releases after 1 s. LED blinks sleepy purple while held. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 5–10 s, then release** | Shutdown OS (TTS announce → release servos → `sudo shutdown -h now`). LED blinks red while armed. | n/a — TTP223 hardware cannot reliably hold (see "FastMode" below) |
 | **Hold 10 s+, then release** | Factory-reset: wipe device state + reboot into AP setup (TTS announce → release servos → POST `/api/system/factory-reset` on the OS server). LED goes solid red while armed. **Off on Lamp** (`"factory_reset": false` on the primary button): a 10 s+ hold stays at shutdown because the dedicated reset button owns factory-reset. | n/a |
@@ -136,7 +136,7 @@ backoff, even if that capture finishes before the next attempt. This keeps the
 cue from truncating the user's sentence; the click still stops speech and grants
 wake focus normally.
 
-The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap top of Lamp (touchpad) or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
+The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
@@ -422,67 +422,43 @@ filter for `hal.drivers.mpr121` when investigating a missed or duplicate tap.
 
 ## TTP223 detection (`hal/drivers/ttp223.py`)
 
-The TTP223 IC on this board runs in **FastMode**: output goes HIGH on touch, then automatically drops back LOW within ~50-80 ms even with the finger still on the pad. The IC re-triggers only when capacitance changes meaningfully (finger moves). Continuous "hold" is impossible without rewiring the IC's FM pin to LowPowerMode (~12 s max touch).
+The TTP223 headpad is for affection only. Single tap, fast/slow double tap,
+one-way swipe and back-and-forth pet all call `head_pat_action`. GPIO/MPR121
+retain their control mappings. TTP223 does not stop/unmute, toggle the mic,
+sleep, reboot, shut down or factory-reset the device.
 
-Cross-talk between adjacent pads is also significant — a single physical touch fires edges on both pads with staggered timing. With the middle pad gone the two are further apart and the coupling is weaker: one tap now often lights only one of them, which is why gesture rules must not depend on how many pads a touch happens to reach.
+The FastMode pads cannot reliably measure a held finger. Cross-talk also lets
+one touch produce several edges, so the existing grouping/classification stays:
 
-The driver compensates with a **two-layer model**:
+1. Any edge restarts the **200 ms** contact timer.
+2. The first contact plays the acknowledgement chime without stopping speech.
+3. A clear pet can resolve early; other contacts wait for the **1.2 s** decision
+   window. Every non-empty resolved gesture calls the same PET action once.
+4. Every response attempt arms a **1.5 s** cooldown. Contacts inside it extend
+   the cooldown, so continuous touching does not queue repeated responses.
 
-### Layer 1: Session (200 ms gap)
+`HAL_TOUCH_SWIPE=true` keeps the spatial classifier and early pet detection.
+With `false`, grouping uses contact count instead. Both settings still produce
+only PET responses. Trace labels retain the detected `TAP`, `DOUBLE_TAP`,
+`SWIPE` or `PET`, while the recorded action is always `head_pat_action`.
+The first-contact chime is separate from that action. There are no parked
+control-action branches left in this driver.
 
-Any edge — rising or falling, any pad — restarts a 200 ms timer. When the timer expires (no new edges for 200 ms), the "session" ends. One session = one logical touch event from the user's perspective, regardless of how many physical edges fired inside it (cross-talk + FastMode auto-LOW pulses).
-
-### Layer 2: Decision window (1.2 s after session end)
-
-After a session ends:
-
-1. If a **pet cooldown** is active (a head-pat fired recently), the session is silently absorbed and the cooldown is extended. Prevents stuttering `single_click` interjections between continuous strokes.
-2. Otherwise increment the session count. On the **first** session of a burst (`_ack_first_session`): if TTS is mid-utterance, speech is stopped immediately, then a short ack chime plays (gesture-neutral — valid for a tap or the first stroke of a pet). TTS stop + chime only — music, unmute and the listening cue still wait for resolution. Deliberate trade-off: petting Lamp while she talks now cuts her off (the pet giggle follows) in exchange for instant tap-to-interrupt.
-3. Then resolve:
-   - `count >= 2` → fire `head_pat_action` immediately, arm 1.5 s pet cooldown
-   - `count < 2` → schedule a 1.2 s decision timer. When that timer fires with `count == 1`, fire `single_click_action`.
-
-### Layer 3: Gesture classification (`HAL_TOUCH_SWIPE`, default ON)
-
-**On by default** since 2026-08-27, after hands-on validation on orange-lamp across tap, fast and slow double tap, pet and swipe. Setting `HAL_TOUCH_SWIPE=false` restores the two-gesture behaviour in one step and without a redeploy — that is the rollback if a field unit misbehaves.
-
-Turning it on means a double tap toggles the **microphone** and a swipe **sleeps** the device. Both are reversible (double tap again; one tap wakes), and nothing destructive is reachable here — FastMode cannot measure a hold, so TTP223 cannot trigger reboot / shutdown / factory-reset; reboot is on the mechanical button; shutdown is on the mechanical button and MPR121; factory-reset is on the GPIO buttons only.
-
-**The signal is *when* pads fire, not which.** Device-measured on orange-lamp, 2026-08-27 — inter-pad gaps inside a single contact:
-
-| | |
-|---|---|
-| several fingers landing together | **1 – 23 ms** |
-| one finger travelling across pads | **53 – 322 ms** |
-
-Nothing in between, and `HAL_TOUCH_SWIPE_MIN_GAP_MS` (40) sits in the gap. Every rule below is derived from that one threshold.
-
-**A contact is not a gesture.** This is the thing the first three attempts got wrong. Layer 1 ends a contact when no edge arrives for 200 ms, so a *continuous* stroke never ends one — a whole ~1 s pet arrives as a **single** contact, and two fast taps arrive as a single contact too. Counting contacts therefore cannot identify anything on its own.
-
-Resolution order, first match wins:
-
-1. **SWIPE** → sleep. One contact reaching **every wired pad**, none of them twice, with a gap above the floor. "Every pad" rather than a fixed count — on a 3-pad board two of three is a partial move, not a crossing. **One contact only**: each leg of a back-and-forth stroke is itself a clean one-direction pass, so letting any leg carry the verdict turns every pet into a swipe. Checked first so a resolved swipe never also fires a tap.
-2. **DOUBLE TAP** → mic mute toggle, with a spoken state confirmation. The hand was on the same ground twice **and at some point two pads lit together** — a gap below the floor, which only a landing produces. A stroke is travel throughout and can never satisfy it, so this is safe to check before pet even though both revisit.
-3. **PET** → giggle. The finger **revisited** a pad it had left with **no landing anywhere** — every step was travel, which is what a stroke is. No contact-count gate: a continuous stroke is a single contact.
-4. **TAP** → everything else, including several fingers landing at once. That lights every pad, but within ~20 ms, which is not movement.
-
-**What is genuinely ambiguous.** A single one-direction sweep with tight timing — three pads, no revisit, gaps under the floor — is indistinguishable from a firm three-finger tap and resolves as TAP. There is no signal on this surface that separates them.
-
-| Env var | Default | Tunes |
+| Setting | Default | Purpose |
 |---|---|---|
-| `HAL_TOUCH_SWIPE` | **`true`** | Master switch for rules 1–3. Set `false` to restore the two-gesture behaviour exactly — the rollback path. |
-| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 40 | The movement floor, and the one number every rule derives from: gaps at or above it mean the hand travelled, below it mean fingers arrived together. Sits inside the measured 23–53 ms empty band. **Load-bearing now that the classifier ships enabled** — raise it if firm taps read as swipes, lower it if real swipes are missed. `HAL_TOUCH_DEBUG` records the gaps it is measured against. |
+| `SESSION_GAP_S` | 0.2 s | Coalesce cross-talk and automatic release edges |
+| `DECISION_WINDOW_S` | 1.2 s | Group contacts before resolving a response |
+| `PET_SESSION_THRESHOLD` | 2 | Count-based early pet threshold |
+| `PET_COOLDOWN_S` | 1.5 s | Quiet gap required after a response attempt |
+| `HAL_TOUCH_SWIPE` | `true` | Spatial classification and early pet recognition |
+| `HAL_TOUCH_SWIPE_MIN_GAP_MS` | 35 | Lower boundary for movement classification |
+| `HAL_TOUCH_SWIPE_MAX_GAP_MS` | 150 | Upper boundary separating travel from a new tap |
+| `HAL_TOUCH_PRESS_MIN_EMPTY_MS` | 15 | Minimum empty-surface gap for a new press |
 
-`ttp223.json` accepts an optional `axis` in each board entry — the configured `lines` in physical left-to-right order. Legacy fallback reads `axis` from the `touch` entry in `boards.json`. It is **absent** today: line order is not spatial order on this board, and only a labelled press-one-pad-at-a-time run can establish it. Absent, classification falls back to declared line order. A wrong axis costs only the swipe *direction*, which the driver deliberately does not use.
-
-### Constants (`ttp223.py`)
-
-| Constant | Value | Why |
-|---|---|---|
-| `SESSION_GAP_S` | 0.2 | Comfortably exceeds observed cross-talk burst (~30-100 ms) without merging genuinely separate taps |
-| `DECISION_WINDOW_S` | 1.2 | Field-measured user stroke pace is 0.8-1.2 s per beat — wide enough to keep the first stroke of a pet motion from firing a spurious single_click |
-| `PET_SESSION_THRESHOLD` | 2 | Two consecutive sessions within the decision window = pet. Easier than 3 because each "stroke" produces only one session on this hardware |
-| `PET_COOLDOWN_S` | 1.5 | After a pet fires, additional sessions within 1.5 s extend the cooldown rather than starting a new count. Stroking continuously = one pet, then silence |
+`ttp223.json` supplies chip, lines and optional spatial `axis`; absent axis uses
+line order. Geometry only affects classification/timing, not the PET action.
+Tests in `hal/test/test_ttp223.py` cover both classifier settings, two/three-pad
+layouts, all gesture shapes, cooldown and first-contact non-interruption.
 
 ### Tracing what actually happened (`HAL_TOUCH_DEBUG`)
 
@@ -517,7 +493,7 @@ The actions live in one place so the GPIO button, TTP223, MPR121, and any future
 | `factory_reset_action(source)` | Speak "Factory reset starting. Rebooting now" → `release_servos()` → POST `/api/system/factory-reset` on the OS server (the server owns the wipe + reboot, see below). | Yes |
 | `swipe_action(source)` | Always `sleep_action`. Not keyed on direction (a swipe the "wrong" way would otherwise do nothing, with no feedback saying why) and not keyed on state (one gesture meaning two things depending on something invisible). On an already-sleeping device `sleep_action` returns early. | Yes |
 | `mic_toggle_action(source)` | Mic mute toggle for a resolved double tap (fast or slow). Refuses while the HW mic switch is off or a voice enrollment is recording. After the flip it speaks the resulting **state**, drawn at random from `MIC_MUTED_PHRASES_BY_LANG` / `MIC_UNMUTED_PHRASES_BY_LANG` in the lamp's own voice ("[whispers] Shh, my ears are closed." / "[excited] My ears are open!"), so the voice and the mic-muted LED agree; a refused toggle stays silent rather than announcing a mute that did not happen. | No — non-interrupting, drops if TTS is busy |
-| `head_pat_action(source)` | Pick a random localized pet phrase, speak it via `speak_cached` on a daemon thread. **Non-interrupting**: if TTS is still busy the phrase is dropped silently. In practice on TTP223 the first touch session already cut any in-flight speech and sounded the ack chime (`_ack_first_session`), so by pet time TTS is usually free and the giggle plays. | No |
+| `head_pat_action(source)` | Picks a random local pet phrase and calls `speak_cached` off-thread, then notifies the OS on acceptance. TTP223 maps every resolved gesture here and never stops current speech first. | No explicit stop; uses existing TTS admission rules. |
 
 ### Factory-reset: what gets wiped
 

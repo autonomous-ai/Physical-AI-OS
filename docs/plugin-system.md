@@ -26,6 +26,8 @@ HAL is the kernel — plugins are userspace. The OS mediates all hardware access
 Plugins coexist with HAL and the agent runtime. HAL serializes hardware access
 so multiple plugins can run without resource conflicts.
 
+Plugin installation and lifecycle endpoints require admin authorization. Manifest and lifecycle names allow letters, digits, underscores, hyphens and dots (including existing uppercase names). Empty names, `.` and `..`, paths, spaces, globs and unit-file directives are rejected before filesystem operations. Install URLs beginning with `-` are rejected, and Git receives `--` before the URL so it cannot be parsed as an option. Plugins still run trusted third-party code; name validation is not a sandbox.
+
 ## Plugin Format
 
 A plugin is a directory (git repo) with:
