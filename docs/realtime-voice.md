@@ -2256,13 +2256,17 @@ knows what `build_instructions()` re-feeds. Four rules keep that lossless:
   `HAL_REALTIME_SUMMARIZE_AT_FRACTION` (0.75) of their budget, so no turn is
   ever in neither the window nor the summary. Only one summarize runs at a time.
   Each summarize leaves the newest `HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS` (4)
-  turns verbatim in `memory.jsonl`.
+  turns verbatim in `memory.jsonl`, but never more than half the verbatim
+  budget, so a few long replies cannot fill the window on their own.
 - **Activity first, cap respected.** The prompt gets the real char budget and
   must open with `## Current activity` (rules the user set, current
   question/round, score, one line per covered item) while an activity is in
   progress. An over-long summary is shrunk by `fit_summary()` — whole bullets,
   oldest history first; `## Current activity` and `## Open requests` are kept —
-  instead of a hard cut that dropped the newest content.
+  instead of a hard cut that dropped the newest content. The section's first
+  bullet is `[<ISO-8601>] Last active`; `expire_current_activity()` drops the
+  whole section once that stamp is `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S`
+  (3600s) old, so an abandoned quiz is not resumed the next day.
 - **Summarizer health.** The memory summarizer runs with thinking disabled (the
   proxy otherwise spent all 4096 output tokens reasoning and returned nothing);
   a second consecutive empty result is logged at ERROR and consumes no entries.
@@ -2270,8 +2274,9 @@ knows what `build_instructions()` re-feeds. Four rules keep that lossless:
 Gemini answers questions about the conversation in progress (question just
 asked, score, round, rules) itself from this memory instead of delegating them:
 the main agent was not part of the conversation (`system_prompt_gemini.md`,
-`routing_prompt_gemini.md`, `complete_response`). Recall of earlier sessions is
-still delegated. Cost: the realtime-memory block can now reach 13k chars
+`routing_prompt_gemini.md`, `complete_response`). "Remind me what…" about this
+conversation counts as recall, not a reminder. Recall of earlier days or
+sessions is still delegated, even when the summary paraphrases it. Cost: the realtime-memory block can now reach 13k chars
 (≈ +1.2k input tokens per turn at worst); summarization stays off the turn path.
 
 ## Live mode (full duplex)

@@ -142,6 +142,39 @@ def expire_open_requests(summary: str, now_s: float, file_age_s: float, ttl_s: f
     return "\n".join(out).strip()
 
 
+def expire_current_activity(summary: str, now_s: float, file_age_s: float, ttl_s: float) -> str:
+    """Drop the `## Current activity` section once the activity has gone quiet.
+
+    The section tells a fresh session to carry on a quiz or debate; re-fed
+    after the user walked away it would resume a test they abandoned the night
+    before, and fit_summary protects it at the cost of real history. Its first
+    bullet carries a `[<ISO-8601>] Last active` stamp (summarize_prompt.md);
+    ttl_s or more before now_s — or, without a parseable stamp, a file that old —
+    and the whole section goes. ttl_s <= 0 disables.
+    """
+    if ttl_s <= 0 or CURRENT_ACTIVITY_HEADING.lower() not in summary.lower():
+        return summary
+    lines: list[str] = summary.splitlines()
+    start: int = next(
+        i for i, line in enumerate(lines)
+        if line.strip().lower() == CURRENT_ACTIVITY_HEADING.lower()
+    )
+    end: int = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("#")),
+        len(lines),
+    )
+    stamp_s: float | None = None
+    for line in lines[start + 1:end]:
+        m = _OPEN_REQUEST_BULLET_RE.match(line)
+        if m:
+            stamp_s = _parse_open_request_stamp(m.group(1))
+            break
+    expired: bool = (now_s - stamp_s >= ttl_s) if stamp_s is not None else (file_age_s >= ttl_s)
+    if not expired:
+        return summary
+    return "\n".join(lines[:start] + lines[end:]).strip()
+
+
 class ContextManagerBase(ABC):
     """Abstract base for realtime voice agent context managers.
 
@@ -276,8 +309,19 @@ class ContextManagerBase(ABC):
                     lines: list[str] = raw.splitlines()
                     # The newest turns stay verbatim for the next session;
                     # only the older ones are folded into summary.md.
+                    # Bounded by chars too (half the verbatim budget): a few
+                    # long replies could otherwise fill the window on their own,
+                    # drop an unsummarized turn and re-trigger every turn.
                     keep_recent: int = max(0, app_config.REALTIME_SUMMARY_KEEP_RECENT_TURNS)
-                    to_read: list[str] = lines[: max(0, len(lines) - keep_recent)]
+                    kept: int = 0
+                    tail_chars: int = 0
+                    for line in reversed(lines):
+                        size: int = len(self._format_jsonl_entry(line))
+                        if kept >= keep_recent or tail_chars + size > self._realtime_memory_max_chars // 2:
+                            break
+                        kept += 1
+                        tail_chars += size
+                    to_read: list[str] = lines[: len(lines) - kept]
                     lines_read: int = len(to_read)
                     entries: list[str] = self._parse_jsonl_lines(to_read)
                     if not entries:
@@ -461,7 +505,7 @@ class ContextManagerBase(ABC):
             return self._load_realtime_memory_unlocked()
 
     def _read_summary_for_refeed(self) -> str:
-        """summary.md with its stale `## Open requests` section removed.
+        """summary.md with its stale `## Open requests` / `## Current activity` removed.
 
         Used both where the summary is re-fed as [Previous summary] to the next
         summarize and where it is loaded into session context — the two places
@@ -479,7 +523,11 @@ class ContextManagerBase(ABC):
         trimmed: str = expire_open_requests(existing, now_s, file_age_s, self._open_request_ttl_s)
         if trimmed != existing:
             logger.info("[realtime] dropped stale open requests from summary (file age %.0fs)", file_age_s)
-        return trimmed
+        # Same TTL: an activity untouched this long was abandoned (#449).
+        fresh: str = expire_current_activity(trimmed, now_s, file_age_s, self._open_request_ttl_s)
+        if fresh != trimmed:
+            logger.info("[realtime] dropped stale current activity from summary")
+        return fresh
 
     def _load_realtime_memory_unlocked(self) -> list[str]:
         entries: list[str] = []

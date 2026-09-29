@@ -120,3 +120,13 @@ def test_current_conversation_recall_is_answered_directly():
     assert "memory recall of earlier sessions" in ROUTING
     assert "checking conversation memory" not in ROUTING
     assert "Questions about THIS conversation" in ROUTING
+
+
+# Review of #449: earlier-session recall stays delegated even when the summary
+# paraphrases it, and "remind me what…" about this conversation is recall, not
+# a reminder.
+def test_earlier_sessions_stay_delegated_and_remind_me_what_is_recall():
+    assert "recall of earlier days or sessions is still delegated, even when a paraphrase of it appears here" in PROMPT
+    assert "delegate specific recall of anything older that it does not contain" not in PROMPT
+    assert '"remind me what' in PROMPT
+    assert '"remind me what' in ROUTING

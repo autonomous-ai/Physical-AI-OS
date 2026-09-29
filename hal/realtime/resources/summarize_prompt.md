@@ -18,13 +18,14 @@ You are a memory summarizer for a smart device's voice agent. Your job is to com
 ## Current activity
 
 - If the entries show an activity still in progress — a quiz or oral test, a debate, a lesson, a game, a story, a practice drill — the summary MUST start with a heading exactly `## Current activity`, before anything else
+- Its first bullet is exactly `- [<timestamp of the newest entry that belongs to the activity>] Last active`, copying that entry's timestamp; the device drops the section once that stamp is old
 - Under it, one short line each, keep what a fresh voice agent needs to continue seamlessly:
   - what the activity is and who asked for it
   - the rules the user set, in their words when short (e.g. "number every question", "one argument per round", "keep score")
   - where it stands now: the current question or round number, the score, and the question or argument still waiting for an answer
   - what was already covered: one compact line per question or round (question → user's answer → right/wrong; or round N: user's point / device's counter)
 - Keep this section under half of the character limit; compress the per-item lines rather than dropping items
-- Omit the section when nothing is in progress, or when the entries show the activity finished or was abandoned
+- Omit the section when nothing is in progress, or when the entries show the activity finished or was abandoned — including when the newest entries moved on to unrelated requests
 
 ## Open requests
 

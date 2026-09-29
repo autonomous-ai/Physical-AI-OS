@@ -2186,13 +2186,18 @@ mới chỉ biết những gì `build_instructions()` nạp lại. Bốn quy t�
   nền khi các lượt nguyên văn đạt `HAL_REALTIME_SUMMARIZE_AT_FRACTION` (0.75)
   ngân sách của chúng, nên không lượt nào nằm ngoài cả cửa sổ lẫn summary. Mỗi
   lúc chỉ một summarize chạy. Mỗi lần summarize giữ nguyên văn
-  `HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS` (4) lượt mới nhất trong `memory.jsonl`.
+  `HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS` (4) lượt mới nhất trong `memory.jsonl`,
+  nhưng không quá một nửa ngân sách nguyên văn, để vài câu trả lời dài không tự
+  lấp đầy cửa sổ.
 - **Hoạt động đứng đầu, tôn trọng giới hạn.** Prompt nhận đúng ngân sách ký tự
   và phải mở đầu bằng `## Current activity` (luật người dùng đặt, câu hỏi/vòng
   hiện tại, điểm, mỗi mục đã qua một dòng) khi đang có hoạt động. Summary quá
   dài được `fit_summary()` rút gọn — bỏ nguyên bullet, lịch sử cũ nhất trước;
   giữ `## Current activity` và `## Open requests` — thay vì cắt cứng làm mất
-  nội dung mới nhất.
+  nội dung mới nhất. Bullet đầu của section là `[<ISO-8601>] Last active`;
+  `expire_current_activity()` bỏ cả section khi dấu thời gian đó đã cũ
+  `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (3600s), để bài kiểm tra bỏ dở không
+  bị tiếp tục vào ngày hôm sau.
 - **Sức khỏe summarizer.** Summarizer của memory chạy với thinking tắt (proxy
   từng tiêu hết 4096 output token để suy nghĩ và trả về rỗng); kết quả rỗng lần
   thứ hai liên tiếp được log ở mức ERROR và không tiêu thụ entry nào.
@@ -2200,7 +2205,9 @@ mới chỉ biết những gì `build_instructions()` nạp lại. Bốn quy t�
 Gemini tự trả lời các câu hỏi về cuộc hội thoại đang diễn ra (câu vừa hỏi, điểm,
 vòng, luật) từ memory này thay vì delegate: main agent không tham gia cuộc hội
 thoại đó (`system_prompt_gemini.md`, `routing_prompt_gemini.md`,
-`complete_response`). Hỏi lại các session trước vẫn được delegate. Chi phí: khối
+`complete_response`). "Nhắc lại cho tôi…" về cuộc hội thoại này được tính là hỏi
+lại, không phải đặt nhắc nhở. Hỏi lại các ngày hoặc session trước vẫn được
+delegate, kể cả khi summary có diễn giải lại. Chi phí: khối
 realtime memory giờ có thể tới 13k ký tự (tệ nhất ≈ +1.2k input token mỗi lượt);
 việc tóm tắt vẫn nằm ngoài đường xử lý lượt.
 

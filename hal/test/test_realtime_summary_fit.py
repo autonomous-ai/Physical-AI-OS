@@ -59,3 +59,64 @@ def test_prompt_states_the_real_budget_and_the_activity_section():
     system = RealtimeSummarizer(api_key="test")._system_prompt
     assert "{max_chars}" not in system
     assert str(app_config.REALTIME_SUMMARY_MAX_CHARS) in system
+
+
+# An abandoned activity must not be resumed the next morning: the section
+# carries a `[<ISO-8601>] Last active` stamp and expires like open requests.
+from datetime import datetime, timezone  # noqa: E402
+
+from hal.realtime.context_manager.base import expire_current_activity  # noqa: E402
+
+NOW = datetime(2026, 9, 29, 12, 0, 0, tzinfo=timezone.utc).timestamp()
+TTL = 3600
+
+
+def _with_activity(stamp: str) -> str:
+    return (
+        f"{CURRENT_ACTIVITY_HEADING}\n"
+        f"- [{stamp}] Last active\n"
+        "- Oral test on astronomy, question 7, score 3/6\n"
+        "\n"
+        "## Facts\n"
+        "- The user is Minh\n"
+    )
+
+
+def test_fresh_activity_is_kept():
+    text = _with_activity("2026-09-29T11:40:00+00:00")
+    assert expire_current_activity(text, now_s=NOW, file_age_s=0, ttl_s=TTL) == text
+
+
+def test_stale_activity_is_dropped_with_its_heading():
+    out = expire_current_activity(_with_activity("2026-09-28T22:00:00+00:00"),
+                                  now_s=NOW, file_age_s=0, ttl_s=TTL)
+    assert CURRENT_ACTIVITY_HEADING not in out
+    assert "question 7" not in out
+    assert "## Facts\n- The user is Minh" in out
+
+
+def test_unstamped_activity_falls_back_to_file_age():
+    text = _with_activity("t")
+    assert expire_current_activity(text, now_s=NOW, file_age_s=TTL - 1, ttl_s=TTL) == text
+    assert CURRENT_ACTIVITY_HEADING not in expire_current_activity(
+        text, now_s=NOW, file_age_s=TTL, ttl_s=TTL)
+
+
+def test_prompt_asks_for_the_last_active_stamp():
+    prompt = (RESOURCES_DIR / "summarize_prompt.md").read_text(encoding="utf-8")
+    assert "] Last active`" in prompt
+
+
+def test_refeed_drops_a_stale_activity(tmp_path):
+    import os
+    from hal.realtime.context_manager.openclaw import OpenClawContextManager
+
+    (tmp_path / "ws").mkdir()
+    manager = OpenClawContextManager(
+        workspace_dir=str(tmp_path / "ws"),
+        realtime_memory_path=str(tmp_path / "realtime" / "memory.jsonl"),
+    )
+    manager._summary_path.parent.mkdir(parents=True)
+    manager._summary_path.write_text(_with_activity("2020-01-01T00:00:00+00:00"), encoding="utf-8")
+    os.utime(manager._summary_path, None)  # freshly written: only the stamp can expire it
+    assert CURRENT_ACTIVITY_HEADING not in manager._read_summary_for_refeed()

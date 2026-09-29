@@ -83,7 +83,7 @@ def test_summarize_triggers_before_the_window_overflows(tmp_path, monkeypatch):
 def test_summarize_keeps_the_newest_turns_verbatim(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "REALTIME_SUMMARY_KEEP_RECENT_TURNS", 4)
     fake = _FakeSummarizer()
-    manager = _manager(tmp_path, summarizer=fake)
+    manager = _manager(tmp_path, summarizer=fake, max_chars=2000)  # tail cap 1000: count governs
     _write_turns(manager, [f"T{i:03d}" for i in range(1, 7)])
 
     manager.summarize_realtime_memory()
@@ -97,7 +97,7 @@ def test_summarize_keeps_the_newest_turns_verbatim(tmp_path, monkeypatch):
 def test_summarize_is_a_noop_when_only_recent_turns_exist(tmp_path, monkeypatch):
     monkeypatch.setattr(app_config, "REALTIME_SUMMARY_KEEP_RECENT_TURNS", 4)
     fake = _FakeSummarizer()
-    manager = _manager(tmp_path, summarizer=fake)
+    manager = _manager(tmp_path, summarizer=fake, max_chars=2000)  # tail cap 1000: count governs
     _write_turns(manager, ["T001", "T002", "T003"])
 
     manager.summarize_realtime_memory()
@@ -148,3 +148,43 @@ def test_no_turn_is_ever_in_neither_place(tmp_path, monkeypatch):
         covered = set(re.findall(r"T\d{3}", summary)) | _verbatim_ids(manager)
         missing = {f"T{j:03d}" for j in range(1, i + 1)} - covered
         assert not missing, f"after turn {i}: {sorted(missing)} in neither place"
+
+
+def test_kept_tail_is_bounded_by_chars(tmp_path, monkeypatch):
+    # Four long replies must not all stay verbatim: the tail alone would fill
+    # the window and trigger a summarize on every following turn.
+    monkeypatch.setattr(app_config, "REALTIME_SUMMARY_KEEP_RECENT_TURNS", 4)
+    manager = _manager(tmp_path, summarizer=_FakeSummarizer(), max_chars=1000)
+    _write_turns(manager, [f"T{i:03d}" for i in range(1, 7)], size=300)  # 321 chars each
+
+    manager.summarize_realtime_memory()
+
+    # Half the verbatim budget (500 chars) holds one 321-char turn.
+    assert _verbatim_ids(manager) == {"T006"}
+
+
+def test_no_turn_is_ever_in_neither_place_with_long_turns(tmp_path, monkeypatch):
+    monkeypatch.setattr(app_config, "REALTIME_SUMMARIZE_AT_FRACTION", 0.75)
+    monkeypatch.setattr(app_config, "REALTIME_SUMMARY_KEEP_RECENT_TURNS", 4)
+
+    class _InlineThread:
+        def __init__(self, target, **_kw):
+            self._target = target
+
+        def start(self):
+            self._target()
+
+    monkeypatch.setattr(
+        base_mod, "threading", SimpleNamespace(Thread=_InlineThread, Lock=threading.Lock)
+    )
+    fake = _FakeSummarizer()
+    manager = _manager(tmp_path, summarizer=fake, max_chars=1000)
+
+    for i in range(1, 31):
+        manager.add_turn(f"T{i:03d} " + "u" * 300, "a")  # ~357 chars formatted
+        summary = manager._summary_path.read_text(encoding="utf-8") if manager._summary_path.exists() else ""
+        covered = set(re.findall(r"T\d{3}", summary)) | _verbatim_ids(manager)
+        missing = {f"T{j:03d}" for j in range(1, i + 1)} - covered
+        assert not missing, f"after turn {i}: {sorted(missing)} in neither place"
+    # A summarize per turn would mean the kept tail alone re-triggers it.
+    assert len(fake.calls) < 20
