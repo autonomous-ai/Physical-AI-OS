@@ -263,6 +263,7 @@ run-with-restart.sh [OPTIONS] -- COMMAND [ARGS...]
   --cooldown SECONDS        wait between restarts (default: 5)
   --probe-url URL           liveness probe; after PROBE_FAILURES consecutive
                             failures the child is SIGKILLed and restarted
+                            (SIGUSR1 stack dump first, see below)
   --log-dir PATH            plain-file logging (never a pipe -- a blocked pipe
                             can freeze the server):
                               log-dir/stdout.log    server stdout
@@ -289,6 +290,7 @@ The wrapper now polls `--probe-url` alongside `wait`:
 | `PROBE_TIMEOUT` | 5s | per-probe curl timeout |
 | `PROBE_FAILURES` | 6 | consecutive failures before acting (~60s) |
 | `PROBE_GRACE` | 180s | no probing for this long after start |
+| `STACK_DUMP_WAIT` | 2s | between the SIGUSR1 stack-dump request and the SIGKILL |
 
 `PROBE_GRACE` is not optional padding: dlserver takes ~2-3 minutes to load models
 (08:51 -> 08:53 on the real box). Probing during that window would kill it before
@@ -308,6 +310,15 @@ On `PROBE_FAILURES` consecutive failures the wrapper sends **SIGKILL**, not
 SIGTERM. A hung uvicorn absorbs SIGTERM: its handler only sets `should_exit`, and
 the only thing that can act on that flag is the event loop -- the thing that is
 stuck.
+
+Just before that it sends **SIGUSR1**. lbserver and dlserver register
+`faulthandler` on it (`src/core/stackdump.py`) and append every thread's Python
+stack to a file in `/tmp` named after their `--log-dir`: `lbserver-stack.log`,
+`dlserver-stack.log` (slot A), `dlserver-8002-stack.log` (slot B). That turns the
+next freeze into a stack trace instead of an inference from log timestamps (#530).
+If the frozen thread is in uninterruptible sleep in the kernel, the dump may not
+arrive in time, and an empty dump is itself a clue. SIGUSR1 is separate from the
+SIGHUP that `make deploy-dlserver` sends lbserver to switch slots.
 
 **Probe `/livez`, never `/health`.** `/livez` takes no auth and checks nothing but
 the event loop. `/hal/api/dl/health` is a *readiness* check -- it reports whether
@@ -416,6 +427,8 @@ costs realtime responsiveness -- that is a device-side decision, deployed by OTA
 | `/tmp/dlserver*.rev` | commit each slot started from |
 | `/tmp/lbserver.pid` | lbserver process PID |
 | `/tmp/lbserver-wrapper.pid` | lbserver watchdog PID |
+| `/tmp/lbserver-stack.log` | lbserver stack dumps (taken before a watchdog SIGKILL) |
+| `/tmp/dlserver-stack.log`, `/tmp/dlserver-8002-stack.log` | dlserver stack dumps, slot A / slot B |
 | `/tmp/nginx.pid` | nginx master process PID |
 | `/workspace/logs/dlserver/` | dlserver stdout/stderr/watchdog logs (slot A) |
 | `/workspace/logs/dlserver-8002/` | dlserver stdout/stderr/watchdog logs (slot B) |

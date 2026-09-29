@@ -96,6 +96,18 @@ unwritable it rolls over **once** to a fresh inode; if that still fails it mutes
 for `retry_after` (30s) and tries again. Failure notices on stderr are
 rate-limited to one per window instead of a ~40-line traceback per record.
 
+Writes are also **queued** (#530). Each file handler is wrapped by
+`core.logging_ext.queued()`: `logger.info()` only puts the record on an in-memory
+queue (10,000 records max), and a background thread writes it. A write that
+*hangs* on the volume, instead of failing, then stalls only that thread. On
+2026-09-28 a hung write froze lbserver's event loop for ~3 minutes, and every
+request, WebSocket and `/livez` stalled behind it.
+
+If the writer stays stuck long enough to fill the queue, new records are dropped,
+not waited on. Once it recovers, one line reports the loss:
+
+    2026-09-28 04:03:10,512 [core.logging_ext] [-] WARNING: [logging] queue full: dropped 1234 record(s) while the log writer was stalled
+
 So a log that is *permanently* frozen now means the fault outlasted every retry.
 Check:
 
@@ -118,6 +130,8 @@ ls -l /proc/$(cat /tmp/lbserver.pid)/fd | grep -a workspace
 | fd shows `(deleted)` | An unlinked-but-open file. Should not happen since the handlers were merged -- if it does, the double-handler bug is back |
 | fd on a live inode, NUL tail, size frozen | Storage-side fault on that file's backing chunks. Not preventable from the app; the handler should have rolled over |
 | `[logging] write failed` on stderr | The handler is retrying. One line per 30s is normal during a fault |
+| `[logging] queue full: dropped N record(s)` | The log writer was stuck long enough to fill the queue. The server kept serving; the log has a gap |
+| Server froze and was SIGKILLed | Read its stack file in `/tmp` (`lbserver-stack.log`, `dlserver-stack.log`, `dlserver-8002-stack.log`): the watchdog asks for a stack dump (SIGUSR1) before the kill. The last block before the next `--- <name> pid=… started` header is the frozen process |
 
 > `/workspace` is MooseFS. The client tools that would identify a bad chunk
 > (`mfsfileinfo`, `mfscheckfile`) are **not installed** -- worth adding, since
@@ -139,8 +153,9 @@ tail -50  /workspace/logs/autostart/autostart.log
 | `<svc>/stdout.log` | server stdout |
 | `<svc>/stderr.log` | server stderr (library warnings, tracebacks) |
 | `<svc>/watchdog.log` | restart events from `run-with-restart.sh` |
-| `<svc>/<svc>.log` | application log (`RotatingFileHandler`, 1 MB × 3) |
+| `<svc>/<svc>.log` | application log (queued writes, `ResilientRotatingFileHandler`, 1 MB × 3) |
 | `<svc>/uvicorn.log` | uvicorn error **and** access log (one shared handler) |
+| `/tmp/<log-dir name>-stack.log` | all-thread stack dumps taken just before a watchdog SIGKILL (`lbserver`, `dlserver`, `dlserver-8002`). Local disk on purpose; lost on container recreate |
 
 Rotation keeps 3 generations as `.1`, `.2`, `.3`:
 
@@ -149,7 +164,7 @@ Rotation keeps 3 generations as `.1`, `.2`, `.3`:
   every `GUARD_INTERVAL` seconds, default 60). The size guard **copies then
   truncates in place**; it must never rename, because the server holds an
   `O_APPEND` fd and would keep writing to the renamed inode.
-- `<svc>.log` and `uvicorn.log` are rotated by Python's `RotatingFileHandler`.
+- `<svc>.log` and `uvicorn.log` are rotated by `ResilientRotatingFileHandler` (a `RotatingFileHandler` subclass) on the background log-writer thread.
 
 > **Historical note.** Before 2026-08-18 these were
 > [multilog](https://cr.yp.to/daemontools/multilog.html) *directories* (`stdout/`,
