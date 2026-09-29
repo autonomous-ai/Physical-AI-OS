@@ -1,11 +1,4 @@
-"""EmoNet emotion predictor (5-class and 8-class variants).
-
-Pure emotion classification from a face crop — no face detection.
-Input: 256x256 RGB face crop, normalized to [0, 1].
-
-Outputs expression logits + valence + arousal. Overrides
-_postprocess_batch to extract the additional outputs.
-"""
+"""EmoNet emotion predictor (5/8-class); input 256x256 RGB in [0, 1], outputs probs + valence + arousal."""
 
 from pathlib import Path
 from typing import cast
@@ -22,11 +15,7 @@ from core.utils.files import get_default_cdn_url, get_default_model_path
 
 
 class EmoNetRecognizer(EmotionRecognizer):
-    """EmoNet ONNX emotion predictor. Supports 5-class and 8-class variants.
-
-    Subclass only overrides class-level defaults and _postprocess_batch
-    (EmoNet has 3 outputs: expression, valence, arousal).
-    """
+    """EmoNet ONNX emotion predictor (5-class and 8-class variants)."""
 
     DEFAULT_CLASSES_PATH_8: Path = RESOURCES_DIR / "emonet_8_classes.txt"
     DEFAULT_CLASSES_PATH_5: Path = RESOURCES_DIR / "emonet_5_classes.txt"
@@ -66,10 +55,7 @@ class EmoNetRecognizer(EmotionRecognizer):
     def _postprocess_batch(
         self, raw_outputs: list[npt.NDArray], N: int
     ) -> list[RawEmotionDetection]:
-        """EmoNet has 3 outputs: probs (N, C), valence (N,), arousal (N,).
-
-        Softmax is baked into the ONNX graph — probs are ready to use.
-        """
+        """EmoNet outputs probs (N, C) (softmax baked in), valence (N,), arousal (N,)."""
         probs: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[0])
         valence: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[1])
         arousal: npt.NDArray[np.float32] = cast(npt.NDArray[np.float32], raw_outputs[2])

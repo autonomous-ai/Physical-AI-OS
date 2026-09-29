@@ -1,8 +1,4 @@
-"""YOLO object detector using ONNX Runtime.
-
-General-purpose COCO detector. Output boxes are normalized [0, 1] relative
-to the letterboxed image. Call ``revert_boxes(boxes, (H, W))`` for pixel coords.
-"""
+"""YOLO COCO object detector using ONNX Runtime."""
 
 from pathlib import Path
 

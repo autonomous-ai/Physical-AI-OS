@@ -1,11 +1,6 @@
-"""DL Backend — FastAPI server.
+"""DL Backend FastAPI server: model loading lifespan and router registration.
 
-Thin shell: app creation, lifespan (model loading), router registration.
-
-Usage:
-    python -m dlserver                  # default 0.0.0.0:8001
-    python -m dlserver --port 9000      # custom port
-    python -m dlserver --host 127.0.0.1 # localhost only
+Example: ``python -m dlserver --host 127.0.0.1 --port 8001``
 """
 
 import argparse
@@ -71,11 +66,8 @@ LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s
 # Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
 install_request_id_logging()
 
-# Holds the single-instance flock for the process lifetime; closing it releases.
 _instance_lock: object | None = None
 logger = logging.getLogger(__name__)
-
-# --- Auth ---
 
 api_key_header = APIKeyHeader(name="X-API-Key", auto_error=False)
 
@@ -88,14 +80,10 @@ async def verify_api_key(api_key: str = Security(api_key_header)):
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 
 
-# --- Lifespan ---
-
-
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     """Load models at startup, release on shutdown."""
 
-    # -- Action model --
     if settings.action.enabled:
         logger.info("Loading action model...")
         try:
@@ -106,7 +94,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load action model: %s", e)
 
-    # -- Emotion model --
     if settings.fer.enabled:
         logger.info("Loading emotion model...")
         try:
@@ -117,7 +104,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load emotion model: %s", e)
 
-    # -- Audio embedder --
     if settings.audio_embedder.enabled:
         logger.info("Loading audio embedder...")
         try:
@@ -128,7 +114,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load audio embedder: %s", e)
 
-    # -- Audio emotion model --
     if settings.ser.enabled:
         logger.info("Loading audio emotion model...")
         try:
@@ -139,7 +124,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load audio emotion model: %s", e)
 
-    # -- Pose estimator --
     if settings.pose.enabled:
         logger.info("Loading pose estimator...")
         try:
@@ -150,7 +134,6 @@ async def lifespan(app: FastAPI):
         except Exception as e:
             logger.error("Failed to load pose estimator: %s", e)
 
-    # -- Object detectors --
     logger.info("Loading object detectors...")
     object_models = build_object_perceptions()
     for name, model in list(object_models.items()):
@@ -190,14 +173,11 @@ async def lifespan(app: FastAPI):
     logger.info("DL backend shutdown complete")
 
 
-# --- App + Routers ---
-
 app = FastAPI(title="DL Backend", lifespan=lifespan)
 app.middleware("http")(request_id_middleware)
 # Liveness: no prefix, no auth. Restricted to localhost at the nginx layer.
 app.include_router(livez_router)
 
-# Existing perceptions — /hal/api/dl/ prefix
 app.include_router(action_ws_router, prefix="/hal/api/dl")
 app.include_router(emotion_ws_router, prefix="/hal/api/dl")
 app.include_router(emotion_http_router, prefix="/hal/api/dl", dependencies=[Depends(verify_api_key)])
@@ -209,12 +189,9 @@ app.include_router(audio_emotion_router, prefix="/hal/api/dl", dependencies=[Dep
 app.include_router(pose_ws_router, prefix="/hal/api/dl")
 
 
-# Object detection — /api/dl/ prefix (backward-compatible with go2)
+# /api/dl/ prefix kept for go2 backward compatibility.
 app.include_router(object_ws_router, prefix="/api/dl")
 app.include_router(object_http_router, prefix="/api/dl", dependencies=[Depends(verify_api_key)])
-
-
-# --- CLI ---
 
 
 def parse_args() -> argparse.Namespace:
@@ -234,13 +211,11 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
 
     try:
         Path(log_dir).mkdir(parents=True, exist_ok=True)
-        # Hold this for the process lifetime -- see acquire_instance_lock. It must
-        # be taken BEFORE the rotation below, which renames/unlinks unconditionally.
+        # Must be taken before the rotation below, which renames/unlinks unconditionally.
         global _instance_lock
         _instance_lock = acquire_instance_lock(log_dir)
         log_path = Path(log_dir) / "dlserver.log"
         uvicorn_log_path = Path(log_dir) / "uvicorn.log"
-        # Rotate old logs
         for prefix in ("dlserver.log", "uvicorn.log"):
             for bak in Path(log_dir).glob(f"{prefix}*.bak"):
                 bak.unlink()
@@ -257,8 +232,7 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
         # Route uvicorn/fastapi logs to a separate file (one shared, queued handler).
         return uvicorn_file_log_config(str(uvicorn_log_path), LOG_FORMAT)
     except InstanceAlreadyRunning:
-        # Never fall back to console here: continuing would run a second instance
-        # that clobbers the live one's log files. Propagate and let main() exit.
+        # Never fall back to console: a second instance would clobber the live one's logs.
         raise
     except Exception as e:
         logging.basicConfig(level=logging.INFO, format=LOG_FORMAT)
@@ -274,8 +248,6 @@ def main() -> None:
         print(f"refusing to start: {e}", file=sys.stderr)
         raise SystemExit(3) from None
 
-    # Log SIGTERM so we know when the container/orchestrator kills us.
-    # SIGKILL (OOM) can't be caught — but SIGTERM (graceful stop) now logs.
     def _handle_sigterm(signum, frame):
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())
 

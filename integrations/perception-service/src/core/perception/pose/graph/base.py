@@ -7,11 +7,7 @@ import numpy.typing as npt
 
 
 class SkeletonGraph(ABC):
-    """Base interface for skeleton topology.
-
-    Defines joint names, connectivity, and adjacency for a skeleton format.
-    Subclasses define the specific joint layout (COCO, H36M, etc.).
-    """
+    """Base interface for skeleton topology (joint names, connectivity, adjacency)."""
 
     @property
     @abstractmethod

@@ -1,13 +1,4 @@
-"""Per-face action recognition.
-
-Subscribes to face detection updates. For each detected face, expands the
-bounding box (1x up, 2x on other sides), crops the frame, and sends the
-crop to a dedicated WS session on the action recognition backend.
-
-Each tracked face_id gets its own RemoteMotionChecker (separate WS session)
-so the backend maintains an independent frame buffer per person. Sessions
-are created on first sight and evicted after a TTL of no updates.
-"""
+"""Per-face action recognition."""
 
 import logging
 import threading
@@ -49,7 +40,6 @@ class _FaceSession:
         self.frames_received: int = 0
         self.actions_buffer: list[str] = []
         self.snapshots_buffer: list[cv2.typing.MatLike] = []
-        # Per-action dedup: {label: last_sent_ts}
         self._sent_actions: dict[str, float] = {}
         self.dedup_window_s: float = dedup_window_s
         self._min_frames: int = min_frames
@@ -70,11 +60,7 @@ class _FaceSession:
         return self.frames_received >= self._min_frames
 
     def filter_new_actions(self, labels: set[str], now: float) -> set[str]:
-        """Return only labels that haven't been sent within the dedup window.
-
-        Prunes stale entries on each call.
-        """
-        # Prune expired
+        """Return only labels that haven't been sent within the dedup window."""
         cutoff = now - self.dedup_window_s
         self._sent_actions = {
             k: ts for k, ts in self._sent_actions.items() if ts >= cutoff
@@ -90,10 +76,7 @@ class _FaceSession:
 class MotionPerFacePerception(Perception[FaceDetectionData]):
     """Per-face action recognition via the remote DL backend.
 
-    For each face detected by FaceRecognizer, expands the bbox
-    (1x up, 2x left/right/down), crops the region, and sends it
-    to a dedicated WS session. Each face_id has its own backend
-    session so frame buffers don't mix between people.
+    Each face_id has its own backend session so frame buffers don't mix between people.
     """
 
     def __init__(
@@ -122,16 +105,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
         self._lock: threading.RLock = threading.RLock()
         self._last_flush_ts: float = 0.0
 
-        # Global (cross-face) cooldown floor, mirroring MotionPerception's.
-        # The per-face dedup keys on (face, action) only — with N faces in
-        # frame it would still allow N motion.activity emissions per flush
-        # (one per person), and every new/re-detected face reopens it. One
-        # shared floor bounds the whole perception to a single same-class
-        # emission per MOTION_EVENT_COOLDOWN_S, with the same coarse-class
-        # transition bypass (min-gapped against detection flicker) as
-        # MotionPerception. NOTE: this perception is an ALTERNATIVE to
-        # MotionPerception (both emit motion.activity); when both are enabled
-        # their floors are independent — don't run both.
+        # Global (cross-face) cooldown floor, mirroring MotionPerception's. NOTE: this
+        # perception is an ALTERNATIVE to MotionPerception (both emit motion.activity);
+        # when both are enabled their floors are independent — don't run both.
         self._event_cooldown_s: float = config.MOTION_EVENT_COOLDOWN_S
         self._transition_min_gap_s: float = config.MOTION_TRANSITION_MIN_GAP_S
         self._last_event_ts: float = 0.0
@@ -159,7 +135,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             api_key=self._api_key,
             whitelist=self._whitelist,
             threshold=config.MOTION_CONFIDENCE_THRESHOLD,
-            # Disable person detection — we already have the person crop from the face bbox
             person_detection_enabled=False,
         )
         session = _FaceSession(
@@ -195,9 +170,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
     ) -> tuple[int, int, int, int]:
         """Expand face bbox: 1x the face height upward, 2x on left/right/down.
 
-        This captures the upper body + hands around the person's face,
-        which is where most desk activities happen (typing, drinking, eating).
-
         Args:
             bbox: [x1, y1, x2, y2] from face detection.
             frame_h: Frame height.
@@ -210,13 +182,11 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
         face_w = x2 - x1
         face_h = y2 - y1
 
-        # Expand: 1x up, 2x left, 2x right, 2x down
         new_x1 = x1 - face_w * 2
         new_y1 = y1 - face_h * 1
         new_x2 = x2 + face_w * 2
         new_y2 = y2 + face_h * 2
 
-        # Clamp to frame
         new_x1 = max(0, int(new_x1))
         new_y1 = max(0, int(new_y1))
         new_x2 = min(frame_w, int(new_x2))
@@ -244,11 +214,9 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             self._sessions.clear()
 
     def reset_dedup(self, new_user: str = "") -> None:
-        """Clear the global cooldown floor only if the visible user actually
-        changed — same guard as MotionPerception.reset_dedup (stranger flicker
-        collapses to "unknown" and must not reopen the floor on every
-        presence.enter). Per-face dedup maps are keyed by face_id and stay:
-        a returning face keeps its own recent-action history.
+        """Clear the global cooldown floor only if the visible user actually changed.
+
+        collapses to "unknown" and must not reopen the floor on every presence.enter).
         """
         with self._lock:
             if self._last_sent_class is None:
@@ -289,7 +257,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
                 face_id = face.person_id
                 session = self._get_or_create_session(face_id)
 
-                # Expand bbox and crop
                 ex1, ey1, ex2, ey2 = self._expand_face_bbox(
                     face.bbox,
                     frame_h,
@@ -337,7 +304,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             session.actions_buffer.clear()
             session.snapshots_buffer.clear()
 
-            # Map to labels (same logic as MotionPerception)
             labels: set[str] = set()
             for a in reversed(actions):
                 group = ACTIVITY_GROUP.get(a)
@@ -349,9 +315,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
                     labels.add(a)
                 else:
                     labels.add(group)
-                # NOTE: drifted from MotionPerception — that path also keeps
-                # `eat` raw and applies _RAW_LABEL_EMIT_REMAP (reading book /
-                # newspaper → reading). Not mirrored here.
 
             if not labels:
                 continue
@@ -362,12 +325,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
             ):
                 continue
 
-            # Global cooldown floor — same semantics as MotionPerception:
-            # within the same coarse activity class, at most one emission per
-            # _event_cooldown_s across ALL faces; a coarse-class TRANSITION
-            # bypasses the floor but is itself min-gapped against detection
-            # flicker. Checked BEFORE the per-face dedup so a floored label
-            # isn't marked sent and can still fire once the floor clears.
             classes: frozenset[str] = coarse_classes(labels)
             class_changed: bool = (
                 self._last_sent_class is not None
@@ -403,7 +360,6 @@ class MotionPerFacePerception(Perception[FaceDetectionData]):
                     cur_ts - self._last_event_ts,
                 )
 
-            # Per-action dedup: only send actions not seen in the last 5 min
             new_labels = session.filter_new_actions(labels, cur_ts)
             if not new_labels:
                 logger.info(

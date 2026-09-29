@@ -1,9 +1,4 @@
-"""OpenCV single-object tracker backend (ViT preferred).
-
-The tracker lives in DOWNSCALED frame space (see frame_utils); vit_init /
-vit_update translate between original camera coords and tracker coords so
-callers only ever see original-frame bboxes.
-"""
+"""OpenCV single-object tracker backend (ViT preferred)."""
 
 import logging
 import os
@@ -21,8 +16,7 @@ VIT_MODEL_PATH = os.path.join(os.path.dirname(__file__), "models", "vittrack.onn
 
 
 def create_tracker():
-    """Create best available OpenCV tracker. CSRT/KCF removed in cv2 4.10+.
-    Prefer TrackerVit (ViT-based, accurate) → MIL fallback."""
+    """Create best available OpenCV tracker."""
     def _make_vit():
         params = cv2.TrackerVit_Params()
         params.net = VIT_MODEL_PATH
@@ -56,11 +50,7 @@ def get_tracking_score(tracker) -> float:
 
 def vit_init(tracker, frame: npt.NDArray[np.uint8],
              bbox_orig: Tuple[int, int, int, int]) -> Optional[bool]:
-    """Init `tracker` on the downscaled frame with the bbox scaled to match.
-
-    bbox_orig is in original camera coords; the tracker lives in downscaled
-    space (paired with vit_update). Returns tracker.init()'s result.
-    """
+    """Init `tracker` on the downscaled frame with the bbox scaled to match."""
     small, scale = downscale(frame)
     return tracker.init(small, scale_bbox(bbox_orig, scale))
 

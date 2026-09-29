@@ -1,11 +1,4 @@
-"""The face-ID debug capture must cost nothing when it is switched off.
-
-It writes six files per face per sensing tick and exists to investigate
-recognition bugs, so it ships disabled. The property worth locking down is not
-"it writes nothing" — that is obvious — but that it returns BEFORE copying the
-frame. Annotating copies a 1280x720 frame twice per face, which at a 2s tick is
-pure waste on every production device.
-"""
+"""The face-ID debug capture must cost nothing when it is switched off."""
 
 import numpy as np
 import pytest
@@ -32,9 +25,7 @@ def test_disabled_writes_nothing(tmp_path, frame):
 
 
 def test_disabled_does_not_copy_the_frame(tmp_path, frame, monkeypatch):
-    """The whole point: bail before _annotate / _draw_landmarks, not inside
-    _write_folder. Both helpers copy the frame, so reaching them at all is the
-    regression this guards against."""
+    """Debug logging bails before _annotate / _draw_landmarks copy the frame."""
     calls: list[str] = []
     monkeypatch.setattr(
         FaceIdDebugLogger, "_annotate",
@@ -56,8 +47,6 @@ def test_disabled_does_not_copy_the_frame(tmp_path, frame, monkeypatch):
     )
     assert calls == []
 
-    # ...and the same helpers DO run once it is switched on, so the assertion
-    # above is testing the guard rather than a broken code path.
     _ = _logger(tmp_path, enabled=True).save_decision(
         "long", 0.62, frame=frame, bbox=[10, 10, 110, 150],
         landmarks=np.zeros((468, 2), np.float32),
@@ -78,7 +67,6 @@ def test_enabled_writes_a_folder_per_face(tmp_path, frame):
     assert folder is not None
     written = {p.name for p in (tmp_path / "logs").iterdir() for p in p.iterdir()}
     assert {"input.jpg", "frame.jpg", "annotated.jpg", "result.json"} <= written
-    # the verdict is in the folder name, so a bad match is visible in `ls`
     assert (tmp_path / "logs").iterdir().__next__().name.endswith("_long_0.62")
 
 

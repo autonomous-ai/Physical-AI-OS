@@ -62,7 +62,7 @@ Với event do `skills/sensing/SKILL.md` xử lý, prompt yêu cầu HW marker �
 
 ### Cơ chế hoạt động
 
-HAL bắn một sound event cho mỗi audio sample vượt ngưỡng `SOUND_RMS_THRESHOLD` — có thể nhiều lần mỗi giây. Python-side **sound tracker** (`hal/drivers/sensing/perceptions/sound.py`) áp dụng dedup và escalation trước khi forward lên Go. Go chỉ nhận các event đã pass và forward thẳng lên agent.
+HAL bắn một sound event cho mỗi audio sample vượt ngưỡng `SOUND_RMS_THRESHOLD` — có thể nhiều lần mỗi giây. Python-side **sound tracker** (`hal/drivers/sensing/perceptions/processors/sound.py`) áp dụng dedup và escalation trước khi forward lên Go. Go chỉ nhận các event đã pass và forward thẳng lên agent.
 
 ### Hành vi leo thang (Escalation)
 
@@ -166,7 +166,7 @@ Timeline tự động điều khiển presence:
 
 HAL quản lý việc điều khiển đèn; agent chỉ xử lý thông báo bằng giọng nói. Nếu người dùng quay lại (phát hiện chuyển động), đèn tự phục hồi và event `presence.enter` được kích hoạt.
 
-Timer được reset bởi hai loại bằng chứng, không chỉ camera. **Chuyển động** là `on_motion()` từ các processor people-perception (face / motion / emotion). **Hoạt động của user** là `on_activity()`, gọi qua `app_state.note_user_activity()`: mọi voice turn HAL gửi lên os-server (`voice`, `voice_command`, `voice_followup`, `voice_agent_handled`, sau bộ lọc echo, trong `SensingSender.send`) và các cử chỉ chạm: single click (nút GPIO, touchpad, gạt privacy switch để unmute), head pat và double tap (bật/tắt mic). Trước đây, user nói chuyện với đèn khi camera tắt hoặc ngồi ngoài khung hình vẫn bị timeout sang AWAY và đèn thông báo đi ngủ giữa cuộc trò chuyện. Hoạt động trong lúc IDLE/AWAY đưa về PRESENT và phục hồi đèn giống chuyển động, trừ khi device đang ngủ: lúc đó bỏ qua việc phục hồi đèn (kể cả với chuyển động), để emotion wake quản lý LED. Chat gõ tay (`web_chat` / `mqtt_chat`) **không** được tính — nó có thể đến từ điện thoại khi user không ở nhà, và không được giữ đèn sáng trong phòng trống. Cử chỉ giữ nút (sleep / shutdown / reset) và vuốt (sleep) cũng không tính. Hoạt động chỉ làm mới state machine đang bật; nó không bao giờ bật state machine lên.
+Timer được reset bởi hai loại bằng chứng, không chỉ camera. **Chuyển động** là `on_motion()` từ các processor people-perception (face / motion / emotion). **Hoạt động của user** là `on_activity()`, gọi qua `app_state.note_user_activity()`: mọi voice turn HAL gửi lên os-server (`voice`, `voice_command`, `voice_followup`, `voice_agent_handled`, sau bộ lọc echo, trong `SensingSender.send`) và các cử chỉ chạm: single click (nút GPIO, touchpad, gạt privacy switch để unmute) và head pat (mọi cử chỉ trên headpad TTP223 — tap, double tap, vuốt, vuốt ve — đều quy về `head_pat_action`). Trước đây, user nói chuyện với đèn khi camera tắt hoặc ngồi ngoài khung hình vẫn bị timeout sang AWAY và đèn thông báo đi ngủ giữa cuộc trò chuyện. Hoạt động trong lúc IDLE/AWAY đưa về PRESENT và phục hồi đèn giống chuyển động, trừ khi device đang ngủ: lúc đó bỏ qua việc phục hồi đèn (kể cả với chuyển động), để emotion wake quản lý LED. Chat gõ tay (`web_chat` / `mqtt_chat`) **không** được tính — nó có thể đến từ điện thoại khi user không ở nhà, và không được giữ đèn sáng trong phòng trống. Cử chỉ giữ nút (sleep / shutdown / reset) và vuốt (sleep) cũng không tính. Hoạt động chỉ làm mới state machine đang bật; nó không bao giờ bật state machine lên.
 
 **Khi ngủ, timer dừng; khi thức, timer chạy lại từ đầu.** Trong lúc `_sleeping`, `tick()` return sớm: không dim, không tắt đèn, không gửi `presence.away`. Sleep đã quản lý LED, và camera tắt nên vốn không có gì reset được timer. Trước đây timer vẫn chạy, nên dim lại đèn đang ngủ lên 20% màu của user (`_dim_light` gọi thẳng `rgb_service`, không qua sleep lock của `/led`) và để state ở AWAY cho lần wake sau kế thừa. Mọi đường wake — nút bấm, pill emotion trên web UI, `POST /emotion` trực tiếp, agent trả `greeting`/`stretching` (ví dụ khi trả lời một tin chat) — đều đi qua `express_emotion` trong `hal/routes/emotion.py`, nơi gọi `app_state.note_presence_wake()` → `PresenceService.on_wake()`: timer chạy lại từ thời điểm thức và state về PRESENT mà không vẽ lại đèn (emotion wake quản lý LED). Trước đây chỉ camera thấy mặt mới reset timer, nên một lần wake không có ai đứng trước camera hoặc giữ mốc cũ trước khi ngủ và thông báo đi ngủ ngay sau khi vừa thức, hoặc kẹt ở AWAY và không bao giờ timeout nữa.
 
@@ -372,7 +372,7 @@ Skill `face-enroll` (phía Lamp) parse hint đó và nói trực tiếp với ng
 
 ## Chăm sóc sức khỏe (Wellbeing — Nhắc uống nước + Nghỉ ngơi, AI-Driven)
 
-Lamp chủ động chăm sóc sức khỏe người dùng bằng cron jobs do AI agent tự quản lý qua OpenClaw. Thay vì timer cứng, agent tự quyết interval dựa trên khoa học và thói quen user.
+Lamp chủ động chăm sóc sức khỏe người dùng bằng lời nhắc do AI quyết định, chạy theo event. Không dùng cron job hay timer cứng: trên mỗi event `motion.activity`, agent tự quyết có nhắc hay không dựa vào ngưỡng của skill, history đã log và habit pattern của user.
 
 ### Cơ chế hoạt động (event-driven — không cron)
 
@@ -395,7 +395,7 @@ Wellbeing hoạt động **event-driven**. **KHÔNG còn cron wellbeing** nào. 
 
 **Dedup nằm ở 2 nơi.**
 
-*Activity dedup (window 5 phút).* `hal/drivers/sensing/perceptions/motion.py` giữ `_last_sent_key = (current_user, frozenset(labels))` và `_last_sent_ts`, trong đó `labels` khớp với outbound message (bucket names cho drink/break/celebrate, raw Kinetics labels cho sedentary). Trước khi gửi `motion.activity` **và trước khi POST các row tới `/api/wellbeing/log`**, nếu key không đổi **và** khoảng cách từ lần gửi cuối chưa vượt `MOTION_DEDUP_WINDOW_S = 300` giây (5 phút) → drop cả chu kỳ. Nên `eating burger → eating cake` gộp thành cùng key `break` và bị drop, còn `writing → drawing` lật key (sedentary giữ raw) nên pass qua.
+*Activity dedup (window 5 phút).* `hal/drivers/sensing/perceptions/processors/motion.py` giữ `_last_sent_key = (current_user, frozenset(labels))` và `_last_sent_ts`, trong đó `labels` khớp với outbound message (bucket names cho drink/break/celebrate, raw Kinetics labels cho sedentary). Trước khi gửi `motion.activity` **và trước khi POST các row tới `/api/wellbeing/log`**, nếu key không đổi **và** khoảng cách từ lần gửi cuối chưa vượt `MOTION_DEDUP_WINDOW_S = 300` giây (5 phút) → drop cả chu kỳ. Nên `eating burger → eating cake` gộp thành cùng key `break` và bị drop, còn `writing → drawing` lật key (sedentary giữ raw) nên pass qua.
 
 - Đổi user (owner→owner, owner→unknown, unknown→owner) lật key ngay → event pass qua.
 - Stranger khác nhau (`stranger_46` → `stranger_54`) đều collapse về `"unknown"` qua `FaceRecognizer.current_user()` → đổi stranger không phá dedup.
@@ -432,14 +432,17 @@ Reaction path được thêm vào để hành động tích cực không bị im
 
 ### Ngưỡng
 
-Hardcode trong `lamp/resources/openclaw-skills/wellbeing/SKILL.md`:
+Hardcode trong `skills/wellbeing/SKILL.md` (giá trị production):
 
-| Threshold | Giá trị test | Giá trị production |
-|---|---|---|
-| `HYDRATION_THRESHOLD_MIN` | **5** | 45 |
-| `BREAK_THRESHOLD_MIN` | **7** | 30 |
+| Threshold | Giá trị |
+|---|---|
+| `HYDRATION_THRESHOLD_MIN` | 45 |
+| `BREAK_THRESHOLD_MIN` | 30 |
+| `BREAK_THRESHOLD_TIRED` | 20 (thay cho `BREAK_THRESHOLD_MIN` khi labels có `yawning`) |
+| `YAWN_ACK_COOLDOWN_MIN` | 60 |
+| `TOILET_DRINK_THRESHOLD` | 2 (tính theo số lần — một lần mỗi N lần uống kể từ lần nhắc trước) |
 
-> ⚠ **Release checklist:** trước khi ship, đổi cả 2 ngưỡng về production (45 / 30). Hydration và break cố ý lệch nhau (5 vs 7) để test phân biệt nhánh nào fire.
+Để test nhanh trên device, tạm hạ các hằng số này trong skill rồi khôi phục giá trị production trước khi ship.
 
 **Cách chặn spam re-nudge.** Entry `nudge_hydration` / `nudge_break` mà agent log sau khi nhắc cũng tính là reset point cho threshold. Sau khi Lamp nhắc, delta về 0 → lần nhắc tiếp theo cùng loại chỉ fire sau một threshold window nữa (45 min cho hydration, 30 min cho break trong production).
 
@@ -501,31 +504,26 @@ AGENTS.md quy định thứ tự ưu tiên: **SKILL.md luôn override KNOWLEDGE.
 
 Backend ghi marker `leave` vào log. Không có gì khác để làm — **không có cron để cancel**. Directive yêu cầu agent im lặng (`NO_REPLY`).
 
-Agent dùng ảnh camera để đánh giá — KHÔNG phải lúc nào cũng nói. Tránh spam user khi họ trông ổn.
+### Hành vi Agent
+
+| Nhánh (theo `skills/wellbeing/SKILL.md`) | Khi nào | Output |
+|---|---|---|
+| Nhắc uống nước | `hydration_delta_min >= HYDRATION_THRESHOLD_MIN` | Nói câu nhắc uống nước + marker inline `nudge_hydration` |
+| Nhắc nghỉ | `break_delta_min >= BREAK_THRESHOLD_MIN` (hoặc `BREAK_THRESHOLD_TIRED` khi có `yawning`) | Nói câu nhắc nghỉ + marker inline `nudge_break` |
+| Còn lại | Chưa vượt ngưỡng nào | Phản ứng ngắn với hành động tích cực, hoặc `NO_REPLY` |
+
+Không có cron nhắc nhở: mọi lần nhắc được quyết định trên một event `motion.activity` đến, dựa vào `[wellbeing_context: ...]` đã tính sẵn. Agent KHÔNG phải lúc nào cũng nói — tránh spam user khi họ trông ổn.
 
 ### Gợi ý nhạc (AI-Driven)
 
-Gợi ý nhạc **không còn** được kích hoạt bởi timer cứng. Thay vào đó, AI agent **tự schedule** music check qua OpenClaw cron jobs và **tự học** thói quen user theo thời gian:
+Gợi ý nhạc **do AI quyết định và chạy theo event** — không cron job, không timer ở backend. Chỉ có một trigger:
 
-- **Tự schedule:** Khi phát hiện **hoạt động tĩnh đầu tiên** trong `motion.activity` (không phải `presence.enter`), AI tạo cron job (mặc định: mỗi 20 phút / 1200000ms, `sessionTarget: "current"`, `payload.kind: "systemEvent"`). AI tự điều chỉnh interval dựa trên phản hồi của user.
-- **Quyết định dựa trên dữ liệu:** Trước khi gợi ý, AI query:
-  - `GET /audio/status` — nhạc đang phát chưa?
-  - `GET /api/agent/mood-history` — mood mới nhất để chọn genre
-  - `GET /audio/history?person={name}` — lịch sử nghe nhạc per-user (genre ưa thích, thời lượng, mức độ hài lòng)
-- **Vòng lặp học:** AI so sánh thời điểm gợi ý với `music.play` events trong mood history. Gợi ý được chấp nhận → củng cố timing/genre; bị từ chối → điều chỉnh schedule.
-- **Cá nhân hóa:** Theo thời gian, AI học được khi nào user thích nghe nhạc, thể loại nào, nghe bao lâu — và điều chỉnh gợi ý cho phù hợp.
+- **Trigger theo mood:** `user-emotion-detection/SKILL.md` là router cho các event `emotion.detected` (camera) và `speech_emotion.detected` (giọng nói). Mỗi turn nó chọn một nhánh (`music` / `checkin` / `action` / `silent`); `music-suggestion/SKILL.md` chỉ nói khi router chọn `music`. Event `motion.activity` / `[activity]` (sedentary, drink/break, celebrate) chỉ route tới `wellbeing/SKILL.md` và không bao giờ kích hoạt gợi ý nhạc.
+- **Context lấy sẵn:** backend inject `[emotion_context: ...]` gồm `audio_playing`, `last_suggestion_age_min`, `prior_decision` / `is_decision_stale`, `audio_recent`, `music_pattern_for_hour`, `suggestion_worthy` và `mapped_mood`, nên agent không gọi read tool nào. Chỉ khi thiếu block này mới fallback sang `GET /audio/status`, lịch sử gợi ý nhạc (`GET /api/agent/music-suggestion-history`), mood history, `GET /audio/history?person={name}` và `patterns.json`.
+- **Điều kiện:** chỉ gợi ý khi mood đáng gợi ý (`sad`, `stressed`, `tired`, `excited`, `happy`, `bored`), không có audio đang phát, và `last_suggestion_age_min` nằm ngoài `[0, 7)` — cooldown 7 phút trong skill hiện tại (dự kiến 30 phút cho production), dùng chung với nhánh check-in.
+- **Vòng lặp học:** gợi ý được log bằng marker inline `[HW:/music-suggestion/log:{...}]` (→ `POST /api/music-suggestion/log`); chấp nhận / từ chối được POST sau vào `POST /api/music-suggestion/status`. Agent không bao giờ tự phát nhạc — chỉ phát sau khi user đồng ý.
 
-**Dữ liệu AI sử dụng để học thói quen:**
-
-| Câu hỏi | Nguồn dữ liệu |
-|----------|----------------|
-| User ngồi vào bàn mấy giờ? | `presence.enter` events → field `hour` |
-| Ngồi bao lâu thì muốn nghe nhạc? | Khoảng cách giữa `presence.enter` và `music.play` |
-| Nghe thể loại gì? | `audio/history` → fields `query`, `title` |
-| Nghe bao lâu thì tắt? | `audio/history` → field `duration_s` |
-| Thời điểm nào thích nghe nhạc nhất? | `music.play` events → field `hour` |
-
-Xem skill Music (`resources/openclaw-skills/music/SKILL.md`) để biết chi tiết implementation.
+Xem `skills/music-suggestion/SKILL.md` và `skills/user-emotion-detection/SKILL.md` để biết chi tiết implementation.
 
 ### Chăm sóc chủ động (piggyback trên sensing events)
 
@@ -539,7 +537,7 @@ Hai control marker cho turn channel-origin:
 
 | Marker | Tác dụng | Khi nào dùng |
 |---|---|---|
-| `[HW:/speak:{}]` | Force TTS trên loa. Không ảnh hưởng Telegram. | Proactive crons (wellbeing, music) chạy trong Telegram/channel session để nhắc phát qua loa. Thường kèm `[HW:/dm:{"telegram_id":"..."}]` để DM đúng 1 người. |
+| `[HW:/speak:{}]` | Force TTS trên loa. Không ảnh hưởng Telegram. | Proactive reply (wellbeing, music) chạy trong Telegram/channel session để nhắc phát qua loa. Thường kèm `[HW:/dm:{"telegram_id":"..."}]` để DM đúng 1 người. |
 | `[HW:/broadcast:{}]` | Force TTS **và** fan-out text tới tất cả Telegram chat. | Chỉ dành cho guard mode alert. Không dùng cho wellbeing/music — sẽ notify mọi chat, không phải chỉ người được nhắc. |
 
 Mặc định turn channel-origin (Telegram, webchat) suppress TTS loa vì reply đi qua channel message. `/speak` override suppression đó mà không kèm fan-out.
@@ -598,7 +596,7 @@ Agent liên kết tên face recognition với Telegram username bằng cách qua
 
 ## Phân tích Motion Activity (khi đang có mặt)
 
-Khi user đang ở trạng thái PRESENT và camera phát hiện chuyển động, hệ thống gửi event `motion.activity` thay vì `motion`. Hệ thống gửi tên action đã detect (không kèm ảnh — tên action đủ để agent suy luận).
+Khi user đang ở trạng thái PRESENT và camera phát hiện chuyển động, hệ thống gửi event `motion.activity` thay vì `motion`. Dùng chung cooldown (`MOTION_EVENT_COOLDOWN_S`, mặc định 900 s) — không có timer riêng. Hệ thống gửi tên action đã detect (không kèm ảnh — tên action đủ để agent suy luận).
 
 ### Cách hoạt động
 
@@ -637,22 +635,67 @@ Agent đọc dòng `Activity detected:`, split theo dấu phẩy, rồi POST t�
 
 Tùy chọn thay thế cho `MotionPerception` — chạy nhận diện hành động **riêng cho từng khuôn mặt** thay vì toàn bộ frame. Bật qua `HAL_MOTION_PER_FACE_ENABLED=true` (mặc định `false`).
 
-- Mở rộng bbox khuôn mặt (1x lên, 2x trái/phải/xuống) để lấy phần thân trên + tay.
-- Mỗi `face_id` có WS session riêng với backend action recognition.
-- Person detection luôn **tắt** trên các session này.
-- Dedup theo từng action riêng biệt cho mỗi face (mặc định 5 phút).
-- **Cooldown floor toàn cục chung cho MỌI face** — cùng semantics và cùng knobs với `MotionPerception`: cùng coarse class thì tối đa 1 `motion.activity` mỗi `MOTION_EVENT_COOLDOWN_S` (mặc định 15 phút); **transition** đổi coarse class bypass floor khi đã qua `MOTION_TRANSITION_MIN_GAP_S` (mặc định 60s); floor được xóa khi user thực sự đổi (`reset_dedup`), không xóa khi stranger chớp tắt. Không có floor này, N người trong frame = N event mỗi flush.
-- Session cần tối thiểu 4 frame trước khi gửi event đầu tiên.
-- Session bị xóa sau 30 giây không thấy face đó.
+#### Cách hoạt động
+
+1. Subscribe cập nhật `detected_faces` (giống emotion perception).
+2. Với mỗi face, **mở rộng bounding box** (1x chiều cao mặt lên trên, 2x chiều rộng mặt sang trái/phải/xuống) để lấy phần thân trên + tay — vùng diễn ra các hoạt động ở bàn làm việc.
+3. Crop vùng đã mở rộng từ frame.
+4. Gửi crop tới một **WS session riêng** trên backend action recognition. Mỗi `face_id` (vd. `gray`, `stranger_5`) có session riêng với frame buffer độc lập.
+5. Person detection luôn **tắt** trên các session này — việc mở rộng bbox mặt đã tách riêng người đó.
+
+#### Dedup theo từng action
+
+Mỗi face session giữ dedup per-action độc lập. Trong dedup window (mặc định 5 phút), label action lặp lại của cùng face bị chặn — nhưng các action khác vẫn fire.
+
+Ví dụ:
+```
+t=0:00  leo → {drinking, using computer}     → SEND both
+t=1:00  leo → {drinking, using computer}     → DROP both (within 5 min)
+t=2:00  leo → {drinking, writing}            → SEND writing only (drinking still in window)
+t=5:01  leo → {drinking}                     → SEND drinking (expired from window)
+```
+
+Ví dụ này chỉ minh họa riêng tầng per-face — cooldown floor toàn cục bên dưới áp dụng chồng lên nó.
+
+#### Cooldown floor toàn cục (chung cho mọi face)
+
+Một cooldown floor dùng chung cho TẤT CẢ face session, cùng semantics và cùng knobs với `MotionPerception`: cùng coarse activity class thì tối đa 1 `motion.activity` mỗi `MOTION_EVENT_COOLDOWN_S` (mặc định 15 phút); **transition** đổi coarse class bypass floor khi đã qua `MOTION_TRANSITION_MIN_GAP_S` (mặc định 60s) kể từ lần phát cuối; floor được xóa khi user thực sự đổi (`reset_dedup`), không xóa khi stranger chớp tắt.
+
+Không có floor này, riêng dedup per-face sẽ cho phép mỗi người một event mỗi flush — N người trong frame = N event, và mỗi face mới phát hiện sẽ fire ngay lập tức. Có floor, cảnh nhiều người vẫn chỉ tạo tối đa một event cùng class mỗi cooldown, bất kể đang track bao nhiêu face.
+
+#### Cổng số frame tối thiểu
+
+Face session mới phải nhận ít nhất `MOTION_PER_FACE_MIN_FRAMES` frame (mặc định 4) trước khi event đầu tiên fire. Tránh phân loại nhiễu từ một frame đơn lẻ khi face chỉ thoáng qua.
+
+#### Vòng đời session
+
+- **Tạo** khi lần đầu thấy một `face_id`.
+- **Xóa** sau `MOTION_PER_FACE_SESSION_TTL_S` (mặc định 30s) không thấy face đó.
+- Khi xóa, đóng kết nối WS tới backend và bỏ toàn bộ state đã buffer.
+
+#### Cấu hình
 
 | Config | Env var | Mặc định | Mô tả |
 |---|---|---|---|
 | `MOTION_PER_FACE_ENABLED` | `HAL_MOTION_PER_FACE_ENABLED` | `false` | Bật nhận diện hành động per-face |
-| `MOTION_PER_FACE_DEDUP_WINDOW_S` | `HAL_MOTION_PER_FACE_DEDUP_WINDOW_S` | `300` | Cửa sổ dedup per-action (5 phút) |
-| `MOTION_PER_FACE_SESSION_TTL_S` | `HAL_MOTION_PER_FACE_SESSION_TTL_S` | `30` | Xóa session sau bao lâu không thấy face |
-| `MOTION_PER_FACE_MIN_FRAMES` | `HAL_MOTION_PER_FACE_MIN_FRAMES` | `4` | Số frame tối thiểu trước khi gửi event |
+| `MOTION_PER_FACE_DEDUP_WINDOW_S` | `HAL_MOTION_PER_FACE_DEDUP_WINDOW_S` | `300` (5 phút) | Cửa sổ dedup per-action cho mỗi face |
+| `MOTION_PER_FACE_SESSION_TTL_S` | `HAL_MOTION_PER_FACE_SESSION_TTL_S` | `30` | Xóa WS session sau bao lâu không thấy face |
+| `MOTION_PER_FACE_MIN_FRAMES` | `HAL_MOTION_PER_FACE_MIN_FRAMES` | `4` | Số frame tối thiểu trước khi event đầu tiên fire |
 
-Định dạng message: `Activity detected (gray): using computer, writing.`
+#### Định dạng message
+
+```
+Activity detected (gray): using computer, writing.
+Activity detected (stranger_5): drinking.
+```
+
+Có `face_id` trong ngoặc để agent biết hoạt động thuộc về người nào. Dùng cùng event type `motion.activity` với `MotionPerception`.
+
+#### Khi nào nên dùng
+
+- **Cảnh nhiều người** — mỗi người được phân loại hành động độc lập.
+- **Camera tự chuyển động** — crop neo theo mặt ổn định hơn cả frame khi servo đang quay.
+- **Đánh đổi**: mở một kết nối WS cho mỗi face được track. Với một người ngồi bàn, `MotionPerception` chuẩn đơn giản hơn.
 
 ---
 

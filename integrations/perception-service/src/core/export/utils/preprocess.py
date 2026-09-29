@@ -12,9 +12,6 @@ def letterbox(
 ) -> tuple[npt.NDArray[np.float32], float, tuple[int, int]]:
     """Resize image with letterbox padding, matching ultralytics preprocessing.
 
-    Maintains aspect ratio by scaling to fit target_size, then center-padding
-    the shorter dimension. Returns normalized float32 CHW tensor.
-
     Args:
         img: BGR image (H, W, 3) uint8.
         target_size: target square size (e.g. 640).
@@ -50,9 +47,6 @@ def owlv2_preprocess(
 ) -> tuple[npt.NDArray[np.float32], float]:
     """Preprocess image for OWLv2, matching HuggingFace Owlv2Processor.
 
-    OWLv2 pads bottom-right to square (pad value 0.5 after rescale),
-    then resizes to target_size, then normalizes with CLIP mean/std.
-
     Args:
         img: BGR image (H, W, 3) uint8.
         target_size: target square size (default 1008).
@@ -73,15 +67,12 @@ def owlv2_preprocess(
     padded = np.full((max_dim, max_dim, 3), 0.5, dtype=np.float32)
     padded[:h, :w] = img_rgb
 
-    # Resize to target_size
     resized = cv2.resize(padded, (target_size, target_size))
 
-    # Normalize with CLIP mean/std
     mean_arr = np.array(mean, dtype=np.float32).reshape(1, 1, 3)
     std_arr = np.array(std, dtype=np.float32).reshape(1, 1, 3)
     normalized = (resized - mean_arr) / std_arr
 
-    # HWC → CHW
     img_chw = normalized.transpose(2, 0, 1).astype(np.float32)
     return img_chw, max_dim
 
@@ -118,10 +109,7 @@ def unowlv2_boxes(
     boxes_xywh: npt.NDArray[np.float32],
     max_dim: float,
 ) -> npt.NDArray[np.float32]:
-    """Convert OWLv2 normalized boxes to original image pixel coords.
-
-    OWLv2 boxes are normalized to the padded square (max(H,W) x max(H,W)).
-    Multiply all coords by max_dim to get pixel coordinates.
+    """Convert OWLv2 boxes (normalized to the padded max_dim square) to original pixel coords.
 
     Args:
         boxes_xywh: [N, 4] center-based xywh normalized to [0, 1].

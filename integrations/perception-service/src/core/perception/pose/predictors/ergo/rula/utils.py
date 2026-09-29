@@ -13,17 +13,10 @@ def signed_flexion_angle(
     v: npt.NDArray[np.float32],
     trunk_up: npt.NDArray[np.float32],
 ) -> float:
-    """Signed flexion angle (degrees) of *v* relative to *trunk_up*.
+    """Signed flexion angle (degrees) of *v* relative to *trunk_up*; positive = forward flexion.
 
-    Positive = forward flexion, negative = extension.
-    Computed fully in 3D using the cross product to determine sign.
-
-    Assumes the skeleton has been aligned via ``align_to_vertical`` so the
-    coordinate frame is x=right, y=down, z=depth and ``trunk_up`` ≈ [0, -1, 0].
-    Flexion happens in the sagittal (y-z) plane, i.e. as a rotation about the
-    X axis, so the SIGN of the X component of ``cross(trunk_up, v)`` tells
-    forward (+) from backward (−) lean. ``angle_between_3d`` only gives the
-    unsigned magnitude, hence this separate sign step.
+    Assumes ``align_to_vertical`` was applied (x=right, y=down, z=depth); the sign
+    comes from the X component of ``cross(trunk_up, v)``.
     """
     angle: float = angle_between_3d(v, trunk_up)
     cross: npt.NDArray[np.float32] = np.cross(trunk_up, v)
@@ -37,11 +30,7 @@ def signed_flexion_angle(
 def align_to_vertical(
     keypoints: npt.NDArray[np.float32],
 ) -> npt.NDArray[np.float32]:
-    """Rotate 3D keypoints so that spine-to-thorax aligns with -Y (up).
-
-    Convention: x=right, y=down, z=depth.
-    Upward in image space is -Y, so trunk (spine→thorax) should point to [0, -1, 0].
-    """
+    """Rotate 3D keypoints so spine->thorax points to [0, -1, 0] (x=right, y=down, z=depth)."""
     spine_idx: int = _H36M.joint("SPINE")
     thorax_idx: int = _H36M.joint("THORAX")
     spine: npt.NDArray[np.float32] = keypoints[spine_idx]

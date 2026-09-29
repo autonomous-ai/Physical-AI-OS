@@ -1,12 +1,4 @@
-"""Base audio emotion predictor — classifies emotion from audio waveforms.
-
-Takes a batch of Audio inputs, preprocesses (mono + resample), runs ONNX
-inference with zero-padding for variable-length batching, and returns raw
-expression probability distributions.
-
-Concrete subclasses (Emotion2Vec) override class-level defaults
-(model path, labels file, sample rate).
-"""
+"""Base audio emotion predictor: classifies emotion from audio waveforms via ONNX."""
 
 from pathlib import Path
 from typing import Any, cast
@@ -28,11 +20,7 @@ from core.utils.runtime import prepare_ort_session
 
 
 class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
-    """Base class for audio emotion classifiers.
-
-    Subclasses override class-level defaults. The base handles ONNX
-    lifecycle, preprocessing, and inference.
-    """
+    """Base class for audio emotion classifiers; subclasses override class-level defaults."""
 
     DEFAULT_MODEL_PATH: Path | None = None
     DEFAULT_REMOTE_URL: str | None = None
@@ -48,12 +36,10 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
     )
     ONNX_INPUT_NAME: str = "input"
     ONNX_OUTPUT_NAME: str = "logits"
-    # Hard input-length bound (seconds). Must match the TensorRT profile built
-    # in _start_impl — see length.py for why.
+    # Input-length bound (s); must match the TensorRT profile (see length.py, #492).
     MIN_AUDIO_S: float = 2.0
     MAX_AUDIO_S: float = 8.0
-    # Batched inputs are zero-padded to the longest member, so a short clip
-    # batched with a long one would be classified as mostly silence.
+    # Zero-padding to the longest member would make short clips read as silence.
     MAX_BATCH_SIZE: int = 1
 
     def __init__(
@@ -122,12 +108,8 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         self._processor = self._processor_factory.create()
         self._processor.start()
         self._logger.info("Loading model from %s", self._model_path)
-        # Warm up at both ends of the input bound. Every request is fit to
-        # [min_samples, max_samples] at batch 1, and both shapes sit inside
-        # the engine's shape range, so no request can trigger a TensorRT
-        # rebuild (#492). With a cached engine (prod: 32000-549120 samples,
-        # batch 1-4) nothing is rebuilt at startup either; on a host without
-        # a cache the builds happen here, before any traffic.
+        # Warm up at both ends of the input bound so no request triggers a
+        # TensorRT rebuild (#492); uncached engines are built here, before traffic.
         name = self.ONNX_INPUT_NAME
         warmup = [
             {name: np.zeros((1, self.min_samples), dtype=np.float32)},
@@ -164,11 +146,7 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
         preprocess: bool = True,
         **kwargs: Any,
     ) -> list[RawAudioEmotionDetection]:
-        """Classify emotion for a batch of audio utterances.
-
-        Bounds each waveform to [MIN_AUDIO_S, MAX_AUDIO_S], zero-pads to max length in batch,
-        stacks into [N, T_max], and runs ONNX inference in one pass.
-        """
+        """Classify emotion for a batch; each waveform is bounded to [MIN_AUDIO_S, MAX_AUDIO_S]."""
         if preprocess:
             input = self.preprocess(input)
 
@@ -199,10 +177,7 @@ class AudioEmotionRecognizer(PredictorBase[Audio, RawAudioEmotionDetection]):
     def _postprocess_batch(
         self, raw_outputs: list[npt.NDArray[np.float32]], N: int
     ) -> list[RawAudioEmotionDetection]:
-        """Convert batched ONNX output to per-sample RawAudioEmotionDetection.
-
-        Softmax is baked into the ONNX graph — output is probs directly.
-        """
+        """Convert batched ONNX output (softmax baked in) to per-sample detections."""
         probs: npt.NDArray[np.float32] = np.asarray(raw_outputs[0], dtype=np.float32)
 
         return [RawAudioEmotionDetection(expression_probs=probs[i]) for i in range(N)]

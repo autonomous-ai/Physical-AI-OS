@@ -1,10 +1,4 @@
-"""Run all ONNX exports.
-
-Each individual export function handles checkpoint resolution internally
-via ensure_downloaded — no need to check for local pretrained files here.
-
-Detection models are exported twice: raw (no NMS) and with NMS baked in.
-"""
+"""Run all ONNX exports. Detection models are exported twice: raw and with NMS baked in."""
 
 import logging
 from pathlib import Path
@@ -53,7 +47,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
 
     results: dict[str, bool] = {}
 
-    # EmoNet
     for n in (5, 8):
         results[f"emonet_{n}"] = _run(
             f"emonet_{n}",
@@ -62,7 +55,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
             ),
         )
 
-    # POSTER V2
     results["posterv2"] = _run(
         "posterv2",
         lambda: export_posterv2.export(
@@ -70,7 +62,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         ),
     )
 
-    # Emo-AffectNet (static ResNet-50) — optional: needs the HuggingFace .pt.
     results["emoaffectnet"] = _run(
         "emoaffectnet",
         lambda: export_emoaffectnet.export(
@@ -79,7 +70,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         required=False,
     )
 
-    # TCPFormer
     results["tcpformer"] = _run(
         "tcpformer",
         lambda: export_tcpformer.export(
@@ -87,7 +77,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         ),
     )
 
-    # Emotion2Vec
     results["emotion2vec"] = _run(
         "emotion2vec",
         lambda: export_emotion2vec.export(
@@ -97,7 +86,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         ),
     )
 
-    # UniformerV2
     results["uniformerv2"] = _run(
         "uniformerv2",
         lambda: export_uniformerv2.export(
@@ -107,9 +95,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         ),
     )
 
-    # --- Object detection: raw (no NMS) + NMS baked ---
-
-    # OWLv2
     results["owlv2_raw"] = _run(
         "owlv2 (raw)",
         lambda: export_owlv2.export(
@@ -129,7 +114,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         required=True,
     )
 
-    # YOLO (person detection)
     results["yolo_raw"] = _run(
         "yolo (raw)",
         lambda: export_yolo.export(
@@ -147,7 +131,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         required=True,
     )
 
-    # YOLO-World
     results["yolo_world_raw"] = _run(
         "yolo_world (raw)",
         lambda: export_yolo_world.export(
@@ -165,7 +148,6 @@ def export_all(output_dir: Path | None = None, opset: int = 17):
         required=True,
     )
 
-    # Summary
     logger.info("=" * 60)
     logger.info("Summary:")
     logger.info("=" * 60)

@@ -1,25 +1,4 @@
-"""Camera driver for Raspberry Pi CSI sensors driven by libcamera.
-
-Why this exists: `LocalVideoCaptureDevice` opens a V4L2 node with OpenCV, which
-works for UVC webcams (Lamp) but not for a CSI sensor behind Raspberry Pi's
-unicam + libcamera pipeline. On a Reachy Mini the imx708 exposes /dev/video0 as
-a raw Bayer node: `cv2.VideoCapture(0)` reports isOpened() == True and then every
-read() times out, and the wheel-built `opencv-python` is compiled with
-`GStreamer: NO`, so a `libcamerasrc` pipeline is not available either.
-
-Approach: run `rpicam-vid` (rpicam-apps, shipped by Raspberry Pi OS and present
-on Pollen OS) as a child process emitting MJPEG on stdout, split the stream on
-JPEG markers, and decode the newest frame with cv2.imdecode. That keeps the
-libcamera ISP — exposure, white balance, lens shading — tuned by the vendor,
-and needs no Python binding that must match the interpreter ABI (python3-picamera2
-is built for the system interpreter, which is not the one HAL's venv runs).
-
-Measured on a Reachy Mini Wireless (CM4, daemon running its control loop):
-1280x720 MJPEG at 15 fps requested delivers ~14 fps for ~21% of one core.
-
-The device must own the camera before this starts: on Reachy the Pollen daemon
-holds it until `POST /api/media/release`.
-"""
+"""Camera driver for Raspberry Pi CSI sensors driven by libcamera."""
 from __future__ import annotations
 
 import logging
@@ -35,8 +14,6 @@ import numpy.typing as npt
 from .models import VideoCaptureDeviceInfo, VideoCaptureDeviceResponse
 from .video_capture_device import VideoCaptureDeviceBase
 
-# JPEG frame delimiters. MJPEG over a pipe is just concatenated JPEGs, so the
-# reader re-syncs on these rather than trusting any framing.
 _SOI = b"\xff\xd8\xff"
 _EOI = b"\xff\xd9"
 
@@ -44,9 +21,7 @@ _READ_CHUNK = 65536
 # Discard a partial buffer that never terminates — a truncated frame must not
 # grow without bound if the child wedges mid-write.
 _MAX_BUFFER = 8 * 1024 * 1024
-# Restart backoff when the child exits (camera taken away, ISP fault, OOM).
 _RESTART_DELAY_S = 2.0
-# No frame for this long with the child still alive = wedged pipeline; respawn.
 _STALL_RESTART_S = 10.0
 
 logger = logging.getLogger(__name__)
@@ -56,16 +31,8 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
     """MJPEG-over-pipe capture from `rpicam-vid`, for CSI/libcamera sensors."""
 
     runable: bool = True
-    # libcamera selects the sensor through its own pipeline; there is no V4L2
-    # index to resolve (and /dev/video0 here is a raw Bayer node that would only
-    # mislead). See VideoCaptureDeviceBase.requires_v4l2_index.
     requires_v4l2_index: bool = False
 
-    # Idle frame rate. Sensing polls every couple of seconds and the tracker is
-    # the only fast consumer, so the child runs slow until someone calls
-    # acquire_consumer() — same throttling contract the OpenCV driver honours,
-    # except here the rate is a child-process argument, so changing it means
-    # respawning rather than sleeping in the read loop.
     _IDLE_FPS: int = 5
     _ACTIVE_FPS: int = 15
 
@@ -86,8 +53,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
 
         self._active_consumers: int = 0
         self._consumers_lock: threading.Lock = threading.Lock()
-        # Set when the consumer count crosses 0 so the loop respawns the child
-        # at the other frame rate instead of waiting for the next fault.
         self._rate_changed: threading.Event = threading.Event()
 
         self.zoom: float = 1.0
@@ -96,8 +61,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
         self.actual_fps: float | None = None
 
         self._logger: logging.Logger = logging.getLogger(self.__class__.__name__)
-
-    # --- state exposed to consumers (mirrors LocalVideoCaptureDevice) --------
 
     @property
     def last_frame(self) -> npt.NDArray[np.uint8] | None:
@@ -148,8 +111,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
         if crossed:
             self._rate_changed.set()
 
-    # --- lifecycle ----------------------------------------------------------
-
     @override
     def capture(
         self, need_description: bool = False
@@ -186,11 +147,8 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
             self._thread.join(timeout=5)
             self._thread = None
 
-    # --- internals ----------------------------------------------------------
-
     @staticmethod
     def _binary() -> str:
-        # rpicam-apps renamed the binaries; older images still ship libcamera-vid.
         return "rpicam-vid" if shutil.which("rpicam-vid") else "libcamera-vid"
 
     def _target_fps(self) -> int:
@@ -206,7 +164,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
             "--width", str(width),
             "--height", str(height),
             "--framerate", str(fps),
-            # 0 = run until killed. Without it rpicam-vid stops after 5s.
             "-t", "0",
             "--nopreview",
             "-o", "-",
@@ -234,7 +191,7 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
                 pass
 
     def _capture_loop(self) -> None:
-        import cv2  # imported here so the module loads on machines without cv2
+        import cv2
 
         buf = bytearray()
         while not self._stopped.is_set():
@@ -251,7 +208,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
             last_frame_at = time.monotonic()
 
             while not self._stopped.is_set():
-                # Respawn on a rate change: the frame rate is a launch argument.
                 if self._rate_changed.is_set() and self._target_fps() != fps:
                     self._logger.info("consumer count changed — restarting at new rate")
                     break
@@ -267,8 +223,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
                     break
                 buf += chunk
 
-                # Drain every complete JPEG in the buffer, keeping only the last:
-                # decoding intermediate frames would burn CPU on images nobody reads.
                 newest: bytes | None = None
                 while True:
                     start = buf.find(_SOI)
@@ -291,8 +245,6 @@ class RpicamVideoCaptureDevice(VideoCaptureDeviceBase):
                     self._logger.warning("no JPEG boundary in %d bytes — resyncing", len(buf))
                     buf.clear()
 
-                # Alive but silent: libcamera can wedge with the process still up,
-                # which no exit code reports. Treat prolonged silence as a fault.
                 if time.monotonic() - last_frame_at > _STALL_RESTART_S:
                     self._logger.warning("no frame for %.0fs — restarting", _STALL_RESTART_S)
                     break

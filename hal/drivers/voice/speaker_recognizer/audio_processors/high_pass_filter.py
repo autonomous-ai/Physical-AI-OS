@@ -5,7 +5,6 @@ from scipy.signal import butter, sosfiltfilt
 
 from .base import Audio, AudioProcessorBase
 
-# --- Defaults ---
 DEFAULT_CUTOFF_HZ: float = 80.0
 DEFAULT_ORDER: int = 4
 

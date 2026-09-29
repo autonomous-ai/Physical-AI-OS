@@ -15,9 +15,10 @@ _resolve_logger = logging.getLogger("CameraResolve")
 
 
 def _norm_device_name(s: str) -> str:
-    """Lowercase and strip non-alphanumerics so 'OPENAICAM', 'openaicam' and
-    the by-id mangling ('usb-SunplusIT_Inc_OPENAICAM-video-index0') all
-    compare equal on the parts that matter."""
+    """Lowercase and strip non-alphanumerics so 'OPENAICAM', 'openaicam' and the by-id
+    mangling ('usb-SunplusIT_Inc_OPENAICAM-video-index0') all compare equal on the parts
+    that matter.
+    """
     return "".join(c for c in s.lower() if c.isalnum())
 
 
@@ -29,22 +30,6 @@ def resolve_camera_device_id(
 ):
     """Resolve a camera device id from a hardware name, mirroring how audio
     devices are picked by name instead of a bare index.
-
-    Preference order:
-    0. An absolute path (e.g. "/dev/device-camera", a udev SYMLINK keyed on the
-       camera's vid:pid — the camera counterpart of asound.conf's role aliases)
-       is returned as-is when it exists, so .env names a ROLE and the udev rule
-       decides which hardware fills it. Missing path falls through to 3.
-    1. /dev/v4l/by-id capture symlink ("...-video-index0") whose name contains
-       the needle — returned AS the symlink path, so later reopens follow it
-       to the right node even when the kernel renumbers /dev/video<N> after a
-       replug or USB power-cycle.
-    2. /sys/class/video4linux/video<N>/name match (lowest N first), skipping
-       non-capture sibling nodes (UVC cams expose a metadata node with the
-       same name; its sysfs `index` attribute is non-zero).
-    3. The legacy index fallback, with a warning — camera absent or renamed.
-
-    With no name configured the legacy index passes through untouched.
     """
     if not name:
         return fallback_index
@@ -92,9 +77,9 @@ def resolve_camera_device_id(
                 try:
                     with open(os.path.join(sysfs_dir, node, "index")) as f:
                         if f.read().strip() != "0":
-                            continue  # metadata sibling node, cannot capture
+                            continue
                 except OSError:
-                    pass  # no index attribute — assume capture-capable
+                    pass
                 _resolve_logger.info(
                     "Camera resolved by name %r -> /dev/%s (%s)", name, node, node_name
                 )
@@ -112,10 +97,8 @@ def resolve_camera_device_id(
 class VideoCaptureDeviceBase(
     IDevice[VideoCaptureDeviceInfo, VideoCaptureDeviceResponse]
 ):
-    # True when device_id must be resolved to a V4L2 node index before
-    # construction (UVC webcams). Backends that address the sensor another way
-    # — libcamera picks it by pipeline, not by /dev/video number — set this
-    # False so boot does not probe V4L2 for a node that will never be opened.
+    # True when device_id must be resolved to a V4L2 node index before construction (UVC
+    # webcams).
     requires_v4l2_index: bool = True
 
     def __init__(
@@ -144,59 +127,30 @@ class VideoCaptureDeviceBase(
 class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
     runable: bool = True
 
-    # ISP-freeze watchdog: reopen the device when it has delivered
-    # byte-identical frames for this long. A live sensor never produces
-    # identical frames (photon noise); a wedged ISP does, with ret=True,
-    # so the read()-failure recovery never fires.
+    # ISP-freeze watchdog: reopen the device when it has delivered byte-identical frames
+    # for this long.
     _FREEZE_REOPEN_S: float = 10.0
 
-    # Color-corruption watchdog: the same wedged ISP can also keep delivering
-    # CHANGING frames whose colors are garbage — posterized flat regions with
-    # either green+magenta, red+magenta, or a magenta/deep-magenta palette
-    # (seen live on the SunplusIT UVC cam right after a close/open cycle, with
-    # every v4l2 control correct),
-    # which the freeze watchdog cannot see. A normal red LED spill is one hue;
-    # the red palette requires a substantial magenta companion before it can
-    # count as corrupt. Sustained corruption triggers the same recovery ladder
-    # as a freeze; a single clean frame resets the timer. Thresholds are
-    # calibrated from three live corrupt specimens: green 0.19 / magenta 0.012,
-    # red 0.23-0.42 / magenta 0.10-0.35, and magenta 0.24 / deep-magenta
-    # 0.16 (sat>=100).
     _COLOR_CORRUPT_REOPEN_S: float = 12.0
     _COLOR_SAT_MIN: int = 100  # HSV saturation floor for an "extreme" pixel
-    _COLOR_VAL_MIN: int = 60  # HSV value floor — ignore near-black pixels
-    _COLOR_GREEN_FRAC: float = 0.10  # min frame fraction of extreme green
-    _COLOR_MAGENTA_FRAC: float = 0.008  # min frame fraction of extreme magenta
-    _COLOR_RED_FRAC: float = 0.15  # min frame fraction of extreme red
-    _COLOR_RED_MAGENTA_FRAC: float = 0.01  # companion magenta floor for red palette
-    _COLOR_MAGENTA_DOMINANT_FRAC: float = 0.15  # broad magenta palette floor
-    _COLOR_DEEP_MAGENTA_FRAC: float = 0.10  # companion violet-red palette floor
+    _COLOR_VAL_MIN: int = 60
+    _COLOR_GREEN_FRAC: float = 0.10
+    _COLOR_MAGENTA_FRAC: float = 0.008
+    _COLOR_RED_FRAC: float = 0.15
+    _COLOR_RED_MAGENTA_FRAC: float = 0.01
+    _COLOR_MAGENTA_DOMINANT_FRAC: float = 0.15
+    _COLOR_DEEP_MAGENTA_FRAC: float = 0.10
 
-    # ISP fault escalation: a plain V4L2 reopen does NOT reset the camera
-    # firmware — device-verified on the SunplusIT UVC cam, where reopening a
-    # wedged ISP re-triggers the exact green/posterized glitch, so the freeze
-    # watchdog fires again seconds later and the loop hammers itself into a
-    # self-perpetuating churn. The only verified fix short of a reboot is
-    # power-cycling the USB port via the usb driver's unbind/bind sysfs
-    # interface, WITH a settle delay so the reopen lands on a fully-booted ISP
-    # (see _USB_SETTLE_AFTER_BIND_S). So escalate on the FIRST ISP fault
-    # rather than wasting cycles on futile plain reopens; the cooldown below
-    # still bounds how often an actually-dead camera gets cycled. Read-failure
-    # reopens do NOT count toward escalation (those a plain reopen does fix).
+    # ISP fault escalation: a plain V4L2 reopen does NOT reset the camera firmware.
     _ISP_FAULT_ESCALATE_COUNT: int = 1
     _ISP_FAULT_WINDOW_S: float = 600.0
     # Never power-cycle more often than this — a physically dead camera must
     # not put the loop into an endless unbind/bind cycle.
     _USB_POWER_CYCLE_COOLDOWN_S: float = 600.0
-    # Delay between unbind and bind so the device fully powers down.
     _USB_REBIND_DELAY_S: float = 3.0
-    # How long to wait for /dev/video<N> to reappear after the bind.
     _USB_DEVNODE_TIMEOUT_S: float = 15.0
-    # After the node re-enumerates, the ISP firmware still needs a few seconds
-    # to finish booting. Reopening the instant the /dev node appears (which
-    # can be <1s) catches the ISP mid-boot and re-triggers the green/posterized
-    # glitch — device-verified: a power-cycle followed by an immediate reopen
-    # comes back corrupt, the same cycle with this settle comes back clean.
+    # After the node re-enumerates, the ISP firmware still needs a few seconds to finish
+    # booting.
     _USB_SETTLE_AFTER_BIND_S: float = 5.0
 
     def __init__(
@@ -216,19 +170,11 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         self._lock: threading.Lock = threading.Lock()
         self._stopped: threading.Event = threading.Event()
 
-        # When > 0, capture runs at full FPS; otherwise throttles to save CPU
         self._active_consumers: int = 0
         self._consumers_lock: threading.Lock = threading.Lock()
 
-        # Digital zoom factor (1.0 = no zoom). Applied in capture loop so all
-        # downstream consumers (sensing, tracker, snapshot, stream) see the
-        # same zoomed frame. Side effect: zoom > 1 narrows the effective FOV
-        # for sensing/tracking. Settable via /camera/zoom route.
         self.zoom: float = 1.0
 
-        # Negotiated capture mode — populated after the device accepts the
-        # CAP_PROP_FRAME_WIDTH/HEIGHT/FPS request. None until the capture loop
-        # has opened the device once.
         self.actual_width: int | None = None
         self.actual_height: int | None = None
         self.actual_fps: float | None = None
@@ -298,11 +244,8 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             self._logger.info(f"{self.__class__.__name__} has already started")
             return
 
-        # A previous loop thread that died — the camera vanished from USB and the
-        # open path raised, or an unhandled error escaped — leaves a stale,
-        # non-None _thread. Allow a fresh start to revive it (e.g. via
-        # /camera/enable once the device is physically back) instead of refusing
-        # forever with "already started" until a full HAL restart.
+        # A previous loop thread that died — the camera vanished from USB and the open
+        # path raised, or an unhandled error escaped — leaves a stale, non-None _thread.
         self._stopped.clear()
         self._thread = threading.Thread(
             target=self._video_capture_loop,
@@ -320,28 +263,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         return cap
 
     def _apply_camera_controls(self, video_capture):
-        """Pin exposure (when configured) so auto-exposure can't throttle FPS.
-
-        UVC auto-exposure stretches integration time in low light (~60ms),
-        capping delivery at ~16fps regardless of resolution. A fixed exposure
-        below the frame budget (e.g. 20ms < 33ms for 30fps) restores the full
-        rate; the trade-off is a darker image in dim light, offset by gain /
-        brightness, or a longer exposure (fewer fps).
-
-        In "auto" mode (default) the auto-exposure control is actively set to
-        3 (aperture-priority) rather than left untouched: UVC cameras retain
-        manual exposure/gain across process restarts, so a leftover manual
-        state from an earlier configuration would otherwise survive an .env
-        switch to auto forever (green/posterized frames when the leftover gain
-        is high). Gain is pinned to HAL_CAMERA_GAIN in auto mode too: UVC
-        auto-exposure only moves integration time, so a gain left at max by an
-        earlier manual run (seen on lamp-4ace, gain 128/128) blows out a lit
-        room no matter what auto-exposure does.
-
-        V4L2/UVC CAP_PROP_AUTO_EXPOSURE: 1 = manual, 3 = aperture-priority
-        (auto). CAP_PROP_EXPOSURE is exposure_absolute in ×100µs units.
-        Best-effort: unsupported controls are logged and skipped.
-        """
+        """Pin exposure (when configured) so auto-exposure can't throttle FPS."""
         if (self._auto_exposure or "auto") != "manual":
             try:
                 video_capture.set(cv2.CAP_PROP_AUTO_EXPOSURE, 3)
@@ -379,20 +301,12 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
 
     @classmethod
     def _looks_color_corrupt(cls, small: npt.NDArray[np.uint8]) -> bool:
-        """Heuristic ISP color-corruption check on a subsampled BGR frame.
-
-        Flags the wedged-ISP failure mode where frames keep changing but the
-        chroma is garbage: posterized green+magenta, red+magenta, or a
-        broad magenta/deep-magenta palette.
-        Requiring both hue families keeps false positives out — a green wall,
-        foliage, or the lamp's own red LED spill are single-hue.
-        """
+        """Heuristic ISP color-corruption check on a subsampled BGR frame."""
         hsv = cv2.cvtColor(small, cv2.COLOR_BGR2HSV)
         hue = hsv[..., 0]
         extreme = (hsv[..., 1] >= cls._COLOR_SAT_MIN) & (
             hsv[..., 2] >= cls._COLOR_VAL_MIN
         )
-        # OpenCV hue is 0-179: red ~0/179, green ~60, magenta/pink ~150.
         red_frac = float((extreme & ((hue <= 10) | (hue >= 170))).mean())
         green_frac = float((extreme & (hue >= 35) & (hue <= 85)).mean())
         magenta_frac = float((extreme & (hue >= 130) & (hue <= 175)).mean())
@@ -405,9 +319,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             red_frac >= cls._COLOR_RED_FRAC
             and magenta_frac >= cls._COLOR_RED_MAGENTA_FRAC
         )
-        # The blue-LED specimen had negligible green and canonical red, but a
-        # frame-wide magenta palette with a large violet-red component. Keep
-        # the second threshold so a single ordinary pink hue does not trip it.
         magenta_palette_corrupt = (
             magenta_frac >= cls._COLOR_MAGENTA_DOMINANT_FRAC
             and deep_magenta_frac >= cls._COLOR_DEEP_MAGENTA_FRAC
@@ -419,14 +330,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         )
 
     def _recover_isp_fault(self, video_capture, device_id, now_mono, reason: str):
-        """Recover from an ISP fault (freeze / color corruption).
-
-        Counts fault-triggered reopens (read-failure reopens are NOT
-        counted) in a sliding window. Repeated faults shortly after a reopen
-        mean the ISP is deep-stuck and a V4L2 reopen alone won't unwedge it
-        — escalate to a USB power-cycle (cooldown-gated) before the reopen.
-        Returns the reopened capture (None only when stop() was requested).
-        """
+        """Recover from an ISP fault (freeze / color corruption)."""
         self._isp_fault_times = [
             t for t in self._isp_fault_times if now_mono - t < self._ISP_FAULT_WINDOW_S
         ]
@@ -443,8 +347,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                 n_faults,
                 self._ISP_FAULT_WINDOW_S,
             )
-            # Release before unbind so the driver detaches cleanly;
-            # _reopen_with_backoff's release below is then a no-op.
             try:
                 video_capture.release()
             except Exception:
@@ -456,12 +358,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
 
     @staticmethod
     def _video_dev_node(device_id) -> str | None:
-        """Map a capture device id to its /dev/video<N> node path.
-
-        Accepts an integer index (0 → /dev/video0) or a device path string;
-        symlinks like /dev/cam (udev rule) are resolved to the real node.
-        Returns None when the id doesn't map to a video4linux node.
-        """
+        """Map a capture device id to its /dev/video<N> node path."""
         if isinstance(device_id, int):
             return f"/dev/video{device_id}"
         if isinstance(device_id, str) and device_id.startswith("/dev/"):
@@ -471,26 +368,12 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         return None
 
     def _resolve_usb_path(self, device_id) -> str | None:
-        """Resolve the USB bus path (e.g. "1-1") behind /dev/video<N>.
-
-        Walks up the sysfs parent chain from
-        /sys/class/video4linux/video<N>/device until it reaches the node
-        carrying an idVendor attribute — that directory's basename is the
-        bus path the usb driver's bind/unbind interface expects. Returns
-        None when the camera is not USB-backed (e.g. a CSI sensor) or the
-        sysfs walk fails.
-        """
+        """Resolve the USB bus path (e.g. "1-1") behind /dev/video<N>."""
         sys_dev = self._resolve_usb_sysfs_dir(device_id)
         return os.path.basename(sys_dev) if sys_dev is not None else None
 
     def _resolve_usb_sysfs_dir(self, device_id) -> str | None:
-        """Return the USB device sysfs directory behind a video device.
-
-        The return value is the directory containing ``idVendor`` (for
-        example ``.../usb1/1-1``), or ``None`` for a non-USB camera / an
-        unavailable sysfs path. Keeping this separate from ``_resolve_usb_path``
-        lets runtime-PM handling use the same dynamic device resolution.
-        """
+        """Return the USB device sysfs directory behind a video device."""
         node = self._video_dev_node(device_id)
         if node is None:
             return None
@@ -498,8 +381,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             sys_dev = os.path.realpath(
                 f"/sys/class/video4linux/{os.path.basename(node)}/device"
             )
-            # Bounded walk — the USB device node sits a few levels above the
-            # interface (e.g. .../1-1/1-1:1.0/video4linux/video0).
             for _ in range(10):
                 if os.path.isfile(os.path.join(sys_dev, "idVendor")):
                     return sys_dev
@@ -512,14 +393,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         return None
 
     def _disable_usb_autosuspend(self, device_id) -> None:
-        """Keep a USB camera powered while HAL owns it.
-
-        UVC webcams can be left in runtime autosuspend by the kernel after a
-        short idle period. Some cameras recover cleanly; this one can resume
-        with a wedged ISP. ``power/control=on`` is scoped to the resolved USB
-        camera, is re-applied after each HAL start / USB rebind, and has no
-        effect on CSI or other non-USB cameras.
-        """
+        """Keep a USB camera powered while HAL owns it."""
         sys_dev = self._resolve_usb_sysfs_dir(device_id)
         if sys_dev is None:
             return
@@ -538,14 +412,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             )
 
     def _usb_power_cycle(self, device_id) -> bool:
-        """Power-cycle the camera's USB device via driver unbind/bind.
-
-        Best-effort: returns True when the unbind/bind writes succeeded
-        (whether or not the /dev/video node reappeared within the timeout —
-        the reopen backoff copes either way), False when the camera is not
-        USB-backed or a sysfs write failed, in which case the caller falls
-        back to the plain reopen path. Requires root (HAL runs as root).
-        """
+        """Power-cycle the camera's USB device via driver unbind/bind."""
         usb_path = self._resolve_usb_path(device_id)
         if usb_path is None:
             self._logger.warning(
@@ -566,16 +433,11 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                 usb_path,
             )
             return False
-        # Wait for the video node to re-enumerate before handing control back
-        # to the reopen backoff — enumeration takes a couple of seconds.
         node = self._video_dev_node(device_id)
         deadline = time.monotonic() + self._USB_DEVNODE_TIMEOUT_S
         while not self._stopped.is_set() and time.monotonic() < deadline:
             if node and os.path.exists(node):
                 self._disable_usb_autosuspend(device_id)
-                # Node is back, but the ISP is still booting — settle before
-                # handing control to the reopen, or the fresh open catches it
-                # mid-boot and re-triggers the green/posterized glitch.
                 self._logger.info(
                     "Camera USB power-cycled (%s) — %s is back, settling %.0fs",
                     usb_path, node, self._USB_SETTLE_AFTER_BIND_S,
@@ -593,15 +455,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         return True
 
     def _reopen_with_backoff(self, video_capture, device_id, reason: str):
-        """Release and reopen the capture device, retrying with backoff.
-
-        Never gives up while the loop is alive: a USB camera that wedged or
-        dropped off the bus can come back seconds later (autosuspend, ISP
-        freeze, replug), and exiting the loop would leave HAL camera-less for
-        the rest of the process lifetime. Re-applies MJPEG, resolution and
-        exposure — a fresh open resets the device to defaults. Returns the
-        opened capture, or None only when stop() was requested mid-retry.
-        """
+        """Release and reopen the capture device, retrying with backoff."""
         try:
             video_capture.release()
         except Exception:
@@ -630,7 +484,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
         return None
 
     def _video_capture_loop(self):
-
         device_id = self.device_info.device_id
 
         if isinstance(device_id, str) and device_id.isdigit():
@@ -640,7 +493,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
 
         video_capture = self._try_open(device_id)
 
-        # Fallback: try /dev/cam symlink (udev rule), then scan index 0-5
         if not video_capture.isOpened():
             fallbacks = ["/dev/cam"] + [i for i in range(6) if i != device_id]
             for fb in fallbacks:
@@ -657,20 +509,13 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                 f"Failed to open video capture device: {self.device_info.device_id}"
             )
 
-        # Force MJPEG format — some USB webcams (e.g. Generalplus) fail read()
-        # with the default YUYV format on Pi 5 but work fine with MJPEG.
         video_capture.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
 
-        # Request the configured resolution from the device. Without this the
-        # cam delivers its default mode (often 640x480) regardless of
-        # max_width/max_height. The device snaps to its nearest supported mode
-        # — we read back the actual values below.
         if self._max_width:
             video_capture.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
         if self._max_height:
             video_capture.set(cv2.CAP_PROP_FRAME_HEIGHT, self._max_height)
 
-        # Pin exposure (if configured) so auto-exposure doesn't throttle FPS.
         self._apply_camera_controls(video_capture)
 
         w = int(video_capture.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -694,14 +539,11 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
             1 / self._fps if self._fps is not None and self._fps < device_fps else 0
         )
 
-        # Idle capture interval — only grab a frame every 2s when no streaming clients
         idle_interval = 2.0
 
-        # ISP-freeze watchdog state (see _FREEZE_REOPEN_S).
         freeze_sig: bytes | None = None
         freeze_since: float = 0.0
 
-        # Color-corruption watchdog state (see _COLOR_CORRUPT_REOPEN_S).
         corrupt_since: float = 0.0
         last_color_check: float = 0.0
 
@@ -717,7 +559,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                     if elapsed < idle_interval:
                         self._stopped.wait(min(idle_interval - elapsed, 0.5))
                         continue
-                    # Flush stale frames from device buffer after idle sleep
                     video_capture.grab()
                     video_capture.grab()
 
@@ -725,11 +566,7 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
 
                 if not ret:
                     # USB cameras (e.g. HD USB Camera 32e4:9230 on OrangePi) hit
-                    # autosuspend after ~2s idle; the wakeup outlasts a single
-                    # 1s retry. Instead of exiting the loop forever, mirror what
-                    # the /camera/disable + /camera/enable workaround does:
-                    # release the handle and reopen. Same recovery path V4L2
-                    # would do under any transient device-error condition.
+                    # autosuspend after ~2s idle; the wakeup outlasts a single 1s retry.
                     self._logger.warning("Camera read() failed, retrying in 1s...")
                     time.sleep(1)
                     ret, frame = video_capture.read()
@@ -742,15 +579,6 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                             break
                         continue
 
-                # ISP-freeze watchdog: a wedged camera (seen with manual
-                # exposure/gain on the UVC cam) keeps redelivering the SAME
-                # buffer with ret=True, so every consumer (look, sensing,
-                # tracking, snapshot) silently works on a stale scene while
-                # last_frame_ts stays fresh. Byte-identical subsampled frames
-                # over _FREEZE_REOPEN_S can't come from a live sensor — reopen.
-                # Contiguous copy of the subsampled frame — shared by the
-                # freeze signature and the color-corruption check (cvtColor
-                # rejects strided views).
                 small = np.ascontiguousarray(frame[::32, ::32])
                 sig: bytes = small.tobytes()
                 now_mono = time.monotonic()
@@ -773,10 +601,8 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                     freeze_sig = sig
                     freeze_since = now_mono
 
-                # Color-corruption watchdog (see _COLOR_CORRUPT_REOPEN_S):
-                # throttled to ~1 check/s; requires uninterrupted corruption
-                # — a single clean frame resets, so LED animations or a
-                # briefly-held colorful object never accumulate 30s.
+                # Color-corruption watchdog (see _COLOR_CORRUPT_REOPEN_S): throttled to
+                # ~1 check/s; requires uninterrupted corruption.
                 if now_mono - last_color_check >= 1.0:
                     last_color_check = now_mono
                     if self._looks_color_corrupt(small):
@@ -844,11 +670,8 @@ class LocalVideoCaptureDevice(VideoCaptureDeviceBase):
                 self.last_response = response
         finally:
             # video_capture is None when a reopen path (read-failure or ISP-fault
-            # recovery) returned None because stop() was requested mid-retry — the
-            # loop then breaks straight here. Guard so shutdown doesn't die with
-            # `AttributeError: 'NoneType' has no attribute 'release'`, which would
-            # leave `_thread` referencing a crashed thread that start() then
-            # refuses to revive ("already started") until a full HAL restart.
+            # recovery) returned None because stop() was requested mid-retry — the loop
+            # then breaks straight here.
             if video_capture is not None:
                 video_capture.release()
 
@@ -879,23 +702,8 @@ def capture_still(
 ) -> npt.NDArray[np.uint8] | None:
     """Grab a frame guaranteed to be captured while the servos were quiet.
 
-    Freezes animation_service (pauses the animation loop AND the tracker's
-    servo worker — both honor the frozen flag), then waits for a frame whose
-    capture timestamp is at least `settle_s` after the last servo bus write,
-    so residual mechanical oscillation has died down before the exposure.
-
-    Fast path: when the servos have been quiet for `settle_s` already, the
-    current frame qualifies immediately — zero added latency (the common
-    idle case). Servo writes that ignore the frozen flag (e.g. an in-flight
-    /servo/move interpolation) keep re-stamping last_servo_write, so the wait
-    simply extends until they finish or the deadline hits.
-
-    Best effort: on timeout returns the latest frame anyway (a possibly
-    blurred answer beats none); returns None only when the camera never
-    delivered a frame at all.
-
-    animation_service is duck-typed (freeze/unfreeze/last_servo_write) and
-    optional — devices without servos just get the latest frame.
+    Best effort: on timeout returns the latest frame anyway (a possibly blurred answer
+    beats none); returns None only when the camera never delivered a frame at all.
     """
     if cap is None:
         return None
@@ -910,11 +718,6 @@ def capture_still(
     try:
         entry = time.monotonic()
         deadline = entry + max(timeout_s, 0.05)
-        # Freshness floor: with no consumers the capture loop idles at ~one
-        # frame per 2s, so last_frame can be up to 2s old — taken before the
-        # user raised the object they're asking about. Require a frame
-        # captured after WE started (costs at most one frame period now that
-        # acquire_consumer bumped the loop to full FPS).
         min_fresh = entry - 0.15
         while True:
             quiet_from = min_fresh

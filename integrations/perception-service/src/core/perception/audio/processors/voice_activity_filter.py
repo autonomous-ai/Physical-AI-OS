@@ -21,15 +21,9 @@ from .base import AudioProcessorBase
 
 
 class VoiceActivityFilter(AudioProcessorBase):
-    """Strip leading/trailing non-voice regions and reject low-quality audio.
+    """Strip leading/trailing non-voice (silero-vad) and reject low-quality audio.
 
-    Uses silero-vad to detect speech segments. Internal silence between speech
-    regions is kept (matching WeSpeaker convention).
-
-    Raises PreprocessRejected if:
-    - VAD removes all speech
-    - Remaining audio is too short
-    - Voice ratio is below threshold
+    Raises PreprocessRejected when no speech remains, it is too short, or the voice ratio is too low.
     """
 
     def __init__(

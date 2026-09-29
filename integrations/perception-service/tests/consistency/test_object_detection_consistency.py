@@ -1,10 +1,6 @@
-"""Consistency tests: verify local server matches remote API.
+"""Consistency tests: local TestClient object detection matches the remote API within tolerance.
 
-For each available object detector, sends the same fixture images to both
-the local TestClient and the remote DL_BACKEND_URL, then asserts the
-results match within tolerance.
-
-Requires DL_BACKEND_URL and DL_API_KEY in .env.
+Requires DL_BACKEND_URL and DL_API_KEY.
 """
 
 import asyncio
@@ -36,14 +32,8 @@ pytestmark = pytest.mark.skipif(
     not DL_BACKEND_URL, reason="DL_BACKEND_URL not set — skipping consistency tests"
 )
 
-# Tolerance for floating-point comparison
 COORD_TOLERANCE: float = 2.0  # pixel coords
 CONF_TOLERANCE: float = 0.05
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")
@@ -159,11 +149,6 @@ def _remote_detect(
     )
     assert resp.status_code == 200
     return resp.json().get("detections", [])
-
-
-# ---------------------------------------------------------------------------
-# Consistency tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.mark.parametrize("detector", ALL_DETECTORS)

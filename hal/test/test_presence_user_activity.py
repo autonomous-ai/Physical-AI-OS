@@ -1,10 +1,4 @@
-"""User interaction keeps presence alive, not only the camera.
-
-The idle→away timer used to hear only face / motion / emotion perception. A user
-talking to the device with the camera off, or sitting outside the frame, timed
-out to AWAY after AWAY_TIMEOUT_S and the device announced sleep mid-conversation.
-Voice turns and physical gestures now reset the same clock via on_activity().
-"""
+"""User interaction keeps presence alive, not only the camera."""
 
 import time
 from unittest import mock
@@ -40,7 +34,6 @@ def test_activity_resets_the_away_clock():
 
 
 def test_without_activity_the_device_still_goes_away():
-    # The camera-only path is unchanged: nobody seen, nobody talking → AWAY.
     svc = _service()
     _age(svc, config.IDLE_TIMEOUT_S + 1)
     svc.tick()
@@ -64,8 +57,6 @@ def test_activity_while_dimmed_brings_the_light_back():
 
 
 def test_activity_on_a_sleeping_device_leaves_the_strip_to_sleep():
-    # A tap reaches presence before its wake runs; relighting here would paint
-    # over sleep's dark strip.
     rgb = mock.Mock()
     svc = _service(rgb)
     svc._is_sleeping = lambda: True
@@ -78,8 +69,6 @@ def test_activity_on_a_sleeping_device_leaves_the_strip_to_sleep():
 
 
 def test_activity_does_not_enable_a_disabled_machine():
-    # A device without `presence` starts disabled on purpose; talking to it
-    # must not switch the auto-off timer on.
     svc = _service(enabled=False)
 
     svc.on_activity("voice")
@@ -104,12 +93,7 @@ def test_note_user_activity_reaches_presence_and_never_raises():
         state.note_user_activity("touch")
 
 
-# --- Sleep and wake ---------------------------------------------------------
-
-
 def test_wake_restarts_the_countdown_even_past_away():
-    # Woken by the web UI / API / an agent reply: nobody on camera, and the
-    # pre-sleep timestamp is already past AWAY. It must not announce sleep again.
     svc = _service()
     _age(svc, config.AWAY_TIMEOUT_S + 60)
 
@@ -132,8 +116,6 @@ def test_wake_out_of_away_does_not_repaint_the_strip():
 
 
 def test_the_clock_stands_still_while_asleep():
-    # Asleep past both thresholds: no dim over the user's colour, no light off,
-    # no presence.away, and the state is not left AWAY for the wake to inherit.
     rgb = mock.Mock()
     svc = _service(rgb)
     svc._is_sleeping = lambda: True
@@ -173,7 +155,6 @@ def test_note_presence_wake_reaches_presence_and_never_raises():
 
 
 def test_every_wake_through_express_emotion_resets_presence():
-    # express_emotion is where the button, web UI, API and agent wakes meet.
     import hal.app_state as state
     from hal.models import EmotionRequest
     from hal.routes import emotion

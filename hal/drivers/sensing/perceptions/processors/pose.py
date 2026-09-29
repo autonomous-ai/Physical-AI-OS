@@ -1,13 +1,4 @@
-"""Pose estimation + ergonomic sampling via perception-service WS.
-
-Follows the same pattern as MotionPerception (RemoteMotionChecker):
-- Maintains a WS connection to perception-service /api/dl/pose-estimation/ws
-- Sends camera frames, receives pose_2d + optional pose_3d + optional ergo
-- Silently samples each frame into a rolling RAM buffer + daily JSONL file.
-- Does NOT emit a pose.ergo_risk event directly. MotionPerception queries
-  get_posture_summary() and folds the aggregate into motion.activity when
-  the user is "using computer" for long enough.
-"""
+"""Pose estimation + ergonomic sampling via perception-service WS."""
 
 import base64
 import json
@@ -39,9 +30,6 @@ from .base import Perception
 
 logger: logging.Logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# COCO 17-joint skeleton for visualization
-# ---------------------------------------------------------------------------
 
 _COCO_SKELETON: list[tuple[int, int]] = [
     (15, 13), (13, 11), (16, 14), (14, 12),
@@ -50,25 +38,24 @@ _COCO_SKELETON: list[tuple[int, int]] = [
     (1, 2), (0, 1), (0, 2), (1, 3), (2, 4), (3, 5), (4, 6),
 ]
 
-# Bone colors: left side = cyan, right side = orange, center = green
 _BONE_COLORS: list[tuple[int, int, int]] = [
-    (255, 200, 0), (255, 200, 0),           # left leg
-    (0, 100, 255), (0, 100, 255),           # right leg
-    (0, 220, 0),                             # hip bridge
-    (255, 200, 0), (0, 100, 255),           # hip to shoulder
-    (0, 220, 0),                             # shoulder bridge
-    (255, 200, 0), (0, 100, 255),           # shoulders to elbows
-    (255, 200, 0), (0, 100, 255),           # elbows to wrists
-    (0, 220, 0), (0, 220, 0), (0, 220, 0), # nose to eyes
-    (255, 200, 0), (0, 100, 255),           # eyes to ears
-    (255, 200, 0), (0, 100, 255),           # ears to shoulders
+    (255, 200, 0), (255, 200, 0),
+    (0, 100, 255), (0, 100, 255),
+    (0, 220, 0),
+    (255, 200, 0), (0, 100, 255),
+    (0, 220, 0),
+    (255, 200, 0), (0, 100, 255),
+    (255, 200, 0), (0, 100, 255),
+    (0, 220, 0), (0, 220, 0), (0, 220, 0),
+    (255, 200, 0), (0, 100, 255),
+    (255, 200, 0), (0, 100, 255),
 ]
 
 _RISK_COLORS: dict[int, tuple[int, int, int]] = {
-    1: (0, 200, 0),     # negligible — green
-    2: (0, 200, 200),   # low — yellow
-    3: (0, 140, 255),   # medium — orange
-    4: (0, 0, 255),     # high — red
+    1: (0, 200, 0),
+    2: (0, 200, 200),
+    3: (0, 140, 255),
+    4: (0, 0, 255),
 }
 
 _CONF_THRESHOLD: float = 0.3
@@ -89,7 +76,6 @@ def _draw_pose_2d(
 
     kps: npt.NDArray[np.int32] = np.array(joints, dtype=np.int32)
 
-    # Draw bones
     for idx, (u, v) in enumerate(_COCO_SKELETON):
         if max(u, v) >= len(kps):
             continue
@@ -98,13 +84,11 @@ def _draw_pose_2d(
         color: tuple[int, int, int] = _BONE_COLORS[idx] if idx < len(_BONE_COLORS) else (0, 220, 0)
         cv2.line(vis, tuple(kps[u]), tuple(kps[v]), color, 2)
 
-    # Draw joints
     for i, kp in enumerate(kps):
         if confs[i] < _CONF_THRESHOLD:
             continue
         cv2.circle(vis, tuple(kp), 4, (255, 255, 255), -1)
 
-    # Draw ergo score label
     if ergo is not None:
         score: int = ergo.get("score", 0)
         risk_level: int = ergo.get("risk_level", 0)
@@ -114,11 +98,6 @@ def _draw_pose_2d(
         cv2.putText(vis, label, (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.8, color, 2)
 
     return vis
-
-
-# ---------------------------------------------------------------------------
-# Data classes
-# ---------------------------------------------------------------------------
 
 
 @dataclass
@@ -132,20 +111,14 @@ class PoseResult:
 class _PoseSample:
     """One posture snapshot recorded into the rolling buffer.
 
-    All RULA values (score / risk_level / per-side body_scores + angles) are
-    passed through verbatim from perception-service (Khanh's RULA scorer). We do not
-    derive or override anything on this side."""
+    We do not derive or override anything on this side.
+    """
 
     ts: float
     score: int
     risk_level: int
     raw_left: dict[str, Any] = field(default_factory=dict)
     raw_right: dict[str, Any] = field(default_factory=dict)
-
-
-# ---------------------------------------------------------------------------
-# Remote WS client (same pattern as RemoteMotionChecker)
-# ---------------------------------------------------------------------------
 
 
 class RemotePoseEstimator:
@@ -185,10 +158,7 @@ class RemotePoseEstimator:
             self._ws_session = None
 
     def _setup_crypto(self) -> None:
-        """Perform WS key exchange after connection.
-
-        Raises RuntimeError if DL_ENCRYPTION_REQUIRED and setup fails.
-        """
+        """Perform WS key exchange after connection."""
         if self._ws_session is None:
             raise RuntimeError("Cannot setup crypto without a WS connection")
 
@@ -313,11 +283,6 @@ class RemotePoseEstimator:
             self._ws_session = None
 
 
-# ---------------------------------------------------------------------------
-# Perception processor
-# ---------------------------------------------------------------------------
-
-
 _REGIONS: tuple[str, ...] = ("neck", "trunk", "upper_arm", "lower_arm", "wrist")
 
 
@@ -335,16 +300,13 @@ def _dir_size(path: str) -> int:
         pass
     return total
 
-# perception-service signed_flexion_angle currently returns the opposite sign of
-# its docstring; we flip on receive while waiting for the upstream fix.
-# lower_arm_angle is unsigned so it stays as-is.
 _SIGNED_ANGLE_KEYS: tuple[str, ...] = ("neck_angle", "trunk_angle", "upper_arm_angle")
 
 
 def _flip_signed_angles(side: dict[str, Any]) -> dict[str, Any]:
-    """Return a copy of `side` (a per-side ergo dict from perception-service) with
-    the three signed angle keys negated inside `body_scores`. Safe no-op
-    when keys are missing or non-numeric."""
+    """Return a copy of `side` (a per-side ergo dict from perception-service) with the
+    three signed angle keys negated inside `body_scores`.
+    """
     if not side:
         return side
     bs: dict[str, Any] | None = side.get("body_scores")
@@ -363,16 +325,8 @@ def _flip_signed_angles(side: dict[str, Any]) -> dict[str, Any]:
 class PosePerception(Perception[cv2.typing.MatLike]):
     """Pose estimation + silent ergonomic sampling.
 
-    Each tick:
-    1. Send the frame to perception-service pose-estimation WS.
-    2. While the user is present, append one sample per
-       POSE_SAMPLE_INTERVAL_S to a rolling RAM deque AND a daily JSONL file.
-    3. NEVER emit an event directly — MotionPerception calls
-       get_posture_summary() and decides whether to fold it into the next
-       motion.activity payload.
-
-    Single-frame noise (wrap-edge ±180°, transient reaches for a cup) is
-    filtered at aggregation time, not at the sample tap.
+    3. NEVER emit an event directly — MotionPerception calls get_posture_summary() and
+    decides whether to fold it into the next motion.activity payload.
     """
 
     def __init__(
@@ -391,13 +345,9 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
         self._last_result: PoseResult | None = None
         self._risk_threshold: int = config.POSE_ERGO_HIGH_RISK_THRESHOLD
-        # Tumbling window: samples accumulate until POSE_WINDOW_DURATION_S
-        # elapses since the first sample, then MotionPerception evaluates
-        # and calls reset_window() to start a fresh cycle. The deque
-        # maxlen is a safety cap (2× expected window samples, floor 50)
-        # in case motion.py's flush stops ticking (e.g. classifier loses
-        # the user despite presence still PRESENT) — without it, samples
-        # would grow unbounded until presence drop.
+        # Tumbling window: samples accumulate until POSE_WINDOW_DURATION_S elapses since
+        # the first sample, then MotionPerception evaluates and calls reset_window() to
+        # start a fresh cycle.
         max_expected: int = int(
             config.POSE_WINDOW_DURATION_S / max(config.POSE_SAMPLE_INTERVAL_S, 1.0)
         )
@@ -409,9 +359,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
         self._buckets_dir: str = os.path.join(self._samples_dir, "buckets")
         os.makedirs(self._buckets_dir, exist_ok=True)
-        # Snapshot filenames recorded into the current bucket as they're
-        # written. Mirrors the deque so we can build the bucket.json + worst
-        # selection at finalize time without rescanning the dir.
         self._bucket_snapshots: list[dict[str, Any]] = []
 
     def _samples_file_path(self, ts: float) -> str:
@@ -434,10 +381,9 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         result: PoseResult,
         sample: "_PoseSample",
     ) -> None:
-        """Persist an annotated snapshot into the current bucket so the
-        monitor can click any sample row + so /dm can surface the worst
-        frames at end-of-window. We only save while a window is open —
-        pre-window samples are cleared at start_window() anyway."""
+        """Persist an annotated snapshot into the current bucket so the monitor can click
+        any sample row + so /dm can surface the worst frames at end-of-window.
+        """
         bucket_dir: str = self._current_bucket_dir()
         if not bucket_dir:
             return
@@ -458,11 +404,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                     "score": sample.score,
                     "risk_level": sample.risk_level,
                     "filename": filename,
-                    # Persist per-side body scores + angles too, so the
-                    # Flow Monitor popup can render the same joint table
-                    # the live Sensing tab shows (the deque is wiped at
-                    # reset_window — bucket.json is the only on-disk
-                    # source once a window has closed).
                     "left": sample.raw_left,
                     "right": sample.raw_right,
                 }
@@ -471,9 +412,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             logger.debug("[pose.sample] snapshot save failed: %s", e)
 
     def _finalize_bucket(self, keep: bool, summary: dict[str, Any] | None) -> None:
-        """Close the current bucket. If `keep` is True, write bucket.json
-        with the full sample list + the worst-snapshot selection; otherwise
-        delete the bucket dir entirely. Called from reset_window()."""
+        """Close the current bucket."""
         bucket_dir: str = self._current_bucket_dir()
         if not bucket_dir or not os.path.isdir(bucket_dir):
             self._bucket_snapshots = []
@@ -516,13 +455,10 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._prune_old_buckets()
 
     def _select_worst_sample_keys(self, summary: dict[str, Any] | None) -> list[int]:
-        """Pick up to POSE_WORST_SNAPSHOTS_PER_BUCKET sample ts keys that
-        cover the cases a user would want to see: highest ergo score, the
-        dominant-region representative, and the latest bad sample. Returns
-        the ts keys (int(sample.ts)) in chronological order — the
-        filename / aggregate helpers fan out from this single source so
-        the DM preview, the monitor popup, and the habit alert row all
-        anchor on the SAME three samples."""
+        """Pick up to POSE_WORST_SNAPSHOTS_PER_BUCKET sample ts keys that cover the cases a
+        user would want to see: highest ergo score, the dominant-region representative,
+        and the latest bad sample.
+        """
         cap: int = max(1, config.POSE_WORST_SNAPSHOTS_PER_BUCKET)
         if not self._bucket_snapshots:
             return []
@@ -530,7 +466,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         sub_thr: int = config.POSE_REGION_HIGH_SUBSCORE
         dominant: str = (summary or {}).get("dominant_region", "") or ""
 
-        # Index snapshots by ts to look up raw side data from the deque.
         by_ts: dict[int, _PoseSample] = {int(s.ts): s for s in self._samples}
 
         def _hi_in_region(s: _PoseSample, region: str) -> bool:
@@ -545,8 +480,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                     continue
             return False
 
-        # Restrict to actually-bad samples; if everything ended up "ok"
-        # somehow but we still kept the bucket, fall back to all samples.
         bad_keys: list[int] = []
         for entry in self._bucket_snapshots:
             ts_key: int = int(entry["ts"])
@@ -560,7 +493,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         selected: list[int] = []
 
-        # 1. Highest ergo score among bad samples.
         bad_keys_by_score: list[int] = sorted(
             bad_keys,
             key=lambda k: (by_ts[k].score if k in by_ts else 0),
@@ -569,8 +501,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         if bad_keys_by_score:
             selected.append(bad_keys_by_score[0])
 
-        # 2. Dominant-region representative — highest score among samples
-        # where the dominant region itself crossed the sub-score threshold.
         if dominant:
             cands: list[int] = [
                 k for k in bad_keys_by_score
@@ -579,27 +509,23 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             if cands:
                 selected.append(cands[0])
 
-        # 3. Latest bad sample.
         for k in sorted(bad_keys, reverse=True):
             if k not in selected:
                 selected.append(k)
                 break
 
-        # Top up if we still have room (e.g. dominant region missed).
         for k in bad_keys_by_score:
             if len(selected) >= cap:
                 break
             if k not in selected:
                 selected.append(k)
 
-        # Chronological order so the DM / monitor preview reads
-        # oldest → newest left-to-right.
         return sorted(set(selected))[:cap]
 
     def _select_worst_snapshots(self, summary: dict[str, Any] | None) -> list[str]:
-        """Filenames of the worst frames — what the DM gallery + the
-        monitor preview attach to. Mirrors `_select_worst_sample_keys`
-        order."""
+        """Filenames of the worst frames — what the DM gallery + the monitor preview attach
+        to.
+        """
         keys: list[int] = self._select_worst_sample_keys(summary)
         if not keys or not self._bucket_snapshots:
             return []
@@ -609,12 +535,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         return [ts_to_file[k] for k in keys if k in ts_to_file]
 
     def _worst_sample_aggregate(self, summary: dict[str, Any] | None) -> dict[str, Any]:
-        """Max-of-worst stats across the same samples picked for the DM
-        attach — keeps the habit `posture_alert` numbers consistent with
-        the photos the user actually saw ("the score in the row equals
-        the worst frame the bot just sent me"). Returns an empty dict
-        when the selection landed on samples not present in the deque
-        (very rare; window cleared mid-build)."""
+        """Max-of-worst stats across the same samples picked for the DM attach."""
         keys: list[int] = self._select_worst_sample_keys(summary)
         if not keys:
             return {}
@@ -639,11 +560,12 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         }
 
     def _prune_old_buckets(self) -> None:
-        """Drop kept buckets older than POSE_BUCKET_KEEP_S and trim the
-        kept-bucket pool to fit POSE_SNAPSHOT_MAX_BYTES (oldest first).
-        Also sweeps any orphan dirs lacking a .kept marker that are older
-        than one window duration — these are buckets whose finalize never
-        ran (process killed mid-window)."""
+        """Drop kept buckets older than POSE_BUCKET_KEEP_S and trim the kept-bucket pool to
+        fit POSE_SNAPSHOT_MAX_BYTES (oldest first).
+
+        than one window duration — these are buckets whose finalize never ran (process
+        killed mid-window).
+        """
         now: float = time.time()
         keep_s: float = config.POSE_BUCKET_KEEP_S
         orphan_grace: float = max(config.POSE_WINDOW_DURATION_S * 2, 600.0)
@@ -674,7 +596,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         if not entries:
             return
 
-        entries.sort(key=lambda e: e[0])  # oldest first
+        entries.sort(key=lambda e: e[0])
 
         survivors: list[tuple[float, int, str, bool]] = []
         for mtime, size, path, is_kept in entries:
@@ -744,9 +666,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
 
         now: float = time.time()
 
-        # Presence gate: if the user isn't here, reset the tumbling window
-        # (session ended) and skip sampling. Window start_ts is reset too
-        # so the next presence return starts a fresh cycle from sample 1.
         if (
             self._presence_service is not None
             and self._presence_service.state != PresenceState.PRESENT
@@ -760,8 +679,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                 self._last_sample_ts = 0.0
             return
 
-        # Throttle to one sample per POSE_SAMPLE_INTERVAL_S regardless of
-        # the underlying tick rate.
         if now - self._last_sample_ts < config.POSE_SAMPLE_INTERVAL_S:
             return
 
@@ -780,13 +697,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
         self._samples.append(sample)
         self._last_sample_ts = now
-        # Note: window anchoring is NOT done here. MotionPerception calls
-        # start_window() the moment it observes a sedentary label, so the
-        # window cycle aligns with "user is at the computer" rather than
-        # "first pose sample after presence". Samples that arrive before
-        # the window starts (e.g. user is present but standing/stretching)
-        # still get appended, and once start_window() fires they're already
-        # in the deque for the new cycle.
         self._append_sample_file(sample)
         self._save_event_snapshot(data, result, sample)
         window_age: float = (now - self._window_start_ts) if self._window_start_ts > 0 else 0.0
@@ -800,22 +710,13 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         )
 
     def is_window_complete(self) -> bool:
-        """True when the tumbling window has been open for at least
-        POSE_WINDOW_DURATION_S. Caller is expected to follow up with
-        get_posture_summary() + reset_window() — the window doesn't
-        self-evaluate or self-reset."""
+        """True when the tumbling window has been open for at least POSE_WINDOW_DURATION_S."""
         if self._window_start_ts <= 0.0:
             return False
         return time.time() - self._window_start_ts >= config.POSE_WINDOW_DURATION_S
 
     def start_window(self) -> None:
-        """Open a new tumbling window. Idempotent — a second call while
-        the window is already open is a no-op. Called by MotionPerception
-        the moment it sees a sedentary label, so the window cycle aligns
-        with "user is at the computer" rather than "user just appeared".
-        Pre-window samples (collected between presence-return and sedentary
-        detection) are cleared on start so the bad_ratio reflects only the
-        sitting period."""
+        """Open a new tumbling window."""
         if self._window_start_ts > 0.0:
             return
         self._samples.clear()
@@ -829,14 +730,11 @@ class PosePerception(Perception[cv2.typing.MatLike]):
                 logger.debug("[pose.bucket] start create failed: %s", e)
 
     def reset_window(self) -> None:
-        """Clear samples + finalize the bucket and unanchor the window.
-        Called by MotionPerception at the end of every completed cycle
-        (fire or no-fire) — every cycle starts fresh, no carry-over. After
-        reset, start_window() must be called again before a new cycle.
+        """Clear samples + finalize the bucket and unanchor the window. After reset,
+        start_window() must be called again before a new cycle.
 
-        Bucket is kept (long retention) when bad_ratio >= POSE_BAD_RATIO so
-        the kept frames remain available for /dm attach + monitor replay;
-        otherwise it's deleted immediately to keep Pi disk lean."""
+        reset, start_window() must be called again before a new cycle.
+        """
         summary: dict[str, Any] | None = self._aggregate() if self._samples else None
         keep: bool = bool(
             summary is not None
@@ -847,20 +745,7 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         self._window_start_ts = 0.0
 
     def _aggregate(self) -> dict[str, Any] | None:
-        """Pure aggregation over whatever samples are currently in the
-        deque. Returns None only when there are no samples to aggregate.
-
-        Called by both `get_posture_summary()` (with window-complete +
-        min-samples gates layered on top, for the motion fire decision)
-        and the monitor's running view in `to_dict()` (no gates, so the
-        FE can show a live bad_ratio mid-window for debugging).
-
-        "Bad" sample = any single region (L or R) at sub-score
-        >= POSE_REGION_HIGH_SUBSCORE, OR whole-body risk_level >= 2 (LOW+).
-        The sub-score arm catches forward-head-thrust cases where the
-        RULA total stays "low" because trunk+arms are fine but neck
-        alone is clearly off.
-        """
+        """Pure aggregation over whatever samples are currently in the deque."""
         if not self._samples:
             return None
 
@@ -884,10 +769,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
         ]
         bad_ratio: float = len(bad) / len(self._samples)
 
-        # Region frequency = how often each region appeared at sub-score
-        # >= POSE_REGION_HIGH_SUBSCORE on EITHER side among bad samples.
-        # Uses Khanh's per-side numbers directly (no max-derivation on
-        # this side).
         region_freq: dict[str, int] = {region: 0 for region in _REGIONS}
         for s in bad:
             body_l: dict[str, Any] = (s.raw_left or {}).get("body_scores", {}) or {}
@@ -926,19 +807,15 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             "latest_right": latest.raw_right,
             "bucket_id": self._current_bucket_id(),
         }
-        # Pre-compute the worst selection so motion.py can lift it onto
-        # the event payload before reset_window() finalizes the bucket.
-        # Filenames + the max-of-worst aggregate share the same 3 source
-        # samples — habit numbers stay aligned with the DM photos.
         summary["worst_snapshots"] = self._select_worst_snapshots(summary)
         summary.update(self._worst_sample_aggregate(summary))
         return summary
 
     def get_posture_summary(self) -> dict[str, Any] | None:
-        """Gated aggregation: returns the summary only when the window has
-        elapsed AND has at least POSE_WINDOW_MIN_SAMPLES samples (statistical
-        noise floor — detection misses can leave a window too sparse to
-        trust). Used by MotionPerception for the fire/no-fire decision."""
+        """Gated aggregation: returns the summary only when the window has elapsed AND has
+        at least POSE_WINDOW_MIN_SAMPLES samples (statistical noise floor — detection
+        misses can leave a window too sparse to trust).
+        """
         if not self.is_window_complete():
             return None
         if len(self._samples) < config.POSE_WINDOW_MIN_SAMPLES:
@@ -1004,10 +881,6 @@ class PosePerception(Perception[cv2.typing.MatLike]):
             "sample_interval_s": config.POSE_SAMPLE_INTERVAL_S,
             "bad_ratio_threshold": config.POSE_BAD_RATIO,
             "summary": self.get_posture_summary(),
-            # Live aggregate over whatever samples are in the deque right
-            # now, regardless of window-complete / min-samples gates. Lets
-            # the monitor show "would-fire?" indicators mid-window without
-            # waiting for the cycle boundary.
             "running": self._aggregate(),
             "samples": [
                 {

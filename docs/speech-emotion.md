@@ -10,11 +10,7 @@ This is the voice-side twin of facial emotion detection (`emotion.detected`). Th
 
 **Vietnamese:** [docs/vi/speech-emotion_vi.md](vi/speech-emotion_vi.md)
 
-> **This page is the platform-level SER reference** — architecture, guards, buckets, config, debug audio, failure modes. The speech-service doc set goes deeper on two axes:
->
-> - **[docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md)** — every stage with its file:line, the complete prefilter threshold tables, an 18-row drop-reason → log-line index, and a debug playbook.
-> - **[docs/speech/speech-emotion-known-issues.md](speech/speech-emotion-known-issues.md)** — open defects and performance problems.
-> - [docs/speech/speech-emotion.md](speech/speech-emotion.md) — how SER plugs into a voice turn.
+> **This page is the platform-level SER reference** — architecture, guards, buckets, config, debug audio, failure modes. The cloud side (emotion2vec model, preprocessing, 2–8 s input bound) is documented in [perception-service: Speech emotion (SER)](../integrations/perception-service/docs/perceptions.md#4-speech-emotion-ser).
 >
 > Where docs and code disagree, **the code wins**.
 
@@ -39,23 +35,26 @@ voice_service._stream_session(...) finally:                      ← every mic s
                   └─ SpeechEmotionService.submit(user, wav, duration_s)
                   ▼
 SpeechEmotionService.submit(user, wav_bytes, duration_s)   ← non-blocking
-    │  4 guards (available / non-empty user / non-empty wav / duration ≥ 3.0 s)
-    │  queue.put_nowait                          ← maxsize 32
+    │  5 guards (available / non-empty user / non-empty wav / duration ≥ 3.0 s /
+    │            not every bucket still inside its dedup window)
+    │  queue.put_nowait                          ← maxsize 8; full → evict OLDEST job
     ▼
 worker thread (daemon)
+    │  drop job if it waited > 30 s in the queue (stale mood)
     │  Emotion2VecRecognizer.recognize(wav_bytes)
     │     ├─ prefilter — RMS trim + voiced gate, then Silero VAD, then ≤8 s most-voiced span   ← LOCAL, drops non-speech
     │     ├─ POST {DL_BACKEND_URL}/hal/api/dl/ser/recognize
     │     │     ← { "label": "happy", "confidence": 0.78 }
-    │     ├─ per-label confidence gate
-    │     └─ _persist_wav() → debug clip on disk
+    │  neutral / other / <unk> → dropped (before the confidence gate)
+    │  per-label confidence gate
+    │  _persist_wav() → debug clip on disk (newest 200 kept)
     ▼
 buffer[user].append(_Inference)              ← per-user accumulation
     ▲
     │  (flush thread wakes every SPEECH_EMOTION_FLUSH_S)
     ▼
 flush:
-    ① drop neutral / <unk> / other labels
+    ① drop neutral / <unk> / other labels (defensive — already dropped in the worker)
     ② mode(label) across this user's buffered samples
     ③ bucket = polarity(mode)                ← positive | negative
     ④ TTL dedup: key=(user, bucket) over SPEECH_EMOTION_DEDUP_WINDOW_S
@@ -64,7 +63,7 @@ flush:
 
 HAL's voice pipeline **only calls `submit()`**. The prefilter, all HTTP I/O to perception-service, buffering, bucketing, dedup, retry, and the OS server POST are contained inside the `speech_emotion/` module — they never block the STT path.
 
-There is a **second** call site: when the wake-word gate rejects a turn, `voice_service.py:1555` submits directly with the default `user="unknown"`. It is only reachable when `WAKEWORD_ENABLED` is true, which defaults to **false** (`hal/config.py:625`) — so in the shipped always-listening configuration every finished mic session reaches SER through `dispatch_turn`.
+There is a **second** call site: when the wake-word gate rejects a turn, `VoiceService._stream_session` (`voice_service.py`) submits directly with the default `user="unknown"`. It is only reachable when `WAKEWORD_ENABLED` is true, which reads `wakeword` from `config.json` and defaults to **false** (`hal/config.py`) — so in the shipped always-listening configuration every finished mic session reaches SER through `dispatch_turn`.
 
 ---
 
@@ -86,11 +85,11 @@ Callers and neighbours:
 
 | Concern | Path |
 |---------|------|
-| Submit site + service construction | `hal/drivers/voice/_internal/speaker_decorate.py` (`:117`, `:322`, `:343`) |
-| Turn dispatch (supplies `user`) | `hal/drivers/voice/_internal/turn_dispatch.py:157` |
-| Untrimmed SER snapshot | `hal/drivers/voice/_internal/session_finalize.py:28` |
+| Submit site + service construction | `hal/drivers/voice/_internal/speaker_decorate.py` (`_init_speech_emotion`, `identify_and_decorate`, `submit_speech_emotion_from_session`) |
+| Turn dispatch (supplies `user`) | `hal/drivers/voice/_internal/turn_dispatch.py` (`dispatch_turn`) |
+| Untrimmed SER snapshot | `hal/drivers/voice/_internal/session_finalize.py` (`finalize_session`) |
 | Boot-scoped dedup sidecar | `hal/dedup_sidecar.py` |
-| Shared Silero model | `hal/drivers/voice/resources/silero_vad.onnx` |
+| Shared Silero model | `hal/drivers/voice/resources/silero_vad.onnx`, one process-wide session via `vad_filters.shared_silero_session` |
 | Cloud model + serving | `integrations/perception-service/src/core/perception/audio_emotion/` |
 | OS-server consumer | `system/server/sensing/delivery/http/handler.go` |
 
@@ -104,36 +103,36 @@ Two daemon threads, started in `SpeechEmotionService.__init__` only when `recogn
 
 | Thread | Loop | Drains | Produces |
 |--------|------|--------|----------|
-| `speech-emotion-worker` | `_worker_loop` | submission queue (`queue.Queue`, maxsize 32) | per-user buffer entries |
+| `speech-emotion-worker` | `_worker_loop` | submission queue (`queue.Queue`, maxsize 8) | per-user buffer entries |
 | `speech-emotion-flush` | `_flush_loop` (wait + tick every `SPEECH_EMOTION_FLUSH_S`) | per-user buffer | `speech_emotion.detected` POSTs to the OS server |
 
 Both threads exit cleanly on `stop()` — the worker is poisoned with a `None` sentinel, the flush thread observes the stop event during its `Event.wait` (and therefore skips a final flush, deliberately). All mutable state (`_buffer`, `_last_sent_by_key`, `_last_flush_ts`) is guarded by one `threading.RLock`.
 
-`submit()` is non-blocking by design. If the worker queue is full (32-job backlog) the **new** submission is dropped with a warning — this signals real overload (perception-service wedged or down). Audio is single-utterance, not streaming, so a one-utterance drop is acceptable.
+`submit()` is non-blocking by design. If the worker queue is full (8-job backlog, `DEFAULT_QUEUE_MAXSIZE`) the **oldest** queued job is evicted (`EVICT — queue full, dropped oldest job`) and the new one is enqueued: for a real-time affect signal the utterance that just happened is the valuable one. Only if another producer refills the slot in between is the new job dropped (`DROP submit — worker queue full`). The worker additionally discards any job that waited longer than `DEFAULT_JOB_MAX_AGE_S` (30 s) in the queue (`DROP — stale job`), because old audio no longer describes the user's current mood and would let the dedup suppress the current one. The queue is kept small on purpose: output is capped at one event per user per bucket per dedup window, so a deep backlog could only produce stale readings.
 
 > `available` is `recognizer is not None and recognizer.available`, and for the HTTP engine that is just `bool(url)` — a **configuration** check, not a reachability check. The service can report `available` while the backend is down; every call then fails at the HTTP leg and returns `None`.
 
-Module-level config is read **at import time** (`service.py:85-99`), so tests that patch `hal.config` must do it before importing the module.
+Module-level config is read **at import time** (top of `service.py`), so tests that patch `hal.config` must do it before importing the module.
 
 ---
 
 ## Local Prefilter (the only edge model on this path)
 
-Before any network I/O, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py:215`) gates the clip. Its purpose is to reject **long-but-sparse** audio — a 20-second clip containing two seconds of TV chatter — which emotion2vec would otherwise label confidently and wrongly. It returns the **trimmed, re-encoded** WAV, so the cloud sees the cleaner buffer too.
+Before any network I/O, `Emotion2VecRecognizer.prefilter()` (`emotion2vec.py`) gates the clip. Its purpose is to reject **long-but-sparse** audio — a 20-second clip containing two seconds of TV chatter — which emotion2vec would otherwise label confidently and wrongly. It returns the **trimmed, re-encoded** WAV, so the cloud sees the cleaner buffer too.
 
 Decode requires 16-bit PCM at exactly 16 kHz; multi-channel is averaged to mono.
 
 **Stage 1 — RMS** (single pass, `utils.compute_trim_and_voiced`). One 20 ms RMS envelope serves two jobs with two thresholds by design: `PREFILTER_TRIM_RMS = 3500` (strict) anchors the head/tail trim boundary, `PREFILTER_VOICED_RMS = 2500` (lenient) counts voiced frames inside it so whisper/breathy speech still registers. 100 ms of padding is kept around the cut. Drops when the trimmed clip is `< 2.0 s`, total voiced is `< 1.0 s`, or the voiced ratio is `< 0.30` (denominator is the padded-trim span, so a long silent prefix cannot deflate it).
 
-**Stage 2 — Silero VAD** on the trimmed buffer (`emotion2vec.py:417`). Silero v5 contract: 512-sample chunks at 16 kHz with a 64-sample context prepended; LSTM `state` and `context` are rebuilt from zeros every call, so independent invocations never bleed into each other. Drops when Silero-voiced duration is `< 1.0 s`. When Silero is unavailable (missing model, broken ORT) the RMS bar **tightens** from 1.0 s to 3.0 s rather than passing everything through.
+**Stage 2 — Silero VAD** on the trimmed buffer (`emotion2vec.py`). Silero v5 contract: 512-sample chunks at 16 kHz with a 64-sample context prepended; LSTM `state` and `context` are rebuilt from zeros every call, so independent invocations never bleed into each other. Drops when Silero-voiced duration is `< 1.0 s`. When Silero is unavailable (missing model, broken ORT) the RMS bar **tightens** from 1.0 s to 3.0 s rather than passing everything through.
 
 **Upload clip** — after both gates pass, `utils.select_voiced_span` keeps only the contiguous **8 s** (`SER_MAX_CLIP_S`) span with the most voiced 20 ms frames (`PREFILTER_VOICED_RMS`). Ties go to the latest span. Clips of 8 s or less are unchanged. The span is a plain slice, never stitched from voiced pieces. perception-service also bounds SER input to 2–8 s, so anything longer would be cropped server-side anyway (#492).
 
 Re-encode failure is fail-open: the original WAV is sent.
 
-All thresholds are compile-time constants in `constants.py:87-135` — **not** env-overridable. Full tables in [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md#stage-5-6--the-prefilter-the-only-local-model).
+All thresholds are compile-time constants in the `PREFILTER_*` block of `constants.py` (plus `SER_MAX_CLIP_S`) — **not** env-overridable.
 
-> This is the **fourth** Silero session in the HAL process (`voice_service._silero_vad`, `_rt_noise_vad` and `_silence_vad` all load the same file). See [known-issues #5](speech/speech-emotion-known-issues.md#5--a-fourth-redundant-silero-onnx-session).
+> The prefilter does not load its own Silero model: `_load_silero()` takes the process-wide session from `vad_filters.shared_silero_session`, shared with the voice capture path. The per-call LSTM `state`/`context` stay local to each call, which is what makes the sharing safe.
 
 ---
 
@@ -172,7 +171,7 @@ Labels (emotion2vec_plus_large, from `/api/dl/ser/labels`):
 angry, disgusted, fearful, happy, neutral, other, sad, surprised, <unk>
 ```
 
-Timeout is a hardcoded 15 s (`DEFAULT_API_TIMEOUT_S`) and there is **no retry on this leg** — any transport error, non-200, non-JSON body, or missing `label` returns `None` and the sample is skipped. When `DL_ENCRYPTION_ENABLED` (default **true**) and a public key resolves, the request and response bodies are wrapped by `CryptoSession`; `DL_ENCRYPTION_REQUIRED` (default false) turns a missing key into a hard error at construction instead of a silent plaintext fallback.
+Timeout is `SPEECH_EMOTION_API_TIMEOUT_S` (env `HAL_SPEECH_EMOTION_API_TIMEOUT_S`, default 15 s), passed to the engine by `_build_default_recognizer()`, and there is **no retry on this leg** — any transport error, non-200, non-JSON body, or missing `label` returns `None` and the sample is skipped. When `DL_ENCRYPTION_ENABLED` (default **true**) and a public key resolves, the request and response bodies are wrapped by `CryptoSession`; `DL_ENCRYPTION_REQUIRED` (default false) turns a missing key into a hard error at construction instead of a silent plaintext fallback.
 
 ### Sensing event → OS server
 
@@ -204,27 +203,27 @@ To make noisy SER reads debuggable, the service persists the WAV clip behind eac
 
 ### Write side (HAL)
 
-In `_process_job`, every inference that clears the per-label confidence gate is written to disk by `_persist_wav()` before it lands in the buffer:
+In `_process_job`, every inference that is not neutral and clears the per-label confidence gate is written to disk by `_persist_wav()` before it lands in the buffer:
 
-- **Directory:** `SPEECH_EMOTION_AUDIO_DIR` (config in `hal/config.py:563`, env `HAL_SPEECH_EMOTION_AUDIO_DIR`), default `<tempdir>/hal-speech-emotion` (i.e. `/tmp/hal-speech-emotion`). Created with `os.makedirs(exist_ok=True)` at init; if creation fails the directory is disabled and every POST carries an empty `audio` field (graceful degradation — SER keeps working).
+- **Directory:** `SPEECH_EMOTION_AUDIO_DIR` (config in `hal/config.py`, env `HAL_SPEECH_EMOTION_AUDIO_DIR`), default `<tempdir>/hal-speech-emotion` (i.e. `/tmp/hal-speech-emotion`). Created with `os.makedirs(exist_ok=True)` at init; if creation fails the directory is disabled and every POST carries an empty `audio` field (graceful degradation — SER keeps working).
 - **Contents:** the **pre-prefilter** WAV, i.e. what the mic captured, not the trimmed buffer sent to the model.
 - **Filename:** `<ms>_<user>_<label>.wav`, where `<ms>` is the inference timestamp in milliseconds and `<user>`/`<label>` are sanitized to `[a-zA-Z0-9_-]` (anything else collapsed to `_`). That sanitization is what lets the Go handler serve these files by basename alone.
 - **Flush selection:** when a user's flush emits the dominant non-neutral label, it attaches the **latest** clip among the dominant-label inferences — `max(dom_inferences, key=lambda i: i.ts).audio_path` — as the `audio` field in the POST.
 
 ### Serve side (OS server)
 
-The OS server exposes the clip to the Flow Monitor UI **only** via `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`, `handler.go:821`). It serves the WAV by **basename** (the full path never leaves the device) from one of:
+The OS server exposes the clip to the Flow Monitor UI **only** via `GET /api/sensing/audio/:name` (`SensingHandler.GetAudio`, `system/server/sensing/delivery/http/handler.go`). It serves the WAV by **basename** (the full path never leaves the device) from one of:
 
 ```
 /var/lib/hal/speech-emotion
 /tmp/hal-speech-emotion
 ```
 
-The basename is validated (`.wav` suffix, no `/`, `\`, or `..`) before serving. On `PostSensingEvent`, the raw `audio` path is mapped to a servable URL by `audioURLForPath` (`handler.go:808`) and attached to the Monitor `sensing_input` event detail; the Monitor turn item renders it as a clickable audio player. The raw path is never exposed to the UI, and the `audio` field is never concatenated into the outgoing chat text.
+The basename is validated (`.wav` suffix, no `/`, `\`, or `..`) before serving. On `PostSensingEvent`, the raw `audio` path is mapped to a servable URL by `audioURLForPath` (same file) and attached to the Monitor `sensing_input` event detail; the Monitor turn item renders it as a clickable audio player. The raw path is never exposed to the UI, and the `audio` field is never concatenated into the outgoing chat text.
 
-### Known limitation: no cleanup
+### Retention cap
 
-Every qualifying inference's WAV is persisted — **including neutral clips that are structurally guaranteed to be dropped at flush**, and non-dominant clips that never become an event. There is **no automatic cleanup** of the audio directory. On the default path that directory is on **tmpfs, i.e. RAM**, so on a long-running device it must be pruned by external housekeeping. Tracked as [known-issues #1](speech/speech-emotion-known-issues.md#1--debug-wav-directory-grows-without-bound-on-tmpfs) and [#2](speech/speech-emotion-known-issues.md#2--neutral-results-are-persisted-and-buffered-then-always-discarded).
+Neutral / other / `<unk>` results are dropped in the worker **before** the confidence gate and are never written. Non-dominant clips that never become an event are still written. After every write, `_prune_audio_dir()` keeps only the newest **200** clips (`DEFAULT_AUDIO_MAX_FILES`, the `audio_max_files` constructor argument; `0` = unbounded; not env-overridable). Filenames start with the millisecond timestamp, so lexical order is chronological. The cap matters because the default directory is on **tmpfs, i.e. RAM**, shared with other writers such as the dedup sidecar. Prune failures are swallowed so they never fail the write.
 
 ---
 
@@ -270,7 +269,7 @@ One utterance produces **one** directory even though the code that knows the aud
 | `HAL_SER_DEBUG_DIR` | `speech_emotion_logs/` beside `debug_tracer.py` | Output root |
 | `HAL_SER_DEBUG_MAX_ENTRIES` | `1000` | Per-kind dir cap, oldest pruned; `0` = unbounded |
 
-The knobs are read straight from `os.environ` inside `debug_tracer.py`, **not** through `hal/config.py` — the whole block stays removable without touching config. See also the [pipeline debug playbook](speech/speech-emotion-pipeline.md#debug-playbook).
+The knobs are read straight from `os.environ` inside `debug_tracer.py`, **not** through `hal/config.py` — the whole block stays removable without touching config.
 
 ---
 
@@ -282,7 +281,7 @@ Bucketing mirrors the facial pipeline so `(user, bucket)` dedup keys are interpr
 |--------|--------|
 | `positive` | happy, surprised |
 | `negative` | angry, disgusted, fearful, sad |
-| `other` | neutral, other, `<unk>` (these are **dropped before bucketing** — see anti-spam guard #5, so this bucket is unreachable in practice) |
+| `other` | neutral, other, `<unk>` (these are **dropped before bucketing** — see anti-spam guard #6, so this bucket is unreachable in practice) |
 
 Why bucket-level dedup, not label-level: emotion2vec on short utterances flips between sad/fearful/angry within the same affective state. Per-label dedup would over-deliver. Per-bucket dedup collapses within-bucket noise (sad ↔ fearful ↔ angry) into one negative event per window; cross-bucket flips (sad → happy) still fire as a genuine mood change.
 
@@ -296,18 +295,20 @@ Layered, matched to the facial emotion processor:
 |---|-------|----------------|
 | 1 | `submit()` | `wav_bytes` empty / `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` |
 | 2 | `submit()` | `user` is empty after normalize (no subject to attribute emotion to — mirrors face `current_user==""`) |
-| 3 | engine | **prefilter** — RMS trim/voiced/ratio gate, then Silero VAD (see above) |
-| 4 | worker | `confidence < CONFIDENCE_THRESHOLD_BY_LABEL[label]` (per-label gate, see Configuration) |
-| 5 | flush | label is `neutral` / `other` / `<unk>` |
-| 6 | flush | `(user, bucket)` was sent less than `SPEECH_EMOTION_DEDUP_WINDOW_S` seconds ago |
+| 3 | `submit()` | every reachable bucket (`positive`, `negative`) for this user is still inside its dedup window, with a margin for queue wait + cloud call + one flush tick (`_buckets_saturated`, `DROP submit — every bucket … is still inside the dedup window`) |
+| 4 | worker | job waited longer than `DEFAULT_JOB_MAX_AGE_S` (30 s) in the queue |
+| 5 | engine | **prefilter** — RMS trim/voiced/ratio gate, then Silero VAD (see above) |
+| 6 | worker | label is `neutral` / `other` / `<unk>` (checked before the confidence gate; flush repeats the check defensively) |
+| 7 | worker | `confidence < CONFIDENCE_THRESHOLD_BY_LABEL[label]` (per-label gate, see Configuration) |
+| 8 | flush | `(user, bucket)` was sent less than `SPEECH_EMOTION_DEDUP_WINDOW_S` seconds ago |
 
 Each bucket keeps its own independent TTL entry in `_last_sent_by_key`. Sending a positive event does NOT reset the negative window (and vice versa). Same semantics as facial emotion.
 
-The TTL map is persisted to a boot-scoped sidecar (`/tmp/hal-ser-state.json`, `hal/dedup_sidecar.py`) so a HAL service restart restores the dedup window instead of re-firing the last-known emotion on the first flush after a deploy/OTA. A full device reboot starts fresh (tmpfs + kernel `boot_id` check). Facial emotion uses the same mechanism with its own file (`/tmp/hal-emotion-state.json`, `drivers/sensing/perceptions/processors/emotion.py:35`).
+The TTL map is persisted to a boot-scoped sidecar (`/tmp/hal-ser-state.json`, `hal/dedup_sidecar.py`) so a HAL service restart restores the dedup window instead of re-firing the last-known emotion on the first flush after a deploy/OTA. A full device reboot starts fresh (tmpfs + kernel `boot_id` check). Facial emotion uses the same mechanism with its own file (`/tmp/hal-emotion-state.json`, `drivers/sensing/perceptions/processors/emotion.py`).
 
-Three **further** rate limits apply server-side, after SER's own dedup: `speech_emotion.detected` is an `ambientFloorTypes` member (`SensingTurnFloorSeconds`, default 120 s), it expires from the runtime's pending queue after 60 s, and it coalesces to the last occurrence of its type (`runtimes/hermes/events.go:124-150`). An event that survives the edge can still be discarded before it reaches the agent.
+Three **further** rate limits apply server-side, after SER's own dedup: `speech_emotion.detected` is an `ambientFloorTypes` member (`SensingTurnFloorSeconds`, default 120 s), it expires from the runtime's pending queue after 60 s, and it coalesces to the last occurrence of its type (`runtimes/hermes/events.go`). An event that survives the edge can still be discarded before it reaches the agent.
 
-> **Guard ordering is the pipeline's main performance problem.** Guards 5 and 6 — the two with real suppression power — run *after* the cloud call, the local Silero pass and the disk write have already been paid for. See [known-issues #7](speech/speech-emotion-known-issues.md#7--the-suppression-gates-all-sit-downstream-of-the-only-expensive-step).
+> **Guard ordering and cost.** Guard 3 skips the Silero pass and the cloud call when no label could emit anyway, and guard 6 skips the disk write and buffer append for neutral results. The label-specific checks (guards 6–8) still need the cloud result, so while at least one bucket is open every clip that passes the prefilter pays for the cloud call.
 
 ---
 
@@ -321,7 +322,7 @@ All knobs live in `hal/config.py` as `SPEECH_EMOTION_*`, overridable via env var
 | `SPEECH_EMOTION_FLUSH_S` | `HAL_SPEECH_EMOTION_FLUSH_S` | `10.0` | Buffer drain cadence |
 | `SPEECH_EMOTION_DEDUP_WINDOW_S` | `HAL_SPEECH_EMOTION_DEDUP_WINDOW_S` | `300.0` | TTL for `(user, bucket)` |
 | `SPEECH_EMOTION_MIN_AUDIO_S` | `HAL_SPEECH_EMOTION_MIN_AUDIO_S` | `3.0` | Min utterance length |
-| `SPEECH_EMOTION_API_TIMEOUT_S` | `HAL_SPEECH_EMOTION_API_TIMEOUT_S` | `15` | **Dead config** — never passed to the engine, which always uses the hardcoded 15 s. See [known-issues #3](speech/speech-emotion-known-issues.md#3--speech_emotion_api_timeout_s-is-dead-config) |
+| `SPEECH_EMOTION_API_TIMEOUT_S` | `HAL_SPEECH_EMOTION_API_TIMEOUT_S` | `15` | HTTP timeout of the cloud recognize call; also sizes the saturated-bucket margin (guard 3) |
 | `SPEECH_EMOTION_AUDIO_DIR` | `HAL_SPEECH_EMOTION_AUDIO_DIR` | `/tmp/hal-speech-emotion` | Debug WAV dir; `""` disables persistence |
 | `DL_SER_ENDPOINT` | `DL_SER_ENDPOINT` | `/hal/api/dl/ser/recognize` | Path suffix on `DL_BACKEND_URL` |
 | `SPEECH_EMOTION_API_URL` | — | derived | `DL_BACKEND_URL` + `DL_SER_ENDPOINT` |
@@ -333,7 +334,7 @@ All knobs live in `hal/config.py` as `SPEECH_EMOTION_*`, overridable via env var
 Label vocabulary, bucket map, prefilter thresholds, and **per-label confidence thresholds** are declared in `hal/drivers/voice/speech_emotion/constants.py` (not env-overridable — touching these requires a code change). The threshold dict:
 
 ```python
-# constants.py:38
+# constants.py
 CONFIDENCE_THRESHOLD_BY_LABEL: dict[str, float] = {
     SpeechEmotionLabel.HAPPY:     0.5,
     SpeechEmotionLabel.SURPRISED: 0.6,
@@ -345,15 +346,15 @@ CONFIDENCE_THRESHOLD_BY_LABEL: dict[str, float] = {
 DEFAULT_CONFIDENCE_THRESHOLD: float = 0.5  # fallback for unlisted labels
 ```
 
-Negative emotions get higher gates to avoid false-positive alarms; `happy` is loosest because positive misfires are cheap; `sad` carries the highest bar of all (the code states the values, not the reasoning). Lookup goes through `utils.threshold_for(label)`, which falls back to `DEFAULT_CONFIDENCE_THRESHOLD` for any unmapped label — including `neutral`, which therefore clears the gate at 0.5 and is only discarded later at flush.
+Negative emotions get higher gates to avoid false-positive alarms; `happy` is loosest because positive misfires are cheap; `sad` carries the highest bar of all (the code states the values, not the reasoning). Lookup goes through `utils.threshold_for(label)`, which falls back to `DEFAULT_CONFIDENCE_THRESHOLD` for any unmapped label. Neutral / other / `<unk>` never reach this gate — they are dropped just before it.
 
-Also not configurable: `DEFAULT_QUEUE_MAXSIZE = 32`, the hedge strings, the 3-attempt OS-server retry, and the sidecar path `/tmp/hal-ser-state.json`.
+Also not env-configurable (constructor arguments or constants only): `DEFAULT_QUEUE_MAXSIZE = 8`, `DEFAULT_JOB_MAX_AGE_S = 30.0`, `DEFAULT_AUDIO_MAX_FILES = 200`, the hedge strings, the 3-attempt OS-server retry, and the sidecar path `/tmp/hal-ser-state.json`.
 
 ---
 
 ## Integration Point
 
-Called from `dispatch_turn` (`_internal/turn_dispatch.py:157`), which itself runs from `VoiceService._stream_session`'s `finally` block. Speaker recognize runs **once** per session — in the speaker-ID prepass at `voice_service.py:1407` — and its result feeds both the OS-server-message decoration and the SER `user` field:
+Called from `dispatch_turn` (`_internal/turn_dispatch.py`), which itself runs from `VoiceService._stream_session`'s `finally` block. Speaker recognize runs **once** per session — in the speaker-ID prepass in `voice_service.py` — and its result feeds both the OS-server-message decoration and the SER `user` field:
 
 ```python
 # voice_service.py finally, after finalize_session:
@@ -381,7 +382,7 @@ if combined:
 decorator.submit_speech_emotion_from_session(ser_audio_buffer, user=user)
 ```
 
-`submit_speech_emotion_from_session` (`speaker_decorate.py:343`) is a thin submitter with no embedded speaker call:
+`submit_speech_emotion_from_session` (`speaker_decorate.py`) is a thin submitter with no embedded speaker call:
 
 ```python
 session_audio = self._session_wav_for_ser(audio_buffer)
@@ -398,22 +399,22 @@ The whole call is wrapped in `try/except` — a SER failure can never kill a voi
 | Speaker ID outcome | `user` passed to `submit()` |
 |--------------------|-----------------------------|
 | `match=True` with enrolled name | Speaker label (e.g. `alice`) |
-| `match=False` / below threshold (API OK, no `error`) | `unknown` — set directly by `identify_and_decorate` (`speaker_decorate.py:317`) |
-| Recognize skipped or failed (`se_user` is `None`) | `unknown` — substituted at `turn_dispatch.py:105` |
-| No transcript at all (`if combined:` skipped) | `unknown` — the `turn_dispatch.py:94` init value survives |
-| Wake-word gate rejected the turn | `unknown` — the default parameter at `voice_service.py:1555` |
+| `match=False` / below threshold (API OK, no `error`) | `unknown` — set directly by `identify_and_decorate` (`speaker_decorate.py`) |
+| Recognize skipped or failed (`se_user` is `None`) | `unknown` — substituted in `dispatch_turn` (`turn_dispatch.py`) |
+| No transcript at all (`if combined:` skipped) | `unknown` — the `dispatch_turn` init value survives |
+| Wake-word gate rejected the turn | `unknown` — the default parameter of `submit_speech_emotion_from_session`, called from `voice_service.py` |
 
 SER is never invoked from inside `identify_and_decorate`.
 
-> Those five cases are **indistinguishable on the wire**, and the OS server reads `current_user` as "who is in front of the device" (`handler.go:155` calls `mood.SetCurrentUser`). An SER event whose speaker-ID came back `unknown` therefore overwrites a good face-derived identity. See [known-issues #6](speech/speech-emotion-known-issues.md#6--current_user-clobbers-the-device-wide-identity).
+> Those five cases are **indistinguishable on the wire**. The OS server therefore does **not** let `speech_emotion.detected` update the device-wide identity: `PostSensingEvent` (`system/server/sensing/delivery/http/handler.go`) skips `mood.SetCurrentUser` for this event type, so an SER event whose speaker-ID came back `unknown` cannot overwrite a face-derived identity. The event's own `[context: current_user=…]` still carries the SER `user`, so stranger mood logs under `unknown`.
 
 ### When SER is not submitted
 
-- The device declares no `audio` capability — voice people-perception (speaker-ID + SER) is gated on the mic, so `SpeakerDecorator` is constructed with `enable_people_perception=False` and the SER service never initializes (`speaker_decorate.py:117`). (This is the `audio` capability, not `presence`: a mic is all SER needs. Facial emotion in the sensing loop stays `presence`-gated.)
+- The device declares no `audio` capability — voice people-perception (speaker-ID + SER) is gated on the mic, so `SpeakerDecorator` is constructed with `enable_people_perception=False` and the SER service never initializes (`SpeakerDecorator._init_speech_emotion`). (This is the `audio` capability, not `presence`: a mic is all SER needs. Facial emotion in the sensing loop stays `presence`-gated.)
 - `SPEECH_EMOTION_ENABLED=false`, or `SpeechEmotionService` not `available` (no `DL_BACKEND_URL`)
 - `ser_audio_buffer` empty or shorter than `SPEAKER_MIN_AUDIO_S` (gates `_session_wav_for_ser`)
 - `duration_s < SPEECH_EMOTION_MIN_AUDIO_S` (gates `submit()` itself — default 3.0 s, the binding floor)
-- `submit()` drops (queue full, empty `user` after normalize)
+- `submit()` drops (empty `user` after normalize, every bucket still inside its dedup window, or — rarely — the queue refilled between eviction and enqueue)
 
 `wav_bytes` is built from `ser_audio_buffer` — the **untrimmed** snapshot taken before `finalize_session` trims trailing silence off the speaker-recognition copy. That is deliberate: laughter, sighs and trailing "hmm"s carry affect but are not words, and the speaker-recognition trim would cut them.
 
@@ -439,13 +440,13 @@ This is why the ordering is: finalize → wake-word classification → speaker-I
 | perception-service returns non-200 / non-JSON / no `label` | Worker logs warning, sample dropped | Same as above |
 | Encryption required but no public key | `RuntimeError` at construction → caught in `_init_speech_emotion` → service is `None` | Fix `DL_PUBLIC_KEY_URL`/`DL_PUBLIC_KEY_FILE`, or unset `HAL_DL_ENCRYPTION_REQUIRED` |
 | Silero model missing / ORT broken | Prefilter falls back to a **stricter** RMS bar (3.0 s voiced) | Restore `resources/silero_vad.onnx`; check the one-time load warning |
-| Prefilter rejects the clip | Sample dropped before the cloud call, with the driving metrics logged | Expected for TV/music/sparse audio; tune `constants.py:87-135` if legitimate speech is being cut |
-| Worker queue full | `submit()` logs warning, drops the **new** job | Indicates backend overload; see [known-issues #4](speech/speech-emotion-known-issues.md#4--queue-drops-the-newest-job-and-never-ages-out-stale-ones) |
+| Prefilter rejects the clip | Sample dropped before the cloud call, with the driving metrics logged | Expected for TV/music/sparse audio; tune the `PREFILTER_*` constants in `constants.py` if legitimate speech is being cut |
+| Worker queue full | `submit()` logs `EVICT`, drops the **oldest** job and enqueues the new one | Indicates backend overload; jobs older than 30 s are also discarded by the worker |
 | OS server sensing endpoint down | 3 retries with 2 s back-off, then sample dropped | Buffer continues filling for next flush |
 | `duration_s < MIN_AUDIO_S` | Dropped in `submit()` with a log line | Expected — short utterances aren't worth classifying |
 | Audio dir `mkdir` fails | Persistence disabled for the process; every POST carries an empty `audio` | Check permissions on `HAL_SPEECH_EMOTION_AUDIO_DIR` |
 
-Nothing here blocks the STT path or speaker recognition — SER failures are silent at the user level and visible only in the HAL server log. For the full drop-reason → log-line index and a step-by-step debug playbook, see [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md#every-drop-reason-in-order).
+Nothing here blocks the STT path or speaker recognition — SER failures are silent at the user level and visible only in the HAL server log (grep `[speech_emotion]` for `DROP` / `EVICT` lines); `HAL_SER_DEBUG=true` records the reason for every drop (see [Debug Tracer](#debug-tracer-ser-debug)).
 
 ### Manual verification
 
@@ -486,7 +487,7 @@ python -m hal.test.test_speech_emotion_service    # full pipeline + mock OS serv
 | Mood synthesis (Mood skill) | — | Any emotion signal | mood `signal` / `decision` rows | — |
 | Sound (`sound.py` perception) | Mic RMS | Loud noise | `sound` | dog-bark escalation, separate skill |
 
-Speech emotion shares the polarity vocabulary with facial emotion deliberately. The OS server's sensing handler tags incoming events with `[speech_emotion]` (vs `[emotion]` for face) in `system/lib/sensingmsg/sensingmsg.go:78`, pre-fetches the same `[emotion_context: …]` block via `skillcontext.BuildEmotionContext` (`sensingmsg.go:116-122`, one branch serving both types), and routes to `user-emotion-detection/SKILL.md`. The label-to-mood map covers both vocabularies (`Fear`/`Fearful → stressed`, `Surprise`/`Surprised → excited`, `Disgust`/`Disgusted → frustrated`); the only modality-specific behavior in the skill is `source:"voice"` vs `source:"camera"` on the mood signal log row. Music-suggestion cooldown is shared across modalities so voice cannot bypass a recent camera-driven suggestion, and vice versa.
+Speech emotion shares the polarity vocabulary with facial emotion deliberately. The OS server's sensing handler tags incoming events with `[speech_emotion]` (vs `[emotion]` for face) in `system/lib/sensingmsg/sensingmsg.go`, pre-fetches the same `[emotion_context: …]` block via `skillcontext.BuildEmotionContext` (one `case` in `sensingmsg.go` serving both types), and routes to `user-emotion-detection/SKILL.md`. The label-to-mood map covers both vocabularies (`Fear`/`Fearful → stressed`, `Surprise`/`Surprised → excited`, `Disgust`/`Disgusted → frustrated`); the only modality-specific behavior in the skill is `source:"voice"` vs `source:"camera"` on the mood signal log row. Music-suggestion cooldown is shared across modalities so voice cannot bypass a recent camera-driven suggestion, and vice versa.
 
 `[speech_emotion]` is also in every runtime's `ackSkipPrefixes` (`runtimes/*/emotion_ack.go`), so these turns do **not** drive the "thinking" face — they frequently resolve to `NO_REPLY`, which would otherwise leave the face stuck.
 
@@ -494,9 +495,7 @@ Speech emotion shares the polarity vocabulary with facial emotion deliberately. 
 
 ## See also
 
-- [docs/speech/speech-emotion-pipeline.md](speech/speech-emotion-pipeline.md) — stage-by-stage data flow, complete threshold tables, drop-reason index, debug playbook.
-- [docs/speech/speech-emotion-known-issues.md](speech/speech-emotion-known-issues.md) — open defects and performance problems.
-- [docs/speech/README.md](speech/README.md) — the whole speech service (STT, TTS, speaker recognition, realtime).
-- [docs/speech/cloud-models.md](speech/cloud-models.md) — the emotion2vec endpoint and its ONNX/TensorRT serving chain.
+- [perception-service: Speech emotion (SER)](../integrations/perception-service/docs/perceptions.md#4-speech-emotion-ser) — the emotion2vec endpoint, preprocessing and ONNX/TensorRT serving.
 - [docs/perception-service.md](perception-service.md) — the cloud DL inference service, load balancer, encryption.
-- [docs/face-emotion/README.md](face-emotion/README.md) — the camera-side twin.
+- [perception-service: Facial emotion (FER)](../integrations/perception-service/docs/perceptions.md#2-facial-emotion-fer) — the camera-side twin's cloud model.
+- [docs/realtime-voice.md](realtime-voice.md) — the voice turn pipeline SER hangs off.

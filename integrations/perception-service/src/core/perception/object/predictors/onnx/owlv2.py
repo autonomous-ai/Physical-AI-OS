@@ -1,9 +1,4 @@
-"""OWLv2 zero-shot object detector using ONNX Runtime.
-
-The ONNX graph includes the CLIP text encoder. NMS is run in postprocess
-when nms=True. Output boxes are normalized [0, 1] relative to the padded
-square — use ``unowlv2_boxes(boxes, max(H, W))`` for pixel coords.
-"""
+"""OWLv2 zero-shot object detector using ONNX Runtime (CLIP text encoder in-graph)."""
 
 from pathlib import Path
 

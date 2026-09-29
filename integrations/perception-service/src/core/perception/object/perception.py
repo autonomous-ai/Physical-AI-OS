@@ -90,7 +90,6 @@ class ObjectPerception(PerceptionBase[ObjectPerceptionSession]):
             config=config,
         )
 
-    # --- Single-shot prediction (for HTTP endpoints) ---
 
     async def predict_image(
         self,

@@ -1,10 +1,6 @@
-"""Integration tests against a remote DL backend server (object detection).
+"""Integration tests against a remote DL backend (object detection), per ready detector.
 
-Parametrizes tests across all known detectors, skipping any that aren't
-ready on the remote server. Requires DL_BACKEND_URL and DL_API_KEY in
-.env (or environment).
-
-Run with: pytest tests/object_api/test_object_detection_api.py -v
+Requires DL_BACKEND_URL and DL_API_KEY.
 """
 
 import base64
@@ -42,11 +38,6 @@ def _ws_url(path: str) -> str:
 
 
 AUTH_HEADERS: dict[str, str] = {"X-API-Key": DL_API_KEY}
-
-
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
 
 
 def _load_image(name: str) -> tuple[str, int, int]:
@@ -118,11 +109,6 @@ def ready_detectors() -> set[str]:
 def _skip_if_not_ready(detector: str, ready_detectors: set[str]) -> None:
     if detector not in ready_detectors:
         pytest.skip(f"Detector '{detector}' not ready on remote")
-
-
-# ---------------------------------------------------------------------------
-# HTTP tests
-# ---------------------------------------------------------------------------
 
 
 class TestObjectDetectionHTTP:
@@ -223,11 +209,6 @@ class TestObjectDetectionHTTP:
         assert resp.status_code == 503
 
 
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests
-# ---------------------------------------------------------------------------
-
-
 def _detect(detector: str, b64: str, classes: list[str]) -> list[dict[str, Any]]:
     resp = httpx.post(
         _http_url(f"/api/dl/object-detect/{detector}"),
@@ -317,11 +298,6 @@ class TestObjectDetectionPerformance:
         assert len(persons) == 0, (
             f"[{detector}] False positive: detected {len(persons)} person(s) in fire image"
         )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket tests
-# ---------------------------------------------------------------------------
 
 
 class TestObjectDetectionWebSocket:

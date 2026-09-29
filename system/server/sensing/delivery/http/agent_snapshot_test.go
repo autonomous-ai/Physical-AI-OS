@@ -10,11 +10,7 @@ import (
 	"github.com/gin-gonic/gin"
 )
 
-// Driven through a real engine rather than by calling the handler directly:
-// gin defers WriteHeader until the engine flushes it, so a bare
-// CreateTestContext leaves the recorder reading 200 whatever the handler set —
-// and a 404 assertion written that way passes against every bug it exists to
-// catch.
+// Driven through a real engine: CreateTestContext would always report 200.
 func serveSnapshot(t *testing.T, runtime, source, name string) int {
 	t.Helper()
 	gin.SetMode(gin.TestMode)
@@ -27,11 +23,7 @@ func serveSnapshot(t *testing.T, runtime, source, name string) int {
 	return rec.Code
 }
 
-// The runtime allow-list here has to match the one that BUILDS the URL
-// (agent/delivery/http/camera_snapshot.go) and the one that decides where HAL
-// writes (hal/config.py _AGENT_CONFIG_DIRS). opencode was absent from this
-// list, so even a correctly built URL answered 404 — the frame existed, the
-// link existed, and the image never appeared.
+// The runtime allow-list matches camera_snapshot.go and hal/config.py.
 func TestGetAgentSnapshotServesEveryRuntimeHALWritesTo(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OS_AGENT_HOME", home)
@@ -52,8 +44,7 @@ func TestGetAgentSnapshotServesEveryRuntimeHALWritesTo(t *testing.T) {
 	}
 }
 
-// The runtime segment arrives from a URL. An unknown one must not reach the
-// filesystem even when a file happens to sit there.
+// An unknown runtime segment never reaches the filesystem.
 func TestGetAgentSnapshotRejectsAnUnknownRuntime(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OS_AGENT_HOME", home)
@@ -69,8 +60,7 @@ func TestGetAgentSnapshotRejectsAnUnknownRuntime(t *testing.T) {
 	}
 }
 
-// A name is a basename, never a path. Traversal must not escape the snapshot
-// directory.
+// Traversal must not escape the snapshot directory.
 func TestGetAgentSnapshotRejectsATraversingName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("OS_AGENT_HOME", home)

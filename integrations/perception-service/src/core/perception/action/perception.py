@@ -1,8 +1,4 @@
-"""Action analysis: model lifecycle, person detection, and session management.
-
-Wraps a HumanActionRecognizer + optional PersonDetector behind InputBatchers.
-Each WebSocket connection creates an ActionSession via create_session().
-"""
+"""Action analysis: model lifecycle, optional person detection, and session creation."""
 
 import asyncio
 

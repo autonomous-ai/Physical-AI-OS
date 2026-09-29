@@ -1,22 +1,4 @@
-"""How much of the window a facial emotion must hold before it becomes an event.
-
-A man sitting at his desk generated 41 "Anger" flush emissions in 29 minutes and
-not one was correct: a face turned toward a monitor reads as Anger to an
-AffectNet-trained model. The vote let it through because it counted only the
-frames that came back with a label — a lone Anger frame among a dozen attempts
-that returned nothing won outright, since `_flush_buffer` dropped Neutral and
-then took `most_common(1)`.
-
-Two rules follow, and they are asymmetric on purpose:
-
-  * a failed recognition still happened, so it belongs in the denominator. An
-    empty response is not evidence of Neutral — the service gates the argmax per
-    label and hands back Neutral's own low probability — it is "no confirmed
-    reading", and a negative label has to outweigh those too.
-  * Happy keeps firing on one frame. At ~2.2s between triggers a smile is
-    frequently a single frame, and requiring persistence dropped most of the
-    genuine ones. The noisy labels sit on the other side of the line.
-"""
+"""How much of the window a facial emotion must hold before it becomes an event."""
 
 import tempfile
 import threading
@@ -42,15 +24,11 @@ class _Sidecar:
 
 
 def _perception(readings, attempts, attempt_age_s=1.0):
-    """An EmotionPerception carrying only the state `_flush_buffer` reads.
-
-    Built with __new__ so the test needs no network, crypto session or config —
-    the method under test is the real one.
-    """
+    """An EmotionPerception carrying only the state `_flush_buffer` reads."""
     p = object.__new__(EmotionPerception)
     p._state_lock = threading.RLock()
     p._flush_interval = 10.0
-    p._last_flush_ts = 0.0          # far enough in the past that a flush is due
+    p._last_flush_ts = 0.0
     p._presence_service = None
     p._perception_state = types.SimpleNamespace(
         current_user=types.SimpleNamespace(data=PERSON)
@@ -107,11 +85,7 @@ def test_anger_holding_the_window_still_fires():
 
 
 def test_failed_attempts_count_against_a_negative():
-    """The heart of the change: same three readings, different denominator.
-
-    Three Anger among three failures is 3 of 6 — not a majority — where the old
-    vote saw only the three Anger frames and emitted.
-    """
+    """Failed attempts count in the denominator against a negative."""
     p, sent = _perception(["Anger"] * 3, ["Anger"] * 3 + [_NO_READING] * 3)
     p._flush_buffer()
     assert sent == []
@@ -131,13 +105,7 @@ def test_a_stale_negative_does_not_carry_over():
 
 
 def test_even_happy_is_not_reported_from_a_stale_reading():
-    """Happy's exemption is from the OCCUPANCY test, not from freshness.
-
-    A smile from ninety seconds ago is not news now, and reporting it was the
-    other half of the stale-buffer defect. Under arrival evaluation this case
-    barely arises — a reading is judged in the tick it lands — but the window
-    is what guarantees it.
-    """
+    """Happy's exemption is from the OCCUPANCY test, not from freshness."""
     p, sent = _perception(
         ["Happy"], ["Happy"], attempt_age_s=_OCCUPANCY_LOOKBACK_S + 5
     )
@@ -151,12 +119,8 @@ def test_a_quiet_window_emits_nothing():
     assert sent == []
 
 
-
 def test_three_of_five_is_a_majority_and_survives():
-    """Observed on the device: a real Surprise held 3 of 5 attempts. The first
-    setting (2/3, needing 4) dropped it — three agreeing frames is evidence, and
-    an expression only spans a few frames at ~2.2s between triggers.
-    """
+    """Three agreeing frames out of five attempts are enough to fire."""
     p, sent = _perception(
         ["Surprise"] * 3, ["Surprise"] * 3 + [_NO_READING] * 2
     )
@@ -172,10 +136,7 @@ def test_an_exact_tie_is_not_a_majority():
 
 
 def test_a_lone_reading_in_a_sparse_window_is_not_enough():
-    """1 of 1 is a majority but not evidence. Observed on device 2026-09-04
-    12:42: a single Sad fired because the face was detected only once in the
-    window — attempts are counted per face detection, not per sensing tick.
-    """
+    """A single detection is a majority but not enough evidence to fire."""
     p, sent = _perception(["Sad"], ["Sad"])
     p._flush_buffer()
     assert sent == []
@@ -196,12 +157,7 @@ def test_a_lone_happy_is_still_exempt():
 
 
 def test_a_short_expression_is_judged_while_it_is_still_fresh():
-    """Observed 2026-09-04 12:55: four clean Surprise readings, then the face
-    left frame. The callback that drives the decision only fires on a DETECTED
-    face, so the tail sat unevaluated for 91s and was finally judged against a
-    window it no longer overlapped — "Surprise held 0/1". Two readings arriving
-    together must decide there and then.
-    """
+    """A pending window is judged when the face leaves, while still fresh."""
     p, sent = _perception(["Surprise"] * 2, ["Surprise"] * 2)
     p._flush_buffer()
     assert _labels(sent) == ["Surprise"]
@@ -226,13 +182,7 @@ def test_only_the_person_that_fired_is_cleared():
 
 
 def test_disabled_debug_capture_costs_nothing(tmp_path=None):
-    """Capture is off by default and must be free when off.
-
-    The enabled check used to live in _write_folder, which runs AFTER
-    _annotate — so every prediction copied a whole frame and drew on it before
-    discovering it had nowhere to put it. At 1280x720 that is a ~2.7MB memcpy
-    per face per tick, on a board that has better things to do.
-    """
+    """Capture is off by default and must be free when off."""
     import os
 
     class _NoCopy(np.ndarray):

@@ -17,14 +17,6 @@ from dlserver.utils.state import get_action_model, set_action_model
 TEST_API_KEY = "test-secret-key"
 os.environ["DL_API_KEY"] = TEST_API_KEY
 
-# X3D_MODEL_PATH = Path.cwd() / "local" / "x3d_m_16x5x1_int8.onnx"
-#
-# pytestmark = pytest.mark.skipif(
-#     not X3D_MODEL_PATH.exists(),
-#     reason=f"Local X3D model not found at {X3D_MODEL_PATH}",
-# )
-
-
 def _make_frame_b64(width: int = 320, height: int = 240) -> str:
     """Create a base64-encoded JPEG of a random BGR image."""
     frame = np.random.randint(0, 255, (height, width, 3), dtype=np.uint8)
@@ -149,7 +141,6 @@ class TestActionAnalysisWebSocket:
             for det in resp["detected_classes"]:
                 assert det["class_name"] in allowed
 
-            # Reset whitelist for other tests
             ws.send_text(json.dumps({"type": "config", "task": "action", "whitelist": None}))
             ws.receive_json()
 
@@ -227,10 +218,6 @@ class TestActionAnalysisWebSocket:
                 ws.send_text(json.dumps({"type": "config", "task": "action", "whitelist": None}))
                 ws.receive_json()
 
-
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests using real fixture images
-# ---------------------------------------------------------------------------
 
 FIXTURES_DIR = Path(__file__).resolve().parent.parent / "fixtures" / "images"
 

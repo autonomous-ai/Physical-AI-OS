@@ -1,7 +1,4 @@
-"""Tests for the load balancer HTTP proxy.
-
-Uses monkeypatching to mock the httpx client so no real servers are needed.
-"""
+"""Tests for the load balancer HTTP proxy with a mocked httpx client."""
 
 import base64
 import json
@@ -206,7 +203,6 @@ class TestHTTPEncryptionPipeline:
         )
         assert resp.status_code == 200
 
-        # Decrypt the response with the same session key
         from lbserver.models import CipherHTTPResponse
         enc_resp = CipherHTTPResponse.model_validate_json(resp.content)
         decrypted = session.decrypt(enc_resp.to_raw_payload())

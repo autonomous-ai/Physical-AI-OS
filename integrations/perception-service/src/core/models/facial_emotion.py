@@ -8,11 +8,7 @@ import numpy.typing as npt
 
 @dataclass
 class RawEmotionDetection:
-    """Raw recognizer output for a single face crop.
-
-    Contains only what the emotion ONNX model outputs.
-    Face-related info (bbox, face_confidence) is added by the session.
-    """
+    """Raw recognizer output for a single face crop (bbox/face info is added by the session)."""
 
     expression_probs: npt.NDArray[np.float32]
     """Shape: (C,) — softmaxed expression probabilities."""

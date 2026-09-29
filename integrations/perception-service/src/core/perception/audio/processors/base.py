@@ -8,11 +8,7 @@ from core.perception.base.processor import InputProcessorBase
 
 
 class AudioProcessorBase(InputProcessorBase[Audio, Audio], ABC):
-    """Base for audio processors. Input and output are both Audio.
-
-    Default lifecycle is no-op (ready immediately). Subclasses that load
-    resources (e.g. VAD model) override _start_impl/_stop_impl/_is_ready_impl.
-    """
+    """Base for Audio -> Audio processors; the default lifecycle is a no-op."""
 
     def __init__(self) -> None:
         super().__init__()

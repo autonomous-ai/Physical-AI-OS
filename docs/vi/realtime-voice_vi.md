@@ -1407,7 +1407,7 @@ không có hoạt động turn nào, thread watchdog `rt-idle-park` đóng trans
 `prepare_turn()` kế tiếp sẽ nối lại session mới một cách đồng bộ
 (`idle-park-resume`) trước khi có audio nào được stream — đúng bằng việc mà
 pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đệm capture qua
-~1 giây handshake. Không park khi đang có turn chạy dở; nếu resume không nối
+~1 giây handshake. Không park khi đang có turn chạy dở, và mỗi chunk câu trả lời stream về đều tính là hoạt động, nên câu trả lời dài hơn mốc bảo vệ 120 giây (`TURN_IN_FLIGHT_MAX_S`, chỉ để hết hạn turn bị bỏ dở) không bao giờ bị park giữa câu; nếu resume không nối
 được thì báo unavailable (turn rơi về main agent) nhưng vẫn giữ trạng thái parked
 để turn sau thử lại.
 Ở chế độ wake-word, việc nối lại được chạy chồng lên câu user đang nói: `Session
@@ -2256,6 +2256,43 @@ refeed lại thành `[Previous summary]` cho lần summarize kế tiếp lẫn n
 được nạp vào session context — cơ chế xác định (deterministic) để chặn một task
 đang chờ nằm mãi trong context rồi bị "trả lời" từ ký ức cũ bởi một nudge rỗng
 nội dung (#419, #421). `0` là tắt cơ chế hết hạn.
+
+**Hội thoại dài (#449).** Một bài kiểm tra, vấn đáp hay tranh luận kéo dài qua
+nhiều session Gemini (idle park, turn cap, recycle do tool call), và mỗi session
+mới chỉ biết những gì `build_instructions()` nạp lại. Bốn quy tắc giữ cho việc
+đó không mất thông tin:
+
+- **Ngân sách tách riêng.** `summary.md` (giới hạn `HAL_REALTIME_SUMMARY_MAX_CHARS`,
+  5000) và các lượt nguyên văn (`HAL_REALTIME_MEMORY_MAX_CHARS`, 8000) không còn
+  dùng chung một cửa sổ — trước đây summary đầy chỉ còn ~3k ký tự cho các lượt.
+- **Tóm tắt trước khi lượt bị rơi.** `_trim_memory_if_needed()` chạy summarize
+  nền khi các lượt nguyên văn đạt `HAL_REALTIME_SUMMARIZE_AT_FRACTION` (0.75)
+  ngân sách của chúng, nên không lượt nào nằm ngoài cả cửa sổ lẫn summary. Mỗi
+  lúc chỉ một summarize chạy. Mỗi lần summarize giữ nguyên văn
+  `HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS` (4) lượt mới nhất trong `memory.jsonl`,
+  nhưng không quá một nửa ngân sách nguyên văn, để vài câu trả lời dài không tự
+  lấp đầy cửa sổ.
+- **Hoạt động đứng đầu, tôn trọng giới hạn.** Prompt nhận đúng ngân sách ký tự
+  và phải mở đầu bằng `## Current activity` (luật người dùng đặt, câu hỏi/vòng
+  hiện tại, điểm, mỗi mục đã qua một dòng) khi đang có hoạt động. Summary quá
+  dài được `fit_summary()` rút gọn — bỏ nguyên bullet, lịch sử cũ nhất trước;
+  giữ `## Current activity` và `## Open requests` — thay vì cắt cứng làm mất
+  nội dung mới nhất. Bullet đầu của section là `[<ISO-8601>] Last active`;
+  `expire_current_activity()` bỏ cả section khi dấu thời gian đó đã cũ
+  `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` (3600s), để bài kiểm tra bỏ dở không
+  bị tiếp tục vào ngày hôm sau.
+- **Sức khỏe summarizer.** Summarizer của memory chạy với thinking tắt (proxy
+  từng tiêu hết 4096 output token để suy nghĩ và trả về rỗng); kết quả rỗng lần
+  thứ hai liên tiếp được log ở mức ERROR và không tiêu thụ entry nào.
+
+Gemini tự trả lời các câu hỏi về cuộc hội thoại đang diễn ra (câu vừa hỏi, điểm,
+vòng, luật) từ memory này thay vì delegate: main agent không tham gia cuộc hội
+thoại đó (`system_prompt_gemini.md`, `routing_prompt_gemini.md`,
+`complete_response`). "Nhắc lại cho tôi…" về cuộc hội thoại này được tính là hỏi
+lại, không phải đặt nhắc nhở. Hỏi lại các ngày hoặc session trước vẫn được
+delegate, kể cả khi summary có diễn giải lại. Chi phí: khối
+realtime memory giờ có thể tới 13k ký tự (tệ nhất ≈ +1.2k input token mỗi lượt);
+việc tóm tắt vẫn nằm ngoài đường xử lý lượt.
 
 ## Chế độ live (song công hoàn toàn)
 
@@ -3225,7 +3262,7 @@ Chẩn đoán: `[realtime][timing]` ghi lúc đưa audio commit vào hàng đợ
 
 Replay camera với Gemini extended-thinking: khi audio replay được commit thành công, vòng nhận được đánh thức và kết thúc grace, kiểm tra outcome và continuation buffer của filler cũ, dù Gemini có gửi `interrupted` hay không. Replay nhận generation phản hồi và thời hạn progress mới, giữ câu hỏi của người dùng. Provider xử lý ranh giới phản hồi cũ trước khi có lời đáp mới; queue consumer không còn nuốt terminal fallback của chính replay. Commit thông thường và LIVE mode không kích hoạt reset này; user interrupt sau khi replay bắt đầu trả lời vẫn cancel phản hồi. Phản hồi mới vẫn cần outcome được xác nhận; thay đổi này không ép yêu cầu ảnh thành công hoặc tắt fallback. Log chẩn đoán: `look_replay_response_started`.
 
-Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy xuất memory cụ thể và tác vụ Harness/code), yêu cầu chỉ gọi thật `delegate_to_main`, không để Gemini nói hoặc gọi emotion trước handoff. Cue chờ của HAL vẫn có thể phát; main chịu trách nhiệm trả lời nội dung. Chỉ Gemini được thêm lời nhắc routing ngắn sau identity và memory trong instructions, tránh lấy các câu xác nhận cũ làm mẫu thay cho thực thi. Chào hỏi vẫn trả lời trực tiếp; câu hỏi về ảnh vẫn dùng `look`. Thay đổi này chỉ tác động chỉ dẫn model, không đổi routing xác định hay deadline fallback. Kiểm chứng model bằng event provider `Function call: delegate_to_main`, không dùng riêng `route=delegated` vì route đó cũng gồm HAL fallback.
+Thứ tự delegation của Gemini: với việc cần main (gồm nhạc, truy xuất memory cụ thể từ các session trước và tác vụ Harness/code; câu hỏi về cuộc hội thoại đang diễn ra được trả lời trực tiếp), yêu cầu chỉ gọi thật `delegate_to_main`, không để Gemini nói hoặc gọi emotion trước handoff. Cue chờ của HAL vẫn có thể phát; main chịu trách nhiệm trả lời nội dung. Chỉ Gemini được thêm lời nhắc routing ngắn sau identity và memory trong instructions, tránh lấy các câu xác nhận cũ làm mẫu thay cho thực thi. Chào hỏi vẫn trả lời trực tiếp; câu hỏi về ảnh vẫn dùng `look`. Thay đổi này chỉ tác động chỉ dẫn model, không đổi routing xác định hay deadline fallback. Kiểm chứng model bằng event provider `Function call: delegate_to_main`, không dùng riêng `route=delegated` vì route đó cũng gồm HAL fallback.
 
 Ở Live ON, `reject_turn` được chấp nhận còn đặt trạng thái chặn bền vững trước khi đưa tool tới consumer. Trạng thái này giữ qua các vòng nhận và ACK tool: audio/text của lượt đã bị loại không được biến thành câu trả lời mới không có chủ sở hữu hay kích hoạt fallback sang main. Sự kiện bắt đầu nói mới từ provider hoặc transcript đầu vào không rỗng mới mở lại; terminal và metadata kết thúc transcript rỗng không mở. Reconnect đặt lại trạng thái. Cách này bảo vệ quyền sở hữu lượt độc lập ngôn ngữ câu trả lời; không ngăn backend từ xa tự sinh câu lỗi sau ACK.
 

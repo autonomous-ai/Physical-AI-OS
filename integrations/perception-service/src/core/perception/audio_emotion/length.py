@@ -1,10 +1,7 @@
 """Input-length bound for the SER model.
 
-emotion2vec is served through TensorRT with a fixed shape profile. Any input
-length outside that profile would force an engine rebuild inside a live
-request (issue #492): it stalls every GPU route for ~30-70 s and ratchets GPU
-memory. Every waveform is therefore forced into [min_samples, max_samples]
-before it reaches ONNX Runtime.
+Lengths outside the TensorRT shape profile force an engine rebuild mid-request
+(issue #492), stalling all GPU routes, so waveforms are clamped to [min, max] samples.
 """
 
 import numpy as np

@@ -37,11 +37,8 @@ class AESGCMSession(CryptoBase[AESGCMCipherPayload, AESGCMPlainPayload]):
 
     @override
     def encrypt(self, payload: AESGCMPlainPayload) -> AESGCMCipherPayload:
-        # A FRESH random nonce per message is mandatory for AES-GCM: reusing a
-        # (key, nonce) pair leaks the XOR of plaintexts and destroys the
-        # authentication guarantee. 96-bit random nonces make collisions
-        # negligible for our message volume. The nonce is not secret — it is sent
-        # alongside the ciphertext — only its uniqueness matters.
+        # A fresh 96-bit random nonce per message is mandatory: reusing a (key, nonce)
+        # pair breaks AES-GCM confidentiality and authentication.
         nonce = os.urandom(GCM_NONCE_SIZE)
         aesgcm = AESGCM(self._session_key)
         cipher_data = aesgcm.encrypt(nonce, payload.plain_data, None)
@@ -58,11 +55,9 @@ class AESGCMSession(CryptoBase[AESGCMCipherPayload, AESGCMPlainPayload]):
 
 
 class RSAAESCrypto(CryptoBase[RSAAESCipherPayload, RSAAESPlainPayload]):
-    """RSA + AES-256-GCM hybrid encryption.
+    """RSA-OAEP key exchange + AES-256-GCM data encryption.
 
-    RSA-OAEP for key exchange, AES-256-GCM for data.
-    Key pair is always generated. If key_dir is provided, keys are
-    persisted to disk and loaded on next init.
+    Keys are loaded from key_dir if present, otherwise generated (and persisted when key_dir is set).
     """
 
     PADDING: padding.OAEP = padding.OAEP(
@@ -83,15 +78,10 @@ class RSAAESCrypto(CryptoBase[RSAAESCipherPayload, RSAAESPlainPayload]):
         self._private_key: RSAPrivateKey = private_key
         self._public_key: RSAPublicKey = public_key
 
-    # -----------------------------------------------------------------------
-    # Key management
-    # -----------------------------------------------------------------------
-
     @staticmethod
     def _load_or_generate_keys(
         key_dir: Path | None, key_size: int
     ) -> tuple[RSAPrivateKey, RSAPublicKey]:
-        # Try loading from disk
         if key_dir is not None:
             private_path = key_dir / "private_key.pem"
             public_path = key_dir / "public_key.pem"
@@ -107,7 +97,6 @@ class RSAAESCrypto(CryptoBase[RSAAESCipherPayload, RSAAESPlainPayload]):
                 )
                 return private_key, public_key
 
-        # Generate new key pair
         logger.info("Generating RSA-%d key pair", key_size)
         private_key = rsa.generate_private_key(
             public_exponent=65537,
@@ -115,7 +104,6 @@ class RSAAESCrypto(CryptoBase[RSAAESCipherPayload, RSAAESPlainPayload]):
         )
         public_key = private_key.public_key()
 
-        # Persist if key_dir is set
         if key_dir is not None:
             key_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
             private_path = key_dir / "private_key.pem"
@@ -147,18 +135,10 @@ class RSAAESCrypto(CryptoBase[RSAAESCipherPayload, RSAAESPlainPayload]):
             format=serialization.PublicFormat.SubjectPublicKeyInfo,
         ).decode()
 
-    # -----------------------------------------------------------------------
-    # Session
-    # -----------------------------------------------------------------------
-
     def create_session(self, encrypted_key: bytes) -> AESGCMSession:
         """RSA-decrypt the encrypted key and create an AES-GCM session."""
         session_key = self._private_key.decrypt(encrypted_key, self.PADDING)
         return AESGCMSession(session_key)
-
-    # -----------------------------------------------------------------------
-    # Full hybrid encrypt/decrypt (CryptoBase interface)
-    # -----------------------------------------------------------------------
 
     @override
     def encrypt(self, payload: RSAAESPlainPayload) -> RSAAESCipherPayload:

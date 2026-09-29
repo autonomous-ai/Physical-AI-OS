@@ -4,7 +4,6 @@ import numpy as np
 
 from .base import Audio, AudioProcessorBase
 
-# --- Defaults ---
 DEFAULT_TARGET_RMS: float = 0.1
 DEFAULT_MAX_GAIN: float = 20.0
 

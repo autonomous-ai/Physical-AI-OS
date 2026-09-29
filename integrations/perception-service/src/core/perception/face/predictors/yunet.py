@@ -81,11 +81,7 @@ class YuNetFaceDetector(FaceDetector):
     def _predict_impl(
         self, input: list[cv2t.MatLike], *, preprocess: bool = True, **kwargs: Any
     ) -> list[RawFaceDetection]:
-        """Detect faces in a batch of BGR frames.
-
-        Returns one RawFaceDetection per frame with bbox_xyxy and confidence
-        as batched numpy arrays. Empty arrays when no faces detected.
-        """
+        """Detect faces in a batch of BGR frames; one RawFaceDetection per frame."""
         _EMPTY: RawFaceDetection = RawFaceDetection(
             bbox_xyxy=np.zeros((0, 4), dtype=np.float32),
             confidence=np.zeros(0, dtype=np.float32),
