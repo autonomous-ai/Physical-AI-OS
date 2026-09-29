@@ -955,8 +955,10 @@ Tham khảo [ví dụ API ElevenLabs v4](https://elevenlabs.io/pl/v4) và
 [HTTP streaming](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 Ngày 2026-09-29, Autonomous proxy hiện tại đã tổng hợp PCM v4 với Rachel thành
 công, gồm sáu mẫu cảm xúc/diễn đạt tiếng Anh phát trên macOS. Đường đã test không
-cần sửa proxy. Routing trực tiếp ElevenLabs có test HTTP giả lập; chưa test API
-trực tiếp thật hoặc phát trên device.
+cần sửa proxy. Các turn voice-command tiếp theo trên Lamp `172.168.20.142`
+xác nhận tag từ main agent được gửi qua proxy tới v4 và phát qua loa với Rachel;
+chủ máy xác nhận mẫu tiếng Anh giọng mếu nghe đúng. Routing trực tiếp ElevenLabs
+có test HTTP giả lập; chưa test API trực tiếp thật.
 
 Audio tag v4 là chỉ dẫn diễn đạt bằng ngôn ngữ tự nhiên, không phải enum emotion
 cố định: có tag ghép như `[excited, happy]`, mô tả giọng như
@@ -967,6 +969,17 @@ chưa thêm khả năng phát hiệu ứng âm thanh độc lập. Prompt realti
 phản ứng/trạng thái/khoảng nghỉ của con người; marker emotion điều khiển phần
 cứng là giao thức riêng. Provider khác không tự có hỗ trợ tag v4.
 Tham khảo [thông báo v4](https://elevenlabs.io/fr/blog/eleven-v4).
+
+`robots/lamp/SOUL.md` dùng palette chỉ dẫn giọng v4 mở: cảm xúc ghép, mô tả
+cách nói, phản ứng và khoảng nghỉ có chủ đích. Câu ngắn thường dùng một cue
+phù hợp hoặc lời nói thuần, thay cho quy tắc bắt buộc mọi câu có tag. Kể chuyện,
+đọc, nhập vai và demo giọng theo yêu cầu được tuân theo độ dài người dùng muốn,
+chuyển cách nói ở đoạn có thay đổi ý nghĩa. Khóc/nức nở dành cho diễn theo yêu
+cầu, không tự kích hoạt khi người dùng buồn. Output chính xác của skill,
+`NO_REPLY` và handoff Harness ưu tiên hơn trang trí giọng. Tag đi kèm lời nói,
+không mở rộng tên emotion phần cứng; cơ thể vẫn theo Emotion skill. Nếu biết
+voice không hỗ trợ tag thì dùng lời nói thuần. Đây là hướng dẫn persona, không
+phải parser tag mới hay bổ sung emotion vật lý của device.
 
 Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v4` hoặc override
 `eleven_v3`, HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong

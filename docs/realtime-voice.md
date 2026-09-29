@@ -987,8 +987,11 @@ See [ElevenLabs v4 API example](https://elevenlabs.io/pl/v4) and
 [HTTP streaming reference](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
 On 2026-09-29, the existing Autonomous proxy successfully synthesized v4 PCM
 with Rachel, including six English emotion/delivery samples played on macOS.
-No proxy change was needed for that tested route. Direct ElevenLabs routing is
-covered by mocked HTTP tests; live direct API and device playback remain untested.
+No proxy change was needed for that tested route. Subsequent voice-command
+turns on Lamp `172.168.20.142` verified main-agent audio tags reaching v4 through
+the proxy and speaker playback with Rachel; the owner confirmed the tearful
+English sample sounded correct. Direct ElevenLabs routing is covered by mocked
+HTTP tests; live direct API remains untested.
 
 V4 audio tags are natural-language performance directions, not a fixed emotion
 enum: combined cues such as `[excited, happy]`, delivery descriptions such as
@@ -999,6 +1002,18 @@ suppressed, so standalone sound-effect generation is not added by this upgrade.
 Realtime prompts keep their existing human-reaction/state/pause scope; hardware
 emotion markers remain a separate contract. Other providers do not automatically
 gain v4 tag support. See the [v4 announcement](https://elevenlabs.io/fr/blog/eleven-v4).
+
+Lamp's `robots/lamp/SOUL.md` uses an open palette of v4 voice directions:
+combined emotions, delivery descriptions, reactions and intentional pauses.
+Short replies normally use one appropriate cue or plain speech, replacing the
+old mandatory-tag rule. Requested stories, readings, roleplay and voice demos
+may follow the requested length and change delivery at meaningful beats.
+Crying/sobbing is reserved for requested performance, not an automatic reaction
+to user distress. Exact skill outputs, `NO_REPLY` and Harness handoffs override
+voice styling. Tags stay attached to words and do not extend physical emotion
+names; the usual Emotion skill controls the body. Other voices known not to
+support tags receive plain speech. This is persona guidance, not a new tag
+parser or an expansion of the device's physical emotions.
 
 For ElevenLabs HTTP requests whose effective model is `eleven_v4` or
 explicitly `eleven_v3`, HAL requests provider `speed=1.0` and applies
