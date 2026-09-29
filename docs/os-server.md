@@ -1004,7 +1004,7 @@ When receiving a text-only `voice_command`, `voice_followup`, `voice`, `web_chat
 | "relax" | scene:relax |
 | "movie mode" | scene:movie |
 | "goodnight" | scene:night + sleepy emotion |
-| "brighter" | scene:energize |
+| "brighten the light" | relative brightness increase; bare "brighter" defers for context |
 | "happy" | emotion:happy |
 | "sad" | emotion:sad |
 | "volume up" | volume 100 |
@@ -1088,9 +1088,9 @@ subsequent misses during cooldown continue to the main runtime. Provider
 abstention also continues to the main runtime. This adds latency on unmatched
 requests when enabled; there is no live latency benchmark or accuracy guarantee.
 
-The catalog covers all **20 local intents**, plus `none` to defer:
+The catalog covers all **21 local intents**, plus `none` to defer:
 
-- Light: `led_on`, `led_off`, `dim`, and `led_color`.
+- Light: `led_on`, `led_off`, `dim`, `brighten`, and `led_color`.
 - Scenes: `scene_off`, `scene_reading`, `scene_focus`, `scene_relax`,
   `scene_movie`, `scene_night`, and `scene_energize`.
 - Audio/media: `volume_up`, `volume_down`, `mute_speaker`, `unmute_speaker`,
@@ -1119,7 +1119,14 @@ accepted enum values into code-owned text for the existing rule executor.
 Neither raw user speech nor model-generated HAL payloads reach that executor.
 HAL safety limits remain authoritative. `dim` reads `/led/color`, halves each RGB
 channel (integer rounding), and writes `/led/solid`, then verifies the readback.
-Repeating the request dims again, and an already-dark light stays off. Effects
+Repeating the request dims again, and an already-dark light stays off.
+`brighten` raises the current RGB peak by 25% (at least one level, capped at 255),
+scaling the other channels proportionally with integer rounding. From off it starts
+at warm RGB [32,27,20]. It shares the dim adjustment lock and sleeping-state guard.
+HAL still clamps to its safety ceiling; readback must confirm an increase with the
+expected hue, including proportional safety clamping, before saying “Brighter now.”
+An unchanged or unexpected readback returns a failure rather than claiming success.
+This step is a product default, not a calibrated perceptual brightness increment. Effects
 and scenes become a solid color based on the reported effect base or brightest
 pixel; animation/pattern preservation is not supported. `volume_down` halves
 current speaker volume; `volume_up` adds 10% of the safe range (at least one
@@ -1128,6 +1135,11 @@ honest failure, not a success acknowledgement. Color stops the LED effect before
 setting a solid color. Night activates its scene and may add the sleepy expression.
 Stopping speech, stopping music and muting the speaker remain distinct actions.
 Candidate descriptions separate accepted user intent from execution effects.
+Scene selection also applies configured servo/camera/mic/speaker changes; it defers
+requests that explicitly require those peripherals to remain unchanged. `energize`
+is a configured scene, not maximum brightness; its acknowledgment is “Energize mode!”.
+Maximum-brightness requests defer to the agent. Dark-room complaints without an
+external source can select `brighten`; this does not measure ambient illuminance.
 Reading/work needs may select a lighting scene: “need focus to read book” selects
 reading because the specific activity takes precedence over generic focus; an
 explicit focus-mode request still selects focus. Book recommendations defer.
@@ -1177,7 +1189,7 @@ with the revised prompt/catalog. All 34 rejection-case runs deferred. One
 "Reduce the brightness of this lamp now" run deferred at fit 0.94 versus the
 unchanged 0.95 cutoff; the live suite therefore passed once and failed once.
 These are small-sample observations, not a calibrated accuracy estimate or
-results for the expanded catalog. The expanded live suite contains 65 English
+results for the expanded catalog. The 2026-09-23 expanded live suite contained 65 English
 cases covering all intent families, required parameters and rejection cases;
 the final expanded run on 2026-09-23 passed 62/65 cases (29/32 positive
 requests and all 33 rejection cases). Warm-white lighting, following the speaker
@@ -1199,6 +1211,18 @@ and never invokes HAL. Live model output can vary; a passing fixture set is not
 proof of microphone/STT performance or universal classification accuracy.
 
 <a id="jev-bff-contract"></a>
+
+### English intent regression corpus
+
+The opt-in `TestJevLiveNaturalLanguage` corpus covers every catalog intent with at
+least two positive English examples, plus negation, future/conditional requests,
+external devices, unsupported parameters and multi-action requests. It logs decision
+latency per case without executing hardware. The offline coverage check validates
+case IDs and enum parameters; passing it does not establish live classifier accuracy.
+Context-dependent fragments are also tested at the sensing routing layer, before
+JEV. Run live evaluation with `JEV_EVAL_CONFIG` pointing to a private OS config;
+ordinary `go test` skips it when credentials are not explicitly supplied.
+
 
 #### BFF Decisions contract
 

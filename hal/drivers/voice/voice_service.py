@@ -34,6 +34,10 @@ from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
 from hal.drivers.voice._internal.realtime_turn import (
+    realtime_speech_text,
+    realtime_visible_text,
+    split_delivery_sentence,
+    split_realtime_first_chunk,
     _WaitFiller,
     ROUTE_DELEGATED,
     ROUTE_NOISE_DROPPED,
@@ -121,12 +125,20 @@ class VoiceService:
     )
 
     @staticmethod
-    def strip_rt_markers(text: str) -> str:
-        """Remove HW markers, audio tags, and system tags from realtime agent text."""
+    def strip_rt_markers(text: str, *, preserve_audio_tags: bool = False) -> str:
+        """Remove control markers; optionally retain delivery tags for ElevenLabs."""
         text = VoiceService.RT_HW_LINK_RE.sub(
             lambda m: "" if m.group(1)[:3].lower() == "hw:" else m.group(1), text
         )
-        cleaned: str = VoiceService.RT_MARKER_RE.sub("", text)
+        def replace_marker(match):
+            marker = match.group(0)
+            if (preserve_audio_tags and marker.startswith("[")
+                    and not re.match(r"\[(?:HW:|thinking|thinks|thought|pondering|ponders|reasoning)",
+                                     marker, re.IGNORECASE)):
+                return marker
+            return ""
+
+        cleaned: str = VoiceService.RT_MARKER_RE.sub(replace_marker, text)
         cleaned = re.sub(r"  +", " ", cleaned).strip()
         cleaned = re.sub(r"^(?:(?:<\s*no\s+speech\s*>|\{\s*pause\s*\})\s*)+",
                          "", cleaned, flags=re.IGNORECASE)
@@ -1571,6 +1583,14 @@ class VoiceService:
                             transcript += out.transcript
                         continue
                     if isinstance(out, RTTextOutput):
+                        if (not native and getattr(self._tts, "_provider", None) == "elevenlabs"
+                                and sentence_buf and out.user_turn_id
+                                and buffer_reply_key and out.user_turn_id != buffer_reply_key):
+                            # A held sentence belongs only to its original reply.
+                            # A newer reply must never flush old speech or tags.
+                            sentence_buf = ""
+                            first_sent = False
+                            buffer_mixed = False
                         if deferred_marker_tail is not None:
                             owner, prefix = deferred_marker_tail
                             if out.user_turn_id == owner:
@@ -1604,12 +1624,12 @@ class VoiceService:
                             speech_iid = ""
                         iid = speech_iid
                         sentence_buf += out.text
-                        visible = self.strip_rt_markers(sentence_buf)
+                        visible = realtime_visible_text(sentence_buf, self._tts, self.strip_rt_markers)
                         if not visible:
                             continue
                         if not first_sent:
-                            head, rest = split_first_chunk(sentence_buf)
-                            head = self.strip_rt_markers(head) if head else ""
+                            head, rest = split_realtime_first_chunk(sentence_buf, self._tts, self.strip_rt_markers)
+                            head = realtime_speech_text(head, self._tts, self.strip_rt_markers) if head else ""
                             if head:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
@@ -1624,18 +1644,22 @@ class VoiceService:
                                 sentence_buf = rest
                         # Check the spoken text; a trailing tag must not hold a
                         # complete sentence until the provider's routing grace ends.
-                        sentence = self.strip_rt_markers(sentence_buf)
+                        sentence = realtime_visible_text(sentence_buf, self._tts, self.strip_rt_markers)
                         complete = sentence.rstrip().endswith(SENTENCE_ENDS + ("…",))
                         ready, tail = ("", "") if complete else split_completed_prefix(sentence_buf)
-                        if ready:
-                            sentence = self.strip_rt_markers(ready)
+                        if getattr(self._tts, "_provider", None) == "elevenlabs":
+                            ready, tail = split_delivery_sentence(sentence_buf)
+                            sentence = realtime_visible_text(ready, self._tts, self.strip_rt_markers)
+                        elif ready:
+                            sentence = realtime_visible_text(ready, self._tts, self.strip_rt_markers)
                         if sentence.rstrip().endswith(SENTENCE_ENDS + ("…",)):
                             if sentence:
                                 if cues is not None:
                                     cues.finish(out.user_turn_id)
                                 if opener is not None:
                                     opener["consumed"] = True
-                                speak_live(sentence, iid, buffer_reply_key)
+                                speech = realtime_speech_text(ready if ready else sentence_buf, self._tts, self.strip_rt_markers)
+                                speak_live(speech, iid, buffer_reply_key)
                                 if opener is not None:
                                     if iid == opener["interaction_id"]:
                                         opener["replied"] = True
@@ -1665,14 +1689,14 @@ class VoiceService:
                 if (not native and sentence_buf.strip()
                         and self._live_running and generation == self._live_generation
                         and not (stop_event is not None and stop_event.is_set())):
-                    visible_tail = self.strip_rt_markers(sentence_buf)
+                    visible_tail = realtime_visible_text(sentence_buf, self._tts, self.strip_rt_markers)
                     if (self._pending_rt_silence_marker(sentence_buf)
                             and not getattr(self._realtime, "execution_completed", False)):
                         if isinstance(buffer_reply_key, str) and buffer_reply_key:
                             deferred_marker_tail = (buffer_reply_key, sentence_buf)
                         tail = ""
                     else:
-                        tail = visible_tail
+                        tail = realtime_speech_text(sentence_buf, self._tts, self.strip_rt_markers) if visible_tail else ""
                     if tail:
                         if cues is not None:
                             cues.finish(getattr(self._realtime, "execution_turn_id", ""))

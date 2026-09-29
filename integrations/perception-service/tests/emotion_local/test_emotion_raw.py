@@ -1,9 +1,4 @@
-"""predict_face(gate=False): the ungated argmax plus every class probability.
-
-HAL now owns the per-label gate, so the server must be able to hand back what
-the model actually said. The gated path stays the default for every other
-caller.
-"""
+"""predict_face(gate=False): the ungated argmax plus every class probability; gated stays default."""
 
 import asyncio
 import types

@@ -1,21 +1,4 @@
-"""Per-detection debug capture for the v2 face pipeline.
-
-Every face the recognizer decides on writes its OWN timestamped folder under
-``config.FACEID_LOG_DIR``, so a false acceptance (wrong person matched) or a
-false rejection can be eyeballed against the actual frame instead of guessed at
-from a log line. Same folder shape and naming scheme as the face-emotion debug
-log, so both can be reviewed with the same tooling.
-
-Knobs live in ``hal/config.py`` with the rest of the HAL environment:
-``HAL_FACEID_DEBUG_LOG_ENABLED`` / ``HAL_FACEID_LOG_DIR`` /
-``HAL_FACEID_LOG_MAX_TRIGGERS``.
-
-Note this deliberately does NOT write a folder when the detector finds no face
-at all: unlike emotion (which only runs once a face exists), face detection ticks
-every ``HAL_SENSING_INTERVAL`` seconds whether or not anybody is in the room, so
-empty-room frames would evict every interesting detection from the capped
-directory within minutes.
-"""
+"""Per-detection debug capture for the v2 face pipeline."""
 
 import json
 import logging
@@ -30,11 +13,6 @@ import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# face_with_landmark.jpg framing: the detector bbox padded by this fraction (the
-# FaceMesh covers forehead/jaw that can sit outside a tight bbox, and clipped
-# points are exactly what you need to see), upscaled so the view's longer side
-# is at least this many pixels — 468 dots on a 110 px face are an unreadable
-# smear otherwise.
 _LANDMARK_VIEW_PAD = 0.25
 _LANDMARK_VIEW_MIN_PX = 320
 
@@ -43,34 +21,8 @@ class FaceIdDebugLogger:
     """Persists every face-recognition decision to its OWN timestamped folder
     under ``config.FACEID_LOG_DIR``.
 
-    The folder name encodes the verdict up front so a wrong identity is obvious
-    from the directory listing alone:
-
-      - decision: ``<timestamp>_<face_id>_<similarity>`` — e.g.
-        ``20260903-160102-091365_long_0.62``
-      - failure:  ``<timestamp>_FAIL-<reason>`` — e.g.
-        ``20260903-160104-226340_FAIL-too-small``
-
-    Each folder contains:
-
-      - ``input.jpg``     the face cut out of the original frame (detector bbox)
-      - ``aligned.jpg``   the 112x112 aligned crop actually fed to EdgeFace
-      - ``frame.jpg``     the clean, unannotated original frame
-      - ``annotated.jpg`` full frame with bbox + "<id> <similarity>" drawn
-      - ``face_with_landmark.jpg`` padded face view with the dense 468-point
-        FaceMesh plotted, the 5 alignment points highlighted, and the detector
-        bbox outlined
-      - ``landmarks.json`` the same mesh as numbers (full-frame pixels), for
-        offline re-alignment checks; compact, written only when a mesh exists
-      - ``result.json``   identity, every bank's similarity, thresholds, bbox
-
-    ``result.json`` records both the raw ``bbox`` and the clamped ``crop_box``
-    actually used, so ``input.jpg`` can be reproduced from ``frame.jpg`` (or
-    re-cropped with different padding) offline.
-
     All writes are best-effort and lock-guarded — a logging failure never breaks
-    detection. When ``max_triggers > 0`` the oldest folders are pruned so the log
-    directory stays bounded.
+    detection.
     """
 
     def __init__(self, root_dir: str, enabled: bool = True, max_triggers: int = 0):
@@ -93,9 +45,9 @@ class FaceIdDebugLogger:
     def _json_default(o: Any) -> Any:
         """Coerce non-JSON types (numpy scalars/arrays) to native values so
         similarities serialize as numbers, not stringified reprs."""
-        if hasattr(o, "item"):  # numpy scalar → python int/float
+        if hasattr(o, "item"):
             return o.item()
-        if hasattr(o, "tolist"):  # numpy array → list
+        if hasattr(o, "tolist"):
             return o.tolist()
         return str(o)
 
@@ -131,14 +83,7 @@ class FaceIdDebugLogger:
         landmarks: Any,
         kps5: Any = None,
     ) -> cv2.typing.MatLike | None:
-        """Padded face view with the dense mesh plotted over it.
-
-        Magenta = the 468 FaceMesh points, yellow = the 5 canonical points the
-        ArcFace warp is built from (mis-set eyes/nose/mouth corners skew the
-        aligned crop and, with it, the embedding), green = the detector bbox.
-        Landmarks are in full-frame pixels, so they are shifted into the crop
-        and scaled by the same factor the view was upscaled with.
-        """
+        """Padded face view with the dense mesh plotted over it."""
         if landmarks is None:
             return None
         try:
@@ -177,9 +122,10 @@ class FaceIdDebugLogger:
 
     @staticmethod
     def _landmark_summary(landmarks: Any, kps5: Any) -> dict[str, Any]:
-        """The small landmark facts that belong in result.json: how many dense
-        points there were, and the 5 warp points themselves (they are what a
-        bad alignment shows up in, and 5 pairs stay readable inline)."""
+        """The small landmark facts that belong in result.json: how many dense points there
+        were, and the 5 warp points themselves (they are what a bad alignment shows up
+        in, and 5 pairs stay readable inline).
+        """
         out: dict[str, Any] = {
             "landmark_count": 0 if landmarks is None else int(len(landmarks)),
         }
@@ -219,9 +165,6 @@ class FaceIdDebugLogger:
                 for filename, image in images.items():
                     if image is not None:
                         _ = cv2.imwrite(os.path.join(folder, filename), image)
-                # Bulk numeric payloads (the dense mesh) go to their own compact
-                # file — inlining 468 points would bury result.json, which has
-                # to stay scannable.
                 for filename, payload in (sidecars or {}).items():
                     if payload is None:
                         continue
@@ -261,7 +204,6 @@ class FaceIdDebugLogger:
                 for e in os.listdir(self._root)
                 if os.path.isdir(os.path.join(self._root, e))
             ]
-            # Names are timestamp-prefixed → lexical sort == chronological.
             entries.sort()
             for stale in entries[: max(0, len(entries) - self._max_triggers)]:
                 shutil.rmtree(os.path.join(self._root, stale), ignore_errors=True)
@@ -283,12 +225,6 @@ class FaceIdDebugLogger:
     ) -> str | None:
         """One face the recognizer reached an identity decision on → its own
         folder, named ``<timestamp>_<face_id>_<similarity>``."""
-        # Bail BEFORE _annotate / _draw_landmarks: each copies the whole frame
-        # (~2.8 MB at 1280x720) and draws on it, so leaving the check to
-        # _write_folder would cost two frame memcpys per face per tick even with
-        # capture switched off. detect() already gates every call site; this is
-        # the same guard one level down, so a future caller cannot pay that cost
-        # by forgetting. Mirrors the fix made to the emotion capture.
         if not self._enabled:
             return None
         annotated = (
@@ -311,7 +247,6 @@ class FaceIdDebugLogger:
             record["bbox"] = list(bbox)
         record.update(meta)
         record.update(self._landmark_summary(landmarks, kps5))
-        # frame.jpg is the clean original → re-crop from it using bbox/crop_box.
         return self._write_folder(
             name,
             record,
@@ -338,12 +273,6 @@ class FaceIdDebugLogger:
     ) -> str | None:
         """One face that never reached an identity decision → its own folder,
         with the input image (when available) and the reason it was dropped."""
-        # Bail BEFORE _annotate / _draw_landmarks: each copies the whole frame
-        # (~2.8 MB at 1280x720) and draws on it, so leaving the check to
-        # _write_folder would cost two frame memcpys per face per tick even with
-        # capture switched off. detect() already gates every call site; this is
-        # the same guard one level down, so a future caller cannot pay that cost
-        # by forgetting. Mirrors the fix made to the emotion capture.
         if not self._enabled:
             return None
         mesh = (

@@ -1,14 +1,9 @@
-"""Noise reduction using the noisereduce library.
-
-Disabled by default (see AudioProcessorFactory). ``noisereduce`` is imported
-lazily so it is never required on the default HAL path.
-"""
+"""Noise reduction using the noisereduce library."""
 
 import numpy as np
 
 from .base import Audio, AudioProcessorBase
 
-# --- Defaults ---
 DEFAULT_STATIONARY: bool = False
 
 
@@ -24,7 +19,7 @@ class NoiseReducer(AudioProcessorBase):
             return input
 
         try:
-            import noisereduce as nr  # lazy: only loaded when this stage runs
+            import noisereduce as nr
 
             cleaned = nr.reduce_noise(
                 y=input.waveform, sr=input.sample_rate, stationary=self._stationary

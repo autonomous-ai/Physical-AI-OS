@@ -14,22 +14,14 @@ logger = logging.getLogger(__name__)
 
 
 class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
-    """Base interface for person detectors.
-
-    Subclasses implement ``start``, ``stop``, ``is_ready``, and ``predict``.
-    ``extract_largest_crop`` is provided by the base class.
-    """
+    """Base interface for person detectors."""
 
     def extract_largest_crop(
         self,
         input: list[cv2t.MatLike],
         min_area_ratio: float = 0.0,
     ) -> list[cv2.typing.MatLike | None]:
-        """Return a crop of the largest detected person in each frame.
-
-        Skips persons whose area is below ``min_area_ratio`` of the frame.
-        Returns ``None`` per frame when no qualifying person is found.
-        """
+        """Crop of the largest person per frame with area >= ``min_area_ratio``, else None."""
         detections: list[RawPersonDetection] = self.predict(input)
         return self.extract_largest_crop_from_raw(input, detections, min_area_ratio)
 
@@ -61,7 +53,6 @@ class PersonDetector(PredictorBase[cv2t.MatLike, RawPersonDetection], ABC):
                 cropped_input.append(None)
                 continue
 
-            # Find largest among those passing the area filter
             filtered_area = np.where(filter_mask, pixel_area, 0.0)
             largest_id: int = int(filtered_area.argmax(0))
 

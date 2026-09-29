@@ -9,19 +9,13 @@ INPUT_T = TypeVar("INPUT_T")
 OUTPUT_T = TypeVar("OUTPUT_T")
 PREDICTOR_T = TypeVar("PREDICTOR_T")
 
-# Global GPU lock. ANY code that touches the GPU (ONNX inference, PyTorch
-# forward, TorchScript VAD, model loading/warmup) must hold this lock.
-# Prevents CUDA stream collisions, cuDNN race conditions, and OOM from
-# concurrent GPU allocations across all predictor and processor instances.
+# Global GPU lock: any GPU work (inference, VAD, model load/warmup) must hold it to
+# avoid CUDA stream collisions, cuDNN races and OOM from concurrent allocations.
 gpu_lock: threading.RLock = threading.RLock()
 
 
 class PredictorFactory(Generic[PREDICTOR_T], ABC):
-    """Base class for predictor factories.
-
-    Subclasses store config (model path, thresholds, etc.) in __init__
-    and create fresh predictor instances via create().
-    """
+    """Base class for predictor factories: store config, create fresh predictors."""
 
     @abstractmethod
     def create(self) -> PREDICTOR_T:
@@ -78,21 +72,12 @@ class PredictorBase(Generic[INPUT_T, OUTPUT_T], ABC):
     def predict(
         self, input: list[INPUT_T], *, preprocess: bool = True, **kwargs: Any
     ) -> list[OUTPUT_T]:
-        """Make prediction on a batch of input.
+        """Predict on a batch, chunked by ``_batch_size``.
 
-        Each subclass acquires ``gpu_lock`` around the ONNX ``session.run()``
-        call inside ``_predict_impl()``, serializing GPU access while allowing
-        preprocessing to run concurrently. Large batches are chunked by
-        ``_batch_size`` to limit peak memory.
+        Subclasses hold ``gpu_lock`` only around ``session.run()`` so preprocessing stays concurrent.
 
         Args:
-            input: Batch of inputs.
-            preprocess: If True (default), run preprocess on each input
-                before inference. Set to False when input is already
-                preprocessed (e.g. from a buffer).
-
-        Raises:
-            RuntimeError: If the predictor is not ready.
+            preprocess: False when input is already preprocessed.
         """
         with self._lock:
             if not self._is_ready_impl():

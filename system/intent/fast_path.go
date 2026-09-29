@@ -32,12 +32,12 @@ func matchCanonical(text string) *Result {
 func canonicalCommand(text string) bool {
 	switch text {
 	case "turn on the light", "light on", "turn off the light", "light off",
-		"dim the light", "dimmer", "dim light", "volume up", "louder", "volume down", "quieter",
+		"dim the light", "dimmer", "dim light", "brighten the light", "brighten light", "volume up", "louder", "volume down", "quieter",
 		"mute speaker", "mute the speaker", "unmute speaker", "unmute the speaker",
 		"stop music", "stop the music", "music off", "stop playing", "stop talking", "ok stop",
 		"stop tracking", "stop following", "stop watching", "stop track",
 		"what time", "what time is it", "whats the time", "what's the time",
-		"goodnight", "good night", "brighter", "energize", "max brightness":
+		"goodnight", "good night", "brighter", "energize":
 		return true
 	}
 	for _, scene := range sceneNames {

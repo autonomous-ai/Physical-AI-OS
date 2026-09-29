@@ -21,14 +21,9 @@ class BatchingQueueItem(Generic[INPUT_T, OUTPUT_T]):
 
 
 class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
-    """Async batching layer that sits between sessions and a predictor.
+    """Async batching layer between sessions and a predictor.
 
-    Multiple concurrent sessions submit individual inputs via ``submit()``.
-    The batcher accumulates them and dispatches to the underlying predictor
-    in batches, improving GPU utilization under concurrent load.
-
-    Items with different kwargs (e.g. different ``classes`` for object
-    detection) are grouped into separate sub-batches automatically.
+    Items with different kwargs (e.g. object ``classes``) go into separate sub-batches.
     """
 
     DEFAULT_BATCH_SIZE: int = 1
@@ -58,11 +53,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
 
     @property
     def predictor(self) -> PredictorBase[INPUT_T, OUTPUT_T]:
-        """Access the underlying predictor for non-inference methods.
-
-        Use this for helpers like ``preprocess_single_frame()``,
-        ``extract_crops()``, ``class_names``, etc.
-        """
+        """Underlying predictor, for non-inference helpers (e.g. ``class_names``)."""
         return self._predictor
 
     async def start(self) -> None:
@@ -79,10 +70,7 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         )
 
     def _ensure_loop(self) -> asyncio.Queue[BatchingQueueItem[INPUT_T, OUTPUT_T]]:
-        """Create the queue and background loop in the current event loop.
-
-        Returns the queue so callers can use it without None-checks.
-        """
+        """Create the queue and background loop in the current event loop; returns the queue."""
         current_loop = asyncio.get_running_loop()
         if self._bound_loop is not current_loop:
             self._bound_loop = current_loop
@@ -105,7 +93,6 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
                 pass
             self._running_loop = None
 
-        # Reject any remaining pending items.
         for item in self._pending_items:
             if not item.future.done():
                 item.future.set_exception(
@@ -119,12 +106,9 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         return self._running and self._predictor.is_ready()
 
     async def submit(self, inputs: list[INPUT_T], **kwargs: Any) -> list[asyncio.Future[OUTPUT_T]]:
-        """Submit inputs for batched inference.
+        """Submit inputs for batched inference; returns one future per input.
 
-        Returns a list of futures, one per input. Await them to get results.
-        Extra kwargs are forwarded to ``predictor.predict()`` and are used
-        to group items into sub-batches (items with the same kwargs get
-        batched together).
+        Extra kwargs are forwarded to ``predictor.predict()`` and group items into sub-batches.
         """
         if not self._running:
             raise RuntimeError("InputBatcher is not running")
@@ -151,20 +135,17 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
         if queue is None:
             raise RuntimeError("InputBatcher._loop started without a queue")
         while True:
-            # Calculate how long to wait for the next item.
             wait_ts = max(
                 self._batch_timeout - (time.monotonic() - self._last_dispatch_ts),
                 0.001,  # avoid zero timeout (busy loop)
             )
 
-            # Wait for a new item or timeout.
             try:
                 new_item = await asyncio.wait_for(queue.get(), timeout=wait_ts)
                 self._pending_items.append(new_item)
             except (asyncio.TimeoutError, TimeoutError):
                 pass
 
-            # Drain any remaining items from the queue.
             while True:
                 try:
                     new_item = queue.get_nowait()
@@ -175,7 +156,6 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
             if not self._pending_items:
                 continue
 
-            # Decide whether to dispatch.
             now_ts = time.monotonic()
             interval_ts = now_ts - self._last_dispatch_ts
             if len(self._pending_items) < self._batch_size and interval_ts <= self._batch_timeout:
@@ -183,12 +163,10 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
 
             while self._pending_items:
                 self._last_dispatch_ts = time.monotonic()
-                # Collect up to batch_size items from pending.
                 dispatch_items: list[BatchingQueueItem[INPUT_T, OUTPUT_T]] = []
                 while len(dispatch_items) < self._batch_size and self._pending_items:
                     dispatch_items.append(self._pending_items.popleft())
 
-                # Group by kwargs for correct dispatch.
                 groups: dict[
                     int,
                     list[BatchingQueueItem[INPUT_T, OUTPUT_T]],
@@ -196,7 +174,6 @@ class InputBatcher(Generic[INPUT_T, OUTPUT_T]):
                 for item in dispatch_items:
                     groups[item.kwargs_key].append(item)
 
-                # Dispatch each group.
                 for items in groups.values():
                     input_batch: list[INPUT_T] = [it.input for it in items]
                     kwargs = items[0].kwargs

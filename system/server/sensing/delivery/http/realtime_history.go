@@ -24,12 +24,10 @@ func (h *SensingHandler) persistRealtimeHistory(c *gin.Context, req SensingEvent
 		c.JSON(http.StatusInternalServerError, serializers.ResponseError("Could not save realtime conversation history"))
 		return
 	}
-	// The voice exchange and its main-agent synchronization are separate runs.
 	runID := "device-realtime-" + strings.TrimPrefix(historyRunID, "device-chat-context-")
 	input, reply, _ := strings.Cut(strings.TrimPrefix(req.Message, "[skills: input-branching]\n[HANDLED] "), "\n[REPLY] ")
 	input = strings.TrimPrefix(input, "[HANDLED] ")
 	telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
-	// Preserve the original sensing evidence and look thumbnail for the web turn.
 	start := flow.Start("sensing_input", map[string]any{
 		"type": req.Type, "message": req.Message, "interaction_id": req.InteractionID,
 		"route": "realtime", "history_run_id": historyRunID, "voice_turn_type": req.voiceTurnType(),

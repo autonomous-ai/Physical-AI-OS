@@ -1,23 +1,4 @@
-"""Vision-guided object tracking with servo follow — gimbal hybrid mode.
-
-Workflow:
-  1. Caller provides a target label (or bbox). A detector (detection.py) finds
-     the object in the current frame and initialises a ViT local tracker
-     (vit_tracker.py).
-  2. A fast loop (FAST_LOOP_FPS) updates the tracker each frame, computes the
-     pixel offset from frame center, runs it through an alpha-beta filter +
-     PID + velocity feedforward (filters.py), and publishes a servo goal that
-     a decoupled follow worker glides toward (servo_follow.py).
-  3. A background YOLO thread fires every YOLO_REDETECT_S to correct tracker
-     drift — it does NOT block the fast loop (non-freezing, queue-based).
-  4. The session stops on ghost-lock (sliding-window low confidence), no
-     detector confirm for STOP_NO_YOLO_S, retry exhaustion, or timeout.
-
-Package layout: constants.py (tuning knobs), filters.py (math), frame_utils.py
-(downscale/coord mapping), detection.py (YOLO/YuNet/YOLOWorld), vit_tracker.py
-(OpenCV tracker backend), servo_follow.py (goal + follow worker), this file
-(session lifecycle + the fast loop).
-"""
+"""Vision-guided object tracking with servo follow — gimbal hybrid mode."""
 
 import logging
 import math
@@ -47,26 +28,13 @@ from hal.drivers.tracking.vit_tracker import (
 
 logger = logging.getLogger(__name__)
 
-# Retries after the tracker+detector both lose the target (search sweep between).
 MAX_TRACKING_RETRIES = 4
 
 _TRACKING_MOTORS = ("base_yaw", "base_pitch", "elbow_pitch", "wrist_pitch")
 
 
 def trust_window_s(detect_latency_s: float) -> float:
-    """How long to go without a detector confirm before distrusting the tracker.
-
-    Sized from the detector's MEASURED cost rather than fixed, because one loop
-    is served by detectors three orders of magnitude apart: YuNet at ~30ms,
-    local YOLO at ~0.4s, the remote open-vocab model at ~0.55s median. One redetect
-    interval plus two detections is the shortest gap a single missed confirm can
-    produce, so anything tighter reads an ordinary miss as a lost lock — which
-    is what parked the servo in WAIT-YOLO with the object plainly in frame on
-    every target the face detector does not serve.
-
-    C.TRUST_TRACKER_S remains the floor, so a fast detector keeps exactly the
-    behaviour it had.
-    """
+    """How long to go without a detector confirm before distrusting the tracker."""
     return max(
         C.TRUST_TRACKER_S,
         C.YOLO_REDETECT_S + 2.0 * detect_latency_s + C.TRUST_MARGIN_S,
@@ -101,7 +69,6 @@ class TrackerService:
         self._follower = ServoFollower()
         # Area (px²) of the last trusted bbox lock — baseline for bloat detection.
         self._track_init_area: float = 0.0
-        # Remote detections mirror their confidence into the session status.
         self._detector = ObjectDetector(
             on_confidence=lambda c: setattr(self._state, "confidence", c)
         )
@@ -134,11 +101,7 @@ class TrackerService:
         camera_capture=None,
         animation_service=None,
     ) -> bool:
-        """Start tracking an object.
-
-        If bbox is provided, use it directly. Otherwise, auto-detect via YOLOWorld.
-        target_label accepts str or list[str] — first non-empty label is used.
-        """
+        """Start tracking an object."""
         if camera_capture is None or animation_service is None:
             self.last_error = "camera or animation service not available"
             logger.error("tracker start: %s", self.last_error)
@@ -149,11 +112,7 @@ class TrackerService:
                       else [target_label] if target_label else [])
         target_label = candidates[0] if candidates else ""
 
-        # Serialize concurrent /servo/track calls. Seeding measured 2.4s for
-        # three candidate labels, and the first call of a session also pays the
-        # model load (~6s). Without this lock,
-        # two near-simultaneous calls both pass self.stop() (nothing to stop yet)
-        # and spawn two tracking threads that race over servo state.
+        # Serialize concurrent /servo/track calls.
         if not self._start_lock.acquire(blocking=False):
             self.last_error = "another tracking session is initializing — ignoring duplicate request"
             logger.warning("tracker start: %s target='%s'", self.last_error, target_label)
@@ -176,10 +135,6 @@ class TrackerService:
         """Body of start() — runs while _start_lock is held."""
 
         # Freeze servos so YOLO + tracker init see a sharp, stable frame.
-        # NOT capture_still (it unfreezes on return; the freeze must hold
-        # through YOLO + tracker init so the scene can't shift under them).
-        # Acquire a consumer: with none, the capture loop idles at ~0.5fps and
-        # last_frame can be up to 2s old — captured BEFORE the freeze, blurred.
         settle_s = 0.30
         t_req = time.perf_counter()
         animation_service.freeze()
@@ -198,7 +153,7 @@ class TrackerService:
                             break
                     time.sleep(0.03)
                 if frame is None:
-                    frame = camera_capture.last_frame  # best effort
+                    frame = camera_capture.last_frame
             finally:
                 camera_capture.release_consumer()
             t_after_settle = time.perf_counter()
@@ -218,24 +173,6 @@ class TrackerService:
                     animation_service.unfreeze()
                     return False
                 t_yolo0 = time.perf_counter()
-                # Try every candidate label the caller offered and keep the
-                # most confident hit. The API has always documented this
-                # ("pass a list when unsure of the exact word"); until now the
-                # list was truncated to its first entry, so a caller hedging
-                # between near-synonyms got one guess and a failure. It matters
-                # most for exactly the objects this path is weakest on: COCO
-                # splits hairs a speaker does not — bottle is not cup, and a
-                # user holding a water bottle says "cup". Seeding happens once
-                # per session and local detection is ~300ms, so a second or
-                # third look is affordable here in a way it would not be in the
-                # fast loop.
-                # Local sweep first, across ALL candidates, before any of them
-                # is allowed the remote detector. Interleaving them instead
-                # (local then remote, per candidate) makes a miss on the first
-                # word pay a network round-trip before the second word is tried at
-                # all — measured at 5.7s to seed three candidates, against a
-                # 10s session budget. Remote is the fallback for the QUESTION,
-                # not for each guess at how to word it.
                 probe = list(candidates or [target_label])
                 bbox = None
                 best_conf = -1.0
@@ -317,10 +254,9 @@ class TrackerService:
             t = self._state.thread
 
         if t and t.is_alive():
-            # Tracking loop iterations can take up to ~250ms (tracker update +
-            # frame settle). 10s gives ~40 iterations of headroom so we never
-            # return while the old thread is still racing the servo with a new
-            # session's commands.
+            # Tracking loop iterations can take up to ~250ms (tracker update + frame
+            # settle). 10s gives ~40 iterations of headroom so we never return while the
+            # old thread is still racing the servo with a new session's commands.
             t.join(timeout=10.0)
             if t.is_alive():
                 logger.error("[tracker.stop] previous tracking thread refused to exit after 10s")
@@ -328,8 +264,9 @@ class TrackerService:
         logger.info("Tracking stopped: '%s'", self._state.target_label)
 
     def update_bbox(self, bbox: Tuple[int, int, int, int], camera_capture=None) -> bool:
-        """Re-init the active session's tracker to a caller-supplied bbox
-        (x, y, w, h in original camera coords). Serves POST /servo/track/update."""
+        """Re-init the active session's tracker to a caller-supplied bbox (x, y, w, h in
+        original camera coords). Serves POST /servo/track/update.
+        """
         if not self.is_tracking:
             return False
         if camera_capture is None:
@@ -356,8 +293,6 @@ class TrackerService:
         self._track_init_area = float(bbox[2] * bbox[3])
         logger.info("update_bbox: tracker re-initialized to %s", bbox)
         return True
-
-    # --- Internal tracking loop ---
 
     def _track_loop(self, camera_capture, animation_service):
         """Background loop: tracker update at FAST_LOOP_FPS + YOLO background correction."""
@@ -396,41 +331,31 @@ class TrackerService:
         # Baseline bbox area for bloat detection — the initial lock is trusted.
         self._track_init_area = float(state.bbox[2] * state.bbox[3]) if state.bbox else 0.0
 
-        # Detection gating + reinit debounce state. A noisy YOLO/YuNet detection
-        # (background face, glitch box) can make the correction bbox jump wildly
-        # between frames. Reiniting the ViT tracker to every such box is the
-        # main cause of jerky servo. Keep a short area history to reject outlier
-        # detections, and rate-limit reinits.
+        # Detection gating + reinit debounce state.
         recent_yolo_areas: list[float] = []
         last_reinit_t: float = 0.0
 
-        # Alpha-beta centroid filter (smoothed, velocity-led, outlier-gated offset).
         ab_filter = AlphaBetaFilter2D(C.AB_ALPHA, C.AB_BETA, C.AB_GATE_PX)
-        last_ab_t: Optional[float] = None   # perf_counter of previous filter update (dt source)
-        prev_dx: Optional[float] = None   # offset from previous frame (direction arrow)
+        last_ab_t: Optional[float] = None
+        prev_dx: Optional[float] = None
         prev_dy: Optional[float] = None
         motion_state = "INIT"
         last_servo_t: float = 0.0         # timestamp of last servo fire (for cooldown)
         miss_count = 0
-        yolo_miss_count = 0   # consecutive YOLO misses — ghost tracking detection
-        # Sliding window of below-threshold confidence flags (1 = low frame).
+        yolo_miss_count = 0
         low_conf_window: deque = deque(maxlen=C.LOW_CONF_WINDOW)
-        saccade_mode = False   # profile state with hysteresis (see constants)
+        saccade_mode = False
         retry_count = 0
         frame_count = 0
-        t_csrt_acc = 0.0   # accumulated tracker-update time
+        t_csrt_acc = 0.0
         servo_count = 0    # frames where servo actually fired
         track_start_t = time.perf_counter()
         last_yolo_t = track_start_t
         # Detector-gated trust: skip servo if YOLO hasn't confirmed target recently.
         last_yolo_confirm_t = track_start_t
-        # Measured detector cost (EMA, seconds), maintained by _fire_yolo. 0
-        # until the first redetect returns; the trust window falls back to the
-        # constant floor until then.
         detect_latency_s = 0.0
         fps_t0 = track_start_t
 
-        # Queue for background YOLO results (maxsize=1 → latest result only).
         yolo_q: queue.Queue = queue.Queue(maxsize=1)
         yolo_running = threading.Event()
 
@@ -445,7 +370,6 @@ class TrackerService:
             logger.info("[retry] attempt %d/%d (soft)", retry_count, MAX_TRACKING_RETRIES)
             self._yaw_pid.reset()
             self._pitch_pid.reset()
-            # Try YOLO detect on fresh frame
             _f = camera_capture.last_frame
             if _f is not None:
                 _bbox = self.detect_object(_f, state.target_label, strict=False)
@@ -460,16 +384,15 @@ class TrackerService:
                                 logger.info("[retry] tracker reinit OK bbox=%s", _bbox)
                         except Exception as _e:
                             logger.warning("[retry] tracker init failed: %s", _e)
-            # Reset per-attempt state
             miss_count = 0
             yolo_miss_count = 0
             low_conf_window.clear()   # fresh lock → stale conf history is meaningless
             state.low_confidence_frames = 0
-            ab_filter.reset()   # tracker relocated → drop stale velocity/gate
+            ab_filter.reset()
             prev_dx = prev_dy = None
             motion_state = "INIT"
-            last_yolo_t = 0  # force YOLO on next frame
-            while True:  # drain stale YOLO queue
+            last_yolo_t = 0
+            while True:
                 try: yolo_q.get_nowait()
                 except queue.Empty: break
             return True
@@ -477,17 +400,12 @@ class TrackerService:
         def _fire_yolo(frame_snap: npt.NDArray[np.uint8]) -> None:
             nonlocal detect_latency_s
             t0_yolo = time.perf_counter()
-            # No remote fallback on a routine redetect: this call confirms a
-            # lock we already have, and a remote round-trip would stall the
-            # single-flight detect thread long enough to trip the trust gate
-            # below. Recovery paths (_do_retry, session seeding) still allow it.
+            # No remote fallback on a routine redetect: this call confirms a lock we
+            # already have, and a remote round-trip would stall the single-flight detect
+            # thread long enough to trip the trust gate below.
             result = self.detect_object(frame_snap, state.target_label, strict=False,
                                         allow_remote_fallback=False)
             t_yolo_ms = (time.perf_counter() - t0_yolo) * 1000
-            # EMA of what this detector actually costs, which is what sizes the
-            # trust window (see trust_window_s). Measured rather than declared:
-            # the same code serves YuNet (~30ms), local YOLO (~0.5s) and the
-            # remote model (~2s), and a constant tuned for one starves the others.
             detect_latency_s = (0.7 * detect_latency_s + 0.3 * (t_yolo_ms / 1000.0)
                                 if detect_latency_s > 0 else t_yolo_ms / 1000.0)
             logger.info("[yolo-bg] detect=%.0fms result=%s bbox=%s target='%s'",
@@ -549,14 +467,9 @@ class TrackerService:
                     miss_count += 1
                     logger.info("[search] tracker miss %d/%d target='%s'", miss_count, C.YOLO_MAX_MISS, state.target_label)
                     if miss_count == 1:
-                        # First miss: force YOLO immediately instead of waiting for interval
                         last_yolo_t = 0
                     coast_speed = (ab_filter.vx ** 2 + ab_filter.vy ** 2) ** 0.5
                     if miss_count <= C.MISS_COAST_FRAMES and coast_speed > C.VFF_MOVING_MIN_PXS:
-                        # Target was moving when ViT lost it (fast wave, motion
-                        # blur) — coast along its last velocity to re-catch it
-                        # instead of stopping dead, which guarantees it exits
-                        # the frame before the redetect lands.
                         dt_c = 1.0 / C.FAST_LOOP_FPS
                         deg_per_px = C.CAMERA_FOV_DEG / w_fr
                         _lim = C.PID_OUTPUT_MAX_DEG
@@ -588,9 +501,7 @@ class TrackerService:
                 bbox_ratio = (bw * bh) / frame_area
                 # "Object too close" stop removed intentionally — servo PID drives off
                 # the centroid, not bbox size, so a person filling the frame can still
-                # be tracked. Stopping just because they stood up close was killing
-                # every session within 1–2s on the Pi. If they back away, bbox shrinks
-                # naturally and tracking continues.
+                # be tracked.
 
                 # Ghost-lock: bbox shrunk to a sliver (typically locked on frame edge).
                 if bbox_ratio < C.DETECT_MIN_AREA_RATIO:
@@ -599,9 +510,6 @@ class TrackerService:
                     break
 
                 # Bbox drifted large — fire YOLO to correct, but DON'T skip the frame.
-                # Skipping creates a dead spiral: tracker keeps bloating each iteration
-                # while YOLO misses, until bbox crosses the stop threshold. Letting the
-                # loop continue keeps the servo chasing while YOLO works in background.
                 if bbox_ratio > C.DETECT_MAX_AREA_RATIO:
                     logger.warning("[bbox] large (%.1f%% > %.1f%%) — firing YOLO bg, keep tracking",
                                    bbox_ratio * 100, C.DETECT_MAX_AREA_RATIO * 100)
@@ -615,16 +523,10 @@ class TrackerService:
                 cx_obj = bx + bw / 2.0
                 cy_obj = by + bh / 2.0
 
-                # Alpha-beta filter on the centroid: predict → gate → correct.
-                # dt is wall-clock between frames (variable on the Pi, so feed it
-                # explicitly). The PID then drives off a smoothed, velocity-led,
-                # outlier-gated offset rather than the jittery raw ViT bbox center.
                 now_ab = time.perf_counter()
                 ab_dt = 0.0 if last_ab_t is None else (now_ab - last_ab_t)
                 last_ab_t = now_ab
                 fx, fy, vx_f, vy_f, ab_gated = ab_filter.update(cx_obj, cy_obj, ab_dt)
-                # Velocity feedforward: aim where the target will be in C.AB_LEAD_S,
-                # not where it is now — cuts the lag on fast motion.
                 lead_x = fx + vx_f * C.AB_LEAD_S
                 lead_y = fy + vy_f * C.AB_LEAD_S
                 dx = float(lead_x - w_fr / 2.0)
@@ -633,7 +535,6 @@ class TrackerService:
                     logger.debug("[ab-gate] meas=(%.0f,%.0f) coast→(%.0f,%.0f) v=(%.0f,%.0f)px/s",
                                  cx_obj, cy_obj, fx, fy, vx_f, vy_f)
 
-                # --- tracking_object log: position, motion, direction ---
                 offset_mag = (dx ** 2 + dy ** 2) ** 0.5
                 screen_x_pct = (cx_obj / w_fr) * 100
                 screen_y_pct = (cy_obj / h_fr) * 100
@@ -654,21 +555,14 @@ class TrackerService:
                             dx, dy, offset_mag, moving_str, direction, bbox_ratio * 100,
                             confidence, time.perf_counter() - last_yolo_confirm_t)
 
-                # --- PID + velocity-feedforward continuous-fire with detector-gated trust ---
                 now_t = time.perf_counter()
-                # Saccade vs pursuit: big offset → snappy relocation profile;
-                # small offset → heavy fluid-head pursuit profile. Hysteresis
-                # so the boundary doesn't flip-flop the speed cap every frame.
                 if saccade_mode:
                     if offset_mag < C.SACCADE_EXIT_FRAC * w_fr:
                         saccade_mode = False
                 elif offset_mag > C.SACCADE_OFFSET_FRAC * w_fr:
                     saccade_mode = True
-                # The tracking loop is a declared-bound path like any other: its
-                # own pursuit/saccade ceilings (55/100 deg/s) are tuning, not
-                # permission. A body that declares a lower motion.max_speed wins
-                # — this is the only place the loop's speed is chosen, so it is
-                # the whole gate.
+                # The tracking loop is a declared-bound path like any other: its own
+                # pursuit/saccade ceilings (55/100 deg/s) are tuning, not permission.
                 self._follower.set_profile(
                     C.SACCADE_SMOOTH_TIME if saccade_mode else C.SERVO_SMOOTH_TIME,
                     cap_speed_dps(
@@ -676,36 +570,25 @@ class TrackerService:
                         C.SACCADE_MAX_SPEED_DPS if saccade_mode else C.SERVO_MAX_SPEED_DPS,
                     ),
                 )
-                # Tiered dead zone: true zero inside INNER, lazy creep toward
-                # center up to the outer edge, full error beyond (continuous).
                 err_dx = soft_deadband(dx, w_fr * C.DEAD_ZONE_INNER_PCT,
                                        w_fr * C.DEAD_ZONE_YAW_PCT, C.DEAD_ZONE_CREEP_GAIN)
                 err_dy = soft_deadband(dy, h_fr * C.DEAD_ZONE_INNER_PCT,
                                        h_fr * C.DEAD_ZONE_PITCH_PCT, C.DEAD_ZONE_CREEP_GAIN)
-                # Target pixel speed (alpha-beta velocity) — drives the feedforward
-                # and keeps a centered-but-moving target being panned.
                 speed_pxs = (vx_f ** 2 + vy_f ** 2) ** 0.5
                 moving_ff = speed_pxs > C.VFF_MOVING_MIN_PXS
                 centered = err_dx == 0.0 and err_dy == 0.0
                 yolo_age = now_t - last_yolo_confirm_t
                 trust_window = trust_window_s(detect_latency_s)
                 # Bbox-trust guard: ViT bloated past its last trusted lock (or the
-                # absolute ceiling) → centroid is garbage. Hold the servo instead
-                # of chasing it; YOLO redetect / ghost-lock retry will relock.
-                # Untrusted only when the bbox overflows the frame (ViT dissolved).
-                # A real object — even a person standing close — is ≤ frame, so
-                # this never freezes a legitimately large target.
+                # absolute ceiling) → centroid is garbage.
                 cur_area_px = bw * bh
                 bloated_vs_trust = (
                     self._track_init_area > 0
                     and cur_area_px > self._track_init_area * C.BLOAT_HOLD_MULT
                 )
                 bbox_untrusted = bbox_ratio >= C.BBOX_FREEZE_RATIO or bloated_vs_trust
-                # Ghost-lock recovery: ViT sometimes reports ok=True with a bbox
-                # larger than the frame (lock dissolved into background). If that
-                # persists with no detector confirm, _do_retry instead of breaking
-                # — gives one chance to relocate via YOLO/YuNet before giving up
-                # the session.
+                # Ghost-lock recovery: ViT sometimes reports ok=True with a bbox larger
+                # than the frame (lock dissolved into background).
                 if bbox_ratio > 0.95 and yolo_age >= 3.0:
                     logger.warning("[ghost-lock] bbox=%.0f%% no-detect=%.1fs → forced retry",
                                    bbox_ratio * 100, yolo_age)
@@ -718,14 +601,12 @@ class TrackerService:
                                    yolo_age, C.STOP_NO_YOLO_S)
                     break
                 elif bbox_untrusted:
-                    # Bloated/garbage bbox — hold position, reset PID so the
-                    # integral doesn't wind up while we wait for a clean relock.
                     self._yaw_pid.reset()
                     self._pitch_pid.reset()
                     motion_state = "BLOAT-HOLD"
                     self._follower.hold()
                     if not yolo_running.is_set() and state.target_label:
-                        last_yolo_t = 0  # force YOLO redetect ASAP to relock
+                        last_yolo_t = 0
                     logger.info("[bbox] untrusted (%s): area=%.0f%% cur_px=%.0f trust_px=%.0f — HOLD servo, await YOLO relock",
                                 "overflow" if bbox_ratio >= C.BBOX_FREEZE_RATIO else "bloat>%.1fx" % C.BLOAT_HOLD_MULT,
                                 bbox_ratio * 100, cur_area_px, self._track_init_area)
@@ -735,26 +616,19 @@ class TrackerService:
                     # on feedforward so it never drifts out before the PID reacts.)
                     self._yaw_pid.reset()
                     self._pitch_pid.reset()
-                    # A previous PID goal can still be several command units
-                    # away. Retarget to the current pose; merely stopping new
-                    # PID fires lets the follower overshoot that stale goal and
-                    # then reverse on the next camera correction.
                     self._follower.hold()
                     motion_state = "CENTERED"
                 elif confidence < C.SERVO_MIN_CONF:
-                    # Tracker barely holding the lock — don't chase, even with a
-                    # fresh detector confirm (conf 0.15–0.4 + confirm used to be
-                    # a blind zone that kept the servo hunting ghosts). Tracker
-                    # keeps updating; PID resumes once confidence recovers.
+                    # Tracker barely holding the lock — don't chase, even with a fresh
+                    # detector confirm (conf 0.15–0.4 + confirm used to be a blind zone
+                    # that kept the servo hunting ghosts).
                     self._yaw_pid.reset()
                     self._pitch_pid.reset()
                     motion_state = "LOW-CONF-HOLD"
                     self._follower.hold()
                 elif yolo_age >= trust_window and confidence < C.TRACKER_TRUST_CONF:
                     # Tracker AND detector both unsure — hold servo, don't chase
-                    # phantom. If ViT confidence is high we trust the tracker
-                    # even without detector confirm (face moving fast often makes
-                    # YuNet miss while ViT keeps a good lock).
+                    # phantom.
                     motion_state = "WAIT-YOLO"
                     self._follower.hold()
                 elif (now_t - last_servo_t) >= C.SERVO_COOLDOWN_S:
@@ -764,10 +638,6 @@ class TrackerService:
                     # (verified empirically vs legacy gimbal path).
                     yaw_pid = self._yaw_pid.update(err_dx)
                     pitch_pid = self._pitch_pid.update(err_dy)
-                    # Velocity feedforward: convert target pixel velocity → a
-                    # per-fire angular step so the camera pans at the target's
-                    # speed with zero position error. deg_per_px is the same on
-                    # both axes for square pixels (vert FOV = horiz FOV·h/w).
                     dt_fire = (min(C.VFF_MAX_DT_S, now_t - last_servo_t)
                                if last_servo_t > 0 else 1.0 / C.FAST_LOOP_FPS)
                     deg_per_px = C.CAMERA_FOV_DEG / w_fr
@@ -786,10 +656,8 @@ class TrackerService:
                     last_servo_t = now_t
                 prev_dx, prev_dy = dx, dy
 
-                # Drain YOLO result queue — re-init tracker ONLY when it has
-                # clearly diverged. Blindly reiniting on every YOLO confirm causes
-                # ViT to bbox-bloat after re-init, which "teleports" the centroid
-                # and lurches the servo (the main cause of jerky tracking).
+                # Drain YOLO result queue — re-init tracker ONLY when it has clearly
+                # diverged.
                 try:
                     yolo_bbox = yolo_q.get_nowait()
                     if yolo_bbox is not None:
@@ -798,11 +666,9 @@ class TrackerService:
                         cur_bbox = state.bbox
                         cur_area = (cur_bbox[2] * cur_bbox[3]) if cur_bbox else 0
                         yolo_area = yolo_bbox[2] * yolo_bbox[3]
-                        # Detection gate (outlier rejection): reject a box whose
-                        # area is wildly off the recent median — a false detection
-                        # the tracker must NOT reinit to. Median over a short window
-                        # tolerates real scale changes (person approaching) while
-                        # dropping single-frame glitches (15k↔300k swings observed).
+                        # Detection gate (outlier rejection): reject a box whose area is
+                        # wildly off the recent median — a false detection the tracker
+                        # must NOT reinit to.
                         recent_yolo_areas.append(float(yolo_area))
                         if len(recent_yolo_areas) > 5:
                             recent_yolo_areas.pop(0)
@@ -813,26 +679,17 @@ class TrackerService:
                             if med > 0 and (yolo_area > med * C.YOLO_AREA_GATE_MULT
                                             or yolo_area < med / C.YOLO_AREA_GATE_MULT):
                                 area_outlier = True
-                        # Center distance between tracker bbox and YOLO bbox
                         cdx = cdy = 0.0
                         if cur_bbox is not None:
                             cdx = (cur_bbox[0] + cur_bbox[2] / 2.0) - (yolo_bbox[0] + yolo_bbox[2] / 2.0)
                             cdy = (cur_bbox[1] + cur_bbox[3] / 2.0) - (yolo_bbox[1] + yolo_bbox[3] / 2.0)
                         center_dist = (cdx ** 2 + cdy ** 2) ** 0.5
-                        # Reinit only when truly drifted. For a large bbox (e.g. full person
-                        # at 70%+ frame), YOLO and tracker can legitimately disagree on
-                        # center by 100–200px frame-to-frame just from how each draws the
-                        # bbox edges. Scale the divergence threshold by the smaller bbox
-                        # dimension so a 500-wide bbox tolerates ~200px center jitter.
                         cur_min_dim = min(cur_bbox[2], cur_bbox[3]) if cur_bbox else 0
                         diverge_threshold = max(120.0, cur_min_dim * 0.4)
                         bloated = cur_area > 0 and cur_area > yolo_area * 2.0
                         diverged = center_dist > diverge_threshold
-                        # Reinit debounce: rate-limit reinits so a noisy detector
-                        # can't reinit every frame (the churn that whipsaws the
-                        # servo). Bypass the cooldown only when the lock is clearly
-                        # lost (center past half the frame diagonal) so a real loss
-                        # still recovers fast.
+                        # Reinit debounce: rate-limit reinits so a noisy detector can't
+                        # reinit every frame (the churn that whipsaws the servo).
                         now_reinit = time.perf_counter()
                         frame_diag = (w_fr ** 2 + h_fr ** 2) ** 0.5
                         clearly_lost = center_dist > frame_diag * C.LOST_CENTER_FRAC
@@ -844,7 +701,7 @@ class TrackerService:
                             logger.info("[drift-correct] reinit reason: bloated=%s diverged=%s lost=%s "
                                         "cur_area=%d yolo_area=%d center_dist=%.0fpx",
                                         bloated, diverged, clearly_lost, cur_area, yolo_area, center_dist)
-                            ab_filter.reset()   # centroid legitimately jumps to YOLO bbox → re-seed filter
+                            ab_filter.reset()
                             new_tracker = create_tracker()
                             if new_tracker is not None:
                                 reinit_frame = camera_capture.last_frame
@@ -881,7 +738,6 @@ class TrackerService:
                     logger.info("[edge] offset=(%.0f,%.0f) > 25%% frame → force YOLO target='%s'",
                                 dx, dy, state.target_label)
 
-                # Fire background YOLO scan every C.YOLO_REDETECT_S.
                 now = time.perf_counter()
                 if state.target_label and not yolo_running.is_set() and now - last_yolo_t >= C.YOLO_REDETECT_S:
                     last_yolo_t = now
@@ -891,7 +747,6 @@ class TrackerService:
                         target=_fire_yolo, args=(snap,), daemon=True, name="yolo-worker"
                     ).start()
 
-                # Log every ~2 seconds.
                 frame_count += 1
                 fps_elapsed = time.perf_counter() - fps_t0
                 if fps_elapsed >= 2.0:
@@ -904,7 +759,6 @@ class TrackerService:
                         csrt_avg, servo_count,
                         frame_avg, dx, dy, state.bbox, state.target_label,
                     )
-                    # System metrics snapshot
                     try:
                         import subprocess as _sp
                         cpu = float(open("/proc/loadavg").read().split()[0])
@@ -932,15 +786,11 @@ class TrackerService:
             animation_service._hold_mode = False
             state.running.clear()
 
-            # Stop the follow worker before handing the bus back to idle.
             self._follower.join(timeout=2.0)
             self._follower.clear_goal()
 
             try:
-                # Idle must interpolate from the physical pose where tracking
-                # stopped. _current_state belongs to the animation loop and is
-                # stale while the follower owns the bus; using it would make the
-                # first idle frame jump toward a pre-tracking pose.
+                # Idle must interpolate from the physical pose where tracking stopped.
                 current = animation_service.get_positions()
                 if current:
                     animation_service._current_state = dict(current)
@@ -963,9 +813,6 @@ class TrackerService:
                 animation_service._event_thread.start()
 
             # Restart idle. The tracking lock in _continue_playback cleared
-            # _current_recording, so the revived event loop has nothing to
-            # play and would return at its first guard forever — arm rigid with
-            # torque on. Every other exit re-enters idle the same
-            # way (music stop, aim, resume); this one used to be the gap.
-            # dispatch, not _handle_play: playback belongs to the event thread.
+            # _current_recording, so the revived event loop has nothing to play and
+            # would return at its first guard forever — arm rigid with torque on.
             animation_service.dispatch("play", animation_service.idle_recording)

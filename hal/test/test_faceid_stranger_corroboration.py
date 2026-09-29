@@ -1,11 +1,4 @@
-"""An unknown face must persist for a few ticks before it earns an identity.
-
-Minting is the expensive verdict — a persistent `stranger_N`, a presence event,
-a row in the Unknown Faces card — and it is reached by scoring below everything,
-which is what an unknown person looks like AND what a momentarily unusable frame
-looks like. These tests pin the behaviour that separates them: still being there
-a tick later.
-"""
+"""An unknown face must persist for a few ticks before it earns an identity."""
 
 import time
 
@@ -20,8 +13,7 @@ from hal.drivers.sensing.perceptions.processors.faceid.recognizer import (
 
 @pytest.fixture
 def rec() -> FaceRecognizer:
-    """A recogniser with no models started — only the corroboration bookkeeping
-    is exercised, which is pure array work."""
+    """Recogniser with no models started, for corroboration bookkeeping only."""
     return FaceRecognizer()
 
 
@@ -49,8 +41,7 @@ def test_two_different_faces_do_not_corroborate_each_other(rec):
 
 
 def test_two_unknown_people_each_accumulate_independently(rec):
-    """A single pending slot would let two faces steal it back and forth every
-    tick, so neither would ever mint. They must be tracked separately."""
+    """Two pending strangers are tracked separately so both can mint."""
     a, b = _emb(1), _emb(99)
     assert (rec._corroborate_stranger(a), rec._corroborate_stranger(b)) == (1, 1)
     assert (rec._corroborate_stranger(a), rec._corroborate_stranger(b)) == (2, 2)

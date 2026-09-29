@@ -17,19 +17,10 @@ FRAME_MS = 20
 
 
 def _clip(total_s: float, bursts: list[tuple[float, float]]) -> np.ndarray:
-    """Quiet noise floor (RMS well under VOICED_RMS) with loud sine bursts at [start, end) s.
-
-    The background is seeded low-amplitude noise, not a repeating ramp: a
-    periodic background (e.g. `arange(n) % 200`) combined with an integer-Hz
-    burst tone makes two windows a whole number of seconds apart byte-for-byte
-    identical, which lets `_span` "find" a span the function never actually
-    returned — silently defeating any test that needs to pin down *which*
-    occurrence was picked (see `test_tie_prefers_latest_span`). Noise makes
-    every 8 s window unique, so a located span is unambiguous.
-    """
+    """Quiet noise floor (RMS well under VOICED_RMS) with loud sine bursts at [start, end) s."""
     n = int(SR * total_s)
     rng = np.random.default_rng(0)
-    out = rng.integers(-150, 151, n).astype(np.int16)  # RMS ~87, unique per window
+    out = rng.integers(-150, 151, n).astype(np.int16)
     t = np.arange(n) / SR
     for start, end in bursts:
         mask = (t >= start) & (t < end)
@@ -38,12 +29,7 @@ def _clip(total_s: float, bursts: list[tuple[float, float]]) -> np.ndarray:
 
 
 def _span(samples, out) -> tuple[float, float]:
-    """Locate `out` inside `samples` (spans are contiguous slices).
-
-    Forward scan: with the noise background in `_clip`, every window's bytes
-    are unique, so the first (and only) match is the span the function
-    actually returned.
-    """
+    """Locate `out` inside `samples` (spans are contiguous slices)."""
     for start in range(0, samples.size - out.size + 1, 320):
         if np.array_equal(samples[start : start + out.size], out):
             return start / SR, (start + out.size) / SR
@@ -75,13 +61,13 @@ def test_long_clip_crops_to_max_and_contains_burst():
 
 
 def test_select_voiced_span_keeps_early_speech():
-    s = _clip(30.0, [(0.5, 4.0)])  # speech at the start, silence after
+    s = _clip(30.0, [(0.5, 4.0)])
     start, end = _span(s, _select(s))
     assert start <= 0.5 and end >= 4.0
 
 
 def test_tie_prefers_latest_span():
-    s = _clip(30.0, [(2.0, 4.0), (20.0, 22.0)])  # equal voiced mass
+    s = _clip(30.0, [(2.0, 4.0), (20.0, 22.0)])
     start, end = _span(s, _select(s))
     assert start <= 20.0 and end >= 22.0
     assert start > 4.0
@@ -95,10 +81,7 @@ def test_all_silent_long_clip_returns_last_span():
 
 
 def _loud_sine_wav(total_s: float) -> bytes:
-    """A synthetic 16 kHz mono int16 WAV: a loud 220 Hz sine for the whole
-    clip (amplitude ~10000), well above PREFILTER_TRIM_RMS/VOICED_RMS so it
-    clears both prefilter stages, including the stricter Silero-off RMS
-    fallback (>= 3.0 s voiced)."""
+    """Synthetic 16 kHz mono int16 WAV loud enough to clear both prefilter stages."""
     n = int(SR * total_s)
     t = np.arange(n) / SR
     samples = (10_000 * np.sin(2 * np.pi * 220 * t)).astype(np.int16)
@@ -106,19 +89,14 @@ def _loud_sine_wav(total_s: float) -> bytes:
 
 
 def _no_network_recognizer(monkeypatch) -> Emotion2VecRecognizer:
-    """Recognizer wired for prefilter()-only testing: encryption off (no
-    crypto/network setup) and Silero forced unavailable (no ONNX load), so
-    construction and prefilter() touch neither the network nor a GPU/model."""
+    """Recognizer for prefilter()-only tests: no encryption, no Silero."""
     monkeypatch.setattr("hal.config.DL_ENCRYPTION_ENABLED", False)
     monkeypatch.setattr(Emotion2VecRecognizer, "_load_silero", lambda self: None)
     return Emotion2VecRecognizer(url="http://fake-server.invalid", api_key="", timeout_s=1.0)
 
 
 def test_prefilter_caps_long_passing_clip_to_8s(monkeypatch):
-    """A clip that passes the prefilter gates but runs well past 8 s must be
-    uploaded as a WAV of 8 s or less — proving prefilter() actually wires in
-    select_voiced_span (this module's SUT above), not just that the helper
-    works in isolation."""
+    """A long clip passing the prefilter is uploaded as at most 8 s."""
     rec = _no_network_recognizer(monkeypatch)
     wav_bytes = _loud_sine_wav(20.0)
 

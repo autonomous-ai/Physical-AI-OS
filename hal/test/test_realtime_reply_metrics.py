@@ -262,3 +262,36 @@ def test_bundled_next_sentence_does_not_hold_completed_reply(monkeypatch):
         [object()], 2.0, interaction_id="vi-prefix",
     )
     assert tts.speak_queue.call_count == 1
+
+
+@pytest.mark.parametrize('chunks,expected', [
+    (['Why did the scarecrow win an award?', ' [pause]',
+      ' Because he was outstanding in his field! [laughs]',
+      ' [gig', 'gle] That one always gets me!'],
+     ['Why did the scarecrow win an award? [pause]',
+      'Because he was outstanding in his field! [laughs] [giggle]',
+      'That one always gets me!']),
+    (['[HW:/led/off:{}][voice trembling] I miss you. [sobbing]'],
+     ['[voice trembling] I miss you. [sobbing]']),
+    (['[laugh', 's] That was funny'], ['[laughs] That was funny']),
+    (['Because they make up everything.', ' [laughs]'], ['Because they make up everything. [laughs]']),
+])
+def test_elevenlabs_receives_realtime_delivery_tags(monkeypatch, chunks, expected):
+    from hal.drivers.voice.voice_service import VoiceService
+    monkeypatch.setattr(realtime_turn.hal_config, 'REALTIME_ENABLED', True)
+    monkeypatch.setattr(realtime_turn.hal_config, 'REALTIME_NATIVE_AUDIO', False)
+    monkeypatch.setattr(realtime_turn.hal_config, 'REALTIME_PROVIDER', 'openai')
+    monkeypatch.setattr(realtime_turn.hal_config, 'REALTIME_FIRST_CHUNK_MAX_CHARS', 100)
+    monkeypatch.setattr(realtime_turn, '_thinking_cue_start', lambda: None)
+    monkeypatch.setattr(realtime_turn, '_thinking_cue_clear', lambda: None)
+    monkeypatch.setattr(realtime_turn, '_reply_language_name', lambda: 'English')
+    monkeypatch.setattr(realtime_turn, '_WaitFiller', Mock())
+    realtime, tts = Mock(available=True), Mock(_provider='elevenlabs')
+    tts.speak.return_value = True
+    realtime.stream_output.return_value = iter(TextOutput(text=t) for t in chunks)
+    realtime_turn.run_realtime_turn(
+        realtime, tts, VoiceService.strip_rt_markers, 'Tell a joke and laugh please',
+        [object()], 2.0, interaction_id='vi-tags',
+    )
+    spoken = [call.args[0] for call in tts.speak.call_args_list + tts.speak_queue.call_args_list]
+    assert spoken == expected

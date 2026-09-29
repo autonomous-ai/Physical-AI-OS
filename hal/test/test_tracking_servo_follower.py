@@ -102,12 +102,6 @@ def test_worker_coalesces_small_steps_until_they_accumulate(monkeypatch):
     assert C.SERVO_COMMAND_MIN_DELTA <= first < C.SERVO_COMMAND_MIN_DELTA * 4
 
 
-# --- pitch allocation across the three joints ---------------------------------
-#
-# The arm's travel is badly asymmetric (constants.PITCH_TRAVEL_*), so these
-# assert against direction, not against a fixed split.
-
-
 def _tilt(before: dict, after: dict) -> float:
     """Total camera tilt the joint deltas add up to, positive = down."""
     return sum(
@@ -122,11 +116,7 @@ def _rest() -> dict[str, float]:
 
 
 def test_looking_up_does_not_lean_on_the_wrist():
-    """wrist_pitch stalls at -34.8 and idle rests it near -32.
-
-    Spending an upward correction there is what made gaze announce a correction
-    every 10s while the head never moved.
-    """
+    """Looking up does not use wrist_pitch, which stalls near -34.8."""
     before = _rest()
     after = servo_follow.distribute_pitch(before, -12.0)
 
@@ -136,11 +126,7 @@ def test_looking_up_does_not_lean_on_the_wrist():
 
 
 def test_looking_down_does_use_the_wrist():
-    """Downward is where the wrist has ~65 deg, and it should not go to waste.
-
-    elbow_pitch runs out first going down (it stops near -4), so a correction
-    larger than the elbow can absorb has to land somewhere — the wrist is where.
-    """
+    """Downward is where the wrist has ~65 deg, and it should not go to waste."""
     before = _rest()
     after = servo_follow.distribute_pitch(before, 40.0)
 
@@ -190,9 +176,6 @@ def test_zero_asks_for_nothing():
     assert servo_follow.distribute_pitch(before, 0.0) == pytest.approx(before)
 
 
-# --- body ownership spans the writer's whole lifetime ---------------------------
-
-
 class _OwnableService(_FakeAnimationService, BodyOwnership):
     """Animation service stand-in with the real ownership semantics."""
 
@@ -202,12 +185,7 @@ class _OwnableService(_FakeAnimationService, BodyOwnership):
 
 
 def _run_worker_briefly(follower, service, running, seconds=0.3):
-    """Run the worker in a thread and stop it, with a bounded wait.
-
-    Never drive the loop's exit from inside send_action: if the goal happens to
-    match the current pose nothing is written, the loop spins, and the test
-    hangs instead of failing.
-    """
+    """Run the worker in a thread and stop it, with a bounded wait."""
     thread = threading.Thread(target=follower._worker, args=(service, running))
     thread.start()
     time.sleep(seconds)
@@ -217,22 +195,13 @@ def _run_worker_briefly(follower, service, running, seconds=0.3):
 
 
 def test_the_follow_worker_owns_the_body_for_as_long_as_it_writes():
-    """The gap that let gaze fight the tracker and lose.
-
-    `_track_loop` set the tracking flag on entry and cleared it on exit, but the
-    thing writing the bus is this worker, which outlives that loop. In the gap
-    the lock read free while the follower was still writing every joint at 30fps
-    — device-traced, the follower wrote elbow_pitch 130 times in a minute at a
-    fixed goal while gaze made corrections that were erased on the next frame.
-    """
+    """The follow worker owns the body while it writes."""
     service = _OwnableService()
     running = threading.Event()
     running.set()
     follower = ServoFollower()
     follower.read_initial_positions(service)
 
-    # Whoever spawned the worker has already cleared its own flag, exactly as
-    # _track_loop does on the way out.
     service._tracking_active = False
 
     owned = []
@@ -243,7 +212,7 @@ def test_the_follow_worker_owns_the_body_for_as_long_as_it_writes():
         real_send(action)
 
     service.robot.send_action = watching
-    follower.set_goal(dict(_pose(40.0)))       # far enough that it must write
+    follower.set_goal(dict(_pose(40.0)))
     _run_worker_briefly(follower, service, running)
 
     assert owned, "precondition: the worker wrote at least one frame"
@@ -252,11 +221,7 @@ def test_the_follow_worker_owns_the_body_for_as_long_as_it_writes():
 
 
 def test_ownership_is_released_even_if_the_follow_loop_raises(monkeypatch):
-    """Exercises the try/finally directly.
-
-    Going through the real loop would hang: it catches and logs bus errors and
-    keeps going, so a send_action that always raises never ends the loop.
-    """
+    """Ownership is released even if the follow loop raises."""
     service = _OwnableService()
     running = threading.Event()
     running.set()
@@ -272,18 +237,12 @@ def test_ownership_is_released_even_if_the_follow_loop_raises(monkeypatch):
     assert not service._tracking_active, "a crashed worker must not wedge the lock"
 
 
-# --- pan allocation ------------------------------------------------------------
-
-
 def _pan_rest() -> dict[str, float]:
     return {"base_yaw.pos": 0.0, "wrist_roll.pos": 0.0}
 
 
 def test_a_face_on_the_right_turns_the_camera_right():
-    """Device-verified by capture, both joints: base_yaw -24 and wrist_roll -34
-    each put the subject at the FAR RIGHT of frame, +24/+34 brought them left.
-    So increasing either pans right, and dx > 0 is corrected by increasing both.
-    """
+    """dx > 0 is corrected by increasing both base_yaw and wrist_roll."""
     before = _pan_rest()
     after = servo_follow.distribute_yaw(before, +10.0)
 
@@ -300,12 +259,7 @@ def test_a_face_on_the_left_turns_the_camera_left():
 
 
 def test_the_base_leads_the_pan():
-    """base_yaw carries the correction, not the wrist.
-
-    Turning the base is what reads as "it looked at me", and user_bearing stores
-    the bearing AS base_yaw — aiming mostly with the wrist would leave the
-    remembered bearing describing a pose the lamp never held.
-    """
+    """base_yaw carries the correction, not the wrist."""
     before = _pan_rest()
     after = servo_follow.distribute_yaw(before, +10.0)
 

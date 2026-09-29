@@ -261,11 +261,6 @@ class TestEmotionAnalysisWebSocket:
                 ws.receive_json()
 
 
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture(scope="session")
 def happy_frame_b64() -> str:
     """Load happy face image once."""

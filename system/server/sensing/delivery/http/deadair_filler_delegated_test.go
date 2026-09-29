@@ -3,10 +3,6 @@ package http
 import "testing"
 
 // A turn the realtime model delegated already carries that model's filler.
-// os-server must not promise an answer again before the main agent does any
-// work: no timer at turn start, first filler armed by the first tool.start,
-// so a NO_REPLY turn stays silent — device-observed as "one moment" followed
-// by nothing.
 func TestDelegatedRunArmsOnlyAtFirstTool(t *testing.T) {
 	fm := NewFillerManager()
 	id := "delegated-turn"

@@ -9,12 +9,7 @@ from hal.drivers.tracking import constants as C
 
 def smooth_damp(current: float, target: float, velocity: float,
                 smooth_time: float, dt: float, max_speed: float) -> Tuple[float, float]:
-    """Critically-damped follower. Returns (new_position, new_velocity).
-
-    Eases in and out toward `target`, carrying `velocity` across calls so
-    retargeting mid-move stays smooth. Overshoot-clamped so it settles cleanly.
-    (Game Programming Gems 4 / Unity's Mathf.SmoothDamp.)
-    """
+    """Critically-damped follower. Returns (new_position, new_velocity)."""
     smooth_time = max(1e-4, smooth_time)
     omega = 2.0 / smooth_time
     x = omega * dt
@@ -37,14 +32,8 @@ def smooth_damp(current: float, target: float, velocity: float,
 def soft_deadband(error: float, inner: float, outer: float, creep: float) -> float:
     """Tiered dead zone, continuous everywhere. Sign-preserving.
 
-    - |error| ≤ inner: 0 — servo truly rests (CENTERED, PID clears).
-    - inner < |error| ≤ outer: creep band — a gentle `creep` slope so the
-      camera lazily drifts toward center instead of freezing dead at the
-      boundary. A hard stop here produced the start-stop "security camera"
-      feel; a human operator never fully freezes.
-    - |error| > outer: full error, offset so it continues exactly where the
-      creep band left off (no output step at either boundary — a value jump
-      at the edge was the old "kick out of center" jerk).
+    A hard stop here produced the start-stop "security camera" feel; a human operator
+    never fully freezes.
     """
     mag = abs(error)
     if mag <= inner:
@@ -56,16 +45,7 @@ def soft_deadband(error: float, inner: float, outer: float, creep: float) -> flo
 
 
 class AlphaBetaFilter2D:
-    """Constant-velocity alpha-beta filter on a 2D point (the target centroid).
-
-    Steady-state Kalman for a constant-velocity model (SORT/ByteTrack use a full
-    Kalman; alpha-beta is the lightweight fixed-gain equivalent — no matrices,
-    cheap on the A523). Smooths detector/tracker jitter, coasts through dropped
-    or garbage frames via prediction, and exposes velocity so the servo can lead
-    a moving target. `update()` gates a measurement whose residual from the
-    prediction exceeds gate_px (ViT-bloat teleport / false detection): it then
-    coasts on the prediction instead of snapping to the bad point.
-    """
+    """Constant-velocity alpha-beta filter on a 2D point (the target centroid)."""
 
     def __init__(self, alpha: float, beta: float, gate_px: float,
                  gate_decay: float = C.AB_GATE_DECAY,
@@ -91,16 +71,12 @@ class AlphaBetaFilter2D:
             self.vx = self.vy = 0.0
             self._gated_streak = 0
             return self.x, self.y, self.vx, self.vy, False
-        # Predict (constant velocity).
         px = self.x + self.vx * dt
         py = self.y + self.vy * dt
         rx, ry = mx - px, my - py
         gated = (rx * rx + ry * ry) ** 0.5 > self.gate_px
-        # Hysteresis: a real fast move produces a large residual too, and would be
-        # gated forever (velocity never updates → filter never catches up). After
-        # a short streak of rejects, force-accept and re-seed to the measurement —
-        # transient teleports (ViT bloat) last 1–2 frames, sustained motion does
-        # not.
+        # Hysteresis: a real fast move produces a large residual too, and would be gated
+        # forever (velocity never updates → filter never catches up).
         if gated and self._gated_streak >= self.max_gated_streak:
             self.x, self.y = mx, my
             self.vx = self.vy = 0.0

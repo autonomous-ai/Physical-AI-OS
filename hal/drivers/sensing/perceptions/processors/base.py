@@ -14,13 +14,7 @@ T = TypeVar("T")
 
 
 class Perception[T](ABC):
-    """Base class for a single camera-frame perception check.
-
-    check() is non-blocking: it submits _check_impl() to a shared thread
-    pool. A per-instance busy guard ensures each perception has at most one
-    task in the pool, preserving FIFO order per instance while different
-    perceptions run in parallel.
-    """
+    """Base class for a single camera-frame perception check."""
 
     # Face ID is HAL's biggest idle CPU user; keep it off the cores the voice path uses.
     _pool: ThreadPoolExecutor = ThreadPoolExecutor(

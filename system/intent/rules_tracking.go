@@ -1,7 +1,3 @@
-// Vision-tracking rules — servo follow. Going through OpenClaw costs ~3-5s
-// per "track the cup" command; local match → direct POST /servo/track keeps
-// the latency under ~100ms so the camera starts following before the user has
-// finished their next breath.
 package intent
 
 import (
@@ -46,14 +42,7 @@ var trackingRules = []rule{
 // hasTrackVerb returns true when the command contains a tracking verb.
 func hasTrackVerb(t string) bool { return trackVerbEnd(t) >= 0 }
 
-// trackVerbEnd returns the index just past the first tracking verb in t, or -1
-// when there is none. Phrased to require the verb at a word start so "I'd like
-// to follow up on..." or "I can't watch that movie" don't trigger the camera,
-// and so "you are tracking me" (no trailing space after "track") stays with the
-// agent, which can answer it conversationally.
-//
-// The position matters: extractTrackTarget prefers the object named AFTER the
-// verb over one mentioned earlier in passing.
+// trackVerbEnd returns the index just past the first tracking verb (at a word start), or -1.
 func trackVerbEnd(t string) int {
 	bestStart, bestEnd := -1, -1
 	for _, kw := range []string{"track ", "follow ", "watch "} {
@@ -70,12 +59,8 @@ func trackVerbEnd(t string) int {
 	return bestEnd
 }
 
-// trackTargets maps spoken nouns to the label sent to /servo/track.
-//
-// pronoun marks the bare person-words. They resolve to "person" only when the
-// utterance names no concrete object: "watch me type on my keyboard" is about
-// the keyboard, not the speaker. Without the tier, the pronoun entry's table
-// position decided every tracking command ever issued.
+// trackTargets maps spoken nouns to /servo/track labels; pronoun entries resolve to
+// "person" only when no concrete object is named.
 var trackTargets = []struct {
 	keywords []string
 	label    string
@@ -114,17 +99,8 @@ type trackHit struct {
 	pronoun bool
 }
 
-// extractTrackTarget pulls the COCO/face label from a tracking command.
-//
-// Selection, in order:
-//  1. Whole-word matches only — "me" must not fire inside "camera" or
-//     "mentioned", "us" not inside "mouse".
-//  2. A concrete object noun always beats a bare pronoun.
-//  3. Within a tier, prefer the first hit AFTER the tracking verb; otherwise
-//     take the last hit before it (the one nearest the verb).
-//
-// Returns "" when nothing matches — caller should then fall through to the
-// agent, which can use YOLOWorld open-vocab for less common nouns.
+// extractTrackTarget returns the COCO/face label for a tracking command, or "".
+// Whole words only; objects beat pronouns; prefer the first hit after the verb.
 func extractTrackTarget(t string) string {
 	verbEnd := trackVerbEnd(t)
 	var hits []trackHit
@@ -145,8 +121,7 @@ func extractTrackTarget(t string) string {
 	return pickTrackHit(hits, verbEnd, true)
 }
 
-// pickTrackHit chooses among the hits of a single tier: the first one after the
-// verb, else the last one before it.
+// pickTrackHit returns the first hit after the verb, else the last one before it.
 func pickTrackHit(hits []trackHit, verbEnd int, pronouns bool) string {
 	after, last := -1, -1
 	var afterLabel, lastLabel string

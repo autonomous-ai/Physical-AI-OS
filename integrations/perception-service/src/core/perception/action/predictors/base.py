@@ -1,8 +1,4 @@
-"""Abstract base class for human action recognizer models.
-
-Pure ONNX model wrapper: load weights, preprocess frames, run inference.
-Session management, person detection, and config live in ActionAnalysis.
-"""
+"""Abstract base class for human action recognizer ONNX models."""
 
 from pathlib import Path
 from typing import Any, cast
@@ -65,7 +61,6 @@ class HumanActionRecognizer(PredictorBase[Video, RawHumanActionDetection]):
         self._max_frames: int = get_or_default(max_frames, self.DEFAULT_MAX_FRAMES)
         self._frame_size: tuple[int, int] = get_or_default(frame_size, self.DEFAULT_FRAME_SIZE)
 
-        # This would be registered when starting the predictor
         self._class_names: list[str] = []
         self._default_class_mask: npt.NDArray[np.bool_] = np.ones(0, dtype=np.bool_)
 

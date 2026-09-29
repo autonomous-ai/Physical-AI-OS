@@ -7,8 +7,6 @@ from pydantic import BaseModel, ConfigDict, Discriminator, Tag
 from core.models.facial_emotion import EmotionDetection
 from core.types import Omit, omit
 
-# --- WebSocket messages ---
-
 
 class EmotionFrameRequest(BaseModel):
     type: Literal["frame"] = "frame"
@@ -35,9 +33,6 @@ EmotionRequest = Annotated[
     | Annotated[EmotionHeartBeatRequest, Tag("heartbeat")],
     Discriminator("type"),
 ]
-
-
-# --- HTTP request/response ---
 
 
 class EmotionRecognizeRequest(BaseModel):

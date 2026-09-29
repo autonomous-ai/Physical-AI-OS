@@ -1,8 +1,4 @@
-"""Integration tests against a remote DL backend server.
-
-Requires DL_BACKEND_URL and DL_API_KEY in .env (or environment).
-Run with: pytest tests/test_action_analysis_ws_api.py -v
-"""
+"""Integration tests against a remote DL backend (action). Requires DL_BACKEND_URL and DL_API_KEY."""
 
 import base64
 import json
@@ -129,7 +125,6 @@ class TestActionAnalysisWebSocket:
         for det in resp["detected_classes"]:
             assert det["class_name"] in allowed
 
-        # Reset
         await ws.send(json.dumps({"type": "config", "task": "action", "whitelist": None}))
         await ws.recv()
 
@@ -261,7 +256,6 @@ class TestActionPerformance:
     async def test_drinking_gif_action_detected(self, ws, drinking_gif_frames: list[str]) -> None:
         """Send frames extracted from drinking.webp and assert 'drinking' is detected."""
         resp = None
-        # Pad to 16 frames by repeating if the clip is shorter
         frames = drinking_gif_frames
         while len(frames) < 16:
             frames = frames + drinking_gif_frames
@@ -286,7 +280,6 @@ class TestActionPerformance:
     async def test_eating_gif_action_detected(self, ws, eating_gif_frames: list[str]) -> None:
         """Send frames extracted from eating.gif and assert 'eating' is detected."""
         resp = None
-        # Pad to 16 frames by repeating if the clip is shorter
         frames = eating_gif_frames
         while len(frames) < 16:
             frames = frames + eating_gif_frames

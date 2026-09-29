@@ -1,16 +1,7 @@
-"""Export OWLv2 zero-shot object detector to ONNX.
+"""Export OWLv2 zero-shot object detector (with text encoder) to ONNX.
 
-The ONNX model includes the text encoder so it takes raw text
-token IDs as input, preserving zero-shot capability at runtime.
-
-Inputs:
-    images:    [batch, 3, H, W]           — preprocessed image
-    class_tokens: [num_queries, seq_len]     — tokenized text queries
-
-Outputs:
-    boxes:   [batch, num_det, 4]           — center-based xywh, normalized [0,1]
-    probs:   [batch, num_det, num_classes] — full probability vector per detection
-    labels:  [batch, num_det]              — argmax class indices (-1 = padding)
+Inputs: images [B, 3, H, W], class_tokens [Q, seq_len].
+Outputs: boxes [B, D, 4] cxcywh in [0,1], probs [B, D, Q], labels [B, D] (-1 = padding).
 """
 
 import argparse
@@ -79,7 +70,6 @@ def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool 
     wrapper = OWLv2ONNX(model, nms=nms)
     wrapper.eval()
 
-    # Dummy inputs
     processor = Owlv2Processor.from_pretrained(model_id)
     dummy_text = ["a photo of a cat", "a photo of a dog", "a photo of a person"]
     dummy_inputs = processor(
@@ -133,7 +123,6 @@ def export(model_id: str, output: str | None = None, opset: int = 17, nms: bool 
     logger.info("Verification:")
     for i, e in enumerate(errors):
         logger.info(f"\tChannel {i}: mean_err = {e[0]:.6f} | max_err = {e[1]:.6f}")
-
 
 
 def entry():

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"go.autonomous.ai/os/system/lib/hal"
 	"log/slog"
+	"math"
 	"strings"
 	"sync"
 
@@ -94,6 +95,13 @@ var ledRules = []rule{
 	},
 
 	{
+		name:       "brighten",
+		capability: device.CapLight,
+		match:      anyOf("brighten the light", "brighten light", "brighter"),
+		exec:       func(string) *Result { return brightenCurrentLight() },
+	},
+
+	{
 		name:       "dim",
 		capability: device.CapLight,
 		match:      anyOf("dim the light", "dimmer", "dim light"),
@@ -141,4 +149,54 @@ func dimCurrentLight() *Result {
 	}
 	slog.Info("intent dim applied", "before", color, "after", next)
 	return &Result{TTSText: "Dimmed.", LEDChanged: next != [3]int{}, LEDOff: next == [3]int{}, Actions: actions}
+}
+
+// brightenCurrentLight shares the dim lock so opposite adjustments cannot overwrite each other.
+func brightenCurrentLight() *Result {
+	if !dimMu.TryLock() {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't change that setting because another adjustment is in progress. Please try again."}
+	}
+	defer dimMu.Unlock()
+	actions := []string{"GET /led/color"}
+	failure := func() *Result {
+		return &Result{ExecutionFailed: true, TTSText: "I couldn't confirm the light got brighter.", Actions: actions}
+	}
+	color, err := hal.GetColor()
+	if err != nil {
+		return failure()
+	}
+	peak := max(color[0], color[1], color[2])
+	if peak == 255 {
+		return &Result{TTSText: "The light is already at maximum brightness.", Actions: actions}
+	}
+	// Start a dark lamp gently; otherwise raise its peak by 25%, retaining its hue.
+	next := [3]int{32, 27, 20}
+	if peak > 0 {
+		nextPeak := min(255, peak+max(1, peak/4))
+		for i, channel := range color {
+			next[i] = channel * nextPeak / peak
+		}
+	}
+	body := fmt.Sprintf(`{"color":[%d,%d,%d]}`, next[0], next[1], next[2])
+	actions = append(actions, "POST /led/solid "+body)
+	if err := post("/led/solid", body); err != nil {
+		return failure()
+	}
+	actions = append(actions, "GET /led/color")
+	actual, err := hal.GetColor()
+	if err != nil {
+		return failure()
+	}
+	actualPeak, requestedPeak := max(actual[0], actual[1], actual[2]), max(next[0], next[1], next[2])
+	if actualPeak <= peak || actualPeak > requestedPeak {
+		return failure()
+	}
+	// HAL can proportionally clamp RGB to its safety ceiling. Accept that only
+	// when readback confirms an actual increase and the expected scaled hue.
+	for i, channel := range next {
+		if actual[i] != int(math.RoundToEven(float64(channel)*float64(actualPeak)/float64(requestedPeak))) {
+			return failure()
+		}
+	}
+	return &Result{TTSText: "Brighter now.", LEDChanged: true, Actions: actions}
 }

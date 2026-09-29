@@ -24,14 +24,9 @@ from core.utils.runtime import prepare_ort_session
 class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
     """Base audio embedder using WeSpeaker ONNX models.
 
-    Computes 80-dim fbank features, splits them into chunks (see
-    _sliding_windows), runs ONNX inference per chunk, and mean-aggregates with
-    L2 normalization. Speech at or below chunk_threshold_frames (default 10 s) is
-    embedded as a single whole-utterance chunk; longer speech is split into
-    window_frames chunks (default 6 s) with hop_frames stride (default 4 s).
+    80-dim fbank -> chunks (see _sliding_windows) -> ONNX -> L2-normalized mean.
     """
 
-    # Enum identity of this embedder (e.g. AudioEmbedderEnum.RESNET293)
     MODEL_NAME: AudioEmbedderEnum | None = None
 
     DEFAULT_MODEL_PATH: Path | None = None
@@ -80,19 +75,13 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
         self._session: ort.InferenceSession | None = None
         self._processor: CompositeAudioProcessor | None = None
         self._input_name: str = self.ONNX_INPUT_NAME
-        # Stable identity of the loaded weights — computed once at start (see
-        # _compute_model_version). Stamped onto every embedding so a client can
-        # tell that a stored vector was produced by a DIFFERENT model and must be
-        # re-embedded before it is comparable again.
         self._model_version: str | None = None
 
     @property
     def model_version(self) -> str | None:
-        """Identity of the loaded weights (``<Class>:<sha256[:12]>``), or None.
+        """Identity of the loaded weights (``<name>:<sha256[:12]>``), or None until started.
 
-        None until the model is started. Changes whenever the ONNX weights file
-        changes — even a same-dimension checkpoint swap — so clients can detect
-        that their stored embeddings are stale.
+        Lets clients detect stale stored embeddings after a checkpoint swap.
         """
         return self._model_version
 
@@ -130,15 +119,9 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
         )
 
     def _compute_model_version(self) -> str:
-        """Fingerprint the loaded weights: ``<model-name>:<sha256(file)[:12]>``.
+        """Fingerprint the loaded weights: ``<MODEL_NAME>:<sha256(file)[:12]>``.
 
-        ``<model-name>`` is the ``AudioEmbedderEnum`` value (e.g. ``resnet293``)
-        — the stable config name, not the Python class name — falling back to the
-        class name only if a subclass forgot to set ``MODEL_NAME``. Hashing the
-        ONNX file content (not just its path or dimension) means a silent
-        checkpoint swap that keeps the same embedding dimension still yields a new
-        version — exactly the case a dimension check would miss. Runs once at
-        start.
+        Hashes file content so a same-dimension checkpoint swap still changes the version.
         """
         name = self.MODEL_NAME.value if self.MODEL_NAME is not None else self.__class__.__name__
         digest = "unknown"
@@ -205,22 +188,12 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
     ) -> npt.NDArray[np.float32]:
         """Split fbank features into chunks for per-chunk embedding.
 
-        Net speech length is T (post-VAD fbank frames, ~100 per second):
-
-        * ``use_sliding_window`` False (enroll): return the whole utterance as
-          ONE chunk of shape (1, T, M) regardless of length — the model embeds
-          the entire reference in a single shot, no windowing/mean.
-        * ``T <= chunk_threshold_frames`` (default 10 s): return the whole
-          utterance as ONE chunk of shape (1, T, M).
-        * ``T > chunk_threshold_frames``: slide ``window_frames`` with
-          ``hop_frames`` overlap so a long, possibly multi-speaker recording is
-          split for per-chunk voting. The last window is shifted back so every
-          window has exactly ``window_frames`` frames.
+        One (1, T, M) chunk when sliding is off or T <= chunk_threshold_frames;
+        otherwise windows of window_frames with hop_frames stride (last one shifted back).
 
         Args:
-            feat: Shape (T, num_mel_bins).
-            use_sliding_window: When False, never split — embed the whole
-                utterance as a single chunk (used by the enroll path).
+            feat: Shape (T, num_mel_bins), ~100 frames per second.
+            use_sliding_window: False never splits (enroll path).
 
         Returns:
             Array of shape (N, W, num_mel_bins) — W == T in the single-chunk case,
@@ -298,13 +271,7 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
         use_sliding_window: bool = True,
         **kwargs: Any,
     ) -> list[RawAudioEmbedding]:
-        """Run audio embedding on a batch of audio inputs.
-
-        Per audio: preprocess → fbank → sliding windows → ONNX → aggregate.
-
-        ``use_sliding_window`` False embeds each whole utterance as a single
-        chunk (enroll path); the aggregate then equals that single vector.
-        """
+        """Embed a batch of audio inputs; ``use_sliding_window=False`` embeds each whole utterance."""
         if preprocess:
             input = self.preprocess(input)
 

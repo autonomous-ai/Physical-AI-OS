@@ -1,12 +1,4 @@
-"""Abstract base class for 3D pose lifters.
-
-Extends PredictorBase. Input is a temporal sequence of 2D keypoints,
-output is a batched 3D joint prediction. Subclasses override class-level
-defaults (model path, n_frames, input_size).
-
-The input type for PredictorBase is a tuple of (keypoints, scores) arrays
-representing one temporal sequence. The output is RawPose3DDetection.
-"""
+"""Abstract base class for 3D pose lifters: (keypoints, scores) sequence -> RawPose3DDetection."""
 
 from pathlib import Path
 from typing import Any, cast
@@ -28,11 +20,7 @@ Pose3DInput = tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]
 
 
 class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | None]):
-    """Base class for 3D pose lifters (e.g. TCPFormer).
-
-    Takes temporal sequences of 2D keypoints, normalizes, pads/truncates
-    to n_frames, and runs ONNX inference.
-    """
+    """Base class for 3D pose lifters (e.g. TCPFormer)."""
 
     GRAPH_TYPE: GraphEnum
 
@@ -102,16 +90,11 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
 
     @override
     def preprocess(self, input: list[Pose3DInput]) -> list[npt.NDArray[np.float32]]:
-        """Normalize, center on neck, pad/truncate to n_frames, append confidence.
-
-        Each input is (keypoints (T, K, 2), scores (T, K)).
-        Returns list of (n_frames, K, 3) tensors.
-        """
+        """Center on neck, normalize, append confidence, pad/truncate to (n_frames, K, 3)."""
         W, H = self._input_size
         results: list[npt.NDArray[np.float32]] = []
         for keypoints, scores in input:
             norm_kps: npt.NDArray[np.float32] = keypoints.copy()
-            # Center around neck joint
             neck: npt.NDArray[np.float32] = norm_kps[
                 :, self.NECK_JOINT_IDX : self.NECK_JOINT_IDX + 1, :
             ]
@@ -119,17 +102,11 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
             # Normalize to [-1, 1]
             norm_kps[..., 0] = norm_kps[..., 0] / W * 2
             norm_kps[..., 1] = norm_kps[..., 1] / H * 2
-            # Append confidence as 3rd channel
             norm: npt.NDArray[np.float32] = np.concatenate(
                 [norm_kps, scores[..., None]], axis=-1
             ).astype(np.float32)  # (T, K, 3)
-            # Pad or truncate to the fixed temporal window the model expects.
-            # Short clips are padded by REPEATING the last frame (not zero-padding):
-            # the lifter is trained on continuous motion, so a held final pose is a
-            # benign "person stopped moving" signal, whereas zeros would inject an
-            # impossible jump to the origin and corrupt the temporal features.
-            # Long clips keep the MOST RECENT n_frames (tail) so the prediction
-            # tracks the current pose rather than stale history.
+            # Pad by repeating the last frame (zeros would inject a jump to the origin);
+            # truncate by keeping the most recent n_frames.
             T: int = norm.shape[0]
             if T < self._n_frames:
                 norm = np.concatenate(
@@ -149,15 +126,10 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
         preprocess: bool = True,
         **kwargs: Any,
     ) -> list[RawPose3DDetection | None]:
-        """Lift 2D keypoint sequences to 3D.
-
-        Each input is (keypoints (T, K, 2), scores (T, K)).
-        Returns None for sequences with fewer than n_frames // 2 frames.
-        """
+        """Lift (keypoints (T, K, 2), scores (T, K)) sequences to 3D; None if T < n_frames // 2."""
         results: list[RawPose3DDetection | None] = []
         preprocessed: list[npt.NDArray[np.float32]] = []
 
-        # Check minimum frame count and preprocess
         for keypoints, scores in input:
             if preprocess:
                 preprocessed.append(self.preprocess([(keypoints, scores)])[0])
@@ -171,7 +143,7 @@ class PoseEstimator3DLifting(PredictorBase[Pose3DInput, RawPose3DDetection | Non
             (output,) = self._session.run([self.ONNX_OUTPUT_NAME], {self.ONNX_INPUT_NAME: batch})
         output = cast(npt.NDArray[np.float32], output)  # (B, n_frames, K, 3)
 
-        # Map results back — trim padded frames to original T
+        # Trim padded frames back to original T.
         result_map: dict[int, npt.NDArray[np.float32]] = {}
         for idx in range(output.shape[0]):
             original_T: int = input[idx][0].shape[0]

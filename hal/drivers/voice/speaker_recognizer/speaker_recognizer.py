@@ -1,66 +1,4 @@
-"""Speaker voice recognition service.
-
-Stores per-user voice embeddings under ``/root/local/users/<name>/voice/`` and
-recognizes speakers via cosine similarity. Embeddings are computed by a
-configurable external API (see ``SPEAKER_EMBEDDING_API_URL``).
-
-Audio preprocessing (Mono → Resample → [HighPass] → [NoiseReduce] → VAD →
-[STOI gate] → RMS) runs ON THIS DEVICE (see ``audio_processors/``), next to the
-mic. Only audio that passes the VAD + STOI intelligibility gate is uploaded; the
-server is told to skip its own preprocessing (``preprocess=false``) and just
-compute the embedding.
-
-External API contract:
-    POST {SPEAKER_EMBEDDING_API_URL}
-    Headers: X-API-Key: {SPEAKER_EMBEDDING_API_KEY} (optional)
-    Body:    {"audios_b64": ["<base64 WAV>", ...], "preprocess": false,
-              "use_sliding_window": <bool>}
-      ``use_sliding_window`` picks the chunking policy: false (enroll) embeds the
-      whole utterance in a single shot; true (recognize) slides overlapping
-      windows and returns the per-chunk matrix for voting.
-    Response: {"embedding": [float, ...],            # 1-D aggregate, any dim
-               "chunk_embeddings": [[float, ...]]}   # [M, D], only when
-                                                     # use_sliding_window=true
-
-A speaker is stored as a BANK of per-sample embeddings — one row per WAV, never
-averaged together. Retrieval takes the max over a speaker's rows, mirroring the
-face pipeline (``faceid/recognizer.py``). Averaging was removed because it made
-every sample able to damage every other: one bad clip shifted the single stored
-vector, so samples had to be filtered and deleted to protect the mean, and a
-merge decision could not be undone.
-
-Two tiers per user, kept separate exactly as face keeps uploads vs extended:
-
-* **anchor** — audio the user deliberately enrolled. Permanent; no automatic
-  path prunes or deletes it.
-* **extended** — auto-captured: unknown-cluster audio claimed at enroll time,
-  plus confidently-recognized later turns. Capped and diversity-pruned.
-
-Storage layout per user::
-
-    /root/local/users/<norm>/
-        metadata.json           — SHARED identity (telegram_username, telegram_id,
-                                   display_name). Same file face-enroll writes —
-                                   merged on write, never overwritten blindly.
-        voice/
-            metadata.json       — voice-specific (enrolled_at, updated_at,
-                                   num_samples, sample_files, embedding_dim)
-            sample_<origin>_<ts>_<uuid>.wav  — anchor WAV (16kHz mono)
-            sample_<origin>_<ts>_<uuid>.npy  — its L2-normalized embedding [D]
-            .extended/
-                ext_<ts>_<seq>.wav           — auto-captured sample
-                ext_<ts>_<seq>.npy           — its embedding [D]
-            embedding.npy       — LEGACY aggregated vector. No longer written;
-                                   still READ as a one-row bank so profiles from
-                                   before the rewrite keep matching.
-
-Label normalization matches :class:`FaceRecognizer.normalize_label` so face /
-voice / mood / wellbeing all share the same per-user folder for a person.
-
-Registry of users with registered voices::
-
-    /root/local/users/.voice_registry.json
-"""
+"""Speaker voice recognition service."""
 
 from __future__ import annotations
 
@@ -87,70 +25,38 @@ from hal.drivers.sensing.crypto import CryptoSession, resolve_public_key
 
 logger = logging.getLogger("hal.voice.speaker")
 
-# --- Storage layout (paths come from hal.config) ---
 _USERS_DIR = Path(config.USERS_DIR)
 _VOICE_SUBDIR = "voice"
-# LEGACY single aggregated vector. No longer written — kept as a read-only
-# fallback so profiles enrolled before the bank rewrite keep matching as a
-# one-row bank instead of silently un-enrolling. See _load_user_bank.
 _EMBEDDING_FILE = "embedding.npy"
 _METADATA_FILE = "metadata.json"
 _REGISTRY_FILE = _USERS_DIR / ".voice_registry.json"
 _UNKNOWN_AUDIO_DIR = Path(config.SPEAKER_UNKNOWN_AUDIO_DIR)
 _MAX_INCOMING_FILES = config.SPEAKER_MAX_INCOMING_FILES
 
-# Each stored WAV carries a sidecar .npy holding its (already L2-normalized)
-# embedding, so a reload never has to re-run inference on a clip the current
-# preprocessing gate might now reject — the very samples worth keeping are the
-# ones most likely to fail a re-gate. Mirrors faceid/recognizer.py.
+# Each stored WAV carries a sidecar .npy holding its (already L2-normalized) embedding,
+# so a reload never has to re-run inference on a clip the current preprocessing gate
+# might now reject.
 _SIDECAR_EXT = ".npy"
 # Auto-captured "extended" samples live in this per-user subfolder, i.e.
-# <user>/voice/.extended/. Dot-prefixed so the sample loader (which globs
-# sample_*.wav directly under voice/) never mistakes one for an enrollment
-# sample, and so the web UI's voice-file listing stays clean.
+# <user>/voice/.extended/.
 _EXTENDED_SUBDIR = ".extended"
 _EXTENDED_PREFIX = "ext_"
 
-# Where an enrollment sample came from, embedded in its filename. Single tokens
-# with no "_", because _sample_origin recovers the tag by splitting on "_".
-# "other" is the catch-all for anything a caller sends that is not in this set.
 _SAMPLE_ORIGINS = ("mic", "telegram", "web", "other")
 
-# --- External embedding API (centralized in hal.config) ---
 _API_URL = config.SPEAKER_EMBEDDING_API_URL
 _API_KEY = config.SPEAKER_EMBEDDING_API_KEY
 _API_TIMEOUT_S = config.SPEAKER_EMBEDDING_API_TIMEOUT_S
 
-# --- Voice stranger clustering ---
-# Assigns a stable "voiceprint_hash" (voice_<N> label) to every unknown voice
-# so callers can track "same unknown speaker seen multiple times" without
-# needing voiceprint_hash support from the embedding backend. Mirrors the
-# face stranger tracker in faceid/perception.py.
 _VOICE_STRANGERS_DIR = Path(
     os.environ.get("HAL_VOICE_STRANGERS_DIR", "/root/local/voice_strangers")
 )
-# Cap cluster COUNT (not row count) so disk doesn't grow unbounded. Oldest
-# cluster evicted first, and its on-disk dir goes with it — see
-# _evict_oldest_clusters. Each cluster holds up to _MAX_CLUSTER_SAMPLES rows.
 _MAX_VOICE_STRANGERS = int(
     os.environ.get("HAL_MAX_VOICE_STRANGERS", "50")
 )
 _VOICE_STRANGER_PREFIX = "voice_"
 _VOICE_STRANGER_DIR_RE = re.compile(r"^voice_\d+$")
 
-# --- Identity thresholds ---
-# EVERY similarity in this file is RAW cosine in [-1, 1] — embeddings are
-# L2-normalized, so `a @ b` IS the cosine and no rescaling happens anywhere.
-# (Before the bank rewrite these were SCALED cosine, `(raw + 1) / 2`; the
-# config names changed with the unit so a stale scaled value cannot be reread
-# as raw. Conversion: raw = 2 * scaled - 1.)
-#
-# One identity bar is used for every identity question — recognizing an
-# enrolled user, deciding a returning unknown voice belongs to an existing
-# cluster, deciding an unknown cluster's audio belongs to the person being
-# enrolled, and deciding two clips in one enroll batch are the same person. There is deliberately no looser merge gate: the old one admitted
-# clips at 0.625 scaled that were then used to judge genuine enroll audio at
-# 0.75 scaled.
 _MATCH_COS = config.SPEAKER_MATCH_COS
 # Redundancy, NOT identity — a different axis, hence a different number. Must
 # stay above _MATCH_COS: both gates measure max cosine to the user's existing
@@ -165,7 +71,6 @@ _EXTEND_REQUIRE_UNANIMOUS = config.SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS
 _EXTEND_MIN_CHUNK_COS = config.SPEAKER_EXTEND_MIN_CHUNK_COS
 _EXTEND_MIN_ANCHOR_COS = config.SPEAKER_EXTEND_MIN_ANCHOR_COS
 
-# Target sample rate for stored/enrolled audio (matches STT pipeline).
 _TARGET_SR = 16000
 
 
@@ -174,27 +79,12 @@ class SpeakerRecognizerError(Exception):
 
 
 class EmbeddingAPIUnavailableError(SpeakerRecognizerError):
-    """Raised when the embedding API is unreachable / 5xx / protocol-broken.
-
-    Distinct from audio-level rejections: the audio itself may be perfectly
-    fine — the caller should retry rather than ask the user to re-record.
-    Callers that batch over multiple samples MUST abort on this error
-    instead of skipping the sample, to avoid misattributing an outage to
-    bad audio and to avoid destructive cleanup of valid on-disk samples.
-    """
+    """Raised when the embedding API is unreachable / 5xx / protocol-broken."""
 
 
-# ---------------------------------------------------------------------------
-# On-device audio preprocessing (moved from perception-service).
-#
-# The filter/VAD/normalize chain (Mono -> Resample -> [HighPass] ->
-# [NoiseReduce] -> VAD -> [STOI gate] -> RMS) now runs HERE, next to the mic.
-# Only audio that passes the VAD + STOI intelligibility gate is uploaded; the
-# embedding server is then told to skip its own preprocessing (preprocess=false)
-# and just compute the embedding. The composite processor is a lazily-built
-# singleton because the TEN-VAD + STOI models load once and are reused across
-# every enroll/recognize call.
-# ---------------------------------------------------------------------------
+# On-device audio preprocessing (moved from perception-service). The
+# filter/VAD/normalize chain (Mono -> Resample -> [HighPass] -> [NoiseReduce] -> VAD ->
+# [STOI gate] -> RMS) now runs HERE, next to the mic.
 _audio_processor: Optional[Any] = None
 _audio_processor_lock = threading.Lock()
 
@@ -239,9 +129,6 @@ def _get_audio_processor() -> Any:
                 proc.start()  # loads the TEN-VAD ONNX model
             except Exception as e:
                 # Missing dep / model-load failure is systemic, not audio-level.
-                # Raise EmbeddingAPIUnavailableError so enroll aborts cleanly
-                # (never deletes on-disk samples) and recognize degrades to
-                # "unknown" instead of crashing every turn with a 500.
                 logger.error(
                     "Failed to init on-device audio preprocessor: %s", e)
                 raise EmbeddingAPIUnavailableError(
@@ -260,12 +147,7 @@ def _get_audio_processor() -> Any:
 
 
 def _normalize_label(name: str) -> str:
-    """Folder-safe lowercase label — matches FaceRecognizer.normalize_label.
-
-    Keeping this rule identical to the face recognizer ensures that a person
-    enrolled via face and via voice lands in the SAME per-user folder, and
-    that mood/wellbeing/music-suggestion logs all refer to the same identity.
-    """
+    """Folder-safe lowercase label — matches FaceRecognizer.normalize_label."""
     s = (name or "").strip().lower()
     s = re.sub(r"[^a-z0-9_-]+", "_", s)
     s = s.strip("_")
@@ -273,13 +155,7 @@ def _normalize_label(name: str) -> str:
 
 
 def _cosine_similarity(e1: np.ndarray, e2: np.ndarray) -> float:
-    """Raw cosine similarity in [-1, 1].
-
-    Tolerates non-normalized inputs (unlike plain ``np.dot`` which requires
-    pre-normalized vectors). The ``+ 1e-12`` guards against zero-norm inputs.
-    This value is compared DIRECTLY against the thresholds in this file — there
-    is no [0, 1] rescaling step anywhere.
-    """
+    """Raw cosine similarity in [-1, 1]."""
     return float(
         np.dot(e1, e2) / (np.linalg.norm(e1) * np.linalg.norm(e2) + 1e-12)
     )
@@ -297,24 +173,7 @@ def _l2(vec: np.ndarray) -> np.ndarray:
 def _runner_up_mean(
     confs: np.ndarray, names: list[str], best_name: str
 ) -> float:
-    """Mean score of the strongest speaker who did NOT win, or ``-inf``.
-
-    ``confs`` is [M chunks, K speakers] of raw cosine; column k is every
-    chunk's score against speaker ``names[k]``'s closest row.
-
-    The margin gate used to derive its runner-up from the per-speaker vote
-    tally, which only ever contains speakers that WON at least one chunk. A
-    unanimous vote therefore produced a single entry and a margin of ``inf``,
-    so the gate passed everything -- and a unanimous vote is most turns. Three
-    users whose chunks sit 0.01 apart were waved straight through, which is
-    precisely the near-tie the gate exists to block.
-
-    Returning ``-inf`` when nobody else is enrolled is deliberate, not a
-    fallback: with one enrolled user there is genuinely no relative signal, so
-    the caller's ``best_conf - (-inf) == inf`` correctly reports "no runner-up
-    to be close to". An absolute floor is the only gate that helps there --
-    see _EXTEND_MIN_ANCHOR_COS.
-    """
+    """Mean score of the strongest speaker who did NOT win, or ``-inf``."""
     others = [k for k, n in enumerate(names) if n != best_name]
     if not others:
         return float("-inf")
@@ -326,19 +185,9 @@ def _select_diverse(
 ) -> list[int]:
     """Greedy farthest-point selection: indices of the ``k`` most diverse rows.
 
-    Ported from ``faceid/recognizer.py::_select_diverse``. Starting from
-    ``anchor`` (the user's permanent enrollment samples) as reference points,
-    repeatedly keep the candidate whose similarity to everything already kept is
-    LOWEST — the most novel sample. This packs the capped slots with audio that
-    COMPLEMENTS the enrollment (different distance, loudness, room) rather than
-    more of the same. If ``anchor`` is None/empty the newest candidate seeds it.
-
-    Caveat worth knowing when tuning: in face space the dominant within-person
-    axis is pose, so "farthest" means "useful new angle". In speaker space the
-    dominant axis is channel and noise, so farthest-point will happily rank a
-    degraded clip as the most valuable one. The identity floor (a candidate must
-    clear _MATCH_COS to be considered at all) plus the duration gate in
-    _maybe_extend_user are what keep that in check — not this function.
+    The identity floor (a candidate must clear _MATCH_COS to be considered at all) plus
+    the duration gate in _maybe_extend_user are what keep that in check — not this
+    function.
     """
     m = len(candidates)
     if m <= k:
@@ -348,14 +197,14 @@ def _select_diverse(
         selected_ref: list[np.ndarray] = [anchor]
         selected_local: list[int] = []
     else:
-        seed = m - 1  # newest candidate
+        seed = m - 1
         selected_ref = [candidates[seed][None, :]]
         selected_local = [seed]
 
     remaining = [j for j in range(m) if j not in selected_local]
     while len(selected_local) < k and remaining:
-        ref = np.concatenate(selected_ref)          # [K, D]
-        sims = candidates[remaining] @ ref.T        # [R, K] raw cosine
+        ref = np.concatenate(selected_ref)
+        sims = candidates[remaining] @ ref.T
         nearest = sims.max(axis=1)
         pick = int(np.argmin(nearest))
         chosen = remaining.pop(pick)
@@ -370,10 +219,7 @@ def _sidecar_path(wav_path: Path) -> Path:
 
 
 def _sample_origin(filename: str) -> str:
-    """Parse the origin tag encoded in ``sample_<origin>_<ts>_<uuid>.wav``.
-
-    Legacy files ``sample_<ts>_<uuid>.wav`` (no origin) → ``"unknown"``.
-    """
+    """Parse the origin tag encoded in ``sample_<origin>_<ts>_<uuid>.wav``."""
     parts = filename.split("_", 2)
     if len(parts) >= 2 and parts[0] == "sample":
         candidate = parts[1]
@@ -391,9 +237,7 @@ def _merge_shared_metadata(
 ) -> dict[str, Any]:
     """Merge identity fields into ``/root/local/users/<norm>/metadata.json``.
 
-    This is the SAME file that :class:`FaceRecognizer` writes — we read,
-    update only the provided fields, and write back. Empty/``None`` values
-    never overwrite existing entries.
+    Empty/``None`` values never overwrite existing entries.
     """
     path = user_dir / "metadata.json"
     data: dict[str, Any] = {}
@@ -422,18 +266,7 @@ def _read_bytes(path: str) -> bytes:
 
 
 def _wav_duration_s(wav_bytes: bytes) -> float:
-    """Best-effort duration in seconds. 0.0 when the clip cannot be read.
-
-    Read from the RIFF header, which already carries the frame count and rate.
-    This used to decode the whole file through
-    ``_wav_bytes_to_float32_16k_mono`` and divide by the target rate — correct,
-    but it paid a full decode plus a ``resample_poly`` pass to count samples.
-    On a 44.1 kHz clip (a Telegram voice note) that was ~5 ms to answer "how
-    long is this"; the header answers it in ~8 us with an identical result.
-
-    Falls back to the decode for anything ``wave`` cannot parse, so a container
-    it does not understand still gets a real answer instead of 0.0.
-    """
+    """Best-effort duration in seconds. 0.0 when the clip cannot be read."""
     try:
         with wave.open(io.BytesIO(wav_bytes), "rb") as wf:
             rate = wf.getframerate()
@@ -484,11 +317,7 @@ def _wav_bytes_to_float32_16k_mono(raw: bytes) -> np.ndarray:
 def _float32_waveform_to_wav_bytes(
     waveform: np.ndarray, sample_rate: int = _TARGET_SR
 ) -> bytes:
-    """Encode a float32 mono waveform into PCM_16 WAV bytes (16kHz by default).
-
-    ``sample_rate`` is only ever passed by the SPEAKER-DEBUG partial-chain dump,
-    which can capture a waveform from *before* the Resampler stage ran.
-    """
+    """Encode a float32 mono waveform into PCM_16 WAV bytes (16kHz by default)."""
     try:
         import soundfile as sf  # type: ignore
     except ImportError as e:
@@ -516,39 +345,6 @@ def pcm16_bytes_to_wav(pcm_bytes: bytes, sample_rate: int = _TARGET_SR) -> bytes
     return buf.getvalue()
 
 
-# ==========================================================================
-# ==  SPEAKER-DEBUG  —  TEMPORARY DIAGNOSTIC TRACER  —  REMOVE BEFORE DEPLOY ==
-# ==========================================================================
-# Everything tagged `SPEAKER-DEBUG` in this file is a throwaway diagnostic aid
-# for tuning speaker recognition. It traces every recognize()/enroll() call to
-# disk (input audio, query/enroll embeddings, full cosine-similarity breakdown,
-# reject reason, or server error), mirroring the facial-emotion debug logs.
-#
-# TO REMOVE FOR PRODUCTION: delete this block and every line/call marked
-# `SPEAKER-DEBUG` (grep -n "SPEAKER-DEBUG" this file — the __init__ line and the
-# self._debug.* calls in recognize()/enroll()). It is self-contained: no other
-# module or config file is touched. It is OFF by default (production-safe); set
-# HAL_SPEAKER_DEBUG=true to enable it during development.
-#
-# Env knobs (all optional):
-#   HAL_SPEAKER_DEBUG            "true" to enable (OFF by default)
-#   HAL_SPEAKER_DEBUG_DIR        output root (default: ./speaker_logs next to this file)
-#   HAL_SPEAKER_DEBUG_MAX_ENTRIES  per-kind dir cap, oldest pruned (default 1000; 0=unbounded)
-#
-# Layout (per call, named like the facial-emotion logs); <root> defaults to the
-# `speaker_logs/` folder beside this file for fast inspection:
-#   <root>/recognize/<ts>_<class>_<confidence>/       (class = enrolled name | stranger-<N> | unknown)
-#   <root>/recognize/<ts>_FAIL-<reason>/              (too-short | too-silent | server-error | ...)
-#   <root>/enroll/<ts>_<norm>_<cohesion>/             (cohesion = mean pairwise sim among the stored anchors)
-#   <root>/enroll/<ts>_FAIL-<reason>/
-# each dir holds: input.wav (raw) + preprocessed.wav (post VAD/STOI/RMS, what was
-# uploaded) / sample_NN.wav, *.npy embeddings, result.json + profile.json.
-# result.json carries the recognition decision plus the preprocessing metrics
-# (incl. STOI score) and, on a gate reject, the reason; profile.json carries ONLY
-# the per-stage latency + memory numbers, kept separate so neither file buries
-# the other.
-# NOTE: speaker_logs/ lands inside the source tree — don't commit it (the whole
-# SPEAKER-DEBUG block is meant to be removed before deploy anyway).
 def _debug_audio_stats(wav_bytes: bytes) -> tuple[Optional[float], Optional[float]]:
     """Best-effort (duration_s, rms) from WAV bytes for the trace. Never raises."""
     try:
@@ -561,109 +357,24 @@ def _debug_audio_stats(wav_bytes: bytes) -> tuple[Optional[float], Optional[floa
 
 
 def _debug_stranger_label(vp_hash: Optional[str]) -> str:
-    """SPEAKER-DEBUG: 'voice_3' -> 'stranger-3' for readable trace-dir names.
-
-    The internal id stays 'voice_<N>' everywhere (cluster folders, result.json
-    voiceprint_hash); only the human-facing debug dir token is rewritten.
-    """
+    """SPEAKER-DEBUG: 'voice_3' -> 'stranger-3' for readable trace-dir names."""
     if not vp_hash:
         return "unknown"
     return vp_hash.replace(_VOICE_STRANGER_PREFIX, "stranger-", 1)
 
 
-# ---------------------------------------------------------------------------
-# SPEAKER-DEBUG: per-stage latency / CPU / memory profiler.
-#
-# Rides on the SAME trace the tracer already writes — same per-call dir, same
-# HAL_SPEAKER_DEBUG switch, no extra env knob — but lands in its own
-# `profile.json` rather than in result.json, which is already dense with the
-# recognition decision.
-#
-# Stages form a TREE: a stage opened inside another becomes its child, so the
-# containment is structural instead of a naming convention the reader has to
-# parse. `preprocess` owns `ten_vad` / `stoi_gate`; summing the top level
-# gives the call total without double-counting:
-#
-#   decode_input                 base64/file read + WAV normalize to 16k mono
-#   preprocess                   the whole on-device chain
-#     +- decode_wav                WAV bytes -> float32 waveform
-#     +- processor_init            lazy build/start of the composite (models load)
-#     +- mono / resample / high_pass / noise_reduce
-#     +- ten_vad                 << the TEN-VAD stage, profiled explicitly
-#     +- stoi_gate               << the STOI gate, profiled explicitly
-#     +- rms_normalize
-#     +- encode_wav                cleaned waveform -> WAV bytes -> base64
-#   embed_api                    the embedding call
-#     +- request                 << the HTTP request itself
-#     +- decode                    response parse + L2 normalize
-#   load_enrolled / match_vote / stranger_cluster / save_input_wav
-#
-# Each node also carries `self_ms` (its own time minus its children's), so the
-# cost of a parent's own glue is visible rather than hidden in the total.
-#
-# MEMORY. RSS is SAMPLED on a background thread (~20 ms) for the life of the
-# call, and each stage reports the PEAK seen inside its own window. Endpoint-only
-# sampling — read RSS at entry, read it again at exit — was the original approach
-# and it is wrong for this pipeline: RSS moves only when the allocator asks the
-# OS for pages or returns them, so a stage that allocates and frees within its
-# own window reports 0.0, and a stage that happens to run when an earlier
-# allocation is released reports a NEGATIVE cost. Real traces showed exactly
-# that — `stoi_gate` at 1.7 s of ONNX inference reporting 0.00 MB on one call
-# and -28.62 MB on the next. So three numbers are kept, each answering a
-# different question:
-#
-#   rss_peak_delta_mb   peak-during-stage minus RSS at entry — "what did this
-#                       stage cost at its worst". THIS is the memory number to
-#                       read; it survives allocate-then-free.
-#   rss_end_delta_mb    exit minus entry — "what did it keep". Legitimately
-#                       negative when the allocator hands pages back.
-#   rss_peak_mb         absolute high-water RSS during the stage.
-#
-# Caveat that no RSS-based method escapes: RSS is PROCESS-wide, so a concurrent
-# HAL thread allocating during a stage lands in that stage's numbers. Sampling
-# widens that exposure (it sees every spike in the window, not just the
-# endpoints) in exchange for catching transient peaks at all. Read a single
-# stage's memory as an upper bound, and prefer the shape across several calls.
-#
-# CPU. `cpu_ms` is process CPU time (`time.process_time()`) across the whole
-# process, which is what catches the ONNX/torch intra-op thread pools — the
-# work that makes `stoi_gate` expensive. `cpu_pct` is cpu_ms/wall_ms*100, so
-# >100% means it used more than one core and ~0% means it was blocked, not
-# working (`embed_api.request` should sit near zero — it is waiting on the
-# network). `thread_cpu_ms` is the calling thread alone, so the gap between it
-# and `cpu_ms` is roughly what the pools did. Both are process-wide in the same
-# way RSS is: another busy HAL thread inflates `cpu_ms`.
-#
-# The RSS source is recorded as `rss_source`, because it changes what a delta means:
-#
-#   "psutil" / "statm"  CURRENT RSS — the accurate case (on-device Linux, and
-#                       any box with psutil). A delta can be NEGATIVE when the
-#                       allocator hands pages back.
-#   "rusage"            HIGH-WATER RSS (ru_maxrss) — the macOS-without-psutil
-#                       fallback. Monotonic, so deltas are growth-only: a stage
-#                       reports > 0 only when it pushed the process past its
-#                       previous peak. Good enough to spot which stage owns the
-#                       footprint, useless for measuring memory being released.
-#
-# Repeated stages (enroll embeds many samples) are summed, with `calls` and
-# `ms_max` alongside.
-from contextlib import contextmanager, nullcontext  # SPEAKER-DEBUG
+from contextlib import contextmanager, nullcontext
 
-# Resolved once on first sample: "psutil" | "statm" | "rusage" | "none".
 _debug_rss_mode: Optional[str] = None
 _debug_rss_proc: Any = None
 
 
 def _debug_rss_bytes() -> Optional[int]:
-    """SPEAKER-DEBUG: process RSS in bytes; None if unmeasurable.
-
-    See the block comment above for what each backend actually measures —
-    ``rusage`` is a high-water mark, not current RSS.
-    """
+    """SPEAKER-DEBUG: process RSS in bytes; None if unmeasurable."""
     global _debug_rss_mode, _debug_rss_proc
     if _debug_rss_mode is None:
         try:
-            import psutil  # optional; present on-device via the HAL deps
+            import psutil
 
             _debug_rss_proc = psutil.Process()
             _debug_rss_mode = "psutil"
@@ -676,7 +387,6 @@ def _debug_rss_bytes() -> Optional[int]:
         if _debug_rss_mode == "psutil":
             return int(_debug_rss_proc.memory_info().rss)
         if _debug_rss_mode == "statm":
-            # field 1 = resident pages
             with open("/proc/self/statm", "r") as fh:
                 return int(fh.read().split()[1]) * os.sysconf("SC_PAGE_SIZE")
         if _debug_rss_mode == "rusage":
@@ -684,7 +394,6 @@ def _debug_rss_bytes() -> Optional[int]:
             import sys
 
             maxrss = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
-            # ru_maxrss is bytes on Darwin/BSD, kilobytes on Linux.
             return int(maxrss) if sys.platform == "darwin" else int(maxrss) * 1024
     except Exception:
         return None
@@ -708,10 +417,8 @@ def _debug_mb(n: Optional[float]) -> Optional[float]:
     return None if n is None else round(float(n) / (1024.0 * 1024.0), 2)
 
 
-# SPEAKER-DEBUG: processor class -> stage name. The two gates the profile is
-# really about are named after the model (ten_vad / stoi_gate), not the class —
-# so this key changes when the model behind a stage does. `ten_vad` was
-# `silero_vad` before the TEN-VAD swap; traces predating it use the old name.
+# SPEAKER-DEBUG: processor class -> stage name. `ten_vad` was `silero_vad` before the
+# TEN-VAD swap; traces predating it use the old name.
 _DEBUG_STAGE_NAMES: dict[str, str] = {
     "MonoConverter": "mono",
     "Resampler": "resample",
@@ -783,9 +490,6 @@ class _StageNode:
                 rss_peak if self.rss_peak_b is None else max(self.rss_peak_b, rss_peak)
             )
             if rss_before is not None:
-                # MAX, not sum: for a repeated stage the useful number is the
-                # worst single occurrence ("how big did one call of this get"),
-                # not a total that grows with the sample count.
                 growth = max(0, rss_peak - rss_before)
                 self.rss_peak_delta_b = (
                     growth if self.rss_peak_delta_b is None
@@ -797,16 +501,12 @@ class _StageNode:
         d: dict[str, Any] = {
             "stage": self.name,
             "ms": round(self.ms, 2),
-            # This node's OWN time — the parent's glue, not its children's work.
             "self_ms": round(max(0.0, self.ms - sum(k.ms for k in kids)), 2),
             "cpu_ms": round(self.cpu_ms, 2),
-            # >100% = used more than one core; ~0% = blocked, not working.
             "cpu_pct": (round(self.cpu_ms / self.ms * 100.0, 1) if self.ms > 0 else None),
             "thread_cpu_ms": round(self.thread_cpu_ms, 2),
-            # THE memory number: peak inside this stage minus RSS at entry.
             "rss_peak_delta_mb": _debug_mb(self.rss_peak_delta_b),
             "rss_peak_mb": _debug_mb(self.rss_peak_b),
-            # What it KEPT — legitimately negative when pages go back to the OS.
             "rss_end_delta_mb": _debug_mb(self.rss_end_delta_b),
             "rss_after_mb": _debug_mb(self.rss_after_b),
         }
@@ -825,7 +525,7 @@ class _StageProfiler:
     # misses any allocation freed before the stage exits — see the block
     # comment above for the traces that exposed it.
     _SAMPLE_INTERVAL_S = 0.02
-    _MAX_SAMPLES = 20000        # ~400 s of sampling; backstop, not a real limit
+    _MAX_SAMPLES = 20000
     _MAX_LIFETIME_S = 300.0     # sampler self-terminates if a call never ends
 
     def __init__(self, label: str) -> None:
@@ -834,8 +534,6 @@ class _StageProfiler:
         self._cpu0 = time.process_time()
         self._rss0 = _debug_rss_bytes()
         self._root = _StageNode(label)
-        # Open-stage stack: a stage entered while another is open becomes its
-        # child. This is what makes the output a tree instead of a flat list.
         self._stack: list[_StageNode] = [self._root]
         self._samples: list[tuple[float, int]] = []
         self._stop = threading.Event()
@@ -877,7 +575,7 @@ class _StageProfiler:
         for p in points:
             if p is not None and (best is None or p > best):
                 best = p
-        for t, rss in list(self._samples):  # snapshot; sampler only appends
+        for t, rss in list(self._samples):
             if t0 <= t <= t1 and (best is None or rss > best):
                 best = rss
         return best
@@ -939,8 +637,6 @@ class _StageProfiler:
                     None if (rss_end is None or self._rss0 is None)
                     else rss_end - self._rss0
                 ),
-                # Process high-water mark since start-up (Linux VmHWM) — a
-                # whole-process number, unrelated to this call's own peak.
                 "process_peak_rss_mb": _debug_mb(_debug_peak_rss_bytes()),
                 "stages": [k.to_dict() for k in self._root.kids()],
             }
@@ -975,14 +671,8 @@ class _SpeakerDebugTracer:
     """SPEAKER-DEBUG: writes per-call trace dirs. Fully self-contained; never raises."""
 
     def __init__(self) -> None:
-        # SPEAKER-DEBUG: OFF by default (production-safe). Set HAL_SPEAKER_DEBUG=true
-        # to enable during development — no .env edit needed, any env source works
-        # (shell `export`, systemd `Environment=`, docker `-e`, the launch script).
-        # Read once at construction, so restart HAL after changing it.
         self.enabled = os.environ.get(
             "HAL_SPEAKER_DEBUG", "false").lower() == "true"
-        # Default: a `speaker_logs/` dir right next to this file, so traces are
-        # trivial to inspect. Override with HAL_SPEAKER_DEBUG_DIR.
         _default_dir = Path(__file__).resolve().parent / "speaker_logs"
         self._base = Path(os.environ.get("HAL_SPEAKER_DEBUG_DIR", str(_default_dir)))
         try:
@@ -990,8 +680,6 @@ class _SpeakerDebugTracer:
         except ValueError:
             self._max = 1000
         if self.enabled:
-            # Prefer the source-tree dir; if it's read-only (device deploy),
-            # fall back to a writable temp dir instead of silently disabling.
             if not self._try_mkdir(self._base):
                 import tempfile
                 fallback = Path(tempfile.gettempdir()) / "hal-speaker-debug"
@@ -1061,9 +749,6 @@ class _SpeakerDebugTracer:
                 payload.update(result)
             (out / "result.json").write_text(json.dumps(payload, indent=2, default=str))
 
-            # Latency/memory goes in its OWN file — result.json is already dense
-            # with the recognition decision, and mixing timings into it makes
-            # both harder to read. Same dir, so a trace stays one unit.
             if profile:
                 (out / "profile.json").write_text(
                     json.dumps(profile, indent=2, default=str)
@@ -1102,8 +787,6 @@ class _SpeakerDebugTracer:
         if isinstance(err, EmbeddingAPIUnavailableError):
             return "server-error"
         msg = str(err).lower()
-        # On-device preprocessing gate rejections (PreprocessRejected reason
-        # codes are embedded in the message as "[<reason>]").
         if "empty_input" in msg:
             return "empty-input"
         if "vad_removed_all" in msg:
@@ -1121,7 +804,6 @@ class _SpeakerDebugTracer:
         if "invalid base64" in msg or "cannot decode" in msg or "empty audio" in msg:
             return "bad-audio"
         return "embed-error"
-# ===================  end SPEAKER-DEBUG tracer block  =====================
 
 
 class SpeakerRecognizer:
@@ -1142,13 +824,9 @@ class SpeakerRecognizer:
         )
         self._mu = threading.Lock()
 
-        # --- Embedding-model identity tracking ------------------------------
-        # Every stored embedding is only comparable to a query embedding from
-        # the SAME server model. We stamp each enrollment with the server's
-        # model version and re-embed (migrate) stored WAVs when the server model
-        # changes. `_server_model_version` is refreshed as a side effect of every
-        # /embed call (see _call_embedding_api). Migration runs in a single
-        # background thread guarded by these fields.
+        # Every stored embedding is only comparable to a query embedding from the SAME
+        # server model. Migration runs in a single background thread guarded by these
+        # fields.
         self._server_model_version: Optional[str] = None
         self._migration_lock = threading.Lock()
         self._migrating_version: Optional[str] = None
@@ -1158,48 +836,28 @@ class SpeakerRecognizer:
         self._user_locks: dict[str, threading.Lock] = {}
 
         # Bank cache + the lock guarding it and every extended-set mutation.
-        # RLock because the extend path takes it for two short critical sections
-        # around an unlocked disk write, and prune runs nested inside the
-        # second. Disk I/O must NEVER happen while this is held — see
-        # _maybe_extend_user, and faceid/recognizer.py:282 for what went wrong
-        # in the face pipeline when it did.
         self._bank_lock = threading.RLock()
         self._bank_cache: Optional[
             tuple[Optional[np.ndarray], list[str], list[str]]
         ] = None
         self._bank_cache_sig: Optional[tuple] = None
-        # Monotonic counter appended to extended filenames so two samples
-        # captured in the same millisecond cannot overwrite each other.
         self._extended_seq: int = 0
 
-        # Live count of incoming_*.wav in the log root, so a turn knows whether
-        # it is over the cap without stat-ing the directory. Seeded from disk,
-        # which is what trims a device that ran before the cap existed: an old
-        # backlog is counted at startup and rolled away on the first turn.
         self._roll_lock = threading.Lock()
         self._incoming_count: int = self._count_incoming()
 
-        self._debug = _SpeakerDebugTracer()  # SPEAKER-DEBUG (remove before deploy)
-        # SPEAKER-DEBUG: last stranger-cluster match info, stashed by
-        # _assign_voiceprint_hash so the recognize() trace can record the
-        # cluster match score / re-appearance without changing that method's
-        # return signature. Only ever written when self._debug.enabled.
+        self._debug = _SpeakerDebugTracer()
         self._debug_stranger: Optional[dict[str, Any]] = None
         # SPEAKER-DEBUG: last on-device preprocessing snapshot (cleaned WAV +
         # VAD/STOI metrics), stashed by _prepare_wav_for_embedding so the
         # recognize() trace can log what the gate produced. Reset per recognize.
         self._debug_preproc: Optional[dict[str, Any]] = None
-        # SPEAKER-DEBUG: the PARTIAL chain output when a stage rejects — the
-        # audio the last successful stage produced. Without this a STOI reject
-        # traced only input.wav, so there was no way to hear what TEN-VAD
-        # actually handed the gate, which is the audio the reject is about.
-        # Reset at the top of every _prepare_wav_for_embedding.
+        # SPEAKER-DEBUG: the PARTIAL chain output when a stage rejects — the audio the
+        # last successful stage produced.
         self._debug_partial: Optional[dict[str, Any]] = None
         # SPEAKER-DEBUG: per-call stage profiler (latency + RSS per stage).
-        # THREAD-LOCAL, unlike the two snapshots above: recognize()/enroll() are
-        # not serialized against each other, and a profile is an accumulating
-        # list — two concurrent calls sharing one would interleave their stages
-        # and report nonsense timings.
+        # THREAD-LOCAL, unlike the two snapshots above: recognize()/enroll() are not
+        # serialized against each other, and a profile is an accumulating list.
         self._debug_prof = threading.local()
 
         self._crypto: CryptoSession | None = None
@@ -1218,14 +876,12 @@ class SpeakerRecognizer:
         # tracking. Persists to _VOICE_STRANGERS_DIR so reboots don't lose
         # the "same voice seen again" grouping.
         self._stranger_lock = threading.Lock()
-        self._stranger_embeds: Optional[np.ndarray] = None  # [N, D] L2-normalized
-        self._stranger_labels: Optional[np.ndarray] = None  # [N] str labels
+        self._stranger_embeds: Optional[np.ndarray] = None
+        self._stranger_labels: Optional[np.ndarray] = None
         self._stranger_counter: int = 0
         self._stranger_model_version: Optional[str] = None
         _VOICE_STRANGERS_DIR.mkdir(parents=True, exist_ok=True)
         self._load_strangers()
-        # Clear cluster dirs left orphaned by the previous row-based eviction,
-        # which dropped centroids without ever touching disk.
         self._reconcile_cluster_dirs()
 
         logger.info(
@@ -1236,16 +892,12 @@ class SpeakerRecognizer:
             0 if self._stranger_embeds is None else len(self._stranger_embeds),
         )
 
-        # On restart, proactively check whether the server model changed while we
-        # were down and re-embed any stale profiles.
         if self.available:
             self._spawn_startup_reconcile()
 
     @property
     def available(self) -> bool:
         return bool(self._api_url)
-
-    # ------------------------------------------------------------------ paths
 
     def _voice_dir(self, norm: str) -> Path:
         return self._users_dir / norm / _VOICE_SUBDIR
@@ -1258,25 +910,18 @@ class SpeakerRecognizer:
         return self._voice_dir(norm) / _EMBEDDING_FILE
 
     def _has_profile(self, norm: str) -> bool:
-        """Whether this user has any usable voice bank on disk.
-
-        Replaces the old ``_embedding_path(norm).is_file()`` check: enrollments
-        made after the bank rewrite have no ``embedding.npy`` at all, so that
-        test would report every new user as un-enrolled.
-        """
+        """Whether this user has any usable voice bank on disk."""
         voice_dir = self._voice_dir(norm)
         if not voice_dir.is_dir():
             return False
         if self._embedding_path(norm).is_file():
-            return True  # legacy one-row profile
+            return True
         return any(
             _sidecar_path(p).is_file() for p in voice_dir.glob("sample_*.wav")
         )
 
     def _metadata_path(self, norm: str) -> Path:
         return self._voice_dir(norm) / _METADATA_FILE
-
-    # ------------------------------------------------------------- registry
 
     def _load_registry(self) -> dict[str, Any]:
         if _REGISTRY_FILE.is_file():
@@ -1322,9 +967,7 @@ class SpeakerRecognizer:
                 self._save_registry(reg)
 
     def _user_lock(self, norm: str) -> threading.Lock:
-        """Per-user commit lock (created on first use). Held only briefly under
-        ``_mu`` to fetch/create it, so callers never hold ``_mu`` while waiting on
-        the returned lock — the lock order is always user-lock → ``_mu``."""
+        """Per-user commit lock (created on first use)."""
         with self._mu:
             lock = self._user_locks.get(norm)
             if lock is None:
@@ -1332,22 +975,10 @@ class SpeakerRecognizer:
                 self._user_locks[norm] = lock
             return lock
 
-    # -------------------------------------------------------------- external
-
     def _call_embedding_api(
         self, audios_b64: list[str], *, use_sliding_window: bool = False
     ) -> np.ndarray:
-        """POST audios to the embedding API.
-
-        ``use_sliding_window=False`` (default, enroll path): the server embeds
-        the WHOLE utterance as a single chunk — no windowing/mean — and this
-        returns the L2-normalized aggregated vector ``[D]``.
-
-        ``use_sliding_window=True`` (recognize path): the server slides
-        overlapping windows and this returns the matrix of per-chunk embeddings
-        ``[M, D]`` for per-chunk voting against stored speakers (mirroring
-        perception-service's /recognize logic).
-        """
+        """POST audios to the embedding API."""
         if not self._api_url:
             raise SpeakerRecognizerError(
                 "SPEAKER_EMBEDDING_API_URL not configured"
@@ -1369,10 +1000,6 @@ class SpeakerRecognizer:
             "use_sliding_window": use_sliding_window,
         }
 
-        # SPEAKER-DEBUG: `embed_api` = the whole call, `embed_api.request` = the
-        # network round-trip alone, `embed_api.decode` = parse + L2 normalize.
-        # Both record on failure too (the `finally` in _StageProfiler.stage), so
-        # a timeout shows up as its full _API_TIMEOUT_S wait rather than vanishing.
         with self._debug_stage("embed_api"):
             try:
                 with self._debug_stage("request"):
@@ -1462,44 +1089,12 @@ class SpeakerRecognizer:
     def _prepare_wav_for_embedding(
         self, wav_bytes: bytes
     ) -> tuple[list[str], float]:
-        """Run the on-device preprocessing pipeline and wrap the cleaned WAV.
-
-        Returns ``(payload, cleaned_duration_s)``. The duration is measured on
-        the CLEANED waveform, after VAD has removed silence: the raw turn's
-        length is not a measure of how much speech it holds, and the caller
-        joins an ENTIRE mic session (up to MAX_SESSION_DURATION_S = 30s) into
-        one WAV, so on a quiet turn the difference is most of the file. The
-        extend duration floor exists to reject clips carrying too little
-        speaker information, which is a statement about speech, not bytes.
-
-        HAL now runs the full filter/VAD/normalize chain locally (Mono →
-        Resample → [HighPass] → [NoiseReduce] → VAD → [STOI] → RMS) — the
-        pipeline that used to run inside perception-service, plus the HAL-only
-        STOI intelligibility gate. Only audio that PASSES the gate
-        is returned for upload; ``_call_embedding_api`` then asks the server to
-        skip its own preprocessing (``preprocess=false``) and just compute the
-        embedding on this cleaned waveform.
-
-        The ``/embed`` endpoint still windows/chunks the waveform itself, so we
-        pass the whole cleaned WAV as a single element and let the server slice
-        it (client-side splitting would only add a lossy float32 → PCM_16
-        round-trip per slice).
-
-        Raises ``SpeakerRecognizerError`` (audio-level) when the pipeline
-        rejects the clip — recognize() maps that to "unknown" and enroll()
-        skips the sample, exactly as when the server returned HTTP 400. Note
-        this is deliberately NOT ``EmbeddingAPIUnavailableError``: a rejected
-        clip is a bad recording, not a server outage.
-        """
-        # Light submodule imports (Audio / PreprocessRejected) avoid pulling in
-        # onnxruntime at module import time — that loads in _get_audio_processor.
+        """Run the on-device preprocessing pipeline and wrap the cleaned WAV."""
         from hal.drivers.voice.speaker_recognizer.audio_processors.base import Audio
         from hal.drivers.voice.speaker_recognizer.audio_processors.exceptions import (
             PreprocessRejected,
         )
 
-        # SPEAKER-DEBUG: `prof` is None unless tracing is on; every stage below
-        # is wrapped so the whole chain (and each gate inside it) is profiled.
         prof: Optional[_StageProfiler] = getattr(self._debug_prof, "cur", None)
         self._debug_partial = None  # SPEAKER-DEBUG: never report a stale partial
         with self._debug_stage("preprocess"):
@@ -1515,16 +1110,13 @@ class SpeakerRecognizer:
                 processor = _get_audio_processor()
             try:
                 audio_in = Audio(waveform=waveform, sample_rate=_TARGET_SR)
-                if prof is not None:  # SPEAKER-DEBUG: per-stage walk of the chain
+                if prof is not None:
                     cleaned = self._debug_profiled_process(processor, audio_in, prof)
                 else:
                     cleaned = processor.process(audio_in)
             except PreprocessRejected as e:
-                # Audio-level rejection (a bad recording), NOT a server outage —
-                # map to SpeakerRecognizerError so recognize() reads "unknown" and
-                # every batch caller (enroll, migration) SKIPS this clip without
-                # deleting any previously-accepted on-disk sample. The gate is a
-                # moving target; a stored WAV is not "corrupt" merely because
+                # Audio-level rejection (a bad recording), NOT a server outage. The gate
+                # is a moving target; a stored WAV is not "corrupt" merely because
                 # today's VAD/STOI trims it below threshold.
                 err = SpeakerRecognizerError(
                     f"audio rejected by preprocessing gate [{e.reason}]: {e}"
@@ -1540,21 +1132,16 @@ class SpeakerRecognizer:
                 cleaned_wav = _float32_waveform_to_wav_bytes(out)
                 payload = [base64.b64encode(cleaned_wav).decode("ascii")]
                 cleaned_duration_s = float(out.shape[0]) / _TARGET_SR
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 self._debug_preproc = self._debug_preproc_snapshot(
                     out, cleaned_wav, processor
                 )
         return payload, cleaned_duration_s
 
-    def _debug_preproc_snapshot(  # SPEAKER-DEBUG (remove before deploy)
+    def _debug_preproc_snapshot(
         self, cleaned: np.ndarray, cleaned_wav: bytes, processor: Any
     ) -> dict[str, Any]:
-        """Snapshot the on-device preprocessing result for the recognize trace.
-
-        Captures the cleaned/uploaded WAV plus its duration/RMS and the STOI
-        gate's pass score (pulled off the SpeechIntelligibilityFilter stage, if
-        present). Only called when debug is enabled.
-        """
+        """Snapshot the on-device preprocessing result for the recognize trace."""
         dur = round(float(cleaned.shape[0]) / _TARGET_SR, 3)
         rms = (round(float(np.sqrt(np.mean(cleaned.astype(np.float64) ** 2))), 6)
                if cleaned.size else 0.0)
@@ -1567,7 +1154,7 @@ class SpeakerRecognizer:
                 stoi_threshold = getattr(p, "_threshold", None)
                 break
         return {
-            "cleaned_wav": cleaned_wav,          # popped into the trace's wavs
+            "cleaned_wav": cleaned_wav,
             "cleaned_duration_s": dur,
             "cleaned_rms": rms,
             "stoi_score": stoi_score,
@@ -1584,27 +1171,17 @@ class SpeakerRecognizer:
         metrics = {k: v for k, v in pp.items() if k != "cleaned_wav"} or None
         return wavs, metrics
 
-    # ------------------------------------ SPEAKER-DEBUG: stage profiling
-
     def _debug_profile_start(self, label: str) -> None:
         """SPEAKER-DEBUG: begin a per-call profile. No-op when tracing is off."""
         self._debug_prof.cur = _StageProfiler(label) if self._debug.enabled else None
 
     def _debug_stage(self, name: str) -> Any:
-        """SPEAKER-DEBUG: context manager timing one stage; no-op when off.
-
-        Used at every call site so the production path costs one attribute
-        lookup and a ``nullcontext``.
-        """
+        """SPEAKER-DEBUG: context manager timing one stage; no-op when off."""
         prof = getattr(self._debug_prof, "cur", None)
         return prof.stage(name) if prof is not None else nullcontext()
 
     def _debug_profile_dict(self) -> Optional[dict[str, Any]]:
-        """SPEAKER-DEBUG: finish the profile — log the summary, return the JSON.
-
-        Passed as ``record(profile=...)`` at each trace point, which writes it
-        to ``profile.json`` beside result.json in the same per-call dir.
-        """
+        """SPEAKER-DEBUG: finish the profile — log the summary, return the JSON."""
         prof = getattr(self._debug_prof, "cur", None)
         if prof is None:
             return None
@@ -1616,33 +1193,17 @@ class SpeakerRecognizer:
     def _debug_profiled_process(
         self, processor: Any, audio: Any, prof: _StageProfiler
     ) -> Any:
-        """SPEAKER-DEBUG: run the preprocessing chain stage-by-stage.
-
-        Mirrors ``CompositeAudioProcessor._process_impl`` exactly — same order,
-        same ``processor.process(...)`` per stage, same exceptions — and only
-        adds a timer around each one, so TEN-VAD and the STOI gate each get
-        their own latency + memory numbers instead of one opaque "preprocess"
-        total. Kept HERE rather than inside ``audio_processors/`` so the whole
-        SPEAKER-DEBUG block stays removable without touching that package.
-        Falls back to the plain composite call if the chain isn't introspectable.
-
-        Also records the PARTIAL result when a stage rejects: the audio the last
-        successful stage produced is stashed on ``self._debug_partial`` before
-        the exception propagates, so a STOI reject can still dump the TEN-VAD
-        output the gate said no to.
-        """
+        """SPEAKER-DEBUG: run the preprocessing chain stage-by-stage."""
         stages = getattr(processor, "_processors", None)
         if not stages:
             with prof.stage("chain"):
                 return processor.process(audio)
         result = audio
-        last_ok: Optional[str] = None  # SPEAKER-DEBUG: last stage that returned
+        last_ok: Optional[str] = None
         for p in stages:
             cls_name = type(p).__name__
             stage_name = _DEBUG_STAGE_NAMES.get(cls_name, cls_name.lower())
             try:
-                # Leaf name only — the profiler nests it under whatever stage is
-                # open (``preprocess``), so the tree carries the path.
                 with prof.stage(stage_name):
                     result = p.process(result)
             except Exception:
@@ -1654,15 +1215,12 @@ class SpeakerRecognizer:
             last_ok = stage_name
         return result
 
-    def _debug_capture_partial(  # SPEAKER-DEBUG (remove before deploy)
+    def _debug_capture_partial(
         self, partial: Any, after_stage: Optional[str], rejected_by: str
     ) -> None:
         """Stash the chain output as it stood when ``rejected_by`` refused it.
 
-        ``after_stage`` is the last stage that actually ran (None if the very
-        first one rejected, in which case there is nothing to dump that
-        ``input.wav`` doesn't already show). Never raises — a debug aid must not
-        turn a gate rejection into a crash.
+        Never raises — a debug aid must not turn a gate rejection into a crash.
         """
         try:
             if after_stage is None:
@@ -1672,8 +1230,6 @@ class SpeakerRecognizer:
                 return
             sr = int(getattr(partial, "sample_rate", _TARGET_SR))
             self._debug_partial = {
-                # Named for the stage that produced it, so the file says what it
-                # is: `after_ten_vad.wav` next to a FAIL-low-stoi result.json.
                 "wav_name": f"after_{after_stage}.wav",
                 "wav": _float32_waveform_to_wav_bytes(wf, sr),
                 "after_stage": after_stage,
@@ -1695,8 +1251,6 @@ class SpeakerRecognizer:
         metrics = {k: v for k, v in pp.items() if k != "wav"} or None
         return wavs, metrics
 
-    # ------------------------------------------------------------- metadata
-
     def _read_metadata(self, norm: str) -> dict[str, Any]:
         p = self._metadata_path(norm)
         if p.is_file():
@@ -1711,10 +1265,7 @@ class SpeakerRecognizer:
         return self._read_metadata(norm).get("embed_model_version") or ""
 
     def _read_shared_metadata(self, norm: str) -> dict[str, Any]:
-        """Read the top-level ``/root/local/users/<norm>/metadata.json``.
-
-        Shared with FaceRecognizer — source of truth for telegram_* fields.
-        """
+        """Read the top-level ``/root/local/users/<norm>/metadata.json``."""
         p = self._users_dir / norm / "metadata.json"
         if p.is_file():
             try:
@@ -1733,17 +1284,9 @@ class SpeakerRecognizer:
             "%Y-%m-%dT%H:%M:%S"
         )
 
-    # ------------------------------------------------------------- bank (disk)
-
     @staticmethod
     def _read_sidecar(wav_path: Path) -> Optional[np.ndarray]:
-        """L2-normalized embedding stored beside ``wav_path``, or None.
-
-        Trusted as-is — deliberately NOT re-gated against the preprocessing
-        chain. A sample worth keeping (far mic, quiet delivery) is exactly the
-        one a stricter gate would now reject, and re-running inference on every
-        load would also mean a remote API call per sample per restart.
-        """
+        """L2-normalized embedding stored beside ``wav_path``, or None."""
         p = _sidecar_path(wav_path)
         if not p.is_file():
             return None
@@ -1760,9 +1303,8 @@ class SpeakerRecognizer:
     def _write_sidecar(wav_path: Path, embedding: np.ndarray) -> None:
         """Atomically (over)write the embedding sidecar beside a sample WAV.
 
-        temp + os.replace so a concurrent bank read never sees a torn file and a
-        crash mid-migration leaves whole sidecars, never a corrupt one. Passing a
-        file object to np.save stops it appending a second .npy to the temp name.
+        temp + os.replace so a concurrent bank read never sees a torn file and a crash
+        mid-migration leaves whole sidecars, never a corrupt one.
         """
         p = _sidecar_path(wav_path)
         tmp = p.with_name(p.name + ".tmp")
@@ -1786,17 +1328,7 @@ class SpeakerRecognizer:
         return sorted(self._voice_dir(norm).glob("sample_*.wav"))
 
     def _disk_sample_fields(self, norm: str) -> dict[str, Any]:
-        """Sample counts and file lists read LIVE from disk.
-
-        metadata.json still records these at enroll time, but reads derive them
-        from the directory instead so they cannot drift. Anything may remove a
-        sample between enrolls — the OS server's per-file delete button is the
-        common case — and under the old model that drift was hidden because the
-        delete path re-ran a full enroll purely to refresh the profile. That
-        re-enroll duplicated every surviving sample, so it was removed; deriving
-        here is what makes the follow-up call unnecessary rather than merely
-        skipped.
-        """
+        """Sample counts and file lists read LIVE from disk."""
         anchor_paths = self._anchor_wavs(norm)
         extended_paths = self._extended_wavs(norm)
         return {
@@ -1810,16 +1342,8 @@ class SpeakerRecognizer:
     def _reconcile_sidecars(self, norm: str) -> int:
         """Delete embedding sidecars whose sample WAV is gone.
 
-        The mirror image of the backfill in :meth:`enroll` — that creates a
-        missing sidecar for an existing WAV, this removes a sidecar left behind
-        by a deleted WAV. Safe in a way that deleting audio never is: a sidecar
-        is DERIVED data, so an orphan loses nothing recoverable.
-
-        Orphans are invisible to matching (the bank indexes by WAV) but they
-        show up in the voice-file listing, and the OS server correctly refuses
-        to let the UI delete a .npy directly — so without this there is no way
-        to clear one. Covers devices that accumulated orphans before the OS
-        server started removing sidecars alongside their WAV.
+        Safe in a way that deleting audio never is: a sidecar is DERIVED data, so an
+        orphan loses nothing recoverable.
         """
         removed = 0
         for d in (self._voice_dir(norm), self._extended_dir(norm)):
@@ -1827,7 +1351,7 @@ class SpeakerRecognizer:
                 continue
             for npy in sorted(d.glob("*.npy")):
                 if npy.name == _EMBEDDING_FILE:
-                    continue  # legacy aggregate, not a sidecar
+                    continue
                 if npy.with_suffix(".wav").is_file():
                     continue
                 try:
@@ -1848,13 +1372,7 @@ class SpeakerRecognizer:
     def _load_user_bank(
         self, norm: str
     ) -> tuple[Optional[np.ndarray], Optional[np.ndarray]]:
-        """Return ``(anchor [Na, D], extended [Ne, D])`` for one user.
-
-        Legacy fallback: a profile enrolled before the bank rewrite has no
-        sidecars, only the aggregated ``embedding.npy``. That vector is loaded
-        as a one-row anchor bank so the user keeps matching. Nothing rewrites it
-        — the bank fills in naturally as they are re-enrolled or auto-extended.
-        """
+        """Return ``(anchor [Na, D], extended [Ne, D])`` for one user."""
         anchor_embs, _ = self._read_tier(self._anchor_wavs(norm))
         if not anchor_embs:
             legacy = self._embedding_path(norm)
@@ -1873,11 +1391,8 @@ class SpeakerRecognizer:
     def _bank_signature(self) -> tuple:
         """Cheap invalidation key for the whole-bank cache.
 
-        Sidecars are only ever created or deleted, never edited in place, so a
-        directory mtime is a sufficient signal. This exists because recognize()
-        loads the bank on EVERY turn and the bank is now N rows per user rather
-        than one vector — without a cache that is N times the disk reads on the
-        voice hot path.
+        Sidecars are only ever created or deleted, never edited in place, so a directory
+        mtime is a sufficient signal.
         """
         sig: list[tuple] = []
         if not self._users_dir.is_dir():
@@ -1901,13 +1416,7 @@ class SpeakerRecognizer:
         return tuple(sig)
 
     def _load_bank(self) -> tuple[Optional[np.ndarray], list[str], list[str]]:
-        """Load every user's bank, flattened.
-
-        Returns ``(rows [N, D], labels [N], tiers [N])`` where ``tiers[i]`` is
-        ``"anchor"`` or ``"extended"``. Flat rather than per-user because
-        recognize() scores one matmul against everything, then reduces per
-        speaker. Cached against :meth:`_bank_signature`.
-        """
+        """Load every user's bank, flattened."""
         sig = self._bank_signature()
         with self._bank_lock:
             if self._bank_cache is not None and self._bank_cache_sig == sig:
@@ -1929,9 +1438,6 @@ class SpeakerRecognizer:
                         labels.append(entry.name)
                         tiers.append(tier)
 
-        # Guard against a model change mid-life: rows of differing width cannot
-        # be stacked, and silently dropping the minority would be worse than
-        # saying so. Keep the most common width and log the rest.
         if rows:
             widths = {int(r.shape[0]) for r in rows}
             if len(widths) > 1:
@@ -1962,16 +1468,9 @@ class SpeakerRecognizer:
             self._bank_cache = None
             self._bank_cache_sig = None
 
-    # -------------------------------------------------- extended tier (disk)
-
     @staticmethod
     def _delete_sample(wav_path: Path) -> None:
-        """Delete a sample WAV and its sidecars (best-effort, never raises).
-
-        The provenance ``.json`` goes with them: it only ever describes THIS
-        sample, so leaving it behind would attribute an evicted sample's
-        admission record to whatever later reuses the name.
-        """
+        """Delete a sample WAV and its sidecars (best-effort, never raises)."""
         try:
             wav_path.unlink(missing_ok=True)
             _sidecar_path(wav_path).unlink(missing_ok=True)
@@ -1983,19 +1482,7 @@ class SpeakerRecognizer:
         self, norm: str, wav_bytes: bytes, embedding: np.ndarray,
         provenance: Optional[dict[str, Any]] = None,
     ) -> Optional[Path]:
-        """Persist one extended sample (WAV + sidecar). Returns its path or None.
-
-        The sidecar is written after the WAV, and a sample only counts as
-        present once both exist — a half-written pair is simply invisible to
-        the bank loader rather than corrupting it.
-
-        ``provenance`` (when given) records WHY this sample was admitted and
-        under which thresholds, as a ``.json`` beside the pair. Nothing reads
-        it at runtime — it exists so a later threshold change can ask which
-        samples the previous rule let in, which is impossible for everything
-        written before it. The enroll path passes none: those samples are
-        committed on the user's own say-so, not by these gates.
-        """
+        """Persist one extended sample (WAV + sidecar). Returns its path or None."""
         try:
             dest = self._extended_dir(norm)
             dest.mkdir(parents=True, exist_ok=True)
@@ -2026,10 +1513,7 @@ class SpeakerRecognizer:
     def _prune_extended(self, norm: str) -> list[Path]:
         """Trim a user's extended tier to the most diverse _MAX_EXTENDED_SAMPLES.
 
-        Anchored on the user's enrollment samples, so the kept slots are the
-        ones that COMPLEMENT the enrollment rather than repeat it. Returns the
-        paths that were deleted. Anchor samples are never candidates here —
-        that tier is permanent by design.
+        Anchor samples are never candidates here — that tier is permanent by design.
         """
         paths = self._extended_wavs(norm)
         embs, kept_paths = self._read_tier(paths)
@@ -2045,10 +1529,6 @@ class SpeakerRecognizer:
         if len(embs) <= _MAX_EXTENDED_SAMPLES:
             return []
 
-        # Via _load_user_bank (not _read_tier) so a pre-rewrite profile whose
-        # only anchor is the legacy embedding.npy still anchors the selection —
-        # reading the tier directly returns nothing for those users and the
-        # diversity walk silently falls back to seeding on the newest sample.
         anchor, _ext = self._load_user_bank(norm)
         keep = set(
             _select_diverse(np.stack(embs, axis=0), anchor, _MAX_EXTENDED_SAMPLES)
@@ -2080,55 +1560,11 @@ class SpeakerRecognizer:
     ) -> None:
         """Consider folding one confidently-recognized turn into a user's set.
 
-        Ported from ``faceid/recognizer.py::_maybe_extend_user``, with two
-        extra bars that the face pipeline does not need. A camera frame holds
-        one face per crop; a turn's audio can hold the TV, a second speaker, or
-        the device's own TTS tail — so extending demands more than recognizing:
-
-        * ``duration_s`` must clear _EXTEND_MIN_DURATION_S. A ~1s clip carries
-          too little speaker information to be worth a permanent slot, and its
-          embedding is noisy enough to look "diverse" for the wrong reason.
-        * ``margin`` (winner's confidence minus runner-up's) must clear
-          _EXTEND_MIN_MARGIN_COS, so a near-tie between two enrolled users
-          never writes audio into either one's bank.
-        * the turn must be acoustically PURE: every chunk voted for this
-          speaker (``chunk_votes == num_chunks``) and even the weakest winning
-          chunk cleared _EXTEND_MIN_CHUNK_COS. The stored sample is the mean of
-          all chunks, so one chunk of somebody else is one chunk of somebody
-          else in this user's permanent bank.
-        * the ANCHOR rows must have carried the match (``anchor_cos`` clears
-          _EXTEND_MIN_ANCHOR_COS). A match the extended tier carried is
-          evidence about a previous guess, not about the person, so letting
-          it admit a row would let the tier vouch for its own growth.
-
-        Then the diversity gate: keep the sample only if its max cosine to what
-        we already hold is BELOW _DIVERSITY_COS — above that it duplicates a
-        sample we have.
-
-        ``payload`` is the CLEANED WAV, base64-wrapped, exactly as recognize()
-        already built it for its own /embed call. This method embeds it a
-        second time in SINGLE-SHOT mode once the cheap gates pass — see the
-        comment at that call for why the stored vector is not recognize()'s
-        per-chunk mean.
-
-        ``existing_rows`` is this speaker's slice of the bank recognize() just
-        matched against — anchor and extended concatenated, legacy fallback
-        included, which is exactly what _load_user_bank would rebuild. Taking
-        it as an argument rather than re-reading the sidecars saves one np.load
-        per stored sample on EVERY recognized turn, almost always to be thrown
-        away a line later when the diversity gate rejects a redundant clip.
-
-        Like the face version, this NEVER holds ``_bank_lock`` across disk I/O.
+        A camera frame holds one face per crop; a turn's audio can hold the TV, a second
+        speaker, or the device's own TTS tail.
         """
-        # Purity gates. A long turn is identified by majority vote but the
-        # sample we are about to store is the mean of EVERY chunk, so a turn
-        # that was not wholly this speaker would fold somebody else into their
-        # bank permanently. Reject the whole turn -- do not salvage, do not
-        # slice, do not partially admit. Both gates are no-ops below ~10s of
-        # post-VAD speech, where the server returns a single chunk.
-        #
-        # Logged at INFO, not DEBUG: a contaminated turn is the interesting
-        # event here and it is rare enough not to be noisy.
+        # Purity gates. Reject the whole turn -- do not salvage, do not slice, do not
+        # partially admit.
         if _EXTEND_REQUIRE_UNANIMOUS and chunk_votes < num_chunks:
             logger.info(
                 "[speaker] extend '%s': skip — %d/%d chunks voted %s "
@@ -2164,26 +1600,13 @@ class SpeakerRecognizer:
             )
             return
 
-        # Embed the CLEANED WAV as a single shot -- the same call enroll,
-        # sidecar backfill and migration all make. Auto-extend used to store
-        # the mean of recognize()'s sliding-window chunks, which made it the
-        # only writer in the system producing a different kind of vector: the
-        # extended tier held means while the anchor tier held single-shot
-        # vectors, and _reembed_user silently converted the means on the next
-        # model change (so re-embedding a stored ext_*.wav did not reproduce
-        # its own sidecar). One row per WAV, embedded one way, everywhere.
-        #
-        # Deliberately placed AFTER the five cheap gates and BEFORE the
-        # diversity gate: a turn that was never going to be stored pays no
-        # network call, and the redundancy check measures the vector actually
-        # being stored rather than a differently-computed stand-in.
+        # Embed the CLEANED WAV as a single shot -- the same call enroll, sidecar
+        # backfill and migration all make. Deliberately placed AFTER the five cheap
+        # gates and BEFORE the diversity gate.
         try:
             embedding = _l2(self._call_embedding_api(payload))
         except SpeakerRecognizerError as e:
-            # Never let bank maintenance break a turn. Unlike the enroll and
-            # migration batches this does NOT re-raise on an outage: there is
-            # no batch here to misattribute a server failure to, so the right
-            # answer is simply not to extend this turn.
+            # Never let bank maintenance break a turn.
             logger.warning(
                 "[speaker] extend '%s': skip — embedding failed: %s", norm, e,
             )
@@ -2209,9 +1632,6 @@ class SpeakerRecognizer:
                 "num_chunks": num_chunks,
                 "min_chunk_cos": min_chunk_cos,
                 "anchor_cos": anchor_cos,
-                # How this vector was computed. Samples written before this
-                # existed hold the mean of recognize()'s chunks and carry no
-                # mode key at all, which is what tells the two apart on disk.
                 "embedding_mode": "single_shot",
                 "max_sim_to_existing": None if max_sim != max_sim else max_sim,
                 "thresholds": {
@@ -2243,15 +1663,6 @@ class SpeakerRecognizer:
             margin, path.name,
         )
 
-    # embedding-model migration
-    #
-    # Enrolled embeddings are only comparable to a query embedding from the SAME
-    # server model. When the server model changes, stored vectors go stale — but
-    # every contributing WAV is retained on disk, so we can re-embed them under
-    # the new model WITHOUT asking the user to record again. That turns "the
-    # model changed" from "lose every enrollment" into "run a background job".
-    # Only users whose WAVs are all gone need a physical re-enroll.
-
     def _iter_enrolled_users(self) -> list[str]:
         """Normalized names of every user that has a usable voice bank."""
         out: list[str] = []
@@ -2265,13 +1676,7 @@ class SpeakerRecognizer:
         return out
 
     def _fetch_server_model_version(self) -> Optional[str]:
-        """GET the embedding server's /health → ``audio_embedder_version``.
-
-        Lets the restart reconcile learn the server model WITHOUT sending audio.
-        Returns None if the server is unreachable, still booting, or too old to
-        report a version — callers then fall back to the lazy recognize-path
-        check. /health is plain JSON (not encrypted), behind the same API key.
-        """
+        """GET the embedding server's /health → ``audio_embedder_version``."""
         if not self._api_url:
             return None
         marker = "/audio-recognizer/embed"
@@ -2305,16 +1710,10 @@ class SpeakerRecognizer:
         ).start()
 
     def _startup_reconcile(self) -> None:
-        """On restart: if the server model changed while we were down, migrate.
-
-        Best-effort: retries the health probe a few times (the server may still
-        be booting), scans metadata cheaply for staleness BEFORE loading the
-        heavy preprocessing model, and only then migrates. Any failure is
-        swallowed — recognize() is the correctness backstop.
-        """
+        """On restart: if the server model changed while we were down, migrate."""
         try:
             ver: Optional[str] = None
-            for attempt in range(5):  # 5 tries, ~5s apart, to cover server boot
+            for attempt in range(5):
                 ver = self._fetch_server_model_version()
                 if ver:
                     break
@@ -2346,14 +1745,7 @@ class SpeakerRecognizer:
             logger.warning("Startup reconcile failed: %s", e)
 
     def _start_migration(self, server_version: str) -> None:
-        """Kick off a background re-embed migration to ``server_version``.
-
-        Single-flight: at most ONE migration runs at a time, regardless of
-        version. A request that arrives while one is already running is dropped —
-        the next recognize (or the restart reconcile) re-triggers for the
-        then-current server version, so a model that changes mid-migration still
-        converges without ever running two migrations at once.
-        """
+        """Kick off a background re-embed migration to ``server_version``."""
         with self._migration_lock:
             if self._migrating_version is not None:
                 return
@@ -2406,7 +1798,7 @@ class SpeakerRecognizer:
                 continue
             if result is True:
                 migrated += 1
-            else:  # None → not migrated (removed if all rejected, else left stale)
+            else:
                 unmigrated += 1
         logger.info(
             "Embedding migration to %s done: migrated=%d fresh=%d "
@@ -2417,31 +1809,7 @@ class SpeakerRecognizer:
     def _reembed_user(self, norm: str, server_version: str) -> Optional[bool]:
         """Re-embed one user's retained WAVs. True=migrated; None=not migrated.
 
-        On None the profile is LEFT STALE (excluded from matching) — never
-        deleted. This covers both a profile with no source WAVs (legacy
-        embedding.npy-only, or WAVs gone) and one whose every retained WAV fails
-        the preprocessing gate: a stale profile is harmless (filtered out of
-        matching) and its WAVs may be the only copy of the enrollment, so a
-        version bump must not destroy it. It re-migrates automatically once a
-        sample passes the gate again.
-
-        Rewrites each sample's embedding SIDECAR in place — both the anchor
-        (``sample_*.wav``) and extended (``extended_*.wav``) tiers — so the bank
-        loader picks up the new-model vectors on its next read. Nothing is
-        aggregated: the store is one row per sample, exactly as enroll writes it.
-
-        Takes the per-user lock, which serializes this against another
-        ``_reembed_user`` of the same profile — already guaranteed by migration
-        single-flight, so it is belt-and-suspenders — AND against a concurrent
-        ``enroll()`` of the same user, whose disk-commit holds the same lock, so
-        the two never interleave writes to the same profile (sidecars +
-        ``metadata.json``). ``metadata.json`` is an atomic write; its sample
-        counts/lists are re-derived from disk on read, and both writers stamp the
-        same ``embed_model_version``.
-
-        Raises ``EmbeddingAPIUnavailableError`` on outage so the caller can halt
-        — the commit runs only after EVERY sample embedded, so a halt leaves the
-        profile fully on the old model, never half-migrated.
+        On None the profile is LEFT STALE (excluded from matching) — never deleted.
         """
         with self._user_lock(norm):
             # Re-read fresh: a concurrent enroll (which does not take this lock)
@@ -2451,13 +1819,8 @@ class SpeakerRecognizer:
             if (meta.get("embed_model_version") or "") == server_version:
                 return True
 
-            # Both tiers migrate. A profile with no per-sample WAVs (legacy with
-            # only the aggregate embedding.npy, or WAVs deleted) has no audio to
-            # re-embed. It is left stale (excluded from matching) until the person
-            # re-enrolls — never deleted, since a stale profile is harmless (it is
-            # filtered out of matching) and its WAVs may be the only copy of the
-            # enrollment. The "all samples fail the gate" case below is handled the
-            # same way: left stale, not removed.
+            # Both tiers migrate. It is left stale (excluded from matching) until the
+            # person re-enrolls.
             wav_paths = self._anchor_wavs(norm) + self._extended_wavs(norm)
             if not wav_paths:
                 logger.warning(
@@ -2479,7 +1842,7 @@ class SpeakerRecognizer:
                         self._prepare_wav_for_embedding(wb)[0]
                     )
                 except EmbeddingAPIUnavailableError:
-                    raise  # outage → bubble up so migration halts, not a bad sample
+                    raise
                 except SpeakerRecognizerError as e:
                     logger.info(
                         "Migration: %r sample %s rejected by gate — %s", norm, wf.name, e,
@@ -2490,12 +1853,6 @@ class SpeakerRecognizer:
                 dim = int(emb.shape[0])
 
             if not migrated:
-                # No retained sample produced an embedding — almost always the
-                # gate config tightening (these WAVs passed it at enroll under the
-                # old config), a reversible change, or a transient unreadable file.
-                # Either way leave the profile STALE rather than deleting its only
-                # copy of the audio; it re-migrates automatically once a sample
-                # embeds cleanly again.
                 logger.warning(
                     "Migration: %r — no retained sample produced an embedding "
                     "(%d gate-rejected of %d); left stale (excluded from "
@@ -2504,11 +1861,6 @@ class SpeakerRecognizer:
                 )
                 return None
 
-            # Commit only now that every sample embedded cleanly. Overwrite each
-            # migrated sample's sidecar, and drop the sidecar of any sample the
-            # gate rejected so no old-model vector survives — matters for a
-            # same-dimension checkpoint swap, where the bank's mixed-dim guard
-            # cannot tell an old row from a new one.
             for wf, emb in migrated:
                 self._write_sidecar(wf, emb)
             for wf in rejected:
@@ -2519,14 +1871,12 @@ class SpeakerRecognizer:
             meta["updated_at"] = self._now_iso()
             self._write_metadata(norm, meta)
             self._update_registry(norm, meta)
-            self._invalidate_bank()  # force recognize to reload the new vectors
+            self._invalidate_bank()
             logger.info(
                 "Migration: re-embedded %r from %d sample(s) → %s",
                 norm, len(migrated), server_version,
             )
             return True
-
-    # --------------------------------------------------------- public: enroll
 
     def enroll(
         self,
@@ -2538,33 +1888,6 @@ class SpeakerRecognizer:
         origin: str = "",
     ) -> dict[str, Any]:
         """Enroll or re-enroll a speaker.
-
-        Each accepted WAV is stored with its own embedding sidecar and becomes
-        one row of the user's ANCHOR bank. Nothing is averaged, and no existing
-        sample is modified or deleted — a new enrollment can only add rows.
-
-        Unknown-voice clusters belonging to this person are claimed here too,
-        but their audio joins the EXTENDED tier (capped, prunable), never the
-        anchor tier, so auto-collected audio can never displace the recording
-        the user deliberately made.
-
-        Identity (``telegram_username`` / ``telegram_id`` / display name) is
-        merged into the SHARED ``/root/local/users/<norm>/metadata.json`` —
-        the same file face-enroll writes to — so one person's identity is
-        consistent across face, voice, mood, and wellbeing skills.
-
-        Each sample is tagged with its origin (``"mic"`` or ``"telegram"``)
-        so a user enrolled only via mic (no Telegram identity yet) can later
-        be re-enrolled via Telegram without losing their earlier samples.
-
-        Args:
-            name: Display name (normalized to folder-safe lowercase).
-            wav_sources: List of base64-encoded WAV data or filepaths.
-            source_type: ``"base64"`` or ``"filepath"``.
-            telegram_username: Optional Telegram @handle (e.g. ``chloe_92``).
-            telegram_id: Optional numeric Telegram user ID.
-            origin: ``"mic"`` / ``"telegram"`` / ``"other"``. Auto-derived
-                (from presence of telegram_id/username) if empty.
 
         Returns:
             Metadata dict for the enrolled speaker (voice-specific + merged
@@ -2582,21 +1905,12 @@ class SpeakerRecognizer:
                 "embedding API not configured — set SPEAKER_EMBEDDING_API_URL"
             )
 
-        # Infer origin from whether Telegram identity was supplied.
         if not origin:
             origin = (
                 "telegram" if (telegram_username or telegram_id) else "mic"
             )
-        # Single tokens only: the tag is embedded as sample_<origin>_<ts>_<uuid>
-        # and _sample_origin parses it back with split("_", 2), so an origin
-        # containing "_" would read back as its first word and fail the round
-        # trip. That is why the web route sends "web" and not "web_device_mic",
-        # which used to land here and get silently relabelled "other".
         origin = origin if origin in _SAMPLE_ORIGINS else "other"
 
-        # SPEAKER-DEBUG: per-call latency/memory profile. Enroll runs the
-        # preprocessing chain + embedding call once per sample, so the shared
-        # stages below aggregate (see `calls` / `ms_max` in the profile).
         self._debug_profile_start("enroll")
 
         norm = _normalize_label(name)
@@ -2610,7 +1924,6 @@ class SpeakerRecognizer:
         voice_dir = self._voice_dir(norm)
         voice_dir.mkdir(parents=True, exist_ok=True)
 
-        # Persist shared identity early, even if embedding fails later.
         shared_identity = _merge_shared_metadata(
             user_dir,
             display_name=name.strip() or None,
@@ -2618,18 +1931,12 @@ class SpeakerRecognizer:
             telegram_id=telegram_id or None,
         )
 
-        # ------------------------------------------------------------
-        # No aggregation: every accepted sample becomes its OWN row in the
-        # bank. Work still happens in memory first — validate, embed — so
-        # audio that fails the gate never lands on disk. What changed is that
-        # committing no longer recomputes a shared vector, which means a new
-        # sample can no longer damage an existing one, and nothing already on
-        # disk has to be deleted to protect it.
-        # ------------------------------------------------------------
+        # No aggregation: every accepted sample becomes its OWN row in the bank. Work
+        # still happens in memory first — validate, embed — so audio that fails the gate
+        # never lands on disk.
 
-        # Step 1 — Decode + normalize incoming audios (in-memory only).
         new_wavs: list[bytes] = []
-        with self._debug_stage("decode_input"):  # SPEAKER-DEBUG
+        with self._debug_stage("decode_input"):
             for src in sources:
                 if source_type == "filepath":
                     raw = _read_bytes(src)
@@ -2642,18 +1949,8 @@ class SpeakerRecognizer:
                     raise SpeakerRecognizerError("empty audio")
                 new_wavs.append(_ensure_wav_16k_mono(raw))
 
-        # Step 2 — Compute embedding per NEW wav BEFORE writing to disk.
-        # _prepare_wav_for_embedding raises on too-short/silent audio;
-        # _call_embedding_api raises SpeakerRecognizerError for 4xx
-        # (audio-level reject — skip this sample) or
-        # EmbeddingAPIUnavailableError for network/5xx (bubble up so the
-        # whole enroll aborts cleanly and nothing on disk is touched).
         new_embeddings: list[tuple[bytes, np.ndarray]] = []
         per_sample_errors: list[tuple[int, str]] = []
-        # SPEAKER-DEBUG: per-rejected-sample gate detail + partial chain output,
-        # captured inside the loop because _debug_partial is overwritten by the
-        # next sample. Without this the enroll FAIL trace held no audio at all.
-        # (index, json detail, the sample's own wav, partial-chain wavs)
         per_sample_debug: list[tuple[int, dict[str, Any], bytes, dict[str, bytes]]] = []
         for idx, wb in enumerate(new_wavs):
             try:
@@ -2664,7 +1961,7 @@ class SpeakerRecognizer:
                 raise
             except SpeakerRecognizerError as e:
                 per_sample_errors.append((idx, str(e)))
-                if self._debug.enabled:  # SPEAKER-DEBUG
+                if self._debug.enabled:
                     detail: dict[str, Any] = {"index": idx, "error": str(e)}
                     gate_detail = getattr(e, "gate_detail", None)
                     if gate_detail is not None:
@@ -2684,7 +1981,7 @@ class SpeakerRecognizer:
         if not new_embeddings:
             # Surface the actual reason from perception-service (VAD reject text, etc.)
             # or from local gates (too short / silent) — no hardcoded summary.
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 fail_wavs: dict[str, bytes] = {}
                 for idx, _detail, wb, partial_wavs in per_sample_debug:
                     fail_wavs[f"sample_{idx:02d}_input.wav"] = wb
@@ -2694,8 +1991,6 @@ class SpeakerRecognizer:
                     wavs=fail_wavs,
                     result={
                         "name": norm, "origin": origin, "num_new": len(new_wavs),
-                        # Now carries the structured gate reason + the partial
-                        # chain output per sample, not just the message string.
                         "per_sample_errors": [d for _i, d, _w, _p in per_sample_debug],
                     },
                     profile=self._debug_profile_dict(),
@@ -2707,23 +2002,8 @@ class SpeakerRecognizer:
             )
             raise SpeakerRecognizerError(f"no valid new samples — {details}")
 
-        # Step 3 — Mutual-match gate WITHIN the incoming batch.
-        #
-        # Every clip must clear _MATCH_COS against at least ONE OTHER clip in
-        # the batch. No clip is privileged: a batch assembled from a voice_<N>
-        # cluster has no "correct" sample to anchor on, so electing one and
-        # judging the rest against it just moves the guesswork rather than
-        # removing it — if the elected clip is the wrong person, the right ones
-        # get dropped as incoherent and the wrong one is enrolled permanently.
-        #
-        # Requiring a partner instead lets natural variation through (a clip
-        # only has to agree with SOMETHING, not with a single chosen yardstick)
-        # while still ejecting true outliers, which by definition agree with
-        # nothing. Note this is degree >= 1, not one connected component: two
-        # disjoint pairs both survive.
-        #
-        # Single-sample enrolls skip the gate entirely — there is no pair to
-        # form, and the caller deliberately offered that one recording.
+        # Step 3 — Mutual-match gate WITHIN the incoming batch. Every clip must clear
+        # _MATCH_COS against at least ONE OTHER clip in the batch.
         durations = [_wav_duration_s(wb) for wb, _e in new_embeddings]
         anchors: list[tuple[bytes, np.ndarray]] = []
         dropped_new = 0
@@ -2732,9 +2012,9 @@ class SpeakerRecognizer:
             anchors = list(new_embeddings)
         else:
             rows = np.stack([_l2(e) for _w, e in new_embeddings], axis=0)
-            sims = rows @ rows.T                     # [N, N] raw cosine
-            np.fill_diagonal(sims, -np.inf)          # a clip cannot partner itself
-            best_other = sims.max(axis=1)            # closest OTHER clip per row
+            sims = rows @ rows.T
+            np.fill_diagonal(sims, -np.inf)
+            best_other = sims.max(axis=1)
             for i, (wb, emb) in enumerate(new_embeddings):
                 if best_other[i] >= _MATCH_COS:
                     anchors.append((wb, emb))
@@ -2747,28 +2027,12 @@ class SpeakerRecognizer:
                     )
 
         if not anchors:
-            # Nothing agreed with anything: the batch is not one speaker (or is
-            # all noise). Fail loudly rather than committing an arbitrary clip
-            # as a permanent anchor — the caller can ask for a cleaner sample.
             raise SpeakerRecognizerError(
                 f"no coherent samples — none of the {len(new_embeddings)} clips "
                 f"matched another at cos >= {_MATCH_COS}; audio may contain more "
                 f"than one speaker"
             )
 
-        # Step 4 — Claim unknown-voice clusters that belong to this person.
-        #
-        # Two ways in, unioned:
-        #   (a) Explicit — a source path lives inside a ``voice_<N>`` dir.
-        #       Passing ANY path from a cluster claims the whole cluster, so an
-        #       agent that surfaces one sample per turn strands nothing.
-        #   (b) Match — the cluster scores >= _MATCH_COS against the anchors we
-        #       just accepted. This previously ran at a deliberately looser
-        #       0.625 scaled bar; it now clears exactly the bar that
-        #       recognizing this person clears, so nothing enters an enrollment
-        #       that would not have been called this person at recognize time.
-        #
-        # Filepath sources only — base64 carries no path to resolve.
         claimed: list[tuple[bytes, np.ndarray]] = []
         consume_hashes: list[str] = []
         if source_type == "filepath":
@@ -2787,13 +2051,6 @@ class SpeakerRecognizer:
                     if _VOICE_STRANGER_DIR_RE.match(resolved.parent.name):
                         claimed_hashes.add(resolved.parent.name)
 
-            # Paths the caller handed us are ALREADY enrolled as anchors above.
-            # Claiming a cluster pulls its whole directory, which re-globs those
-            # same files — without this set they would be embedded a second time
-            # and stored again in the extended tier, so one clip would occupy two
-            # bank rows carrying identical information. Resolved rather than
-            # string-compared so a caller path and a glob result that differ only
-            # in form still match.
             caller_resolved: set[str] = set()
             for src in sources:
                 try:
@@ -2820,7 +2077,7 @@ class SpeakerRecognizer:
                     wav_str = str(wav)
                     try:
                         if str(wav.resolve()) in caller_resolved:
-                            continue  # already handled as an anchor above
+                            continue
                     except OSError:
                         pass
                     try:
@@ -2849,14 +2106,6 @@ class SpeakerRecognizer:
                     _MATCH_COS,
                 )
 
-        # Step 5 — Backfill sidecars for any pre-existing sample that lacks one.
-        #
-        # Covers two cases without a migration script: a profile enrolled
-        # before the bank rewrite (aggregated embedding.npy, no sidecars), and
-        # a sample whose WAV was written but whose sidecar was not. Strictly
-        # best-effort — a failure just leaves the sample unbacked, and NOTHING
-        # is deleted. Once backfilled, the legacy embedding.npy stops being
-        # consulted (see _load_user_bank).
         backfilled = 0
         for p in self._anchor_wavs(norm):
             if _sidecar_path(p).is_file():
@@ -2876,25 +2125,9 @@ class SpeakerRecognizer:
                 )
         if backfilled:
             logger.info("Enroll: backfilled %d sidecar(s) for %s", backfilled, norm)
-        # Opposite direction: drop sidecars whose WAV was deleted outside HAL.
         self._reconcile_sidecars(norm)
 
-        # Step 6 — Commit anchors. Each WAV gets its embedding sidecar written
-        # first-class alongside it. The millisecond stamp is offset by index so
-        # two samples in the same enroll can never collide, and lexical order
-        # stays chronological (the old code recomputed time.time() per file
-        # with a comment claiming a sleep kept them unique — there was no
-        # sleep, and same-batch samples routinely shared a timestamp).
-        # Steps 6–8 mutate this user's on-disk voice profile. Hold the per-user
-        # lock across the WHOLE commit so it cannot interleave with a background
-        # migration of the SAME user: _reembed_user may rmtree this voice dir
-        # (its "all samples rejected by the gate" removal path) or rewrite its
-        # sidecars, and a half-applied enroll racing that delete would silently
-        # lose the freshly recorded samples. Only the disk commit is guarded —
-        # the embedding network calls above (Steps 2/4/5) ran lock-free, so a
-        # normal enroll blocks on this lock only when this exact user is being
-        # re-embedded right now, and only for that one profile's re-embed, never
-        # the whole migration batch.
+        # Step 6 — Commit anchors.
         with self._user_lock(norm):
             written_new_paths: list[Path] = []
             stamp = int(time.time() * 1000)
@@ -2912,11 +2145,6 @@ class SpeakerRecognizer:
             if not written_new_paths and not self._has_profile(norm):
                 raise SpeakerRecognizerError("failed to write any enrollment sample")
 
-            # Step 7 — Commit claimed cluster audio to the EXTENDED tier, then
-            # prune that tier back to its cap by diversity. Written first and
-            # pruned after (rather than admission-tested up front like the face
-            # pipeline does) because enroll is not a hot path and the churn is
-            # bounded by one cluster's worth of files.
             for wb, emb in claimed:
                 self._write_extended_sample(norm, wb, emb)
             if claimed:
@@ -2924,7 +2152,6 @@ class SpeakerRecognizer:
 
             self._invalidate_bank()
 
-            # Re-read from disk so metadata reflects exactly what is stored.
             anchor_paths = self._anchor_wavs(norm)
             extended_paths = self._extended_wavs(norm)
             anchor_embs, _ = self._read_tier(anchor_paths)
@@ -2939,7 +2166,6 @@ class SpeakerRecognizer:
                 len(claimed), len(anchor_paths), len(extended_paths), dim,
             )
 
-            # Update voice metadata + registry.
             existing = self._read_metadata(norm)
             now_iso = time.strftime("%Y-%m-%dT%H:%M:%S%z") or time.strftime(
                 "%Y-%m-%dT%H:%M:%S"
@@ -2977,9 +2203,6 @@ class SpeakerRecognizer:
             self._write_metadata(norm, meta)
             self._update_registry(norm, meta)
 
-            # Drop any stranger clusters whose WAVs were just claimed. Keeping
-            # them would leave stale rows that re-label the now-known speaker as
-            # voice_<N> on any recognition below the match threshold.
             if source_type == "filepath":
                 self._drop_consumed_clusters(sources)
 
@@ -2987,18 +2210,12 @@ class SpeakerRecognizer:
             "Enrolled speaker '%s' — %d anchor + %d extended sample(s), dim=%d",
             norm, meta["num_samples"], meta["num_extended"], dim,
         )
-        if self._debug.enabled:  # SPEAKER-DEBUG
-            # cohesion = mean cosine of every stored anchor to the reference
-            # sample; a single "how tight is this enrollment" number. There is
-            # no aggregated vector to measure against any more.
+        if self._debug.enabled:
             try:
                 if len(anchor_embs) > 1:
                     _st = np.stack([_l2(e) for e in anchor_embs], axis=0)
                     _sm = _st @ _st.T
                     _n = len(anchor_embs)
-                    # Mean of the off-diagonal: how tightly the stored anchors
-                    # agree with each other. No reference sample exists now, so
-                    # there is nothing else meaningful to measure against.
                     cohesion = round(
                         float((_sm.sum() - np.trace(_sm)) / (_n * (_n - 1))), 4
                     )
@@ -3040,19 +2257,12 @@ class SpeakerRecognizer:
                         {"index": i, "error": m} for i, m in per_sample_errors
                     ],
                 },
-                # Stages aggregate across every sample this enroll embedded.
                 profile=self._debug_profile_dict(),
             )
         return meta
 
     def drop_stranger_cluster(self, label: str) -> bool:
-        """Drop a single stranger cluster by label.
-
-        Removes the centroid row from the in-memory tables (persisting the
-        reduced tables), then ``rmtree`` the on-disk cluster sub-dir.
-        Returns ``True`` if anything was removed, ``False`` when the label
-        wasn't known and no dir existed (route uses that for 404).
-        """
+        """Drop a single stranger cluster by label."""
         if not label or not _VOICE_STRANGER_DIR_RE.match(label):
             return False
         removed_centroid = False
@@ -3089,17 +2299,7 @@ class SpeakerRecognizer:
         return removed_centroid or removed_dir
 
     def _drop_consumed_clusters(self, wav_paths: list[str]) -> None:
-        """Remove stranger clusters whose WAVs were consumed by enroll().
-
-        Looks at each ``wav_path``'s parent dir — if it's a ``voice_<N>``
-        sub-dir inside ``SPEAKER_UNKNOWN_AUDIO_DIR``, that cluster is now
-        redundant (the speaker is known) and we drop both:
-          - centroid row from ``_stranger_embeds`` / ``_stranger_labels``,
-          - the cluster sub-dir on disk.
-
-        Safe no-op if the caller passed paths from outside the cluster tree
-        (e.g. Telegram enroll writes into a session temp dir).
-        """
+        """Remove stranger clusters whose WAVs were consumed by enroll()."""
         try:
             unknown_root = _UNKNOWN_AUDIO_DIR.resolve()
         except OSError:
@@ -3148,17 +2348,8 @@ class SpeakerRecognizer:
                     "Enroll: failed to remove cluster dir %s: %s", cluster_dir, e,
                 )
 
-    # --------------------------------------------------------- public: remove
-
     def remove(self, name: str) -> bool:
-        """Delete the user's voice folder (embedding + samples + voice metadata).
-
-        Other per-user data (face photos, mood, wellbeing, ...) is preserved —
-        we only touch the ``voice/`` subdir. The SHARED identity file
-        ``/root/local/users/<norm>/metadata.json`` (telegram_username,
-        telegram_id) is left untouched because face-enroll and other skills
-        may still depend on it.
-        """
+        """Delete the user's voice folder (embedding + samples + voice metadata)."""
         norm = _normalize_label(name)
         voice_dir = self._voice_dir(norm)
         if not voice_dir.is_dir():
@@ -3173,9 +2364,7 @@ class SpeakerRecognizer:
         logger.info("Removed speaker '%s'", norm)
         return True
 
-    # ------------------------------------------------------ public: recognize
-
-    def _debug_safe_assign_hash(  # SPEAKER-DEBUG (remove before deploy)
+    def _debug_safe_assign_hash(
         self,
         query_chunks: np.ndarray,
         wav_bytes: bytes,
@@ -3186,17 +2375,7 @@ class SpeakerRecognizer:
         source_type: str,
         saved_path: str,
     ) -> Optional[str]:
-        """SPEAKER-DEBUG wrapper around _assign_voiceprint_hash.
-
-        Stranger clustering can raise on an embedding-dimension mismatch between
-        the stored voice_strangers store and the current backend (e.g. the
-        192-vs-256 concatenate error when the embedding model changed). That
-        raise happens BEFORE recognize()'s trace hook, so the failure otherwise
-        never lands in the logs. This wrapper captures it as a FAIL trace with
-        the input audio + dims + error, and degrades to no-cluster so recognize
-        returns 'unknown' instead of crashing. Original call was just
-        `self._assign_voiceprint_hash(query_chunks)`.
-        """
+        """SPEAKER-DEBUG wrapper around _assign_voiceprint_hash."""
         try:
             return self._assign_voiceprint_hash(query_chunks) or None
         except Exception as e:
@@ -3223,22 +2402,7 @@ class SpeakerRecognizer:
         wav_source: str,
         source_type: str = "base64",
     ) -> dict[str, Any]:
-        """Recognize a speaker from a single WAV audio.
-
-        Returns a dict with:
-
-        ``name``
-            matched user's normalized label, or ``"unknown"``
-        ``confidence``
-            best match confidence in ``[0, 1]``
-        ``match``
-            whether the best confidence exceeds ``match_threshold``
-        ``unknown_audio_path``
-            path to the audio saved under the unknown-audio dir (always set —
-            so the skill can reuse the path for later enrollment)
-        ``candidates``
-            top-3 ``(name, confidence)`` pairs for debugging
-        """
+        """Recognize a speaker from a single WAV audio."""
         if source_type not in ("base64", "filepath"):
             raise SpeakerRecognizerError(
                 f"invalid source_type {source_type!r}"
@@ -3250,8 +2414,6 @@ class SpeakerRecognizer:
             wav_source if source_type == "filepath" else f"<base64 {len(wav_source)}B>",
         )
 
-        # SPEAKER-DEBUG: start the per-call latency/memory profile FIRST, so the
-        # decode below is inside it. Reset per call, like the snapshots after it.
         self._debug_profile_start("recognize")
 
         with self._debug_stage("decode_input"):
@@ -3270,14 +2432,14 @@ class SpeakerRecognizer:
         # never report the PREVIOUS call's cluster score when this call's
         # clustering is skipped (empty/zero-norm chunks) or fails.
         self._debug_stranger = None
-        self._debug_preproc = None  # SPEAKER-DEBUG: reset per-call preprocessing snapshot
+        self._debug_preproc = None
 
         with self._debug_stage("save_input_wav"):
             saved_path = self._save_incoming_audio(wav_bytes)
 
         if not self.available:
             logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 self._debug.record(
                     "recognize", reason="api-not-configured",
                     wavs={"input.wav": wav_bytes},
@@ -3299,17 +2461,14 @@ class SpeakerRecognizer:
 
         try:
             payload, cleaned_duration_s = self._prepare_wav_for_embedding(wav_bytes)
-            # Per-chunk query embeddings — same per-chunk granularity that
-            # perception-service's /recognize uses internally, so per-chunk voting
-            # below produces apples-to-apples confidence.
             query_chunks = self._call_embedding_api(
                 payload, use_sliding_window=True
-            )  # [M, D]
+            )
         except SpeakerRecognizerError as e:
             logger.warning(
                 "Recognize: embedding failed for %s — %s", saved_path, e,
             )
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 dur, rms = _debug_audio_stats(wav_bytes)
                 fail_result = {
                     "source_type": source_type, "error": str(e),
@@ -3322,10 +2481,9 @@ class SpeakerRecognizer:
                 gate_detail = getattr(e, "gate_detail", None)
                 if gate_detail is not None:
                     fail_result["preprocessing_reject"] = gate_detail
-                # Plus the audio the chain had produced when the gate said no —
-                # for a STOI reject that is the TEN-VAD output, i.e. the very
-                # clip the rejection is about. Without it the trace held only
-                # the raw input and there was nothing to listen to.
+                # Plus the audio the chain had produced when the gate said no — for a
+                # STOI reject that is the TEN-VAD output, i.e. the very clip the
+                # rejection is about.
                 partial_wavs, partial_metrics = self._debug_partial_parts()
                 if partial_metrics is not None:
                     fail_result["preprocessing_partial"] = partial_metrics
@@ -3356,15 +2514,9 @@ class SpeakerRecognizer:
             bank_rows, bank_labels, bank_tiers = self._load_bank()
             known = sorted(set(bank_labels))
 
-        # Per-turn model-identity gate. A stored row is only comparable to this
-        # query when it came from the SAME server model — the /embed above just
-        # refreshed _server_model_version. Any profile whose stamped version
-        # differs is EXCLUDED from this turn's match (so a model swap can't
-        # wrong-match, or crash the matmul on a dim change; it reads as unknown
-        # until re-embedded), and a one-shot background re-embed is kicked to
-        # bring stale profiles current. That migration is single-flight and runs
-        # in a daemon thread — the main flow pays only this cheap in-memory
-        # filter, never the re-embed itself.
+        # Per-turn model-identity gate. That migration is single-flight and runs in a
+        # daemon thread — the main flow pays only this cheap in-memory filter, never the
+        # re-embed itself.
         if bank_rows is not None and known:
             server_ver = self._server_model_version
             if server_ver:
@@ -3383,10 +2535,6 @@ class SpeakerRecognizer:
                     bank_labels = [bank_labels[i] for i in keep]
                     bank_tiers = [bank_tiers[i] for i in keep]
                     known = sorted(set(bank_labels))
-            # Defensive dim guard for when the server reports no version (gate
-            # above skipped): _load_bank makes every row one uniform width, so a
-            # bank whose width != the query's is wholly incomparable and would
-            # crash the matmul below — drop it and fall through to unknown.
             if bank_rows is not None and int(bank_rows.shape[1]) != int(
                 query_chunks.shape[1]
             ):
@@ -3397,12 +2545,9 @@ class SpeakerRecognizer:
                 bank_rows, bank_labels, bank_tiers, known = None, [], [], []
 
         if bank_rows is None or not known:
-            # No enrolled users — every voice is unknown. Still assign a
-            # stable cluster hash so repeat speakers can be tracked before
-            # anyone is enrolled.
             logger.info("Recognize: no enrolled users — unknown + cluster-only path")
             with self._debug_stage("stranger_cluster"):
-                vp_hash = self._debug_safe_assign_hash(  # SPEAKER-DEBUG (was: _assign_voiceprint_hash)
+                vp_hash = self._debug_safe_assign_hash(
                     query_chunks, wav_bytes, resolved_name="unknown", is_match=False,
                     num_enrolled=0, source_type=source_type, saved_path=saved_path,
                 )
@@ -3411,14 +2556,12 @@ class SpeakerRecognizer:
                 "Recognize result: name=unknown confidence=0.00 cluster=%s path=%s",
                 vp_hash or "(none)", saved_path,
             )
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 dur, rms = _debug_audio_stats(wav_bytes)
                 st = self._debug_stranger or {}
                 st_score = st.get("score")
                 pp_wavs, pp_metrics = self._debug_preproc_parts()
                 self._debug.record(
-                    # No enrolled users → dir named by the stranger cluster and
-                    # its match score (how sure this is the same returning voice).
                     "recognize",
                     cls=_debug_stranger_label(vp_hash),
                     confidence=(st_score if st_score is not None else 0.0),
@@ -3454,29 +2597,15 @@ class SpeakerRecognizer:
                 "candidates": [],
             }
 
-        # Per-chunk voting (mirrors perception-service.recognize line 614-645):
-        # for each query chunk, pick the highest-confidence speaker, record
-        # one vote and one confidence sample. Winner = most votes, tiebreak
-        # by avg confidence. Returned confidence = avg of winner's votes.
         with self._debug_stage("match_vote"):
             names = list(known)
-            # Score every chunk against every ROW, then collapse each speaker's
-            # rows to their best. A speaker holds several independent samples
-            # now, so "how well does this chunk match Leo" is "how well does it
-            # match Leo's closest sample" — the same max-over-bank reduction
-            # faceid/recognizer.py:787 does across its upload and extended
-            # banks. Values are raw cosine throughout; nothing is rescaled.
-            #
-            # Note this makes the score monotonically non-decreasing in bank
-            # size: more rows means more chances at a high draw, for impostors
-            # too. _MAX_EXTENDED_SAMPLES is what bounds that drift.
-            row_sims = query_chunks @ bank_rows.T          # [M, N rows] raw cos
+            row_sims = query_chunks @ bank_rows.T
             label_arr = np.asarray(bank_labels)
             confs = np.stack(
                 [row_sims[:, label_arr == n].max(axis=1) for n in names],
                 axis=1,
-            )                                              # [M, K] raw cos
-            best_idx = confs.argmax(axis=1)                             # [M]
+            )
+            best_idx = confs.argmax(axis=1)
             best_conf_per_chunk = confs[np.arange(confs.shape[0]), best_idx]
 
             vote_count: dict[str, int] = {}
@@ -3502,9 +2631,6 @@ class SpeakerRecognizer:
         is_match = best_conf >= self._match_threshold
         resolved_name = best_name if is_match else "unknown"
 
-        # Full per-speaker breakdown — lets operator see why a near-miss
-        # happened (e.g. speaker_a scored 0.68 with 5 votes vs speaker_b 0.64
-        # with 4 votes against threshold 0.70 → both lose, tag as unknown).
         scores_str = ", ".join(
             f"{n}={c:.3f}(v={v})" for n, c, v in scores[:5]
         )
@@ -3513,43 +2639,20 @@ class SpeakerRecognizer:
             self._match_threshold, is_match, resolved_name, scores_str,
         )
 
-        # Only assign a stranger cluster hash for unknowns — known speakers
-        # already have a stable identity (their name).
         with self._debug_stage("stranger_cluster"):
-            vp_hash = None if is_match else self._debug_safe_assign_hash(  # SPEAKER-DEBUG (was: _assign_voiceprint_hash)
+            vp_hash = None if is_match else self._debug_safe_assign_hash(
                 query_chunks, wav_bytes, resolved_name=resolved_name, is_match=is_match,
                 num_enrolled=len(known), source_type=source_type, saved_path=saved_path,
             )
-        # Move WAV into per-cluster sub-dir so later inspection can group
-        # samples by cluster. Known-speaker WAVs stay in the flat dir.
         if vp_hash:
             saved_path = self._move_to_cluster(saved_path, vp_hash)
 
-        # Auto-extend: a confidently-recognized turn may earn a slot in the
-        # speaker's extended tier, so the bank picks up the acoustics this
-        # room actually produces (distance, loudness) instead of only the one
-        # enrollment recording. Gated hard inside _maybe_extend_user — most
-        # turns are rejected as too short, too close a tie, or redundant.
         if is_match:
             with self._debug_stage("auto_extend"):
-                # Runner-up is the best NON-winning speaker across ALL of
-                # `confs`, not just speakers that happened to win a chunk.
-                # Deriving it from `scores` (vote winners only) meant a
-                # unanimous vote produced `inf` and this gate did nothing.
                 margin = best_conf - _runner_up_mean(confs, names, best_name)
                 try:
-                    # This speaker's slice of the bank we already matched
-                    # against — no reason to read their sidecars back off disk.
                     own_rows = bank_rows[label_arr == best_name]
-                    # Per-chunk purity evidence. The winner's column in `confs`
-                    # is every chunk's score against this speaker's best row,
-                    # so its min is the weakest chunk we are about to average
-                    # into a permanent sample.
                     win_col = names.index(best_name)
-                    # Did ENROLLMENT audio carry this match, or did the
-                    # extended tier vouch for it? bank_tiers is already loaded
-                    # and already filtered in lockstep with bank_rows; this is
-                    # the first thing that reads it.
                     tier_arr = np.asarray(bank_tiers)
                     anchor_mask = (label_arr == best_name) & (tier_arr == "anchor")
                     anchor_cos = (
@@ -3589,7 +2692,6 @@ class SpeakerRecognizer:
                 for n, c, v in scores[:3]
             ],
         }
-        # Surface identity fields on match.
         if is_match:
             shared = self._read_shared_metadata(best_name)
             result["display_name"] = shared.get("display_name", best_name)
@@ -3598,14 +2700,13 @@ class SpeakerRecognizer:
             result["has_telegram_identity"] = bool(
                 shared.get("telegram_id") or shared.get("telegram_username")
             )
-        if self._debug.enabled:  # SPEAKER-DEBUG
+        if self._debug.enabled:
             dur, rms = _debug_audio_stats(wav_bytes)
-            # Full per-chunk comparison across EVERY enrolled speaker. Voting keeps
-            # only each chunk's argmax winner, so a speaker that never wins a chunk
-            # gets 0 votes and vanishes from `candidates` — even though it WAS
-            # compared on every chunk. Capture the whole [chunk x speaker] matrix
-            # so you can see the losers and why each chunk voted the way it did.
-            _confs = confs.tolist()  # [M chunks][K speakers], RAW cosine [-1, 1]
+            # Full per-chunk comparison across EVERY enrolled speaker. Voting keeps only
+            # each chunk's argmax winner, so a speaker that never wins a chunk gets 0
+            # votes and vanishes from `candidates` — even though it WAS compared on
+            # every chunk.
+            _confs = confs.tolist()
             per_chunk_scores = [
                 {
                     "chunk": ci,
@@ -3624,7 +2725,6 @@ class SpeakerRecognizer:
             }
             dbg_result = {
                 "name": resolved_name, "match": is_match,
-                # nearest-enrolled similarity (the winning vote), regardless of match
                 "confidence": round(best_conf, 4),
                 "threshold": self._match_threshold,
                 "voiceprint_hash": vp_hash,
@@ -3632,11 +2732,8 @@ class SpeakerRecognizer:
                 "num_query_chunks": int(query_chunks.shape[0]),
                 "embedding_dim": int(query_chunks.shape[1]),
                 "enrolled_speakers": names,
-                # EVERY enrolled speaker (incl. 0-vote losers): votes + mean/max sim.
                 "speaker_summary": speaker_summary,
-                # Each chunk vs every speaker + which one that chunk voted for.
                 "per_chunk_scores": per_chunk_scores,
-                # Vote-winners only — the actual decision breakdown.
                 "candidates": [
                     {"name": n, "confidence": round(c, 4), "votes": v}
                     for n, c, v in scores
@@ -3647,11 +2744,8 @@ class SpeakerRecognizer:
                 "unknown_audio_path": saved_path,
             }
             if is_match:
-                # Enrolled → dir = <name>_<nearest-enrolled score>.
                 dbg_cls, dbg_conf = resolved_name, best_conf
             else:
-                # Stranger → dir = stranger-<N>_<cluster match score>, and record
-                # the re-appearance detail alongside the nearest-enrolled miss.
                 st = self._debug_stranger or {}
                 st_score = st.get("score")
                 dbg_cls = _debug_stranger_label(vp_hash)
@@ -3668,7 +2762,6 @@ class SpeakerRecognizer:
                 arrays={
                     "input_chunks.npy": query_chunks,
                     "input_embedding.npy": _l2(query_chunks.mean(axis=0)),
-                    # [chunks x speakers] raw cosine; columns = enrolled_speakers order.
                     "chunk_scores.npy": confs,
                 },
                 result=dbg_result,
@@ -3678,16 +2771,8 @@ class SpeakerRecognizer:
             )
         return result
 
-    # ------------------------------------------------------------ public: get
-
     def get_meta(self, name: str) -> Optional[dict[str, Any]]:
-        """Return the full enrollment meta for one user, or None if not enrolled.
-
-        Mirrors the per-row shape of :meth:`list_registered` but skips the
-        registry walk. Used for idempotent retries on the enroll route — when
-        the caller passes paths that have already been consumed, we can return
-        the existing meta instead of erroring out.
-        """
+        """Return the full enrollment meta for one user, or None if not enrolled."""
         norm = _normalize_label(name)
         if not self._has_profile(norm):
             return None
@@ -3713,25 +2798,11 @@ class SpeakerRecognizer:
             "embedding_dim": voice_meta.get("embedding_dim", 0),
             "enrolled_at": voice_meta.get("enrolled_at"),
             "updated_at": voice_meta.get("updated_at"),
-            # Counts/file lists come from disk, not the JSON — see
-            # _disk_sample_fields.
             **self._disk_sample_fields(norm),
         }
 
-    # ----------------------------------------------------------- public: list
-
     def list_registered(self) -> list[dict[str, Any]]:
-        """Return users who have a registered voice (embedding file exists).
-
-        Backed by the registry file but cross-verified with on-disk state so
-        stale registry rows are skipped. Telegram identity is read fresh from
-        the shared ``metadata.json`` on every call so renames propagate.
-
-        Each entry includes ``enrollment_sources`` (e.g. ``["mic"]``,
-        ``["telegram"]`` or ``["mic", "telegram"]``) and
-        ``has_telegram_identity`` — so the skill can tell whether a mic-only
-        user still needs to be linked to a Telegram account for DM targeting.
-        """
+        """Return users who have a registered voice (embedding file exists)."""
         reg = self._load_registry()
         out: list[dict[str, Any]] = []
         for norm in sorted(reg.keys()):
@@ -3767,14 +2838,8 @@ class SpeakerRecognizer:
             )
         return out
 
-    # ------------------------------------ public: identity-focused methods
-
     def get_telegram_id(self, name: str) -> str | None:
-        """Return ``telegram_id`` for a user, or ``None`` if not set.
-
-        Mirrors :meth:`FaceRecognizer.get_telegram_id` so any skill wanting
-        to DM a person after voice recognition can use a single lookup.
-        """
+        """Return ``telegram_id`` for a user, or ``None`` if not set."""
         norm = _normalize_label(name)
         meta = self._read_shared_metadata(norm)
         val = meta.get("telegram_id") or ""
@@ -3787,11 +2852,7 @@ class SpeakerRecognizer:
         return val or None
 
     def lookup_by_telegram_id(self, telegram_id: str) -> str | None:
-        """Reverse-lookup: given a Telegram user ID, return the norm label.
-
-        Useful when a Telegram turn arrives and the skill wants to decide
-        whether the sender already has a voice profile before enrolling.
-        """
+        """Reverse-lookup: given a Telegram user ID, return the norm label."""
         if not telegram_id:
             return None
         reg = self._load_registry()
@@ -3806,12 +2867,7 @@ class SpeakerRecognizer:
         telegram_username: str = "",
         telegram_id: str = "",
     ) -> dict[str, Any]:
-        """Attach / update Telegram identity on an existing voice profile.
-
-        Use this when a user enrolled by mic first (no Telegram info) later
-        introduces themselves from Telegram — we can link the two without
-        re-uploading audio or recomputing the embedding.
-        """
+        """Attach / update Telegram identity on an existing voice profile."""
         norm = _normalize_label(name)
         user_dir = self._users_dir / norm
         if not self._has_profile(norm):
@@ -3824,10 +2880,7 @@ class SpeakerRecognizer:
             telegram_username=telegram_username or None,
             telegram_id=telegram_id or None,
         )
-        # Refresh mirrored fields in voice metadata + registry. Hold the per-user
-        # lock across read-modify-write so this can't clobber a concurrent enroll
-        # or migration commit (which would otherwise revert embed_model_version
-        # to this stale snapshot). Re-read inside the lock.
+        # Refresh mirrored fields in voice metadata + registry.
         with self._user_lock(norm):
             voice_meta = self._read_metadata(norm)
             voice_meta["telegram_username"] = shared.get("telegram_username", "")
@@ -3849,19 +2902,12 @@ class SpeakerRecognizer:
         return voice_meta
 
     def reset_all(self) -> int:
-        """Delete every registered voice profile.
-
-        Mirrors :meth:`FaceRecognizer.reset_enrolled`. Only the ``voice/``
-        subdir of each user is removed — the shared ``metadata.json``
-        (telegram identity) is preserved because face / mood / wellbeing
-        still depend on it.
-        """
+        """Delete every registered voice profile."""
         count = 0
         reg = self._load_registry()
         for norm in list(reg.keys()):
             if self.remove(norm):
                 count += 1
-        # Best-effort: walk disk too in case registry was stale.
         if self._users_dir.is_dir():
             for entry in self._users_dir.iterdir():
                 if not entry.is_dir() or entry.name.startswith("."):
@@ -3873,25 +2919,16 @@ class SpeakerRecognizer:
                         count += 1
                     except OSError as e:
                         logger.warning("reset_all: failed to drop %s: %s", voice_dir, e)
-        # Clear registry file.
         with self._mu:
             self._save_registry({})
         logger.info("reset_all: cleared %d voice profiles", count)
         return count
 
-    # --------------------------------------------------------------- helpers
-
     def _save_incoming_audio(self, wav_bytes: bytes) -> str:
         """Save the incoming recognize() WAV to the unknown-audio dir.
 
-        We always save — even on a match — so there is a record of what the
-        device heard and a stable path skills can reuse for follow-up
-        enrollment flows. Written BEFORE recognition runs, so the paths that
-        never reach a match decision (gate reject, embedding-server error)
-        still have one.
-
-        This is a ROLLING log: :meth:`_roll_incoming_log` keeps the newest
-        ``HAL_MAX_INCOMING_FILES`` and evicts oldest-first.
+        Written BEFORE recognition runs, so the paths that never reach a match decision
+        (gate reject, embedding-server error) still have one.
         """
         _UNKNOWN_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
         fname = (
@@ -3922,17 +2959,7 @@ class SpeakerRecognizer:
             return 0
 
     def _roll_incoming_log(self) -> None:
-        """Trim the incoming log to _MAX_INCOMING_FILES, oldest evicted first.
-
-        Only reached when the in-memory counter says we are over, so the
-        directory listing here is not paid for on an ordinary turn. The listing
-        also RESYNCS the counter, which makes any drift self-healing — a file
-        removed out-of-band, or a move whose decrement was lost, costs at most
-        one early listing before the count is exact again.
-
-        Touches ``incoming_*.wav`` in the root only. Cluster sub-dirs belong to
-        the stranger tracker and are bounded by cluster eviction.
-        """
+        """Trim the incoming log to _MAX_INCOMING_FILES, oldest evicted first."""
         if _MAX_INCOMING_FILES <= 0:
             return
         if not _UNKNOWN_AUDIO_DIR.is_dir():
@@ -3952,7 +2979,6 @@ class SpeakerRecognizer:
         if len(files) <= _MAX_INCOMING_FILES:
             return
 
-        # Newest first, so everything past the cap is the oldest tail.
         ordered = sorted(files, key=lambda t: t[0], reverse=True)
         removed = 0
         for _mt, p in ordered[_MAX_INCOMING_FILES:]:
@@ -3970,13 +2996,7 @@ class SpeakerRecognizer:
             )
 
     def _move_to_cluster(self, saved_path: str, vp_hash: Optional[str]) -> str:
-        """Move a saved WAV into a per-cluster sub-dir, return the new path.
-
-        Called right after voiceprint_hash is assigned so later tools (web UI,
-        diagnostic scripts) can list all audio for a given cluster via a
-        single directory listing. No-op when hash is empty or file missing —
-        known-speaker WAVs stay in the flat _UNKNOWN_AUDIO_DIR.
-        """
+        """Move a saved WAV into a per-cluster sub-dir, return the new path."""
         if not vp_hash or not saved_path:
             return saved_path
         src = Path(saved_path)
@@ -3987,14 +3007,8 @@ class SpeakerRecognizer:
             cluster_dir.mkdir(parents=True, exist_ok=True)
             dst = cluster_dir / src.name
             src.rename(dst)
-            # It left the root, so it no longer counts against the log cap.
-            # Skipping this would only cost an early (self-correcting) listing,
-            # but on a device hearing mostly strangers that is every turn.
             with self._roll_lock:
                 self._incoming_count = max(0, self._incoming_count - 1)
-            # Bound the cluster we just wrote to. Only that one directory is
-            # touched, so the work is proportional to its own size and settles
-            # at cap+1 entries — no sweep across every cluster.
             self._prune_cluster_dir(vp_hash, keep=dst)
             return str(dst)
         except OSError as e:
@@ -4003,14 +3017,8 @@ class SpeakerRecognizer:
             )
             return saved_path
 
-    # ------------------------------------------------- voice stranger clustering
-
     def _cluster_labels_in_order(self) -> list[str]:
-        """Distinct cluster labels, oldest first. Caller holds _stranger_lock.
-
-        A cluster now owns SEVERAL rows, so "oldest" is the label whose first
-        row appears earliest — not simply the first row in the array.
-        """
+        """Distinct cluster labels, oldest first. Caller holds _stranger_lock."""
         if self._stranger_labels is None:
             return []
         seen: list[str] = []
@@ -4030,16 +3038,7 @@ class SpeakerRecognizer:
         return self._stranger_embeds[mask]
 
     def _evict_oldest_clusters(self) -> list[str]:
-        """Retire whole clusters once over _MAX_VOICE_STRANGERS. Holds the lock.
-
-        Evicts by LABEL, not by row. Slicing rows (as the face tracker does,
-        correctly, because each of its strangers owns exactly one row) would
-        here delete a cluster's oldest samples while leaving the rest —
-        silently shrinking clusters instead of retiring them.
-
-        Returns the evicted labels so the caller can remove their on-disk dirs
-        AFTER releasing the lock.
-        """
+        """Retire whole clusters once over _MAX_VOICE_STRANGERS. Holds the lock."""
         labels = self._cluster_labels_in_order()
         if len(labels) <= _MAX_VOICE_STRANGERS:
             return []
@@ -4058,10 +3057,8 @@ class SpeakerRecognizer:
     def _remove_cluster_dir(label: str) -> None:
         """Delete a cluster's on-disk audio. Never call under _stranger_lock.
 
-        Eviction used to drop only the in-memory row, leaving the directory
-        behind forever: nothing else pruned _UNKNOWN_AUDIO_DIR, so evicted
-        clusters accumulated on disk AND kept showing up in GET /voice/strangers
-        (which lists the filesystem) as clusters that could never match again.
+        Eviction used to drop only the in-memory row, leaving the directory behind
+        forever.
         """
         cluster_dir = _UNKNOWN_AUDIO_DIR / label
         if not cluster_dir.is_dir():
@@ -4075,18 +3072,7 @@ class SpeakerRecognizer:
     def _prune_cluster_dir(self, label: str, keep: Optional[Path] = None) -> int:
         """Trim one cluster dir to _MAX_CLUSTER_FILES, oldest evicted first.
 
-        These WAVs are what an agent enrols a stranger from, so the cap is a
-        deliberate trade rather than pure housekeeping — see
-        SPEAKER_MAX_CLUSTER_FILES. Recency is the only criterion: the clips have
-        no embedding sidecars, so there is nothing to rank them by acoustically
-        without re-embedding every file.
-
-        ``keep`` is never evicted. Normally it is the newest and would survive
-        anyway, but ``rename`` preserves mtime, so a clip that sat in the root
-        across a clock change could sort old — and evicting the very clip whose
-        path was just handed to the agent is the one outcome worth ruling out.
-
-        Returns the number of files removed.
+        ``keep`` is never evicted.
         """
         if _MAX_CLUSTER_FILES <= 0 or not label:
             return 0
@@ -4125,13 +3111,7 @@ class SpeakerRecognizer:
         return removed
 
     def _reconcile_cluster_dirs(self) -> int:
-        """Delete cluster dirs that no longer have any centroid row.
-
-        Run once at startup to clear orphans left behind by the old
-        row-eviction path. Deliberately skipped when the stranger state failed
-        to load — with no labels in memory, every dir would look orphaned and
-        we would wipe the lot.
-        """
+        """Delete cluster dirs that no longer have any centroid row."""
         with self._stranger_lock:
             if self._stranger_labels is None:
                 return 0
@@ -4163,19 +3143,8 @@ class SpeakerRecognizer:
     def _assign_voiceprint_hash(self, query_chunks: np.ndarray) -> str:
         """Return a stable voice_<N> label for an unknown voice.
 
-        Pools the per-chunk query embeddings into one L2-normalized vector and
-        compares it against the stored cluster rows. A cluster matches when its
-        BEST row scores >= self._match_threshold (raw cosine, the same bar an
-        enrolled user must clear); otherwise a new cluster is allocated.
-
-        A matching utterance is APPENDED to that cluster as another row rather
-        than folded into an average, subject to the same diversity gate and cap
-        the extended tier uses. The old code stored one centroid per cluster
-        and never updated it, so a cluster with eight clips was still being
-        matched against the embedding of clip #1 forever.
-
-        Consumers don't call this directly — recognize() stamps the hash into
-        its response when the speaker is unknown.
+        A cluster matches when its BEST row scores >= self._match_threshold (raw cosine,
+        the same bar an enrolled user must clear); otherwise a new cluster is allocated.
         """
         if query_chunks is None or len(query_chunks) == 0:
             return ""
@@ -4187,19 +3156,14 @@ class SpeakerRecognizer:
 
         evicted: list[str] = []
         with self._stranger_lock:
-            # Model-change guard
             self._ensure_stranger_store_compatible(int(agg.shape[0]))
-            best_sim_pre = None  # captured for the "new cluster" log path
+            best_sim_pre = None
             best_label_pre: Optional[str] = None
             breakdown_pre = ""
             if self._stranger_embeds is not None and len(self._stranger_embeds) > 0:
-                # Both sides L2-normalized -> the dot product IS raw cosine,
-                # compared directly against the threshold. No rescaling.
                 row_sims = self._stranger_embeds @ agg
                 labels_in_order = self._cluster_labels_in_order()
                 label_arr = np.asarray(self._stranger_labels)
-                # Per-cluster score = its best row, mirroring how an enrolled
-                # speaker is scored across their bank.
                 cluster_sims = {
                     lbl: float(row_sims[label_arr == lbl].max())
                     for lbl in labels_in_order
@@ -4218,7 +3182,7 @@ class SpeakerRecognizer:
                     )
                     self._append_cluster_row(best_label_pre, agg)
                     self._save_strangers()
-                    if self._debug.enabled:  # SPEAKER-DEBUG
+                    if self._debug.enabled:
                         self._debug_stranger = {
                             "reappeared": True, "score": best_sim_pre,
                             "closest_label": best_label_pre,
@@ -4226,7 +3190,6 @@ class SpeakerRecognizer:
                         }
                     return best_label_pre
 
-            # No match — allocate a new cluster.
             self._stranger_counter = (self._stranger_counter + 1) % int(1e6)
             label = f"{_VOICE_STRANGER_PREFIX}{self._stranger_counter}"
             new_row = agg.reshape(1, -1).astype(np.float32)
@@ -4246,8 +3209,6 @@ class SpeakerRecognizer:
             self._save_strangers()
             num_clusters = len(self._cluster_labels_in_order())
             if best_sim_pre is not None:
-                # Hit the "no existing cluster matched" branch — surface the
-                # closest miss so operators can spot threshold edge cases.
                 logger.info(
                     "Voiceprint hash: %s (new cluster, total=%d) | "
                     "closest=%s cos=%.3f below threshold=%.3f | scores=[%s]",
@@ -4261,7 +3222,7 @@ class SpeakerRecognizer:
                     "no prior clusters",
                     label, num_clusters,
                 )
-            if self._debug.enabled:  # SPEAKER-DEBUG
+            if self._debug.enabled:
                 self._debug_stranger = {
                     "reappeared": False, "score": best_sim_pre,
                     "closest_label": best_label_pre,
@@ -4274,18 +3235,13 @@ class SpeakerRecognizer:
         return label
 
     def _append_cluster_row(self, label: str, row: np.ndarray) -> None:
-        """Add one row to a cluster, diversity-gated and capped. Holds the lock.
-
-        Same shape as the extended tier: a near-duplicate of a row we already
-        hold adds nothing but false-accept surface, and the cap bounds how far
-        max-over-rows can inflate this cluster's score.
-        """
+        """Add one row to a cluster, diversity-gated and capped. Holds the lock."""
         rows = self._cluster_rows(label)
         if rows is not None and len(rows):
             if float(np.max(rows @ row)) > _DIVERSITY_COS:
-                return  # redundant with a row we already hold
+                return
             if len(rows) >= _MAX_CLUSTER_SAMPLES:
-                return  # cluster is full; existing rows already span it
+                return
         self._stranger_embeds = np.concatenate(
             [self._stranger_embeds, row.reshape(1, -1).astype(np.float32)], axis=0,
         )
@@ -4296,15 +3252,7 @@ class SpeakerRecognizer:
     def _match_stranger_clusters(
         self, query_rows: np.ndarray, threshold: float,
     ) -> list[str]:
-        """Cluster labels whose best row scores >= ``threshold`` against any query row.
-
-        Used by enroll() to claim clusters that belong to the person being
-        enrolled. ``threshold`` is RAW cosine and callers pass _MATCH_COS —
-        there is no longer a looser merge gate. The old one admitted clips at
-        0.625 scaled that were then used to judge the user's own enrollment
-        audio at 0.75 scaled, which is how a stray 1s chat clip could end up
-        replacing a deliberate 15s recording.
-        """
+        """Cluster labels whose best row scores >= ``threshold`` against any query row."""
         q = np.atleast_2d(np.asarray(query_rows, dtype=np.float32))
         q = np.stack([_l2(r) for r in q], axis=0)
         with self._stranger_lock:
@@ -4319,7 +3267,6 @@ class SpeakerRecognizer:
             ):
                 logger.info("Cluster claim scan: no stranger rows to compare")
                 return []
-            # [rows, queries] raw cosine -> best query per row -> best row per cluster.
             row_sims = (self._stranger_embeds @ q.T).max(axis=1)
             label_arr = np.asarray(self._stranger_labels)
             labels_in_order = self._cluster_labels_in_order()
@@ -4340,29 +3287,10 @@ class SpeakerRecognizer:
     def _ensure_stranger_store_compatible(self, query_dim: int) -> None:
         """Wipe the stranger store unless it is PROVEN to match the current model.
 
-        Caller must hold ``_stranger_lock``. The verdict is deliberately
-        conservative — the store is kept ONLY when we can prove it came from the
-        model in use right now:
-
-        * ``_server_model_version`` (the live model, refreshed by every /embed
-          call) is known, the store's stamp **equals** it, AND the stored
-          embedding dim equals the query dim → **keep**.
-        * Anything else — a **missing** stamp, a **different** stamp, or a
-          **different** dim — cannot prove same-model provenance, so the store
-          is **wiped**. We never ASSUME an unstamped store is current: a
-          same-dim checkpoint swap under a different model would otherwise slip
-          through (exactly the case a dim check alone misses).
-
-        When the server reports **no** version at all we have no version signal,
-        so we fall back to a dim-only guard (a same-dim swap is undetectable
-        without a version). Strangers are anonymous / ephemeral, so a mismatch
-        WIPES the table (never re-embeds); ``_stranger_counter`` stays monotonic
-        so a fresh ``voice_<N>`` never collides with a leftover cluster dir.
+        Caller must hold ``_stranger_lock``.
         """
         cur = self._server_model_version
         if self._stranger_embeds is None or len(self._stranger_embeds) == 0:
-            # Empty store — nothing to invalidate; adopt the current stamp so a
-            # fresh store is labelled with the model it will be built under.
             if cur and self._stranger_model_version != cur:
                 self._stranger_model_version = cur
                 self._save_strangers()
@@ -4384,10 +3312,7 @@ class SpeakerRecognizer:
     def _wipe_stranger_store(self, reason: str) -> None:
         """Drop all stranger data: in-memory centroids + on-disk WAV clusters.
 
-        Caller must hold ``_stranger_lock``. ``_stranger_counter`` is KEPT
-        (monotonic) so a new ``voice_<N>`` label can never collide with any
-        leftover cluster dir. Persists the wipe so a restart does not reload the
-        superseded centroids.
+        Caller must hold ``_stranger_lock``.
         """
         n = 0 if self._stranger_embeds is None else len(self._stranger_embeds)
         logger.warning(
@@ -4396,10 +3321,6 @@ class SpeakerRecognizer:
         )
         self._stranger_embeds = None
         self._stranger_labels = None
-        # Remove EVERY on-disk voice_<N>/ dir — including orphans whose centroid
-        # was already evicted. Scan the disk (not the label table) so nothing is
-        # stranded; _remove_cluster_dirs applies the same regex filter, so any
-        # non-cluster entry is skipped.
         try:
             names = [e.name for e in _UNKNOWN_AUDIO_DIR.iterdir() if e.is_dir()]
         except OSError as e:
@@ -4411,11 +3332,7 @@ class SpeakerRecognizer:
     def _remove_cluster_dirs(self, labels: Iterable[str]) -> None:
         """rmtree the on-disk ``voice_<N>/`` WAV dirs for the given labels.
 
-        The single place that deletes cluster folders. Used by eviction (the
-        specific labels pushed out of the centroid table) and by
-        ``_wipe_stranger_store`` (every on-disk dir). Non-cluster names are
-        skipped via the ``voice_<N>`` regex. Best-effort; never raises. Caller
-        holds ``_stranger_lock``.
+        Best-effort; never raises.
         """
         for label in labels:
             if not label or not _VOICE_STRANGER_DIR_RE.match(label):
@@ -4427,9 +3344,8 @@ class SpeakerRecognizer:
     def _save_strangers(self) -> None:
         """Persist stranger state to disk. Caller must hold _stranger_lock.
 
-        Always persists the counter + model-version stamp. Centroid tables are
-        written when present and DELETED when the store was wiped (embeds None),
-        so a restart never reloads centroids a model change invalidated.
+        Centroid tables are written when present and DELETED when the store was wiped
+        (embeds None), so a restart never reloads centroids a model change invalidated.
         """
         embeds_path = _VOICE_STRANGERS_DIR / "embeds.npy"
         labels_path = _VOICE_STRANGERS_DIR / "labels.npy"

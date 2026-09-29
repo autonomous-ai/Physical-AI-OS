@@ -1,8 +1,4 @@
-"""The backstop for a tracking flag left set with no owner (#312).
-
-Pure logic with an injected clock — no sleeping, no threads, and no import of
-animation_service (which pulls lerobot and would skip this file off-device).
-"""
+"""The backstop for a tracking flag left set with no owner (#312)."""
 
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
@@ -31,8 +27,6 @@ def test_a_free_body_is_never_reported():
 
 
 def test_a_live_tracking_session_is_never_reported():
-    # The tracker holds the flag for the whole session and its follower holds a
-    # counter slot the whole time. Clearing that would end tracking mid-follow.
     dog, clock = _watchdog()
     for _ in range(5):
         assert dog.check(flag=True, owners=1) is None
@@ -40,8 +34,7 @@ def test_a_live_tracking_session_is_never_reported():
 
 
 def test_the_startup_gap_is_not_reported():
-    # tracker_service sets the flag at :367 and the follower acquires at :394 —
-    # milliseconds apart. That window must never be mistaken for a wedge.
+    # Flag set and follower acquire are milliseconds apart; not a wedge.
     dog, clock = _watchdog()
     assert dog.check(flag=True, owners=0) is None
     clock.advance(0.2)
@@ -51,7 +44,7 @@ def test_the_startup_gap_is_not_reported():
 
 def test_a_flag_with_no_owner_is_reported_once_the_grace_expires():
     dog, clock = _watchdog(grace_s=30.0)
-    assert dog.check(flag=True, owners=0) is None  # starts the clock
+    assert dog.check(flag=True, owners=0) is None
     clock.advance(29.0)
     assert dog.check(flag=True, owners=0) is None
     clock.advance(2.0)
@@ -72,6 +65,6 @@ def test_an_owner_arriving_resets_the_clock():
     dog, clock = _watchdog(grace_s=30.0)
     dog.check(flag=True, owners=0)
     clock.advance(29.0)
-    dog.check(flag=True, owners=1)  # a writer starts — not a wedge
+    dog.check(flag=True, owners=1)
     clock.advance(29.0)
     assert dog.check(flag=True, owners=0) is None, "the grace restarts from here"

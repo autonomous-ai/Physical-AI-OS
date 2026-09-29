@@ -1,11 +1,4 @@
-"""Fire hazard detection via DL backend object detection endpoint.
-
-Sends camera frames to the object detection API to detect fire indicators
-(flame), smoke, and flammable objects (soft furnishings, wooden items,
-etc.). Assesses hazard by checking fire/furniture bbox overlap.
-
-Uses the same HTTP+crypto pattern as EmotionPerception.
-"""
+"""Fire hazard detection via DL backend object detection endpoint."""
 
 import json
 import logging
@@ -40,11 +33,7 @@ _RATE_LIMIT_BACKOFF_S = 300.0
 RESOURCES_DIR = Path(__file__).parent / "resources"
 
 class RemoteFireHazardDetector:
-    """HTTP client for the DL backend object detection endpoint.
-
-    Loads class lists from resource files, sends them in a single API call,
-    splits results by category, and assesses fire hazard risk via bbox overlap.
-    """
+    """HTTP client for the DL backend object detection endpoint."""
 
     DEFAULT_FIRE_CLASSES_PATH: Path = RESOURCES_DIR / "fire_classes.txt"
     DEFAULT_SMOKE_CLASSES_PATH: Path = RESOURCES_DIR / "smoke_classes.txt"
@@ -61,10 +50,6 @@ class RemoteFireHazardDetector:
         self._api_key: str = api_key
         self._timeout: float = timeout
         self._crypto: CryptoSession | None = None
-        # Rate-limit backoff: when the backend answers 429 (plan quota
-        # exhausted), every further call is a guaranteed failure — stop
-        # hammering (and stop the one-WARNING-per-tick log spam) until the
-        # window passes.
         self._backoff_until: float = 0.0
 
         self._fire_classes: list[str] = self._load_classes(self.DEFAULT_FIRE_CLASSES_PATH)
@@ -109,10 +94,7 @@ class RemoteFireHazardDetector:
         logger.info("[fire_hazard] encryption session initialized")
 
     def detect(self, frame: cv2t.MatLike) -> list[FireHazard]:
-        """Detect objects in a frame and assess fire hazard risk.
-
-        Returns a list of FireHazard results (empty if safe).
-        """
+        """Detect objects in a frame and assess fire hazard risk."""
         if not self._url:
             return []
 
@@ -201,13 +183,7 @@ class RemoteFireHazardDetector:
         flammable_objects: list[dict[str, Any]],
         safe_objects: list[dict[str, Any]],
     ) -> list[FireHazard]:
-        """Assess fire hazard risk from detected objects.
-
-        - Smoke → SMOKE
-        - Fire near flammable (higher overlap than safe) → HAZARD_FIRE
-        - Fire near safe object (higher overlap than flammable) → SAFE_FIRE
-        - Fire with no significant overlap to either → UNSURE_FIRE
-        """
+        """Assess fire hazard risk from detected objects."""
         hazards: list[FireHazard] = []
 
         for o in smoke_objects:
@@ -228,7 +204,6 @@ class RemoteFireHazardDetector:
             [xywh_to_xyxy(np.array(o["xywh"], dtype=np.float32)) for o in safe_objects]
         ) if safe_objects else np.zeros((0, 4), dtype=np.float32)
 
-        # Filter degenerate boxes
         if len(fire_bboxes) > 0:
             fire_bboxes = fire_bboxes[bbox_area(fire_bboxes) > 1e-5]
         if len(flammable_bboxes) > 0:
@@ -243,25 +218,23 @@ class RemoteFireHazardDetector:
         if n_fire == 0:
             return hazards
 
-        # Compute flammable overlap: intersection / min(area_fire, area_flammable)
         if n_flammable > 0:
             flammable_overlap = bbox_intersection(
                 fire_bboxes[:, None, :], flammable_bboxes[None, :, :]
             ) / np.minimum(
                 bbox_area(fire_bboxes[:, None, :]), bbox_area(flammable_bboxes[None, :, :])
             )
-            flammable_score = flammable_overlap.max(axis=-1)  # (N_fire,)
+            flammable_score = flammable_overlap.max(axis=-1)
         else:
             flammable_score = np.full(n_fire, -1.0)
 
-        # Compute safe overlap: intersection / min(area_fire, area_safe)
         if n_safe > 0:
             safe_overlap = bbox_intersection(
                 fire_bboxes[:, None, :], safe_bboxes[None, :, :]
             ) / np.minimum(
                 bbox_area(fire_bboxes[:, None, :]), bbox_area(safe_bboxes[None, :, :])
             )
-            safe_score = safe_overlap.max(axis=-1)  # (N_fire,)
+            safe_score = safe_overlap.max(axis=-1)
         else:
             safe_score = np.full(n_fire, -1.0)
 
@@ -300,12 +273,9 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         self._last_sent_by_type: dict[str, float] = {}
         self._dedup_window_s: float = config.FIRE_HAZARD_DEDUP_WINDOW_S
 
-        # Confirmation: track when each hazard type was first seen continuously.
-        # Only promote to buffer after it persists for FIRE_HAZARD_CONFIRM_S.
         self._first_seen_by_type: dict[str, float] = {}
         self._confirm_s: float = config.FIRE_HAZARD_CONFIRM_S
 
-        # Buffer — accumulates confirmed hazards + annotated snapshots across ticks
         self._hazard_buffer: list[FireHazard] = []
         self._snapshot_buffer: list[npt.NDArray[np.uint8]] = []
         self._flush_interval: float = config.FIRE_HAZARD_FLUSH_S
@@ -319,7 +289,6 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
 
         now = time.time()
 
-        # Detect on interval
         if now - self._last_check_ts < config.FIRE_HAZARD_CHECK_INTERVAL_S:
             self._flush_buffer(now)
             return
@@ -343,7 +312,6 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 if elapsed >= self._confirm_s:
                     confirmed.append(h)
 
-            # Clear first-seen for types no longer detected (streak broken)
             for t in list(self._first_seen_by_type):
                 if t not in seen_types:
                     logger.debug("[fire_hazard] streak broken: %s", t)
@@ -354,7 +322,6 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
                 self._hazard_buffer.extend(confirmed)
                 self._snapshot_buffer.append(annotated)
 
-        # Flush on interval
         self._flush_buffer(now)
 
     def _flush_buffer(self, now: float) -> None:
@@ -370,14 +337,12 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
             self._snapshot_buffer.clear()
             self._last_flush_ts = now
 
-        # Prune expired dedup entries
         cutoff = now - self._dedup_window_s
         with self._state_lock:
             self._last_sent_by_type = {
                 k: ts for k, ts in self._last_sent_by_type.items() if ts >= cutoff
             }
 
-        # Group by type, dedup per type
         by_type: dict[str, list[FireHazard]] = {}
         for hazard in hazards:
             by_type.setdefault(hazard.type.value, []).append(hazard)
@@ -404,10 +369,10 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         self._send_event("fire_hazard.detected", message, "fire_hazard", snapshots, None)
 
     _HAZARD_COLORS: dict[FireHazardEnum, tuple[int, int, int]] = {
-        FireHazardEnum.HAZARD_FIRE: (0, 0, 255),       # red
-        FireHazardEnum.UNSURE_FIRE: (0, 165, 255),     # orange
-        FireHazardEnum.SAFE_FIRE: (0, 200, 0),         # green
-        FireHazardEnum.SMOKE: (128, 128, 128),          # gray
+        FireHazardEnum.HAZARD_FIRE: (0, 0, 255),
+        FireHazardEnum.UNSURE_FIRE: (0, 165, 255),
+        FireHazardEnum.SAFE_FIRE: (0, 200, 0),
+        FireHazardEnum.SMOKE: (128, 128, 128),
     }
 
     def _annotate_frame(
@@ -423,12 +388,6 @@ class FireHazardPerception(Perception[cv2t.MatLike]):
         return vis
 
     def reset_dedup(self, new_user: str = "") -> None:
-        # Deliberate no-op: hazard alerts are about the ENVIRONMENT, not the
-        # viewer — a presence.enter (including stranger-ID flicker, which
-        # fires this on every processor) doesn't make the same candle news
-        # again. Clearing here re-armed the alert on every enter and turned a
-        # steady hazard into an event stream. Re-alerts pace on the dedup
-        # window; a NEW hazard type always alerts immediately regardless.
         pass
 
     @override

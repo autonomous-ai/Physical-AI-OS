@@ -1,8 +1,4 @@
-"""Abstract base class for ergonomic assessment from pose keypoints.
-
-Extends PredictorBase. Input is (keypoints, scores) for a single frame,
-output is ErgoAssessment or None.
-"""
+"""Abstract base class for ergonomic assessment from pose keypoints."""
 
 from abc import ABC
 
@@ -19,11 +15,7 @@ ErgoInput = tuple[npt.NDArray[np.float32], npt.NDArray[np.float32]]
 
 
 class ErgoAssessor(PredictorBase[ErgoInput, ErgoAssessment | None], ABC):
-    """Base interface for ergonomic assessors that operate on pose keypoints.
-
-    Unlike ONNX-based predictors, ergo assessors are pure computation
-    (no model to load). start/stop are no-ops by default.
-    """
+    """Base interface for ergonomic assessors (pure computation; start/stop are no-ops)."""
 
     GRAPH_TYPE: GraphEnum
 

@@ -1,8 +1,4 @@
-"""Integration tests against a remote DL backend server (pose endpoint).
-
-Requires DL_BACKEND_URL and DL_API_KEY in .env (or environment).
-Run with: pytest tests/pose_api/test_pose_estimation_api.py -v
-"""
+"""Integration tests against a remote DL backend (pose). Requires DL_BACKEND_URL and DL_API_KEY."""
 
 import base64
 import json

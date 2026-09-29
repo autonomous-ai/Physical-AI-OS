@@ -1,7 +1,7 @@
 # Sensing Threshold Tuning Guide
 
 How to tune Lamp's sensing thresholds on real hardware.
-All constants live in `hal/config.py` and `hal/drivers/voice/voice_service.py`.
+All constants live in `hal/config.py` and `hal/drivers/voice/_internal/config.py`.
 
 ## View Logs
 
@@ -82,7 +82,7 @@ INFO hal...motion: [motion] transition bypass: ['sedentary'] → ['eat'] (last e
 **File:** `hal/config.py`
 
 ```python
-SOUND_RMS_THRESHOLD = 3000   # RMS level to trigger "loud noise" event
+SOUND_RMS_THRESHOLD = 8000   # RMS level to trigger "loud noise" event (env HAL_SOUND_RMS_THRESHOLD)
 SOUND_SAMPLE_DURATION_S = 0.5 # sample window length
 ```
 
@@ -90,7 +90,7 @@ SOUND_SAMPLE_DURATION_S = 0.5 # sample window length
 The event message includes the actual RMS level:
 
 ```
-INFO lelamp.service.sensing.sensing_service: [sensing] sound: Loud noise detected (level: 4521)
+INFO lelamp.service.sensing.sensing_service: [sensing] sound: Loud noise detected (level: 9521)
 ```
 
 Watch the `level` value during normal ambient conditions vs. when you clap/speak loudly.
@@ -99,15 +99,15 @@ Watch the `level` value during normal ambient conditions vs. when you clap/speak
 
 | Symptom | Fix |
 |---------|-----|
-| Normal speech doesn't trigger event | Decrease `SOUND_RMS_THRESHOLD` (3000 → 1500) |
-| Triggers on fan noise / AC hum | Increase `SOUND_RMS_THRESHOLD` (3000 → 5000) |
+| Normal speech doesn't trigger event | Decrease `SOUND_RMS_THRESHOLD` (8000 → 4000) |
+| Triggers on fan noise / AC hum | Increase `SOUND_RMS_THRESHOLD` (8000 → 12000) |
 
 
 ---
 
 ## Voice Wake Word (VAD)
 
-**File:** `hal/drivers/voice/voice_service.py` (all env-tunable)
+**File:** `hal/drivers/voice/_internal/config.py` (all env-tunable)
 
 ```python
 HAL_VAD_THRESHOLD = 3500        # RMS to trigger speech detection (default 3500)
@@ -140,22 +140,22 @@ HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 **File:** `hal/config.py`
 
 ```python
-LIGHT_LEVEL_INTERVAL_S = 30.0  # check every 30 seconds
-LIGHT_CHANGE_THRESHOLD = 30    # min brightness change (0–255) to trigger event
+LIGHT_LEVEL_INTERVAL_S = 300.0  # check every 5 minutes (env HAL_LIGHT_LEVEL_INTERVAL_S)
+LIGHT_CHANGE_THRESHOLD = 100    # min brightness change (0–255) to trigger event (env HAL_LIGHT_CHANGE_THRESHOLD)
 ```
 
 **How to read the log:**
 
 ```
-INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient light decreased significantly (level: 45/255, change: -38)
+INFO lelamp.service.sensing.sensing_service: [sensing] light.level: Ambient light decreased significantly (level: 45/255, change: -120)
 ```
 
 **Tuning:**
 
 | Symptom | Fix |
 |---------|-----|
-| No event when lights are turned on/off | Decrease `LIGHT_CHANGE_THRESHOLD` (30 → 15) |
-| Too sensitive (triggers from lamp dimming slowly) | Increase `LIGHT_CHANGE_THRESHOLD` (30 → 50) |
+| No event when lights are turned on/off | Decrease `LIGHT_CHANGE_THRESHOLD` (100 → 50) |
+| Too sensitive (triggers from lamp dimming slowly) | Increase `LIGHT_CHANGE_THRESHOLD` (100 → 150) |
 | Events too frequent | Increase `LIGHT_LEVEL_INTERVAL_S` |
 
 ---
@@ -342,6 +342,14 @@ the honest outcome, and it beats being absorbed into somebody else's.
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
 The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
+
+Each face-ID tick with an ungreeted stranger in frame logs one line, with the numbers behind each stranger's vote and their running count:
+
+```
+[face] stranger gaze: stranger_16 yaw=51.6<=92.6 face=117px>=48 edge=0.68 -> facing 2/2; stranger_17 yaw=70.2>62.4 face=40px<48 edge=0.05 -> away (face too small, turned too far) 0/1; stranger_18 yaw=- face=120px>=48 edge=0.10 -> away (landmarks off-frame) 0/3
+```
+
+`yaw` is the head yaw in degrees, shown against the cone allowed at that edge (`GAZE_MAX_YAW_DEG` widened by `GAZE_EDGE_CONE_SCALE`): `<=` passes, `>` fails. `face` is the face height in the gaze watcher's 640-wide pixels, shown against `GAZE_MIN_FACE_PX`: `>=` passes, `<` fails. A tick votes `facing` only when both pass. `edge` is the distance from frame centre (0 = centre, 1 = edge). An `away` vote names what failed in brackets: `face too small`, `turned too far`, or, when yaw could not be measured at all (`yaw=-`), `no keypoints`, `landmarks off-frame`, `no yaw` or `no frame`. An unmeasurable face never counts as facing, but it isn't a stranger who turned away either.
 
 **Tuning:**
 

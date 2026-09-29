@@ -1,15 +1,6 @@
-"""WebSocket benchmark: concurrent connections with increasing load.
+"""WebSocket benchmark: concurrent connections with increasing load, per-frame latency.
 
-Opens multiple WS connections to all available streaming endpoints
-simultaneously, sends frames, and measures per-frame latency.
-
-Requires:
-    * ``DL_BACKEND_URL``  -- e.g. ``http://127.0.0.1:8001``
-    * ``DL_API_KEY``      -- sent as ``X-API-Key``
-    * Image fixtures under ``tests/fixtures/images/``
-
-Run with:
-    pytest tests/benchmark_api/test_benchmark_ws.py -v -s
+Requires DL_BACKEND_URL, DL_API_KEY and image fixtures. Example: ``pytest tests/benchmark_api/test_benchmark_ws.py -v -s``
 """
 
 from __future__ import annotations
@@ -128,11 +119,6 @@ ALL_WS_ENDPOINTS: list[WSEndpointSpec] = [
 ]
 
 AUTH_WS_HEADERS: dict[str, str] = {"X-API-Key": DL_API_KEY} if DL_API_KEY else {}
-
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 
 def _probe_ws(ep: WSEndpointSpec) -> bool:
@@ -300,10 +286,6 @@ def _assert_error_rate(results: list[WSResult], label: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(scope="module")
 def available_ws_endpoints() -> list[WSEndpointSpec]:
     eps = [ep for ep in ALL_WS_ENDPOINTS if _probe_ws(ep)]
@@ -328,10 +310,6 @@ ws_fer_endpoint = _make_single_ep_fixture("ws_fer")
 ws_action_endpoint = _make_single_ep_fixture("ws_action")
 ws_object_endpoint = _make_single_ep_fixture("ws_object")
 
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 WS_CONN_LEVELS = [1, 2, 4, 8, 16, 32, 64, 128]
 

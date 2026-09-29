@@ -20,6 +20,42 @@ logger = logging.getLogger(__name__)
 # (resources/summarize_prompt.md). expire_open_requests keys off it.
 OPEN_REQUESTS_HEADING = "## Open requests"
 
+# First section of summary.md while an activity (quiz, debate, lesson, game)
+# is in progress — its rules, position and covered items. Written by the
+# summarizer (resources/summarize_prompt.md); fit_summary never drops it.
+CURRENT_ACTIVITY_HEADING: str = "## Current activity"
+
+
+def fit_summary(summary: str, max_chars: int) -> str:
+    """Shrink an over-long summary by whole bullets, oldest history first.
+
+    A hard cut at max_chars dropped the END of the summary — the newest debate
+    rounds and `## Open requests` (#449). The activity and open-request
+    sections are what the next session needs most, so they are kept whole and
+    bullets are removed from the other sections top-down (the summary runs
+    oldest to newest). A hard cut remains only as the last resort.
+    """
+    if len(summary) <= max_chars:
+        return summary
+    protected: set[str] = {CURRENT_ACTIVITY_HEADING, OPEN_REQUESTS_HEADING}
+    lines: list[str] = summary.splitlines()
+    section: str = ""
+    droppable: list[int] = []
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            section = line.strip()
+        elif section not in protected and line.lstrip().startswith(("- ", "* ")):
+            droppable.append(i)
+    dropped: set[int] = set()
+    size: int = len(summary)
+    for i in droppable:
+        if size <= max_chars:
+            break
+        dropped.add(i)
+        size -= len(lines[i]) + 1
+    fitted: str = "\n".join(line for i, line in enumerate(lines) if i not in dropped)
+    return fitted[:max_chars]
+
 
 # Example bullet: `- [2026-09-15T11:56:02+00:00] turn off the TV`
 _OPEN_REQUEST_BULLET_RE = re.compile(r"^\s*[-*]\s*\[([^\]]*)\]")
@@ -84,6 +120,39 @@ def expire_open_requests(summary: str, now_s: float, file_age_s: float, ttl_s: f
     return "\n".join(out).strip()
 
 
+def expire_current_activity(summary: str, now_s: float, file_age_s: float, ttl_s: float) -> str:
+    """Drop the `## Current activity` section once the activity has gone quiet.
+
+    The section tells a fresh session to carry on a quiz or debate; re-fed
+    after the user walked away it would resume a test they abandoned the night
+    before, and fit_summary protects it at the cost of real history. Its first
+    bullet carries a `[<ISO-8601>] Last active` stamp (summarize_prompt.md);
+    ttl_s or more before now_s — or, without a parseable stamp, a file that old —
+    and the whole section goes. ttl_s <= 0 disables.
+    """
+    if ttl_s <= 0 or CURRENT_ACTIVITY_HEADING.lower() not in summary.lower():
+        return summary
+    lines: list[str] = summary.splitlines()
+    start: int = next(
+        i for i, line in enumerate(lines)
+        if line.strip().lower() == CURRENT_ACTIVITY_HEADING.lower()
+    )
+    end: int = next(
+        (i for i in range(start + 1, len(lines)) if lines[i].lstrip().startswith("#")),
+        len(lines),
+    )
+    stamp_s: float | None = None
+    for line in lines[start + 1:end]:
+        m = _OPEN_REQUEST_BULLET_RE.match(line)
+        if m:
+            stamp_s = _parse_open_request_stamp(m.group(1))
+            break
+    expired: bool = (now_s - stamp_s >= ttl_s) if stamp_s is not None else (file_age_s >= ttl_s)
+    if not expired:
+        return summary
+    return "\n".join(lines[:start] + lines[end:]).strip()
+
+
 class ContextManagerBase(ABC):
     """Abstract base for realtime voice agent context managers."""
 
@@ -143,6 +212,9 @@ class ContextManagerBase(ABC):
         )
         self._realtime_memory_lock: threading.Lock = threading.Lock()
         self._realtime_summarize_lock: threading.Lock = threading.Lock()
+        # Consecutive summarize calls that produced nothing; logged at ERROR
+        # from the second, because memory then silently stops being compressed.
+        self._summary_failures: int = 0
 
     IDENTITY_NAME_FILE: str = "IDENTITY.md"
 
@@ -196,8 +268,23 @@ class ContextManagerBase(ABC):
                         return
 
                     lines: list[str] = raw.splitlines()
-                    lines_read: int = len(lines)
-                    entries: list[str] = self._parse_jsonl_lines(lines)
+                    # The newest turns stay verbatim for the next session;
+                    # only the older ones are folded into summary.md.
+                    # Bounded by chars too (half the verbatim budget): a few
+                    # long replies could otherwise fill the window on their own,
+                    # drop an unsummarized turn and re-trigger every turn.
+                    keep_recent: int = max(0, app_config.REALTIME_SUMMARY_KEEP_RECENT_TURNS)
+                    kept: int = 0
+                    tail_chars: int = 0
+                    for line in reversed(lines):
+                        size: int = len(self._format_jsonl_entry(line))
+                        if kept >= keep_recent or tail_chars + size > self._realtime_memory_max_chars // 2:
+                            break
+                        kept += 1
+                        tail_chars += size
+                    to_read: list[str] = lines[: len(lines) - kept]
+                    lines_read: int = len(to_read)
+                    entries: list[str] = self._parse_jsonl_lines(to_read)
                     if not entries:
                         return
 
@@ -211,33 +298,46 @@ class ContextManagerBase(ABC):
                     "[realtime] Summarizing %d realtime memory entries...", len(entries)
                 )
                 new_summary: str = self._summarizer.summarize(to_summarize)
-                if new_summary:
-                    # Cap at write time: the summary is re-fed as [Previous summary], so it compounds.
-                    if len(new_summary) > self._summary_max_chars:
-                        logger.warning(
-                            "[realtime] summary truncated %d → %d chars",
-                            len(new_summary), self._summary_max_chars,
-                        )
-                        new_summary = new_summary[: self._summary_max_chars]
-                    with self._realtime_memory_lock:
-                        self._summary_path.write_text(
-                            new_summary + "\n", encoding="utf-8"
-                        )
-                        # Only remove the lines we read; keep entries added during summarization.
-                        current_lines: list[str] = (
-                            self._realtime_memory_path.read_text(encoding="utf-8")
-                            .strip()
-                            .splitlines()
-                        )
-                        remaining: list[str] = current_lines[lines_read:]
-                        self._realtime_memory_path.write_text(
-                            "\n".join(remaining) + "\n" if remaining else "",
-                            encoding="utf-8",
-                        )
-                    logger.info(
-                        "[realtime] Realtime memory summarization complete → summary.md (kept %d new entries)",
-                        len(remaining),
+                if not new_summary:
+                    self._summary_failures += 1
+                    log = logger.error if self._summary_failures >= 2 else logger.warning
+                    log(
+                        "[realtime] realtime memory summarize produced nothing "
+                        "(%d in a row) — %d entries stay unsummarized",
+                        self._summary_failures, len(entries),
                     )
+                    return
+                self._summary_failures = 0
+                # Enforce the floor cap at WRITE time — the summary is
+                # billed every turn and re-fed as [Previous summary] input
+                # to the next summarize, so an uncapped write compounds.
+                if len(new_summary) > self._summary_max_chars:
+                    fitted: str = fit_summary(new_summary, self._summary_max_chars)
+                    logger.warning(
+                        "[realtime] summary over cap %d → %d chars "
+                        "(dropped oldest history bullets)",
+                        len(new_summary), len(fitted),
+                    )
+                    new_summary = fitted
+                with self._realtime_memory_lock:
+                    self._summary_path.write_text(
+                        new_summary + "\n", encoding="utf-8"
+                    )
+                    # Only remove the lines we read — keep any new entries added during summarization
+                    current_lines: list[str] = (
+                        self._realtime_memory_path.read_text(encoding="utf-8")
+                        .strip()
+                        .splitlines()
+                    )
+                    remaining: list[str] = current_lines[lines_read:]
+                    self._realtime_memory_path.write_text(
+                        "\n".join(remaining) + "\n" if remaining else "",
+                        encoding="utf-8",
+                    )
+                logger.info(
+                    "[realtime] Realtime memory summarization complete → summary.md (kept %d new entries)",
+                    len(remaining),
+                )
             except Exception as e:
                 logger.exception(
                     "[realtime] Failed to summarize realtime memory due to %s", e
@@ -354,7 +454,7 @@ class ContextManagerBase(ABC):
             return self._load_realtime_memory_unlocked()
 
     def _read_summary_for_refeed(self) -> str:
-        """summary.md with its stale `## Open requests` section removed."""
+        """summary.md with its stale `## Open requests` / `## Current activity` removed."""
         try:
             existing: str = self._summary_path.read_text(encoding="utf-8").strip()
             now_s: float = time.time()
@@ -367,7 +467,11 @@ class ContextManagerBase(ABC):
         trimmed: str = expire_open_requests(existing, now_s, file_age_s, self._open_request_ttl_s)
         if trimmed != existing:
             logger.info("[realtime] dropped stale open requests from summary (file age %.0fs)", file_age_s)
-        return trimmed
+        # Same TTL: an activity untouched this long was abandoned (#449).
+        fresh: str = expire_current_activity(trimmed, now_s, file_age_s, self._open_request_ttl_s)
+        if fresh != trimmed:
+            logger.info("[realtime] dropped stale current activity from summary")
+        return fresh
 
     def _load_realtime_memory_unlocked(self) -> list[str]:
         entries: list[str] = []
@@ -390,7 +494,11 @@ class ContextManagerBase(ABC):
             logger.warning("[realtime] Failed to read realtime memory: %s", e)
             return entries
 
-        total_chars: int = sum(len(e) for e in entries)
+        # Verbatim turns have their own budget, separate from the summary's
+        # (REALTIME_SUMMARY_MAX_CHARS). Sharing one left ~3k chars of turns
+        # next to a full summary, and the turns it dropped were not summarized
+        # yet (#449).
+        total_chars: int = 0
         selected_lines: list[str] = []
         for line in reversed(lines):
             formatted: str = self._format_jsonl_entry(line)
@@ -414,7 +522,16 @@ class ContextManagerBase(ABC):
                     raw: str = self._realtime_memory_path.read_text(
                         encoding="utf-8"
                     ).strip()
-                    needs_summarize = len(raw) > self._realtime_memory_max_chars
+                    # Measured the way the loader counts (formatted entries),
+                    # against the verbatim budget, with headroom so the
+                    # summary lands before the loader starts dropping turns.
+                    verbatim_chars: int = sum(
+                        len(self._format_jsonl_entry(line)) for line in raw.splitlines()
+                    )
+                    needs_summarize = verbatim_chars > (
+                        self._realtime_memory_max_chars
+                        * app_config.REALTIME_SUMMARIZE_AT_FRACTION
+                    )
 
             with self._realtime_memory_lock:
                 if self._raw_memory_path.exists():
@@ -434,7 +551,9 @@ class ContextManagerBase(ABC):
                             len(kept),
                         )
 
-            if needs_summarize:
+            # One summarize at a time: with the earlier trigger every turn
+            # during a slow summarize would otherwise queue another thread.
+            if needs_summarize and not self._realtime_summarize_lock.locked():
                 logger.info(
                     "[realtime] Memory.jsonl exceeds char limit — summarizing in background"
                 )

@@ -1,14 +1,6 @@
-"""Shared model state for protocol handlers.
+"""Shared model state: set by the lifespan hook, read by routers.
 
-Lifespan (server.py) calls setters during startup/shutdown.
-Routers call getters to access the loaded models.
-
-Thread-safety: these module globals are WRITTEN only by the lifespan hook
-(single-threaded, before the server accepts traffic, and again at shutdown after
-it stops). Request handlers only READ them. Because writes never race with reads,
-no lock is needed; do NOT mutate these from within a request handler or that
-invariant breaks. The perception objects themselves handle their own internal
-concurrency (see PredictorBase locking).
+No lock: globals are written only by lifespan before/after serving; never mutate them from a request handler.
 """
 
 from core.perception.action.perception import ActionPerception

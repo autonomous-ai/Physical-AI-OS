@@ -63,7 +63,7 @@ For events handled by `skills/sensing/SKILL.md`, the prompt requires literal HW 
 
 ### How it works
 
-HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD` — potentially several times per second. The Python-side **sound tracker** (`hal/drivers/sensing/perceptions/sound.py`) applies dedup and escalation before forwarding to Go. Go receives only passed events and forwards them to the agent unchanged.
+HAL fires a sound event on every audio sample that crosses `SOUND_RMS_THRESHOLD` — potentially several times per second. The Python-side **sound tracker** (`hal/drivers/sensing/perceptions/processors/sound.py`) applies dedup and escalation before forwarding to Go. Go receives only passed events and forwards them to the agent unchanged.
 
 ### Escalation behavior
 
@@ -167,7 +167,7 @@ The full presence auto-control timeline:
 
 HAL manages the light control; the agent only handles the verbal announcement. If the user returns (motion detected), light restores automatically and a `presence.enter` event fires.
 
-The timer resets on two kinds of evidence, not only the camera. **Motion** is `on_motion()` from the people-perception processors (face / motion / emotion). **User activity** is `on_activity()`, reached through `app_state.note_user_activity()`: every voice turn HAL forwards to os-server (`voice`, `voice_command`, `voice_followup`, `voice_agent_handled`, after the echo filter, in `SensingSender.send`) and the touch gestures single click (GPIO button, touchpad, privacy-switch unmute), head pat and double tap (mic toggle). Without it, a user talking to the lamp with the camera off or sitting outside the frame timed out to AWAY and the lamp announced sleep mid-conversation. Activity during IDLE/AWAY returns to PRESENT and restores the light like motion does, except while the device is asleep: the light restore is then skipped (for motion too), and the wake emotion owns the strip. Typed chat (`web_chat` / `mqtt_chat`) does **not** count — it can come from a phone away from home, and must not keep an empty room lit. Hold gestures (sleep / shutdown / reset) and swipe (sleep) do not count either. Activity only refreshes a machine that is already enabled; it never enables it.
+The timer resets on two kinds of evidence, not only the camera. **Motion** is `on_motion()` from the people-perception processors (face / motion / emotion). **User activity** is `on_activity()`, reached through `app_state.note_user_activity()`: every voice turn HAL forwards to os-server (`voice`, `voice_command`, `voice_followup`, `voice_agent_handled`, after the echo filter, in `SensingSender.send`) and the touch gestures single click (GPIO button, touchpad, privacy-switch unmute) and head pat (every TTP223 headpad gesture — tap, double tap, swipe, pet — resolves to `head_pat_action`). Without it, a user talking to the lamp with the camera off or sitting outside the frame timed out to AWAY and the lamp announced sleep mid-conversation. Activity during IDLE/AWAY returns to PRESENT and restores the light like motion does, except while the device is asleep: the light restore is then skipped (for motion too), and the wake emotion owns the strip. Typed chat (`web_chat` / `mqtt_chat`) does **not** count — it can come from a phone away from home, and must not keep an empty room lit. Hold gestures (sleep / shutdown / reset) and swipe (sleep) do not count either. Activity only refreshes a machine that is already enabled; it never enables it.
 
 **Sleep pauses the timer and waking restarts it.** While `_sleeping`, `tick()` returns early: no dim, no light off, no `presence.away`. Sleep already owns the strip, and the camera is off, so nothing could reset the clock anyway. Counting on used to dim a sleeping lamp back to 20% of the user's colour (`_dim_light` calls `rgb_service` directly, past the `/led` sleep lock) and left the machine AWAY for the wake to inherit. Every wake — button, web UI emotion pill, direct `POST /emotion`, an agent `greeting`/`stretching` (for example in reply to a chat) — converges on `express_emotion` in `hal/routes/emotion.py`, which calls `app_state.note_presence_wake()` → `PresenceService.on_wake()`: the clock restarts from now and the state returns to PRESENT without repainting the light (the wake emotion owns the strip). Before, only a face on camera reset it, so a wake nobody stood in front of either kept the pre-sleep timestamp and announced sleep again right after waking, or stayed AWAY and never timed out again.
 
@@ -374,7 +374,7 @@ The `face-enroll` skill (Lamp side) parses that hint and addresses the camera-pe
 
 ## Wellbeing (AI-Driven Hydration + Break Reminders)
 
-Lamp proactively cares for the user's health using AI-driven cron jobs managed by the OpenClaw agent. Instead of hardcoded timers, the agent decides reminder intervals based on scientific recommendations and the user's historical patterns.
+Lamp proactively cares for the user's health with AI-driven, event-driven reminders. Instead of cron jobs or hardcoded timers, the agent decides on each `motion.activity` event whether to nudge, using the skill's thresholds, the user's logged history and habit patterns.
 
 ### How it works (event-driven — no cron)
 
@@ -397,7 +397,7 @@ Wellbeing is **event-driven**. There are NO wellbeing cron jobs. On every `motio
 
 **Dedup lives in two places.**
 
-*Activity dedup (5-min window).* `hal/drivers/sensing/perceptions/motion.py` keeps a `_last_sent_key = (current_user, frozenset(labels))` and a `_last_sent_ts`, where `labels` matches the outbound message (bucket names for drink/break/celebrate, raw Kinetics labels for sedentary). Before emitting `motion.activity` **and before POSTing the rows to `/api/wellbeing/log`**, it drops the cycle if the key hasn't changed **and** the gap since the last send is still under `MOTION_DEDUP_WINDOW_S = 300` seconds (5 min). So `eating burger → eating cake` collapses to the same `break` key and is dropped, while `writing → drawing` flips the key (sedentary is raw) and passes through.
+*Activity dedup (5-min window).* `hal/drivers/sensing/perceptions/processors/motion.py` keeps a `_last_sent_key = (current_user, frozenset(labels))` and a `_last_sent_ts`, where `labels` matches the outbound message (bucket names for drink/break/celebrate, raw Kinetics labels for sedentary). Before emitting `motion.activity` **and before POSTing the rows to `/api/wellbeing/log`**, it drops the cycle if the key hasn't changed **and** the gap since the last send is still under `MOTION_DEDUP_WINDOW_S = 300` seconds (5 min). So `eating burger → eating cake` collapses to the same `break` key and is dropped, while `writing → drawing` flips the key (sedentary is raw) and passes through.
 
 - User change (owner→owner, owner→unknown, unknown→owner) flips the key immediately → event passes through.
 - Different strangers (e.g. `stranger_46` → `stranger_54`) collapse to `"unknown"` via `FaceRecognizer.current_user()`, so swapping strangers alone doesn't break dedup.
@@ -434,14 +434,17 @@ The reaction path was added so positive actions don't fall into silence: drinkin
 
 ### Thresholds
 
-Hardcoded in `lamp/resources/openclaw-skills/wellbeing/SKILL.md`:
+Hardcoded in `skills/wellbeing/SKILL.md` (production values):
 
-| Threshold | Test value | Production value |
-|---|---|---|
-| `HYDRATION_THRESHOLD_MIN` | **5** | 45 |
-| `BREAK_THRESHOLD_MIN` | **7** | 30 |
+| Threshold | Value |
+|---|---|
+| `HYDRATION_THRESHOLD_MIN` | 45 |
+| `BREAK_THRESHOLD_MIN` | 30 |
+| `BREAK_THRESHOLD_TIRED` | 20 (replaces `BREAK_THRESHOLD_MIN` when `yawning` is in the labels) |
+| `YAWN_ACK_COOLDOWN_MIN` | 60 |
+| `TOILET_DRINK_THRESHOLD` | 2 (count-based — once per N drinks since the last nudge) |
 
-> ⚠ **Release checklist:** before shipping, change both constants to the production values (45 / 30). Test values let us iterate within minutes instead of hours — hydration and break are intentionally offset (5 vs 7) so you can tell which path fired during testing.
+For quick on-device testing, temporarily lower these constants in the skill and restore the production values before shipping.
 
 **How re-nudge spam is prevented.** The `nudge_hydration` / `nudge_break` log entry the agent writes after speaking is also counted as a reset point for its threshold. After Lamp reminds, the delta drops back to 0 and the next reminder of that kind only fires after another full threshold window (45 min for hydration, 30 min for break in production).
 
@@ -505,26 +508,24 @@ Backend writes the `leave` marker to the log. Nothing else to do — there are n
 
 ### Agent behavior
 
-| Reminder | Emotion | Voice |
+| Route (from `skills/wellbeing/SKILL.md`) | When | Output |
 |---|---|---|
-| Hydration cron | `caring` (0.5) | YES (remind water) or silent |
-| Break cron | `caring` (0.6) | YES (remind stretch/walk) or silent |
+| Hydration nudge | `hydration_delta_min >= HYDRATION_THRESHOLD_MIN` | Speak a hydration nudge + inline `nudge_hydration` marker |
+| Break nudge | `break_delta_min >= BREAK_THRESHOLD_MIN` (or `BREAK_THRESHOLD_TIRED` with `yawning`) | Speak a break nudge + inline `nudge_break` marker |
+| Otherwise | No threshold crossed | Short reaction to a positive action, or `NO_REPLY` |
 
-The agent uses the camera snapshot to make a judgment call — it does NOT always speak. This prevents spamming the user when they seem fine.
+There are no reminder crons: every nudge is decided on an incoming `motion.activity` event from the pre-computed `[wellbeing_context: ...]`. The agent does NOT always speak — this prevents spamming the user when they seem fine.
 
 ### Music Suggestions (AI-Driven)
 
-Music suggestions are **fully AI-driven** — no cron jobs, no backend triggers. The agent decides when to suggest based on two triggers:
+Music suggestions are **AI-driven and event-driven** — no cron jobs, no backend timers. There is a single trigger:
 
-- **Mood trigger:** After logging a suggestion-worthy mood (`sad`, `stressed`, `tired`, `excited`, `happy`, `bored`), the agent follows the Music skill to suggest music matching that mood — this includes the music branch of the emotion router (see "Agent behavior" below), as well as moods logged from conversation, wellbeing, or explicit asks.
-- **Sedentary trigger:** When `motion.activity` carries a sedentary raw label (`using computer`, `writing`, `texting`, `reading`, `drawing`, `playing controller`), the agent suggests background music (lo-fi, ambient, instrumental).
-- **Data-driven decisions:** Before suggesting, the agent queries:
-  - `GET /audio/status` — is music already playing?
-  - `GET /api/agent/music-suggestion-history` — the last entry is the reset point; fire only when `minutes_since_last_suggestion >= SUGGESTION_INTERVAL_MIN` (7 min test / 30 min prod)
-  - `GET /audio/history?person={name}` — per-user listening history (genre preference, duration, satisfaction)
-- **Learning loop:** Accepted suggestions reinforce genre/timing; rejected suggestions trigger approach adjustments. All logged via `/api/music-suggestion/log`.
+- **Mood trigger:** `user-emotion-detection/SKILL.md` is the router for `emotion.detected` (camera) and `speech_emotion.detected` (voice) events. It picks one route per turn (`music` / `checkin` / `action` / `silent`); `music-suggestion/SKILL.md` speaks only when the router picks `music`. `motion.activity` / `[activity]` events (sedentary, drink/break, celebrate) route to `wellbeing/SKILL.md` only and never trigger a music suggestion.
+- **Pre-fetched context:** the backend injects `[emotion_context: ...]` with `audio_playing`, `last_suggestion_age_min`, `prior_decision` / `is_decision_stale`, `audio_recent`, `music_pattern_for_hour`, `suggestion_worthy` and `mapped_mood`, so the agent fires no read tool calls. Only if the block is missing does it fall back to `GET /audio/status`, the music-suggestion history (`GET /api/agent/music-suggestion-history`), mood history, `GET /audio/history?person={name}` and `patterns.json`.
+- **Gate:** suggest only when the mood is suggestion-worthy (`sad`, `stressed`, `tired`, `excited`, `happy`, `bored`), no audio is playing, and `last_suggestion_age_min` is outside `[0, 7)` — a 7-minute cooldown in the current skill (30 min planned for production), shared with the check-in route.
+- **Learning loop:** the suggestion is logged with an inline `[HW:/music-suggestion/log:{...}]` marker (→ `POST /api/music-suggestion/log`); accept / reject is posted later to `POST /api/music-suggestion/status`. The agent never auto-plays — it plays only after the user confirms.
 
-See the Music skill (`resources/openclaw-skills/music/SKILL.md`) for full implementation details.
+See `skills/music-suggestion/SKILL.md` and `skills/user-emotion-detection/SKILL.md` for full implementation details.
 
 ### Proactive care (piggyback on sensing events)
 
@@ -538,7 +539,7 @@ Two control markers on channel-origin turns:
 
 | Marker | Effect | When to use |
 |---|---|---|
-| `[HW:/speak:{}]` | Forces TTS on the speaker. No Telegram side-effect. | Proactive crons (wellbeing, music) running inside a Telegram/channel session so the reminder is also heard aloud. Usually combined with `[HW:/dm:{"telegram_id":"..."}]` for a targeted DM. |
+| `[HW:/speak:{}]` | Forces TTS on the speaker. No Telegram side-effect. | Proactive replies (wellbeing, music) running inside a Telegram/channel session so the reminder is also heard aloud. Usually combined with `[HW:/dm:{"telegram_id":"..."}]` for a targeted DM. |
 | `[HW:/broadcast:{}]` | Forces TTS **and** fans out the reply text to every connected Telegram chat. | Guard mode alerts only. Never use in wellbeing/music — it will notify every chat, not just the person being reminded. |
 
 By default, channel-origin turns (Telegram, webchat) suppress speaker TTS because the reply is routed as a channel message. `/speak` overrides that suppression without the fan-out side-effect.
@@ -597,7 +598,7 @@ The agent links face recognition names to Telegram usernames by observing timing
 
 ## Motion Activity Analysis (while present)
 
-When the user is already present (PRESENT state), foreground motion triggers a `motion.activity` event instead of `motion`. Same cooldown (`MOTION_EVENT_COOLDOWN_S`, 3 min) — no separate timer. The system sends the detected action name(s) (no images — action names are sufficient for the agent to infer behavior).
+When the user is already present (PRESENT state), foreground motion triggers a `motion.activity` event instead of `motion`. Same cooldown (`MOTION_EVENT_COOLDOWN_S`, default 900 s) — no separate timer. The system sends the detected action name(s) (no images — action names are sufficient for the agent to infer behavior).
 
 ### How it works
 

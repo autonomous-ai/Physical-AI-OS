@@ -1,10 +1,4 @@
-"""EdgeFace recognition pipeline.
-
-Renamed from the reference ``FaceRecognizer`` so it does NOT shadow the public
-``FaceRecognizer``. Chains SCRFD (detect) -> ONNX landmark (align) -> EdgeFace
-(embed) and exposes ``.get(frame)`` with the exact insightface FaceAnalysis
-output shape (plus an extra ``emotion_box`` key).
-"""
+"""EdgeFace recognition pipeline."""
 
 import numpy as np
 import onnxruntime as ort
@@ -16,17 +10,7 @@ from .scrfd import _SCRFDDetector
 
 
 class _EdgeFacePipeline:
-    """SCRFD (detect) -> ONNX landmark (align) -> EdgeFace (embed).
-
-    ``get(frame)`` returns one dict per face, drop-in compatible with
-    ``insightface.app.FaceAnalysis.get`` (plus extra ``emotion_box`` /
-    ``aligned`` / ``landmarks`` / ``landmark_score`` keys):
-        {'bbox': float32[4], 'kps': float32[5,2]|None,
-         'det_score': np.float32, 'embedding': float32[D],
-         'emotion_box': list[int]|None, 'aligned': uint8[112,112,3],
-         'landmarks': float32[468,2]|None, 'landmark_score': float}
-    Faces that cannot be aligned are skipped (same as the reference).
-    """
+    """SCRFD (detect) -> ONNX landmark (align) -> EdgeFace (embed)."""
 
     def __init__(
         self,
@@ -90,14 +74,7 @@ class _EdgeFacePipeline:
                     "det_score": np.float32(det["det_score"]),
                     "embedding": embedding.astype(np.float32),
                     "emotion_box": emotion_box,
-                    # The exact 112x112 BGR crop fed to EdgeFace. Already in
-                    # memory; carried out so the debug log can persist the real
-                    # model input (a misalignment is the usual cause of a
-                    # false match, and it is invisible in the frame crop).
                     "aligned": aligned,
-                    # Dense 468-point FaceMesh in full-frame pixels, plus the
-                    # confidence that gated it. Computed for the alignment
-                    # above; carried out for the debug log.
                     "landmarks": landmarks,
                     "landmark_score": lm_score,
                 }

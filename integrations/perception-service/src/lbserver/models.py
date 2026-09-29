@@ -7,11 +7,6 @@ from pydantic import BaseModel
 
 from core.models.crypto import AESGCMCipherPayload
 
-# ---------------------------------------------------------------------------
-# HTTP
-# ---------------------------------------------------------------------------
-
-
 class CipherHTTPRequest(BaseModel):
     """HTTP request with encrypted payload (includes RSA-encrypted AES key)."""
 
@@ -45,11 +40,6 @@ class CipherHTTPResponse(BaseModel):
             nonce=base64.b64encode(payload.nonce).decode(),
             cipher_data=base64.b64encode(payload.cipher_data).decode(),
         )
-
-
-# ---------------------------------------------------------------------------
-# WebSocket
-# ---------------------------------------------------------------------------
 
 
 class WSKeyExchangeRequest(BaseModel):

@@ -88,12 +88,14 @@ Weights được check vào repo (`hal/drivers/tracking/models/`) nên deploy ch
 
 Tracking điều khiển 4 joint:
 
-- **base_yaw** (ID 1) — pan trái/phải (100 % của yaw)
-- **base_pitch** (ID 2) — tilt lên/xuống, 10 % của pitch
-- **elbow_pitch** (ID 3) — tilt lên/xuống, 90 % của pitch
-- **wrist_pitch** (ID 5) — tilt lên/xuống, 0 %
+- **base_yaw** (ID 1) — pan trái/phải (100 % của yaw khi object tracking; `ServoFollower.apply` chỉ ghi yaw vào `base_yaw`)
+- **base_pitch** (ID 2) — tilt lên/xuống, 20 % của pitch
+- **elbow_pitch** (ID 3) — tilt lên/xuống, 60 % của pitch
+- **wrist_pitch** (ID 5) — tilt lên/xuống, 20 % của pitch
 
-Pitch được dồn vào elbow (`PITCH_WEIGHT_ELBOW = 0.90`). Thực nghiệm cho thấy chỉ các joint xoay-thuần mới đưa vật thể về giữa; base/wrist chủ yếu tịnh tiến camera (kinematic coupling), nên weight của chúng thấp/bằng không. Chiều dương của motor elbow bị đảo ở phần cứng, nên đóng góp của nó mang `ELBOW_PITCH_SIGN = -1.0`.
+Pitch do elbow dẫn dắt (`PITCH_WEIGHT_BASE/ELBOW/WRIST = 0.20 / 0.60 / 0.20`). Đây là ưu tiên, không phải tỉ lệ cứng: `servo_follow.distribute_pitch` phân bổ theo weight trước, phần joint bão hòa không nhận được (theo `PITCH_TRAVEL_MIN/MAX` đo thực tế) được chuyển cho joint còn dư hành trình. Elbow không còn nhận 90 % vì khi elbow chập chờn không phản hồi, nó nuốt gần hết mọi lần hiệu chỉnh. Chiều dương của motor elbow bị đảo ở phần cứng, nên đóng góp của nó mang `ELBOW_PITCH_SIGN = -1.0`.
+
+Pan của gaze (không phải object tracking) chia yaw cho `base_yaw` và `wrist_roll` qua `servo_follow.distribute_yaw` với `YAW_WEIGHT_BASE/ROLL = 0.75 / 0.25` — xem phần pan của gaze bên dưới.
 
 ### Control law (vision loop → servo goal)
 
@@ -162,7 +164,8 @@ pitch_correction = clamp(PID(soft_deadband(dy)) + VFF·vy·deg_per_px·dt,  ±5�
 | `SERVO_COMMAND_MIN_DELTA` | 0.08 | Chỉ gộp các thay đổi normalized rất nhỏ; final target được gửi một lần |
 | `TRACKING_GOAL_VELOCITY` | 0 (unlimited) | Được ghi rõ khi session bắt đầu để xóa hardware cap cũ; các profile SmoothDamp sở hữu speed envelope (150 steps/s ≈ 13°/s đã làm mọi đường cong ease thành một chuyển động chậm đều) |
 | `TRACKING_ACCELERATION` | 30 | Ramp gia tốc phần cứng |
-| `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.10 / 0.90 / 0.0 | Phân bổ pitch qua các joint |
+| `PITCH_WEIGHT_BASE/ELBOW/WRIST` | 0.20 / 0.60 / 0.20 | Phân bổ pitch ưu tiên qua các joint (phần tràn được `distribute_pitch` chuyển tiếp) |
+| `YAW_WEIGHT_BASE/ROLL` | 0.75 / 0.25 | Chia yaw cho `distribute_yaw` (pan của gaze; object tracking chỉ điều khiển `base_yaw`) |
 | `ELBOW_PITCH_SIGN` | -1.0 | Chiều elbow (phần cứng đảo) |
 | `YOLO_REDETECT_S` | 1.5 | Khoảng thời gian background re-detect |
 | `YOLO_AREA_GATE_MULT` | 4.0 | Loại re-detect có diện tích outlier |
@@ -200,7 +203,7 @@ Mọi knob nằm trong `hal/drivers/tracking/constants.py`. (Đường proportio
 | Không detector confirm trong `STOP_NO_YOLO_S` (20 s) | Dừng — ghost tracking |
 | CSRT miss `YOLO_MAX_MISS` (30) sau `MAX_TRACKING_RETRIES` (4) | Dừng — vật thể biến mất |
 | Thời lượng tracking > `HAL_TRACKING_MAX_DURATION_S` (mặc định 10 giây) | Dừng — timeout để tiết kiệm motor/CPU |
-| Single-click từ nút GPIO hoặc TTP223 | Dừng — user chủ động huỷ attention |
+| Single-click từ nút GPIO hoặc MPR121 (Harness OFF) | Dừng — user chủ động huỷ attention. Cử chỉ trên headpad TTP223 **không** dừng tracking; chỉ gọi `head_pat_action`. |
 
 Lưu ý: một bbox lớn (ví dụ một người lấp đầy frame) **không** phải điều kiện dừng — PID chạy theo centroid, không phải kích thước bbox, nên một vật thể ở gần vẫn track. Khi tracking kết thúc, idle nội suy từ pose hiện tại đo được của cánh tay thay vì đưa tay qua zero trước — xem [Tương tác với các hệ thống khác](#tương-tác-với-các-hệ-thống-khác).
 
@@ -212,13 +215,7 @@ Object tracking được điều khiển bởi các cập nhật vision từ xa 
 
 Tất cả nằm dưới `/servo/track`.
 
-### GET /servo/track/targets — Liệt kê target gợi ý
-
-```json
-{"targets": ["person", "cup", "bottle", "glass", "phone", "laptop", ...]}
-```
-
-Detection là open-vocabulary qua YOLOWorld (và YuNet cho khuôn mặt) — mọi text đều được, danh sách này chỉ là gợi ý.
+Không có endpoint liệt kê target. Detection là open-vocabulary qua YOLOWorld (và YuNet cho khuôn mặt) — mọi text đều dùng được làm `target` (ví dụ `person`, `cup`, `bottle`, `phone`, `laptop`).
 
 ### POST /servo/track — Bắt đầu tracking
 
@@ -365,7 +362,7 @@ là hãy nhìn vào một vật.
 
 **Thân máy được sở hữu trong suốt cả lượt look.** Từ lúc pha ngắm bắt đầu cho tới khi màn trập đóng,
 `servo_ownership()` giữ một suất đếm tham chiếu trong đúng cái khóa `_tracking_active` mà vision
-tracker vẫn dùng, khóa này chặn **toàn bộ** animation servo của emotion (`routes/emotion.py`) và
+tracker vẫn dùng, khóa này chặn **toàn bộ** animation servo của emotion (`hal/routes/emotion.py`) và
 khiến vòng animation bỏ luôn bản ghi đang phát dở.
 
 Đây không phải phần đánh bóng cho đẹp. Các preset emotion phát những tư thế **đã ghi sẵn**, tuyệt đối
@@ -1078,3 +1075,16 @@ curl -X POST 127.0.0.1:5001/servo/bearing/reset
 Lệnh đặt lại cũng được nối với giọng nói qua `skills/servo-control` — *"tôi đã dời bạn đi"*, *"bạn
 đang ở chỗ mới"*. Việc phát hiện tự động cần vài lần thất bại mới hành động, điều đó đúng để tránh báo
 động giả nhưng chậm khi người dùng vốn đã BIẾT là lamp bị dời.
+
+## Trở lại idle từ hold qua servo-control
+
+Skill `servo-control` phân biệt trạng thái chuyển động với hướng nhìn. Trong ngữ
+cảnh tư thế/hold đã rõ, “back to normal” hoặc “turn to normal position” chọn
+`/servo/resume`: thoát hold và tiếp tục idle, vẫn giữ lực motor. “Look straight
+ahead” chỉ chọn `/servo/aim` với `center`, giữ trạng thái hold. Nếu yêu cầu rõ cả
+hai, phát aim center rồi resume. “Stay still” hoặc “don't resume” được ưu tiên;
+quay về giữa nhưng đứng yên thì phát aim center rồi hold. “Back to normal” trong
+tác vụ không liên quan không kích hoạt servo; nếu chưa rõ trạng thái thân máy,
+đọc `GET /servo` (`motion_mode`). `/servo/play` với `idle` không xóa hold, còn
+`/servo/release` tắt lực motor thay vì trở lại idle. Chỉ đổi hướng dẫn routing
+của skill, không đổi hành vi HAL.

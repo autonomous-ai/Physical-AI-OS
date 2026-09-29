@@ -1,12 +1,4 @@
-"""The blur gate drops frames too smeared to carry an identity.
-
-A blurred face is not a smaller or clipped face, so the height and truncation
-gates never see it. What it produces is a near-random embedding that resembles
-nothing — and "resembles nothing" is the new-stranger branch, so a blurred frame
-of the enrolled user mints a `stranger_N` for him. These tests pin the two
-properties that matter: the measure responds to blur, and it is taken on the
-aligned crop so values are comparable between frames.
-"""
+"""The blur gate drops frames too smeared to carry an identity."""
 
 import cv2
 import numpy as np
@@ -43,13 +35,7 @@ def test_blurred_crop_falls_below_the_shipped_default():
 
 
 def test_sharpness_is_scale_sensitive_hence_measured_on_the_aligned_crop():
-    """Why the gate must use the aligned 112x112 and never the detector crop.
-
-    Laplacian variance changes with resolution, so the same face measured at two
-    crop sizes gives two different numbers — which is exactly what would make a
-    fixed threshold meaningless if it were applied to the variable-size input
-    crop.
-    """
+    """Why the gate must use the aligned 112x112 and never the detector crop."""
     sharp = _detailed_crop(112)
     upscaled = cv2.resize(sharp, (224, 224), interpolation=cv2.INTER_LINEAR)
     assert FaceRecognizer._sharpness(upscaled) != FaceRecognizer._sharpness(sharp)

@@ -1,9 +1,4 @@
-"""Object detection WebSocket + HTTP endpoints.
-
-Each enabled detector gets its own endpoints:
-- POST /object-detect/{detector_name}
-- WS   /object-detection/{detector_name}/ws
-"""
+"""Object detection endpoints per enabled detector: POST /object-detect/{name}, WS /object-detection/{name}/ws."""
 
 import logging
 
@@ -34,10 +29,7 @@ _request_adapter: TypeAdapter[ObjectRequest] = TypeAdapter(ObjectRequest)
 async def object_detection_ws(websocket: WebSocket, detector_name: str):
     """WebSocket endpoint for streaming object detection.
 
-    Accepts JSON messages with a "type" field:
-    - {"type": "frame", "task": "object", "frame_b64": "<base64>"} — feed a frame
-    - {"type": "config", "task": "object", "classes": [...]} — update config
-    - {"type": "heartbeat", "task": "object"} — keep-alive
+    Message types: ``frame``, ``config`` (classes), ``heartbeat``.
     """
     if not await verify_ws_api_key(websocket):
         return

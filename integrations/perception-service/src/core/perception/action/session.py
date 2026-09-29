@@ -72,9 +72,7 @@ class ActionPerceptionSession(
     async def update(self, input: cv2t.MatLike) -> HumanActionDetection | None:
         """Buffer a frame and optionally run inference.
 
-        Returns ActionResponse with detected classes above threshold.
-        Returns an empty ActionResponse when person detection is active
-        but no person is found in the frame.
+        Returns classes above threshold; empty when person detection finds no person.
         """
         cur_ts: float = time.time()
         if cur_ts - self._last_update_ts >= self._config.frame_interval:

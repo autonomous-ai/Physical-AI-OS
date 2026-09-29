@@ -13,10 +13,7 @@ from core.utils.files import get_default_cdn_url, get_default_model_path
 
 
 class X3DModel(HumanActionRecognizer):
-    """X3D ONNX model for action recognition.
-
-    Uses old ONNX export that outputs raw logits — softmax applied here.
-    """
+    """X3D ONNX model for action recognition; the export outputs raw logits, so softmax is applied here."""
 
     DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.X3D_ONNX)
     DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.X3D_ONNX)

@@ -79,7 +79,7 @@ func (c *command) execute() *Result {
 		return nil
 	}
 	// HAL drops solid LED writes during sleep; check first so we don't report false success.
-	if c.rule.name == "led_on" || c.rule.name == "led_color" || c.rule.name == "dim" {
+	if c.rule.name == "led_on" || c.rule.name == "led_color" || c.rule.name == "dim" || c.rule.name == "brighten" {
 		sleeping, err := hal.GetSleeping()
 		if err != nil || sleeping {
 			reply := "I couldn't check whether the light is available. Please try again."
@@ -155,7 +155,7 @@ func capEnabled(capability string) bool {
 var CacheableReplies = func() []string {
 	out := []string{
 		"Light on!", "Light off!", "Back to normal!", "Goodnight!",
-		"Volume up!", "Volume down!", "Music stopped.", "Dimmed.", "Max brightness!",
+		"Volume up!", "Volume down!", "Music stopped.", "Dimmed.", "Brighter now.", "Energize mode!",
 		"Speaker on!",
 	}
 	for _, r := range chitchatRules {

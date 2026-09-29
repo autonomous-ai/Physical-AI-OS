@@ -1,16 +1,6 @@
 """Mixed HTTP + WS benchmark: stress both protocols simultaneously.
 
-Fires HTTP requests and opens WS connections in parallel to test
-how the server handles combined load across both protocols.
-
-Requires:
-    * ``DL_BACKEND_URL``  -- e.g. ``http://127.0.0.1:8001``
-    * ``DL_API_KEY``      -- sent as ``X-API-Key``
-    * Audio fixtures under ``tests/fixtures/audio/``
-    * Image fixtures under ``tests/fixtures/images/``
-
-Run with:
-    pytest tests/benchmark_api/test_benchmark_mixed.py -v -s
+Requires DL_BACKEND_URL, DL_API_KEY and audio/image fixtures. Example: ``pytest tests/benchmark_api/test_benchmark_mixed.py -v -s``
 """
 
 from __future__ import annotations
@@ -41,10 +31,6 @@ pytestmark = pytest.mark.skipif(
     reason="DL_BACKEND_URL not set - skipping mixed benchmark tests.",
 )
 
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
 
 @dataclass
 class MixedResult:
@@ -79,7 +65,6 @@ def _run_mixed(
 
     n_procs = min(len(all_tasks), MAX_PROCESSES)
 
-    # Split into chunks
     chunks: list[list[tuple]] = [[] for _ in range(n_procs)]
     for i, task in enumerate(all_tasks):
         chunks[i % n_procs].append(task)
@@ -179,10 +164,6 @@ def _assert_mixed_error_rate(results: list[MixedResult], label: str) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
 @pytest.fixture(scope="module")
 def available_http_endpoints() -> list[EndpointSpec]:
     eps = [ep for ep in ALL_ENDPOINTS if _probe_endpoint(ep)]
@@ -200,10 +181,6 @@ def available_ws_endpoints() -> list[WSEndpointSpec]:
     print(f"\nAvailable WS endpoints: {[e.name for e in eps]}")
     return eps
 
-
-# ---------------------------------------------------------------------------
-# Tests
-# ---------------------------------------------------------------------------
 
 MIXED_LEVELS = [
     (4, 2, 3),    # 4 HTTP/ep, 2 WS conn/ep, 3 frames/conn

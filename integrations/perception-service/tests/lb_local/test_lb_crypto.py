@@ -1,7 +1,4 @@
-"""Tests for LB encryption pipeline — HTTP and WebSocket.
-
-Uses monkeypatching to mock backends. Crypto is initialized in-memory (no disk).
-"""
+"""Tests for the LB encryption pipeline (HTTP and WS) with mocked backends and in-memory keys."""
 
 import base64
 import json
@@ -22,11 +19,6 @@ from lbserver.models import (
     CipherHTTPResponse,
     WSCipherMessage,
 )
-
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
 
 def _make_session(crypto: RSAAESCrypto) -> tuple[AESGCMSession, bytes]:
     """Generate a session key, RSA-encrypt it, return (session, encrypted_key_bytes)."""
@@ -64,11 +56,6 @@ def _mock_response(request: httpx.Request) -> httpx.Response:
     )
 
 
-# ---------------------------------------------------------------------------
-# Fixtures
-# ---------------------------------------------------------------------------
-
-
 @pytest.fixture()
 def crypto() -> RSAAESCrypto:
     return RSAAESCrypto()
@@ -104,11 +91,6 @@ def lb_client(monkeypatch, crypto):
     set_crypto(None)
 
 
-# ---------------------------------------------------------------------------
-# Public key endpoint
-# ---------------------------------------------------------------------------
-
-
 class TestPublicKeyEndpoint:
     def test_returns_valid_pem(self, lb_client, crypto):
         resp = lb_client.get("/api/crypto/public-key")
@@ -126,11 +108,6 @@ class TestPublicKeyEndpoint:
         client = TestClient(app)
         resp = client.get("/api/crypto/public-key")
         assert resp.status_code == 404
-
-
-# ---------------------------------------------------------------------------
-# HTTP encryption pipeline
-# ---------------------------------------------------------------------------
 
 
 class TestHTTPEncryption:
@@ -181,10 +158,6 @@ class TestHTTPEncryption:
         assert resp.status_code == 400
         assert "invalid auth tag" in resp.json()["detail"]
 
-
-# ---------------------------------------------------------------------------
-# WebSocket encryption pipeline
-# ---------------------------------------------------------------------------
 
 WS_ECHO_PORT = 19050
 
@@ -260,7 +233,6 @@ class TestWSEncryption:
         session = AESGCMSession(session_key)
 
         with lb_ws_client.websocket_connect("/api/dl/test/ws") as ws:
-            # Key exchange
             ws.send_json({
                 "type": "key_exchange",
                 "encrypted_key": base64.b64encode(encrypted_key).decode(),
@@ -268,13 +240,11 @@ class TestWSEncryption:
             resp = ws.receive_json()
             assert resp["status"] == "key_exchange_ok"
 
-            # Send encrypted message
             plain = json.dumps({"type": "frame", "task": "pose", "frame_b64": "abc"})
             encrypted = session.encrypt(AESGCMPlainPayload(plain_data=plain.encode()))
             ws_msg = WSCipherMessage.from_raw_payload(encrypted)
             ws.send_text(ws_msg.model_dump_json())
 
-            # Receive encrypted response (echo)
             raw_resp = ws.receive_text()
             enc_resp = WSCipherMessage.model_validate_json(raw_resp)
             decrypted = session.decrypt(enc_resp.to_raw_payload())
@@ -283,15 +253,11 @@ class TestWSEncryption:
     def test_plain_ws_without_key_exchange(self, lb_ws_client):
         """Without key exchange, messages pass through unencrypted."""
         with lb_ws_client.websocket_connect("/api/dl/test/ws") as ws:
-            # Send plain (not key_exchange, just a normal message)
+            # Plain message, no key exchange.
             ws.send_json({"type": "heartbeat", "task": "pose"})
             resp = ws.receive_json()
             assert resp == {"type": "heartbeat", "task": "pose"}
 
-
-# ---------------------------------------------------------------------------
-# Client-side encryption (simulates hal calling the API)
-# ---------------------------------------------------------------------------
 
 GCM_NONCE_SIZE = 12
 
@@ -435,17 +401,14 @@ class TestClientHTTP:
     """Simulate a client: fetch public key, encrypt request, decrypt response."""
 
     def test_fetch_key_and_round_trip(self, lb_client):
-        # 1. Fetch public key
         resp = lb_client.get("/api/crypto/public-key")
         assert resp.status_code == 200
         session = _ClientCryptoSession(resp.text)
 
-        # 2. Send encrypted request
         plain = json.dumps({"image_b64": "abc123", "threshold": 0.5}).encode()
         resp = lb_client.post("/api/dl/emotion-recognize", content=session.wrap_http_request(plain))
         assert resp.status_code == 200
 
-        # 3. Decrypt response
         decrypted = json.loads(session.unwrap_http_response(resp.content))
         assert json.loads(decrypted["body"]) == {"image_b64": "abc123", "threshold": 0.5}
 
@@ -469,15 +432,12 @@ class TestClientWS:
         session = _ClientCryptoSession(resp.text)
 
         with lb_ws_client.websocket_connect("/api/dl/test/ws") as ws:
-            # Key exchange
             ws.send_json({"type": "key_exchange", "encrypted_key": session.encrypted_key_b64})
             assert ws.receive_json()["status"] == "key_exchange_ok"
 
-            # Send encrypted frame
             plain = json.dumps({"type": "frame", "task": "pose", "frame_b64": "img_data"})
             ws.send_text(session.wrap_ws_message(plain))
 
-            # Decrypt response
             decrypted = session.unwrap_ws_message(ws.receive_text())
             data = json.loads(decrypted)
             assert data["type"] == "frame"

@@ -3,9 +3,7 @@
 Reference: McAtamney & Corlett (1993), "RULA: a survey method for the
 investigation of work-related upper limb disorders."
 """
-# TODO: This is written by Claude based on https://ergo-plus.com/wp-content/uploads/RULA-A-Step-by-Step-Guide1.pdf
-# Refactor and logic checking needed.
-# This serves mainly as the PoC now.
+# TODO: PoC based on https://ergo-plus.com/wp-content/uploads/RULA-A-Step-by-Step-Guide1.pdf; logic needs verification.
 
 from typing import Any
 
@@ -38,11 +36,8 @@ _H36M = H36MSkeleton()
 class RULAAssessor(ErgoAssessor):
     """RULA ergonomic assessment from H36M keypoints.
 
-    Assesses both sides independently. The skeleton is first converted to 3D
-    (if 2D), then rotated so that the spine-to-thorax vector aligns with the
-    vertical. Joints with confidence below the threshold are skipped.
-
-    The overall score is the worse (higher) of the two sides.
+    Sides are assessed independently after aligning spine->thorax to vertical;
+    the overall score is the worse side. Low-confidence joints are skipped.
     """
 
     GRAPH_TYPE: GraphEnum = GraphEnum.H36M
@@ -105,7 +100,6 @@ class RULAAssessor(ErgoAssessor):
             kps[_H36M.joint("THORAX")] - kps[_H36M.joint("SPINE")]
         )
 
-        # --- Upper arm angle (3D angle between upper-arm vec and trunk) ---
         if shoulder_ok and elbow_ok:
             upper_arm_vec: npt.NDArray[np.float32] = kps[elbow_idx] - kps[shoulder_idx]
             upper_arm_angle: float = signed_flexion_angle(upper_arm_vec, trunk_up)
@@ -114,12 +108,7 @@ class RULAAssessor(ErgoAssessor):
             upper_arm_angle = 0.0
             upper_arm_score = 1
 
-        # When a required joint is below the confidence threshold we cannot measure
-        # its angle, so we fall back to the NEUTRAL posture (RULA score 1, the best /
-        # lowest-risk bucket). Rationale: a missing joint should not inflate the risk
-        # score — it is reported via `skipped_joints` instead so the caller knows the
-        # value is a default rather than a measurement.
-        # --- Lower arm angle (3D elbow flexion) ---
+        # Low-confidence joints fall back to neutral (score 1) and are reported in skipped_joints.
         if shoulder_ok and elbow_ok and wrist_ok:
             forearm_vec: npt.NDArray[np.float32] = kps[wrist_idx] - kps[elbow_idx]
             upper_arm_neg: npt.NDArray[np.float32] = kps[shoulder_idx] - kps[elbow_idx]
@@ -134,7 +123,6 @@ class RULAAssessor(ErgoAssessor):
         wrist_score: int = 1
         wrist_twist_score: int = 1
 
-        # --- Neck angle (3D angle of head-neck vec relative to trunk) ---
         if neck_ok and head_ok:
             neck_vec: npt.NDArray[np.float32] = kps[head_idx] - kps[neck_idx]
             neck_angle: float = signed_flexion_angle(neck_vec, trunk_up)
@@ -143,14 +131,12 @@ class RULAAssessor(ErgoAssessor):
             neck_angle = 0.0
             neck_score = 1
 
-        # --- Trunk angle (3D angle of trunk from true vertical [0,-1,0]) ---
         true_vertical: npt.NDArray[np.float32] = np.array([0.0, -1.0, 0.0], dtype=np.float32)
         trunk_angle: float = signed_flexion_angle(trunk_up, true_vertical)
         trunk_score: int = score_trunk(trunk_angle)
 
         leg_score: int = 1
 
-        # --- Lookup tables ---
         table_a_score: int = lookup_table_a(
             upper_arm_score, lower_arm_score, wrist_score, wrist_twist_score
         )

@@ -1,9 +1,4 @@
-"""Abstract base class for 2D pose estimators.
-
-Extends PredictorBase. Subclasses override class-level defaults
-(model path, input size, mean/std). The base handles ONNX lifecycle,
-batch preprocessing, and batch inference.
-"""
+"""Abstract base class for 2D pose estimators."""
 
 from pathlib import Path
 from typing import Any, cast
@@ -24,11 +19,7 @@ from core.utils.runtime import prepare_ort_session
 
 
 class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
-    """Base class for 2D pose estimators (e.g. RTMPose).
-
-    Subclasses override class-level defaults. The base handles ONNX
-    lifecycle, preprocessing, and inference.
-    """
+    """Base class for 2D pose estimators (e.g. RTMPose); subclasses override class-level defaults."""
 
     GRAPH_TYPE: GraphEnum
 
@@ -107,13 +98,7 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         preprocess: bool = True,
         **kwargs: Any,
     ) -> list[RawPose2DDetection]:
-        """Run 2D pose estimation on a batch of frames.
-
-        Each frame is processed independently (SimCC decoding requires
-        original frame dimensions for coordinate scaling).
-        Returns one RawPose2DDetection per frame.
-        """
-        # Store original sizes (W, H) before preprocessing
+        """Run 2D pose estimation on a batch of frames; one RawPose2DDetection per frame."""
         original_sizes: npt.NDArray[np.float32] = np.array(
             [(f.shape[1], f.shape[0]) for f in input], dtype=np.float32
         )  # (N, 2)
@@ -135,20 +120,12 @@ class PoseEstimator2D(PredictorBase[cv2t.MatLike, RawPose2DDetection]):
         OW: npt.NDArray[np.float32] = original_sizes[:, 0:1]  # (N, 1)
         OH: npt.NDArray[np.float32] = original_sizes[:, 1:2]  # (N, 1)
 
-        # Vectorized SimCC decode → keypoints in ORIGINAL frame pixels: (N, K)
-        #
-        # SimCC represents each coordinate as a 1-D classification over a grid that is
-        # `simcc_split_ratio` times finer than the model input resolution (RTMPose uses
-        # split_ratio = 2.0). So:
-        #   - argmax(-1)          → bin index in the finer SimCC grid, range [0, IW * ratio)
-        #   - * 0.5  (= 1/ratio)  → convert bin index back to model-input pixels [0, IW)
-        #   - * OW / IW           → rescale from model input size to the original frame
-        # If the split ratio ever changes, the 0.5 must change to 1/ratio.
+        # SimCC decode to original-frame pixels: argmax bin * 0.5 (= 1/simcc_split_ratio,
+        # RTMPose uses 2.0) * OW / IW. If the split ratio changes, 0.5 must change too.
         loc_x: npt.NDArray[np.float32] = simcc_x.argmax(-1).astype(np.float32) * OW / IW * 0.5
         loc_y: npt.NDArray[np.float32] = simcc_y.argmax(-1).astype(np.float32) * OH / IH * 0.5
         all_keypoints: npt.NDArray[np.float32] = np.stack([loc_x, loc_y], axis=-1)  # (N, K, 2)
-        # Per-keypoint confidence = the weaker of the two axis peak responses (x vs y),
-        # so a keypoint is only confident when BOTH axes peak strongly.
+        # Confidence = weaker of the x/y axis peaks.
         all_scores: npt.NDArray[np.float32] = np.minimum(simcc_x.max(-1), simcc_y.max(-1)).astype(
             np.float32
         )  # (N, K)
