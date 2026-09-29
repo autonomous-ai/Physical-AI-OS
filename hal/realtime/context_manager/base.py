@@ -209,6 +209,9 @@ class ContextManagerBase(ABC):
         # Lock for concurrent access to memory files
         self._realtime_memory_lock: threading.Lock = threading.Lock()
         self._realtime_summarize_lock: threading.Lock = threading.Lock()
+        # Consecutive summarize calls that produced nothing; logged at ERROR
+        # from the second, because memory then silently stops being compressed.
+        self._summary_failures: int = 0
 
     # Subclasses declare where their runtime stores the explicit identity card.
     IDENTITY_NAME_FILE: str = "IDENTITY.md"
@@ -290,37 +293,46 @@ class ContextManagerBase(ABC):
                     "[realtime] Summarizing %d realtime memory entries...", len(entries)
                 )
                 new_summary: str = self._summarizer.summarize(to_summarize)
-                if new_summary:
-                    # Enforce the floor cap at WRITE time — the summary is
-                    # billed every turn and re-fed as [Previous summary] input
-                    # to the next summarize, so an uncapped write compounds.
-                    if len(new_summary) > self._summary_max_chars:
-                        fitted: str = fit_summary(new_summary, self._summary_max_chars)
-                        logger.warning(
-                            "[realtime] summary over cap %d → %d chars "
-                            "(dropped oldest history bullets)",
-                            len(new_summary), len(fitted),
-                        )
-                        new_summary = fitted
-                    with self._realtime_memory_lock:
-                        self._summary_path.write_text(
-                            new_summary + "\n", encoding="utf-8"
-                        )
-                        # Only remove the lines we read — keep any new entries added during summarization
-                        current_lines: list[str] = (
-                            self._realtime_memory_path.read_text(encoding="utf-8")
-                            .strip()
-                            .splitlines()
-                        )
-                        remaining: list[str] = current_lines[lines_read:]
-                        self._realtime_memory_path.write_text(
-                            "\n".join(remaining) + "\n" if remaining else "",
-                            encoding="utf-8",
-                        )
-                    logger.info(
-                        "[realtime] Realtime memory summarization complete → summary.md (kept %d new entries)",
-                        len(remaining),
+                if not new_summary:
+                    self._summary_failures += 1
+                    log = logger.error if self._summary_failures >= 2 else logger.warning
+                    log(
+                        "[realtime] realtime memory summarize produced nothing "
+                        "(%d in a row) — %d entries stay unsummarized",
+                        self._summary_failures, len(entries),
                     )
+                    return
+                self._summary_failures = 0
+                # Enforce the floor cap at WRITE time — the summary is
+                # billed every turn and re-fed as [Previous summary] input
+                # to the next summarize, so an uncapped write compounds.
+                if len(new_summary) > self._summary_max_chars:
+                    fitted: str = fit_summary(new_summary, self._summary_max_chars)
+                    logger.warning(
+                        "[realtime] summary over cap %d → %d chars "
+                        "(dropped oldest history bullets)",
+                        len(new_summary), len(fitted),
+                    )
+                    new_summary = fitted
+                with self._realtime_memory_lock:
+                    self._summary_path.write_text(
+                        new_summary + "\n", encoding="utf-8"
+                    )
+                    # Only remove the lines we read — keep any new entries added during summarization
+                    current_lines: list[str] = (
+                        self._realtime_memory_path.read_text(encoding="utf-8")
+                        .strip()
+                        .splitlines()
+                    )
+                    remaining: list[str] = current_lines[lines_read:]
+                    self._realtime_memory_path.write_text(
+                        "\n".join(remaining) + "\n" if remaining else "",
+                        encoding="utf-8",
+                    )
+                logger.info(
+                    "[realtime] Realtime memory summarization complete → summary.md (kept %d new entries)",
+                    len(remaining),
+                )
             except Exception as e:
                 logger.exception(
                     "[realtime] Failed to summarize realtime memory due to %s", e

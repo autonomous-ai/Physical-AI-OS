@@ -147,8 +147,9 @@ class RealtimeSummarizer:
         for attempt in range(1, attempts + 1):
             try:
                 chunks: list[str] = []
-                # Speech notifications need a short answer, not reasoning. Keep
-                # memory summarization's provider defaults unchanged.
+                # Callers that need text, not reasoning, turn thinking off: the
+                # proxy can spend the whole budget thinking and return nothing
+                # (speech notifications, and realtime memory since #449).
                 options = {"thinking": {"type": "disabled"}} if getattr(self, "_disable_thinking", False) else {}
                 with self._get_client().messages.stream(
                     model=self._model,

@@ -381,6 +381,16 @@ def _web_search_available() -> bool:
     )
 
 
+def _make_memory_summarizer() -> RealtimeSummarizer:
+    """Summarizer for realtime memory, with thinking off.
+
+    With provider defaults the proxy spent the whole 4096-token budget on
+    reasoning and returned no text (stop_reason=max_tokens, device-observed
+    2026-09-28), leaving memory.jsonl unsummarized (#449).
+    """
+    return RealtimeSummarizer(disable_thinking=True)
+
+
 class RealtimeOrchestrator:
     """Manages a single realtime voice agent session.
 
@@ -525,7 +535,7 @@ class RealtimeOrchestrator:
         summarizer: RealtimeSummarizer | None = None
         if config.REALTIME_SUMMARIZER_ENABLED:
             try:
-                summarizer = RealtimeSummarizer()
+                summarizer = _make_memory_summarizer()
                 logger.info(
                     "Realtime summarizer enabled (model=%s)",
                     config.REALTIME_SUMMARIZER_MODEL,
