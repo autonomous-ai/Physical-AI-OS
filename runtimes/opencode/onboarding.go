@@ -20,34 +20,17 @@ import (
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh opencode-only
 // device (one that never ran openclaw, so presync.sh §1 had nothing to copy) still
 // gets the living-learnings doc the AGENTS.md block tells the agent to read.
-// Identical template to runtimes/openclaw/resources/KNOWLEDGE.md.
 //
 //go:embed resources/KNOWLEDGE.md
 var knowledgeFS embed.FS
 
-// Onboarding (OpenCode). Mirrors runtimes/openclaw/onboarding.go, but trimmed to
-// what OpenCode actually owns on-device:
-//
-//   - The OpenCode CLI binary + systemd unit are installed out-of-process by
-//     runtimes/opencode/install.sh; presync.sh migrates the workspace files
-//     (persona/memory/skills) from openclaw once (§1) and owns opencode.json/.env
-//     (§2/§3). Those run during the switch-runtime flow (and presync again from
-//     EnsureOnboarding below), NOT here.
-//   - This file owns the OS-managed blocks in the workspace markdown — AGENTS.md
-//     (prompt rules), SOUL.md (per-device-type persona), HEARTBEAT.md (daily
-//     knowledge-synthesis) — plus the KNOWLEDGE.md seed, the same contract openclaw
-//     has, so a plain os-server OTA keeps them current. OpenCode natively reads
-//     AGENTS.md in the working dir: the gatewayd runs `opencode run --dir <workspace>`
-//     per turn, so markdown-only changes take effect on the next turn WITHOUT a
-//     gateway restart (only presync config/.env changes and unit self-heal restart).
-//
-// The block is OpenClaw-derived but stripped of OpenClaw-only bits (the
-// hooks/handler.ts paragraph and `openclaw --version`); everything else is
-// backend-agnostic prompt discipline (skills selection, memory rules, priority).
+// Onboarding (OpenCode).
+// Those run during the switch-runtime flow (and presync again from EnsureOnboarding below), NOT
+// here.
 
 const (
 	// osMandatoryMarker delimits the OS-managed block so it can be stripped +
-	// re-injected cleanly on update. MUST match the marker used in the block below.
+	// re-injected cleanly on update.
 	osMandatoryMarker = "<!-- OS DO NOT REMOVE -->"
 
 	// personaInlineStart/personaInlineEnd delimit the persona block inlined at the
@@ -62,38 +45,16 @@ const (
 	personaInlineSoulCap = 20_000
 
 	// opencodeWorkspaceDir is OpenCode's workspace (HOME=/root → ~/.opencode).
-	// TODO(opencode-config-dir): there is no OpenCodeConfigDir in server/config yet
-	// (openclaw uses cfg.OpenclawConfigDir). Hardcoded for now; promote to config if
-	// the data dir ever needs to be overridable.
 	opencodeWorkspaceDir = "/root/.opencode/workspace"
 
-	// opencodeSkillsDir is the on-device skill store. It is opencode's NATIVE skill
-	// discovery root (~/.config/opencode/skills — opencode auto-discovers every
-	// <name>/SKILL.md here, in EVERY session regardless of cwd, and lists them in
-	// the `@` picker), NOT workspace/skills, which opencode never scans. This mirrors
-	// the claudecode fix (skills moved to Claude Code's native ~/.claude/skills):
-	// a coding session runs `opencode run --dir <folder>` (telegram_coding.go) whose
-	// project-AGENTS.md walk never reaches the workspace, but the global
-	// ~/.config/opencode skills load anyway. Skills are ALSO referenced by this
-	// absolute path in AGENTS.md (workspace + user block) so a read-by-path fallback
-	// resolves from any cwd.
+	// opencodeSkillsDir is the on-device skill store.
 	opencodeSkillsDir = opencodeXDGConfigDir + "/skills"
 
 	// opencodeUserAgentsMD is opencode's GLOBAL user-instructions file
-	// (~/.config/opencode/AGENTS.md). OpenCode loads it in EVERY session regardless
-	// of cwd, merged BEFORE the repo-root→cwd project AGENTS.md walk. The workspace
-	// AGENTS.md only reaches the device-chat session (gatewayd runs
-	// `opencode run --dir <workspace>`); a coding session started in
-	// /root, /root/myapp, … never loads it, so the device-wide connector + skill
-	// rules must ALSO live here or coding sessions can't see the connectors and
-	// tell the user Gmail/Calendar is "not connected". Wiped whole by ResetAgent
-	// (it lives under opencode's XDG config dir).
+	// (~/.config/opencode/AGENTS.md).
 	opencodeUserAgentsMD = opencodeXDGConfigDir + "/AGENTS.md"
 
 	// agentsMDBlock is the OS-managed block injected into workspace/AGENTS.md.
-	// Derived from runtimes/openclaw/onboarding.go agentsMDBlock with OpenClaw-only
-	// content removed (hooks/handler.ts; `openclaw --version`; the injected
-	// `<available_skills>` wording).
 	agentsMDBlock = `<!-- OS DO NOT REMOVE -->
 **MANDATORY (skills):** Your device skills live at ` + "`/root/.config/opencode/skills/<name>/SKILL.md`" + ` (absolute path — reachable from any cwd, including coding sessions in another folder). Before any skill-driven action, determine the skill scope without doing broad filesystem scans. For ordinary chat, simple Q&A, or meta discussion with no action/event/hardware behavior and no connected-service data, do NOT read a SKILL.md — answer normally. A question ABOUT a linked third-party service (see Connectors) is NOT ordinary chat: it needs the skill even when phrased as a simple question.
   - If the message contains ` + "`[skills: a, b, c]`" + `, treat it as an authoritative whitelist — read ONLY those ` + "`/root/.config/opencode/skills/<name>/SKILL.md`" + ` files. Do NOT scan other skill directories "just in case".
@@ -128,22 +89,7 @@ Follow the instructions in whichever file you read.
 ---`
 
 	// heartbeatMDBlock is the OS-managed knowledge-synthesis block injected at the top
-	// of workspace/HEARTBEAT.md. Backend-agnostic — verbatim from openclaw.
-	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the
-	// gateway's periodic heartbeat poll (~every 30 min while the device is on).
-	//
-	// It is deliberately CATCH-UP driven, not clock driven. The synthesis used to be
-	// gated on "current time >= 21:00", which silently never fired on a device that
-	// is switched off at the end of the working day — the common case for a desk
-	// lamp. Device-observed 2026-09-03 on lamp-ac82: three days of flow logs ended
-	// 18:39 / 17:57 / 17:34, and memory/2026-08-24.md was never distilled into
-	// KNOWLEDGE.md because 21:00 never arrived. Comparing "days with memory" against
-	// "days already distilled" instead means the first heartbeat after the device is
-	// switched on clears whatever backlog accumulated, on any schedule.
-	//
-	// Keep this block byte-identical across openclaw/codex/opencode/picoclaw: it is
-	// matched verbatim by ensureHeartbeatMDBlock, and a runtime switch must not
-	// silently drop the people sync.
+	// of workspace/HEARTBEAT.md. Keep byte-identical across runtimes: it is matched verbatim.
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
 **Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
 
@@ -163,14 +109,7 @@ Follow the instructions in whichever file you read.
 
 	// userAgentsMDBlock is the OS-managed block in opencode's GLOBAL user-instructions
 	// file (opencodeUserAgentsMD = ~/.config/opencode/AGENTS.md), which opencode loads in
-	// EVERY session regardless of cwd. The workspace AGENTS.md only reaches the
-	// device-chat session (cwd=workspace); a Telegram coding session runs
-	// `opencode run --dir <folder>` and never loads it,
-	// so without this block a coding session has no idea the device's connectors
-	// exist and tells the user Gmail/Calendar is "not connected". Kept deliberately
-	// small — device persona/memory rules stay workspace-scoped; only the
-	// device-wide facts that must survive a `cd` live here. Skill references are
-	// ABSOLUTE so they resolve from any cwd.
+	// EVERY session regardless of cwd.
 	userAgentsMDBlock = `<!-- OS DO NOT REMOVE -->
 **This machine is an Autonomous device.** The facts below hold in EVERY folder and session — they describe the DEVICE, not the directory you are working in.
 
@@ -181,9 +120,7 @@ Follow the instructions in whichever file you read.
 ---`
 )
 
-// SetupAgent runs onboarding. The runtime itself is
-// installed + provisioned out-of-process by install.sh/presync.sh; what os-server
-// owns at setup time is the workspace reconciliation EnsureOnboarding does.
+// SetupAgent runs onboarding.
 func (s *OpenCodeService) SetupAgent(_ domain.SetupRequest) error {
 	return s.EnsureOnboarding()
 }
@@ -191,15 +128,8 @@ func (s *OpenCodeService) SetupAgent(_ domain.SetupRequest) error {
 // EnsureOnboarding reconciles the device-side OpenCode workspace on boot/config-change
 // (server/config_watch.go, same path openclaw/hermes use): seed KNOWLEDGE.md if
 // absent, capability-gate skills, and refresh the OS-managed SOUL/AGENTS/HEARTBEAT
-// blocks. The gateway is restarted only when presync changed opencode.json/.env or the
-// unit needed self-heal — markdown changes are picked up per-turn by `opencode run`.
-// CLI install + opencode.json/.env are owned by install.sh/presync.sh (see file header).
+// blocks.
 func (s *OpenCodeService) EnsureOnboarding() error {
-	// Re-sync opencode.json/.env from config.json by running the embedded presync
-	// hook (hermes pattern): hash the presync-owned files around the run so the
-	// gateway restarts only on a real change. This is also the fallback path the
-	// device service relies on after RefreshModelsConfig/UpdatePrimaryModel
-	// return ErrNotSupportedByRuntime — an llm_* change applies here, live.
 	// Best-effort: a presync failure must not block gateway startup.
 	configBefore := fileHash(opencodeConfigJSON) + fileHash(opencodeEnvFile)
 	if err := s.runPresync(); err != nil {
@@ -207,31 +137,18 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 	}
 	presyncChanged := fileHash(opencodeConfigJSON)+fileHash(opencodeEnvFile) != configBefore
 
-	// Seed KNOWLEDGE.md from the embedded template only if absent. presync.sh §1
-	// copies openclaw's living KNOWLEDGE.md (with accumulated learnings) when
-	// migrating; this fallback covers the fresh opencode-only device where there was
-	// no openclaw copy. Never overwrites an existing file.
+	// Seed KNOWLEDGE.md from the embedded template only if absent.
+	// Never overwrites an existing file.
 	seedFileIfAbsent(knowledgeFS, "resources/KNOWLEDGE.md",
 		filepath.Join(opencodeWorkspaceDir, "KNOWLEDGE.md"))
 
-	// Lift any workspace-scoped skills left by an older os-server into opencode's
-	// native discovery root FIRST, so the prune below sees the post-migration dir.
 	migrateSkillsToOpenCodeHome()
 
-	// Capability-gate skills: drop platform skills this device can't use (e.g.
-	// servo-control on a motionless device). Skill dirs are read per-turn from
-	// disk, so no gateway reload is needed.
 	s.pruneUnsupportedSkills()
-	// Re-sync all supported skills at boot/config reconciliation, mirroring
-	// OpenClaw. The watcher only reacts to metadata changes after it starts, so
-	// this self-heals a stale local skill when os-server starts after a CDN update.
 	changedSkills := s.downloadSkills()
 
-	// OS-managed markdown blocks (incl. the persona inline block below).
-	// Refreshing them never requires a gateway restart: the gatewayd spawns a
-	// fresh `opencode run --dir <workspace>` per turn, which re-reads AGENTS.md
-	// (and, via its instructions, HEARTBEAT.md / KNOWLEDGE.md) from disk — the
-	// next turn sees the new blocks.
+	// OS-managed markdown blocks (incl.
+	// the persona inline block below).
 	if _, err := s.ensureSoulMDBlock(); err != nil {
 		slog.Error("ensure SOUL.md block failed", "component", "opencode-onboarding", "error", err)
 	}
@@ -240,8 +157,7 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 	}
 	// Persona inline: AFTER ensureSoulMDBlock (so the freshly-reconciled soul is
 	// what gets inlined) and AFTER ensureAgentsMDBlock (so the persona block ends
-	// up above a just-prepended OS mandatory block). Never a restart signal —
-	// opencode re-reads AGENTS.md per turn, same as the blocks above.
+	// up above a just-prepended OS mandatory block).
 	if _, err := s.ensurePersonaInlineBlock(); err != nil {
 		slog.Error("ensure persona inline block failed", "component", "opencode-onboarding", "error", err)
 	}
@@ -249,29 +165,16 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 		slog.Error("ensure HEARTBEAT.md block failed", "component", "opencode-onboarding", "error", err)
 	}
 	// Global user AGENTS.md (~/.config/opencode/AGENTS.md): reaches coding sessions in
-	// any cwd, which never load the workspace AGENTS.md. Not a restart signal — opencode
-	// re-reads it per turn, same as the workspace blocks above.
+	// any cwd, which never load the workspace AGENTS.md.
 	ensureUserAgentsMDBlock()
 
 	needRestart := false
 
-	// Presync rewrote opencode.json/.env → the running unit is stale: .env is a
-	// systemd EnvironmentFile (WS token/port, OPENAI_API_KEY) loaded only at
-	// unit start, so a restart is required for it to take effect. (opencode.json
-	// alone is re-read by each `opencode run`, but both files hash into the same
-	// change signal.)
 	if presyncChanged {
 		slog.Info("opencode presync changed opencode.json/.env", "component", "opencode-onboarding")
 		needRestart = true
 	}
 
-	// Self-heal (hermes pattern): make sure the opencode.service unit actually
-	// exists before we rely on (re)starting it. A device that reached opencode
-	// WITHOUT switch-runtime (e.g. a hand-edited config.json agent_runtime=opencode)
-	// has no unit, so IsReady()'s WS connect — and the setup WaitForAgentReady
-	// gate — would fail forever. Also (re)start when the unit exists but is not
-	// running: factory reset disables+stops it, and it can crash on a stale
-	// config that presync just fixed.
 	gatewayInstalled := s.ensureGatewayUnit()
 	gatewayDown := !gatewayActive()
 	if gatewayInstalled || gatewayDown {
@@ -281,43 +184,27 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Restart the gateway so the unit reloads .env (and a freshly healed unit
-	// actually starts). systemctl restart — see service_gateway.go for why not
-	// a reload.
 	if needRestart {
 		slog.Info("restarting opencode gateway (presync config change or unit self-heal)", "component", "opencode-onboarding")
-		// Re-enable so opencode survives a reboot — factory reset disabled the
-		// unit, and a freshly self-healed one is not enabled. Best-effort;
-		// restart still starts it for this session even if enable fails.
 		enableOpenCodeGateway()
 		if err := restartOpenCodeGateway(); err != nil {
 			return fmt.Errorf("restart opencode after onboarding: %w", err)
 		}
 	}
 
-	// Skills are read per turn, so no gateway restart is needed. Notify after a
-	// possible restart so the bridge is available to deliver the re-read request.
 	s.notifySkillChanges(changedSkills)
 
-	// (openclaw additionally pins messages.queue.mode — N/A for opencode: the
-	// gatewayd strictly serializes turns through one `opencode run` at a time, so
-	// there is no queue mode to pin. openclaw.json-specific steps —
-	// hooks/logging/controlUi — are likewise N/A; skill capability-gating is
-	// done above via pruneUnsupportedSkills.)
 	return nil
 }
 
 // ensureAgentsMDBlock injects/refreshes the OS-managed block in workspace/AGENTS.md.
-// Returns true if the file was modified. Mirrors openclaw's ensureAgentsMDBlock.
 func (s *OpenCodeService) ensureAgentsMDBlock() (bool, error) {
 	agentsFile := filepath.Join(opencodeWorkspaceDir, "AGENTS.md")
 
 	if _, err := os.Stat(agentsFile); os.IsNotExist(err) {
-		// TODO(opencode-agents-template): openclaw regenerates a base AGENTS.md via
-		// `openclaw setup` when it is missing. OpenCode's AGENTS.md comes from the
-		// one-time openclaw workspace migration (presync.sh §1) instead — a
-		// opencode-only device has none, and the CLI has no regenerate command, so
-		// skip injection rather than write the block into an empty file.
+		// OpenCode's AGENTS.md comes from the one-time openclaw workspace migration (presync.sh
+		// §1) instead — a opencode-only device has none, and the CLI has no regenerate command,
+		// so skip injection rather than write the block into an empty file.
 		slog.Warn("AGENTS.md missing — skipping block injection (no opencode regenerate)",
 			"component", "opencode-onboarding", "path", agentsFile)
 		return false, nil
@@ -339,7 +226,6 @@ func (s *OpenCodeService) ensureAgentsMDBlock() (bool, error) {
 		text = stripMarkedBlock(text)
 	}
 
-	// Inject below the "Your workspace" line; prepend to the top if it isn't found.
 	lines := strings.Split(text, "\n")
 	result := make([]string, 0, len(lines)+2)
 	injected := false
@@ -362,29 +248,21 @@ func (s *OpenCodeService) ensureAgentsMDBlock() (bool, error) {
 }
 
 // ensurePersonaInlineBlock inlines the persona (SOUL.md + the IDENTITY.md name) at
-// the very top of workspace/AGENTS.md. OpenCode auto-loads ONLY AGENTS.md into context;
-// the AGENTS.md "Session Startup" instruction to read SOUL.md/IDENTITY.md is
-// voluntary, and on short turns the model skips it (device-verified: asked for its name,
-// the model introduced itself as "OpenCode"). OpenClaw/Hermes inject the soul into the system prompt at the
-// runtime layer; opencode has no such layer, so the persona must live inside the one
-// file opencode is guaranteed to read. Returns true if AGENTS.md was modified.
+// the very top of workspace/AGENTS.md.
+// OpenClaw/Hermes inject the soul into the system prompt at the runtime layer; opencode has no such
+// layer, so the persona must live inside the one file opencode is guaranteed to read.
 func (s *OpenCodeService) ensurePersonaInlineBlock() (bool, error) {
 	return ensurePersonaInlineBlockIn(opencodeWorkspaceDir)
 }
 
 // ensurePersonaInlineBlockIn is the workspace-parameterized body of
 // ensurePersonaInlineBlock (opencodeWorkspaceDir is a hardcoded const — the parameter
-// exists so tests can point it at a temp dir). Upsert is idempotent: any existing
-// start..end region is stripped, the freshly-built block is prepended, and the file
-// is rewritten (atomically, tmp+rename like UpdateIdentityName) only when the bytes
-// actually differ. A missing SOUL.md removes the block instead.
+// exists so tests can point it at a temp dir).
 func ensurePersonaInlineBlockIn(workspaceDir string) (bool, error) {
 	agentsFile := filepath.Join(workspaceDir, "AGENTS.md")
 	agentsRaw, err := os.ReadFile(agentsFile)
 	if err != nil {
 		if os.IsNotExist(err) {
-			// Same skip as ensureAgentsMDBlock: a opencode-only device without the
-			// openclaw migration has no AGENTS.md to inline into.
 			slog.Warn("AGENTS.md missing — skipping persona inline",
 				"component", "opencode-onboarding", "path", agentsFile)
 			return false, nil
@@ -431,9 +309,7 @@ func ensurePersonaInlineBlockIn(workspaceDir string) (bool, error) {
 }
 
 // buildPersonaInlineBlock composes the marker-delimited persona block from the soul
-// text and the agent name. The soul is inlined verbatim, capped at
-// personaInlineSoulCap bytes (rune-safe cut + truncation note) so AGENTS.md stays
-// under opencode's 32KiB project-doc cap.
+// text and the agent name.
 func buildPersonaInlineBlock(soul, name string) string {
 	soul = strings.TrimSpace(soul)
 	if len(soul) > personaInlineSoulCap {
@@ -457,8 +333,9 @@ func buildPersonaInlineBlock(soul, name string) string {
 }
 
 // stripPersonaInlineBlock removes the personaInlineStart..personaInlineEnd region
-// plus the blank padding around it. An unterminated block (hand-deleted end marker)
-// only loses the start-marker line — never trailing user content.
+// plus the blank padding around it.
+// An unterminated block (hand-deleted end marker) only loses the start-marker line — never
+// trailing user content.
 func stripPersonaInlineBlock(text string) string {
 	start := strings.Index(text, personaInlineStart)
 	if start < 0 {
@@ -509,8 +386,6 @@ func atomicWriteFile(path string, data []byte) error {
 
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at the
 // top of workspace/SOUL.md; owner content below the closing `---` is preserved.
-// Mirrors openclaw's ensureSoulMDBlock. The soul is resolved per device_type from
-// ROBOT.md `soul_ref` (path or URL). A device that declares no soul injects nothing.
 func (s *OpenCodeService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(opencodeWorkspaceDir, "SOUL.md")
 
@@ -546,8 +421,7 @@ func (s *OpenCodeService) ensureSoulMDBlock() (bool, error) {
 	}
 
 	// Discard a managed default soul left in the remaining text so it is not preserved
-	// as fake owner content and duplicated below the device block. Keep an owner-added
-	// `## Personal` section if present.
+	// as fake owner content and duplicated below the device block.
 	trimmed := strings.TrimLeft(text, " \t\r\n")
 	if isDefaultSoulHeading(trimmed) {
 		if idx := strings.Index(text, "## Personal"); idx >= 0 {
@@ -575,13 +449,12 @@ func (s *OpenCodeService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// robots/<type>/ROBOT.md. Mirrors openclaw's deviceSoulCore: absent → no override;
-// http(s) → download; otherwise a path relative to robots/<type>/.
+// robots/<type>/ROBOT.md.
 func (s *OpenCodeService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
-		return nil, false, nil // soulless body: no override
+		return nil, false, nil
 	}
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		b, derr := downloadSoul(ref)
@@ -602,7 +475,7 @@ func (s *OpenCodeService) deviceSoulCore() (content []byte, hasSoul bool, err er
 }
 
 // devicesDir returns the root holding per-device profile folders
-// (robots/<type>/{DEVICE,SOUL}.md). Override with DEVICES_DIR. Mirrors openclaw.
+// (robots/<type>/{DEVICE,SOUL}.md).
 func devicesDir() string {
 	if d := strings.TrimSpace(os.Getenv("DEVICES_DIR")); d != "" {
 		return d
@@ -626,13 +499,12 @@ func downloadSoul(url string) ([]byte, error) {
 
 // isDefaultSoulHeading reports whether trimmed begins with a managed soul template
 // heading that must not be preserved as owner content below the device block.
-// Mirrors openclaw's isDefaultSoulHeading.
 func isDefaultSoulHeading(trimmed string) bool {
 	return strings.HasPrefix(trimmed, "# Soul") || strings.HasPrefix(trimmed, "# SOUL.md")
 }
 
 // ensureHeartbeatMDBlock injects the knowledge-synthesis block at the top of
-// workspace/HEARTBEAT.md. Returns true if modified. Mirrors openclaw.
+// workspace/HEARTBEAT.md.
 func (s *OpenCodeService) ensureHeartbeatMDBlock() (bool, error) {
 	heartbeatFile := filepath.Join(opencodeWorkspaceDir, "HEARTBEAT.md")
 
@@ -659,11 +531,7 @@ func (s *OpenCodeService) ensureHeartbeatMDBlock() (bool, error) {
 
 // ensureUserAgentsMDBlock injects/refreshes the OS-managed block in opencode's
 // GLOBAL user-instructions file (opencodeUserAgentsMD = ~/.config/opencode/AGENTS.md),
-// which opencode loads in every session regardless of cwd. Same marker discipline
-// as the workspace AGENTS.md: content below the block is the owner's and is
-// preserved. Returns true if modified. No gateway restart is needed — each
-// `opencode run` (device chat AND coding sessions) re-reads this file at turn
-// start, so the next turn sees the change.
+// which opencode loads in every session regardless of cwd.
 func ensureUserAgentsMDBlock() bool {
 	return ensureUserAgentsMDBlockAt(opencodeUserAgentsMD)
 }
@@ -680,7 +548,7 @@ func ensureUserAgentsMDBlockAt(path string) bool {
 	text := string(content)
 
 	if strings.Contains(text, userAgentsMDBlock) {
-		return false // already current
+		return false
 	}
 	if strings.Contains(text, osMandatoryMarker) {
 		text = stripMarkedBlock(text)
@@ -704,16 +572,12 @@ func ensureUserAgentsMDBlockAt(path string) bool {
 
 // migrateSkillsToOpenCodeHome moves skills installed by an older os-server under
 // workspace/skills into opencode's NATIVE discovery root (opencodeSkillsDir =
-// ~/.config/opencode/skills), then drops the workspace copy. Without the move, devices
-// already in the field keep their skills in a dir opencode never scans — invisible
-// to the `@` picker and to native skill loading in every session. Idempotent: a
-// no-op once the legacy dir is gone. Returns true when anything moved. Mirrors
-// claudecode.migrateSkillsToUserScope.
+// ~/.config/opencode/skills), then drops the workspace copy.
 func migrateSkillsToOpenCodeHome() bool {
 	legacyDir := filepath.Join(opencodeWorkspaceDir, "skills")
 	entries, err := os.ReadDir(legacyDir)
 	if err != nil {
-		return false // absent (already migrated / fresh device) — nothing to do
+		return false
 	}
 
 	if err := os.MkdirAll(opencodeSkillsDir, 0o755); err != nil {
@@ -728,7 +592,7 @@ func migrateSkillsToOpenCodeHome() bool {
 		}
 		dst := filepath.Join(opencodeSkillsDir, e.Name())
 		if _, err := os.Stat(dst); err == nil {
-			continue // already at the opencode discovery root — the legacy copy is redundant
+			continue
 		}
 		if err := os.Rename(filepath.Join(legacyDir, e.Name()), dst); err != nil {
 			slog.Warn("migrate skills: move failed", "component", "opencode-onboarding", "skill", e.Name(), "error", err)
@@ -737,8 +601,6 @@ func migrateSkillsToOpenCodeHome() bool {
 		moved++
 	}
 
-	// Drop the legacy dir even when nothing moved (every skill already existed at
-	// the opencode discovery root) — leaving it wastes disk and confuses future audits.
 	if err := os.RemoveAll(legacyDir); err != nil {
 		slog.Warn("migrate skills: remove legacy dir failed", "component", "opencode-onboarding", "error", err)
 	}
@@ -749,12 +611,7 @@ func migrateSkillsToOpenCodeHome() bool {
 
 // pruneUnsupportedSkills removes platform-catalog skill dirs the device can't use
 // from opencodeSkillsDir (~/.config/opencode/skills, opencode's native discovery root — same
-// capability gate openclaw uses). The device skill set comes from the openclaw
-// migration (presync.sh §1) plus the CDN skill watcher, so only skills.Catalog
-// names are OS-owned — unknown dirs (e.g. user-created skills, or opencode's own
-// bundled skills) are left alone, matching openclaw's prune semantics. Fail-open:
-// when ROBOT.md declares no capabilities, skills.Supported returns the full
-// catalog, so nothing is pruned.
+// capability gate openclaw uses).
 func (s *OpenCodeService) pruneUnsupportedSkills() {
 	skillsDir := opencodeSkillsDir
 	entries, err := os.ReadDir(skillsDir)
@@ -789,8 +646,7 @@ func (s *OpenCodeService) pruneUnsupportedSkills() {
 }
 
 // seedFileIfAbsent writes an embedded file to dst only when dst does not already
-// exist (never overwrites — KNOWLEDGE.md is a living doc). Copied from
-// runtimes/openclaw/onboarding.go (package-private there).
+// exist (never overwrites — KNOWLEDGE.md is a living doc).
 func seedFileIfAbsent(efs embed.FS, src, dst string) {
 	if _, err := os.Stat(dst); err == nil {
 		return // already exists, never overwrite
@@ -812,7 +668,6 @@ func seedFileIfAbsent(efs embed.FS, src, dst string) {
 }
 
 // stripMarkedBlock removes the block between the marker and the next --- separator.
-// Copied from runtimes/openclaw/onboarding.go (package-private there).
 func stripMarkedBlock(text string) string {
 	lines := strings.Split(text, "\n")
 	var cleaned []string

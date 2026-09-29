@@ -205,8 +205,7 @@ func TestRecoveryCommandCancellation(t *testing.T) {
 	defer cancel()
 	r := wifiRecovery{}
 	start := time.Now()
-	// A shell and its child must both stop; otherwise the child keeps the output
-	// pipe open (and a real mode-script child could still mutate the interface).
+	// Shell and child must both stop, or the child keeps the pipe open.
 	if _, err := r.command(ctx, "sh", "-c", "sleep 30 & wait"); err == nil {
 		t.Fatal("cancelled command succeeded")
 	}

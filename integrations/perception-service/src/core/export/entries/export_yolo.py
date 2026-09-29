@@ -39,7 +39,6 @@ class YOLOONNX(torch.nn.Module):
         if self.nms:
             return onnx_nms(boxes_xyxy, scores, input_hw=(x.shape[2], x.shape[3]))
 
-        # No NMS: return all anchors normalized
         xywh = xyxy_to_xywh_normalized(boxes_xyxy, input_hw=(x.shape[2], x.shape[3]))
         _, labels = scores.max(dim=-1)
         return xywh, scores, labels

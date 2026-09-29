@@ -50,7 +50,7 @@ HAL đã categorize trước khi gửi. Trên dòng `Activity detected:`:
 - dining — ăn cơm
 - eating burger, eating cake, eating carrots, eating doughnuts, eating hotdog, eating ice cream, eating spaghetti, eating watermelon
 
-## sedentary — create wellbeing crons + trigger Music suggestion / Ngồi yên, tạo wellbeing crons + kích hoạt Music suggestion
+## sedentary — sedentary streak + posture window, fed to wellbeing nudges (no cron, no music trigger) / Ngồi yên — sedentary streak + pose window, cho wellbeing nhắc nhở (không cron, không kích hoạt gợi ý nhạc)
 
 - using computer — dùng máy tính
 - writing — viết

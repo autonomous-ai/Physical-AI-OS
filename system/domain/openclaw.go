@@ -12,8 +12,7 @@ type WSEvent struct {
 	Payload json.RawMessage `json:"payload"`
 }
 
-// AgentPayload represents an agent lifecycle/stream event from the gateway.
-// The Stream field distinguishes: "lifecycle", "tool", "assistant", "thinking".
+// AgentPayload is an agent event; Stream is "lifecycle", "tool", "assistant" or "thinking".
 type AgentPayload struct {
 	RunID      string `json:"runId"`
 	Stream     string `json:"stream"`
@@ -27,26 +26,19 @@ type AgentPayload struct {
 		EndedAt              int64  `json:"endedAt,omitempty"`
 		Error                string `json:"error,omitempty"`
 		Aborted              bool   `json:"aborted,omitempty"`
-		// Tool stream fields
-		// OpenClaw uses "name" for tool name; "tool" is a device alias kept for backwards compat.
+		// "tool" is a legacy device alias of "name".
 		Tool       string          `json:"tool,omitempty"`
 		Name       string          `json:"name,omitempty"`
 		ToolCallID string          `json:"toolCallId,omitempty"`
 		ToolArgs   string          `json:"toolArgs,omitempty"`
-		Args       json.RawMessage `json:"args,omitempty"` // OpenClaw sends args as object e.g. {"command":"curl ..."}
+		Args       json.RawMessage `json:"args,omitempty"`
 		Arguments  string          `json:"arguments,omitempty"`
-		// Result/PartialResult: legacy OpenClaw versions sent strings; 5.4+ with
-		// openai-codex/gpt-5.5 sends structured tool results (objects with
-		// `content: [{type:"text", text:"..."}]`). Keep as RawMessage and use
-		// ResultText() / PartialResultText() helpers — typing as string broke
-		// the WS read loop with "cannot unmarshal object into ... string".
+		// Result may be a string or structured object; keep RawMessage (string type broke the WS read loop).
 		Result        json.RawMessage `json:"result,omitempty"`
 		PartialResult json.RawMessage `json:"partialResult,omitempty"`
-		// Thinking/assistant stream fields
-		Text  string `json:"text,omitempty"`
-		Delta string `json:"delta,omitempty"`
-		// Token usage (populated on lifecycle "end")
-		Usage *TokenUsage `json:"usage,omitempty"`
+		Text          string          `json:"text,omitempty"`
+		Delta         string          `json:"delta,omitempty"`
+		Usage         *TokenUsage     `json:"usage,omitempty"`
 	} `json:"data"`
 }
 
@@ -58,8 +50,7 @@ func (p *AgentPayload) ToolName() string {
 	return p.Data.Tool
 }
 
-// ToolArguments returns tool arguments as a string.
-// OpenClaw sends args as an object (e.g. {"command":"curl ..."}), device legacy uses a flat string.
+// ToolArguments returns tool arguments as a string from whichever field is set.
 func (p *AgentPayload) ToolArguments() string {
 	if p.Data.ToolArgs != "" {
 		return p.Data.ToolArgs
@@ -73,31 +64,26 @@ func (p *AgentPayload) ToolArguments() string {
 	return ""
 }
 
-// ResultText extracts a human-readable string from Data.Result regardless of
-// whether OpenClaw sent it as a JSON string (legacy) or a structured tool
-// result object (5.4+ openai-codex). Falls back to the raw JSON for unknown shapes.
+// ResultText extracts readable text from Data.Result; falls back to raw JSON.
 func (p *AgentPayload) ResultText() string { return resultRawToString(p.Data.Result) }
 
-// PartialResultText: same logic as ResultText for streaming partial results.
+// PartialResultText is ResultText for Data.PartialResult.
 func (p *AgentPayload) PartialResultText() string { return resultRawToString(p.Data.PartialResult) }
 
 func resultRawToString(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
 	}
-	// Legacy: plain JSON string.
 	var s string
 	if json.Unmarshal(raw, &s) == nil {
 		return s
 	}
-	// Common: { "text": "..." }
 	var withText struct {
 		Text string `json:"text"`
 	}
 	if json.Unmarshal(raw, &withText) == nil && withText.Text != "" {
 		return withText.Text
 	}
-	// Structured tool result: { "content": [{ "type": "text", "text": "..." }, ...] }
 	var withContent struct {
 		Content []struct {
 			Text string `json:"text"`
@@ -114,7 +100,6 @@ func resultRawToString(raw json.RawMessage) string {
 			return strings.Join(parts, " ")
 		}
 	}
-	// Unknown shape — return compact JSON so callers still have something to log.
 	return string(raw)
 }
 
@@ -145,13 +130,11 @@ func (p *ChatPayload) ResolveChatMessage() {
 	if len(p.RawMessage) == 0 {
 		return
 	}
-	// Try string first
 	var s string
 	if json.Unmarshal(p.RawMessage, &s) == nil {
 		p.Message = s
 		return
 	}
-	// Try object with text field
 	var obj struct {
 		Text string `json:"text"`
 	}
@@ -162,9 +145,6 @@ func (p *ChatPayload) ResolveChatMessage() {
 		}
 	}
 
-	// Try generic object/array shapes used by some providers:
-	// { "content": "..." }
-	// { "content": [{ "text": "..." }, { "type": "text", "text": "..." }] }
 	var generic map[string]any
 	if json.Unmarshal(p.RawMessage, &generic) == nil {
 		parts := make([]string, 0, 2)

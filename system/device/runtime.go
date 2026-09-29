@@ -13,20 +13,15 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// switch_runtime.sh is the generic, backend-agnostic agentic-backend switcher.
-// It is embedded in os-server and written to switchRuntimeBin on demand, so the
-// switcher is versioned and OTA-updated together with the binary — no
-// scripts/imager/setup.sh change is ever needed to ship or update it, and adding a new
-// backend is just a runtimes/<name>/install.sh on the CDN.
+// switchRuntimeScript is the backend-agnostic switcher, embedded so it ships
+// and OTA-updates with os-server.
 //
 //go:embed switch_runtime.sh
 var switchRuntimeScript []byte
 
 const switchRuntimeBin = "/usr/local/bin/switch-runtime"
 
-// ensureSwitchRuntime writes the embedded switcher to switchRuntimeBin when it
-// is missing or stale (content drift after an OTA). Idempotent — a no-op once
-// the on-disk copy matches the embedded one.
+// ensureSwitchRuntime writes the embedded switcher to switchRuntimeBin when missing or stale.
 func ensureSwitchRuntime() error {
 	if cur, err := os.ReadFile(switchRuntimeBin); err == nil && bytes.Equal(cur, switchRuntimeScript) {
 		return nil
@@ -37,18 +32,11 @@ func ensureSwitchRuntime() error {
 	return nil
 }
 
-// frDefaultAgentPath is a build-time-baked, per-image default runtime — e.g.
-// the intern-v2 case-color images (blue=hermes, orange=openclaw, black=claudecode,
-// scripts/imager/build-orangepi.sh DEFAULT_AGENT). It deliberately lives outside
-// /root/config/config.json so it survives Factory Reset untouched (it is NOT
-// in factoryreset.go's deviceWipePaths — verified device-side: siblings like
-// bootstrap.json/buddy.json in the same dir already survive F_R the same way).
-// Most builds never write this file, so it is absent and this is a no-op.
-// var, not const, so tests can point it at a temp file.
+// frDefaultAgentPath holds a build-baked per-image default runtime; it lives
+// outside config.json so it survives Factory Reset. Usually absent.
 var frDefaultAgentPath = "/root/config/f_r_default_agent"
 
-// readFRDefaultAgent returns the baked per-image default runtime, or "" if
-// the file is absent (the common case — falls back to ROBOT.md gateway.default).
+// readFRDefaultAgent returns the baked per-image default runtime, or "".
 func readFRDefaultAgent() string {
 	b, err := os.ReadFile(frDefaultAgentPath)
 	if err != nil {
@@ -57,27 +45,10 @@ func readFRDefaultAgent() string {
 	return strings.TrimSpace(string(b))
 }
 
-// ResolveDefaultAgent returns the device's built-in default runtime when
-// config.agent_runtime is not yet set, checked with priority: (1) the
-// build-baked f_r_default_agent file — a per-image/per-color default that
-// survives Factory Reset; (2) ROBOT.md gateway.default. Returns "" (source
-// "") when neither names a valid runtime.
-//
-// This is the SINGLE source of truth for that resolution — shared by
-// SeedAgentRuntimeFromGateway (persists the default into config.json) AND
-// agent.resolveRuntime (decides which gateway implementation actually gets
-// constructed, system/agent/factory.go). They must never resolve
-// independently: system/server/wire_gen.go constructs agent.ProvideGateway
-// BEFORE device.ProvideService runs SeedAgentRuntimeFromGateway, so if
-// resolveRuntime had its own copy of this priority (as it did before this
-// function existed), a fresh boot / post-Factory-Reset device would construct
-// its in-memory gateway from ROBOT.md gateway.default (ignoring
-// f_r_default_agent) while SeedAgentRuntimeFromGateway simultaneously
-// persisted the CORRECT value to config.json a moment later — config.json and
-// the actually-running backend would disagree until the next os-server
-// restart. Routing both callers through this one function makes the two
-// resolutions structurally impossible to drift, independent of Wire's
-// provider order.
+// ResolveDefaultAgent returns the default runtime and its source:
+// f_r_default_agent first, then ROBOT.md gateway.default, else ("", "").
+// Single source of truth for seeding and agent.resolveRuntime; they must not
+// resolve independently or config.json and the running gateway can disagree.
 func ResolveDefaultAgent(cfg *config.Config) (value, source string) {
 	if g := strings.ToLower(readFRDefaultAgent()); g != "" && domain.IsValidAgentRuntime(g) {
 		return g, "f_r_default_agent"
@@ -88,14 +59,8 @@ func ResolveDefaultAgent(cfg *config.Config) (value, source string) {
 	return "", ""
 }
 
-// SeedAgentRuntimeFromGateway materializes the device's default runtime (see
-// ResolveDefaultAgent) into config.agent_runtime when the field is still
-// empty, then persists it. Once a concrete value is on disk the device "owns"
-// its runtime: a dev who set it (via switch or by hand) is left untouched,
-// and the resolve-fallback in CurrentAgentRuntimeFromConfig becomes a no-op.
-// Idempotent — only the first boot of a fresh/legacy config.json writes. When
-// ResolveDefaultAgent names nothing there is nothing to seed, so the field
-// stays empty and the runtime keeps resolving to openclaw at boot.
+// SeedAgentRuntimeFromGateway persists ResolveDefaultAgent into an empty
+// config.agent_runtime; an existing value is never touched.
 func SeedAgentRuntimeFromGateway(cfg *config.Config) {
 	if cfg == nil || strings.TrimSpace(cfg.AgentRuntime) != "" {
 		return
@@ -110,21 +75,13 @@ func SeedAgentRuntimeFromGateway(cfg *config.Config) {
 	}
 }
 
-// CurrentAgentRuntime returns the effective agentic backend, resolved the same
-// way as system/agent/factory.go: config.agent_runtime, else the device's
-// ROBOT.md gateway.default, else openclaw. Used by GET /api/device/agent-runtime
-// so the web settings page shows what is actually running.
+// CurrentAgentRuntime returns the effective agentic backend.
 func (s *Service) CurrentAgentRuntime() string {
 	return CurrentAgentRuntimeFromConfig(s.config)
 }
 
-// CurrentAgentRuntimeFromConfig resolves the effective agentic backend without a
-// Service receiver, so callers holding only a *config.Config (e.g. the MQTT info
-// handler, the web-CLI env-file check in server.go) can report what is actually
-// running. Same precedence as agent.resolveRuntime: config.agent_runtime, else
-// ResolveDefaultAgent (f_r_default_agent, then ROBOT.md gateway.default), else
-// openclaw — routed through the same shared resolver so this can't become a
-// third place that drifts from what actually gets seeded/constructed.
+// CurrentAgentRuntimeFromConfig returns config.agent_runtime, else
+// ResolveDefaultAgent, else openclaw (same precedence as agent.resolveRuntime).
 func CurrentAgentRuntimeFromConfig(cfg *config.Config) string {
 	if r := strings.ToLower(strings.TrimSpace(cfg.AgentRuntime)); r != "" {
 		return r
@@ -135,21 +92,14 @@ func CurrentAgentRuntimeFromConfig(cfg *config.Config) string {
 	return domain.AgentRuntimeOpenClaw
 }
 
-// ReserveAgentRuntimeSwitch exclusively reserves the runtime switcher and returns
-// the function that performs the switch. The caller must invoke the returned
-// function exactly once; it releases the reservation when it returns.
-//
-// A runtime switch changes systemd units and may install a backend, so allowing a
-// second request to enter while the first is in progress can leave config.json and
-// the running unit pointing at different runtimes.
+// ReserveAgentRuntimeSwitch exclusively reserves the switcher and returns the
+// switch function; call it exactly once (it releases the reservation).
 func (s *Service) ReserveAgentRuntimeSwitch(d domain.AgentRuntimeSetData) (run func() (bool, error), err error) {
 	return s.reserveAgentRuntimeSwitch(d, false)
 }
 
-// ReserveAgentRuntimeSwitchReady exclusively reserves a runtime switch and
-// requires the target's readiness probe to pass before it is persisted. It is
-// currently used by the HTTP API; MQTT retains its existing unit-active
-// acknowledgement flow until its protocol is upgraded separately.
+// ReserveAgentRuntimeSwitchReady is ReserveAgentRuntimeSwitch that also requires
+// the target's readiness probe to pass before persisting.
 func (s *Service) ReserveAgentRuntimeSwitchReady(d domain.AgentRuntimeSetData) (run func() (bool, error), err error) {
 	return s.reserveAgentRuntimeSwitch(d, true)
 }
@@ -164,67 +114,36 @@ func (s *Service) reserveAgentRuntimeSwitch(d domain.AgentRuntimeSetData, waitRe
 	}, nil
 }
 
-// updateAgentRuntime swaps the agentic backend (openclaw / hermes / picoclaw). It
-// runs switch-runtime and BLOCKS until the switch finishes, then persists
-// config.agent_runtime ONLY if it landed — so a failed install never leaves disk
-// pointing at a backend that isn't actually running. Shared by the MQTT
-// hermes.setup / picoclaw.setup handlers and the HTTP config API.
-//
-// Returns:
-//   - (true, nil)  — the switch landed; the caller MUST report success and then
-//     call RestartForAgentRuntime so factory.go re-resolves the gateway.
-//   - (false, nil) — no-op (already on the target); no restart needed.
-//   - (false, err) — the switch failed and was rolled back to `old`.
-//
-// It deliberately does NOT restart os-server: the restart kills os-server, so it
-// has to happen AFTER the caller has put its success ack on the wire. switch-runtime
-// no longer restarts os-server either (it used to) — that move is what lets the
-// caller's goroutine survive long enough to ack the real result.
+// updateAgentRuntime runs switch-runtime synchronously and persists
+// config.agent_runtime only if it landed. Returns (true, nil) when switched:
+// the caller must ack, then call RestartForAgentRuntime.
 func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady bool) (bool, error) {
 	runtime := strings.ToLower(strings.TrimSpace(d.Runtime))
-	// Reject unknown values outright. factory.go falls back to openclaw on
-	// garbage, but an unknown runtime from the BFF/web is a contract error we
-	// surface rather than silently coerce.
 	if !domain.IsValidAgentRuntime(runtime) {
 		return false, fmt.Errorf("invalid runtime %q (want %s)", d.Runtime, strings.Join(domain.AgentRuntimes, "|"))
 	}
-	// "remote" is not activated through switch-runtime — the HTTP handler
-	// persists agent_runtime + AgentRemoteURL/Token directly and restarts
-	// os-server. If we reach here with "remote" it means an MQTT
-	// hermes.setup / picoclaw.setup style command tried to switch to it,
-	// which is not supported: MQTT lacks a way to carry the endpoint URL.
+	// "remote" needs a URL, so only the HTTP settings API can set it.
 	if runtime == domain.AgentRuntimeRemote {
 		return false, fmt.Errorf("runtime %q is only settable via the HTTP settings API (it needs the gateway URL)", runtime)
 	}
 
-	// Resolve the currently-active runtime BEFORE the save so switch-runtime
-	// knows which backend to stop. Default to openclaw (matches factory.go).
 	old := strings.ToLower(strings.TrimSpace(s.config.AgentRuntime))
 	if old == "" {
 		old = domain.AgentRuntimeOpenClaw
 	}
 
-	// No-op guard: re-sending the active runtime shouldn't churn services or
-	// bounce os-server. Returns switched=false so the caller skips the restart.
 	if old == runtime {
 		slog.Info("agent runtime unchanged, skipping switch", "component", "device", "runtime", runtime)
 		return false, nil
 	}
 
-	// Make sure the embedded switcher is on disk before we depend on it, and
-	// materialize the target's embedded installer (if compiled in) so the switch
-	// works fully offline — switch-runtime runs the local copy, no CDN needed.
 	if err := ensureSwitchRuntime(); err != nil {
 		return false, fmt.Errorf("install switch-runtime: %w", err)
 	}
 	if err := materializeInstaller(runtime); err != nil {
 		return false, fmt.Errorf("materialize %s installer: %w", runtime, err)
 	}
-	// Refresh the pre-start hook on disk too, so a plain os-server OTA delivers
-	// its latest version (config self-heal) even when the backend is already
-	// installed and install.sh is therefore skipped. switch-runtime runs it
-	// right before the backend starts. Non-fatal: a backend without a presync, or
-	// a transient write error, must not block the switch.
+	// Non-fatal: a missing presync must not block the switch.
 	if err := materializePresync(runtime); err != nil {
 		slog.Warn("materialize presync hook failed (non-fatal)", "component", "device", "runtime", runtime, "error", err)
 	}
@@ -236,20 +155,14 @@ func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady boo
 
 	slog.Info("running switch-runtime", "component", "device", "from", old, "to", runtime)
 
-	// Run the switcher and WAIT for its exit code. We deliberately do NOT persist
-	// config.agent_runtime first: if the install/start fails, config.json stays at
-	// `old`, so the device — including after a crash or reboot mid-switch — resolves
-	// the still-installed old backend instead of a half-installed new one. On failure
-	// switch-runtime has already rolled the systemd units back to `old`, and since we
-	// never touched config (memory or disk) there is nothing to revert.
+	// Do not persist before the switch lands: config.json stays at `old` on
+	// failure or crash, and switch-runtime has already rolled units back.
 	if err := s.runSwitchRuntime(runtime, old, waitReady); err != nil {
 		return false, fmt.Errorf("switch to %s failed, rolled back to %s: %w", runtime, old, err)
 	}
 
-	// Switch landed (NEW up, OLD stopped) — only NOW persist the new runtime, so the
-	// imminent RestartForAgentRuntime (and every future boot) resolves it. If this
-	// save fails the units are already on NEW while disk still says `old`; surface the
-	// error so the caller skips the restart and an operator can re-trigger.
+	// On save failure the units are on NEW but disk says `old`; surface it so
+	// the caller skips the restart.
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		c.AgentRuntime = runtime
 	}); err != nil {
@@ -260,11 +173,8 @@ func (s *Service) updateAgentRuntime(d domain.AgentRuntimeSetData, waitReady boo
 	return true, nil
 }
 
-// runSwitchRuntime runs the embedded switcher in a transient systemd unit and
-// blocks for its result. --wait propagates switch-runtime's exit code (so we learn
-// landed-vs-rolled-back), --collect GCs the unit afterwards. Pass <new> <old> so
-// the switch stays fully generic (no hardcoded backend list anywhere). Safe to wait
-// on from this process because switch-runtime no longer restarts os-server.
+// runSwitchRuntime runs the switcher in a transient systemd unit and waits for
+// its exit code (landed vs rolled back).
 func (s *Service) runSwitchRuntime(newRuntime, oldRuntime string, waitReady bool) error {
 	args := []string{"--quiet", "--collect", "--wait", "--unit=os-runtime-switch", switchRuntimeBin, newRuntime, oldRuntime}
 	if waitReady {
@@ -276,18 +186,8 @@ func (s *Service) runSwitchRuntime(newRuntime, oldRuntime string, waitReady bool
 	return nil
 }
 
-// RestartForAgentRuntime restarts os-server so system/agent/factory.go re-resolves
-// the gateway against the freshly-persisted runtime. The restart runs in its OWN
-// transient systemd unit (systemd-run) — NOT inline: `systemctl restart os-server`
-// tears down os-server's cgroup, which would SIGTERM a plain child mid-call
-// ("signal: terminated") and is racy. systemd-run launches it in a separate cgroup
-// that survives the teardown, then returns once the unit is started (before the
-// teardown begins), so this returns cleanly and real launch failures still surface.
-//
-// The unit is named (--unit) and NOT --quiet on purpose: this is the one action that
-// bounces the whole server, so we want systemd-run to log which unit ran it and to
-// be able to `journalctl -u os-server-runtime-restart` after the fact. --collect GCs
-// the unit once it's done. Callers MUST have already published their success ack —
+// RestartForAgentRuntime restarts os-server via its own systemd-run unit (an
+// inline restart would kill the child with our cgroup). Callers must ack first:
 // this kills os-server.
 func (s *Service) RestartForAgentRuntime() error {
 	if err := exec.Command("systemd-run", "--collect", "--unit=os-server-runtime-restart",

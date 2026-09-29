@@ -30,8 +30,7 @@ class _Sender:
         self.sent = []
 
     def send(self, msg, event_type="", skip_echo=False, image_b64="", **_kwargs):
-        # **_kwargs: dispatch also passes measurement-only fields (the voice
-        # metrics interaction id). This double asserts on routing, not on those.
+        # **_kwargs absorbs measurement-only fields.
         self.sent.append((msg, event_type))
 
 
@@ -51,8 +50,6 @@ def _dispatch(rt, combined, caplog, event_type_override=None, interaction_id="")
 
 
 def test_a_turn_the_main_agent_answers_names_its_route(caplog):
-    # The case that was invisible: realtime committed but nothing came back, so
-    # the main agent answers — with no "delegated" line anywhere in the journal.
     lines = _dispatch(
         RealtimeTurnResult(route=ROUTE_NO_OUTPUT), "research my email", caplog
     )
@@ -132,11 +129,8 @@ def test_event_type_travels_with_the_route(caplog, override):
     assert f"event={override or 'voice'}" in lines[0]
 
 
-# --- Locally-handled commands are served, not failed ------------------------
-
 class _LocalResult:
-    """What os-server returns for a local intent match: 200, a spoken reply,
-    and no run id — it answered the command itself."""
+    """os-server response for a local intent match: 200, spoken reply, no run id."""
 
     run_id = ""
     speech_suppressed = False
@@ -145,9 +139,7 @@ class _LocalResult:
 
 
 def test_locally_handled_command_is_not_marked_as_failed(monkeypatch):
-    """Regression: "volume up" is executed by os-server and answered out loud,
-    but carries no run id. Treating that as a failed dispatch counted a served
-    command as unanswered."""
+    """A local intent reply without run id is not a failed dispatch."""
     from hal.drivers.voice._internal import turn_dispatch
 
     failed = []
@@ -169,15 +161,6 @@ def test_undelivered_command_is_still_marked_as_failed(monkeypatch):
     assert failed == [("vi-2", turn_dispatch.voice_metrics.FAIL_DISPATCH_FAILED)]
 
 
-# ─── What the main agent is matched against ──────────────────────────────────
-#
-# The composed sensing message is the ONLY text every SKILL.md trigger is
-# matched on. #342 defect L: the same request reached the lamp as
-# "maximum capability in scanning around" (matched the servo skill, real sweep)
-# and as "movement demonstration … rotation/tilting" (matched nothing, fell
-# through to a canned emotion). Nothing pinned what goes into that text.
-
-
 def _sent_message(rt, combined):
     sender = _Sender()
     dispatch_turn(_Decorator(), sender, combined, [], [], rt)
@@ -186,9 +169,7 @@ def _sent_message(rt, combined):
 
 
 def test_the_transcript_survives_next_to_the_paraphrase():
-    """The delegate's message is a PARAPHRASE and skills are matched on
-    vocabulary. Keeping the user's own words in the text is what lets a trigger
-    still fire when the paraphrase has rewritten it."""
+    """The delegate text keeps the user's own words."""
     msg = _sent_message(
         RealtimeTurnResult(
             delegated=True,
@@ -203,8 +184,7 @@ def test_the_transcript_survives_next_to_the_paraphrase():
 
 
 def test_the_paraphrase_alone_is_forwarded_when_there_is_no_transcript():
-    """A tool call can land before local STT finalises; the handoff must not
-    be lost, and no empty `[transcript]` line may be invented."""
+    """Only the paraphrase is forwarded when no transcript exists yet."""
     msg = _sent_message(
         RealtimeTurnResult(delegated=True, delegate_msg="find my keyboard",
                            route=ROUTE_DELEGATED),

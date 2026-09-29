@@ -1,14 +1,4 @@
-// Package wellbeing provides a per-user activity history logger.
-//
-// Logs user activity observed from motion.activity events — bucket names for
-// drink / break / celebrate, raw Kinetics labels for sedentary / eat / tired
-// (`yawning`). HAL posts one entry per outbound label before firing the event.
-//
-// Usage:
-//
-//	wellbeing.Init()                                    // once at startup
-//	wellbeing.LogForUser("gray", "drink", "3rd today")  // append entry
-//	events := wellbeing.Query("gray", "2026-04-17", 100)
+// Package wellbeing logs per-user activity history from motion.activity events.
 package wellbeing
 
 import (
@@ -53,15 +43,13 @@ type logger struct {
 
 var global = &logger{}
 
-// Init creates the users directory and starts the retention cleaner.
-// Call once at startup.
+// Init creates the users directory and starts the retention cleaner; call once.
 func Init() {
 	_ = os.MkdirAll(usersDir, 0o755)
 	go cleanOldLogs()
 }
 
-// cleanOldLogs removes wellbeing JSONL files older than retentionDays.
-// Runs once at startup and daily after that.
+// cleanOldLogs removes wellbeing files older than retentionDays (startup, then daily).
 func cleanOldLogs() {
 	for {
 		cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02")
@@ -92,9 +80,7 @@ func cleanOldLogs() {
 	}
 }
 
-// NormalizeUser lowercases, replaces non [a-z0-9_-] with _, strips _,
-// caps at 64 chars. Mirrors the Python faceid/perception.py normalize_label
-// so Go-written paths match Python-written paths.
+// NormalizeUser mirrors Python normalize_label so Go and Python paths match.
 func NormalizeUser(name string) string {
 	s := strings.ToLower(strings.TrimSpace(name))
 	s = reNonLabel.ReplaceAllString(s, "_")
@@ -108,37 +94,14 @@ func NormalizeUser(name string) string {
 	return s
 }
 
-// presenceActions are backend-written session markers. Multiple stranger
-// faces cycling in and out all collapse to user="unknown", so we must
-// dedup that specific case (hal only dedups motion.activity — presence
-// events bypass it). Without the dedup, stranger_74 → stranger_75 produces
-// two "enter" entries in the unknown timeline and resets the wellbeing
-// delta twice even though, from the device's perspective, the "user" (unknown)
-// never changed.
-//
-// Friends do NOT need this guard: hal's per-friend session tracking
-// (_owners_last_seen + FACE_OWNER_FORGET_S) at faceid/perception already
-// fires enter only on a genuinely new session, so os-server should trust each
-// friend's enter/leave and just record it. Deduping friends here causes
-// the opposite failure: if hal restarts between a friend's last
-// detection and the forget-timeout, leave is never fired, the file gets
-// stuck in "enter" state, and the NEXT legitimate enter is silently
-// dropped — the friend vanishes from their own timeline on return.
-//
-// Physical activity actions (drink/break/sedentary) and agent-written
-// nudge actions are not deduped here — hal already dedups them at the
-// source for motion.activity, and nudge entries are explicitly meant to
-// act as reset points one-per-event.
+// presenceActions are deduped only on the "unknown" timeline (strangers collapse to
+// one user); friend enter/leave comes from HAL session tracking and must not be deduped.
 var presenceActions = map[string]bool{
 	"enter": true,
 	"leave": true,
 }
 
-// LogForUser appends an activity entry for the given user. For presence
-// markers on the unknown timeline, it collapses against the last PRESENCE
-// action (ignoring activity rows between them) so stranger flicker does
-// not inflate the unknown session count. Friend presence rows skip the
-// dedup — hal is the authoritative source of friend enter/leave.
+// LogForUser appends an activity entry; unknown-user presence rows are deduped.
 func LogForUser(user, action, notes string) {
 	user = NormalizeUser(user)
 	now := time.Now()
@@ -149,8 +112,6 @@ func LogForUser(user, action, notes string) {
 	if presenceActions[action] && user == DefaultUser {
 		day := now.Format("2006-01-02")
 		lastPresence := readLastPresenceAction(user, day)
-		// enter while already in an open session → skip (session still live).
-		// leave while no open session → skip (nothing to close).
 		if action == "enter" && lastPresence == "enter" {
 			return
 		}
@@ -170,10 +131,7 @@ func LogForUser(user, action, notes string) {
 	global.writeJSONL(now, user, evt)
 }
 
-// readLastPresenceAction scans today's file bottom-up and returns the most
-// recent enter/leave action for the user, or empty if none. Skips
-// activity rows so an activity entry between two enters doesn't mask the
-// open session.
+// readLastPresenceAction returns today's most recent enter/leave for user, or "".
 func readLastPresenceAction(user, day string) string {
 	path := filePath(user, day)
 	data, err := os.ReadFile(path)
@@ -197,18 +155,8 @@ func readLastPresenceAction(user, day string) string {
 	return ""
 }
 
-// LastActionTS returns the Unix timestamp of the most recent event with the
-// given action across the last `lookbackDays` daily files (1 = today only,
-// 2 = today + yesterday, …). Returns 0 when no matching event is found.
-//
-// Scans today first, then walks back one day at a time, stopping at the first
-// hit. Each file is read once and scanned bottom-up (events are appended in
-// order, so the most recent match within a file is near the end).
-//
-// Used by skillcontext to compute `last_leave_age_min` for the return-welcome
-// presence.enter route — we may need to reach into yesterday's file when the
-// user was gone overnight, but bounded by lookbackDays so file scans stay
-// cheap.
+// LastActionTS returns the Unix time of the latest action within lookbackDays
+// (1 = today only), or 0 if none.
 func LastActionTS(user, action string, lookbackDays int) float64 {
 	user = NormalizeUser(user)
 	if lookbackDays <= 0 {
@@ -240,8 +188,7 @@ func LastActionTS(user, action string, lookbackDays int) float64 {
 	return 0
 }
 
-// Query reads wellbeing events for a given user and day (YYYY-MM-DD).
-// Returns up to last n events. If n <= 0, returns all.
+// Query returns up to the last n events for user on day (YYYY-MM-DD); n <= 0 returns all.
 func Query(user, day string, n int) []Event {
 	user = NormalizeUser(user)
 	path := filePath(user, day)
@@ -276,8 +223,7 @@ func filePath(user, day string) string {
 	return filepath.Join(usersDir, user, wellbeingSubdir, day+fileSuffix)
 }
 
-// writeJSONL appends the event to the user's daily JSONL file.
-// Must be called with mu held.
+// writeJSONL appends evt to the user's daily file. Caller must hold mu.
 func (l *logger) writeJSONL(now time.Time, user string, evt Event) {
 	day := now.Format("2006-01-02")
 

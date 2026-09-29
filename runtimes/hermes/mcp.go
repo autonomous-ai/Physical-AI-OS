@@ -9,20 +9,7 @@ import (
 	"github.com/goccy/go-yaml"
 )
 
-// WriteMCPEntry upserts mcp_servers.<name> in ~/.hermes/config.yaml and restarts
-// the gateway so the new server is picked up. entry is the canonical (OpenClaw-
-// shaped) server-config map the connector writer produces — {type:"http", url,
-// headers} for hosted MCP, or {command, args, env} for stdio. It is translated to
-// the Hermes schema (mcp-config-reference.md) on the way in: Hermes infers the
-// transport from the presence of url vs command, so the `type` key is dropped, and
-// `enabled: true` is asserted so the server is active. Errors when config.yaml does
-// not exist — connectors are only configured post-onboarding (the installer/presync
-// hook materializes config.yaml before any connector.set lands).
-//
-// The read-modify-write cycle is serialized under mcpMu so concurrent connector.set
-// writes cannot interleave. The presync hook (a subprocess at boot/switch) edits
-// only .model/.custom_providers via yq and leaves mcp_servers untouched, so the two
-// owners do not collide.
+// WriteMCPEntry upserts mcp_servers.<name> in ~/.hermes/config.yaml and restarts the gateway.
 func (s *HermesService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -47,9 +34,7 @@ func (s *HermesService) WriteMCPEntry(name string, entry map[string]any) error {
 	return nil
 }
 
-// RemoveMCPEntry deletes mcp_servers.<name> from ~/.hermes/config.yaml. Returns
-// removed=false (no write, no restart) when the entry was already absent or the
-// config file does not exist yet. Mirrors OpenclawService.RemoveMCPEntry.
+// RemoveMCPEntry deletes mcp_servers.<name> from ~/.hermes/config.yaml.
 func (s *HermesService) RemoveMCPEntry(name string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -86,11 +71,7 @@ func (s *HermesService) RemoveMCPEntry(name string) (bool, error) {
 	return true, nil
 }
 
-// toHermesMCPEntry translates the canonical OpenClaw-shaped server entry into the
-// Hermes mcp_servers schema. Hermes selects the transport from url vs command, so
-// the OpenClaw-only `type` discriminator is dropped, and `enabled: true` is set so
-// the server is active (also re-enables a previously-disabled entry on re-write).
-// url/headers (http) and command/args/env (stdio) pass through unchanged.
+// toHermesMCPEntry translates the canonical OpenClaw-shaped server entry into the Hermes mcp_servers schema.
 func toHermesMCPEntry(entry map[string]any) map[string]any {
 	out := make(map[string]any, len(entry)+1)
 	for k, v := range entry {
@@ -103,10 +84,7 @@ func toHermesMCPEntry(entry map[string]any) map[string]any {
 	return out
 }
 
-// readHermesConfig loads config.yaml into a generic map. Errors (including
-// not-exist) are returned so connector writes surface a clear failure rather than
-// silently no-op'ing on an un-onboarded device. goccy/go-yaml decodes mappings into
-// map[string]any (JSON-compatible), so nested access mirrors the openclaw.json path.
+// readHermesConfig loads config.yaml into a generic map.
 func readHermesConfig(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -119,10 +97,7 @@ func readHermesConfig(path string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// writeHermesConfig marshals + atomically writes config.yaml. Hermes runs as root
-// and owns /root/.hermes, so no chown is needed (unlike openclaw's runtime user).
-// The whole file is reserialized; the presync hook re-asserts .model/.custom_providers
-// structure idempotently on the next boot, so any key reordering self-heals.
+// writeHermesConfig marshals + atomically writes config.yaml.
 func writeHermesConfig(path string, cfg map[string]any) error {
 	written, err := yaml.Marshal(cfg)
 	if err != nil {
@@ -134,8 +109,7 @@ func writeHermesConfig(path string, cfg map[string]any) error {
 	return nil
 }
 
-// ensureYAMLMap returns parent[key] as a map[string]any, creating it when absent or
-// of the wrong type. Mirrors openclaw.ensureMap for the yaml-decoded config tree.
+// ensureYAMLMap returns parent[key] as a map[string]any, creating it when absent or of the wrong type.
 func ensureYAMLMap(parent map[string]any, key string) map[string]any {
 	if existing, ok := parent[key].(map[string]any); ok && existing != nil {
 		return existing
@@ -145,9 +119,7 @@ func ensureYAMLMap(parent map[string]any, key string) map[string]any {
 	return created
 }
 
-// atomicWriteFile writes data to a temp file in the same dir then renames it over
-// path, so a crash mid-write never leaves a truncated config.yaml. Mirrors
-// openclaw.atomicWriteFile (kept local to avoid a cross-package dependency).
+// atomicWriteFile writes data to a temp file in the same dir then renames it over path, so a crash mid-write never leaves a truncated config.yaml.
 func atomicWriteFile(path string, data []byte, perm os.FileMode) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".hermes-*.tmp")
 	if err != nil {

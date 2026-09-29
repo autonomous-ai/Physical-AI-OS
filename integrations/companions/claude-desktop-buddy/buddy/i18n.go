@@ -2,10 +2,7 @@ package buddy
 
 import "fmt"
 
-// NarrationCategory tags a kind of activity-status announcement. The
-// narrator uses these as both the throttle key and the lookup key into
-// per-language template tables — adding a new category means adding an
-// entry in narrationStrings for every supported language.
+// NarrationCategory is a narration throttle key and template id; each needs an entry per language in narrationStrings.
 type NarrationCategory string
 
 const (
@@ -27,17 +24,10 @@ const (
 	NarrateToolGeneric   NarrationCategory = "tool_generic" // unknown tool — no name spoken
 )
 
-// fallbackLang is the language we reach for when the configured one
-// has no template for a category. English keeps the widest TTS
-// provider coverage and reads cleanly across most voices.
+// fallbackLang is used when the configured language lacks a template.
 const fallbackLang = "en"
 
-// narrationStrings is the only place narration text lives. Every
-// phrase names "Claude" up front so the user always knows who the
-// announcement is about — without that prefix "Editing a file" played
-// out of a smart device is ambiguous (was it the device? was it the user?).
-// Keep entries short — these are played mid-flow while the user is
-// reading code on the Mac.
+// narrationStrings holds all narration text per language; keep phrases short and prefixed with "Claude".
 var narrationStrings = map[string]map[NarrationCategory]string{
 	"vi": {
 		NarrateConnected:     "Claude đã kết nối",
@@ -95,10 +85,7 @@ var narrationStrings = map[string]map[NarrationCategory]string{
 	},
 }
 
-// narrationText resolves a category against a language, falling back
-// to English when the language is unknown or missing the entry, and
-// finally to the raw category id so a missing template never silently
-// swallows a narration.
+// narrationText resolves category in lang, falling back to English, then the raw category id.
 func narrationText(lang string, cat NarrationCategory, args ...any) string {
 	if tpl, ok := lookupTemplate(lang, cat); ok {
 		return applyArgs(tpl, args...)
@@ -127,17 +114,9 @@ func applyArgs(tpl string, args ...any) string {
 	return fmt.Sprintf(tpl, args...)
 }
 
-// toolToCategory maps an Anthropic tool_use.name to the narration
-// category that best describes the operation. Anything we don't have
-// a dedicated category for falls back to NarrateToolGeneric, which
-// reads as a name-less "Claude is running a tool" — we deliberately
-// avoid speaking the raw tool name because Claude Code's tool names
-// (CamelCase, mcp__server__method, etc.) come out as gibberish
-// through TTS.
+// toolToCategory maps a tool_use name to a narration category; unknown tools use NarrateToolGeneric since raw names read badly via TTS.
 func toolToCategory(name string) NarrationCategory {
-	// MCP tools share a `mcp__<server>__<method>` shape; match the
-	// prefix so any MCP method routes to the same announcement and
-	// gets a single cache entry instead of one per server/method.
+	// Route all mcp__<server>__<method> tools to one announcement.
 	if len(name) >= 5 && name[:5] == "mcp__" {
 		return NarrateToolMCP
 	}
@@ -165,9 +144,7 @@ func toolToCategory(name string) NarrationCategory {
 	}
 }
 
-// supportedLang returns the input language if narration strings exist
-// for it, otherwise the fallback. Used when loading config so an
-// invalid value doesn't silently degrade to category ids at runtime.
+// supportedLang returns lang if narration strings exist for it, otherwise fallbackLang.
 func supportedLang(lang string) string {
 	if _, ok := narrationStrings[lang]; ok {
 		return lang

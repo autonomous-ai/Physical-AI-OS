@@ -6,18 +6,10 @@ import (
 	"time"
 )
 
-// slackStreamFlushInterval throttles chat.appendStream calls. chat.appendStream is
-// Tier 4 (100+/min); ~1.5/sec stays comfortably under that while keeping the text
-// visibly streaming. The FIRST flush is immediate (kick), so content appears as soon
-// as it is ready.
+// slackStreamFlushInterval throttles chat.appendStream (Tier 4, 100+/min).
 const slackStreamFlushInterval = 650 * time.Millisecond
 
-// slackStream is a live Slack streaming reply for one run. chat.startStream is opened
-// lazily on the FIRST content chunk (seeded with that text), so the message is never a
-// visibly-empty bubble — the assistant status ("Generating response…") covers the
-// pre-text think time. A dedicated goroutine appends the cleaned reply text in order so
-// the agent-event delta loop never blocks on Slack HTTP calls. The handler feeds the
-// cleaned cumulative text via StreamSlackDelta; the goroutine appends only the new tail.
+// slackStream is a live Slack streaming reply for one run, opened lazily on the first content chunk.
 type slackStream struct {
 	channel  string
 	threadTS string
@@ -34,8 +26,7 @@ type slackStream struct {
 	stopped chan struct{} // closed by the goroutine after its final flush + stopStream
 }
 
-// startSlackStreamSession registers a (not-yet-opened) stream for runID and starts its
-// append loop. chat.startStream is called lazily on the first content.
+// startSlackStreamSession registers a (not-yet-opened) stream for runID and starts its append loop. chat.startStream is called lazily on the first content.
 func (s *HermesService) startSlackStreamSession(runID, channel, threadTS, teamID string) {
 	st := &slackStream{
 		channel:  channel,
@@ -63,7 +54,7 @@ func (s *HermesService) runSlackStream(st *slackStream) {
 		case <-ticker.C:
 			s.flushSlackStream(st, &lastFlush, false)
 		case <-st.stop:
-			s.flushSlackStream(st, &lastFlush, true) // final flush, forced
+			s.flushSlackStream(st, &lastFlush, true)
 			st.mu.Lock()
 			started, ts := st.started, st.ts
 			st.mu.Unlock()
@@ -78,11 +69,7 @@ func (s *HermesService) runSlackStream(st *slackStream) {
 	}
 }
 
-// flushSlackStream sends the un-sent tail of latest. It opens the stream
-// (chat.startStream, seeded with the first tail) on the first call that has content,
-// then appends subsequent tails (chat.appendStream). appendedLen only advances on a
-// successful call, so a transient failure retries the same tail next flush. force
-// bypasses the throttle (final flush).
+// flushSlackStream sends the un-sent tail of latest.
 func (s *HermesService) flushSlackStream(st *slackStream, lastFlush *time.Time, force bool) {
 	if !force && time.Since(*lastFlush) < slackStreamFlushInterval {
 		return
@@ -102,7 +89,7 @@ func (s *HermesService) flushSlackStream(st *slackStream, lastFlush *time.Time, 
 		ts, err := s.startSlackStream(st.channel, st.threadTS, st.teamID, pending)
 		if err != nil {
 			slog.Debug("slack: startStream failed (non-fatal, will fall back)", "component", "hermes", "err", err)
-			return // not started; appendedLen unchanged → retry / fallback
+			return
 		}
 		st.mu.Lock()
 		st.ts, st.started = ts, true
@@ -111,7 +98,7 @@ func (s *HermesService) flushSlackStream(st *slackStream, lastFlush *time.Time, 
 	} else {
 		if err := s.appendSlackStream(st.channel, st.ts, pending); err != nil {
 			slog.Debug("slack: appendStream failed (non-fatal)", "component", "hermes", "err", err)
-			return // appendedLen unchanged → retry next flush
+			return
 		}
 		st.mu.Lock()
 		st.appendedLen += len(pending)
@@ -120,9 +107,7 @@ func (s *HermesService) flushSlackStream(st *slackStream, lastFlush *time.Time, 
 	*lastFlush = time.Now()
 }
 
-// StreamSlackDelta implements domain.SlackBridge — records the latest cleaned
-// cumulative text for runID and nudges the append loop. Monotonic guard: ignore a
-// shorter snapshot (a mid-stream sanitize that briefly shrank the text).
+// StreamSlackDelta implements domain.SlackBridge — records the latest cleaned cumulative text for runID and nudges the append loop.
 func (s *HermesService) StreamSlackDelta(runID, cleanTextSoFar string) {
 	s.slackStreamsMu.Lock()
 	st := s.slackStreams[runID]
@@ -141,11 +126,7 @@ func (s *HermesService) StreamSlackDelta(runID, cleanTextSoFar string) {
 	}
 }
 
-// finishSlackStream finalizes the stream for runID: records the final text, signals the
-// goroutine to flush + chat.stopStream, waits, and removes the session. Returns true
-// when the stream was actually opened (reply delivered via streaming); false when it
-// never opened (the caller then posts a chat.postMessage fallback). No-op (false) when
-// absent.
+// finishSlackStream finalizes the stream for runID: records the final text, signals the goroutine to flush + chat.stopStream, waits, and removes the session.
 func (s *HermesService) finishSlackStream(runID, finalText string) bool {
 	s.slackStreamsMu.Lock()
 	st := s.slackStreams[runID]

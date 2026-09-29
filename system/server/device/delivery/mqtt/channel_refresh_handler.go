@@ -11,21 +11,12 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// channelRefreshTimeout caps the whole channel.refresh_config call. The config
-// write is instant; the slow part is `systemctl restart openclaw` waiting for
-// the gateway to bind its socket again (~30-60s on a healthy device). Bound it
-// so a stuck restart can't deadlock the refresh slot indefinitely.
+// channelRefreshTimeout caps the whole channel.refresh_config call.
 const channelRefreshTimeout = 5 * time.Minute
 
-// handleChannelRefreshConfig handles kind="channel.refresh_config": re-applies
-// the canonical channels.<channel> block on an already-onboarded device using
-// the current applySlackChannelConfig writer. Credentials are read from
-// config.json on the device — they are NOT carried in the payload.
-//
-// Async: acks "configuring" (not "starting" — the channel was already set up;
-// this is a re-apply), then runs the write+restart in a background goroutine
-// (gateway restart can take 30-60s; blocking the broker callback would
-// back-pressure the topic). Terminal status published from the goroutine.
+// handleChannelRefreshConfig handles kind="channel.refresh_config":
+// re-applies the canonical channels.<channel> block on an already-onboarded
+// device using the current applySlackChannelConfig writer.
 func (h *DeviceMQTTHandler) handleChannelRefreshConfig(env domain.MQTTDataCommand) error {
 	var req domain.MQTTChannelRefreshConfigData
 	if len(env.Data) > 0 {
@@ -40,8 +31,6 @@ func (h *DeviceMQTTHandler) handleChannelRefreshConfig(env domain.MQTTDataComman
 
 	slog.Info("channel.refresh_config: received", "component", "mqtt", "channel", req.Channel)
 
-	// "configuring" (not "starting") because the channel was already set up
-	// previously — this is a re-apply, not a first-time install.
 	if err := h.publishDataResult(env.Kind, "configuring", "", nil); err != nil {
 		slog.Warn("channel.refresh_config: ack publish failed", "component", "mqtt", "channel", req.Channel, "error", err)
 	}
@@ -52,8 +41,6 @@ func (h *DeviceMQTTHandler) handleChannelRefreshConfig(env domain.MQTTDataComman
 
 		runtimeStr, err := h.deviceService.RefreshChannelConfig(ctx, req.Channel)
 		if err != nil {
-			// Map sentinel errors to stable codes so the backend can branch
-			// without parsing free-form text.
 			errCode := err.Error()
 			switch {
 			case errors.Is(err, device.ErrSlackCredentialsMissing):

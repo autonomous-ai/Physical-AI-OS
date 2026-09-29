@@ -1,20 +1,7 @@
 """Export Emo-AffectNet static ResNet-50 (7-class AffectNet) to ONNX.
 
-The reference checkpoint (`FER_static_ResNet50_AffectNet.pt`) is a plain
-state_dict published on HuggingFace by ElenaRyumina/face_emotion_recognition.
-Its native preprocessing is unusual and is baked into the export wrapper here
-so the runtime predictor (`predictors/emoaffectnet.py`) stays trivial:
-
-  reference (app/model.py::pth_processing):
-    PILToTensor -> uint8 RGB in [0,255]
-    flip channels RGB->BGR
-    subtract per-channel BGR means [91.4953, 103.8827, 131.0912]
-    (no /255, no std, no softmax in the net — fc2 returns logits)
-
-The base predictor hands the ONNX graph an RGB tensor already scaled to
-[0,1] (it does `/255`). The wrapper below re-applies the reference transform
-on top of that and appends softmax, so the ONNX graph is a drop-in for the
-base contract (input: RGB NCHW in [0,1]; output: probabilities).
+The native preprocessing (uint8 RGB -> BGR, subtract BGR means, no std) and softmax
+are baked in, so the graph takes RGB NCHW in [0,1] and outputs probabilities.
 """
 
 import argparse
@@ -42,12 +29,7 @@ HF_CHECKPOINT_URL: str = (
 
 
 class EmoAffectNetONNX(torch.nn.Module):
-    """Wraps ResNet-50 with the model's native preprocessing + softmax.
-
-    Input ``x``: (N, 3, H, W) RGB, float32 in [0, 1] (base predictor's
-    ``/255`` output). We undo the scale, flip to BGR, subtract the VGGFace2
-    means, run the net, and softmax the logits.
-    """
+    """Wraps ResNet-50 with its native preprocessing + softmax. Input: (N, 3, H, W) RGB in [0, 1]."""
 
     # Per-channel means in BGR order, exactly as the reference subtracts them.
     MEAN_BGR: list[float] = [91.4953, 103.8827, 131.0912]
@@ -71,8 +53,6 @@ def export(checkpoint: str | None = None, output: str | None = None, num_classes
     dest.parent.mkdir(parents=True, exist_ok=True)
 
     if checkpoint is None:
-        # Not in the project weights bucket by default — pull the canonical
-        # HuggingFace checkpoint into the model cache on first export.
         model_path = get_default_model_path(ModelEnum.EMOAFFECTNET_PTH)
         remote_url = get_default_cdn_url(ModelEnum.EMOAFFECTNET_PTH) or HF_CHECKPOINT_URL
         checkpoint = str(ensure_downloaded(model_path, remote=remote_url))

@@ -18,12 +18,6 @@ func nowUnixMs() int64 { return time.Now().UnixMilli() }
 // --format json` JSONL event forwarded verbatim (text / reasoning / tool_use /
 // step_start / step_finish / message.updated / session.error) or a bridge frame
 // (session.idle synthesized on clean exit / bridge.status / bridge.error / pong).
-// Every opencode line carries sessionID.
-//
-// Device-verified event shapes (opencode 1.18.4): the assistant reply arrives on
-// a `text` event under `part.text`; a turn ends with a `step_finish` whose
-// `part.reason == "stop"` carrying `part.tokens` (there is NO session.idle from
-// the CLI — the gatewayd synthesizes one on the process's clean exit, §gatewayd).
 type opencodeFrame struct {
 	RequestID string `json:"request_id"`
 	RunID     string `json:"run_id"`
@@ -141,8 +135,6 @@ func (e *opencodeError) UnmarshalJSON(raw []byte) error {
 // captureUsage stashes the latest per-turn token counts from a step_finish
 // (part.tokens — device-verified shape) or message.updated (info.tokens) frame;
 // emitFinal reads it (the synthesized terminal session.idle carries no usage).
-// input + cache.read approximates the live context size (what ShouldRotateSession
-// keys on); TotalTokens is the full turn volume.
 func (s *OpenCodeService) captureUsage(f opencodeFrame) {
 	var tk *opencodeTokens
 	switch {
@@ -153,11 +145,6 @@ func (s *OpenCodeService) captureUsage(f opencodeFrame) {
 	default:
 		return
 	}
-	// opencode reports Anthropic-style: `input` excludes the cached prefix, so
-	// the two add up to the context. Keep them in SEPARATE domain fields —
-	// folding cache read into InputTokens made a cache-hit turn read as if it
-	// had re-sent the whole context, and hid the R figure the Flow monitor
-	// turn card renders (TurnBadge.tsx).
 	in, cacheRead, cacheWrite := tk.Input, tk.Cache.Read, tk.Cache.Write
 	out := tk.Output
 	if in == 0 && cacheRead == 0 && out == 0 {
@@ -175,20 +162,7 @@ func (s *OpenCodeService) captureUsage(f opencodeFrame) {
 }
 
 // translateFrame parses one inbound bridge frame and emits 0..N domain.WSEvent
-// frames into dispatch. Mapping (keep in sync with docs/agentic/opencode.md):
-//
-//	first line w/ sessionID        → capture session key
-//	step_start                     → lifecycle.start (once per turn)
-//	text                           → buffer as the reply (no delta stream); a
-//	                                 newer part demotes the previous to thinking
-//	                                 unless it carries a [HW:…] marker
-//	reasoning                      → ignored (thinking, not content)
-//	tool_use                       → tool.start + tool.end pair
-//	step_finish / message.updated  → capture token usage
-//	session.idle / status idle     → delta(final) + chat.final + lifecycle.end
-//	session.error / error /
-//	bridge.error                   → lifecycle.error (ends turn)
-//	bridge.status / pong           → log / ignore
+// frames into dispatch.
 func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	var f opencodeFrame
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -203,7 +177,6 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 	if isTurnFrame(f.Type) && !s.adoptFrameCorrelation(f, dispatch) {
 		return
 	}
-	// Capture the session only after correlation accepts the frame.
 	if f.SessionID != "" && f.SessionID != s.GetSessionKey() {
 		s.SetSessionKey(f.SessionID)
 	}
@@ -214,13 +187,9 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 	case "text":
 		s.ensureTurnStarted(dispatch)
 		if txt := f.textContent(); strings.TrimSpace(txt) != "" {
-			// Like codex exec, opencode narrates before it calls a tool ("Using
-			// the sensing skill for this presence event.") as its own `text`
-			// part. Only the LAST one is the reply; every earlier one is
-			// narration that must never reach TTS, so it is demoted to the
-			// thinking stream (Flow Monitor only) as soon as a newer part
-			// proves it was not the reply. Exception: a part carrying a
-			// [HW:…] marker is a real hardware action and is kept.
+			// Only the LAST one is the reply; every earlier one is narration that must never reach
+			// TTS, so it is demoted to the thinking stream (Flow Monitor only) as soon as a newer
+			// part proves it was not the reply.
 			s.turnMu.Lock()
 			var preamble string
 			if n := len(s.assistantParts); n > 0 && !hasHWMarker(s.assistantParts[n-1]) {
@@ -234,7 +203,6 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 			}
 		}
 	case "reasoning":
-		// thinking — status, not content (matches codex/hermes)
 	case "tool_use":
 		s.ensureTurnStarted(dispatch)
 		s.ensureToolStart(f.ID, f.toolName(), f.toolArgs(), dispatch)
@@ -258,18 +226,15 @@ func (s *OpenCodeService) translateFrame(raw []byte, dispatch func(domain.WSEven
 	case "bridge.status":
 		slog.Info("opencode bridge status", "component", "opencode", "sessionId", f.SessionID)
 	case "pong":
-		// keepalive reply — ignore
 	default:
 		slog.Debug("opencode: unhandled frame type", "component", "opencode", "type", f.Type)
 	}
 }
 
-// ensureTurnStarted emits lifecycle.start exactly once per turn. The runID is
-// adopted from a pending outbound SendChat when present, else freshly
-// allocated for an externally-initiated turn.
+// ensureTurnStarted emits lifecycle.start exactly once per turn.
 func (s *OpenCodeService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() != "" {
-		return // already started
+		return
 	}
 	runID := s.consumePendingRunID()
 	if runID == "" {
@@ -316,9 +281,7 @@ func (s *OpenCodeService) ensureToolStart(id, name, args string, dispatch func(d
 
 // hasHWMarker reports whether text carries an inline hardware marker, in either
 // the plain form `[HW:/led/off]` or the markdown-link form
-// `[Lights off](HW:/led/off)`. Deliberately coarse: it only decides whether a
-// non-final text part is narration (droppable) or a real action to keep — the
-// authoritative parse lives in server/agent/delivery/http/handler_hw.go.
+// `[Lights off](HW:/led/off)`.
 func hasHWMarker(text string) bool {
 	return strings.Contains(text, "[HW:") || strings.Contains(text, "](HW:")
 }
@@ -381,17 +344,7 @@ func (s *OpenCodeService) emitToolEnd(id, result string, dispatch func(domain.WS
 
 // emitFinal emits, in order: (a) the whole reply as a single assistant delta,
 // (b) the final chat message, (c) lifecycle.end with usage — then closes the
-// turn. Order matches OpenClaw/Hermes/PicoClaw (assistant deltas → chat.final
-// → lifecycle.end → idle); `opencode run` json mode delivers text as discrete
-// events (accumulated across the turn), so (a) is the N=1 case of that contract
-// — it is what lets the shared consumer flush TTS + [HW:/…] hardware markers at
-// lifecycle.end. Usage comes from the stashed lastUsage (a message.updated /
-// step_finish frame), since the terminal session.idle carries none.
-//
-// The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false)
-// on chat.final / lifecycle.end, which synchronously drains queued sensing
-// events and starts the NEXT turn (fresh pending run ID). Clearing here lets
-// that turn's runID survive instead of being clobbered.
+// turn. Turn ids are reset BEFORE dispatch: the consumer starts the next turn synchronously.
 func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 	s.ensureTurnStarted(dispatch)
 	runID := s.getCurrentRunID()
@@ -417,15 +370,11 @@ func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 	}
 	slog.Info("opencode <<< turn completed", logArgs...)
 
-	// Preserve later queued requests when the current turn finishes.
 	s.finishCurrentCorrelation()
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
-	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
-	// this DM is the user-visible output. [HW:/...] hardware markers and TTS
-	// audio tags are for HAL, not the chat bubble — strip them
-	// (stripForChannel, hal.go). Best-effort in a goroutine: the read loop
-	// must not block on the Bot API.
+	// originating chat.
+	// Best-effort in a goroutine: the read loop must not block on the Bot API.
 	if chatID := s.consumeTelegramRun(runID); chatID != "" && finalText != "" {
 		if reply := stripForChannel(finalText); reply != "" {
 			go func() {
@@ -438,20 +387,15 @@ func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 	}
 
 	// Slack-originated turn (slack.go): post the reply back to the originating
-	// channel/thread (chat.postMessage) and clear the eyes ack reaction. TTS
-	// was suppressed at injection (MarkSilentRun); markers are stripped like
-	// the telegram path. Consumed here — synchronously, before dispatch — so
-	// the shared handler's DeliverSlackReply safety net stays a no-op.
+	// channel/thread (chat.postMessage) and clear the eyes ack reaction.
 	// Best-effort in a goroutine: the read loop must not block on the Web API.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		go s.finishSlackTurn(o, stripForChannel(finalText))
 	}
 
 	// Discord-originated turn (discord.go): post the reply back to the
-	// originating channel (chunked at Discord's 2000-char limit). TTS was
-	// suppressed at injection (MarkSilentRun); markers are stripped like the
-	// telegram path. Best-effort in a goroutine: the read loop must not block
-	// on the Discord API.
+	// originating channel (chunked at Discord's 2000-char limit).
+	// Best-effort in a goroutine: the read loop must not block on the Discord API.
 	if channelID := s.consumeDiscordRun(runID); channelID != "" && finalText != "" {
 		go s.finishDiscordTurn(channelID, stripForChannel(finalText))
 	}
@@ -489,16 +433,13 @@ func (s *OpenCodeService) emitFinal(dispatch func(domain.WSEvent)) {
 }
 
 func (s *OpenCodeService) handleError(msg string, dispatch func(domain.WSEvent)) {
-	s.ensureTurnStarted(dispatch) // make sure a runID exists for the error
+	s.ensureTurnStarted(dispatch)
 	runID := s.getCurrentRunID()
 	if msg == "" {
 		msg = "opencode error"
 	}
 	slog.Warn("opencode <<< error", "component", "opencode", "runID", runID, "error", msg)
 
-	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
-	// on lifecycle.error, draining the next turn synchronously.
-	// Preserve later queued requests when the current turn finishes.
 	s.finishCurrentCorrelation()
 	s.turnMu.Lock()
 	s.assistantParts = nil
@@ -506,14 +447,11 @@ func (s *OpenCodeService) handleError(msg string, dispatch func(domain.WSEvent))
 	s.turnMu.Unlock()
 
 	// Telegram-originated turn: consume the tracker so the map doesn't leak.
-	// No DM — the user simply gets no reply for a failed turn.
 	if chatID := s.consumeTelegramRun(runID); chatID != "" {
 		slog.Warn("telegram-originated turn failed — reply dropped",
 			"component", "opencode", "runID", runID, "chatID", chatID)
 	}
 
-	// Slack-originated turn: consume the tracker (no reply for a failed turn)
-	// and clear the eyes ack reaction so the message isn't left marked.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		slog.Warn("slack-originated turn failed — reply dropped",
 			"component", "opencode", "runID", runID, "channel", o.channel)
@@ -521,7 +459,7 @@ func (s *OpenCodeService) handleError(msg string, dispatch func(domain.WSEvent))
 	}
 
 	// Discord-originated turn: consume the tracker so the map doesn't leak
-	// (and the typing keeper stops). No reply for a failed turn.
+	// (and the typing keeper stops).
 	if channelID := s.consumeDiscordRun(runID); channelID != "" {
 		slog.Warn("discord-originated turn failed — reply dropped",
 			"component", "opencode", "runID", runID, "channelID", channelID)
@@ -539,8 +477,6 @@ func (s *OpenCodeService) handleError(msg string, dispatch func(domain.WSEvent))
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
-
-// --- turn-correlation helpers ---
 
 func (s *OpenCodeService) getCurrentRunID() string {
 	v, _ := s.currentRunID.Load().(string)
@@ -595,9 +531,7 @@ func (s *OpenCodeService) finishCurrentCorrelation() {
 	s.currentRunID.Store("")
 }
 
-// clearTurn resets the in-flight turn ids without touching busy state. Used on
-// disconnect / busyTTL expiry / send failure. The normal end-of-turn path
-// clears the ids inline in emitFinal / handleError (before dispatch).
+// clearTurn resets the in-flight turn ids without touching busy state.
 func (s *OpenCodeService) clearTurn() {
 	telemetry.ReportTaskObservationLost(s.unfinishedTaskRunIDs()...)
 	s.pendingMu.Lock()
@@ -624,7 +558,7 @@ func isTurnFrame(kind string) bool {
 func (s *OpenCodeService) adoptFrameCorrelation(f opencodeFrame, dispatch func(domain.WSEvent)) bool {
 	if f.RequestID == "" && f.RunID == "" {
 		return true
-	} // old bridge: FIFO
+	}
 	if current := s.getCurrentRunID(); current != "" {
 		request, _ := s.currentRequestID.Load().(string)
 		if (f.RunID == "" || f.RunID == current) && (f.RequestID == "" || request == "" || f.RequestID == request) {
@@ -666,8 +600,7 @@ func (s *OpenCodeService) adoptFrameCorrelation(f opencodeFrame, dispatch func(d
 	return true
 }
 
-// Queue rejection is not a failure of the currently streaming turn. Remove
-// only the rejected pending request and emit its own correlated terminal event.
+// Queue rejection is not a failure of the currently streaming turn.
 func (s *OpenCodeService) rejectQueuedFrame(f opencodeFrame, dispatch func(domain.WSEvent)) {
 	pending := s.takePendingRun(f.RequestID, f.RunID, false)
 	if pending.runID == "" {

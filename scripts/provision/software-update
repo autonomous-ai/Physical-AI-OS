@@ -1,8 +1,6 @@
 #!/bin/bash
 set -e
-# Metadata URL comes from the bootstrap worker config (single source of truth,
-# baked at image build). An explicit OTA_METADATA_URL env var still overrides it
-# for manual/debug runs. No compiled-in default — abort if neither is set.
+# Metadata URL from the bootstrap config; OTA_METADATA_URL env overrides. No default.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
 ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
@@ -32,15 +30,13 @@ hal_dependency_extra() {
   if [ -z "$device_type" ]; then
     device_type="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null || true)"
   fi
-  # Match the Reachy installer; other devices select aec plus shared Pipecat.
   case "$device_type" in
     reachy-mini) printf '%s\n' reachy ;;
     *) printf '%s\n' aec ;;
   esac
 }
 
-# Use npm's bundled semver implementation: engine ranges can include unions
-# and upper bounds, so a major-version comparison is not sufficient.
+# npm's semver: engine ranges can include unions and upper bounds.
 node_satisfies_engine() {
   node - "$1" "$(command -v npm)" <<'NODE'
 const fs = require('fs');
@@ -96,33 +92,18 @@ ensure_openclaw_node() {
   ensure_node_engine "$engine" "openclaw@$version"
 }
 
-# cli_semver: print the FIRST x.y.z[suffix] found on stdin (a `--version`
-# output), or nothing. It must be the first: Hermes 0.21+ prints
-# "Hermes Agent v0.21.1 (2026.9.7) · upstream …", and a greedy `sed 's/.*(…)/'`
-# grabbed the last match — even a fragment of it ("6.9.7") — so a correct
-# install failed its version check and skipped the gateway/os-server restarts.
+# Print the first x.y.z[suffix] on stdin (Hermes prints several versions; take the first).
 cli_semver() {
   grep -oE '[0-9]+\.[0-9]+\.[0-9]+([-.+_][0-9A-Za-z.-]+)?' | head -1
 }
 
 update_hermes_package() {
-  # Match upstream scripts/install.sh node_satisfies_build. The update command
-  # only resolves an existing npm; it does not run the installer's Node setup.
   ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
   hermes update
 }
 
-# update_hermes_pinned <full-sha>: check the exact upstream commit out and
-# rebuild the runtime, driving the upstream installer stage by stage exactly as
-# scripts/imager/build-orangepi.sh and runtimes/hermes/install.sh do (the
-# monolithic `curl | bash` runs node-deps, which hangs on this ARM board, and
-# the interactive setup/gateway stages, which os-server owns). The installer is
-# fetched AT the pinned commit so its stage logic matches the tree it installs.
-# `repository` with --commit on an existing checkout fetches + detaches at the
-# sha; --force-commit lets it roll BACK too, so a device that ran an unpinned
-# `hermes update` (HEAD) can be brought onto the released build. Stages
-# `prerequisites`/`config` are skipped: apt and config.yaml belong to the image
-# and to presync.
+# update_hermes_pinned <full-sha>: check out the exact commit and rebuild via the upstream
+# installer, stage by stage (the monolithic installer hangs on ARM). --force-commit allows rollback.
 update_hermes_pinned() {
   local commit="$1" installer stage
   ensure_node_engine '>=22.22.0 <23 || >=24.11.0 <25 || >=26.0.0' hermes || return 1
@@ -145,8 +126,7 @@ update_openclaw() {
   npm install -g "openclaw@$version" || { echo "npm install openclaw failed"; return 1; }
   openclaw plugins install "@openclaw/discord@$version" --force 2>&1 || echo "[software-update] WARN: discord plugin install failed (non-fatal)"
   openclaw plugins install "@openclaw/slack@$version" --force 2>&1 || echo "[software-update] WARN: slack plugin install failed (non-fatal)"
-  # Doctor must own maintenance while migrating legacy workspace/state stores.
-  # Use the same state paths as the system-owned gateway, not the SSH user's.
+  # Use the system gateway's state paths, not the SSH user's.
   systemctl stop openclaw || return 1
   if ! HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
     openclaw doctor --fix --non-interactive --no-workspace-suggestions; then
@@ -166,9 +146,7 @@ update_openclaw() {
   return 1
 }
 
-# Web is a directory install, so retain the complete prior bundle and whether
-# nginx was running. The backup is only replaced after the new ZIP has been
-# downloaded and unpacked into a sibling staging directory.
+# Keep the full prior web bundle; replace the backup only after the new ZIP is staged.
 save_web_service_state() {
   mkdir -p "$ROLLBACK_DIR"
   if systemctl is-active --quiet nginx; then
@@ -178,16 +156,8 @@ save_web_service_state() {
   fi
 }
 
-# Was this unit supposed to be running once the update finishes?
-#
-# The recorded snapshot alone is not enough: it is taken at the START of a run,
-# so a run that begins while a PREVIOUS failed update left the unit down records
-# "inactive" — and every later update then faithfully restores "down". That is
-# how a successful web update finished with nginx stopped (and check_web
-# short-circuited past its HTTP probe, reporting success while the UI was dead),
-# and how HAL stayed stopped after its runtime was rebuilt. A unit systemd still
-# has enabled is meant to run, so treat enabled as "yes" regardless of the
-# snapshot. A unit deliberately disabled stays down.
+# Whether the unit should run after the update: enabled counts as yes, since the start-of-run
+# snapshot can record "inactive" left by a previous failed update.
 unit_wanted_active() {
   local unit="$1" state_file="$2"
   [ "$(cat "$state_file" 2>/dev/null || echo active)" = active ] && return 0
@@ -223,9 +193,7 @@ wait_for_web() {
 check_web() {
   [ -f "$WEB_ROOT/index.html" ] || return 1
   nginx -t >/dev/null || return 1
-  # Gate the probe on what nginx IS doing, not on what the snapshot predicted:
-  # the old form skipped the HTTP check entirely whenever the snapshot said
-  # "inactive", so a 403-serving web root passed as healthy.
+  # Probe what nginx is doing now, not what the snapshot predicted.
   systemctl is-active --quiet nginx || return 0
   wait_for_web
 }
@@ -262,7 +230,6 @@ device_was_active() {
   local unit="$1"
   grep -qx "$unit=active" "$ROLLBACK_DIR/device.services" 2>/dev/null && return 0
   [ ! -f "$ROLLBACK_DIR/device.services" ] && return 0
-  # Same poisoned-snapshot reasoning as unit_wanted_active above.
   if systemctl is-enabled --quiet "$unit" 2>/dev/null; then
     echo "[software-update] $unit was recorded inactive but is enabled — starting it"
     return 0
@@ -285,9 +252,7 @@ wait_for_url() {
   return 1
 }
 
-# Older images have the generic /api/ proxy but no WebSocket Upgrade route for
-# Harness. Bootstrap refreshes this script between OTA runs, so migrate nginx
-# before a Harness-capable OS or web component is installed.
+# Older images lack the Harness WebSocket route; migrate nginx before a Harness-capable install.
 ensure_harness_nginx_location() {
   command -v nginx >/dev/null 2>&1 || {
     echo "[software-update] nginx is not installed; cannot install Harness route" >&2
@@ -364,8 +329,7 @@ check_device_profile() {
 }
 
 snapshot_device_rootfs() {
-  # Save every file the old or staged profile can overlay, including an explicit
-  # absent marker so rollback removes files introduced only by the failed OTA.
+  # Record absent files too, so rollback removes files added by the failed OTA.
   local old_rootfs="$1" new_rootfs="$2" archive="$ROLLBACK_DIR/device.previous.rootfs"
   local list rel target state
   list=$(mktemp)
@@ -425,26 +389,14 @@ restore_hal_service_state() {
 
 check_hal() {
   [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
-  # Same as check_web: probe what HAL is actually doing. The old form passed
-  # silently whenever the snapshot said the unit should be down — including the
-  # case where a broken venv made it impossible to start at all.
   systemctl is-active --quiet hal || return 0
   wait_for_url http://127.0.0.1:5001/health 120
 }
 
-# A staging directory built with `mktemp -d` is mode 700 by design. Three
-# branches (web, hal, device) `mv` such a directory INTO PLACE, which silently
-# changes the installed tree's permissions — and the web root is read by nginx as
-# www-data, so a 700 root-owned /usr/share/nginx/html/setup answers 403 to every
-# request. The health check then fails and the update rolls itself back: an OTA
-# that can never succeed, for a reason nothing in the log names. Publish the
-# staged tree with the mode the live one had (default 0755).
+# mktemp -d staging dirs are 0700; publish with the live tree's mode (nginx needs to read the web root).
 publish_mode() {
   local staged="$1" reference="$2"
-  # Copy the live tree's mode only when it is at least world-readable+executable.
-  # Inheriting blindly propagates a bad mode forever: a tree published once by
-  # the old 0700 path hands 0700 to its successor, and to the one after that.
-  # 0755 is what the imager installs, so it is the floor.
+  # Floor at 0755 so a bad mode doesn't propagate forever.
   local ref_mode=""
   [ ! -d "$reference" ] || ref_mode="$(stat -c "%a" "$reference" 2>/dev/null || true)"
   case "$ref_mode" in
@@ -453,13 +405,7 @@ publish_mode() {
   esac
 }
 
-# A uv/virtualenv is NOT relocatable: every console script in .venv/bin carries
-# an absolute shebang. Building the venv inside the staging directory and moving
-# it leaves `#!/opt/.hal.new.XXXXXX/.venv/bin/python`, so systemd fails the unit
-# with 203/EXEC once the staging path is gone. Normally invisible because the
-# previous .venv is copied in and its shebangs already point at $HAL_DIR — it
-# only bites on a fresh install, which is exactly the recovery path. Rewrite the
-# staged path to the final one after the move; a no-op when nothing refers to it.
+# Venvs aren't relocatable: rewrite the staging path in .venv shebangs after the move (else 203/EXEC).
 relocate_venv_scripts() {
   local venv="$1" from="$2" to="$3"
   [ -d "$venv/bin" ] || return 0
@@ -468,36 +414,14 @@ relocate_venv_scripts() {
   [ ! -f "$venv/pyvenv.cfg" ] || sed -i "s|$from|$to|g" "$venv/pyvenv.cfg"
 }
 
-# Crash safety for the publish window.
-#
-# Every branch publishes by moving the live tree aside and renaming a staged one
-# into its place. Between those two renames the component simply does not exist
-# on disk — and if the process dies there (a `systemctl restart bootstrap` kills
-# the whole cgroup, an SSH hangup, a power cut), nothing restores it: that is how
-# a device was left with no /opt/hal at all. Record the pending move, and put the
-# tree back if we exit before publishing.
-#
-# SIGKILL and power loss cannot be trapped; recovery for those is the reinstall
-# path (a missing tree is treated as "install fresh", see the HAL branch).
+# Crash safety: record the pending move and restore the live tree if we exit before publishing.
+# SIGKILL/power loss can't be trapped; the reinstall path covers those.
 PENDING_MOVED_FROM=""
 PENDING_MOVED_TO=""
 PENDING_RESTORE_SERVICES=""
 
-# Services this run has stopped and not yet brought back.
-#
-# Separate from the pending-publish state above, and armed EARLIER, because the
-# two windows are not the same. A branch stops its services first and only then
-# starts moving trees around, so an exit between those two points used to leave
-# the device with its services down and nothing to bring them back:
-# mark_publish_pending had not run yet, so on_exit had no restore function to
-# call. Device-observed 26/08/2026 on lamp-0c89: `software-update device` wrote
-# its service snapshot, ran `systemctl stop os-server`, and died on the SIGTERM
-# that same stop delivered (the updater was inside os-server's cgroup). hal was
-# never even reached, os-server stayed down, and the run left no other trace.
-#
-# Arm this immediately before the first `systemctl stop` of a branch and disarm
-# it once services are confirmed back, so EVERY exit path in between — signal,
-# `set -e`, an explicit `exit 1` — restores them.
+# Restart services this run stopped on any exit path (signal, set -e, exit 1).
+# Arm right before a branch's first `systemctl stop`; disarm once services are back.
 STOPPED_SERVICES_RESTORE=""
 
 arm_service_restore() {
@@ -512,8 +436,6 @@ mark_publish_pending() {
   PENDING_MOVED_FROM="$1"   # where the live tree used to be
   PENDING_MOVED_TO="$2"     # where it was moved to
   PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
-  # Callers that publish also stopped services; keep the longer-lived latch in
-  # step so it stays armed for a branch that never called arm_service_restore.
   [ -z "${3:-}" ] || arm_service_restore "$3"
 }
 
@@ -529,9 +451,7 @@ on_exit() {
     echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
     mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
   fi
-  # After the tree is back, not before: restarting a service onto a half-moved
-  # tree would start it against the staging path. One call only — the latch is
-  # what the publish window used to duplicate.
+  # Only after the tree is restored, so services don't start against the staging path.
   if [ -n "$STOPPED_SERVICES_RESTORE" ]; then
     echo "[software-update] exiting with services stopped — bringing them back" >&2
     "$STOPPED_SERVICES_RESTORE" || true
@@ -552,40 +472,14 @@ restore_hal_backup() {
 
 [ "$(id -u)" -ne 0 ] && { echo "Run as root."; exit 1; }
 
-# Hand the work to a transient systemd SERVICE and wait for it.
-#
-# Every branch stops the component it replaces, and three of them stop whatever
-# is hosting the caller: `os-server` and `device` stop os-server, which serves
-# the web CLI; `web` stops nginx, which carries that CLI's connection. Run
-# inline, the updater is a child of that shell, so the stop kills its cgroup —
-# SIGKILL, no trap, update abandoned half-done. Device-observed 26/08/2026 on
-# lamp-0c89: `software-update device` published the profile and died before
-# applying its rootfs, leaving os-server down and a staging dir behind.
-#
-# A transient service has no client process to kill: systemd owns it, in its own
-# cgroup, so it runs to completion no matter what happens to the caller. --wait
-# keeps the familiar CLI behaviour — the shell blocks and gets the real exit
-# code — but if that shell dies, the update carries on instead of aborting.
-#
-# NOT `--scope`: a scope IS owned by the systemd-run client, which lives in the
-# caller's cgroup, so killing the caller stops the scope. That was tried on
-# 26/08/2026 and made things worse (it broke the SSH-hangup path that used to
-# recover cleanly), so do not swap this back.
-#
-# Output goes to the journal rather than the terminal; the line below says how
-# to follow it. Probe first so a box without systemd-run still updates inline.
+# Run the update in a transient systemd service (--wait): stopping os-server/nginx kills the
+# caller's cgroup, so an inline run would be abandoned half-done. Not --scope: a scope dies with its client.
 if [ -z "${SOFTWARE_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 2>&1; then
   SU_UNIT="software-update-$1-$$"
   if systemd-run --unit="probe-$SU_UNIT" --collect --quiet --wait \
       --service-type=oneshot -- /bin/true >/dev/null 2>&1; then
     SELF="$(readlink -f "$0" 2>/dev/null || echo "$0")"
-    # Carry the caller's overrides across. A transient unit starts from a clean
-    # environment, so anything the operator exported would be dropped —
-    # SILENTLY, which is the dangerous part: `OTA_METADATA_URL=<staging-feed>
-    # software-update web` ran against the PRODUCTION feed and reported success
-    # (measured 26/08/2026). Every variable this script reads from the
-    # environment belongs in this list; keep it in step with the `${VAR:-}`
-    # reads above.
+    # Transient units start with a clean env; forward every ${VAR:-} this script reads.
     SU_ENV=()
     for v in OTA_METADATA_URL HAL_UV_CACHE; do
       [ -z "${!v:-}" ] || SU_ENV+=("--setenv=$v=${!v}")
@@ -597,13 +491,7 @@ if [ -z "${SOFTWARE_UPDATE_DETACHED:-}" ] && command -v systemd-run >/dev/null 2
   fi
   echo "[software-update] transient units unavailable — running inline" >&2
 fi
-# One update at a time, whoever asks. Two concurrent runs destroy each other:
-# the component branches move the installed tree to <name>.previous, so a second
-# run `rm -rf`s the first run's ONLY backup and then fails on the missing source
-# — which is exactly how a device ended up with no /opt/hal, no staging dir and
-# no hal.previous (two clicks on the web update button, 30s apart, sailed past
-# the per-target rate limit). The lock is released when the process exits, so a
-# killed run cannot wedge it.
+# One update at a time: concurrent runs delete each other's .previous backup.
 exec 9>/var/lock/software-update.lock
 if ! flock -n 9; then
   echo "[software-update] another update is already running (pid $(cat /var/lock/software-update.pid 2>/dev/null)) — refusing to run a second one"
@@ -704,10 +592,7 @@ if [ "$APP" = "rollback" ]; then
     fi
   fi
   install -D -m 0755 "$BACKUP" "$DEST"
-  # codex.service / opencode.service / picoclaw.service only exist once the
-  # runtime has been switched to them (the binary is baked on every lamp/intern-v2 image
-  # regardless) — restoring the binary on a device running another runtime must
-  # not fail the rollback.
+  # Runtime units exist only after switching to that runtime; don't fail the rollback.
   if { [ "$ROLLBACK_TARGET" = "codex" ] || [ "$ROLLBACK_TARGET" = "opencode" ] || [ "$ROLLBACK_TARGET" = "picoclaw" ]; } && [ ! -f "/etc/systemd/system/${UNIT}.service" ]; then
     echo "[software-update] ${UNIT}.service absent (runtime not active) — binary restored, no restart"
   else
@@ -743,8 +628,7 @@ METADATA_PAYLOAD=$(mktemp)
 ZIP_TMP=""
 DIR_TMP=""
 trap on_exit EXIT
-# INT/TERM/HUP run the same restore: the default action for these would skip the
-# EXIT trap's cleanup in some shells, and HUP is what an interrupted SSH sends.
+# INT/TERM/HUP run the same restore; HUP is what an interrupted SSH sends.
 trap 'exit 130' INT
 trap 'exit 143' TERM HUP
 curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" -o "$METADATA_TMP" "$OTA_METADATA_URL" || { echo "Failed to fetch metadata from $OTA_METADATA_URL"; exit 1; }
@@ -762,11 +646,9 @@ else
   cp "$METADATA_TMP" "$METADATA_PAYLOAD"
 fi
 if [ "$APP" = "device" ]; then
-  # Device profile lives nested under devices.<type>; resolve THIS device's type.
   DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
   [ -z "$DEVICE_TYPE" ] && DEVICE_TYPE="$(jq -r '.device_type // empty' /root/config/config.json 2>/dev/null)"
-  # No lamp fallback: pulling the lamp profile onto a device whose class can't be
-  # resolved would overwrite its persona with the wrong one — refuse instead.
+  # No lamp fallback: the wrong profile would overwrite this device's persona.
   [ -z "$DEVICE_TYPE" ] && { echo "ERROR: device_type not found in /opt/hal/.env or /root/config/config.json — cannot resolve device profile"; exit 1; }
   VERSION=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].version // empty' "$METADATA_PAYLOAD")
   URL=$(jq -r --arg t "$DEVICE_TYPE" '.devices[$t].url // empty' "$METADATA_PAYLOAD")
@@ -817,15 +699,8 @@ elif [ "$APP" = "bootstrap" ]; then
 elif [ "$APP" = "openclaw" ]; then
   update_openclaw "$VERSION"
 elif [ "$APP" = "codex" ]; then
-  # The Codex CLI is a static musl binary published on GitHub releases — there
-  # is no url/sha256 in metadata (nothing of ours is hosted on GCS for it), so
-  # the release URL is composed from the version. Metadata carries the BARE
-  # semver (0.149.1) because that is what `codex --version` prints; the upstream
-  # tag adds the "rust-v" prefix, re-added here. Keep in step with the same
-  # download in runtimes/codex/install.sh and scripts/imager/build-orangepi.sh.
-  #
-  # Only the binary is touched: config.toml / .env / persona stay owned by the
-  # presync hook, so nothing here can clobber a device's Codex configuration.
+  # Codex: static musl binary from GitHub releases; metadata carries bare semver, tag adds "rust-v".
+  # Only the binary is touched; config stays owned by presync.
   [ -x /usr/local/bin/codex ] || { echo "codex is not installed on this device — switch the runtime to codex first"; exit 1; }
   case "$(uname -m)" in
     aarch64|arm64) CODEX_ASSET="codex-aarch64-unknown-linux-musl.tar.gz" ;;
@@ -835,9 +710,7 @@ elif [ "$APP" = "codex" ]; then
   CODEX_URL="https://github.com/openai/codex/releases/download/rust-v${VERSION}/${CODEX_ASSET}"
   DIR_TMP=$(mktemp -d)
   echo "[software-update] downloading $CODEX_URL"
-  # No sha256 to verify against (upstream artifact, not ours) — the tar extract
-  # below is the integrity check: a truncated or corrupt download fails here
-  # rather than landing a broken binary in /usr/local/bin.
+  # No sha256 (upstream artifact); tar extraction is the integrity check.
   download_verified "$CODEX_URL" "$DIR_TMP/$CODEX_ASSET" "" || { echo "Failed to download codex $VERSION"; exit 1; }
   tar -xzf "$DIR_TMP/$CODEX_ASSET" -C "$DIR_TMP" || { echo "Corrupt codex tarball for $VERSION"; exit 1; }
   CODEX_SRC="$DIR_TMP/${CODEX_ASSET%.tar.gz}"
@@ -845,9 +718,7 @@ elif [ "$APP" = "codex" ]; then
   install -D -m 0755 /usr/local/bin/codex /root/bootstrap/rollback/codex.previous
   install -m 0755 "$CODEX_SRC" /usr/local/bin/codex
   /usr/local/bin/codex --version || { echo "codex binary not runnable after update"; exit 1; }
-  # The unit only exists once the device has actually switched to the codex
-  # runtime. Every lamp/intern-v2 image bakes the BINARY regardless of runtime
-  # (scripts/imager/build-orangepi.sh), so a restart here must not be assumed.
+  # The unit exists only after switching to the codex runtime.
   if [ -f /etc/systemd/system/codex.service ]; then
     systemctl restart codex
   else
@@ -855,24 +726,14 @@ elif [ "$APP" = "codex" ]; then
   fi
   echo "codex updated to $VERSION"
 elif [ "$APP" = "claudecode" ]; then
-  # Claude Code is installed by Anthropic's own installer, which owns
-  # /root/.local/share/claude/versions/<ver> and repoints
-  # /root/.local/bin/claude at it; /usr/local/bin/claude is only our symlink
-  # into that (runtimes/claudecode/install.sh + the imager pre-bake). So the
-  # update is "re-run the installer pinned to $VERSION" — NOT a binary copy,
-  # and there is deliberately no .previous backup: the installer keeps the old
-  # version dir, so a downgrade is `software-update claudecode` with the older
-  # version published, not a rollback of a file we saved.
-  #
-  # The installer takes the version as a POSITIONAL arg: install.sh [stable|latest|VERSION].
+  # Claude Code: re-run Anthropic's installer pinned to $VERSION (positional arg); no .previous backup,
+  # the installer keeps old version dirs.
   [ -x /usr/local/bin/claude ] || { echo "claude is not installed on this device — switch the runtime to claudecode first"; exit 1; }
   export HOME=/root
   curl -fsSL https://claude.ai/install.sh | bash -s -- "$VERSION" || { echo "claude installer failed for $VERSION"; exit 1; }
-  # Re-point our stable path in case the installer replaced the symlink target.
   [ -x /root/.local/bin/claude ] && ln -sf /root/.local/bin/claude /usr/local/bin/claude
   /usr/local/bin/claude --version || { echo "claude not runnable after update"; exit 1; }
-  # claudecode.service only exists once the runtime was switched to claudecode;
-  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  # The unit exists only after switching to the claudecode runtime.
   if [ -f /etc/systemd/system/claudecode.service ]; then
     systemctl restart claudecode
   else
@@ -880,29 +741,20 @@ elif [ "$APP" = "claudecode" ]; then
   fi
   echo "claudecode updated to $VERSION"
 elif [ "$APP" = "opencode" ]; then
-  # OpenCode ships via its own official installer, which does arch detection and
-  # tarball extraction itself; we only pin the version and force the install dir.
-  # Mirrors runtimes/opencode/install.sh and the imager pre-bake exactly — keep
-  # the three in step.
-  #
-  # OPENCODE_INSTALL_DIR MUST prefix `bash` (the process running the installer),
-  # NOT `curl` — in a `VAR=x curl … | bash` pipeline the var binds to curl only,
-  # and the installer would fall back to its ~/.opencode/bin default.
+  # OpenCode: official installer, pinned version. OPENCODE_INSTALL_DIR must prefix `bash`, not `curl`.
   [ -x /usr/local/bin/opencode ] || { echo "opencode is not installed on this device — switch the runtime to opencode first"; exit 1; }
   export HOME=/root
   install -D -m 0755 /usr/local/bin/opencode /root/bootstrap/rollback/opencode.previous
   curl -fsSL https://opencode.ai/install | OPENCODE_INSTALL_DIR=/usr/local/bin bash -s -- --version "$VERSION" \
     || { echo "opencode installer failed for $VERSION"; exit 1; }
-  # Belt-and-suspenders, same as install.sh: the official installer has ignored
-  # OPENCODE_INSTALL_DIR before and dropped the binary at its own default.
+  # The installer has ignored OPENCODE_INSTALL_DIR before.
   if [ ! -x /usr/local/bin/opencode ]; then
     OC_SRC="$(command -v opencode 2>/dev/null || true)"
     [ -x "$OC_SRC" ] || OC_SRC="/root/.opencode/bin/opencode"
     [ -x "$OC_SRC" ] && install -m 0755 "$OC_SRC" /usr/local/bin/opencode
   fi
   /usr/local/bin/opencode --version || { echo "opencode not runnable after update"; exit 1; }
-  # opencode.service only exists once the runtime was switched to opencode;
-  # every lamp/intern-v2 image bakes the CLI regardless of runtime.
+  # The unit exists only after switching to the opencode runtime.
   if [ -f /etc/systemd/system/opencode.service ]; then
     systemctl restart opencode
   else
@@ -910,22 +762,8 @@ elif [ "$APP" = "opencode" ]; then
   fi
   echo "opencode updated to $VERSION"
 elif [ "$APP" = "hermes" ]; then
-  # Hermes is a git install (runtimes/hermes/install.sh stamps
-  # /usr/local/lib/hermes-agent/.install_method=git). Two modes:
-  #
-  #   PINNED  — metadata carries hermes.commit (scripts/release/upload-hermes.sh):
-  #             check that exact commit out through the upstream installer
-  #             (`--commit <sha> --force-commit`, the flags the imager bakes
-  #             with), then rebuild the venv/deps. The landed version MUST equal
-  #             $VERSION — a mismatch is a failure, the pin is the whole point.
-  #   UNPINNED — no hermes.commit (metadata published before pinning existed):
-  #             `hermes update` to upstream HEAD; the version we land on is only
-  #             EXPECTED, so a mismatch is a warning. The bootstrap worker never
-  #             auto-applies this mode (it would re-trigger forever); it is the
-  #             manual SSH path only.
-  #
-  # Unit is hermes-gateway.service, not hermes.service (declared in
-  # /usr/local/lib/os-runtimes/hermes/service).
+  # Hermes git install. Pinned (hermes.commit): exact checkout, version must match.
+  # Unpinned: `hermes update` to HEAD, mismatch only warns (manual path only).
   command -v hermes >/dev/null 2>&1 || { echo "hermes is not installed on this device — switch the runtime to hermes first"; exit 1; }
   export HOME=/root
   HERMES_COMMIT=$(jq -r '.hermes.commit // empty' "$METADATA_PAYLOAD")
@@ -950,27 +788,15 @@ elif [ "$APP" = "hermes" ]; then
   else
     echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
   fi
-  # os-server patches two Hermes sources at EnsureOnboarding (runtimes/hermes/
-  # cache_usage.go → gateway/platforms/api_server.py, runs_patch.go →
-  # api_server_runs.py). A fresh checkout drops both: the next turns fall back
-  # to /v1/responses and report no cache usage (lamp-dbda 2026-09-16 after a
-  # manual hermes update — web showed no cache column though Hermes logged 86-99%
-  # hits). Restart os-server so onboarding re-applies them.
+  # A fresh checkout drops os-server's Hermes source patches; restart os-server to re-apply them.
   if systemctl is-active --quiet os-server; then
     echo "[software-update] restarting os-server to re-apply the Hermes compatibility patches"
     systemctl restart os-server
   fi
   echo "hermes updated to $HERMES_NOW"
 elif [ "$APP" = "picoclaw" ]; then
-  # PicoClaw is a raw binary from our own GitHub releases (no tarball, unlike
-  # codex). Mirrors runtimes/picoclaw/install.sh and the imager pre-bake.
-  #
-  # VERSION here is the release TAG (v0.3.1-fixvision), not a semver: PicoClaw's
-  # `picoclaw version` prints an unrelated build description
-  # ("nightly-44-g1959045c-dirty"), so the tag cannot be recovered from the
-  # binary. That is why the installed tag is stamped to
-  # /usr/local/lib/os-runtimes/picoclaw/installed-version below — a version
-  # check (here or in a future bootstrap worker) must read that stamp.
+  # PicoClaw: raw binary from our releases. VERSION is the release tag; the binary can't report it,
+  # so it is stamped to /usr/local/lib/os-runtimes/picoclaw/installed-version.
   [ -x /usr/local/bin/picoclaw ] || { echo "picoclaw is not installed on this device — switch the runtime to picoclaw first"; exit 1; }
   case "$(uname -m)" in
     aarch64|arm64) PICO_ASSET="picoclaw-linux-arm64" ;;
@@ -981,17 +807,14 @@ elif [ "$APP" = "picoclaw" ]; then
   DIR_TMP=$(mktemp -d)
   echo "[software-update] downloading $PICO_URL"
   download_verified "$PICO_URL" "$DIR_TMP/$PICO_ASSET" "" || { echo "Failed to download picoclaw $VERSION"; exit 1; }
-  # No tarball and no sha256 (our own upstream artifact), so the only integrity
-  # gate is running the new binary before it is trusted — do it from the temp
-  # dir, BEFORE overwriting the installed one.
+  # No sha256: run the new binary from the temp dir before replacing the installed one.
   chmod 0755 "$DIR_TMP/$PICO_ASSET"
   "$DIR_TMP/$PICO_ASSET" --no-color version >/dev/null 2>&1 || { echo "Downloaded picoclaw $VERSION is not runnable — keeping the current binary"; exit 1; }
   install -D -m 0755 /usr/local/bin/picoclaw /root/bootstrap/rollback/picoclaw.previous
   install -m 0755 "$DIR_TMP/$PICO_ASSET" /usr/local/bin/picoclaw
   mkdir -p /usr/local/lib/os-runtimes/picoclaw
   echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
-  # picoclaw.service only exists once the runtime was switched to picoclaw;
-  # every lamp/intern-v2 image bakes the binary regardless of runtime.
+  # The unit exists only after switching to the picoclaw runtime.
   if [ -f /etc/systemd/system/picoclaw.service ]; then
     systemctl restart picoclaw
   else
@@ -1033,18 +856,13 @@ elif [ "$APP" = "hal" ]; then
   UV_BIN="$(find_hal_uv)" || exit 1
   HAL_EXTRA="$(hal_dependency_extra)"
   HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
-  # Smart Turn is shared by non-Live voice backends on lamp images. Reachy's
-  # SDK requires a different ONNX version and cannot install Pipecat.
   if [ "$HAL_EXTRA" != "reachy" ]; then
     HAL_EXTRA_ARGS+=(--extra pipecat)
   fi
   save_hal_service_state
   arm_service_restore restore_hal_service_state
   systemctl stop hal 2>/dev/null || true
-  # A missing $HAL_DIR is a REINSTALL, not an error: an interrupted earlier run
-  # can leave the runtime moved away with nothing to move back, and aborting
-  # here would make the one command that could repair the device refuse to run.
-  # There is simply no rollback point for this run — say so rather than pretend.
+  # A missing $HAL_DIR is a reinstall (no rollback point), not an error.
   if [ -d "$HAL_DIR" ]; then
     rm -rf "$ROLLBACK_DIR/hal.previous"
     if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
@@ -1057,18 +875,7 @@ elif [ "$APP" = "hal" ]; then
     rm -rf "$ROLLBACK_DIR/hal.previous"
   fi
   DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
-  # The uv cache lives OUTSIDE the runtime tree, and is never copied.
-  #
-  # It used to sit at $HAL_DIR/.uv-cache, so every update copied it (and .venv)
-  # into the staging tree before syncing. That cache only grows — measured at
-  # 2.5G with a 2.3G .venv beside it — so each update moved ~4.8G across eMMC
-  # before doing any real work, taking minutes and making the device look hung
-  # while HAL was down. Keeping it at a fixed path next to $HAL_DIR (same
-  # filesystem, so uv can hardlink instead of copying package contents into the
-  # venv) removes both copies and stops the cache being duplicated per update.
-  #
-  # Migrate an in-tree cache the first time we see one, so a device does not
-  # re-download everything after this change.
+  # uv cache lives outside the runtime tree (same filesystem for hardlinks) so updates don't copy it.
   HAL_UV_CACHE="${HAL_UV_CACHE:-$(dirname "$HAL_DIR")/.uv-cache-hal}"
   if [ ! -d "$HAL_UV_CACHE" ] && [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then
     echo "[software-update] migrating uv cache out of the runtime tree → $HAL_UV_CACHE"
@@ -1081,8 +888,6 @@ elif [ "$APP" = "hal" ]; then
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
-    # New archives carry the validated lock. Preserve legacy archive support,
-    # but never silently re-resolve a release that includes one.
     HAL_LOCK_ARGS=()
     [ ! -f uv.lock ] || HAL_LOCK_ARGS+=(--locked)
     "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}" "${HAL_LOCK_ARGS[@]}" || exit 1
@@ -1139,7 +944,6 @@ elif [ "$APP" = "device" ]; then
   unzip -o -q "$ZIP_TMP" -d "$DIR_TMP"
   [ -f "$DIR_TMP/ROBOT.md" ] || { echo "No ROBOT.md in device profile"; exit 1; }
   [ -d "$DEST" ] || { echo "No installed device profile at $DEST"; exit 1; }
-  # The persistent hardware selection is not shipped in the OTA overlay.
   HARDWARE_PROFILE=""
   [ ! -e /etc/autonomous/hardware-profile ] || HARDWARE_PROFILE=$(sed 's/^[[:space:]]*//;s/[[:space:]]*$//' /etc/autonomous/hardware-profile) \
     || { echo "Cannot read hardware profile selection" >&2; exit 1; }
@@ -1161,23 +965,8 @@ elif [ "$APP" = "device" ]; then
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
   clear_publish_pending
-  # Apply the profile's rootfs overlay, /opt/hal/.env included.
-  #
-  # The repo is the only source of a device's .env: a dev edits
-  # robots/<type>/rootfs/opt/hal/.env, publishes with `make upload-device`, and
-  # every device picks it up on its next `software-update device`. Anything
-  # edited directly on a device is a temporary experiment from an SSH session,
-  # and is MEANT to be overwritten by the next update — that is how the machine
-  # gets back to what the repo says.
-  #
-  # This used to back .env up and restore it afterwards, which quietly broke
-  # that flow: the new file reached /opt/devices/<type>/rootfs/opt/hal/.env and
-  # was then thrown away, so no running device ever received an .env change
-  # again — only freshly flashed ones did. Device-observed 26/08/2026 on
-  # lamp-0c89: a published HAL_REALTIME_FILLER_DELAY_S never reached the live
-  # file and HAL kept running the old value. Do not re-add the backup; if a
-  # value has to differ per unit, it belongs in that unit's profile in the repo.
-  # Selected hardware overrides are applied above before snapshot/publication.
+  # Apply the profile rootfs overlay including /opt/hal/.env; the repo is the source of truth,
+  # so on-device .env edits are intentionally overwritten. Do not re-add a backup.
   if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
       || ! restore_device_service_state || ! check_device_profile; then
     echo "device profile apply or health check failed; restoring the known-good profile" >&2

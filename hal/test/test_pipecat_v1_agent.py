@@ -1,10 +1,4 @@
-"""pipecat_v1 provider: the VoiceAgentBase contract it produces from pipeline events.
-
-The Pipecat side (pipecat_pipeline.py) reports frames as plain `_ev_*` calls,
-so the turn / generation / tool bookkeeping is tested here without a pipeline
-and without pipecat installed. The one adapter test that needs the package
-skips when it is absent.
-"""
+"""pipecat_v1 provider: the VoiceAgentBase contract it produces from pipeline events."""
 
 import asyncio
 import queue
@@ -84,9 +78,6 @@ def reply(agent, *chunks: str):
     agent._ev_response_ended()
 
 
-# --- turn-based mode --------------------------------------------------------------
-
-
 def test_text_reply_is_reset_then_text_then_turn_done(monkeypatch):
     agent = make_agent(monkeypatch, live=False)
     agent._ev_user_turn_started()
@@ -97,7 +88,6 @@ def test_text_reply_is_reset_then_text_then_turn_done(monkeypatch):
     assert [e.output.text for e in events[1:3]] == ["Four", "."]
     assert isinstance(events[3], TurnDoneEvent) and events[3].execution_completed
     assert events[3].user_turn_id == agent._user_turn_id != ""
-    # every output of one user turn carries the same generation
     assert {e.gen for e in events[:3]} == {agent._gen}
 
 
@@ -105,7 +95,7 @@ def test_output_reset_only_once_per_user_turn(monkeypatch):
     agent = make_agent(monkeypatch, live=False)
     agent._ev_user_turn_started()
     reply(agent, "a")
-    agent._ev_response_started()  # a tool-result follow-up in the same turn
+    agent._ev_response_started()
     agent._ev_text("b")
     agent._ev_response_ended()
     resets = [e for e in drain(agent) if isinstance(e, OutputEvent) and isinstance(e.output, InterruptedOutput)]
@@ -123,7 +113,6 @@ def test_first_audio_proposes_start_and_commit_proposes_stop_then_finalizes(monk
     assert calls[2] == ("audio", 2048) and calls[3] == ("audio", 2048)
     assert calls[4:] == [("stop",), ("finalize",)]
     assert agent._turn_awaiting is True
-    # the next utterance opens a fresh proposal
     agent._sync_send_input(AudioInput(audio=frame))
     assert agent._handle.calls[6] == ("start",)
 
@@ -144,7 +133,6 @@ def test_empty_transcript_ends_a_committed_turn(monkeypatch):
     agent._ev_stt_turn_finalized(had_text=False)
     events = drain(agent)
     assert isinstance(events[-1], TurnDoneEvent) and not events[-1].execution_completed
-    # ...but a transcribed turn is left to the LLM
     agent._sync_send_input(AudioInput(audio=np.zeros(8, dtype=np.float32)))
     agent._sync_commit()
     agent._ev_stt_turn_finalized(had_text=True)
@@ -157,14 +145,11 @@ def test_interruption_in_turn_mode_emits_no_turn_done(monkeypatch):
     agent._ev_response_started()
     agent._ev_text("half a rep")
     gen_before = agent._gen
-    agent._ev_interruption()  # the next utterance's first frame cut the reply
+    agent._ev_interruption()
     events = drain(agent)
     assert not any(isinstance(e, TurnDoneEvent) for e in events)
     assert agent._gen == gen_before + 1
     assert not agent._response_open
-
-
-# --- tool calls -------------------------------------------------------------------------
 
 
 def test_tool_call_defers_turn_done_to_the_follow_up_response(monkeypatch):
@@ -172,7 +157,7 @@ def test_tool_call_defers_turn_done_to_the_follow_up_response(monkeypatch):
     agent._ev_user_turn_started()
     agent._ev_response_started()
     agent._ev_calls_started(["c1"])
-    agent._ev_response_ended()  # tool-call-only response: no TurnDone yet
+    agent._ev_response_ended()
     assert not any(isinstance(e, TurnDoneEvent) for e in drain(agent))
     agent._ev_call_result("c1", run_llm=True)
     assert drain(agent) == []
@@ -200,12 +185,9 @@ def test_end_turn_fences_the_rest_of_the_user_turn(monkeypatch):
     agent._ev_response_started()
     agent._ev_calls_started(["c1"])
     agent._ev_response_ended()
-    # the orchestrator delegated and stopped reading
     agent.end_turn()
-    # ...and the model still answers the tool result
     agent._ev_call_result("c1", run_llm=True)
     reply(agent, "Sure, delegating that now.")
-    # next user turn
     agent._ev_user_turn_started()
     reply(agent, "Paris.")
     yielded = [o for o in agent.receive(stop_on_done=True)]
@@ -263,9 +245,6 @@ def test_unanswered_tool_call_times_out_with_an_error(monkeypatch):
     assert "error" in out and run_llm is False
 
 
-# --- live mode ------------------------------------------------------------------------------
-
-
 def test_live_mode_reports_user_speech_and_interruptions(monkeypatch):
     agent = make_agent(monkeypatch, live=True)
     agent._ev_user_turn_started()
@@ -275,11 +254,10 @@ def test_live_mode_reports_user_speech_and_interruptions(monkeypatch):
     agent._ev_response_started()
     agent._ev_text("Par")
     gen = agent._gen
-    agent._ev_interruption()  # the user spoke over the reply
+    agent._ev_interruption()
     events = drain(agent)
     speech = [e.output for e in events if isinstance(e, OutputEvent) and isinstance(e.output, UserSpeechOutput)]
     assert speech[0].method == "server_vad" and speech[0].endpoint_at is None
-    # interims are not surfaced; the final is
     assert speech[1].method == "provider_transcript" and speech[1].transcript == "What is the capital of France?"
     assert speech[1].transcript_finished
     assert speech[2].method == "server_vad" and speech[2].endpoint_at is not None
@@ -294,11 +272,11 @@ def test_live_mode_reports_user_speech_and_interruptions(monkeypatch):
 def test_live_transcripts_are_emitted_as_final_deltas_only(monkeypatch):
     agent = make_agent(monkeypatch, live=True)
     agent._ev_user_turn_started()
-    agent._ev_transcript("what is", False)            # interims never reach the pump
+    agent._ev_transcript("what is", False)
     agent._ev_transcript("What is the capital", False)
-    agent._ev_transcript("What is the capital of France?", True)   # Flux EndOfTurn
-    agent._ev_transcript("What is the capital of France? And Spain?", True)  # a second final
-    agent._ev_transcript("What is the capital", True)  # shorter rewrite: nothing new
+    agent._ev_transcript("What is the capital of France?", True)
+    agent._ev_transcript("What is the capital of France? And Spain?", True)
+    agent._ev_transcript("What is the capital", True)
     chunks = [
         (e.output.transcript, e.output.transcript_finished)
         for e in drain(agent)
@@ -307,7 +285,6 @@ def test_live_transcripts_are_emitted_as_final_deltas_only(monkeypatch):
     assert chunks == [
         ("What is the capital of France?", True), (" And Spain?", True), ("", True),
     ], chunks
-    # a rewritten final only contributes the words after the common prefix
     agent._ev_transcript("What is the Capital of France? And Spain? Thanks", True)
     chunk = drain(agent)[-1].output.transcript
     assert chunk == " Thanks"
@@ -320,9 +297,6 @@ def test_live_mode_ignores_commits(monkeypatch):
     agent._sync_commit()
     assert agent._handle.calls == [("audio", 16)]
     assert drain(agent) == []
-
-
-# --- health ---------------------------------------------------------------------------------
 
 
 def test_fail_fast_only_unblocks_a_waiting_turn(monkeypatch):
@@ -349,9 +323,6 @@ def test_orchestrator_factory_builds_pipecat_v1_with_the_voice_stt_provider(monk
     assert agent._config.instructions == "be brief"
 
 
-# --- STT adapter (needs pipecat) ---------------------------------------------------------------
-
-
 def test_stt_adapter_reads_the_turn_flag_after_close():
     pytest.importorskip("pipecat")
     from hal.realtime.voice_agent import pipecat_stt
@@ -370,7 +341,6 @@ def test_stt_adapter_reads_the_turn_flag_after_close():
             self.audio += data
 
         def close(self):
-            # the server flushes the final only on CloseStream
             self.h["cb"]("hello there", True)
             self.closed.set()
 
@@ -387,7 +357,7 @@ def test_stt_adapter_reads_the_turn_flag_after_close():
     )
     stt._ops.put(b"\x00" * 64)
     stt._ops.put(pipecat_stt._OP_FINALIZE)
-    stt._ops.put(pipecat_stt._OP_FINALIZE)  # a commit with no audio in between
+    stt._ops.put(pipecat_stt._OP_FINALIZE)
     stt._ops.put(pipecat_stt._OP_STOP)
     stt._sender_loop()
     assert transcripts == [("hello there", True)]

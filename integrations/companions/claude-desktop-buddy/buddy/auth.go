@@ -11,14 +11,8 @@ import (
 	"golang.org/x/crypto/bcrypt"
 )
 
-// Authenticator validates the admin-password Bearer token the plugin presents
-// on LAN-facing endpoints. The source of truth is the OS server's config.json
-// (shared on /root/config): admin_password_hash is the bcrypt hash of the same
-// password used to log into the web UI, so "the device password" means exactly
-// one thing across web + buddy. llm_api_key is also accepted so machine callers
-// (curl, scripts) keep working — this mirrors the OS server's adminAuthMiddleware.
-//
-// It fails closed: if neither credential is configured, Authorize always denies.
+// Authenticator validates the admin Bearer token against the OS server config.json (admin_password_hash or llm_api_key).
+// It fails closed: with no credential configured, Authorize always denies.
 type Authenticator struct {
 	path string
 
@@ -39,9 +33,7 @@ func NewAuthenticator(osConfigPath string) *Authenticator {
 	return a
 }
 
-// refresh reloads credentials when config.json changes on disk, so a password
-// rotation in the web UI takes effect without restarting the daemon. The bcrypt
-// plaintext cache is cleared on reload because the hash may have changed.
+// refresh reloads credentials when config.json changes, clearing the plaintext cache.
 func (a *Authenticator) refresh() {
 	fi, err := os.Stat(a.path)
 	if err != nil {
@@ -68,10 +60,7 @@ func (a *Authenticator) refresh() {
 	a.verified = ""
 }
 
-// Authorize reports whether secret is the device admin password (or the machine
-// API key). The correct-password hot path is a constant-time string compare
-// against the cached plaintext, so bcrypt only runs on first use / after a
-// rotation — not on every event the plugin pushes.
+// Authorize reports whether secret is the admin password or API key; the hot path is a constant-time compare against the cached plaintext.
 func (a *Authenticator) Authorize(secret string) bool {
 	if secret == "" {
 		return false

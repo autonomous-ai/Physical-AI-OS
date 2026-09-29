@@ -1,8 +1,4 @@
-// visualizer.js — Canvas frequency visualizer
-//
-// Duo uses Three.js for 3D robot visualization + MusicNoteSystem particles.
-// We use a 2D canvas with frequency bars + waveform + beat flash,
-// since Autonomous OS robots don't have a standard 3D model to render.
+// visualizer.js — 2D canvas frequency bars, waveform and beat flash.
 
 export class Visualizer {
   constructor(canvas) {
@@ -10,11 +6,9 @@ export class Visualizer {
     this.ctx = canvas.getContext('2d');
     this._resize();
 
-    // Smooth values for animation
     this._smoothBars = null;
     this._beatFlash = 0;
 
-    // Resize on window change
     this._resizeHandler = () => this._resize();
     window.addEventListener('resize', this._resizeHandler);
   }
@@ -32,36 +26,29 @@ export class Visualizer {
     this.h = rect.height;
   }
 
-  // Called every frame from dance engine tick
   draw(freqData, timeData, analysis) {
     const { w, h, ctx } = this;
     const { bass, mid, high, energy, isBeat } = analysis;
 
-    // Beat flash decay
     if (isBeat) this._beatFlash = 1.0;
     else this._beatFlash *= 0.9;
 
-    // --- Background fade (creates trail effect) ---
     ctx.fillStyle = `rgba(10, 10, 15, 0.3)`;
     ctx.fillRect(0, 0, w, h);
 
-    // Beat flash overlay
     if (this._beatFlash > 0.05) {
       ctx.fillStyle = `rgba(108, 92, 231, ${this._beatFlash * 0.12})`;
       ctx.fillRect(0, 0, w, h);
     }
 
-    // --- Frequency bars ---
     if (freqData) {
       this._drawBars(freqData);
     }
 
-    // --- Waveform ---
     if (timeData) {
       this._drawWaveform(timeData);
     }
 
-    // --- Center energy circle ---
     this._drawEnergyCircle(energy, isBeat);
   }
 
@@ -69,7 +56,6 @@ export class Visualizer {
     const { w, h, ctx } = this;
     const barCount = Math.min(freqData.length, 96);
 
-    // Initialize smooth bars
     if (!this._smoothBars || this._smoothBars.length !== barCount) {
       this._smoothBars = new Float32Array(barCount);
     }
@@ -80,7 +66,6 @@ export class Visualizer {
     for (let i = 0; i < barCount; i++) {
       const raw = freqData[i] / 255;
 
-      // Smooth falloff (bars fall slower than they rise)
       if (raw > this._smoothBars[i]) {
         this._smoothBars[i] = raw;
       } else {
@@ -91,7 +76,6 @@ export class Visualizer {
       const barH = val * h * 0.75;
       const x = i * (barW + gap);
 
-      // Color gradient based on frequency position
       const ratio = i / barCount;
       const r = ratio < 0.1 ? 160 : ratio < 0.4 ? 60 : Math.floor(180 * ratio);
       const g = ratio < 0.1 ? 50 : ratio < 0.4 ? Math.floor(160 + 95 * ratio) : 230;
@@ -100,7 +84,6 @@ export class Visualizer {
       const alpha = 0.3 + val * 0.7;
       ctx.fillStyle = `rgba(${r},${g},${b},${alpha})`;
 
-      // Mirror bars (top and bottom)
       const halfH = barH / 2;
       const centerY = h / 2;
       ctx.fillRect(x, centerY - halfH, barW, halfH);

@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# patch-security.sh — one-shot security patch for existing Lamp devices.
-#
-# Paste this entire script into the browser CLI (/monitor#cli) and press Enter.
-# Safe to run multiple times.
-#
-# PREREQUISITE: run OTA first so the device has the latest code:
-#   sudo software-update hal   ← same-origin middleware (server.py)
-#   sudo software-update os-server  ← sameOriginOrLAN guard (/api/sensing/event)
+# One-shot, idempotent security patch for existing Lamp devices; paste into the browser CLI (/monitor#cli).
+# Requires the latest hal and os-server OTA first.
 
 set -euo pipefail
 
@@ -15,10 +9,7 @@ HAL_UNIT="hal"
 DEVICE_TYPE="$(grep -E '^DEVICE_TYPE=' /opt/hal/.env 2>/dev/null | cut -d= -f2)"
 NGINX_CONF="/etc/nginx/conf.d/${DEVICE_TYPE}.conf"
 
-# Hash watched files before patching so the end-of-script restart only fires
-# when something actually changed. Idempotent re-runs (everything already
-# patched) leave services untouched — avoids the ~5s 502 window the unconditional
-# restart caused on a no-op re-run.
+# Hash watched files so services restart only when something changed.
 hash_file() { [ -e "$1" ] && sha256sum "$1" | awk '{print $1}' || echo "missing"; }
 NGINX_HASH_BEFORE=$(hash_file "$NGINX_CONF")
 HAL_HASH_BEFORE=$(hash_file "$HAL_SVC")
@@ -80,10 +71,7 @@ else:
     print("[patch] nginx /api/system/exec: already patched, skipping")
 PYEOF
 
-# 3a. nginx /api/system/shell: add WebSocket upgrade block if missing.
-# Devices provisioned from setup.sh before the dedicated shell block was added
-# fall through to the generic /api/ proxy (no Upgrade headers) — WS handshake
-# fails with "upgrade token not found in Connection header".
+# 3a. nginx /api/system/shell: add WebSocket upgrade block if missing
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -118,10 +106,7 @@ with open(path, "w") as f:
 print("[patch] nginx /api/system/shell: WebSocket upgrade block added")
 PYEOF
 
-# 3a'. nginx /api/buddy/ws: add WebSocket upgrade block if missing.
-# Same shape as /api/system/shell — generic /api/ proxy doesn't forward Upgrade
-# headers, so the Autonomous Buddy macOS companion's persistent WS handshake fails
-# without a dedicated location block. Must come BEFORE the generic /api/ block.
+# 3a'. nginx /api/buddy/ws: add WebSocket upgrade block if missing (must precede the generic /api/ block)
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -156,7 +141,7 @@ with open(path, "w") as f:
 print("[patch] nginx /api/buddy/ws: WebSocket upgrade block added")
 PYEOF
 
-# 3b'. nginx /openapi.json: add proxy block if missing (Swagger UI iframe spec)
+# 3b'. nginx /openapi.json: add proxy block if missing
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -191,7 +176,7 @@ with open(path, "w") as f:
 print("[patch] nginx /openapi.json: proxy block added")
 PYEOF
 
-# 3b. nginx /gw and /gw/: add allow/deny if missing (OpenClaw gateway local-only)
+# 3b. nginx /gw and /gw/: add allow/deny if missing
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -229,9 +214,7 @@ if patched_any:
         f.write(content)
 PYEOF
 
-# 3c. nginx security headers (CSP, X-Frame-Options, …): inject after
-# `client_max_body_size` if missing. Defends the monitor UI from clickjacking
-# + MIME-sniffing and shrinks future XSS blast radius.
+# 3c. nginx security headers: inject after client_max_body_size if missing
 python3 - "$NGINX_CONF" <<'PYEOF'
 import sys
 path = sys.argv[1]
@@ -355,21 +338,15 @@ else
   echo "[patch] ${HAL_UNIT}.service: EnvironmentFile already present, skipping"
 fi
 
-# 6. Bind os-server to 127.0.0.1 (defense-in-depth: port 5000 unreachable from LAN
-#    even if nginx config is wrong). Only needed on devices deployed before 2026-05-19.
+# 6. Bind os-server to 127.0.0.1
 OS_SVC="/etc/systemd/system/os-server.service"
 OS_BIN="/usr/local/bin/os-server"
 
-# Detect if the installed binary still binds 0.0.0.0 by checking its help/version
-# output — there is no config knob for this; it is baked into the binary.
-# New binaries (post-2026-05-19 OTA) bind 127.0.0.1 by default; old ones bind :5000.
-# The reliable signal is the OTA version. If lamp OTA is up-to-date, skip.
 LAMP_VERSION=$("$OS_BIN" --version 2>/dev/null | grep -oE '[0-9]+\.[0-9]+\.[0-9]+' | head -1 || true)
 echo "[patch] os-server version: ${LAMP_VERSION:-unknown}"
 echo "[patch] To close port 5000 on LAN: run 'sudo software-update os-server' to get the latest binary."
 
-# 7. Apply — only reload/restart when files actually changed. Avoids the
-# unnecessary 502 window on idempotent re-runs.
+# 7. Apply: reload/restart only when files changed
 NGINX_HASH_AFTER=$(hash_file "$NGINX_CONF")
 HAL_HASH_AFTER=$(hash_file "$HAL_SVC")
 

@@ -7,28 +7,8 @@ import (
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
-// System-originated prompts sent to the active agent gateway. Kept separate from
-// server.go so they can be translated without touching boot wiring, and so
-// future system messages (skill watcher updates, wellbeing nudges, …) have
-// an obvious home next to the wake greeting.
-
 // wakeGreetingPrompt is the system message fired right after the voice
-// pipeline becomes ready. SOUL.md already tells the agent to mirror the
-// owner's language, but an English prompt still primes English replies for
-// the very first turn — so emit the prompt itself in the owner's language.
-// Empty / unknown lang → English. Language is read from lib/i18n at call
-// time, so caller must i18n.SetConfig before invoking.
-//
-// The prompt being written in the owner's language is only an IMPLICIT
-// signal, and it loses to an explicit one: the agent runtime (openclaw /
-// hermes / …) carries session memory that may still hold the language from
-// before an stt_language switch. So the prompt also names the language
-// outright and tells the agent to ignore the earlier one, plus carries the
-// machine-readable [context: current_language=X] tag (same injection the
-// passive-sensing path uses in lib/sensingmsg for text-less events). It also
-// identifies the ready gateway and declared body capabilities so the agent can
-// apply its runtime-specific workspace instructions without assuming absent
-// hardware exists.
+// pipeline becomes ready.
 func wakeGreetingPrompt(agentRuntime, deviceType string, capabilities map[string]bool) string {
 	contextTags := i18n.LangContextTag() +
 		"\n[context: agent_runtime=" + agentRuntime + "]" +

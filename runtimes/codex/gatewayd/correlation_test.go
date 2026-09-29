@@ -29,7 +29,7 @@ func TestGatewaySteersConcurrentMessagesIntoActiveTurn(t *testing.T) {
 	binary := writeFakeCodex(t, dir, filepath.Join(dir, "argv.log"))
 	url, _ := startServer(t, binary, dir)
 	conn := dial(t, url, testToken)
-	_ = readFrame(t, conn) // ready
+	_ = readFrame(t, conn)
 	for i := 1; i <= 3; i++ {
 		if err := conn.WriteJSON(map[string]any{"type": "message.send", "id": fmt.Sprintf("req-%d", i), "run_id": fmt.Sprintf("run-%d", i), "payload": map[string]any{"content": fmt.Sprintf("followup-%d", i)}}); err != nil {
 			t.Fatal(err)
@@ -41,7 +41,7 @@ func TestGatewaySteersConcurrentMessagesIntoActiveTurn(t *testing.T) {
 	}
 	for _, frame := range frames {
 		if frame["type"] == "bridge.steered" {
-			continue // acknowledgement belongs to the merged follow-up itself
+			continue
 		}
 		if frame["request_id"] != "req-1" || frame["run_id"] != "run-1" {
 			t.Fatalf("steered turn must retain first correlation: %v", frame)
@@ -73,7 +73,7 @@ func TestGatewayInterruptsTimedOutAppServerTurn(t *testing.T) {
 	binary := writeFakeCodex(t, dir, filepath.Join(dir, "argv.log"))
 	url, _ := startServerTimeout(t, binary, dir, 25*time.Millisecond)
 	conn := dial(t, url, testToken)
-	_ = readFrame(t, conn) // ready
+	_ = readFrame(t, conn)
 	sendMessage(t, conn, "slow turn")
 	frames := readTurnFrames(t, conn)
 	last := frames[len(frames)-1]

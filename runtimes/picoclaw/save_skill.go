@@ -8,12 +8,9 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// Skill authoring / installing / listing for PicoClaw. Mirrors
-// runtimes/openclaw/save_skill.go — the rendering, extraction and tree walk are
-// shared in system/skills; only the target directory differs per backend.
-//
-// The runtime is NOT restarted for any of these: PicoClaw picks skills up per
-// session, the same contract its skill watcher relies on.
+// Skill authoring / installing / listing for PicoClaw.
+// The runtime is NOT restarted for any of these: PicoClaw picks skills up per session, the same
+// contract its skill watcher relies on.
 
 // SaveSkill writes a user-authored skill as <name>/SKILL.md.
 func (s *PicoclawService) SaveSkill(draft domain.SkillDraft) (string, error) {

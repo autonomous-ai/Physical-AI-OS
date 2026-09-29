@@ -23,8 +23,8 @@ class WakeWordFocus:
     def begin(self, interaction_id: str) -> bool:
         """Hold an already-authorized turn; callers must enforce the wake gate.
 
-        A five-minute lease bounds lost terminal events. Repeated observations
-        of the same turn must not renew that lease or resurrect a finished turn.
+        Repeated observations of the same turn must not renew that lease or resurrect a
+        finished turn.
         """
         if not interaction_id or self._timeout_s <= 0:
             return False
@@ -110,14 +110,7 @@ class WakeWordFocus:
             return True
 
     def refresh(self, timeout_s: float | None = None) -> bool:
-        """Extend focus from now; false when follow-up focus is disabled.
-
-        `timeout_s` grants a SHORTER window than the default, for an opener
-        that is inferred rather than deliberate. It never lengthens one: a
-        wake word and a button click are explicit acts and keep the full
-        window, while a gaze wake is a guess about intent and should not be
-        able to claim more floor than the gestures it sits beside.
-        """
+        """Extend focus from now; false when follow-up focus is disabled."""
         if self._timeout_s <= 0:
             return False
         window = self._timeout_s if timeout_s is None else min(self._timeout_s, max(0.0, timeout_s))
@@ -140,21 +133,9 @@ def is_addressed(
 ) -> bool:
     """Whether the sentence being spoken has been shown to be for this device.
 
-    Asked by everything that claims to be the addressee — the listening cue,
-    the backchannel — so the device does not acknowledge a conversation it was
-    never part of.
-
-    ``focus_active_now`` is read LIVE, and that is the point: gaze can open the
-    follow-up window in the MIDDLE of the sentence it is meant to acknowledge.
-    Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
-    face evidence ("of 0" samples) so the session-start latch was False, and the
-    watcher only confirmed the user 3.6s later at speech END. The whole turn ran
-    with no listening cue: the device sat dark through the sentence and lit up
-    only for the next one.
-
-    Live focus can only ADD an addressed turn, never remove one — the latch is
-    still passed in and still wins, so a window that EXPIRES mid-sentence cannot
-    retract a turn from someone already speaking.
+    Asked by everything that claims to be the addressee — the listening cue, the
+    backchannel — so the device does not acknowledge a conversation it was never part
+    of.
     """
     if not wakeword_enabled:
         return True

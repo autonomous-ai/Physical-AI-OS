@@ -42,11 +42,7 @@ func (s *Server) handleUsage(w http.ResponseWriter, r *http.Request) {
 	ok(w)
 }
 
-// --- Reverse approval (device → Claude Code) ---
-
-// CodeApprovalRequestBody is the body of POST /claude-code/approval-request, sent
-// by the plugin's permission hook on the Mac. The hook BLOCKS on this request
-// until the on-device agent resolves it (or it times out).
+// CodeApprovalRequestBody is the body of POST /claude-code/approval-request.
 type CodeApprovalRequestBody struct {
 	ID    string         `json:"id"`
 	Tool  string         `json:"tool"`
@@ -54,10 +50,7 @@ type CodeApprovalRequestBody struct {
 	Input map[string]any `json:"input"`
 }
 
-// handleApprovalRequest long-polls: it blocks until the device agent approves /
-// denies the prompt or the use case times out, then returns the decision. The
-// hook maps "allow"/"deny" to a PermissionRequest decision and anything else
-// (incl. "timeout") to "defer to the native dialog".
+// handleApprovalRequest long-polls until the prompt is approved, denied, or times out.
 func (s *Server) handleApprovalRequest(w http.ResponseWriter, r *http.Request) {
 	var req CodeApprovalRequestBody
 	if err := decodeJSON(w, r, &req); err != nil {
@@ -83,9 +76,7 @@ func (s *Server) handleApprovalRequest(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"decision": decision})
 }
 
-// handleCodeApprove / handleCodeDeny are called by the on-device agent (the
-// OpenClaw skill) after the user answers by voice. They are bound to loopback —
-// only the device itself should be able to let code run on the user's Mac.
+// handleCodeApprove / handleCodeDeny resolve a code approval; loopback-only so only the device can let code run on the Mac.
 func (s *Server) handleCodeApprove(w http.ResponseWriter, r *http.Request) {
 	s.codeDecide(w, r, s.codeApprovals.Approve)
 }
@@ -114,8 +105,7 @@ func (s *Server) codeDecide(w http.ResponseWriter, r *http.Request, action func(
 	}
 }
 
-// handleCodePending lists currently-blocked code approvals so the on-device
-// agent (or a debugging human) can see what's awaiting a voice answer.
+// handleCodePending lists pending code approvals.
 func (s *Server) handleCodePending(w http.ResponseWriter, r *http.Request) {
 	pending := s.codeApprovals.Pending()
 	out := make([]map[string]any, 0, len(pending))
@@ -125,8 +115,7 @@ func (s *Server) handleCodePending(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"pending": out})
 }
 
-// deriveHint produces a short human description of a tool call for TTS / display
-// when the hook didn't supply one.
+// deriveHint builds a short tool-call description when the hook supplied none.
 func deriveHint(tool string, input map[string]any) string {
 	if input != nil {
 		for _, key := range []string{"command", "file_path", "path", "url", "pattern", "query"} {

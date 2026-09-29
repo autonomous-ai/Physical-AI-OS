@@ -26,9 +26,7 @@ type signedOTAMetadata struct {
 	} `json:"signature"`
 }
 
-// verifyOTAMetadata verifies the deployment-owned Ed25519 signature before
-// returning the raw metadata payload. The signature covers the exact decoded
-// payload bytes, avoiding any dependency on JSON serialization details.
+// verifyOTAMetadata verifies the Ed25519 signature over the exact decoded payload bytes.
 func verifyOTAMetadata(data []byte, encodedPublicKey string) ([]byte, error) {
 	publicKey, err := base64.StdEncoding.DecodeString(strings.TrimSpace(encodedPublicKey))
 	if err != nil {
@@ -38,9 +36,7 @@ func verifyOTAMetadata(data []byte, encodedPublicKey string) ([]byte, error) {
 		return nil, fmt.Errorf("signing public key is %d bytes, want %d", len(publicKey), ed25519.PublicKeySize)
 	}
 
-	// Compatibility feeds retain the legacy top-level component entries and put
-	// the authenticated document under "signed". Old workers ignore that extra
-	// component-shaped entry; new workers exclusively consume the signed payload.
+	// Compatibility feeds keep legacy top-level entries and put the signed document under "signed".
 	var wrapper struct {
 		Signed json.RawMessage `json:"signed"`
 	}

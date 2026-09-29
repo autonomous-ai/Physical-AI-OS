@@ -1,12 +1,4 @@
-"""The body goes back to idle after a direct move parked it — unless someone
-else owns it, or something else has already started playing.
-
-`move_and_hold` drops the playing recording and sets `_idle_settled`; nothing
-re-arms idle on its own. Gaze fixed this for the speech reacquire in
-`_release_reacquire_hold`; search and look-aim had no equivalent (lamp-ac82
-2026-09-14: "Find my keyboard" left the arm on the keyboard until a HAL
-restart). One helper now, three callers.
-"""
+"""The body returns to idle after a direct move, unless it is owned or already playing."""
 
 import threading
 from unittest import mock
@@ -22,7 +14,7 @@ class _Svc:
         self._tracking_active = flags.get("tracking", False)
         self._hold_mode = flags.get("hold", False)
         self._zero_mode = flags.get("zero", False)
-        # None = parked by a direct move (the state this helper exists for).
+        # None = parked by a direct move.
         self._current_recording = flags.get("recording", None)
 
     def dispatch(self, cmd, payload):
@@ -49,8 +41,6 @@ def test_it_leaves_the_body_alone_when_something_else_owns_it(monkeypatch):
         assert svc.dispatched == [], flag
 
 
-# An emotion (or idle itself) that started after the park owns playback now;
-# the animation loop returns to idle by itself when a recording ends.
 def test_it_does_not_interrupt_a_recording_that_started_meanwhile(monkeypatch):
     svc = _Svc(recording="happy")
     _with_service(monkeypatch, svc)
@@ -82,7 +72,7 @@ def test_a_delayed_release_fires_after_the_window(monkeypatch):
     svc = _Svc()
     _with_service(monkeypatch, svc)
     t = body.release_to_idle_later(0.05, "test")
-    assert svc.dispatched == []          # not yet
+    assert svc.dispatched == []
     t.join(timeout=2.0)
     assert svc.dispatched == [("play", "idle")]
 
@@ -101,7 +91,7 @@ def test_scheduling_again_cancels_the_earlier_timer(monkeypatch):
     second = body.release_to_idle_later(0.05, "second")
     second.join(timeout=2.0)
     first.join(timeout=1.0)
-    assert svc.dispatched == [("play", "idle")]   # once, not twice
+    assert svc.dispatched == [("play", "idle")]
 
 
 def test_the_timer_is_a_daemon(monkeypatch):

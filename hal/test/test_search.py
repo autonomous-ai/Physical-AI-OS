@@ -1,9 +1,4 @@
-"""Focused tests for the deliberate search sweep.
-
-The behaviours that matter: it looks at the likely place FIRST, its stops
-overlap so nobody falls between them, it stays inside the mechanical range,
-and it stops the moment it finds someone rather than completing the sweep.
-"""
+"""Focused tests for the deliberate search sweep."""
 
 import os
 import time
@@ -41,8 +36,6 @@ class _FakeCap:
 
 
 class _FakeSvc(BodyOwnership):
-    # The idle recording's first frame, which the animation service holds. The
-    # sweep rests on it when there is no bearing to seed from.
     IDLE_BASELINE = {
         "base_yaw.pos": 3.0, "base_pitch.pos": 29.8, "elbow_pitch.pos": 27.1,
         "wrist_pitch.pos": -61.7, "wrist_roll.pos": 8.2,
@@ -51,27 +44,18 @@ class _FakeSvc(BodyOwnership):
     def __init__(self, idle_baseline=None):
         self.yaw = 0.0
         self.roll = 0.0
-        # Tracked because the look ring moves it: two consecutive looks can share
-        # a roll and differ only in pitch (bottom-right -> right). A fake that
-        # pinned wrist_pitch at 0 made those look like no-ops, and _look_at
-        # skips a move whose target it is already on.
+        # Tracks wrist_pitch: consecutive looks can differ only in pitch.
         self.wrist_pitch = 0.0
-        self.holds = []            # absolute poses restored before the sweep
-        # (yaw, roll) after every commanded move, in order. The base turns via
-        # nudge() and the head via move_and_hold(), so neither call log alone
-        # shows where the camera actually pointed at each step.
+        self.holds = []
+        # (yaw, roll) after every commanded move, in order.
         self.trail = []
-        # (joint, speed) writes, in order — the sweep caps the base and puts it
-        # back, and both halves matter.
+        # (joint, speed) writes, in order.
         self.speeds = []
         self._idle_baseline = (
             dict(self.IDLE_BASELINE) if idle_baseline is None else idle_baseline
         )
         self.nudge = mock.Mock(side_effect=self._nudge)
-        # A real arm reports every joint. `_bearing_step_target` treats a joint
-        # ABSENT from the current pose as already-correct, so a double that
-        # returns yaw alone can never restore pitch — and would hide the very
-        # thing this file now tests.
+        # Report every joint: a joint absent from the pose counts as already correct.
         self.get_positions = mock.Mock(side_effect=lambda: {
             "base_yaw.pos": self.yaw,
             "base_pitch.pos": 0.0,
@@ -86,9 +70,7 @@ class _FakeSvc(BodyOwnership):
 
     UNWRITTEN_SPEED_EQUIVALENT = 0
 
-    # The handback after a sweep dispatches play(idle) on the real service;
-    # without these the fake would raise inside body.release_to_idle (caught,
-    # but logged as a warning on every test) instead of taking the real path.
+    # Needed for the real release_to_idle handback path.
     idle_recording = "idle"
 
     def dispatch(self, cmd, payload):
@@ -122,8 +104,7 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
     calls = {"n": 0}
 
     def _detect(f, t, strict=True):
-        # _detect_subject probes "person" then "face" at each stop, so count
-        # only the first probe to get the stop number.
+        # _detect_subject probes person then face, so count only the first probe.
         if t == "person":
             calls["n"] += 1
             if abort_at_stop is not None and calls["n"] >= abort_at_stop:
@@ -138,8 +119,6 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
         est = None
     else:
         est = mock.Mock(bearing_deg=bearing, confidence=confidence)
-        # A real estimate carries a whole posture; the seed restores it before
-        # sweeping (see _seed_from_bearing).
         est.pose = {"base_yaw.pos": bearing} if pose is None else pose
 
     with (
@@ -155,13 +134,7 @@ def _run(detect_at_stop=None, bearing=None, disabled=False, abort_at_stop=None,
 
 
 def test_stops_overlap_so_nobody_falls_between_them():
-    """Seams are what a sweep must not have — a person straddling two tiles
-    would be missed by both.
-
-    The head covers the gap now, so the base may step further than the lens is
-    wide. What has to hold is that one yaw stop's TOTAL reach (widest roll plus
-    half the field of view) still overlaps the next stop's.
-    """
+    """Adjacent sweep tiles overlap."""
     reach = max(abs(r) for r, _ in search.LOOK_CIRCLE) + config.LOOK_AIM_FOV_DEG / 2.0
     assert search.STEP_DEG < 2 * reach, (
         f"step {search.STEP_DEG} leaves a seam between stops reaching +/-{reach}"
@@ -169,25 +142,13 @@ def test_stops_overlap_so_nobody_falls_between_them():
 
 
 def test_the_sweep_checks_the_remembered_bearing_first():
-    """The sweep stops on the FIRST subject it sees, so "first" has to mean the
-    person who was asked about.
-
-    Device-observed 2026-08-25 with pure left-to-right ordering: it found a
-    person at yaw -102 — a colleague at another desk — while the user sat at the
-    seed, -12, which it never reached. Ordering by position alone answers "is
-    anyone in this room" when the question was "where are YOU".
-    """
+    """The remembered bearing is checked first, so the first subject seen is the one asked about."""
     stops = search._stop_list(60.0)
     assert stops[0] == 60.0, "the likely place must be checked first"
 
 
 def test_the_sweep_goes_right_before_left():
-    """The order is what makes the sweep flow.
-
-    The seed stop finishes looking at seed+45, and the RIGHT stop opens on the
-    same direction (seed+90 with the head at -45), so the handover is invisible.
-    Going left first would throw the head back across everything just covered.
-    """
+    """The sweep goes right before left."""
     assert search._stop_list(0.0) == [0.0, search.STEP_DEG, -search.STEP_DEG]
 
 
@@ -204,8 +165,7 @@ def test_seed_beyond_the_limit_is_clamped():
 
 
 def test_a_stop_past_the_limit_is_clamped_not_dropped():
-    """With only three stops a discarded one leaves a real hole, whereas a
-    clamped one still looks somewhere useful."""
+    """Out-of-range stops are clamped, not discarded."""
     stops = search._stop_list(C.YAW_MAX - 10.0)
     assert len(stops) == 3, f"a stop was dropped instead of clamped: {stops}"
     assert C.YAW_MAX in stops
@@ -225,8 +185,6 @@ def test_reports_failure_after_exhausting_the_sweep():
 
 
 def test_camera_disabled_never_sweeps():
-    # A search is a lot of conspicuous movement to perform while the user has
-    # asked the device not to look.
     res, svc = _run(detect_at_stop=1, disabled=True)
     assert res.found is False
     assert res.reason == "camera disabled"
@@ -234,8 +192,6 @@ def test_camera_disabled_never_sweeps():
 
 
 def test_abort_stops_the_sweep_mid_flight():
-    # request_abort() cancels an in-flight sweep; the flag is cleared at entry
-    # so a stale abort cannot prevent the next search from ever running.
     res, svc = _run(detect_at_stop=None, abort_at_stop=2)
     assert res.reason == "aborted"
     assert res.looks_visited < search.MAX_STOPS
@@ -247,17 +203,8 @@ def test_a_stale_abort_does_not_block_the_next_search():
     assert res.found is True
 
 
-# --- Task F / F7: the search restores the posture and honours confidence ---
-
-
 def test_the_sweep_restores_the_remembered_posture_first():
-    """A sweep is the one consumer that provably needs more than yaw.
-
-    It steps the head across up to MAX_STOPS bearings; with the pitch left
-    aimed at the desk it sweeps the desk MAX_STOPS times and reports nobody
-    there — `user_bearing`'s own warning, applied to the consumer that sweeps
-    by definition.
-    """
+    """The sweep restores the remembered posture before sweeping."""
     _res, svc = _run(
         bearing=40.0,
         pose={"base_yaw.pos": 40.0, "base_pitch.pos": -12.0, "wrist_pitch.pos": -30.0},
@@ -278,23 +225,14 @@ def test_a_low_confidence_bearing_is_not_used_to_seed_the_sweep():
 
 
 def test_no_bearing_rests_on_the_idle_pose_before_sweeping():
-    """Sweeping from wherever the arm happens to be finds nothing.
-
-    A loop that has been walking the head around does not leave it in a pose
-    anyone chose, and a sweep from a camera aimed at the desk is thorough about
-    the wrong hemisphere. The idle baseline is by construction a pose the lamp
-    is designed to rest in — device-checked, it looks out at head height — so
-    the "not aimed at the floor" guarantee comes from the pose, not from a
-    separate pitch check.
-    """
+    """With no bearing, the sweep starts from the idle pose."""
     _res, svc = _run(bearing=None)
     rested = [h for h in svc.holds if h.get("base_pitch.pos") == 29.8]
     assert rested, f"expected a rest on the idle pose, got {svc.holds[:3]}"
 
 
 def test_with_no_idle_pose_either_the_sweep_starts_where_it_stands():
-    """The last resort. A device with neither memory still sweeps rather than
-    refusing — half a search beats none."""
+    """With no memory at all, the device still sweeps."""
     _res, svc = _run(bearing=None, idle_baseline={})
     idle_pitch = _FakeSvc.IDLE_BASELINE["base_pitch.pos"]
     assert [h for h in svc.holds if h.get("base_pitch.pos") == idle_pitch] == []
@@ -311,9 +249,7 @@ def test_a_failed_posture_restore_still_sweeps():
     """Sweeping from the wrong pitch beats not sweeping at all."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     svc = _FakeSvc()
-    # Fail only the FIRST move — the posture restore. Breaking every move
-    # instead tests something else entirely (a dead arm), and used to pass only
-    # because one look happened to need no movement at all.
+    # Fail only the FIRST move — the posture restore.
     _real_move = svc.move_and_hold
     _calls = {"n": 0}
 
@@ -342,30 +278,18 @@ def test_a_failed_posture_restore_still_sweeps():
     assert res.looks_visited >= 1, "a failed restore must not abort the search"
 
 
-# --- the head looks around at each stop ----------------------------------------
-
-
 def _rolls(svc):
     """Every wrist_roll angle the sweep commanded, in order."""
     return [h["wrist_roll.pos"] for h in svc.holds if "wrist_roll.pos" in h]
 
 
 def _sweep_rolls(svc):
-    """Just the looks — without the pose restored before the sweep, or the one
-    the sweep ends on. Both are deliberate moves home, not part of the search."""
+    """Only the sweep's looks, excluding the restore and home moves."""
     return _rolls(svc)[1:-1]
 
 
 def test_each_bearing_walks_the_look_ring():
-    """Turning the whole lamp reads as a camera on a turntable; turning the head
-    at a fixed body reads as something looking around. Both cover ground, only
-    one of them looks alive.
-
-    The default sweep walks the lower half of the ring — centre, left, round the
-    bottom, out to the right — because the things people ask the lamp to find sit
-    on desks, and because ending on the right is the direction the next bearing
-    lies in.
-    """
+    """Each bearing turns the head through its look ring at a fixed body."""
     _res, svc = _run(bearing=None)
     rolls = _rolls(svc)
     want = [r for r, _ in search.LOOK_CIRCLE[:search.HALF_LOOKS]]
@@ -378,17 +302,9 @@ def test_each_bearing_walks_the_look_ring():
 
 
 def test_the_ring_only_ever_moves_the_wrist():
-    """The pitch tiers used to go through distribute_pitch, which reshapes the
-    whole arm: device-observed 2026-09-09 the upward tier put elbow_pitch at
-    +35.8 and base_pitch at +10.6, extending the arm up and back far enough to
-    look like it might tip. A sweep must leave the body where it is."""
+    """Pitch tiers move the head only, never reshaping the arm."""
     _res, svc = _run(bearing=None)
-    # Only the LOOK moves — a look always commands wrist_roll. The posture
-    # restore before the sweep legitimately moves the whole arm; that is how a
-    # head left pointing at the floor stops sweeping the floor in a circle.
-    # holds[0] is the pose restored before the sweep and holds[-1] the move
-    # home; both legitimately command the whole arm. Everything between them is
-    # a look. (Same slice the roll helpers use.)
+    # Only the LOOK moves; a look always commands wrist_roll.
     looks = svc.holds[1:-1]
     assert looks, "no looks were commanded"
     for h in looks:
@@ -399,44 +315,23 @@ def test_the_ring_only_ever_moves_the_wrist():
 
 
 def _view_directions(svc):
-    """Where the camera pointed after each commanded move: base_yaw + wrist_roll.
-
-    The roll angles alone say nothing about smoothness — a 90 deg swing of the
-    head can leave the view exactly where it was if the base moved the other way,
-    which is precisely how the seed hands over to the next stop.
-    """
+    """Where the camera pointed after each commanded move: base_yaw + wrist_roll."""
     return [yaw + roll for yaw, roll in svc.trail]
 
 
 def test_the_view_carries_on_from_stop_to_stop():
-    """One stop ends where the next begins, so the camera sweeps continuously.
-
-    Exactly one discontinuity is allowed: the far right and the far left are
-    genuinely far apart, and no ordering removes that.
-    """
+    """One stop ends where the next begins, so the camera sweeps continuously."""
     _res, svc = _run(bearing=None)
     views = _view_directions(svc)[1:-1]
 
     jumps = [abs(b - a) for a, b in zip(views, views[1:])
              if abs(b - a) > search.STEP_DEG + 1e-6]
-    # The base visits each bearing ONCE now, so the far-right-to-far-left trip
-    # that no ordering can remove happens once per sweep again. The ring adds a
-    # step at each handover (it ends on the right, the next bearing is +90 away),
-    # which is a 45 deg move, well under STEP_DEG.
     assert len(jumps) <= 1, (
         f"more than one discontinuity in {[round(v) for v in views]}")
 
 
 def test_the_handover_onto_the_next_bearing_is_a_short_step():
-    """The ring ends on the right (+45) and the next bearing is +90 further
-    right, entered at the centre of its own ring — so the view steps 45 deg in
-    the direction it was already travelling.
-
-    The old raster cancelled the turn exactly (base +90, head -90) and jumped
-    zero. That cancellation only worked because every stop ended at the same
-    roll; a ring cannot both close and end where the next one opens. 45 deg
-    forward is the price, and it is under half a STEP_DEG.
-    """
+    """The next bearing continues in the direction of travel."""
     _res, svc = _run(bearing=None)
     views = _view_directions(svc)[1:]
 
@@ -450,16 +345,14 @@ def test_the_handover_onto_the_next_bearing_is_a_short_step():
 
 
 def test_a_subject_found_mid_look_stops_the_sweep_there():
-    """The sweep ends on the first subject seen — that is the whole contract,
-    and adding a second axis must not make it keep looking past them."""
+    """The sweep still stops on the first subject seen."""
     res, svc = _run(detect_at_stop=2, bearing=None)
     assert res.found
     assert res.looks_visited == 2, "it kept looking after finding someone"
 
 
 def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
-    """Three looks per yaw stop, so coverage comes from the head rather than
-    from turning the body more often."""
+    """Three looks per yaw stop."""
     res, svc = _run(bearing=None)
     yaw_stops = len(search._stop_list(_FakeSvc.IDLE_BASELINE["base_yaw.pos"]))
     assert res.looks_visited == yaw_stops * search.HALF_LOOKS, (
@@ -468,12 +361,8 @@ def test_looking_around_multiplies_the_stops_not_the_yaw_positions():
     assert yaw_stops == 3, "three yaw positions is the whole point of the wider step"
 
 
-# --- where the sweep leaves the arm --------------------------------------------
-
-
 def test_a_failed_sweep_returns_to_where_it_started():
-    """Nothing found means nothing to look at. Freezing wherever the last look
-    left the head leaves the lamp cocked 45 deg over, staring at a wall."""
+    """A failed sweep returns the head home."""
     _res, svc = _run(bearing=None)
     last = svc.holds[-1]
     assert last.get("wrist_roll.pos") == pytest.approx(
@@ -482,31 +371,19 @@ def test_a_failed_sweep_returns_to_where_it_started():
 
 
 def test_a_successful_sweep_keeps_looking_at_the_subject():
-    """Returning to the seed here would fix the posture and lose the person.
-
-    The head is straightened by turning the BASE as far as the head was turned,
-    so the camera ends up pointing at exactly the same place with the head level.
-    """
-    # Find on the SECOND look — the ring opens at centre (roll 0), where
-    # straightening would have nothing to absorb and prove nothing.
+    """A successful sweep stays on the subject instead of returning home."""
+    # Find on the SECOND look; the ring opens at centre where straightening proves nothing.
     res, svc = _run(detect_at_stop=2, bearing=None)
     assert res.found
     last = svc.holds[-1]
     assert last.get("wrist_roll.pos") == pytest.approx(0.0), "head left cocked"
-    # Look 2 of the ring is "left", so the base must absorb that roll.
     assert last["base_yaw.pos"] == pytest.approx(
         _FakeSvc.IDLE_BASELINE["base_yaw.pos"] + search.LOOK_CIRCLE[1][0]
     )
 
 
 def test_an_abort_also_returns_to_where_it_started():
-    """A single click means "stop searching and attend to me".
-
-    The pose an interrupted sweep freezes in is not a resting one — the head can
-    be cocked 45 deg over, facing a wall. Stopping there answers the letter of
-    the request and none of it: attending to someone means ending somewhere they
-    can be seen from.
-    """
+    """An abort returns the head to where the sweep started."""
     res, svc = _run(abort_at_stop=2, bearing=None)
     assert res.reason == "aborted"
     last = svc.holds[-1]
@@ -516,22 +393,13 @@ def test_an_abort_also_returns_to_where_it_started():
 
 
 def test_the_shutter_waits_for_the_arm_to_stop_moving():
-    """move_and_hold returns when it has finished SENDING, not when the servos
-    have arrived.
-
-    Device-measured: a 90 deg base_yaw turn returns the call in 0.77s and is
-    still moving at 5.88s, because base_yaw manages ~14 deg/s under the whole
-    lamp's inertia. Without waiting, the head began its looks and the shutter
-    fired mid-swing — blurred frames, aimed somewhere other than the stop they
-    are recorded against.
-    """
+    """The sweep waits for arrival, not just for move_and_hold to return."""
     svc = _FakeSvc()
     reads = {"n": 0}
     real = svc.get_positions
 
     def still_moving():
-        # Reports a different yaw for the first few polls, like an arm that has
-        # been commanded and is on its way.
+        # Reports a different yaw for the first few polls, like an arm still moving.
         reads["n"] += 1
         pose = dict(real())
         if reads["n"] < 4:
@@ -548,8 +416,7 @@ def test_the_shutter_waits_for_the_arm_to_stop_moving():
 
 
 def test_waiting_gives_up_rather_than_stalling_the_sweep():
-    """A stop the arm cannot quite reach is still a fine place to shoot from;
-    waiting forever for an arrival that never comes is not."""
+    """An unreachable stop times out and is shot from anyway."""
     svc = _FakeSvc()
     jitter = {"n": 0}
 
@@ -569,13 +436,7 @@ def test_waiting_gives_up_rather_than_stalling_the_sweep():
 
 
 def test_the_sweep_owns_the_body_for_its_whole_duration():
-    """Idle plays absolutely, on every joint, and never stops on its own.
-
-    Device-traced during one sweep: idle wrote base_yaw 280 times to the
-    search's 31, so every commanded stop was overwritten ~33ms later. The base
-    appeared to crawl — 90 deg took 5.9s with HAL running against 0.35s with the
-    arm to itself. Not a slow servo, a contested one.
-    """
+    """The sweep owns the body for its whole duration."""
     import hal.app_state as app_state
     from hal.drivers.tracking import aim
 
@@ -606,11 +467,7 @@ def test_the_sweep_owns_the_body_for_its_whole_duration():
 
 
 def test_a_caller_can_follow_the_sweep_stop_by_stop():
-    """A sweep is half a minute of the lamp moving without saying anything.
-
-    The callback exists so a caller can fill that, while WHAT to say — and
-    whether to say anything — stays outside this file.
-    """
+    """A caller can follow the sweep stop by stop."""
     seen = []
     _res, _svc = _run(bearing=None, on_progress=lambda v, t: seen.append((v, t)))
 
@@ -620,8 +477,7 @@ def test_a_caller_can_follow_the_sweep_stop_by_stop():
 
 
 def test_the_midpoint_of_a_full_sweep_is_the_middle_look():
-    """Three yaw stops of three looks each, so #5 — the middle look of the
-    middle stop, which is the right-hand stop at roll 0."""
+    """Look #5 is the middle look of the middle stop."""
     seen = []
     _res, _svc = _run(bearing=None, on_progress=lambda v, t: seen.append((v, t)))
 
@@ -642,11 +498,7 @@ def test_a_talkative_caller_cannot_sink_the_sweep():
 
 
 def test_every_sweep_narrates_its_own_midpoint():
-    """Whoever started it is waiting through the same silence.
-
-    This used to be passed in by the look-aim, which meant a sweep the USER
-    asked for — "where are you?" — ran its full half-minute without a word.
-    """
+    """Every sweep narrates its own midpoint."""
     said = []
     with mock.patch("hal.drivers.tracking.aim._say", side_effect=said.append):
         _res, _svc = _run(bearing=None)
@@ -667,8 +519,7 @@ def test_a_sweep_that_ends_early_stays_quiet():
 
 
 def test_a_caller_can_take_over_the_narration():
-    """The default speaks; a caller passing its own handler replaces it, and one
-    that does nothing keeps the sweep silent."""
+    """The default narrates; a custom handler replaces it."""
     said = []
     seen = []
     with mock.patch("hal.drivers.tracking.aim._say", side_effect=said.append):
@@ -679,13 +530,7 @@ def test_a_caller_can_take_over_the_narration():
 
 
 def test_the_sweep_speeds_the_base_up_only_for_itself():
-    """The base has to be brisk during a sweep and unchanged outside it.
-
-    Goal_Speed has to be WRITTEN to take effect — it reads 0 on every joint yet
-    the arm behaves as if capped — so this cannot be done once at startup
-    without changing how the whole robot moves: idle, emotions, every recorded
-    animation. None of that asked to be sped up.
-    """
+    """The base has to be brisk during a sweep and unchanged outside it."""
     _res, svc = _run(bearing=None)
 
     assert svc.speeds, "the sweep never touched the base speed"
@@ -711,12 +556,7 @@ def test_the_base_speed_is_restored_even_when_the_sweep_raises():
 
 
 def test_the_resting_speed_the_sweep_restores_is_the_one_startup_writes():
-    """Two places must agree on what "resting" means, or a killed sweep and a
-    clean one leave the arm at different paces.
-
-    Only runs where the servo driver imports — it pulls in lerobot, which is a
-    device dependency.
-    """
+    """The killed and clean sweep paths share one resting pace."""
     pytest.importorskip("lerobot")
     from hal.drivers.motors.animation_service import AnimationService
 
@@ -724,12 +564,7 @@ def test_the_resting_speed_the_sweep_restores_is_the_one_startup_writes():
 
 
 def _run_target(target="person", exhaustive=False, hits=(), person_everywhere=False):
-    """A sweep whose detector answers per-target.
-
-    `hits` is the 1-based indices of the OBJECT probes that should succeed;
-    `person_everywhere` makes every person probe succeed, which is the condition
-    that used to end an object search at the first bystander.
-    """
+    """A sweep whose detector answers per-target."""
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
     svc = _FakeSvc()
     n = {"person": 0, "obj": 0}
@@ -760,8 +595,7 @@ def _run_target(target="person", exhaustive=False, hits=(), person_everywhere=Fa
 
 
 def test_an_object_search_is_not_ended_by_a_person():
-    """The reported bug: "look around for my keyboard" stopped at the first
-    person in frame, because the target never reached the detector."""
+    """An object search passes its target to the detector and is not ended by a person."""
     res, _svc, det = _run_target(target="keyboard", hits=(), person_everywhere=True)
     assert res.found is False, "a person ended a keyboard search"
     assert res.reason == "no keyboard found"
@@ -776,8 +610,7 @@ def test_an_object_search_finds_the_object():
 
 
 def test_a_person_search_keeps_the_closest_person_policy():
-    """person/face still route through _detect_subject, which picks the CLOSEST
-    person and falls back to a face. An object target must not inherit that."""
+    """Person targets keep the closest-person policy; object targets do not."""
     res, _svc, det = _run_target(target="person", person_everywhere=True)
     assert res.found is True
     assert "person" in res.reason
@@ -785,9 +618,7 @@ def test_a_person_search_keeps_the_closest_person_policy():
 
 
 def test_the_sweep_tilts_as_well_as_pans():
-    """Reported: the sweep only went left-right. wrist_roll PANS the view (it
-    aims the camera and leaves the horizon level), so a sweep of yaw and roll
-    alone covers one horizontal band and never sees the desk below it."""
+    """The sweep also tilts to cover the desk below the horizon."""
     _res, svc, _det = _run_target(target="person")
     pitched = [h["wrist_pitch.pos"] for h in svc.holds if "wrist_pitch.pos" in h]
     assert pitched, "the sweep never commanded wrist_pitch"
@@ -796,8 +627,7 @@ def test_the_sweep_tilts_as_well_as_pans():
 
 
 def test_a_full_scan_does_not_stop_at_the_first_hit():
-    """Reported: asked outright for a maximum-capability scan, it still ended
-    on the first person it saw."""
+    """Exhaustive mode does not stop on the first person."""
     quick, _svc, _det = _run_target(target="person", person_everywhere=True)
     full, _svc2, _det2 = _run_target(target="person", person_everywhere=True,
                                      exhaustive=True)
@@ -809,8 +639,7 @@ def test_a_full_scan_does_not_stop_at_the_first_hit():
 
 
 def test_a_full_scan_adds_the_upper_half_of_the_ring():
-    """The top half is what makes 'maximum' mean more than 'slower'. The default
-    sweep is the half-moon below the horizon; only exhaustive looks up."""
+    """Only exhaustive mode looks above the horizon."""
     half = search.LOOK_CIRCLE[:search.HALF_LOOKS]
     assert all(dp >= 0 for _r, dp in half), "the default sweep must not look up"
     assert any(dp < 0 for _r, dp in search.LOOK_CIRCLE), "nothing looks up at all"
@@ -818,9 +647,7 @@ def test_a_full_scan_adds_the_upper_half_of_the_ring():
 
 
 def test_a_hit_is_centred_before_the_sweep_returns():
-    """Reported (#342 defect N): the sweep aimed at the LOOK DIRECTION of the
-    stop, not at the object — up to ~50 deg off at the frame edge — and called
-    that a find."""
+    """A hit is centred on the object, not the stop's look direction (#342)."""
     calls = []
 
     def _fake_centre(svc, cap, probe, deadline_s=None):
@@ -839,8 +666,7 @@ def test_a_hit_is_centred_before_the_sweep_returns():
 
 
 def test_a_failed_centring_still_reports_the_find():
-    """Losing the box during the correction means the aim is imperfect, not
-    that the object was never there. Silence would be a worse answer."""
+    """Losing the box during correction still reports a find."""
     def _fake_centre(svc, cap, probe, deadline_s=None):
         from hal.drivers.tracking.aim import CentreResult
         return CentreResult(False, "lost the subject", 2, 8.0, 0.4, None, None)
@@ -853,9 +679,7 @@ def test_a_failed_centring_still_reports_the_find():
 
 
 def test_the_probe_handed_to_the_centring_loop_looks_for_the_TARGET():
-    """The correction must chase the thing the sweep was asked for. Handing it
-    the closest-subject policy would centre on whoever is standing nearby and
-    report it as the keyboard."""
+    """The correction chases the requested target."""
     probes = []
 
     def _fake_centre(svc, cap, probe, deadline_s=None):
@@ -873,8 +697,7 @@ def test_the_probe_handed_to_the_centring_loop_looks_for_the_TARGET():
 
 
 def test_an_exhaustive_sweep_counts_bearings_and_looks_apart():
-    """#342 defect C: `visited` counts LOOKS and was rendered "after N stop(s)"
-    against MAX_STOPS = 3, so a full sweep truthfully reported 27 of 3."""
+    """Looks and stops are reported as separate counts (#342)."""
     res, _svc, _det = _run_target(target="person", person_everywhere=True,
                                   exhaustive=True)
 
@@ -885,9 +708,7 @@ def test_an_exhaustive_sweep_counts_bearings_and_looks_apart():
 
 
 def test_the_winning_frame_is_written_where_the_agent_can_read_it(tmp_path):
-    """#342 defect I: the sweep persisted nothing, so no image could ever be
-    shown. The path must land in the ACTIVE runtime's snapshot dir — the agent
-    image tool refuses anything outside its allow-list."""
+    """The found image lands in the active runtime's snapshot dir (#342)."""
     def _fake_centre(svc, cap, probe, deadline_s=None):
         from hal.drivers.tracking.aim import CentreResult
         return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
@@ -907,19 +728,14 @@ def test_the_winning_frame_is_written_where_the_agent_can_read_it(tmp_path):
 
 
 def test_a_miss_writes_no_image():
-    """Nothing was found, so there is nothing to show. Writing the last frame
-    anyway would put a picture of an empty wall in front of the user under a
-    caption that says the search failed."""
+    """A failed search writes no image."""
     res, _svc, _det = _run_target(target="keyboard", hits=())
     assert res.found is False
     assert res.image_path is None
 
 
 def test_a_find_always_has_an_image_even_when_centring_never_got_a_frame(tmp_path):
-    """The centring loop can exit before its first grab — no fresh frame, an
-    abort, a nudge failure. The sweep still SAW the thing: it has the frame and
-    the box that triggered the hit. Falling back to those is the difference
-    between "found it, here" and "found it" with nothing to show."""
+    """Falls back to the sweep's frame and box when centring never grabs."""
     def _fake_centre(svc, cap, probe, deadline_s=None):
         from hal.drivers.tracking.aim import CentreResult
         return CentreResult(False, "no fresh frame", 0, 0.0, None, None, None)
@@ -938,9 +754,7 @@ def test_a_find_always_has_an_image_even_when_centring_never_got_a_frame(tmp_pat
 
 
 def test_the_saved_image_carries_the_box_and_not_the_aim_debug_lines(tmp_path):
-    """The box is the point — "here is your keyboard". The two full-height
-    centre lines encode_annotated draws by default are an aim-debug device for
-    reading dx, and after centring they overlap in the middle of the picture."""
+    """The search image has the box but no centre lines."""
     seen = {}
 
     def _spy(frame, box=None, label="", both_axes=False, centre_lines=True):
@@ -967,8 +781,7 @@ def test_the_saved_image_carries_the_box_and_not_the_aim_debug_lines(tmp_path):
 
 
 def test_the_snapshot_pool_is_rotated_like_the_camera_route(tmp_path):
-    """Same pool, same cap. A sweep that wrote without rotating would fill the
-    runtime's media dir one find at a time."""
+    """Search images rotate within the same capped pool."""
     def _fake_centre(svc, cap, probe, deadline_s=None):
         from hal.drivers.tracking.aim import CentreResult
         return CentreResult(True, "centred", 1, 5.0, 0.01, (10, 10, 20, 20),
@@ -990,14 +803,7 @@ def test_the_snapshot_pool_is_rotated_like_the_camera_route(tmp_path):
 
 
 def _search_client():
-    """A TestClient over the servo router — no hardware, no app startup.
-
-    The router is mounted as declared, so the `response_model` these tests pin
-    is the real one rather than a copy restated here. That matters: FastAPI
-    silently DROPS any field the model does not declare, so a field added to
-    SearchResult and forgotten in ServoSearchResponse never reaches the agent
-    and nothing anywhere reports an error.
-    """
+    """A TestClient over the servo router — no hardware, no app startup."""
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
@@ -1009,8 +815,7 @@ def _search_client():
 
 
 def test_the_route_reports_bearings_and_looks_separately():
-    """#342 defect C: "after 27 stop(s)" against MAX_STOPS = 3. The two counts
-    are different quantities and the body must not merge them."""
+    """The route reports looks and stops separately (#342)."""
     hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
                               "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
     with mock.patch("hal.drivers.tracking.search.search_for_subject",
@@ -1025,9 +830,7 @@ def test_the_route_reports_bearings_and_looks_separately():
 
 
 def test_the_route_carries_every_field_the_agent_needs():
-    """`response_model` SILENTLY drops anything it does not declare, so a field
-    added to SearchResult and forgotten in the model is invisible until someone
-    wonders why the picture never appears."""
+    """The response model declares every SearchResult field."""
     hit = search.SearchResult(True, "found keyboard", 7, 85.0, -45.0, 2,
                               "keyboard", (1, 2, 3, 4), True, "/tmp/snap_1.jpg")
     with mock.patch("hal.drivers.tracking.search.search_for_subject",
@@ -1045,8 +848,7 @@ def test_the_route_carries_every_field_the_agent_needs():
 
 
 def test_the_route_answers_a_miss_without_an_image():
-    """"found: false" is an answer. It must not look like a crash, and it must
-    not carry a picture of wherever the head happened to stop."""
+    """A not-found result is a clean answer with no image."""
     miss = search.SearchResult(False, "no keyboard found", 18,
                                bearings_visited=3)
     with mock.patch("hal.drivers.tracking.search.search_for_subject",
@@ -1072,13 +874,7 @@ def test_an_empty_body_still_searches_for_a_person():
 
 
 def test_the_correction_runs_before_the_head_is_straightened():
-    """Device-observed twice on lamp-ac82: found at roll +/-45, then
-    `centring: lost the subject after 0 iteration(s)`. Straightening first
-    turns the base and re-levels the head, and the correction's first frames
-    were taken on a body that had just moved. The object is PROVEN in view at
-    the pose the sweep saw it from, so correct there, then straighten — the
-    straighten preserves the camera's direction, so a centred box stays
-    centred."""
+    """Centring starts from the pose the object was found at."""
     order = []
 
     def _fake_centre(svc, cap, probe, deadline_s=None):
@@ -1099,19 +895,13 @@ def test_the_correction_runs_before_the_head_is_straightened():
 
 
 def test_an_object_search_stops_at_the_first_sighting_even_when_told_to_be_exhaustive():
-    """Design decision 2026-09-14: a search for a THING stops at the first
-    sighting, always. `exhaustive` is a survey mode — "scan the room", "is
-    anyone else here" — and an agent that passed it for "find my doll" got a
-    lamp that saw the doll five times, went home, and reported a find with no
-    picture. Enforced here rather than trusted to the skill text."""
+    """A target search stops at the first sighting even when exhaustive."""
     res, svc, det = _run_target(target="doll", exhaustive=True, hits=(2,))
 
     assert res.found is True
     assert res.looks_visited == 2, "kept sweeping after the first sighting"
     assert "x" not in res.reason, f"reported a survey count for a find: {res.reason!r}"
     assert svc.holds[-1] != _FakeSvc.IDLE_BASELINE, "went home instead of staying on the doll"
-    # Centring ran (it is what the default path does on a hit); its outcome is
-    # the fake detector's business and is pinned by the centring tests.
     assert any(c.args[1] == "doll" for c in det.detect.call_args_list[2:]), (
         "no probe after the sighting — the correction never ran")
 
@@ -1125,21 +915,15 @@ def test_exhaustive_still_surveys_for_people():
 
 
 def test_the_centring_probe_sticks_to_the_instance_the_sweep_found():
-    """Device-observed on lamp-ac82: two keyboards in frame (a laptop's and a
-    black one). `detect` returns whichever scores higher each frame, so the
-    correction chased a target that jumped between them —
-    dx -11% -> -43% -> +30% — and hit its deadline. The probe must prefer the
-    candidate nearest the box it is already centring, not the most canonical
-    keyboard in the picture."""
+    """The probe follows the anchored instance among multiple candidates."""
     from hal.drivers.tracking.search import _sticky_probe
 
     det = mock.Mock()
-    # Two keyboards: a confident one far left, a weaker one near the anchor.
     det.detect_candidates = mock.Mock(return_value=[
-        ((40, 300, 120, 60), 0.91),     # laptop keyboard, left edge, high conf
-        ((520, 220, 130, 70), 0.62),    # the one we started on, near centre
+        ((40, 300, 120, 60), 0.91),
+        ((520, 220, 130, 70), 0.62),
     ])
-    det.detect = mock.Mock(return_value=(40, 300, 120, 60))  # what detect alone would say
+    det.detect = mock.Mock(return_value=(40, 300, 120, 60))
 
     probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
     box = probe(np.zeros((480, 640, 3), dtype=np.uint8))
@@ -1149,14 +933,13 @@ def test_the_centring_probe_sticks_to_the_instance_the_sweep_found():
 
 
 def test_the_sticky_probe_follows_its_instance_as_the_camera_turns():
-    """After a correction the object has moved in the frame; the anchor must
-    move with it so the next probe still prefers the same instance."""
+    """The anchor moves with the object after each correction."""
     from hal.drivers.tracking.search import _sticky_probe
 
     det = mock.Mock()
     frames = [
         [((500, 200, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
-        [((380, 210, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],  # ours moved left
+        [((380, 210, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
         [((330, 215, 100, 60), 0.7), ((40, 300, 120, 60), 0.9)],
     ]
     det.detect_candidates = mock.Mock(side_effect=lambda f, t, **kw: frames.pop(0))
@@ -1169,8 +952,7 @@ def test_the_sticky_probe_follows_its_instance_as_the_camera_turns():
 
 
 def test_the_sticky_probe_falls_back_to_detect_for_targets_without_candidates():
-    """Open-vocab targets go to the remote detector, which has no candidate
-    list; a person target keeps the closest-subject policy. Both still work."""
+    """Open-vocab and person targets both work without candidate lists."""
     from hal.drivers.tracking.search import _sticky_probe
 
     det = mock.Mock()
@@ -1181,28 +963,18 @@ def test_the_sticky_probe_falls_back_to_detect_for_targets_without_candidates():
 
 
 def test_the_sticky_probe_refuses_a_candidate_that_could_not_be_the_same_object():
-    """Second device observation, same desk: on one frame the detector returned
-    ONLY the laptop keyboard, so "nearest candidate" was still the wrong one —
-    dx -3% -> -43% in a single step with no move in between. A box further from
-    the anchor than a correction could have moved it is a different object; the
-    probe reports a miss and the correction's miss tolerance takes a fresh frame
-    instead of chasing it."""
+    """A candidate too far from the anchor is rejected."""
     from hal.drivers.tracking.search import _sticky_probe
 
     det = mock.Mock()
-    det.detect_candidates = mock.Mock(return_value=[((40, 300, 120, 60), 0.91)])  # far left only
+    det.detect_candidates = mock.Mock(return_value=[((40, 300, 120, 60), 0.91)])
     probe = _sticky_probe(det, "keyboard", first_box=(500, 200, 130, 70))
 
     assert probe(np.zeros((480, 640, 3), dtype=np.uint8)) is None
 
 
 def test_the_sticky_probe_refuses_a_candidate_that_moved_away_from_centre():
-    """Third device observation: the swap can be small. Anchor at dx -20%, the
-    loop turned LEFT (object should drift right, toward centre), and the only
-    candidate sat at dx -40% — 20% away, under any sane distance cutoff, yet
-    impossible for the same object: a correction never moves its target away
-    from centre on the same side. Overshoot past centre is legitimate and must
-    still be accepted."""
+    """A candidate on the wrong side of the move direction is rejected."""
     from hal.drivers.tracking.search import _sticky_probe
 
     f = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -1212,16 +984,13 @@ def test_the_sticky_probe_refuses_a_candidate_that_moved_away_from_centre():
     probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
     assert probe(f) is None, "accepted a candidate that moved away from centre"
 
-    # Overshoot: anchor dx -20%, candidate at dx +25% (centre x = 480). Same
-    # object, corrected past the middle. Must be accepted.
+    # Overshoot: same object corrected past the middle; must be accepted.
     det.detect_candidates = mock.Mock(return_value=[((450, 220, 60, 40), 0.9)])
     probe = _sticky_probe(det, "keyboard", first_box=(160, 220, 60, 40))
     assert probe(f) == (450, 220, 60, 40)
 
 
-# After a hit the arm stays on the object with nothing playing (lamp-ac82
-# 2026-09-14: motionless until a HAL restart). The sweep now hands the body
-# back to idle after a window, on a timer, so the turn still gets its result.
+# After a hit the sweep hands the body back to idle after a window.
 def test_a_find_hands_the_body_back_after_the_hold_window():
     with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
         res, svc = _run(detect_at_stop=2)
@@ -1232,8 +1001,6 @@ def test_a_find_hands_the_body_back_after_the_hold_window():
     assert "search" in reason
 
 
-# Not found → _restore parks the body on the seed pose exactly the same way.
-# Nothing to show, so no window: back to idle now.
 def test_a_miss_hands_the_body_back_immediately():
     with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
         res, _ = _run(detect_at_stop=None)

@@ -4,9 +4,6 @@ import {
   describeLastRun, missingConnectorCodes, skipReason, skippedRunMessage,
 } from "../src/pages/settings/scheduleRunStatus.ts";
 
-// The device writes this exact summary for a skipped run
-// (system/schedule/runner.go: missingConnectorSummaryPrefix + codes joined by ", ").
-
 test("a skip names the one missing connector by its raw code", () => {
   assert.deepEqual(describeLastRun("skipped", "missing connector: gmail"),
     { label: "Skipped · gmail isn't connected", tone: "neutral" });

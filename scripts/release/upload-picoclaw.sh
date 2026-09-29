@@ -1,30 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Publish a new PicoClaw version to OTA metadata. Mirrors upload-openclaw.sh /
-# upload-codex.sh — this script ONLY updates the metadata field, it doesn't touch
-# GCS otherwise (the artifact lives in autonomous-ai/picoclaw GitHub releases;
-# the device fetches it directly, so there is no url/sha256 here).
-#
-# ⚠️ VERSION FORMAT DIFFERS FROM EVERY OTHER COMPONENT: this is the raw GitHub
-# release TAG (e.g. v0.3.1-fixvision), not a bare semver. PicoClaw's own
-# `picoclaw version` reports a build description ("nightly-44-g1959045c-dirty")
-# that has no relation to the release tag, so the tag is the only stable handle.
-# For the same reason `software-update picoclaw` records the installed tag in
-# /usr/local/lib/os-runtimes/picoclaw/installed-version — that stamp, not
-# `picoclaw version`, is what a future bootstrap-worker version check must read.
-#
-# Usage:
-#   ./scripts/release/upload-picoclaw.sh <release_tag>
-#
-# Example:
-#   ./scripts/release/upload-picoclaw.sh v0.3.1-fixvision
-#
-# Bumping `version` alone does NOT push the fleet: the bootstrap worker only
-# auto-applies up to `min_version`. Release it with:
-#   make promote-picoclaw
-#
-# Other keys in metadata.json (skills, openclaw, codex, …) are preserved.
+# Publish a PicoClaw release TAG (e.g. v0.3.1-fixvision, not semver) to OTA metadata; roll out with `make promote-picoclaw`.
+# Usage: ./scripts/release/upload-picoclaw.sh <release_tag>
 
 if [[ -z "${1:-}" ]]; then
   echo "Usage: $0 <picoclaw-release-tag>" >&2
@@ -41,16 +19,13 @@ METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP"' EXIT
 
-# Fail early on a tag that does not exist upstream: unlike the other components
-# the tag is composed into a download URL on the device, and a typo would only
-# surface there as a failed OTA on every polling device.
+# The tag becomes a device download URL; fail here rather than on every device.
 PICO_REPO="${PICO_REPO:-autonomous-ai/picoclaw}"
 if ! curl -fsSL -o /dev/null "https://github.com/${PICO_REPO}/releases/download/${VERSION}/picoclaw-linux-arm64"; then
   echo "ERROR: no picoclaw-linux-arm64 asset at release tag '${VERSION}' in ${PICO_REPO}." >&2
   exit 1
 fi
 
-# Pull existing metadata; if missing, bootstrap with an empty object.
 if ! gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
   echo "Note: $METADATA_GCS not found — bootstrapping with empty object."
   printf '{}' > "$PAYLOAD_TMP"

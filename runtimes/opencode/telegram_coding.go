@@ -17,29 +17,12 @@ import (
 	"time"
 )
 
-// Telegram remote-coding: attach a Telegram chat to a folder's interactive
-// `opencode` thread and continue it from your phone (see coding_sessions.go for
-// discovery). Usecase: code on the device terminal at home, walk out, keep
-// going over Telegram — across multiple folders, each its own thread.
-//
-// Model = HAND-OFF, not co-editing. Each accepted turn spawns a fresh `opencode
-// run --format json --auto --dir <folder> [--session
-// <id>]`, so history persists in opencode's own session store and the bridge
-// stays stateless. A per-folder lock serializes turns, and a /proc check refuses
-// to run while an interactive opencode TUI still holds the folder. This is
-// separate from the device-main persona turn (the gatewayd per-turn child): a
-// chat with NO coding selection still talks to device-main.
-//
-// This mirrors runtimes/claudecode/telegram_coding.go 1:1; only the runtime
-// specifics differ — opencode resumes by session id via `--session <id>` (the
-// folder is set independently by --dir, so there is no flag-ordering trap), its
-// reply is the concatenation of the JSONL `text` events, and its child env only
-// needs HOME + the presync .env (opencode reads its config from XDG under HOME;
-// there is no home-override env like codex's CODEX_HOME).
+// A per-folder lock serializes turns, and a /proc check refuses to run while an interactive
+// opencode TUI still holds the folder.
 
 const (
 	// codingSelFileDefault persists chat→thread selections so a restart keeps
-	// each chat in its thread. Overridable via the codingSelPath test seam.
+	// each chat in its thread.
 	codingSelFileDefault = "/root/.opencode/telegram_coding.json"
 
 	// codingTurnTimeout caps one remote-coding turn (tool use can be slow).
@@ -60,17 +43,14 @@ const codingHelpText = "🤖 Coding over Telegram\n\n" +
 	"/device — return to the device assistant\n\n" +
 	"Once a thread is selected, a plain message runs opencode in that folder and sends the result back here."
 
-// codingTarget is a chat's selected coding thread. SessionID is empty for a
-// freshly requested /new folder until its first turn captures the real thread id.
+// codingTarget is a chat's selected coding thread.
 type codingTarget struct {
 	Folder    string `json:"folder"`
 	SessionID string `json:"session_id"`
 }
 
 // handleTelegramCoding intercepts coding commands and routes plain messages for
-// a chat that has an active coding selection. Returns true when it took the
-// update (caller then skips the default device-main injection). A chat with no
-// selection and no coding command returns false → device-main handles it.
+// a chat that has an active coding selection.
 func (s *OpenCodeService) handleTelegramCoding(ctx context.Context, rawText, chatID string) bool {
 	text := strings.TrimSpace(rawText)
 	if strings.HasPrefix(text, "/") {
@@ -78,24 +58,19 @@ func (s *OpenCodeService) handleTelegramCoding(ctx context.Context, rawText, cha
 	}
 	tgt, ok := s.getCodingTarget(chatID)
 	if !ok {
-		return false // no coding selection → device-main persona handles it
+		return false
 	}
 	go s.runTelegramCodingTurn(ctx, chatID, tgt, text)
 	return true
 }
 
-// handleCodingCommand dispatches a /slash command. Returns true when consumed.
-// A KNOWN command is always consumed. An UNKNOWN slash is consumed only when a
-// coding thread is active (passed through as a prompt); with no selection it
-// returns false so device-main still receives arbitrary slash text unchanged.
+// handleCodingCommand dispatches a /slash command.
 func (s *OpenCodeService) handleCodingCommand(ctx context.Context, text, chatID string) bool {
 	fields := strings.Fields(text)
 	cmd := strings.ToLower(fields[0])
 	arg := strings.TrimSpace(strings.TrimPrefix(text, fields[0]))
 	switch cmd {
 	case "/resume":
-		// Mirrors the opencode CLI's resume: no arg lists threads, an arg picks one
-		// (by number or folder).
 		if arg == "" {
 			s.cmdListSessions(ctx, chatID, "")
 		} else {
@@ -148,7 +123,6 @@ func (s *OpenCodeService) cmdListSessions(ctx context.Context, chatID, arg strin
 	b.WriteString(header)
 	b.WriteString("\n\n")
 	for i, cs := range sessions {
-		// number → what you type; folder + recent prompts + age → how you know it.
 		fmt.Fprintf(&b, "%d.  📂 %s\n     🕐 %s\n", i+1, cs.Folder, humanizeAgo(cs.Modified))
 		if len(cs.Recent) == 0 {
 			b.WriteString("     📝 (no description)\n")
@@ -198,8 +172,7 @@ func (s *OpenCodeService) selectCoding(ctx context.Context, chatID string, cs co
 	s.dmCoding(ctx, chatID, fmt.Sprintf("✅ In thread:\n📂 %s\n📝 %s\n\nSend a message to continue coding. /device to exit.", cs.Folder, cs.label()))
 }
 
-// cmdNewSession selects a folder for a brand-new thread (no resume). The folder
-// is created if missing; the real thread id is captured on the first turn.
+// cmdNewSession selects a folder for a brand-new thread (no resume).
 func (s *OpenCodeService) cmdNewSession(ctx context.Context, chatID, arg string) {
 	folder := normalizeFolder(arg)
 	if folder == "" {
@@ -230,7 +203,8 @@ func (s *OpenCodeService) cmdWhere(ctx context.Context, chatID string) {
 
 // runTelegramCodingTurn executes one hand-off turn: serialize on the folder,
 // refuse if an interactive TUI holds it, run opencode, persist any new thread id,
-// and DM the reply. Runs in its own goroutine (called with `go`).
+// and DM the reply.
+// Runs in its own goroutine (called with `go`).
 func (s *OpenCodeService) runTelegramCodingTurn(ctx context.Context, chatID string, tgt codingTarget, prompt string) {
 	unlock := s.lockCodingFolder(tgt.Folder)
 	defer unlock()
@@ -264,10 +238,8 @@ func (s *OpenCodeService) runTelegramCodingTurn(ctx context.Context, chatID stri
 
 // runCodingOpenCode is the production runner: `opencode run --format json
 // --auto --dir <folder> [--session <id>] <prompt>`.
-// --session is a plain flag (no ordering trap, unlike codex's `resume`
-// subcommand) and the model comes from opencode's config (never a --model flag).
-// Returns the accumulated assistant text and the session id (new or resumed)
-// captured from the JSONL.
+// --session is a plain flag (no ordering trap, unlike codex's `resume` subcommand) and the model
+// comes from opencode's config (never a --model flag).
 func (s *OpenCodeService) runCodingOpenCode(ctx context.Context, folder, threadID, prompt string) (string, string, error) {
 	cctx, cancel := context.WithTimeout(ctx, codingTurnTimeout)
 	defer cancel()
@@ -301,12 +273,7 @@ func (s *OpenCodeService) runCodingOpenCode(ctx context.Context, folder, threadI
 	return reply, newID, nil
 }
 
-// parseOpenCodeResult scans `opencode run --format json` JSONL. Every line
-// carries a "sessionID" (captured into sessionID for resume). "text" events
-// carry streamed assistant output (in ".text", or nested under ".part.text")
-// and are concatenated into the reply; "reasoning" events are ignored. The turn
-// ends successfully at "session.idle"; a "session.error"/"error" line surfaces
-// the failure. turnErr is non-empty only when the turn failed with no reply.
+// parseOpenCodeResult scans `opencode run --format json` JSONL.
 func parseOpenCodeResult(b []byte) (reply, sessionID, turnErr string) {
 	sc := bufio.NewScanner(bytes.NewReader(b))
 	sc.Buffer(make([]byte, 0, 64*1024), 8*1024*1024)
@@ -397,10 +364,7 @@ func opencodeErrText(raw json.RawMessage, msg string) string {
 
 // codingChildEnv mirrors the gatewayd's turnEnv: the process env with HOME
 // asserted (deduped), plus the presync .env pairs (LLM_API_KEY, OPENCODE_WS_TOKEN,
-// …). opencode reads its own config from XDG (~/.config/opencode/opencode.json)
-// under HOME, so — unlike codex — there is NO home-override env (no CODEX_HOME /
-// OPENCODE_HOME) to set; asserting HOME=/root plus sourcing the presync .env is
-// enough for remote coding to resolve the same model + auth the gatewayd uses.
+// …).
 func (s *OpenCodeService) codingChildEnv() []string {
 	base := os.Environ()
 	out := make([]string, 0, len(base)+8)
@@ -411,8 +375,6 @@ func (s *OpenCodeService) codingChildEnv() []string {
 		out = append(out, kv)
 	}
 	out = append(out, loadEnvFilePairs(s.codingEnvFile())...)
-	// HOME is opencodeHome's parent (/root); opencode looks under it for its XDG
-	// config/data. No OPENCODE_HOME — that was a codex-ism.
 	out = append(out, "HOME="+filepath.Dir(opencodeHome))
 	return out
 }
@@ -464,7 +426,7 @@ func (s *OpenCodeService) liveOpenCodeHolds(folder string) bool {
 }
 
 // procHoldsFolder scans /proc for a `opencode` process whose cwd == folder (Linux;
-// the device is Linux). Best-effort: unreadable entries are skipped.
+// the device is Linux).
 func procHoldsFolder(folder string) bool {
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
@@ -500,8 +462,6 @@ func procIsOpenCode(pid string) bool {
 	first := string(bytes.SplitN(cmdline, []byte{0}, 2)[0])
 	return strings.Contains(filepath.Base(first), "opencode")
 }
-
-// ── selection state (in-memory + persisted) ─────────────────────────────────
 
 func (s *OpenCodeService) codingSelFile() string {
 	if s.codingSelPath != "" {
@@ -556,7 +516,7 @@ func (s *OpenCodeService) getCodingList(chatID string) []codingSession {
 }
 
 // loadCodingSelLocked reads persisted selections (called under codingMu with a
-// nil map). A missing/corrupt file yields an empty map.
+// nil map).
 func (s *OpenCodeService) loadCodingSelLocked() {
 	s.codingSel = map[string]codingTarget{}
 	data, err := os.ReadFile(s.codingSelFile())
@@ -603,8 +563,6 @@ func (s *OpenCodeService) lockCodingFolder(folder string) func() {
 	mu.Lock()
 	return mu.Unlock
 }
-
-// ── Telegram delivery ────────────────────────────────────────────────────────
 
 // dmCoding sends text to chatID, chunked to Telegram's per-message limit.
 func (s *OpenCodeService) dmCoding(ctx context.Context, chatID, text string) {

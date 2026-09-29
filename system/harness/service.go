@@ -28,8 +28,7 @@ type Callbacks struct {
 	// BeforeRequest binds local intent to the exact authenticated connection.
 	BeforeRequest func(Frame, ResultContext) error
 	OnReceipt     func(Frame, ResultContext)
-	// OnRevoked runs after the paired computer revoked this device and the pin
-	// was removed (same cleanup as a local unpair, e.g. disable Harness voice).
+	// OnRevoked runs after the computer revoked this device and the pin was removed.
 	OnRevoked func()
 }
 type Status struct {
@@ -731,9 +730,7 @@ func (s *Service) Unpair() error {
 		sockets = append(sockets, socket)
 	}
 	s.mu.Unlock()
-	// Never let a stalled/offline CLI delay local trust removal or the MQTT
-	// acknowledgement. The socket is closed below; this best-effort notice is
-	// only for promptly clearing the CLI's credentials when it is reachable.
+	// A stalled CLI must never delay local trust removal; the revoke notice is best-effort.
 	if revoke != nil {
 		go func() { _ = c.channel.SendEncrypted(revoke) }()
 	}
@@ -953,9 +950,8 @@ func (s *Service) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// revokedByComputer removes the pin after the paired computer rejected or
-// revoked this device. generation guards against a local unpair/re-pair that
-// raced with the revoke; s.conn is already nil here so Unpair sends no echo.
+// revokedByComputer removes the pin after the computer revoked this device;
+// generation guards against a racing local unpair/re-pair.
 func (s *Service) revokedByComputer(generation uint64) {
 	s.mu.Lock()
 	stale := s.generation != generation || s.disk.Peer == nil

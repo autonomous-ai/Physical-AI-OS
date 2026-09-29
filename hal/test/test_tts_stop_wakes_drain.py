@@ -1,11 +1,4 @@
-"""stop() must wake a drain loop parked in queue.get(), not let it time out.
-
-Both drain loops in _speak_sync only re-check the stop event between queue
-gets, and the head queue's get blocks for up to 2s. A newer turn preempting
-the current one waits 2.0s for the lock, so a worker that needs longer than
-that to notice the stop loses the race: the old turn is cut mid-word and the
-new one is refused with a 503, leaving the device silent.
-"""
+"""stop() must wake a drain loop parked in queue.get(), not let it time out."""
 
 import queue
 import threading
@@ -46,7 +39,6 @@ def test_stop_unblocks_a_parked_get_immediately():
     t.join(timeout=2.0)
 
     assert not t.is_alive()
-    # The sentinel is what the loops already read as end-of-stream.
     assert waited["item"] is None
     assert waited["elapsed"] < 0.5, "stop() left the drain loop waiting out its timeout"
 
@@ -65,8 +57,7 @@ def test_stop_wakes_every_registered_queue():
 
 
 def test_forgotten_queues_are_not_woken():
-    # Playback drops its registrations before releasing the lock, so a stop
-    # aimed at the NEXT turn cannot inject a sentinel into the finished one.
+    # Playback drops its registrations before releasing the lock.
     svc = _service()
     q: queue.Queue = queue.Queue(maxsize=256)
     svc._register_drain_queue(q)
@@ -78,8 +69,7 @@ def test_forgotten_queues_are_not_woken():
 
 
 def test_a_full_queue_is_not_an_error():
-    # put_nowait raises Full, but a full queue is not one anybody is blocked
-    # on — the loop sees the stop event on its next iteration regardless.
+    # put_nowait raises Full, but nobody is blocked on a full queue.
     svc = _service()
     q: queue.Queue = queue.Queue(maxsize=1)
     q.put_nowait(object())

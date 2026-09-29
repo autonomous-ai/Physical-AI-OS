@@ -8,10 +8,7 @@ let package = Package(
         .executable(name: "AutonomousBuddy", targets: ["AutonomousBuddy"])
     ],
     dependencies: [
-        // URLSessionWebSocketTask on macOS Ventura (Darwin 22.x / CFNetwork 1410)
-        // misreads incoming WS frames as HTTP and retries the upgrade on the
-        // same TCP socket. Starscream sidesteps this by doing WS framing itself
-        // over raw TCP. Verified via tcpdump 2026-05-22.
+        // URLSessionWebSocketTask on Ventura misreads WS frames as HTTP; Starscream does its own framing.
         .package(url: "https://github.com/daltoniam/Starscream", from: "4.0.8")
     ],
     targets: [

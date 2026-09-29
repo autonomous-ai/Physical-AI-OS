@@ -22,8 +22,7 @@ var (
 	reWhitespace = regexp.MustCompile(`\s+`)
 )
 
-// StartHALVoice starts the HAL voice pipeline. Backend-agnostic — only talks to
-// the HAL daemon on the Pi.
+// StartHALVoice starts the HAL voice pipeline.
 func (s *OpenCodeService) StartHALVoice(deepgramKey, llmKey, sttKey, ttsKey, llmBaseURL, sttBaseURL, ttsBaseURL, ttsVoice, ttsInstructions, ttsProvider string) error {
 	if deepgramKey == "" {
 		return nil
@@ -62,16 +61,11 @@ func stripForTTS(text string) string {
 var (
 	// reHWMarker mirrors hwMarkerRe in server/agent/delivery/http/handler_hw.go
 	// (the downstream consumer that fires + strips [HW:/...] markers on the TTS
-	// path). The Telegram reply routing in emitFinal reads the RAW final text
-	// (it bypasses that pipeline), so the same markers must be stripped here.
-	// Keep the two patterns in sync.
+	// path). Keep the two patterns in sync.
 	reHWMarker = regexp.MustCompile(`\[HW:((?:/[^{:\]]+(?::[^{:\]]+)*))(?::(\{[^}]*\}))?\]`)
 	// reHWLink mirrors hwLinkRe in handler_hw.go EXACTLY (grammar-wise):
 	// markdown-link-form markers like [Lights off](HW:/led/off:{}) — keep the
-	// label, drop the marker. It must never be looser than the executor: a
-	// variant the executor won't fire has to stay visible as raw text, not be
-	// scrubbed into a confident-looking label. The brace-anchored body also
-	// keeps a `)` inside JSON strings from truncating the match.
+	// label, drop the marker. Must never be looser than the executor.
 	reHWLink = regexp.MustCompile(`(?i)\[([^\]]*)\]\(\s*HW:\s*(?:/[^(){:\s]+(?::[^(){:\s]+)*)(?::\{[^}]*\})?:?\s*\)`)
 	// reAudioTag mirrors HAL's _strip_audio_tags whitelist
 	// (hal/drivers/voice/tts/openai.py): ElevenLabs-style delivery tags like
@@ -81,13 +75,10 @@ var (
 
 // stripForChannel removes [HW:/...] hardware markers and TTS audio-style tags
 // so a channel reply (Telegram DM, see translator.go emitFinal) shows only the
-// conversational text. Unlike stripForTTS it keeps markdown and emoji — chat
-// clients render them fine.
+// conversational text.
 func stripForChannel(text string) string {
 	text = reHWLink.ReplaceAllStringFunc(text, func(m string) string {
 		label := reHWLink.FindStringSubmatch(m)[1]
-		// Label may itself be a canonical marker's content (LLM link-wrapped
-		// the second of a back-to-back pair) — both are markers, show neither.
 		if len(label) >= 3 && strings.EqualFold(label[:3], "HW:") {
 			return ""
 		}
@@ -126,26 +117,11 @@ func (s *OpenCodeService) StopTTS() error {
 }
 
 // Speak says text out loud and nothing else — no agent turn, no session entry,
-// no tokens. See domain.AgentGateway.Speak for the full contract; the only
-// per-runtime difference is the log component, which is why every backend's
-// implementation is this same delegation to hal.Speak.
-//
-// hal.Speak, NOT hal.SpeakReply: SpeakReply sets realtime_feedback so the
-// spoken text is fed back to the realtime voice agent as history, which is
-// right for the agent's own reply and wrong for a canned line the agent never
-// produced. This is the same path hardcoded fillers and system notices take.
-//
-// The returned error means HAL REFUSED THE TEXT (transport failure, or a
-// rejection such as the 1..2000 character bound it enforces without
-// truncating). A nil error means HAL accepted it for playback — not that audio
-// was produced, and certainly not that anyone heard it.
+// no tokens. Uses hal.Speak, not SpeakReply, so the text never enters realtime voice history.
 func (s *OpenCodeService) Speak(text string) error {
-	// Same normalisation the agent's own TTS gets: emoji and markdown read
-	// aloud as noise. It can only ever shorten the string, so it cannot push a
-	// caller-validated length back over HAL's cap.
 	text = stripForTTS(text)
 	if text == "" {
-		return nil // nothing to say; HAL rejects an empty string outright
+		return nil
 	}
 	if err := hal.Speak(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
@@ -160,8 +136,6 @@ func (s *OpenCodeService) SendToHALTTS(text string) error {
 	if text == "" {
 		return nil
 	}
-	// SpeakReply (not Speak): the agent's actual reply, fed back to the realtime
-	// voice agent as history. Hardcoded fillers use hal.Speak so they don't.
 	if err := hal.SpeakReply(text); err != nil {
 		return fmt.Errorf("speak: %w", err)
 	}

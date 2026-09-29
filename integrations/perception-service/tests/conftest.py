@@ -1,8 +1,4 @@
-"""Pytest bootstrap for local import paths.
-
-This file is loaded by pytest before test modules are imported.
-It ensures both `src.*` and direct package imports from `src/` work.
-"""
+"""Pytest bootstrap: make both `src.*` and direct `src/` package imports work."""
 
 from __future__ import annotations
 

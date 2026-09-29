@@ -1,11 +1,4 @@
-"""Hermes context manager — loads identity, memory, and skills from the Hermes workspace.
-
-Hermes workspace layout:
-- SOUL.md (personality/tone)
-- memories/USER.md (user preferences)
-- memories/MEMORY.md (agent-curated notes, 2200 char limit)
-- skills/*/SKILL.md (same format as OpenClaw)
-"""
+"""Hermes context manager: SOUL.md, memories/USER.md, memories/MEMORY.md and skills/*/SKILL.md."""
 
 import logging
 import re
@@ -18,12 +11,7 @@ logger = logging.getLogger(__name__)
 
 
 def _first_sentence(text: str, cap: int = 150) -> str:
-    """First sentence of a skill description (cheap token cut for the catalog).
-
-    Collapses newlines, cuts at the first sentence terminator (. ! ?) followed
-    by whitespace, else hard-caps at `cap` chars. Keeps the catalog
-    declaration-driven while dropping the verbose main-agent-only tail.
-    """
+    """First sentence of a skill description, else hard-capped at `cap` chars."""
     text = " ".join(text.split())
     m = re.search(r"[.!?](\s|$)", text)
     s = text[: m.end()].strip() if m else text
@@ -31,11 +19,7 @@ def _first_sentence(text: str, cap: int = 150) -> str:
 
 
 class HermesContextManager(ContextManagerBase):
-    """Context manager for the Hermes agent runtime.
-
-    Reads SOUL.md and USER.md for identity, MEMORY.md for device memory,
-    and skills/*/SKILL.md for the skill catalog.
-    """
+    """Context manager for the Hermes agent runtime."""
 
     IDENTITY_NAME_FILE = "SOUL.md"
 

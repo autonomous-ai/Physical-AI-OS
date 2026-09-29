@@ -1,10 +1,4 @@
-"""The client-side `web_search` tool for the pipecat provider.
-
-Pins three things: the Google-Search relay's Interaction shape (captured from
-a live call on 2026-09-21, trimmed), the orchestrator's tool contract (every
-outcome is acknowledged with trigger_response=True and the turn continues), and
-the registration gate (pipecat_v1 + flag only).
-"""
+"""The client-side `web_search` tool for the pipecat provider."""
 
 import json
 from unittest import mock
@@ -29,8 +23,7 @@ from hal.realtime.web_search import (
     strip_markdown,
 )
 
-# The relay's answer to "Who won the euro 2024?" — signatures, usage and the
-# search-suggestion HTML dropped, everything the parser reads kept verbatim.
+# The relay's real answer, trimmed to the fields the parser reads.
 INTERACTION = {
     "id": "v1_abc",
     "status": "completed",
@@ -71,9 +64,6 @@ INTERACTION = {
 }
 
 
-# --- response parsing -----------------------------------------------------------------
-
-
 def test_parse_reads_the_grounded_answer_queries_and_distinct_sources():
     res = parse_interaction(INTERACTION)
     assert res.answer.startswith("Spain won UEFA Euro 2024.")
@@ -110,9 +100,6 @@ def test_parse_caps_a_long_answer_at_a_sentence_boundary(monkeypatch):
 def test_strip_markdown_flattens_what_gemini_writes():
     text = "## Weather\n- **31°C** and _sunny_\n- see [forecast](https://w)\n\n\nLater: `clouds`"
     assert strip_markdown(text) == "Weather\n31°C and sunny\nsee forecast\nLater: clouds"
-
-
-# --- HTTP client ----------------------------------------------------------------------
 
 
 def _response(status=200, payload=INTERACTION):
@@ -162,9 +149,6 @@ def test_grounded_search_reports_a_non_200_and_a_missing_endpoint():
         grounded_search("q", url="", api_key="k", model="m", timeout_s=1.0)
 
 
-# --- orchestrator handler ---------------------------------------------------------------
-
-
 def _orchestrator_with_agent():
     orch = object.__new__(RealtimeOrchestrator)
     orch._agent = mock.Mock()
@@ -211,8 +195,7 @@ def test_handler_reads_the_endpoint_knobs_from_config(monkeypatch):
 
 
 def test_handler_failure_is_still_acknowledged_with_a_way_out():
-    """An unanswered call only times out into the bridge's generic error; a
-    failed one must let the model say so or delegate — never guess."""
+    """A failed web search returns an error result to the model."""
     orch = _orchestrator_with_agent()
     with mock.patch.object(web_search, "grounded_search", side_effect=WebSearchError("search relay returned HTTP 503")):
         orch._handle_web_search_call(_call())
@@ -233,12 +216,8 @@ def test_handler_refuses_an_empty_query_without_searching():
         assert json.loads(_sent(orch).output) == {"error": "query must not be empty"}
 
 
-# --- stream_output: the turn continues through a search ---------------------------------
-
-
 class _SearchingAgent:
-    """A pipecat-shaped agent: the model calls web_search, then (once the
-    result is in) speaks the answer."""
+    """Pipecat-shaped agent that calls web_search, then speaks the answer."""
 
     def __init__(self) -> None:
         self.sent = []
@@ -278,7 +257,6 @@ def test_stream_output_answers_the_search_and_keeps_the_turn(monkeypatch):
     with mock.patch.object(web_search, "grounded_search", return_value=SearchResult(answer="31 °C")):
         outputs = list(orchestrator.stream_output())
 
-    # The call itself is consumed; only the spoken follow-up reaches the caller.
     assert [type(o).__name__ for o in outputs] == ["TextOutput"]
     assert agent.end_turn_calls == 0, "unlike delegate/reject, a search does not leave the turn"
     assert json.loads(agent.sent[0][0].output)["result"] == "31 °C"
@@ -286,16 +264,13 @@ def test_stream_output_answers_the_search_and_keeps_the_turn(monkeypatch):
     assert orchestrator._consecutive_silent == 0, "a turn that searched is not a silent turn"
 
 
-# --- registration gate ------------------------------------------------------------------
-
-
 @pytest.mark.parametrize(
     "provider, flag, expected",
     [
         ("pipecat_v1", True, True),
         ("pipecat_v1", False, False),
-        ("gemini", True, False),   # grounds on its own side
-        ("gptlive", True, False),  # its Responses backend searches
+        ("gemini", True, False),
+        ("gptlive", True, False),
         ("openai", True, False),
     ],
 )

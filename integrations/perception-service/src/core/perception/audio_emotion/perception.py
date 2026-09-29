@@ -1,9 +1,4 @@
-"""Audio emotion perception: model lifecycle, session management, and single-shot prediction.
-
-Wraps an AudioEmotionRecognizer behind an InputBatcher.
-Each connection creates an AudioEmotionPerceptionSession via create_session().
-Single-shot method (predict_audio) is provided for HTTP endpoints.
-"""
+"""Audio emotion perception: model lifecycle, sessions, and single-shot predict_audio for HTTP."""
 
 import asyncio
 from typing import cast

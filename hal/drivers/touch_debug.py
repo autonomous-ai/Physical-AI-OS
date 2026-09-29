@@ -1,58 +1,5 @@
-"""TOUCH-DEBUG: per-gesture trace files for the TTP223 edge -> session -> gesture -> action flow.
-
-Modelled on the LOOK-DEBUG tracer in `hal/drivers/tracking/look_debug.py` — same
-shape, same guarantees: OFF by default, self-contained, and it never raises. A
-tracing bug must not cost the user a gesture.
-
-Why it exists: the touch path collapses information at every layer and then
-throws away the evidence. `_on_edge` receives which pad fired and whether it was
-a press or a release, and uses neither. The two log lines that say what the
-decision layer actually saw (`session ended (count=%d)`, `session ignored (pet
-cooldown)`) are `logger.debug` and invisible at the shipped `HAL_LOG_LEVEL=INFO`.
-So when a touch does the wrong thing there is no way to tell whether the pad
-misfired, the session layer mis-grouped it, the classifier mis-read it, or the
-action did something unexpected. This puts all four in one file per gesture.
-
-It is also the measuring instrument the classifier was designed from: per-contact
-`touch_order` and `adjacent_deltas_ms` are emitted whether or not gesture
-classification is on, and those deltas are what showed fingers-landing-together
-(1-23ms) separating from a finger travelling (53-322ms). `touch_order` is the
-full step sequence and matches the driver's own contact step for step — an
-earlier `first_touch_order` kept one entry per pad and silently under-reported
-the gaps in 47 of 130 traces, so treat pre-2026-08-28 histograms with suspicion.
-
-This module does NOT classify. It records edges and sessions, and stores whatever
-the driver reports through `note_classifier`. An earlier version recomputed its
-own traversal, and once the driver's model changed the two silently disagreed —
-a trace read `reversals: 3, "stroke-shaped"` beside a DOUBLE_TAP verdict, which
-is worse than no trace at all because it looks authoritative.
-
-Env knobs (all optional):
-  HAL_TOUCH_DEBUG              "true" to enable (OFF by default)
-  HAL_TOUCH_DEBUG_DIR          output root (default: ./touch_logs next to this file)
-  HAL_TOUCH_DEBUG_MAX_ENTRIES  file cap, oldest pruned (default 200; 0 = unbounded)
-  HAL_TOUCH_DEBUG_PADS         line->label map, e.g. "96=S1,100=S4". Without
-                               it pads are labelled by line number, because the
-                               historical S-names do not follow line order on this
-                               board and guessing them would assert something false.
-
-Layout — one file per resolved gesture, named so a wrong classification is
-visible from `ls` alone:
-  <root>/20260827-114032_TAP.json
-  <root>/20260827-114107_PET.json
-  <root>/20260827-114230_SWIPE.json
-  <root>/20260827-114251_IGNORED-pet_cooldown.json
-  <root>/20260827-114301_IGNORED-settle.json
-
-Deviation from look_debug: a flat .json per gesture rather than a directory. The
-look tracer needs a directory to hold capture.jpg and its step frames; there are
-no binary artefacts here, so a directory would just be an empty wrapper.
-
-THREAD SAFETY IS THE POINT. `note_edge` runs inside the lgpio callback. It only
-appends under a short lock — never file I/O, never a blocking call. A blocking
-write there would delay subsequent edges and *manufacture* the very inter-pad
-deltas this module exists to measure. The file write happens on a daemon thread
-spawned by `finish`.
+"""
+TOUCH-DEBUG: per-gesture trace files for the TTP223 edge -> session -> gesture -> action flow.
 """
 
 from __future__ import annotations
@@ -117,8 +64,9 @@ def _init() -> bool:
 
 
 def _parse_pad_labels(raw: str) -> Dict[int, str]:
-    """Parse "96=S1,100=S4" into {96: "S1", 100: "S4"}. Malformed entries are
-    skipped rather than raising — a typo in an env var must not kill touch."""
+    """Parse "96=S1,100=S4" into {96: "S1", 100: "S4"}. Malformed entries are skipped
+    rather than raising — a typo in an env var must not kill touch.
+    """
     out: Dict[int, str] = {}
     for part in raw.split(","):
         part = part.strip()
@@ -133,10 +81,10 @@ def _parse_pad_labels(raw: str) -> Dict[int, str]:
 
 
 def _pad(line: int) -> str:
-    """Label for a line. Defaults to the line number: the board's historical
-    S-names (S1/S2/S4) do not follow line order after two relocations, so
-    inventing them here would assert something false. Set HAL_TOUCH_DEBUG_PADS
-    once the pads are physically labelled (build-plan Phase 2.2)."""
+    """Label for a line. Defaults to the line number: the board's historical S-names
+    (S1/S2/S4) do not follow line order after two relocations, so inventing them here
+    would assert something false.
+    """
     return _pad_labels.get(line, f"L{line}")
 
 
@@ -176,12 +124,7 @@ def _arm_idle_flush() -> None:
 
 
 def _on_idle_flush() -> None:
-    """Close a cycle that went quiet without resolving to a gesture.
-
-    Two real cases: the startup-settle burst (every edge suppressed, no session
-    timer ever armed) and a cycle orphaned by an exception upstream. Naming them
-    apart matters — a settle file every boot is expected, an unresolved one is a bug.
-    """
+    """Close a cycle that went quiet without resolving to a gesture."""
     with _lock:
         trace = _current
         if trace is None:
@@ -192,8 +135,7 @@ def _on_idle_flush() -> None:
 
 
 def start_cycle(chip: int, lines: List[int], axis: Optional[List[int]] = None) -> None:
-    """Open a trace for one gesture cycle. No-op if one is already open — a
-    cycle spans every edge and session from first contact to resolved action."""
+    """Open a trace for one gesture cycle."""
     if not _init():
         return
     try:
@@ -215,9 +157,6 @@ def _new_trace_locked(chip: int, lines: List[int], axis: Optional[List[int]]) ->
         "chip": chip,
         "lines": list(lines),
         "pads": {str(l): _pad(l) for l in lines},
-        # axis = lines in physical left-to-right order. Absent until the pads
-        # are physically labelled; traversal falls back to declared line order
-        # and says so, because reversal detection needs SOME ordering.
         "axis": list(axis) if axis else None,
         "edges": [],
         "sessions": [],
@@ -227,11 +166,7 @@ def _new_trace_locked(chip: int, lines: List[int], axis: Optional[List[int]]) ->
 
 
 def note_edge(line: int, level: int, suppressed: bool = False) -> None:
-    """Record one GPIO edge. Called from the lgpio callback — append only.
-
-    `level` is lgpio's: 0 = LOW. Pads rest HIGH (pull-up), so level 0 is the
-    TOUCH edge and level 1 is the release.
-    """
+    """Record one GPIO edge. Called from the lgpio callback — append only."""
     if not _init():
         return
     try:
@@ -257,13 +192,7 @@ def note_edge(line: int, level: int, suppressed: bool = False) -> None:
 
 
 def note_session_end(count: int) -> None:
-    """Close off the edges seen since the last boundary into one session.
-
-    A session is one physical contact: the burst of cross-talk and FastMode
-    auto-release edges from a single finger press. `count` is the driver's
-    running session counter, recorded as-is so the trace can be compared against
-    the driver's own view.
-    """
+    """Close off the edges seen since the last boundary into one session."""
     if not _init():
         return
     try:
@@ -280,32 +209,13 @@ def note_session_end(count: int) -> None:
 
 def _summarise_session(edges: List[Dict[str, Any]], count: int,
                        trace: Dict[str, Any]) -> Dict[str, Any]:
-    """Per-contact arithmetic — the measurement the classifier is tuned from.
-
-    `touch_order` is the FULL step sequence: every TOUCH edge (level 0), with
-    only *consecutive* repeats collapsed, exactly the way the driver builds its
-    own contact. Release edges are excluded because FastMode's auto-drop is not
-    a second contact and would double every gap.
-
-    It replaced a `first_touch_order` that kept only the first hit per pad, and
-    that reduction was not cosmetic — `adjacent_deltas_ms` was computed from it.
-    Measured over 130 captured traces, **47 reported fewer gaps than the driver
-    actually saw**, one of them 2 instead of 9:
-
-        driver:  L96,L100,L98,L100,L96,L100,L98,L96,L100,L98   (10 steps)
-        tracer:  L96,L100,L98                                  (3 entries)
-
-    So the inter-pad histogram this driver's threshold was chosen from had been
-    measured through a partially blind view. The same reduction had already hid
-    the pet revisit signature once. One unreduced sequence now, matching the
-    driver step for step, so the two views cannot disagree.
-    """
+    """Per-contact arithmetic — the measurement the classifier is tuned from."""
     seq: List[List[Any]] = []
     for e in edges:
         if e["level"] != 0:
             continue
         if seq and seq[-1][0] == e["pad"]:
-            continue  # same pad re-firing under a still finger, not a move
+            continue
         seq.append([e["pad"], e["t_ms"]])
 
     times = [t for _, t in seq]
@@ -317,28 +227,16 @@ def _summarise_session(edges: List[Dict[str, Any]], count: int,
         "ended_t_ms": round((time.monotonic() - trace["_t0"]) * 1000, 1),
         "edge_count": len(edges),
         "steps": len(seq),
-        # A set, not a sequence — named so it cannot be mistaken for the order.
         "distinct_pads": distinct,
         "touch_order": seq,
         "adjacent_deltas_ms": deltas,
         "span_ms": round(times[-1] - times[0], 1) if len(times) > 1 else 0.0,
-        # First pad to fire in this contact — the proxy for "where the finger
-        # was". Its reliability under cross-talk is the open assumption the
-        # spatial model rests on, and what this field exists to measure.
         "primary_pad": seq[0][0] if seq else None,
     }
 
 
 def note_classifier(**fields: Any) -> None:
-    """Record the DRIVER's own view of the cycle.
-
-    The tracer used to recompute traversal itself, and once the driver's model
-    changed the two silently disagreed — a trace read `reversals: 3,
-    "stroke-shaped"` next to a `DOUBLE_TAP` verdict, which is worse than no
-    trace at all because it looks authoritative (device-observed 2026-08-27,
-    trace 160546). There is one source of truth now: the driver classifies, and
-    reports what it saw.
-    """
+    """Record the DRIVER's own view of the cycle."""
     if not _init():
         return
     try:
@@ -366,12 +264,7 @@ def note_decision(gesture: str, reason: str, session_count: int) -> None:
 
 
 def note_action(fn: str, source: str, **fields: Any) -> None:
-    """Record the action dispatched and the device state it ran against.
-
-    State matters because several outcomes are state-dependent and silent
-    today: a tap on a sleeping device, a gesture blocked by the hardware mic
-    switch, a pet whose phrase was dropped because the speaker was muted.
-    """
+    """Record the action dispatched and the device state it ran against."""
     if not _init():
         return
     try:
@@ -389,9 +282,10 @@ def note_action(fn: str, source: str, **fields: Any) -> None:
 
 
 def _read_state() -> Dict[str, Any]:
-    """Snapshot the flags the touch actions branch on. Imported lazily and
-    defensively — app_state pulls in most of HAL, and a debug aid must not be
-    the reason a driver fails to import."""
+    """Snapshot the flags the touch actions branch on. Imported lazily and defensively —
+    app_state pulls in most of HAL, and a debug aid must not be the reason a driver
+    fails to import.
+    """
     try:
         import hal.app_state as state
 
@@ -407,8 +301,7 @@ def _read_state() -> Dict[str, Any]:
 
 
 def finish(status: str) -> None:
-    """Close the cycle and write it out. `status` becomes the filename suffix,
-    so a wrong classification is visible from `ls` alone."""
+    """Close the cycle and write it out."""
     global _current, _flush_timer
     if not _init():
         return
@@ -421,8 +314,6 @@ def finish(status: str) -> None:
                 _flush_timer = None
         if trace is None or _base is None:
             return
-        # Any edges not yet closed into a session still belong in the record —
-        # a cycle that resolved mid-contact is exactly the interesting case.
         if trace["_pending"]:
             trace["sessions"].append(
                 _summarise_session(trace["_pending"], -1, trace)
@@ -448,7 +339,6 @@ def _write(status: str, trace: Dict[str, Any]) -> None:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         safe = "".join(c if c.isalnum() or c in "-_" else "_" for c in status)[:40]
         path = _base / f"{stamp}_{safe}.json"
-        # Same-second gestures would collide; petting produces exactly that.
         if path.exists():
             n = 2
             while (_base / f"{stamp}_{safe}-{n}.json").exists():
@@ -464,8 +354,8 @@ def _write(status: str, trace: Dict[str, Any]) -> None:
 def _log_summary(status: str, trace: Dict[str, Any]) -> None:
     """One INFO line accounting for the whole gesture.
 
-    INFO deliberately: the driver's own decision lines are logger.debug and
-    never appear at the shipped HAL_LOG_LEVEL, which is the gap this closes.
+    INFO deliberately: the driver's own decision lines are logger.debug and never appear
+    at the shipped HAL_LOG_LEVEL, which is the gap this closes.
     """
     try:
         cl = trace.get("classifier") or {}

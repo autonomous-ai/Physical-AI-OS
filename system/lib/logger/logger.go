@@ -17,16 +17,13 @@ import (
 	"gopkg.in/natefinch/lumberjack.v2"
 )
 
-// GELF centralized logging. Read inside Init() so callers can load .env
-// (godotenv) before logging is initialized. If GELF_URL is empty, the GELF
-// handler is attached dormant and ships nothing until EnableGELFRelay arms it.
+// GELF settings, read in Init so callers can load .env first.
 var (
 	gelfURL      string
 	gelfUsername string
 	gelfPassword string
 )
 
-// ANSI color codes
 const (
 	colorReset  = "\033[0m"
 	colorRed    = "\033[31m"
@@ -73,7 +70,6 @@ func (h *colorHandler) Handle(_ context.Context, r slog.Record) error {
 		r.Message,
 	)
 
-	// Append attributes
 	r.Attrs(func(a slog.Attr) bool {
 		key := a.Key
 		if h.group != "" {
@@ -158,21 +154,16 @@ func (m *multiHandler) WithGroup(name string) slog.Handler {
 const (
 	gelfQueueSize            = 256
 	gelfShutdownFlushTimeout = 5 * time.Second
-	// gelfRelayPath is appended to the cloud API base URL (which already ends in
-	// /v1) to reach its GELF relay.
+	// gelfRelayPath is appended to the cloud API base URL (already ending in /v1).
 	gelfRelayPath = "/logs/gelf"
 )
 
-// gelfSender owns the bounded GELF delivery queue. Logging must never create an
-// unbounded number of network goroutines when the remote collector is slow or
-// unavailable, so overload drops the newest GELF record instead. Drops are
-// reported to stderr with exponentially spaced notices to preserve observability
-// without turning a collector outage into a second log storm.
+// gelfSender owns the bounded GELF queue; overload drops the newest record, with
+// exponentially spaced stderr notices, so a slow collector never spawns unbounded goroutines.
 type gelfSender struct {
 	client *http.Client
 	url    string
-	// auth sets the request credential: basic auth for a direct collector, the
-	// device's Bearer key for the cloud API relay. Nil sends none.
+	// auth sets the request credential (basic or Bearer); nil sends none.
 	auth func(*http.Request)
 
 	queue   chan []byte
@@ -199,8 +190,7 @@ func newGELFSender(client *http.Client, url string, auth func(*http.Request)) *g
 	return s
 }
 
-// basicAuth is the direct-collector credential (GELF_USERNAME/GELF_PASSWORD).
-// Nil without a username, which sends no credential at all.
+// basicAuth is the direct-collector credential; nil without a username.
 func basicAuth(username, password string) func(*http.Request) {
 	if username == "" {
 		return nil
@@ -288,20 +278,15 @@ func (s *gelfSender) close() {
 	}
 }
 
-// gelfSink is the delivery slot shared by a GELF handler and every handler
-// derived from it. slog's With/WithGroup copy the handler, so a sender held by
-// value would leave loggers built before the relay was armed — package-level
-// ones are built long before config.json loads — pointing at nil forever.
-// Holding it behind one shared pointer arms all of them at once.
+// gelfSink is the sender slot shared by a GELF handler and all its With/WithGroup copies,
+// so arming the relay reaches loggers built before config loaded.
 type gelfSink struct {
 	sender atomic.Pointer[gelfSender]
 }
 
 func (s *gelfSink) load() *gelfSender { return s.sender.Load() }
 
-// gelfHandler serializes records and enqueues them for the shared GELF sender.
-// It is dormant (Enabled reports false, nothing is serialized) until its sink
-// holds a sender.
+// gelfHandler enqueues records for the shared GELF sender; dormant until its sink holds one.
 type gelfHandler struct {
 	level      slog.Level
 	host       string
@@ -319,9 +304,7 @@ func newGELFHandler(level slog.Level, host string) *gelfHandler {
 	return h
 }
 
-// newDormantGELFHandler returns a handler with no sender, and so no goroutine,
-// for EnableGELFRelay to arm once the device key is known. A process that never
-// arms it (bootstrap) ships nothing and pays nothing.
+// newDormantGELFHandler returns a handler with no sender for EnableGELFRelay to arm later.
 func newDormantGELFHandler(level slog.Level, host string) *gelfHandler {
 	return &gelfHandler{
 		level:  level,
@@ -368,7 +351,6 @@ func (h *gelfHandler) Handle(_ context.Context, r slog.Record) error {
 		msg["_device_type"] = h.deviceType // device class, for centralized filtering
 	}
 
-	// Add attributes as GELF extra fields (prefixed with _)
 	for _, a := range h.attrs {
 		key := a.Key
 		if h.group != "" {
@@ -422,24 +404,15 @@ func SetGELFHost(host string) {
 	}
 }
 
-// SetGELFDeviceType stamps the device class on every shipped log as `_device_type`
-// (call after config loads) so centralized logs are filterable by device, not the
-// per-unit host. Device-agnostic: each device reports its own class, not "lamp".
+// SetGELFDeviceType stamps the device class on every shipped log as `_device_type`.
 func SetGELFDeviceType(deviceType string) {
 	if activeGELF != nil && deviceType != "" {
 		activeGELF.deviceType = deviceType
 	}
 }
 
-// EnableGELFRelay arms the dormant GELF handler to ship through
-// the cloud API instead of straight to the collector: POST {baseURL}/logs/gelf
-// with the device's own key as a Bearer token. The collector credential stays
-// server-side, so the device carries none — shipped devices are not provisioned
-// with GELF_URL/GELF_USERNAME/GELF_PASSWORD.
-//
-// Call once config.json has loaded. No-op when GELF_URL is set (direct delivery
-// wins), when baseURL or apiKey is blank, when Init attached no GELF handler, or
-// when the relay is already armed, so a repeat call cannot start a second sender.
+// EnableGELFRelay arms the dormant handler to POST {baseURL}/logs/gelf with apiKey as Bearer.
+// No-op when GELF_URL is set, inputs are blank, or the relay is already armed.
 func EnableGELFRelay(baseURL, apiKey string) {
 	baseURL = strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	apiKey = strings.TrimSpace(apiKey)
@@ -453,11 +426,8 @@ func EnableGELFRelay(baseURL, apiKey string) {
 	}
 }
 
-// Init sets up the global slog default logger with colored console output.
-// HAL_LOG_LEVEL controls the level for the Go services and HAL from the shared
-// /opt/hal/.env. Missing or invalid values default to INFO.
-// If logFilePath is non-empty, logs are also written to that file (plain text, no color).
-// Returns a cleanup function to close the log file (call via defer).
+// Init sets up the default slog logger (level from HAL_LOG_LEVEL, default INFO), optionally
+// also writing to logFilePath; the returned func closes the file.
 func Init(logFilePath string) func() {
 	level := levelFromEnv()
 
@@ -471,7 +441,6 @@ func Init(logFilePath string) func() {
 		return func() {}
 	}
 
-	// Rotating log file: 2 MB per file, keep 10 most recent backups
 	rotatingWriter := &lumberjack.Logger{
 		Filename:   logFilePath,
 		MaxSize:    2, // MB
@@ -489,10 +458,7 @@ func Init(logFilePath string) func() {
 	gelfUsername = os.Getenv("GELF_USERNAME")
 	gelfPassword = os.Getenv("GELF_PASSWORD")
 
-	// GELF_URL ships straight to that collector. Without it the handler is
-	// attached dormant for EnableGELFRelay to arm once config.json supplies the
-	// device key; until then (and forever, in bootstrap) it ships nothing.
-	// "os-server" is the pre-config host; SetGELFHost(DeviceID) overrides it.
+	// Without GELF_URL the handler stays dormant until EnableGELFRelay arms it.
 	var gelf *gelfHandler
 	if gelfURL != "" {
 		gelf = newGELFHandler(level, "os-server")

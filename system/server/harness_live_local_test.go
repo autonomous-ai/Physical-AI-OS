@@ -18,10 +18,7 @@ import (
 	agenthttp "go.autonomous.ai/os/system/server/agent/delivery/http"
 )
 
-// TestHarnessLiveLocalBridge is explicitly opt-in. It exposes only the existing
-// signed device socket to LAN; test control endpoints require actual loopback.
-// It never sends a task by itself. Voice routes require an explicit local HAL
-// test fixture so the normal HAL endpoint cannot be contacted accidentally.
+// TestHarnessLiveLocalBridge is explicitly opt-in.
 type harnessLiveHALTransport struct {
 	base   http.RoundTripper
 	target *url.URL

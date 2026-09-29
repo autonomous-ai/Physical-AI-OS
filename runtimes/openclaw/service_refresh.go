@@ -11,28 +11,12 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// RefreshChannelConfig rewrites channels.<channel> in openclaw.json using the
-// canonical apply helpers, then restarts the gateway. Unlike AddChannel this
-// path NEVER calls `openclaw channels add`, `plugins install`, or any other CLI
-// side effect — refresh is config-only. Today only slack is implemented; other
-// channels return an error so future expansion stays explicit.
-//
-// Returns the detected runtime version string ("Y.M.P", empty when undetected)
-// so the caller can echo the runtime version in fd_channel responses, and errors
-// out (without restarting) if openclaw.json does not yet exist — refresh is only
-// meaningful on already-onboarded devices.
-//
-// The runtime is read ONCE per call from the cached OpenClaw version
-// (currentOpenclawRuntime — the same value the MQTT info message reports), not a
-// fresh shell-out, so refresh stays consistent with setup/add_channel.
+// RefreshChannelConfig rewrites channels.<channel> in openclaw.json using the canonical apply helpers, then restarts the gateway.
 func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.RefreshChannelRequest) (string, error) {
-	_ = ctx // config-only path: no subprocess to bound, ctx kept for interface symmetry.
+	_ = ctx
 	runtime := currentOpenclawRuntime()
 	runtimeStr := runtimeVersionString(runtime)
 
-	// Hold primarySyncMu for the full read-modify-write cycle so this cannot
-	// interleave with SyncModelsFromAPI or RefreshModelsConfig writing a newer
-	// version of openclaw.json between our ReadFile and our WriteFile.
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
 
@@ -71,7 +55,6 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 		channelsMap[domain.ChannelDiscord] = discordMap
 		ensureMap(entriesMap, domain.ChannelDiscord)["enabled"] = true
 	case domain.ChannelTelegram:
-		// Mirror AddChannel's telegram writer (built-in channel, no plugin).
 		telegramMap := ensureMap(channelsMap, domain.ChannelTelegram)
 		telegramMap["enabled"] = true
 		telegramMap["botToken"] = req.TelegramBotToken
@@ -90,9 +73,6 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 	configData["channels"] = channelsMap
 	configData["plugins"] = pluginsMap
 
-	// Mirror AddChannel's elevated.allowFrom seed so older devices missing this
-	// entry pick it up on refresh — without it, elevated tools (e.g. /exec) stay
-	// gated to channels that were already in the allowFrom map.
 	if toolsMap, ok := configData["tools"].(map[string]any); ok {
 		if elevatedMap, ok := toolsMap["elevated"].(map[string]any); ok {
 			elevatedAllowFrom := ensureMap(elevatedMap, "allowFrom")
@@ -105,8 +85,6 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 	if err != nil {
 		return runtimeStr, fmt.Errorf("marshal openclaw config: %w", err)
 	}
-	// Refresh does not change the primary model — write the existing primary into
-	// the flag so the watcher correctly identifies this as an os-server write.
 	if existingPrimary := extractPrimaryModel(configData); existingPrimary != "" {
 		setOSWriteFlag(s.config.OpenclawConfigDir, existingPrimary)
 	}
@@ -126,8 +104,6 @@ func (s *OpenclawService) RefreshChannelConfig(ctx context.Context, req domain.R
 }
 
 // runtimeVersionString returns "Y.M.P" when the runtime was detected, "" otherwise.
-// Empty signals to the backend that version probing failed (still recoverable;
-// the refresh itself may have succeeded since AtLeast treats undetected as modern).
 func runtimeVersionString(r RuntimeInfo) string {
 	if !r.Detected {
 		return ""

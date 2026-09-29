@@ -12,8 +12,6 @@ func TestQueuedFollowupsRetainTheirRunIDs(t *testing.T) {
 	for _, tagged := range []bool{false, true} {
 		t.Run(fmt.Sprintf("tagged=%v", tagged), func(t *testing.T) {
 			s := &CodexService{}
-			// All three are sent before the first output arrives: the old single
-			// pending string assigned run-3 to turn 1 and orphaned the others.
 			for i := 1; i <= 3; i++ {
 				s.addPendingRun(fmt.Sprintf("req-%d", i), fmt.Sprintf("run-%d", i))
 			}
@@ -268,8 +266,6 @@ func TestGatewayDisconnectEndsActiveTurnBeforeCleanup(t *testing.T) {
 func TestReusedRequestIDWithDifferentRunSurvivesRestartOverlap(t *testing.T) {
 	s := &CodexService{}
 	s.addPendingRun("chat-1", "new-run")
-	// A gateway can finish an old queued request after os-server restarts its
-	// request counter. The unique originating run IDs distinguish both requests.
 	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"chat-1","run_id":"old-run"}`), func(domain.WSEvent) {})
 	var got string
 	s.translateFrame([]byte(`{"type":"turn.completed","request_id":"chat-1","run_id":"new-run"}`), func(e domain.WSEvent) {

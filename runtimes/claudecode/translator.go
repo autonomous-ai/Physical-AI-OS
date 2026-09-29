@@ -17,8 +17,7 @@ func nowUnixMs() int64 { return time.Now().UnixMilli() }
 // claudeEvent is one inbound frame from the bridge: either a Claude Code
 // stream-json event forwarded verbatim (type: system / assistant / user /
 // result / stream_event) or a bridge-native frame (pong / bridge.status /
-// bridge.error). See https://code.claude.com/docs/en/headless for the
-// stream-json event contract.
+// bridge.error).
 type claudeEvent struct {
 	Type      string `json:"type"`
 	Subtype   string `json:"subtype"`
@@ -42,8 +41,7 @@ type claudeMessage struct {
 	Content []claudeContentBlock `json:"content"`
 }
 
-// claudeContentBlock is one content block of an assistant/user message. The
-// union of the fields used by text, tool_use, and tool_result blocks.
+// claudeContentBlock is one content block of an assistant/user message.
 type claudeContentBlock struct {
 	Type string `json:"type"`
 
@@ -88,15 +86,7 @@ func (u *claudeUsage) toDomain() *domain.TokenUsage {
 }
 
 // translateFrame parses one inbound bridge frame and emits 0..N domain.WSEvent
-// frames into dispatch. Mapping (keep in sync with docs/agentic/claudecode.md):
-//
-//	system (subtype=init)          → capture session_id (no dispatch)
-//	assistant text block           → stashed (fallback final text; not streamed)
-//	assistant tool_use block       → lifecycle.start (once) + tool.start
-//	user tool_result block         → tool.end (result text, matched by id)
-//	result subtype=success         → chat.final + lifecycle.end (ends turn)
-//	result subtype=error* / error  → lifecycle.error (ends turn)
-//	stream_event / pong / bridge.* → ignored (bridge.error → lifecycle.error)
+// frames into dispatch.
 func (s *ClaudeCodeService) translateFrame(raw []byte, dispatch func(domain.WSEvent)) {
 	var f claudeEvent
 	if err := json.Unmarshal(raw, &f); err != nil {
@@ -104,15 +94,12 @@ func (s *ClaudeCodeService) translateFrame(raw []byte, dispatch func(domain.WSEv
 		return
 	}
 
-	// Capture the Claude-assigned session_id from any frame that carries one.
 	if f.SessionID != "" && f.SessionID != s.GetSessionKey() {
 		s.SetSessionKey(f.SessionID)
 	}
 
 	switch f.Type {
 	case "system":
-		// subtype=init announces the fresh session (model, tools, session_id —
-		// captured above). Other system subtypes are status, not content.
 		if f.Subtype == "init" {
 			slog.Info("claudecode <<< session init", "component", "claudecode", "sessionKey", f.SessionID)
 		}
@@ -120,8 +107,9 @@ func (s *ClaudeCodeService) translateFrame(raw []byte, dispatch func(domain.WSEv
 		s.ensureTurnStarted(dispatch)
 		s.handleAssistant(f, dispatch)
 	case "user":
-		// Tool results echo back as user messages. A turn must already be open
-		// (the tool_use opened it); don't force one for unrelated user echoes.
+		// Tool results echo back as user messages.
+		// A turn must already be open (the tool_use opened it); don't force one for unrelated user
+		// echoes.
 		s.handleToolResults(f, dispatch)
 	case "result":
 		s.ensureTurnStarted(dispatch)
@@ -134,8 +122,6 @@ func (s *ClaudeCodeService) translateFrame(raw []byte, dispatch func(domain.WSEv
 		s.ensureTurnStarted(dispatch)
 		s.handleError(bridgeErrorText(f.Payload), dispatch)
 	case "stream_event", "pong", "bridge.status":
-		// stream_event: partial deltas (bridge does not enable them). pong:
-		// keepalive. bridge.status: child-process state, informational only.
 	default:
 		slog.Debug("claudecode: unhandled frame type", "component", "claudecode", "type", f.Type)
 	}
@@ -205,7 +191,7 @@ func (s *ClaudeCodeService) handleToolResults(f claudeEvent, dispatch func(domai
 
 // toolResultText extracts a printable string from a tool_result content field,
 // which Claude sends either as a plain string or as content blocks
-// ([{type:"text",text:"..."}]). Unknown shapes fall back to compact JSON.
+// ([{type:"text",text:"..."}]).
 func toolResultText(raw json.RawMessage) string {
 	if len(raw) == 0 {
 		return ""
@@ -253,13 +239,10 @@ func bridgeErrorText(raw json.RawMessage) string {
 	return "claudecode bridge error"
 }
 
-// ensureTurnStarted emits lifecycle.start exactly once per turn. The runID is
-// adopted from a pending outbound SendChat when present, else freshly allocated
-// for an externally-initiated turn (e.g. a Telegram channel message Claude Code
-// processed inside its own session — those turns surface on the same stdout).
+// ensureTurnStarted emits lifecycle.start exactly once per turn.
 func (s *ClaudeCodeService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 	if s.getCurrentRunID() != "" {
-		return // already started
+		return
 	}
 	runID := s.consumePendingRunID()
 	if runID == "" {
@@ -285,15 +268,8 @@ func (s *ClaudeCodeService) ensureTurnStarted(dispatch func(domain.WSEvent)) {
 }
 
 // emitFinal emits (a) the final chat message and (b) lifecycle.end with usage,
-// then closes the turn. Order matches OpenClaw/Hermes so handler_events.go sees
-// chat.final before lifecycle.end → idle.
-//
-// The turn ids are reset BEFORE dispatch: the consumer calls SetBusy(false) on
-// chat.final / lifecycle.end, which synchronously drains queued sensing events
-// and starts the NEXT turn (fresh pending run ID). Clearing here lets that turn's
-// runID survive instead of being clobbered. Busy itself is owned by the
-// consumer's SetBusy(false) — the translator never touches it (matches the
-// PicoClaw translator).
+// then closes the turn.
+// Turn ids are reset BEFORE dispatch: the consumer starts the next turn synchronously.
 func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEvent)) {
 	runID := s.getCurrentRunID()
 	finalText := f.Result
@@ -320,22 +296,15 @@ func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEven
 	s.lastAssistantText.Store("")
 
 	// Slack-originated turn (slack.go): post the reply back to the originating
-	// channel/thread (chat.postMessage) and clear the eyes ack reaction. TTS
-	// was suppressed at injection (MarkSilentRun); [HW:/...] markers and audio
-	// tags are stripped (stripForChannel, hal.go). Consumed here —
-	// synchronously, before dispatch — so the shared handler's
-	// DeliverSlackReply safety net stays a no-op. Best-effort in a goroutine:
-	// the read loop must not block on the Web API.
+	// channel/thread (chat.postMessage) and clear the eyes ack reaction.
+	// Best-effort in a goroutine: the read loop must not block on the Web API.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		go s.finishSlackTurn(o, stripForChannel(finalText))
 	}
 
 	// Telegram-originated turn (telegram_poll.go): DM the reply back to the
-	// originating chat. TTS was suppressed at injection (MarkSilentRun), so
-	// this DM is the user-visible output. [HW:/...] hardware markers and TTS
-	// audio tags are for HAL, not the chat bubble — strip them
-	// (stripForChannel, hal.go). Best-effort in a goroutine: the read loop
-	// must not block on the Bot API.
+	// originating chat.
+	// Best-effort in a goroutine: the read loop must not block on the Bot API.
 	if chatID := s.consumeTelegramRun(runID); chatID != "" && finalText != "" {
 		if reply := stripForChannel(finalText); reply != "" {
 			go func() {
@@ -348,10 +317,8 @@ func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEven
 	}
 
 	// Discord-originated turn (discord.go): post the reply back to the
-	// originating channel (chunked at Discord's 2000-char limit). TTS was
-	// suppressed at injection (MarkSilentRun); markers are stripped like the
-	// telegram path. Best-effort in a goroutine: the read loop must not block
-	// on the Discord API.
+	// originating channel (chunked at Discord's 2000-char limit).
+	// Best-effort in a goroutine: the read loop must not block on the Discord API.
 	if channelID := s.consumeDiscordRun(runID); channelID != "" && finalText != "" {
 		go s.finishDiscordTurn(channelID, stripForChannel(finalText))
 	}
@@ -359,10 +326,6 @@ func (s *ClaudeCodeService) emitFinal(f claudeEvent, dispatch func(domain.WSEven
 	// The whole reply as a single assistant delta BEFORE chat.final — the
 	// shared consumer only flushes TTS + [HW:/…] markers (and logs tts_send,
 	// which the web chat reads) from accumulated deltas at lifecycle.end;
-	// without this the reply reaches the chat stream but is never spoken nor
-	// shown in Flow Monitor. Claude Code --print does not stream tokens, so
-	// this is the N=1 case of the delta contract (mirrors the codex
-	// translator).
 	if finalText != "" {
 		deltaPayload, _ := json.Marshal(map[string]any{
 			"runId":      runID,
@@ -402,22 +365,17 @@ func (s *ClaudeCodeService) handleError(msg string, dispatch func(domain.WSEvent
 	}
 	slog.Warn("claudecode <<< error", "component", "claudecode", "runID", runID, "error", truncRunes(msg, 500))
 
-	// Reset turn ids before dispatch (see emitFinal) — the consumer clears busy
-	// on lifecycle.error, draining the next turn synchronously.
 	s.finishCurrentCorrelation()
 
 	s.lastAssistantText.Store("")
 
 	// Telegram-originated turn: consume the tracker so the map doesn't leak
-	// (and the typing keeper stops). No DM — the user simply gets no reply
-	// for a failed turn.
+	// (and the typing keeper stops).
 	if chatID := s.consumeTelegramRun(runID); chatID != "" {
 		slog.Warn("telegram-originated turn failed — reply dropped",
 			"component", "claudecode", "runID", runID, "chatID", chatID)
 	}
 
-	// Slack-originated turn: consume the tracker (no reply for a failed turn)
-	// and clear the eyes ack reaction so the message isn't left marked.
 	if o, ok := s.consumeSlackRun(runID); ok {
 		slog.Warn("slack-originated turn failed — reply dropped",
 			"component", "claudecode", "runID", runID, "channel", o.channel)
@@ -425,7 +383,7 @@ func (s *ClaudeCodeService) handleError(msg string, dispatch func(domain.WSEvent
 	}
 
 	// Discord-originated turn: consume the tracker so the map doesn't leak
-	// (and the typing keeper stops). No reply for a failed turn.
+	// (and the typing keeper stops).
 	if channelID := s.consumeDiscordRun(runID); channelID != "" {
 		slog.Warn("discord-originated turn failed — reply dropped",
 			"component", "claudecode", "runID", runID, "channelID", channelID)
@@ -443,8 +401,6 @@ func (s *ClaudeCodeService) handleError(msg string, dispatch func(domain.WSEvent
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
-
-// --- turn-correlation helpers ---
 
 func (s *ClaudeCodeService) getCurrentRunID() string {
 	v, _ := s.currentRunID.Load().(string)
@@ -490,10 +446,7 @@ func (s *ClaudeCodeService) finishCurrentCorrelation() {
 	s.currentRunID.Store("")
 }
 
-// clearTurn resets the in-flight turn ids without touching busy state. Used on
-// disconnect / busyTTL expiry / send failure. The normal end-of-turn path clears
-// the ids inline in emitFinal / handleError (before dispatch) so a drained
-// follow-up turn's ids survive — see emitFinal.
+// clearTurn resets the in-flight turn ids without touching busy state.
 func (s *ClaudeCodeService) clearTurn() {
 	telemetry.ReportTaskObservationLost(s.unfinishedTaskRunIDs()...)
 	s.pendingMu.Lock()

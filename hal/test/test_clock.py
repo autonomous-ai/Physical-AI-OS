@@ -30,16 +30,13 @@ def test_timezone_change_reflected_without_restart(tmp_path, monkeypatch):
 
 
 def test_missing_or_bogus_falls_back_to_naive(tmp_path, monkeypatch):
-    # bogus zone name → None (naive fallback)
     monkeypatch.setattr(clock, "_TZ_FILE", _write_tz(tmp_path, "Not/AZone"))
     assert clock.device_timezone() is None
     assert clock.device_now().tzinfo is None
 
-    # empty file → None
     monkeypatch.setattr(clock, "_TZ_FILE", _write_tz(tmp_path, ""))
     assert clock.device_timezone() is None
 
-    # missing file → None
     monkeypatch.setattr(clock, "_TZ_FILE", tmp_path / "nope")
     assert clock.device_timezone() is None
     assert clock.device_now().tzinfo is None
@@ -47,7 +44,6 @@ def test_missing_or_bogus_falls_back_to_naive(tmp_path, monkeypatch):
 
 def test_fromtimestamp_uses_device_zone(tmp_path, monkeypatch):
     monkeypatch.setattr(clock, "_TZ_FILE", _write_tz(tmp_path, "Asia/Tokyo"))
-    # epoch 0 is 1970-01-01 09:00 in Tokyo (UTC+9)
     dt = clock.device_fromtimestamp(0)
     assert dt == datetime(1970, 1, 1, 9, 0, tzinfo=dt.tzinfo)
     assert dt.astimezone(timezone.utc).year == 1970

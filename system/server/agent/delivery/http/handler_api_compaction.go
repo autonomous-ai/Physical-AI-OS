@@ -18,8 +18,7 @@ const (
 	openclawSessionsIndex = "/root/.openclaw/agents/main/sessions/sessions.json"
 	defaultMainSessionKey = "agent:main:main"
 
-	// Compaction records embed the full summary text plus read-file lists in one JSONL line.
-	// The observed max summary is ~16000 chars; raw line headroom is 4 MiB.
+	// Records embed the full summary in one JSONL line (~16000 chars observed); 4 MiB headroom.
 	compactionLineBufMax = 4 * 1024 * 1024
 )
 
@@ -35,17 +34,8 @@ type compactionRecord struct {
 	FirstKeptEntryID any            `json:"firstKeptEntryId"`
 }
 
-// CompactionLatest returns the compaction summary that was active at a given time for an OpenClaw
-// agent session — i.e. the most recent compaction record with timestamp ≤ ?at (default: now, which
-// resolves to the latest record). This summary is injected at the top of every subsequent turn's
-// prompt until the next compaction, so rules accidentally copied into it can override SKILL.md.
-// Exposing it lets the UI surface what's actually driving agent behavior vs what the SKILLs claim.
-//
-// Query:
-//
-//	?session=<key>  (default: agent:main:main)
-//	?at=<iso-ts>    (default: empty → newest record; when set, returns the compaction active
-//	                 at that moment, used to debug a specific turn)
+// CompactionLatest returns the compaction summary active at a given time for an OpenClaw session.
+// Query: session=<key> (default agent:main:main), at=<iso-ts> (default: newest record).
 func (h *AgentHandler) CompactionLatest(c *gin.Context) {
 	raw, err := os.ReadFile(openclawSessionsIndex)
 	if err != nil {
@@ -108,11 +98,8 @@ func (h *AgentHandler) CompactionLatest(c *gin.Context) {
 	}))
 }
 
-// scanActiveCompaction returns the compaction record that was active at `atCutoff` (ISO timestamp).
-// An empty atCutoff means "whichever compaction is active right now" = the newest record.
-// It also returns the timestamp of the NEXT compaction after the matched one — "" if the matched
-// record is still the active one (no successor yet). The caller can use this to display the window
-// of time a given summary was in effect.
+// scanActiveCompaction returns the record active at atCutoff (empty = newest) and the next
+// record's timestamp ("" if still active).
 func scanActiveCompaction(path, atCutoff string) (*compactionRecord, string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -139,13 +126,11 @@ func scanActiveCompaction(path, atCutoff string) (*compactionRecord, string, err
 			continue
 		}
 		if atCutoff != "" && rec.Timestamp > atCutoff {
-			// Past the cutoff. If we already locked in an active record, this is the successor
-			// that ends its window — record it and stop.
+			// Past the cutoff: this is the successor that ends the active record's window.
 			if active != nil {
 				nextTs = rec.Timestamp
 				break
 			}
-			// No earlier record qualifies — cutoff predates all compactions in this session.
 			continue
 		}
 		cp := rec

@@ -1,30 +1,9 @@
 #!/usr/bin/env python3
-"""Standalone TTP223 pad probe — stdlib only, no gpiod, no lgpio, no sudo.
+"""Standalone TTP223 pad probe (stdlib ioctl only; no gpiod, no sudo).
 
-Two modes:
-
-  info  [lines...]   Passive line dump: name, consumer, flags. Does NOT claim
-                     anything, so it works WHILE hal.service is running and is
-                     the right first question ("which lines did HAL actually
-                     take?"). Also the only way to ask about lines HAL does not
-                     claim — e.g. whether an abandoned pad is still wired.
-
-  watch [lines...]   Claim the lines pulled up and print every level change.
-                     Touch one pad at a time to map pad -> line. REQUIRES
-                     hal.service to be stopped: it holds its lines and the
-                     kernel refuses a second claim.
-
-With no line arguments, read the selected device's ttp223.json through the
-same loader as HAL, falling back to legacy board wiring when absent.
-Select --device-type (or DEVICE_TYPE) and --devices-dir (or DEVICES_DIR).
-
-Why stdlib ioctl rather than gpiod: gpiod is not installed on the lamp images,
-and HAL's venv lives under /root where the orangepi user cannot execute it. A
-diagnostic that cannot run on the device it diagnoses is not a diagnostic.
-
-Usage on the device:
-    python3 hal/test_ttp223_probe_orangepi.py info --device-type lamp --devices-dir /opt/devices
-    sudo systemctl stop hal && python3 hal/test_ttp223_probe_orangepi.py watch --device-type lamp --devices-dir /opt/devices
+info [lines...]: passive line dump, safe while hal.service runs.
+watch [lines...]: claim lines and print level changes (stop hal first).
+Example: python3 hal/test_ttp223_probe_orangepi.py info --device-type lamp --devices-dir /opt/devices
 """
 
 from __future__ import annotations
@@ -38,7 +17,7 @@ import struct
 import sys
 import time
 
-# --- GPIO uAPI v2, from linux/gpio.h -------------------------------------
+# GPIO uAPI v2, from linux/gpio.h
 GPIO_MAX_NAME_SIZE = 32
 GPIO_V2_LINES_MAX = 64
 GPIO_V2_LINE_NUM_ATTRS_MAX = 10

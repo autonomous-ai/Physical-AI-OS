@@ -143,7 +143,6 @@ def test_hw_effect_wait_does_not_block_mic_feedback(monkeypatch):
     try:
         cues.input("turn", transcript="hello")
         assert entered.wait(1)
-        # These return while the HW effect is still blocked on the worker.
         cues.input("turn", transcript="hello")
         cues.tick()
         assert not release.is_set()

@@ -96,7 +96,6 @@ func TestSlackOriginMapRoundTrip(t *testing.T) {
 	s := &HermesService{slackRunOrigin: make(map[string]slackOrigin)}
 
 	s.markSlackOrigin("run-1", "C42", "1.99", "1.50")
-	// Peek is non-consuming.
 	if !s.IsSlackOriginRun("run-1") {
 		t.Errorf("IsSlackOriginRun should be true before consume")
 	}
@@ -107,18 +106,15 @@ func TestSlackOriginMapRoundTrip(t *testing.T) {
 	if !ok || o.channel != "C42" || o.threadTS != "1.99" || o.messageTS != "1.50" {
 		t.Fatalf("consumeSlackOrigin = (%+v,%v), want {C42,1.99,1.50},true", o, ok)
 	}
-	// Cleared after consume.
 	if s.IsSlackOriginRun("run-1") {
 		t.Errorf("origin not cleared after consume")
 	}
 	if _, ok := s.consumeSlackOrigin("run-1"); ok {
 		t.Errorf("second consume should miss")
 	}
-	// Unknown run is a miss.
 	if s.IsSlackOriginRun("nope") {
 		t.Errorf("unknown run reported as slack origin")
 	}
-	// markSlackOrigin ignores empty channel (can't route a reply without it).
 	s.markSlackOrigin("run-2", "", "", "")
 	if s.IsSlackOriginRun("run-2") {
 		t.Errorf("empty-channel origin should not be recorded")

@@ -15,27 +15,17 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// zoneInfoDir is the system tzdata tree. A zone name is valid iff a regular file
-// exists at <zoneInfoDir>/<name> (e.g. Asia/Ho_Chi_Minh). Used both to validate
-// an incoming zone before applying it and to enumerate the picker list when
-// `timedatectl list-timezones` is unavailable.
+// zoneInfoDir is the system tzdata tree; a zone is valid iff <zoneInfoDir>/<name> is a file.
 const zoneInfoDir = "/usr/share/zoneinfo"
 
-// timezoneFile is the Debian-style plain-text zone name file. HAL's clock helpers
-// (hal/clock.py) read it fresh on every call, so writing it is what makes a
-// timezone change take effect on the device WITHOUT restarting HAL. `timedatectl`
-// alone does NOT touch this file (it only updates /etc/localtime), so we always
-// write it ourselves — see the timezone-runtime-clock note.
+// timezoneFile is read fresh by HAL's clock helpers; timedatectl does not write
+// it, so we always do.
 const timezoneFile = "/etc/timezone"
 
-// localtimeFile is the symlink glibc resolves for local wall-clock. We point it
-// at the chosen zone's tzdata file directly (rather than relying on timedatectl,
-// which may be absent) so the change lands even on a minimal image.
+// localtimeFile is the glibc local wall-clock symlink, set directly (timedatectl may be absent).
 const localtimeFile = "/etc/localtime"
 
-// commonTimezones is the fallback picker list when neither `timedatectl
-// list-timezones` nor a walk of /usr/share/zoneinfo yields anything (e.g. a
-// stripped image). Kept short and ops-relevant rather than exhaustive.
+// commonTimezones is the fallback picker list when no system source yields zones.
 var commonTimezones = []string{
 	"UTC",
 	"Asia/Ho_Chi_Minh",
@@ -59,9 +49,8 @@ var commonTimezones = []string{
 	"Pacific/Auckland",
 }
 
-// isValidTimezone reports whether name is a real IANA zone present in the system
-// tzdata tree. Rejects empty, absolute, and traversal-y inputs before touching
-// the filesystem so a crafted name can't escape zoneInfoDir.
+// isValidTimezone reports whether name is an IANA zone in the tzdata tree.
+// Rejects empty, absolute and traversal inputs so name cannot escape zoneInfoDir.
 func isValidTimezone(name string) bool {
 	name = strings.TrimSpace(name)
 	if name == "" || strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
@@ -71,9 +60,8 @@ func isValidTimezone(name string) bool {
 	return err == nil && info.Mode().IsRegular()
 }
 
-// currentSystemTimezone returns the device's active zone name. /etc/timezone is
-// the authoritative source (same file HAL reads); when it's missing we resolve
-// the /etc/localtime symlink back to a zone name. Empty when neither resolves.
+// currentSystemTimezone returns the active zone from /etc/timezone, else the
+// /etc/localtime symlink; empty when neither resolves.
 func currentSystemTimezone() string {
 	if data, err := os.ReadFile(timezoneFile); err == nil {
 		if tz := strings.TrimSpace(string(data)); tz != "" {
@@ -81,7 +69,6 @@ func currentSystemTimezone() string {
 		}
 	}
 	if target, err := os.Readlink(localtimeFile); err == nil {
-		// /etc/localtime → /usr/share/zoneinfo/<zone> → strip the prefix.
 		if idx := strings.Index(target, "zoneinfo/"); idx != -1 {
 			return target[idx+len("zoneinfo/"):]
 		}
@@ -89,9 +76,8 @@ func currentSystemTimezone() string {
 	return ""
 }
 
-// listSystemTimezones returns the selectable zone names, newest source first:
-// `timedatectl list-timezones` (systemd's curated set), else a walk of the
-// tzdata tree, else the built-in commonTimezones fallback. Always non-empty.
+// listSystemTimezones returns selectable zones from timedatectl, else the tzdata
+// tree, else commonTimezones. Always non-empty.
 func listSystemTimezones() []string {
 	if out, err := exec.Command("timedatectl", "list-timezones").Output(); err == nil {
 		zones := parseLines(out)
@@ -117,10 +103,8 @@ func parseLines(out []byte) []string {
 	return lines
 }
 
-// walkZoneInfo enumerates zone names from the tzdata tree. Only the standard
-// Area/Location zones (a "/" in the relative path, e.g. Asia/Ho_Chi_Minh) plus
-// UTC are returned, skipping the posix/right/ duplicate trees and bare legacy
-// aliases so the picker mirrors what timedatectl would show.
+// walkZoneInfo returns Area/Location zones plus UTC from the tzdata tree,
+// skipping posix/right/ duplicates and legacy aliases.
 func walkZoneInfo() []string {
 	var zones []string
 	_ = filepath.Walk(zoneInfoDir, func(path string, info os.FileInfo, err error) error {
@@ -143,36 +127,25 @@ func walkZoneInfo() []string {
 	return zones
 }
 
-// applySystemTimezone points /etc/localtime at the zone's tzdata file and writes
-// /etc/timezone, the two changes that actually move the device's wall-clock.
-// `timedatectl set-timezone` is also invoked best-effort so systemd + a running
-// timesyncd learn the new zone, but it is not required for correctness. Caller
-// must have validated `tz` via isValidTimezone first.
+// applySystemTimezone sets /etc/localtime and /etc/timezone, then runs
+// timedatectl best-effort. Validate tz with isValidTimezone first.
 func applySystemTimezone(tz string) error {
-	// /etc/localtime → the chosen zone. Replace atomically (remove then symlink)
-	// so a stale symlink can't linger if the target type changed.
 	zonePath := filepath.Join(zoneInfoDir, tz)
 	_ = os.Remove(localtimeFile)
 	if err := os.Symlink(zonePath, localtimeFile); err != nil {
 		return fmt.Errorf("link %s: %w", localtimeFile, err)
 	}
-	// /etc/timezone — the file HAL's clock helpers read. Trailing newline matches
-	// the Debian convention (skills do `cat /etc/timezone`).
 	if err := os.WriteFile(timezoneFile, []byte(tz+"\n"), 0644); err != nil {
 		return fmt.Errorf("write %s: %w", timezoneFile, err)
 	}
-	// Best-effort: keep systemd's view in sync. Failure (binary absent on a
-	// minimal image / dev box) is non-fatal — the two writes above already moved
-	// the clock.
+	// Best-effort: failure is non-fatal, the writes above already moved the clock.
 	if out, err := exec.Command("timedatectl", "set-timezone", tz).CombinedOutput(); err != nil {
 		slog.Warn("timedatectl set-timezone failed (non-fatal)", "component", "device", "tz", tz, "error", err, "output", strings.TrimSpace(string(out)))
 	}
 	return nil
 }
 
-// GetTimezone returns the device's current zone plus the selectable list, for
-// GET /api/device/timezone. Current prefers the live system value (config is just
-// a record); when the system can't be read it falls back to config.Timezone.
+// GetTimezone returns the current zone (system, else config) and the selectable list.
 func (s *Service) GetTimezone() (current string, zones []string) {
 	current = currentSystemTimezone()
 	if current == "" {
@@ -181,10 +154,7 @@ func (s *Service) GetTimezone() (current string, zones []string) {
 	return current, listSystemTimezones()
 }
 
-// CurrentTimezone returns just the device's active IANA zone (live from the
-// system, config.Timezone as fallback) — without enumerating the selectable
-// list. Cheap enough to call on every MQTT info uplink, unlike GetTimezone which
-// shells out to `timedatectl list-timezones`.
+// CurrentTimezone returns the active IANA zone (system, else config) without the list.
 func (s *Service) CurrentTimezone() string {
 	if tz := currentSystemTimezone(); tz != "" {
 		return tz
@@ -192,10 +162,8 @@ func (s *Service) CurrentTimezone() string {
 	return s.config.Timezone
 }
 
-// SetTimezone validates, applies (localtime + /etc/timezone + best-effort
-// timedatectl), and persists the chosen IANA zone to config.json. HAL's clock
-// helpers read /etc/timezone fresh per call, so the change takes effect without a
-// HAL restart. Returns an error for an unknown zone (nothing is written).
+// SetTimezone validates, applies and persists an IANA zone; no HAL restart needed.
+// Example: SetTimezone("Asia/Ho_Chi_Minh")
 func (s *Service) SetTimezone(tz string) error {
 	tz = strings.TrimSpace(tz)
 	if !isValidTimezone(tz) {
@@ -204,13 +172,8 @@ func (s *Service) SetTimezone(tz string) error {
 	if err := applySystemTimezone(tz); err != nil {
 		return fmt.Errorf("apply timezone: %w", err)
 	}
-	// Re-point THIS process's cached local zone. Go reads /etc/localtime once at
-	// startup and caches time.Local for the process lifetime, so os-server's own
-	// local-date logic (the daily JSONL buckets in flow/history/analytics and
-	// skillcontext/posture|music|mood|wellbeing, all keyed by time.Now().Format("2006-01-02"))
-	// would keep using the OLD zone until restart. Updating time.Local here makes
-	// the change live in-process, so changing the timezone needs NO os-server
-	// restart — matching HAL, which reads /etc/timezone fresh per call.
+	// Go caches time.Local at startup; update it so daily buckets switch zone
+	// without an os-server restart.
 	if loc, err := time.LoadLocation(tz); err == nil {
 		time.Local = loc
 	} else {

@@ -38,7 +38,6 @@ def test_a_failing_close_is_logged_not_raised(caplog):
     assert agent.disconnect.called
 
 
-# Leaking the socket is worse than the delay we were avoiding.
 def test_it_closes_inline_when_a_thread_cannot_be_started():
     agent = mock.Mock()
     with mock.patch("hal.realtime.orchestrator.threading.Thread",

@@ -52,7 +52,6 @@ class HarnessNginxPatchTests(unittest.TestCase):
                 executable = binaries / name
                 executable.write_text("#!/bin/sh\n" + body + "\n")
                 executable.chmod(0o755)
-            # Redirect only filesystem roots; execute the actual script logic.
             script = root / "patch.sh"
             script.write_text(SCRIPT.read_text().replace("/etc/nginx", str(nginx)).replace(
                 "/var/backups/nginx-harness-ws", str(backups)))

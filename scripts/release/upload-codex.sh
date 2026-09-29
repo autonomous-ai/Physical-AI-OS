@@ -1,27 +1,8 @@
 #!/usr/bin/env bash
 set -e
 
-# Publish a new Codex CLI version to OTA metadata. Mirrors
-# upload-openclaw.sh — this script ONLY updates the metadata field, it
-# doesn't touch GCS otherwise (the artifact lives in openai/codex GitHub
-# releases; the device fetches it directly, so there is no url/sha256 here).
-#
-# VERSION FORMAT: the bare semver, WITHOUT the upstream "rust-v" tag prefix
-# (e.g. 0.149.1, not rust-v0.149.1) — it is compared against `codex --version`
-# output ("codex-cli 0.149.1") by the bootstrap worker, and the on-device
-# updater re-adds the prefix when building the release URL.
-#
-# Usage:
-#   ./scripts/release/upload-codex.sh <version_str>
-#
-# Example:
-#   ./scripts/release/upload-codex.sh 0.149.1
-#
-# Bumping `version` alone does NOT push the fleet: the bootstrap worker only
-# auto-applies up to `min_version`. Release it with:
-#   make promote-codex          # min_version = codex.version
-#
-# Other keys in metadata.json (skills, openclaw, etc.) are preserved.
+# Publish a Codex CLI version (bare semver, no "rust-v") to OTA metadata; roll out with `make promote-codex`.
+# Usage: ./scripts/release/upload-codex.sh <version_str>
 
 if [[ -z "${1:-}" ]]; then
   echo "Usage: $0 <codex-version>" >&2
@@ -30,9 +11,7 @@ if [[ -z "${1:-}" ]]; then
 fi
 VERSION="$1"
 
-# Reject the upstream tag prefix explicitly rather than silently stripping it:
-# the value published here is compared against `codex --version` output, and a
-# "rust-v0.149.1" in metadata would never match and would re-trigger forever.
+# Compared against `codex --version`; a "rust-v" prefix would never match and loop updates.
 if [[ "$VERSION" == rust-v* || "$VERSION" == v* ]]; then
   echo "ERROR: pass the bare semver (0.149.1), not the release tag ($VERSION)." >&2
   exit 1
@@ -46,7 +25,6 @@ METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP" "$PAYLOAD_TMP"' EXIT
 
-# Pull existing metadata; if missing, bootstrap with an empty object.
 if ! gsutil cp "$METADATA_GCS" "$METADATA_TMP" 2>/dev/null; then
   echo "Note: $METADATA_GCS not found — bootstrapping with empty object."
   printf '{}' > "$PAYLOAD_TMP"

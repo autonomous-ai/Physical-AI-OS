@@ -51,7 +51,7 @@ def test_slow_key_fetch_does_not_block_transcripts_or_other_service(factories):
     finally:
         release.set()
         finish(d)
-    speaker.return_value.stop.assert_not_called()  # Process-wide singleton.
+    speaker.return_value.stop.assert_not_called()
     emotion.return_value.stop.assert_called_once()
 
 

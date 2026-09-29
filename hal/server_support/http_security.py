@@ -1,10 +1,4 @@
-"""HAL HTTP access control — loopback / same-origin / bearer-token gate.
-
-Extracted verbatim from server.py. These definitions are registered onto the
-FastAPI app from server.py (in the same order as before), so middleware ordering
-is unchanged; only the bodies live here. The logger keeps the `hal.server` name
-so existing log lines / greps are byte-identical after the move.
-"""
+"""HAL HTTP access control: loopback / same-origin / bearer-token gate."""
 
 import logging
 import secrets
@@ -60,24 +54,16 @@ def _is_local(value: str | None) -> bool:
 def _is_same_origin(origin_or_referer: str | None, host: str) -> bool:
     if not origin_or_referer:
         return False
-    # Strip scheme and path — just compare hostname:port
     value = origin_or_referer.split(",")[0].strip()
     for prefix in ("https://", "http://"):
         if value.startswith(prefix):
             value = value[len(prefix):]
-    value = value.split("/")[0]  # drop path
+    value = value.split("/")[0]
     return value == host
 
 
 def _has_valid_bearer_token(request) -> bool:
-    """Return True if the request carries Authorization: Bearer <DEVICE_AUTH_TOKEN>.
-
-    DEVICE_AUTH_TOKEN is the device-internal auth secret, kept SEPARATE from the
-    LLM provider key (it falls back to the LLM key only for devices provisioned
-    before the split — see config.py / SECURITY.md). Empty token disables this
-    path — falls through to other auth in the middleware. Constant-time compare
-    guards against timing side-channels.
-    """
+    """True if the request carries Authorization: Bearer <DEVICE_AUTH_TOKEN> (empty token disables)."""
     if not DEVICE_AUTH_TOKEN:
         return False
     auth = request.headers.get("authorization", "")
@@ -95,19 +81,13 @@ async def local_only_middleware(request, call_next):
         xff = request.headers.get("x-forwarded-for")
         real_ip = request.headers.get("x-real-ip")
 
-        # Localhost callers (Go server, OpenClaw on-device) always pass.
         if _is_local(client) and not (xff and not _is_local(xff)) and not (real_ip and not _is_local(real_ip)):
             return await call_next(request)
 
-        # Bearer token matching llm_api_key (config.json). Lets authenticated
-        # server-to-server callers and (future) post-login web sessions pass
-        # without depending on spoof-friendly Origin/Referer headers.
         if _has_valid_bearer_token(request):
             return await call_next(request)
 
-        # Browser requests from the same device origin pass (web UI, Swagger API calls).
-        # /docs and /openapi.json are only reachable via iframe from the web UI —
-        # direct URL navigation has no Referer and is blocked here intentionally.
+        # /docs and /openapi.json are iframe-only; direct navigation has no Referer and is blocked.
         host = request.headers.get("host", "")
         origin = request.headers.get("origin")
         referer = request.headers.get("referer")

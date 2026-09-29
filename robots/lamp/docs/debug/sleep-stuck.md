@@ -33,7 +33,7 @@ User nói "No. I wake up." cũng không giúp: event `voice` gửi tới sensing
 
 `motion.py` update `_last_sent_ts` **trước** khi event thực sự đi qua sensing. Nếu sensing suppress (sleep), perception vẫn coi là đã gửi → tiếp tục log `dedup drop` mỗi 10 s, nhìn như đây là nguyên nhân chính.
 
-Tham chiếu: `hal/drivers/sensing/perceptions/motion.py:414-425` (sau khi flush message → check dedup window 300 s → set `_last_sent_ts` → gọi `send_event`).
+Tham chiếu: `hal/drivers/sensing/perceptions/processors/motion.py:414-425` (sau khi flush message → check dedup window 300 s → set `_last_sent_ts` → gọi `send_event`).
 
 ## Evidence — verified 2026-04-22
 

@@ -62,7 +62,6 @@ func TestGuardMemoryFileObserveOnlyWritesNothing(t *testing.T) {
 func TestGuardMemoryFilePicksRuleByName(t *testing.T) {
 	dir := t.TempDir()
 	mem := filepath.Join(dir, "MEMORY.md")
-	// Free prose is fine in MEMORY.md; a curl prescription is not.
 	body := "- Long likes jazz\n- Full-room scan works best as curl-driven aim + look per direction\n"
 	if err := os.WriteFile(mem, []byte(body), 0o644); err != nil {
 		t.Fatal(err)
@@ -103,12 +102,7 @@ func TestMemoryFilePathsCoverEveryAdapter(t *testing.T) {
 	}
 }
 
-// TestQuarantinePathNeverEndsInMarkdown pins the sidecar extension. PicoClaw's
-// MEMORY.md lives in `<ws>/memory/`, and HAL's OpenClawContextManager globs
-// `memory/*.md` (hal/realtime/context_manager/openclaw.py, load_device_memory
-// and summarize_device_memory, newest first). A `.md` sidecar there would feed
-// every quarantined block straight back into the realtime session and its
-// device_summary.md — the exact poison the guard removed.
+// TestQuarantinePathNeverEndsInMarkdown: a `.md` sidecar would be re-injected by HAL's memory/*.md glob.
 func TestQuarantinePathNeverEndsInMarkdown(t *testing.T) {
 	p := "/home/pi/.picoclaw/workspace/memory/MEMORY.md"
 	got := QuarantinePath(p)
@@ -120,13 +114,9 @@ func TestQuarantinePathNeverEndsInMarkdown(t *testing.T) {
 	}
 }
 
-// TestGuardMemoryFilePrunesOldBackups covers F4: every trip writes a
-// `.bak-<nano>`, and heartbeat churn made that ~50 files a day. Only the
-// newest guardBackupsKept survive, and the one just written is among them.
+// TestGuardMemoryFilePrunesOldBackups: only the newest guardBackupsKept backups survive.
 func TestGuardMemoryFilePrunesOldBackups(t *testing.T) {
 	_, path := seedDevice(t, cleanUserMD+greenLampPoison, "long")
-	// Seven stale backups with ascending numeric suffixes, all older than
-	// anything the guard will write now (UnixNano is ~1.7e18).
 	for i := 1; i <= 7; i++ {
 		name := fmt.Sprintf("%s.bak-%d", path, 1000+i)
 		if err := os.WriteFile(name, []byte("old"), 0o644); err != nil {
@@ -142,8 +132,6 @@ func TestGuardMemoryFilePrunesOldBackups(t *testing.T) {
 		t.Fatalf("want exactly %d backups after prune, got %d: %v", guardBackupsKept, len(baks), baks)
 	}
 	sort.Strings(baks)
-	// Survivors are the newest: fake 1004..1007 plus the fresh one. The
-	// numeric-suffix sort must not be fooled by string order.
 	for _, want := range []string{"1004", "1005", "1006", "1007"} {
 		if _, err := os.Stat(path + ".bak-" + want); err != nil {
 			t.Errorf("newest fake backup .bak-%s must survive: %v", want, err)

@@ -12,7 +12,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// jevEnabled is the runtime build switch. Enable only after native validation.
+// jevEnabled is the runtime build switch.
 const jevEnabled = false
 
 const jevPluginID = "autonomous-jev"
@@ -129,9 +129,7 @@ func syncJevPlugin(home, configPath string) (bool, error) {
 	return changed, nil
 }
 
-// stripJevPreload restores the original request for run correlation. The native
-// hook prepends a single JSON envelope to the persisted user message. Malformed
-// or oversized prefixes are left untouched; this function grants no authority.
+// stripJevPreload restores the original request for run correlation.
 func stripJevPreload(message string) string {
 	const start = "[jev-skill-preload]\n"
 	const end = "\n[/jev-skill-preload]\n\n"
@@ -154,7 +152,7 @@ func stripJevPreload(message string) string {
 	return message[len(start)+i+len(end):]
 }
 
-// Disabled builds install nothing. Only retire a registration from an older build.
+// Disabled builds install nothing.
 func disableExistingJevPlugin(home string) (bool, error) {
 	file := filepath.Join(home, "openclaw.json")
 	raw, err := os.ReadFile(file)

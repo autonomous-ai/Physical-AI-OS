@@ -63,17 +63,8 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 		"set_up_completed", h.config.SetUpCompleted,
 		"admin_hash_on_file", h.config.AdminPasswordHash != "",
 	)
-	// First-time setup with no admin password supplied: default it to the
-	// device's hardware suffix (last 4 chars after '-' in GetDeviceMac(), e.g.
-	// "intern-993f" → "993f"). This suffix matches the AP hotspot SSID (set by
-	// scripts/provision/setup-ap.sh with identical logic) and is printed on
-	// the sticker at the bottom of the device, so operators can sign in without
-	// picking a password during setup. Only fires when the device has no
-	// admin_password_hash yet — re-setup on a provisioned device keeps its
-	// existing hash. Fails 400 rather than silently falling back to a
-	// hardcoded default when the mac is unreadable (no DEVICE_TYPE env, no
-	// serial, no eth MAC) — silent fallback would give every unidentified
-	// device the same well-known password.
+	// First setup without a password: default to the hardware suffix (sticker /
+	// AP SSID); fail 400 rather than fall back to a well-known password.
 	if req.AdminPassword == "" && !h.config.SetUpCompleted && h.config.AdminPasswordHash == "" {
 		mac := device.GetDeviceMac()
 		dash := strings.LastIndex(mac, "-")
@@ -99,25 +90,8 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 			"admin_hash_on_file", h.config.AdminPasswordHash != "",
 		)
 	}
-	// Re-setup via `#force`: operator may omit secrets they already have on
-	// file (the web form hides them when `has_*` reports configured). Merge
-	// missing fields from the current config before validation so required
-	// tags + ValidateChannel still pass when only the changed fields ship.
-	//
-	// Deliberately NOT gated on SetUpCompleted. A setup that fails at the Wi-Fi
-	// step (wrong password) never reaches the config writes in device.Setup, so
-	// the device stays SetUpCompleted=false — yet the operator's browser may
-	// well have lost the pushed credentials by the time they retry (the AP
-	// teardown kills the tab's sessionStorage, and a popup reopened without the
-	// original query string comes back empty). Gating here meant that retry
-	// failed validation on LLMAPIKey and surfaced "Missing: AI Brain API key" to
-	// someone who had only mistyped their Wi-Fi password.
-	//
-	// Safe by construction: mergeMissingFromConfig only fills slots the request
-	// left empty, and only from this device's own config, so it can neither
-	// override what the operator sent nor introduce a value they couldn't
-	// already read back. On a genuinely fresh device the config is empty, the
-	// merge is a no-op, and validation still rejects an incomplete request.
+	// Fill omitted secrets from this device's own config (only empty slots).
+	// Not gated on SetUpCompleted so a retry after a failed Wi-Fi step validates.
 	mergeMissingFromConfig(&req, h.config)
 	if err := validator.New().Struct(req); err != nil {
 		slog.Warn("setup validator failed", "component", "device", "error", err.Error(),
@@ -127,20 +101,9 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
-	// Messaging channels are optional during initial setup. Keep the selected
-	// channel's validation available for re-enabling this policy if needed;
-	// POST /device/channel and MQTT add_channel still validate credentials.
-	// if err := req.ValidateChannel(); err != nil {
-	// 	slog.Warn("setup channel validation failed", "component", "device", "error", err.Error(), "channel", req.Channel)
-	// 	c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
-	// 	return
-	// }
 
-	// If operator supplied an admin password, set the session cookie now so the
-	// browser is logged in by the time it redirects post-setup. The hash itself
-	// is persisted asynchronously inside service.Setup; the cookie validates
-	// against SessionSecret (independent of the password hash), so there's no
-	// race — any subsequent /api/* call sees a valid session immediately.
+	// No race: the cookie validates against SessionSecret, not the password
+	// hash that service.Setup persists asynchronously.
 	if req.AdminPassword != "" {
 		if err := session.Issue(c, h.config); err != nil {
 			slog.Warn("setup: issue session failed", "component", "device", "error", err)
@@ -198,13 +161,7 @@ func (h *DeviceHandler) WifiProvision(c *gin.Context) {
 		"set_up_completed", h.config.SetUpCompleted,
 	)
 
-	// Fresh device (never set up) MUST supply an LLM triplet — otherwise the
-	// device joins Wi-Fi but has no brain, and the operator ends up in the
-	// admin page seeing "Auto-AI / campaign-api.autonomous.ai" defaults that
-	// won't actually resolve to a working chat. Once the device is provisioned,
-	// missing fields keep their on-disk values (mergeMissingFromConfig
-	// semantics) — the operator changing Wi-Fi shouldn't have to retype the
-	// API key.
+	// A fresh device MUST supply an LLM triplet, or it joins Wi-Fi with no brain.
 	if !h.config.SetUpCompleted {
 		var missing []string
 		if req.LLMAPIKey == "" {
@@ -225,11 +182,8 @@ func (h *DeviceHandler) WifiProvision(c *gin.Context) {
 		}
 	}
 
-	// Fresh device with no admin password on file gets the same hardware-suffix
-	// default as handler.Setup. Once a hash is on file, the operator's PATCH
-	// leaves it alone (empty admin_password = "keep current"). Failing here
-	// rather than silently defaulting to a hardcoded value avoids handing every
-	// unidentified device the same well-known password.
+	// First setup without a password: default to the hardware suffix (sticker /
+	// AP SSID); fail 400 rather than fall back to a well-known password.
 	if req.AdminPassword == "" && !h.config.SetUpCompleted && h.config.AdminPasswordHash == "" {
 		mac := device.GetDeviceMac()
 		dash := strings.LastIndex(mac, "-")
@@ -241,16 +195,12 @@ func (h *DeviceHandler) WifiProvision(c *gin.Context) {
 		}
 		req.AdminPassword = mac[dash+1:]
 	}
-	// Set session cookie now so the browser is logged in when it redirects to
-	// the new LAN IP post-AP-teardown.
 	if req.AdminPassword != "" {
 		if err := session.Issue(c, h.config); err != nil {
 			slog.Warn("wifi-provision: issue session failed", "component", "device", "error", err)
 		}
 	}
 
-	// Same 2s pre-delay as Setup so the HTTP response has time to reach the
-	// client before the AP tears down mid-request. See handler.Setup.
 	go func() {
 		time.Sleep(2 * time.Second)
 		if err := h.service.ReprovisionWifi(req); err != nil {
@@ -291,28 +241,18 @@ func (h *DeviceHandler) GetConfig(c *gin.Context) {
 //	@Router			/device/setup/status [get]
 func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 	phase, lanIP, errMsg, run := h.service.SetupStatus()
-	// `mac` (hardware-derived "<device_type>-XXXX") is exposed here intentionally — the
-	// device already broadcasts `<device_type>-xxxx.local` via avahi-daemon on the LAN,
-	// so the suffix isn't sensitive. The web client uses it to auto-redirect
-	// 192.168.100.1 → <device_type>-xxxx.local even before the operator is authed,
-	// since /api/device/config requires admin auth and fresh devices have
-	// none.
+	// The web client uses it to auto-redirect 192.168.100.1 →
+	// <device_type>-xxxx.local even before the operator is authed, since
+	// /api/device/config requires admin auth and fresh devices have none.
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{
 		"phase":  phase,
 		"lan_ip": lanIP,
 		"error":  errMsg,
 		"mac":    device.GetDeviceMac(),
-		// Setup runs since boot. The web client compares it against the value it
-		// read before submitting to tell its own run's verdict from a leftover —
-		// phase alone is not enough when a run resolves inside one poll interval.
+		// Setup runs since boot: lets the client tell its own verdict from a leftover.
 		"run": run,
-		// Whether this device has ever completed setup. `SetupGate` needs it to
-		// choose the initial wizard vs the continue wizard, and it used to infer
-		// that from "does the device have internet" — sound only while the
-		// provisioning AP was the device's only network, which ethernet is not.
-		// A boolean, not a secret: it says nothing beyond what the wizard is
-		// about to show, and the endpoint must stay open because a device that
-		// hasn't finished setup has no admin password to authenticate against.
+		// Not a secret; the endpoint stays open because an unset-up device has
+		// no admin password.
 		"set_up_completed": h.config.SetUpCompleted,
 	}))
 }
@@ -340,11 +280,8 @@ func (h *DeviceHandler) UpdateConfig(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(true))
 }
 
-// GetVoices returns the list of available TTS voices for the requested provider.
-// Tries HAL /voice/voices?provider=&lang= first (source of truth), falls
-// back to a static list. `lang` (BCP-47 stt_language code) lets the web UI
-// filter voices to those that sound natural in the active language; empty
-// lang returns the full flat list.
+// GetVoices returns the list of available TTS voices for the requested
+// provider.
 func (h *DeviceHandler) GetVoices(c *gin.Context) {
 	provider := c.DefaultQuery("provider", domain.TTSProviderOpenAI)
 	lang := c.Query("lang")
@@ -354,13 +291,8 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}
-	// Piper voices are files under /opt/piper, so HAL is the only thing that
-	// can know what is installed — there is no static list to fall back to.
-	// Answering an unreachable HAL with an empty success would be a claim this
-	// server cannot make ("no voices installed"), and the web takes it as the
-	// authoritative list: the picker empties and, since it only refetches on a
-	// provider or language change, never fills back in. An error instead leaves
-	// the client holding its last known-good list.
+	// Error, not an empty list: the web would treat empty as authoritative and
+	// never refetch.
 	if provider == domain.TTSProviderPiper {
 		if err != nil {
 			c.JSON(http.StatusServiceUnavailable,
@@ -370,7 +302,6 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(voices))
 		return
 	}
-	// Fallback to static list (no language filtering — static list is EN-only)
 	staticVoices, ok := domain.TTSVoicesByProvider[provider]
 	if !ok {
 		staticVoices = domain.TTSVoices
@@ -403,16 +334,9 @@ func (h *DeviceHandler) GetAgentRuntime(c *gin.Context) {
 	}))
 }
 
-// SetAgentRuntime swaps the agentic backend (openclaw / hermes / picoclaw). The
-// switch now BLOCKS until it lands (the reserved switch waits on switch-runtime,
-// which may install the backend). HTTP additionally requests an optional runtime
-// readiness probe, so a backend such as Hermes is not persisted merely because its
-// systemd process is active while its gateway is still booting. We validate the
-// runtime synchronously for the 400 and run the switch in the background, returning
-// 200 "accepted" right away.
-// On a successful switch os-server restarts itself, so the HTTP connection drops
-// shortly after — the web should treat 200 as "accepted, reconnecting" and re-poll
-// GetAgentRuntime / the agent banner once os-server is back.
+// SetAgentRuntime validates synchronously (400), then switches the agentic
+// backend in the background and returns 200 "accepted"; os-server restarts
+// on success, so the client should re-poll GetAgentRuntime.
 //
 //	@Router	/device/agent-runtime [post]
 func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
@@ -426,13 +350,6 @@ func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
 			fmt.Sprintf("invalid runtime %q (want %s)", req.Runtime, strings.Join(domain.AgentRuntimes, "|"))))
 		return
 	}
-	// Phase B: "remote" is Hermes-over-LAN. It reuses the Hermes runtime with an
-	// external BaseURL/APIKey, so there is no separate install.sh and no
-	// systemd unit to swap — persist the target + endpoint, restart os-server
-	// in the background, and let factory.go re-resolve to the retargeted
-	// Hermes client. The previously-active backend's systemd unit stays
-	// running (idle) until the next full switch — a small overhead the demo
-	// tolerates; wiring switch-runtime to stop it cleanly can wait.
 	if strings.ToLower(strings.TrimSpace(req.Runtime)) == domain.AgentRuntimeRemote {
 		url := strings.TrimSpace(req.URL)
 		if url == "" {
@@ -452,9 +369,6 @@ func (h *DeviceHandler) SetAgentRuntime(c *gin.Context) {
 			c.JSON(http.StatusInternalServerError, serializers.ResponseError(err.Error()))
 			return
 		}
-		// Restart os-server in the background so this HTTP response reaches the
-		// client before the process exits. Same pattern the regular runtime
-		// switch uses after switch-runtime lands.
 		go func() {
 			if rerr := h.service.RestartForAgentRuntime(); rerr != nil {
 				slog.Error("agent-runtime os-server restart failed (remote)", "component", "device-http", "error", rerr)
@@ -499,22 +413,13 @@ func (h *DeviceHandler) GetTimezone(c *gin.Context) {
 	}))
 }
 
-// SetTimezone applies an IANA timezone (e.g. "Asia/Ho_Chi_Minh"): writes
-// /etc/localtime + /etc/timezone (best-effort timedatectl) and persists it to
-// config.json. HAL's clock helpers read /etc/timezone fresh per call, so the
-// change takes effect without a HAL restart. An unknown zone returns 400.
+// SetTimezone applies an IANA timezone (e.g. "Asia/Ho_Chi_Minh"); an unknown
+// zone returns 400.
 //
 //	@Router	/device/timezone [post]
 //
-// RestoreDefaults puts one settings section back on the credentials the device
-// shipped with.
-//
-// POST /api/device/restore-defaults  {"section": "llm" | "voice" | "realtime"}
-//
-// Per-section rather than all-at-once because that is how an operator thinks
-// about it: they swapped the AI Brain, or the voice provider, and want that one
-// thing back. Sections take different slices of the same stored set — the brain
-// url + key + model, the other two url + key.
+// RestoreDefaults puts one settings section ("llm" | "voice" | "realtime")
+// back on the shipped credentials.
 func (h *DeviceHandler) RestoreDefaults(c *gin.Context) {
 	var req struct {
 		Section string `json:"section" validate:"required"`
@@ -571,23 +476,16 @@ func (h *DeviceHandler) ChangeChannel(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
-	// WhatsApp pairing streams a QR back to the caller; HTTP's fire-and-forget
-	// shape can't deliver that. Force the canonical MQTT add_channel path.
 	if req.EffectiveChannel() == domain.ChannelWhatsapp {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("whatsapp pairing not supported via HTTP; use MQTT add_channel"))
 		return
 	}
-	// Reject a channel the active runtime can't run synchronously — the
-	// fire-and-forget goroutine below couldn't surface the not-supported error.
 	if !h.service.SupportsChannel(req.EffectiveChannel()) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(req.EffectiveChannel()+" not supported on the active runtime"))
 		return
 	}
 
 	go func() {
-		// Background context — HTTP request is fire-and-forget; subprocess
-		// invocations inside AddChannel take ~seconds, not minutes, for
-		// telegram/slack/discord.
 		if _, err := h.service.AddChannel(context.Background(), req); err != nil {
 			slog.Error("add channel failed", "component", "device", "error", err)
 			return
@@ -599,11 +497,7 @@ func (h *DeviceHandler) ChangeChannel(c *gin.Context) {
 }
 
 // mergeMissingFromConfig fills empty SetupRequest fields with the values
-// already saved in config.json. Re-setup callers (web `#force`, scripts)
-// can omit any secret/identifier they don't intend to change — the
-// previously-saved value rides through into validation + the Setup pipeline
-// unchanged. AdminPassword is left alone on purpose (operator either sets a
-// new one or skips that field entirely).
+// already saved in config.json.
 func mergeMissingFromConfig(req *domain.SetupRequest, cfg *config.Config) {
 	if req.SSID == "" {
 		req.SSID = cfg.NetworkSSID

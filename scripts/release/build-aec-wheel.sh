@@ -1,18 +1,6 @@
 #!/usr/bin/env bash
-# Build the aarch64 wheel for `aec-audio-processing` ON a device, then fetch it.
-#
-# PyPI ships Windows wheels only, so aarch64 has to compile the vendored
-# webrtc-audio-processing + abseil. Doing that on the target device is the
-# simplest way to get the right ABI (same Debian, same uv-managed CPython 3.12)
-# without cross-compilation or a container.
-#
-# meson and ninja are installed FROM PyPI into a throwaway venv, so this needs
-# no apt and no root-owned system change: everything lives under /tmp on the
-# device and is removed afterwards. /opt/hal is never touched.
-#
-# Usage:
-#   scripts/release/build-aec-wheel.sh <device-ip> [version]
-#   make upload-aec-wheel        # publishes what this produced
+# Build the aarch64 aec-audio-processing wheel on a device (under /tmp, no root changes) and fetch it.
+# Usage: scripts/release/build-aec-wheel.sh <device-ip> [version]
 set -e
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
@@ -39,7 +27,6 @@ SCP=(sshpass -p "$DEVICE_PASS" scp -o StrictHostKeyChecking=no)
 
 echo "========== Building ${VERSION} on ${DEVICE_IP} =========="
 
-# Run as root: uv lives in /root/.local/bin and the venv it creates is root-owned.
 "${SSH[@]}" "echo ${DEVICE_PASS} | sudo -S bash -s" <<REMOTE
 set -euo pipefail
 UV=/root/.local/bin/uv

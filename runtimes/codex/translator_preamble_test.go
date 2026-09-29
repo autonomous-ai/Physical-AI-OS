@@ -49,8 +49,9 @@ func agentMessage(text string) []byte {
 	return raw
 }
 
-// Codex exec narrates before each tool call. Only the last agent_message is the
-// reply — the preambles must not be joined into the spoken text.
+// Codex exec narrates before each tool call.
+// Only the last agent_message is the reply — the preambles must not be joined into the spoken
+// text.
 func TestPreamblesDoNotReachReply(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -133,9 +134,9 @@ func TestSingleAgentMessageUnchanged(t *testing.T) {
 }
 
 // Codex speaks the OpenAI Responses API: `input_tokens` already includes
-// `cached_input_tokens`. Adding them (as this did before campaign-api enabled
-// prompt caching, when cached was always 0 and the bug was invisible) reports
-// double the context and halves the effective rotation threshold.
+// `cached_input_tokens`.
+// Adding them (as this did before campaign-api enabled prompt caching, when cached was always 0 and
+// the bug was invisible) reports double the context and halves the effective rotation threshold.
 func TestCodexUsageSubtractsCachedFromInput(t *testing.T) {
 	u := &codexUse{InputTokens: 17623, CachedInputTokens: 17408, OutputTokens: 31}
 	got := u.toDomain()

@@ -1,8 +1,3 @@
-// Voice enrollment phrases + intro, keyed by stt_language. VN/CN owners
-// read prompts in their own language since embedding quality drops if
-// they stumble through English they don't speak natively. Unknown lang → en.
-// Shared between Setup's VoiceSection and EditConfig.
-
 export const VOICE_PHRASES_BY_LANG: Record<string, string[]> = {
   en: [
     "Hi there, I'm enrolling my voice so you can recognize me when we talk.",

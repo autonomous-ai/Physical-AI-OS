@@ -18,10 +18,7 @@ from core.perception.object.predictors.base import ObjectDetector
 
 
 class OWLv2Detector(ObjectDetector):
-    """Zero-shot object detection using OWLv2.
-
-    Text queries are constructed fresh per request. Supports batch processing.
-    """
+    """Zero-shot object detection using OWLv2; text queries are built per request."""
 
     DEFAULT_MODEL_PATH: Path | None = Path("google/owlv2-large-patch14-ensemble")
     DEFAULT_THRESHOLD: float = 0.1
@@ -87,7 +84,6 @@ class OWLv2Detector(ObjectDetector):
         effective_classes: list[str] = classes if classes else self._class_names
         text_queries: list[str] = [f"a photo of {c}" for c in effective_classes]
 
-        # Batch: convert all images to PIL
         pil_images: list[Image.Image] = [
             Image.fromarray(img[:, :, ::-1]) for img in input
         ]
@@ -115,7 +111,6 @@ class OWLv2Detector(ObjectDetector):
             conf_np: npt.NDArray[np.float32] = post["scores"].cpu().numpy().astype(np.float32)
             labels_np: npt.NDArray[np.int64] = post["labels"].cpu().numpy().astype(np.int64)
 
-            # Discard unknown
             valid_np = labels_np < len(effective_classes)
             xyxy_np = xyxy_np[valid_np]
             conf_np = conf_np[valid_np]

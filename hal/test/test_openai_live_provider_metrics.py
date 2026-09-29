@@ -1,10 +1,4 @@
-"""OpenAI Realtime emits the same live-mode contract as Gemini Live.
-
-Drives `_sync_receive_turn` with GA Realtime server events and checks the
-recv queue: user-turn ownership, UserSpeechOutput from server VAD and input
-transcription, barge-in handling (drain, server_interrupt, generation bump,
-item truncate), output_reset, execution completion and the usage line.
-"""
+"""OpenAI Realtime emits the same live-mode contract as Gemini Live."""
 
 import base64
 import logging
@@ -127,8 +121,6 @@ def _raw(agent_queue):
     return items
 
 
-# --- ownership + user speech -------------------------------------------------
-
 def test_server_vad_and_transcript_share_one_input_key(monkeypatch):
     monkeypatch.setattr("hal.realtime.voice_agent.openai_realtime.time.monotonic", lambda: 42.0)
     _, completed, events = _run([
@@ -137,14 +129,13 @@ def test_server_vad_and_transcript_share_one_input_key(monkeypatch):
     ])
     assert completed
     speech = [e for e in events if isinstance(e, UserSpeechOutput)]
-    assert len(speech) == 4  # start, delta, endpoint, completed remainder
+    assert len(speech) == 4
     key = speech[0].turn_id
     assert key.startswith("openai-")
     assert all(e.turn_id == key for e in speech)
     assert speech[0].transcript == "" and speech[0].endpoint_at is None
     assert speech[1].transcript == "Find " and speech[1].method == "provider_transcript"
     assert speech[2].endpoint_at == 42.0 and speech[2].method == "server_vad"
-    # completed carries only what the deltas had not streamed yet
     assert speech[3].transcript == "a flight" and speech[3].transcript_finished is True
     assert "".join(e.transcript for e in speech) == "Find a flight"
     assert all(e.user_turn_id == key for e in events if not isinstance(e, UserSpeechOutput))
@@ -163,7 +154,6 @@ def test_unsolicited_response_has_no_user_task():
 def test_late_transcription_is_attributed_to_its_own_item_not_the_new_input():
     agent, _, first = _run([speech_started("item_u1"), speech_stopped("item_u1"), created(), transcript("Hi"), done()])
     key1 = next(e for e in first if isinstance(e, UserSpeechOutput)).turn_id
-    # The next speech starts BEFORE the first utterance's transcript lands.
     _, _, second = _run([speech_started("item_u2"), in_tx_done("first words", "item_u1"),
                          in_tx_delta("second", "item_u2"), created("resp_2"), transcript("Ok", "resp_2"), done(rid="resp_2")],
                         agent=agent)
@@ -187,12 +177,9 @@ def test_turn_mode_does_not_emit_live_user_metadata(monkeypatch):
     agent, _, events = _run([committed(), in_tx_done("Hello"), created(), fn_call(), done()])
     assert not any(isinstance(e, UserSpeechOutput) for e in events)
     assert not any(isinstance(e, InterruptedOutput) for e in events)
-    # ...but the transcript still reaches the delegate message.
     call = next(e for e in events if isinstance(e, FunctionCallOutput))
     assert call.user_transcript == "Hello"
 
-
-# --- barge-in -----------------------------------------------------------------
 
 def test_barge_in_drains_queue_announces_interrupt_bumps_gen_and_truncates():
     conn = Mock()
@@ -201,8 +188,8 @@ def test_barge_in_drains_queue_announces_interrupt_bumps_gen_and_truncates():
     conn_snapshot = _Conn(conn, [
         speech_started("item_u1"), speech_stopped("item_u1"),
         created(), transcript("Long reply "), audio(500), audio(500), audio(500),
-        speech_started("item_u2"),               # user talks over the reply
-        audio(500),                              # in-flight chunk of the cancelled reply
+        speech_started("item_u2"),
+        audio(500),
         done(status="cancelled"),
     ])
     agent._connection = conn_snapshot
@@ -214,11 +201,9 @@ def test_barge_in_drains_queue_announces_interrupt_bumps_gen_and_truncates():
     speeches = [e for e in outputs if isinstance(e, UserSpeechOutput)]
     key1, key2 = speeches[0].turn_id, speeches[-1].turn_id
     assert key1 != key2
-    # Everything queued from the cancelled reply is gone, input metadata stays.
     assert not any(isinstance(e, (AudioOutput, TextOutput)) for e in outputs)
     interrupt = next(e for e in outputs if isinstance(e, InterruptedOutput) and e.reason == "server_interrupt")
     assert interrupt.at is not None and interrupt.user_turn_id == key1
-    # The interrupt carries the bumped generation.
     gen_of = {id(r.output): r.gen for r in raw if isinstance(r, OutputEvent)}
     assert gen_of[id(interrupt)] == agent._turn_gen == 2
     assert isinstance(outputs[-1], TurnDoneEvent)
@@ -228,7 +213,6 @@ def test_barge_in_drains_queue_announces_interrupt_bumps_gen_and_truncates():
     kw = conn.conversation.item.truncate.call_args.kwargs
     assert kw["item_id"] == "item_a1" and kw["content_index"] == 0
     assert kw["audio_end_ms"] == 0 and kw["event_id"] == openai_realtime._TRUNCATE_EVENT_ID
-    # The new input keeps its key for the next response.
     assert agent._live_user_turn_id == key2
 
 
@@ -237,16 +221,15 @@ def test_truncate_accounts_for_audio_already_handed_to_the_consumer():
     agent = _agent()
 
     class _LiveConn(_Conn):
-        """The consumer thread takes chunks WHILE the response streams: after
-        the second audio delta is queued, one 400 ms chunk is already playing."""
+        """The consumer drains chunks while the response streams."""
 
         def __iter__(self):
             for event in self._events:
                 yield event
                 if getattr(event, "type", "") == "response.output_audio.delta" and not getattr(self, "_taken", False):
                     self._taken = True
-                    agent._recv_queue.get_nowait()  # UserSpeechOutput (speech_started)
-                    agent._recv_queue.get_nowait()  # first 400 ms chunk → the player
+                    agent._recv_queue.get_nowait()
+                    agent._recv_queue.get_nowait()
 
     snapshot = _LiveConn(conn, [
         speech_started(), created(), audio(400), audio(400), speech_started("item_u2"), done(status="cancelled"),
@@ -295,8 +278,6 @@ def test_speech_started_without_active_response_is_just_a_new_input():
     conn.conversation.item.truncate.assert_not_called()
     assert events[-1].execution_completed
 
-
-# --- errors, liveness, usage ---------------------------------------------------
 
 def test_benign_errors_do_not_end_the_session():
     err_commit = ev("error", error=NS(code="input_audio_buffer_commit_empty", message="empty", event_id=None))
@@ -355,8 +336,6 @@ def test_function_call_carries_owner_and_transcript_then_clears_it():
     assert agent._user_transcript == ""
 
 
-# --- session config + commit ------------------------------------------------------
-
 def _config_agent(**overrides):
     from hal.realtime.config import OpenAIConfig
     agent = object.__new__(OpenAIRealtimeAgent)
@@ -376,13 +355,13 @@ def test_session_payload_matches_the_ga_schema(td, end):
         vad_end_sensitivity=end, language="vi-VN", noise_reduction="far_field",
     )
     session = agent._build_session()
-    RealtimeSessionCreateRequest.model_validate(session)  # raises on a wrong shape
+    RealtimeSessionCreateRequest.model_validate(session)
     audio_in = session["audio"]["input"]
     assert session["output_modalities"] == ["audio"]
     assert audio_in["transcription"] == {"model": agent._config.transcribe_model, "language": "vi"}
     assert audio_in["noise_reduction"] == {"type": "far_field"}
     if td is None:
-        assert audio_in["turn_detection"] is None  # explicit null = manual turns
+        assert audio_in["turn_detection"] is None
     elif td == "server_vad":
         assert audio_in["turn_detection"] == {"type": "server_vad", "threshold": 0.7, "prefix_padding_ms": 300}
     else:

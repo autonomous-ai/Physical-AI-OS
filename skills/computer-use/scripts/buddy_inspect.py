@@ -21,8 +21,6 @@ def compact_tree(tree, navigation=False):
     items = []
     omitted = 0
     text_clipped = False
-    # Navigation prioritizes observed enabled controls while keeping their
-    # original refs/parents. Stable ordering preserves peer order within groups.
     ordered = sorted(nodes, key=lambda node: not (node.get("enabled") is True and node.get("actions"))) if navigation else nodes
     for node in ordered:
         current, seen = node, set()
@@ -90,8 +88,7 @@ def _frame(value):
 
 def compact_cua(observation):
     """Preserve evidence and annotate geometry; never claim hit-test visibility."""
-    # Driver max_elements advice is incompatible with Buddy's max_nodes. Keep
-    # tree_markdown: static text can exist there alone, including calendar year.
+    # Keep tree_markdown: static text can exist only there.
     result = {key: value for key, value in observation.items() if key != "_note"}
     elements = observation.get("elements")
     if not isinstance(elements, list):
@@ -180,8 +177,7 @@ def inspect_ui(params, command, known_backend=None):
     if known_backend is None:
         result = _inspect_ui(params, measured_command)
     else:
-        # A successful typed action proves its backend. The companion still
-        # enforces pause and permissions on this new observation command.
+        # The companion still enforces pause and permissions on this observation.
         result = _observe_backend(params, measured_command, known_backend, None)
         result.update(backend=known_backend, backend_source="successful_action")
 
@@ -224,12 +220,10 @@ def _observe_backend(params, command, backend, desktop):
         raw = command(action, arguments).get("result")
         if not isinstance(raw, dict):
             raise ValueError("invalid Cua observation" if backend == "cua" else "invalid Accessibility result")
-        # Validate native trees before deciding whether to request another view.
         observation = compact_cua(raw) if backend == "cua" else compact_tree(raw, navigation=navigation)
         incomplete = raw.get("truncated") is True
         if backend == "cua":
-            # elements_complete=false can mean static text exists only in the
-            # markdown; it does not establish that the AX traversal was cut.
+            # elements_complete=false does not mean the AX traversal was cut.
             markdown = raw.get("tree_markdown")
             footer = markdown.rstrip().split("\n")[-1] if isinstance(markdown, str) and markdown.strip() else ""
             incomplete |= raw.get("tree_truncated") is True or bool(
@@ -240,8 +234,7 @@ def _observe_backend(params, command, backend, desktop):
     navigation = mode == "navigation"
     observation, incomplete = capture(navigation)
     if mode == "auto" and incomplete:
-        # This is one bounded read of a different tree depth, never a retry of
-        # an errored command or an action. Only these fresh references survive.
+        # One bounded re-read at another depth, never a retry; only fresh refs survive.
         observation, _ = capture(True)
         navigation = True
     if backend == "native" and desktop is not None and desktop.get("screen_recording") is not True:

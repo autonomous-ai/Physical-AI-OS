@@ -1,10 +1,4 @@
-"""Abstract speech emotion recognizer.
-
-One inference per utterance — given a mono 16kHz WAV blob, return the top
-label + confidence. Concrete engines (see `emotion2vec.py`) talk to
-perception-service; in-process engines could be added the same way as the face
-emotion recognizer registry on perception-service.
-"""
+"""Abstract speech emotion recognizer."""
 
 from __future__ import annotations
 

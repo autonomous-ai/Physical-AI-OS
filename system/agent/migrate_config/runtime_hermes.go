@@ -13,18 +13,14 @@ type hermesAdapter struct{}
 
 func (hermesAdapter) runtime() Runtime { return RuntimeHermes }
 
-// read extracts LLMConfig from ~/.hermes/config.yaml (base_url) and ~/.hermes/.env
-// (AUTONOMOUS_API_KEY). These are the two files presync.sh writes; reading them
-// directly captures any drift the agent introduced after the last presync run.
+// read extracts LLMConfig from the presync-owned config.yaml (base_url) and .env (AUTONOMOUS_API_KEY).
 func (hermesAdapter) read(opts Options) (LLMConfig, error) {
 	baseURL := readHermesBaseURL(filepath.Join(opts.HermesRoot, "config.yaml"))
 	apiKey := readEnvVar(filepath.Join(opts.HermesRoot, ".env"), "AUTONOMOUS_API_KEY")
 	return LLMConfig{APIKey: apiKey, BaseURL: baseURL}, nil
 }
 
-// write updates ~/.hermes/config.yaml and ~/.hermes/.env with the canonical config.
-// Uses the same fields presync.sh owns so the result is identical to what a fresh
-// presync would produce — no divergence between Go-written and shell-written files.
+// write updates config.yaml and .env with the same fields presync.sh owns.
 func (hermesAdapter) write(cfg LLMConfig, opts Options) error {
 	if cfg.BaseURL != "" {
 		if err := writeHermesBaseURL(filepath.Join(opts.HermesRoot, "config.yaml"), cfg.BaseURL); err != nil {

@@ -3,16 +3,13 @@ import time
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))  # repo os/ → `hal` package
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from hal.drivers.motors import MotorsService
 from hal.drivers.base import Priority
 
 def test_motors_service():
-    # A hands-on bring-up script, not a unit test: it drives real servos over a
-    # serial port named on the command line. pytest collects it anyway and calls
-    # it with no arguments, so argparse used to abort the run with SystemExit: 2.
-    # Skip unless someone actually passed the hardware in.
+    # Hardware bring-up script: skip unless --id/--port were passed.
     if not {"--id", "--port"}.issubset(set(sys.argv)):
         import pytest
 
@@ -37,7 +34,6 @@ def test_motors_service():
             print(f"Playing first recording: {recordings[0]}")
             motors_service.dispatch("play", recordings[0])
             
-            # Wait for playback to complete
             motors_service.wait_until_idle(timeout=30)
             print("Playback completed!")
         else:

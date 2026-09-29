@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Patch existing device nginx to add /api/harness/ws WebSocket upgrade block.
-#
-# Devices flashed before the Harness direct-pair feature landed have nginx
-# configs whose only "location = /api/..." blocks with WebSocket upgrade are
-# /api/system/shell and /api/buddy/ws. /api/harness/ws then falls through to
-# the generic "location /api/" block, which does NOT relay the Upgrade /
-# Connection headers, so the Harness Desktop CLI cannot complete the WS
-# handshake. Symptom: pair fails with a generic "Autonomous device management
-# request failed" (the CLI's uncoded fallback), while os-server logs show only
-# ordinary GET /api/harness/status polling.
-#
-# Run this script directly on the device as root.
+# Add the /api/harness/ws WebSocket upgrade block to an existing device nginx config.
+# Run directly on the device as root.
 set -euo pipefail
 
 if [ "$(id -u)" -ne 0 ]; then
@@ -37,21 +27,16 @@ if grep -q "location = /api/harness/ws" "$CONF"; then
   exit 0
 fi
 
-# Work on the real file so backups contain bytes, not a sites-enabled symlink.
-# Editing and restoring this target also preserves the enabled symlink itself.
+# Edit the real file (not the sites-enabled symlink) so backups contain bytes.
 CONF="$(python3 -c 'import os, sys; print(os.path.realpath(sys.argv[1]))' "$CONF")"
 
-# Keep backups OUTSIDE the sites-enabled directory so nginx does not try to
-# parse them and error out with "duplicate upstream".
+# Backups live outside sites-enabled or nginx fails with "duplicate upstream".
 BACKUP_DIR="/var/backups/nginx-harness-ws"
 mkdir -p "$BACKUP_DIR"
 BACKUP="$(mktemp "${BACKUP_DIR}/$(basename "$CONF").bak.XXXXXX")"
 cp -a "$CONF" "$BACKUP"
 echo "[patch] backup written to $BACKUP"
 
-# Insert the harness ws block right after the /api/buddy/ws block. Matches the
-# closing brace on its own line that terminates the buddy block (indented by
-# two spaces, matching the imager templates).
 python3 - "$CONF" <<'PY'
 import re, sys
 path = sys.argv[1]

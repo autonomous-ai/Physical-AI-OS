@@ -56,7 +56,6 @@ func TestPersistedVolumeUnreadableProfileDoesNotUseLegacy(t *testing.T) {
 	if err := os.WriteFile(statePath, []byte("30"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	// Reading a directory fails even when tests run as root.
 	if value, ok := persistedVolume(dir, statePath); ok {
 		t.Fatalf("unreadable profile restored legacy volume: (%d, %v)", value, ok)
 	}

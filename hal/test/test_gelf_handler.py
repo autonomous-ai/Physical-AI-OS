@@ -1,9 +1,4 @@
-"""Tests for hal.drivers.gelf_handler — where HAL ships its GELF records.
-
-GELF_URL set → straight to that collector with basic auth, as before. Unset →
-relayed through the cloud API (`{base}/logs/gelf`) with the device's own key,
-so no Graylog credential has to live on the device.
-"""
+"""Tests for hal.drivers.gelf_handler — where HAL ships its GELF records."""
 
 import logging
 import sys

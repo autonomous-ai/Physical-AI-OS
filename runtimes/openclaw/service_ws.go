@@ -22,7 +22,6 @@ import (
 )
 
 // StartWS connects to the gateway WebSocket and runs the read loop, calling handler for each event.
-// It runs until ctx is cancelled. Auto-reconnects when disconnected.
 func (s *OpenclawService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	backoff := 5 * time.Second
 	for {
@@ -35,22 +34,10 @@ func (s *OpenclawService) StartWS(ctx context.Context, handler domain.AgentEvent
 		if ctx.Err() != nil {
 			return
 		}
-		// Skip the cyan status overlay during AP/provisioning mode: the WS
-		// is doomed to fail until the user finishes setup (no openclaw
-		// credentials yet), and StateAgentDown would clobber the
-		// setup-needed solid white painted by server.waitAndPaintSetupReady.
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Set(statusled.StateAgentDown)
 		}
-		// Safety reflex: the gateway link just dropped, so any in-flight servo
-		// object-tracking is now chasing a target it can no longer get vision
-		// updates for. Stop it (best-effort, idempotent) so the body doesn't
-		// keep aiming at stale coordinates. Local idle animation is untouched —
-		// it's harmless and self-contained — and recovery reflexes stay
-		// available. Never block or affect the reconnect/backoff loop below.
-		// Only devices that can servo-track (motion) have anything to stop —
-		// skip on bodies without it (e.g. intern-v2) so we don't POST to a
-		// /servo endpoint they don't serve.
+		// Safety reflex: the gateway link just dropped, so any in-flight servo object-tracking is now chasing a target it can no longer get vision updates for.
 		if s.config.SetUpCompleted && device.Has(s.config.DeviceTypeOrDefault(), device.CapMotion) {
 			if err := hal.StopServoTracking(); err != nil {
 				slog.Warn("stop servo tracking on ws disconnect failed", "component", "openclaw", "error", err)
@@ -101,7 +88,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		conn.Close()
 	}()
 
-	// Read connect.challenge from gateway
 	conn.SetReadDeadline(time.Now().Add(5 * time.Second))
 	_, msg, err := conn.ReadMessage()
 	if err != nil {
@@ -166,7 +152,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		return fmt.Errorf("write connect: %w", err)
 	}
 
-	// Read connect response — extract sessionKey if present
 	conn.SetReadDeadline(time.Now().Add(10 * time.Second))
 	_, connectResp, err := conn.ReadMessage()
 	if err != nil {
@@ -209,9 +194,7 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 			SessionKey string `json:"sessionKey"`
 		} `json:"result"`
 		Payload struct {
-			// uptimeMs may live at payload top level (older gateway responses) or
-			// inside snapshot (current 2026.5.27 hello-ok shape) — capture both,
-			// prefer the non-zero one.
+			// uptimeMs may live at payload top level (older gateway responses) or inside snapshot (current 2026.5.27 hello-ok shape) — capture both, prefer the non-zero one.
 			UptimeMs int64 `json:"uptimeMs"`
 			Snapshot struct {
 				UptimeMs        int64 `json:"uptimeMs"`
@@ -230,9 +213,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 			s.SetSessionKey(sk)
 			slog.Info("session key from connect", "component", "openclaw", "sessionKey", sk)
 		}
-		// Compute the OpenClaw process start time so the monitor UI can show the
-		// gateway's true age, not Lamp's WS connection age. Try both known
-		// locations of uptimeMs in the hello-ok payload.
 		upMs := connectResult.Payload.UptimeMs
 		if upMs <= 0 {
 			upMs = connectResult.Payload.Snapshot.UptimeMs
@@ -242,7 +222,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		}
 	}
 
-	// If no session key yet, request sessions.list to find an active session
 	if s.GetSessionKey() == "" {
 		listReq := map[string]interface{}{
 			"type":   "req",
@@ -284,10 +263,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 	flow.Log("ws_ready", map[string]any{"session": s.GetSessionKey() != ""})
 
 	// On reconnect (not first boot), announce via TTS so user knows agent is back.
-	// SpeakCached (not SendToHALTTS): this is a hardcoded system filler, so it
-	// must NOT be fed to the realtime voice agent as history. Cached: fixed pool,
-	// self-caches into hal's WAV cache on first render so replays skip the
-	// provider — reconnects often coincide with provider trouble.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
@@ -297,8 +272,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		}()
 	}
 
-	// Subscribe to session events so we receive tool events for all turns
-	// (including Telegram-initiated turns where Lamp didn't call chat.send).
 	subReq := map[string]interface{}{
 		"type":   "req",
 		"id":     fmt.Sprintf("sub-%d", s.reqCounter.Add(1)),
@@ -312,17 +285,7 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		slog.Info("sessions.subscribe sent", "component", "openclaw")
 	}
 
-	// Event handler runs in a worker goroutine so it does not block the read
-	// loop. This matters because the handler may call FetchChatHistory (a WS
-	// RPC) — if the read loop is stuck inside the handler waiting for the RPC
-	// response, the response frame never gets read, and the call deadlocks.
-	// With the worker model, the read loop keeps consuming frames and routes
-	// the response to dispatchRPCResponse independently, unblocking the
-	// pending RPC inside the handler.
-	//
-	// The channel is buffered to absorb short bursts; if the handler stalls
-	// past the buffer, the read loop blocks on send (back-pressure) instead
-	// of dropping events — order is preserved end-to-end.
+	// Event handler runs in a worker goroutine so it does not block the read loop.
 	const eventChanBuf = 64
 	eventCh := make(chan domain.WSEvent, eventChanBuf)
 	handlerDone := make(chan struct{})
@@ -339,21 +302,15 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 			}
 			if err := handler(ctx, evt); err != nil {
 				slog.Error("ws handler error", "component", "openclaw", "event", evt.Event, "error", err)
-				// Do not exit on handler error — keep processing subsequent
-				// events. Read loop exit is driven by socket error or ctx.
 			}
 		}
 	}()
-	// Stop the worker when this read loop returns (socket error, ctx done,
-	// or reconnect path). Drain ensures the next iteration of startWS gets a
-	// fresh worker.
 	defer func() {
 		close(eventCh)
 		<-handlerDone
 	}()
 
-	// The authenticated socket and event worker are ready. Only locally unsent
-	// events are drained; pending chat traces never become a replay source.
+	// The authenticated socket and event worker are ready.
 	go s.drainPendingEvents()
 
 	for {
@@ -368,7 +325,6 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 			return err
 		}
 
-		// Try to extract sessionKey from any message (fallback if connect response didn't have it)
 		if s.GetSessionKey() == "" {
 			var raw struct {
 				SessionKey string `json:"sessionKey"`
@@ -396,19 +352,13 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 			}
 		}
 
-		// Dispatch RPC responses to pending callers immediately in the read
-		// loop. This must happen before pushing to eventCh: chat.history and
-		// other RPCs called from inside the handler block on pendingRPC
-		// channels, which can only be delivered here.
+		// Must run before pushing to eventCh: handler RPCs block on pendingRPC channels delivered only here.
 		s.dispatchRPCResponse(msg)
 
 		var evt domain.WSEvent
 		if err := json.Unmarshal(msg, &evt); err != nil {
 			continue
 		}
-		// Push to worker. Blocks only if buffer is full (handler is far
-		// behind) — back-pressure is preferable to dropping events because
-		// it preserves order and surfaces handler slowdowns as latency.
 		select {
 		case eventCh <- evt:
 		case <-ctx.Done():
@@ -443,7 +393,6 @@ func (s *OpenclawService) dispatchRPCResponse(msg []byte) {
 }
 
 // FetchChatHistory sends a chat.history RPC and returns the raw payload.
-// Best-effort with a 3-second timeout; returns nil on any failure.
 func (s *OpenclawService) FetchChatHistory(sessionKey string, limit int) (json.RawMessage, error) {
 	s.wsMu.Lock()
 	conn := s.wsConn

@@ -1,9 +1,4 @@
-"""TOUCH-DEBUG tracer: inert when off, correct arithmetic when on.
-
-The first test is the important one. The tracer sits inside the lgpio callback
-path, so "disabled costs nothing and touches no disk" is the guarantee that lets
-it ship on by default in the repo and off on every device.
-"""
+"""TOUCH-DEBUG tracer: inert when off, correct arithmetic when on."""
 
 import importlib
 import json
@@ -14,8 +9,7 @@ from pathlib import Path
 
 
 def _fresh(enabled: bool, out_dir: str = "", pads: str = ""):
-    """Re-import the module with a given env. `_enabled` is resolved once and
-    cached, so each case needs a clean module."""
+    """Re-import the module with a given env (`_enabled` is cached)."""
     os.environ["HAL_TOUCH_DEBUG"] = "true" if enabled else "false"
     if out_dir:
         os.environ["HAL_TOUCH_DEBUG_DIR"] = out_dir
@@ -51,8 +45,7 @@ class TestDisabled(unittest.TestCase):
 
 
 class TestSessionArithmetic(unittest.TestCase):
-    """The Phase 2 measurement. Deltas are what decide swipe viability, so they
-    are worth pinning even before a classifier exists."""
+    """Inter-pad deltas are recorded."""
 
     def _trace(self, tmp):
         return json.loads(next(Path(tmp).glob("*.json")).read_text())
@@ -61,7 +54,6 @@ class TestSessionArithmetic(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             td = _fresh(True, tmp, pads="96=S1,98=S2,100=S4")
             td.start_cycle(0, [96, 98, 100])
-            # One finger press: three pads fire close together, then release.
             td.note_edge(96, 0)
             td.note_edge(98, 0)
             td.note_edge(100, 0)
@@ -76,8 +68,7 @@ class TestSessionArithmetic(unittest.TestCase):
             s = tr["sessions"][0]
             self.assertEqual(s["distinct_pads"], ["S1", "S2", "S4"])
             self.assertEqual(s["primary_pad"], "S1")
-            # Release edge (level 1) must not appear in touch_order — it is
-            # FastMode's auto-drop, not a second contact.
+            # Release edge is FastMode's auto-drop, not a second contact.
             self.assertEqual(s["steps"], 3)
             self.assertEqual(len(s["adjacent_deltas_ms"]), 2)
 
@@ -95,19 +86,11 @@ class TestSessionArithmetic(unittest.TestCase):
             tr = self._trace(tmp)
             self.assertEqual(len(tr["edges"]), 2)
             self.assertTrue(all(e["suppressed"] for e in tr["edges"]))
-            # Suppressed edges never enter a contact, so no pad was "touched".
             self.assertEqual(tr["sessions"][0]["distinct_pads"], [])
 
 
 class TestTouchOrderIsUnreduced(unittest.TestCase):
-    """The deltas must be measured over every step, not one per pad.
-
-    `first_touch_order` kept only the first hit per pad and `adjacent_deltas_ms`
-    was computed from it, so a contact that revisited pads reported fewer gaps
-    than the driver saw — 47 of 130 captured traces, one losing 7 of 9. The
-    inter-pad histogram the classifier's threshold came from was measured
-    through that reduction.
-    """
+    """The deltas must be measured over every step, not one per pad."""
 
     def _trace(self, tmp):
         return json.loads(next(Path(tmp).glob("*.json")).read_text())
@@ -129,13 +112,10 @@ class TestTouchOrderIsUnreduced(unittest.TestCase):
                              ["S1", "S2", "S4", "S2", "S1"])
             self.assertEqual(s["steps"], 5)
             self.assertEqual(s["distinct_pads"], ["S1", "S2", "S4"])
-            # 4 gaps, not the 2 the deduplicated version reported.
             self.assertEqual(len(s["adjacent_deltas_ms"]), 4)
 
     def test_a_pad_refiring_under_a_still_finger_is_not_a_step(self):
-        """Consecutive repeats still collapse — FastMode re-triggers on a
-        stationary finger, and counting those would invent gaps of ~0 ms and
-        drag the measured floor down."""
+        """Consecutive repeats collapse into one."""
         with tempfile.TemporaryDirectory() as tmp:
             td = _fresh(True, tmp, pads="96=S1,98=S2")
             td.start_cycle(0, [96, 98])
@@ -152,14 +132,7 @@ class TestTouchOrderIsUnreduced(unittest.TestCase):
 
 
 class TestClassifierBlock(unittest.TestCase):
-    """The driver classifies; the tracer only records what it was told.
-
-    The tracer used to recompute traversal itself. When the driver's model
-    changed the two silently diverged and a trace showed `reversals: 3,
-    "stroke-shaped"` beside a DOUBLE_TAP verdict (device trace 160546) — an
-    instrument that contradicts the thing it is measuring is worse than none,
-    because it reads as authoritative. One source of truth now.
-    """
+    """The driver classifies; the tracer only records what it was told."""
 
     def _trace(self, tmp):
         return json.loads(next(Path(tmp).glob("*.json")).read_text())
@@ -198,16 +171,13 @@ class TestClassifierBlock(unittest.TestCase):
             self.assertNotIn("classifier", self._trace(tmp))
 
     def test_the_tracer_no_longer_computes_traversal_itself(self):
-        """Guards the regression directly: if a future change re-adds a
-        tracer-side traversal, the two models can drift apart again."""
+        """The tracer records the driver's traversal instead of computing its own."""
         td = _fresh(True, tempfile.gettempdir())
         self.assertFalse(hasattr(td, "_traversal"))
 
 
 class TestPadLabels(unittest.TestCase):
-    """`_pad` reads the map `_init` resolves, so these call it first — every
-    real caller reaches `_pad` only from an entry point that has already
-    initialised."""
+    """`_init` is called first because `_pad` reads the map it resolves."""
 
     def test_defaults_to_line_number_when_unmapped(self):
         td = _fresh(True, tempfile.gettempdir())
@@ -219,7 +189,6 @@ class TestPadLabels(unittest.TestCase):
         td._init()
         self.assertEqual(td._pad(96), "S1")
         self.assertEqual(td._pad(98), "S2")
-        # The two malformed entries are dropped, not raised on.
         self.assertEqual(td._pad(100), "L100")
 
 

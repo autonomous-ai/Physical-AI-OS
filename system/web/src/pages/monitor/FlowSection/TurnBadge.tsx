@@ -13,10 +13,7 @@ import { turnMemoryState, memoryBadge } from "./memory";
 import { PoseBucketModal } from "./PoseBucketModal";
 import { UserAvatar } from "./UserAvatar";
 
-// Turn timestamp label: "Ns ago" / "N min ago" for anything within the last
-// 30 minutes, otherwise the HH:MM:SS part of the ISO string. Reads the wall
-// clock, so it lives at module scope (outside the component render body)
-// rather than being re-created on every render.
+// "Ns ago" / "N min ago" within 30 min, otherwise HH:MM:SS.
 function formatTurnTime(iso: string): string {
   const date = new Date(iso);
   const diffMs = Date.now() - date.getTime();
@@ -51,25 +48,18 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
     : "var(--lm-amber)";
   const displayType = turnDisplayType(turn);
   const SourceIcon = TYPE_LUCIDE[displayType] ?? Circle;
-  // Source icon takes the turn's source-category color (mic / cam / channel /
-  // web / cron / system) instead of a dim grey, so it stands out and doubles
-  // as a quick at-a-glance source cue. Falls back to teal for unmapped types.
   const sourceColor =
-    /voice|sound|speech_emotion/.test(turn.type) ? "var(--lm-purple)"        // mic
-    : /motion|presence|light|emotion|pose|environment/.test(turn.type) ? "var(--lm-blue)" // cam
-    : /telegram|discord|slack|wechat|channel/.test(turn.type) ? "var(--lm-cyan)"          // channel
-    : /web_chat/.test(turn.type) ? "var(--lm-teal)"                          // web
-    : /mqtt_chat/.test(turn.type) ? "var(--lm-cyan)"                        // mqtt chat (phone app)
-    : /cron/.test(turn.type) ? "var(--lm-amber)"                            // cron
-    : /system|schedule|music|heartbeat/.test(turn.type) ? "var(--lm-text-dim)"   // system
-    : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"                  // button
+    /voice|sound|speech_emotion/.test(turn.type) ? "var(--lm-purple)"
+    : /motion|presence|light|emotion|pose|environment/.test(turn.type) ? "var(--lm-blue)"
+    : /telegram|discord|slack|wechat|channel/.test(turn.type) ? "var(--lm-cyan)"
+    : /web_chat/.test(turn.type) ? "var(--lm-teal)"
+    : /mqtt_chat/.test(turn.type) ? "var(--lm-cyan)"
+    : /cron/.test(turn.type) ? "var(--lm-amber)"
+    : /system|schedule|music|heartbeat/.test(turn.type) ? "var(--lm-text-dim)"
+    : /touch|head_pat/.test(turn.type) ? "var(--lm-green)"
     : "var(--lm-teal)";
   const { input, output, hwOutput, snapshotUrls, audioUrls, poseBucket } = turnIO(turn);
   const harnessOutput = harnessOutputPresentation(turn, output);
-  // When a motion.activity turn folded in a posture nudge, append the
-  // first two worst pose snapshots to the existing strip (capped to 3
-  // tiles total including the motion frame). The remaining samples are
-  // surfaced via the "Load more" → PoseBucketModal popup.
   const baseSnaps: string[] = [...snapshotUrls];
   let extraStrip: string[] = [];
   if (poseBucket && poseBucket.files.length > 0) {
@@ -77,8 +67,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
       (f) => `${HW}/sensing/pose-bucket/${encodeURIComponent(poseBucket.id)}/img/${encodeURIComponent(f)}`,
     );
   }
-  // 3-tile cap: keep at most 1 baseline snapshot + up to 2 bucket worst.
-  // When baseSnaps already has ≥3 we leave them alone (other event types).
   const stripUrls: string[] = poseBucket
     ? [...baseSnaps.slice(0, 1), ...extraStrip].slice(0, 3)
     : baseSnaps;
@@ -88,22 +76,12 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
   const hasBroadcast = turn.events.some((ev) =>
     ev.type === "flow_event" && ev.detail?.node === "telegram_alert_broadcast"
   );
-  // A cancelled turn still reports DONE — it ran to completion, it just never
-  // reached the speaker. Without its own marker the header is identical to a
-  // turn the user actually heard, which is exactly the question you ask when
-  // scanning the timeline for "why did it go quiet there?".
-  // Either signal counts: a turn can lose only its voice (the usual case) or
-  // only its body (web-chat turns never speak, so the click shows up purely as
-  // dropped HW markers).
+  // A cancelled turn still reports DONE; mark it so the header differs.
   const cancelEvent = turn.events.find((ev) =>
     ev.type === "flow_event" &&
     (ev.detail?.node === "tts_cancelled" || ev.detail?.node === "hw_cancelled")
   );
   const wasCancelled = cancelEvent !== undefined;
-  // Two things silence a turn and they are not the same story to someone
-  // scanning the timeline: the user pressed the button, or the lamp answered a
-  // newer question through the realtime agent and this reply went stale. Older
-  // events carry no source — they predate the second cause, so read as a click.
   const cancelBySelf =
     (cancelEvent?.detail as { source?: string } | undefined)?.source === "realtime_handled";
   const fmtToken = (n: number) => (n >= 1000 ? `${(n / 1000).toFixed(1)}k` : `${n}`);
@@ -131,12 +109,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
       fontSize: 11,
       cursor: "default",
     }}>
-      {/* Card header: the badge row (icon + type + path + status + user +
-          timing) and the time/id meta line — the part shown in the collapsed
-          turn card. Marked as a region so it can be targeted/inspected like
-          the other FLOW_* regions. */}
       <div data-region="FLOW_TURN_CARD_HEADER">
-      {/* Row 1: source icon + type + path + status tag + duration */}
       <div data-region="FLOW_TURN_CARD_BADGES" style={{ display: "flex", alignItems: "center", gap: 5, marginBottom: 4, flexWrap: "wrap", rowGap: 3 }}>
         <span className="lm-turn-src" style={{
           display: "inline-flex", alignItems: "center", justifyContent: "center",
@@ -228,9 +201,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
         })()}
       </div>
 
-      {/* Meta line: time + traceable id on one dim mono row. The id is a
-          debug detail (rarely read), so it's truncated to the tail and the
-          full value lives in `title` — keeping it from dominating the card. */}
       <div data-region="FLOW_TURN_CARD_META" style={{
         fontSize: 8.5, color: "var(--lm-text-muted)", fontFamily: "monospace",
         marginBottom: 5, display: "flex", alignItems: "center", gap: 6,
@@ -246,7 +216,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
         </span>
       </div>
       </div>
-      {/* Input — primary content, the loudest text in the card. */}
       <div style={{
         fontSize: 12, color: "var(--lm-text)", marginBottom: 4,
         overflowWrap: "anywhere" as const, lineHeight: 1.5,
@@ -258,11 +227,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
           background: "color-mix(in srgb, var(--lm-teal) 15%, transparent)",
           verticalAlign: "1px",
         }}>IN</span>
-        {/* Heartbeat turns have no user input of their own — the chat_input
-            logged under them is the freshest user message BORROWED from the
-            conversation (often the previous real turn's, e.g. the "[system]
-            wake" text), which read as a duplicate turn. Show what the run
-            actually is instead. */}
         {turn.type === "heartbeat" ? (
           <span style={{ color: "var(--lm-text-dim)", fontStyle: "italic" }}>
             Periodic HEARTBEAT.md self-check (every 30m) — no user input
@@ -340,12 +304,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
         <PoseBucketModal bucketId={poseBucket.id} onClose={() => setBucketOpen(false)} />
       )}
       {lightboxUrl && createPortal(
-        // Portalled to <body> so the overlay's position:fixed anchors to the
-        // viewport, not to this card. The card has a transform/animation
-        // (hover lift + entrance), which would otherwise become the fixed
-        // containing block and let the lightbox overflow on top of the page
-        // instead of covering it. The `lm-root ${themeClass}` re-scope keeps
-        // the --lm-* tokens resolving outside the monitor root.
+        // Portalled so position:fixed anchors to the viewport, not the transformed card.
         <div
           className={`lm-root ${themeClass}`}
           onClick={() => setLightboxUrl(null)}
@@ -378,7 +337,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
         </div>,
         document.body,
       )}
-      {/* Row 3: output — source attribution does not imply speech playback. */}
       {output === "[no reply]" ? (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-muted)", marginBottom: 2,
@@ -456,7 +414,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
           Merged into {turn.mergedIntoRunId}
         </div>
       )}
-      {/* Row 3b: output — Hardware actions */}
       {hwOutput && (
         <div style={{
           fontSize: 11.5, color: "var(--lm-text-dim)",
@@ -469,9 +426,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
           {hwOutput}
         </div>
       )}
-      {/* Footer meta: events + tokens on one quiet hairline-topped row. Tokens
-          were a loud red box that read like an error; now a compact inline
-          summary, with the full cache/billed breakdown in `title` on hover. */}
       <div data-region="FLOW_TURN_CARD_FOOTER" style={{
         fontSize: 10.5, color: "var(--lm-text-dim)", marginTop: 7, paddingTop: 6,
         borderTop: "1px solid var(--lm-border)",
@@ -492,13 +446,6 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
                 <span style={{ color: "var(--lm-teal)", fontWeight: 700 }}>↓{fmtToken(tokenStats.inTok)}</span>
                 {" "}
                 <span style={{ color: "var(--lm-amber)", fontWeight: 700 }}>↑{fmtToken(tokenStats.outTok)}</span>
-                {/* Cache read shown inline (not tooltip-only): it IS the bulk of
-                    the context the LLM ingested each turn — hiding it made a
-                    ~55k-context turn read as "2k tokens" and confused users
-                    comparing against billing. R = cache read; Σ = total
-                    (in + out + cache), which matches the Autonomous backend's
-                    billed count — it charges cached reads at full price, so no
-                    0.1× discount math here. */}
                 {(tokenStats.cacheRead > 0 || tokenStats.cacheWrite > 0) && (
                   <>
                     {" "}
@@ -508,17 +455,12 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
                   </>
                 )}
                 {" "}
-                {/* "LLM tokens", not just "tokens": the Autonomous billing UI
-                    counts realtime voice (Gemini) + TTS tokens in the same
-                    bucket — this footer covers the text-agent LLM only. */}
                 <span style={{ color: "var(--lm-text-muted)" }}>LLM tokens</span>
               </span>
             </span>
           );
         })()}
         {memory && (() => {
-          // All the state gating lives in memoryBadge (see memory.ts): gray and
-          // amber are debug-only, red is always shown. Null = render nothing.
           const badge = memoryBadge(memory, isDebug);
           if (!badge) return null;
           return (
@@ -535,11 +477,7 @@ export function TurnBadge({ turn, pairTint, userPhotos, isDebug, onViewPipeline 
           className="lm-view-pipeline-btn"
           onClick={(e) => { e.stopPropagation(); onViewPipeline(); }}
           style={{
-            // NOTE: do NOT set `display` here — visibility is controlled by
-            // `.lm-view-pipeline-btn` (none on desktop, flex on mobile). An
-            // inline `display` would override that non-!important rule and leak
-            // the mobile-only button onto desktop. The mobile CSS sets
-            // `display: flex`, which already aligns the icon + label.
+            // No inline `display`: `.lm-view-pipeline-btn` controls visibility per breakpoint.
             marginTop: 8,
             width: "100%",
             padding: "7px 10px",

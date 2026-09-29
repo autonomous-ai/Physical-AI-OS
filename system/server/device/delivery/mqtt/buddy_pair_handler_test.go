@@ -22,8 +22,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// captureBuddyPairReply runs the real MQTT publisher against a minimal local
-// broker, including the QoS 1 acknowledgement, without an external service.
+// captureBuddyPairReply runs the real MQTT publisher against a minimal local broker.
 func captureBuddyPairReply(t *testing.T, svc *buddy.Service, kind string) map[string]json.RawMessage {
 	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
@@ -89,7 +88,6 @@ func captureBuddyPairReply(t *testing.T, svc *buddy.Service, kind string) map[st
 			return
 		}
 		replies <- result{publish: publish}
-		// Keep the broker alive until the publisher closes its connection.
 		_, _ = packets.ReadPacket(conn)
 	}()
 	t.Cleanup(func() { <-done })
@@ -263,7 +261,6 @@ func TestBuddyPairRevokeMQTTFailure(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		// A directory at the store file path forces a deterministic write failure.
 		if err := os.MkdirAll(buddy.BuddiesFilePath, 0o755); err != nil {
 			t.Fatal(err)
 		}

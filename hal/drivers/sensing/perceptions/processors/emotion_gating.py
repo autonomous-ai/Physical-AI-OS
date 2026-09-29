@@ -1,15 +1,4 @@
-"""Per-label confidence gate for facial emotion, applied on the device.
-
-Mirrors integrations/perception-service label_gating.resolve_label plus the
-emotion-recognize route's threshold drop, so a reading is judged identically
-whichever side gates it. HAL asks the server for raw probabilities and gates
-here, which makes each label's bar a per-device HAL setting instead of a change
-to the shared server.
-
-The outcome that matters: a reading that fails is None — "no confirmed
-reading" — never a Neutral reading. The occupancy vote counts no-readings
-against a label, so turning them into Neutral would weaken it.
-"""
+"""Per-label confidence gate for facial emotion, applied on the device."""
 
 import json
 import logging
@@ -17,10 +6,6 @@ from typing import NamedTuple
 
 logger = logging.getLogger(__name__)
 
-# Keyed by lowercased label. Neutral is the fallback target and has no bar;
-# labels not listed are accepted at argmax. Sad and Anger sit high because an
-# AffectNet-trained model reads a bowed head (Sad) or a face turned toward a
-# monitor (Anger) confidently wrong.
 DEFAULT_LABEL_THRESHOLDS: dict[str, float] = {
     "happy": 0.5,
     "surprise": 0.6,
@@ -61,8 +46,6 @@ def gate_reading(
         if neutral is not None:
             label, confidence, is_fallback = neutral, float(probabilities[neutral]), True
 
-    # Same floor the server route applies: below it the server answered with
-    # no detection at all.
     if confidence < min_confidence:
         return None
     return GatedReading(label, confidence, is_fallback)
@@ -71,8 +54,7 @@ def gate_reading(
 def load_label_thresholds(raw_json: str) -> dict[str, float]:
     """Parse HAL_EMOTION_LABEL_THRESHOLDS; defaults when unset or malformed.
 
-    A set value replaces the whole map, as FER__LABEL_THRESHOLDS does on the
-    server. A bad value must not take sensing down, so it logs and falls back.
+    A bad value must not take sensing down, so it logs and falls back.
     """
     if not raw_json.strip():
         return dict(DEFAULT_LABEL_THRESHOLDS)

@@ -1,29 +1,4 @@
-"""
-One-shot test of the speech-emotion engine against a hosted perception-service.
-
-Records a fixed-length clip from the default mic, sends it to
-`/api/dl/ser/recognize`, prints `{label, confidence}`. No buffering,
-no Lamp POST — just verifies the engine + network path.
-
-Usage (from repo root):
-
-    # Point at your hosted perception-service
-    export DL_BACKEND_URL="https://<host>"            # no trailing slash
-    export DL_API_KEY="<your shared secret>"          # if your backend requires it
-
-    # Record 5 seconds and classify
-    python -m hal.test.test_speech_emotion_engine
-
-    # Tweak
-    python -m hal.test.test_speech_emotion_engine \\
-        --dl-backend-url "$DL_BACKEND_URL" \\
-        --api-key "$DL_API_KEY" \\
-        --duration 6 \\
-        --device 1            # sounddevice input index (see `python -m sounddevice`)
-
-The script exits non-zero on transport / parse failure so it's safe to
-chain in a smoke-test pipeline.
-"""
+"""One-shot test of the speech-emotion engine against a hosted perception-service."""
 
 from __future__ import annotations
 
@@ -46,18 +21,11 @@ logger = logging.getLogger("test.speech_emotion_engine")
 SAMPLE_RATE = 16000
 CHANNELS = 1
 DEFAULT_DURATION_S = 5.0
-# Hit FastAPI directly — the `/hal/` prefix only exists when perception-service
-# is fronted by the production nginx config (RunPod) that strips it before
-# forwarding. Local dev runs uvicorn on its native port, no prefix.
 DEFAULT_ENDPOINT = "/api/dl/ser/recognize"
 
 
 def record_wav_bytes(duration_s: float, device: int | None) -> bytes:
-    """Record `duration_s` of mono int16 audio @ 16 kHz, return WAV bytes.
-
-    Uses sounddevice (PortAudio). Pass `device` as a sounddevice index
-    when the OS default mic isn't right (run `python -m sounddevice` to list).
-    """
+    """Record `duration_s` of mono int16 audio @ 16 kHz, return WAV bytes."""
     import numpy as np
     import sounddevice as sd
 
@@ -76,7 +44,7 @@ def record_wav_bytes(duration_s: float, device: int | None) -> bytes:
     buf = io.BytesIO()
     with wave.open(buf, "wb") as wf:
         wf.setnchannels(CHANNELS)
-        wf.setsampwidth(2)  # int16
+        wf.setsampwidth(2)
         wf.setframerate(SAMPLE_RATE)
         wf.writeframes(pcm.tobytes())
     return buf.getvalue()
@@ -114,7 +82,6 @@ def main() -> int:
         )
         return 2
 
-    # Compose URL once so logs show exactly what we're hitting.
     url = args.dl_backend_url.rstrip("/") + "/" + args.endpoint.strip("/")
     logger.info("Target: %s (api_key=%s)", url, "set" if args.api_key else "none")
 
@@ -125,7 +92,6 @@ def main() -> int:
         return 3
     logger.info("WAV bytes: %d", len(wav_bytes))
 
-    # Lazy import so missing requests doesn't break --help.
     from hal.drivers.voice.speech_emotion import Emotion2VecRecognizer
 
     rec = Emotion2VecRecognizer(url=url, api_key=args.api_key)

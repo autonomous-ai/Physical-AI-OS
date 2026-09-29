@@ -9,12 +9,9 @@ ZIP_NAME="setup-web.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
 VERSION_FILE="${ROOT_DIR}/system/VERSION_WEB"
 
-# Bucket for web bundle
-
 echo "========== npm install =========="
 (cd "$ROOT_DIR/system/web" && npm install)
 
-# Auto-increment semver (patch) before upload
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
   IFS='.' read -r major minor patch <<< "$version"
@@ -48,7 +45,6 @@ echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")
 
-# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - web key
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

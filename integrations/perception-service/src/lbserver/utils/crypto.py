@@ -25,11 +25,7 @@ def try_decrypt_http_body(body: bytes) -> tuple[bytes, bytes | None]:
     try:
         req = CipherHTTPRequest.model_validate_json(body)
     except (ValidationError, ValueError):
-        # Body isn't an encrypted envelope. Security policy fork:
-        #   require_encryption=true  → reject with 400 (no plaintext allowed).
-        #   require_encryption=false → accept it as plaintext and pass through.
-        # The second branch is the deliberate dev/back-compat path: enabling crypto
-        # at the LB does NOT by itself forbid plaintext clients unless this flag is set.
+        # Plaintext is accepted unless require_encryption is set (dev/back-compat path).
         if settings.crypto.require_encryption:
             raise HTTPException(status_code=400, detail="Encryption required")
         return body, None

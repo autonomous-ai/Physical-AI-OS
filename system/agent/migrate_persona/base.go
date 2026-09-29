@@ -10,14 +10,12 @@ import (
 	"unicode/utf8"
 )
 
-// baseMigrator holds the shared state and every helper both directions reuse
+// baseMigrator holds report state and helpers shared by all write adapters.
 type baseMigrator struct {
 	opts  Options
 	items []ItemResult
 }
 
-// ── REPORT──
-// mode
 func (b *baseMigrator) mode() string {
 	if b.opts.Execute {
 		return "execute"
@@ -56,12 +54,10 @@ func (b *baseMigrator) report(dir Direction) *Report {
 	}
 }
 
-// ── File operations ──
-
 // backup copies an existing destination aside before it is overwritten.
 func (b *baseMigrator) backup(path string) (string, error) {
 	if _, err := os.Stat(path); err != nil {
-		return "", nil // nothing to back up
+		return "", nil
 	}
 	dst := fmt.Sprintf("%s.bak-%d", path, time.Now().UnixNano())
 	data, err := os.ReadFile(path)
@@ -74,14 +70,8 @@ func (b *baseMigrator) backup(path string) (string, error) {
 	return dst, nil
 }
 
-// writePersona writes an already-transformed persona body (SOUL.md) into the
-// destination — the write half of the old copyPersona, driven by the bundle's
-// in-memory Soul instead of a source file.
-//   - empty content            → skipped (no source persona)
-//   - dest equals content       → skipped ("already matches")
-//   - dest exists, !overwrite    → conflict
-//   - otherwise                  → backup (if any) + write   (execute)
-//     or "would copy"            (dry-run)
+// writePersona writes a transformed SOUL.md: empty or identical content is skipped, an existing
+// dest without Overwrite is a conflict, otherwise backup + write (or dry-run).
 func (b *baseMigrator) writePersona(kind, content, destination string) {
 	if strings.TrimSpace(content) == "" {
 		b.record(kind, "", destination, StatusSkipped, "no source persona", nil)
@@ -122,10 +112,8 @@ func (b *baseMigrator) writePersona(kind, content, destination string) {
 	b.record(kind, "", destination, StatusMigrated, "", details)
 }
 
-// writeMemoryEntries entry-merges already-transformed incoming entries into the
-// destination memory file, deduping and enforcing a char limit. The write half of
-// the old mergeMemory — the read adapter has parsed sources into the bundle, the
-// write adapter rebrands + concatenates the relevant slots into incoming.
+// writeMemoryEntries entry-merges incoming entries into the destination memory file
+// (deduped, char-limited).
 func (b *baseMigrator) writeMemoryEntries(kind string, incoming []string, destination string, limit int, dstFormat entryFormat) {
 	if len(incoming) == 0 {
 		b.record(kind, "", destination, StatusSkipped, "no importable entries found", nil)
@@ -169,10 +157,8 @@ func (b *baseMigrator) writeMemoryEntries(kind string, incoming []string, destin
 	b.record(kind, "", destination, StatusMigrated, "", details)
 }
 
-// inlineIdentityCard appends an identity-card block to a SOUL.md when it is not
-// already present — idempotent, for runtimes that have no separate IDENTITY.md
-// slot and carry the owner's name inside SOUL (Hermes). No-op when block is empty
-// (no filled fields) or the soul is absent.
+// inlineIdentityCard idempotently appends an identity card to SOUL.md for runtimes without
+// IDENTITY.md (Hermes); no-op for empty block or absent soul.
 func (b *baseMigrator) inlineIdentityCard(soulPath, block string) {
 	const kind = "identity-inline"
 	if block == "" {
@@ -207,10 +193,8 @@ func (b *baseMigrator) inlineIdentityCard(soulPath, block string) {
 	b.record(kind, "", soulPath, StatusMigrated, "identity inlined into soul", details)
 }
 
-// writeIdentityFields restores identity fields into an IDENTITY.md (the slot
-// OpenClaw owns), line replace-or-append per field so an existing template
-// (descriptions, other slots) is preserved; the file is created when absent.
-// brand rebrands each value to the destination runtime. No-op when fields empty.
+// writeIdentityFields replace-or-appends each branded field into IDENTITY.md, preserving the
+// rest; creates the file when absent.
 func (b *baseMigrator) writeIdentityFields(kind string, fields []IdentityField, identityPath string, brand func(string) string) {
 	if len(fields) == 0 {
 		b.record(kind, "", identityPath, StatusSkipped, "no identity fields to restore", nil)
@@ -251,8 +235,7 @@ func (b *baseMigrator) writeIdentityFields(kind string, fields []IdentityField, 
 	b.record(kind, "", identityPath, StatusMigrated, "identity restored to IDENTITY.md", details)
 }
 
-// Memory entry utils: Hermes delimiter, markdown extraction, dedupe, char limit.
-// entryDelimiter matches Hermes memory file separator.
+// entryDelimiter is the Hermes memory entry separator.
 const entryDelimiter = "\n§\n"
 
 var (
@@ -262,20 +245,16 @@ var (
 	reMemFileNames = regexp.MustCompile(`(?i)\b(MEMORY|USER|SOUL|AGENTS|TOOLS|IDENTITY)\.md\b`)
 )
 
-// charLen counts unicode code points, matching Python len() on str so the char
-// limits behave identically across implementations.
+// charLen counts code points (matches Python len) for char limits.
 func charLen(s string) int { return utf8.RuneCountInString(s) }
 
-// normalizeText collapses whitespace runs to single spaces and trims; used as
-// the dedupe key for entries.
+// normalizeText collapses whitespace; the dedupe key for entries.
 func normalizeText(text string) string {
 	return reWhitespace.ReplaceAllString(strings.TrimSpace(text), " ")
 }
 
-// extractMarkdownEntries turns a markdown document into a flat, deduped list of
-// entries. Headings become an "A > B: " context prefix on entries beneath them;
-// bullets and paragraphs each become one entry; code blocks and table rows are
-// skipped. Direct port of the upstream extract_markdown_entries.
+// extractMarkdownEntries flattens markdown into deduped entries (heading "A > B: " prefix;
+// code blocks and tables skipped). Port of upstream extract_markdown_entries.
 func extractMarkdownEntries(text string) []string {
 	var entries []string
 	var headings []string
@@ -326,10 +305,7 @@ func extractMarkdownEntries(text string) []string {
 			continue
 		}
 
-		// Skip HTML comments. KNOWLEDGE.md ships `<!-- ... -->` placeholders under
-		// each empty section; those are scaffolding, never real memory, so they must
-		// not become entries when the file is folded into MEMORY.md. Handles both
-		// single-line and multi-line comments.
+		// Skip HTML comments: KNOWLEDGE.md placeholders must not become memory entries.
 		if inComment {
 			if strings.Contains(stripped, "-->") {
 				inComment = false
@@ -382,8 +358,7 @@ func extractMarkdownEntries(text string) []string {
 	return dedupeEntries(entries)
 }
 
-// dedupeEntries drops empty and normalize-equal duplicate entries, preserving
-// first-seen order and the original (un-normalized) text.
+// dedupeEntries drops empty and normalize-equal duplicates, keeping first-seen order.
 func dedupeEntries(entries []string) []string {
 	var out []string
 	seen := map[string]struct{}{}
@@ -401,8 +376,7 @@ func dedupeEntries(entries []string) []string {
 	return out
 }
 
-// parseEntries reads an existing memory file into entries. See parseEntriesText.
-// Returns nil for a missing or empty file.
+// parseEntries reads a memory file into entries; nil for missing or empty.
 func parseEntries(path string) []string {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -436,10 +410,8 @@ type mergeStats struct {
 	overflowed int
 }
 
-// mergeEntries appends incoming entries to existing ones, skipping normalize-equal
-// duplicates and stopping entries that would push the serialized length past
-// limit (returned as overflowed). Char counts use code points to match the
-// upstream char-limit semantics. Direct port of the upstream merge_entries.
+// mergeEntries appends non-duplicate incoming entries until limit (code points); the rest
+// are returned as overflowed. Port of upstream merge_entries.
 func mergeEntries(existing, incoming []string, limit int) ([]string, mergeStats, []string) {
 	merged := append([]string(nil), existing...)
 	seen := map[string]struct{}{}
@@ -505,12 +477,10 @@ func (f entryFormat) serialize(entries []string) string {
 			sb.WriteString("\n")
 		}
 		return sb.String()
-	default: // hermesFormat
+	default:
 		return strings.Join(entries, entryDelimiter) + "\n"
 	}
 }
-
-// Brand rewriting: keeps capitalization; lowercase stays lowercase.
 
 var reUpper = regexp.MustCompile(`[A-Z]`)
 

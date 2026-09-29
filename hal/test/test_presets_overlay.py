@@ -1,8 +1,4 @@
-"""Tests for the per-device preset overlay (board/presets_overlay.py).
-
-Pure logic, no hardware. The overlay mutates the module-level preset tables in
-place, so each test deep-copies and restores them to stay isolated.
-"""
+"""Tests for the per-device preset overlay (board/presets_overlay.py)."""
 import copy
 import json
 import os
@@ -21,7 +17,6 @@ class TestMergeTable(unittest.TestCase):
     def test_patches_only_named_fields(self):
         base = {"listening": {"color": [51, 121, 230], "effect": "pulse", "speed": 1.5}}
         _merge_table("emotion", base, {"listening": {"color": [255, 120, 0]}}, "demo")
-        # Only color changed; effect + speed kept from the base entry.
         self.assertEqual(base["listening"], {"color": [255, 120, 0], "effect": "pulse", "speed": 1.5})
 
     def test_leaves_other_entries_untouched(self):
@@ -46,8 +41,7 @@ class TestMergeTable(unittest.TestCase):
 
 class TestApplyDevicePresets(unittest.TestCase):
     def setUp(self):
-        # Snapshot the real module tables; restore after each test so mutation
-        # never leaks across tests (other test modules import these too).
+        # Snapshot and restore the real module tables so mutation never leaks across tests.
         self._emotion = copy.deepcopy(presets.EMOTION_PRESETS)
         self._scene = copy.deepcopy(presets.SCENE_PRESETS)
         self._aim = copy.deepcopy(presets.AIM_PRESETS)
@@ -84,7 +78,6 @@ class TestApplyDevicePresets(unittest.TestCase):
             count = apply_device_presets("demo", tmp)
         self.assertEqual(count, 60)
         self.assertEqual(presets.EMOTION_PRESETS["listening"]["color"], [255, 120, 0])
-        # Untouched field on the same entry survives.
         self.assertEqual(presets.EMOTION_PRESETS["listening"]["effect"],
                          self._emotion["listening"]["effect"])
 
@@ -93,7 +86,6 @@ class TestApplyDevicePresets(unittest.TestCase):
             self._write(tmp, "demo", {"status_led": {"booting": {"color": [10, 20, 30]}}})
             apply_device_presets("demo", tmp)
         self.assertEqual(presets.STATUS_LED_PRESETS["booting"]["color"], [10, 20, 30])
-        # effect/speed on the same entry survive the field-by-field merge.
         self.assertEqual(presets.STATUS_LED_PRESETS["booting"]["effect"],
                          self._status["booting"]["effect"])
 
@@ -142,8 +134,6 @@ class TestApplyDevicePresets(unittest.TestCase):
         self.assertEqual(presets.EMOTION_PRESETS["listening"]["color"], [1, 2, 3])
 
     def test_shipped_example_file_is_valid(self):
-        # The committed robots/_base/presets.example.json must always apply
-        # cleanly — it is the copy-paste reference, so a typo there is a bug.
         here = os.path.dirname(os.path.abspath(__file__))
         example = os.path.normpath(
             os.path.join(here, "..", "..", "robots", "_base", "presets.example.json")
@@ -158,14 +148,7 @@ class TestApplyDevicePresets(unittest.TestCase):
 
 class TestStatusLedPresetKeys(unittest.TestCase):
     def test_keys_match_go_status_states(self):
-        # These MUST equal every status name the Go side sends to HAL POST
-        # /led/status; a missing key → that status would 400 and show nothing:
-        #   - system/statusled State constants (incl. wifi_connecting during
-        #     POST /api/device/setup) + the "ready_flash" ready cue
-        #   - bootstrap OTA progress: ota_progress / ota_error / ota_success
-        #   - server.go setup-ready: setup
-        # Plus HAL-internal consumers: mic_muted is applied by /voice/mute
-        # (app_state), not by the Go side, but lives in the same preset table.
+        # Must equal every status name the Go side POSTs to HAL /led/status.
         expected = {
             "ota", "error", "booting", "connectivity", "wifi_connecting",
             "hal_down", "agent_down", "hardware", "ready_flash",
@@ -173,8 +156,6 @@ class TestStatusLedPresetKeys(unittest.TestCase):
             "mic_muted",
         }
         self.assertEqual(set(presets.STATUS_LED_PRESETS), expected)
-        # Every preset must name a real effect (or the "solid" persistent fill)
-        # + an RGB triple + a speed.
         for state, p in presets.STATUS_LED_PRESETS.items():
             self.assertTrue(p["effect"] == "solid" or p["effect"] in presets.VALID_LED_EFFECTS, state)
             self.assertEqual(len(p["color"]), 3, state)

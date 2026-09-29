@@ -13,10 +13,7 @@ from core.utils.files import get_default_cdn_url, get_default_model_path
 
 
 class VideoMAEModel(HumanActionRecognizer):
-    """VideoMAE ONNX model for action recognition.
-
-    Uses old ONNX export that outputs raw logits — softmax applied here.
-    """
+    """VideoMAE ONNX model for action recognition; the export outputs raw logits, so softmax is applied here."""
 
     DEFAULT_MODEL_PATH: Path | None = get_default_model_path(ModelEnum.VIDEOMAE_ONNX)
     DEFAULT_REMOTE_URL: str | None = get_default_cdn_url(ModelEnum.VIDEOMAE_ONNX)

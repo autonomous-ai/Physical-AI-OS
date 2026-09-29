@@ -1,9 +1,4 @@
-"""Configured level-driven mic-mute slide switch.
-
-Wiring and timing are injected from the device configuration. Boot synchronizes
-mic state with the switch; edges reconcile after settling. The watchdog only
-reconciles changed physical levels so software-only mute remains untouched.
-"""
+"""Configured level-driven mic-mute slide switch."""
 
 import logging
 import threading
@@ -37,13 +32,9 @@ class PrivacyButtonHandler:
         # _on_edge fire. Feeds the [mic-switch-trace] logs so operators can
         # tell "switch was slow" from "internal ops were slow" at a glance.
         self._last_edge_ts: float = 0.0
-        # Last pin level we actually applied to app_state. Set at boot-sync
-        # and every reconcile. The watchdog compares the CURRENT pin against
-        # this — a divergence means the lgpio callback thread missed an edge
-        # (silent stall) and we need to catch up. WITHOUT this compare the
-        # watchdog would blindly re-drive state to match the pin every 30s,
-        # which reverts software-only mutes (web UI / voice command) because
-        # the pin never moved. None until start() populates it.
+        # Last pin level we actually applied to app_state. The watchdog compares the
+        # CURRENT pin against this — a divergence means the lgpio callback thread missed
+        # an edge (silent stall) and we need to catch up.
         self._last_known_level: int | None = None
 
     def start(self):
@@ -82,14 +73,10 @@ class PrivacyButtonHandler:
             self.stop()
             return
 
-        # Sync boot-time state to the switch's current position. Without this,
-        # a device that boots with the switch already in "muted" would run
-        # with the mic hot until the user throws it once and back.
         try:
             initial_level = lgpio.gpio_read(self._handle, self._config.line)
         except Exception as e:
             logger.warning("Mic switch initial read failed: %s", e)
-            # Extended privacy fails closed; preserve legacy microphone fallback.
             initial_level = (self._config.muted_level if (
                 self._config.disable_camera_on_mute or self._config.mute_speaker_on_mute
             ) else 1 - self._config.muted_level)
@@ -103,13 +90,8 @@ class PrivacyButtonHandler:
             int(self._config.watchdog_s),
         )
 
-        # Boot-time sync runs SYNCHRONOUSLY (unlike the edge handler which
-        # threads off) so subsequent HAL init phases see the final mic state.
-        # Without this, a reboot with the switch already in "muted" would let
-        # voice_service start briefly listening before the mute lands, opening
-        # a ~hundreds-of-ms window where the mic is hot despite the hardware
-        # kill switch being off. The route call is idempotent and cheap
-        # (~tens of ms at most) so blocking start() here is worth it.
+        # Boot-time sync runs SYNCHRONOUSLY (unlike the edge handler which threads off)
+        # so subsequent HAL init phases see the final mic state.
         self._last_known_level = initial_level
         with self._apply_lock:
             self._apply_state_locked(initial_level == self._config.muted_level, initial=True)
@@ -150,12 +132,6 @@ class PrivacyButtonHandler:
                     self._handle = None
 
     def _on_edge(self, chip, gpio, level, tick):
-        # Restart the settle timer on every edge. The `level` param from
-        # lgpio is deliberately IGNORED here — bouncing contacts can call
-        # this several times with alternating levels within a few ms and
-        # the last one is not always the terminal position. Instead we
-        # re-read the pin in _reconcile after the bounce settles, so the
-        # applied state matches the switch's real end position.
         self._last_edge_ts = time.monotonic()
         logger.info("[mic-switch-trace] EDGE fired (level=%d, tick=%d)", level, tick)
         with self._timer_lock:
@@ -170,10 +146,9 @@ class PrivacyButtonHandler:
             t.start()
 
     def _reconcile(self):
-        """Read the pin now and drive HAL state to match. Called from the
-        settle Timer (after an edge storm quiets) and from the watchdog.
-        Runs under _apply_lock so concurrent triggers can't race the
-        underlying mute_mic() / unmute_mic() routes."""
+        """Read the pin now and drive HAL state to match. Runs under _apply_lock so
+        concurrent triggers can't race the underlying mute_mic() / unmute_mic() routes.
+        """
         t_lock_want = time.monotonic()
         with self._apply_lock:
             if self._stopped.is_set():
@@ -211,14 +186,13 @@ class PrivacyButtonHandler:
         )
 
     def _watchdog_loop(self):
-        """Periodic pin re-read to catch missed edges (lgpio callback thread
-        has been observed to stall silently under sustained edge storms).
-        Compares the CURRENT pin against the last level we applied — reconciles
-        ONLY on a divergence. Blindly forcing reconcile every tick would revert
-        software-only mutes (web UI, voice command, MQTT) because the physical
-        pin never moved from its idle position, but our state did — verified
-        2026-07-24: user muted via web, watchdog auto-unmuted 28s later because
-        pin_level=1 while state._mic_muted=True."""
+        """Periodic pin re-read to catch missed edges (lgpio callback thread has been
+        observed to stall silently under sustained edge storms).
+
+        Blindly forcing reconcile every tick would revert software-only mutes (web UI,
+        voice command, MQTT) because the physical pin never moved from its idle
+        position, but our state did.
+        """
         while not self._stopped.wait(self._config.watchdog_s):
             try:
                 with self._apply_lock:
@@ -229,9 +203,6 @@ class PrivacyButtonHandler:
                 logger.warning("Mic switch watchdog read failed: %s", e)
                 continue
             if self._last_known_level is None or current == self._last_known_level:
-                # Pin hasn't moved since last apply — callback (if fired) hasn't
-                # missed anything. Software may have mutated state._mic_muted
-                # via another channel; leave it alone.
                 continue
             logger.warning(
                 "Mic switch watchdog: pin state diverged (pin=%d, last_known=%d) — callback likely stalled, reconciling",
@@ -243,17 +214,12 @@ class PrivacyButtonHandler:
                 logger.warning("Mic switch watchdog reconcile failed: %s", e)
 
     def _paint_listening_after_cue(self):
-        """Fire the blue LISTENING pulse after the unmute "I'm listening"
-        TTS cue finishes so the strip settles on a clear "ready to listen"
-        cue instead of the warm-white last-frame from the TTS wave.
+        """Fire the blue LISTENING pulse after the unmute "I'm listening" TTS cue finishes
+        so the strip settles on a clear "ready to listen" cue instead of the warm-white
+        last-frame from the TTS wave.
 
-        Poll _tts_speaking (up to 5s) rather than sleeping a fixed delay:
-        the cached clip is ~740ms but launch latency varies (thread
-        startup + first-audio jitter), and a fixed 1.5s wait was landing
-        WHILE the wave was still painting → _apply_emotion_led_display's
-        "Emotion LED skipped -- TTS speaking_wave active" guard swallowed
-        the paint and blue never appeared. Also bail if the user re-muted
-        or music started meanwhile."""
+        Poll _tts_speaking (up to 5s) rather than sleeping a fixed delay.
+        """
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline:
             if self._stopped.is_set() or state._hw_mic_switch_muted is True or state._mic_muted:
@@ -282,19 +248,13 @@ class PrivacyButtonHandler:
             logger.warning("mic switch unmute listening cue failed: %s", e)
 
     def _apply_state_locked(self, muted: bool, *, initial: bool = False):
-        """Push mic state to match the switch position. Idempotent — if HAL
-        state already matches (web admin just set it, or start-up sync
-        found the correct value), skip the route call to avoid log spam
-        and needless voice-service restarts.
+        """Push mic state to match the switch position.
 
-        MUST be called with _apply_lock held (or from single-threaded
-        contexts like boot init) so the check-then-write on state._mic_muted
-        isn't racy against another edge/watchdog reconcile.
+        MUST be called with _apply_lock held (or from single-threaded contexts like boot
+        init) so the check-then-write on state._mic_muted isn't racy against another
+        edge/watchdog reconcile.
         """
-        # Publish the physical switch position BEFORE the idempotency skip:
-        # /voice/status and single_click_action guards read this flag, so a
-        # boot-time sync where the sidecar already agrees with the switch
-        # still needs to advertise "HW-locked" to the web.
+        # Publish the physical switch position BEFORE the idempotency skip.
         state._hw_mic_switch_muted = muted
 
         extended = self._config and (
@@ -325,22 +285,10 @@ class PrivacyButtonHandler:
                 return
             if muted:
                 logger.info("mic switch → muting")
-                # Order matters. Do the fast quiet-me ops FIRST (stop_tts,
-                # audio_stop each ~10ms) BEFORE painting red, because
-                # audio_stop unconditionally invokes _on_music_complete
-                # which, when the user has no saved LED state, tramples the
-                # current effect and starts its own "idle breathing"
-                # fallback (routes/music.py) — that would kill the red the
-                # instant we painted it. Painting AFTER means the red is
-                # the LAST effect started, so nothing races it. mute_mic
-                # (slow, seconds — voice_service.stop() session teardown)
-                # still runs last so the visual feedback is not gated on it.
                 stop_tts()
                 from hal.routes.music import audio_stop
 
                 audio_stop()
-                # Now paint. force also overlays a live TTS/music wave, so
-                # even a mid-utterance throw gets immediate red feedback.
                 state._apply_mic_muted_led(force=True)
                 mute_mic()
             else:
@@ -350,16 +298,10 @@ class PrivacyButtonHandler:
                 # hot — kill it immediately, even mid-wave.
                 state._clear_mic_muted_led(force=True)
                 logger.info("[mic-switch-trace] unmute step1 clear_red done +%.0fms", (time.monotonic() - t0) * 1000)
-                # Reuse the 1-tap action instead of a bare unmute_mic():
-                # wake-if-sleepy + relax speaker mute + unmute mic + ack
-                # chime + localized "I'm listening" cue — the slide switch
-                # gets the same feedback set as the button/touchpad.
                 from hal.drivers.button_actions import single_click_action
 
                 t_sca = time.monotonic()
                 if extended:
-                    # Wake while the peripheral gates remain closed, then restore
-                    # the user's camera/speaker preferences before playing the cue.
                     try:
                         single_click_action("privacy-switch", announce=False, chime=False,
                                             unmute_output=False)
@@ -371,17 +313,6 @@ class PrivacyButtonHandler:
                 else:
                     single_click_action("mic-switch")
                 logger.info("[mic-switch-trace] unmute step2 single_click_action done +%.0fms (cumul=%.0fms)", (time.monotonic() - t_sca) * 1000, (time.monotonic() - t0) * 1000)
-                # After unmute the natural resting look is warm-white
-                # ambient because _user_led_state is None on fresh boots —
-                # the "listening" blue pulse only fires when speech is
-                # actually detected (voice_service.py). Users read that
-                # gap as "did unmute even work?" Paint the blue listening
-                # indicator NOW so the transition red → blue is instant.
-                # Delayed ~1.5s so the "I'm listening" TTS cue (~1s
-                # cached clip) finishes first — otherwise its speaking-
-                # wave overlays and immediately hides the blue. force_led
-                # skips the background-emotion "respect user state" guard
-                # (LISTENING is a background emotion).
                 threading.Thread(
                     target=self._paint_listening_after_cue,
                     daemon=True,

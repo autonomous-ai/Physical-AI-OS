@@ -1,10 +1,4 @@
-"""Frame downscale + bbox coordinate mapping.
-
-The whole vision pipeline (ViT tracker + every detector) runs on a frame
-downscaled to VISION_MAX_WIDTH; every bbox is mapped back to ORIGINAL camera
-coordinates before any servo/PID math, so pixel-tuned constants never need
-re-tuning when the downscale factor changes.
-"""
+"""Frame downscale + bbox coordinate mapping."""
 
 from typing import Tuple
 
@@ -16,12 +10,7 @@ from hal.drivers.tracking import constants as C
 
 
 def downscale(frame: npt.NDArray[np.uint8]) -> Tuple[npt.NDArray[np.uint8], float]:
-    """Return (small_frame, scale) with scale = small_w / orig_w (≤ 1.0).
-
-    No-op (returns the frame and scale 1.0) when downscale is disabled or the
-    frame is already within VISION_MAX_WIDTH. INTER_AREA is the correct
-    interpolation for shrinking (avoids aliasing that would jitter the bbox).
-    """
+    """Return (small_frame, scale) with scale = small_w / orig_w (≤ 1.0)."""
     if not C.VISION_MAX_WIDTH:
         return frame, 1.0
     h, w = frame.shape[:2]

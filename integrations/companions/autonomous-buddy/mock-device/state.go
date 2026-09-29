@@ -10,8 +10,7 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// PairingRecord is what the device persists for each paired buddy.
-// In production this would live in `config/buddies.json`; the mock keeps it in memory.
+// PairingRecord is what the device persists for each paired buddy (in memory here).
 type PairingRecord struct {
 	Token       string `json:"token"`
 	BuddyID     string `json:"buddy_id"`
@@ -20,10 +19,7 @@ type PairingRecord struct {
 	OSVersion   string `json:"os_version"`
 }
 
-// State holds all server-side state: the pending pairing code, the (single) paired buddy,
-// the current WebSocket, and the table of in-flight requests waiting for their response.
-//
-// Mirrors what the device's `system/buddy/service.go` + `registry.go` + `pairing.go` will look like.
+// State holds the pending pairing code, the single paired buddy, the WebSocket and in-flight requests.
 type State struct {
 	mu      sync.Mutex
 	code    string
@@ -70,10 +66,7 @@ func (s *State) savePairing(record PairingRecord) {
 	s.paired = &record
 }
 
-// clearPairing drops the in-memory pairing record + closes the WS if one is
-// open. Mirrors production `Service.Unpair`: used when the buddy app itself
-// initiates an unpair (via DELETE /api/buddy/self) so the mock matches Pi
-// behaviour during local dev.
+// clearPairing drops the pairing record and closes the WS if open.
 func (s *State) clearPairing() {
 	s.mu.Lock()
 	ws := s.ws
@@ -156,8 +149,6 @@ func (s *State) cancelPending(id string) {
 	delete(s.pending, id)
 	s.mu.Unlock()
 }
-
-// MARK: random helpers
 
 func newCode() string {
 	b := make([]byte, 4)

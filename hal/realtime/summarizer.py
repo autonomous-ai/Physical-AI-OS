@@ -26,9 +26,7 @@ class RealtimeSummarizer:
         max_tokens: int = 4096,
         disable_thinking: bool = False,
     ) -> None:
-        # anthropic imports lazily on first summarize(): the SDK costs ~1.3s of
-        # import time on device and every summarize() runs on a background
-        # thread, so cold boot shouldn't pay for it.
+        # anthropic is imported lazily (~1.3s on device) so cold boot doesn't pay for it.
         self._api_key = api_key
         self._base_url = base_url
         self._client = None
@@ -39,7 +37,6 @@ class RealtimeSummarizer:
         self._max_tokens: int = max_tokens
         self._disable_thinking = disable_thinking
         if system_prompt is not None:
-            # Another task on the same endpoint (e.g. Harness speech rendering).
             self._system_prompt = system_prompt
             return
         try:
@@ -67,20 +64,7 @@ class RealtimeSummarizer:
 
     @staticmethod
     def _log_failure_evidence(exc: BaseException) -> None:
-        """Say what the SERVER actually sent when a call fails.
-
-        The bare `%s` of an exception is often useless here: a proxy that
-        answers with a compressed or binary body surfaces only as
-        "'utf-8' codec can't decode byte 0xc4 in position 4" (device-observed
-        03/09/2026), which names neither the endpoint's status nor the body it
-        choked on. Decoding fails before the SDK can wrap it in an APIError, so
-        there is no status code on the exception either — the bytes are the only
-        evidence, and without them the next reader cannot tell a gzip/brotli
-        mismatch from an HTML error page or a truncated response.
-
-        Best-effort by construction: diagnostics must never replace the original
-        failure with one of their own.
-        """
+        """Log what the server actually sent when a call fails (best-effort; never masks the failure)."""
         try:
             if isinstance(exc, UnicodeDecodeError):
                 raw = exc.object or b""
@@ -112,11 +96,7 @@ class RealtimeSummarizer:
             logger.debug("[realtime] Summarizer: failure diagnostics unavailable: %s", diag_error)
 
     def summarize(self, entries: list[str]) -> str:
-        """Summarize a list of text entries into a concise summary.
-
-        Returns the summary text, or an empty string if entries are empty
-        or the API call fails.
-        """
+        """Summarize text entries; returns '' if entries are empty or the call fails."""
         entries = [e.strip() for e in entries if e.strip()]
         if not entries:
             return ""
@@ -126,22 +106,8 @@ class RealtimeSummarizer:
             logger.info("[realtime] Truncating summarizer input: %d → %d chars", len(user_content), self.MAX_INPUT_CHARS)
             user_content = user_content[-self.MAX_INPUT_CHARS :]
 
-        # Streaming, deliberately — not for latency. The gateway's NON-streaming
-        # /v1/messages answers with a binary body while labelling it
-        # `application/json; charset=utf-8`, so the SDK dies decoding it before
-        # it can even raise an APIError (device-observed 03/09/2026: every
-        # summarization failed with "'utf-8' codec can't decode byte 0xc4").
-        # Probed on device with Accept-Encoding identity/gzip and with/without
-        # `anthropic-version`: the body is binary either way, and it is NOT
-        # transport compression. The SSE path on the same endpoint returns clean
-        # `event: message_start` text, which is why web chat and the delegate
-        # agent never saw this. The gateway is still wrong; this stops the
-        # summarizer being the one caller that has to wait for the fix.
-        # Retried because the failures are the gateway's, not the input's: the
-        # same payload has returned 404 once and then succeeded on the next
-        # attempts, while the LARGER payload containing it went through first
-        # time (measured on lamp-0c89, 03/09/2026). A dropped call otherwise
-        # costs the whole summary until the next session rebuild.
+        # Streaming on purpose: the gateway's non-streaming /v1/messages returns a binary body
+        # labelled JSON. Retried because the gateway fails intermittently.
         attempts = max(self._retries, 0) + 1
         backoff = self._retry_backoff_s
         for attempt in range(1, attempts + 1):
@@ -164,9 +130,7 @@ class RealtimeSummarizer:
                         chunks.append(text)
                 summary: str = "".join(chunks).strip()
                 if not summary:
-                    # HTTP 200 is not proof of a usable summary. The proxy can
-                    # exhaust output tokens before emitting any text. Return
-                    # promptly so the announcer can use its local fallback.
+                    # HTTP 200 is not proof of a usable summary: the proxy can exhaust tokens before any text.
                     final = stream.get_final_message()
                     logger.warning(
                         "[realtime] Empty summarizer response: stop_reason=%s "

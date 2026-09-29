@@ -1,33 +1,6 @@
-"""
-Per-device preset overlay.
+"""Per-device preset overlay: deep-merge a sparse robots/<type>/presets.json onto the base tables in place.
 
-The base preset tables in ``hal.presets`` (``EMOTION_PRESETS``, ``SCENE_PRESETS``,
-``AIM_PRESETS``) are the platform default — every device gets them. A device may
-override only the values it wants different by shipping a sparse
-``robots/<type>/presets.json``; this module deep-merges that delta onto the base
-tables IN PLACE at startup, before any route or driver reads them. A device with
-no ``presets.json`` keeps the base verbatim.
-
-"Declare what's different" — the same philosophy as ``robots/_base`` inheritance,
-applied to look/behaviour values (LED colors, scene mixes, servo aim positions).
-This is HAL-only: the OS core (Go) does not read presets, so unlike capability
-inheritance there is no cross-language parser to keep in sync.
-
-Override file shape (every section optional)::
-
-    {
-      "led_count": 60,
-      "emotion": { "listening": { "color": [255, 120, 0] } },
-      "scene":   { "relax":     { "brightness": 0.3 } },
-      "aim":     { "desk":      { "base_pitch.pos": 8.0 } }
-    }
-
-Each entry patches the matching base entry field-by-field: only the fields named
-in the override change; everything else stays at the base value. An override that
-names a preset absent from the base table is a typo (or a preset that does not
-exist) → fail loud, mirroring ROBOT.md / SAFETY.md strictness. Field names within
-an entry are intentionally permissive (the base entries themselves vary, e.g. some
-emotions carry a "camera" key and some do not), so a device may add a field.
+Example: {"emotion": {"listening": {"color": [255, 120, 0]}}, "led_count": 60}
 """
 import json
 import logging
@@ -44,12 +17,10 @@ from hal.presets import (
 
 logger = logging.getLogger(__name__)
 
-# LED ring size when a device declares none. The lamp reference ring is 64;
-# devices with a different ring (e.g. intern-v2's 8) override via presets.json.
+# Lamp reference ring; other rings (e.g. intern-v2's 8) override via presets.json.
 DEFAULT_LED_COUNT = 64
 
-# Override section name -> the base table it patches. Mutated in place so every
-# module that imported the table by reference sees the merged values.
+# Mutated in place so modules that imported the tables by reference see merged values.
 _TABLES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "emotion": EMOTION_PRESETS,
     "scene": SCENE_PRESETS,
@@ -60,9 +31,7 @@ _TABLES: Dict[str, Dict[str, Dict[str, Any]]] = {
 
 
 def _merge_table(name: str, base: Dict[str, Dict], override: Any, device_type: str) -> None:
-    """Deep-merge ``override`` onto ``base`` in place, one level deep. Each
-    override entry patches an existing base entry field-by-field. An override key
-    with no matching base entry fails loud — the common, silent-no-op typo."""
+    """Deep-merge ``override`` onto ``base`` in place, one level deep; unknown keys fail loud."""
     if not isinstance(override, dict):
         raise ValueError(
             f"presets.json '{name}' for device '{device_type}' must be an object, "
@@ -83,11 +52,9 @@ def _merge_table(name: str, base: Dict[str, Dict], override: Any, device_type: s
 
 
 def apply_device_presets(device_type: str, devices_dir: str) -> int:
-    """Overlay ``robots/<device_type>/presets.json`` onto the base preset tables
-    in place and return the device's LED count (``DEFAULT_LED_COUNT`` if unset).
+    """Overlay the device presets.json onto the base tables; return the LED count.
 
-    Missing file → base tables unchanged, default LED count. A malformed file or an
-    override of a non-existent preset → fail loud (a deploy fault, like ROBOT.md).
+    Missing file keeps the base; a malformed file or unknown preset fails loud.
     """
     path = os.path.join(devices_dir, device_type, "presets.json")
     if not os.path.exists(path):
@@ -95,7 +62,7 @@ def apply_device_presets(device_type: str, devices_dir: str) -> int:
         return DEFAULT_LED_COUNT
 
     with open(path, "r", encoding="utf-8") as f:
-        data = json.load(f)  # JSONDecodeError → fail loud
+        data = json.load(f)
     if not isinstance(data, dict):
         raise ValueError(f"presets.json for device '{device_type}' must be a JSON object")
 

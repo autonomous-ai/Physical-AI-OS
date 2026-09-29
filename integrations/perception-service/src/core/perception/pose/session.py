@@ -81,18 +81,13 @@ class PosePerceptionSession(
 
     @override
     async def update(self, input: cv2t.MatLike) -> PoseDetection | None:
-        """Run pose estimation on a single frame.
-
-        Returns PoseDetection with 2D (always), optional 3D and ergo,
-        or None if rate-limited.
-        """
+        """Run pose estimation (2D, optional 3D and ergo) on one frame; None if rate-limited."""
         cur_ts: float = time.time()
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction
 
         estimator_2d = cast(PoseEstimator2D, self._pose2d_batcher.predictor)
 
-        # 2D estimation via batcher
         futures_2d = await self._pose2d_batcher.submit([input])
         raw_2d: RawPose2DDetection = await futures_2d[0]
 
@@ -108,11 +103,9 @@ class PosePerceptionSession(
 
         result: PoseDetection = PoseDetection(pose_2d=pose_2d)
 
-        # Check if enough keypoints are confident for downstream
         num_valid: int = int((confs >= self._config.confidence_threshold_2d).sum())
         has_valid_pose: bool = num_valid >= self._config.min_valid_keypoints
 
-        # Optional 3D lifting (2D graph -> lifter graph)
         lifter_kps: npt.NDArray[np.float32] | None = None
         lifter_scores: npt.NDArray[np.float32] | None = None
         if self._pose3d_batcher is not None and has_valid_pose:
@@ -155,7 +148,6 @@ class PosePerceptionSession(
                     confs=[float(c) for c in lifter_scores[0]],
                 )
 
-        # Optional ergo assessment
         if self._ergo_batcher is not None and has_valid_pose:
             ergo_assessor = cast(ErgoAssessor, self._ergo_batcher.predictor)
             ergo_graph: GraphEnum = ergo_assessor.GRAPH_TYPE

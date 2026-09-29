@@ -1,8 +1,6 @@
 import Foundation
 
-// Returns a short, human-readable description of a command for the Activity
-// window and audit log. Keeps it tight (~one line) so the running list stays
-// scannable — full payloads are still in the on-disk audit and the WS frames.
+// One-line human-readable command description for the Activity window and audit log.
 enum CommandSummary {
     static func describe(action: String, params: [String: Any]) -> String {
         switch action {

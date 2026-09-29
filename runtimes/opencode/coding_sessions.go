@@ -12,23 +12,11 @@ import (
 	"time"
 )
 
-// Coding-session (opencode session) discovery for the Telegram remote-coding
-// feature (telegram_coding.go). opencode stores its sessions under
-// ~/.local/share/opencode in an internal format — NOT the parseable per-folder
-// rollout transcripts codex used — so there is no on-disk cwd we can recover to
-// build a cross-folder "resumable sessions" list. `opencode session list` exists
-// (table/JSON output, --max-count) but its JSON shape and directory scoping are
-// unconfirmed, and it lists sessions for the current runtime context by default
-// rather than every folder on the device. Until that is verified on-device,
-// discovery is degraded to empty (allCodingSessions returns nil); /new <folder>
-// plus per-turn resume via `--session <id>` still work. The retained helpers
-// (normalizeFolder, humanizeAgo, oneLine) and the codingSession type keep
-// telegram_coding.go's /resume + /use flow compiling and behaving sanely (an
-// empty list yields a "no sessions yet" message).
+// opencode stores its sessions under ~/.local/share/opencode in an internal format — NOT the
+// parseable per-folder rollout transcripts codex used — so there is no on-disk cwd we can recover
+// to build a cross-folder "resumable sessions" list.
 
-// codingSession is one resumable opencode session. Discovery is currently
-// degraded (see allCodingSessions), so these are only ever populated by an
-// explicit selection, not by on-disk scanning.
+// codingSession is one resumable opencode session.
 type codingSession struct {
 	Folder    string    // working dir — passed to `opencode run --dir`
 	SessionID string    // opencode session id — passed to `opencode run --session <id>`
@@ -44,27 +32,19 @@ func (c codingSession) label() string {
 	return "(no description)"
 }
 
-// codingSessionListTimeout bounds the `opencode session list` call. The CLI
-// reads its SQLite session store locally (no network) so this is generous —
-// most invocations return in <100ms even on the OrangePi.
+// codingSessionListTimeout bounds the `opencode session list` call.
 const codingSessionListTimeout = 5 * time.Second
 
 // codingSessionExcludeDirs lists working-directory prefixes that DO NOT
-// represent a user-visible coding thread. These are opencode contexts owned by
-// the gatewayd (device chat) and the presync workspace default; surfacing them
-// under `/sessions` would confuse the operator ("I never made these threads").
-// User-created threads live in their own folders (e.g. /root/myapp, /root/src).
+// represent a user-visible coding thread.
 var codingSessionExcludeDirs = []string{
-	"/root/.opencode/workspace", // device-chat runtime, owned by gatewayd
+	"/root/.opencode/workspace",
 }
 
 // allCodingSessions returns every resumable user coding session, most-recent
-// first. Implementation shells out to `opencode session list --format json`
-// (verified on device 2026-07-23: opencode 1.18.4 emits {id, title, updated,
-// directory, ...}) and filters out device-chat / gatewayd contexts so the
-// Telegram `/sessions` list shows only threads the user actually opened. On
-// any failure (CLI missing, timeout, JSON shape change) returns nil so the
-// list is empty-but-consistent rather than a stale/partial view.
+// first.
+// On any failure (CLI missing, timeout, JSON shape change) returns nil so the list is
+// empty-but-consistent rather than a stale/partial view.
 func (s *OpenCodeService) allCodingSessions() []codingSession {
 	ctx, cancel := context.WithTimeout(context.Background(), codingSessionListTimeout)
 	defer cancel()
@@ -108,8 +88,6 @@ func (s *OpenCodeService) allCodingSessions() []codingSession {
 			Recent:    recent,
 		})
 	}
-	// CLI already returns newest-first, but sort defensively so a future opencode
-	// release that changes ordering doesn't silently break /sessions.
 	sort.SliceStable(result, func(i, j int) bool {
 		return result[i].Modified.After(result[j].Modified)
 	})
@@ -118,8 +96,7 @@ func (s *OpenCodeService) allCodingSessions() []codingSession {
 
 // isExcludedCodingDir reports whether a session's working directory belongs to
 // the device-chat / gatewayd territory and should be hidden from the Telegram
-// coding list. Uses prefix matching so subpaths under an excluded root (e.g.
-// /root/.opencode/workspace/tmp) are also filtered.
+// coding list.
 func isExcludedCodingDir(dir string) bool {
 	clean := filepath.Clean(dir)
 	for _, prefix := range codingSessionExcludeDirs {
@@ -131,13 +108,12 @@ func isExcludedCodingDir(dir string) bool {
 }
 
 // codingFolders returns the NEWEST session per folder, most-recent folder first
-// — the default /sessions view (one line per project). Empty while discovery is
-// degraded.
+// — the default /sessions view (one line per project).
 func (s *OpenCodeService) codingFolders() []codingSession {
 	all := s.allCodingSessions()
 	seen := map[string]bool{}
 	var out []codingSession
-	for _, cs := range all { // already newest-first, so the first hit per folder wins
+	for _, cs := range all {
 		if seen[cs.Folder] {
 			continue
 		}
@@ -147,8 +123,7 @@ func (s *OpenCodeService) codingFolders() []codingSession {
 	return out
 }
 
-// folderSessions returns all sessions in one folder, newest first. Empty while
-// discovery is degraded.
+// folderSessions returns all sessions in one folder, newest first.
 func (s *OpenCodeService) folderSessions(folder string) []codingSession {
 	folder = normalizeFolder(folder)
 	var out []codingSession
@@ -161,7 +136,7 @@ func (s *OpenCodeService) folderSessions(folder string) []codingSession {
 }
 
 // latestSessionForFolder returns the newest session in folder (ok=false if
-// none). Always ok=false while discovery is degraded.
+// none).
 func (s *OpenCodeService) latestSessionForFolder(folder string) (codingSession, bool) {
 	sessions := s.folderSessions(folder)
 	if len(sessions) == 0 {

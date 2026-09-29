@@ -11,8 +11,6 @@ import (
 
 func TestSoftwareUpdateAckStartedIsTerminalSuccess(t *testing.T) {
 	status, errMsg, data := softwareUpdateAck("agent", "hermes", nil)
-	// The backend's listen mode waits for a terminal status; "success" with
-	// state "started" is what ends it.
 	if status != "success" || errMsg != "" {
 		t.Fatalf("status=%q err=%q", status, errMsg)
 	}

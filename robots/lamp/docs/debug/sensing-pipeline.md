@@ -201,7 +201,7 @@ The agent is LLM-driven so "the code is correct" doesn't guarantee "the agent co
 ### 6.1 Agent skips mood logging entirely
 **Symptom:** `tool_call` trace contains no `/api/mood/log` call. Mood JSONL empty despite events firing.
 **Diagnose:** grep `tool_call` for `mood/log` — zero hits.
-**Fix path:** strengthen MANDATORY directive in `system/server/sensing/delivery/http/handler.go` and `user-emotion-detection/SKILL.md` to explicitly chain to Mood skill.
+**Fix path:** strengthen MANDATORY directive in `system/server/sensing/delivery/http/handler.go` and `skills/user-emotion-detection/SKILL.md` to explicitly chain to Mood skill.
 
 ### 6.2 Agent bijas mood payload schema
 **Symptom:** `POST /api/mood/log` returns `Field validation for 'Mood' failed on the 'required' tag`.
@@ -217,7 +217,7 @@ The agent is LLM-driven so "the code is correct" doesn't guarantee "the agent co
 ### 6.4 Agent narrates plan/thinking into TTS
 **Symptom:** TTS says *"Leo's hydration cron exists but no break cron. Need to create break cron for unknown + hydration & break for unknown, then post mood decision. Now create both wellbeing crons + log activity: Someone's having a good laugh! 😄"*
 **Diagnose:** grep `tts_send` nodes — look for "Need to…", "Now I'll…", "Since X, I should…" patterns before the caring line.
-**Fix path:** explicit rule in `SOUL.md` and `sensing/SKILL.md` — reply text is spoken verbatim, all planning MUST stay in `thinking`.
+**Fix path:** explicit rule in `SOUL.md` and `skills/sensing/SKILL.md` — reply text is spoken verbatim, all planning MUST stay in `thinking`.
 
 ### 6.5 Wellbeing nudge logic (historical evolution)
 **Original:** cron-based — the agent created 2 cron jobs on first sedentary and frequently created only one.
@@ -229,7 +229,7 @@ The agent is LLM-driven so "the code is correct" doesn't guarantee "the agent co
 
 ### 6.6 Music suggestion didn't fire after sedentary
 **Symptom:** `sedentary` event but no new row in `users/<user>/music-suggestions/`.
-**Diagnose:** check last suggestion timestamp — if `< 30 min ago`, this is **correct** (30-min cooldown per `music/SKILL.md:117`). Not a bug.
+**Diagnose:** check last suggestion timestamp — if `< 30 min ago`, this is **correct** (30-min cooldown per `skills/music/SKILL.md:117`). Not a bug.
 
 ---
 

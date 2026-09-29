@@ -122,7 +122,7 @@ def test_incomplete_pause_keeps_one_session_and_merges_final_segments(monkeypatc
     detector.poll.side_effect = [False, True]
     frames = [
         (1, True, "Please arrange the trip"),
-        (4, False, None),  # Model says incomplete, beyond ordinary fallback.
+        (4, False, None),
         (5, True, "and reserve a hotel"),
         (8, False, None),
     ]
@@ -152,8 +152,7 @@ def test_unchanged_final_refreshes_model_with_recorded_quiet_tail(monkeypatch):
         assert detector.submit.call_count == 2
         first, refreshed = detector.submit.call_args_list
         assert first.args[0] != refreshed.args[0]
-        # The new snapshot includes audio beyond four post-RMS frames. It is
-        # not the identical clipped PCM that produced INCOMPLETE earlier.
+        # The new snapshot extends past four post-RMS frames, unlike the clipped PCM before.
         assert len(first.args[1]) == 2 * 2048
         assert len(refreshed.args[1]) == len(frames) * 2048
         result.stt.close.assert_called_once()

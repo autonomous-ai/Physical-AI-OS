@@ -23,52 +23,36 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// Device-side wrapper around the Autonomous Agent Skills catalog (public read
-// API, see agent-skills-public-api.md). The web UI's chat composer
-// ("+" → Skills → Browse skills) goes through here rather than calling the
-// catalog directly — same rationale as GET /api/plugin/browse: no CORS
-// round-trip, and the catalog host stays a server-side concern.
+// Device-side proxy for the Agent Skills catalog, so the web UI avoids CORS.
 
 const (
-	// skillStoreTimeout bounds a listing fetch, skillDownloadTimeout an archive
-	// download (bigger body, so a longer budget).
 	skillStoreTimeout    = 10 * time.Second
 	skillDownloadTimeout = 30 * time.Second
 )
 
-// Bundle extraction caps. Skills are small (a SKILL.md plus a handful of
-// reference files), so these are generous ceilings that exist to keep a hostile
-// or broken archive from exhausting device memory/disk, not to constrain real
-// content.
+// Caps that keep a hostile or broken archive from exhausting memory/disk.
 const (
 	maxBundleBytes = 16 << 20 // downloaded archive
 	maxFileBytes   = 2 << 20  // one extracted file
 	maxBundleFiles = 500
-	// Store listing pagination is bounded so a malformed upstream `total` cannot
-	// turn opening Manage skills into an unbounded series of device requests.
+	// Bounds pagination against a malformed upstream `total`.
 	storeMatchPageSize = 100
 	maxStoreMatchPages = 50
 )
 
-// storeEnvelope is the catalog's JSON wrapper. Business failures come back with
-// HTTP 200 and a non-1 status, so every caller must check Status — not just the
-// HTTP code.
+// storeEnvelope is the catalog's JSON wrapper; failures return HTTP 200 with Status != 1.
 type storeEnvelope struct {
 	Status  int             `json:"status"`
 	Message string          `json:"message"`
 	Data    json.RawMessage `json:"data"`
 }
 
-// storeGet delegates to the shared catalog client in system/skills — the MQTT
-// downlink needs the same transport, and one copy means the two paths can't
-// drift on host, header or limits.
+// storeGet delegates to the shared catalog client in system/skills.
 func storeGet(path string, query url.Values, timeout time.Duration, maxBytes int64) ([]byte, error) {
 	return skills.StoreGet(path, query, timeout, maxBytes)
 }
 
-// ListSkills handles GET /api/agent/skills. Returns the skills present in the
-// ACTIVE runtime's skills dir, each with its file tree — the Manage-skills UI.
-// A runtime with no device-readable skills dir answers 501.
+// ListSkills handles GET /api/agent/skills: the active runtime's installed skills (501 if unsupported).
 func (h *AgentHandler) ListSkills(c *gin.Context) {
 	list, err := h.agentGateway.ListSkills()
 	if errors.Is(err, domain.ErrNotSupportedByRuntime) {
@@ -86,8 +70,7 @@ func (h *AgentHandler) ListSkills(c *gin.Context) {
 	}
 	if len(list) > 0 {
 		if err := h.annotateStoreAvailability(list); err != nil {
-			// Listing local skills remains useful when the catalog is offline. Do
-			// not call a skill device-only unless the whole catalog was read.
+			// Never label device_only unless the whole catalog was read.
 			slog.Warn("[skills] store availability unknown", "component", "agent-http", "error", err)
 			for i := range list {
 				list[i].StoreAvailability = "unknown"
@@ -97,11 +80,8 @@ func (h *AgentHandler) ListSkills(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(list))
 }
 
-// annotateStoreAvailability marks installed skills that can also be found in
-// the current catalog. Runtime skill directories do not retain a catalog ID,
-// so this deliberately compares normalized directory names with catalog slugs
-// and names. It must either read the complete catalog or return an error: a
-// partial catalog could incorrectly label a store skill as device-only.
+// annotateStoreAvailability marks installed skills found in the catalog by
+// normalized name; it reads the complete catalog or returns an error.
 func (h *AgentHandler) annotateStoreAvailability(installed []domain.InstalledSkill) error {
 	storeNames := make(map[string]struct{})
 	for page := 1; page <= maxStoreMatchPages; page++ {
@@ -144,9 +124,7 @@ func (h *AgentHandler) annotateStoreAvailability(installed []domain.InstalledSki
 	return fmt.Errorf("catalog exceeds %d pages", maxStoreMatchPages)
 }
 
-// normalizeSkillName makes a runtime directory such as "computer-use" match
-// a catalog name such as "Computer Use" without treating punctuation as part
-// of the identity. Catalog IDs are not preserved by runtime skill directories.
+// normalizeSkillName lowercases and keeps only [a-z0-9], e.g. "Computer Use" -> "computeruse".
 func normalizeSkillName(value string) string {
 	var b strings.Builder
 	for _, r := range strings.ToLower(strings.TrimSpace(value)) {
@@ -157,10 +135,7 @@ func normalizeSkillName(value string) string {
 	return b.String()
 }
 
-// ReadSkillFiles handles GET /api/agent/skills/files?name=<skill>. Returns one
-// installed skill's files with text inlined — the Manage-skills detail view,
-// deliberately the same `domain.SkillBundle` shape the store preview returns so
-// both render through one component.
+// ReadSkillFiles handles GET /api/agent/skills/files?name=<skill>, returning a SkillBundle.
 func (h *AgentHandler) ReadSkillFiles(c *gin.Context) {
 	name := strings.TrimSpace(c.Query("name"))
 	if name == "" {
@@ -178,8 +153,6 @@ func (h *AgentHandler) ReadSkillFiles(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	case err != nil:
-		// A missing skill is the common case here (stale listing), so this is a
-		// 404 rather than a 500.
 		c.JSON(http.StatusNotFound, serializers.ResponseError(err.Error()))
 		return
 	}
@@ -260,23 +233,8 @@ func (h *AgentHandler) PublishSkill(c *gin.Context) {
 	c.Data(http.StatusOK, "application/json", data)
 }
 
-// UploadSkill handles POST /api/agent/skills/upload — a skill supplied from the
-// operator's machine, installed into the ACTIVE runtime's skills dir. Same
-// destination and same replace semantics as installing from the catalog; only the
-// source of the bytes differs.
-//
-// Accepted inputs mirror the upstream skill format (anthropics/skills):
-//
-//	.zip / .skill  an archive that MUST contain SKILL.md at the skill root
-//	.md            a bare SKILL.md whose YAML front-matter MUST carry name +
-//	               description — that name is what the skill is installed as
-//
-// Both requirements are enforced device-side, so a malformed upload is rejected
-// with a 400 instead of installing something the agent can never load.
-//
-// Multipart (field `file`) rather than the base64-in-JSON this repo uses for face
-// enrollment: that carries a small JPEG, whereas a skill archive can run to
-// megabytes, and base64 would inflate it by a third for no gain.
+// UploadSkill handles POST /api/agent/skills/upload (multipart field `file`).
+// Accepts .zip/.skill with SKILL.md at the root, or a bare SKILL.md with name + description front-matter.
 func (h *AgentHandler) UploadSkill(c *gin.Context) {
 	header, err := c.FormFile("file")
 	if err != nil {
@@ -332,8 +290,7 @@ func (h *AgentHandler) UploadSkill(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"name": name, "path": dir}))
 }
 
-// installUploadedMarkdown handles a bare SKILL.md upload: the file's own YAML
-// front-matter names the skill, so nothing has to be inferred from the filename.
+// installUploadedMarkdown installs a bare SKILL.md, named by its front-matter.
 func (h *AgentHandler) installUploadedMarkdown(header *multipart.FileHeader) (string, error) {
 	f, err := header.Open()
 	if err != nil {
@@ -348,9 +305,8 @@ func (h *AgentHandler) installUploadedMarkdown(header *multipart.FileHeader) (st
 	return h.agentGateway.InstallSkillMarkdown(content)
 }
 
-// installUploadedArchive stages a `.skill`/`.zip` upload in a temp dir and hands
-// it to the runtime. The fallback name is only consulted for a flat archive; a
-// normal bundle's wrapping directory names the skill.
+// installUploadedArchive stages an archive upload and installs it; the filename
+// is the fallback name for flat archives.
 func (h *AgentHandler) installUploadedArchive(header *multipart.FileHeader, base string) (string, error) {
 	tmpDir, err := os.MkdirTemp("", "skill-upload-*")
 	if err != nil {
@@ -367,8 +323,7 @@ func (h *AgentHandler) installUploadedArchive(header *multipart.FileHeader, base
 	return h.agentGateway.InstallSkillArchive(zipPath, fallback)
 }
 
-// saveMultipartFile writes an uploaded part to dst. Hand-rolled rather than
-// gin's SaveUploadedFile so the copy is byte-capped.
+// saveMultipartFile writes an uploaded part to dst, byte-capped.
 func saveMultipartFile(header *multipart.FileHeader, dst string) error {
 	src, err := header.Open()
 	if err != nil {
@@ -387,9 +342,7 @@ func saveMultipartFile(header *multipart.FileHeader, dst string) error {
 	return out.Close()
 }
 
-// DeleteSkill handles DELETE /api/agent/skills?name=<skill>. Removes the skill
-// from the ACTIVE runtime's skills dir via the AgentGateway. A skill that isn't
-// installed is a 404, not a silent success — the caller's list was stale.
+// DeleteSkill handles DELETE /api/agent/skills?name=<skill>; 404 if not installed.
 func (h *AgentHandler) DeleteSkill(c *gin.Context) {
 	name := strings.TrimSpace(c.Query("name"))
 	if name == "" {
@@ -420,14 +373,7 @@ func (h *AgentHandler) DeleteSkill(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"name": name, "path": path}))
 }
 
-// SaveSkill handles POST /api/agent/skills. Writes a user-authored skill (the
-// web UI's "Write skill" form) into the ACTIVE runtime's skills dir via the
-// AgentGateway — each backend owns its own directory, so the device layer never
-// hardcodes one.
-//
-// A backend that hasn't implemented it returns ErrNotSupportedByRuntime, which
-// surfaces as 501: nothing was stored, and the UI says so rather than pretending
-// the skill was saved.
+// SaveSkill handles POST /api/agent/skills: writes a user-authored skill to the active runtime (501 if unsupported).
 func (h *AgentHandler) SaveSkill(c *gin.Context) {
 	var draft domain.SkillDraft
 	if err := c.ShouldBindJSON(&draft); err != nil {
@@ -461,13 +407,11 @@ func (h *AgentHandler) SaveSkill(c *gin.Context) {
 	}))
 }
 
-// BrowseSkills handles GET /api/agent/skills/browse. Thin pass-through of the
-// catalog's GET /api/v1/agent-skills listing, forwarding the optional filters
-// the web UI exposes (keyword / category_id / plan / page / limit).
+// BrowseSkills handles GET /api/agent/skills/browse, proxying the catalog listing.
+// Params: keyword, category_id, plan, page, limit (all optional).
 func (h *AgentHandler) BrowseSkills(c *gin.Context) {
 	q := url.Values{}
-	// `status` is deliberately not forwarded: the catalog can't distinguish
-	// "unset" from 0, so sending it would silently filter the listing.
+	// Never forward `status`: the catalog treats it as 0 and filters the listing.
 	for _, k := range []string{"keyword", "category_id", "plan", "page", "limit"} {
 		if v := strings.TrimSpace(c.Query(k)); v != "" {
 			q.Set(k, v)
@@ -509,21 +453,15 @@ func (h *AgentHandler) BrowseSkills(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(list))
 }
 
-// SkillBundle handles GET /api/agent/skills/bundle?id=<skillID>. Downloads the
-// skill's `.skill` archive to a temp dir, unzips it there, and returns the file
-// list with text contents inlined so the web UI can render a file browser
-// without a round-trip per file. The temp dir is removed before returning —
-// this is a preview, not an install.
-//
-// The id rides a query param rather than a path segment so the route never
-// collides with the sibling static `skills/browse` route.
+// SkillBundle handles GET /api/agent/skills/bundle?id=<skillID>: a preview of a
+// catalog skill's files (not an install).
 func (h *AgentHandler) SkillBundle(c *gin.Context) {
 	id := strings.TrimSpace(c.Query("id"))
 	if id == "" {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("id is required"))
 		return
 	}
-	// The id goes into the upstream path — reject anything that could escape it.
+	// The id goes into the upstream path; reject anything that could escape it.
 	if strings.ContainsAny(id, "/\\?#") {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid skill id"))
 		return
@@ -536,8 +474,6 @@ func (h *AgentHandler) SkillBundle(c *gin.Context) {
 	}
 	defer os.RemoveAll(tmpDir)
 
-	// 1. Download the archive. `/download` returns a raw zip, NOT the JSON
-	//    envelope — so a JSON body here means the catalog failed.
 	archive, err := storeGet("/api/v1/agent-skills/"+url.PathEscape(id)+"/download",
 		nil, skillDownloadTimeout, maxBundleBytes)
 	if err != nil {
@@ -552,7 +488,6 @@ func (h *AgentHandler) SkillBundle(c *gin.Context) {
 		return
 	}
 
-	// 2. Unzip into the temp dir and read what came out.
 	bundle, err := extractSkillBundle(zipPath, filepath.Join(tmpDir, "unpacked"))
 	if err != nil {
 		slog.Error("[skills] bundle extract failed", "component", "agent-http", "id", id, "error", err)
@@ -565,11 +500,7 @@ func (h *AgentHandler) SkillBundle(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(bundle))
 }
 
-// InstallSkill handles POST /api/agent/skills/install with body {id, name}.
-// Downloads the catalog's `.skill` archive to a temp dir and hands it to the
-// ACTIVE runtime, which extracts it into its own skills dir. Same per-backend
-// split as SaveSkill — a runtime that hasn't implemented it answers 501 and
-// nothing is installed.
+// InstallSkill handles POST /api/agent/skills/install {id, name}: installs a catalog skill into the active runtime.
 func (h *AgentHandler) InstallSkill(c *gin.Context) {
 	var req struct {
 		ID   string `json:"id" binding:"required"`
@@ -628,9 +559,7 @@ func (h *AgentHandler) InstallSkill(c *gin.Context) {
 	}))
 }
 
-// extractSkillBundle unzips zipPath into destDir and returns the extracted
-// files with text contents inlined. Path-traversal guarded; per-file and
-// file-count caps applied.
+// extractSkillBundle unzips zipPath into destDir with path-traversal guards and size caps.
 func extractSkillBundle(zipPath, destDir string) (domain.SkillBundle, error) {
 	var bundle domain.SkillBundle
 
@@ -657,7 +586,6 @@ func extractSkillBundle(zipPath, destDir string) (domain.SkillBundle, error) {
 		if strings.HasPrefix(name, "/") || strings.Contains(name, "..") {
 			return bundle, fmt.Errorf("archive contains an unsafe path")
 		}
-		// Editor/OS cruft that would only clutter the file list.
 		if base := filepath.Base(name); base == ".DS_Store" || strings.HasPrefix(name, "__MACOSX/") {
 			continue
 		}
@@ -688,8 +616,7 @@ func extractSkillBundle(zipPath, destDir string) (domain.SkillBundle, error) {
 	return bundle, nil
 }
 
-// readZipEntry writes one entry to disk (the "unzip into temp" step) and
-// returns the bytes it wrote, capped at maxFileBytes.
+// readZipEntry writes one entry to target and returns its bytes, capped at maxFileBytes.
 func readZipEntry(f *zip.File, target string) ([]byte, error) {
 	rc, err := f.Open()
 	if err != nil {

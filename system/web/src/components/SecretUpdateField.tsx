@@ -2,21 +2,15 @@ import { useState } from "react";
 import { Pencil, X, Eye, EyeOff } from "lucide-react";
 import { C } from "@/components/setup/shared";
 
-// SecretUpdateField is a write-only credential input. The current value is
-// never rendered (server returns presence boolean only via ConfigPublicResponse),
-// so the field stays inert until the operator clicks "Edit" to type a new one.
-// Empty value means "no change" — caller must omit empty strings from the
-// PUT payload so they don't accidentally clear an already-configured secret.
+// Write-only credential input; an empty value means "no change" and must be omitted from the PUT payload.
 export function SecretUpdateField({
   label, id, configured, value, onChange, placeholder,
 }: {
   label: string;
   id: string;
-  /** True when the backend has a value on file. Drives the placeholder /
-   *  read-only resting state. */
+  /** True when the backend has a value on file. */
   configured: boolean;
-  /** Pending new value the operator typed. Stays in component state via the
-   *  parent; the parent decides whether to ship it. */
+  /** Pending new value the operator typed. */
   value: string;
   onChange: (v: string) => void;
   placeholder?: string;

@@ -193,7 +193,7 @@ def test_timeout_keeps_identity_and_cannot_complete_execution(monkeypatch, kpi):
     _pump(monkeypatch, kpi, [
         ([UserSpeechOutput(turn_id="u1")], "", False),
         ([TextOutput(text="Finished.", user_turn_id="u1")], "u1", True),
-        ([], "u1", True),  # Duplicate provider terminal is idempotent.
+        ([], "u1", True),
     ])
     kpi.close_all()
     assert len(kpi.of(voice_metrics.EVENT_INTERACTION)) == 1
@@ -284,8 +284,7 @@ def test_endpoint_can_upgrade_before_playback_but_never_after(kpi):
 
 
 def test_live_execution_report_counts_missing_endpoint_and_pending(kpi):
-    # The reporter is a standalone repository script, not hal.scripts. Load
-    # its path explicitly so this test also works with hal/ as the working dir.
+    # Standalone repo script, not hal.scripts: load by path so any cwd works.
     spec = importlib.util.spec_from_file_location(
         "live_metrics_reporter",
         Path(__file__).resolve().parents[2] / "scripts/report_voice_task_metrics.py",
@@ -403,7 +402,6 @@ def test_pending_audio_ownership_survives_queue_pop_before_first_frame():
 
     class PendingFrames:
         def get(self, timeout):
-            # The drain popped the item, but synthesis has not delivered audio.
             observed.append(speaker.has_pending_speech("run:waiting"))
             return None
 
@@ -432,3 +430,34 @@ def test_live_bundled_sentence_starts_before_next_delta(monkeypatch, kpi):
           strip_markers=VoiceService.strip_rt_markers)
     assert [call.args[0] for call in tts.speak_queue.call_args_list] == [
         'I am right here.', 'Let me help you.']
+
+
+@pytest.mark.parametrize('chunks,expected', [
+    (['[laugh', 's] That was funny! [giggle]'], '[laughs] That was funny! [giggle]'),
+    (['[HW:/led/off:{}][voice trembling] I miss you. [sobbing]'],
+     '[voice trembling] I miss you. [sobbing]'),
+])
+def test_live_elevenlabs_preserves_delivery_at_terminal(monkeypatch, kpi, chunks, expected):
+    from unittest.mock import Mock
+    tts = Mock(speaking=False, _provider='elevenlabs')
+    outputs = [UserSpeechOutput(turn_id='u-tags')]
+    outputs.extend(TextOutput(text=text, user_turn_id='u-tags') for text in chunks)
+    _pump(monkeypatch, kpi, [(outputs, 'u-tags', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    tts.speak_queue.assert_called_once()
+
+    assert tts.speak_queue.call_args.args == (expected,)
+
+
+def test_elevenlabs_held_sentence_does_not_cross_reply_owner(monkeypatch, kpi):
+    from unittest.mock import Mock
+    tts = Mock(speaking=False, _provider='elevenlabs')
+    outputs = [
+        UserSpeechOutput(turn_id='old'),
+        TextOutput(text='Old response. [laughs]', user_turn_id='old'),
+        UserSpeechOutput(turn_id='new', transcript='Stop that and answer this instead'),
+        TextOutput(text='New response.', user_turn_id='new'),
+    ]
+    _pump(monkeypatch, kpi, [(outputs, 'new', True)], tts=tts,
+          strip_markers=VoiceService.strip_rt_markers)
+    assert [c.args[0] for c in tts.speak_queue.call_args_list] == ['New response.']

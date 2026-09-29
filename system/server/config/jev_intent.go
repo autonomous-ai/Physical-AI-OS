@@ -21,15 +21,12 @@ type JevIntentSettings struct {
 }
 
 // JevIntentSettings resolves config.json without any environment credentials.
-// local_intent=false remains the master switch; Jev never replaces local rules
-// or runs on its own.
 func (c *Config) JevIntentSettings() JevIntentSettings {
 	settings := JevIntentSettings{
 		Enabled:   true,
 		TimeoutMS: int(jev.DefaultTimeout.Milliseconds()),
 		APIKey:    strings.TrimSpace(c.LLMAPIKey),
 	}
-	// Reuse the configured proxy; unavailable routes fall through to the main agent.
 	if base := strings.TrimRight(strings.TrimSpace(c.LLMBaseURL), "/"); base != "" {
 		settings.Endpoint = base + "/jev/decisions"
 	}

@@ -12,10 +12,7 @@ from config import settings
 
 
 def decode_image(image_b64: str) -> cv2t.MatLike:
-    """Decode a base64-encoded JPEG/PNG image to a BGR numpy array.
-
-    Raises ValueError on invalid input (works in both HTTP and WS contexts).
-    """
+    """Decode a base64 JPEG/PNG to a BGR array; raises ValueError on invalid input."""
     img_bytes = base64.b64decode(image_b64)
     max_bytes = settings.input_limits.max_image_bytes
     if len(img_bytes) > max_bytes:
@@ -32,11 +29,7 @@ def decode_image(image_b64: str) -> cv2t.MatLike:
 
 
 async def verify_ws_api_key(websocket: WebSocket) -> bool:
-    """Validate API key on WebSocket connect.
-
-    Returns True if the key is valid (or no key is configured).
-    Returns False and closes the connection if the key is invalid.
-    """
+    """Validate the API key on WebSocket connect; closes the socket and returns False if invalid."""
     if settings.dl_api_key:
         api_key = websocket.headers.get("x-api-key", "")
         if not api_key or not secrets.compare_digest(api_key, settings.dl_api_key):

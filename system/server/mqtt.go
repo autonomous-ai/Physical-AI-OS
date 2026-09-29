@@ -30,8 +30,8 @@ func (s *Server) startMQTT() {
 		s.mqttMu.Unlock()
 		return
 	}
-	// Client IDs are derived from device_id, so two processes carrying the same
-	// config fight over one broker session and neither stays connected.
+	// Client IDs derive from device_id: two processes sharing a config would
+	// fight over one broker session.
 	if !syspath.BackendUplink() {
 		s.mqttMu.Unlock()
 		slog.Info("backend uplink off — mqtt not started", "component", "mqtt")
@@ -54,17 +54,7 @@ func (s *Server) startMQTT() {
 		}
 	})
 
-	// Deliver schedule edits the user made while this device was offline.
-	//
-	// A periodic sweep rather than a connect callback: the publish path already
-	// fires immediately on each edit, so this only has to catch the cases that
-	// path cannot — no broker at the time, a dropped link, a reboot with a
-	// non-empty queue. Polling covers all three identically, where an
-	// OnConnectionUp hook would need plumbing through the client factory and
-	// would still miss a publish that failed while nominally connected.
-	//
-	// Re-publishing is safe by construction: the backend collapses replays on
-	// intent_id, which is generated once per user action, not once per send.
+	// Re-publishing is safe: the backend collapses replays on intent_id.
 	safego.Go("schedule-intent-flush", func() {
 		ticker := time.NewTicker(scheduleIntentFlushInterval)
 		defer ticker.Stop()
@@ -80,9 +70,7 @@ func (s *Server) startMQTT() {
 }
 
 // scheduleIntentFlushInterval is how often queued device-originated schedule
-// changes are retried. Short enough that a reconnect delivers an edit while the
-// user is plausibly still looking at the screen; long enough that a device
-// parked offline for days is not publishing constantly into the void.
+// changes are retried.
 const scheduleIntentFlushInterval = 30 * time.Second
 
 // stopMQTT disconnects and clears the MQTT client. Safe to call when not connected.

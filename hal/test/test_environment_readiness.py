@@ -19,7 +19,6 @@ def test_continuity_advances_only_with_samples():
     assert snapshot_at(service, 100)["continuous_data_s"] == 0
     service._store_sample({"co2_ppm": 601}, 104)
     assert snapshot_at(service, 104)["continuous_data_s"] == 4
-    # Reading the cache or waiting for the next sample cannot prove warm-up.
     assert snapshot_at(service, 108)["continuous_data_s"] == 4
     assert snapshot_at(service, 110)["continuous_data_s"] is None
     service._store_sample({"co2_ppm": 602}, 110)

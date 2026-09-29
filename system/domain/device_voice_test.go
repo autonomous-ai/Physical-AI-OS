@@ -11,7 +11,7 @@ func TestDefaultElevenLabsVoiceForLang(t *testing.T) {
 		"zh":    "Amy",
 		"en":    "Rachel",
 		"en-US": "Rachel",
-		"":      "Rachel", // unset/unknown → English default
+		"":      "Rachel",
 		"fr":    "Rachel",
 	}
 	for lang, want := range cases {

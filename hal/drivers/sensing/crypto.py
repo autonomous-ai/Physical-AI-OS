@@ -1,8 +1,4 @@
-"""Client-side RSA+AES-GCM encryption for DL backend communication.
-
-Mirrors the wire format defined in integrations/perception-service/src/lbserver/models.py.
-Public key can be loaded from a local PEM file or fetched from the load balancer.
-"""
+"""Client-side RSA+AES-GCM encryption for DL backend communication."""
 
 import base64
 import logging
@@ -21,22 +17,17 @@ logger = logging.getLogger(__name__)
 GCM_NONCE_SIZE: int = 12
 
 
-# ---------------------------------------------------------------------------
-# Wire-format models (mirrors integrations/perception-service/src/lbserver/models.py)
-# ---------------------------------------------------------------------------
-
-
 class CipherPayload(BaseModel):
     """Base AES-GCM cipher fields (shared by HTTP response + WS message)."""
 
-    nonce: str        # base64
-    cipher_data: str  # base64
+    nonce: str
+    cipher_data: str
 
 
 class CipherHTTPRequest(CipherPayload):
     """HTTP request with encrypted payload + RSA-encrypted AES key."""
 
-    encrypted_key: str  # base64
+    encrypted_key: str
 
 
 class CipherHTTPResponse(CipherPayload):
@@ -47,18 +38,13 @@ class WSKeyExchangeRequest(BaseModel):
     """WS key exchange: client sends RSA-encrypted AES session key."""
 
     type: Literal["key_exchange"] = "key_exchange"
-    encrypted_key: str  # base64
+    encrypted_key: str
 
 
 class WSCipherMessage(CipherPayload):
     """WS encrypted message (after key exchange, both directions)."""
 
     type: Literal["encrypted"] = "encrypted"
-
-
-# ---------------------------------------------------------------------------
-# Session
-# ---------------------------------------------------------------------------
 
 
 class CryptoSession:
@@ -89,8 +75,6 @@ class CryptoSession:
         cipher_data = base64.b64decode(payload.cipher_data)
         return self._aesgcm.decrypt(nonce, cipher_data, None)
 
-    # -- HTTP helpers --
-
     def wrap_http_request(self, plain_body: bytes) -> bytes:
         """Encrypt plain body into a CipherHTTPRequest JSON."""
         enc = self.encrypt(plain_body)
@@ -106,8 +90,6 @@ class CryptoSession:
         resp = CipherHTTPResponse.model_validate_json(resp_body)
         return self.decrypt(resp)
 
-    # -- WS helpers --
-
     def wrap_ws_message(self, plain: str) -> str:
         """Encrypt a plain WS text message into a WSCipherMessage JSON."""
         enc = self.encrypt(plain.encode())
@@ -118,11 +100,6 @@ class CryptoSession:
         """Decrypt a WSCipherMessage JSON back to a plain string."""
         msg = WSCipherMessage.model_validate_json(raw)
         return self.decrypt(msg).decode()
-
-
-# ---------------------------------------------------------------------------
-# Public key resolution
-# ---------------------------------------------------------------------------
 
 
 def load_public_key(pem: str) -> RSAPublicKey:

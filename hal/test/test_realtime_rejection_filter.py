@@ -1,8 +1,4 @@
-"""Regression coverage for the explicit AI rejection gate.
-
-Empty output is not proof of rejection. Explicit rejection and a completed,
-marker-only Gemini silence decision can suppress the main-agent fallback.
-"""
+"""Regression coverage for the explicit AI rejection gate (empty output is not a rejection)."""
 
 from unittest import mock
 

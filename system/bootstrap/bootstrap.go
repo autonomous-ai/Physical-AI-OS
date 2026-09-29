@@ -30,9 +30,7 @@ import (
 // semverRe captures the first semver-like token (e.g. 2026.3.8 or v1.2.3-beta).
 var semverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
 
-// versionParts extracts the numeric dotted core (e.g. 1.2.3 → [1 2 3]) of a
-// version string, ignoring any pre-release/build suffix. Returns nil when no
-// semver-like token is present (treated as the lowest possible version).
+// versionParts extracts the numeric dotted core of a version (1.2.3 -> [1 2 3]); nil if none.
 func versionParts(v string) []int {
 	core := semverRe.FindString(v)
 	if core == "" {
@@ -52,9 +50,7 @@ func versionParts(v string) []int {
 	return out
 }
 
-// compareVersions returns -1 if a < b, 0 if equal, 1 if a > b, comparing the
-// numeric dotted core of each. An empty/unparseable version sorts lowest, so a
-// device with an unknown current version always falls below any real floor.
+// compareVersions returns -1/0/1 comparing numeric cores; unparseable sorts lowest.
 func compareVersions(a, b string) int {
 	pa, pb := versionParts(a), versionParts(b)
 	n := len(pa)
@@ -79,12 +75,8 @@ func compareVersions(a, b string) int {
 	return 0
 }
 
-// forceTargetAllowed limits both force endpoints to components an operator can
-// meaningfully target from the UI. The agent CLIs are included so the Versions
-// card can update the runtime a device runs; os-server resolves its virtual
-// "agent" target to one of these before forwarding. componentInstalled is still
-// what decides whether the work happens (wrong runtime / old on-device updater →
-// refused), so a stray call cannot push a CLI onto a device that does not run it.
+// forceTargetAllowed lists components the force endpoints may target.
+// componentInstalled still gates whether the work happens.
 var forceTargetAllowed = map[string]bool{
 	domain.OTAKeyOSServer: true, domain.OTAKeyBootstrap: true, domain.OTAKeyWeb: true, domain.OTAKeyHal: true,
 	domain.OTAKeyDevice: true,
@@ -97,31 +89,24 @@ type Bootstrap struct {
 	cfg    *config.Config
 	client *http.Client
 	state  *state.State
-	// announcedThisCycle prevents the "device is updating" TTS cue from firing
-	// once per component when a single check-cycle needs to update multiple
-	// (e.g. HAL + web + os-server all behind min_version). Reset at the top of
-	// every checkOnce so a later cycle that finds new updates re-announces.
+	// announcedThisCycle limits the "device is updating" cue to once per checkOnce.
 	announcedThisCycle bool
 	// security records the last metadata fetch outcome for GET /security.
 	security securityTracker
 }
 
-// configRetryInterval is how often Serve reloads bootstrap.json while waiting for
-// it to provide a metadata URL (i.e. the device is not yet provisioned).
+// configRetryInterval is how often Serve reloads bootstrap.json while unprovisioned.
 const configRetryInterval = 30 * time.Second
 
-// otaErrorLEDDisplayDuration keeps a failed-update cue visible long enough to
-// be noticed without leaving the strip latched red until a later operation.
+// otaErrorLEDDisplayDuration is how long the failed-update cue stays visible.
 const otaErrorLEDDisplayDuration = 10 * time.Second
 
-// scheduleOTAErrorRestore is a small seam for testing the delayed cleanup
-// without sleeping. Production always uses time.AfterFunc.
+// scheduleOTAErrorRestore is a test seam over time.AfterFunc.
 var scheduleOTAErrorRestore = func(delay time.Duration, restore func()) {
 	time.AfterFunc(delay, restore)
 }
 
-// ProvideServer creates a Bootstrap from config. The metadata URL may be empty
-// here (device not yet provisioned); Serve waits for it before polling.
+// ProvideServer creates a Bootstrap; the metadata URL may still be empty.
 func ProvideServer() (*Bootstrap, error) {
 	cfg := config.LoadOrDefault()
 	st, err := state.Load(cfg.StateFile)
@@ -135,10 +120,8 @@ func ProvideServer() (*Bootstrap, error) {
 	}, nil
 }
 
-// waitForConfig blocks until bootstrap.json yields a non-empty metadata URL,
-// reloading /root/config/bootstrap.json on configRetryInterval. It runs before
-// any other goroutine starts, so reassigning b.cfg here is race-free. Returns
-// false if ctx is cancelled (shutdown) before a URL appears.
+// waitForConfig blocks until bootstrap.json yields a metadata URL; false on ctx cancel.
+// Runs before other goroutines start, so reassigning b.cfg is race-free.
 func (b *Bootstrap) waitForConfig(ctx context.Context) bool {
 	for strings.TrimSpace(b.cfg.MetadataURL) == "" {
 		slog.Warn("waiting for metadata_url in bootstrap config (device not provisioned yet)",
@@ -153,14 +136,11 @@ func (b *Bootstrap) waitForConfig(ctx context.Context) bool {
 	return true
 }
 
-// Serve runs the gin HTTP server as the main loop, with OTA checks in a background goroutine.
-// Handles SIGINT/SIGTERM for graceful shutdown.
+// Serve runs the healthcheck HTTP server with OTA checks in the background.
 func (b *Bootstrap) Serve() error {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGINT, syscall.SIGTERM)
 	defer cancel()
 
-	// The device may not be provisioned yet: wait until bootstrap.json provides a
-	// metadata URL before starting the poll loop and healthcheck server.
 	if !b.waitForConfig(ctx) {
 		return nil
 	}
@@ -171,10 +151,8 @@ func (b *Bootstrap) Serve() error {
 	}
 	slog.Info("bootstrap started", "component", "bootstrap", "metadataURL", b.cfg.MetadataURL, "interval", b.cfg.PollInterval)
 
-	// Run OTA check loop in background.
 	go b.checkLoop(ctx, pollInterval)
 
-	// Gin healthcheck as main serve.
 	gin.SetMode(gin.ReleaseMode)
 	r := gin.New()
 	r.Use(gin.Recovery())
@@ -184,8 +162,7 @@ func (b *Bootstrap) Serve() error {
 	r.GET("/security", func(c *gin.Context) {
 		c.JSON(http.StatusOK, b.securityStatus())
 	})
-	// Cheap sibling of /versions: no metadata fetch, so the web UI can poll it
-	// every couple of seconds while an update runs without hammering the CDN.
+	// Cheap sibling of /versions (no metadata fetch) for UI polling during an update.
 	r.GET("/updating", func(c *gin.Context) {
 		c.JSON(http.StatusOK, gin.H{"updating": UpdatesInFlight()})
 	})
@@ -200,19 +177,14 @@ func (b *Bootstrap) Serve() error {
 		}()
 		c.JSON(http.StatusOK, gin.H{"status": "ok", "message": "update check triggered"})
 	})
-	// force-update: install the published `version` NOW, floor and all — the
-	// endpoint behind the web Versions card's button, equivalent to running
-	// `software-update <target>` over SSH. force-check below is the other thing:
-	// re-run the AUTOMATIC decision, which respects min_version.
+	// force-update installs the published version now, ignoring min_version.
 	r.POST("/force-update/:target", func(c *gin.Context) {
 		target := c.Param("target")
 		if !forceTargetAllowed[target] {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "unknown target: " + target})
 			return
 		}
-		// Async: an install runs for minutes (download + restart) and would blow
-		// any HTTP timeout. The caller gets "started"; the outcome lands in the
-		// journal and in the next /versions read.
+		// Async: an install outlives any HTTP timeout.
 		go func() {
 			if err := b.forceUpdate(context.Background(), target); err != nil {
 				slog.Error("force update failed", "component", "bootstrap", "target", target, "error", err)
@@ -249,7 +221,7 @@ func (b *Bootstrap) Serve() error {
 	return nil
 }
 
-// checkLoop runs OTA checks on a ticker in the background.
+// checkLoop runs OTA checks on a ticker.
 func (b *Bootstrap) checkLoop(ctx context.Context, pollInterval time.Duration) {
 	if err := b.checkOnce(ctx); err != nil {
 		slog.Error("initial check failed", "component", "bootstrap", "error", err)
@@ -302,27 +274,13 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		return nil
 	}
 
-	// Bring the on-device updater current BEFORE reconciling: the components
-	// below delegate their installs to it, and a fix shipped in the updater is
-	// only useful if it lands before the run that needs it. `software-update` is
-	// not an OTA component, so this is the only automatic path it has.
+	// Update the on-device updater first: components below delegate installs to it.
 	b.refreshUpdater(ctx)
 
-	// Reset per-cycle so a later cycle that finds new updates can announce
-	// again. Without this reset the operator would only hear the cue once per
-	// bootstrap-process lifetime, and long-running boxes would go silent even
-	// on real updates.
 	b.announcedThisCycle = false
 
 	changed := false
-	// Driven by metadata.openclaw.version — bumped via scripts/release/upload-openclaw.sh.
-	// detectVersion / applyUpdate already handle OTAKeyOpenClaw (npm install +
-	// systemctl restart openclaw); the old reconcileOpenClawFromNpm() pulled
-	// "latest" from `npm view` instead and is no longer needed.
-	// The agent-runtime CLIs (codex/claudecode/opencode/picoclaw/hermes) ride the
-	// same loop; componentInstalled gates each to the runtime the device actually
-	// runs, and hermesPinned additionally requires a commit-pinned entry — see
-	// domain.OTAKeyHermes.
+	// Agent-runtime CLIs are gated by componentInstalled; hermes also needs a commit pin.
 	for _, key := range []string{
 		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
 		domain.OTAKeyOpenClaw, domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw,
@@ -342,8 +300,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		}
 	}
 
-	// Device profile (devices.<type>) is nested in metadata, not a flat
-	// component, so it can't ride the loop above — reconcile it separately.
+	// Device profile is nested in metadata, so it is reconciled separately.
 	if updated, err := b.reconcileDevice(ctx); err != nil {
 		slog.Error("device reconcile error", "component", "bootstrap", "error", err)
 	} else if updated {
@@ -358,9 +315,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	return nil
 }
 
-// resolveSTTLanguage returns the device's configured `stt_language` code (e.g.
-// "vi", "en", "zh") so announceUpdateStart can pick the right phrase. Returns
-// "" when config is missing / empty; callers fall back to English.
+// resolveSTTLanguage returns the configured stt_language code, or "".
 func resolveSTTLanguage() string {
 	data, err := os.ReadFile("/root/config/config.json")
 	if err != nil {
@@ -375,15 +330,7 @@ func resolveSTTLanguage() string {
 	return strings.TrimSpace(c.STTLanguage)
 }
 
-// otaUpdateStartPhrase returns the localized "device is updating, please wait"
-// announcement text. Mirrors the language branches in HAL's
-// _factory_reset_phrase — same fixed 3-lang set (vi / zh / en default) so both
-// destructive-ish flows sound consistent. Text is hardcoded here rather than
-// pushed through HAL i18n because bootstrap runs as its own binary and does not
-// import the HAL Python module; adding a new i18n key for one phrase would
-// mean touching both sides for every language change. Keep the phrases short
-// (~2-3s each) so the announce + settle window fits inside the LED "orange
-// breathing" cue before the actual update work drowns out further speech.
+// otaUpdateStartPhrase returns the localized "device is updating" phrase (vi/zh/en).
 func otaUpdateStartPhrase(lang string) string {
 	switch {
 	case strings.HasPrefix(lang, "vi"):
@@ -395,14 +342,8 @@ func otaUpdateStartPhrase(lang string) string {
 	}
 }
 
-// announceUpdateStart speaks the "device is updating" cue via HAL's cached TTS
-// path. Idempotent per check-cycle via b.announcedThisCycle so batched updates
-// (HAL + web + os-server all behind min_version) only trigger one cue.
-// Fire-and-forget: any error is logged but does not block the OTA (HAL could
-// be restarting during a HAL-component update, or the device may have no
-// speaker at all — audio out is a nice-to-have, not a hard requirement).
-// Skipped on devices without the `audio` capability so silent-body devices
-// don't waste render/network cycles on TTS that would go nowhere.
+// announceUpdateStart speaks the update cue once per cycle; errors are logged only.
+// Skipped on devices without the audio capability.
 func (b *Bootstrap) announceUpdateStart() {
 	if b.announcedThisCycle {
 		return
@@ -418,36 +359,27 @@ func (b *Bootstrap) announceUpdateStart() {
 	}
 }
 
-// progressLED shows an OTA-progress status by name (ota_progress/ota_error/
-// ota_success); HAL owns the color/effect via STATUS_LED_PRESETS (per-device
-// overridable). Only on a body with an LED — a device with no `light` capability
-// has no /led route at all, so skip the POST. Fail-open when the device type is
-// unresolved (device.Has returns true), matching legacy behavior.
+// progressLED shows an OTA status preset by name; skipped on bodies without light.
 func (b *Bootstrap) progressLED(state string) {
 	if device.Has(resolveDeviceType(), device.CapLight) {
 		hal.SetStatus(state)
 	}
 }
 
-// restoreLED returns a completed transient OTA cue to the user's LED state,
-// or to the ambient resting look when no user state exists.
+// restoreLED returns the strip to the user's LED state or the ambient resting look.
 func (b *Bootstrap) restoreLED() {
 	if device.Has(resolveDeviceType(), device.CapLight) {
 		hal.RestoreLED()
 	}
 }
 
-// showOTAErrorLED briefly signals a failed OTA with a red pulse, then returns
-// the strip to the user's LED state (or the ambient resting state).
+// showOTAErrorLED briefly pulses red, then restores the LED state.
 func (b *Bootstrap) showOTAErrorLED() {
 	b.progressLED("ota_error")
 	scheduleOTAErrorRestore(otaErrorLEDDisplayDuration, b.restoreLED)
 }
 
-// resolveDeviceType returns this device's class for picking devices.<type> in
-// OTA metadata: DEVICE_TYPE env → config.json device_type. Returns "" when
-// unresolved — NO "lamp" fallback (callers skip the device-profile OTA rather
-// than pull the wrong device's profile).
+// resolveDeviceType returns DEVICE_TYPE env or config device_type; "" if unset (no fallback).
 func resolveDeviceType() string {
 	if t := strings.TrimSpace(os.Getenv("DEVICE_TYPE")); t != "" {
 		return t
@@ -463,9 +395,7 @@ func resolveDeviceType() string {
 	return ""
 }
 
-// fetchDeviceComponent reads metadata.devices.<type>. The profile is nested, so
-// the flat OTAMetadata decode in fetchMetadata can't see it — fetch + decode the
-// devices map directly.
+// fetchDeviceComponent reads metadata.devices.<type>.
 func (b *Bootstrap) fetchDeviceComponent(ctx context.Context, deviceType string) (domain.OTAComponent, bool, error) {
 	payload, verified, err := b.fetchMetadataPayload(ctx)
 	if err != nil {
@@ -486,9 +416,7 @@ func (b *Bootstrap) fetchDeviceComponent(ctx context.Context, deviceType string)
 	return comp, ok, nil
 }
 
-// reconcileDevice updates this device's profile (devices.<type>) to the metadata
-// version, delegating the install to `software-update device`. Absent artifact
-// for this device type → no-op (the device simply has no published profile).
+// reconcileDevice updates this device's profile via `software-update device`.
 func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
 	deviceType := resolveDeviceType()
 	if deviceType == "" {
@@ -505,14 +433,9 @@ func (b *Bootstrap) reconcileDevice(ctx context.Context) (bool, error) {
 	return b.reconcile(ctx, domain.OTAKeyDevice, comp)
 }
 
-// reconcile decides whether the automatic OTA worker should update a component.
-//
-// The worker only rolls a device UP TO the approved floor (target.MinVersion,
-// defaulting to target.Version when unset): it applies an update only when the
-// current version is strictly BELOW that floor. A release can therefore bump
-// Version without auto-pushing it — the fleet moves only once MinVersion is
-// promoted. Manual `software-update <key>` over SSH bypasses this entirely and
-// always installs Version (it self-fetches metadata and ignores MinVersion).
+// reconcile decides whether the automatic worker updates a component.
+// It only upgrades devices strictly below the floor (MinVersion, default Version);
+// manual `software-update <key>` bypasses this and always installs Version.
 func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTAComponent) (bool, error) {
 	targetVersion := strings.TrimSpace(target.Version)
 	if targetVersion == "" {
@@ -532,28 +455,15 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 		current = b.state.Components[key]
 	}
 
-	// A component this device does not have is not "out of date" — it is simply
-	// not part of this device. Metadata lists everything published; no device
-	// runs all of it (a Reachy Mini has no claude-desktop-buddy, a device on a
-	// non-OpenClaw runtime has no openclaw). For those, detectVersion returns ""
-	// which sorts below every floor, so without this gate the worker announces
-	// "device is updating" over the speaker, turns the strip orange, fails to
-	// install something the device was never meant to run — and repeats every
-	// poll, forever.
-	//
-	// Gated on componentInstalled rather than on the empty version alone so
-	// self-repair still works: an os-server binary that is present but whose
-	// --version is broken reports "" too, and that one must still be updated.
+	// Skip components absent from this device (detectVersion "" would loop forever);
+	// a present binary with broken --version is still updated.
 	if current == "" && !b.componentInstalled(key) {
 		slog.Debug("component not installed on this device — skipping", "component", "bootstrap", "key", key)
 		return false, nil
 	}
 
-	// At or above the approved floor → nothing to auto-apply. Keep persisted
-	// state in sync with what's actually installed.
 	if compareVersions(current, minVersion) >= 0 {
-		// A newer build exists but the approved floor holds it back — surface it
-		// so staged rollouts are visible (promote min_version to release it).
+		// A newer build is held back by the floor; log it for staged rollouts.
 		if compareVersions(current, targetVersion) < 0 {
 			slog.Info("update held by min_version floor", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
 		}
@@ -566,14 +476,9 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 
 	slog.Info("update available", "component", "bootstrap", "key", key, "current", current, "min", minVersion, "target", targetVersion)
 
-	// Voice cue BEFORE the LED + apply so the user hears "device is updating"
-	// while the strip is still on the current color and speech isn't fighting
-	// a HAL restart that a HAL-component update would trigger seconds later.
-	// Idempotent per cycle (b.announcedThisCycle) — a batched OS-server+HAL+web
-	// update speaks once, not thrice.
+	// Speak before the LED + apply so speech does not race a HAL restart.
 	b.announceUpdateStart()
 
-	// Status LED: orange breathing while updating
 	b.progressLED("ota_progress")
 
 	if err := b.applyUpdate(ctx, key, target); err != nil {
@@ -581,16 +486,12 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 		return false, err
 	}
 
-	// Brief green flash to confirm success, then restore the user's chosen
-	// look (or the ambient resting look if none exists). The flash lasts about
-	// 750ms at its preset speed, so wait a full second before restoring.
+	// The success flash lasts ~750ms; wait 1s before restoring.
 	b.progressLED("ota_success")
 	time.Sleep(time.Second)
 	b.restoreLED()
-	// The bootstrap updater replaces this process asynchronously. Do not record
-	// the target as deployed until a later poll observes the restarted binary's
-	// injected version; otherwise a failed self-update would be persisted as a
-	// success and suppress the retry/rollback operator path.
+	// The updater replaces this process asynchronously: record the version only once
+	// a later poll observes it, so a failed self-update is not persisted as success.
 	if key == domain.OTAKeyBootstrap {
 		slog.Info("bootstrap update staged; waiting for restarted version confirmation", "component", "bootstrap", "version", targetVersion)
 		return false, nil
@@ -610,9 +511,7 @@ func (b *Bootstrap) fetchMetadata(ctx context.Context) (domain.OTAMetadata, erro
 }
 
 func (b *Bootstrap) fetchMetadataPayload(ctx context.Context) (payload []byte, verified bool, err error) {
-	// Every outcome — including a transport failure before any verification
-	// could run — lands in the security status, so an operator polling
-	// GET /security sees a stalled feed instead of a stale success.
+	// Record every outcome, including transport failures, in the security status.
 	defer func() { b.security.record(verified, err) }()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, b.cfg.MetadataURL, nil)
@@ -697,14 +596,12 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 		}
 		return cliSemver(string(out))
 	case domain.OTAKeyCodex:
-		// "codex-cli 0.142.5" — the metadata carries the bare semver.
 		out, err := system.Run(runCtx, "codex", "--version")
 		if err != nil {
 			return ""
 		}
 		return cliSemver(string(out))
 	case domain.OTAKeyClaudeCode:
-		// "2.1.218 (Claude Code)".
 		out, err := system.Run(runCtx, "claude", "--version")
 		if err != nil {
 			return ""
@@ -717,17 +614,13 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 		}
 		return cliSemver(string(out))
 	case domain.OTAKeyHermes:
-		// "Hermes Agent v0.21.1 (2026.9.7)" — the metadata carries the bare semver.
 		out, err := system.Run(runCtx, "hermes", "--version")
 		if err != nil {
 			return ""
 		}
 		return cliSemver(string(out))
 	case domain.OTAKeyPicoClaw:
-		// Deliberately NOT `picoclaw version`: that prints a build description
-		// ("nightly-44-g1959045c-dirty") with no relation to the release tag, so
-		// it would never parse and the component would look infinitely stale.
-		// `software-update picoclaw` stamps the tag it installed here instead.
+		// Not `picoclaw version`: it prints a build description, not the release tag.
 		data, err := os.ReadFile(domain.PicoClawVersionStamp)
 		if err != nil {
 			return ""
@@ -748,60 +641,25 @@ func (b *Bootstrap) detectVersion(ctx context.Context, key string) string {
 	}
 }
 
-// componentInstalled reports whether this component exists on the device at all.
-//
-// Deliberately coarser than detectVersion: it asks "is the artifact here", not
-// "which version is here". A present-but-unreadable install therefore still
-// counts as installed and can be repaired by an OTA; only a component that is
-// genuinely absent — the metadata offers it, this device never had it — is
-// skipped.
-//
-// The lookups mirror detectVersion and the on-device updater
-// (robots/<type>/software-update); keep the three in step. os-server/openclaw
-// use the same PATH resolution detectVersion runs them with, so the two can
-// never disagree about whether the binary exists.
+// componentInstalled reports whether the component exists on the device at all.
+// Coarser than detectVersion so a present-but-unreadable install can be repaired.
+// Keep in step with detectVersion and robots/<type>/software-update.
 func (b *Bootstrap) componentInstalled(key string) bool {
 	switch key {
 	case domain.OTAKeyBootstrap:
-		// This process. Always — otherwise the worker could never self-update.
+		// Always, otherwise the worker could never self-update.
 		return true
 	case domain.OTAKeyOSServer:
 		return inPath("os-server")
 	case domain.OTAKeyOpenClaw:
-		// Absent on devices running another agent runtime (hermes, codex,
-		// claudecode, …). Those must not be dragged onto OpenClaw by the OTA.
-		// Left on binary presence deliberately: openclaw is npm-installed per
-		// device rather than baked into every image, so the check is meaningful
-		// here — and an unset agent_runtime (older provisioning) must not stop
-		// OpenClaw devices from updating.
+		// Absent on devices running another runtime; binary presence is meaningful here.
 		return inPath("openclaw")
 	case domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw:
-		// Binary presence proves NOTHING for these: scripts/imager/build-orangepi.sh
-		// bakes every agent CLI onto every lamp/intern-v2 image regardless of
-		// DEFAULT_AGENT. An inPath() check would therefore mark all four
-		// "installed" on every device, and each poll would announce "device is
-		// updating" over the speaker, turn the strip orange, download the CLI,
-		// and restart a unit that does not exist — forever.
-		//
-		// The runtime the device actually runs is the real predicate.
-		//
-		// Second gate: the on-device updater must know the key. `software-update`
-		// reaches a device ONLY via the imager or setup.sh (see scripts/README.md)
-		// — never over OTA — so a device provisioned before these keys existed
-		// keeps an updater that answers "Unknown app: codex" forever. Without this
-		// check that device would, every poll (5m): speak "device is updating",
-		// breathe orange, fail the apply, and show a temporary red error cue.
-		// Skipping instead means such devices simply never
-		// receive agent-CLI updates — which is the only outcome available to them
-		// anyway — and do it silently.
+		// Every image bakes all agent CLIs, so gate on the configured runtime, and
+		// on the on-device updater knowing the key (it is never updated over OTA).
 		return resolveAgentRuntime() == key && updaterSupports(key)
 	case domain.OTAKeyHermes:
-		// Same two gates, plus the updater must be the PINNING one: an older
-		// `software-update` also has a hermes branch, but it runs `hermes update`
-		// to upstream HEAD — applying a pinned entry through it would land on a
-		// version that never matches, re-triggering every poll (the very reason
-		// hermes used to be excluded). updaterSupportsHermesPin greps for the
-		// metadata field that only the pinning branch reads.
+		// The updater must also be the pinning one; the old one follows upstream HEAD.
 		return resolveAgentRuntime() == key && updaterSupports(key) && updaterSupportsHermesPin()
 	case domain.OTAKeyWeb:
 		return dirExists("/usr/share/nginx/html/setup")
@@ -824,13 +682,7 @@ func (b *Bootstrap) componentInstalled(key string) bool {
 	}
 }
 
-// resolveAgentRuntime returns the agent runtime this device runs, from
-// `agent_runtime` in /root/config/config.json (the same file os-server writes
-// when the user switches runtimes in the web UI). Returns "" when the file or
-// key is missing — callers treat that as "not this runtime", which is the safe
-// direction: an unknown runtime skips the CLI update instead of pushing one.
-//
-// Values match the domain.OTAKey* constants for the CLIs by construction.
+// resolveAgentRuntime returns agent_runtime from config.json, or "" (skip CLI updates).
 func resolveAgentRuntime() string {
 	data, err := os.ReadFile("/root/config/config.json")
 	if err != nil {
@@ -845,17 +697,8 @@ func resolveAgentRuntime() string {
 	return strings.TrimSpace(c.AgentRuntime)
 }
 
-// updaterSupports reports whether the on-device `software-update` script has a
-// branch for this component key.
-//
-// It matches the branch guard verbatim — `[ "$APP" = "<key>" ]`, the exact form
-// every branch in scripts/provision/software-update uses — rather than looking
-// for the key anywhere in the file: the key also appears in comments and in the
-// usage strings of an updater that does NOT implement it, so a loose search
-// would report support that isn't there.
-//
-// A missing/unreadable script means "no support": the caller then skips the
-// component, which is strictly better than exec'ing an updater that will fail.
+// updaterSupports reports whether software-update has a `[ "$APP" = "<key>" ]` branch.
+// A missing script means no support.
 func updaterSupports(key string) bool {
 	path, err := exec.LookPath("software-update")
 	if err != nil {
@@ -868,9 +711,7 @@ func updaterSupports(key string) bool {
 	return strings.Contains(string(data), `[ "$APP" = "`+key+`" ]`)
 }
 
-// updaterSupportsHermesPin reports whether the on-device `software-update` reads
-// the commit pin (`.hermes.commit`) — i.e. it is the pinning updater, not the
-// older HEAD-following one. See componentInstalled's hermes case.
+// updaterSupportsHermesPin reports whether software-update reads `.hermes.commit`.
 func updaterSupportsHermesPin() bool {
 	path, err := exec.LookPath("software-update")
 	if err != nil {
@@ -883,10 +724,7 @@ func updaterSupportsHermesPin() bool {
 	return strings.Contains(string(data), ".hermes.commit")
 }
 
-// hermesPinned is the per-entry gate the reconcile loop and the version report
-// share: every component passes except an unpinned hermes entry (no commit),
-// which the worker must never apply or advertise — `hermes update` would land
-// on upstream HEAD and the published min_version could never be satisfied.
+// hermesPinned rejects an unpinned hermes entry; everything else passes.
 func hermesPinned(key string, component domain.OTAComponent) bool {
 	return key != domain.OTAKeyHermes || strings.TrimSpace(component.Commit) != ""
 }
@@ -906,11 +744,7 @@ func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domai
 	switch key {
 	case domain.OTAKeyOSServer, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy, domain.OTAKeyOpenClaw, domain.OTAKeyDevice,
 		domain.OTAKeyCodex, domain.OTAKeyClaudeCode, domain.OTAKeyOpenCode, domain.OTAKeyPicoClaw, domain.OTAKeyHermes:
-		// All non-bootstrap components delegate to the on-device
-		// `software-update <key>` script (installed by setup.sh) so the
-		// install logic lives in one place — the script self-fetches
-		// metadata.json and handles each app's specifics (npm install
-		// for openclaw, zip-extract + systemctl restart for the rest).
+		// Non-bootstrap components delegate to the on-device `software-update <key>`.
 		runCtx, cancel := context.WithTimeout(ctx, 10*time.Minute)
 		defer cancel()
 		out, err := system.Run(runCtx, "software-update", key)
@@ -921,7 +755,7 @@ func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domai
 		return nil
 
 	case domain.OTAKeyBootstrap:
-		// Spawn as detached background process so it survives bootstrap exit.
+		// Detached so it survives bootstrap exit.
 		slog.Info("spawning background software-update bootstrap", "component", "bootstrap")
 		if err := system.SpawnBackground("software-update", "bootstrap"); err != nil {
 			return fmt.Errorf("spawn software-update bootstrap: %w", err)
@@ -933,12 +767,8 @@ func (b *Bootstrap) applyUpdate(ctx context.Context, key string, component domai
 	}
 }
 
-// cliSemver extracts the semver from the FIRST line of an agent CLI's
-// --version output: "OpenClaw 2026.3.8 (3caab92)" -> "2026.3.8",
-// "codex-cli 0.142.5" -> "0.142.5", "2.1.218 (Claude Code)" -> "2.1.218".
-// Shared by openclaw/codex/claudecode/opencode — every one of them prints the
-// version somewhere on line one, and each publishes that bare semver as its
-// metadata version. NOT usable for picoclaw (no semver in its output).
+// cliSemver extracts the semver from the first line of an agent CLI's --version.
+// Example: "codex-cli 0.142.5" -> "0.142.5". Not usable for picoclaw.
 func cliSemver(raw string) string {
 	line := strings.TrimSpace(strings.TrimRight(raw, "\r\n"))
 	if i := strings.IndexByte(line, '\n'); i >= 0 {
@@ -950,8 +780,7 @@ func cliSemver(raw string) string {
 	return ""
 }
 
-// normalizeVersion extracts a semver-like version from command output (e.g. "1.0.83" or "os-server 1.0.83" -> "1.0.83").
-// Used for OTAKeyOSServer and bootstrap-style version output (os-server --version, bootstrap-server --version).
+// normalizeVersion extracts a semver-like version, e.g. "os-server 1.0.83" -> "1.0.83".
 func normalizeVersion(raw string) string {
 	line := strings.TrimSpace(strings.TrimRight(raw, "\r\n"))
 	if line == "" {

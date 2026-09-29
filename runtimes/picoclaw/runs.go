@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SetSessionKey stores the session id. PicoClaw assigns it on its first inbound
-// frame (translateFrame captures it), so the read loop is the usual caller.
+// SetSessionKey stores the session id.
 func (s *PicoclawService) SetSessionKey(key string) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "picoclaw", "key", key)

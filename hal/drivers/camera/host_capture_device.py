@@ -1,17 +1,4 @@
-"""Host webcam backend for the laptop simulation mode (`HAL_SIM_MEDIA=host`).
-
-This is NOT a production driver. `LocalVideoCaptureDevice` is the UVC/V4L2 path
-and it is full of Linux-specific healing (MJPG fourcc negotiation, V4L2 exposure
-units, `/sys/bus/usb` unbind/bind power-cycling). None of that exists on a
-developer's Mac: `cv2.CAP_V4L2` never opens, and the sysfs healing paths are
-dead code there.
-
-So the simulator gets its own thin capture device: open the host webcam with the
-platform's native OpenCV backend (AVFoundation on macOS, V4L2 on Linux), pull
-frames in a background thread, expose exactly the surface the routes, sensing
-and the tracker already use. No control tuning, no recovery escalation — if the
-host camera goes away, the simulator falls back to the virtual device.
-"""
+"""Host webcam backend for the laptop simulation mode (`HAL_SIM_MEDIA=host`)."""
 
 from __future__ import annotations
 
@@ -33,8 +20,6 @@ class HostCameraUnavailable(RuntimeError):
     """The host webcam could not be opened — permission, absence, or in use."""
 
 
-# AVFoundation returns false for the first reads while the capture session
-# spins up. Judging a camera on one read calls a working webcam dead.
 _WARMUP_ATTEMPTS = 40
 _WARMUP_GAP_S = 0.05
 
@@ -50,12 +35,7 @@ def _read_warm(cap) -> "np.ndarray | None":
 
 
 def _backends() -> list[int]:
-    """OpenCV backends to try, most native for this OS first.
-
-    On macOS `cv2.VideoCapture(0)` with no backend hint has been observed to
-    pick FFMPEG/avfoundation device listing and fail even when the camera is
-    granted; naming CAP_AVFOUNDATION opens it.
-    """
+    """OpenCV backends to try, most native for this OS first."""
     if platform.system() == "Darwin":
         return [cv2.CAP_AVFOUNDATION, cv2.CAP_ANY]
     if platform.system() == "Linux":
@@ -66,9 +46,9 @@ def _backends() -> list[int]:
 def probe_host_camera(device_id: int | str) -> None:
     """Open, read a frame, release. Raises HostCameraUnavailable on failure.
 
-    Called before the simulator commits to host media so the fallback to the
-    virtual device happens with a reason a human can act on, instead of a
-    stream that silently never delivers a frame.
+    Called before the simulator commits to host media so the fallback to the virtual
+    device happens with a reason a human can act on, instead of a stream that silently
+    never delivers a frame.
     """
     last = "camera did not open"
     for backend in _backends():
@@ -106,12 +86,8 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
     # macOS and would only log a misleading failure.
     requires_v4l2_index = False
 
-    # Frame interval when nobody is streaming; a consumer (stream, sensing,
-    # tracker) raises the rate to the negotiated FPS.
     _IDLE_INTERVAL_S = 0.2
 
-    # How long a reopened capture may go without a frame before we give up on
-    # it. Shorter than this is just the session starting.
     _READ_GRACE_S = 3.0
 
     def __init__(self, device_info: VideoCaptureDeviceInfo, name: str | None = None):
@@ -127,8 +103,6 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
         self.actual_width: int | None = None
         self.actual_height: int | None = None
         self.actual_fps: float | None = None
-
-    # --- capture surface -------------------------------------------------
 
     @property
     def last_frame(self) -> np.ndarray | None:
@@ -165,8 +139,6 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
         with self._consumers_lock:
             self._active_consumers = max(0, self._active_consumers - 1)
 
-    # --- lifecycle -------------------------------------------------------
-
     def start(self) -> None:
         if self._thread is not None and self._thread.is_alive():
             return
@@ -195,9 +167,6 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
             if not cap.isOpened():
                 cap.release()
                 continue
-            # Ask for the configured frame size. macOS/AVFoundation snaps to the
-            # nearest supported mode rather than failing, so read back what we
-            # actually got instead of trusting the request.
             if self._max_width:
                 cap.set(cv2.CAP_PROP_FRAME_WIDTH, self._max_width)
             if self._max_height:
@@ -242,8 +211,6 @@ class HostVideoCaptureDevice(VideoCaptureDeviceBase):
                     last_good = time.monotonic()
                 ok, frame = cap.read()
                 if not ok or frame is None:
-                    # Reopening on the first miss loops forever: every reopen
-                    # starts a fresh session that misses its first reads too.
                     if time.monotonic() - last_good < self._READ_GRACE_S:
                         self._stopped.wait(_WARMUP_GAP_S)
                         continue

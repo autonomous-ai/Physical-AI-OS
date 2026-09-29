@@ -1,18 +1,4 @@
-"""Speech emotion recognition (SER) service.
-
-Public surface:
-    SpeechEmotionService — voice_service calls `submit(user, wav, dur)` per
-    utterance; this service buffers per-user, dedups by polarity bucket,
-    and POSTs sensing events to the OS server. Mirrors the face emotion processor's
-    clustering/dedup architecture.
-
-Engine layer:
-    BaseSpeechEmotionRecognizer — ABC
-    Emotion2VecRecognizer       — concrete, talks to perception-service /api/dl/ser
-
-All env-overridable defaults live in `hal.config.SPEECH_EMOTION_*`;
-label vocabulary and bucket map live in `constants.py`.
-"""
+"""Speech emotion recognition (SER) service."""
 
 from hal.drivers.voice.speech_emotion.base import (
     BaseSpeechEmotionRecognizer,

@@ -1,15 +1,5 @@
 #!/usr/bin/env python3
-"""Add an explicit SMS chat-GUID drop to the iMessage-only filter. The service
-field alone was insufficient — real BlueBubbles webhook payloads from
-carrier SMS (888, VinaPhone, banking OTP) sometimes ship WITHOUT the
-`service` field populated, so the earlier version passed them through and
-the bot replied to automated SMS senders, creating loops.
-
-This patch keeps the `service` check (so payloads that DO name themselves
-"SMS" still drop early) and adds a chat-GUID check that ONLY drops when the
-GUID explicitly starts with `sms;` (case-insensitive). Unknown-prefix GUIDs
-(`any;`, bare phone number, missing) fall through so real iMessage chats
-don't get wrongly dropped."""
+"""Add an explicit SMS chat-GUID drop to the iMessage-only filter."""
 import re
 import sys
 from pathlib import Path
@@ -26,8 +16,6 @@ if MARKER in src:
     print("ALREADY_ADDED")
     sys.exit(0)
 
-# Find the existing service-check block (from the earlier relax patch) and
-# append the SMS-prefix drop right after it.
 ANCHOR = '''        if _svc and _svc != "imessage":
             return web.Response(text="ok")
 '''

@@ -10,40 +10,17 @@ import (
 	"strings"
 )
 
-// Installing a downloaded `.skill` archive into a runtime's skills dir.
-//
-// Like WriteAuthoredSkill, this lives here because only the TARGET DIRECTORY
-// differs per agentic runtime — each backend's AgentGateway.InstallSkillArchive
-// passes its own dir and this does the rest.
-//
-// Archive shape: the catalog's `.skill` bundles carry a single top-level
-// `<name>/` directory (verified against the live catalog). Skill zips from the
-// OTA CDN instead carry the files at the root. Both are handled: a single
-// common top-level dir names the skill, otherwise fallbackName does.
-
 // ErrEmptyArchive is returned when the archive holds no usable files.
 var ErrEmptyArchive = errors.New("skill archive is empty")
 
-// installMaxFiles / installMaxFileBytes bound what a single archive can write.
-// Generous ceilings — they exist to stop a hostile or corrupt archive from
-// filling the device, not to constrain real skills.
+// installMaxFiles / installMaxFileBytes bound what one archive can write.
 const (
 	installMaxFiles     = 500
 	installMaxFileBytes = 4 << 20
 )
 
-// InstallSkillArchive extracts archivePath into skillsDir as a single skill
-// directory and returns the absolute path it wrote plus the file count.
-//
-// The write is atomic per skill: everything is staged under
-// <skillsDir>/<name>.new and only swapped into place once the whole archive
-// extracted cleanly, so a corrupt download can never leave a half-installed
-// skill (or destroy a working one). An existing skill of that name IS replaced
-// — installing from the store is an explicit user action, unlike authoring,
-// which refuses to clobber.
-//
-// The runtime is NOT restarted; every backend with a skills dir picks new files
-// up per session.
+// InstallSkillArchive extracts archivePath into skillsDir as one skill; returns path and file count.
+// Staged under <name>.new and swapped in atomically; an existing skill is replaced.
 func InstallSkillArchive(archivePath, skillsDir, fallbackName string) (string, int, error) {
 	if skillsDir == "" {
 		return "", 0, errors.New("skills dir is not configured")
@@ -63,8 +40,7 @@ func InstallSkillArchive(archivePath, skillsDir, fallbackName string) (string, i
 		return "", 0, fmt.Errorf("skill archive has %d files (max %d)", len(entries), installMaxFiles)
 	}
 
-	// A single shared top-level dir names the skill and is stripped; otherwise
-	// the files sit at the archive root and fallbackName names the skill.
+	// A single shared top-level dir names the skill; otherwise fallbackName does.
 	name, strip := archiveSkillName(entries)
 	if name == "" {
 		name = strings.TrimSpace(fallbackName)
@@ -92,15 +68,13 @@ func InstallSkillArchive(archivePath, skillsDir, fallbackName string) (string, i
 		return "", 0, ErrEmptyArchive
 	}
 
-	// A skill without SKILL.md at its root is not a skill: the agent has nothing
-	// to load, so it would install as dead weight. Checked on the STAGING copy so
-	// a rejected archive never reaches the live tree.
+	// Checked on the staging copy so a rejected archive never reaches the live tree.
 	if _, err := os.Stat(filepath.Join(staging, SkillMarkdownFile)); err != nil {
 		_ = os.RemoveAll(staging)
 		return "", 0, ErrMissingSkillMD
 	}
 
-	// Swap in. The old dir is moved aside first so a failed rename can be undone.
+	// Old dir is moved aside first so a failed rename can be undone.
 	backup := target + ".old"
 	_ = os.RemoveAll(backup)
 	if _, err := os.Stat(target); err == nil {
@@ -119,8 +93,7 @@ func InstallSkillArchive(archivePath, skillsDir, fallbackName string) (string, i
 	return target, count, nil
 }
 
-// usableEntries drops directories and editor/OS cruft, and rejects nothing —
-// path safety is enforced later, per entry, against the resolved staging dir.
+// usableEntries drops directories and OS cruft; path safety is checked at extract.
 func usableEntries(r *zip.ReadCloser) []*zip.File {
 	out := make([]*zip.File, 0, len(r.File))
 	for _, f := range r.File {
@@ -136,9 +109,7 @@ func usableEntries(r *zip.ReadCloser) []*zip.File {
 	return out
 }
 
-// archiveSkillName returns the archive's single common top-level directory (and
-// true, meaning that segment must be stripped on extract). Returns ("", false)
-// when the files live at the archive root or span multiple top-level dirs.
+// archiveSkillName returns the single common top-level dir (strip=true), else ("", false).
 func archiveSkillName(entries []*zip.File) (string, bool) {
 	top := ""
 	for _, f := range entries {
@@ -159,9 +130,7 @@ func archiveSkillName(entries []*zip.File) (string, bool) {
 	return top, top != ""
 }
 
-// extractEntries writes entries into dest, optionally stripping the first path
-// segment. Path-traversal guarded against dest; forces 0644/0755 perms (modes
-// from an upload host aren't trusted).
+// extractEntries writes entries into dest with a traversal guard and forced 0644/0755 perms.
 func extractEntries(entries []*zip.File, strip bool, dest string) (int, error) {
 	cleanDest, err := filepath.Abs(dest)
 	if err != nil {
@@ -200,8 +169,7 @@ func extractEntries(entries []*zip.File, strip bool, dest string) (int, error) {
 	return count, nil
 }
 
-// copyLimited copies at most limit bytes and errors if the source has more —
-// so a lying UncompressedSize64 (zip bomb) can't fill the disk.
+// copyLimited copies at most limit bytes, erroring if the source has more (zip bomb guard).
 func copyLimited(dst io.Writer, src io.Reader, limit int64) (int64, error) {
 	n, err := io.Copy(dst, io.LimitReader(src, limit+1))
 	if err != nil {
@@ -227,7 +195,6 @@ func writeZipFile(f *zip.File, target string) error {
 	if err != nil {
 		return fmt.Errorf("create %s: %w", target, err)
 	}
-	// LimitReader guards against a lying UncompressedSize64 (zip bomb).
 	if _, err := copyLimited(out, rc, installMaxFileBytes); err != nil {
 		out.Close()
 		return fmt.Errorf("write %s: %w", target, err)

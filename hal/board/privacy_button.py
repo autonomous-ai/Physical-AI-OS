@@ -19,11 +19,7 @@ class PrivacyButtonConfig:
 
 def load_privacy_button_config(device_dir: str, board_id: str,
                            device_type: str) -> PrivacyButtonConfig | None:
-    """Missing declarations preserve the old device-only Intern gate and wiring.
-
-    Other devices remain disabled until explicitly configured. The caller skips
-    simulation before invoking the loader, as for the other hardware inputs.
-    """
+    """Load the privacy button config; missing declarations keep the legacy Intern wiring."""
     fallback = PrivacyButtonConfig() if device_type == "intern-v2" else None
     path = Path(device_dir) / "privacy_button.json"
     try:

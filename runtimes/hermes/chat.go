@@ -16,15 +16,11 @@ import (
 var errHermesNotReady = errors.New("hermes not ready")
 
 // SendChatMessage sends a user message to Hermes via POST /v1/responses.
-// Returns the run ID (== idempotency key) the caller should use to correlate
-// flow/monitor events with the resulting SSE stream.
 func (s *HermesService) SendChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "user", nil)
 }
 
-// SendSystemChatMessage flags the flow event as a system-originated message
-// (skill watcher, wake greeting, /compact) so Flow Monitor renders it
-// separately from real user input. Wire payload is identical otherwise.
+// SendSystemChatMessage flags the flow event as system-originated for Flow Monitor.
 func (s *HermesService) SendSystemChatMessage(message string) (string, error) {
 	return s.sendChat(message, nil, "", "", "system", nil)
 }
@@ -33,10 +29,7 @@ func (s *HermesService) SendChatMessageWithImages(message string, imagesBase64 [
 	return s.sendChat(message, imagesBase64, "", "", "user", nil)
 }
 
-// NextChatRunID allocates the run / req id pair. Caller flow.SetTrace(runID)
-// before flow.Start so the sensing_input enter line matches the eventual
-// chat_send. Same shape as openclaw's allocator so logs / monitor stay
-// identical across backends.
+// NextChatRunID allocates the run / req id pair.
 func (s *HermesService) NextChatRunID() (reqID string, runID string) {
 	reqID = fmt.Sprintf("chat-%d", s.reqCounter.Add(1))
 	runID = fmt.Sprintf("device-%s-%d", reqID, time.Now().UnixMilli())
@@ -51,10 +44,7 @@ func (s *HermesService) SendChatMessageWithImagesAndRun(message string, imagesBa
 	return s.sendChat(message, imagesBase64, reqID, runID, "user", nil)
 }
 
-// SendSlashCommandWithRun — Hermes has no per-channel "deliver:false" flag,
-// so slash commands look the same as any other user input on the wire.
-// Marker: we still tag the flow source so logs distinguish "this came from
-// web monitor" vs voice.
+// SendSlashCommandWithRun — Hermes has no per-channel "deliver:false" flag, so slash commands look the same as any other user input on the wire.
 func (s *HermesService) SendSlashCommandWithRun(message string, reqID string, runID string) (string, error) {
 	return s.sendChat(message, nil, reqID, runID, "user_slash", nil)
 }
@@ -63,16 +53,7 @@ func (s *HermesService) SendSlashCommandWithImagesAndRun(message string, imagesB
 	return s.sendChat(message, imagesBase64, reqID, runID, "user_slash", nil)
 }
 
-// sendChat is the internal entry. It:
-//  1. allocates ids if not provided,
-//  2. marks busy + records pending trace,
-//  3. emits chat_input / chat_send flow events for parity with openclaw,
-//  4. builds the streamRequest (string input for text-only, array w/ image),
-//  5. fires postStream in a background goroutine and dispatches translated
-//     events into the registered handler.
-//
-// Returns the device run ID (idempotency-style) once the POST has been
-// kicked off — not after response.completed. Caller correlates via SSE.
+// sendChat is the internal entry.
 func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReqID string, fixedRunID string, sourceType string, _ any) (string, error) {
 	if !s.ready.Load() {
 		return "", errHermesNotReady
@@ -86,9 +67,6 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 		reqID, idempotencyKey = s.NextChatRunID()
 	}
 
-	// Strip [snapshot: ...] paths from presence events so the agent doesn't
-	// waste tokens on file paths it has no tools to access. Matches the
-	// openclaw codepath at service_chat.go.
 	wsMessage := message
 	if strings.Contains(message, "[sensing:presence.enter]") || strings.Contains(message, "[sensing:presence.leave]") {
 		wsMessage = strings.TrimSpace(reSnapshotPath.ReplaceAllString(message, ""))
@@ -110,8 +88,6 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 		Conversation: s.conversationName(),
 		Stream:       true,
 	}
-	// One input_image block per attached photo, after the single text block —
-	// the content list is what lets a turn carry several images at once.
 	content := []inputContent{{Type: "input_text", Text: wsMessage}}
 	imgLen := 0
 	for _, img := range imagesBase64 {
@@ -131,15 +107,10 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 		body.Input = wsMessage
 	}
 
-	// Mark busy before the network round-trip so sensing-while-busy gates
-	// catch the in-flight turn even before response.created arrives. Cleared
-	// when this request stream terminates, after terminal event dispatch.
 	s.busySince.Store(time.Now().UnixMilli())
 	s.inFlightStreams.Add(1)
 	s.activeTurn.Store(true)
 
-	// Flash the "thinking" face for visible turns (OpenClaw emotion-acknowledge
-	// hook parity). Skips passive sensing + realtime-handled turns. See emotion_ack.go.
 	s.fireAckEmotion(idempotencyKey, message)
 
 	s.SetPendingChatTrace(idempotencyKey, message)
@@ -152,7 +123,7 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 		"model", body.Model,
 		"source", sourceType,
 		"hasImage", hasImage,
-		"imageCount", len(content) - 1,
+		"imageCount", len(content)-1,
 		"imageBytes", imgLen,
 		"msgLen", len(message),
 		"message", truncRunes(message, 500))
@@ -173,8 +144,7 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 		RunID:   idempotencyKey,
 	})
 
-	// Run the SSE stream in a background goroutine: Device callers (sensing
-	// handler, voice loop) shouldn't block for the full turn duration.
+	// Run the SSE stream in a background goroutine: Device callers (sensing handler, voice loop) shouldn't block for the full turn duration.
 	s.steeringMu.Lock()
 	native := s.SupportsNativeSteering()
 	s.steeringMu.Unlock()
@@ -187,8 +157,7 @@ func (s *HermesService) sendChat(message string, imagesBase64 []string, fixedReq
 	return idempotencyKey, nil
 }
 
-// runStream issues the POST and pumps translated events into the registered
-// handler. Runs in its own goroutine — one per outbound chat.send.
+// runStream issues the POST and pumps translated events into the registered handler.
 func (s *HermesService) runStream(runID string, body streamRequest) {
 	defer func() {
 		s.RemovePendingChatTraceByRunID(runID)
@@ -201,8 +170,6 @@ func (s *HermesService) runStream(runID string, body streamRequest) {
 		if handler == nil {
 			return
 		}
-		// Best-effort: drop handler errors but keep streaming. Matches
-		// the openclaw worker's "do not exit on handler error" policy.
 		if err := handler(context.Background(), evt); err != nil {
 			slog.Error("hermes dispatch handler error", "component", "hermes",
 				"event", evt.Event, "runID", runID, "error", err)
@@ -215,8 +182,6 @@ func (s *HermesService) runStream(runID string, body streamRequest) {
 	res, err := s.postStream(ctx, runID, body, dispatch)
 	if err != nil {
 		slog.Error("hermes stream error", "component", "hermes", "runID", runID, "error", err)
-		// The deferred stream release updates busy after dispatching this error.
-		// Synthesize a lifecycle.error so flow/monitor consumers see the turn fail.
 		payload, _ := json.Marshal(map[string]any{
 			"runId":      runID,
 			"sessionKey": s.GetSessionKey(),

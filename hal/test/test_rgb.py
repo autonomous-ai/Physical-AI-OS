@@ -2,7 +2,7 @@ import time
 import sys
 import os
 
-sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))  # repo os/ → `hal` package
+sys.path.append(os.path.dirname(os.path.dirname(os.path.dirname(__file__))))
 
 from hal.drivers.rgb import RGBService
 from hal.drivers.base import Priority
@@ -28,19 +28,19 @@ def test_rgb_service():
         
         print("Testing paint pattern...")
         colors = [
-            (255, 0, 0),    # Red
-            (0, 255, 0),    # Green
-            (0, 0, 255),    # Blue
-            (255, 255, 0),  # Yellow
-            (255, 0, 255),  # Magenta
-        ] * 8  # Repeat pattern
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 0),
+            (255, 0, 255),
+        ] * 8
         
         rgb_service.dispatch("paint", colors)
         time.sleep(3)
         
         print("Testing priority - high priority solid should override paint...")
-        rgb_service.dispatch("paint", [(255, 255, 255)] * 40)  # White
-        rgb_service.dispatch("solid", (255, 0, 0), Priority.HIGH)  # High priority red
+        rgb_service.dispatch("paint", [(255, 255, 255)] * 40)
+        rgb_service.dispatch("solid", (255, 0, 0), Priority.HIGH)
         time.sleep(2)
         
         print("Clearing...")

@@ -8,12 +8,6 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// handleRealtimeSet applies a `realtime.set` downlink — configure the realtime
-// voice agent (Gemini Live / OpenAI Realtime). Same flow as tts.set: ack
-// immediately, apply async (write config.json + restart hal), then ack the
-// outcome. See domain.RealtimeSetData for the full downlink contract the
-// FE / BFF push (envelope, fields, valid values, examples).
-
 func (h *DeviceMQTTHandler) publishRealtimeSetAck(status, errMsg string, data *domain.RealtimeSetData) {
 	ack := domain.MQTTRealtimeSetAck{
 		MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()),
@@ -37,7 +31,6 @@ func (h *DeviceMQTTHandler) handleRealtimeSet(env domain.MQTTDataCommand) error 
 
 	slog.Info("realtime.set: received", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "reasoning", req.Reasoning)
 
-	// Ack immediately so BFF knows the device received the command.
 	h.publishRealtimeSetAck("starting", "", nil)
 
 	go func() {
@@ -46,8 +39,6 @@ func (h *DeviceMQTTHandler) handleRealtimeSet(env domain.MQTTDataCommand) error 
 			h.publishRealtimeSetAck("failure", err.Error(), &req)
 			return
 		}
-		// UpdateRealtimeConfig saves config + kicks systemctl restart hal async.
-		// ACK success immediately — BFF doesn't need to wait for hal to come back.
 		slog.Info("realtime.set: applied", "component", "mqtt", "provider", req.Provider, "voice", req.Voice)
 		h.publishRealtimeSetAck("success", "", &req)
 	}()

@@ -1,7 +1,6 @@
 // Package http exposes the device-local ingestion endpoint for telemetry
-// events produced outside os-server — HAL today, any other on-device process
-// later. It does nothing but validate and hand over to system/telemetry: the
-// measurement lives with whoever can observe it, this is only the pipe.
+// events produced outside os-server — HAL today, any other on-device
+// process later.
 package http
 
 import (
@@ -31,9 +30,7 @@ type TelemetryHandler struct{}
 
 func ProvideTelemetryHandler() *TelemetryHandler { return &TelemetryHandler{} }
 
-// PostEvent accepts one event and queues it. Always 200 on a well-formed
-// body: the producer is on the voice path and must never be made to retry or
-// wait on the warehouse being reachable.
+// PostEvent accepts one event and queues it.
 func (h *TelemetryHandler) PostEvent(c *gin.Context) {
 	var req EventRequest
 	if err := c.ShouldBindJSON(&req); err != nil {

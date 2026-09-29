@@ -26,8 +26,7 @@ func (s *Service) UpdateWakeWord(enabled bool) error {
 	return nil
 }
 
-// applyWakeWord updates the persisted flag and reports whether its effective
-// value changed. It is kept free of I/O so the MQTT update behavior is testable.
+// applyWakeWord updates the flag and reports whether its effective value changed.
 func applyWakeWord(c *config.Config, enabled bool) bool {
 	changed := c.WakeWordEnabled() != enabled
 	c.WakeWord = &enabled

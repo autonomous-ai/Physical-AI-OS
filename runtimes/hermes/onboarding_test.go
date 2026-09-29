@@ -7,22 +7,17 @@ import (
 	"testing"
 )
 
-// legacySoulRuleBlock is how the OS rule block looked on devices that ran an
-// os-server from before it moved to AGENTS.md: same body, inside SOUL.md, under
-// the shared marker.
+// legacySoulRuleBlock is the pre-AGENTS.md rule block inside SOUL.md under the shared marker.
 func legacySoulRuleBlock() string {
 	return soulOSMarker + "\n" + soulSkillPrioritySentinel + " old wording\n---\n"
 }
 
-// ownMarkerSoulRuleBlock is the intermediate shape: still in SOUL.md, but under
-// the Hermes-only marker.
+// ownMarkerSoulRuleBlock is the intermediate shape: still in SOUL.md, but under the Hermes-only marker.
 func ownMarkerSoulRuleBlock() string {
 	return soulSkillPriorityMarker + "\n" + soulSkillPrioritySentinel + " old wording\n---\n"
 }
 
 const testPersona = "# Lamp\n\n## Skill-driven turns (Non-Negotiable)\n- `[sensing:*]` → `skills/sensing/SKILL.md`."
-
-// --- AGENTS.md: the OS rule block ------------------------------------------
 
 func TestUpsertAgentsMDBlock_SeedsEmptyFile(t *testing.T) {
 	got := upsertAgentsMDBlock("")
@@ -69,10 +64,7 @@ func TestUpsertAgentsMDBlock_RefreshesWithoutDuplicating(t *testing.T) {
 	}
 }
 
-// --- SOUL.md: the rule block must be cleaned out of it ----------------------
-
-// The regression this split exists for: a persona block wears the same marker as
-// the rule block once did, so the prune must never mistake one for the other.
+// The regression this split exists for: a persona block wears the same marker as the rule block once did, so the prune must never mistake one for the other.
 func TestStripSoulOSRuleBlock_KeepsMarkedPersona(t *testing.T) {
 	soul := soulOSMarker + "\n" + testPersona + "\n---\n\nowner notes\n"
 	got := stripSoulOSRuleBlock(soul)
@@ -108,8 +100,6 @@ func TestStripSoulOSRuleBlock_RemovesBothShapes(t *testing.T) {
 		}
 	}
 }
-
-// --- persona block ----------------------------------------------------------
 
 func TestUpsertSoulPersonaBlock_SeedsEmptySoul(t *testing.T) {
 	got := upsertSoulPersonaBlock("", testPersona)
@@ -157,9 +147,7 @@ func TestUpsertSoulPersonaBlock_DropsManagedDefaultSoul(t *testing.T) {
 		"hermes fallback":  hermesSoulFallback,
 		"openclaw seed":    "# Soul\n\nold template\n",
 		"openclaw gateway": "# SOUL.md - Who You Are\n\nold template\n",
-		// What presync leaves behind on a freshly flashed device: the Hermes
-		// gateway re-seeds its own persona whenever SOUL.md is missing, and it
-		// opens with prose rather than a heading.
+		// Hermes re-seeds its own prose persona when SOUL.md is missing.
 		"hermes gateway seed": "You are Hermes Agent, built by Nous Research. Be direct.\n\nold template\n",
 	} {
 		got := upsertSoulPersonaBlock(stale, testPersona)
@@ -185,10 +173,7 @@ func TestUpsertSoulPersonaBlock_KeepsPersonalSectionUnderDefault(t *testing.T) {
 	}
 }
 
-// --- both files together, as EnsureOnboarding drives them -------------------
-
 // Every boot runs the persona upsert, the SOUL prune and the AGENTS.md upsert.
-// Both files must settle after the first pass and never grow again.
 func TestPromptFiles_StableAcrossBoots(t *testing.T) {
 	boot := func(soul, agents string) (string, string) {
 		return stripSoulOSRuleBlock(upsertSoulPersonaBlock(soul, testPersona)), upsertAgentsMDBlock(agents)
@@ -213,8 +198,7 @@ func TestPromptFiles_StableAcrossBoots(t *testing.T) {
 	}
 }
 
-// A device updating from an older os-server carries the rule block inside
-// SOUL.md. One boot must move it out and leave everything else intact.
+// A device updating from an older os-server carries the rule block inside SOUL.md.
 func TestPromptFiles_MigratesRuleBlockOutOfSoul(t *testing.T) {
 	soul := soulOSMarker + "\n" + testPersona + "\n---\n\n## Personal\n\nowner notes\n\n" +
 		"## Your identity card\n\n- **Name:** Ngan\n\n" + legacySoulRuleBlock()
@@ -280,7 +264,6 @@ func TestPruneImportedDuplicates_RenamesWhenOnlyImportedExists(t *testing.T) {
 func TestPruneImportedDuplicates_NoopCases(t *testing.T) {
 	dir := t.TempDir()
 	mkSkill(t, dir, "connectors")
-	// plain file with the suffix must be ignored (not a skill dir)
 	if err := os.WriteFile(filepath.Join(dir, "notes-imported"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}

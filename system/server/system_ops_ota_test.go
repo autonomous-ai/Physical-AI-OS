@@ -10,8 +10,7 @@ import (
 	"go.autonomous.ai/os/system/ota"
 )
 
-// The Versions card relies on these exact statuses; the refactor onto package
-// ota must not change them.
+// The Versions card relies on these exact statuses.
 func TestOTAHTTPStatus(t *testing.T) {
 	cases := []struct {
 		err  error

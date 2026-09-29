@@ -1,26 +1,4 @@
-// Package posture provides a per-user ergonomic-risk history logger.
-//
-// Three row types share one daily JSONL per user:
-//
-//   - `posture_alert` — auto-written by the sensing handler whenever a
-//     motion.activity carries a [posture_summary:] block (i.e. a pose
-//     tumbling window crossed POSE_BAD_RATIO). Captures latest_score,
-//     latest_risk_level (mapped to high/medium/low/negligible), and the
-//     per-side whole-body scores. This is the raw signal the habit skill
-//     reads to compute posture_patterns (peak_hour, side_bias, typical_risk).
-//   - `nudge_posture` / `praise_posture` — agent reactions fired through
-//     /api/posture/log when the wellbeing skill decides to coach or
-//     acknowledge a fix. Notes carry the spoken line.
-//
-// Mirrors skillcontext/mood structure (newer pattern than skillcontext/wellbeing). Daily
-// JSONL files with 60-day retention.
-//
-// Usage:
-//
-//	posture.Init()                                                // once at startup
-//	posture.LogAlert("gray", posture.AlertExtras{Score: 6, Risk: "medium", LeftScore: 5, RightScore: 6})
-//	posture.LogNudge("gray", 5, "Cổ kìa, ngẩng lên thử.")
-//	events := posture.Query("gray", "2026-05-13", 100)
+// Package posture logs per-user posture alerts, nudges and praises to daily JSONL.
 package posture
 
 import (
@@ -36,31 +14,27 @@ import (
 	"go.autonomous.ai/os/system/lib/usercanon"
 )
 
-// Event is one posture history record persisted to JSONL.
-//
-// `Action` is the row type. Sub-fields are optional and only populated for
-// rows that use them — JSON omitempty keeps each line compact.
+// Event is one posture history record; only fields relevant to Action are set.
 type Event struct {
 	TS     float64 `json:"ts"`
 	Seq    int64   `json:"seq"`
 	Hour   int     `json:"hour"`
 	Action string  `json:"action"`
 
-	// Alert-row fields (Action == ActionAlert).
+	// Alert-row fields.
 	Score      int    `json:"score,omitempty"`
 	Risk       string `json:"risk,omitempty"` // medium | high (hal filters lower)
 	LeftScore  int    `json:"left_score,omitempty"`
 	RightScore int    `json:"right_score,omitempty"`
 
-	// Nudge-row fields (Action == ActionNudge).
+	// Nudge-row fields.
 	NudgeLevel int `json:"nudge_level,omitempty"` // 2..5
 
-	// Free-text — for nudge/praise, this is the line the device spoke.
+	// Notes is the spoken line for nudge/praise rows.
 	Notes string `json:"notes,omitempty"`
 }
 
-// Action constants. Never invent new actions — the skill spec and timeline
-// readers rely on this fixed vocabulary.
+// Action constants; readers rely on this fixed vocabulary.
 const (
 	ActionAlert  = "posture_alert"  // sensing handler auto-write on bad-window motion.activity
 	ActionNudge  = "nudge_posture"  // agent spoke / fired servo / chime
@@ -70,11 +44,7 @@ const (
 const (
 	postureSubdir = "posture"
 	fileSuffix    = ".jsonl"
-	// retentionDays is intentionally longer than music (7 days) and the
-	// 30-day mood/wellbeing storage so the posture coach can do
-	// weekly/monthly trend framing — "tuần này vs tuần trước", future
-	// habit-integration patterns.
-	// Daily file caps at ~16 KB → 60 days ≈ 960 KB / user. Negligible.
+	// retentionDays allows weekly/monthly trends (~16 KB/day per user).
 	retentionDays = 60
 	DefaultUser   = "unknown"
 )
@@ -89,16 +59,13 @@ type logger struct {
 
 var global = &logger{}
 
-// Init creates the users root and starts the retention cleaner.
-// Call once at startup.
+// Init creates the users root and starts the retention cleaner; call once.
 func Init() {
 	_ = os.MkdirAll(usercanon.UsersDir, 0o755)
 	go cleanOldLogs()
 }
 
-// AlertExtras carries the hal event payload os-server persists when an event
-// arrives. The skill is the caller — typically right when the event reaches
-// it (before any nudge decision), so the timeline anchors each episode.
+// AlertExtras carries the HAL posture event facts to persist.
 type AlertExtras struct {
 	Score      int
 	Risk       string
@@ -125,9 +92,7 @@ func LogAlert(user string, e AlertExtras) {
 	global.writeJSONL(now, user, evt)
 }
 
-// LogNudge appends a `nudge_posture` row after the agent has spoken / fired a
-// servo / chime. level is 2..5 per the SKILL escalation ladder. notes is the
-// line spoken (or empty for L2/L3 which have no voice).
+// LogNudge appends a nudge_posture row; level is 2..5, notes is the spoken line (may be empty).
 func LogNudge(user string, level int, notes string) {
 	user = usercanon.Resolve(user)
 	now := time.Now()
@@ -164,12 +129,8 @@ func logSimple(user, action, notes string) {
 	global.writeJSONL(now, user, evt)
 }
 
-// QueryLastDays reads posture events across the last `days` daily files
-// (1 = today only, 7 = today + 6 prior). Events are returned oldest-first
-// across the whole window. perDayCap limits rows per file (0 = no cap).
-//
-// Used by the skillcontext builder to compute a multi-day user profile
-// (peak hour, side bias, weekly trend) without a fresh tool turn.
+// QueryLastDays returns events from the last days files (1 = today), oldest first.
+// perDayCap limits rows per file (0 = no cap).
 func QueryLastDays(user string, days, perDayCap int) []Event {
 	user = usercanon.Resolve(user)
 	if days <= 0 {
@@ -184,7 +145,7 @@ func QueryLastDays(user string, days, perDayCap int) []Event {
 	return out
 }
 
-// Query reads posture events for the user/day. Up to last n rows. n<=0 → all.
+// Query returns up to the last n rows for user on day; n <= 0 returns all.
 func Query(user, day string, n int) []Event {
 	user = usercanon.Resolve(user)
 	path := filePath(user, day)
@@ -212,9 +173,7 @@ func Query(user, day string, n int) []Event {
 	return out
 }
 
-// LastActionTS returns the Unix timestamp of the most recent row with the
-// given action, scanning today and up to `lookbackDays-1` days back. Returns
-// 0 when no match found.
+// LastActionTS returns the Unix time of the latest action within lookbackDays, or 0.
 func LastActionTS(user, action string, lookbackDays int) float64 {
 	user = usercanon.Resolve(user)
 	if lookbackDays <= 0 {
@@ -241,8 +200,7 @@ func LastActionTS(user, action string, lookbackDays int) float64 {
 	return 0
 }
 
-// LastNudgeLevel returns the level of the most recent nudge_posture row today,
-// or 0 if no nudge has been logged today.
+// LastNudgeLevel returns today's most recent nudge level, or 0.
 func LastNudgeLevel(user string) int {
 	events := Query(user, time.Now().Format("2006-01-02"), 0)
 	for i := len(events) - 1; i >= 0; i-- {
@@ -257,8 +215,7 @@ func filePath(user, day string) string {
 	return filepath.Join(usercanon.UsersDir, user, postureSubdir, day+fileSuffix)
 }
 
-// writeJSONL appends the event to the user's daily file. Must be called with
-// l.mu held.
+// writeJSONL appends evt to the user's daily file. Caller must hold l.mu.
 func (l *logger) writeJSONL(now time.Time, user string, evt Event) {
 	day := now.Format("2006-01-02")
 	if l.day != day || l.user != user || l.file == nil {
@@ -281,8 +238,7 @@ func (l *logger) writeJSONL(now time.Time, user string, evt Event) {
 	_, _ = l.file.Write(append(b, '\n'))
 }
 
-// cleanOldLogs removes posture JSONL files older than retentionDays. Runs at
-// startup and once a day after that.
+// cleanOldLogs removes files older than retentionDays (startup, then daily).
 func cleanOldLogs() {
 	for {
 		cutoff := time.Now().AddDate(0, 0, -retentionDays).Format("2006-01-02")

@@ -54,7 +54,6 @@ class IDevice[DEVICE_INFO_T: IDeviceInfo, DEVICE_RESPONSE_T: IDeviceResponse](AB
         """Start the device driver or initialize the service (sync mode)"""
         raise NotImplementedError("start method is not implemented")
 
-    # this method is used to stop the device driver, or just terminate the service
     def stop(self) -> None:
         """Stop the device or terminate the service"""
         if self.runable:

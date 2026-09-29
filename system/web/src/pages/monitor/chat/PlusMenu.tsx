@@ -6,18 +6,8 @@ import {
 import { MenuDivider, MenuItem } from "./MenuPanel";
 import { menuPanel } from "./styles";
 
-// The composer's "+" button. Replaces the bare paperclip: attaching a file is
-// now one entry in a menu that also hosts the Skills sub-menu.
-//
-// Layout: the trigger sits at the bottom-left of the composer, so both the menu
-// and the Skills fly-out open UPWARD (bottom-anchored) and to the right — the
-// composer column is 760px wide and the trigger is at its left edge, so there
-// is always room for the fly-out.
-
 export type SkillsAction = "write" | "upload" | "browse" | "manage";
 
-// "new" opens the Scheduled settings section with the editor already open;
-// "manage" just goes to the list.
 export type ScheduledAction = "new" | "manage";
 
 export function PlusMenu({
@@ -34,8 +24,7 @@ export function PlusMenu({
   const [scheduledOpen, setScheduledOpen] = useState(false);
   const wrapRef = useRef<HTMLDivElement>(null);
 
-  // Sending disables the composer — derive the menu closed rather than closing
-  // it from an effect, so a disabled composer can never render a live menu.
+  // Derived closed while disabled rather than closed from an effect.
   const open = menuOpen && !disabled;
 
   const close = useCallback(() => {
@@ -44,8 +33,6 @@ export function PlusMenu({
     setScheduledOpen(false);
   }, []);
 
-  // Outside click + Escape close the whole menu. Bound only while open so the
-  // composer doesn't pay for a document listener on every keystroke.
   useEffect(() => {
     if (!open) return;
     const onDown = (e: MouseEvent) => {
@@ -89,9 +76,6 @@ export function PlusMenu({
         <div role="menu" className="lm-pop" style={{ ...menuPanel, bottom: 42, left: 0, minWidth: 190 }}>
           <MenuItem icon={Paperclip} label="Attach file" hint="max 10 MB" onClick={() => run(onAttachFile)} />
 
-          {/* Skills row keeps the menu open and toggles the fly-out. Hover opens
-              it too so it feels like a native sub-menu; the click target stays
-              for keyboard/touch. */}
           <div
             onMouseEnter={() => { setSkillsOpen(true); setScheduledOpen(false); }}
             style={{ position: "relative" }}
@@ -108,8 +92,6 @@ export function PlusMenu({
                 <MenuItem icon={Sparkles} label="Create with Agent" hint="plan it together in chat" onClick={() => run(onCreateWithAgent)} />
                 <MenuItem icon={PenLine} label="Write skill" hint="author a new SKILL.md" onClick={() => run(() => onSkillsAction("write"))} />
                 <MenuItem icon={Upload} label="Upload a skill" hint=".skill / .zip / .md from this computer" onClick={() => run(() => onSkillsAction("upload"))} />
-                {/* Splits "add one of your own" from "work with what's out there
-                    / already installed". */}
                 <MenuDivider />
                 <MenuItem icon={Store} label="Browse skills" hint="Autonomous skill store" onClick={() => run(() => onSkillsAction("browse"))} />
                 <MenuItem icon={FolderTree} label="Manage skills" hint="installed on this runtime" onClick={() => run(() => onSkillsAction("manage"))} />
@@ -117,9 +99,6 @@ export function PlusMenu({
             )}
           </div>
 
-          {/* Scheduled sits alongside Skills: both are "things this device can
-              do on its own", as opposed to Attach file which acts on THIS
-              message. Same hover-to-open sub-menu behaviour. */}
           <div
             onMouseEnter={() => { setScheduledOpen(true); setSkillsOpen(false); }}
             style={{ position: "relative" }}

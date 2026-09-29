@@ -1,8 +1,5 @@
 #!/usr/bin/env bash
-# Hermes is ready only once its local HTTP gateway accepts an authenticated
-# health request. This is intentionally stricter than systemctl is-active:
-# systemd can report active while the gateway is still booting and has not bound
-# its listener yet.
+# Stricter than systemctl is-active: systemd reports active before the listener binds.
 set -euo pipefail
 
 curl --fail --silent --show-error --max-time 5 \

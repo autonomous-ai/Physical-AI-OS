@@ -19,26 +19,14 @@ _DEDUPE_INTERVAL_S = 15.0
 _WINDOW_DURATION_S = 120.0
 _PERSISTENT_AFTER = 3
 _SUPPRESS_DURATION_S = 180.0
-# Conversation guard window: skip loud-noise events this long after STT last
-# produced transcript text. On the saturating sensing mic, nearby talk
-# (~740 RMS) reads the same as thunder (~755) — but talk transcribes and
-# thunder comes back empty, so a recent transcript means "people talking".
+# Conversation guard window: skip loud-noise events this long after STT last produced
+# transcript text.
 _CONVERSATION_HOLDOFF_S = 15.0
-# Max age of a worker-recorded RMS reading before the consumer discards it —
-# a stale reading means the guards (TTS/music) blocked consumption for a
-# while, so the sound it captured belongs to a situation that's over.
 _READING_MAX_AGE_S = 10.0
 
 
 class SoundPerception(Perception[Any]):
-    """Detects loud sounds via microphone RMS energy.
-
-    Escalation logic (mirrors Go soundTracker):
-      - occurrence 1-2: forwarded silently (agent reacts with emotion only)
-      - occurrence 3+: marked persistent — agent speaks once, then suppressed for 3 min
-      - 15s dedup prevents flooding between occurrences
-      - 2min silence resets the window
-    """
+    """Detects loud sounds via microphone RMS energy."""
 
     def __init__(
         self,
@@ -90,32 +78,20 @@ class SoundPerception(Perception[Any]):
         self._window_start: float = 0.0
         self._last_passed: float = 0.0
         self._suppress_until: float = 0.0
-        # Latest sampled RMS + timestamp — published every check (even below
-        # threshold) so the web VU meter can show the sensing mic's ambient
-        # level. Sampled once per sensing poll, NOT a continuous stream.
         self._last_rms: float = 0.0
         self._last_rms_ts: float = 0.0
 
-        # Async capture. sd.rec(blocking=True) takes SOUND_SAMPLE_DURATION_S
-        # (0.5s) and used to run INSIDE the sensing observer chain — every
-        # perception behind sound waited out the recording on every tick. A
-        # dedicated worker now records ON REQUEST (same duty cycle and same
-        # device-open pattern as before, so no new ALSA contention) and
-        # publishes (rms, ts); the check callback consumes the previous
-        # reading and requests the next. Detection lags one tick — irrelevant
-        # against the 120s escalation window.
+        # Async capture. sd.rec(blocking=True) takes SOUND_SAMPLE_DURATION_S (0.5s) and
+        # used to run INSIDE the sensing observer chain — every perception behind sound
+        # waited out the recording on every tick.
         self._sample_req = threading.Event()
         self._capture_stop = threading.Event()
         self._capture_thread: threading.Thread | None = None
-        self._reading: tuple[float, float] | None = None  # (rms, unix ts)
+        self._reading: tuple[float, float] | None = None
 
     @property
     def last_level(self) -> tuple[float, float]:
-        """(last sampled RMS on int16 scale, unix ts of that sample).
-
-        ts stays 0.0 until the first sample; readers use it to age the value
-        (samples arrive once per sensing poll, and pause during/after TTS).
-        """
+        """(last sampled RMS on int16 scale, unix ts of that sample)."""
         return self._last_rms, self._last_rms_ts
 
     def set_tts_service(self, tts_service) -> None:
@@ -139,12 +115,10 @@ class SoundPerception(Perception[Any]):
         if now < self._suppress_until:
             return False, 0, False
 
-        # Reset window after silence longer than window duration
         if self._last_passed and (now - self._last_passed) > _WINDOW_DURATION_S:
             self._count = 0
             self._window_start = 0.0
 
-        # Dedup: at most one event per dedupe interval
         if self._last_passed and (now - self._last_passed) < _DEDUPE_INTERVAL_S:
             return False, 0, False
 
@@ -165,7 +139,7 @@ class SoundPerception(Perception[Any]):
     @override
     def cleanup(self) -> None:
         self._capture_stop.set()
-        self._sample_req.set()  # unblock the worker's wait so it can exit
+        self._sample_req.set()
 
     def _ensure_capture_thread(self) -> None:
         if self._capture_thread is not None and self._capture_thread.is_alive():
@@ -177,9 +151,9 @@ class SoundPerception(Perception[Any]):
         self._capture_thread.start()
 
     def _capture_loop(self) -> None:
-        """Record one RMS sample per request from _check_impl (see __init__
-        note). The 0.5s blocking rec lands on THIS thread, not the sensing
-        observer chain."""
+        """Record one RMS sample per request from _check_impl (see __init__ note). The 0.5s
+        blocking rec lands on THIS thread, not the sensing observer chain.
+        """
         sample_rate = 44100
         frames = int(sample_rate * config.SOUND_SAMPLE_DURATION_S)
         while not self._capture_stop.is_set():
@@ -220,15 +194,6 @@ class SoundPerception(Perception[Any]):
             self._sample_req.clear()  # don't record the tail of our own speech
             return
 
-        # Music guard — the speaker's own playback reaches the sensing mic just
-        # like TTS does. Read late from app_state (music service starts after
-        # sensing); `streaming` is True only while audio actually plays.
-        # Movement guard — REAL arm movement (tracking / non-idle animation)
-        # is audible on the sensing mic (500+ RMS); idle breathing is not
-        # (~11 RMS) and is excluded by is_actively_moving, so detection stays
-        # live while the lamp just sits and breathes.
-        # Conversation guard — recent STT transcript = the loud audio is
-        # people talking, not noise (see _CONVERSATION_HOLDOFF_S above).
         try:
             import hal.app_state as app_state
 
@@ -249,13 +214,13 @@ class SoundPerception(Perception[Any]):
         try:
             self._ensure_capture_thread()
             reading = self._reading
-            self._reading = None  # consume once
-            self._sample_req.set()  # ask the worker for a fresh sample
+            self._reading = None
+            self._sample_req.set()
             if reading is None:
                 return
             rms, ts = reading
             if time.time() - ts > _READING_MAX_AGE_S:
-                return  # guards blocked consumption for a while — situation is over
+                return
             self._last_rms = rms
             self._last_rms_ts = ts
             if rms < config.SOUND_RMS_THRESHOLD:
@@ -287,11 +252,6 @@ class SoundPerception(Perception[Any]):
                     {"action": "silent", "occurrence": occurrence},
                 )
             else:
-                # Middle occurrences (2..persistent-1) only advance the
-                # tracker. Each POST is a full agent turn, and "still noisy"
-                # between the transition (occurrence 1) and the escalation
-                # (persistent) tells the agent nothing it can act on — in
-                # sustained noise this cuts 3 turns per cycle to 2.
                 self._push_monitor(
                     "sound_tracker",
                     f"sound occurrence {occurrence} → counted, not forwarded",

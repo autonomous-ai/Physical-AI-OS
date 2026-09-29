@@ -8,17 +8,10 @@ import (
 	"github.com/godbus/dbus/v5/introspect"
 )
 
-// agentPath is the D-Bus object path BlueZ will call back into when it
-// needs pairing input/output. The path is arbitrary but must be stable
-// for the lifetime of the process.
+// agentPath is the D-Bus object path BlueZ calls back into; must stay stable for the process lifetime.
 const agentPath = "/ai/autonomous/buddy/agent"
 
-// Agent implements org.bluez.Agent1 with DisplayOnly capability per the
-// Claude Desktop Hardware Buddy spec. The reference firmware on the
-// M5StickC Plus shows a 6-digit passkey on its display; we have no
-// display, so we log it to the journal and to the standard log output —
-// the operator reads it from `journalctl -u claude-desktop-buddy` and types it
-// into Claude Desktop's pairing prompt.
+// Agent implements org.bluez.Agent1 as DisplayOnly; the passkey is logged for the operator to type into Claude Desktop.
 type Agent struct{}
 
 // Release is called when BlueZ unregisters the agent (e.g. on shutdown).
@@ -33,33 +26,25 @@ func (a *Agent) Cancel() *dbus.Error {
 	return nil
 }
 
-// AuthorizeService is called when a remote tries to use a service that
-// requires user authorization. We blanket-accept since access control
-// is enforced at the GATT layer via the secure-read/secure-write flags.
+// AuthorizeService accepts every service request; access control is left to GATT security flags.
 func (a *Agent) AuthorizeService(device dbus.ObjectPath, uuid string) *dbus.Error {
 	log.Printf("[agent] authorize service %s on %s", uuid, device)
 	return nil
 }
 
-// DisplayPasskey is called by BlueZ during pairing to show the passkey
-// the user must enter on the remote (the desktop). `entered` is the
-// number of digits the user has typed so far on the remote side; we
-// just log the full passkey.
+// DisplayPasskey logs the pairing passkey the user must enter on the desktop.
 func (a *Agent) DisplayPasskey(device dbus.ObjectPath, passkey uint32, entered uint16) *dbus.Error {
 	log.Printf("[agent] PAIRING PASSKEY for %s: %06d (entered %d/6)", device, passkey, entered)
 	return nil
 }
 
-// DisplayPinCode is the legacy BR/EDR pairing equivalent of DisplayPasskey.
-// Should not fire on LE-only flows but provided for completeness.
+// DisplayPinCode is the legacy BR/EDR equivalent of DisplayPasskey.
 func (a *Agent) DisplayPinCode(device dbus.ObjectPath, pincode string) *dbus.Error {
 	log.Printf("[agent] PAIRING PIN for %s: %s", device, pincode)
 	return nil
 }
 
-// RequestPasskey is called when BlueZ needs the user to type a passkey
-// on the device. We're DisplayOnly so this should never be called; if
-// it is, return 0 to signal failure.
+// RequestPasskey should never fire for DisplayOnly; returns 0 to signal failure.
 func (a *Agent) RequestPasskey(device dbus.ObjectPath) (uint32, *dbus.Error) {
 	log.Printf("[agent] WARN: RequestPasskey called on DisplayOnly agent for %s", device)
 	return 0, dbus.NewError("org.bluez.Error.Rejected", nil)
@@ -71,23 +56,19 @@ func (a *Agent) RequestPinCode(device dbus.ObjectPath) (string, *dbus.Error) {
 	return "", dbus.NewError("org.bluez.Error.Rejected", nil)
 }
 
-// RequestConfirmation is called for Just Works / Numeric Comparison
-// pairing — not the DisplayOnly path. Auto-accept so headless setups
-// work; the GATT-level security flags still enforce encryption.
+// RequestConfirmation auto-accepts Just Works / Numeric Comparison so headless setups work.
 func (a *Agent) RequestConfirmation(device dbus.ObjectPath, passkey uint32) *dbus.Error {
 	log.Printf("[agent] confirm pairing for %s passkey=%06d (auto-accept)", device, passkey)
 	return nil
 }
 
-// RequestAuthorization is called when bonding without numeric comparison
-// is requested. Auto-accept.
+// RequestAuthorization auto-accepts bonding without numeric comparison.
 func (a *Agent) RequestAuthorization(device dbus.ObjectPath) *dbus.Error {
 	log.Printf("[agent] authorization for %s (auto-accept)", device)
 	return nil
 }
 
-// agentIntrospectXML satisfies BlueZ's introspection probe. Without
-// this, some BlueZ versions reject the agent registration.
+// agentIntrospectXML answers BlueZ's introspection probe; some BlueZ versions reject the agent without it.
 const agentIntrospectXML = `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
@@ -107,10 +88,7 @@ const agentIntrospectXML = `<?xml version="1.0" encoding="UTF-8" standalone="no"
   </interface>
 </node>`
 
-// registerBluezAgent exports our Agent on the system D-Bus and asks
-// BlueZ to use it as the default with DisplayOnly capability. This
-// matches the Hardware Buddy spec: BlueZ generates a 6-digit passkey
-// and calls DisplayPasskey; the user types it into Claude Desktop.
+// registerBluezAgent exports Agent on the system D-Bus and registers it as BlueZ's default DisplayOnly agent.
 func registerBluezAgent() error {
 	conn, err := dbus.SystemBus()
 	if err != nil {
@@ -128,8 +106,7 @@ func registerBluezAgent() error {
 
 	mgr := conn.Object("org.bluez", "/org/bluez")
 
-	// Best-effort: an old agent registration from a prior run may still be
-	// alive. Unregister first; ignore the error if there's nothing to clean.
+	// Best-effort: drop a stale registration from a prior run.
 	mgr.Call("org.bluez.AgentManager1.UnregisterAgent", 0, dbus.ObjectPath(agentPath))
 
 	if call := mgr.Call("org.bluez.AgentManager1.RegisterAgent", 0,

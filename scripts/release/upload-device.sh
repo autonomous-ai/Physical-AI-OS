@@ -1,12 +1,6 @@
 #!/usr/bin/env bash
-# Publish ONE device profile as its own OTA artifact.
-#
-#   upload-device.sh <device-type>     e.g. upload-device.sh lamp
-#
-# Per-device by design: a team owning a device type publishes only that type and
-# only touches its own metadata entry (devices.<type>) — independent teams never
-# clobber each other. Namespace-agnostic: everything is built from BUCKET_PREFIX
-# (ota-config.sh), so a fork re-namespaces by changing that one knob, not code.
+# Publish one device profile as its own OTA artifact (touches only devices.<type>).
+# Usage: upload-device.sh <device-type>
 set -e
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
@@ -29,7 +23,6 @@ if [[ ! -f "$DEVICE_DIR/ROBOT.md" ]]; then
 fi
 VERSION_FILE="${DEVICE_DIR}/VERSION"
 
-# Auto-increment semver (patch) before upload.
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
   IFS='.' read -r major minor patch <<< "$version"
@@ -47,41 +40,25 @@ ZIP_NAME="${DEVICE_TYPE}-${new_version}.zip"
 ZIP_PATH="${ROOT_DIR}/${ZIP_NAME}"
 GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/devices/${DEVICE_TYPE}/${new_version}.zip}"
 
-# Ship the runtime contract (ROBOT.md / SOUL.md / SAFETY.md / VERSION) plus the
-# device rootfs overlay (rootfs/ — system config like etc/asound.conf installed
-# onto / at build/OTA). Exclude docs/, hardware/ (CAD!), images/ — never read.
 echo "========== Zipping robots/${DEVICE_TYPE} (contract + rootfs) to ${ZIP_NAME} =========="
 rm -f "$ZIP_PATH"
 (cd "$DEVICE_DIR" && zip -r "$ZIP_PATH" . \
   -x "docs/*" "hardware/*" "images/*" ".git/*" "*/__pycache__/*" "*.pyc")
 
-# Stage the canonical on-device updater at the package root, the same way
-# upload-setup.sh inlines it into setup.sh — so it is never a second copy kept in
-# sync by hand (robots/reachy-mini/software-update used to be exactly that, and
-# drifted: it never gained the agent-CLI components). Boards that install from
-# the device package (Reachy's spike-bootstrap.sh looks for
-# `<package>/software-update`, i.e. /opt/devices/<type>/software-update) pick up
-# the current updater with every profile release.
-#
-# Deliberately NOT placed under rootfs/: `software-update device` copies
-# rootfs/. onto / with `cp -a`, which rewrites files in place — and bash reads a
-# script lazily, so overwriting /usr/local/bin/software-update while that very
-# script is the running process would corrupt its own execution.
+# Not under rootfs/: `cp -a` there would overwrite the running software-update script mid-execution.
 SWUPDATE_SRC="${RELEASE_DIR}/../provision/software-update"
 [[ -f "$SWUPDATE_SRC" ]] || { echo "Error: canonical updater not found at $SWUPDATE_SRC" >&2; exit 1; }
 bash -n "$SWUPDATE_SRC" || { echo "Error: canonical software-update is not valid bash" >&2; exit 1; }
 echo "========== Staging canonical software-update into ${ZIP_NAME} =========="
 zip -j "$ZIP_PATH" "$SWUPDATE_SRC"
 
-# One generic renderer for every device package; product overrides are data.
 zip -j "$ZIP_PATH" "${RELEASE_DIR}/../provision/apply-overrides.py"
 
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 ZIP_SHA256=$(ota_artifact_sha256 "$ZIP_PATH")
 
-# Update metadata.json — nested devices.<type> entry. MERGE: never touch other
-# device types' entries (independent per-team releases).
+# Merge: never touch other device types' entries.
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

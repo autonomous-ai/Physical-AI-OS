@@ -1,32 +1,4 @@
-"""presence.enter text — the one place its wording is decided and parsed.
-
-Three consumers read this string and must agree on its shape: the agent
-(skills/sensing/SKILL.md greets from it), the wake-focus gate in
-sensing_service (``has_new_friend``) and people grepping the flow log
-(skills/sensing-track). The ``friend (<name>)`` / ``stranger (<id>)`` labels
-for NEW arrivals are that contract and stay byte-identical.
-
-Shape (#426):
-
-    Person detected — new: stranger (stranger_2); already present: momo (friend); faces in frame: 2 (momo, stranger_2)
-
-- ``new:`` — who just became visible, friend part first. This is what
-  presence.enter has always meant: NEWLY visible, not visible.
-- ``already present:`` — friends boxed in the SAME frame whose last_seen was
-  still inside the forget window. It is the co-presence signal the sensing
-  skill keys its "looks like you've got company" aside on. It lists every
-  friend face-ID matched in that frame; the stranger it sits next to is
-  already corroborated (FACE_STRANGER_MIN_TICKS) and the friend is a
-  positive match, so no extra tick guard is needed (#531). Written
-  ``<name> (friend)`` on purpose: ``friend (<name>)`` means "a friend just
-  arrived" to ``has_new_friend`` and would open the voice gate for a
-  stranger's arrival.
-- ``faces in frame:`` — the number of boxes in the frame the snapshot
-  shows and their labels in detection order, ``unsure`` for a box without
-  an identity yet. Same labels ``_annotate_frame`` draws. It is not the
-  number of arrivals; it describes the newest frame attached, the one the
-  agent is looking at.
-"""
+"""presence.enter text — the one place its wording is decided and parsed (#426)."""
 
 from collections.abc import Iterable
 from typing import NamedTuple
@@ -35,12 +7,7 @@ from hal.drivers.sensing.perceptions.models import Face, PersonKind
 
 
 class FrameFacts(NamedTuple):
-    """What one frame says about itself: its box labels and the friends present.
-
-    Always the newest attached frame — a new friend's current frame, or the
-    tick where a stranger's gaze was confirmed — so the text describes the
-    picture the agent sees.
-    """
+    """What the newest attached frame says about itself: box labels and friends present."""
 
     labels: list[str]
     present_friends: list[str]
@@ -79,11 +46,7 @@ def build_enter_message(
 def has_new_friend(message: str) -> bool:
     """True when the event announces a NEWLY visible friend.
 
-    Only the ``new:`` segment carries the ``friend (<name>)`` label; an
-    already-present friend is written ``<name> (friend)`` and the trailing
-    familiar-stranger hint never contains it, but the check is limited to the
-    first segment anyway so a future segment cannot open the voice gate by
-    accident.
+    Only the ``new:`` segment carries the ``friend (<name>)`` label.
     """
     head = message.split(";", 1)[0]
     return "friend (" in head.lower()

@@ -1,26 +1,7 @@
-"""Pipecat STT stage backed by HAL's own STT provider.
+"""Pipecat STT stage backed by HAL's own streaming STT provider.
 
-The device's streaming STT (`hal.drivers.voice.stt`: the Deepgram-compatible
-relay behind campaign-api, or Deepgram direct) is a thread + callback client
-that Pipecat's stock services cannot reach — they connect to the vendor's
-public endpoint with the vendor's key. This adapter puts that client behind
-Pipecat's `STTService` contract so the pipeline runs STT itself, on the same
-credentials, model and boost terms as the turn-based path.
-
-Two session shapes, chosen by the agent:
-
-- ``per_turn=True`` (turn-based path, `HAL_LIVE_MODE=false`): one provider
-  session per user turn. Opened on the first audio frame, closed by
-  :meth:`finalize` when HAL commits the turn — `close()` sends CloseStream so the
-  server flushes the last transcript before the socket goes. The recv thread is
-  joined inside the sender thread, never on the pipeline loop.
-- ``per_turn=False`` (live mode): one long session for the pipeline's life,
-  reopened if the provider drops it. Endpointing is the pipeline's (Silero +
-  Smart Turn), the provider's own turn events just arrive as final results.
-
-All provider I/O runs on one sender thread so open / send / close never block
-the asyncio loop and stay in order. Transcripts arrive on the provider's recv
-thread and are handed to the loop with `call_soon_threadsafe`.
+per_turn=True: one provider session per turn, closed on finalize; per_turn=False: one long session.
+All provider I/O runs on one sender thread to keep the asyncio loop unblocked and ordered.
 """
 
 from __future__ import annotations
@@ -53,21 +34,16 @@ logger = logging.getLogger(__name__)
 _OP_FINALIZE = object()
 _OP_STOP = object()
 
-# Idle keepalive cadence for a session that is open but not receiving audio
-# (the live session while nobody talks). The relay idle-closes a silent socket.
+# The relay idle-closes a silent socket.
 _KEEPALIVE_S: float = 5.0
-# Backoff after a failed session open (see _open_session).
 _OPEN_RETRY_S: float = 2.0
 
 
 @dataclass
 class STTFinalizeFrame(SystemFrame):
-    """Turn-based mode: the utterance is committed — flush and close the session.
+    """Turn-based mode: the utterance is committed, flush and close the session.
 
-    A system frame, pushed through the pipeline behind the turn's audio, so it
-    reaches the STT stage only after every frame of the utterance has been
-    handed to the sender thread. Signalling the thread directly would race the
-    audio still travelling down the pipeline and finalize an empty session.
+    Sent through the pipeline behind the audio so it can't race the last frames.
     """
 
 
@@ -84,7 +60,6 @@ class HALSTTService(STTService):
         on_turn_finalized: Callable[[bool], None] | None = None,
         **kwargs: Any,
     ) -> None:
-        # No TTFB timeout games: finals are marked finalized=True explicitly.
         super().__init__(sample_rate=sample_rate, **kwargs)
         self._provider = provider
         self._per_turn = per_turn
@@ -93,17 +68,12 @@ class HALSTTService(STTService):
         self._ops: queue.Queue[Any] = queue.Queue()
         self._sender: threading.Thread | None = None
         self._session: STTSession | None = None
-        # Transcript text seen since the session opened (per-turn shape) —
-        # tells the agent whether a finalized turn was empty.
         self._turn_had_text: bool = False
         self._loop: asyncio.AbstractEventLoop | None = None
         self._lock = threading.Lock()
         self._last_send_at: float = 0.0
-        # After a failed open, don't retry on every 64 ms frame: the connect
-        # itself blocks up to 10 s, and the sender thread is the only writer.
+        # A connect blocks up to 10 s; don't retry on every 64 ms frame.
         self._next_open_at: float = 0.0
-
-    # --- Pipecat lifecycle -------------------------------------------------
 
     async def start(self, frame):  # type: ignore[override]
         await super().start(frame)
@@ -138,8 +108,6 @@ class HALSTTService(STTService):
             return
         await super().process_frame(frame, direction)
 
-    # --- Sender thread ------------------------------------------------------
-
     def _sender_loop(self) -> None:
         while True:
             try:
@@ -151,9 +119,7 @@ class HALSTTService(STTService):
                 self._close_session()
                 return
             if op is _OP_FINALIZE:
-                # close() blocks until the server flushed the final transcript,
-                # so read the flag AFTER it — the last (often only) final of a
-                # short utterance arrives during the close.
+                # close() blocks until the final transcript is flushed; read the flag after it.
                 self._close_session()
                 with self._lock:
                     had_text = self._turn_had_text
@@ -213,16 +179,11 @@ class HALSTTService(STTService):
             session.send_audio(audio)  # type: ignore[union-attr]
             self._last_send_at = time.monotonic()
         except Exception as e:  # noqa: BLE001
-            # The relay idle-closes a live session between HAL's live calls
-            # (device-observed: `received 1000 (OK)` on the first frame of the
-            # next call); the close is only seen on this send. Reopen and
-            # resend the frame once so the utterance's first 64 ms survive.
+            # The relay idle-closes live sessions between calls; reopen and resend the frame once.
             logger.warning("[pipecat-stt] send failed: %s — %s", e, "reopening" if retry else "dropping session")
             self._close_session()
             if retry:
                 self._send_audio(audio, retry=False)
-
-    # --- Provider recv thread → pipeline loop ----------------------------------
 
     def _on_provider_transcript(self, text: str, is_final: bool) -> None:
         text = (text or "").strip()
@@ -248,6 +209,5 @@ class HALSTTService(STTService):
         loop.call_soon_threadsafe(self._schedule_push, frame)
 
     def _schedule_push(self, frame: Frame) -> None:
-        # On the loop thread now (call_soon_threadsafe) — let the processor's
-        # task manager own the push so pipeline teardown can cancel it.
+        # Let the processor's task manager own the push so teardown can cancel it.
         self.create_task(self.push_frame(frame))

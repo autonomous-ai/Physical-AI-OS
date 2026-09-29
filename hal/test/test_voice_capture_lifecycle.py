@@ -160,7 +160,6 @@ def test_stop_aborts_raw_backend_under_aec_wrapper(monkeypatch):
     backend = MagicMock()
     wrapped = MagicMock()
     monkeypatch.setattr(module.aec, 'wrap_mic', Mock(return_value=wrapped))
-    # Teardown must address the raw input: the AEC adapter has no abort().
     with s._capture(backend, 16000) as mic:
         assert mic is wrapped.__enter__.return_value
         s.stop()

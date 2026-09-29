@@ -6,11 +6,7 @@ import (
 	"time"
 )
 
-// A timezone change arrives on its own downlink, not as part of a
-// schedule.sync — and the runner resolves every wall-clock cadence against
-// Store.Timezone(). These pin the store half of that fix: without SetTimezone
-// the store keeps whatever zone the last sync carried, and a device moved from
-// UTC to Asia/Saigon goes on firing on the old zone indefinitely.
+// SetTimezone tests: timezone.set arrives separately from schedule.sync.
 
 func TestSetTimezone_UpdatesAndReportsChange(t *testing.T) {
 	s := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
@@ -30,9 +26,7 @@ func TestSetTimezone_UpdatesAndReportsChange(t *testing.T) {
 	}
 }
 
-// A repeat downlink must not report a change — callers skip the recompute and
-// the upward publish on that signal, so a chatty duplicate would otherwise
-// spam a sync result on every message.
+// A repeated value reports no change.
 func TestSetTimezone_NoOpOnRepeat(t *testing.T) {
 	s := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	if err := s.ReplaceWithTimezone(nil, "Asia/Saigon"); err != nil {
@@ -47,9 +41,7 @@ func TestSetTimezone_NoOpOnRepeat(t *testing.T) {
 	}
 }
 
-// The schedule list must survive a timezone-only write — this is the whole
-// point of not routing it through ReplaceWithTimezone, which would need the
-// caller to hand back the schedules and could drop run bookkeeping.
+// A timezone-only write preserves the schedule list.
 func TestSetTimezone_PreservesSchedules(t *testing.T) {
 	s := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	seed := []Schedule{
@@ -76,9 +68,7 @@ func TestSetTimezone_PreservesSchedules(t *testing.T) {
 	}
 }
 
-// The bug this fixes, end to end at the store level: the same 11:00 cadence
-// must resolve to a DIFFERENT instant once the zone changes. Before the fix
-// the store stayed on Etc/UTC and 11:00 kept meaning 11:00Z (18:00 Saigon).
+// The same 11:00 cadence resolves to a different instant after a zone change.
 func TestSetTimezone_ChangesResolvedFireTime(t *testing.T) {
 	s := NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 	spec := Spec{Repeat: RepeatDaily, Time: "11:00"}
@@ -103,9 +93,7 @@ func TestSetTimezone_ChangesResolvedFireTime(t *testing.T) {
 	if utcNext.Equal(sgnNext) {
 		t.Fatalf("fire time unchanged (%v) after a timezone change — the store did not re-anchor", utcNext)
 	}
-	// 11:00 Saigon is 04:00Z. Anchored at exactly 04:00Z the same-day slot is
-	// already spent, so the correct answer rolls to tomorrow 04:00Z — the
-	// point being that the WALL CLOCK now lands on 11:00 local, not 11:00Z.
+	// Anchored at 04:00Z (11:00 Saigon) the slot is spent, so it rolls to tomorrow.
 	if h, m, _ := sgnNext.In(mustLoad(t, "Asia/Saigon")).Clock(); h != 11 || m != 0 {
 		t.Fatalf("Saigon next resolves to %02d:%02d local, want 11:00", h, m)
 	}

@@ -6,8 +6,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// SetExternalHistoryObserver observes completion only. Existing silent/TTS,
-// event delivery and runtime behavior remain unchanged.
+// SetExternalHistoryObserver registers an observer for turn completion only; delivery is unchanged.
 func (h *AgentHandler) SetExternalHistoryObserver(fn func(runID string, failed bool)) {
 	h.externalHistoryObserver = fn
 }

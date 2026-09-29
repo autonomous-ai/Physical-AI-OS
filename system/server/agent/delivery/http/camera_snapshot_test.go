@@ -44,26 +44,17 @@ func TestCameraSnapshotURL(t *testing.T) {
 	}
 }
 
-// Codex-shaped event pair: arguments arrive only on "start", the result only on
-// "end". Without the carry-over the snapshot URL is never built (lamp-0c89,
-// 2026-09-04: valid frame on disk, no image in Flow Monitor).
-//
-// The call order here mirrors the handler exactly — remember at "start", THEN
-// resolve on that same event — because an earlier version consumed the map on
-// the start event and left the end event with nothing. A test that resolved
-// before remembering passed against that bug.
+// Codex-shaped pair: args arrive on "start", the result on "end"; remember, then resolve on the same event.
 func TestSnapshotURLForToolCallCarriesArgsFromStart(t *testing.T) {
 	h := &AgentHandler{}
 	args := `/bin/bash -lc "curl -s http://127.0.0.1:5001/camera/snapshot?save=true"`
 	result := `{"path": "/root/.codex/media/hal-snapshots/snap_1788498402794.jpg"}`
 
-	// start: args present, no result yet.
 	h.rememberToolArgs("item_1", args)
 	if got := h.snapshotURLForToolCall("item_1", args, ""); got != "" {
 		t.Fatalf("start event must not yield a URL, got %q", got)
 	}
 
-	// end: result present, args gone.
 	want := "/api/sensing/agent-snapshot/codex/media-hal-snapshots/snap_1788498402794.jpg"
 	if got := h.snapshotURLForToolCall("item_1", "", result); got != want {
 		t.Fatalf("end event: got %q, want %q", got, want)
@@ -74,8 +65,7 @@ func TestSnapshotURLForToolCallCarriesArgsFromStart(t *testing.T) {
 	}
 }
 
-// The camera skill calls os-server's /api/vision/look, not HAL's raw snapshot
-// endpoint, so the detector must recognize both.
+// The detector must recognize both os-server's /api/vision/look and HAL's snapshot endpoint.
 func TestSnapshotURLForToolCallAcceptsLookEndpoint(t *testing.T) {
 	h := &AgentHandler{}
 	args := `/bin/bash -lc "curl -sX POST http://127.0.0.1:5000/api/vision/look -d '{}'"`
@@ -90,10 +80,7 @@ func TestSnapshotURLForToolCallAcceptsLookEndpoint(t *testing.T) {
 	}
 }
 
-// The search sweep persists the frame it centred on and returns the path in its
-// own response body, so a find must surface a thumbnail the same way a snapshot
-// does. Before this the sweep was the one camera path the gate did not know
-// about: the JPEG was written and then dropped (#342 defect I).
+// A search sweep's persisted frame must surface a thumbnail like a snapshot (#342 defect I).
 func TestCameraSnapshotURLAcceptsASearchResult(t *testing.T) {
 	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{\"target\":\"keyboard\"}'"}`
 	result := `{"found":true,"kind":"keyboard","image_path":"/root/.codex/media/hal-snapshots/snap_1757500000000.jpg"}`
@@ -103,10 +90,7 @@ func TestCameraSnapshotURLAcceptsASearchResult(t *testing.T) {
 	}
 }
 
-// hal/config.py _AGENT_CONFIG_DIRS lists six runtimes and this allow-list had
-// five, so every snapshot taken on opencode was written to a path the UI then
-// refused to serve — silently, since a non-match is indistinguishable from
-// "this tool call was not a camera call".
+// Every runtime in hal/config.py _AGENT_CONFIG_DIRS, including opencode, must be allow-listed.
 func TestCameraSnapshotURLCoversEveryRuntimeHALWritesTo(t *testing.T) {
 	for _, runtime := range []string{
 		"openclaw", "hermes", "picoclaw", "codex", "claudecode", "opencode",
@@ -120,8 +104,7 @@ func TestCameraSnapshotURLCoversEveryRuntimeHALWritesTo(t *testing.T) {
 	}
 }
 
-// Tool output is untrusted agent text. Naming the search endpoint must not turn
-// an arbitrary path into a servable URL.
+// Naming the search endpoint in untrusted tool output must not make an arbitrary path servable.
 func TestCameraSnapshotURLStillRejectsAnUnapprovedSearchPath(t *testing.T) {
 	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{}'"}`
 	for _, result := range []string{
@@ -135,8 +118,7 @@ func TestCameraSnapshotURLStillRejectsAnUnapprovedSearchPath(t *testing.T) {
 	}
 }
 
-// A sweep that found nothing writes no frame. The body still mentions the
-// endpoint, so the gate must not invent a URL out of the miss.
+// A sweep that found nothing must not yield a URL.
 func TestCameraSnapshotURLIgnoresASearchThatFoundNothing(t *testing.T) {
 	args := `{"command":"curl -sX POST http://127.0.0.1:5001/servo/search -d '{}'"}`
 	result := `{"found":false,"image_path":null,"message":"no keyboard found after 18 look(s)"}`
@@ -145,13 +127,7 @@ func TestCameraSnapshotURLIgnoresASearchThatFoundNothing(t *testing.T) {
 	}
 }
 
-// A sweep that outlives the exec tool's foreground window is backgrounded, and
-// its result arrives on a later `poll` call whose args name a session, not the
-// endpoint. Device-observed 2026-09-14 (lamp-ac82, three "find my doll" turns):
-// the frame was written, the URL was buildable, and the card stayed blank
-// because the endpoint gate looked at the poll's args. `image_path` is our own
-// field name — nothing but the sweep writes it — so a result carrying it under
-// an approved runtime path is trusted on the path alone.
+// A backgrounded sweep's poll result carrying image_path under an approved path is trusted on the path alone.
 func TestCameraSnapshotURLAcceptsASearchResultDeliveredByAPoll(t *testing.T) {
 	args := `{"action":"poll","sessionId":"brisk-bison","timeout":15000}`
 	result := `{"status":"ok","found":true,"kind":"doll","image_path":"/root/.openclaw/media/hal-snapshots/snap_1789363665350.jpg","looks_visited":2}`
@@ -161,9 +137,7 @@ func TestCameraSnapshotURLAcceptsASearchResultDeliveredByAPoll(t *testing.T) {
 	}
 }
 
-// The relaxation is scoped to OUR key. A generic `path` in a non-camera tool's
-// output must still need the endpoint in the args, and an unapproved directory
-// is refused regardless of key.
+// Only image_path is relaxed: a generic `path` still needs the endpoint, and unapproved dirs are refused.
 func TestCameraSnapshotURLPollRelaxationIsScopedToImagePath(t *testing.T) {
 	poll := `{"action":"poll","sessionId":"x"}`
 	if got := cameraSnapshotURL(poll, `{"path":"/root/.openclaw/media/hal-snapshots/snap_1.jpg"}`); got != "" {

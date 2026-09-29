@@ -1,14 +1,7 @@
-"""Request-ID propagation shared by dlserver and lbserver.
+"""Request-ID propagation across nginx -> lbserver -> dlserver.
 
-A single id follows one request across nginx -> lbserver -> dlserver so an
-operator-visible failure can be traced with one grep instead of correlating
-wall-clock timestamps across four logs.
-
-Install order matters: `install_request_id_logging()` must run before any log
-record is emitted, because LOG_FORMAT references %(request_id)s and a record
-without that attribute raises during formatting. Using a LogRecord factory
-(rather than a logging.Filter) guarantees *every* record has the attribute,
-including ones from third-party libraries that never pass through our handlers.
+`install_request_id_logging()` must run before any record is emitted; a LogRecord
+factory guarantees every record (incl. third-party) has %(request_id)s.
 """
 
 from __future__ import annotations
@@ -67,30 +60,15 @@ async def request_id_middleware(
         request_id_var.reset(token)
 
 
-# ---------------------------------------------------------------------------
-# Single-instance guard
-# ---------------------------------------------------------------------------
-
-
 class InstanceAlreadyRunning(RuntimeError):
     """Another process already holds the log-directory lock."""
 
 
 def acquire_instance_lock(log_dir: str) -> "object":
-    """Take an exclusive, non-blocking lock on <log_dir>/.instance.lock.
+    """Take an exclusive, non-blocking flock on <log_dir>/.instance.lock.
 
-    Must be called BEFORE the startup log rotation. That rotation renames and
-    unlinks every matching log file with no liveness check, so starting a second
-    instance used to yank the log files out from under the first and orphan its
-    open handles -- which is what made the 2026-08-10 outage unrecoverable.
-
-    flock is used rather than a PID file because it is race-free (no TOCTOU
-    window between "is that PID alive?" and "claim it") and self-cleaning: the
-    kernel releases it when the holder dies, however it dies -- including
-    SIGKILL, which is how a wedged server has to be stopped.
-
-    Returns the open file object; the caller must keep a reference to it for the
-    process lifetime, since closing it releases the lock.
+    Must be called before startup log rotation. Returns the open file; keep a
+    reference for the process lifetime, since closing it releases the lock.
     """
     import fcntl
     from pathlib import Path

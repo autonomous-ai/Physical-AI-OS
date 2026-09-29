@@ -17,10 +17,7 @@ from core.perception.object.predictors.base import ObjectDetector
 
 
 class YOLOWorldDetector(ObjectDetector):
-    """Zero-shot object detection using YOLO-World (ultralytics).
-
-    Classes are set per-request via model.set_classes().
-    """
+    """Zero-shot object detection using YOLO-World (ultralytics); classes set per request."""
 
     DEFAULT_MODEL_PATH: Path | None = Path("yolov8s-worldv2.pt")
 
@@ -95,7 +92,6 @@ class YOLOWorldDetector(ObjectDetector):
             conf_np: npt.NDArray[np.float32] = boxes.conf.cpu().numpy().astype(np.float32)
             cls_np: npt.NDArray[np.int64] = boxes.cls.cpu().numpy().astype(np.int64)
 
-            # Discard unknown class indices
             valid_np = cls_np < len(effective_classes)
             xyxy_np = xyxy_np[valid_np]
             conf_np = conf_np[valid_np]

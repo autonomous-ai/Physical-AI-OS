@@ -1,43 +1,7 @@
 #!/usr/bin/env python3
-"""os-server-observer — PicoClaw process hook forwarding channel (Telegram) turns
-to os-server so they appear in the device Flow Monitor and drive [HW:/…] markers.
+"""os-server-observer — PicoClaw process hook forwarding channel turns to os-server.
 
-Mirror of the Hermes os-server-observer hook, adapted to PicoClaw's process-hook
-wire protocol: a long-lived subprocess speaking NDJSON JSON-RPC over stdio — one
-JSON object per line on stdin; responses on stdout. PicoClaw spawns it because
-config.json has hooks.enabled + hooks.processes.os-server-observer.enabled + this
-script's command (see runtimes/picoclaw/hooks.go).
-
-Wire protocol (verified on-device, picoclaw 0.2.9):
-  * hook.hello (REQUEST, has "id") — handshake. Respond {"action":"continue"}.
-  * hook.runtime_event (NOTIFICATION, no "id") — params is the events.Event:
-    {kind, scope{channel,chat_id,sender_id,session_key,turn_id,…}, payload:{…}}.
-      - kind "agent.turn.start": payload.UserMessage is the inbound user text.
-      - kind "agent.turn.end":   payload.UserMessage + payload.FinalContent (the
-        assistant reply, WITH any [HW:/…] markers). FinalContent is what os-server
-        turns into the chat_response + fires HW from.
-    Other kinds (agent.tool.*, agent.llm.*) are ignored.
-  * Any other REQUEST (before_llm/after_llm if ever configured) — we are in the
-    turn's critical path, so respond {"action":"continue"} IMMEDIATELY, never block.
-
-We forward, per turn: agent:start (with UserMessage) on turn.start and agent:end
-(with FinalContent) on turn.end, mapped to the ChannelTurn payload os-server's
-shared handler already serves for Hermes (handler_channel_turn.go). PicoClaw pairs
-these into one Flow turn by session_key.
-
-By default every channel the gateway processes is forwarded (channel-agnostic, like
-the Hermes observer): os-server's skipPlatform drops the ones it already logs itself
-— chiefly the device-local "pico" WS channel (its own sendChat/session.message path)
-and cli/api_server. Set OBSERVER_CHANNELS to a comma list only to restrict forwarding
-to an explicit allowlist. Internal senders in SKIP_SENDERS (heartbeat) are always
-dropped.
-
-Besides POSTing, every forwarded payload is appended as one JSON line (JSONL) to
-OBSERVER_LOG (default /root/.picoclaw/logs/messages_hooks.log) — a local audit
-trail written before the POST, so it survives an os-server outage.
-
-Set OBSERVER_DEBUG=1 to dump every raw stdin line to stderr (PicoClaw surfaces
-subprocess stderr in its gateway log) — used to verify the field names above.
+Speaks NDJSON JSON-RPC over stdio; every request is answered with "continue" at once.
 """
 
 import datetime
@@ -50,16 +14,13 @@ import urllib.request
 OS_SERVER_TURN_URL = "__OS_SERVER_TURN_URL__"
 DEBUG = os.environ.get("OBSERVER_DEBUG") == "1"
 HOOK_LOG = os.environ.get("OBSERVER_LOG", "/root/.picoclaw/logs/messages_hooks.log")
-# OBSERVER_CHANNELS is an OPTIONAL allowlist. Empty/unset (the default) forwards
-# EVERY channel — the device-local "pico" WS channel is excluded downstream by
-# os-server's skipPlatform, not here. Set a comma list to restrict forwarding.
+# Optional channel allowlist; empty forwards every channel.
 FORWARD_CHANNELS = {
     c.strip().lower()
     for c in os.environ.get("OBSERVER_CHANNELS", "").split(",")
     if c.strip()
 }
-# Internal senders whose turns ride a real channel (e.g. the heartbeat turn is
-# tagged channel=telegram) but are not user messages — never forward them.
+# Internal senders riding a real channel (e.g. heartbeat) — never forwarded.
 SKIP_SENDERS = {
     s.strip()
     for s in os.environ.get("OBSERVER_SKIP_SENDERS", "heartbeat").split(",")
@@ -73,8 +34,7 @@ def _debug(*a):
 
 
 def _log_json(record):
-    """Append one JSON line to HOOK_LOG. Best-effort + independent of the POST, so
-    the local audit trail survives even when os-server is down."""
+    """Append one JSON line to HOOK_LOG (best-effort, independent of the POST)."""
     try:
         os.makedirs(os.path.dirname(HOOK_LOG), exist_ok=True)
         with open(HOOK_LOG, "a", encoding="utf-8") as f:
@@ -98,18 +58,14 @@ def _send(payload):
 
 def _post(event, ctx):
     payload = {"event": event, "context": ctx}
-    # Local audit copy first (synchronous, fast, keeps event order).
     _log_json({"ts": datetime.datetime.now(datetime.timezone.utc).isoformat(), **payload})
-    # Fire the network POST OFF the stdin loop so a slow/hung os-server never stalls
-    # the next event (observer_timeout_ms is only 500ms). Best-effort daemon thread.
+    # POST off the stdin loop: observer_timeout_ms is only 500ms.
     threading.Thread(target=_send, args=(payload,), daemon=True).start()
 
 
 def _ctx(scope, message="", response=""):
     """Map a PicoClaw runtime-event scope → the ChannelTurn payload context."""
-    # platform must match `channel` in handle(): default to "" (NOT "telegram") so an
-    # event with no channel is dropped by os-server's skipPlatform, not mislabeled as
-    # a telegram turn now that forwarding is channel-agnostic.
+    # Default platform "" so os-server's skipPlatform drops channel-less events.
     return {
         "platform": str(scope.get("channel") or "").lower(),
         "user_id": str(scope.get("sender_id") or ""),
@@ -124,8 +80,7 @@ def handle(msg):
     if not isinstance(msg, dict):
         return
 
-    # CRITICAL PATH: answer every request (hook.hello handshake + any intercept)
-    # immediately so picoclaw is never blocked waiting on us.
+    # Critical path: answer every request immediately so picoclaw never blocks.
     if msg.get("id") is not None:
         sys.stdout.write(
             json.dumps({"jsonrpc": "2.0", "id": msg["id"], "result": {"action": "continue"}})
@@ -133,7 +88,6 @@ def handle(msg):
         )
         sys.stdout.flush()
 
-    # Only observe runtime events carry the turn boundaries + text we forward.
     if msg.get("method") != "hook.runtime_event":
         return
     params = msg.get("params") or {}
@@ -147,9 +101,9 @@ def handle(msg):
     sender = str(scope.get("sender_id") or "")
 
     if FORWARD_CHANNELS and channel not in FORWARD_CHANNELS:
-        return  # an explicit allowlist is set and this channel is not on it
+        return
     if sender in SKIP_SENDERS or str(scope.get("session_key") or "") in SKIP_SENDERS:
-        return  # heartbeat / internal turns riding the channel
+        return
 
     if kind.endswith("turn.start"):
         _post("agent:start", _ctx(scope, message=str(payload.get("UserMessage") or "")))

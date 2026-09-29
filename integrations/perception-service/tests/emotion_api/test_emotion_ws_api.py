@@ -1,8 +1,4 @@
-"""Integration tests against a remote DL backend server (emotion endpoint).
-
-Requires DL_BACKEND_URL and DL_API_KEY in .env (or environment).
-Run with: pytest tests/emotion_api/test_emotion_ws_api.py -v
-"""
+"""Integration tests against a remote DL backend (emotion). Requires DL_BACKEND_URL and DL_API_KEY."""
 
 import base64
 import json

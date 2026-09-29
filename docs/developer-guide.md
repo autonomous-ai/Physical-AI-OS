@@ -62,7 +62,7 @@ sudo -i
 | Path | What lives there |
 |---|---|
 | `/usr/local/bin/os-server` | Go binary — main HTTP API server (Gin, :5000) |
-| `/usr/local/bin/bootstrap` | Go binary — OTA worker |
+| `/usr/local/bin/bootstrap-server` | Go binary — OTA worker |
 | `/opt/hal/` | Python HAL (FastAPI, :5001) — full source lives here |
 | `/opt/hal/.env` | HAL environment variables (audio devices, VAD, model URLs, …) |
 | `/root/config/config.json` | OS Server config — LLM base URL, API key, channel tokens, Wi-Fi, admin hash |
@@ -71,10 +71,11 @@ sudo -i
 | `/etc/systemd/system/os-server.service` | Service unit for os-server |
 | `/etc/systemd/system/hal.service` | Service unit for HAL |
 | `/etc/systemd/system/bootstrap.service` | Service unit for OTA worker |
-| `/etc/nginx/sites-enabled/default` | Nginx — proxies `/api/*` to os-server, `/api/hardware/*` to HAL, serves setup Web UI |
+| `/etc/nginx/conf.d/<DEVICE_TYPE>.conf` | Nginx (written by `setup.sh`, which also removes `sites-enabled/default`) — proxies `/api/*` to os-server, `/hw/*` to HAL (loopback callers only), serves setup Web UI |
 
-Web (nginx) sits in front on port 80. The `/api/*` prefix is os-server, the
-`/api/hardware/*` prefix is HAL.
+Web (nginx) sits in front on port 80. The `/api/*` prefix is os-server;
+os-server itself reverse-proxies `/api/hardware/*` to HAL (admin auth required).
+nginx's `/hw/*` → HAL location allows only `127.0.0.1` / `::1`.
 
 ### 1.3 Web CLI — browser terminal from the Admin panel
 
@@ -244,7 +245,7 @@ build step needed.
 ```bash
 # From the repo root
 make os-build            # → system/os-server
-make os-build-bootstrap  # → system/bootstrap
+make os-build-bootstrap  # → system/bootstrap-server
 ```
 
 Push the binary and restart:
@@ -306,7 +307,8 @@ Nginx serves the SPA — no restart needed after replacing files.
 ## 5. Controlling the OTA bootstrap
 
 The `bootstrap` service polls `https://cdn.autonomous.ai/os/ota/metadata.json`
-and applies any component (os-server, HAL, web, bootstrap itself) whose
+and applies any component (os-server, HAL, web, bootstrap itself, Buddy, the
+device profile, and the active agent runtime's CLI) whose
 official version is newer than what's on disk. Left running, it **will**
 overwrite any custom os-server / HAL / web build you pushed with `scp`,
 usually within a minute — the Intern team ships OTAs on their own cadence
@@ -337,8 +339,9 @@ sudo journalctl -u bootstrap -f
 ## 6. HAL API — TTS / STT / Mic / Speaker / LED
 
 Full HAL routes live in `hal/routes/`. Reach them from the device with
-`curl http://127.0.0.1:5001/…`, or from your laptop / web dashboard via nginx
-at `http://<device-ip>/api/hardware/…`.
+`curl http://127.0.0.1:5001/…`, or from your laptop / web dashboard via
+os-server's admin-authenticated proxy at `http://<device-ip>/api/hardware/…`
+(nginx `/api/` → os-server → HAL).
 
 Every endpoint returns `{"status": 1, "data": <payload>, "message": null}` on
 success, `{"status": 0, "data": null, "message": "…"}` on failure.
@@ -359,10 +362,10 @@ for the decorator (e.g. `@router.post("/voice/speak"`) in the same file.
 | What | Where |
 |---|---|
 | Route module | `hal/routes/voice.py` |
-| `POST /voice/speak` — one-shot say (interrupts current speech) | `voice.py:189` — `def speak_text(req: SpeakRequest)` |
-| `POST /voice/speak-queue` — say after current speech finishes | `voice.py:284` — `def speak_queue_text(req: SpeakRequest)` |
-| `POST /tts/stop` — cut off the currently-playing sentence | `voice.py:328` — `def stop_tts()` |
-| `SpeakRequest` schema (text, voice, provider, interruptible, cached…) | `hal/models.py:228` |
+| `POST /voice/speak` — one-shot say (interrupts current speech) | `voice.py:310` — `def speak_text(req: SpeakRequest)` |
+| `POST /voice/speak-queue` — say after current speech finishes | `voice.py:463` — `def speak_queue_text(req: SpeakRequest)` |
+| `POST /tts/stop` — cut off the currently-playing sentence | `voice.py:515` — `def stop_tts()` |
+| `SpeakRequest` schema (text, voice, provider, interruptible, cached…) | `hal/models.py:327` |
 
 ```bash
 # Fire-and-forget say
@@ -396,9 +399,9 @@ call it to transcribe an ad-hoc WAV. Instead:
 - Live turn stream (VAD → STT → LLM → TTS): subscribe to the OS Server
   flow monitor SSE endpoint — see `docs/flow-monitor.md`.
 - Current voice-pipeline state (STT provider, language, VAD, is speaking): 
-  `GET /voice/status` — `hal/routes/voice.py:443` (`def voice_status()`).
+  `GET /voice/status` — `hal/routes/voice.py:682` (`def voice_status()`).
 - Live mic RMS level (SSE, useful for a "am I hearing you?" indicator):
-  `GET /voice/mic-level` — `hal/routes/voice.py:376`
+  `GET /voice/mic-level` — `hal/routes/voice.py:605`
   (`async def mic_level_stream(...)`).
 
 ```bash
@@ -406,16 +409,17 @@ curl http://127.0.0.1:5001/voice/status
 curl -N http://127.0.0.1:5001/voice/mic-level   # SSE stream
 ```
 
-The full STT drivers (OpenAI, Whisper local, Google, …) live under
-`hal/drivers/stt/` if you need to plug a new one in.
+The STT providers (`deepgram.py`, `autonomous.py`, behind the abstract
+`provider.py` interface) live under `hal/drivers/voice/stt/` if you need to
+plug a new one in.
 
 ### 6.3 Mic — mute / unmute mid-conversation
 
 | What | Where |
 |---|---|
 | Route module | `hal/routes/voice.py` |
-| `POST /voice/mute` — stops feeding audio into VAD/STT, ignores mic | `voice.py:336` — `def mute_mic()` |
-| `POST /voice/unmute` — re-arms the mic | `voice.py:349` — `def unmute_mic()` |
+| `POST /voice/mute` — stops feeding audio into VAD/STT, ignores mic | `voice.py:551` — `def mute_mic()` |
+| `POST /voice/unmute` — re-arms the mic | `voice.py:570` — `def unmute_mic()` |
 | Slide-switch driver (physical mic mute on PD1, Intern v2 Pro) | `hal/drivers/privacy_button.py` — calls `mute_mic()` / `unmute_mic()` on GPIO edge |
 
 ```bash
@@ -432,11 +436,11 @@ button you want to bolt on.
 | What | Where |
 |---|---|
 | Route module | `hal/routes/music.py` |
-| `POST /audio/play` — play a music track or WAV path | `music.py:219` — `def audio_play(req: MusicPlayRequest)` |
-| `POST /audio/stop` — stop current playback | `music.py:271` — `def audio_stop()` |
-| `POST /speaker/mute` — mute the speaker at the ALSA level (TTS still runs but silent) | `music.py:280` — `def mute_speaker()` |
-| `POST /speaker/unmute` — restore | `music.py:294` — `def unmute_speaker()` |
-| `GET /audio/status` — what's playing right now | `music.py:304` — `def audio_status()` |
+| `POST /audio/play` — play a music track or WAV path | `music.py:218` — `def audio_play(req: MusicPlayRequest)` |
+| `POST /audio/stop` — stop current playback | `music.py:278` — `def audio_stop()` |
+| `POST /speaker/mute` — mute the speaker at the ALSA level (TTS still runs but silent) | `music.py:288` — `def mute_speaker()` |
+| `POST /speaker/unmute` — restore | `music.py:312` — `def unmute_speaker()` |
+| `GET /audio/status` — what's playing right now | `music.py:327` — `def audio_status()` |
 
 ```bash
 # Play a local WAV (playing music via the LLM's music skill goes here too)
@@ -462,16 +466,16 @@ actually shut up.
 | What | Where |
 |---|---|
 | Route module | `hal/routes/led.py` |
-| `POST /led/solid` — solid RGB colour | `led.py:73` — `def set_led_solid(req: LEDSolidRequest)` |
-| `POST /led/paint` — per-pixel colours | `led.py:91` — `def set_led_paint(req: LEDPaintRequest)` |
-| `POST /led/effect` — named animation (breathing, blink, pulse, rainbow…) | `led.py:119` — `def start_led_effect(req: LEDEffectRequest)` |
-| `POST /led/status` — status-cue overlay (booting, listening, error) | `led.py:183` — `def set_led_status(req: LEDStatusRequest)` |
-| `POST /led/off` | `led.py:101` — `def turn_off_leds(...)` |
-| `POST /led/effect/stop` — stop the running animation, keep last frame | `led.py:229` — `def stop_led_effect()` |
-| `POST /led/restore` — hand strip back to user's saved state (after a transient overlay) | `led.py:206` — `def restore_led()` |
-| `GET /led` — current state | `led.py:35` — `def get_led_state()` |
+| `POST /led/solid` — solid RGB colour | `led.py:127` — `def set_led_solid(req: LEDSolidRequest)` |
+| `POST /led/paint` — per-pixel colours | `led.py:176` — `def set_led_paint(req: LEDPaintRequest)` |
+| `POST /led/effect` — named animation (breathing, blink, pulse, rainbow…) | `led.py:246` — `def start_led_effect(req: LEDEffectRequest)` |
+| `POST /led/status` — status-cue overlay (booting, listening, error) | `led.py:340` — `def set_led_status(req: LEDStatusRequest)` |
+| `POST /led/off` | `led.py:212` — `def turn_off_leds(...)` |
+| `POST /led/effect/stop` — stop the running animation, keep last frame | `led.py:411` — `def stop_led_effect()` |
+| `POST /led/restore` — hand strip back to user's saved state (after a transient overlay) | `led.py:363` — `def restore_led()` |
+| `GET /led` — current state | `led.py:54` — `def get_led_state()` |
 | `GET /led/color` — ring state: brightest pixel + `uniform` flag, read across every pixel | `led.py` — `def get_led_color()` |
-| Named status → colour/effect table (STATUS_LED_PRESETS) | `hal/presets.py:188` |
+| Named status → colour/effect table (STATUS_LED_PRESETS) | `hal/presets.py:350` |
 
 Concrete calls, all copy-pasteable:
 
@@ -524,26 +528,26 @@ copy patterns from):
 |---|---|---|
 | Status-cue overlay service | `system/statusled/service.go:71` — `func (s *Service) Set(state State)` | Priority-stacked overlay: booting / ota / error / connectivity / hal_down / agent_down / hardware / wifi_connecting. Highest priority wins; on `Clear` the strip is restored. |
 | State constants (booting, wifi_connecting, agent_down, …) | `system/statusled/service.go:19-26` | The exact set of states you can pass to `/led/status`. |
-| Wi-Fi connecting blue-blink | `system/device/setup.go:80` — `s.statusLED.Set(statusled.StateWifiConnecting)` | Fires the blue blink while the STA join is happening during setup. |
+| Wi-Fi connecting blue-blink | `system/device/setup.go:145` — `s.statusLED.Set(statusled.StateWifiConnecting)` | Fires the blue blink while the STA join is happening during setup. |
 | HAL health watchdog | `system/healthwatch/service.go:94,107,136` | Sets `StateHALDown` / `StateHardware` when HAL or a driver stops responding. |
-| Agent-runtime health | `runtimes/openclaw/service_ws.go:43`, `runtimes/claudecode/client.go:57`, `runtimes/codex/client.go:60`, `runtimes/opencode/client.go:60`, `runtimes/picoclaw/client.go:50`, `runtimes/hermes/health.go:126` | Every agent runtime sets `StateAgentDown` when its socket drops so the user sees the LED go red without having to check logs. |
+| Agent-runtime health | `runtimes/openclaw/service_ws.go:43`, `runtimes/claudecode/client.go:60`, `runtimes/codex/client.go:65`, `runtimes/opencode/client.go:63`, `runtimes/picoclaw/client.go:54`, `runtimes/hermes/health.go:141` | Every agent runtime sets `StateAgentDown` when its socket drops so the user sees the LED go red without having to check logs. |
 | Ambient "breathing" idle behaviour | `system/ambient/service.go` | Drives soft colour drift + breathing while there's no interaction. Uses `/led/effect` with `transient=true` so it doesn't clobber the user's saved state. |
 | LLM skill / tool-call bridge (`[HW:/led/…:{...}]`) | `system/server/agent/delivery/http/handler_hw.go` | When an OpenClaw / Hermes / Claude Code skill emits e.g. `[HW:/led/solid:{"color":[255,0,0]}]`, this handler forwards it to HAL. This is how any skill turns the LED red without wiring plumbing itself. |
-| Go HAL client (helpers you'd call from an os-server service) | `system/lib/hal/client.go:76-131` — `StartEffect`, `StopEffect`, `SetLEDStatus`, `RestoreLED`, `GetColor` | Fire-and-forget wrappers around the endpoints above. New Go services should use these instead of hand-rolling HTTP. |
+| Go HAL client (helpers you'd call from an os-server service) | `system/lib/hal/client.go:138-200` — `SetEffect`, `StopEffect`, `SetStatus`, `RestoreLED`, `GetColor` | Fire-and-forget wrappers around the endpoints above. New Go services should use these instead of hand-rolling HTTP. |
 
 Full LED preset catalogue and rendering rules (colours, priorities, per-preset
-behaviour): `docs/led-control.md`.
+behaviour): `robots/lamp/docs/led-control.md`.
 
 ### 6.6 Other useful HAL surfaces
 
 | Domain | Source file | Highlights |
 |---|---|---|
 | Servo (Lamp only) | `hal/routes/servo.py` | `/servo/aim`, `/servo/track`, `/servo/play` |
-| Emotion | `hal/routes/emotion.py` | `/emotion/express` — coordinated servo + LED + display |
-| Scene | `hal/routes/scene.py` | `/scene/reading`, `/scene/focus`, … |
-| Camera | `hal/routes/camera.py` | `/camera/snap`, `/camera/enable`, `/camera/disable` |
-| Display (Lamp) | `hal/routes/display.py` | `/display/text`, `/display/eye` |
-| Face recognition | `hal/routes/face.py` | Enroll / list / remove |
+| Emotion | `hal/routes/emotion.py` | `POST /emotion` — coordinated servo + LED; `/emotion/presets`, `/emotion/status` |
+| Scene | `hal/routes/scene.py` | `GET /scene` (list), `POST /scene` (activate by name), `POST /scene/off` |
+| Camera | `hal/routes/camera.py` | `/camera/snapshot`, `/camera/stream`, `/camera/enable`, `/camera/disable` |
+| Display (Lamp) | `hal/routes/display.py` | `/display/eyes`, `/display/info`, `/display/eyes-mode`, `/display/snapshot` |
+| Face recognition | `hal/routes/sensing.py` | `/face/enroll`, `/face/owners`, `/face/remove`, `/face/reset` |
 
 ---
 
@@ -606,7 +610,7 @@ The React SPA in `system/web/` covers both flows:
 
 | Route | What it is | Key files |
 |---|---|---|
-| `/setup` | First-boot provisioning — Wi-Fi + admin password + LLM/channel prefill | `src/pages/Setup.tsx`, `src/components/setup/*` |
+| `/setup` | First-boot provisioning — Wi-Fi + admin password + LLM/channel prefill | `src/pages/setup/Setup.tsx`, `src/components/setup/*` |
 | `/login` | Admin login (bcrypt-checked against `config.admin_password_hash`) | `src/pages/Login.tsx` |
 | `/monitor` | Post-login dashboard — flow monitor, live device state | `src/pages/monitor/*` |
 | `/setting` | Admin settings — rotate password, edit config, channel management | `src/pages/settings/*` |

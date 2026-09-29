@@ -16,8 +16,7 @@ func sampleSkillFiles() []domain.SkillBundleFile {
 	}
 }
 
-// List mode must be bounded: a caller asking for the listing hasn't asked for
-// contents, and a skill's combined text can exceed what a broker will carry.
+// List mode strips every file body.
 func TestStripSkillFileText(t *testing.T) {
 	got := stripSkillFileText(sampleSkillFiles())
 	if len(got) != 3 {
@@ -28,7 +27,6 @@ func TestStripSkillFileText(t *testing.T) {
 			t.Errorf("%s still carries a body: text=%q truncated=%v", f.Path, f.Text, f.Truncated)
 		}
 	}
-	// Metadata survives so a client can render the list and pick a file.
 	if got[0].Path != "music/SKILL.md" || got[0].Size != 12 {
 		t.Errorf("metadata lost: %+v", got[0])
 	}
@@ -38,7 +36,6 @@ func TestStripSkillFileText(t *testing.T) {
 }
 
 func TestCapSkillFileText(t *testing.T) {
-	// Under the cap: untouched.
 	small := domain.SkillBundleFile{Path: "a.md", Size: 7, Text: "small"}
 	if got := capSkillFileText(small); got != small {
 		t.Errorf("small file was modified: %+v", got)
@@ -52,7 +49,6 @@ func TestCapSkillFileText(t *testing.T) {
 	if got.Text != strings.Repeat("a", mqttMaxFileTextBytes) {
 		t.Errorf("text = %q, want exactly %d bytes", got.Text, mqttMaxFileTextBytes)
 	}
-	// Size keeps reporting the real length, not the truncated preview's.
 	if got.Size != int64(len(big)) {
 		t.Errorf("size = %d, want %d", got.Size, len(big))
 	}

@@ -48,7 +48,6 @@ class UserSpeechOutput(OutputBase):
 
     type: OutputTypeEnum = OutputTypeEnum.USER_SPEECH
     turn_id: str
-    # Incremental provider transcription, attributed to this exact input turn.
     transcript: str = ""
     # Provider transcription completion is emotion evidence, not a VAD timestamp.
     transcript_finished: bool = False
@@ -67,7 +66,6 @@ class FunctionCallOutput(OutputBase):
     name: str
     arguments: str  # JSON string
     call_id: str
-    # Provider-side transcript of the utterance that triggered the call
-    # (Gemini input_transcription); empty when the provider has none.
+    # Provider transcript of the triggering utterance (Gemini input_transcription); may be empty.
     user_transcript: str = ""
     handoff_context: str = ""

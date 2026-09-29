@@ -6,8 +6,7 @@ import (
 	"github.com/go-playground/validator/v10"
 )
 
-// baseSetupRequest returns a request with every still-required field populated,
-// so each test below varies exactly one thing.
+// baseSetupRequest returns a request with every required field populated.
 func baseSetupRequest() SetupRequest {
 	return SetupRequest{
 		SSID:             "home-wifi",
@@ -21,10 +20,7 @@ func baseSetupRequest() SetupRequest {
 	}
 }
 
-// TestSetupRequestNetworkFieldsOptional locks in the contract that makes a
-// wired setup possible: an absent SSID is a valid request meaning "the device
-// already has an uplink, don't join any WiFi". device.Setup is what verifies
-// that claim — validation must not reject it up front.
+// TestSetupRequestNetworkFieldsOptional checks an absent SSID/password passes validation (wired setup).
 func TestSetupRequestNetworkFieldsOptional(t *testing.T) {
 	v := validator.New()
 
@@ -39,19 +35,16 @@ func TestSetupRequestNetworkFieldsOptional(t *testing.T) {
 			wantPass: true,
 		},
 		{
-			// The ethernet case.
 			name:     "no ssid and no password",
 			mutate:   func(r *SetupRequest) { r.SSID = ""; r.Password = "" },
 			wantPass: true,
 		},
 		{
-			// Open WiFi — also rejected before this change.
 			name:     "ssid without password",
 			mutate:   func(r *SetupRequest) { r.Password = "" },
 			wantPass: true,
 		},
 		{
-			// Guard against over-relaxing: the rest of the contract still holds.
 			name:     "missing llm api key still rejected",
 			mutate:   func(r *SetupRequest) { r.LLMAPIKey = "" },
 			wantPass: false,

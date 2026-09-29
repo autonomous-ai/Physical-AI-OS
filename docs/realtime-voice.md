@@ -1392,9 +1392,9 @@ dropdown (`RealtimeSection.tsx`) list the same values, in that order, before
 
 | Provider | Class | Threading model | Default model | Sample rate |
 |----------|-------|-----------------|---------------|-------------|
-| Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | private asyncio loop on a `gemini-io` thread; send/recv threads submit coroutines via `run_coroutine_threadsafe` | `gemini-2.5-flash-native-audio-preview-12-2025` | 16000 Hz |
+| Gemini Live | `voice_agent/gemini_live.py` `GeminiLiveAgent` | private asyncio loop on a `gemini-io` thread; send/recv threads submit coroutines via `run_coroutine_threadsafe` | `gemini-3.8-live-extended-thinking` (os-server seed; HAL's no-config fallback is `gemini-3.8-live`) | 16000 Hz |
 | OpenAI Realtime | `voice_agent/openai_realtime.py` `OpenAIRealtimeAgent` | fully synchronous; one `RealtimeConnection` shared by send/recv threads, serialized by a reentrant lock | `gpt-realtime-2` | 24000 Hz in and out |
-| GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 24000) |
+| GPT-Live | `voice_agent/gpt_live.py` `GPTLiveAgent` | fully synchronous; one `LiveConnection` shared by send/recv threads, serialized by a reentrant lock, plus a `gptlive-watchdog` thread that synthesizes the turn boundary the wire never sends | `gpt-live-1` | 16000 or 24000 Hz, **one** PCM format for both directions (default 16000) |
 | Pipecat v1 | `voice_agent/pipecat_v1.py` `PipecatV1Agent` (+ `pipecat_pipeline.py`, `pipecat_stt.py`) | **no vendor session**: a Pipecat pipeline on a private asyncio loop (`pipecat-io` thread) inside HAL; the send thread submits frames with `run_coroutine_threadsafe`, the pipeline's `EventSink` writes straight to the recv queue, the recv thread only watches pipeline health | `qwen/qwen3.6-35b-a3b` via the campaign-api Qwen relay (any OpenAI-compatible chat endpoint) | 16000 Hz in; **text out** (HAL's TTS speaks) |
 
 Native realtime playback preempts interruptible fillers using the same bounded
@@ -2894,16 +2894,23 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    session memory holds. `gemini-3.1-flash-live` and OpenAI accept both. Every drop
    is logged (`[realtime->model] DROPPED …`).
 
-   **This does not apply to the shipped default.** `REALTIME_GEMINI_MODEL` defaults to
-   `gemini-3.8-live` (`hal/config.py`), which is not native-audio, so
-   the guard is off and both the context and the correction reach the model. It
-   re-engages only when a `*native-audio*` model is configured. The default is the
-   plain `gemini-3.8-live`, not `-extended-thinking`: cost-lean, it takes the
-   default BLOCKING tools and omits thinking (it rejects `thinkingLevel`, so
-   `gemini_live._build_config` sends none). The extended variant is usable too — it
-   accepts only NON_BLOCKING tool declarations, which `_build_config` now sets for
-   it (a BLOCKING one made it error mid-turn with a spoken "I'm sorry, an error
-   occurred.", device-observed 2026-09-17) — but plain live stays the default.
+   **This does not apply to the shipped default.** Devices run
+   `gemini-3.8-live-extended-thinking`: os-server seeds it into
+   `config.json` `realtime.gemini.model` (`defaultRealtimeGeminiModel` in
+   `system/server/config/realtime.go`) and rewrites every un-pinned realtime block
+   from those defaults on each start. HAL's own `REALTIME_GEMINI_MODEL` fallback
+   (`hal/config.py`) is plain `gemini-3.8-live` and applies only when no config
+   value is present (the `realtime.go` comment saying the two match is stale).
+   Neither is native-audio, so the guard is off and both the context and the
+   correction reach the model; it re-engages only when a `*native-audio*` model is
+   configured. The extended variant is the seeded default because it answers
+   chit-chat directly by voice, whereas plain `gemini-3.8-live` delegated or stayed
+   silent every turn (device-observed 2026-09-18). It accepts only NON_BLOCKING tool
+   declarations, which `_build_config` sets for it (a BLOCKING one made it error
+   mid-turn with a spoken "I'm sorry, an error occurred.", device-observed
+   2026-09-17), and LOW/MEDIUM/HIGH thinking. Plain `gemini-3.8-live` is cost-lean:
+   it takes the default BLOCKING tools and omits thinking (it rejects
+   `thinkingLevel`, so `gemini_live._build_config` sends none).
 4. **Commit.** At session end, if enabled + `available` + audio buffered,
    `commit_audio()` fires. A `thinking` emotion cue fires with the commit
    (face + servo + a FORCED LED pulse — `thinking` is normally a
@@ -3095,7 +3102,7 @@ provider and points at `realtime.pipecat_v1.base_url` instead.
   "realtime": {
     "enabled": true,
     "provider": "gemini",
-    "gemini": { "model": "gemini-3.8-live", "voice": "Kore", "thinking_level": "LOW" },
+    "gemini": { "model": "gemini-3.8-live-extended-thinking", "voice": "Kore", "thinking_level": "LOW" },
     "openai": { "model": "gpt-realtime-2", "voice": "alloy", "reasoning_effort": "minimal" },
     "gptlive": { "model": "gpt-live-1", "voice": "marin" },
     "pipecat_v1": { "model": "qwen/qwen3.6-35b-a3b" }
@@ -3104,7 +3111,8 @@ provider and points at `realtime.pipecat_v1.base_url` instead.
 ```
 
 The reasoning knobs (`thinking_level` / `reasoning_effort`) default to the
-**cheapest** tier (`MINIMAL` / `minimal`), not the providers' max — raise them
+**cheapest** tier each model accepts (`LOW` for Gemini — the extended-thinking
+model has no `MINIMAL` — and `minimal` for OpenAI), not the providers' max — raise them
 explicitly for deeper reasoning. GPT-Live has **no** reasoning knob (the Live
 model exposes none): `RealtimeReasoning()` returns empty for it, the options
 endpoint returns an empty `reasoning.gptlive` list so the web hides the
@@ -3210,7 +3218,7 @@ is a top-level `config.json` flag:
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much session idle time (from the later of the last turn and the session's connect), rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |
-| `HAL_GEMINI_LIVE_MODEL` | `gemini-2.5-flash-native-audio-preview-12-2025` | |
+| `HAL_GEMINI_LIVE_MODEL` | `gemini-3.8-live` | HAL fallback only. os-server seeds `realtime.gemini.model` = `gemini-3.8-live-extended-thinking` into config.json (re-seeded on every start while the block is un-pinned), so devices run the extended-thinking model |
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `LOW` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH`. `gemini-3.8-live-extended-thinking` has no MINIMAL (HAL clamps it to LOW); plain `gemini-3.8-live` rejects thinkingLevel, so HAL omits it there |
@@ -3230,7 +3238,7 @@ is a top-level `config.json` flag:
 | `HAL_GPTLIVE_BASE_URL` | *(empty → the OpenAI Realtime base URL: `HAL_OPENAI_REALTIME_BASE_URL` > `realtime.base_url` > `<llm_base_url>/ws/openai`)* | Also `realtime.gptlive.base_url`. The SDK appends `/live/sessions`, so the proxy must serve `…/ws/openai/live/sessions` (pending as of 2026-09-16; 404 until then). Set `https://api.openai.com/v1` to go direct |
 | `HAL_GPTLIVE_MODEL` | `gpt-live-1` | Also `realtime.gptlive.model` |
 | `HAL_GPTLIVE_VOICE` | `marin` | One of the 13 Live voices listed under the `config.json` block. Also `realtime.gptlive.voice` |
-| `HAL_GPTLIVE_SAMPLE_RATE` | `24000` | `16000` \| `24000`. One PCM format for **both** directions on a Live WebSocket (`output_sample_rate == sample_rate`); 24000 keeps the model's voice at full quality, 16000 halves uplink bandwidth |
+| `HAL_GPTLIVE_SAMPLE_RATE` | `16000` | `16000` \| `24000`. One PCM format for **both** directions on a Live WebSocket (`output_sample_rate == sample_rate`); 24000 keeps the model's voice at full quality, 16000 halves uplink bandwidth |
 | `HAL_GPTLIVE_TURN_GAP_MS` | `800` | Synthesized turn boundary: a reply is over when no `session.output_audio.delta` / `session.output_transcript.delta` has arrived for this long (the wire has no `response.done` / `turn_complete`) |
 | `HAL_GPTLIVE_INTERRUPT_GAP_MS` | `400` | Barge-in verdict: after the user spoke over a reply, output silence this long counts the reply as interrupted; output continuing past it means the overlap was a backchannel |
 | `HAL_GPTLIVE_INPUT_GAP_MS` | `1500` | Input transcript fragments further apart than this (session-timeline `start_ms − previous end_ms`) open a new user turn even when the model has not answered in between |
@@ -3287,8 +3295,8 @@ is a top-level `config.json` flag:
 | `config.py` | Provider config models (`GeminiConfig`, `OpenAIConfig`, `GPTLiveConfig`, `PipecatV1Config`) |
 | `models/`, `enums/` | Input/output/event types, provider + gateway enums |
 | `resources/` | System prompts (shared `system_prompt.md` + per-provider `system_prompt_gemini.md` / `system_prompt_openai.md` / `system_prompt_gptlive.md` / `system_prompt_pipecat.md`) |
-| `../voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
-| `../voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
+| `../drivers/voice/voice_service.py` | Integration: streams mic audio, consumes output, routes delegate/handled. Live mode: `_live_decision` / `_live_session` / `_live_out_pump` / `_live_uplink_frame` |
+| `../drivers/voice/aec.py` | WebRTC AEC3 on the mic path; reference tapped at the TTS output stream (all providers) |
 
 ### Buddy agent completion events
 

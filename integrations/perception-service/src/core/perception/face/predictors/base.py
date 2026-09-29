@@ -9,21 +9,13 @@ from core.perception.base import PredictorBase
 
 
 class FaceDetector(PredictorBase[cv2t.MatLike, RawFaceDetection], ABC):
-    """Base interface for face detectors.
-
-    Subclasses implement ``start``, ``stop``, ``is_ready``, and ``predict``.
-    ``extract_crops`` is provided by the base class.
-    """
+    """Base interface for face detectors."""
 
     def extract_crops(
         self,
         input: list[cv2t.MatLike],
     ) -> list[list[FaceCrop]]:
-        """Detect faces and return crops with metadata per frame.
-
-        Uses ``predict()`` internally, then crops each detected face
-        from the original frame.
-        """
+        """Detect faces and return crops with metadata per frame."""
         detections: list[RawFaceDetection] = self.predict(input)
         return self.extract_crops_from_raw(input, detections)
 

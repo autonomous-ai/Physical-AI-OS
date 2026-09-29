@@ -4,14 +4,7 @@ import { Camera, X, SwitchCamera, Check } from "lucide-react";
 import { C } from "@/components/setup/shared";
 import { useTheme } from "@/lib/useTheme";
 
-// Live-preview webcam capture for face enroll on desktop (and any device with a
-// usable getUserMedia stream). The user can snap several frames in a row; each
-// becomes a JPEG File handed back via onCapture, which the FaceSection drops
-// straight into the same `pending` list as picked/dropped files. Enroll logic is
-// untouched — this is purely another way to produce File objects.
-//
-// getUserMedia needs a secure context (HTTPS or localhost). When it's blocked or
-// denied we surface the reason and the user can still fall back to file picking.
+// Live-preview webcam capture for face enroll on desktop (and any device with a usable getUserMedia stream).
 export function CameraCaptureModal({
   onCapture, onClose,
 }: {
@@ -23,11 +16,7 @@ export function CameraCaptureModal({
   const streamRef = useRef<MediaStream | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [ready, setReady] = useState(false);
-  // "user" = front camera, "environment" = rear. Only meaningful on devices with
-  // more than one; the toggle is a no-op visual on a single-camera laptop.
   const [facing, setFacing] = useState<"user" | "environment">("user");
-  // Frames captured this session, shown as a filmstrip so the user can review and
-  // drop bad shots before committing them all to enroll.
   const [shots, setShots] = useState<{ url: string; file: File }[]>([]);
 
   const stopStream = useCallback(() => {
@@ -68,8 +57,6 @@ export function CameraCaptureModal({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [facing]);
 
-  // Revoke filmstrip preview URLs on unmount (the committed File objects survive;
-  // only the object URLs need cleanup).
   useEffect(() => {
     return () => { shots.forEach((s) => URL.revokeObjectURL(s.url)); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -92,8 +79,6 @@ export function CameraCaptureModal({
     ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
     canvas.toBlob((blob) => {
       if (!blob) return;
-      // Index by current shot count so repeated snaps get distinct names. Date.now
-      // isn't available here, and a stable counter is enough for uniqueness.
       const file = new File([blob], `capture-${shots.length + 1}.jpg`, { type: "image/jpeg" });
       setShots((prev) => [...prev, { url: URL.createObjectURL(blob), file }]);
     }, "image/jpeg", 0.92);
@@ -113,18 +98,7 @@ export function CameraCaptureModal({
     onClose();
   };
 
-  // Portal to document.body so position:fixed anchors to the viewport, not to
-  // the SectionCard ancestor. SectionCard carries `lm-fade-in`, whose animation
-  // leaves a `transform` on the element — and any ancestor transform makes it
-  // the containing block for fixed children, which is what pushed this modal
-  // off-centre and clipped it inside the card. The portal sidesteps that.
-  //
-  // The overlay re-declares `lm-root ${themeClass}` because the --lm-* tokens
-  // are scoped to `.lm-root`, not `:root` — portalled to <body> we land OUTSIDE
-  // that scope, so without this the card/border tokens resolve to nothing and
-  // render transparent. The inline scrim background overrides .lm-root's opaque
-  // --lm-bg fill so the page stays visible behind the dialog. Same contract as
-  // TimezoneSection's picker modal.
+  // Portal to <body>: an ancestor transform would become the containing block.
   return createPortal(
     <div
       className={`lm-root ${themeClass}`}
@@ -142,10 +116,6 @@ export function CameraCaptureModal({
         aria-label="Take photos"
         className="lm-pop"
         style={{
-          // Card surface is set inline (not via the `lm-card` class) because this
-          // modal is portalled to document.body, outside the `.lm-setup`/`.lm-edit`
-          // scopes those styles live under — so the class alone renders no
-          // background. The --lm-* tokens are on :root, so they resolve anywhere.
           width: "min(560px, 100%)", maxHeight: "90vh", minHeight: "52dvh",
           padding: "20px 22px",
           background: "var(--lm-card)",
@@ -172,12 +142,6 @@ export function CameraCaptureModal({
           </button>
         </div>
 
-        {/* Video stage occupies the flexible middle. It is the ONLY element
-            allowed to shrink — header, all action controls, and the footer are
-            pinned (flexShrink:0) so they can never be clipped. The frame takes
-            whatever height is left after the fixed rows, down to a 160px floor,
-            so on short/landscape windows it shrinks instead of pushing buttons
-            off-screen. The 4:3 look is preserved via max-width centering. */}
         <div style={{
           flex: 1, minHeight: 200, position: "relative", width: "100%",
           borderRadius: 12, overflow: "hidden",
@@ -201,8 +165,6 @@ export function CameraCaptureModal({
           )}
         </div>
 
-        {/* Controls: switch camera (front/rear), capture, and a running count.
-            Pinned (flexShrink:0) so the capture button never scrolls away. */}
         <div style={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 10 }}>
           <button
             type="button"
@@ -236,9 +198,6 @@ export function CameraCaptureModal({
           </button>
         </div>
 
-        {/* Filmstrip of captured frames — review and discard before committing.
-            Pinned and scrolls horizontally so many captures stay a single row
-            instead of growing the modal vertically. */}
         {shots.length > 0 && (
           <div style={{ flexShrink: 0, display: "flex", gap: 8, overflowX: "auto", paddingTop: 6 }}>
             {shots.map((s, idx) => (

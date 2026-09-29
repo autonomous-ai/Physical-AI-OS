@@ -43,8 +43,8 @@ type LLMModel struct {
 	Capabilities  *LLMModelCapabilities `json:"capabilities"`
 }
 
-// OpenClawAPIType returns the OpenClaw provider api type from raw substring check on Key and Name.
-// e.g. "claude" -> "anthropic-messages", "gpt" -> "openai-completions", unknown -> "openai-completions".
+// OpenClawAPIType returns the OpenClaw provider api type by substring match on Key and Name.
+// Example: "claude" -> "anthropic-messages", otherwise "openai-completions".
 func (m LLMModel) OpenClawAPIType() string {
 	raw := strings.ToLower(m.Key + " " + m.Name)
 	if strings.Contains(raw, "claude") {
@@ -58,18 +58,11 @@ func (m LLMModel) OpenClawAPIType() string {
 
 type LLMModelsListResponse struct {
 	Count int `json:"count"`
-	// Version is the upstream catalog version. The set-default-model flow only
-	// applies default_model / default_image_model when this is greater than the
-	// device's persisted DefaultModelVersion (avoids redundant gateway restarts).
-	Version int `json:"version"`
-	// DefaultModel is the upstream-recommended primary text model key.
-	DefaultModel string `json:"default_model"`
-	// DefaultImageModel is the upstream-recommended vision/image model key.
+	// Version is the upstream catalog version; defaults apply only when it exceeds DefaultModelVersion.
+	Version           int    `json:"version"`
+	DefaultModel      string `json:"default_model"`
 	DefaultImageModel string `json:"default_image_model"`
-	// API is the wire protocol the autonomous provider speaks (e.g.
-	// "anthropic-messages"). Written into models.providers.autonomous.api at
-	// setup and overwritten on each sync. Empty falls back to the built-in
-	// default (autonomousProviderAPI).
+	// API is the autonomous provider wire protocol (e.g. "anthropic-messages"); empty = built-in default.
 	API    string     `json:"api"`
 	Models []LLMModel `json:"models"`
 }

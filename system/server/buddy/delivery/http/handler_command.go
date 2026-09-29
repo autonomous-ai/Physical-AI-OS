@@ -20,9 +20,8 @@ type commandRequest struct {
 	TimeoutMs int            `json:"timeout_ms" binding:"omitempty,gte=500,lte=60000"`
 }
 
-// Command dispatches one command to the connected buddy and returns the buddy's
-// response. Localhost-only at the route layer (OpenClaw skill on the device is
-// the intended caller).
+// Command dispatches one command to the connected buddy and returns the
+// buddy's response.
 func (h *BuddyHandler) Command(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 1<<20)
 	var req commandRequest
@@ -60,9 +59,8 @@ func (h *BuddyHandler) Command(c *gin.Context) {
 		return
 	}
 	slog.Info("buddy /command response", "component", "buddy", "id", cmd.ID, "action", cmd.Action, "bytes", len(raw))
-	// Buddy's response is already shaped {id, ok, result, error, duration_ms}.
-	// Pass it through inside the os-server envelope so callers get a consistent
-	// {status: 1, data: <buddy-response>, message: null}.
+	// Buddy's response is already shaped {id, ok, result, error,
+	// duration_ms}.
 	var inner map[string]any
 	if err := json.Unmarshal(raw, &inner); err != nil {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(json.RawMessage(raw)))
@@ -72,12 +70,7 @@ func (h *BuddyHandler) Command(c *gin.Context) {
 }
 
 // Exec is the marker-friendly entry point used by OpenClaw skills via the
-// `[HW:/buddy/exec/<action>:{...}]` inline marker. URL path carries the action;
-// JSON body is the params blob. This sidesteps the HW-marker regex limitation
-// (no nested `{}` allowed in body) by keeping params flat per call.
-//
-// For richer use (vision loop, multi-step) the OpenClaw skill should call
-// /api/buddy/command directly with the full Command schema.
+// `[HW:/buddy/exec/<action>:{...}]` inline marker.
 func (h *BuddyHandler) Exec(c *gin.Context) {
 	action := c.Param("action")
 	if action == "" {
@@ -124,9 +117,7 @@ func (h *BuddyHandler) Exec(c *gin.Context) {
 }
 
 // mapKeys returns the sorted keys of a params map for log fields. Values are
-// intentionally omitted — a `type_text` body can be sensitive (passwords) and a
-// screenshot response carries multi-KB base64. The action + key list is enough
-// to confirm "which command, with which fields" without spamming logs.
+// omitted: they can be sensitive (typed passwords).
 func mapKeys(m map[string]any) []string {
 	keys := make([]string, 0, len(m))
 	for k := range m {

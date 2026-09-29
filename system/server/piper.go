@@ -16,25 +16,8 @@ import (
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
-// Piper install proxy. The admin page needs three calls that only HAL can
-// serve (it owns /opt/piper), but the browser can only reach os-server — HAL
-// listens on loopback. These forward verbatim rather than re-modelling the
-// payloads, so the catalogue stays defined in exactly one place: HAL's
-// piper_catalog.py.
-//
-// Admin-gated: installing software and writing 63 MB to the device is not
-// something an unauthenticated LAN caller should be able to trigger.
-
-// A POST is retried while HAL is not listening, because saving any voice
-// setting makes os-server restart HAL and a click landing in that window would
-// otherwise be lost — the operator is told nothing changed and has to guess
-// when to try again.
-//
-// Only a failed dial is retried, and the distinction matters: a dial that never
-// connected proves the request was not delivered, so replaying it cannot repeat
-// an effect. A timeout proves nothing of the sort — the deadline covers reading
-// the reply, so HAL may well have done the work and simply answered slowly.
-// Those surface as a plain failure instead.
+// A POST is retried while HAL is not listening (a voice save restarts HAL).
+// Only a failed dial is retried: a timeout may mean HAL already did the work.
 const (
 	piperRetryWindow   = 25 * time.Second
 	piperRetryInterval = time.Second
@@ -48,12 +31,7 @@ func dialFailed(err error) bool {
 }
 
 // piperFetch performs one request, retrying only while nothing answers.
-//
-// Split out from the handler so the retry can be tested against a listener
-// that goes away and comes back, which is precisely what a HAL restart is.
 func piperFetch(ctx context.Context, method, url string, reqBody []byte, deadline time.Time) (*http.Response, error) {
-	// Per attempt, not per call. Downloads run in their own process and the HAL
-	// handler returns at once, so this only ever covers the handshake.
 	client := &http.Client{Timeout: 10 * time.Second}
 	for {
 		var body io.Reader
@@ -70,9 +48,6 @@ func piperFetch(ctx context.Context, method, url string, reqBody []byte, deadlin
 		if err == nil {
 			return resp, nil
 		}
-		// GET is left to fail fast: the admin page polls status every few
-		// seconds and uses the failure to show that the device is restarting.
-		// Holding those open would stack up requests and hide the state.
 		if method != http.MethodPost || !dialFailed(err) ||
 			!time.Now().Before(deadline) || ctx.Err() != nil {
 			return nil, err
@@ -97,7 +72,7 @@ func piperProxy(c *gin.Context, method, path string) {
 	raw, _ := io.ReadAll(resp.Body)
 	// HAL speaks plain JSON; the web client only accepts this app's
 	// {status,data,message} envelope and reads anything else as a failed
-	// request. Wrap rather than teach the client a second shape.
+	// request.
 	var payload any
 	if err := json.Unmarshal(raw, &payload); err != nil {
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("hal returned invalid JSON: "+err.Error()))

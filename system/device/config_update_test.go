@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// baseConfig returns a config prefilled the way a set-up device looks, so
-// PATCH-semantics tests can assert that untouched fields survive.
+// baseConfig returns a config prefilled like a set-up device.
 func baseConfig() *config.Config {
 	return &config.Config{
 		LLMAPIKey:         "key-llm",
@@ -247,10 +246,7 @@ func TestGetPublicConfigReturnsEffectiveWakePhrases(t *testing.T) {
 	}
 }
 
-// The most common save an operator makes. hal takes provider and voice per
-// utterance, so this must be pushed into the running process — restarting for
-// it left the device deaf and mute for ten to fifteen seconds, and any admin
-// click landing in that window was lost.
+// A voice-only save is pushed live to HAL instead of restarting it.
 func TestApplyUpdateVoiceOnlyDoesNotRestartHAL(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "vi_VN-vais1000-medium"}, "")
@@ -272,8 +268,7 @@ func TestApplyUpdateVoiceOnlyDoesNotRestartHAL(t *testing.T) {
 	}
 }
 
-// An STT key sits in hal's boot-read set, so it still has to bounce the process
-// even though it arrives through the same voice settings page.
+// An STT key is in HAL's boot-read set, so it still restarts HAL.
 func TestApplyUpdateSTTKeyStillRestartsHAL(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{STTAPIKey: "stt-new"}, "")
@@ -282,9 +277,7 @@ func TestApplyUpdateSTTKeyStillRestartsHAL(t *testing.T) {
 	}
 }
 
-// The settings page sends the realtime block on every save, so presence must
-// not read as change: it restarted hal for a voice-only save and undid the
-// whole point of pushing TTS config live.
+// An unchanged realtime block (sent on every save) must not restart HAL.
 func TestApplyUpdateUnchangedRealtimeDoesNotRestartHAL(t *testing.T) {
 	c := baseConfig()
 	enabled := true
@@ -309,9 +302,7 @@ func TestApplyUpdateUnchangedRealtimeDoesNotRestartHAL(t *testing.T) {
 	}
 }
 
-// The shipped credentials have to be preserved before the first edit lands on
-// them, because that edit is what destroys them. Devices reached the field with
-// the team's key overwritten and no way back.
+// The first credential edit captures the shipped defaults before overwriting them.
 func TestFirstCredentialChangeCapturesShippedDefaults(t *testing.T) {
 	c := baseConfig()
 	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
@@ -331,8 +322,7 @@ func TestFirstCredentialChangeCapturesShippedDefaults(t *testing.T) {
 	}
 }
 
-// Capturing twice would store the operator's own key under the Autonomous name
-// and lose the real one for good — the exact failure this exists to prevent.
+// Later credential edits must not overwrite the captured defaults.
 func TestLaterCredentialChangesDoNotOverwriteTheCapture(t *testing.T) {
 	c := baseConfig()
 	c.LLMAPIKey, c.LLMBaseURL, c.LLMModel = "team-key", "https://campaign-api.example.com", "team-model"
@@ -346,9 +336,7 @@ func TestLaterCredentialChangesDoNotOverwriteTheCapture(t *testing.T) {
 	}
 }
 
-// A wifi or rename save must not trip the capture — not because storing it
-// early is harmful, but because "captured" is what the restore affordance keys
-// off, and offering to restore on a device nobody has edited is noise.
+// A non-credential save (wifi, rename) must not trigger the capture.
 func TestNonCredentialSaveDoesNotCapture(t *testing.T) {
 	c := baseConfig()
 	c.LLMAPIKey, c.LLMBaseURL = "team-key", "https://campaign-api.example.com"
@@ -414,10 +402,7 @@ func TestTTSSpeedRejectsBeforeMutation(t *testing.T) {
 	}
 }
 
-// A provider switch must be able to DELETE the stored TTS key. Every field in
-// UpdateConfigRequest is PATCH-style, where "" means "not sent", so an empty
-// TTSAPIKey cannot express a clear — hence the explicit flag. Without this the
-// previous vendor's key survives and GetTTSAPIKey hands it to the new provider.
+// The explicit clear flag deletes the stored TTS key ("" means "not sent").
 func TestApplyUpdateClearTTSAPIKey(t *testing.T) {
 	c := baseConfig()
 	ch := applyUpdate(c, domain.UpdateConfigRequest{ClearTTSAPIKey: true}, "")
@@ -425,13 +410,11 @@ func TestApplyUpdateClearTTSAPIKey(t *testing.T) {
 	if c.TTSAPIKey != "" {
 		t.Fatalf("clear flag did not empty TTSAPIKey: %q", c.TTSAPIKey)
 	}
-	// Once cleared, resolution falls back to the AI-brain key — the credential
-	// the Autonomous proxy actually authenticates against.
+	// Once cleared, resolution falls back to the AI-brain key.
 	if got := c.GetTTSAPIKey(); got != "key-llm" {
 		t.Fatalf("GetTTSAPIKey after clear = %q, want the LLM key", got)
 	}
-	// The key is part of ttsSnapshot, so clearing it must flag a TTS change and
-	// get pushed live to hal. Nothing hal reads at boot changed, so no restart.
+	// Clearing flags a live TTS change, not a HAL restart.
 	if !ch.tts {
 		t.Fatalf("clearing the TTS key did not flag a tts change: %+v", ch)
 	}
@@ -440,8 +423,7 @@ func TestApplyUpdateClearTTSAPIKey(t *testing.T) {
 	}
 }
 
-// Defensive ordering check. The UI never sends both, but if it ever did, the
-// operator's newly typed key is the intent that should win.
+// If both clear and a new key are sent, the new key wins.
 func TestApplyUpdateClearTTSAPIKeyWithNewKeyPrefersNewKey(t *testing.T) {
 	c := baseConfig()
 	applyUpdate(c, domain.UpdateConfigRequest{
@@ -454,8 +436,7 @@ func TestApplyUpdateClearTTSAPIKeyWithNewKeyPrefersNewKey(t *testing.T) {
 	}
 }
 
-// Regression guard for PATCH semantics: without the flag, a save that carries
-// no TTS key must leave the stored one alone. Voice-only saves rely on this.
+// Without the flag, a save with no TTS key keeps the stored one.
 func TestApplyUpdateWithoutClearKeepsTTSAPIKey(t *testing.T) {
 	c := baseConfig()
 	applyUpdate(c, domain.UpdateConfigRequest{TTSVoice: "nova"}, "")

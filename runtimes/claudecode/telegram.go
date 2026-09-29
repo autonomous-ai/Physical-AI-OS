@@ -14,12 +14,7 @@ import (
 
 // telegramTargetsFile is the Device-owned store of known Telegram chats,
 // populated by the device-owned receive loop (telegram_poll.go →
-// upsertTelegramTarget) on every accepted DM. GetTelegramTargets falls back to
-// the configured owner id (config.TelegramUserID) while the store is still
-// absent/empty (before the first accepted DM), so proactive
-// Broadcast/SendToUser reach the owner from boot.
-//
-// Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
+// upsertTelegramTarget) on every accepted DM.
 const telegramTargetsFile = "/root/.lumi/telegram_targets.json"
 
 type telegramTargetEntry struct {
@@ -34,8 +29,7 @@ type telegramTargetsFileContent struct {
 // targetsFileMu serialises read-modify-write on telegramTargetsFile.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from Device config. There is no
-// agent-side config to consult under Claude Code.
+// GetTelegramBotToken returns the bot token from Device config.
 func (s *ClaudeCodeService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
@@ -49,8 +43,9 @@ func (s *ClaudeCodeService) telegramTargetsFilePath() string {
 }
 
 // upsertTelegramTarget records chatID in the targets store so outbound
-// Broadcast reaches the chat the user wrote from. Called by the inbound poll
-// loop (telegram_poll.go) on every accepted message; idempotent, atomic write.
+// Broadcast reaches the chat the user wrote from.
+// Called by the inbound poll loop (telegram_poll.go) on every accepted message; idempotent, atomic
+// write.
 func (s *ClaudeCodeService) upsertTelegramTarget(chatID, chatType string) {
 	if chatID == "" {
 		return
@@ -60,12 +55,11 @@ func (s *ClaudeCodeService) upsertTelegramTarget(chatID, chatType string) {
 	path := s.telegramTargetsFilePath()
 	var content telegramTargetsFileContent
 	if data, err := os.ReadFile(path); err == nil {
-		// Corrupt file → rewrite from scratch with just this target.
 		_ = json.Unmarshal(data, &content)
 	}
 	for _, t := range content.Targets {
 		if t.ChatID == chatID {
-			return // already known
+			return
 		}
 	}
 	content.Targets = append(content.Targets, telegramTargetEntry{ChatID: chatID, Type: chatType})

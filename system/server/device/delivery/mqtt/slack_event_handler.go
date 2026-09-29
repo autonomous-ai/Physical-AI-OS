@@ -16,9 +16,8 @@ import (
 )
 
 const (
-	// slackEventForwardTimeout caps the localhost POST so a slow/wedged gateway
-	// doesn't keep the MQTT handler goroutine alive forever. Slack's signature
-	// validity window is 5 min; we err well under that to surface failures fast.
+	// slackEventForwardTimeout caps the localhost POST so a slow/wedged
+	// gateway doesn't keep the MQTT handler goroutine alive forever.
 	slackEventForwardTimeout = 10 * time.Second
 
 	// slackEventDedupTTL bounds the in-memory event_id LRU. Slack retries
@@ -36,8 +35,7 @@ const (
 )
 
 // slackEventPayload is the verbatim forward shape published by the
-// bff-campaign-service proxy. See domain.CommandSlackEvent docstring for wire
-// format; this struct is purely for unmarshal.
+// bff-campaign-service proxy.
 type slackEventPayload struct {
 	Cmd     string            `json:"cmd"`
 	EventID string            `json:"event_id"`
@@ -54,8 +52,6 @@ var slackEventDedup = struct {
 
 // rememberOrSkip returns true if the event was already seen within the TTL
 // window (caller should skip), false on first sight (caller should process).
-// Also opportunistically prunes expired entries on each call — cheap because
-// the map is bounded by ~Slack QPS × 5 min.
 func rememberOrSkip(eventID string) bool {
 	if eventID == "" {
 		return false // can't dedup without an ID; forward and let OpenClaw decide
@@ -77,10 +73,8 @@ func rememberOrSkip(eventID string) bool {
 	return false
 }
 
-// publishSlackResult mirrors publishAddChannelResult's shape so the fd_channel
-// response vocabulary stays consistent. cmdType is the originating command
-// (domain.CommandSlackEvent or domain.CommandSlackCommand) so the ack `type` and
-// info metadata distinguish a forwarded event from a forwarded slash command.
+// publishSlackResult mirrors publishAddChannelResult's shape so the
+// fd_channel response vocabulary stays consistent.
 func (h *DeviceMQTTHandler) publishSlackResult(cmdType, eventID, status, errMsg string, httpStatus int) error {
 	resp := map[string]any{
 		"channel":     domain.ChannelSlack,
@@ -89,43 +83,26 @@ func (h *DeviceMQTTHandler) publishSlackResult(cmdType, eventID, status, errMsg 
 		"status":      status,
 		"error":       errMsg,
 		"http_status": httpStatus,
-		// MQTTInfoResponse embeds device/version metadata used by every
-		// fa_channel→fd_channel ack; reuse it so observability stays uniform.
+		// Same device/version metadata as every fd_channel ack.
 		"info": domain.NewMQTTInfoResponse(h.config, cmdType, device.GetDeviceMac()),
 	}
 	return h.publish(resp)
 }
 
 // handleSlackEvent forwards a proxy-relayed Slack Events API delivery to the
-// local OpenClaw gateway. The body + signature headers are passed through
-// unchanged so OpenClaw can re-verify against the same signing secret (no
-// re-signing).
-//
-// Dedup is best-effort (per-process in-memory LRU). On reboot or a 2nd device
-// owning the same workspace, OpenClaw is the second line of defence — Slack's
-// event_id is included in the body and the gateway's own dedup applies.
+// local OpenClaw gateway.
 func (h *DeviceMQTTHandler) handleSlackEvent(cmd domain.MQTTMessage) error {
 	return h.forwardSlackHTTP(cmd, domain.CommandSlackEvent)
 }
 
-// handleSlackCommand forwards a proxy-relayed Slack slash command to the local
-// OpenClaw gateway. Slash commands ride the SAME gateway webhook as events —
-// OpenClaw's single HTTP endpoint routes by body shape (urlencoded `command=`
-// vs JSON `type`) — so the wire handling is identical to handleSlackEvent. The
-// proxy tags the envelope headers with Content-Type:
-// application/x-www-form-urlencoded (forwarded verbatim); OpenClaw verifies the
-// signature, runs the command, and replies to the user via the command's
-// response_url. The cmd label differs only for dedup/observability (the proxy
-// puts Slack's trigger_id in the event_id slot, since commands have no event_id).
+// handleSlackCommand forwards a proxy-relayed Slack slash command to the
+// local OpenClaw gateway.
 func (h *DeviceMQTTHandler) handleSlackCommand(cmd domain.MQTTMessage) error {
 	return h.forwardSlackHTTP(cmd, domain.CommandSlackCommand)
 }
 
 // forwardSlackHTTP is the shared Slack forwarder behind handleSlackEvent and
-// handleSlackCommand. It POSTs the verbatim body + signature headers to the
-// local OpenClaw gateway webhook; cmdType only selects the dedup/observability
-// label and the fd_channel ack `type`, because OpenClaw's single HTTP endpoint
-// distinguishes events from slash commands itself.
+// handleSlackCommand.
 func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType string) error {
 	var p slackEventPayload
 	if err := json.Unmarshal(cmd.Raw(), &p); err != nil {
@@ -138,16 +115,9 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 	}
 	if rememberOrSkip(p.EventID) {
 		slog.Debug("slack forward: dedup skip", "component", "mqtt", "cmd", cmdType, "event_id", p.EventID)
-		// Report skipped distinctly so the proxy can measure retry-collapse rate.
 		return h.publishSlackResult(cmdType, p.EventID, "skipped_duplicate", "", 0)
 	}
 
-	// Runtime branch: SlackBridge is the generic mechanism for a runtime whose native
-	// Slack support is Socket Mode only (today: hermes) and which therefore has no
-	// local HTTP webhook to receive events. For such a runtime os-server IS the
-	// HTTP-mode Slack frontend: it parses the event, drives a turn, and posts the
-	// reply via chat.postMessage. The openclaw path below (local webhook POST) is for
-	// runtimes that serve the Slack HTTP webhook themselves.
 	if sb, ok := h.agentGateway.(domain.SlackBridge); ok {
 		challenge, handled, err := sb.HandleInboundSlack(domain.SlackInbound{Body: p.Body})
 		if err != nil {
@@ -155,8 +125,6 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 			return h.publishSlackResult(cmdType, p.EventID, "failure", err.Error(), 0)
 		}
 		if challenge != "" {
-			// url_verification normally terminates at the public proxy (it owns the
-			// Slack Request URL), so this is defensive; ack success either way.
 			slog.Info("slack bridge: url_verification handled", "component", "mqtt", "event_id", p.EventID)
 		}
 		slog.Debug("slack bridge: handled", "component", "mqtt", "cmd", cmdType, "event_id", p.EventID, "started_turn", handled)
@@ -169,12 +137,8 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 	if err != nil {
 		return h.publishSlackResult(cmdType, p.EventID, "failure", fmt.Sprintf("build request: %v", err), 0)
 	}
+	// Forward verbatim: OpenClaw re-verifies X-Slack-Signature/-Timestamp.
 	for k, v := range p.Headers {
-		// Forward verbatim. Critically includes X-Slack-Signature and
-		// X-Slack-Request-Timestamp so OpenClaw's HTTP-mode signature check can
-		// validate against the shared signing secret, plus Content-Type
-		// (application/json for events, x-www-form-urlencoded for commands) so
-		// the gateway parses the body in the right shape.
 		req.Header.Set(k, v)
 	}
 	if req.Header.Get("Content-Type") == "" {
@@ -187,8 +151,6 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 		return h.publishSlackResult(cmdType, p.EventID, "failure", fmt.Sprintf("forward: %v", err), 0)
 	}
 	defer resp.Body.Close()
-	// Drain so the connection can be reused; the body is small and OpenClaw
-	// returns either 200 OK or a 4xx with an error JSON.
 	respBody, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
 
 	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
@@ -196,8 +158,6 @@ func (h *DeviceMQTTHandler) forwardSlackHTTP(cmd domain.MQTTMessage, cmdType str
 		return h.publishSlackResult(cmdType, p.EventID, "success", "", resp.StatusCode)
 	}
 
-	// Non-2xx — surface the gateway's error message so the proxy's retry
-	// decision has signal. Truncate to keep MQTT payload small.
 	errMsg := string(respBody)
 	if len(errMsg) > maxSlackErrorLength {
 		errMsg = errMsg[:maxSlackErrorLength]

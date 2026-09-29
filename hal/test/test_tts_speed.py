@@ -39,15 +39,16 @@ def test_elevenlabs_normal_speed_is_sent_explicitly():
         def close(self):
             pass
 
-        def __iter__(self):
-            return iter([])
+        def recv(self, timeout):
+            return json.dumps({"is_final_audio_for_turn": True})
 
-    ws = object.__new__(ElevenLabsWSTTSBackend)
+    ws = ElevenLabsWSTTSBackend("test-only", "https://proxy.example/v1")
     ws._api_key = "test-only"
     ws._url_tmpl = "wss://proxy.example/{voice_id}?model_id={model}"
     ws._connect = lambda *args, **kwargs: Socket()
     list(ws.stream_pcm("Hello", "Rachel", "", 1.0))
     assert requests[1]["voice_settings"]["speed"] == 1.0
+    ws.close()
 
 
 @pytest.mark.parametrize("saved", [None, 0, 5, "bad", True])

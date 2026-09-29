@@ -26,8 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         self.dispatcher = dispatcher
         self.pairingManager = pairingManager
 
-        // Bonjour discovery — best-effort. If the device doesn't advertise `_autonomous._tcp`,
-        // user pairs by typing `lamp-xxxx.local` manually.
+        // Bonjour discovery is best-effort; users can type `lamp-xxxx.local` manually.
         let discovery = DeviceDiscovery()
         discovery.onDevicesChanged = { devices in
             AppState.shared.setDiscoveredDevices(devices)
@@ -77,7 +76,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             startConnection(record: record)
         }
 
-        // Auto-reconnect if a record already exists from a previous run.
         if !nativeTestMode, let record = pairingManager.current() {
             AppState.shared.setPairing(.paired(buddyID: record.buddyID, deviceHost: record.deviceHost))
             startConnection(record: record)
@@ -134,9 +132,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func unpair(completion: (() -> Void)? = nil) {
-        // Tell the device first so it drops its pairing record before we forget
-        // our token. Fire-and-forget with a 5s timeout inside notifyRevokeSelf;
-        // local state always clears on completion regardless of device reachability.
+        // Tell the device first (fire-and-forget, 5s timeout); local state always clears.
         let snapshot = pairingManager?.current()
         let manager = pairingManager
         Task {

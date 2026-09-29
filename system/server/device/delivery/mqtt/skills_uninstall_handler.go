@@ -11,10 +11,7 @@ import (
 )
 
 // handleSkillsUninstall handles kind="skills.uninstall" — the MQTT twin of
-// DELETE /api/agent/skills. Removes the skill from whichever skills dir the
-// ACTIVE runtime owns, via AgentGateway.DeleteSkill.
-//
-// Synchronous: removing a directory is local disk, measured in milliseconds.
+// DELETE /api/agent/skills.
 func (h *DeviceMQTTHandler) handleSkillsUninstall(env domain.MQTTDataCommand) error {
 	var req domain.MQTTSkillsUninstallData
 	if err := json.Unmarshal(env.Data, &req); err != nil {

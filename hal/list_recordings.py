@@ -7,14 +7,12 @@ from datetime import datetime
 
 def list_recordings(lamp_id):
     """List all recordings for a given lamp ID."""
-    # Get the recordings directory path
     recordings_dir = os.path.join(os.path.dirname(__file__), "recordings")
     
     if not os.path.exists(recordings_dir):
         print(f"No recordings directory found at {recordings_dir}")
         return
     
-    # Pattern to match recordings for the specific lamp ID
     pattern = os.path.join(recordings_dir, f"*.csv")
     recording_files = glob.glob(pattern)
     
@@ -27,10 +25,8 @@ def list_recordings(lamp_id):
     
     for file_path in sorted(recording_files):
         filename = os.path.basename(file_path)
-        # Extract recording name by removing the lamp_id suffix
         recording_name = filename.replace(f".csv", "")
         
-        # Count rows in CSV file
         try:
             with open(file_path, 'r') as csvfile:
                 reader = csv.reader(csvfile)
@@ -38,7 +34,6 @@ def list_recordings(lamp_id):
         except Exception as e:
             row_count = "Error reading file"
         
-        # Get modified time
         stat = os.stat(file_path)
         modified_time = datetime.fromtimestamp(stat.st_mtime)
         

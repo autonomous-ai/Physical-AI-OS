@@ -68,6 +68,5 @@ def test_actual_queued_request_classifies_its_own_segment(
     assert row["ack_latency_ms"] == 900
     assert row["ack_kind"] == expected_kind
     assert row["answer_latency_ms"] == answer
-    # Measurement must not alter feedback or interruption semantics.
     assert service.realtime_feedback == initial_feedback
     assert service.interruptible == initial_interruptible

@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SetSessionKey stores the session id. OpenCode assigns it on its first inbound
-// frame (translateFrame captures it), so the read loop is the usual caller.
+// SetSessionKey stores the session id.
 func (s *OpenCodeService) SetSessionKey(key string) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "opencode", "key", key)
@@ -191,8 +190,7 @@ func (s *OpenCodeService) consumeTelegramRun(runID string) string {
 }
 
 // markSlackRun records a Slack-originated turn (slack.go) so emitFinal can
-// post the reply back to the originating channel/thread. Mirrors
-// markTelegramRun; entries with no channel are unroutable and skipped.
+// post the reply back to the originating channel/thread.
 func (s *OpenCodeService) markSlackRun(runID string, origin slackRun) {
 	if runID == "" || origin.channel == "" {
 		return
@@ -220,7 +218,7 @@ func (s *OpenCodeService) hasSlackRun(runID string) bool {
 }
 
 // markDiscordRun records a Discord-originated turn (discord.go) so emitFinal
-// can post the reply back to the originating channel. Mirrors markTelegramRun.
+// can post the reply back to the originating channel.
 func (s *OpenCodeService) markDiscordRun(runID string, channelID string) {
 	if runID == "" || channelID == "" {
 		return
@@ -249,7 +247,8 @@ func (s *OpenCodeService) hasDiscordRun(runID string) bool {
 
 // consumeDiscordRun is one-shot: returns the channel id for a Discord-
 // originated run and removes the entry, or "" when the run did not come from
-// Discord. Called by emitFinal (reply routing) and handleError (leak prevention).
+// Discord.
+// Called by emitFinal (reply routing) and handleError (leak prevention).
 func (s *OpenCodeService) consumeDiscordRun(runID string) string {
 	s.discordRunsMu.Lock()
 	channelID, ok := s.discordRuns[runID]
@@ -261,8 +260,9 @@ func (s *OpenCodeService) consumeDiscordRun(runID string) string {
 }
 
 // consumeSlackRun is one-shot: returns the origin for a Slack-originated run
-// and removes the entry. Called by emitFinal (reply routing), handleError
-// (leak prevention) and DeliverSlackReply (safety net).
+// and removes the entry.
+// Called by emitFinal (reply routing), handleError (leak prevention) and DeliverSlackReply (safety
+// net).
 func (s *OpenCodeService) consumeSlackRun(runID string) (slackRun, bool) {
 	s.slackRunsMu.Lock()
 	o, ok := s.slackRuns[runID]

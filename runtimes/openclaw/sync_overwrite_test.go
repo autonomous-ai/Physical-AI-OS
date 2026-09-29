@@ -12,8 +12,6 @@ func model(key string, ctx, max int) domain.LLMModel {
 	return domain.LLMModel{Key: key, Name: key, ContextWindow: intPtr(ctx), MaxTokens: intPtr(max)}
 }
 
-// ---- overwriteProviderModels ----
-
 func TestOverwriteProviderModels_ReplacesAndDropsStale(t *testing.T) {
 	existing := []any{
 		map[string]any{"id": "old-stale", "contextWindow": 100, "maxTokens": 10},
@@ -35,7 +33,6 @@ func TestOverwriteProviderModels_ReplacesAndDropsStale(t *testing.T) {
 
 func TestOverwriteProviderModels_NoChangeWhenEquivalent(t *testing.T) {
 	fetched := []domain.LLMModel{model("claude-opus-4-6", 200000, 8192)}
-	// Build "existing" from the same entry builder so it is byte-equivalent.
 	existing := []any{openclawModelToProviderEntry(fetched[0])}
 
 	_, changed := overwriteProviderModels(existing, fetched)
@@ -60,18 +57,16 @@ func TestOverwriteProviderModels_OrderFollowsFetched(t *testing.T) {
 	}
 }
 
-// ---- overwriteAgentAutonomousModels ----
-
 func TestOverwriteAgentAutonomousModels_PurgesStaleAndLegacy(t *testing.T) {
 	existing := map[string]any{
-		"autonomous/old-stale":       map[string]any{},                 // stale autonomous → remove
-		"claude-haiku-4-5":           map[string]any{},                 // legacy unprefixed → remove
-		"venice/some-model":          map[string]any{},                 // other provider → keep
-		"autonomous/claude-opus-4-6": map[string]any{"params": "keep"}, // wanted → keep
+		"autonomous/old-stale":       map[string]any{},
+		"claude-haiku-4-5":           map[string]any{},
+		"venice/some-model":          map[string]any{},
+		"autonomous/claude-opus-4-6": map[string]any{"params": "keep"},
 	}
 	fetched := []domain.LLMModel{
 		{Key: "claude-opus-4-6"},
-		{Key: "claude-haiku-4-5"}, // present in fetched → prefixed key should exist
+		{Key: "claude-haiku-4-5"},
 	}
 
 	out, changed := overwriteAgentAutonomousModels(existing, fetched)
@@ -94,8 +89,6 @@ func TestOverwriteAgentAutonomousModels_PurgesStaleAndLegacy(t *testing.T) {
 		t.Error("missing wanted autonomous/* key must be added")
 	}
 }
-
-// ---- setdefault gating + apply ----
 
 func TestApplyDefaultPrimaryModel(t *testing.T) {
 	cfg := map[string]any{}
@@ -132,7 +125,6 @@ func TestIsDefaultsOnAutonomous(t *testing.T) {
 	}
 	onVenice := map[string]any{}
 	applyDefaultPrimaryModel(onVenice, "x")
-	// Manually flip to another provider.
 	onVenice["agents"].(map[string]any)["defaults"].(map[string]any)["model"].(map[string]any)["primary"] = "venice/foo"
 	if isDefaultsOnAutonomous(onVenice) {
 		t.Error("venice/* primary must NOT be treated as on-autonomous")

@@ -11,9 +11,8 @@ import (
 
 var storeCapabilities = []string{"store.list", "store.inspect", "agent.prepare", "operation.get"}
 
-// PreparationUnknownError means preparation may have been durably reserved.
-// Recover by polling its operation or retrying the identical parameters and key,
-// never by using a turn receipt or allocating a new preparation key.
+// PreparationUnknownError means preparation may have been reserved; recover by polling
+// or retrying with identical parameters and key, never a new key.
 type PreparationUnknownError struct {
 	RequestID string
 	Cause     error

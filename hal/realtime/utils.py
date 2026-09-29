@@ -27,14 +27,7 @@ def float32_to_pcm16_bytes(audio: npt.NDArray[np.float32]) -> bytes:
 
 
 def pcm16_bytes_to_float32(data: bytes) -> npt.NDArray[np.float32]:
-    """Convert raw PCM16 bytes to float32 [-1.0, 1.0]. Used by Gemini.
-
-    Trims a trailing odd byte before decoding: streamed audio chunks can split
-    mid-sample, and np.frombuffer(dtype=int16) requires an even length (2 bytes
-    per sample) — an odd buffer otherwise raises "buffer size must be a multiple
-    of element size" and kills the recv loop. Dropping the half-sample is
-    inaudible.
-    """
+    """Convert raw PCM16 bytes to float32 [-1.0, 1.0]; drops a trailing odd byte from a split chunk."""
     usable = len(data) - (len(data) % 2)
     if usable <= 0:
         return np.empty(0, dtype=np.float32)
@@ -54,16 +47,9 @@ def resample_float32(
 
 
 class StreamingResampler:
-    """Frame-by-frame resampler that keeps continuity across frames.
+    """Frame-by-frame overlap-save resampler; delays the stream by `history` input samples.
 
-    `resample_float32` on an isolated 20 ms frame lets the polyphase FIR see a
-    hard zero edge at both ends, so every frame boundary rings — a 50 Hz click
-    train over the speech that was loud enough to stop GPT-Live transcribing a
-    single word (device-measured 2026-09-17 on a 16 → 24 kHz uplink). The
-    filter is zero-phase, so it needs real samples on BOTH sides of every
-    output sample: this keeps `history` input samples before and after the
-    region it emits (overlap-save with lookahead), which delays the stream by
-    `history` input samples (4 ms at 16 kHz for the default 64).
+    Resampling isolated 20 ms frames rings at every boundary (a 50 Hz click train).
     """
 
     def __init__(self, src_rate: int, dst_rate: int, history: int = 64) -> None:

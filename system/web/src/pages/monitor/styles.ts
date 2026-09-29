@@ -63,8 +63,6 @@ export const S = {
     gridTemplateColumns: "1fr 1fr 1fr",
     gap: 14,
   },
-  // Matches the setup/settings `.lm-card` look (radius 14 + soft elevation) so
-  // the monitor cards read as the same surface family across flows.
   card: {
     background: "var(--lm-card)",
     border: "1px solid var(--lm-border)",

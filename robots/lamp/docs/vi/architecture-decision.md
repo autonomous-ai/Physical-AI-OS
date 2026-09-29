@@ -1,5 +1,7 @@
 # Quyết Định Kiến Trúc: AI Lamp — Hybrid Hardware Control
 
+> **Lưu ý:** bản tiếng Việt này không phải bản dịch 1-1 của [architecture-decision.md](../architecture-decision.md) — nó có thêm bảng phần cứng, bảng endpoint theo từng nhóm và mục trạng thái triển khai; hai bản có thể khác nhau về chi tiết.
+
 ## Ngày: 2026-03-24
 
 ---
@@ -105,7 +107,7 @@ Hoạt động **KHÔNG cần OpenClaw**. Nếu OpenClaw ngừng, thiết bị v
 | Giao tiếp MQTT | Kết nối backend, báo cáo trạng thái, nhận lệnh |
 | Giám sát internet | Phát hiện mất kết nối, tự khôi phục |
 | **Autonomous sensing** | Sensing loop nhẹ, chạy liên tục: camera (presence, light level), mic (sound level, silence, voice tone), time (schedules), plug-in sensors. Đẩy event cho OpenClaw khi phát hiện thay đổi đáng kể. |
-| **Ambient life** | Hành vi idle tạo cảm giác "sống": breathing LED (sine-wave brightness), color drift (xoay palette ấm), micro-movements (servo recordings an toàn), TTS self-talk (tự lẩm bẩm). Tự pause khi có interaction, resume sau 10s im lặng. |
+| **Ambient life** | Hành vi idle tạo cảm giác "sống": breathing LED (sine-wave brightness), color drift (xoay palette ấm), micro-movements (servo recordings an toàn), TTS self-talk (tự lẩm bẩm). Tự pause khi có interaction, resume sau 60s im lặng. |
 
 ### Autonomous Sensing Loop (Tầng 1.5)
 
@@ -126,12 +128,12 @@ Sensing Loop (Lamp Server, luôn chạy):
 **Rule-based** (không cần AI): auto-dim khi vắng, adjust brightness khi trời tối, idle animations.
 **AI-driven** (OpenClaw quyết định): chào hỏi, phản ứng mood, empathy, gợi ý theo lịch.
 
-**Lamp Server modules (trong thư mục `lamp/`):**
+**Lamp Server modules (trong `system/`; `runtimes/` nằm ở root repo):**
 
 ```
 server/server.go          — HTTP server (Gin, port 5000)
 server/config/            — Quản lý cấu hình JSON
-internal/resetbutton/     — GPIO 26 nhấn giữ
+(internal/resetbutton/ đã xóa — cử chỉ click/giữ nút GPIO giờ do HAL xử lý: hal/drivers/gpio_button.py, hal/drivers/button_actions.py)
 system/network/         — WiFi AP/STA
 runtimes/openclaw/        — Cấu hình OpenClaw & WebSocket
 system/beclient/        — Backend client, báo cáo trạng thái
@@ -152,8 +154,8 @@ Toàn bộ **điều khiển phần cứng hướng người dùng** thông qua 
 
 1. File **SKILL.md** trong `workspace/skills/` mô tả API cho LLM
 2. OpenClaw tự phát hiện skills (`skills.load.watch: true`)
-3. **LLM đọc SKILL.md** → hiểu API → tự gọi `curl` đến Lamp HTTP API tại `127.0.0.1:5000`
-4. Lamp HTTP API bridge đến HAL Python services → điều khiển phần cứng
+3. **LLM đọc SKILL.md** → hiểu API → tự gọi `curl` đến HAL HTTP API tại `127.0.0.1:5001` cho phần cứng (Lamp server `127.0.0.1:5000` phục vụ API hệ thống/agent)
+4. HAL Python services → điều khiển phần cứng
 
 Đây **KHÔNG phải MCP**.
 
@@ -182,18 +184,20 @@ workspace/skills/
 | `/led/off` | POST | Tắt tất cả LED |
 | `/led/effect` | POST | Bật effect (breathing, candle, rainbow, notification_flash, pulse) |
 | `/led/effect/stop` | POST | Dừng effect |
+| `/led/status` | POST | Effect status-LED |
+| `/led/restore` | POST | Khôi phục trạng thái LED trước đó của user |
 
 #### Servo Control
 
 | Endpoint | Method | Mô tả |
 |---|---|---|
 | `/servo` | GET | Recordings + animation state |
-| `/servo/play` | POST | Phát animation (20 recordings: curious, nod, happy_wiggle, idle, sad, excited, shy, shock, headshake, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching) |
+| `/servo/play` | POST | Phát một recording trong `hal/recordings/` (liệt kê qua `GET /servo`), vd curious, nod, happy_wiggle, idle, sad, excited, shy, shock, headshake, scanning, wake_up, music_groove, listening, thinking_deep, laugh, confused, sleepy, greeting, acknowledge, stretching |
 | `/servo/move` | POST | Joint positions với smooth interpolation |
 | `/servo/release` | POST | Tắt torque tất cả servo |
 | `/servo/position` | GET | Vị trí servo hiện tại |
 | `/servo/aim` | GET/POST | Aim đầu đèn (center, desk, wall, left, right, up, down, user) |
-| `/servo/track` | POST/DELETE/GET/PUT | Tracking vật thể bằng vision. Xem [vision-tracking_vi.md](vision-tracking_vi.md) |
+| `/servo/track` | POST/GET (+ `POST /servo/track/update`, `POST /servo/track/stop`) | Tracking vật thể bằng vision. Xem [vision-tracking_vi.md](vision-tracking_vi.md) |
 
 #### Camera
 
@@ -235,7 +239,7 @@ workspace/skills/
 
 | Endpoint | Method | Mô tả |
 |---|---|---|
-| `/emotion` | POST | Biểu cảm cảm xúc (8 presets: curious, happy, sad, thinking, idle, excited, shy, shock) |
+| `/emotion` | POST | Biểu cảm cảm xúc (preset trong `hal/presets.py` `EMOTION_PRESETS`, liệt kê qua `GET /emotion/presets`) |
 
 #### Scene
 
@@ -381,6 +385,8 @@ Dashboard gồm 4 phần:
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
+> **Implementation hiện tại:** bridge qua Lamp server (`/api/led`, `/api/servo`, `/api/emotion`, …) ở sơ đồ trên là thiết kế ban đầu. Hiện tại OpenClaw skills gọi thẳng HAL tại `127.0.0.1:5001` (vd `POST /led/solid`, `POST /servo/aim`, `POST /emotion`); Lamp server (`:5000`) chỉ phục vụ API hệ thống/agent.
+
 ---
 
 ## 7. Emotion Skill — Điểm Khác Biệt Quan Trọng
@@ -393,6 +399,8 @@ Emotion là skill **mới quan trọng nhất** — kết hợp tất cả phầ
 POST /api/emotion
 {"emotion": "curious", "intensity": 0.8}
 ```
+
+(Implement thực tế: HAL `POST http://127.0.0.1:5001/emotion` với cùng body.)
 
 ### Cách Hoạt Động
 
@@ -417,9 +425,9 @@ Mỗi lần gọi tạo ra biểu cảm **unique** — không lặp lại y hệ
 Người dùng nói: *"Bạn nghĩ gì về bức tranh này?"*
 
 OpenClaw LLM:
-1. Gọi `POST /api/emotion {"emotion": "curious", "intensity": 0.7}` — đèn nghiêng, đổi màu
-2. Gọi `GET /api/camera/face` — phân tích biểu cảm người dùng
-3. Trả lời bằng giọng nói + gọi `POST /api/emotion {"emotion": "thoughtful", "intensity": 0.5}`
+1. Gọi `POST /emotion {"emotion": "curious", "intensity": 0.7}` (HAL :5001) — đèn nghiêng, đổi màu
+2. Gọi `GET /camera/snapshot` — nhìn bức tranh / người dùng
+3. Trả lời bằng giọng nói + gọi `POST /emotion {"emotion": "thinking", "intensity": 0.5}`
 
 ---
 
@@ -433,11 +441,7 @@ OpenClaw (AI/LLM)
     │ đọc SKILL.md, quyết định hành động
     │
     ▼
-curl HTTP API (127.0.0.1:5000)
-    │
-    ▼
-Lamp Server (Go)
-    │ bridge đến HAL
+curl HAL HTTP API (127.0.0.1:5001)
     │
     ▼
 HAL Python Services
@@ -452,13 +456,13 @@ Phần cứng (Servo / LED / Camera / Speaker)
 Người dùng: *"Chiếu đèn xuống bàn, chế độ tập trung"*
 
 ```bash
-# OpenClaw LLM đọc servo-control/SKILL.md + led-control/SKILL.md, rồi gọi:
+# OpenClaw LLM đọc servo-control/SKILL.md + scene/SKILL.md, rồi gọi:
 
-curl -s -X POST http://127.0.0.1:5000/api/servo \
+curl -s -X POST http://127.0.0.1:5001/servo/aim \
   -H "Content-Type: application/json" \
-  -d '{"preset": "desk"}'
+  -d '{"direction": "desk"}'
 
-curl -s -X POST http://127.0.0.1:5000/api/led \
+curl -s -X POST http://127.0.0.1:5001/scene \
   -H "Content-Type: application/json" \
   -d '{"scene": "focus"}'
 ```
@@ -473,8 +477,8 @@ Tất cả hardware endpoints chạy trực tiếp trên HAL FastAPI (:5001). Op
 
 | Thành phần | Trạng thái |
 |---|---|
-| 10 SKILL.md files | ✅ `lamp/resources/openclaw-skills/` |
-| HAL 38 endpoints | ✅ `hal/server.py` |
+| SKILL.md files | ✅ `skills/` (root repo) |
+| HAL endpoints | ✅ `hal/server.py` + `hal/routes/` |
 | Sensing event routing | ✅ `system/server/sensing/` |
 | Local intent matching | ✅ `system/intent/` |
 | Voice pipeline (VAD + Deepgram) | ✅ `hal/drivers/voice/` |
@@ -500,4 +504,4 @@ Tất cả hardware endpoints chạy trực tiếp trên HAL FastAPI (:5001). Op
 - [x] **Xử lý camera**: On-device OpenCV trong HAL Python. Frame diff cho motion detection trong sensing loop.
 - [x] **Đầu vào audio**: HAL owns mic. Local VAD (RMS energy) + on-demand Deepgram STT. Wake word "Hey Lamp" detected trong transcript.
 - [x] **LED driver**: HAL Python rpi_ws281x driver sở hữu toàn bộ LED control. Go SPI driver đã xóa khỏi Lamp — đèn này dùng LED driver của HAL.
-- [x] **Generative body language**: Emotion presets với randomized parameters. 8 presets (curious, happy, sad, thinking, idle, excited, shy, shock). Mỗi lần gọi tạo biểu cảm unique nhờ randomization.
+- [x] **Generative body language**: Emotion presets với randomized parameters. Danh sách preset trong `hal/presets.py` (`EMOTION_PRESETS`, 22 preset lúc viết). Mỗi lần gọi tạo biểu cảm unique nhờ randomization.

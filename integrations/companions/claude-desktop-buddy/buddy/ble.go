@@ -28,15 +28,8 @@ var (
 	})
 )
 
-// BLEServer manages the Nordic UART BLE GATT server.
-//
-// BlueZ dispatches D-Bus methods on separate goroutines — WriteEvent and
-// SetConnectHandler callbacks can fire concurrently — and ble.Send is called
-// from the HTTP server too. Serialization:
-//   - rxMu   guards rxBuf accumulation / line extraction.
-//   - sendMu guards txChar writes.
-//   - A single processor goroutine drains msgCh and evtCh, calling onMessage
-//     and onConnect sequentially so the transfer state they touch is race-free.
+// BLEServer manages the Nordic UART GATT server.
+// Concurrency: rxMu guards rxBuf, sendMu guards txChar writes, and one processor goroutine runs onMessage/onConnect sequentially.
 type BLEServer struct {
 	rxMu       sync.Mutex // also guards connected/links/lastUp/clientAddr (shared with the D-Bus connect-handler dispatch)
 	sendMu     sync.Mutex
@@ -66,8 +59,7 @@ func NewBLEServer(deviceName string, onMessage func([]byte), onConnect func(conn
 	return s
 }
 
-// processor serializes user callbacks. Running in one goroutine means
-// onMessage and onConnect never race on the shared transfer state.
+// processor runs callbacks on one goroutine so onMessage and onConnect never race.
 func (s *BLEServer) processor() {
 	for {
 		select {
@@ -90,21 +82,10 @@ func (s *BLEServer) Start() error {
 		return err
 	}
 
-	// tinygo bluetooth v0.14.0 has a TODO for MinInterval/MaxInterval on Linux,
-	// so BlueZ falls back to its 1.28s default — way too slow for macOS scan
-	// windows, leaving Claude Desktop frequently unable to discover the device.
-	// Override via the kernel debugfs knobs (writable as root) before
-	// adv.Start() so the registered advertisement uses faster timing.
+	// tinygo leaves BlueZ at the 1.28 s default adv interval, too slow for macOS scans; tune via debugfs before adv.Start().
 	tuneAdvIntervals()
 
-	// Transport-level connects fire for ANY device touching the adapter —
-	// including unrelated ones (e.g. a BT headset the OS pairs on the same
-	// radio) — so they must NOT drive the buddy connected state. We only
-	// track them here; "Claude Desktop connected" is declared when actual
-	// data arrives on the NUS RX characteristic (see handleRX), and
-	// "disconnected" when that attributed client (or the last remaining
-	// link) drops. BlueZ can also fire this handler redundantly, which the
-	// links-set naturally dedups.
+	// Transport connects fire for any device on the radio, so they only track links; "connected" is declared on NUS RX data (see handleRX).
 	adapter.SetConnectHandler(func(device bluetooth.Device, connected bool) {
 		addr := device.Address.String()
 		s.rxMu.Lock()
@@ -117,8 +98,7 @@ func (s *BLEServer) Start() error {
 			delete(s.links, addr)
 			log.Printf("[ble] transport disconnected: %s (links=%d)", addr, len(s.links))
 			if s.connected && (addr == s.clientAddr || len(s.links) == 0) {
-				// Reset the RX buffer so a leftover partial line from the
-				// prior session doesn't corrupt the next.
+				// Drop a leftover partial line from the prior session.
 				s.connected = false
 				s.clientAddr = ""
 				s.rxBuf.Reset()
@@ -133,12 +113,7 @@ func (s *BLEServer) Start() error {
 		}
 	})
 
-	// Hardware Buddy spec recommends LE Secure Connections bonding, but
-	// Claude Desktop's current Mac client connects without auto-triggering
-	// SMP, leaving encrypted-only chrs inaccessible ("No response" in the
-	// panel). For now drop the secure-* flags so the chrs are reachable
-	// over the unencrypted link; bonding can be re-introduced once we
-	// figure out how to make Claude Desktop initiate the pairing handshake.
+	// Secure-* flags dropped: Claude Desktop's Mac client doesn't trigger SMP, so encrypted-only characteristics would be unreachable.
 	err := adapter.AddService(&bluetooth.Service{
 		UUID: nusServiceUUID,
 		Characteristics: []bluetooth.CharacteristicConfig{
@@ -183,18 +158,12 @@ func (s *BLEServer) Start() error {
 	return nil
 }
 
-// handleRX accumulates incoming bytes and forwards each complete
-// newline-terminated line to the processor goroutine. Partial data stays in
-// rxBuf until the terminating '\n' arrives in a later write. rxMu keeps
-// concurrent WriteValue dispatches from racing on the buffer.
+// handleRX buffers incoming bytes and forwards each complete newline-terminated line to the processor; rxMu guards rxBuf.
 func (s *BLEServer) handleRX(data []byte) {
 	s.rxMu.Lock()
 	justConnected := false
 	if !s.connected {
-		// Data on the NUS RX characteristic is the real "Claude Desktop is
-		// here" signal — only its client ever writes to our GATT service.
-		// Attribute the session to the most recent transport connect (the
-		// write follows the connect within milliseconds).
+		// NUS RX data is the real Desktop-connected signal; attribute it to the most recent transport connect.
 		s.connected = true
 		s.clientAddr = s.lastUp
 		justConnected = true
@@ -227,11 +196,7 @@ func (s *BLEServer) handleRX(data []byte) {
 	}
 }
 
-// Send writes a JSON line to the TX characteristic (Device → Desktop).
-// We chunk at 180 bytes — safely under the macOS-negotiated MTU (~185) so a
-// typical ack fits in one notification and Claude Desktop never has to
-// reassemble a fragmented reply. sendMu serializes writes across the
-// processor goroutine and HTTP approval handlers.
+// Send writes a JSON line to the TX characteristic in 180-byte chunks (under the ~185 macOS MTU); sendMu serializes writes.
 func (s *BLEServer) Send(data []byte) error {
 	s.sendMu.Lock()
 	defer s.sendMu.Unlock()
@@ -249,24 +214,15 @@ func (s *BLEServer) Send(data []byte) error {
 	return nil
 }
 
-// ensureKernelAdv uses btmgmt to create a kernel-level BLE advertisement.
-// On Pi5, tinygo's D-Bus RegisterAdvertisement may not create one, causing
-// the device to be invisible to BLE scanners despite the GATT service being
-// registered. This is a workaround.
 // Close is a no-op for tinygo bluetooth.
 func (s *BLEServer) Close() {}
 
-// tuneAdvIntervals writes desired LE advertising min/max intervals to the
-// kernel's hci debugfs knobs so BlueZ uses fast timings (100–200 ms) instead
-// of the 1.28 s default. Values are in 0.625 ms units. Best-effort: any error
-// (debugfs not mounted, different hci index, kernel without these knobs) is
-// logged and we proceed with whatever BlueZ chooses.
+// tuneAdvIntervals sets 100-200 ms LE adv intervals (0.625 ms units) via hci debugfs; best-effort.
 func tuneAdvIntervals() {
 	const minVal = "160" // 100 ms
 	const maxVal = "320" // 200 ms
 
-	// Try every hci<n> debugfs dir so this works on boards where the
-	// controller isn't always hci0.
+	// Try every hci<n>; the controller isn't always hci0.
 	matches, err := filepath.Glob("/sys/kernel/debug/bluetooth/hci*")
 	if err != nil || len(matches) == 0 {
 		log.Printf("[ble] WARN: bluetooth debugfs not available — using BlueZ default 1280ms advertising")
@@ -276,9 +232,7 @@ func tuneAdvIntervals() {
 	for _, dir := range matches {
 		minPath := filepath.Join(dir, "adv_min_interval")
 		maxPath := filepath.Join(dir, "adv_max_interval")
-		// Order matters: kernel rejects min > current max, so write max first
-		// when raising, min first when lowering. We only ever lower, so
-		// writing min first is safe (new min < old max=2048).
+		// Write min first: we only lower, and the kernel rejects min > current max.
 		if err := os.WriteFile(minPath, []byte(minVal), 0644); err != nil {
 			log.Printf("[ble] WARN: tune %s: %v", minPath, err)
 			continue

@@ -1,46 +1,7 @@
 #!/usr/bin/env bash
-# Deploy HAL and/or os-server to ONE device on the LAN, by IP.
-#
-# WHY THIS SCRIPT: `make upload-hal` publishes an OTA release to the whole
-# fleet (bumps VERSION_HAL, signs, uploads). That is the wrong tool for
-# "push my working tree to the lamp on my desk". This does the dev push:
-# rsync the tree, swap the binary, restart the units.
-#
-# USAGE:
-#   scripts/deploy-device.sh --host 172.168.20.255              # hal + os-server
-#   scripts/deploy-device.sh --host 172.168.20.255 --hal        # hal only
-#   scripts/deploy-device.sh --host 172.168.20.255 --os-server  # binary only
-#   scripts/deploy-device.sh --host lamp.local --user pi --pass secret
-#   scripts/deploy-device.sh --host 172.168.20.255 --hal --dry-run
-#   scripts/deploy-device.sh --host 172.168.20.255 --hal-log     # tail hal journal
-#   scripts/deploy-device.sh --host 172.168.20.255 --os-log      # tail os-server
-#   scripts/deploy-device.sh --host 10.0.0.5 --jump proxy-host --hal   # via a bastion
-#
-# --hal-log / --os-log tail that unit's journal on the DEVICE and exit; they
-# deploy nothing, so they are safe to run against a device mid-session. Tunable
-# with LOG_LINES (default 200), FOLLOW=0 to dump instead of follow, and GREP=<re>
-# to filter remotely (cheaper than shipping every line over the link):
-#   IP=... GREP='\[live\]|Response latency' make hal-log
-#
-# --dry-run lists what WOULD change on the device and exits. Worth running
-# whenever your branch might be behind what is deployed: the swap has no
-# --delete, but it does overwrite, so a stale checkout can silently revert
-# work that only exists on the device.
-#
-# Or via make:  IP=172.168.20.255 make device-deploy
-#               IP=10.0.0.5 J=proxy-host make hal-deploy   # via a jump host
-#
-# AUTH: password auth when PI_PASS is set (default "orangepi", needs sshpass);
-# set PI_PASS="" to use your SSH key + interactive sudo instead.
-#
-# JUMP HOST: --jump <host> (or J=<host> / PI_JUMP=<host>) reaches a device that
-# is not routable from here. PI_PASS is the DEVICE password only — the jump hop
-# itself authenticates from your SSH key/agent and ~/.ssh/config, so a bastion
-# that wants a password of its own will not work unattended.
-#
-# NEVER TOUCHED on the device: .env (device-local tuning), .venv, and
-# calibration/ (hand-recaptured servo poses). No --delete, so device-local
-# paths outside the repo survive.
+# Dev push of HAL and/or os-server from the working tree to one LAN device (not an OTA release).
+# Usage: scripts/deploy-device.sh --host IP [--hal|--os-server|--hal-log|--os-log] [--dry-run] [--jump HOST] [--user U --pass P]
+# Never touches the device's .env, .venv or calibration/; no --delete, but stale checkouts overwrite newer device files.
 set -euo pipefail
 
 HOST="${PI_HOST:-${IP:-}}"
@@ -70,8 +31,7 @@ while [[ $# -gt 0 ]]; do
   esac
 done
 
-# No component flag = both. Log mode is not a component: without this guard
-# `--hal-log` alone would fall through and deploy everything.
+# Log mode is not a component: without this guard `--hal-log` alone would deploy everything.
 if [[ -z "$LOG_UNIT" && $DO_HAL -eq 0 && $DO_OS -eq 0 ]]; then DO_HAL=1; DO_OS=1; fi
 
 if [[ -z "$HOST" ]]; then
@@ -85,9 +45,7 @@ STAGE="/home/$USER/.deploy-stage"
 
 SSH_OPTS=(-o StrictHostKeyChecking=accept-new -o LogLevel=ERROR -o ConnectTimeout=10)
 
-# One ProxyJump entry is shared by ssh, scp AND rsync. -o rather than -J because
-# RSYNC_RSH below is a plain string that gets word-split: a single unspaced token
-# survives that intact, so reject whitespace instead of silently mangling it.
+# RSYNC_RSH is word-split, so the jump host must be a single unspaced token.
 if [[ -n "$JUMP" ]]; then
   case "$JUMP" in
     *[[:space:]]*) echo "ERROR: jump host must not contain whitespace: '$JUMP'" >&2; exit 2 ;;
@@ -95,8 +53,6 @@ if [[ -n "$JUMP" ]]; then
   SSH_OPTS+=(-o "ProxyJump=$JUMP")
 fi
 
-# Password auth is optional: with PI_PASS="" fall back to key auth, so this
-# works unattended in a shell that already has an agent.
 if [[ -n "$PASS" ]]; then
   SSHPASS_BIN="$(command -v sshpass || echo "$HOME/.local/bin/sshpass")"
   if [[ ! -x "$SSHPASS_BIN" ]]; then
@@ -108,7 +64,6 @@ if [[ -n "$PASS" ]]; then
   SCP=(env "SSHPASS=$PASS" "$SSHPASS_BIN" -e scp "${SSH_OPTS[@]}")
   RSYNC_RSH="$SSHPASS_BIN -e ssh ${SSH_OPTS[*]}"
   RSYNC_ENV=(env "SSHPASS=$PASS")
-  # `sudo -S` reads the password from stdin; -p "" keeps the prompt out of the log.
   SUDO="echo '$PASS' | sudo -S -p ''"
 else
   SSH=(ssh "${SSH_OPTS[@]}")
@@ -119,10 +74,7 @@ else
 fi
 
 echo "=== Preflight: $USER@$HOST${JUMP:+ (via $JUMP)} ==="
-# ICMP is only an advisory fast-path. A device reached through a ProxyJump (--jump
-# or ~/.ssh/config) is not pingable from here AT ALL, and failing hard on that made
-# the script unusable for every jump-host target — while SSH below is the real
-# reachability test in both cases, with a better error when it fails.
+# ICMP is advisory only: jump-host targets are never pingable; SSH is the real check.
 ping -c 1 -W 2 "$HOST" >/dev/null 2>&1 \
   || echo "  (no ICMP reply — continuing; SSH is the authoritative check)"
 "${SSH[@]}" "$USER@$HOST" true || {
@@ -130,29 +82,21 @@ ping -c 1 -W 2 "$HOST" >/dev/null 2>&1 \
   exit 1; }
 echo "OK — $("${SSH[@]}" "$USER@$HOST" 'hostname; uname -m' | paste -sd' ' -)"
 
-# --- Log mode: tail the unit's journal and exit. -------------------------------
-# Deliberately placed BEFORE staging and the os-server build: reading logs must
-# never create a staging dir, cross-compile, or touch the device's files, so it
-# is safe to run against a device that is mid-session.
+# Log mode must run before staging/build so it never touches the device's files.
 if [[ -n "$LOG_UNIT" ]]; then
   log_lines="${LOG_LINES:-200}"          # LOG_LINES, not LINES: bash owns LINES
   follow="${FOLLOW:-1}"
   remote="journalctl -u $LOG_UNIT -n $log_lines --no-pager"
   [[ "$follow" == "1" ]] && remote+=" -f"
-  # Filter on the DEVICE: an -f session on a chatty unit otherwise ships every
-  # servo/animation line over the link just to drop it locally.
   [[ -n "${GREP:-}" ]] && remote+=" | grep --line-buffered -iE $(printf '%q' "$GREP")"
   banner="=== $LOG_UNIT journal on $HOST — last $log_lines line(s)"
   [[ -n "${GREP:-}" ]] && banner+=", filter: $GREP"
   [[ "$follow" == "1" ]] && banner+=", following (Ctrl-C to stop)"
   echo "$banner ==="
-  # -t forces a TTY so Ctrl-C reaches journalctl ON THE DEVICE. Without it only
-  # the local ssh dies and the remote follower is left running.
+    # -t so Ctrl-C reaches journalctl on the device instead of orphaning it.
   exec "${SSH[@]}" -t "$USER@$HOST" "$remote"
 fi
 
-# rsync creates the staging dir on its own; scp does not, so make it here or
-# an --os-server-only run has nowhere to land.
 "${SSH[@]}" "$USER@$HOST" "mkdir -p '$STAGE'"
 
 if [[ $DO_OS -eq 1 && $SKIP_BUILD -eq 0 ]]; then
@@ -172,9 +116,7 @@ if [[ $DRY -eq 1 ]]; then
   echo
   if [[ $DO_HAL -eq 1 ]]; then
     echo "=== DRY RUN: hal/ files that would change on $HOST ==="
-    # No sudo: a dry run only reads, and /opt/hal is world-readable. Routing it
-    # through `sudo -S` would need a pipe in --rsync-path, and that echo lands
-    # in the rsync protocol stream and kills the connection.
+      # No sudo: piping a password via --rsync-path corrupts the rsync protocol stream.
     if ! out="$("${RSYNC_ENV[@]}" rsync -rn --checksum --itemize-changes "${HAL_EXCLUDES[@]}" \
         -e "$RSYNC_RSH" "$REPO_ROOT/hal/" "$USER@$HOST:/opt/hal/" 2>&1)"; then
       printf '%s\n' "$out" >&2
@@ -200,8 +142,7 @@ fi
 if [[ $DO_HAL -eq 1 ]]; then
   echo
   echo "=== 1) rsync hal/ → $STAGE ==="
-  # Staged first: /opt/hal is root-owned and $USER's sudo may need a password,
-  # so rsync cannot write there directly as $USER.
+    # Staged first: /opt/hal is root-owned and rsync cannot write there as $USER.
   "${RSYNC_ENV[@]}" rsync -a --info=stats1 "${HAL_EXCLUDES[@]}" \
     -e "$RSYNC_RSH" "$REPO_ROOT/hal/" "$USER@$HOST:$STAGE/hal/"
 

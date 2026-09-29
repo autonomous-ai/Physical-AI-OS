@@ -1,12 +1,4 @@
-"""A stranger joining the user is announced WITH the user in the text (#426).
-
-Replays the green-lamp log of 2026-09-16 11:23 tick by tick through
-`FacePerception._check_impl` with the recognizer stubbed: momo alone (greeted),
-momo + an unsure box (the recognizer corroborating), momo + stranger_2 (minted).
-The stranger is greeted once they have looked at the lamp on 2 of their last 3
-ticks (#531), and the enter lists momo as already present when both are
-matched in that frame.
-"""
+"""A stranger joining the user is announced WITH the user in the text (#426, #531)."""
 
 import time
 
@@ -73,9 +65,9 @@ def _enter_images(perception) -> list[list]:
 
 
 def test_stranger_joining_momo_lists_momo_as_already_present(perception, monkeypatch):
-    _tick(perception, [MOMO], monkeypatch)             # 11:12 momo arrives
-    _tick(perception, [MOMO, UNSURE], monkeypatch)     # recognizer corroborating
-    _tick(perception, [MOMO, STRANGER], monkeypatch)   # 11:23 stranger_2 minted, facing 1/1
+    _tick(perception, [MOMO], monkeypatch)
+    _tick(perception, [MOMO, UNSURE], monkeypatch)
+    _tick(perception, [MOMO, STRANGER], monkeypatch)
     _tick(perception, [MOMO, STRANGER], monkeypatch)   # facing 2/2 -> greeted
 
     assert _enters(perception) == [
@@ -126,8 +118,8 @@ def test_a_new_friend_lists_a_present_friend(perception, monkeypatch):
 def test_greeting_describes_the_frame_where_gaze_was_confirmed(perception, monkeypatch):
     """The text describes the newest frame — the one where gaze was confirmed."""
     _tick(perception, [MOMO], monkeypatch)
-    _tick(perception, [MOMO, STRANGER], monkeypatch)   # facing 1/1, momo beside
-    _tick(perception, [STRANGER], monkeypatch)         # facing 2/2, momo gone
+    _tick(perception, [MOMO, STRANGER], monkeypatch)
+    _tick(perception, [STRANGER], monkeypatch)
 
     assert _enters(perception)[-1] == (
         "Person detected — new: stranger (stranger_2); faces in frame: 1 (stranger_2)"

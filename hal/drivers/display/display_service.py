@@ -1,13 +1,4 @@
-"""
-Display Service — manages the GC9A01 round LCD display.
-
-Dual-mode:
-  - Eyes mode (default): animated pixel art eyes synced with emotion
-  - Info mode: shows text (time, weather, timer, notifications)
-
-The service runs a render loop in a background thread, pushing frames to the display.
-When no animation is active, it idles to save CPU.
-"""
+"""Display Service — manages the GC9A01 round LCD display."""
 
 import io
 import logging
@@ -23,10 +14,9 @@ from hal.drivers.display.eyes import (
 
 logger = logging.getLogger("hal.display")
 
-# Animation FPS
-IDLE_FPS = 2       # low FPS when idle (just blink occasionally)
-ACTIVE_FPS = 15    # higher FPS during expression transitions
-BLINK_INTERVAL_S = 4.0  # blink every ~4 seconds
+IDLE_FPS = 2
+ACTIVE_FPS = 15
+BLINK_INTERVAL_S = 4.0
 BLINK_DURATION_S = 0.15
 
 
@@ -44,19 +34,16 @@ class DisplayService:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-        # State
         self._mode = DisplayMode.EYES
         self._eye_state = EyeState()
         self._info_text = ""
         self._info_subtitle = ""
-        self._dirty = True  # needs re-render
+        self._dirty = True
         self._last_blink = time.time()
         self._blink_until = 0.0
 
-        # Last rendered frame (for snapshot)
         self._last_frame: Optional[Image.Image] = None
 
-        # Try to init hardware driver
         try:
             import gc9a01
             import spidev
@@ -144,7 +131,7 @@ class DisplayService:
 
     def _loop(self):
         """Render loop — pushes frames to display."""
-        time.sleep(1)  # wait for init
+        time.sleep(1)
 
         while self._running:
             try:
@@ -163,18 +150,15 @@ class DisplayService:
             if self._mode != DisplayMode.EYES:
                 return
 
-            # Currently blinking
             if now < self._blink_until:
                 self._eye_state.openness = 0.05
                 self._dirty = True
                 return
 
-            # Was blinking, now open
             if self._eye_state.openness < 1.0:
                 self._eye_state.openness = 1.0
                 self._dirty = True
 
-            # Time for a new blink?
             if now - self._last_blink >= BLINK_INTERVAL_S:
                 self._blink_until = now + BLINK_DURATION_S
                 self._last_blink = now
@@ -193,7 +177,6 @@ class DisplayService:
 
             self._last_frame = frame
 
-        # Push to hardware
         if self._driver:
             try:
                 self._driver.display(frame)

@@ -68,7 +68,7 @@ def test_late_reject_cancels_synthesis_before_audio_and_never_syncs(monkeypatch,
     ], "rejected", True)], tts=tts, sender=sender,
         strip_markers=VoiceService.strip_rt_markers)
     if "." in reply:
-        assert tts.items  # ASCII sentences entered synthesis before rejection.
+        assert tts.items
     assert all(item.cancelled.is_set() for item in tts.items)
     assert tts.played == []
     assert sender.calls == []

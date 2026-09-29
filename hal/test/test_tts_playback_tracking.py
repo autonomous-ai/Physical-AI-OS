@@ -1,14 +1,4 @@
-"""The playback-tracking hook on TTSService.
-
-Two things these pin down:
-
-* `on_speak_start` is NOT proof of playback — the cached path fires it before
-  it has taken the stream lock or written a byte. The hook must key off the
-  first frame that actually reaches the stream.
-* There is exactly ONE measuring point, inside the stream wrapper every
-  playback writes through. A new playback path cannot escape the metrics by
-  forgetting to call anything.
-"""
+"""The playback-tracking hook on TTSService."""
 
 import threading
 import wave
@@ -39,8 +29,7 @@ class _FakeDevice:
 
 
 def _tapped(service, recorder):
-    """The real wrapper, over a fake device — the same object every playback
-    path writes through in production."""
+    """The real wrapper over a fake device."""
     from hal.drivers.voice.tts.service import _WatchedStream
 
     return _WatchedStream(_FakeDevice(recorder), service)
@@ -89,14 +78,12 @@ def test_audio_hook_fires_only_after_a_real_write(tmp_path):
     assert writes, "test setup: expected frames to be written"
     kinds = [f for f in fired if isinstance(f, tuple)]
     assert kinds == [("audio", "run:run-7")]
-    # on_speak_start fired first and is NOT the ack signal — that ordering is
-    # exactly why the tracking hook exists.
+    # on_speak_start fires first and is NOT the ack signal.
     assert fired[0] == "speak_start"
 
 
 def test_no_audio_hook_when_playback_is_stopped_before_writing(tmp_path):
-    """Stopped between the callback and the first write: nothing was heard, so
-    nothing may be reported as heard."""
+    """A stop before the first write reports nothing heard."""
     writes, fired = [], []
     service = _playback_service(tmp_path, writes, fired)
     service._begin_playback("run:run-7")
@@ -132,9 +119,7 @@ def test_unclaimed_playback_reports_an_empty_owner(tmp_path):
 
 @pytest.mark.parametrize("cancelled", [False, True])
 def test_gesture_chime_does_not_acknowledge_pending_voice_reply(tmp_path, monkeypatch, cancelled):
-    """A tap's ping must not become the first frame of an unsynthesized reply,
-    even after that reply's completion hook has run during cancellation.
-    """
+    """A tap ping is not credited to an unsynthesized reply."""
     from hal.telemetry import voice_metrics
 
     clock = [1000.0]
@@ -221,13 +206,11 @@ def _pending(text, owner):
 
 
 def test_queued_segment_reports_its_own_owner_not_the_stream_opener():
-    """A sentence queued behind another turn plays on the stream that turn
-    opened. Without re-arming per item it would be credited to the wrong turn.
-    """
+    """Each queued item re-arms tracking for its own turn."""
     writes, fired = [], []
     service = _drain_service(writes, fired)
-    service._begin_playback("run:first-turn")     # who opened the stream
-    service._audio_written_fired = True           # its own first frame already fired
+    service._begin_playback("run:first-turn")
+    service._audio_written_fired = True
     service._pending_queue = [_pending("second turn reply", "run:second-turn")]
 
     service._drain_pending_queue(_tapped(service, writes))

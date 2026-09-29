@@ -6,8 +6,7 @@ import { EmptyState } from "./EmptyState";
 import { fmtAgo, fmtSize } from "./format";
 import type { StrangersData } from "./types";
 
-// Unknown Voice Clusters. Expand state + the delete handlers stay in the parent
-// and are passed in; this is purely the card's presentation.
+// Unknown Voice Clusters.
 export function StrangerClustersCard({
   strangers, strangersError, expandedCluster, setExpandedCluster,
   deletingCluster, deletingStrangerFile, onDeleteCluster, onDeleteStrangerFile,

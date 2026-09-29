@@ -9,7 +9,7 @@
 | Method | Endpoint | Description |
 |--------|----------|-------------|
 | GET | `/api/health/live` | Liveness probe |
-| GET | `/api/health/readiness` | Readiness probe (agent gateway connected?) |
+| GET | `/api/health/readiness` | Readiness probe — currently always `200 "OK"` (does not check the agent gateway) |
 
 ### System
 
@@ -21,6 +21,10 @@
 | GET | `/api/system/ota-security` | OTA trust posture from the bootstrap worker: `legacy` vs `verified`, pinned key fingerprint, last metadata fetch (see `bootstrap-ota.md`) |
 | POST | `/api/system/reboot` | Admin-gated: acknowledge, then ask HAL to announce and reboot the OS |
 | POST | `/api/system/shutdown` | Admin-gated: acknowledge, then ask HAL to announce, release servos, and shut down the OS |
+| POST | `/api/system/software-update/:target` | Admin-gated: install the published version of one component now via bootstrap `POST 127.0.0.1:8080/force-update/<target>` (`agent` resolves to the configured runtime's key). Rate-limited per target |
+| POST | `/api/system/factory-reset` | Admin or loopback: soft factory reset (wipe config/keys/enrollments/WiFi creds, reset the active agent backend) then reboot into AP setup. `202`; `409` if already running, `429` inside the cooldown |
+| POST | `/api/system/exec` | Loopback-only: run `{cmd}` with `sh -c` (30 s timeout), returns `{stdout, stderr, exit_code}` |
+| GET | `/api/system/shell` | Admin-gated WebSocket: `/bin/bash` PTY for the web xterm.js terminal |
 | POST | `/api/system/restart/:target` | Admin-gated service restart for `hal` or `os-server` only. Returns `202` with `{target, scheduled: true}` after systemd accepts the restart timer; unsupported targets return `400`, scheduling failures return `500`. |
 
 Service restart uses `systemd-run --collect --on-active=2s systemctl restart <target>`
@@ -148,6 +152,12 @@ for defaults, validation, payloads and use cases.
 |--------|----------|-------------|
 | POST | `/api/device/setup` | Configure WiFi + LLM + channel + MQTT (async, returns immediately) |
 | POST | `/api/device/channel` | Change messaging channel |
+| GET / PUT | `/api/device/config` | Admin-gated. GET returns the device config with secrets reduced to `Has*` booleans; PUT updates individual fields (saved to disk) |
+| GET / POST | `/api/device/agent-runtime` | Admin-gated. GET: `{current, options, ready, …}`; POST switches the agentic backend (`409` while another switch runs; see Device Ops Alerts below) |
+| GET / POST | `/api/device/mcp-tools` | Admin-gated: list / add remote MCP tool endpoints |
+| DELETE | `/api/device/mcp-tools/:name` | Admin-gated: remove a remote MCP tool |
+| POST | `/api/device/connectors/pat` | Admin-gated: save a static-credential (PAT) connector through the same writer as MQTT `connector.set.<code>` |
+| GET / DELETE | `/api/device/connectors/:code` | Admin-gated: connected state + non-secret identity fields / remove the connector |
 
 ### Device Timezone
 
@@ -286,10 +296,74 @@ An `Unknown Speaker:` label is identity metadata, not a prerequisite for answeri
 |--------|----------|-------------|
 | GET | `/api/agent/status` | WS connection status; includes `uptime` (OS server WS uptime) and `agentUptime` (OpenClaw process uptime, survives OS server restarts) |
 | GET | `/api/agent/events` | SSE stream real-time events |
-| GET | `/api/agent/recent` | 100 most recent events (ring buffer) |
+| GET | `/api/agent/recent` | Last 500 flow events read from today's JSONL (`local/flow_events_<date>.jsonl`) |
 | POST | `/api/agent/speech/cancel` | Physical cancel gesture (single click, called by HAL — loopback-only auth so the button works without a login). Silences every turn currently in flight and stops HAL playback (`StopTTS`, which also clears the pre-synthesised speak-queue). The turns are **not** aborted: they keep running, their tools still fire, and their text still reaches web chat and history — they only lose the speaker. Implemented as a monotone unix-ms watermark (`speechWatermarkMs`): `deliverTTS` drops any reply whose turn was created at or before the mark and logs a `tts_cancelled` flow event. Turn age comes from the runID — device ids end in their creation stamp (`device-chat-7-<unix-ms>`, 13 digits), channel ids (`tg-<messageID>`) have none and fall back to the first time speech was requested for that run. Because new turns are always on the far side of the mark, the user can click and immediately speak again while an older backlog drains silently; the watermark never needs clearing. The same mark also drops the turn's `[HW:]` markers in `fireHWCall` — servos and LEDs stop too, since a device that keeps moving after being told to stop reads as ignoring the user. The run id is put through `resolveRunID` first: the TTS path already holds the device id while HW dispatch may still carry the raw backend UUID for the same turn, and judging them separately muted the reply while the markers fired anyway. `/dm`, `/broadcast` and `/speak` are exempt (the gate sits after them): the click means "stop talking to me" and must not swallow a reply addressed to a Telegram user. A **second** watermark (`autoSpeechWatermarkMs`) works the same way but is stamped by the system: it moves forward whenever HAL reports `voice_agent_handled` — the realtime voice agent has answered a newer utterance out loud — so the main-agent turn still working on the question before it loses the speaker instead of answering it afterwards in a different voice. `deliverTTS` drops a reply older than **either** mark; `fireHWCall` consults **only** the click mark, since a machine judgement must not silently cancel an action the user did ask for. Opt-in per body: set `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` in the body's `/opt/hal/.env`. Default OFF, so a body that has never heard of the switch is unaffected. The click also calls `FillerManager.CancelAllActive()`. Fillers speak straight to HAL and never pass through `deliverTTS`, so the watermark alone cannot reach them — and because a muted turn keeps running, every tool boundary it crossed re-armed another "one moment" for a reply the user had just cancelled. Every run holding filler state at that instant is on the old side of the mark, so all of them are dropped; the Opening filler for whatever the user says next is armed afterwards and is unaffected. A dropped reply is still posted to HAL's `POST /voice/realtime/history`: the click takes the speaker, not the answer, and the realtime agent's record of what the main agent replied otherwise rides on TTS completion (see `docs/realtime-voice.md`). |
 | POST | `/api/agent/restart` | "Start + enable + restart" recovery for the active runtime. Steps: (1) best-effort `systemctl enable <unit>` — where `<unit>` is picked from a runtime→unit map (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — so the fix survives a reboot; (2) `agentGateway.RestartAgent()` which resolves to `systemctl restart <unit>` and thus STARTS the service even if it was stopped. Response `{backend, enabled}`. Used by the Overview's Agent Gateway card to recover a gateway that was stopped+disabled, without SSH. Internal restart callers (config refresh, migration) still bypass the enable step. |
 | POST | `/api/agent/memory/reset` | Admin. No-SSH recovery for self-poisoned memory (#421): for **every** installed runtime, copies `USER.md`, `MEMORY.md`, `KNOWLEDGE.md` and `realtime/{summary.md,device_summary.md,memory.jsonl,memory_raw.jsonl}` into `<workspace>/.memory-reset-<stamp>-<rand>/`, resets `USER.md` to the blank form (emptied for Hermes) and removes the rest, then re-runs onboarding so `KNOWLEDGE.md` is re-seeded. Returns `{backup_dirs, cleared, skipped}`. Files only — session history (OpenClaw sessions, Hermes `state.db`) is untouched; follow with `/new`. Emits a `memory_reset` flow event. |
+
+
+### Auth
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/login` | `{password}` → bcrypt-verifies `admin_password_hash` and sets the signed session cookie; `401` on any failure |
+| POST | `/api/logout` | Clears the session cookie |
+| POST | `/api/login/exchange` | Admin-gated (Bearer): mints a session cookie on the current origin (AP → `.local` post-setup redirect) |
+
+### Schedules
+
+Admin-gated. Create/update/delete do not write `schedules.json` directly: each queues a proposal the backend must confirm (MQTT `schedule.mutate` / `schedule.mutate.ack`, see `mqtt.md`).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/schedule/list` | Schedules from `schedules.json` plus the store timezone |
+| POST | `/api/schedule/:id/run` | Run one schedule now (same path as MQTT `schedule.run`; cadence untouched) |
+| POST | `/api/schedule` | Propose a new schedule |
+| PATCH | `/api/schedule/:id` | Propose an update |
+| DELETE | `/api/schedule/:id` | Propose a delete |
+
+### Plugins
+
+Admin-gated. `GET /api/plugin/browse` is parked (commented out in `system/server/server.go`).
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/plugin/install` | Clone a plugin from a git URL, set up its venv and systemd unit (async; poll the list) |
+| GET | `/api/plugin` | Installed plugins |
+| POST | `/api/plugin/:name/start` · `/api/plugin/:name/stop` | Start / stop a plugin |
+| DELETE | `/api/plugin/:name` | Uninstall a plugin |
+
+### Buddy
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| POST | `/api/buddy/pair/start` | Admin-gated: issue a fresh 6-digit pairing code |
+| POST | `/api/buddy/pair/confirm` | Anonymous (the code is the credential): exchange a valid code for a long-lived token |
+| GET | `/api/buddy/status` | Admin-gated: pairing + connection state |
+| DELETE | `/api/buddy` | Admin-gated: revoke the pairing |
+| DELETE | `/api/buddy/self` | Buddy's own Bearer token: unpair from inside the app |
+| GET | `/api/buddy/ws` | Buddy WebSocket (Bearer token validated against `buddies.json`) |
+| POST | `/api/buddy/command` · `observe` · `suggest` · `exec/:action` | Loopback-only (agent skills / `[HW:]` markers) |
+
+### Harness (pairing and status)
+
+See [Harness integration](harness.md) for payloads. Voice-mode, request, select-agent and results routes are described elsewhere in this doc.
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/api/harness/status` | Admin or loopback: connection/pairing status (pairing code stripped) |
+| GET | `/api/harness/pair/status` | Admin-gated: pairing status |
+| POST | `/api/harness/pair` | Admin-gated: start pairing (`202`; `409` on conflict) |
+| POST | `/api/harness/pair/cancel` | Admin-gated: cancel pairing |
+| DELETE | `/api/harness` | Admin-gated: unpair (also turns Harness-only voice off) |
+| GET | `/api/harness/ws` | Harness WebSocket |
+| GET | `/api/harness/voice-followup` | Loopback-only: `{active}` — true for 2 minutes after a Harness reply/result, so a short spoken clarification stays with the paired agent |
+
+### Misc
+
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| GET | `/openapi.json` | Admin-gated proxy of HAL's OpenAPI spec (for the HAL Swagger UI at `/api/hardware/docs`) |
 
 ---
 
@@ -312,7 +386,7 @@ action outcome below.
 
 | Event | Trigger |
 |-------|---------|
-| Runtime switch | `hermes.setup` / `picoclaw.setup` (starting / success / failure) |
+| Runtime switch | any `<runtime>.setup` — `openclaw`, `hermes`, `picoclaw`, `claudecode`, `codex`, `opencode` (starting / success / failure) |
 | Channel add / refresh | `add_channel`, `channel.refresh_config` (success / failure) |
 | Connector set / remove | `connector.set.*`, `connector.remove.*` (success / failure) |
 | OAuth refresh | refresh loop — alerted only on ok↔fail state change per provider |
@@ -808,7 +882,7 @@ make web-dev      # web UI on :5173 (optional)
 ```
 
 os-server serves no HTML: on a board nginx serves `web/dist` and proxies `/api`
-and `/hw` to it. `make web-dev` puts Vite in nginx's place, with `LAMP_PROXY`
+to it (and `/hw/` to HAL on `127.0.0.1:5001`, loopback-only). `make web-dev` puts Vite in nginx's place, with `LAMP_PROXY`
 (default `http://127.0.0.1:5000`) naming the device the SPA talks to — a `.env`
 in `web/` still wins, so pointing at a real Pi is unchanged. Open
 **`http://localhost:5173/monitor`**; Vite binds `[::1]` only, so `127.0.0.1:5173`

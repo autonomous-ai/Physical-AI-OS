@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// setFRDefaultAgentPath points frDefaultAgentPath at a temp file for the
-// duration of the test and restores the real path after.
+// setFRDefaultAgentPath points frDefaultAgentPath at a temp file for the test.
 func setFRDefaultAgentPath(t *testing.T, content string) {
 	t.Helper()
 	orig := frDefaultAgentPath
@@ -81,14 +80,6 @@ gateway:
 	}
 }
 
-// Direct tests of ResolveDefaultAgent itself — the shared resolver both
-// SeedAgentRuntimeFromGateway and agent.resolveRuntime call through. Added per
-// review: the TestSeedAgentRuntimeFromGateway_* tests above only exercise this
-// indirectly, and agent.resolveRuntime can't set frDefaultAgentPath itself
-// (unexported, different package) to cover the f_r_default_agent-wins case
-// there directly — so this is the one place that actually proves the priority
-// order for both callers.
-
 func TestResolveDefaultAgent_PrefersFRDefaultOverDeviceMD(t *testing.T) {
 	t.Setenv("DEVICE_TYPE", "intern-v2")
 	writeDeviceMD(t, "intern-v2", `---
@@ -137,11 +128,6 @@ schema: autonomous.device.v1
 		t.Fatalf("ResolveDefaultAgent = (%q, %q), want (\"\", \"\")", value, source)
 	}
 }
-
-// CurrentAgentRuntimeFromConfig is a third caller of the same resolution (used
-// by logs.go, the MQTT info handler, status_reporter.go, and server.go's
-// web-CLI env-file check) — review flagged it as still having its own
-// independent copy of the fallback chain before this fix.
 
 func TestCurrentAgentRuntimeFromConfig_PrefersFRDefaultOverDeviceMD(t *testing.T) {
 	t.Setenv("DEVICE_TYPE", "intern-v2")

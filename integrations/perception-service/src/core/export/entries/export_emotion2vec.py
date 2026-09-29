@@ -1,8 +1,4 @@
-"""Export Emotion2Vec (FunASR) to ONNX.
-
-Uses FunASR's AutoModel to load the model with correct weights,
-then wraps with softmax and exports to ONNX.
-"""
+"""Export Emotion2Vec (FunASR) to ONNX with softmax appended."""
 
 import argparse
 import logging
@@ -46,11 +42,7 @@ def _materialize_labels(token_list: list[str], output_dir: Path):
 
 
 class Emotion2VecONNX(torch.nn.Module):
-    """Wraps FunASR emotion2vec model for ONNX export.
-
-    Applies layer_norm (if cfg.normalize), runs the model, applies proj head,
-    masks unused tokens, and applies softmax — matching FunASR's inference path.
-    """
+    """Wraps FunASR emotion2vec for ONNX export, matching FunASR's inference path."""
 
     def __init__(self, model: torch.nn.Module, token_list: list[str]):
         super().__init__()
@@ -75,11 +67,9 @@ class Emotion2VecONNX(torch.nn.Module):
             x = (x - mean) / torch.sqrt(var + 1e-5)
         x = x.view(x.shape[0], -1)
 
-        # Extract features
         feats = self.model.extract_features(x, padding_mask=None)
         h = feats["x"]  # [B, T, D]
 
-        # Pool + classify
         z = h.mean(dim=1)  # [B, D]
         logits = self.model.proj(z)  # [B, C]
         logits = logits + self.logit_bias

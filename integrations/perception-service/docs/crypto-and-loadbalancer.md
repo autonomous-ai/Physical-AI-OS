@@ -147,7 +147,7 @@ limit 50 MB, read/send timeouts 120 s.
 
 ## Client side (HAL)
 
-HAL's `service/sensing/crypto.py` holds the matching `CryptoSession`: it fetches the
+HAL's `hal/drivers/sensing/crypto.py` holds the matching `CryptoSession`: it fetches the
 public key, wraps an AES session key, and speaks the same `CipherHTTPRequest` /
 `WSKeyExchangeRequest` / `WSCipherMessage` wire format. Relevant HAL env knobs are
 listed in [configuration.md](configuration.md#hal-client-os-hal).

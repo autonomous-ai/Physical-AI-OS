@@ -114,7 +114,6 @@ func TestJevClaudeQueuedWireContainsPreloadOnce(t *testing.T) {
 	if len(wire.Message.Content) != 2 || wire.Message.Content[0].Text != "skill content" || wire.Message.Content[1].Text != "read my calendar" {
 		t.Fatalf("unexpected child input: %#v", wire)
 	}
-	// The child restart flushes these already-rendered bytes; it does not select again.
 	if strings.Count(string(s.pending[0]), "skill content") != 1 {
 		t.Fatal("duplicate skill content")
 	}

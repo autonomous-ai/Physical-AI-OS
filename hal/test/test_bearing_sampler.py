@@ -1,9 +1,4 @@
-"""Passive bearing sampling.
-
-The rules here are all about not teaching the lamp something false: a far
-stranger, a bearing computed from too large an offset, or a posture that is not
-actually looking at anyone.
-"""
+"""Passive bearing sampling."""
 
 from unittest import mock
 
@@ -65,7 +60,6 @@ def _run(box, svc=None, tracking=False, disabled=False):
 
 
 def test_a_close_centred_face_is_recorded_with_posture():
-    # 300px tall in a 720px frame, centred both ways.
     rec, _ = _run((490, 210, 300, 300))
     assert rec is not None
     assert rec["pose"] is not None, "a centred subject should teach the posture"
@@ -73,20 +67,16 @@ def test_a_close_centred_face_is_recorded_with_posture():
 
 
 def test_a_far_face_is_ignored():
-    """The colleague across the office — a real face, not our user's.
-
-    Device-measured, background faces detect around 8-18 px against a seated
-    user's 78-101 px, so the two populations are far apart.
-    """
+    """A far face (a colleague across the office) is ignored."""
     rec, _ = _run((600, 300, 28, 30))
     assert rec is None
 
 
 def test_bearing_is_corrected_for_a_horizontal_offset():
     """Off-centre is fine for direction: bearing = yaw + dx x scale."""
-    rec, _ = _run((740, 210, 300, 300))  # centre x=890 of 1280 -> dx=+19.5%
+    rec, _ = _run((740, 210, 300, 300))
     assert rec is not None
-    assert rec["bearing"] > 10.0, rec  # yaw was 10.0, subject is to the right
+    assert rec["bearing"] > 10.0, rec
 
 
 def test_a_large_horizontal_offset_is_not_recorded():
@@ -96,15 +86,8 @@ def test_a_large_horizontal_offset_is_not_recorded():
 
 
 def test_a_face_high_in_frame_still_teaches_its_posture():
-    """Withholding it was self-defeating.
-
-    While the camera is aimed low every face sits near the top edge, so every
-    sighting failed the vertical gate, so no posture was ever stored, so there
-    was nothing to restore and the camera stayed low — device-observed dy of
-    -15.8% then -41.2%, two sightings, a remembered "pose" holding only a yaw.
-    A face proves the posture sees a head wherever in frame it sits.
-    """
-    rec, _ = _run((490, 0, 150, 150))  # high in frame
+    """A face high in frame still records its posture."""
+    rec, _ = _run((490, 0, 150, 150))
     assert rec is not None, "the bearing is still usable"
     assert rec["pose"] is not None, "and so is the posture that saw the face"
 
@@ -122,8 +105,7 @@ def test_nothing_is_sampled_when_the_camera_is_disabled():
 
 
 def test_a_look_in_progress_is_never_made_to_wait():
-    """The sampler takes the detector lock non-blocking — a background learner
-    must not add latency to a user's question."""
+    """The sampler takes the detector lock non-blocking so it never delays a user turn."""
     aim._detector_lock_use.acquire()
     try:
         rec, _ = _run((490, 210, 300, 300))
@@ -131,8 +113,6 @@ def test_a_look_in_progress_is_never_made_to_wait():
         aim._detector_lock_use.release()
     assert rec is None
 
-
-# --- Snapshots ---------------------------------------------------------------
 
 def _run_with_snapshots(tmp_path, box, monkeypatch):
     monkeypatch.setattr(cfg, "SNAPSHOT_PERSIST_DIR", str(tmp_path), raising=False)
@@ -148,8 +128,7 @@ def test_a_recorded_sample_is_pictured(tmp_path, monkeypatch):
 
 
 def test_a_rejected_far_detection_is_also_pictured(tmp_path, monkeypatch):
-    """The far-stranger case is exactly what needed debugging — dropping it
-    silently would hide the reason the bearing never updates."""
+    """A rejected far detection is still captured for debugging."""
     rec, files = _run_with_snapshots(tmp_path, (600, 300, 28, 30), monkeypatch)
     assert rec is None
     assert len(files) == 1, "the dismissed detection left no evidence"
@@ -167,7 +146,7 @@ def test_oldest_snapshots_are_evicted(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BEARING_SNAPSHOT_KEEP", 3, raising=False)
     d = tmp_path / bearing_sampler.SNAPSHOT_CATEGORY
     d.mkdir(parents=True)
-    for i in range(6):  # names sort chronologically, as the real ones do
+    for i in range(6):
         (d / f"20260819-0000{i}.jpg").write_bytes(b"x")
     bearing_sampler._prune(str(d))
     left = sorted(p.name for p in d.iterdir())

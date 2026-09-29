@@ -55,10 +55,7 @@ class ObjectPerceptionSession(
 
     @override
     async def update(self, input: cv2t.MatLike) -> ObjectDetection | None:
-        """Run object detection on a single frame.
-
-        Returns ObjectDetection with detected objects, or None if rate-limited.
-        """
+        """Run object detection on a single frame; None if rate-limited."""
         cur_ts: float = time.time()
         if cur_ts - self._last_update_ts < self._config.frame_interval:
             return self._last_prediction

@@ -1,5 +1,3 @@
-// Formatting helpers for the Face Owners (Users) page. Pure functions, no React.
-
 export function fmtCountdown(s: number): string {
   if (s <= 0) return "ready";
   if (s < 60) return `${Math.ceil(s)}s`;

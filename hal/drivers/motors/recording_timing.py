@@ -1,13 +1,4 @@
-"""Recording playback timing — the one place that decides when a frame plays.
-
-Both motion drivers replay the same shipped CSVs: the SDK-backed
-``AnimationService`` on a physical body, and ``MockMotionService`` on a laptop.
-If they disagreed about timing the simulator would be lying about the thing it
-exists to show, so the stretch-and-resample rule lives here and both call it.
-
-See ``robots/lamp/docs/motion-playback.md`` for the measurements behind the
-speed ceiling.
-"""
+"""Recording playback timing — the one place that decides when a frame plays."""
 from __future__ import annotations
 
 import logging
@@ -19,21 +10,10 @@ from hal.drivers.motors.recording_stability import check_stable
 logger = logging.getLogger("hal.motion.timing")
 
 # Peak joint speed the STS3215 can actually deliver, in degrees/second.
-# Measured on device: recordings commanding >500 deg/s leave the servo 55 deg
-# behind its goal — it saturates, lags, then snaps, which is the audible
-# grinding. Recordings are resampled so no segment exceeds this; segments that
-# would are stretched in time instead. Set HAL_SERVO_MAX_DPS=0 to disable
-# stretching and play recordings at their authored speed.
 SERVO_MAX_DPS = float(os.environ.get("HAL_SERVO_MAX_DPS", "250"))
 
 def effective_max_dps(policy: Any = None) -> float:
-    """The speed ceiling a replay must respect: hardware limit, then policy.
-
-    ``SERVO_MAX_DPS`` is what the servo can physically deliver; SAFETY.md's
-    ``motion.max_speed`` is what the body promises it will not exceed. A replay
-    is bound by whichever is lower, so a declared ceiling covers recordings the
-    same way it already covers move/aim/nudge (#219).
-    """
+    """The speed ceiling a replay must respect: hardware limit, then policy."""
     if SERVO_MAX_DPS <= 0 or policy is None:
         return SERVO_MAX_DPS
     from hal.safety.policy import cap_speed_dps
@@ -41,22 +21,13 @@ def effective_max_dps(policy: Any = None) -> float:
     return cap_speed_dps(policy, SERVO_MAX_DPS)
 
 
-# Recordings are authored at ~20 Hz but a playback loop steps one frame per
-# tick at its own fps, so raw frames play at the wrong wall-clock speed. Frames
-# are resampled onto that grid at load time; this is the CSV column that
-# carries the authored timing.
 RECORDING_TIME_COLUMN = "timestamp"
 
 
 def stretch_timeline(
     times: List[float], frames: List[Dict[str, float]], policy: Any = None
 ) -> List[float]:
-    """Widen the gaps that demand more joint speed than the servo can deliver.
-
-    Returns a new, still-monotonic time axis. Only over-speed segments grow;
-    everything else keeps its authored timing, so a recording slows down
-    exactly where it was impossible and nowhere else.
-    """
+    """Widen the gaps that demand more joint speed than the servo can deliver."""
     max_dps = effective_max_dps(policy)
     if max_dps <= 0:
         return times
@@ -83,14 +54,7 @@ def resample_recording(
 ) -> List[Dict[str, float]]:
     """Put frames on a playback loop's own 1/fps grid.
 
-    The loop steps exactly one frame per tick, so a list sampled at fps plays at
-    real time by construction — no timing logic in the hot path.
-
-    Also the gate for whole-body stability: raises if a pose reaches far enough
-    off the base axis to tip the body, per the body's own declared ceiling and
-    geometry. Checked here because both motion drivers come through this
-    function, so the simulator refuses the same clip a body would. Resampling
-    only stretches time, never moves a joint, so checking the authored frames
+    Resampling only stretches time, never moves a joint, so checking the authored frames
     covers the played ones.
     """
     check_stable(frames, name, policy, geometry)
@@ -107,7 +71,6 @@ def resample_recording(
     src = 0
     for k in range(total + 1):
         t = stretched[0] + min(k * step, duration)
-        # stretched[] is monotonic and t only advances, so this walk is O(n).
         while src < len(stretched) - 2 and stretched[src + 1] < t:
             src += 1
         span = stretched[src + 1] - stretched[src]

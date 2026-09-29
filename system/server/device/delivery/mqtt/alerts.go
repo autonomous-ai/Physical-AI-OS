@@ -9,17 +9,13 @@ import (
 
 // alertOps sends a best-effort ops alert about a DEVICE ACTION to
 // bff-campaign-service (which owns the Telegram bot token + maintainer chat).
-// Device-action metadata only — never customer content. Fire-and-forget:
-// alert.Notify logs and swallows every error, so alerting can never break the
-// action it reports on.
 func (h *DeviceMQTTHandler) alertOps(title, detail string) {
 	alert.Notifyf(context.Background(), h.config, title, detail)
 }
 
-// alertOAuthStateChange alerts the maintainer chat only when a provider's OAuth
-// refresh outcome flips (ok<->fail), so a healthy refresh loop stays silent.
-// Mutated only from the single refresh-loop goroutine (StartOAuthRefreshLoop),
-// so the map needs no lock.
+// alertOAuthStateChange alerts the maintainer chat only when a provider's
+// OAuth refresh outcome flips (ok<->fail), so a healthy refresh loop stays
+// silent.
 func (h *DeviceMQTTHandler) alertOAuthStateChange(provider, status, detail string) {
 	if h.oauthAlertStatus == nil {
 		h.oauthAlertStatus = map[string]string{}
@@ -33,8 +29,6 @@ func (h *DeviceMQTTHandler) alertOAuthStateChange(provider, status, detail strin
 	case "fail":
 		h.alertOps("❌ OAuth refresh "+provider+" — FAILED", detail)
 	case "ok":
-		// Only announce recovery if we previously reported a failure — a first
-		// successful refresh is normal and shouldn't ping the chat.
 		if prev == "fail" {
 			h.alertOps("✅ OAuth refresh "+provider+" — recovered", "")
 		}

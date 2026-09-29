@@ -25,24 +25,10 @@ type pendingEvent struct {
 	fixedRunID  string // preallocated runID (web_chat); empty = allocate at drain
 }
 
-// busyTTL bounds how long activeTurn can stay true without a clearing
-// lifecycle.end. OpenClaw can drop the lifecycle.end SSE for heartbeat
-// (target=none) turns and for concurrent same-lane sends that get merged
-// into the active run; without this expiry, every sensing event after such
-// a stuck turn is dropped/queued forever.
+// busyTTL bounds how long activeTurn can stay true without a clearing lifecycle.end.
 const busyTTL = 5 * time.Minute
 
-// IsBusy returns true while the agent is processing a turn (between lifecycle
-// start and end) OR has at least one chat.send still waiting for its
-// lifecycle_start. The pending-send check closes the gap between Lamp's WS
-// write and the agent echoing lifecycle_start back: during that gap
-// activeTurn can briefly read false (if a previous turn's lifecycle_end just
-// fired), letting new sensing slip through to OpenClaw direct and stack up
-// behind already-in-flight turns in OpenClaw's per-session queue.
-//
-// Auto-clears activeTurn after busyTTL since the last SetBusy(true) so a
-// dropped lifecycle.end cannot wedge the sensing pipeline indefinitely; even
-// after that, fresh pending sends still keep IsBusy true.
+// IsBusy returns true while the agent is processing a turn (between lifecycle start and end) OR has at least one chat.send still waiting for its lifecycle_start.
 func (s *OpenclawService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
@@ -58,8 +44,7 @@ func (s *OpenclawService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
-// SetBusy marks the agent as busy or idle. Called by the SSE handler on lifecycle start/end.
-// When transitioning to idle, any buffered sensing events are replayed.
+// SetBusy marks the agent as busy or idle.
 func (s *OpenclawService) SetBusy(busy bool) {
 	if busy {
 		s.busySince.Store(time.Now().UnixMilli())
@@ -71,7 +56,6 @@ func (s *OpenclawService) SetBusy(busy bool) {
 }
 
 // QueuePendingEvent buffers a sensing event to replay when the agent becomes idle.
-// All events are appended — motion/presence must not be missed.
 func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []string, fixedRunID string) {
 	now := time.Now()
 	curUser := mood.CurrentUser()
@@ -83,9 +67,6 @@ func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []stri
 	s.pendingEventsMu.Unlock()
 	slog.Info("sensing event queued — agent busy", "component", "sensing", "type", eventType, "runId", fixedRunID)
 
-	// Surface the queued event in the monitor immediately so the UI doesn't
-	// look idle while the agent is busy. The original sensing_input flow
-	// entry will fire later at drain time with queued_for_ms attached.
 	s.monitorBus.Push(domain.MonitorEvent{
 		Type:    "sensing_queued",
 		Summary: "[" + eventType + "] " + msg,
@@ -94,9 +75,6 @@ func (s *OpenclawService) QueuePendingEvent(eventType, msg string, images []stri
 }
 
 // drainPendingEvents replays all buffered sensing events in order and clears the buffer.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
 func (s *OpenclawService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -105,7 +83,7 @@ func (s *OpenclawService) drainPendingEvents() {
 	s.pendingEventsDrainMu.Lock()
 	defer s.pendingEventsDrainMu.Unlock()
 	if !s.wsConnected.Load() {
-		return // Keep definitely-unsent events until the authenticated connection is ready.
+		return
 	}
 	s.pendingEventsMu.Lock()
 	events := s.pendingEvents
@@ -116,11 +94,6 @@ func (s *OpenclawService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -132,18 +105,13 @@ func (s *OpenclawService) drainPendingEvents() {
 		return
 	}
 
-	// Prioritize voice events so user replies are processed before queued sensing events.
 	sort.SliceStable(events, func(i, j int) bool {
 		iv := events[i].eventType == "voice" || events[i].eventType == "voice_command"
 		jv := events[j].eventType == "voice" || events[j].eventType == "voice_command"
 		return iv && !jv
 	})
 
-	// Expire stale high-frequency events — replaying stale sensor signals just
-	// floods OpenClaw's queue with no-longer-relevant turns (each ~15-20s LLM
-	// call). Voice events are never expired because they carry user intent.
-	// presence.enter/leave are time-sensitive too: if a person came in 60s ago,
-	// the agent reacting now is awkward and the situation may have changed.
+	// Expire stale high-frequency events — replaying stale sensor signals just floods OpenClaw's queue with no-longer-relevant turns (each ~15-20s LLM call).
 	const expireAfter = 60 * time.Second
 	expirable := map[string]bool{
 		"environment.update":      true,
@@ -168,11 +136,7 @@ func (s *OpenclawService) drainPendingEvents() {
 	}
 	events = filtered
 
-	// Coalesce duplicates: for high-frequency sensor events, keep only the
-	// latest of each type. Replaying every queued presence.enter / motion /
-	// emotion produces a back-to-back chat.send burst that re-floods the
-	// OpenClaw queue (the issue this whole gatekeeper exists to prevent).
-	// Voice/voice_command keep all entries — each is a distinct user utterance.
+	// Coalesce duplicates: for high-frequency sensor events, keep only the latest of each type.
 	coalesce := map[string]bool{
 		"environment.update":      true,
 		"presence.enter":          true,
@@ -215,11 +179,7 @@ func (s *OpenclawService) drainPendingEvents() {
 			s.requeueUnsentEvents(events[i:])
 			return
 		}
-		// Allocate a dedicated run ID so each replayed event gets its own
-		// sensing_input flow entry — required for the UI to render the turn.
-		// web_chat preallocates the runID at queue time (already marked via
-		// MarkWebChatRun) so the web client correlates its pending message;
-		// reuse it instead of generating a new one.
+		// Each replayed event needs its own run ID for its flow entry; web_chat reuses its preallocated runID.
 		var reqID, runID string
 		if ev.fixedRunID != "" {
 			reqID = ev.fixedRunID
@@ -235,23 +195,12 @@ func (s *OpenclawService) drainPendingEvents() {
 		}
 		turnStart := flow.Start("sensing_input", startPayload, runID)
 
-		// Re-stash any pose bucket info riding on a motion.activity that was
-		// queued while the agent was busy. Without this, the SSE /dm path
-		// has no bucket to attach images from when the agent eventually
-		// nudges on the replayed run. Matches the live sensing handler.
 		if ev.eventType == "motion.activity" {
 			if bid, worst := extractPoseBucketMarkers(ev.msg); bid != "" {
 				s.MarkPoseBucketRun(runID, bid, worst)
 			}
 		}
-		// Build the outgoing message via the shared helper so the drain path
-		// stays identical to the live sensing handler. Guard tag is always ""
-		// here — guard state isn't preserved across the queue.
 		msg := sensingmsg.Build(ev.eventType, ev.msg, ev.currentUser, "")
-		// Strip [snapshot: ...] + pose bucket markers from the outgoing LLM
-		// message — matches the behaviour of the direct PostEvent path. The
-		// full text still reaches the sensing_input JSONL via startPayload
-		// above, so Monitor UI thumbnails + bucket popup keep working.
 		msg = reSnapshotPath.ReplaceAllString(msg, "")
 		msg = rePoseBucketMarker.ReplaceAllString(msg, "")
 		msg = rePoseWorstMarker.ReplaceAllString(msg, "")
@@ -259,14 +208,11 @@ func (s *OpenclawService) drainPendingEvents() {
 		msg = strings.TrimSpace(msg)
 		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
-		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-		// on the reply (same as the live PostEvent path).
 		if ev.eventType == "voice_agent_handled" {
 			s.MarkSilentRun(runID)
 		}
 
 		if telemetry.TaskGroup(ev.eventType) == "sensing" {
-			// Keep this cohort stable if the socket disappears before dispatch.
 			ev.fixedRunID = runID
 			events[i] = ev
 			telemetry.ReportTaskStarted(ev.eventType, "", runID)

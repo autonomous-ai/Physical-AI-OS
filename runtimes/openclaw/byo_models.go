@@ -13,30 +13,14 @@ import (
 )
 
 // Bring your own endpoint.
-//
-// The device writes ONE provider into openclaw.json — baseUrl + apiKey from
-// config.json (llm_base_url / llm_api_key) — but until now the model *list*
-// always came from ModelsAPIURL, our hosted catalog. Point llm_base_url at
-// Ollama or vLLM and openclaw still advertised Claude model keys that endpoint
-// has never heard of, so every turn 404s. That is why a fully local robot was
-// not possible.
-//
-// resolveModels closes it. When the base URL is not ours, the model list comes
-// from the endpoint itself over the OpenAI-compatible `GET {base}/models` that
-// Ollama, vLLM, LM Studio, llama.cpp and OpenRouter all serve. Nothing changes
-// for a device pointed at the Autonomous gateway: same call, same catalog,
-// same fallback.
 
-// autonomousHosts are the hosts that serve our own catalog. A base URL on one
-// of these keeps the hosted path; anything else is treated as BYO.
+// autonomousHosts are the hosts that serve our own catalog.
 var autonomousHosts = []string{
 	"autonomous.ai",
 	"autonomousdev.xyz",
 }
 
 // isAutonomousEndpoint reports whether baseURL points at our own gateway.
-// Unparseable or empty → true, so a malformed value can never silently switch a
-// shipped device onto the discovery path.
 func isAutonomousEndpoint(baseURL string) bool {
 	raw := strings.TrimSpace(baseURL)
 	if raw == "" {
@@ -62,8 +46,7 @@ type openAIModelsResponse struct {
 	} `json:"data"`
 }
 
-// modelsEndpoint turns a provider base URL into its models URL: it appends
-// /models, tolerating a base that already ends in /v1 or a trailing slash.
+// modelsEndpoint turns a provider base URL into its models URL: it appends /models, tolerating a base that already ends in /v1 or a trailing slash.
 func modelsEndpoint(baseURL string) string {
 	base := strings.TrimRight(strings.TrimSpace(baseURL), "/")
 	if strings.HasSuffix(base, "/models") {
@@ -72,9 +55,7 @@ func modelsEndpoint(baseURL string) string {
 	return base + "/models"
 }
 
-// fetchOpenAIModels asks a BYO endpoint what it can serve. It accepts either
-// the OpenAI list shape ({"data":[{"id":...}]}) or our own catalog shape, so an
-// operator can point llm_base_url at a proxy that already speaks either one.
+// fetchOpenAIModels asks a BYO endpoint what it can serve.
 func fetchOpenAIModels(ctx context.Context, baseURL, apiKey string) ([]domain.LLMModel, error) {
 	endpoint := modelsEndpoint(baseURL)
 	ctx, cancel := context.WithTimeout(ctx, modelsAPITimeout)
@@ -133,14 +114,7 @@ func fetchOpenAIModels(ctx context.Context, baseURL, apiKey string) ([]domain.LL
 	return out, nil
 }
 
-// resolveModels returns the model catalog for a device, and whether it came
-// from a bring-your-own endpoint.
-//
-// baseURL on an Autonomous host  → the hosted catalog (unchanged behavior).
-// anything else                  → `GET {baseURL}/models` on that endpoint.
-//
-// Both paths fail soft: the caller keeps its existing fallback, and a BYO
-// endpoint that cannot list models is reported so setup can say why.
+// resolveModels returns the model catalog for a device, and whether it came from a bring-your-own endpoint.
 func resolveModels(ctx context.Context, baseURL, apiKey string) (*domain.LLMModelsListResponse, bool, error) {
 	if isAutonomousEndpoint(baseURL) {
 		resp, err := FetchModelsFromAPI()
@@ -156,9 +130,7 @@ func resolveModels(ctx context.Context, baseURL, apiKey string) (*domain.LLMMode
 	return &domain.LLMModelsListResponse{
 		Count:        len(models),
 		DefaultModel: models[0].Key,
-		// OpenAI-compatible is the wire protocol every BYO server above speaks;
-		// a per-model override still comes from OpenClawAPIType at write time.
-		API:    "openai-completions",
-		Models: models,
+		API:          "openai-completions",
+		Models:       models,
 	}, true, nil
 }

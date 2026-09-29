@@ -25,12 +25,7 @@ _request_adapter: TypeAdapter[PoseRequest] = TypeAdapter(PoseRequest)
 async def pose_estimation_ws(websocket: WebSocket):
     """WebSocket endpoint for streaming pose estimation.
 
-    Accepts JSON messages with a "type" field:
-    - {"type": "frame", "task": "pose", "frame_b64": "<base64>"} — feed a frame
-    - {"type": "config", "task": "pose", "frame_interval": 0.1} — update config
-    - {"type": "heartbeat", "task": "pose"} — keep-alive
-
-    API key is validated from the X-API-Key header on connect.
+    Message types: ``frame``, ``config`` (e.g. frame_interval), ``heartbeat``. Requires X-API-Key.
     """
     if not await verify_ws_api_key(websocket):
         return

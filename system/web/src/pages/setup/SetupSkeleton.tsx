@@ -2,24 +2,7 @@ import { C } from "@/components/setup/shared";
 import { useTheme } from "@/lib/useTheme";
 
 // Placeholder shown while the Setup page still can't know which step to open.
-//
-// Two callers, one shape:
-//  - SetupGate (App.tsx), while checkInternet()/getSetupStatus() decide whether
-//    this is `initial` or `continue` mode.
-//  - Setup itself, while the URL hash names a step (#voice / #face) that isn't
-//    in visibleSections yet because the mode hasn't resolved.
-//
-// Both are the same question — "which tab does the operator get?" — so both
-// render this instead of guessing Wi-Fi and correcting a beat later. It is
-// deliberately NOT time-based: it appears only while the answer is genuinely
-// unknown and disappears the instant it is, so a fast network barely sees it
-// and a slow one never flashes the wrong tab.
-//
-// Mirrors the real chrome (sidebar + topbar + card) at the same dimensions so
-// resolving swaps content in without the layout jumping.
 export function SetupSkeleton() {
-  // Read the persisted theme so the skeleton lands in the operator's mode
-  // rather than flashing dark-on-light before the real page mounts.
   const [, , themeClass] = useTheme();
   const bar = (w: number | string, h: number, mb = 0) => (
     <div style={{ width: w, height: h, borderRadius: 6, background: C.surface, marginBottom: mb }} />
@@ -36,7 +19,6 @@ export function SetupSkeleton() {
         fontFamily: "'Inter', 'Segoe UI', sans-serif", fontSize: 14,
       }}
     >
-      {/* Sidebar — same 192px as Setup.tsx so nothing shifts on resolve. */}
       <aside
         className="lm-sidebar"
         style={{
@@ -51,8 +33,6 @@ export function SetupSkeleton() {
           <div className="lm-progress-track" />
         </div>
         <nav style={{ padding: "4px 12px 10px", flex: 1, display: "flex", flexDirection: "column", gap: 10 }}>
-          {/* Three rows: the common continue-mode shape (Wi-Fi / Voice / Face).
-              Count is cosmetic — the real nav replaces this wholesale. */}
           {[0, 1, 2].map((i) => (
             <div key={i} style={{ display: "flex", alignItems: "center", gap: 8, padding: "6px 4px" }}>
               {bar(15, 15)}

@@ -20,7 +20,7 @@ class SEN55:
 
         self._fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR)
         try:
-            fcntl.ioctl(self._fd, 0x0703, 0x69)  # I2C_SLAVE, not FORCE.
+            fcntl.ioctl(self._fd, 0x0703, 0x69)
         except BaseException:
             os.close(self._fd)
             raise
@@ -34,7 +34,6 @@ class SEN55:
         return []
 
     def start(self):
-        # Return to idle even if a previous HAL process exited without stopping.
         self._command(0x0104, delay=0.2)
         name = self._command(0xD014, 16)
         product = b"".join(w.to_bytes(2, "big") for w in name).split(b"\0", 1)[0]
@@ -50,8 +49,6 @@ class SEN55:
         for index, (field, word, scale) in enumerate(zip(
             FIELDS, words, (10, 10, 10, 10, 100, 200, 10, 10),
         )):
-            # The official driver uses the type's maximum as unavailable:
-            # uint16 PM = 0xFFFF; int16 RHT/gas = 0x7FFF.
             if word == (0xFFFF if index < 4 else 0x7FFF):
                 values[field] = None
             else:

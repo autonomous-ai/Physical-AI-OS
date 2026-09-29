@@ -1,9 +1,4 @@
-// Package osreset holds the one OS-level primitive the factory-reset path shares
-// across packages that must not import each other: the device wipe (server/system)
-// and each agent backend's ResetAgent (internal/<backend>). It lives in lib/ so a
-// backend can use it without importing server/system (which would invert the
-// dependency direction). Backend-specific helpers (service stop/verify) live with
-// the backend that uses them, not here.
+// Package osreset holds the path-wipe primitive shared by factory reset and agent backends.
 package osreset
 
 import (
@@ -11,8 +6,7 @@ import (
 	"os"
 )
 
-// WipePath removes path (recursively) and logs the outcome under prefix. Missing
-// paths are silently ignored; a failure is logged non-fatally and skipped.
+// WipePath recursively removes path, logging under prefix; missing paths and failures are non-fatal.
 func WipePath(prefix, p string) {
 	if _, err := os.Stat(p); os.IsNotExist(err) {
 		return

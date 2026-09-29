@@ -39,7 +39,6 @@ func jsonStr(s string) string {
 func TestAllCodingSessionsAndFolders(t *testing.T) {
 	dir := t.TempDir()
 	now := time.Now()
-	// Two folders; -root has two sessions (older + newest).
 	writeTranscript(t, dir, "-root-test", "aaaa1111-0000-0000-0000-000000000001", "/root/test", "Caro game", "make caro game", now.Add(-2*time.Hour))
 	writeTranscript(t, dir, "-root", "bbbb2222-0000-0000-0000-000000000002", "/root", "old", "old work", now.Add(-3*time.Hour))
 	writeTranscript(t, dir, "-root", "cccc3333-0000-0000-0000-000000000003", "/root", "new", "new work", now.Add(-30*time.Minute))
@@ -50,7 +49,6 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 	if len(all) != 3 {
 		t.Fatalf("allCodingSessions = %d, want 3", len(all))
 	}
-	// newest-first ordering
 	if all[0].SessionID != "cccc3333-0000-0000-0000-000000000003" {
 		t.Errorf("newest session = %s, want cccc3333…", all[0].SessionID)
 	}
@@ -58,7 +56,6 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 		t.Errorf("meta wrong: folder=%q summary=%q", all[0].Folder, all[0].label())
 	}
 
-	// codingFolders collapses to newest-per-folder: /root (cccc) + /root/test.
 	folders := s.codingFolders()
 	if len(folders) != 2 {
 		t.Fatalf("codingFolders = %d, want 2", len(folders))
@@ -67,7 +64,6 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 		t.Errorf("folders[0] = %+v, want /root newest cccc", folders[0])
 	}
 
-	// folderSessions(/root) returns both, newest first.
 	rootSessions := s.folderSessions("/root")
 	if len(rootSessions) != 2 || rootSessions[0].SessionID != "cccc3333-0000-0000-0000-000000000003" {
 		t.Fatalf("folderSessions(/root) = %+v", rootSessions)
@@ -84,14 +80,13 @@ func TestAllCodingSessionsAndFolders(t *testing.T) {
 
 func TestReadTranscriptMetaFallbackToFirstUser(t *testing.T) {
 	dir := t.TempDir()
-	// No summary line → summary falls back to first user text.
 	writeTranscript(t, dir, "-root-app", "dddd4444-0000-0000-0000-000000000004", "/root/app", "", "fix login bug\nmany lines", time.Now())
 	s := &ClaudeCodeService{claudeProjectsDirPath: dir}
 	sessions := s.folderSessions("/root/app")
 	if len(sessions) != 1 {
 		t.Fatalf("want 1 session, got %d", len(sessions))
 	}
-	if sessions[0].label() != "fix login bug many lines" { // oneLine collapses the newline
+	if sessions[0].label() != "fix login bug many lines" {
 		t.Errorf("summary = %q, want collapsed first-user text", sessions[0].label())
 	}
 }
@@ -141,7 +136,7 @@ func TestRecentPromptsLast3MostRecentFirst(t *testing.T) {
 	if len(got) != 1 {
 		t.Fatalf("want 1 session, got %d", len(got))
 	}
-	want := []string{"fourth", "third", "second"} // most-recent first, injected skipped
+	want := []string{"fourth", "third", "second"}
 	if len(got[0].Recent) != 3 {
 		t.Fatalf("Recent = %v, want 3 entries", got[0].Recent)
 	}

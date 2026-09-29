@@ -162,11 +162,9 @@ def test_hold_release_maps_each_duration_to_one_explicit_action():
         button_actions.hold_release_action(button_actions.FACTORY_RESET_DURATION, "test button")
         factory_reset.assert_called_once_with("test button")
 
-        # A standard button with factory_reset=False (Lamp primary) stays at shutdown too.
         assert button_actions.button_hold_tier(
             button_actions.FACTORY_RESET_DURATION, factory_reset=False) == 2
 
-        # MPR121 opts out: a 10s+ touch hold stays at shutdown.
         button_actions.hold_release_action(
             button_actions.FACTORY_RESET_DURATION, "MPR121", factory_reset=False)
         factory_reset.assert_called_once_with("test button")
@@ -182,8 +180,7 @@ def test_swipe_sleeps_when_awake():
 
 
 def test_swipe_on_a_sleeping_device_still_routes_to_sleep():
-    """It does NOT wake. Waking is tap / double tap, which is what the device
-    shipped with; sleep_action returns early on "already sleeping"."""
+    """A swipe while sleeping still routes to sleep and does not wake."""
     with mock.patch.object(state, "_sleeping", True), \
          mock.patch.object(button_actions, "sleep_action") as slept, \
          mock.patch.object(button_actions, "_wake_if_sleepy") as woke:
@@ -227,13 +224,7 @@ def _pool(pools):
 
 
 def test_muting_the_mic_says_so():
-    """The double tap's only other feedback is an LED. Landing in silence is
-    what the user reported; this pins the fix.
-
-    Asserted against the language's pool rather than an English literal — the
-    device under test runs Vietnamese, and hardcoding "Microphone off." made
-    this fail on hardware while the behaviour was correct.
-    """
+    """Muting via double tap speaks a confirmation."""
     from hal.i18n import MIC_MUTED_PHRASES_BY_LANG
 
     spoken, mute, unmute = _mic_toggle(muted=False)
@@ -252,14 +243,7 @@ def test_unmuting_the_mic_says_so():
 
 
 def test_every_mic_phrase_states_which_way_the_toggle_went():
-    """The pools exist to sound alive, not to be cryptic. This is a privacy
-    control: a confirmation the user cannot decode is worse than a robotic one,
-    because they are left unsure whether the microphone is live. Guards against
-    a future 'Shh!' with no state in it.
-
-    Checked structurally — every line must carry a listening/hearing/ear word in
-    its own language, and the two pools must never share a line.
-    """
+    """Mute confirmations must clearly state the microphone state."""
     from hal.i18n import (
         MIC_MUTED_PHRASES_BY_LANG as MUTED,
         MIC_UNMUTED_PHRASES_BY_LANG as UNMUTED,
@@ -289,8 +273,7 @@ def test_a_muted_speaker_stays_silent():
 
 
 def test_a_refused_toggle_says_nothing():
-    """Enrolment blocks the toggle — announcing a mute that did not happen
-    would be worse than silence."""
+    """Enrolment blocks the mute toggle and its announcement."""
     spoken, mute, unmute = _mic_toggle(muted=False, enrolling=True)
     mute.assert_not_called()
     unmute.assert_not_called()

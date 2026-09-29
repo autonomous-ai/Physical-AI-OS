@@ -1,16 +1,6 @@
-"""Per-label gating: what a label must score before it is allowed to stand.
+"""Per-label gating thresholds.
 
-The gate is the only thing between a noisy FER read and a sensing event, and it
-had no coverage. Anger is the label that matters. At 0.6 it was the argmax on
-38% of triggers across a 500-trigger device session and never once correct — a
-face turned toward a monitor reads as Anger to an AffectNet-trained model. The
-observed maximum on that session was 0.91, so 0.8 removes the noise floor while
-leaving the label reachable for a genuinely intense expression.
-
-The second rule here is the one callers get wrong: a failed gate does not drop
-the reading, it returns **Neutral carrying Neutral's own probability**, which is
-typically low. So `confidence` on a returned Neutral is not a quality score, and
-an empty HTTP response means "nothing cleared its bar", not "no face was found".
+A failed gate returns Neutral carrying Neutral's own (often low) probability, not a dropped reading.
 """
 
 import numpy as np

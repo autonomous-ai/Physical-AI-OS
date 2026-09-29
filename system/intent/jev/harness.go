@@ -1,11 +1,7 @@
 package jev
 
-// NewHarnessResolver creates an independent session-ownership classifier.
-// It shares validated proxy transport and conservative decision thresholds with
-// the hardware resolver, but not its device-action instructions or busy state.
-// Candidate IDs must be code-owned aliases (for example session_0), not raw UUIDs.
-// The caller maps the validated Selection.Intent back to its original session.
-// A selection is advisory: this resolver never sends, rewrites or executes work.
+// NewHarnessResolver creates a session-ownership classifier sharing the proxy transport.
+// Candidate IDs must be code-owned aliases (e.g. session_0); selections are advisory only.
 func NewHarnessResolver() *Resolver {
 	return &Resolver{client: &jevClient{harness: true}, harness: true}
 }

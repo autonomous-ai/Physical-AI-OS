@@ -1,11 +1,4 @@
-// connection.js — Robot connection via os-server hardware proxy
-//
-// All hardware commands go through os-server (:5000) which proxies to HAL:
-//   /api/hardware/*  →  HAL (127.0.0.1:5001)
-// Gated by adminAuthMiddleware (Bearer token or session cookie).
-//
-// Similar role to duo's duo_connection.js + makeReachySink(),
-// but uses plain HTTP through os-server proxy instead of WebRTC.
+// connection.js — Robot control via the os-server /api/hardware/* proxy to HAL (admin auth).
 
 export class RobotConnection extends EventTarget {
   constructor() {
@@ -15,17 +8,15 @@ export class RobotConnection extends EventTarget {
     this.token = '';     // Bearer token for auth
     this.connected = false;
     this._healthInterval = null;
-    // Restore saved session
     this._loadSession();
   }
 
-  // Login to os-server, then verify HAL reachability via proxy
   async connect(host, password) {
     // No port — nginx fronts os-server on :80
     this.osBase = `http://${host}`;
     this.base = `${this.osBase}/api/hardware`;
 
-    // Login to get session token (cookie won't work cross-origin)
+      // Session token, since the cookie won't work cross-origin.
     if (password) {
       const loginRes = await fetch(`${this.osBase}/api/login`, {
         method: 'POST',
@@ -38,7 +29,6 @@ export class RobotConnection extends EventTarget {
       this._saveSession(host);
     }
 
-    // Verify HAL is reachable through proxy
     try {
       const res = await fetch(`${this.base}/health`, {
         signal: AbortSignal.timeout(5000),
@@ -66,7 +56,6 @@ export class RobotConnection extends EventTarget {
     this._emit('disconnected');
   }
 
-  // Restore saved session and try reconnecting (no password needed)
   async tryReconnect() {
     if (!this.token || !this.osBase) return false;
     this.base = `${this.osBase}/api/hardware`;
@@ -88,8 +77,6 @@ export class RobotConnection extends EventTarget {
     }
   }
 
-  // --- LED ---
-
   async ledSolid(color, transient = true) {
     return this._post('/led/solid', { color, transient });
   }
@@ -106,8 +93,6 @@ export class RobotConnection extends EventTarget {
     return this._post('/led/effect/stop', {});
   }
 
-  // --- Servo ---
-
   async servoAim(direction, durationMs = 400) {
     // HAL expects duration in seconds (0.0–10.0)
     return this._post('/servo/aim', { direction, duration: durationMs / 1000 });
@@ -118,13 +103,9 @@ export class RobotConnection extends EventTarget {
     return this._post('/servo/move', { positions, duration: durationMs / 1000 });
   }
 
-  // --- Emotion ---
-
   async emotion(name, intensity = 1.0) {
     return this._post('/emotion', { emotion: name, intensity });
   }
-
-  // --- Audio ---
 
   async speak(text) {
     return this._post('/voice/speak', { text });
@@ -134,13 +115,9 @@ export class RobotConnection extends EventTarget {
     return this._post('/audio/volume', { volume });
   }
 
-  // --- Health ---
-
   async getHealth() {
     return this._get('/health');
   }
-
-  // --- Internals ---
 
   async _post(path, body) {
     if (!this.connected) return null;

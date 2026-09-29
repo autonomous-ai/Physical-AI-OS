@@ -10,10 +10,7 @@ type opencodeAdapter struct{}
 
 func (opencodeAdapter) runtime() Runtime { return RuntimeOpenCode }
 
-// OpenCode splits the LLM config across two presync-owned files: opencode.json
-// (XDG: ~/.config/opencode) carries provider.campaign.options.baseURL, and
-// /root/.opencode/.env carries the actual key (LLM_API_KEY=…; opencode.json
-// only references it as "{env:LLM_API_KEY}"). Mirrors the codex adapter.
+// read takes the key from /root/.opencode/.env (LLM_API_KEY) and baseURL from opencode.json.
 func (opencodeAdapter) read(opts Options) (LLMConfig, error) {
 	return LLMConfig{
 		APIKey:  readEnvVar(filepath.Join(opts.OpenCodeHome, ".env"), "LLM_API_KEY"),
@@ -35,8 +32,7 @@ func (opencodeAdapter) write(cfg LLMConfig, opts Options) error {
 	return nil
 }
 
-// readOpenCodeBaseURL extracts provider.campaign.options.baseURL from
-// opencode.json. Missing file/keys → "" (nothing to carry).
+// readOpenCodeBaseURL returns provider.campaign.options.baseURL, or "" if missing.
 func readOpenCodeBaseURL(configJSON string) string {
 	raw, err := os.ReadFile(configJSON)
 	if err != nil {
@@ -53,9 +49,8 @@ func readOpenCodeBaseURL(configJSON string) string {
 	return baseURL
 }
 
-// writeOpenCodeBaseURL patches provider.campaign.options.baseURL in opencode.json.
-// A missing opencode.json is not an error — presync regenerates the whole head
-// from config.json (already synced by the caller) on the next switch/boot.
+// writeOpenCodeBaseURL patches provider.campaign.options.baseURL; a missing opencode.json is
+// not an error (presync regenerates it).
 func writeOpenCodeBaseURL(configJSON, baseURL string) error {
 	raw, err := os.ReadFile(configJSON)
 	if err != nil {

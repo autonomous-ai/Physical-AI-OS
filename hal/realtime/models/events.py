@@ -1,8 +1,4 @@
-"""Queue event models for the voice agent send/receive loops.
-
-Send queue: AgentInputEvent subclasses.
-Receive queue: AgentOutputEvent subclasses.
-"""
+"""Queue event models for the voice agent send/receive loops."""
 
 import time
 
@@ -11,8 +7,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from hal.realtime.enums import InputEventTypeEnum, OutputEventTypeEnum
 from hal.realtime.models.input import InputBase
 from hal.realtime.models.output import OutputBase
-
-# --- Send queue events ---
 
 
 class AgentInputEvent(BaseModel):
@@ -33,8 +27,7 @@ class AudioCommitEvent(AgentInputEvent):
     """Send queue: commit buffered audio (end of speech turn)."""
 
     type: InputEventTypeEnum = InputEventTypeEnum.AUDIO_COMMIT
-    # Monotonic timestamp captured on the voice thread when local end-of-turn is
-    # detected. It lets providers separate queue/commit delay from model latency.
+    # Monotonic time of local end-of-turn; separates queue/commit delay from model latency.
     queued_at: float = Field(default_factory=time.monotonic)
 
 
@@ -43,9 +36,6 @@ class AudioStreamEndEvent(AgentInputEvent):
 
     type: InputEventTypeEnum = InputEventTypeEnum.AUDIO_STREAM_END
     session: object
-
-
-# --- Receive queue events ---
 
 
 class AgentOutputEvent(BaseModel):
@@ -70,7 +60,6 @@ class TurnDoneEvent(AgentOutputEvent):
     # Synthetic unblock/error sentinels retain False; only provider proof sets True.
     execution_completed: bool = False
     user_turn_id: str = ""
-    # Providers opt in when speech alone does not establish task completion.
     fallback_to_main: bool = False
     user_transcript: str = ""
     handoff_context: str = ""

@@ -1,9 +1,4 @@
-"""Focused tests for LOOK-DEBUG tracing.
-
-The guarantee that matters most: tracing must never cost the user an answer.
-Every entry point is called on the live look path, so a bug here would break
-visual questions rather than just lose a trace.
-"""
+"""Focused tests for LOOK-DEBUG tracing."""
 
 import json
 import os
@@ -43,7 +38,6 @@ def test_a_full_look_is_written_with_question_and_answer():
 
 
 def test_failures_are_visible_from_the_directory_name():
-    # The point of putting status in the name: `ls` shows what went wrong.
     with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
         ld.start()
         ld.abandon("no_camera_frame")
@@ -71,7 +65,6 @@ def test_disabled_by_default_and_writes_nothing():
 
 
 def test_finishing_without_a_look_is_a_no_op():
-    # Ordinary turns call finish() too; it must not create stray dirs.
     with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
         ld.finish("OK_realtime_handled", answer="no look happened")
         assert os.listdir(tmp) == []
@@ -80,9 +73,9 @@ def test_finishing_without_a_look_is_a_no_op():
 def test_tracing_never_raises_on_bad_input():
     with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
         ld.start()
-        ld.note_aim(object())          # missing every attribute
-        ld.note_capture("/nope.jpg")   # missing file
-        ld.finish("OK_realtime_handled")  # must still write
+        ld.note_aim(object())
+        ld.note_capture("/nope.jpg")
+        ld.finish("OK_realtime_handled")
 
 
 def test_old_traces_are_pruned():
@@ -95,19 +88,16 @@ def test_old_traces_are_pruned():
 
 
 def test_the_turn_replay_extends_the_trace_instead_of_replacing_it():
-    # One visual question calls look() twice by design — capture, then the
-    # replayed turn reads the frame. The second call previously clobbered the
-    # trace, so the capture and aim data were lost and the whole look was
-    # filed as "reused_frame".
+    # One visual question calls look() twice by design: capture, then replay.
     with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
-        ld.start()                       # call 1 — captures
+        ld.start()
         ld.note_aim(_Aim())
         src = os.path.join(tmp, "f.jpg")
         with open(src, "wb") as f:
             f.write(b"jpegbytes")
         ld.note_capture(src)
 
-        ld.start()                       # call 2 — the replay
+        ld.start()
         ld.note_event("reused recent frame (already looked this turn)")
 
         ld.finish("OK_realtime_handled", question="what is this?", answer="a mug")
@@ -126,7 +116,6 @@ def test_the_turn_replay_extends_the_trace_instead_of_replacing_it():
 
 
 def test_an_orphaned_trace_is_eventually_replaced():
-    # A turn that never completes must not block tracing forever.
     with tempfile.TemporaryDirectory() as tmp, _fresh(tmp):
         ld.start()
         ld._current["_t0"] -= ld.STALE_TRACE_S + 1
@@ -135,8 +124,7 @@ def test_an_orphaned_trace_is_eventually_replaced():
 
 
 def test_profile_does_not_double_charge_nested_stages():
-    """`aim.detect` lives inside `aim.total`; charging both would make the
-    device look slower than the turn and push waiting_on_model negative."""
+    """`aim.detect` is not double-counted inside `aim.total`."""
     trace = {
         "stages": {
             "aim.total": {"ms": 2000.0, "n": 1},
@@ -147,11 +135,10 @@ def test_profile_does_not_double_charge_nested_stages():
         "total_ms": 25000,
     }
     profile = ld._take_profile(trace)
-    assert profile["device_ms"] == 2300.0  # aim.total + capture only
+    assert profile["device_ms"] == 2300.0
     assert profile["waiting_on_model_ms"] == 22700.0
     assert profile["stages"]["aim.detect"]["nested_in"] == "aim.total"
     assert profile["stages"]["aim.detect"]["avg_ms"] == 500.0
-    # stages move OUT of the trace so result.json is not buried by timings
     assert "stages" not in trace
 
 
@@ -172,8 +159,7 @@ def test_profile_written_as_its_own_file(tmp_path):
 
 
 def test_step_frames_written_and_annotated(tmp_path):
-    """Per-step frames are what tell you the detector locked onto the WRONG
-    person — a confident wrong lock is invisible in the numbers alone."""
+    """Per-step frames are saved to expose wrong-subject locks."""
     import numpy as np
 
     frame = np.zeros((480, 640, 3), dtype=np.uint8)
@@ -185,7 +171,6 @@ def test_step_frames_written_and_annotated(tmp_path):
     written = sorted(p.name for p in next(tmp_path.iterdir()).iterdir())
     assert any(n.startswith("step_01") for n in written), written
     assert any(n.startswith("step_02") for n in written), written
-    # bytes must not leak into result.json
     result = json.loads((next(tmp_path.iterdir()) / "result.json").read_text())
     assert "_step_frames" not in result
 
@@ -205,8 +190,7 @@ def test_step_frames_can_be_disabled(tmp_path, monkeypatch):
 
 
 def test_the_aim_view_stays_vertical_only():
-    """The aim can only move yaw, so a horizontal line marks an error it has no
-    way to act on. Default stays as it was written."""
+    """The aim view draws only the vertical line by default."""
     import cv2
     import numpy as np
 

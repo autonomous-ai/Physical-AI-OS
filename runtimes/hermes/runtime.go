@@ -13,53 +13,37 @@ import (
 	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
-// Expose the cached version to system/device (backend ping payload) through
-// the neutral registry — a direct import would cycle via statusled → device.
+// Expose the cached version to system/device (backend ping payload) through the neutral registry — a direct import would cycle via statusled → device.
 func init() {
 	runtimereg.RegisterVersion(domain.AgentRuntimeHermes, GetHermesVersion)
 }
 
-// hermesVersionProbeTimeout caps one `hermes --version` probe. Hermes can be
-// slow to start immediately after boot, so keep this aligned with OpenClaw's
-// generous cold-start allowance.
+// hermesVersionProbeTimeout caps one `hermes --version` probe.
 const hermesVersionProbeTimeout = 20 * time.Second
 
-// hermesVersionProbeRetries lets a transient first-boot failure self-heal
-// instead of leaving the Monitor's Agent version blank until os-server is
-// restarted. A warm probe returns immediately, so retries affect only failures.
+// hermesVersionProbeRetries lets a transient first-boot failure self-heal instead of leaving the Monitor's Agent version blank until os-server is restarted.
 const hermesVersionProbeRetries = 6
 
 // hermesVersionProbeBackoff is the wait between failed Hermes version probes.
 const hermesVersionProbeBackoff = 10 * time.Second
 
-// hermesSemverRe captures the first semver-like token in `hermes --version`
-// output (e.g. "Hermes Agent v0.17.0 (2026.6.19)" → "0.17.0").
+// hermesSemverRe captures the first semver-like token in `hermes --version` output (e.g. "Hermes Agent v0.17.0 (2026.6.19)" → "0.17.0").
 var hermesSemverRe = regexp.MustCompile(`(\d+\.\d+\.\d+(?:[-+._][0-9A-Za-z.-]+)?)`)
 
-// hermesVersion caches the parsed Hermes CLI version. Single source of truth,
-// mirroring openclaw.openClawVersion: the MQTT `info` message reports it next to
-// openclaw_version, and the agent Status endpoint reads it via HermesService.Version()
-// so the web shows the active backend's version. It re-probes when the
-// binary on disk changes, so a CLI updated under a running os-server (OTA
-// `software-update hermes`, or a manual install) is reported without waiting for
-// an os-server restart.
+// hermesVersion caches the parsed Hermes CLI version.
 var hermesVersion = versioncache.New(hermesBinary, "hermes-probe", probeHermesVersion)
 
-// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0"). Empty
-// when hermes is not installed or the version hasn't been populated yet.
+// GetHermesVersion returns the cached Hermes CLI version (e.g. "0.17.0").
 func GetHermesVersion() string {
 	return hermesVersion.Get()
 }
 
-// PopulateHermesVersion shells out to `hermes --version`, normalizes the semver,
-// and caches it. It retries failed or unparseable probes so boot-time CLI startup
-// races do not leave the Monitor's Agent version blank for the process lifetime.
+// PopulateHermesVersion shells out to `hermes --version`, normalizes the semver, and caches it.
 func PopulateHermesVersion() {
 	hermesVersion.Populate(hermesVersionProbeRetries, hermesVersionProbeBackoff)
 }
 
-// probeHermesVersion runs one version probe. A failed command, timeout, or
-// unparseable output returns ok=false so PopulateHermesVersion can retry.
+// probeHermesVersion runs one version probe.
 func probeHermesVersion(ctx context.Context) (version string, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, hermesVersionProbeTimeout)
 	defer cancel()
@@ -82,8 +66,7 @@ func parseHermesVersion(output string) (version string, ok bool) {
 	return "", false
 }
 
-// Version satisfies domain.AgentGateway.Version(): the cached Hermes CLI version,
-// or empty when undetected.
+// Version satisfies domain.AgentGateway.Version(): the cached Hermes CLI version, or empty when undetected.
 func (s *HermesService) Version() string {
 	return GetHermesVersion()
 }

@@ -11,10 +11,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// --- Channel abstraction (backend-agnostic) ---
-
 // GetTelegramBotToken returns the Telegram bot token from the agent runtime config.
-// Prefers the runtime config (OpenClaw) over Lamp config, since the runtime owns the sessions.
 func (s *OpenclawService) GetTelegramBotToken() string {
 	if token := s.readOpenClawTelegramToken(); token != "" {
 		return token
@@ -22,8 +19,7 @@ func (s *OpenclawService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets returns all Telegram chats by reading sessions.json directly
-// from the OpenClaw agent's session store (no RPC round-trip required).
+// GetTelegramTargets returns all Telegram chats by reading sessions.json directly from the OpenClaw agent's session store (no RPC round-trip required).
 func (s *OpenclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	sessionsPath := filepath.Join(s.config.OpenclawConfigDir, "agents", "main", "sessions", "sessions.json")
 	data, err := os.ReadFile(sessionsPath)
@@ -47,7 +43,6 @@ func (s *OpenclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) 
 	seen := make(map[string]bool)
 	var targets []domain.TelegramTarget
 	for sessionKey, sess := range raw {
-		// Skip non-Telegram sessions (cron, dashboard, webchat, etc.)
 		if !strings.Contains(sessionKey, ":telegram:") {
 			continue
 		}
@@ -60,9 +55,6 @@ func (s *OpenclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) 
 		if chatID == "" && strings.HasPrefix(sess.LastTo, "telegram:") {
 			chatID = strings.TrimPrefix(sess.LastTo, "telegram:")
 		}
-		// Fallback: parse session key when delivery target is empty.
-		// DM keys:    agent:main:telegram:{account}:direct:{userId}
-		// Group keys: agent:main:telegram:group:{chatId}
 		if chatID == "" {
 			if i := strings.LastIndex(sessionKey, ":direct:"); i >= 0 {
 				chatID = sessionKey[i+len(":direct:"):]
@@ -85,7 +77,6 @@ func (s *OpenclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) 
 }
 
 // Broadcast sends a message to all connected messaging channels.
-// It iterates over registered ChannelSenders, skipping any that are not configured.
 func (s *OpenclawService) Broadcast(msg string, imagePath string) error {
 	var sent int
 	var lastErr error
@@ -110,7 +101,6 @@ func (s *OpenclawService) Broadcast(msg string, imagePath string) error {
 }
 
 // SendToUser sends a direct message to a specific Telegram user ID.
-// If the ID is empty the message is silently dropped.
 func (s *OpenclawService) SendToUser(telegramID string, msg string, imagePath string) error {
 	if telegramID == "" {
 		return nil
@@ -128,9 +118,6 @@ func (s *OpenclawService) SendToUser(telegramID string, msg string, imagePath st
 }
 
 // SendToUserWithMedia is the multi-image variant of SendToUser.
-// Reduces to SendToUser when imagePaths has 0 or 1 entries so callers
-// can pass through whatever ConsumePoseBucketRun returned without
-// branching.
 func (s *OpenclawService) SendToUserWithMedia(telegramID string, msg string, imagePaths []string) error {
 	if telegramID == "" {
 		return nil
@@ -155,7 +142,6 @@ func (s *OpenclawService) SendToUserWithMedia(telegramID string, msg string, ima
 
 // readOpenClawTelegramToken reads the Telegram bot token from OpenClaw's config file.
 func (s *OpenclawService) readOpenClawTelegramToken() string {
-	// Try configured dir first, then common locations.
 	candidates := []string{s.config.OpenclawConfigDir}
 	home, _ := os.UserHomeDir()
 	if home != "" {

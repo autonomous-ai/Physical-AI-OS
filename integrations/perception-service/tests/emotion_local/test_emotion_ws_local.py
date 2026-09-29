@@ -54,11 +54,7 @@ def _make_frame_b64(width: int = 320, height: int = 240) -> str:
 
 
 def _make_face_frame_b64(width: int = 320, height: int = 240) -> str:
-    """Create a base64-encoded JPEG with a synthetic face-like region.
-
-    Uses a simple oval on a dark background — enough for YuNet to
-    occasionally detect a face-like blob, but detection is not guaranteed.
-    """
+    """Create a base64 JPEG with a synthetic face-like oval (detection not guaranteed)."""
     frame = np.zeros((height, width, 3), dtype=np.uint8)
     center = (width // 2, height // 2)
     axes = (50, 65)
@@ -309,11 +305,6 @@ class TestEmotionAnalysisWebSocket:
             with client.websocket_connect("/hal/api/dl/emotion-analysis/ws") as ws:
                 ws.send_text(json.dumps({"type": "config", "task": "emotion", "threshold": 0.5}))
                 ws.receive_json()
-
-
-# ---------------------------------------------------------------------------
-# Performance / accuracy tests
-# ---------------------------------------------------------------------------
 
 
 @pytest.fixture(scope="session")

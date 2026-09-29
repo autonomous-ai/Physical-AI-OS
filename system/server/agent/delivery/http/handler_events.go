@@ -11,15 +11,11 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// poseBucketRoot is the on-disk base where hal writes pose buckets.
-// Matches hal/config.py:SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/".
-// hal and os-server share the same Pi so this is the same FS location for
-// both processes.
+// poseBucketRoot is where HAL writes pose buckets (hal/config.py SNAPSHOT_TMP_DIR + "/sensing_pose/buckets/").
 const poseBucketRoot = "/tmp/hal-sensing-snapshots/sensing_pose/buckets"
 
-// buildPoseBucketImagePaths joins a bucket id with each worst-snapshot
-// filename to produce absolute paths Telegram can read. Filenames that
-// would escape the bucket dir (path separators, "..") are dropped.
+// buildPoseBucketImagePaths returns absolute snapshot paths for a bucket; filenames that would
+// escape the bucket dir are dropped.
 func buildPoseBucketImagePaths(bucketID string, filenames []string) []string {
 	if bucketID == "" || len(filenames) == 0 {
 		return nil
@@ -42,15 +38,10 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 	defer h.observeExternalHistory(evt)
 	slog.Debug("event received", "component", "agent", "event", evt.Event)
 
-	// OpenClaw cron events: action="started" fires immediately before the
-	// agent lifecycle_start for a cron-triggered turn. Payload schema (from
-	// src/cron/service/state.ts CronEvent): { jobId, action, sessionKey,
-	// runAtMs, ... }. We cache sessionKey → timestamp; the next lifecycle_start
-	// matching that sessionKey within cronFireWindowMs gets marked as a cron
-	// fire so isChannelRun is overridden and TTS reaches the device speaker.
+	// Cron "started" precedes the turn's lifecycle_start: cache sessionKey so that run is marked
+	// a cron fire and its TTS reaches the device speaker.
 	if evt.Event == "cron" {
-		// Diagnostic: dump raw cron payload — keep until correlation is proven
-		// stable across all sessionTarget variants.
+		// Diagnostic: keep until cron correlation is proven across all sessionTarget variants.
 		slog.Info("cron event raw payload", "component", "agent", "payload", string(evt.Payload))
 		var cronEvt struct {
 			Action  string `json:"action"`
@@ -60,7 +51,6 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 		if err := json.Unmarshal(evt.Payload, &cronEvt); err == nil && cronEvt.Action == "started" {
 			now := time.Now().UnixMilli()
 			h.cronFireExpectedMu.Lock()
-			// Prune stale entries before pushing — bounds queue growth.
 			cutoff := now - cronFireWindowMs
 			pruned := h.cronFireExpected[:0]
 			for _, ts := range h.cronFireExpected {
@@ -84,17 +74,13 @@ func (h *AgentHandler) HandleEvent(ctx context.Context, evt domain.WSEvent) erro
 	case "session.message":
 		return h.handleSessionMessageEvent(evt)
 	default:
-		// Unhandled WS events (health, heartbeat, cron, shutdown, etc.) — no-op.
 	}
 
 	return nil
 }
 
-// parseHistoryTimestamp accepts both shapes OpenClaw uses for message
-// timestamps: RFC3339 strings (session store) and unix milliseconds (chat
-// events / some chat.history responses). Returns the zero time when the field
-// is absent or unparseable — callers treat zero as "fresh" to keep the old
-// behavior on gateways that omit timestamps.
+// parseHistoryTimestamp parses RFC3339 strings or unix milliseconds; returns zero time when
+// absent or unparseable (callers treat zero as fresh).
 func parseHistoryTimestamp(raw json.RawMessage) time.Time {
 	if len(raw) == 0 {
 		return time.Time{}
@@ -113,15 +99,9 @@ func parseHistoryTimestamp(raw json.RawMessage) time.Time {
 	return time.Time{}
 }
 
-// extractLastUserMessageFromHistory parses a chat.history payload and returns
-// the most recent role:"user" message text, its senderLabel (empty if absent)
-// and its timestamp (zero when missing/unparseable — older gateways). Content
-// can be a plain string or an array of {type,text} blocks; both shapes are
-// handled. Returns ("","",zero) if the payload is malformed or has no user
-// messages. Callers use the timestamp to reject STALE messages: a fetch fired
-// at lifecycle_start can race OpenClaw persisting the new message and see only
-// the previous turn's input (heartbeat runs used to clone the prior turn's
-// [activity] text in the Flow monitor this way).
+// extractLastUserMessageFromHistory returns the latest user message text, senderLabel and timestamp
+// from a chat.history payload, or ("","",zero). Callers use the timestamp to reject stale messages
+// (a fetch at lifecycle_start can race persistence of the new message).
 func extractLastUserMessageFromHistory(payload json.RawMessage) (text string, senderLabel string, msgTime time.Time) {
 	var hist struct {
 		Messages []struct {

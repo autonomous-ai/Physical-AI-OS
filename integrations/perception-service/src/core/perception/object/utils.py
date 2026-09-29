@@ -49,11 +49,7 @@ def create_object_detector(
     threshold: float | None = None,
     batch_size: int | None = None,
 ) -> ObjectDetector:
-    """Instantiate the correct object detector.
-
-    Uses ONNX predictors when use_onnx=True (default),
-    otherwise falls back to PyTorch/HuggingFace predictors.
-    """
+    """Instantiate an ONNX object detector, or a PyTorch/HF one when use_onnx=False."""
 
     if model_name == ObjectDetectorEnum.YOLO_WORLD:
         if use_onnx:

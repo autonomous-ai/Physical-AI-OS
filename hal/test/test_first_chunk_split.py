@@ -26,7 +26,6 @@ def test_falls_back_to_a_word_break_past_the_cap():
     head, rest = split_first_chunk(buf)
     assert head and rest
     assert len(head) <= hal_config.REALTIME_FIRST_CHUNK_MAX_CHARS
-    # Nothing is lost or duplicated; the two halves are spoken in order.
     assert (head + " " + rest).split() == buf.split()
 
 

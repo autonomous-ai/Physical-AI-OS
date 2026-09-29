@@ -1,19 +1,5 @@
 """
 Sensing Service — background loop that detects motion/sound/faces/light and pushes events to the OS server.
-
-OS server (Go, port 5000) then forwards these events to OpenClaw via WebSocket chat.send,
-so the AI agent can react proactively (Pillar 4: "It acts on its own").
-
-Detectors:
-  - Motion: camera frame differencing (grayscale → absdiff → threshold → contour area)
-  - Face: InsightFace recognition — owner/stranger classification (presence.enter/leave)
-  - Light level: mean brightness of camera frame (auto-adjust the device)
-  - Sound: RMS level from microphone (loud noise detection)
-
-Also drives the PresenceService state machine for automatic light on/off.
-
-Events are POST-ed to http://localhost:5000/api/sensing/event as:
-  {"type": "motion", "message": "...", "images": ["<base64 jpeg>"]}
 """
 
 from __future__ import annotations
@@ -92,7 +78,7 @@ class SensingService:
         self._tts_service: TTSService | None = tts_service
         self._animation_service: AnimationService | None = animation_service
         self._is_sleeping: Callable[[], bool] | None = (
-            is_sleeping  # callable → bool; suppresses non-wake events
+            is_sleeping
         )
 
         self._running: bool = False
@@ -102,35 +88,16 @@ class SensingService:
         self._perception_orchestrator: PerceptionOrchestrator = PerceptionOrchestrator(
             poll_interval_ts=self._poll_interval,
             send_event=self._send_event,
-            # Sensing mic for SoundPerception, straight from
-            # HAL_AUDIO_SENSING_DEVICE — None when the device does not declare
-            # one, and the orchestrator then skips loud-noise detection and logs
-            # why. No fallback to the voice mic: see the note at the call site
-            # in server.py for what that cost.
             sound_device_id=self._input_device,
             perception_config=PerceptionConfig(
-                # People perception (face identity + facial emotion) is the
-                # `presence` capability — ML over the camera via perception-service. Gated
-                # on enable_people_perception so a device that doesn't declare
-                # `presence` (e.g. a camera that only streams / does motion) never
-                # runs face/emotion recognition or calls perception-service for them. These
-                # processors are also the only source of on_motion() for the
-                # presence light/away state machine, so without `presence` that
-                # state machine is started disabled (see PresenseService below).
+                # People perception (face identity + facial emotion) is the `presence`
+                # capability — ML over the camera via perception-service.
                 enable_face=enable_people_perception,
-                # `motion` here is human ACTIVITY recognition (Kinetics action
-                # labels — drinking/eating/sedentary — via perception-service), i.e. what
-                # the person is doing: people perception, gated on presence too.
-                # (presence.enter/leave is emitted by face recognition, not this,
-                # so gating motion off does not break person detection.)
                 enable_motion=enable_people_perception and config.MOTION_ENABLED,
                 enable_motion_per_face=enable_people_perception and config.MOTION_PER_FACE_ENABLED,
                 enable_emotion=enable_people_perception and config.EMOTION_ENABLED,
-                # Pose/ergonomics reads the USER's body posture — people perception
-                # too (the physical axis of `presence`, via the camera). Gated on
-                # presence like face/emotion. (Fire-hazard below is NOT people: it
-                # detects flame/smoke in the ENVIRONMENT — a vision/safety concern,
-                # self-limited by camera availability, so it stays on its own flag.)
+                # Pose/ergonomics reads the USER's body posture — people perception too
+                # (the physical axis of `presence`, via the camera).
                 enable_pose=enable_people_perception and config.POSE_ENABLED,
                 enable_light=True,
                 enable_sound=True,
@@ -138,12 +105,6 @@ class SensingService:
             ),
         )
 
-        # Presence auto on/off state machine. Its idle→away→sleep transitions
-        # are fed only by the people-perception processors (face/motion/emotion),
-        # which are themselves gated on the `presence` capability via
-        # enable_people_perception. Without `presence` there is no motion source,
-        # so auto-control starts disabled to avoid a false AWAY (lights off +
-        # sleep announcement) firing on the timeout alone.
         self._presense_service: PresenseService = PresenseService(
             rgb_service=rgb_service,
             send_event=self._send_event,
@@ -176,15 +137,8 @@ class SensingService:
         self._perception_orchestrator.stop()
         logger.info("SensingService stopped")
 
-    # --- Frame encoding ---
-
     def _capture_stable_frame(self):
-        """Freeze servos, wait for settle, capture a fresh frame, then unfreeze.
-
-        Returns a camera frame suitable for _encode_frame(), or None on failure.
-        Always freezes regardless of whether an animation is playing — a 0.3s
-        pause is imperceptible but eliminates motion blur from the servo arm.
-        """
+        """Freeze servos, wait for settle, capture a fresh frame, then unfreeze."""
         if not self._camera or not cv2:
             return None
 
@@ -200,17 +154,10 @@ class SensingService:
             return None
         return frame.frame
 
-    # --- Snapshot storage (two-tier) ---
-    # Tmp: fast rotation buffer, lost on reboot
     _snapshot_tmp_paths: list[str] = []
-    # Persist: survives reboot, agent can look back (TTL + size rotation)
 
     def _save_frame(self, prefix: str, frame: cv2.typing.MatLike) -> str | None:
-        """Save a camera frame as a JPEG to the tmp snapshot dir at original resolution.
-
-        Keeps at most SNAPSHOT_TMP_MAX_COUNT files; deletes the oldest when exceeded.
-        Returns the saved file path, or None on failure.
-        """
+        """Save a camera frame as a JPEG to the tmp snapshot dir at original resolution."""
         try:
             os.makedirs(config.SNAPSHOT_TMP_DIR, exist_ok=True)
             tmp_dir = Path(config.SNAPSHOT_TMP_DIR)
@@ -226,7 +173,6 @@ class SensingService:
 
             self._snapshot_tmp_paths.append(str(filepath))
 
-            # Evict oldest files if over the limit
             while len(self._snapshot_tmp_paths) > config.SNAPSHOT_TMP_MAX_COUNT:
                 oldest = self._snapshot_tmp_paths.pop(0)
                 try:
@@ -240,15 +186,11 @@ class SensingService:
             return None
 
     def _persist_snapshot(self, prefix: str, tmp_path: str) -> str | None:
-        """Copy a tmp snapshot to the persistent dir with TTL + size rotation.
-
-        Returns the persistent file path, or None on failure.
-        """
+        """Copy a tmp snapshot to the persistent dir with TTL + size rotation."""
         try:
             persist_dir = os.path.join(config.SNAPSHOT_PERSIST_DIR, f"sensing_{prefix}")
             os.makedirs(persist_dir, exist_ok=True)
 
-            # Rotate: remove files older than TTL
             now = time.time()
             for f in os.listdir(persist_dir):
                 fp = os.path.join(persist_dir, f)
@@ -258,7 +200,6 @@ class SensingService:
                 except OSError:
                     pass
 
-            # Rotate: if total size exceeds max, remove oldest files
             files = []
             for f in os.listdir(persist_dir):
                 fp = os.path.join(persist_dir, f)
@@ -266,7 +207,7 @@ class SensingService:
                     files.append((fp, os.path.getmtime(fp), os.path.getsize(fp)))
                 except OSError:
                     pass
-            files.sort(key=lambda x: x[1])  # oldest first
+            files.sort(key=lambda x: x[1])
             total = sum(s for _, _, s in files)
             while total > config.SNAPSHOT_PERSIST_MAX_BYTES and files:
                 oldest_path, _, oldest_size = files.pop(0)
@@ -276,7 +217,6 @@ class SensingService:
                 except OSError:
                     pass
 
-            # Copy snapshot to persistent dir
             dest = os.path.join(persist_dir, os.path.basename(tmp_path))
 
             _ = shutil.copy2(tmp_path, dest)
@@ -284,8 +224,6 @@ class SensingService:
         except Exception as e:
             logger.debug("Persist snapshot failed: %s", e)
             return None
-
-    # --- Event sending ---
 
     def to_dict(self) -> dict[str, Any]:
         now = time.time()
@@ -306,31 +244,17 @@ class SensingService:
         images: list[cv2.typing.MatLike] | None = None,
         cooldown: float | None = None,
     ):
-        # Suppress sensing events while sleeping — only allow presence.enter to wake up
         if self._is_sleeping and self._is_sleeping() and event_type != "presence.enter":
             logger.debug("[sensing] sleeping — suppressed %s", event_type)
             return
 
-        # New presence session — clear MotionPerception dedup so the next
-        # motion.activity isn't silently dropped by the 5-min window.
-        # Otherwise a friend arriving while someone was already sitting would
-        # wait out the remainder of the old window before the agent saw them.
-        #
-        # Pass the *current* user so perceptions can skip the reset when the
-        # visible user hasn't actually changed (e.g. stranger_79 → stranger_77,
-        # both collapse to "unknown"). Without this guard, face-recognition
-        # flicker between stranger IDs wipes the dedup every few seconds.
         if event_type == "presence.enter":
             self._perception_orchestrator.reset_dedup()
 
         cur_ts = time.time()
-        # motion.activity, emotion.detected, fire_hazard.detected, and sound
-        # have their own dedup logic — skip the global cooldown so events are
-        # never silently dropped. sound especially: its escalation needs
-        # occurrences ~15s apart inside a 120s window, so the 60s global
-        # cooldown made "persistent → speak" mathematically unreachable
-        # (occurrence 2/3 were always swallowed here while the tracker kept
-        # counting them).
+        # motion.activity, emotion.detected, fire_hazard.detected, and sound have their
+        # own dedup logic — skip the global cooldown so events are never silently
+        # dropped.
         if event_type not in ("motion.activity", "emotion.detected", "fire_hazard.detected", "sound"):
             cd = cooldown if cooldown is not None else config.EVENT_COOLDOWN_S
             last = self._last_event_time.get(event_type, 0)
@@ -340,10 +264,8 @@ class SensingService:
         if event_type == "presence.enter":
             self._grant_wakeword_focus_for_presence(message)
 
-        # Collect all images to save (single image or list)
         frames = images or []
 
-        # Save each frame and append snapshot paths to the message.
         for frame in frames:
             tmp_path = self._save_frame(prefix, frame)
             if tmp_path:
@@ -354,17 +276,6 @@ class SensingService:
         logger.info("[sensing] %s: %s", event_type, message)
 
         payload: dict[str, object] = {"type": event_type, "message": message}
-        # Include HAL's effective current_user so the OS server handler doesn't
-        # have to re-derive it from the message text. Text parsing breaks
-        # when a stranger-only enter event fires while a friend is still
-        # present (extractUserName sees no friend in the message and
-        # downgrades mood.CurrentUser() to "unknown", even though the
-        # friend is still within forget window). HAL's current_user()
-        # is the source of truth — ship it.
-        # Face always wins; the voice speaker fills the slot only when the
-        # camera has nobody (or there is no camera at all), so a camera device
-        # behaves exactly as before while a voice-only device stops reporting
-        # an empty user forever. See app_state.resolve_current_user.
         try:
             from hal import app_state as identity_state
 
@@ -392,18 +303,7 @@ class SensingService:
 
     @staticmethod
     def _grant_wakeword_focus_for_presence(message: str) -> None:
-        """Let a newly recognized person stand in for the wake phrase.
-
-        Face perception marks a NEWLY visible enrolled identity as
-        ``friend (<name>)`` in the ``new:`` segment of its event text
-        (``faceid/enter_message.py`` owns that format — a friend who was merely
-        already present is written ``<name> (friend)`` and does not count).
-        Stranger-only events remain agent-visible but only open the voice gate
-        when ``HAL_PRESENCE_WAKE_STRANGERS`` opts into guest-first conversation.
-        The voice service retains its normal no-op behavior when wake words are
-        off, follow-up focus is disabled, or the microphone pipeline is
-        unavailable.
-        """
+        """Let a newly recognized person stand in for the wake phrase."""
         if not has_new_friend(message) and not config.PRESENCE_WAKE_STRANGERS:
             logger.info("[sensing] stranger-only presence.enter — wake focus not granted")
             return
