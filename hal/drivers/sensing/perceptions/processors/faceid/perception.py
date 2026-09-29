@@ -43,7 +43,7 @@ from .enter_message import (
     frame_labels,
 )
 from .recognizer import FaceRecognizer
-from .stranger_gaze import StrangerGazeTick, face_facing_lamp, gaze_confirmed
+from .stranger_gaze import GazeMeasurement, StrangerGazeTick, gaze_confirmed, measure_gaze
 
 logger = logging.getLogger(__name__)
 
@@ -1033,9 +1033,14 @@ class FacePerception(Perception[cv2.typing.MatLike]):
         if not waiting:
             return set(), [], {}
         frame_h, frame_w = frame.shape[:2]
-        facing = frozenset(
-            f.person_id for f in waiting if face_facing_lamp(f, frame_w, frame_h)
-        )
+        # One measurement per stranger id; when two boxes share an id, the one
+        # facing the lamp wins so the vote stays "any box facing" (#537).
+        gazes: dict[str, GazeMeasurement] = {}
+        for f in waiting:
+            m = measure_gaze(f, frame_w, frame_h)
+            if f.person_id not in gazes or m.facing:
+                gazes[f.person_id] = m
+        facing = frozenset(sid for sid, m in gazes.items() if m.facing)
         # A vote older than the window says nothing about looking now (#531).
         while (
             self._stranger_gaze_ticks
@@ -1047,10 +1052,15 @@ class FacePerception(Perception[cv2.typing.MatLike]):
             StrangerGazeTick(annotated_frame, facing, cur_ts)
         )
         ticks = [t.facing for t in self._stranger_gaze_ticks]
-        in_frame = sorted({f.person_id for f in waiting})
+        in_frame = sorted(gazes)
+        # The numbers behind each vote, so a greeting can be explained from the
+        # log alone (#537).
         logger.info(
             "[face] stranger gaze: %s",
-            ", ".join(f"{sid} {sum(sid in t for t in ticks)}/{len(ticks)}" for sid in in_frame),
+            "; ".join(
+                f"{sid} {gazes[sid].describe()} {sum(sid in t for t in ticks)}/{len(ticks)}"
+                for sid in in_frame
+            ),
         )
         greet = {sid for sid in in_frame if gaze_confirmed(ticks, sid)}
         if not greet:

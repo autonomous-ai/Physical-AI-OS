@@ -239,6 +239,14 @@ Một người khách thật không bị ảnh hưởng quá một nhịp: 2 gi�
 
 Việc kiểm tra ánh nhìn của người lạ dùng lại `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` và `GAZE_MIN_FACE_PX` của gaze wake, nên chỉnh các giá trị đó cho gaze wake cũng làm thay đổi thời điểm người lạ được chào.
 
+Mỗi nhịp face-ID có người lạ chưa được chào trong frame sẽ ghi một dòng log, kèm các số liệu đằng sau lá phiếu của từng người lạ và số phiếu cộng dồn:
+
+```
+[face] stranger gaze: stranger_16 yaw=51.6<=92.9 face=117px>=48 edge=0.68 -> facing 2/2; stranger_17 yaw=70.2>60.0 face=40px<48 edge=0.05 -> away (face too small, turned too far) 0/1; stranger_18 yaw=- face=120px>=48 edge=0.10 -> away (landmarks off-frame) 0/3
+```
+
+`yaw` là góc quay đầu, tính bằng độ, đặt cạnh cone được chấp nhận ở vị trí đó (`GAZE_MAX_YAW_DEG` nới rộng theo `GAZE_EDGE_CONE_SCALE`): `<=` là đạt, `>` là không đạt. `face` là chiều cao khuôn mặt theo pixel của gaze watcher (ảnh rộng 640), đặt cạnh `GAZE_MIN_FACE_PX`: `>=` là đạt, `<` là không đạt. Một nhịp chỉ được tính `facing` khi cả hai đều đạt. `edge` là khoảng cách tới tâm frame (0 = tâm, 1 = mép). Phiếu `away` ghi rõ điều kiện không đạt trong ngoặc: `face too small`, `turned too far`, hoặc khi hoàn toàn không đo được yaw (`yaw=-`) thì là `no keypoints`, `landmarks off-frame`, `no yaw` hay `no frame`. Khuôn mặt không đo được như vậy không bao giờ được tính là đang nhìn, nhưng cũng không phải người lạ đã quay đi.
+
 **Điều chỉnh (Tuning):**
 
 | Triệu chứng | Cách chỉnh |
