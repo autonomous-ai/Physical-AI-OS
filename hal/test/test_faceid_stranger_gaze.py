@@ -163,6 +163,28 @@ def test_describe_yaw_on_the_cone_passes():
     assert m.describe().startswith("yaw=60.0<=60.0 ")
 
 
+def test_describe_face_just_under_the_floor_never_prints_as_the_floor():
+    """47.6 px fails; rounding it to 48 would print 'face=48px<48'."""
+    m = _m(facing=False, yaw=5.0, face_px=47.6, edge=0.05, cone=60.0)
+    assert "face=47px<48" in m.describe()
+
+
+def test_describe_face_on_the_floor_passes():
+    assert "face=48px>=48" in _m(face_px=48.0).describe()
+
+
+def test_describe_yaw_just_over_the_cone_shows_enough_digits():
+    """25.03 fails a 25.0 cone; one decimal would print 'yaw=25.0>25.0'."""
+    m = _m(facing=False, yaw=25.03, edge=0.0, cone=25.0)
+    assert m.describe().startswith("yaw=25.03>25.00 ")
+
+
+def test_describe_yaw_clear_of_the_cone_keeps_one_decimal():
+    """Extra digits only when one decimal would print the pair as equal."""
+    m = _m(facing=False, yaw=92.66, cone=92.64)
+    assert m.describe().startswith("yaw=92.7>92.6 ")
+
+
 def test_describe_unmeasurable_face():
     m = _m(facing=False, yaw=None, face_px=120.0, edge=0.1, cone=60.0,
            reason="landmarks off-frame")

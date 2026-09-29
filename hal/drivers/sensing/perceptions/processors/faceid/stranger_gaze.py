@@ -7,6 +7,7 @@ vote differs: face ID ticks every 2 s, so it counts ticks, and only ticks
 younger than FACE_STRANGER_GAZE_WINDOW_S.
 """
 
+import math
 from collections.abc import Iterable
 from typing import NamedTuple
 
@@ -45,12 +46,19 @@ class GazeMeasurement(NamedTuple):
         words, so the log shows which test decided the vote.
         """
         small = self.face_px < self.min_px
-        size = f"face={self.face_px:.0f}px{'<' if small else '>='}{self.min_px:.0f}"
+        # Rounded down: 47.6 px must not print as 48 next to a floor of 48.
+        size = f"face={math.floor(self.face_px)}px{'<' if small else '>='}{self.min_px:.0f}"
         if self.yaw is None:
             # The size and cone checks never ran; only the first failure applies.
             return f"yaw=- {size} edge={self.edge:.2f} -> away ({self.reason})"
         wide = self.yaw > self.cone
-        yaw = f"yaw={self.yaw:.1f}{'>' if wide else '<='}{self.cone:.1f}"
+        # Rounding keeps order, so only a failing yaw can print equal to its
+        # cone; add decimals until the printed pair shows the gap.
+        for digits in range(1, 7):
+            yaw_txt, cone_txt = f"{self.yaw:.{digits}f}", f"{self.cone:.{digits}f}"
+            if not wide or float(yaw_txt) > float(cone_txt):
+                break
+        yaw = f"yaw={yaw_txt}{'>' if wide else '<='}{cone_txt}"
         line = f"{yaw} {size} edge={self.edge:.2f} -> {'facing' if self.facing else 'away'}"
         failed = [r for r, hit in (("face too small", small), ("turned too far", wide)) if hit]
         return f"{line} ({', '.join(failed)})" if failed else line
