@@ -1,0 +1,248 @@
+"""Queued logging: a stuck log writer must never block the caller (#530)."""
+
+import logging
+import os
+import subprocess
+import sys
+import textwrap
+import threading
+import time
+from pathlib import Path
+
+import pytest
+
+from core.logging_ext import NonBlockingQueueHandler, queued, stop_queued_logging
+from core.request_context import install_request_id_logging
+
+
+class _GatedHandler(logging.Handler):
+    """Collects formatted records; blocks every write until `gate` is set."""
+
+    def __init__(self, fmt: str = "%(message)s") -> None:
+        super().__init__()
+        self.setFormatter(logging.Formatter(fmt))
+        self.gate = threading.Event()
+        self.gate.set()
+        self.started = threading.Event()
+        self.lines: list[str] = []
+
+    def emit(self, record: logging.LogRecord) -> None:
+        self.started.set()
+        self.gate.wait()
+        self.lines.append(self.format(record))
+
+
+def _logger(name: str, handler: logging.Handler) -> logging.Logger:
+    log = logging.getLogger(name)
+    log.handlers[:] = [handler]
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    return log
+
+
+@pytest.fixture(autouse=True)
+def _stop_writers():
+    yield
+    stop_queued_logging(timeout=0.5)
+
+
+def test_emit_returns_while_writer_is_stuck():
+    target = _GatedHandler()
+    target.gate.clear()
+    log = _logger("t.stuck", queued(target))
+    log.info("first")
+    assert target.started.wait(2), "writer thread never picked up the record"
+
+    t0 = time.perf_counter()
+    for i in range(100):
+        log.info("record %d", i)
+    elapsed = time.perf_counter() - t0
+
+    assert elapsed < 0.1, f"100 log calls took {elapsed:.3f}s with the writer stuck"
+    target.gate.set()
+
+
+def test_full_queue_drops_and_reports():
+    install_request_id_logging()
+    target = _GatedHandler("[%(request_id)s] %(levelname)s %(message)s")
+    target.gate.clear()
+    qh = queued(target, maxsize=3)
+    log = _logger("t.full", qh)
+
+    log.info("r0")
+    assert target.started.wait(2)       # r0 is off the queue, writer blocked on it
+    for i in range(1, 4):
+        log.info("r%d", i)              # fills the queue (3)
+    for i in range(4, 9):
+        log.info("r%d", i)              # 5 dropped, must not block
+
+    target.gate.set()
+    stop_queued_logging(timeout=2)
+
+    assert target.lines[0] == "[-] INFO r0"
+    assert "WARNING [logging] queue full: dropped 5 record(s)" in target.lines[1]
+    assert [line.split()[-1] for line in target.lines[2:]] == ["r1", "r2", "r3"]
+    assert qh.take_dropped() == 0
+
+
+def test_stop_flushes_queued_records():
+    target = _GatedHandler()
+    log = _logger("t.flush", queued(target))
+    for i in range(50):
+        log.info("line %d", i)
+    stop_queued_logging(timeout=2)
+    assert target.lines == [f"line {i}" for i in range(50)]
+
+
+def test_stop_does_not_hang_when_writer_is_stuck():
+    target = _GatedHandler()
+    target.gate.clear()
+    log = _logger("t.hang", queued(target))
+    log.info("stuck")
+    assert target.started.wait(2)
+
+    t0 = time.perf_counter()
+    stop_queued_logging(timeout=0.2)
+    assert time.perf_counter() - t0 < 1.0
+    target.gate.set()
+
+
+def test_exception_text_survives_the_queue():
+    target = _GatedHandler()
+    log = _logger("t.exc", queued(target))
+    try:
+        raise ValueError("boom")
+    except ValueError:
+        log.exception("failed")
+    stop_queued_logging(timeout=2)
+    assert "failed" in target.lines[0]
+    assert "ValueError: boom" in target.lines[0]
+
+
+def test_queue_handler_type():
+    assert isinstance(queued(_GatedHandler()), NonBlockingQueueHandler)
+
+
+_WIRING = textwrap.dedent(
+    """
+    import logging, logging.config, sys
+    from lbserver.app import _setup_logging
+    from core.logging_ext import NonBlockingQueueHandler
+
+    cfg = _setup_logging(sys.argv[1])
+    logging.config.dictConfig(cfg)   # exactly what uvicorn.run(log_config=cfg) does
+
+    root = logging.getLogger()
+    uv = logging.getLogger("uvicorn")
+    assert isinstance(root.handlers[0], NonBlockingQueueHandler), root.handlers
+    assert isinstance(uv.handlers[0], NonBlockingQueueHandler), uv.handlers
+    assert uv.handlers[0] is logging.getLogger("uvicorn.access").handlers[0]
+
+    logging.getLogger("lbserver.app").info("app-line")
+    logging.getLogger("uvicorn.error").info("uvicorn-error-line")
+    logging.getLogger("uvicorn.access").info("access-line")
+    """
+)
+
+
+def test_lbserver_setup_logging_is_queued_and_survives_dictconfig(tmp_path: Path):
+    # Subprocess: pytest puts its own handlers on the root logger, which would
+    # make basicConfig() a no-op, and dictConfig() closes every live handler.
+    src = Path(__file__).resolve().parents[2] / "src"
+    result = subprocess.run(
+        [sys.executable, "-c", _WIRING, str(tmp_path)],
+        cwd=src.parent,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    app_log = (tmp_path / "lbserver.log").read_text()
+    uv_log = (tmp_path / "uvicorn.log").read_text()
+    assert "[lbserver.app] [-] INFO: app-line" in app_log
+    assert "uvicorn-error-line" in uv_log
+    assert "access-line" in uv_log
+
+
+def _run_script(script: str, timeout: float) -> subprocess.CompletedProcess:
+    src = Path(__file__).resolve().parents[2] / "src"
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env={**os.environ, "PYTHONPATH": str(src)},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+_SIGNAL_DURING_ENQUEUE = """
+    import logging, signal, threading, time, os
+    from core.logging_ext import queued
+
+    class Sink(logging.Handler):
+        def emit(self, record):
+            pass
+
+    log = logging.getLogger("t.sig")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    log.addHandler(queued(Sink()))
+    # Like lbserver's SIGHUP slot switch: the handler logs on the main thread.
+    signal.signal(signal.SIGUSR2, lambda s, f: log.warning("from signal handler"))
+
+    stop = threading.Event()
+    def pester():
+        while not stop.is_set():
+            os.kill(os.getpid(), signal.SIGUSR2)
+            time.sleep(0.01)
+    threading.Thread(target=pester, daemon=True).start()
+    end = time.monotonic() + 8
+    while time.monotonic() < end:
+        log.info("busy loop line")
+    stop.set()
+    print("done")
+"""
+
+
+def test_signal_handler_logging_mid_enqueue_does_not_deadlock():
+    # A signal handler runs between bytecodes on the main thread, possibly while
+    # the main thread is inside the queue's put(). A non-reentrant queue lock
+    # would deadlock the event loop right there.
+    try:
+        result = _run_script(_SIGNAL_DURING_ENQUEUE, timeout=30)
+    except subprocess.TimeoutExpired:
+        pytest.fail("logging from a signal handler deadlocked the main thread")
+    assert "done" in result.stdout, result.stderr
+
+
+_EXIT_WITH_STUCK_WRITER = """
+    import logging, threading
+    from core.logging_ext import queued
+
+    in_emit = threading.Event()
+
+    class Stuck(logging.Handler):
+        def emit(self, record):
+            in_emit.set()
+            threading.Event().wait()   # a write that never returns
+
+    log = logging.getLogger("t.exit")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    log.addHandler(queued(Stuck()))
+    log.info("this write hangs forever")
+    assert in_emit.wait(5)             # the writer now holds Stuck's lock
+    print("main returned", flush=True)
+"""
+
+
+def test_process_exits_while_writer_is_stuck():
+    try:
+        result = _run_script(_EXIT_WITH_STUCK_WRITER, timeout=15)
+    except subprocess.TimeoutExpired:
+        pytest.fail("process hung at exit behind a stuck log writer")
+    assert "main returned" in result.stdout, result.stderr
