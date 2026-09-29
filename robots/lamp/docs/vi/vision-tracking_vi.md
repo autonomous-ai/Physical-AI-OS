@@ -1075,3 +1075,16 @@ curl -X POST 127.0.0.1:5001/servo/bearing/reset
 Lệnh đặt lại cũng được nối với giọng nói qua `skills/servo-control` — *"tôi đã dời bạn đi"*, *"bạn
 đang ở chỗ mới"*. Việc phát hiện tự động cần vài lần thất bại mới hành động, điều đó đúng để tránh báo
 động giả nhưng chậm khi người dùng vốn đã BIẾT là lamp bị dời.
+
+## Trở lại idle từ hold qua servo-control
+
+Skill `servo-control` phân biệt trạng thái chuyển động với hướng nhìn. Trong ngữ
+cảnh tư thế/hold đã rõ, “back to normal” hoặc “turn to normal position” chọn
+`/servo/resume`: thoát hold và tiếp tục idle, vẫn giữ lực motor. “Look straight
+ahead” chỉ chọn `/servo/aim` với `center`, giữ trạng thái hold. Nếu yêu cầu rõ cả
+hai, phát aim center rồi resume. “Stay still” hoặc “don't resume” được ưu tiên;
+quay về giữa nhưng đứng yên thì phát aim center rồi hold. “Back to normal” trong
+tác vụ không liên quan không kích hoạt servo; nếu chưa rõ trạng thái thân máy,
+đọc `GET /servo` (`motion_mode`). `/servo/play` với `idle` không xóa hold, còn
+`/servo/release` tắt lực motor thay vì trở lại idle. Chỉ đổi hướng dẫn routing
+của skill, không đổi hành vi HAL.

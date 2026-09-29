@@ -1076,3 +1076,16 @@ curl -X POST 127.0.0.1:5001/servo/bearing/reset
 The reset is also wired to speech via `skills/servo-control` — *"I moved you"*, *"you're in a new
 place"*. Automatic detection needs several failures before acting, which is right for avoiding false
 positives but slow when the user already knows the lamp moved.
+
+## Returning from hold through servo-control
+
+The `servo-control` skill distinguishes motion state from direction. In an
+established posture/hold context, “back to normal” or “turn to normal position”
+selects `/servo/resume`, which clears hold and resumes idle with torque on.
+“Look straight ahead” selects only `/servo/aim` with `center`, preserving hold.
+An explicit request for both emits aim center then resume. “Stay still” or
+“don't resume” takes precedence; returning to center while staying still emits
+aim center then hold. Unrelated “back to normal” requests do not trigger servo
+actions; uncertain body state can be read from `GET /servo` (`motion_mode`).
+`/servo/play` with `idle` does not clear hold, and `/servo/release` disables torque
+rather than resuming idle. These are skill routing rules; HAL behavior is unchanged.
