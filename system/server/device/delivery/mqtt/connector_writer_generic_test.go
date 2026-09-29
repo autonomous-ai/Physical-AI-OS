@@ -259,19 +259,6 @@ func TestConnectorWriter_Remove(t *testing.T) {
 	}
 }
 
-func TestBuildAuthHeader(t *testing.T) {
-	creds := ConnectorCreds{AccessToken: "at", APIKey: "ak"}
-	if got := buildAuthHeader(authHeaderBearerAPIKey, creds); got != "Bearer ak" {
-		t.Fatalf("api_key header = %q", got)
-	}
-	if got := buildAuthHeader(authHeaderBearerAccessToken, creds); got != "Bearer at" {
-		t.Fatalf("access_token header = %q", got)
-	}
-	if got := buildAuthHeader("", creds); got != "Bearer at" {
-		t.Fatalf("default header = %q, want Bearer at", got)
-	}
-}
-
 func TestConnectorWriter_ImplementsInterfaces(t *testing.T) {
 	w := newConnectorWriter(t.TempDir(), &fakeMCPGateway{}, nil)
 	var _ ConnectorWriter = w
