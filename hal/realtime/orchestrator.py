@@ -1358,6 +1358,11 @@ class RealtimeOrchestrator:
         for output in execution_agent.receive(**receive_kwargs):
             if stop_event is not None and stop_event.is_set():
                 return
+            # A session that is still streaming a reply is not idle. Without
+            # this, a reply longer than TURN_IN_FLIGHT_MAX_S (a 124-143 s recap,
+            # device-observed 2026-09-29) was parked mid-sentence: the in-flight
+            # guard had expired and the last activity was the commit.
+            self._last_activity_monotonic = time.monotonic()
             if turn is not None:
                 self._validate_audio_turn(turn)
             if isinstance(output, (FunctionCallOutput, MainAgentFallbackOutput, InterruptedOutput)):

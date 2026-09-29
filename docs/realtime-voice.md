@@ -1461,7 +1461,10 @@ parked orchestrator still reports `available`: the next `prepare_turn()`
 reconnects a fresh session synchronously (`idle-park-resume`) before any audio
 is streamed, which is exactly what the pre-turn recycle would have done for that
 turn anyway, and `voice_service` buffers the capture across the ~1 s handshake.
-Parking is skipped while a turn is in flight, and a resume that cannot connect
+Parking is skipped while a turn is in flight, and every chunk a reply streams
+counts as activity, so a reply longer than the 120 s in-flight guard
+(`TURN_IN_FLIGHT_MAX_S`, which only exists to expire an abandoned turn) is never
+parked mid-sentence. A resume that cannot connect
 reports unavailable (turn falls back to the main agent) while staying parked so
 the next turn retries.
 In wake-word mode the resume is overlapped with the user's sentence: `Session

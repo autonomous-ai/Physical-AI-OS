@@ -1407,7 +1407,7 @@ không có hoạt động turn nào, thread watchdog `rt-idle-park` đóng trans
 `prepare_turn()` kế tiếp sẽ nối lại session mới một cách đồng bộ
 (`idle-park-resume`) trước khi có audio nào được stream — đúng bằng việc mà
 pre-turn recycle vốn đã làm cho turn đó — và `voice_service` giữ đệm capture qua
-~1 giây handshake. Không park khi đang có turn chạy dở; nếu resume không nối
+~1 giây handshake. Không park khi đang có turn chạy dở, và mỗi chunk câu trả lời stream về đều tính là hoạt động, nên câu trả lời dài hơn mốc bảo vệ 120 giây (`TURN_IN_FLIGHT_MAX_S`, chỉ để hết hạn turn bị bỏ dở) không bao giờ bị park giữa câu; nếu resume không nối
 được thì báo unavailable (turn rơi về main agent) nhưng vẫn giữ trạng thái parked
 để turn sau thử lại.
 Ở chế độ wake-word, việc nối lại được chạy chồng lên câu user đang nói: `Session
