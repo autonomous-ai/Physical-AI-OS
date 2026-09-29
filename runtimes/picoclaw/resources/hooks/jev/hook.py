@@ -14,7 +14,6 @@ import xml.etree.ElementTree as ET
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from jev.router import Router
 
-ROOT = Path(os.environ.get("JEV_SKILLS_ROOT", "/root/.picoclaw/workspace/skills")).resolve()
 MAX_SKILL = 128 * 1024
 
 
@@ -54,10 +53,10 @@ def contextual_followup(prompt):
     return bool(adjustment and not physical)
 
 
-def catalog_for(messages, root=ROOT):
+def catalog_for(messages):
     """Use the runtime's own published roster; never scan arbitrary skill trees."""
-    root = root.resolve()
     skills = []
+    seen = set()
     for message in messages:
         if message.get("role") != "system":
             continue
@@ -73,14 +72,20 @@ def catalog_for(messages, root=ROOT):
                     if not path.is_absolute() or path.name != "SKILL.md":
                         continue
                     resolved = path.absolute()
-                    if (".." in path.parts or not resolved.is_relative_to(root)
+                    if (".." in path.parts
                             or any(part.is_symlink() for part in [resolved, *resolved.parents])
                             or not resolved.is_file()):
                         continue
-                    # A native roster is authoritative, but only preload OS workspace skills.
+                    identity = (name, str(resolved))
+                    if identity in seen:
+                        continue
+                    seen.add(identity)
+                    # Native discovery applies workspace > global > builtin precedence
+                    # and the active turn's AllowedSkills filter before publishing.
                     skills.append({"name": name, "lookup_name": name,
                                    "description": item.findtext("description", ""),
-                                   "category": "openclaw-imports", "path": str(resolved), "root": str(root)})
+                                   "category": item.findtext("source", "runtime"),
+                                   "path": str(resolved), "root": resolved.anchor})
     return skills
 
 

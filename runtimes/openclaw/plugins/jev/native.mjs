@@ -50,7 +50,6 @@ export async function nativeCatalog(api, ctx) {
   }
   const snapshot = entry?.sessionId === ctx.sessionId ? entry.skillsSnapshot : null;
   if (!Array.isArray(snapshot?.resolvedSkills) || typeof snapshot.prompt !== "string") return [];
-  const root = await realpath(path.join(ctx.workspaceDir, "skills"));
   const agent = config.agents?.list?.find(a => a.id === ctx.agentId);
   const skills = [], seen = new Set();
   for (const skill of snapshot.resolvedSkills) {
@@ -59,9 +58,15 @@ export async function nativeCatalog(api, ctx) {
         (Array.isArray(agent?.skills) && !agent.skills.includes(skill.name)) ||
         (Array.isArray(snapshot.skillFilter) && !snapshot.skillFilter.includes(skill.name))) continue;
     seen.add(skill.name);
-    const file = await realpath(skill.filePath);
-    if (file !== path.resolve(skill.filePath) || !file.startsWith(root + path.sep) || path.basename(file) !== "SKILL.md") continue;
-    const content = await boundedRead(file, 32768);
+    // The native snapshot is the authority for bundled, managed, plugin and
+    // workspace locations. Never discover paths independently or follow aliases.
+    if (typeof skill.filePath !== "string" || !path.isAbsolute(skill.filePath)) continue;
+    let file, content;
+    try {
+      file = await realpath(skill.filePath);
+      if (file !== path.resolve(skill.filePath) || path.basename(file) !== "SKILL.md") continue;
+      content = await boundedRead(file, 32768);
+    } catch { continue; } // A removed or unreadable skill must not hide the rest.
     const front = /^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n|$)/.exec(content)?.[1];
     if (!front) continue;
     // Accept only simple metadata; native handles all dependency/platform,
@@ -70,7 +75,6 @@ export async function nativeCatalog(api, ctx) {
     const name = /^name:\s*["']?([a-zA-Z0-9_.-]+)["']?\s*$/m.exec(front)?.[1];
     if (name !== skill.name || keys.some(k => !["name", "description", "license", "compatibility"].includes(k)) || /[&*!]/.test(front)) continue;
     skills.push({ name: skill.name, description: skill.description, file, content });
-    if (skills.length > 32) return [];
   }
   return skills.sort((a, b) => a.name.localeCompare(b.name));
 }

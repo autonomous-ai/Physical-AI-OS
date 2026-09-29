@@ -87,10 +87,10 @@ class HookTest(unittest.TestCase):
         self.loader_patch.stop()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            path = root / "a/SKILL.md"; path.parent.mkdir(); path.write_text("complete skill")
+            path = root / "global/a/SKILL.md"; path.parent.mkdir(parents=True); path.write_text("complete skill")
             request = self.request()
             request["messages"][0]["content"] = (f"<skills><skill><name>a</name><description>Action</description>"
-                                                  f"<location>{path}</location></skill></skills>")
+                                                  f"<location>{path}</location><source>global</source></skill></skills>")
             payloads = []
             def provider(endpoint, key, timeout, payload):
                 payloads.append(payload)
@@ -99,9 +99,7 @@ class HookTest(unittest.TestCase):
                                     "fit_skill_0": {"type": "noul", "noul": .99}}}
             router = hook.Router(request=provider)
             adapter = hook.Hook(router)
-            native_catalog = hook.catalog_for
-            with patch("jev.router.read_config", return_value=("http://localhost/jev", "mock", 3)), \
-                 patch.object(hook, "catalog_for", side_effect=lambda messages: native_catalog(messages, root)):
+            with patch("jev.router.read_config", return_value=("http://localhost/jev", "mock", 3)):
                 result = adapter.handle("hook.before_llm", request)
             self.assertEqual(result["action"], "modify")
             self.assertIn("complete skill", result["request"]["messages"][-1]["content"])
@@ -154,6 +152,58 @@ class HookTest(unittest.TestCase):
         with patch.object(hook, "load_context", side_effect=ValueError("removed")):
             self.assertEqual(adapter.handle("hook.before_llm", self.request(iteration=2))["action"], "continue")
 
+    def test_native_roster_includes_global_and_builtin_but_not_unlisted_skills(self):
+        self.loader_patch.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            rows = []
+            for source, name in (("workspace", "lamp"), ("global", "session-recall"),
+                                 ("builtin", "weather")):
+                path = root / source / name / "SKILL.md"
+                path.parent.mkdir(parents=True)
+                path.write_text(f"Complete {name} instructions")
+                rows.append(f"<skill><name>{name}</name><description>{name}</description>"
+                            f"<location>{path}</location><source>{source}</source></skill>")
+            unlisted = root / "global/filtered/SKILL.md"
+            unlisted.parent.mkdir(); unlisted.write_text("Do not preload")
+            xml = "<skills>" + "".join(rows) + "</skills>"
+            # Native providers may expose the same roster in content and system_parts.
+            messages = [{"role": "system", "content": xml,
+                         "system_parts": [{"text": xml}]}]
+            catalog = lambda: hook.catalog_for(messages)
+            self.assertEqual([s["name"] for s in catalog()], ["lamp", "session-recall", "weather"])
+            self.assertIn("Complete session-recall instructions", hook.load_context("session-recall", catalog))
+            self.assertIn("Complete weather instructions", hook.load_context("weather", catalog))
+            with self.assertRaises(ValueError): hook.load_context("filtered", catalog)
+            messages[0]["content"] = "<skills>" + rows[0] + "</skills>"
+            messages[0]["system_parts"] = []
+            with self.assertRaises(ValueError): hook.load_context("session-recall", catalog)
+
+    def test_native_roster_rejects_unsafe_paths_and_ambiguous_names(self):
+        self.loader_patch.stop()
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            path = root / "global/recall/SKILL.md"
+            path.parent.mkdir(parents=True); path.write_text("Recall instructions")
+            link = root / "linked"
+            link.symlink_to(path.parent, target_is_directory=True)
+            def roster(paths):
+                return [{"role": "system", "content": "<skills>" + "".join(
+                    f"<skill><name>recall</name><location>{p}</location></skill>"
+                    for p in paths) + "</skills>"}]
+            for unsafe in ("relative/SKILL.md", path.parent / "../recall/SKILL.md",
+                           link / "SKILL.md", path.parent / "missing/SKILL.md", path.parent):
+                self.assertEqual(hook.catalog_for(roster([unsafe])), [])
+            other = root / "builtin/recall/SKILL.md"
+            other.parent.mkdir(parents=True); other.write_text("Other instructions")
+            with self.assertRaises(ValueError):
+                hook.load_context("recall", lambda: hook.catalog_for(roster([path, other])))
+            # Replacing an ancestor after discovery must not escape through a symlink.
+            original = path.parent
+            original.rename(original.with_name("moved"))
+            original.symlink_to(original.with_name("moved"), target_is_directory=True)
+            with self.assertRaises(OSError): hook.read_skill(path, Path(path.anchor))
+
     def test_roster_path_bounds_and_safe_full_load(self):
         self.loader_patch.stop()
         with tempfile.TemporaryDirectory() as directory:
@@ -162,13 +212,12 @@ class HookTest(unittest.TestCase):
             path.write_text("---\nname: a\n---\nFull instructions, references/example.md")
             xml = f"<skills><skill><name>a</name><description>Action</description><location>{path}</location></skill></skills>"
             messages = [{"role": "system", "content": xml}]
-            catalog = lambda: hook.catalog_for(messages, root)
+            catalog = lambda: hook.catalog_for(messages)
             self.assertEqual(len(catalog()), 1)
             loaded = hook.load_context("a", catalog)
             self.assertIn(str(path.parent), loaded)
             self.assertIn("Full instructions", loaded)
-            self.assertEqual(hook.catalog_for([{"role": "user", "content": xml}], root), [])
-            self.assertEqual(hook.catalog_for(messages, root / "other"), [])
+            self.assertEqual(hook.catalog_for([{"role": "user", "content": xml}]), [])
             path.write_text("!`echo no`")
             with self.assertRaises(ValueError): hook.load_context("a", catalog)
             path.write_bytes(b"x" * (hook.MAX_SKILL + 1))
