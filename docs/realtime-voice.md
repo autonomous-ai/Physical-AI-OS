@@ -320,7 +320,7 @@ end to end. The values (`ROUTE_*` in `realtime_turn.py`):
 |---|---|
 | `realtime_handled` | Realtime spoke it. The main agent gets `voice_agent_handled` and stays silent. |
 | `delegated` | The model called `delegate_to_main`. |
-| `ai_rejected` | The model explicitly called `reject_turn`; it reaches nobody. |
+| `ai_rejected` | Explicit `reject_turn`, or a completed marker-only Gemini silence decision in manual text-to-TTS (see below); it reaches nobody when the rejection filter is enabled. |
 | `realtime_no_output` | Committed, but nothing came back (`receive()` timeout, dead WS) — main agent answers. |
 | `realtime_error` | The turn raised; forwarded rather than lost. |
 | `realtime_unavailable` | No live session to commit to — main agent answers. |
@@ -3312,3 +3312,14 @@ Regression coverage: `hal/test/test_voice_capture_lifecycle.py` exercises blocke
 subprocess reads, forced kill/reap, rapid mute/unmute, cancelled deferred restart,
 join timeout, stopped capture, and abort through the AEC wrapper. These local
 tests do not replace a microphone test on the device.
+
+### Completed Gemini silence markers (manual text-to-TTS)
+
+A normally completed Gemini turn whose entire raw output is one or more
+`<no speech>` markers (including split fragments) is treated as `ai_rejected`
+when no tool, interruption, look replay, delegation, or spoken sentence occurred.
+It does not fall back to main or report successful task execution. The existing
+`HAL_REALTIME_AI_REJECT_FILTER` controls downstream rejection and
+`rejected_non_user` KPI exclusion. Empty output, timeouts, incomplete markers,
+marker-prefixed answers, system-error sentences and main-agent `NO_REPLY` do
+not qualify. Native audio and the continuous LIVE output pump are unchanged.

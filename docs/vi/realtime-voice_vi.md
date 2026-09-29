@@ -319,7 +319,7 @@ cuối một turn. Các giá trị (`ROUTE_*` trong `realtime_turn.py`):
 |---|---|
 | `realtime_handled` | Realtime đã nói. Agent chính nhận `voice_agent_handled` và im lặng. |
 | `delegated` | Model gọi `delegate_to_main`. |
-| `ai_rejected` | Model gọi `reject_turn` rõ ràng; turn không tới đâu cả. |
+| `ai_rejected` | Model gọi `reject_turn`, hoặc Gemini hoàn tất quyết định chỉ có marker im lặng ở đường turn text-to-TTS (xem bên dưới); không dispatch khi bật rejection filter. |
 | `realtime_no_output` | Đã commit nhưng không có gì trả về (`receive()` timeout, WS chết) — agent chính trả lời. |
 | `realtime_error` | Turn ném lỗi; forward xuống thay vì mất luôn. |
 | `realtime_unavailable` | Không có session sống để commit — agent chính trả lời. |
@@ -3214,3 +3214,14 @@ Regression test: `hal/test/test_voice_capture_lifecycle.py` kiểm tra đọc su
 bị kẹt, kill/reap, mute/unmute nhanh, hủy restart đang đợi, join timeout, capture
 đã stop và abort qua AEC wrapper. Test local không thay thế test microphone
 trên device.
+
+### Marker im lặng Gemini kết thúc bình thường (turn text-to-TTS)
+
+Turn Gemini kết thúc bình thường, toàn bộ output thô chỉ gồm một hoặc nhiều
+marker `<no speech>` (kể cả bị chia fragment), được xử lý là `ai_rejected`
+nếu không có tool, interruption, look replay, delegate hay câu đã phát.
+Không fallback main và không ghi task execution thành công. Cờ hiện hữu
+`HAL_REALTIME_AI_REJECT_FILTER` điều khiển việc bỏ dispatch và loại KPI với
+`rejected_non_user`. Output rỗng, timeout, marker dở dang, marker kèm câu trả
+lời, câu báo lỗi hệ thống và `NO_REPLY` của main không đủ điều kiện. Native
+audio và output pump LIVE liên tục không đổi.
