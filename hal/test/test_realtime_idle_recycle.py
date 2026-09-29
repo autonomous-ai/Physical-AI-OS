@@ -1,6 +1,4 @@
-"""Gemini closes a session it receives nothing on (WS 1008), regardless of model.
-prepare_turn() must recycle before a post-silence turn streams, or that turn lands
-on a dead session and is lost — the user-visible "I had to say it twice"."""
+"""prepare_turn() recycles a Gemini session idle long enough to be closed (WS 1008)."""
 
 import time
 from types import SimpleNamespace
@@ -26,9 +24,6 @@ def _orch(monkeypatch, model: str, idle_s: float, threshold: float = 60.0):
     return o
 
 
-# The regression this fixes: the recycle used to be gated on
-# gemini_needs_idle_workaround(), which is True only for native-audio. Every 3.1
-# device therefore ran with no protection while still dying to the same 1008.
 def test_recycles_on_non_native_audio_model(monkeypatch):
     o = _orch(monkeypatch, "models/gemini-3.1-flash-live-preview", idle_s=90)
     o.prepare_turn()
@@ -77,8 +72,7 @@ def test_unresolved_tool_call_rebuilds_before_audio(monkeypatch):
     assert o._skip_post_idle_recycle is True
 
 
-# The threshold has to sit under the shortest idle gap that actually killed a
-# session in the field (86s), or the recycle fires after Gemini already closed it.
+# Must sit under the shortest fatal idle gap seen in the field (86s).
 def test_default_threshold_clears_the_observed_failure_floor():
     assert 0 < hal_config.REALTIME_GEMINI_PRE_TURN_RECYCLE_S < 86, (
         "default must be below the 86s shortest observed idle death; "
@@ -86,10 +80,7 @@ def test_default_threshold_clears_the_observed_failure_floor():
     )
 
 
-# Device 2026-09-23 14:09: a privacy-switch unmute restarts realtime on the SAME
-# orchestrator and connects a fresh session, but the idle clock still counted
-# from the last turn (133s ago). prepare_turn() threw the 0s-old session away,
-# the rebuild took 10s, and the turn fell back to the main agent.
+# An unmute reconnects a fresh session while the idle clock still counts from the last turn.
 def test_fresh_session_is_not_recycled_for_an_old_last_turn(monkeypatch):
     o = _orch(monkeypatch, "models/gemini-3.8-live-extended-thinking", idle_s=133)
     o._session_connected_monotonic = time.monotonic() - 1

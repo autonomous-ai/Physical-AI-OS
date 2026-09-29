@@ -14,8 +14,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// fakeBootstrap points bootstrapBaseURL at h for the test and resets the shared
-// rate limiter so tests stay independent.
+// fakeBootstrap points bootstrapBaseURL at h and resets the rate limiter.
 func fakeBootstrap(t *testing.T, h http.HandlerFunc) {
 	t.Helper()
 	srv := httptest.NewServer(h)

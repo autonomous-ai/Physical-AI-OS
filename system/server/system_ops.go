@@ -19,11 +19,8 @@ import (
 )
 
 // softwareUpdate installs the published version of one component now, via the
-// bootstrap worker — the UI equivalent of `software-update <target>` over SSH.
-// Thin wrapper over ota.TriggerUpdate (shared with the MQTT
-// system.software_update kind, including its per-target rate limit).
-// POST /api/system/software-update/:target
-// target: os-server | bootstrap | web | hal | device | agent (resolves to the configured runtime's CLI)
+// bootstrap worker — the UI equivalent of `software-update <target>` over
+// SSH.
 func (s *Server) softwareUpdate(c *gin.Context) {
 	target, err := ota.TriggerUpdate(c.Request.Context(), s.config, c.Param("target"))
 	if err != nil {
@@ -55,12 +52,8 @@ func otaHTTPStatus(err error) int {
 	}
 }
 
-// otaSecurity reports whether this device verifies OTA metadata and artifacts.
-// GET /api/system/ota-security
-//
-// The bootstrap worker owns the answer (it holds the pinned key and performs
-// the verification), so this handler proxies its /security endpoint verbatim
-// rather than re-reading bootstrap.json and guessing.
+// otaSecurity reports whether this device verifies OTA metadata and
+// artifacts. GET /api/system/ota-security
 func (s *Server) otaSecurity(c *gin.Context) {
 	ctx, cancel := context.WithTimeout(c.Request.Context(), 5*time.Second)
 	defer cancel()
@@ -88,11 +81,9 @@ func (s *Server) otaSecurity(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(status))
 }
 
-// otaVersions reports, per component, what this device runs vs what the OTA feed
-// offers — so the Versions card can show an `update` button ONLY where an update
-// actually exists instead of on every row. Includes the "agent" alias of the
-// configured runtime's CLI (see ota.Versions).
-// GET /api/system/ota-versions
+// otaVersions reports, per component, what this device runs vs what the OTA
+// feed offers — so the Versions card can show an `update` button ONLY where
+// an update actually exists instead of on every row.
 func (s *Server) otaVersions(c *gin.Context) {
 	versions, err := ota.Versions(c.Request.Context(), s.config)
 	if err != nil {
@@ -102,10 +93,9 @@ func (s *Server) otaVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
 }
 
-// otaUpdating lists the components the bootstrap worker is installing right now,
-// so the Versions card can label that row "updating…" while the work runs. Cheap
-// by design (no metadata fetch) — the UI polls it every couple of seconds.
-// GET /api/system/ota-updating
+// otaUpdating lists the components the bootstrap worker is installing right
+// now, so the Versions card can label that row "updating…" while the work
+// runs.
 func (s *Server) otaUpdating(c *gin.Context) {
 	updating, err := ota.Updating(c.Request.Context(), s.config)
 	if err != nil {

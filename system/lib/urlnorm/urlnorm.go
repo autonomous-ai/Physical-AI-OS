@@ -2,9 +2,7 @@ package urlnorm
 
 import "strings"
 
-// NormalizeBaseURL ensures base URLs include the /v1 OpenAI-compat
-// prefix so all backends (TTS, STT, LLM, DL) receive a ready-to-use URL without
-// each caller having to patch it individually. Non-autonomous URLs are left untouched.
+// NormalizeBaseURL appends the /v1 OpenAI-compat prefix to Autonomous base URLs; others are unchanged.
 func NormalizeBaseURL(base string) string {
 	base = strings.TrimSuffix(strings.TrimSpace(base), "/")
 	if strings.Contains(base, "campaign-api.autonomous.ai") && strings.HasSuffix(base, "/ai") {

@@ -22,12 +22,9 @@ import (
 var errDisconnectedBeforeSend = errors.New("opencode websocket not connected")
 
 const (
-	// reconnectBackoff is the fixed wait between reconnect attempts. OpenCode is
-	// local so a short, constant backoff is fine (matches openclaw).
+	// reconnectBackoff is the fixed wait between reconnect attempts.
 	reconnectBackoff = 5 * time.Second
-	// readDeadline bounds how long the read loop blocks waiting for a frame. It
-	// is refreshed on every inbound frame (including pong) so a healthy-but-idle
-	// socket is kept alive by the keepalive ping below.
+	// readDeadline bounds how long the read loop blocks waiting for a frame.
 	readDeadline = 90 * time.Second
 	// pingInterval is how often we send an application-level ping so the server
 	// keeps the connection warm and our readDeadline keeps getting fed.
@@ -35,18 +32,12 @@ const (
 )
 
 // StartWS connects to the OpenCode WebSocket and runs the read loop, calling
-// handler for each translated event. Runs until ctx is cancelled, auto-
-// reconnecting on drop. Mirrors the openclaw.OpenclawService.StartWS shape.
+// handler for each translated event.
 func (s *OpenCodeService) StartWS(ctx context.Context, handler domain.AgentEventHandler) {
 	// Device-owned Telegram inbound: ONE poll goroutine for the whole gateway
 	// lifetime (outside the reconnect loop, so it survives WS drops; ctx-bound
-	// so it dies with the gateway). Started here — not at construction — so it
-	// only runs while opencode is the ACTIVE runtime, which is what guarantees no
-	// getUpdates conflict with other runtimes' pollers. See telegram_poll.go.
+	// so it dies with the gateway).
 	go s.startTelegramPoll(ctx)
-	// Device-owned Discord inbound: same lifecycle rule as the telegram loop —
-	// the gateway bot session runs only while opencode is the ACTIVE runtime and
-	// dies with the gateway ctx. See discord.go.
 	go s.startDiscordBot(ctx)
 	for {
 		select {
@@ -58,14 +49,9 @@ func (s *OpenCodeService) StartWS(ctx context.Context, handler domain.AgentEvent
 		if ctx.Err() != nil {
 			return
 		}
-		// Skip the cyan status overlay during AP/provisioning mode (no creds yet).
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Set(statusled.StateAgentDown)
 		}
-		// Safety reflex: the gateway link just dropped, so any in-flight servo
-		// object-tracking is now chasing a target it can no longer get vision
-		// updates for. Stop it (best-effort, idempotent). Only devices that can
-		// servo-track have anything to stop.
 		if s.config.SetUpCompleted && device.Has(s.config.DeviceTypeOrDefault(), device.CapMotion) {
 			if err := hal.StopServoTracking(); err != nil {
 				slog.Warn("stop servo tracking on ws disconnect failed", "component", "opencode", "error", err)
@@ -134,10 +120,7 @@ func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentE
 	flow.Log("ws_ready", map[string]any{"backend": "opencode"})
 	slog.Info("OpenCode connected", "component", "opencode", "url", WSURL)
 
-	// On reconnect (not first boot), announce via TTS so the user knows the agent
-	// is back. SpeakCached (not SendToHALTTS): hardcoded system filler, must NOT
-	// be fed to the realtime voice agent as history; fixed pool self-caches into
-	// hal's WAV cache so replays skip the provider.
+	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
 	if s.wsHasConnected.Swap(true) {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
@@ -147,7 +130,6 @@ func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		}()
 	}
 
-	// Keepalive ping loop — bounded to this connection's lifetime.
 	pingCtx, cancelPing := context.WithCancel(ctx)
 	defer cancelPing()
 	go s.keepAlive(pingCtx)
@@ -156,13 +138,11 @@ func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentE
 		if handler == nil {
 			return
 		}
-		// Best-effort: drop handler errors but keep reading (matches openclaw).
 		if err := handler(ctx, evt); err != nil {
 			slog.Error("ws handler error", "component", "opencode", "event", evt.Event, "error", err)
 		}
 	}
 
-	// Replay only locally buffered, definitely unsent events on connection readiness.
 	go s.drainPendingEvents()
 
 	for {
@@ -180,9 +160,7 @@ func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentE
 	}
 }
 
-// keepAlive sends an application-level ping every pingInterval. OpenCode replies
-// with a pong frame (ignored by the translator) which refreshes the read
-// deadline and keeps an idle socket alive.
+// keepAlive sends an application-level ping every pingInterval.
 func (s *OpenCodeService) keepAlive(ctx context.Context) {
 	tick := time.NewTicker(pingInterval)
 	defer tick.Stop()
@@ -195,16 +173,13 @@ func (s *OpenCodeService) keepAlive(ctx context.Context) {
 				"type": "ping",
 				"id":   fmt.Sprintf("ping-%d", s.reqCounter.Add(1)),
 			}); err != nil {
-				// Write failure means the socket is gone; the read loop will see
-				// the same error and trigger reconnect. Nothing to do here.
 				return
 			}
 		}
 	}
 }
 
-// sendFrame marshals v and writes it to the WebSocket under wsMu. Returns an
-// error when the socket is not connected.
+// sendFrame marshals v and writes it to the WebSocket under wsMu.
 func (s *OpenCodeService) sendFrame(v any) error {
 	body, err := json.Marshal(v)
 	if err != nil {
@@ -224,7 +199,7 @@ func (s *OpenCodeService) sendFrame(v any) error {
 	return nil
 }
 
-// sleepCtx sleeps for d or until ctx is cancelled. Returns false if cancelled.
+// sleepCtx sleeps for d or until ctx is cancelled.
 func sleepCtx(ctx context.Context, d time.Duration) bool {
 	t := time.NewTimer(d)
 	defer t.Stop()

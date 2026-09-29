@@ -13,15 +13,8 @@ import (
 const gatewayRestartTimeout = 60 * time.Second
 
 // restartPicoclawGateway restarts the picoclaw systemd unit so the gateway fully
-// re-reads its workspace + config. Called after EnsureOnboarding rewrites an
-// OS-managed workspace block (SOUL/AGENTS/HEARTBEAT).
-//
-// We restart rather than hit the gateway's /reload endpoint: /reload needs a gateway
-// admin auth we don't hold (the pico channel token is rejected), and even when
-// reachable it is not confirmed to re-read the workspace markdown — a full restart
-// reliably does. The picoclaw gateway has no foreground-friendly `restart`
-// subcommand, so when systemctl is unavailable (non-root / dev box) we log and skip
-// rather than hard-fail.
+// re-reads its workspace + config.
+// Called after EnsureOnboarding rewrites an OS-managed workspace block (SOUL/AGENTS/HEARTBEAT).
 func restartPicoclawGateway() error {
 	ctx, cancel := context.WithTimeout(context.Background(), gatewayRestartTimeout)
 	defer cancel()

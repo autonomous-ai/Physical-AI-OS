@@ -16,7 +16,7 @@ def test_streamed_frames_match_whole_signal_resample_exactly():
     rs = StreamingResampler(16000, 24000)
     streamed = np.concatenate([rs.process(x[i:i + 320]) for i in range(0, len(x), 320)])
     n = len(streamed)
-    assert n == len(whole) - 64 * 24000 // 16000  # only the lookahead tail is still pending
+    assert n == len(whole) - 64 * 24000 // 16000
     assert np.max(np.abs(whole[:n] - streamed)) == 0.0
 
 

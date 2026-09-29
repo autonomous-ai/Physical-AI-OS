@@ -1,19 +1,9 @@
 #!/bin/bash
-# Standalone setup for Claude Desktop Buddy plugin on Raspberry Pi.
-# Run on Pi as root: bash setup-claude-desktop-buddy.sh
-#
-# Prerequisites: Pi4/Pi5 with Bluetooth, setup.sh already completed.
-# This script:
-#   1. Downloads buddy-plugin binary from OTA metadata
-#   2. Installs to /opt/claude-desktop-buddy/
-#   3. Creates systemd service (claude-desktop-buddy)
-#   4. Enables and starts the service
+# Install the Claude Desktop Buddy plugin as a systemd service (run as root after setup.sh).
+# Usage: bash setup-claude-desktop-buddy.sh
 set -euo pipefail
 
-# Metadata URL comes from the bootstrap worker config (single source of truth,
-# seeded by setup.sh). An explicit OTA_METADATA_URL env var still overrides it for
-# manual/debug runs. No compiled-in default — setup.sh is a prerequisite, so
-# /root/config/bootstrap.json already exists; if neither is set, abort.
+# Metadata URL from the bootstrap config; OTA_METADATA_URL env overrides. No default.
 BOOTSTRAP_JSON="/root/config/bootstrap.json"
 if [ -z "${OTA_METADATA_URL:-}" ]; then
   OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
@@ -49,9 +39,7 @@ retry() {
 
 ensure_root
 
-# ----------------------------------------------------------
-# 1. Ensure Bluetooth is available
-# ----------------------------------------------------------
+# 1. Bluetooth
 echo "[buddy] Checking Bluetooth..."
 if ! command -v bluetoothctl &>/dev/null; then
   echo "[buddy] Installing bluez..."
@@ -60,9 +48,7 @@ fi
 bluetoothctl power on 2>/dev/null || true
 echo "[buddy] Bluetooth OK"
 
-# ----------------------------------------------------------
-# 2. Fetch OTA metadata and extract buddy URL
-# ----------------------------------------------------------
+# 2. OTA metadata
 echo "[buddy] Fetching OTA metadata..."
 METADATA_TMP=$(mktemp)
 trap 'rm -f "$METADATA_TMP"' EXIT
@@ -80,9 +66,7 @@ fi
 echo "[buddy] Version: $BUDDY_VERSION"
 echo "[buddy] URL: $BUDDY_URL"
 
-# ----------------------------------------------------------
 # 3. Download and install
-# ----------------------------------------------------------
 echo "[buddy] Downloading..."
 ZIP_TMP=$(mktemp)
 DIR_TMP=$(mktemp -d)
@@ -92,7 +76,6 @@ rm -f "$ZIP_TMP"
 
 mkdir -p "$BUDDY_DIR"
 
-# Binary
 if [ -f "$DIR_TMP/buddy-plugin" ]; then
   cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin"
   chmod +x "$BUDDY_DIR/buddy-plugin"
@@ -102,20 +85,17 @@ else
   exit 1
 fi
 
-# Config (only copy if not already present — don't overwrite user config)
+# Don't overwrite an existing user config.
 if [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ]; then
   mkdir -p /root/config
   cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
 fi
 
-# Version file
 echo "$BUDDY_VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
 
 rm -rf "$DIR_TMP"
 
-# ----------------------------------------------------------
-# 4. Create systemd service
-# ----------------------------------------------------------
+# 4. systemd service
 echo "[buddy] Creating systemd service..."
 
 cat >/etc/systemd/system/claude-desktop-buddy.service <<EOF

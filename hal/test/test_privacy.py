@@ -42,7 +42,6 @@ def test_lock_restore_preserves_preferences(camera_disabled, speaker_muted):
     state.camera_capture.stop.assert_called_once()
     state.tts_service.stop.assert_called_once()
     state.music_service.stop.assert_called_once()
-    # Reconciliation must not overwrite the original preferences with the locks.
     privacy.apply(True, config())
     assert privacy.camera_before == camera_disabled
     assert privacy.speaker_before == speaker_muted
@@ -95,8 +94,7 @@ def test_prepare_does_not_change_intern_or_unconfigured_device(cfg):
 @pytest.mark.parametrize("sleep_owned_mute", [False, True])
 def test_startup_open_switch_preserves_restored_sleep(monkeypatch, extended, sleeping,
                                                      sleep_owned_mute):
-    # Exercise the real privacy overlay and unmute route. Mock only hardware,
-    # persistence and user feedback so a pipeline start cannot hide in a mock.
+    # Only hardware, persistence and feedback are mocked, so a pipeline start cannot hide.
     cfg = PrivacyButtonConfig(disable_camera_on_mute=extended,
                               mute_speaker_on_mute=extended)
     for key, value in {
@@ -209,7 +207,7 @@ def test_restart_privacy_overlay_does_not_restore_sleep_mute_after_wake(
         privacy.apply(False, config())
     state._wake_sleepy_peripherals()
     if not unlock_before_wake:
-        assert state._speaker_muted  # Hardware privacy still blocks output.
+        assert state._speaker_muted
         privacy.apply(False, config())
     assert state._speaker_muted is (not sleep_owned_mute)
     assert not state._sleepy_auto_muted_speaker
@@ -257,7 +255,6 @@ def test_direct_audio_consumers_respect_speaker_lock():
     from hal.drivers.voice.music_service import MusicService
     from hal.drivers.voice.tts.service import TTSService
     privacy.apply(True, config())
-    # Even if another caller changed the software flag, the hardware lock wins.
     state._speaker_muted = False
     assert TTSService._speaker_muted()
     player = MusicService.__new__(MusicService)
@@ -297,15 +294,13 @@ def test_scene_release_cannot_reopen_privacy_peripherals(monkeypatch):
 @pytest.mark.parametrize("camera_manual_override", [False, True])
 def test_scene_release_inside_privacy_lock_reopens_scene_muted_peripherals(
         monkeypatch, camera_manual_override):
-    """Scene mutes captured by the privacy lock must not survive scene off
-    (night → sleep → privacy press; device-observed 2026-09-17, lamp-0c89)."""
+    """Scene mutes captured by the privacy lock do not survive scene off."""
     from hal.routes import scene
     monkeypatch.setattr(state, "_active_scene", "night")
     monkeypatch.setattr(state, "animation_service", None)
     monkeypatch.setattr(state, "rgb_service", None)
     monkeypatch.setattr(state, "_save_user_led_state", mock.Mock())
     monkeypatch.setattr(scene, "_persist_scene", mock.Mock())
-    # Scene night: speaker + camera off; sleep did not own the speaker mute.
     state._speaker_muted = True
     state._camera_disabled = True
     state._camera_manual_override = camera_manual_override
@@ -313,10 +308,9 @@ def test_scene_release_inside_privacy_lock_reopens_scene_muted_peripherals(
     monkeypatch.setattr(state, "_sleepy_auto_muted_mic", False)
     privacy.apply(True, config())
     assert privacy.speaker_before is True and privacy.camera_before is True
-    # Wake runs scene off while the switch is still locked.
     state._wake_sleepy_peripherals()
     scene.deactivate_scene()
-    assert state._speaker_muted and state._camera_disabled  # lock still holds
+    assert state._speaker_muted and state._camera_disabled
     state.camera_capture.start.assert_not_called()
     state._save_boot_sidecar.assert_any_call(state._SPEAKER_STATE_PATH, {"muted": False})
     privacy.apply(False, config())

@@ -13,20 +13,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// kind:"chat.send" — start an agent turn from the backend, so a phone app can
-// hold the same conversation the web monitor's chat holds.
-//
-// Deliberately re-enters the device's OWN sensing endpoint over loopback rather
-// than calling the AgentGateway directly. That endpoint is where the describe-
-// first vision gate, the agent-busy queue fork, the web-chat run marking and the
-// flow logging all live (see system/server/sensing/delivery/http/handler.go);
-// reaching past it would mean a second copy of that logic, drifting from the
-// web chat this is supposed to mirror. Same reason the Hermes gateway hook POSTs
-// to /api/agent/channel-turn instead of reaching in.
-
-// chatSendTimeout bounds the loopback call. The endpoint returns as soon as the
-// agent turn is forwarded, or a local intent has completed. This covers the
-// describe-first gate on an attached image and bounded intent classification.
+// chatSendTimeout bounds the loopback call.
 const chatSendTimeout = 60 * time.Second
 
 var chatSendClient = &http.Client{Timeout: chatSendTimeout}
@@ -57,7 +44,6 @@ func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 		return h.publishDataResult(env.Kind, "failure", err.Error(), nil)
 	}
 
-	// Replay and track before acking; the deferred call discards failed sends.
 	if finishCapture != nil {
 		finishCapture(runID, data.SessionID)
 	}
@@ -73,9 +59,7 @@ func (h *DeviceMQTTHandler) handleChatSend(env domain.MQTTDataCommand) error {
 	})
 }
 
-// sensingRequest is the subset of the sensing endpoint's body this needs. Not
-// the endpoint's own struct: that lives in a package which would import back
-// into this one.
+// sensingRequest is the subset of the sensing endpoint's body this needs.
 type sensingRequest struct {
 	Type    string               `json:"type"`
 	Message string               `json:"message"`
@@ -97,13 +81,6 @@ type sensingReply struct {
 }
 
 func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (string, error) {
-	// "mqtt_chat" is a typed-chat type (sensingmsg.IsChat) — same behaviour as
-	// the monitor composer's "web_chat": TTS suppressed, no wake greeting /
-	// opening filler. It is a SEPARATE type only so the Monitor's turn flow can
-	// show which chat the turn came from; every gate treats the two alike.
-	// `speak` opts back into a spoken reply by sending the turn down the voice
-	// path instead — the same distinction the one-way chat hook bridge
-	// hardcodes to "voice".
 	evtType := "mqtt_chat"
 	if data.Speak {
 		evtType = "voice"
@@ -146,11 +123,8 @@ func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (
 		return "", fmt.Errorf("sensing rejected the turn: http %d", resp.StatusCode)
 	}
 	if reply.Data.RunID == "" && reply.Data.Handler == "local" && reply.Data.HandledLocally == "true" {
-		// Local intents finish before this POST returns, without an agent event.
 		reply.Data.RunID = reply.Data.LocalRunID
 		if reply.Data.RunID != "" && h.chatStream != nil {
-			// Capture and replay the final reply with the acknowledged session,
-			// including speak=true requests that entered through the voice path.
 			h.chatStream.handle(domain.MonitorEvent{
 				ID: reply.Data.RunID + "-final", Time: time.Now().UTC().Format(time.RFC3339Nano),
 				Type: "chat_response", RunID: reply.Data.RunID, State: "final",
@@ -160,8 +134,6 @@ func (h *DeviceMQTTHandler) forwardChatToSensing(data domain.MQTTChatSendData) (
 		}
 	}
 	if reply.Data.RunID == "" {
-		// Without a run id nothing can be correlated, so this is a failure even
-		// though the turn may well be running.
 		return "", fmt.Errorf("sensing returned no run id")
 	}
 	return reply.Data.RunID, nil

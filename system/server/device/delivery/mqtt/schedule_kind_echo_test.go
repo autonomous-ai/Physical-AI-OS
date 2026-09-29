@@ -6,11 +6,6 @@ import (
 	"go.autonomous.ai/os/system/schedule"
 )
 
-// The device's web UI seeds its editor from GET /api/schedule/list. When that
-// response omitted `kind`, every stored "speak" task reopened as "agent" — and
-// saving it back silently demoted it. These pin the echo on both paths a row
-// can reach the UI through.
-
 func TestToScheduleListItem_EchoesKind(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -19,9 +14,8 @@ func TestToScheduleListItem_EchoesKind(t *testing.T) {
 	}{
 		{"speak survives the round trip", schedule.KindSpeak, schedule.KindSpeak},
 		{"agent stays agent", schedule.KindAgent, schedule.KindAgent},
-		// Rows written before the field existed hold "". The runner already
-		// treats that as agent, so the UI must be told "agent" outright rather
-		// than left to infer it from a missing key.
+		// The runner already treats that as agent, so the UI must be told
+		// "agent" outright rather than left to infer it from a missing key.
 		{"empty normalises to agent", "", schedule.KindAgent},
 		{"unrecognised normalises to agent", "yodel", schedule.KindAgent},
 	} {

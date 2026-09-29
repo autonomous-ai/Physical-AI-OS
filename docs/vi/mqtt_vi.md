@@ -6,7 +6,7 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
 
 - Client: Eclipse Paho autopaho (Go)
 - Auto-reconnect khi mất kết nối
-- Client ID format: `device-{DeviceID}`
+- Client ID format: `os-server-{DeviceID}`
 
 ## Cấu Hình
 
@@ -39,6 +39,8 @@ OS server sử dụng MQTT để giao tiếp với backend server (báo cáo tr�
   ...payload fields
 }
 ```
+
+`ota` có hằng số nhưng không có case trong router; xem [`ota` — không được xử lý](#ota--không-được-xử-lý).
 
 ### `info` — Báo cáo thông tin thiết bị
 
@@ -361,6 +363,18 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `system.shutdown` | Xếp lịch shutdown OS qua HAL có cue và release servo | _(không)_ |
 | `system.ota_versions` | Version OTA từng component + những gì bootstrap đang cài (dữ liệu của card Versions trên web) | _(không)_ |
 | `system.software_update` | Cài ngay bản đã publish của một component (nút `update` của card Versions); phản hồi `success`/`started`, sau đó gửi báo cáo hoàn tất không cần yêu cầu | `target` (bắt buộc) |
+| `device.rename` | Ghi lại tên agent trong `IDENTITY.md` (wake word mới được WatchIdentity cập nhật theo); sau đó báo cho agent tên mới | `name` (bắt buộc) |
+| `device.soft_reset` | Xoá `config.json` và restart os-server về chế độ AP setup (không reboot, giữ firmware). Fire-and-forget: **không publish ack** | _(không có)_ |
+| `openclaw.setup` / `hermes.setup` / `picoclaw.setup` / `claudecode.setup` / `codex.setup` / `opencode.setup` | Đổi agentic backend sang runtime mà kind chỉ định (ack `starting`, rồi `success` khi readiness probe qua, hoặc `failure` sau khi rollback; mỗi ack lặp lại kind). os-server restart sau `success` | _(không có)_ |
+| `schedule.sync` | Thay toàn bộ danh sách tác vụ hẹn giờ (backend là nguồn chuẩn); ack `success` kèm `next_run_at` của từng schedule | `timezone`, `schedules[]` |
+| `schedule.run` | Chạy ngay một schedule đã lưu (không đổi nhịp và `next_run_at`); `failure` khi agent đang bận | `id` (bắt buộc) |
+| `schedule.mutate.ack` | Phán quyết của backend cho một đề xuất từ thiết bị; thiết bị bỏ intent đang xếp hàng khi nhận bất kỳ phán quyết cuối nào | `intent_id`, `applied`, `conflict`, tuỳ chọn `reason` |
+| `harness.pair.start` | Bắt đầu ghép đôi Harness; phản hồi thông tin ghép đôi (mã đang hiệu lực) | _(không có)_ |
+| `harness.status` | Trạng thái ghép đôi/kết nối Harness | _(không có)_ |
+| `harness.pair.cancel` | Huỷ lần ghép đôi Harness đang chờ; phản hồi `{cancelled:true}` | _(không có)_ |
+| `harness.pair.revoke` | Xoá ghép đôi Harness và tắt Harness-only voice; phản hồi `{unpaired:true}` | _(không có)_ |
+
+`schedule.mutate` chỉ là chiều **gửi ra** (publish trên `fd_channel`, không bao giờ nhận): khi người dùng tạo, sửa hoặc xoá tác vụ từ UI của chính thiết bị (`POST`/`PATCH`/`DELETE /api/schedule…`), thiết bị publish đề xuất `{intent_id, op, schedule_id?, base_rev?, schedule?}` và gửi lại cho tới khi nhận `schedule.mutate.ack`; `schedule.sync` kế tiếp mới là trạng thái thiết bị coi là chuẩn.
 
 `system.reboot` và `system.shutdown` publish `status:"starting"` trước khi
 thiết bị đặt lịch action, để backend nhận ACK trước lúc thiết bị rời mạng. Hai
@@ -1213,11 +1227,11 @@ client ID riêng duy nhất cho app (không dùng client ID của device). Subsc
 `buddy.pair.start` / `buddy.pair.revoke` hiện có lên `fa_channel`. Không cần sửa
 BFF. Cần kiểm chứng ACL và khả năng truy cập broker từ mạng mobile trên triển
 khai thật. Luồng phục vụ app foreground đang kết nối, không phải push notification
-khi app đã đóng. Xem [prompt bàn giao mobile](../buddy-mobile-handoff_vi.md).
+khi app đã đóng. Xem [prompt bàn giao mobile](buddy-mobile-handoff_vi.md).
 
-### `ota` — Trigger OTA update
+### `ota` — không được xử lý
 
-Xử lý bởi bootstrap worker, không qua MQTT handler trực tiếp.
+Router MQTT của os-server không có case `ota`: message bị log là `unknown command` rồi bỏ qua. OTA chạy theo lịch riêng của bootstrap worker; muốn cài ngay một component qua MQTT thì dùng `data` kind `system.software_update`.
 
 ## Code
 

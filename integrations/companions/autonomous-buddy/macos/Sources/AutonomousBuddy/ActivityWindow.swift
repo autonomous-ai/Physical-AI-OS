@@ -1,9 +1,6 @@
 import AppKit
 
-// Floating "tail -f" view of recent buddy commands. Renders the in-memory ring
-// buffer in AppState (newest at the bottom, terminal-style) and auto-scrolls
-// when the user is parked near the bottom. The full append-only history lives
-// on disk in AuditLog.fileURL — this window is just the live tail.
+// Floating live tail of recent buddy commands; full history lives in AuditLog.fileURL.
 final class ActivityWindowController: NSWindowController {
     private let scrollView = NSScrollView()
     private let textView = NSTextView()
@@ -142,8 +139,6 @@ final class ActivityWindowController: NSWindowController {
         }
         showWindow(nil)
         window?.makeKeyAndOrderFront(nil)
-        // Render once on show so a window that opens long after the last
-        // command still reflects current state.
         render()
         textView.scrollToEndOfDocument(nil)
     }

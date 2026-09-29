@@ -6,7 +6,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
 
 - Client: Eclipse Paho autopaho (Go)
 - Auto-reconnect on connection loss
-- Client ID format: `device-{DeviceID}`
+- Client ID format: `os-server-{DeviceID}`
 
 ## Configuration
 
@@ -39,6 +39,8 @@ The OS server uses MQTT to communicate with the backend server (status reporting
   ...payload fields
 }
 ```
+
+`ota` is a defined constant but has no router case; see [`ota` — not handled](#ota--not-handled).
 
 ### `info` — Report device information
 
@@ -372,6 +374,18 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `system.shutdown` | Queue HAL's cue- and servo-aware OS shutdown | _(none)_ |
 | `system.ota_versions` | Per-component OTA versions + what bootstrap is installing now (the web Versions card's data) | _(none)_ |
 | `system.software_update` | Force-install the published version of one component (the Versions card's `update` button); replies `success`/`started`, then an unsolicited completion report | `target` (required) |
+| `device.rename` | Rewrite the agent name in `IDENTITY.md` (new wake words follow via WatchIdentity); then tells the agent its new name | `name` (required) |
+| `device.soft_reset` | Delete `config.json` and restart os-server into AP setup mode (no reboot, firmware kept). Fire-and-forget: **no ack** is published | _(none)_ |
+| `openclaw.setup` / `hermes.setup` / `picoclaw.setup` / `claudecode.setup` / `codex.setup` / `opencode.setup` | Switch the agentic backend to the runtime the kind names (acks `starting`, then `success` after the readiness probe passes, or `failure` after rollback; each ack echoes the kind). os-server restarts after `success` | _(none)_ |
+| `schedule.sync` | Replace the whole scheduled-task list (backend is authoritative); acks `success` with each schedule's `next_run_at` | `timezone`, `schedules[]` |
+| `schedule.run` | Run one stored schedule now (cadence and `next_run_at` unchanged); `failure` when the agent is busy | `id` (required) |
+| `schedule.mutate.ack` | Backend verdict on one device proposal; the device drops the queued intent on any terminal verdict | `intent_id`, `applied`, `conflict`, optional `reason` |
+| `harness.pair.start` | Start Harness pairing; replies with the pairing info (live code) | _(none)_ |
+| `harness.status` | Harness pairing/connection status | _(none)_ |
+| `harness.pair.cancel` | Cancel a pending Harness pairing; replies `{cancelled:true}` | _(none)_ |
+| `harness.pair.revoke` | Remove the Harness pairing and turn Harness-only voice off; replies `{unpaired:true}` | _(none)_ |
+
+`schedule.mutate` is **outbound** only (published on `fd_channel`, never received): when the user creates, edits or deletes a task from the device's own UI (`POST`/`PATCH`/`DELETE /api/schedule…`), the device publishes a proposal `{intent_id, op, schedule_id?, base_rev?, schedule?}` and retries it until `schedule.mutate.ack` arrives; the next `schedule.sync` is what the device treats as truth.
 
 `system.reboot` and `system.shutdown` publish `status:"starting"` before the
 device schedules the action, so the backend receives an acknowledgement before
@@ -1250,11 +1264,11 @@ existing `buddy.pair.start` / `buddy.pair.revoke` commands on `fa_channel`. No B
 code change is required. ACL permissions and broker reachability from mobile
 networks must be verified against the real deployment. This supports a connected
 foreground app; it does not deliver mobile push notifications when the app is
-closed. See the [mobile handoff prompt](buddy-mobile-handoff_vi.md).
+closed. See the [mobile handoff prompt](vi/buddy-mobile-handoff_vi.md).
 
-### `ota` — Trigger OTA update
+### `ota` — not handled
 
-Handled by bootstrap worker, not through MQTT handler directly.
+There is no `ota` case in the os-server MQTT router: the message is logged as `unknown command` and ignored. OTA runs on the bootstrap worker's own schedule; to install one component now over MQTT use `data` kind `system.software_update`.
 
 ## Code
 

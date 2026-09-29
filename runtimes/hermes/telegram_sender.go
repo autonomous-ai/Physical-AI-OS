@@ -15,13 +15,10 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// telegramMaxMediaGroup is the upper bound imposed by Telegram's
-// sendMediaGroup endpoint.
+// telegramMaxMediaGroup is the upper bound imposed by Telegram's sendMediaGroup endpoint.
 const telegramMaxMediaGroup = 10
 
-// TelegramSender delivers messages via the Telegram Bot API. Identical wire
-// protocol to the openclaw implementation; the only behavioural difference is
-// that GetTelegramTargets() reads from the Device-owned store.
+// TelegramSender delivers messages via the Telegram Bot API.
 type TelegramSender struct {
 	svc *HermesService
 }

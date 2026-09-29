@@ -114,6 +114,6 @@ Chỉ Phase 0:
 2. Bind LAN + sửa systemd unit.
 3. Migrate route sang prefix `/v1/`.
 4. Commit OpenAPI spec (HAL tự sinh, OS server viết tay).
-5. Skeleton dev portal (`docs/dev/index.md` + `docs/vi/dev/index.md`).
+5. Skeleton dev portal (dự kiến `docs/dev/index.md` + `docs/vi/dev/index.md`; chưa được tạo).
 
 Kết quả: dev bên ngoài có thể `curl -H "Authorization: Bearer ..." http://lamp.local:5001/v1/servo/play` từ laptop. Mọi thứ khác xếp lên trên nền này.

@@ -9,8 +9,7 @@ import (
 	"os/exec"
 )
 
-// LookPath searches for the named executable in the PATH. It returns the full path
-// or an error if not found.
+// LookPath returns the full path of the named executable in PATH.
 func LookPath(name string) (string, error) {
 	return exec.LookPath(name)
 }
@@ -31,9 +30,7 @@ func WriteFile(path string, data []byte, perm os.FileMode) error {
 	return os.WriteFile(path, data, perm)
 }
 
-// CreateTempFile creates a new temporary file in dir with the given pattern.
-// It returns the path and a cleanup function that removes the file. The caller
-// must close the file if it was opened.
+// CreateTempFile creates a temp file in dir and returns its path and a cleanup func.
 func CreateTempFile(dir, pattern string) (path string, cleanup func(), err error) {
 	f, err := os.CreateTemp(dir, pattern)
 	if err != nil {
@@ -48,8 +45,7 @@ func CreateTempFile(dir, pattern string) (path string, cleanup func(), err error
 	return path, cleanup, nil
 }
 
-// CreateTempDir creates a new temporary directory in dir with the given pattern.
-// It returns the path and a cleanup function that removes the directory and its contents.
+// CreateTempDir creates a temp directory in dir and returns its path and a cleanup func.
 func CreateTempDir(dir, pattern string) (path string, cleanup func(), err error) {
 	path, err = os.MkdirTemp(dir, pattern)
 	if err != nil {
@@ -59,9 +55,7 @@ func CreateTempDir(dir, pattern string) (path string, cleanup func(), err error)
 	return path, cleanup, nil
 }
 
-// DownloadToTemp downloads url via client to a temporary file and returns its path
-// and a cleanup function. The client's context is not used; use the provided ctx
-// for the request.
+// DownloadToTemp downloads url with ctx into a temp file and returns its path and a cleanup func.
 func DownloadToTemp(ctx context.Context, client *http.Client, url string) (path string, cleanup func(), err error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {

@@ -26,8 +26,7 @@ type runResult struct {
 // childLoop is the respawn loop: spawn claude, enable resume for the next
 // spawn, flush queued stdin lines, pump stdout/stderr until EOF, then report
 // the exit (bridge.error when a turn was in flight) and respawn after the
-// backoff. Mirrors bridge.py run_forever. On ctx cancellation the running
-// child is killed via exec.CommandContext.
+// backoff.
 func (s *Server) childLoop(ctx context.Context) {
 	for ctx.Err() == nil {
 		env := s.loadChildEnv()
@@ -37,7 +36,7 @@ func (s *Server) childLoop(ctx context.Context) {
 		cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
 		cmd.Dir = s.cfg.Workspace
 		cmd.Env = envSlice(env)
-		// Own process group so a shutdown kill reaps claude AND its children.
+		// Own process group so a shutdown kill reaps claude and its children.
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Cancel = func() error {
 			if p := cmd.Process; p != nil {
@@ -68,20 +67,16 @@ func (s *Server) childLoop(ctx context.Context) {
 			continue
 		}
 		if err := cmd.Start(); err != nil {
-			// Covers the claude-binary-not-found case: log, back off, retry.
 			log.Printf("%s spawn claude failed: %v — retry in %s", logPrefix, err, s.cfg.RestartBackoff)
 			s.sleepBackoff(ctx)
 			continue
 		}
 
-		// Publish the child and flush the pending queue under stdinMu so no
-		// message.send line can jump ahead of the queued ones.
+		// Flush pending under stdinMu so no new line can jump ahead of queued ones.
 		s.stdinMu.Lock()
 		s.mu.Lock()
 		s.child = cmd
 		s.stdin = stdin
-		// From now on respawns resume the persisted session (a session.new
-		// before the NEXT spawn clears this again).
 		s.resumeNext = true
 		pending := s.pending
 		s.pending = nil
@@ -112,12 +107,7 @@ func (s *Server) childLoop(ctx context.Context) {
 		if rc != 0 && strings.TrimSpace(res.stderrTail) != "" {
 			log.Printf("%s stderr tail: %s", logPrefix, strings.TrimSpace(res.stderrTail))
 		}
-		// Self-heal a dead --resume: claude exits rc=1 with "No conversation
-		// found with session ID" when the persisted session was dropped from
-		// its store (storage wiped, workspace changed, session expired). Without
-		// clearing it, every respawn re-resumes the same dead id and the runtime
-		// bricks in a crash loop. Drop the stale session so the next spawn is
-		// fresh (--resume gated off), exactly like a session.new.
+		// A dead --resume id makes claude exit rc=1 on every respawn; drop it to avoid a crash loop.
 		if rc != 0 && strings.Contains(res.stderrTail, staleSessionMarker) {
 			log.Printf("%s stale session — dropping persisted session and respawning fresh", logPrefix)
 			s.clearStaleSession()
@@ -141,9 +131,6 @@ func (s *Server) sleepBackoff(ctx context.Context) {
 // buildArgv builds the persistent claude command line — EXACTLY the bridge.py
 // argv: --print --verbose, stream-json on both ends, and
 // --dangerously-skip-permissions (headless device, no TTY to approve tools).
-// --resume rides only when a session id is persisted and resume is enabled;
-// --channels tokens come from CLAUDECODE_CHANNELS in the merged child env
-// (whitespace-split, presync-owned).
 func (s *Server) buildArgv(env map[string]string) []string {
 	argv := []string{s.cfg.ClaudeBin, "--print", "--verbose",
 		"--input-format", "stream-json",
@@ -173,14 +160,11 @@ func (s *Server) loadChildEnv() map[string]string {
 		}
 	}
 	env["HOME"] = s.cfg.Home
-	// The device runs the bridge as root; claude refuses
-	// --dangerously-skip-permissions under uid 0 unless IS_SANDBOX=1 (the
-	// containerized-root escape hatch). The device is a dedicated appliance,
-	// which is exactly that case.
+	// claude refuses --dangerously-skip-permissions as root unless IS_SANDBOX=1.
 	env["IS_SANDBOX"] = "1"
 	data, err := os.ReadFile(s.cfg.EnvFile)
 	if err != nil {
-		return env // missing env file is fine (bridge.py behavior)
+		return env
 	}
 	for _, line := range strings.Split(string(data), "\n") {
 		line = strings.TrimSpace(line)
@@ -258,9 +242,7 @@ func (s *Server) sendUserMessage(payload turnPayload) {
 }
 
 // writeStdin writes one JSONL line to the child stdin; while the child is
-// down the line goes to the pending queue instead,
-// flushed on the next spawn. The blocking pipe write happens under stdinMu
-// only — never under mu (see the lock-order note on Server).
+// down the line is queued and flushed on the next spawn. Writes happen under stdinMu only.
 func (s *Server) writeStdin(line []byte) {
 	s.stdinMu.Lock()
 	defer s.stdinMu.Unlock()
@@ -274,8 +256,8 @@ func (s *Server) writeStdin(line []byte) {
 	s.writePipe(w, line)
 }
 
-// writePipe performs the actual pipe write (caller holds stdinMu). Once a write
-// is attempted, delivery is uncertain on error: never replay a desktop action.
+// writePipe performs the actual pipe write (caller holds stdinMu).
+// Once a write is attempted, delivery is uncertain on error: never replay a desktop action.
 func (s *Server) writePipe(w io.Writer, line []byte) {
 	buf := make([]byte, 0, len(line)+1)
 	buf = append(append(buf, line...), '\n')
@@ -295,9 +277,7 @@ func (s *Server) queuePending(line []byte) {
 const staleSessionMarker = "No conversation found with session ID"
 
 // clearStaleSession drops the persisted session after a failed --resume so the
-// next respawn starts fresh. Unlike newSession it does not signal the child
-// (already exited) and leaves resumeNext untouched — buildArgv's `sessionID !=
-// ""` gate alone suppresses --resume until a fresh session id is captured.
+// next respawn starts fresh.
 func (s *Server) clearStaleSession() {
 	s.mu.Lock()
 	s.sessionID = ""
@@ -381,8 +361,6 @@ func tail(s string, max int) string {
 	}
 	return s
 }
-
-// -- session persistence -----------------------------------------------------
 
 // loadSession reads the persisted session id (absent/corrupt file -> "").
 func (s *Server) loadSession() string {

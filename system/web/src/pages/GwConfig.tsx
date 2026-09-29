@@ -14,17 +14,13 @@ const C = {
 
 export default function GwConfig() {
   useDocumentTitle("GW Config");
-  // /api/agent/config-json is now loopback-only (audit local F5c) so the
-  // browser can't fetch it. The raw openclaw.json holds gateway auth tokens —
-  // shipping it over the wire is exactly what the audit closed. This page
-  // now reads the on-device file via SSH or `cat /root/.openclaw/config/openclaw.json`.
+  // config-json is loopback-only (it holds gateway tokens), so the browser cannot fetch it.
   const raw: string | null = null;
   const error: string = "GW config is no longer exposed via HTTP. SSH to the robot and read /root/.openclaw/config/openclaw.json — or use the Agent → Config view inside Monitor for the redacted summary.";
   const loading = false;
 
   return (
     <div style={{ minHeight: "100vh", background: C.bg, color: C.text, fontFamily: "monospace" }}>
-      {/* Topbar — hide back-link when embedded inside Monitor's iframe (window.top !== self). */}
       {window.top === window.self && (
         <div style={{
           display: "flex",
@@ -42,7 +38,6 @@ export default function GwConfig() {
         </div>
       )}
 
-      {/* Content */}
       <div style={{ padding: "24px 28px", maxWidth: 900 }}>
         {loading && (
           <div style={{ color: C.textMuted, fontSize: 13 }}>Loading...</div>

@@ -1,10 +1,4 @@
-"""Tests for the motion driver factory (hal/drivers/motors/factory.py).
-
-Pure logic, no hardware. Also parses the REAL committed robots/reachy-mini
-ROBOT.md to guard the declared driver name against drift, and AST-checks
-ReachyMotionService against the MotionService protocol (the reachy_mini SDK
-is not installed on dev machines, so the module can't be imported here).
-"""
+"""Tests for the motion driver factory (hal/drivers/motors/factory.py)."""
 import ast
 import os
 import unittest
@@ -13,7 +7,6 @@ from hal.board.device import extract_front_matter, parse_capabilities
 from hal.drivers.motors.factory import MOTION_DRIVERS, resolve_motion_class
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-# hal/test -> hal -> repo root
 DEVICES_DIR = os.path.normpath(os.path.join(HERE, "..", "..", "robots"))
 
 
@@ -24,7 +17,6 @@ class TestResolveMotionClass(unittest.TestCase):
         self.assertEqual(cls.__name__, "AnimationService")
 
     def test_absent_driver_defaults_to_feetech(self):
-        # Schema v1 compat: no driver declared → same class as explicit feetech.
         default_cls = resolve_motion_class(None, required=True)
         feetech_cls = resolve_motion_class("feetech", required=True)
         self.assertIs(default_cls, feetech_cls)
@@ -33,8 +25,8 @@ class TestResolveMotionClass(unittest.TestCase):
         with self.assertRaises(RuntimeError) as ctx:
             resolve_motion_class("no_such_driver", required=True)
         msg = str(ctx.exception)
-        self.assertIn("no_such_driver", msg)   # names the offending driver
-        self.assertIn("feetech", msg)          # lists the registered set
+        self.assertIn("no_such_driver", msg)
+        self.assertIn("feetech", msg)
 
     def test_unknown_driver_optional_returns_none(self):
         self.assertIsNone(resolve_motion_class("no_such_driver", required=False))
@@ -69,15 +61,12 @@ class TestReachyMiniDeclaration(unittest.TestCase):
         self.assertEqual(class_name, "ReachyMotionService")
 
     def test_reachy_sdk_resolves_or_degrades(self):
-        # On dev machines the reachy-mini package is absent → registered driver
-        # import fails → None (plan_mounts handles required); on-device it
-        # resolves to the class. Either way it must not raise.
+        # reachy-mini is absent on dev machines -> None; on-device it resolves. Never raises.
         cls = resolve_motion_class("reachy_sdk", required=True)
         if cls is not None:
             self.assertEqual(cls.__name__, "ReachyMotionService")
 
 
-# Method/property surface of the MotionService protocol (hal/drivers/motors/base.py).
 _PROTOCOL_MEMBERS = {
     "start", "stop", "is_connected",
     "dispatch", "get_available_recordings", "add_recording", "ensure_running",
@@ -121,7 +110,6 @@ class TestReachyServiceConformance(unittest.TestCase):
 class TestReachyMoveMap(unittest.TestCase):
     """Verify _MOVE_MAP covers every SERVO_* preset and targets valid HF moves."""
 
-    # All 81 moves in pollen-robotics/reachy-mini-emotions-library (fetched from HF).
     _HF_MOVES = {
         "amazed1", "anxiety1", "attentive1", "attentive2", "boredom1", "boredom2",
         "calming1", "cheerful1", "come1", "confused1", "contempt1", "curious1",
@@ -142,12 +130,10 @@ class TestReachyMoveMap(unittest.TestCase):
     def _get_move_map(self):
         """Load _MOVE_MAP via AST to avoid importing reachy_mini SDK."""
         import importlib
-        # hal.presets is importable on dev machines (no hardware deps).
         presets = importlib.import_module("hal.presets")
         path = os.path.join(HERE, "..", "drivers", "motors", "reachy_service.py")
         with open(path, encoding="utf-8") as f:
             source = f.read()
-        # Evaluate _MOVE_MAP with hal.presets constants available.
         tree = ast.parse(source)
         for node in ast.iter_child_nodes(tree):
             # _MOVE_MAP uses a type annotation → AnnAssign, not Assign.
@@ -167,9 +153,7 @@ class TestReachyMoveMap(unittest.TestCase):
             and isinstance(v, str)
         }
         unmapped = servo_names - set(move_map.keys())
-        # Allow recordings that are purely feetech concepts (tracking, test,
-        # fear, playful) to remain unmapped — they have no Reachy equivalent
-        # or are not dispatched via the emotion system.
+        # Feetech-only recordings with no Reachy equivalent may stay unmapped.
         acceptable_unmapped = {"tracking", "test"}
         real_missing = unmapped - acceptable_unmapped
         self.assertFalse(
@@ -196,14 +180,7 @@ if __name__ == "__main__":
 
 
 class TestShutdownTorquePolicy(unittest.TestCase):
-    """The shutdown path calls MotionService.stop(); that must not go limp.
-
-    server.py used to clear AnimationService's internals inline, which left
-    torque on. Switching to the contract's stop() brought robot.disconnect()
-    into the shutdown path for the first time, and lerobot's default there is
-    to cut torque — which on a lamp means the arm falls for the ~20s a HAL
-    restart takes. Dropping torque is release()'s job, on request.
-    """
+    """The shutdown path calls MotionService.stop(); that must not go limp."""
 
     def test_feetech_config_keeps_torque_on_disconnect(self):
         import ast

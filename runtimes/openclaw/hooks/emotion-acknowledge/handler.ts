@@ -6,10 +6,7 @@ const handler = async (event: any): Promise<void> => {
   const ctx = event.context;
   const text: string = ctx?.bodyForAgent ?? ctx?.body ?? "";
 
-  // Skip passive sensing — these events should not flip the lamp into
-  // "thinking" because the agent often decides NO_REPLY, which would leave
-  // the lamp stuck on "thinking" until the next event. Skill-driven emotion
-  // calls handle these paths when a real reaction is warranted.
+  // Skip passive sensing: a NO_REPLY would leave the lamp stuck on "thinking".
   if (!text.trim()) return;
   if (
     text.startsWith("[sensing:") ||
@@ -20,12 +17,7 @@ const handler = async (event: any): Promise<void> => {
     return;
   }
 
-  // Realtime agent already handled & spoke this turn. os-server replays it to
-  // the main agent (`voice_agent_handled`) ONLY to absorb memory/mood — TTS is
-  // suppressed and no real reply/emotion follows. Firing "thinking" here would
-  // leave the lamp stuck on the thinking face *after* the turn already finished
-  // (the POST lands a few hundred ms after the spoken reply, with nothing to
-  // overwrite it). The realtime path sets its own face via express_emotion.
+  // voice_agent_handled replays are silent; "thinking" would stick after the turn ended.
   if (text.includes("[HANDLED]")) return;
 
   const req = http.request({
@@ -36,8 +28,6 @@ const handler = async (event: any): Promise<void> => {
     headers: { "Content-Type": "application/json" },
   });
   req.on("error", () => {});
-  // TODO: differentiate emotion by context — "listening" when voice/mic input (user still speaking),
-  // "acknowledge" for quick command confirmations, "thinking" for text/processed messages (current default)
   req.write(JSON.stringify({ emotion: "thinking", intensity: 0.7 }));
   req.end();
 };

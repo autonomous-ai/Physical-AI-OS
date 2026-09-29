@@ -47,8 +47,6 @@ def test_provider_committed_while_hardware_cue_is_blocked(turn):
         try:
             assert entered.wait(2)
             realtime.commit_audio.assert_called_once_with()
-            # Hardware stays serialized with this turn's reply/clear: no late
-            # background thinking can repaint the device after TTS starts.
             tts.speak.assert_not_called()
             clear.assert_not_called()
         finally:

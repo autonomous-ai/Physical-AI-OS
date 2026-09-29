@@ -10,8 +10,7 @@ HAL_ROOT = Path(__file__).resolve().parents[1]
 
 
 def test_sending_is_off_without_an_endpoint(monkeypatch, caplog):
-    """No endpoint configured: nothing leaves the device — but the local log
-    still has it, which is the whole point of logging before sending."""
+    """With no endpoint nothing is sent, but the event is still logged locally."""
     monkeypatch.delenv(client.ENV_ANALYTICS_URL, raising=False)
     sent = []
     monkeypatch.setattr(client, "_ensure_worker", lambda: sent.append("worker"))
@@ -58,20 +57,11 @@ def test_a_configured_endpoint_lets_the_event_through(monkeypatch):
     assert started == [1]
 
 
-# --- hot swap ---------------------------------------------------------------
-
 def test_every_tts_construction_site_wires_the_playback_hooks():
-    """/voice/start hot-swaps TTSService when the provider or voice changes.
-    A site that forgets these keeps speaking while the metrics go blind, so every
-    construction site must pass the shared hooks.
-
-    Read as text rather than imported: importing hal.server initialises the
-    production logging directory."""
+    """Every TTSService construction site passes the shared metrics hooks."""
     sites = 0
     for path in (HAL_ROOT / "runtime.py", HAL_ROOT / "routes" / "voice.py"):
         src = path.read_text()
-        # `= TTSService(` only: VirtualTTSService is the simulator and plays
-        # no real audio, so it has nothing to report.
         for match in re.finditer(r"=\s*TTSService\((.*?)\n\s*\)", src, re.S):
             body = match.group(1)
             sites += 1
@@ -90,5 +80,5 @@ def test_hooks_never_raise_into_the_audio_path(monkeypatch):
     monkeypatch.setattr(voice_metrics, "playback_audio", boom)
     monkeypatch.setattr(voice_metrics, "playback_end", boom)
 
-    tts_hooks.on_playback_audio("run:x")   # must not raise
+    tts_hooks.on_playback_audio("run:x")
     tts_hooks.on_playback_done()

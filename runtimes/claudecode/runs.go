@@ -8,8 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// SetSessionKey stores the session id. Claude Code assigns it on its first inbound
-// frame (translateFrame captures it), so the read loop is the usual caller.
+// SetSessionKey stores the session id.
 func (s *ClaudeCodeService) SetSessionKey(key string) {
 	s.sessionUUID.Store(key)
 	slog.Info("session key stored", "component", "claudecode", "key", key)
@@ -154,8 +153,7 @@ func (s *ClaudeCodeService) ConsumeSilentRun(runID string) bool {
 }
 
 // markTelegramRun records a Telegram-originated turn (telegram_poll.go) so
-// emitFinal can DM the reply back to the originating chat. Mirrors codex'
-// markTelegramRun; entries with no chat id are unroutable and skipped.
+// emitFinal can DM the reply back to the originating chat.
 func (s *ClaudeCodeService) markTelegramRun(runID string, chatID string) {
 	if runID == "" || chatID == "" {
 		return
@@ -183,8 +181,8 @@ func (s *ClaudeCodeService) hasTelegramRun(runID string) bool {
 }
 
 // consumeTelegramRun is one-shot: returns the chat id for a Telegram-originated
-// run ("" when none) and removes the entry. Called by emitFinal (reply
-// routing) and handleError (leak prevention).
+// run ("" when none) and removes the entry.
+// Called by emitFinal (reply routing) and handleError (leak prevention).
 func (s *ClaudeCodeService) consumeTelegramRun(runID string) string {
 	s.telegramRunsMu.Lock()
 	chatID, ok := s.telegramRuns[runID]
@@ -199,8 +197,7 @@ func (s *ClaudeCodeService) consumeTelegramRun(runID string) string {
 }
 
 // markDiscordRun records a Discord-originated turn (discord.go) so emitFinal
-// can post the reply back to the originating channel. Mirrors codex'
-// markDiscordRun; entries with no channel id are unroutable and skipped.
+// can post the reply back to the originating channel.
 func (s *ClaudeCodeService) markDiscordRun(runID string, channelID string) {
 	if runID == "" || channelID == "" {
 		return
@@ -228,8 +225,8 @@ func (s *ClaudeCodeService) hasDiscordRun(runID string) bool {
 }
 
 // consumeDiscordRun is one-shot: returns the channel id for a Discord-
-// originated run ("" when none) and removes the entry. Called by emitFinal
-// (reply routing) and handleError (leak prevention).
+// originated run ("" when none) and removes the entry.
+// Called by emitFinal (reply routing) and handleError (leak prevention).
 func (s *ClaudeCodeService) consumeDiscordRun(runID string) string {
 	s.discordRunsMu.Lock()
 	channelID, ok := s.discordRuns[runID]
@@ -244,8 +241,7 @@ func (s *ClaudeCodeService) consumeDiscordRun(runID string) string {
 }
 
 // markSlackRun records a Slack-originated turn (slack.go) so emitFinal can
-// post the reply back to the originating channel/thread. Mirrors codex'
-// markSlackRun; entries with no channel are unroutable and skipped.
+// post the reply back to the originating channel/thread.
 func (s *ClaudeCodeService) markSlackRun(runID string, origin slackRun) {
 	if runID == "" || origin.channel == "" {
 		return
@@ -273,8 +269,9 @@ func (s *ClaudeCodeService) hasSlackRun(runID string) bool {
 }
 
 // consumeSlackRun is one-shot: returns the origin for a Slack-originated run
-// and removes the entry. Called by emitFinal (reply routing), handleError
-// (leak prevention) and DeliverSlackReply (safety net).
+// and removes the entry.
+// Called by emitFinal (reply routing), handleError (leak prevention) and DeliverSlackReply (safety
+// net).
 func (s *ClaudeCodeService) consumeSlackRun(runID string) (slackRun, bool) {
 	s.slackRunsMu.Lock()
 	o, ok := s.slackRuns[runID]

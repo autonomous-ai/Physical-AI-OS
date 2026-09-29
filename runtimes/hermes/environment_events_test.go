@@ -24,7 +24,6 @@ func TestEnvironmentQueueDropsExpiredOrSuppressed(t *testing.T) {
 			s := &HermesService{}
 			s.ready.Store(true)
 			s.pendingEvents = []pendingEvent{{eventType: "environment.update", msg: "PM changed", queuedAt: time.Now().Add(-tc.age)}}
-			// No transport is configured: attempting an agent send would fail this test.
 			s.DrainPendingEvents()
 			if len(s.pendingEvents) != 0 || s.inFlightStreams.Load() != 0 {
 				t.Fatal("environment event was not discarded")

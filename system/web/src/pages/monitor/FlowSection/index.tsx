@@ -18,35 +18,23 @@ import { PipelineModal } from "./PipelineModal";
 import { FiltersModal } from "./FiltersModal";
 import { UserAvatar } from "./UserAvatar";
 
-// Dev-only "Simulate Event" card, kept in the tree but disabled in the shipped
-// UI. Explicitly typed as `boolean` (not the literal `false`) so the JSX guard
-// below is not a constant expression.
+// Typed `boolean` (not literal `false`) so the JSX guard is not a constant expression.
 const SHOW_SIMULATE_CARD: boolean = false;
 
-// Flow/SSE event payloads arrive as free-form JSON from the device (os-server
-// flow log + agent stream), so their shape is not statically knowable here —
-// each read is a defensive optional-chain into an unmodelled wire object.
+// Free-form flow/SSE JSON from the device, read defensively.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type FlowEventDetail = Record<string, any>;
 
-// Category → turn types mapping
 const CAT_TYPES: Record<string, string[]> = {
   mic: ["voice", "voice_command", "voice_followup", "voice_agent_handled", "voice_command_handled", "voice_followup_handled", "sound", "speech_emotion", "speech_emotion.detected"],
   cam: ["motion", "motion.activity", "emotion.detected", "pose.ergo_risk", "presence.enter", "presence.leave", "presence.away", "light.level", "environment"],
   channel: ["telegram", "discord", "slack", "wechat", "channel"],
-  // Typed chat, either origin: monitor composer (web_chat) or MQTT chat.send
-  // from a phone app (mqtt_chat). Same category, separate sub-type chips.
   web: ["web_chat", "mqtt_chat"],
   cron: ["cron", "cron:music"],
   system: ["system", "schedule", "music.mood", "heartbeat"],
-  // Physical input from GPIO button / TTP223 touchpad / future remotes
-  // (button_actions.py). Currently only head_pat fires an agent event;
-  // single/triple/long press are local-only (listen cue / reboot /
-  // shutdown) and never POST to /sensing/event.
   button: ["touch.head_pat"],
 };
 
-// Preset sensing events for manual testing
 const FAKE_EVENTS: { label: string; type: string; message: string; color: string; tag: string }[] = [
   { label: "bật đèn",          type: "voice",       message: "bật đèn",                            color: "var(--lm-green)",  tag: "LOCAL"  },
   { label: "tắt đèn",          type: "voice",       message: "tắt đèn",                            color: "var(--lm-green)",  tag: "LOCAL"  },
@@ -64,20 +52,15 @@ export function FlowSection({
 }: {
   events: DisplayEvent[];
   onClearEvents: () => void;
-  // Debug mode is a header toggle (`?debug=true`), not a hidden URL param, so
-  // "debug-only" means one click away. Passed down from Monitor rather than
-  // re-parsed per turn card: window.location is not reactive, and a card must
-  // re-render the moment the toggle flips (#463).
+  // Passed down because window.location is not reactive (#463).
   isDebug: boolean;
 }) {
   const [showCanvas, setShowCanvas] = useState(false);
   const [showCompaction, setShowCompaction] = useState(false);
   const [compactionAt, setCompactionAt] = useState<{ at: string; label: string } | null>(null);
   const [selectedTurnId, setSelectedTurnId] = useState<string | null>(null);
-  // Mobile-only: opens the PipelineModal full-screen. Desktop hides the
-  // "View pipeline" button (CSS .lm-view-pipeline-btn) so this stays false.
   const [mobilePipelineOpen, setMobilePipelineOpen] = useState(false);
-  // Opt-out model: store what user has EXCLUDED. Empty = show all.
+  // Opt-out model: store excluded types; empty = show all.
   const [excludedTypes, setExcludedTypes] = useState<Set<string>>(() => {
     try {
       const saved = localStorage.getItem("os-excluded-types-v2");
@@ -85,8 +68,7 @@ export function FlowSection({
       const legacy = localStorage.getItem("os-excluded-types-v1");
       if (legacy) return migrateTurnTypeFilters(JSON.parse(legacy));
     } catch {
-      // Corrupt or unreadable saved filter: start with nothing excluded so the
-      // Flow view always renders, and the next save overwrites the bad value.
+      // Corrupt saved filter: start with nothing excluded.
     }
     return new Set();
   });
@@ -96,10 +78,6 @@ export function FlowSection({
   const [sortBy, setSortBy] = useState<"newest" | "oldest" | "time_desc" | "time_asc" | "tokens_desc" | "tokens_asc">("newest");
   const [filtersOpen, setFiltersOpen] = useState(false);
 
-  // Shared button styles for the Flow Panel toolbar. Pair these with the
-  // `.lm-u-btn` utility class (hover/focus/active states, theme-aware) so the
-  // toolbar matches the setup/settings buttons; the inline object only sets the
-  // size + the per-variant accent (amber primary, red danger).
   const flowGhostBtn = {
     fontSize: 11, padding: "4px 10px", borderRadius: 6,
     background: "transparent", border: "1px solid var(--lm-border)",
@@ -115,9 +93,6 @@ export function FlowSection({
     ...flowGhostBtn,
     border: "1px solid var(--lm-red)", color: "var(--lm-red)", fontWeight: 700,
   };
-  // Segmented group — a subtle pill that visually bundles related actions
-  // (Modals / Downloads / Danger). The shared background + inner padding
-  // reads as one control cluster instead of a flat row of equal buttons.
   const flowGroup = {
     display: "inline-flex", alignItems: "center", gap: 4,
     padding: 3, borderRadius: 9,
@@ -243,7 +218,6 @@ export function FlowSection({
     });
   };
 
-  // Reset every filter back to defaults (used by the modal footer).
   const resetAll = useCallback(() => {
     setSearchText(""); setFromTime(""); setToTime(""); setSortBy("newest");
     setExcludedTypes(() => { saveExcluded(new Set()); return new Set(); });
@@ -251,20 +225,7 @@ export function FlowSection({
 
   const turns = useMemo(() => groupIntoTurns(events), [events]);
 
-  // Live current user — polled from the device every 5s. Reading from turn
-  // events instead was stale: if the agent is busy and no motion/emotion event
-  // has streamed through, the last tagged turn can be minutes old and show the
-  // wrong person.
-  //
-  // This asks for the device-wide identity, not `/face/current-user`: the face
-  // endpoint is empty whenever nobody is in frame — and permanently empty on a
-  // device with no camera — so the chip stayed blank even right after
-  // speaker-ID recognized an enrolled user. HAL resolves face-then-voice, so
-  // the value is the face user whenever the camera has one.
-  //
-  // `user` is the normalized label ("long"), the same shape the face endpoint
-  // returned, which keeps the chip's `capitalize` + photo lookup working
-  // identically for both modalities.
+  // Polled live: turn events can be minutes stale.
   const [currentUser, setCurrentUser] = useState<string>("");
   const [currentUserSource, setCurrentUserSource] = useState<string>("");
   usePolling(async (signal) => {
@@ -275,10 +236,6 @@ export function FlowSection({
     setCurrentUserSource(typeof j?.source === "string" ? j.source : "");
   }, 5000);
 
-  // First enrolled photo per known user, so the header chip can show the real
-  // face avatar (name + photo) instead of the generic icon — same source the
-  // Users tab uses (`GET /face/owners`). Polled lazily at a slow cadence: the
-  // enrolled set rarely changes, and we only need it to map a name → filename.
   const [userPhotos, setUserPhotos] = useState<Record<string, string>>({});
   usePolling(async (signal) => {
     const r = await fetch(`${HW}/face/owners`, { signal });
@@ -291,16 +248,12 @@ export function FlowSection({
     setUserPhotos(map);
   }, 30_000, { timeoutMs: 8000 });
 
-  // Sub-types that actually appear in the current turns list
   const availableTypes = useMemo(() => {
     const seen = new Set<string>();
     for (const t of turns) seen.add(turnDisplayType(t));
     return [...seen];
   }, [turns]);
 
-  // Per-category enabled/partial state for the source quick-toggles. `active`:
-  // all of this category's available types are shown; `partial`: some shown.
-  // Hoisted here so the header chips and the modal chips read identically.
   const catAvailability = useCallback((cat: string) => {
     const catTypes = CAT_TYPES[cat] ?? [];
     const available = catTypes.filter((t) => availableTypes.includes(t));
@@ -309,8 +262,6 @@ export function FlowSection({
     return { active, partial };
   }, [availableTypes, excludedTypes]);
 
-  // Count of distinct active filter groups — drives the "Filters · N" badge on
-  // the header button and the "N active" pill in the modal header.
   const activeFilters = useMemo(() =>
     (searchText.trim() ? 1 : 0) +
     (fromTime || toTime ? 1 : 0) +
@@ -345,41 +296,26 @@ export function FlowSection({
     } else if (sortBy === "tokens_asc") {
       filtered.sort((a, b) => turnBilledTokens(a) - turnBilledTokens(b));
     }
-    // "newest" = default order from groupIntoTurns (newest first)
     return filtered;
   }, [turns, excludedTypes, fromTime, toTime, searchText, sortBy]);
-  // Detect adjacent turn pairs where one is a device-id turn that closed with
-  // chat_final_empty (OpenClaw closed stream · no message · no lifecycle) and
-  // the adjacent turn is an OpenClaw-assigned UUID with matching input text.
-  // Each pair gets a stable color (hashed from the device runId) so distinct
-  // pairs in view are visually distinguishable. Purely visual correlation —
-  // no semantic label.
   const pairTintMap = useMemo(() => {
     const map = new Map<string, string>();
     const PAIR_BGS = [
-      "rgba(167, 139, 250, 0.14)", // purple
-      "rgba(34, 211, 238, 0.14)",  // cyan
-      "rgba(244, 114, 182, 0.14)", // pink
-      "rgba(45, 212, 191, 0.14)",  // teal
-      "rgba(129, 140, 248, 0.14)", // indigo
-      "rgba(248, 113, 113, 0.12)", // soft red
-      "rgba(132, 204, 22, 0.14)",  // lime
-      "rgba(236, 72, 153, 0.12)",  // magenta
+      "rgba(167, 139, 250, 0.14)",
+      "rgba(34, 211, 238, 0.14)",
+      "rgba(244, 114, 182, 0.14)",
+      "rgba(45, 212, 191, 0.14)",
+      "rgba(129, 140, 248, 0.14)",
+      "rgba(248, 113, 113, 0.12)",
+      "rgba(132, 204, 22, 0.14)",
+      "rgba(236, 72, 153, 0.12)",
     ];
     const hashColor = (key: string) => {
       let h = 0;
       for (let i = 0; i < key.length; i++) h = ((h << 5) - h + key.charCodeAt(i)) | 0;
       return PAIR_BGS[Math.abs(h) % PAIR_BGS.length];
     };
-    // Inputs of the same logical message may differ between OS-server-side and
-    // OpenClaw-side because:
-    //   • OS-server log truncates chat_input message at 500 chars + "…" (see
-    //     service_chat.go:147) — UUID-side carries the full text.
-    //   • OS-server log keeps `[snapshot: /var/...]` paths in presence events
-    //     while OpenClaw refires with the snapshot stripped.
-    // So check substring containment either way (after stripping the
-    // sender prefix and trailing "…"). Guard with min length ≥32 to
-    // avoid coincidental short-string matches.
+    // OS-server and OpenClaw copies of one message can differ (truncation, stripped snapshots), so match loosely.
     const normalizeForMatch = (s: string) =>
       s.replace(/^\[[^\]]+\]\s*/, "").replace(/…\s*$/, "").trim();
     const isDeviceRun = (id: string) => id.startsWith("device-");
@@ -405,21 +341,14 @@ export function FlowSection({
         map.set(b.id, color);
         return true;
       };
-      // Try both orientations (a = device run, or b = device run); the second
-      // attempt only runs when the first found no pair — same as the previous
-      // `tryPair(a, b) || tryPair(b, a)` short-circuit.
       if (!tryPair(a, b)) tryPair(b, a);
     }
     return map;
   }, [filteredTurns]);
-  // When user explicitly selected a turn, keep it even if new events arrive.
-  // Only auto-select latest turn when nothing is selected.
   const selectedTurn = selectedTurnId
     ? (turns.find((t) => t.id === selectedTurnId) ?? turns.find((t) => t.runId === selectedTurnId))
     : filteredTurns[0];
 
-  // Render the shared execution from its original start; the selected card
-  // retains the follow-up's own input and result without duplicating events.
   let pipelineTurn = selectedTurn;
   const pipelineRunIds = new Set<string>();
   while (pipelineTurn?.mergedIntoRunId && !pipelineRunIds.has(pipelineTurn.mergedIntoRunId)) {
@@ -442,13 +371,7 @@ export function FlowSection({
     for (const flowNode of FLOW_NODES) {
       if (flowNode.triggers.includes(key)) visitedStages.add(flowNode.id);
     }
-    // tool_exec is the FlowStage anchor for the Event Pipeline rect (see
-    // FlowDiagram.tsx — its node circle is hidden, the rect is rendered in
-    // its place). Treat the pipeline as "visited" whenever any agent core
-    // stream event arrives — thinking / assistant deltas, lifecycle markers
-    // — so the agent_call → pipeline → response edges and the pipeline →
-    // hw_* edges light up correctly even on turns without explicit
-    // tool_call events.
+    // tool_exec anchors the Event Pipeline; mark it visited on any agent stream event.
     if (ev.type === "thinking" || ev.type === "assistant_delta") {
       visitedStages.add("tool_exec");
     }
@@ -463,7 +386,6 @@ export function FlowSection({
     }
   }
   for (const ev of turnEvents) {
-    // Detect sensing type from sensing_input, chat_send, or agent_call events
     const isSensingInput = ev.type === "sensing_input" ||
       (ev.type === "flow_enter" && ev.detail?.node === "sensing_input") ||
       (ev.type === "flow_event" && ev.detail?.node === "sensing_input");
@@ -474,8 +396,6 @@ export function FlowSection({
     const fromSensingAgentCall = (ev.type === "flow_event" && ev.detail?.node === "agent_call") &&
       (sensingType === "voice" || sensingType === "voice_command" || sensingType === "motion" || sensingType === "motion.activity" || sensingType === "emotion.detected" || sensingType === "speech_emotion.detected" || sensingType === "pose.ergo_risk" || sensingType === "sound");
     if (isSensingInput || fromSensingChatSend || fromSensingAgentCall) {
-      // Determine mic vs cam from sensing type or summary prefix.
-      // speech_emotion.detected is mic-sourced even though its label contains "emotion".
       let detectedType = sensingType;
       if (!detectedType && ev.summary) {
         detectedType = extractSensingType(ev.summary) ?? "";
@@ -488,7 +408,6 @@ export function FlowSection({
     }
   }
 
-  // HW nodes: light up when intent_match has hardware actions (local path → LED)
   if (visitedStages.has("local_match")) {
     const hasActions = turnEvents.some((ev) => {
       if (ev.type !== "intent_match" && !(ev.type === "flow_event" && ev.detail?.node === "intent_match")) return false;
@@ -499,13 +418,11 @@ export function FlowSection({
     if (hasActions) visitedStages.add("hw_led");
   }
 
-  // TTS suppressed/muted: mark TTS as visited so it shows red via nodeColor
   const hasTtsSuppressed = turnEvents.some((ev) =>
     ev.type === "flow_event" && ["tts_suppressed", "tts_muted", "tts_cancelled", "hw_cancelled"].includes((ev.detail as FlowEventDetail)?.node)
   );
   if (hasTtsSuppressed) visitedStages.add("tts_speak");
 
-  // CH OUT: only light up for channel turns with a real response (not no_reply)
   const CHANNEL_TYPES = new Set(["telegram", "discord", "slack", "wechat", "channel"]);
   if (selectedTurn && CHANNEL_TYPES.has(selectedTurn.type) && visitedStages.has("agent_response")) {
     const hasNoReply = turnEvents.some((ev) =>
@@ -517,11 +434,7 @@ export function FlowSection({
     }
   }
 
-  // Pipeline body — header (label + summary-prompt button + meta) + timing
-  // breakdown + FlowDiagram. Shared between the desktop inline render
-  // (wrapped in S.card inside .lm-flow-pipeline) and the mobile
-  // PipelineModal (full-screen overlay reached from the per-turn "View
-  // pipeline" button). Captured here so both call sites stay in sync.
+  // Pipeline body, shared by the desktop inline card and the mobile PipelineModal.
   const pipelineBody = (
     <>
       <div style={{ marginBottom: 10, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, flexWrap: "wrap" as const }}>
@@ -613,11 +526,6 @@ export function FlowSection({
         />
       )}
 
-      {/* Header card — neutral toolbar with one primary action (Canvas)
-          and one destructive (Clear). Actions are bundled into segmented
-          groups (Modals / Downloads / Danger) so the eye reads clusters,
-          not a flat row; the meaningful color (amber primary, red danger)
-          stays the only saturated fill. */}
       <div
         id="FLOW_TOPBAR" data-region="FLOW_TOPBAR"
         style={{
@@ -628,9 +536,6 @@ export function FlowSection({
       >
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap" as const, gap: 10 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" as const }}>
-            {/* Brand mark — hexagon glyph + wordmark + live pulse dot.
-                The dot pulses teal while events stream; reuses the shared
-                lm-pulse-dot keyframe (respects prefers-reduced-motion). */}
             <span style={{ display: "inline-flex", alignItems: "center", gap: 8 }}>
               <span
                 aria-hidden
@@ -694,8 +599,6 @@ export function FlowSection({
           </div>
 
           <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 8, alignItems: "center" }}>
-            {/* Group 1 · Views — Canvas is the primary visual entry, Summary
-                is a deep-dive button next to it. */}
             <div style={flowGroup}>
               <button
                 onClick={() => setShowCompaction(true)}
@@ -716,7 +619,6 @@ export function FlowSection({
               ><LayoutDashboard size={13} strokeWidth={2} /> Canvas</button>
             </div>
 
-            {/* Group 2 · Downloads */}
             <div style={flowGroup}>
               <button
                 type="button"
@@ -734,7 +636,6 @@ export function FlowSection({
               ><CalendarDays size={13} strokeWidth={2} /> Full day</a>
             </div>
 
-            {/* Group 3 · Destructive */}
             <button
               onClick={clearServerFlowLog}
               title="Clear server flow log + Agent debug logs"
@@ -745,7 +646,6 @@ export function FlowSection({
         </div>
       </div>
 
-      {/* Simulate card — hidden for now */}
       {SHOW_SIMULATE_CARD && window.location.hostname === "localhost" && (
         <div style={{ ...S.card, padding: "10px 14px" }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 10 }}>
@@ -778,12 +678,8 @@ export function FlowSection({
         </div>
       )}
 
-      {/* Flow diagram + turn list */}
       <div id="FLOW_BODY" data-region="FLOW_BODY" className="lm-flow-layout" style={{ display: "flex", gap: 14, flex: 1, minHeight: 0 }}>
 
-        {/* Turn history list. Width is driven by the `.lm-flow-turns` CSS class
-            (clamps wider on big screens so the dense IN/REPLY text is readable,
-            and the canvas keeps less dead space) rather than a fixed inline px. */}
         <div id="FLOW_LEFTBAR" data-region="FLOW_LEFTBAR" className="lm-flow-turns" style={{
           ...S.card,
           flexShrink: 0,
@@ -794,10 +690,6 @@ export function FlowSection({
           overflow: "hidden",
         }}>
           <div id="FLOW_LEFTBAR_HEADER" data-region="FLOW_LEFTBAR_HEADER" className="lm-flow-turns-header" style={{ padding: "10px 12px 8px", borderBottom: "1px solid var(--lm-border)" }}>
-            {/* Title + count + filters toggle.
-                Primary row stays compact: identity (Turns N/M) + a single
-                toggle that reveals advanced filters. Avoids the 6-row
-                tall header that earlier crowded the list area. */}
             <div style={{ display: "flex", alignItems: "center", marginBottom: 6, gap: 6 }}>
               <span style={{ ...S.cardLabel, marginBottom: 0 }}>Turns</span>
               {(() => {
@@ -836,9 +728,6 @@ export function FlowSection({
               </button>
             </div>
 
-            {/* Search — always visible (most common quick-filter), with a quick
-                clear. The full filter set (sources, sort, sub-types, time range)
-                lives in the Filters modal opened from the button above. */}
             <div style={{ position: "relative" }}>
               <Search
                 size={13}
@@ -898,10 +787,6 @@ export function FlowSection({
                       display: "flex", alignItems: "center", gap: 8, padding: "6px 4px", margin: "2px 0",
                     }}>
                       <div className="lm-flow-session-rule" />
-                      {/* Idle-gap divider (>60s between turns). Labelled with the
-                          actual gap — the old "session" wording read as an
-                          OpenClaw session boundary, which it is not. List is
-                          newest-first, so the gap is prev(newer).start − curr.end. */}
                       <span style={{
                         fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
                         textTransform: "uppercase" as const,
@@ -949,10 +834,6 @@ export function FlowSection({
           </div>
         </div>
 
-        {/* Center: flow diagram. Hidden on mobile via .lm-flow-pipeline CSS —
-            users reach it through the "View pipeline" button on each
-            TurnBadge, which opens PipelineModal full-screen with the same
-            pipelineBody content. */}
         <div id="FLOW_CANVAS" data-region="FLOW_CANVAS" className="lm-flow-pipeline" style={{ flex: 1, minWidth: 0, display: "flex", flexDirection: "column", gap: 12, minHeight: 0 }}>
           <div id="FLOW_PIPELINE" data-region="FLOW_PIPELINE" style={{ ...S.card, flex: 1, minHeight: 0, overflow: "hidden", display: "flex", flexDirection: "column" }}>
             {pipelineBody}

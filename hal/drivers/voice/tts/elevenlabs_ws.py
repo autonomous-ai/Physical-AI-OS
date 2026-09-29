@@ -1,7 +1,6 @@
-"""ElevenLabs v4 Turbo over Text to Dialogue WebSocket.
+"""ElevenLabs v4 Turbo TTS over the Text to Dialogue WebSocket (HAL_TTS_ELEVENLABS_WS=true).
 
-Selected by HAL_TTS_ELEVENLABS_WS=true. Calls reuse one registered voice session, flushing each sentence separately.
-Interrupted streams discard their socket so stale audio cannot reach a later turn.
+Interrupted streams drop their socket so stale audio cannot leak into a later turn.
 The proxy must relay Text to Dialogue; the legacy TTS WS route is incompatible.
 """
 
@@ -24,14 +23,12 @@ logger = logging.getLogger("hal.voice.tts")
 
 
 class ElevenLabsWSTTSBackend(TTSBackend):
-    """ElevenLabs TTS over the stream-input WebSocket. Same output as the HTTP
-    backend: raw PCM int16, 24 kHz mono, volume_boost 1.0."""
+    """ElevenLabs TTS over the Text to Dialogue WebSocket; raw PCM int16, 24 kHz mono."""
 
     supports_synthesis_cancellation = True
     DEFAULT_MODEL = ElevenLabsTTSBackend.DEFAULT_MODEL
     cache_revision = "v4-turbo-dialogue-ws-local-tempo-v1"
     ELEVENLABS_PATH = ElevenLabsTTSBackend.ELEVENLABS_PATH
-    # Reuse the HTTP backend's name→voice_id table so saved voices resolve identically.
     VOICE_IDS = ElevenLabsTTSBackend.VOICE_IDS
 
     def __init__(self, api_key: str, base_url: Optional[str] = None):

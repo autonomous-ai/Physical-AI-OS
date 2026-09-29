@@ -3,8 +3,7 @@ package codex
 import "testing"
 
 // The rotation net keys on the CONTEXT size codex reports (input + cached),
-// not on the totalTokens the shared handler passes. Numbers are device-observed
-// on lamp-0c89 (2026-08-24) — see the threshold comment in rotation.go.
+// not on the totalTokens the shared handler passes.
 func TestShouldRotateSessionKeysOnContext(t *testing.T) {
 	cases := []struct {
 		name          string
@@ -13,8 +12,6 @@ func TestShouldRotateSessionKeysOnContext(t *testing.T) {
 	}{
 		{"idle sensing turn", 38_718, false},
 		{"largest healthy sensing turn", 116_587, false},
-		// Device-observed 2026-09-10: 134k already took 100 seconds and the
-		// next resumed turns expanded to 376k then 473k.
 		{"latency cliff", 134_366, true},
 		{"runaway thread", 300_000, true},
 	}

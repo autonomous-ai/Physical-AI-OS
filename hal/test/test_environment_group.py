@@ -164,7 +164,6 @@ def test_disabled_components_never_open_hardware(tmp_path, monkeypatch, name):
 def test_replacement_preserves_schema_and_does_not_fabricate_gas_indices():
     values = {key: 10 for key in COMPONENTS["sen63c"].measurements}
     values.update(timestamp=100)
-    # Even stray driver keys cannot add measurements absent from its binding.
     values["voc_index"] = 999
     old = EnvironmentGroup({"sen55": component(values), "scd41": component(values)}).snapshot()
     new = EnvironmentGroup({"sen63c": component(values)}).snapshot()

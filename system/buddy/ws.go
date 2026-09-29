@@ -7,10 +7,8 @@ import (
 	"github.com/gorilla/websocket"
 )
 
-// RunReadLoop blocks reading from the buddy's WebSocket, routing each incoming
-// response (matched by `id`) to the corresponding Dispatch caller. Returns
-// when the connection closes for any reason. Caller is expected to invoke this
-// in a goroutine after RegisterConnection.
+// RunReadLoop routes buddy responses (by `id`) to Dispatch callers until the
+// connection closes. Run it in a goroutine after RegisterConnection.
 func (s *Service) RunReadLoop(conn *websocket.Conn, buddyID string, agentHandlers ...func(AgentEvent)) {
 	defer func() {
 		s.clearConnection(conn)

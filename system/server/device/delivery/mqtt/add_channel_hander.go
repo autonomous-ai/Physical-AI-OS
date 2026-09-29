@@ -16,10 +16,8 @@ import (
 // Each char is two vertical QR pixels: '█'=both '▀'=top '▄'=bottom ' '=neither.
 const pairingQRFormat = "unicode_blocks_2x1"
 
-// addChannelTimeout caps the whole add_channel call (incl. streaming pairing).
-// Budget: ~90s plugin install + 90s QR-scan window + 5min Baileys post-pair
-// sync + slack. Set above the sum of those caps so a slow but successful
-// flow can't be cut short.
+// addChannelTimeout caps the whole add_channel call (incl. streaming
+// pairing).
 const addChannelTimeout = 10 * time.Minute
 
 func (h *DeviceMQTTHandler) publishAddChannelResult(channel, status, errMsg string, evt *domain.PairingEvent) error {
@@ -41,10 +39,7 @@ func (h *DeviceMQTTHandler) publishAddChannelResult(channel, status, errMsg stri
 }
 
 // handleAddChannel handles the legacy top-level cmd:"add_channel" message
-// (config carried inline on MQTT). Kept for backward compatibility; the
-// preferred path is the data-envelope form (see handleAddChannelData) which
-// supports the privacy-typed fetch flow so credentials never travel inline
-// over MQTT.
+// (config carried inline on MQTT).
 func (h *DeviceMQTTHandler) handleAddChannel(cmd domain.MQTTMessage) error {
 	var req domain.MQTTAddChannelCommand
 	if err := json.Unmarshal(cmd.Raw(), &req); err != nil {
@@ -54,17 +49,11 @@ func (h *DeviceMQTTHandler) handleAddChannel(cmd domain.MQTTMessage) error {
 	return h.processAddChannel(req)
 }
 
-// handleAddChannelData handles the cmd:"data" kind:"add_channel" form, whose
-// {channel, config} payload arrives in env.Data — inline, or fetched over TLS
-// when the backend sent it as a type:"privacy" envelope (see
-// privacy_fetch.go). Routing through dispatchData means privacy support is
-// automatic; the core logic is shared with the legacy handler via
-// processAddChannel.
+// handleAddChannelData handles the cmd:"data" kind:"add_channel" form (inline
+// or privacy-fetched env.Data).
 func (h *DeviceMQTTHandler) handleAddChannelData(env domain.MQTTDataCommand) error {
 	// Metadata only — env.Data carries channel credentials (bot tokens,
-	// BlueBubbles password) so raw bytes must never hit journalctl. The
-	// parsed shape below is safer: channel name + config_keys is enough
-	// to diagnose a key-name mismatch without exposing the values.
+	// BlueBubbles password) so raw bytes must never hit journalctl.
 	slog.Info("add_channel data envelope received",
 		"component", "mqtt",
 		"kind", env.Kind,
@@ -78,11 +67,6 @@ func (h *DeviceMQTTHandler) handleAddChannelData(env domain.MQTTDataCommand) err
 			slog.Error("add_channel (data): invalid payload", "component", "mqtt", "error", err)
 			return h.publishAddChannelResult(req.Channel, "failure", "invalid JSON payload", nil)
 		}
-		// Tolerate the alternate shape where the channel config rides under
-		// "data" instead of "config". If "config" is absent/empty, fall back
-		// to "data" so either {channel, config:{…}} or {channel, data:{…}}
-		// is accepted — matches the intern v1 behaviour ported from
-		// openclaw-lobster's handleAddChannelData.
 		if len(req.Config) == 0 {
 			var alt struct {
 				Data map[string]interface{} `json:"data"`
@@ -107,9 +91,8 @@ func (h *DeviceMQTTHandler) handleAddChannelData(env domain.MQTTDataCommand) err
 }
 
 // processAddChannel is the shared add-channel logic for both the legacy
-// cmd:"add_channel" form and the cmd:"data" kind:"add_channel" form
-// (inline or privacy-fetched). Kept as a single implementation so a bug fix
-// or new channel case only needs to land once.
+// cmd:"add_channel" form and the cmd:"data" kind:"add_channel" form (inline
+// or privacy-fetched).
 func (h *DeviceMQTTHandler) processAddChannel(req domain.MQTTAddChannelCommand) error {
 	channelReq := req.ToRequest()
 	if err := validator.New().Struct(channelReq); err != nil {
@@ -124,8 +107,6 @@ func (h *DeviceMQTTHandler) processAddChannel(req domain.MQTTAddChannelCommand) 
 
 	events, err := h.deviceService.AddChannel(ctx, channelReq)
 	if err != nil {
-		// Map the shared sentinel to a stable code so the backend can branch
-		// without parsing free-form text (mirrors channel.refresh_config).
 		errMsg := err.Error()
 		if errors.Is(err, device.ErrChannelNotSupported) {
 			errMsg = "channel_not_supported"
@@ -141,12 +122,10 @@ func (h *DeviceMQTTHandler) processAddChannel(req domain.MQTTAddChannelCommand) 
 		return h.publishAddChannelResult(req.Channel, "success", "", nil)
 	}
 
-	// WhatsApp streams pairing events. Publish one fd_channel message per event.
 	for evt := range events {
 		status := string(evt.Status)
 		if pubErr := h.publishAddChannelResult(req.Channel, status, evt.Error, &evt); pubErr != nil {
 			slog.Error("add_channel: publish event failed", "component", "mqtt", "status", status, "error", pubErr)
-			// Keep draining so the goroutine in PairWhatsapp can exit cleanly.
 		}
 		h.alertPairingTerminal("add_channel "+req.Channel, evt)
 	}

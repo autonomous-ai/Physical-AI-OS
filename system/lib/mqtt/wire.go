@@ -2,8 +2,7 @@ package mqtt
 
 import "github.com/google/wire"
 
-// ProviderSet exposes the MQTT client provider for Wire.
-// ProvideClient builds *MQTT from Config (caller must provide Config, e.g. from server config).
+// ProviderSet exposes the MQTT factory and client providers for Wire.
 var ProviderSet = wire.NewSet(
 	ProvideFactory,
 	ProvideClient,

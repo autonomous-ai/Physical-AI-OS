@@ -1,16 +1,4 @@
-"""An LED restore repaints the strip. It must not move the body (#314).
-
-`_restore_user_led()` is called after almost every emotion, at every TTS end, at
-music end, on mic unmute, 3.0s after an STT session opens, and on a rejected
-wake-word turn. While a scene was the saved LED state it spawned a
-`restore-aim-<dir>` thread on each of those, and `aim_servo` honours nothing but
-the sleep lock — so it killed the running recording mid-frame and parked the
-head as `__aim_hold__` for 5 seconds. That read to users as "the lamp yanks its
-head back when it starts listening".
-
-Any thread started from the scene branch is the aim: the branch stops effects
-and dispatches a solid colour, neither of which spawns one.
-"""
+"""An LED restore repaints the strip. It must not move the body (#314)."""
 
 from unittest import mock
 
@@ -59,12 +47,7 @@ def test_a_scene_restore_starts_no_thread(quiet_strip, monkeypatch):
 
 
 def test_a_scene_restore_reaches_the_end_of_its_branch(quiet_strip, monkeypatch, caplog):
-    """The repaint must happen because the branch ran, not because it threw.
-
-    Without this, deleting the aim and crashing before it would look identical
-    to test_a_scene_restore_starts_no_thread: the whole body sits in a
-    `try/except Exception` that logs "LED restore failed" and swallows it.
-    """
+    """The repaint must happen because the branch ran, not because it threw."""
     scene, _preset = _a_scene_with_an_aim()
     monkeypatch.setattr(
         app_state, "_user_led_state", {"type": LST_SCENE, "scene": scene}, raising=False
@@ -89,8 +72,6 @@ def test_a_scene_restore_still_repaints_the_strip(quiet_strip, monkeypatch):
 
 
 def test_a_solid_restore_is_untouched(quiet_strip, monkeypatch):
-    # The repaint path is the point of the function; proving it intact keeps
-    # this from being a test that only says "nothing happens".
     monkeypatch.setattr(
         app_state, "_user_led_state", {"type": LST_SOLID, "color": [10, 20, 30]}, raising=False
     )

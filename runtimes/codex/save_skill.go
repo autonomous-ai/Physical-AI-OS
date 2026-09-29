@@ -7,15 +7,9 @@ import (
 	"go.autonomous.ai/os/system/skills"
 )
 
-// Skill authoring / installing / listing for Codex. Mirrors
-// runtimes/openclaw/save_skill.go — the rendering, extraction and tree walk are
-// shared in system/skills; only the target directory differs per backend.
-//
-// That directory is codex's native discovery root (`~/.codex/skills`), the same tree
-// migrateSkillsToCodexHome moves legacy workspace skills into.
-//
-// The runtime is NOT restarted for any of these: Codex discovers skills per
-// session, the same contract the skill watcher relies on.
+// Skill authoring / installing / listing for Codex.
+// The runtime is NOT restarted for any of these: Codex discovers skills per session, the same
+// contract the skill watcher relies on.
 
 // SaveSkill writes a user-authored skill as <name>/SKILL.md.
 func (s *CodexService) SaveSkill(draft domain.SkillDraft) (string, error) {

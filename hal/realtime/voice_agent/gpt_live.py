@@ -1,52 +1,9 @@
-"""GPT-Live (OpenAI `/v1/live`, `gpt-live-1`) voice agent — queue-based threading, sync.
+"""GPT-Live (OpenAI `/v1/live`, `gpt-live-1`) voice agent: queue-based threading, sync.
 
-GPT-Live is NOT the Realtime API. It is a full-duplex model behind a different
-WebSocket (`client.live.connect()`, `session.start` → `session.started`) whose
-wire has none of the things the VoiceAgentBase contract was built around, so
-this adapter SYNTHESIZES them and says so in each place:
-
-  - No turn boundary (no `response.done` / `turn_complete`), and output audio
-    is streamed CONTINUOUSLY, silence included (device-measured 2026-09-17:
-    ~100 ms deltas for the whole session, speech-level for the reply only). So
-    silent deltas are dropped at the door (`output_silence_dbfs`) and a reply
-    is over when no SPEECH-level audio or transcript has arrived for
-    `turn_gap_ms`; a watchdog thread fires the TurnDoneEvent. A burst that
-    never carried a transcript is a backchannel, not an answer. See
-    `_on_output` / `_fire_boundary`.
-  - No VAD events, no interruption event. User speech is observed ONLY through
-    `session.input_transcript.delta` fragments (so `UserSpeechOutput` never
-    carries a VAD `endpoint_at`). A fragment arriving while the model is
-    speaking marks a barge-in candidate; if the model then falls silent for
-    `interrupt_gap_ms` the reply counts as interrupted (queue drained,
-    `InterruptedOutput(server_interrupt)`), if it keeps talking it was a
-    backchannel. See `_on_input_transcript` / `_on_output`.
-  - No tools at the Live layer. Two delegation modes (`GPTLiveConfig.delegation`):
-      * CLIENT: when the model decides the request needs the backend it emits
-        `session.delegation.created` (metadata only), which this adapter turns
-        into the `delegate_to_main` FunctionCallOutput the orchestrator already
-        handles; the task text is the accumulated input transcript.
-      * RESPONSES (default when `web_search` is on): an OpenAI-hosted Responses
-        backend does the delegated work with `web_search` for live facts and
-        calls OUR `delegate_to_main` function for anything that needs the
-        device. Its calls arrive wrapped in `response.event` and are answered
-        with `response.item.create` + `response.create`; Live hands it the
-        conversation context itself, so nothing is reconstructed here.
-    `express_emotion`, `reject_turn`, `end_conversation` and `look` cannot exist
-    on this provider and are ignored with one log line each.
-  - Feedback to the model goes through `session.thinking.append` (silent
-    context, ≤500 tokens): the delegate ack, `[TURN CONTEXT]`, and the main
-    agent's spoken reply (`[TTS HISTORY]`, which also closes the pending
-    delegation).
-  - Billing is per session-minute ($0.05/min, billed per second), not per token:
-    `session.usage.updated` lines go to gptlive_usage.log. An OPEN idle session
-    costs money — the orchestrator parks (closes) it after
-    REALTIME_GPTLIVE_IDLE_PARK_S of inactivity and reconnects on the next turn.
-
-Wire: the same base URL as OpenAI Realtime (`<llm_base_url>/ws/openai` through
-the campaign-api proxy) — the SDK appends `/live/sessions` to it, so the proxy
-serves `…/ws/openai/realtime` for the Realtime API and `…/ws/openai/live/sessions`
-for this one. Until the proxy route exists the connect 404s and the reconnect
-backoff (2 s → 60 s) keeps retrying; nothing else needs to change when it lands.
+Not the Realtime API: no turn boundary, VAD or tool events, so this adapter synthesizes them.
+Output streams continuously (silence included); a reply ends after `turn_gap_ms` without speech.
+Delegation: CLIENT (session.delegation.created) or RESPONSES (hosted backend + web_search).
+Billed per session-minute, so the orchestrator parks idle sessions.
 """
 
 import json
@@ -88,55 +45,38 @@ from hal.realtime.utils import base64_pcm16_to_float32, float32_to_base64_pcm16
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
 logger = logging.getLogger(__name__)
-# Per-session usage lines → gptlive_usage.log (child logger configured in
-# server_support/log_setup.py with propagate=False).
 usage_logger = logging.getLogger("hal.realtime.usage.gptlive")
 
-# developers.openai.com/api/docs/models/gpt-live-1 (verified 2026-09-16): voice
-# sessions are $0.05 per minute, billed per second; backend work is separate.
+# $0.05 per session-minute, billed per second (verified 2026-09-16).
 _GPTLIVE_USD_PER_MINUTE: float = 0.05
 
-# The only orchestrator tool this provider can honour. Everything else in the
-# tool list is a Realtime-API function tool; GPT-Live has no Live-layer tools.
+# The only orchestrator tool GPT-Live can honour (no Live-layer tools).
 DELEGATE_TOOL_NAME: str = "delegate_to_main"
 
-# Client event_id prefixes stamped on our own commands. A server `error` that
-# names one of them means a command of OURS was rejected (over-long context,
-# audio before session.started, …) — log it and carry on. Only an error with
-# no client id, or one on session.start, means the session itself is broken.
+# A server error naming one of these ids rejected one of OUR commands; the session is fine.
 _EVT_START: str = "hal-start"
 _EVT_AUDIO: str = "hal-audio"
 _EVT_SILENCE: str = "hal-silence"
 _EVT_CONTEXT: str = "hal-context"
 _EVT_DELEGATION: str = "hal-delegation"
 
-# `session.*.append` content is capped at 500 tokens by the API; clip by chars
-# (≈3.5 chars/token for mixed English/Vietnamese) rather than let the append be
-# rejected outright and lose the whole context line.
+# API caps appends at 500 tokens (~3.5 chars/token); clip rather than be rejected.
 _APPEND_MAX_CHARS: int = 1600
 # Bound on remembered delegations so a session where the main agent never
 # answers cannot grow the map without limit.
 _MAX_PENDING_DELEGATIONS: int = 8
 _BACKEND_PROMPT_PATH = RESOURCES_DIR / "system_prompt_gptlive_backend.md"
-# What the Responses backend gets back for a delegated call. The device speaks
-# the main agent's answer itself (HAL TTS), so the backend must not answer too.
+# The device speaks the main agent's answer itself, so the backend must not answer too.
 _BACKEND_DELEGATED_OUTPUT: str = json.dumps({
     "result": "delegated",
     "note": "The device will speak the main agent's answer aloud itself. Do not "
             "answer the request; reply with at most a two-word acknowledgment.",
 })
-# A delegation can land before the sentence is complete in the transcript (BFF
-# integration doc §6). Forward it only once the input transcript has been quiet
-# for this long, so "turn off" is not handed to the main agent while "the light"
-# is still on its way. The hard cap is `delegation_wait_ms`.
+# Forward a delegation only once the input transcript is quiet (hard cap `delegation_wait_ms`).
 _DELEGATION_SETTLE_S: float = 0.25
-# Instructions are capped at 16,384 tokens by the API; warn well before a
-# session.start would be rejected for it (≈3.5 chars/token).
+# API caps instructions at 16,384 tokens (~3.5 chars/token).
 _INSTRUCTIONS_WARN_CHARS: int = 50_000
-# BFF close codes that mean "do not hammer the relay" (integration doc §8):
-# 4001 no key, 4002 GPT-Live not configured on this BFF, 4029 device over its
-# usage limit. The session is not coming back until config/limits change, so the
-# reconnect backoff jumps straight to its ceiling instead of ramping 2 s → 60 s.
+# 4001 no key, 4002 not configured, 4029 over limit: backoff jumps straight to its ceiling.
 _NO_RETRY_CLOSE_CODES: dict[int, str] = {
     4001: "no API key on the upgrade (device lobster key missing)",
     4002: "GPT-Live is not configured on this BFF",
@@ -149,23 +89,12 @@ def _clip(text: str) -> str:
 
 
 def _public_key(owner: str) -> str:
-    """The user-turn key as the consumer sees it. The adapter needs an input key
-    internally in both modes (reply attribution, boundaries), but like the other
-    providers it only PUBLISHES one in live mode; the turn path never reads it."""
+    """The user-turn key as published to the consumer (live mode only)."""
     return owner if app_config.LIVE_MODE else ""
 
 
 class GPTLiveAgent(VoiceAgentBase):
-    """GPT-Live provider (`realtime.provider = gptlive`).
-
-    Base-class hooks left at their defaults, with the reason:
-      - `end_turn()` no-op: there is no `_turn_done` gate here — nothing waits
-        for a provider turn end before the next send (no `response.create`).
-      - `requires_fresh_session` False: a delegation the client never answers
-        does not make the session refuse input (unlike Gemini's 1008).
-      - `output_sample_rate` == `sample_rate`: a Live WebSocket has ONE PCM
-        format for both directions.
-    """
+    """GPT-Live provider (`realtime.provider = gptlive`)."""
 
     def __init__(
         self,
@@ -179,17 +108,13 @@ class GPTLiveAgent(VoiceAgentBase):
             client_kwargs["base_url"] = config.base_url
         self._client: OpenAI = OpenAI(**client_kwargs)
         self._connection: LiveConnection | None = None
-        # Serializes connection swaps and writes across the send/recv threads;
-        # the blocking recv iteration runs outside it on a snapshot.
+        # The blocking recv iteration runs outside this lock on a snapshot.
         self._conn_lock: threading.RLock = threading.RLock()
-        # Turn/ownership state is touched by the recv thread AND the boundary
-        # watchdog, so it has its own lock.
+        # Touched by the recv thread AND the boundary watchdog.
         self._state_lock: threading.RLock = threading.RLock()
-        # Set by the recv loop on `session.started`; sends wait for it because
-        # a command before that is rejected by the server.
+        # A command before `session.started` is rejected by the server.
         self._session_started: threading.Event = threading.Event()
-        # Set on `session.closed`: a graceful close keeps reading until it lands
-        # so the relay can confirm the final usage (BFF integration doc §7).
+        # A graceful close keeps reading until this lands so the relay confirms final usage.
         self._session_closed: threading.Event = threading.Event()
         self._session_id: str = ""
         self._request_id: str = ""
@@ -204,7 +129,6 @@ class GPTLiveAgent(VoiceAgentBase):
         self._interrupt_gap_s: float = config.interrupt_gap_ms / 1000.0
         self._input_gap_ms: int = config.input_gap_ms
         self._delegation_wait_s: float = config.delegation_wait_ms / 1000.0
-        # --- turn state (guarded by _state_lock) ---
         self._turn_gen: int = 0
         self._live_user_turn_id: str = ""
         self._live_speech_emitted: bool = False
@@ -226,13 +150,10 @@ class GPTLiveAgent(VoiceAgentBase):
         # Responses mode: function calls the backend made that we still owe a
         # result (call_id → delegation_id).
         self._pending_function_calls: dict[str, str] = {}
-        # Delegations the backend is still working on (delegation_id → owner).
-        # While one is in flight for an input, whatever the model says is a
-        # filler ("Mmm.", "let me check") — not the answer to that input.
+        # While a delegation is in flight, model speech for that input is a filler, not the answer.
         self._backend_busy: dict[str, str] = {}
         self._usage_seconds: float = 0.0
         self._usage_ratio: float | None = None
-        # --- boundary watchdog ---
         self._watchdog_stop: threading.Event = threading.Event()
         self._watchdog_thread: threading.Thread | None = None
         self._warned: set[str] = set()
@@ -251,8 +172,6 @@ class GPTLiveAgent(VoiceAgentBase):
     def sample_rate(self) -> int:
         return self._config.sample_rate
 
-    # --- Session config ---
-
     def _build_session(self) -> dict[str, Any]:
         """The `session.start` payload (`openai.types.live.SessionConfig`)."""
         if len(self._config.instructions) > _INSTRUCTIONS_WARN_CHARS:
@@ -263,9 +182,6 @@ class GPTLiveAgent(VoiceAgentBase):
             )
         return {
             "model": self._config.model,
-            # Frontend prompt: voice, silence/interruption policy, WHEN to hand
-            # off (system_prompt_gptlive.md). Business rules live in the main
-            # agent, which is the backend here.
             "instructions": self._config.instructions,
             "audio": {
                 # One format for both directions; only 16000 / 24000 Hz PCM.
@@ -276,13 +192,7 @@ class GPTLiveAgent(VoiceAgentBase):
         }
 
     def _delegation_config(self) -> dict[str, Any]:
-        """Who does the delegated work (immutable for the session).
-
-        Client: the model emits session.delegation.created and THIS process
-        (→ the main agent) does the work. Responses: an OpenAI-hosted backend
-        with `web_search` for live facts, plus our delegate_to_main as a
-        function tool so device work still reaches the main agent.
-        """
+        """Who does the delegated work (client vs hosted Responses backend); immutable per session."""
         if not self._config.responses_mode:
             return {"type": "client"}
         tools: list[dict[str, Any]] = []
@@ -318,8 +228,6 @@ class GPTLiveAgent(VoiceAgentBase):
             template = "Do the delegated task and return a short spoken result in {language}."
         return template.replace("{language}", name)
 
-    # --- Sync internals ---
-
     def _reset_turn_state(self) -> None:
         with self._state_lock:
             self._live_user_turn_id = ""
@@ -347,8 +255,7 @@ class GPTLiveAgent(VoiceAgentBase):
         self._session_started.clear()
         self._session_closed.clear()
         self._session_id = ""
-        # Correlation id: the BFF prefixes every usage row of the session with
-        # it (`<id>:voice-N`), so this log line joins lobster_usage to HAL's log.
+        # The BFF prefixes usage rows with this id, joining its usage to HAL's log.
         self._request_id = "hal-" + uuid4().hex[:12]
         logger.info(
             "Connecting to GPT-Live (base_url=%s, model=%s, x-request-id=%s)",
@@ -356,9 +263,7 @@ class GPTLiveAgent(VoiceAgentBase):
             self._config.model,
             self._request_id,
         )
-        # No on_reconnecting → the SDK never reconnects on its own; the
-        # send/recv loops below own recovery (backoff, fail-fast) like the
-        # other providers.
+        # No on_reconnecting: the SDK never reconnects; the loops own recovery.
         conn: LiveConnection = self._client.live.connect(
             extra_headers={"x-request-id": self._request_id},
         ).enter()
@@ -371,11 +276,7 @@ class GPTLiveAgent(VoiceAgentBase):
         logger.info("[realtime] GPT-Live session.start sent (voice=%s)", self._config.voice)
 
     def _sync_disconnect(self, *, wait_closed: bool = False) -> None:
-        """Close the session. `wait_closed` keeps the socket open until the
-        server's `session.closed` lands (or `close_timeout_s`), which is what
-        lets the relay confirm the final usage instead of billing from its own
-        clock. Only the owner-side teardown may wait: the recv thread itself
-        (reconnect path) is the one that would have to read that event."""
+        """Close the session; `wait_closed` waits for `session.closed` so the relay confirms final usage."""
         conn = self._connection
         self._connection = None
         self._session_started.clear()
@@ -383,8 +284,6 @@ class GPTLiveAgent(VoiceAgentBase):
             return
         logger.info("[realtime] Disconnecting from GPT-Live (usage so far %.1fs)", self._usage_seconds)
         try:
-            # Graceful: the server finalizes and answers session.closed with
-            # the final usage before the socket goes.
             conn.session.close()
             if wait_closed and self._session_started_once and not self._session_closed.wait(
                 timeout=self._config.close_timeout_s
@@ -426,24 +325,14 @@ class GPTLiveAgent(VoiceAgentBase):
             elif isinstance(input, TextInput):
                 self._send_context(conn, input.text)
             elif isinstance(input, ImageInput):
-                # Image input is unsupported by gpt-live-1 (model card). `look`
-                # is registered for Gemini only, so this is a stray frame.
                 self._warn_once("image", "[realtime] GPT-Live has no image input — frame dropped")
             elif isinstance(input, FunctionCallResultInput):
                 self._send_delegation_result(conn, input)
 
     def _send_context(self, conn: LiveConnection, text: str) -> None:
-        """Context injection → `session.thinking.append` (silent).
-
-        `[TTS HISTORY] …` is the main agent's spoken reply to a delegated
-        request: it is attached to the newest pending delegation, which closes
-        it, so the model knows the user has been answered and by whom. Other
-        context (`[TURN CONTEXT]`, speaker corrections) is general session
-        context (delegation_id=null).
-        """
+        """Context injection via silent `session.thinking.append`; `[TTS HISTORY]` closes the newest delegation."""
         delegation_id: str | None = None
-        # Non-null delegation ids are rejected with Responses delegation: there
-        # the backend owns the task and context is session-wide only.
+        # Non-null delegation ids are rejected in Responses mode.
         if text.startswith("[TTS HISTORY") and not self._config.responses_mode:
             with self._state_lock:
                 if self._pending_delegations:
@@ -454,13 +343,7 @@ class GPTLiveAgent(VoiceAgentBase):
         )
 
     def _send_delegation_result(self, conn: LiveConnection, result: FunctionCallResultInput) -> None:
-        """The orchestrator's tool result for a delegation → silent context.
-
-        `{"result": "delegated"}` means the main agent owns the request and will
-        speak its own reply through the device; the model must neither answer
-        it nor announce the handoff again. Anything else is a failed handoff
-        (e.g. an empty message), so the model gets to answer directly.
-        """
+        """The orchestrator's delegation result as silent context (`delegated` = main agent answers)."""
         did = result.call_id
         try:
             parsed: Any = json.loads(result.output)
@@ -470,9 +353,6 @@ class GPTLiveAgent(VoiceAgentBase):
         with self._state_lock:
             backend_call = self._pending_function_calls.pop(did, None)
         if backend_call is not None:
-            # A function call the Responses backend made: hand the result back
-            # and let the backend finish its turn (Live speaks whatever it
-            # says — the note keeps that to an acknowledgment).
             conn.response.item.create(
                 item={
                     "type": "function_call_output",
@@ -488,8 +368,6 @@ class GPTLiveAgent(VoiceAgentBase):
             if known and not delegated:
                 del self._pending_delegations[did]
         if not known:
-            # An ack for a tool this provider never emitted (express_emotion,
-            # reject_turn, …) — nothing on the wire to answer.
             logger.debug("[realtime] Ignoring result for unknown call %s", did)
             return
         if delegated:
@@ -506,10 +384,7 @@ class GPTLiveAgent(VoiceAgentBase):
         conn.session.thinking.append(content=content, delegation_id=did, event_id=_EVT_DELEGATION)
 
     def _sync_commit(self) -> None:
-        """End of a client-bracketed turn (turn path). Live has no commit: the
-        model decides when the user is done. Append a short silence so it can
-        hear the utterance is over instead of waiting for room noise to tell it;
-        in LIVE mode the microphone keeps streaming and nothing is needed."""
+        """End of a client-bracketed turn: append short silence (Live has no commit)."""
         with self._state_lock:
             self._awaiting_reply = True
         if app_config.LIVE_MODE or self._config.commit_silence_ms <= 0:
@@ -526,11 +401,8 @@ class GPTLiveAgent(VoiceAgentBase):
                 event_id=_EVT_SILENCE,
             )
 
-    # --- Live-mode input ownership ---
-
     def _observe_user_speech(self, *, transcript: str = "", transcript_finished: bool = False) -> None:
-        """Publish one input key. Never carries a VAD endpoint: GPT-Live sends
-        no speech_started/stopped, so `method` is always provider_transcript."""
+        """Publish one input key (never a VAD endpoint: method is provider_transcript)."""
         if not app_config.LIVE_MODE:
             return
         with self._state_lock:
@@ -557,9 +429,7 @@ class GPTLiveAgent(VoiceAgentBase):
         ))
 
     def _on_input_transcript(self, delta: str, start_ms: int | None, end_ms: int | None) -> None:
-        """A fragment of what the user said. Decides whether it opens a NEW input
-        turn, and whether it lands on top of a reply in progress (barge-in
-        candidate — see `_on_output` / `_fire_boundary` for the verdict)."""
+        """A user transcript fragment: may open a new input turn or mark a barge-in candidate."""
         now = time.monotonic()
         with self._state_lock:
             gap_new = (
@@ -568,9 +438,7 @@ class GPTLiveAgent(VoiceAgentBase):
             )
             new_turn = not self._live_user_turn_id or self._input_answered or gap_new
             if self._output_active:
-                # The user is talking while the model speaks. Whether that is a
-                # barge-in or a backchannel is decided by what the model does
-                # next (stops → interrupted, keeps going → backchannel).
+                # Barge-in vs backchannel is decided by what the model does next.
                 if not self._overlap_pending:
                     self._overlap_pending = True
                     self._overlap_at = now
@@ -590,14 +458,11 @@ class GPTLiveAgent(VoiceAgentBase):
             logger.info("[realtime] <<< user said: %r", delta)
         self._observe_user_speech(transcript=delta)
 
-    # --- Output / turn boundary ---
-
     def _on_output(self, *, audio: str | None = None, text: str | None = None) -> None:
         pcm = None
         if audio is not None:
             pcm = base64_pcm16_to_float32(audio)
-            # The stream carries silence between and around replies; a silent
-            # delta is neither playback material nor evidence of speaking.
+            # The stream carries silence; a silent delta is neither playback nor speaking evidence.
             rms_db = 20 * np.log10(float(np.sqrt(np.mean(pcm * pcm))) + 1e-9) if len(pcm) else -200.0
             if rms_db < self._config.output_silence_dbfs:
                 with self._state_lock:
@@ -608,8 +473,6 @@ class GPTLiveAgent(VoiceAgentBase):
         finished_only = False
         with self._state_lock:
             if not self._output_active:
-                # A new reply burst is a new generation, owned by the input it
-                # answers (or by nobody, for an unsolicited remark).
                 self._output_active = True
                 self._turn_gen += 1
                 self._output_transcript_chunks = 0
@@ -622,18 +485,12 @@ class GPTLiveAgent(VoiceAgentBase):
             if text is not None and self._output_transcript_chunks == 0 and (
                 self._response_user_turn_id and not self._input_answered
             ):
-                # First WORDS of the reply: the input is complete and answered.
-                # (Audio alone can be a backchannel, so this waits for text.)
+                # Audio alone can be a backchannel, so "answered" waits for text.
                 self._input_answered = True
                 finished_only = True
             if self._overlap_pending and now - self._overlap_at > self._interrupt_gap_s:
-                # The model kept talking well past the user's words: backchannel.
                 self._overlap_pending = False
-            # Silence is measured from the LAST speech-level output either way.
-            # While the overlap is still pending the window is the short one —
-            # the model stopping within it is the interruption — but continuous
-            # output keeps pushing the deadline, so a model that talks straight
-            # through the user's words is never cut off by us.
+            # Silence is measured from the last speech-level output; continuous talk keeps pushing the deadline.
             self._boundary_deadline = now + (
                 self._interrupt_gap_s if self._overlap_pending else self._turn_gap_s
             )
@@ -657,30 +514,21 @@ class GPTLiveAgent(VoiceAgentBase):
             self._recv_queue.put(OutputEvent(gen=gen, output=AudioOutput(user_turn_id=owner, audio=pcm)))
         if text is not None:
             if chunk_index == 0:
-                # First words of a reply: reset the live TTS queue so this reply
-                # never plays behind a stale one (same as the other providers).
+                # Reset the live TTS queue so this reply never plays behind a stale one.
                 self._recv_queue.put(OutputEvent(
                     gen=gen, output=InterruptedOutput(reason="output_reset", user_turn_id=owner),
                 ))
             self._recv_queue.put(OutputEvent(gen=gen, output=TextOutput(text=text, user_turn_id=owner)))
 
     def _fire_boundary(self, *, reason: str = "gap") -> bool:
-        """Synthesize the provider turn end the wire never sends.
-
-        Called by the watchdog when output has been quiet for `turn_gap_ms`
-        (or `interrupt_gap_ms` after the user spoke over the reply), and by
-        `_fail_fast_turn` on a transport error. Returns True when a reply was
-        actually closed.
-        """
+        """Synthesize the provider turn end the wire never sends; True if a reply was closed."""
         with self._state_lock:
             if not self._output_active:
                 self._boundary_deadline = None
                 return False
             owner = self._response_user_turn_id
             interrupted = self._overlap_pending
-            # Words spoken while the backend is still working on this input
-            # are a filler, not its answer: the key stays open for the reply
-            # that follows the backend's result.
+            # Speech while the backend works on this input is a filler; keep the key open.
             filler = bool(owner) and owner in self._backend_busy.values()
             spoke = self._output_transcript_chunks > 0 and not filler
             dropped = self._silent_deltas_dropped
@@ -691,13 +539,10 @@ class GPTLiveAgent(VoiceAgentBase):
             self._output_transcript_chunks = 0
             self._silent_deltas_dropped = 0
             if owner and spoke and self._live_user_turn_id == owner:
-                # This input has been answered; a later unsolicited remark must
-                # not be attributed to it.
                 self._live_user_turn_id = ""
                 self._live_speech_emitted = False
             elif owner and not spoke and self._live_user_turn_id == owner:
-                # Audio without words (a backchannel, a breath): the question is
-                # still open and the next words will belong to it.
+                # Audio without words: the question is still open.
                 self._input_answered = False
         if interrupted:
             self._drain_for_interrupt(_public_key(owner))
@@ -712,9 +557,7 @@ class GPTLiveAgent(VoiceAgentBase):
         return True
 
     def _drain_for_interrupt(self, owner: str) -> None:
-        """The model yielded to the user: drop what is still queued from the
-        abandoned reply, keep input metadata and completion evidence, bump the
-        generation and announce the interruption (same shape as gemini_live)."""
+        """Drop the abandoned reply's queue, bump the generation and announce the interruption."""
         dropped = 0
         metadata: list[OutputEvent] = []
         while True:
@@ -749,20 +592,9 @@ class GPTLiveAgent(VoiceAgentBase):
             ))
         logger.info("[realtime] Reply interrupted by the user — dropped %d queued output(s), gen=%d", dropped, gen)
 
-    # --- Delegation ---
-
     def _on_delegation(self, delegation_id: str, target: str) -> None:
-        """`session.delegation.created` → the orchestrator's `delegate_to_main`.
-
-        The event carries no task text; the request is the input transcript
-        accumulated for the current user turn. If transcription has not caught
-        up yet (empty), the forward is deferred up to `delegation_wait_ms` and
-        flushed by the watchdog — see `_flush_deferred_delegation`.
-        """
+        """`session.delegation.created` -> `delegate_to_main`, using the input transcript as the task text."""
         if target != "client":
-            # The Responses backend has the task; what comes back arrives as
-            # response.event envelopes (function calls, usage) — see
-            # _on_backend_event. Nothing to reconstruct here.
             with self._state_lock:
                 self._backend_busy[delegation_id] = self._live_user_turn_id or self._response_user_turn_id
                 while len(self._backend_busy) > _MAX_PENDING_DELEGATIONS:
@@ -774,10 +606,7 @@ class GPTLiveAgent(VoiceAgentBase):
             self._pending_delegations[delegation_id] = owner
             while len(self._pending_delegations) > _MAX_PENDING_DELEGATIONS:
                 del self._pending_delegations[next(iter(self._pending_delegations))]
-            # Never forward straight away: the transcript of the sentence that
-            # triggered this may still be arriving. The watchdog forwards once
-            # the input has been quiet for _DELEGATION_SETTLE_S, or at the hard
-            # deadline whatever has been heard so far.
+            # Never forward immediately: the triggering sentence may still be transcribing.
             self._deferred_delegation = (delegation_id, owner, time.monotonic() + self._delegation_wait_s)
             have = len(self._user_transcript.strip())
         logger.info("[realtime] Delegation %s — settling the transcript (%d chars so far, up to %.0fms)",
@@ -865,13 +694,8 @@ class GPTLiveAgent(VoiceAgentBase):
         elif ntype == "error":
             logger.warning("[realtime] GPT-Live backend error: %s", nested.get("error") or nested)
 
-    # --- Receive ---
-
     def _pump_events(self, conn: LiveConnection) -> bool:
-        """Read events until the connection closes. Returns False on a clean
-        close (the caller fail-fasts any reply in flight and reconnects); raises
-        GPTLiveError on a fatal server error. Turn boundaries are NOT produced
-        here — the watchdog does that from the output timestamps."""
+        """Read events until close; False on a clean close, raises GPTLiveError when fatal."""
         for event in conn:
             etype: str = getattr(event, "type", "")
             match etype:
@@ -895,8 +719,7 @@ class GPTLiveAgent(VoiceAgentBase):
                     )
 
                 case "session.output_audio.delta":
-                    # Liveness is noted inside: a silent delta is a heartbeat of
-                    # the stream, not the model working on a reply.
+                    # A silent delta is a stream heartbeat, not the model working.
                     self._on_output(audio=getattr(event, "delta", "") or "")
 
                 case "session.output_transcript.delta":
@@ -908,14 +731,12 @@ class GPTLiveAgent(VoiceAgentBase):
                     self._on_delegation(getattr(d, "id", "") or "", getattr(d, "target", "") or "")
 
                 case "response.event":
-                    # The backend is working: a turn that is waiting on a web
-                    # search is not a silent one.
+                    # A turn waiting on a web search is not a silent one.
                     self.note_server_activity()
                     self._on_backend_event(getattr(event, "delegation_id", None), getattr(event, "event", None))
 
                 case "session.usage.updated":
-                    # Liveness is NOT noted here: usage ticks say nothing about
-                    # whether the model is working on a reply.
+                    # Usage ticks say nothing about whether the model is working.
                     cw = getattr(event, "context_window", None)
                     ratio = getattr(cw, "usage_ratio", None)
                     if ratio is None:
@@ -935,8 +756,6 @@ class GPTLiveAgent(VoiceAgentBase):
                     logger.info("[realtime] GPT-Live info %s: %s", getattr(event, "code", ""), getattr(event, "message", ""))
 
                 case _:
-                    # session.updated, session.*.appended, input_audio.muted /
-                    # unmuted, response.event (Responses delegation only) …
                     pass
         return False
 
@@ -946,8 +765,6 @@ class GPTLiveAgent(VoiceAgentBase):
         code = getattr(err, "code", None) or ""
         message = getattr(err, "message", None) or str(err)
         if client_id and client_id != _EVT_START and str(client_id).startswith("hal-"):
-            # One of OUR commands was rejected (e.g. context over 500 tokens,
-            # audio before session.started). The session is still fine.
             logger.warning("[realtime] GPT-Live rejected %s (%s): %s", client_id, code, message)
             return
         logger.error("[realtime] GPT-Live error (%s): %s", code, message)
@@ -959,8 +776,7 @@ class GPTLiveAgent(VoiceAgentBase):
             return
         self._usage_seconds = float(seconds)
         if usage_ratio is not None:
-            # Above ~0.9 OpenAI swaps in a fresh voice engine with a summary of
-            # the history; authoritative task state must live on the device.
+            # Above ~0.9 OpenAI swaps in a fresh voice engine with a summary; task state lives on the device.
             self._usage_ratio = float(usage_ratio)
         usage_logger.info(
             "[realtime] GPT-Live usage: session=%s request=%s seconds=%.1f est>=$%.4f context=%s "
@@ -971,11 +787,8 @@ class GPTLiveAgent(VoiceAgentBase):
             "final" if closed else "cumulative", _GPTLIVE_USD_PER_MINUTE,
         )
 
-    # --- Watchdog ---
-
     def _watchdog_loop(self) -> None:
-        """Fires the synthesized turn boundary and flushes a deferred
-        delegation. 50 ms tick: the boundary lands within that of the gap."""
+        """Fire the synthesized turn boundary and flush a deferred delegation (50 ms tick)."""
         while not self._watchdog_stop.wait(0.05):
             now = time.monotonic()
             with self._state_lock:
@@ -1006,8 +819,6 @@ class GPTLiveAgent(VoiceAgentBase):
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=self._config.join_timeout_s)
 
-    # --- Reconnect ---
-
     def _ensure_connected(self) -> None:
         if self._stop_event.is_set() or self._connected.is_set():
             return
@@ -1034,16 +845,14 @@ class GPTLiveAgent(VoiceAgentBase):
                 logger.warning("[realtime] Reconnect failed: %s — next retry in ~%.0fs", e, self._reconnect_backoff)
 
     def _fail_fast_turn(self, reason: str) -> None:
-        """End whatever the consumer is waiting on, now, so the turn falls back
-        to the main agent without waiting out the receive timeout."""
+        """End whatever the consumer is waiting on so the turn falls back without the receive timeout."""
         if self._fire_boundary(reason=reason):
             logger.info("[realtime] Recv error (%s) — reply ended early, falling back to main", reason)
             return
         with self._state_lock:
             waiting = self._awaiting_reply or bool(self._live_user_turn_id)
             self._awaiting_reply = False
-            # The session that heard this input is gone; its answer will never
-            # come, so the input key must not stay open into the next session.
+            # The session that heard this input is gone; don't carry its key into the next.
             self._live_user_turn_id = ""
             self._live_speech_emitted = False
             self._input_answered = False
@@ -1058,8 +867,6 @@ class GPTLiveAgent(VoiceAgentBase):
                 self._session_started.clear()
                 self._connection = None
 
-    # --- VoiceAgentBase implementation ---
-
     @override
     def _do_connect(self) -> None:
         self._sync_connect()
@@ -1068,9 +875,7 @@ class GPTLiveAgent(VoiceAgentBase):
     @override
     def _do_disconnect(self) -> None:
         self._stop_watchdog()
-        # Holding _conn_lock across the bounded wait is safe: the recv thread
-        # reads `session.closed` without taking it, and a send racing this
-        # teardown simply blocks until the connection is gone.
+        # Safe: the recv thread reads `session.closed` without this lock.
         with self._conn_lock:
             self._sync_disconnect(wait_closed=True)
 
@@ -1123,7 +928,6 @@ class GPTLiveAgent(VoiceAgentBase):
                     self._pump_events(conn)
                     if self._stop_event.is_set():
                         break
-                    # Iteration ended: the session closed (expired, hangup, lost).
                     self._fail_fast_turn("session closed")
                     self._drop_connection(conn)
                     break
@@ -1149,8 +953,7 @@ class GPTLiveAgent(VoiceAgentBase):
                     self._drop_connection(conn)
 
     def _note_close_code(self, code: int | None, reason: str) -> None:
-        """Log a relay close the way the BFF integration doc reads it, and stop
-        hammering the relay for the codes that will not change on their own."""
+        """Log a relay close code and stop retrying codes that won't change on their own."""
         meaning = _NO_RETRY_CLOSE_CODES.get(code or 0)
         if meaning is not None:
             self._reconnect_backoff = self._reconnect_backoff_max

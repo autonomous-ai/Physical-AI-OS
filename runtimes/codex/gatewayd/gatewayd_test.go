@@ -18,23 +18,19 @@ import (
 
 const testToken = "test-token"
 
-// successJSONL remains for unit tests of the retired exec parser. Gateway
-// integration tests below use a line-oriented App Server JSON-RPC fake.
+// successJSONL remains for unit tests of the retired exec parser.
 const successJSONL = `{"type":"thread.started","thread_id":"t123"}
 {"type":"item.completed","item":{"item_type":"agent_message","text":"hello"}}
 {"type":"turn.completed","usage":{"input_tokens":10,"output_tokens":5}}`
 
-// writeFakeCodex emulates the App Server JSON-RPC subset gatewayd uses. It
-// deliberately delays terminal events so a subsequent message can exercise
-// turn/steer while the first turn is active.
+// writeFakeCodex emulates the App Server JSON-RPC subset gatewayd uses.
 func writeFakeCodex(t *testing.T, dir, argvFile string) string {
 	t.Helper()
 	script := fmt.Sprintf("#!/bin/bash\nGO_WANT_CODEX_APP_FAKE=1 CODEX_APP_FAKE_LOG=%q exec %q -test.run=TestCodexAppServerFake -- \"$@\"\n", argvFile, os.Args[0])
 	return writeScript(t, dir, "fake-codex", script)
 }
 
-// TestCodexAppServerFake is launched by writeFakeCodex as a subprocess. It is
-// a real JSON-RPC line peer, avoiding shell parsing in integration tests.
+// TestCodexAppServerFake is launched by writeFakeCodex as a subprocess.
 func TestCodexAppServerFake(t *testing.T) {
 	if os.Getenv("GO_WANT_CODEX_APP_FAKE") != "1" {
 		return
@@ -153,7 +149,7 @@ func writeScript(t *testing.T, dir, name, content string) string {
 }
 
 // startServer boots a Server on an ephemeral loopback port with all paths
-// under t.TempDir(). Returns the ws URL and the config used.
+// under t.TempDir().
 func startServer(t *testing.T, codexBin string, dir string) (string, Config) {
 	t.Helper()
 	return startServerTimeout(t, codexBin, dir, 30*time.Second)
@@ -283,7 +279,6 @@ func TestHappyPath(t *testing.T) {
 	url, cfg := startServer(t, writeFakeCodex(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
 
-	// First frame is bridge.status ready with empty thread id.
 	status := readFrame(t, conn)
 	if status["type"] != "bridge.status" || status["state"] != "ready" {
 		t.Fatalf("expected ready status, got %v", status)
@@ -323,7 +318,7 @@ func TestResumeUsesStoredThreadID(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv.txt")
 	url, _ := startServer(t, writeFakeCodex(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	sendMessage(t, conn, "first")
 	readTurnFrames(t, conn)
@@ -348,7 +343,7 @@ func TestSessionNewClearsSession(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv.txt")
 	url, cfg := startServer(t, writeFakeCodex(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	// session.new races an in-flight turn: it rides the same worker queue, so
 	// it must execute AFTER the turn — the turn's thread.started re-persist
@@ -358,8 +353,6 @@ func TestSessionNewClearsSession(t *testing.T) {
 		t.Fatalf("send session.new: %v", err)
 	}
 
-	// Ordered stream: the full turn first (thread persisted from
-	// thread.started), THEN the session_cleared status.
 	sawCompleted := false
 	for {
 		frame := readFrame(t, conn)
@@ -415,7 +408,7 @@ func TestAuthRejectsWrongToken(t *testing.T) {
 	header := http.Header{"Authorization": {"Bearer wrong-token"}}
 	conn, _, err := websocket.DefaultDialer.Dial(url, header)
 	if err != nil {
-		return // handshake rejected outright is acceptable too
+		return
 	}
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -436,7 +429,6 @@ func TestResumeRetryFresh(t *testing.T) {
 	t.Skip("legacy codex exec resume retry test retired")
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Seed a stale session so the first run tries (and fails) to resume it.
 	sessionFile := filepath.Join(dir, "session.json")
 	if err := os.WriteFile(sessionFile, []byte(`{"thread_id":"stale-999"}`), 0o600); err != nil {
 		t.Fatalf("seed session file: %v", err)
@@ -444,7 +436,7 @@ func TestResumeRetryFresh(t *testing.T) {
 	url, cfg := startServer(t, writeFakeCodexResumeFails(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
 
-	status := readFrame(t, conn) // ready status carries the stale thread id
+	status := readFrame(t, conn)
 	if status["thread_id"] != "stale-999" {
 		t.Fatalf("expected seeded thread_id, got %v", status["thread_id"])
 	}
@@ -475,14 +467,13 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 	t.Skip("legacy codex exec resume retry test retired")
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Seed a stale session so the first run resumes and dies with turn.failed.
 	sessionFile := filepath.Join(dir, "session.json")
 	if err := os.WriteFile(sessionFile, []byte(`{"thread_id":"x"}`), 0o600); err != nil {
 		t.Fatalf("seed session file: %v", err)
 	}
 	url, _ := startServer(t, writeFakeCodexResumeTurnFailed(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	sendMessage(t, conn, "retry me")
 	frames := readTurnFrames(t, conn)
@@ -524,21 +515,16 @@ func TestResumedFailureFramesHeldBack(t *testing.T) {
 // A thread whose resume hangs used to wedge the device forever: rotation rides
 // on a COMPLETED turn, so a thread that never completes one is never rotated,
 // and the thread id lives on disk — restarting the service or rebooting the
-// device resumed the same dead thread. The timeout must drop it.
+// device resumed the same dead thread.
 func TestResumeTimeoutDropsTheThread(t *testing.T) {
 	t.Skip("legacy subprocess timeout test retired")
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Start from a persisted thread: creating it in a preliminary timed turn
-	// made this test depend on the fresh shell process exiting within 500ms.
-	// Under race instrumentation it could emit turn.completed and then time
-	// out, leaving its bridge.error for the next turn's reader to consume.
+	// Under race instrumentation it could emit turn.completed and then time out, leaving its
+	// bridge.error for the next turn's reader to consume.
 	if err := os.WriteFile(filepath.Join(dir, "session.json"), []byte(`{"thread_id":"t123"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	// Invoke the existing interpreter directly. Executing a freshly written
-	// shebang file can trigger slow platform executable checks on macOS.
-	// buildArgv's first argument "exec" names this script in the workspace.
 	fake := writeFakeCodexResumeHangs(t, dir, argvFile)
 	script, err := os.ReadFile(fake)
 	if err != nil {
@@ -553,7 +539,7 @@ func TestResumeTimeoutDropsTheThread(t *testing.T) {
 	}
 	url, cfg := startServerTimeout(t, "/bin/bash", dir, 2*time.Second)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	// The first invocation resumes the persisted thread and must hang.
 	sendMessage(t, conn, "second")

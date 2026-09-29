@@ -30,8 +30,7 @@ func writeZip(t *testing.T, path string, files map[string]string) {
 	}
 }
 
-// ExtractSkillZip must atomically REPLACE the target — files removed in the new
-// version must not linger (the swap, not a merge).
+// ExtractSkillZip must replace the target, not merge into it.
 func TestExtractSkillZip_AtomicReplace(t *testing.T) {
 	dir := t.TempDir()
 	target := filepath.Join(dir, "my-skill")

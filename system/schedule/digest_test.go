@@ -6,13 +6,7 @@ import (
 	"testing"
 )
 
-// The golden vectors from the shared digest spec (firmware Task 18 ⇄ worker
-// Task 19). The worker computes the same digest over its lobster.schedules
-// rows and forces a full schedule.sync when the two differ, so these values
-// are a CROSS-REPO contract: if this test ever needs its expectations
-// changed, the worker's copy of the same table must change in lockstep — and
-// the "v1:" prefix must be bumped, or every device/backend pair mid-rollout
-// will read as drifted and re-sync on every info uplink.
+// Golden vectors shared with the worker; changing them requires a lockstep worker change and a new prefix.
 func TestDigest_GoldenVectors(t *testing.T) {
 	v1 := []Schedule{
 		{ID: "a1", Rev: 3, Requires: []string{"gmail"}},
@@ -45,9 +39,7 @@ func TestDigest_GoldenVectors(t *testing.T) {
 	}
 }
 
-// Only id, rev and requires are hashed — the fields the backend owns and the
-// drift check is about. Everything else (enabled, name, run bookkeeping) is
-// deliberately outside the digest, so a run or a pause never reads as drift.
+// Only id, rev and requires are hashed.
 func TestDigest_IgnoresFieldsOutsideTheSpec(t *testing.T) {
 	base := []Schedule{{ID: "a1", Rev: 3, Requires: []string{"gmail"}}, {ID: "b2"}}
 	noisy := []Schedule{
@@ -59,8 +51,7 @@ func TestDigest_IgnoresFieldsOutsideTheSpec(t *testing.T) {
 	}
 }
 
-// requires is hashed in STORED order (the order the backend resolved it in),
-// not sorted — the spec says so, and the worker hashes its rows the same way.
+// requires is hashed in stored order, not sorted.
 func TestDigest_RequiresOrderIsSignificant(t *testing.T) {
 	a := Digest([]Schedule{{ID: "x", Rev: 12, Requires: []string{"gmail", "slack"}}})
 	b := Digest([]Schedule{{ID: "x", Rev: 12, Requires: []string{"slack", "gmail"}}})
@@ -69,8 +60,7 @@ func TestDigest_RequiresOrderIsSignificant(t *testing.T) {
 	}
 }
 
-// Digest sorts a copy: the caller's slice (e.g. the store's rows) must come
-// back in the order it went in.
+// Digest must not reorder the caller's slice.
 func TestDigest_DoesNotReorderTheCallersSlice(t *testing.T) {
 	rows := []Schedule{{ID: "b2"}, {ID: "a1"}}
 	_ = Digest(rows)
@@ -79,9 +69,7 @@ func TestDigest_DoesNotReorderTheCallersSlice(t *testing.T) {
 	}
 }
 
-// LoadChecked is Load plus an honest error for a file that exists but cannot
-// be READ — the one case where the info uplink must omit the digest rather
-// than claim "no schedules".
+// LoadChecked errors only when an existing file cannot be read.
 func TestStore_LoadChecked(t *testing.T) {
 	t.Run("missing file is a legitimately empty store", func(t *testing.T) {
 		rows, err := NewStore(filepath.Join(t.TempDir(), "schedules.json")).LoadChecked()

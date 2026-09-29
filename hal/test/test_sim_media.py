@@ -1,10 +1,4 @@
-"""Host media mode for the laptop simulator (HAL_SIM_MEDIA=host).
-
-Covers the two things that must hold no matter which machine runs the sim:
-the host camera driver is reachable through the same factory as every other
-backend, and an unusable host device downgrades to the virtual one with a
-reason instead of raising or pretending to be live.
-"""
+"""Host media mode for the laptop simulator (HAL_SIM_MEDIA=host)."""
 from __future__ import annotations
 
 import unittest
@@ -25,8 +19,7 @@ class TestHostCameraDriver(unittest.TestCase):
         self.assertIs(resolve_camera_class("host", required=True), HostVideoCaptureDevice)
 
     def test_host_driver_skips_v4l2_index_resolution(self):
-        # macOS has no /dev/video nodes; probing for one would only log a
-        # misleading failure at boot.
+        # macOS has no /dev/video nodes.
         self.assertFalse(HostVideoCaptureDevice.requires_v4l2_index)
 
     def test_probe_raises_when_camera_never_opens(self):
@@ -48,15 +41,14 @@ class TestHostCameraDriver(unittest.TestCase):
         self.assertIn("no frame", str(ctx.exception))
 
     def test_probe_waits_out_the_capture_session_warmup(self):
-        # AVFoundation misses the first reads while the session starts. Judging
-        # the camera on read #1 downgrades a working webcam to virtual.
+        # AVFoundation misses the first reads while the session starts.
         frame = np.zeros((4, 4, 3), dtype=np.uint8)
         cap = mock.Mock()
         cap.isOpened.return_value = True
         cap.read.side_effect = [(False, None), (False, None), (True, frame)]
         with mock.patch("hal.drivers.camera.host_capture_device.cv2.VideoCapture", return_value=cap), \
              mock.patch("hal.drivers.camera.host_capture_device.time.sleep"):
-            probe_host_camera(0)  # must not raise
+            probe_host_camera(0)
         self.assertEqual(cap.read.call_count, 3)
 
     def test_macos_failure_names_the_permission_the_user_must_grant(self):
@@ -105,8 +97,6 @@ class TestSimMediaFallback(unittest.TestCase):
     def test_audio_fallback_switches_routes_to_the_virtual_devices(self):
         self.state.sim_media_fallback("audio", "microphone unusable")
         self.assertEqual(self.state.sim_media_audio, "virtual")
-        # The audio routes branch on this flag, so the silent WAV / silent tone
-        # contract is what a downgraded run actually serves.
         self.assertTrue(self.state.simulation_audio)
 
     def test_first_reason_wins(self):

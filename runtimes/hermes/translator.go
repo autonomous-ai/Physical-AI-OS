@@ -9,15 +9,10 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// nowUnixMs returns the current time in milliseconds (matches the OpenClaw
-// frame timestamp convention).
+// nowUnixMs returns the current time in milliseconds (matches the OpenClaw frame timestamp convention).
 func nowUnixMs() int64 { return time.Now().UnixMilli() }
 
-// emitRunID returns the runId the translator stamps on every WSEvent. It is the
-// device-side idempotency key (device-chat-N-…) so downstream — the web monitor
-// especially — correlates the reply exactly like OpenClaw 5.4+ echoing the
-// idempotencyKey. Falls back to Hermes's response.id only if the device key is
-// somehow absent (e.g. a non-runStream caller).
+// emitRunID returns the runId the translator stamps on every WSEvent.
 func (s *HermesService) emitRunID(result *streamResult, respID string) string {
 	if result != nil && result.DeviceRunID != "" {
 		return result.DeviceRunID
@@ -29,18 +24,12 @@ func (s *HermesService) emitRunID(result *streamResult, respID string) string {
 	return id
 }
 
-// hermesUsage decodes the Hermes /v1/responses usage block (snake_case) so we
-// can rewrap it into domain.TokenUsage (camelCase) without exporting Hermes-
-// specific types.
+// hermesUsage decodes the Hermes /v1/responses usage block (snake_case) so we can rewrap it into domain.TokenUsage (camelCase) without exporting Hermes- specific types.
 type hermesUsage struct {
 	InputTokens  int `json:"input_tokens"`
 	OutputTokens int `json:"output_tokens"`
 	TotalTokens  int `json:"total_tokens"`
-	// OpenAI-style usage nests the cached portion under details — and its
-	// semantics differ from Anthropic: input_tokens is the TOTAL input
-	// INCLUDING cache reads and writes, while domain.TokenUsage stores uncached
-	// input separately. The local Hermes compatibility patch preserves both
-	// buckets through its Responses API; older servers may omit details.
+	// OpenAI usage: input_tokens INCLUDES cache reads/writes; TokenUsage stores uncached input separately.
 	InputTokensDetails struct {
 		CachedTokens     int `json:"cached_tokens"`
 		CacheWriteTokens int `json:"cache_write_tokens"`
@@ -57,8 +46,6 @@ func (u *hermesUsage) toDomain() *domain.TokenUsage {
 	in := u.InputTokens
 	cached := max(0, u.InputTokensDetails.CachedTokens)
 	written := max(0, u.InputTokensDetails.CacheWriteTokens)
-	// Reject impossible detail totals instead of producing negative input or
-	// double-counting tokens. Subtraction avoids overflow on malformed counts.
 	if cached > in || written > in-cached {
 		cached, written = 0, 0
 	}
@@ -72,17 +59,7 @@ func (u *hermesUsage) toDomain() *domain.TokenUsage {
 	}
 }
 
-// translateSSE parses one (event, data) pair from the Hermes SSE stream and
-// emits 0..N domain.WSEvent frames into dispatch.
-//
-// Mapping table is documented in hermes.md §2 — keep both in sync.
-// We tolerate two SSE shapes:
-//
-//	(a) event-line + data-line (preferred; canonical OpenAI Responses API)
-//	(b) data-only with type embedded in the JSON ({"type": "response.xxx", ...})
-//
-// Hermes appears to emit (a); (b) is kept defensive in case the proxy
-// strips event lines.
+// translateSSE parses one (event, data) pair from the Hermes SSE stream and emits 0..N domain.WSEvent frames into dispatch.
 func (s *HermesService) translateSSE(eventName, data string, dispatch func(domain.WSEvent), result *streamResult) {
 	var probe map[string]json.RawMessage
 	if err := json.Unmarshal([]byte(data), &probe); err != nil {
@@ -107,8 +84,6 @@ func (s *HermesService) translateSSE(eventName, data string, dispatch func(domai
 	case "response.output_text.delta":
 		s.handleOutputTextDelta(probe, dispatch, result)
 	case "response.output_text.done":
-		// Final text already streamed via deltas; the consumer will get the
-		// authoritative copy via response.completed.
 	case "response.completed":
 		s.handleResponseCompleted(probe, dispatch, result)
 	case "response.failed":
@@ -118,8 +93,7 @@ func (s *HermesService) translateSSE(eventName, data string, dispatch func(domai
 	}
 }
 
-// handleResponseCreated extracts the response.id and session UUID (carried in
-// the response object), stores them, and emits lifecycle.start.
+// handleResponseCreated extracts the response.id and session UUID (carried in the response object), stores them, and emits lifecycle.start.
 func (s *HermesService) handleResponseCreated(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		Response struct {
@@ -138,7 +112,6 @@ func (s *HermesService) handleResponseCreated(probe map[string]json.RawMessage, 
 		s.lastResponseID.Store(respID)
 		result.ResponseID = respID
 	}
-	// Some Hermes versions report session_id inside the response body too.
 	if inner.Response.SessionID != "" {
 		s.sessionUUID.Store(inner.Response.SessionID)
 		result.SessionID = inner.Response.SessionID
@@ -162,10 +135,7 @@ func (s *HermesService) handleResponseCreated(probe map[string]json.RawMessage, 
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
-// handleOutputItemAdded fires when the agent appends a new output item:
-//   - function_call         → tool.start
-//   - function_call_output  → tool.end (carries the result)
-//   - message               → no event (text comes via output_text.delta)
+// handleOutputItemAdded maps function_call to tool.start and function_call_output to tool.end.
 func (s *HermesService) handleOutputItemAdded(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	var inner struct {
 		OutputIndex int `json:"output_index"`
@@ -186,8 +156,6 @@ func (s *HermesService) handleOutputItemAdded(probe map[string]json.RawMessage, 
 
 	switch inner.Item.Type {
 	case "function_call":
-		// Surface as tool start. Arguments are a JSON string; embed verbatim
-		// so the OpenClaw handler's ToolArguments() helper picks it up.
 		slog.Info("hermes <<< SSE tool CALL", "component", "hermes",
 			"runID", runID,
 			"tool", inner.Item.Name,
@@ -208,9 +176,6 @@ func (s *HermesService) handleOutputItemAdded(probe map[string]json.RawMessage, 
 		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 
 	case "function_call_output":
-		// Tool result. Hermes serialises Output as either a JSON string or a
-		// structured value — pass it through as RawMessage so ResultText() on
-		// the consumer can normalise either shape.
 		result := inner.Item.Output
 		if len(result) == 0 {
 			result = json.RawMessage(`""`)
@@ -233,16 +198,12 @@ func (s *HermesService) handleOutputItemAdded(probe map[string]json.RawMessage, 
 		dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 
 	case "message":
-		// Assistant message item — no event needed here; the text will come
-		// via response.output_text.delta and be finalised at response.completed.
 		slog.Debug("hermes <<< SSE assistant message item opened (waiting for deltas)", "component", "hermes",
 			"runID", runID, "itemId", inner.Item.ID)
 	}
 }
 
-// handleOutputItemDone is largely a parity hook. We already emitted tool.end
-// in output_item.added (for function_call_output); other item.done variants
-// don't surface anything new for the consumer.
+// handleOutputItemDone is largely a parity hook.
 func (s *HermesService) handleOutputItemDone(_ map[string]json.RawMessage, _ func(domain.WSEvent)) {
 }
 
@@ -255,8 +216,6 @@ func (s *HermesService) handleOutputTextDelta(probe map[string]json.RawMessage, 
 		return
 	}
 	runID := s.emitRunID(result, "")
-	// Delta logging stays at Debug — a single assistant reply can emit 100+
-	// deltas and would drown the log. Final text is logged once at completed.
 	slog.Debug("hermes <<< SSE delta", "component", "hermes",
 		"runID", runID, "delta", inner.Delta)
 	payload, _ := json.Marshal(map[string]any{
@@ -270,9 +229,7 @@ func (s *HermesService) handleOutputTextDelta(probe map[string]json.RawMessage, 
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
-// handleResponseCompleted emits (a) the final chat message and (b) the
-// lifecycle.end with usage. Order matches OpenClaw so handler_events.go sees
-// the chat.final before lifecycle.end → idle.
+// handleResponseCompleted emits (a) the final chat message and (b) the lifecycle.end with usage.
 func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage, dispatch func(domain.WSEvent), result *streamResult) {
 	result.Terminal = true
 	var inner struct {
@@ -296,8 +253,6 @@ func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage
 		respID, _ = s.lastResponseID.Load().(string)
 	}
 	result.ResponseID = respID
-	// emitID is what downstream/web correlate on (device runId); respID stays for
-	// Hermes-side logs only.
 	emitID := s.emitRunID(result, respID)
 
 	// Collect every message content[].text part as the authoritative final text.
@@ -333,8 +288,6 @@ func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage
 	}
 	slog.Info("hermes <<< SSE response.completed (assistant final)", logArgs...)
 
-	// (a) Emit chat.final so handler_events.go's session.message handler picks
-	//     up the assistant reply for TTS / [HW:/...] dispatch.
 	chatMsg, _ := json.Marshal(map[string]any{
 		"runId":      emitID,
 		"sessionKey": s.GetSessionKey(),
@@ -344,8 +297,6 @@ func (s *HermesService) handleResponseCompleted(probe map[string]json.RawMessage
 	})
 	dispatch(domain.WSEvent{Type: "evt", Event: "chat", Payload: chatMsg})
 
-	// (b) Emit lifecycle.end with usage so the busy flag clears and the run
-	//     trace closes out.
 	endPayload, _ := json.Marshal(map[string]any{
 		"runId":      emitID,
 		"sessionKey": s.GetSessionKey(),
@@ -406,8 +357,7 @@ func (s *HermesService) handleResponseFailed(probe map[string]json.RawMessage, d
 	dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: payload})
 }
 
-// jsonRemarshal turns the lazy-decoded map back into the typed struct. Cheap
-// for small payloads; saves writing 5 separate Unmarshal calls on the raw bytes.
+// jsonRemarshal turns the lazy-decoded map back into the typed struct.
 func jsonRemarshal(src map[string]json.RawMessage, dst any) error {
 	raw, err := json.Marshal(src)
 	if err != nil {

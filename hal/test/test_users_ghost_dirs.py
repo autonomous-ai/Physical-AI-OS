@@ -1,12 +1,4 @@
-"""Ghost user dirs (#425).
-
-Per-user loggers (audio history, mood, music suggestions) used to create
-`/root/local/users/<slug>/` for any label the agent put in `person` — including
-example names copied out of skill prompts. `/face/owners` then listed those
-log-only folders as enrolled people. Two guards: `canonicalize_person` maps an
-unmatched label to the shared `unknown` bucket instead of a fresh slug, and
-`/face/owners` only lists directories with enrollment evidence.
-"""
+"""Ghost user dirs (#425)."""
 
 import json
 from pathlib import Path
@@ -22,9 +14,6 @@ from hal.routes import sensing
 def users_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(ms, "_USERS_DIR", tmp_path)
     return tmp_path
-
-
-# --- canonicalize_person -----------------------------------------------------
 
 
 def test_unmatched_label_falls_back_to_unknown(users_dir):
@@ -74,13 +63,9 @@ def test_log_play_event_keeps_enrolled_person(users_dir):
     assert not (users_dir / "unknown").exists()
 
 
-# --- /face/owners --------------------------------------------------------------
-
-
 @pytest.fixture
 def owners_dir(tmp_path, monkeypatch):
     monkeypatch.setattr(facerecognizer_v2, "USERS_DIR", tmp_path)
-    # The route only needs the recognizer to exist; the listing is pure filesystem.
     monkeypatch.setattr(sensing, "_require_face_recognizer", lambda: None)
     return tmp_path
 
@@ -122,7 +107,7 @@ def test_face_owners_skips_ghost_dirs(owners_dir):
     _mk(owners_dir, "leo", "audio_history/2026-09-16.jsonl")
     _mk(owners_dir, "gray", "1711929600000.jpg")
     _mk(owners_dir, "long", "voice/sample_1.wav")
-    _mk(owners_dir, ".voice_registry.json")  # hidden, must stay ignored as before
+    _mk(owners_dir, ".voice_registry.json")
     resp = sensing.face_owners_detail()
     labels = [p.label for p in resp.persons]
     assert labels == ["gray", "long"]

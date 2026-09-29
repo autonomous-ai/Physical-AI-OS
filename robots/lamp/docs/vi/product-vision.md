@@ -332,13 +332,13 @@ Kiến trúc được thiết kế theo nguyên tắc **tách biệt rõ ràng**
          ┌────────────────────────┼────────────────────────┐
          │            TẦNG 2: OPENCLAW SKILLS              │
          │                                                  │
-         │         HTTP API @ 127.0.0.1:5000                │
-         │                                                  │
-         │  POST /led/color    POST /servo/position         │
-         │  POST /led/pattern  POST /servo/gesture          │
-         │  POST /audio/play   POST /audio/tts              │
-         │  GET  /camera/face  POST /camera/track           │
-         │  GET  /presence     POST /mood                   │
+         │     HAL HTTP API @ 127.0.0.1:5001                │
+         │     (qua marker [HW:/path:{...}] của os-server)  │
+         │  POST /led/solid    POST /servo/move             │
+         │  POST /led/effect   POST /servo/play             │
+         │  POST /audio/play   POST /emotion                │
+         │  GET  /camera/snapshot  POST /servo/track        │
+         │  GET  /presence     GET  /face/current-user      │
          │                                                  │
          └────────────────────────┬─────────────────────────┘
                                   │ Calls
@@ -402,7 +402,7 @@ Fork từ openclaw-lobster. Đây là tầng **luôn chạy**, hoạt động **
 - Quản lý kết nối mạng (WiFi setup, fallback AP mode)
 - OTA updates (cập nhật firmware từ xa)
 - MQTT bridge (giao tiếp giữa các thành phần)
-- HTTP API server tại `127.0.0.1:5000` — expose hardware control cho OpenClaw Skills
+- HTTP API server (os-server) tại `127.0.0.1:5000` — nhận marker `[HW:/path:{...}]` từ agent và forward tới HAL (`127.0.0.1:5001`), nơi thực sự phục vụ các route phần cứng
 - System LED states (không phụ thuộc AI)
 - Reset button handler
 
@@ -432,24 +432,26 @@ Mỗi skill là một file SKILL.md mô tả HTTP API endpoints để LLM có th
 ## Endpoints
 
 ### Đặt màu toàn bộ
-POST http://127.0.0.1:5000/led/color
-Body: {"r": 255, "g": 100, "b": 0, "brightness": 80}
+POST http://127.0.0.1:5001/led/solid
+Body: {"color": [255, 100, 0]}
 
-### Đặt pattern
-POST http://127.0.0.1:5000/led/pattern
-Body: {"pattern": "breathing", "color": "#FF6600", "speed": 2}
+### Chạy effect
+POST http://127.0.0.1:5001/led/effect
+Body: {"effect": "breathing", "color": [255, 102, 0], "speed": 0.5}
 
-### Đặt pixel cụ thể
-POST http://127.0.0.1:5000/led/pixel
-Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
+### Tô nhiều màu / gradient
+POST http://127.0.0.1:5001/led/paint
+Body: {"colors": [[0, 200, 200], [150, 0, 255]], "gradient": true}
 ```
 
 **LLM flow:**
 1. Người dùng nói: "Chuyển đèn sang màu cam ấm"
-2. OpenClaw LLM đọc SKILL.md → biết có endpoint `/led/color`
-3. LLM quyết định parameters: `{"r": 255, "g": 165, "b": 0, "brightness": 70}`
-4. Gọi `curl -X POST http://127.0.0.1:5000/led/color -d '...'`
-5. Lamp server nhận request → gọi HAL runtime → LED thay đổi
+2. OpenClaw LLM đọc SKILL.md → biết có endpoint `/led/solid`
+3. LLM quyết định parameters: `{"color": [255, 165, 0]}`
+4. Chèn marker `[HW:/led/solid:{"color":[255,165,0]}]` vào câu trả lời (xem `skills/led-control/SKILL.md`)
+5. os-server (`:5000`) parse marker → POST tới HAL (`:5001`) → LED thay đổi
+
+> **Ghi chú (đối chiếu code):** HAL chạy ở `127.0.0.1:5001`. `/led/color` chỉ là `GET` (đọc màu hiện tại); không có `/led/pattern` hay `/led/pixel`. Các route ghi thật trong `hal/routes/led.py`: `POST /led/solid`, `/led/paint`, `/led/effect`, `/led/off`, `/led/status`, `/led/restore`, `/led/effect/stop`.
 
 ---
 
@@ -484,7 +486,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 | **Ưu tiên** | P0 |
 | **Mô tả** | Thay đổi màu sắc LED qua giọng nói hoặc API |
 | **Ví dụ** | "Đèn vàng ấm", "Đèn trắng lạnh", "Đèn đỏ", "Màu hoàng hôn" |
-| **Luồng** | OpenClaw LLM hiểu ngữ cảnh màu → gọi `/led/color` với RGB phù hợp |
+| **Luồng** | OpenClaw LLM hiểu ngữ cảnh màu → gọi `/led/solid` với RGB phù hợp |
 | **Đặc biệt** | Hiểu màu trừu tượng: "màu hoàng hôn" → gradient cam-hồng-tím |
 
 #### UC-14: Phản hồi âm thanh
@@ -642,8 +644,8 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 - User tập trung và bình tĩnh → Lamp giữ nguyên environment, suppress mọi interruption
 
 **Triển khai**:
-- Emotion classifier chạy qua **perception-service WebSocket** (remote inference server), không phải on-device ONNX. HAL gửi camera frames, nhận emotion predictions.
-- `hal/drivers/sensing/perceptions/emotion.py` — `RemoteEmotionChecker` kết nối perception-service, fire event `emotion.detected` với cảm xúc phát hiện được (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
+- Emotion classifier chạy trên **perception-service** (remote inference server), không phải on-device ONNX. HAL POST từng face crop tới endpoint HTTP `/emotion-recognize`, nhận emotion predictions.
+- `hal/drivers/sensing/perceptions/processors/emotion.py` — `RemoteEmotionRecognizer` gọi perception-service; emotion processor fire event `emotion.detected` với cảm xúc phát hiện được (Angry, Disgust, Fear, Happy, Sad, Surprise, Neutral).
 - Lamp `user-emotion-detection/SKILL.md` map cảm xúc khuôn mặt → mood signal qua `POST /api/mood/log`.
 - Lamp `mood/SKILL.md` fusion signals (camera emotion, conversation, voice tone) thành mood decisions.
 - Mood decisions trigger downstream: `music-suggestion` (nhạc chủ động), `wellbeing` (nhắc uống nước/nghỉ), `emotion` (biểu cảm đèn).
@@ -672,7 +674,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 - Mỗi activity logged vào per-user JSONL timeline qua `POST /api/agent/wellbeing/log`.
 - Mỗi event, skill đọc history gần nhất, tính thời gian từ lần hydration/break reset cuối, nhắc nếu vượt threshold.
 - Per-user tracking: `current_user` từ sensing context tag, stranger dùng chung timeline `"unknown"`.
-- `lamp/resources/openclaw-skills/wellbeing/SKILL.md` — full workflow với threshold logic, dedup rules, và cooldowns.
+- `skills/wellbeing/SKILL.md` — full workflow với threshold logic, dedup rules, và cooldowns.
 
 **Câu hỏi đã giải quyết**:
 - [x] Khoảng thời gian nhắc → AI-driven thresholds tính từ activity log (không phải timer cố định).
@@ -685,28 +687,25 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 **Trạng thái: Đã triển khai** (2026-04)
 
 **Actor**: Hệ thống (tự động, mood + sensing-driven)
-**Mô tả**: Lamp chủ động gợi ý nhạc dựa trên tâm trạng phát hiện được, hoạt động sedentary, và lịch sử nghe — không cần user yêu cầu.
+**Mô tả**: Lamp chủ động gợi ý nhạc dựa trên tâm trạng phát hiện được và lịch sử nghe — không cần user yêu cầu.
 
 **Ví dụ**:
 - User detected stressed (facial emotion + conversation) → Lamp gợi ý piano calm
-- User làm việc sedentary lâu → Lamp đề nghị lo-fi/study beats
 - User detected happy/excited → Lamp gợi ý nhạc upbeat
 
 **Triển khai**:
-- `lamp/resources/openclaw-skills/music-suggestion/SKILL.md` — skill chủ động riêng (tách khỏi reactive `music/SKILL.md`).
-- **Hai triggers**:
-  1. **Mood-driven**: Sau khi `mood/SKILL.md` log mood decision (sad, stressed, tired, excited, happy, bored) → music-suggestion fire.
-  2. **Sedentary-driven**: `motion.activity` với sedentary labels (using computer, writing, etc.) → trigger gợi ý trực tiếp.
-- Checks trước khi gợi ý: audio đang chạy? cooldown gợi ý gần đây (7 min)? mood decision cũ (>30 min)?
-- Query `GET /audio/history?person={name}` để lấy genre preference cá nhân.
-- Genre mapping: stressed → soft jazz/classical, tired → calm piano, happy → upbeat pop, sedentary → lo-fi/ambient.
+- `skills/music-suggestion/SKILL.md` — skill chủ động riêng (tách khỏi reactive `music/SKILL.md`).
+- **Một trigger — mood**: `user-emotion-detection/SKILL.md` route các turn `emotion.detected` / `speech_emotion.detected`; khi mood tổng hợp đáng gợi ý (sad, stressed, tired, excited, happy, bored) và router chọn `music` thì music-suggestion mới nói. `motion.activity` (sedentary, drink/break) chỉ route sang wellbeing, không bao giờ trigger gợi ý nhạc.
+- Checks trước khi gợi ý (inject sẵn trong `[emotion_context: ...]`, không cần read tool call): audio đang chạy? cooldown gợi ý gần đây (7 min, chung với check-in)? mood decision cũ?
+- Dùng `audio_recent` / `music_pattern_for_hour` được inject (fallback `GET /audio/history?person={name}`) để lấy genre preference cá nhân.
+- Genre mapping: stressed → soft jazz/classical, tired → calm piano, happy → upbeat pop, bored → fun pop.
 - Luôn gợi ý qua TTS trước, play sau khi user xác nhận.
 - Marker `[HW:/speak]` ép TTS ra speaker đèn ngay cả với session origin từ channel.
 
 **Câu hỏi đã giải quyết**:
 - [x] Sở thích nhạc → Query `hw_audio` flow log + `/audio/history` lấy lịch sử nghe.
 - [x] Hỏi trước vs auto-play → Luôn gợi ý trước, play sau khi xác nhận.
-- [x] Sensing-triggered → Done: mood decisions + sedentary activity đều trigger gợi ý.
+- [x] Sensing-triggered → Done: mood decisions (cảm xúc camera / giọng nói) trigger gợi ý; hoạt động sedentary route sang wellbeing.
 - [ ] Phone call / video meeting detection → Chưa (cần UC-12 hoặc screen awareness).
 
 #### UC-M4: Nhận Thức Thời Gian Nhìn Màn Hình & Hỗ Trợ Cử Chỉ [CHƯA LÀM]
@@ -735,7 +734,7 @@ Body: {"x": 3, "y": 2, "r": 255, "g": 0, "b": 0}
 
 **Triển khai**:
 - `hal/drivers/voice/speaker_recognizer/speaker_recognizer.py` — voice embedding model, profile storage, real-time matching.
-- `lamp/resources/openclaw-skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
+- `skills/speaker-recognizer/SKILL.md` — self-enrollment skill (mic intro, Telegram voice note, two-turn enrollment).
 - Voice profiles lưu per-user cùng face data tại `/root/local/users/{name}/`.
 - Telegram identity linked khi voice enrollment để DM targeting.
 

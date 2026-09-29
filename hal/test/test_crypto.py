@@ -86,7 +86,6 @@ class TestCryptoSession:
         session = CryptoSession(public_key)
         plain = json.dumps({"test": "data"}).encode()
 
-        # Simulate: client wraps request, then wraps a mock response
         encrypted = session.encrypt(plain)
         resp = CipherHTTPResponse(nonce=encrypted.nonce, cipher_data=encrypted.cipher_data)
         resp_bytes = resp.model_dump_json().encode()

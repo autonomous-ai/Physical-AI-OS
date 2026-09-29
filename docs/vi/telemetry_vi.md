@@ -133,6 +133,8 @@ credential. Chỉ id, outcome trong danh sách cố định, và các khoảng t
 | Tracker | Trả lời câu hỏi gì | Doc |
 |---------|--------------------|-----|
 | `hal/telemetry/voice_metrics.py` | Thiết bị báo đã nghe nhanh cỡ nào, và có bao giờ phát câu trả lời mà người dùng đã bỏ qua không | [`docs/vi/voice-metrics_vi.md`](voice-metrics_vi.md) |
+| `hal/telemetry/live_voice.py` | Cùng các KPI voice cho phiên realtime (live): gán mỗi turn của provider vào đúng một interaction HAL và cấp dữ liệu cho `voice_metrics` mà không đoán quyền sở hữu audio | [`docs/vi/voice-metrics_vi.md`](voice-metrics_vi.md) |
+| `system/telemetry/voice_task.go` | Tác vụ voice/chat đã được nhận có thực sự chạy không (bắt đầu, gắn run, lifecycle end hoặc local intent trả về) | [`docs/vi/voice-metrics_vi.md`](voice-metrics_vi.md) |
 
 ## Lệnh kiểm chứng
 

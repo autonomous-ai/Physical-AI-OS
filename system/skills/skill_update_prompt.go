@@ -2,8 +2,7 @@ package skills
 
 import "fmt"
 
-// SkillUpdatePrompt builds the shared instruction to reload updated skills. The
-// caller supplies its agent-visible skills directory and handles delivery.
+// SkillUpdatePrompt builds the instruction to reload the changed skills from skillsDir.
 func SkillUpdatePrompt(skillsDir string, changedSkills []string) string {
 	list := ""
 	for _, name := range changedSkills {

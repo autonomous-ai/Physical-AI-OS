@@ -6,8 +6,7 @@ import (
 	"strings"
 )
 
-// RecordRealtime adapts HAL's existing handled-turn notification to the shared
-// journal. The HTTP adapter keeps transport-only snapshot markers in flow logs.
+// RecordRealtime journals a turn HAL handled in realtime mode.
 func (s *Store) RecordRealtime(origin, message string) (string, error) {
 	message = strings.TrimPrefix(message, "[skills: input-branching]\n")
 	if !strings.HasPrefix(message, "[HANDLED] ") {

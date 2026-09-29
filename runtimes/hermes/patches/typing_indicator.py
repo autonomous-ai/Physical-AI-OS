@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently patch bluebubbles.py so an incoming message triggers a typing
-indicator that pulses to the sender's iPhone every 3s until the LLM reply
-lands. Isolated to bluebubbles.py so only iMessage is affected — Telegram /
-Slack / Discord plugins do not run this code path."""
+"""Idempotently patch bluebubbles.py so an incoming message triggers a typing indicator that pulses to the sender's iPhone every 3s until the LLM reply lands."""
 import ast
 import re
 import sys
@@ -55,16 +52,12 @@ if MARKER in src:
     print("ALREADY_PATCHED")
     sys.exit(0)
 
-# Locate class name so we can attach the helper as methods (not module-level).
 class_re = re.compile(r'class (\w+)\(.*?Platform.*?\):', re.MULTILINE)
 m = class_re.search(src)
 if not m:
     print("CLASS_ANCHOR_NOT_FOUND", file=sys.stderr)
     sys.exit(3)
 
-# Inject helper as methods of the class: find the class body and append.
-# Simpler: put the helper functions ABOVE the class as module-level, then
-# monkey-patch onto the class at the bottom of the file.
 inject_line_re = re.compile(
     r'(\n        task = asyncio\.create_task\(self\.handle_message\(event\)\)\n)'
 )
@@ -72,16 +65,13 @@ if not inject_line_re.search(src):
     print("HANDLE_MESSAGE_ANCHOR_NOT_FOUND", file=sys.stderr)
     sys.exit(4)
 
-# Add helper functions at module top-of-code (after imports)
 lines = src.split('\n')
-# AST end positions preserve parenthesized imports and future imports.
 imports = [node for node in ast.parse(src).body
            if isinstance(node, (ast.Import, ast.ImportFrom))]
 insert_at = max((node.end_lineno for node in imports), default=0)
 new_lines = lines[:insert_at] + [HELPER] + lines[insert_at:]
 src2 = '\n'.join(new_lines)
 
-# At the end of the file, monkey-patch the class with our helpers.
 class_name = m.group(1)
 attach = f'''
 
@@ -92,7 +82,6 @@ attach = f'''
 '''
 src2 = src2.rstrip() + attach + '\n'
 
-# Rewrite the create_task line to invoke our wrapper instead.
 src2 = re.sub(
     r'(\n        )task = asyncio\.create_task\(self\.handle_message\(event\)\)\n',
     r'\1task = asyncio.create_task(self._handle_with_typing(event, session_chat_id))\n',
@@ -100,7 +89,6 @@ src2 = re.sub(
     count=1,
 )
 
-# Atomic write.
 compile(src2, str(TARGET), "exec")
 tmp = TARGET.with_suffix('.py.tmp2')
 tmp.write_text(src2)

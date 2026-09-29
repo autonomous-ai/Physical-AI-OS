@@ -1,11 +1,4 @@
-"""Regression: extended-thinking needs NON_BLOCKING tool declarations.
-
-`gemini-3.8-live-extended-thinking` accepts ONLY NON_BLOCKING tool declarations;
-a BLOCKING one makes it error mid-turn and speak a canned "I'm sorry, an error
-occurred." after every tool call (device-observed 2026-09-17). Every other live
-model keeps the BLOCKING default. The behavior is gated on the model string in
-GeminiLiveAgent._build_config.
-"""
+"""Regression: extended-thinking needs NON_BLOCKING tool declarations."""
 
 from types import SimpleNamespace
 
@@ -17,7 +10,7 @@ from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 def _build(model: str, language=None, use_language_codes=False) -> types.LiveConnectConfig:
     agent = object.__new__(GeminiLiveAgent)
-    agent._vad_disabled = True  # short-circuits _activity_detection setup
+    agent._vad_disabled = True
     agent._resumption_handle = None
     agent._tools = [{"name": "delegate_to_main", "description": "", "parameters": None}]
     agent._config = SimpleNamespace(
@@ -48,7 +41,6 @@ def test_extended_thinking_declares_non_blocking() -> None:
 
 
 def test_plain_live_leaves_tool_blocking() -> None:
-    # Unset behavior == the provider's BLOCKING default; must NOT be NON_BLOCKING.
     for model in ("gemini-3.8-live", "gemini-3.1-flash-live-preview"):
         cfg = _build(model)
         assert _tool_behavior(cfg) != types.Behavior.NON_BLOCKING

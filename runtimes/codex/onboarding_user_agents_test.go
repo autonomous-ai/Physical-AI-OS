@@ -10,7 +10,6 @@ import (
 // Tests for the global user AGENTS.md block (ensureUserAgentsMDBlockAt): codex
 // loads $CODEX_HOME/AGENTS.md in every session regardless of cwd, so the
 // device-wide connector/skill rules must live there to reach coding sessions
-// running in an arbitrary folder.
 
 // (a) fresh file → block written, idempotent on second call; (b) skill/connector
 // references are ABSOLUTE so they resolve from any cwd.

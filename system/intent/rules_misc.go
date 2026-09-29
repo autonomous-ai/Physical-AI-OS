@@ -1,4 +1,3 @@
-// Misc rules — hardware-free intents (time, …).
 package intent
 
 import (
@@ -7,7 +6,6 @@ import (
 )
 
 var miscRules = []rule{
-	// --- Time ---
 	{
 		name:  "what_time",
 		match: anyOf("what time", "whats the time", "what's the time"),

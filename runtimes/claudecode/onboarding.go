@@ -20,81 +20,35 @@ import (
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh
 // claudecode-only device still gets the living-learnings doc the CLAUDE.md block
-// imports. Identical template to runtimes/openclaw/resources/KNOWLEDGE.md.
+// imports.
 //
 //go:embed resources/KNOWLEDGE.md
 var knowledgeFS embed.FS
 
-// Onboarding (Claude Code). Mirrors runtimes/picoclaw/onboarding.go, trimmed to
-// what the Claude Code backend owns on-device:
-//
-//   - The Claude Code CLI is installed out-of-process by
-//     runtimes/claudecode/install.sh (no bun/channel plugins — telegram +
-//     discord are device-owned loops); the bridge + .env are (re)materialized
-//     by presync.sh. Those run during the
-//     switch-runtime flow AND from EnsureOnboarding below (hermes-style), so the
-//     config self-heals on every boot/config change, not only on a switch.
-//   - This file owns the OS-managed workspace markdown: CLAUDE.md (Claude Code's
-//     auto-loaded memory file — holds the OS block with the persona @imports +
-//     prompt discipline) and SOUL.md (per-device-type persona core block). The
-//     persona satellite files (IDENTITY.md / USER.md / MEMORY.md / memory/) are
-//     seeded empty so the @imports resolve; their content is owned by the agent
-//     and the persona migration.
-//   - There is NO HEARTBEAT.md: Claude Code has no heartbeat loop that would
-//     read it (a conscious skip, not an oversight — see
-//     docs/agentic/claudecode.md).
-//
-// When any OS-managed block changes, the bridge is restarted — CLAUDE.md and its
-// imports are loaded at Claude session start only.
+// - This file owns the OS-managed workspace markdown: CLAUDE.md (Claude Code's auto-loaded memory
+// file — holds the OS block with the persona @imports + prompt discipline) and SOUL.md
+// (per-device-type persona core block).
 
 const (
 	// osMandatoryMarker delimits the OS-managed block so it can be stripped +
-	// re-injected cleanly on update. MUST match the marker used in the blocks below.
+	// re-injected cleanly on update.
 	osMandatoryMarker = "<!-- OS DO NOT REMOVE -->"
 
-	// claudecodeWorkspaceDir is the cwd the bridge runs Claude Code in. Claude
-	// auto-loads <cwd>/CLAUDE.md, <cwd>/.mcp.json and <cwd>/.claude/settings.json
-	// from here. Skills are NOT installed here — see claudecodeSkillsDir.
+	// claudecodeWorkspaceDir is the cwd the bridge runs Claude Code in.
 	claudecodeWorkspaceDir = claudecodeHome + "/workspace"
 
-	// claudeUserDir is Claude Code's user-level config dir. The gatewayd runs the
-	// claude child with HOME=/root (gatewayd.Config.Home), so this is $HOME/.claude.
+	// claudeUserDir is Claude Code's user-level config dir.
 	claudeUserDir = "/root/.claude"
 
-	// claudeUserMDPath is the user-level memory file. Claude Code loads it in EVERY
-	// session regardless of cwd — unlike the workspace CLAUDE.md, which only the
-	// device-chat session (cwd = workspace) ever sees. The OS block lives here so
-	// persona + rules follow the agent into coding sessions.
+	// claudeUserMDPath is the user-level memory file.
 	claudeUserMDPath = claudeUserDir + "/CLAUDE.md"
 
 	// claudecodeSkillsDir is where device skills are installed: USER-scoped, not
-	// project-scoped. Claude Code resolves PROJECT skills as <cwd>/.claude/skills,
-	// so a workspace-only install is invisible to any session whose cwd is not the
-	// workspace — notably the coding sessions the device spawns in /root, /root/myapp,
-	// … (coding_sessions.go). Those sessions then can't see the connectors skill and
-	// tell the user their Gmail/Calendar is "not connected" (or write their own
-	// send_email.py) while the credentials sit on disk. USER-level skills load in
-	// EVERY session regardless of cwd, so the device chat AND coding sessions both
-	// get them.
+	// project-scoped.
 	claudecodeSkillsDir = claudeUserDir + "/skills"
 
 	// claudeMDBlock is the OS-managed block injected at the top of the USER-level
 	// memory file (~/.claude/CLAUDE.md — claudeUserMDPath), NOT the workspace one.
-	// Claude Code loads the user file in every session regardless of cwd, so the
-	// device's persona + rules follow the agent into the coding sessions it spawns
-	// in other folders (/root, /root/myapp, …); a workspace-scoped block only ever
-	// reached the device-chat session.
-	//
-	// Two parts: (a) the persona @imports — CLAUDE.md is the only file Claude Code
-	// loads by name, so SOUL/IDENTITY/USER/MEMORY/KNOWLEDGE reach the context
-	// through these import lines; (b) the backend-agnostic prompt discipline,
-	// derived from runtimes/picoclaw/onboarding.go agentsMDBlock with the
-	// paths/commands adjusted to Claude Code (native skills, `claude --version`).
-	//
-	// EVERY path here MUST be absolute. The block is read from sessions whose cwd
-	// is an arbitrary folder, so a relative `@SOUL.md` would resolve against that
-	// folder (persona silently missing) and a relative `memory/…` would scatter
-	// memory files into whatever project the user is coding in.
 	claudeMDBlock = `<!-- OS DO NOT REMOVE -->
 **Persona & memory (OS-managed imports):** the following files hold who you are and what you remember — they are part of your context on every session:
 
@@ -141,18 +95,16 @@ const (
 )
 
 // SetupAgent materializes the device config by running the same presync
-// EnsureOnboarding runs. The device setup flow calls this AFTER it persists
-// config.json, so presync picks up the freshly-entered llm_* / channel tokens
-// right away. The SetupRequest is unused — config.json (just saved) is the
-// source of truth presync reads.
+// EnsureOnboarding runs.
+// The device setup flow calls this AFTER it persists config.json, so presync picks up the
+// freshly-entered llm_* / channel tokens right away.
 func (s *ClaudeCodeService) SetupAgent(_ domain.SetupRequest) error {
 	return s.EnsureOnboarding()
 }
 
 // presyncStateFiles are the files presync owns whose content decides whether the
 // bridge must restart after a presync run: the launch env (ANTHROPIC_* + channel
-// flags) and the channel config. All are loaded at bridge/Claude start only
-// (the bridge itself ships inside the os-server binary — nothing to hash).
+// flags) and the channel config.
 var presyncStateFiles = []string{
 	claudecodeHome + "/.env",
 	"/root/.claude/channels/telegram/.env",
@@ -162,19 +114,7 @@ var presyncStateFiles = []string{
 }
 
 // EnsureOnboarding reconciles the device-side Claude Code state on every
-// os-server boot / config change (server/config_watch.go — same path
-// openclaw/hermes use):
-//
-//  1. re-run the embedded presync hook (.env + channel sync — the
-//     SAME script switch-runtime runs before the backend starts), hermes-style,
-//     so a device that boots straight into claudecode or changes llm_*/telegram
-//     while active self-heals without a runtime switch;
-//  2. seed KNOWLEDGE.md + the empty persona satellite files the CLAUDE.md
-//     imports point at;
-//  3. capability-gate and reconcile every supported skill from the CDN;
-//  4. refresh the OS-managed CLAUDE.md / SOUL.md blocks;
-//  5. self-heal the systemd unit and restart the bridge only when something
-//     actually changed (or it is down) — an unchanged boot is a no-op.
+// os-server boot / config change (server/config_watch.go).
 func (s *ClaudeCodeService) EnsureOnboarding() error {
 	before := hashFiles(presyncStateFiles)
 	if err := s.runPresync(); err != nil {
@@ -190,13 +130,8 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 		filepath.Join(claudecodeWorkspaceDir, "KNOWLEDGE.md"))
 	personaSeeded := ensurePersonaFiles()
 
-	// Lift any project-scoped skills left by an older os-server to user scope
-	// FIRST, so the prune/restore below see the real (post-migration) dir.
 	skillsMigrated := migrateSkillsToUserScope()
 
-	// Capability-gate skills, then reconcile the entire supported set from the
-	// CDN. This also repairs an old local skill when the watcher starts after OTA
-	// metadata was already published at its new version.
 	s.pruneUnsupportedSkills()
 	changedSkills := s.downloadSkills()
 	skillsSynced := len(changedSkills) > 0
@@ -221,8 +156,6 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Self-heal the unit (a device that reached claudecode without switch-runtime
-	// has no unit) and (re)start when needed — mirrors hermes.EnsureOnboarding.
 	unitInstalled := s.ensureGatewayUnit()
 	unitDown := !gatewayActive()
 
@@ -237,18 +170,16 @@ func (s *ClaudeCodeService) EnsureOnboarding() error {
 	enableClaudeCodeGateway()
 	if err := restartClaudeCodeGateway(); err != nil {
 		// Non-fatal: the new config is on disk; the bridge picks it up on its
-		// next (re)start. Don't block the os-server boot path.
+		// next (re)start.
+		// Don't block the os-server boot path.
 		slog.Warn("claudecode bridge restart failed", "component", "claudecode", "error", err)
 	}
-	// Send this after the restart attempt so the bridge is available to receive
-	// the re-read instruction, matching OpenClaw's onboarding ordering.
 	s.notifySkillChanges(changedSkills)
 	return nil
 }
 
 // runPresync materializes the embedded presync script to a temp file and runs
-// it. The script is self-contained (hardcodes /root/.claudecode +
-// /root/config/config.json) and idempotent, so it is safe to run on every boot.
+// it.
 func (s *ClaudeCodeService) runPresync() error {
 	f, err := os.CreateTemp("", "claudecode-presync-*.sh")
 	if err != nil {
@@ -295,9 +226,8 @@ func hashFiles(paths []string) string {
 
 // ensurePersonaFiles creates the empty persona satellite files the CLAUDE.md
 // imports point at (IDENTITY.md / USER.md / MEMORY.md + the memory/ daily dir)
-// so a fresh workspace has no dangling @imports. Never touches existing files —
-// their content belongs to the agent / persona migration. Returns true when
-// anything was created.
+// so a fresh workspace has no dangling @imports.
+// Never touches existing files — their content belongs to the agent / persona migration.
 func ensurePersonaFiles() bool {
 	created := false
 	if err := os.MkdirAll(filepath.Join(claudecodeWorkspaceDir, "memory"), 0o755); err != nil {
@@ -320,8 +250,6 @@ func ensurePersonaFiles() bool {
 // ensureClaudeMDBlock injects/refreshes the OS-managed block at the top of the
 // USER-level ~/.claude/CLAUDE.md, which Claude Code loads in every session
 // whatever the cwd — so the device persona + rules reach the coding sessions too.
-// The file is OS-owned: created when absent, with an owner-editable section
-// preserved below the block. Returns true if modified.
 func (s *ClaudeCodeService) ensureClaudeMDBlock() (bool, error) {
 	claudeFile := claudeUserMDPath
 
@@ -359,21 +287,16 @@ func (s *ClaudeCodeService) ensureClaudeMDBlock() (bool, error) {
 }
 
 // dropWorkspaceClaudeMDBlock strips the OS block from the legacy workspace
-// CLAUDE.md now that it lives at user scope. Both files load in the device-chat
-// session (project + user memory), so leaving the old copy would duplicate the
-// whole block in context — and its RELATIVE @imports/memory paths are exactly
-// what the move to absolute paths fixed. Owner notes below the block survive; the
-// file is deleted only when nothing but the block was in it. Returns true when
-// modified.
+// CLAUDE.md now that it lives at user scope.
 func dropWorkspaceClaudeMDBlock() bool {
 	path := filepath.Join(claudecodeWorkspaceDir, "CLAUDE.md")
 	content, err := os.ReadFile(path)
 	if err != nil {
-		return false // absent — already migrated / fresh device
+		return false
 	}
 	text := string(content)
 	if !strings.Contains(text, osMandatoryMarker) {
-		return false // no OS block to strip (pure owner notes)
+		return false
 	}
 
 	rest := strings.TrimSpace(stripMarkedBlock(text))
@@ -395,9 +318,7 @@ func dropWorkspaceClaudeMDBlock() bool {
 
 // ensureSoulMDBlock wraps this device's soul as a marker-delimited core block at
 // the top of workspace/SOUL.md; owner content below the closing `---` is
-// preserved. Mirrors picoclaw/openclaw's ensureSoulMDBlock. The soul is resolved
-// per device_type from ROBOT.md `soul_ref` (path or URL). A device that
-// declares no soul injects nothing.
+// preserved.
 func (s *ClaudeCodeService) ensureSoulMDBlock() (bool, error) {
 	soulFile := filepath.Join(claudecodeWorkspaceDir, "SOUL.md")
 
@@ -462,12 +383,12 @@ func (s *ClaudeCodeService) ensureSoulMDBlock() (bool, error) {
 }
 
 // deviceSoulCore resolves the soul text for this device from the `soul_ref` in
-// robots/<type>/ROBOT.md. Mirrors openclaw/picoclaw's deviceSoulCore.
+// robots/<type>/ROBOT.md.
 func (s *ClaudeCodeService) deviceSoulCore() (content []byte, hasSoul bool, err error) {
 	devType := s.config.DeviceTypeOrDefault()
 	ref := device.SoulRef(devType)
 	if ref == "" {
-		return nil, false, nil // soulless body: no override
+		return nil, false, nil
 	}
 	if strings.HasPrefix(ref, "http://") || strings.HasPrefix(ref, "https://") {
 		b, derr := downloadSoul(ref)
@@ -510,14 +431,11 @@ func isDefaultSoulHeading(trimmed string) bool {
 // claudecodeBuiltinSkills — Claude Code ships no device-local bundled skills of
 // its own (plugin skills live inside the plugin dirs, not the workspace), so
 // only the capability-gated platform skills exist under .claude/skills and the
-// keep-list is empty. Kept as a map for symmetry with picoclawBuiltinSkills.
+// keep-list is empty.
 var claudecodeBuiltinSkills = map[string]bool{}
 
 // pruneUnsupportedSkills removes skill dirs the device can't use from
-// claudecodeSkillsDir. A skill survives when it is EITHER (a) supported by
-// this device's capabilities (skills.Supported — the same gate openclaw uses) OR
-// (b) a claudecode built-in. Fail-open: when ROBOT.md declares no capabilities,
-// skills.Supported returns the full catalog, so nothing is pruned.
+// claudecodeSkillsDir.
 func (s *ClaudeCodeService) pruneUnsupportedSkills() {
 	skillsDir := claudecodeSkillsDir
 	entries, err := os.ReadDir(skillsDir)
@@ -549,16 +467,12 @@ func (s *ClaudeCodeService) pruneUnsupportedSkills() {
 
 // migrateSkillsToUserScope moves skills installed by an older os-server under
 // workspace/.claude/skills into the user-level claudecodeSkillsDir, then drops
-// the workspace copy. Without the move, devices already in the field would keep
-// project-scoped-only skills (invisible to coding sessions); without the drop,
-// Claude Code would register every skill twice (project + user) in the device
-// chat. Idempotent: a no-op once the legacy dir is gone. Returns true when
-// anything moved, so EnsureOnboarding restarts the bridge.
+// the workspace copy.
 func migrateSkillsToUserScope() bool {
 	legacyDir := filepath.Join(claudecodeWorkspaceDir, ".claude", "skills")
 	entries, err := os.ReadDir(legacyDir)
 	if err != nil {
-		return false // absent (already migrated / fresh device) — nothing to do
+		return false
 	}
 
 	if err := os.MkdirAll(claudecodeSkillsDir, 0o755); err != nil {
@@ -573,7 +487,7 @@ func migrateSkillsToUserScope() bool {
 		}
 		dst := filepath.Join(claudecodeSkillsDir, e.Name())
 		if _, err := os.Stat(dst); err == nil {
-			continue // already at user scope — the legacy copy is redundant
+			continue
 		}
 		if err := os.Rename(filepath.Join(legacyDir, e.Name()), dst); err != nil {
 			slog.Warn("migrate skills: move failed", "component", "claudecode-onboarding", "skill", e.Name(), "error", err)
@@ -582,8 +496,6 @@ func migrateSkillsToUserScope() bool {
 		moved++
 	}
 
-	// Drop the legacy dir even when nothing moved (every skill already existed at
-	// user scope) — leaving it would double-register each skill.
 	if err := os.RemoveAll(legacyDir); err != nil {
 		slog.Warn("migrate skills: remove legacy dir failed", "component", "claudecode-onboarding", "error", err)
 	}
@@ -615,7 +527,7 @@ func seedFileIfAbsent(efs embed.FS, src, dst string) {
 }
 
 // stripMarkedBlock removes the block between the marker and the next ---
-// separator. Copied from runtimes/openclaw/onboarding.go (package-private there).
+// separator.
 func stripMarkedBlock(text string) string {
 	lines := strings.Split(text, "\n")
 	var cleaned []string

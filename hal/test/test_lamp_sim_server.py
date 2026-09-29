@@ -107,13 +107,13 @@ class TestLampSimulationServer(unittest.TestCase):
         _, light = self._json("/led/solid", "POST", {"color": [255, 255, 255]})
         self.assertEqual(light["status"], "ok")
         _, color = self._json("/led/color")
-        self.assertLessEqual(max(color["color"]), 120)  # Lamp SAFETY.md ceiling
+        self.assertLessEqual(max(color["color"]), 120)
 
         with self._response("/camera/snapshot") as response:
             self.assertEqual(response.headers.get_content_type(), "image/jpeg")
             self.assertGreater(len(response.read()), 1_000)
 
-        # Read the shipped policy rather than retaining an old tuning value.
+        # Read the shipped SAFETY.md ceiling rather than hard-coding a tuning value.
         from hal.safety.policy import load_safety, max_volume_pct
         ceiling = max_volume_pct(load_safety(str(REPO_ROOT / "robots/lamp"), "SAFETY.md"))
         expected_volume = min(42, ceiling) if ceiling is not None else 42
@@ -157,8 +157,7 @@ class TestLampSimulationServer(unittest.TestCase):
         self.assertEqual(stopped_effect["status"], "ok")
 
     def test_a_suppressed_motor_refuses_play_and_names_the_mode(self):
-        """A play the driver drops must not come back as "ok", and GET /servo
-        must name the mode that dropped it."""
+        """A dropped play is not reported as ok and GET /servo names the dropping mode."""
         try:
             _, held = self._json("/servo/hold", "POST", {})
             self.assertEqual(held["status"], "ok")
@@ -184,7 +183,6 @@ class TestLampSimulationServer(unittest.TestCase):
         self.assertIsNone(resumed["motion_mode"])
         _, ok = self._json("/servo/play", "POST", {"recording": "nod"})
         self.assertEqual(ok["status"], "ok")
-        # A play that ran carries no reason at all, not a null to special-case.
         self.assertNotIn("reason", ok)
         time.sleep(0.05)
         _, playing = self._json("/servo")
@@ -204,7 +202,6 @@ class TestLampSimulationServer(unittest.TestCase):
             places=3,
         )
 
-        # Every other aim still keeps the yaw it was given.
         self._json("/servo/aim", "POST", {"direction": "left", "duration": 0.1})
         _, up = self._json("/servo/aim", "POST", {"direction": "up", "duration": 0.1})
         self.assertAlmostEqual(
@@ -213,7 +210,6 @@ class TestLampSimulationServer(unittest.TestCase):
             places=3,
         )
 
-        # The fallback lands on center, but a typo must not move yaw.
         _, unknown = self._json("/servo/aim", "POST", {"direction": "sideways", "duration": 0.1})
         self.assertAlmostEqual(
             unknown["positions"]["base_yaw.pos"],
@@ -222,15 +218,7 @@ class TestLampSimulationServer(unittest.TestCase):
         )
 
     def test_named_aims_match_the_reference_lamp_driver(self):
-        # AnimationService keeps the current yaw for desk/up/down, changes only
-        # base_yaw for left/right, resets it for an explicit center. The
-        # simulator must not invent a friendlier two-joint table.
-        # Asserted against AIM_PRESETS, never against copied numbers: these
-        # lines used to hardcode base_pitch -20.0 / elbow_pitch 32.0 / yaw
-        # +-90.0 and went red the day the table was retuned (center is
-        # 25.0/43.0 now, the side yaws -91.57/88.36). A copy of the table
-        # cannot catch the simulator drifting from it — it only reports that
-        # someone edited the table.
+        # Asserted against AIM_PRESETS, never copied numbers, so retuning the table stays green.
         from hal.presets import AIM_PRESETS
 
         def _aim(direction):
@@ -247,9 +235,6 @@ class TestLampSimulationServer(unittest.TestCase):
         for joint in ("base_yaw.pos", "base_pitch.pos", "elbow_pitch.pos"):
             _assert_joint(centered, joint, center[joint], f"center {joint}")
 
-        # Left/right own YAW ONLY (animation_service.py: the lamp's 5-DOF
-        # convention) — every other joint keeps the pose it was already in,
-        # which after the center above is center's.
         for direction in ("right", "left"):
             aimed = _aim(direction)
             _assert_joint(
@@ -270,9 +255,6 @@ class TestLampSimulationServer(unittest.TestCase):
         self.assertIn("/simulator/reference", page)
         _, sim_state = self._json("/simulator/state")
         self.assertEqual(sim_state["media"], "virtual")
-        # The viewer reads joint angles as offsets from the center preset,
-        # because the model's rest pose IS the centered lamp. Serving the preset
-        # keeps the page from hardcoding a copy that drifts from presets.json.
         from hal.presets import AIM_CENTER, AIM_PRESETS
 
         self.assertEqual(sim_state["rig_zero"], AIM_PRESETS[AIM_CENTER])

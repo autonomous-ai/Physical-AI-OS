@@ -16,8 +16,7 @@ const (
 	jevMaxInputBytes = 2000
 )
 
-// Options are explicit per-request settings. Disabled is the zero value.
-// Endpoint and APIKey come from config.json's Autonomous proxy settings.
+// Options are per-request settings (zero value = disabled); from config.json proxy settings.
 type Options struct {
 	Enabled  bool
 	Endpoint string
@@ -29,9 +28,8 @@ type jevDecider interface {
 	decide(context.Context, string, string, string, []Candidate) (Selection, error)
 }
 
-// Resolver classifies a request without performing any hardware action.
-// Reuse one per handler: concurrent calls skip rather than queue, and provider
-// errors open a brief cooldown. No hardware work runs in a detached goroutine.
+// Resolver classifies a request without any hardware action; concurrent calls skip,
+// and provider errors open a brief cooldown.
 type Resolver struct {
 	client     jevDecider
 	harness    bool
@@ -41,11 +39,10 @@ type Resolver struct {
 
 func NewResolver() *Resolver { return &Resolver{client: &jevClient{}} }
 
-// Resolve returns a code-owned selection or an empty Intent to defer to the
-// main agent. The caller owns capability checks and all hardware execution.
+// Resolve returns a code-owned selection, or an empty Intent to defer to the agent.
 func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candidate, options Options) Selection {
 	skip := func(reason string) Selection {
-		// Routing diagnostics must not expose the utterance or provider settings.
+		// Never log the utterance or provider settings.
 		slog.Info("intent Jev decision", "component", "intent", "outcome", "skipped", "reason", reason)
 		return Selection{}
 	}
@@ -63,8 +60,7 @@ func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candid
 	}
 	maxInputBytes := jevMaxInputBytes
 	if r.harness {
-		// Project names, paths and structured task context must retain their case
-		// and punctuation; hardware speech normalization is not suitable here.
+		// Keep case and punctuation for session context.
 		text = strings.TrimSpace(text)
 		maxInputBytes = 8000
 	} else {
@@ -96,7 +92,6 @@ func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candid
 	elapsed := time.Since(started).Milliseconds()
 	outcome := "abstain"
 	defer func() {
-		// Never log credentials, provider bodies or the utterance here.
 		attrs := []any{"component", "intent", "outcome", outcome, "decision_ms", elapsed}
 		if outcome == "selected" {
 			attrs = append(attrs, "intent", id.Intent)

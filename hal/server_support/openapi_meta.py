@@ -1,8 +1,4 @@
-"""Static OpenAPI metadata for the HAL FastAPI app — description + tag docs.
-
-Pure data extracted from server.py to keep the app-construction call readable.
-No behavior change: these are passed straight into FastAPI(...).
-"""
+"""Static OpenAPI metadata for the HAL FastAPI app (description + tag docs)."""
 
 API_DESCRIPTION = (
     "Hardware driver API for the OS. "

@@ -1,5 +1,4 @@
-// Package hal provides a lightweight HTTP client for the HAL hardware API.
-// Both os-server and bootstrap-server use this to control the device on port 5001.
+// Package hal is a lightweight HTTP client for the HAL hardware API on port 5001.
 package hal
 
 import (
@@ -18,28 +17,17 @@ import (
 	"time"
 )
 
-// ErrSpeakerMuted reports that HAL accepted the speak request but suppressed
-// playback because the device speaker is muted (HTTP 200 with
-// status="suppressed" — see HAL routes/voice.py). Nothing was synthesized or
-// spoken. Callers can surface the mute (e.g. a tts_muted flow event) instead
-// of treating it as a delivery failure.
+// ErrSpeakerMuted reports that HAL accepted a speak request but suppressed it (speaker muted).
 var ErrSpeakerMuted = errors.New("speaker muted")
 
 const BaseURL = "http://127.0.0.1:5001"
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
 
-// apiKey is the shared HAL auth token (matches config.json::llm_api_key).
-// HAL's local_only_middleware accepts Authorization: Bearer <apiKey> as one
-// of the allowed paths. Loopback callers still pass without a token, so an
-// unset key keeps existing behavior — the header is only attached when set.
-// atomic.Value lets the server's config-change listener swap the key at runtime
-// without a mutex on the hot request path.
+// apiKey is the HAL bearer token (config llm_api_key); the header is sent only when set.
 var apiKey atomic.Value // string
 
-// SetAPIKey registers the bearer token attached to every outbound request.
-// Pass the empty string to drop the Authorization header (e.g. local LLM
-// mode where llm_api_key is unset).
+// SetAPIKey sets the bearer token for outbound requests; "" drops the header.
 func SetAPIKey(key string) {
 	apiKey.Store(key)
 }
@@ -51,8 +39,7 @@ func getAPIKey() string {
 	return ""
 }
 
-// newRequest builds an http.Request to BaseURL+path with JSON content type
-// (when a body is present) and the bearer Authorization header (when set).
+// newRequest builds a request to BaseURL+path with JSON content type and bearer auth when set.
 func newRequest(method, path string, body io.Reader) (*http.Request, error) {
 	req, err := http.NewRequest(method, BaseURL+path, body)
 	if err != nil {
@@ -67,8 +54,7 @@ func newRequest(method, path string, body io.Reader) (*http.Request, error) {
 	return req, nil
 }
 
-// doGet / doPost are thin wrappers so every call site picks up the
-// Authorization header automatically. Replace direct httpClient.Get/Post.
+// doGet sends an authorized GET to HAL.
 func doGet(path string) (*http.Response, error) {
 	req, err := newRequest("GET", path, nil)
 	if err != nil {
@@ -85,10 +71,7 @@ func doPost(path string, body io.Reader) (*http.Response, error) {
 	return httpClient.Do(req)
 }
 
-// ─── Camera ─────────────────────────────────────────────────────────────────
-
-// snapshotClient is separate from httpClient because /camera/snapshot freezes
-// the servos and waits for a stable frame, which overruns the shared 5s budget.
+// snapshotClient has a longer timeout: /camera/snapshot freezes servos and waits for a stable frame.
 var snapshotClient = &http.Client{Timeout: 20 * time.Second}
 
 // Snapshot captures a frame and returns the file path HAL saved it to.
@@ -103,9 +86,7 @@ func Snapshot(width, quality int) (string, error) {
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		// Carry HAL's `detail` up: the agent reads this string to decide whether
-		// to retry, and "returned 503" alone reads as a hiccup while HAL may be
-		// saying the camera hardware is absent.
+		// Surface HAL's `detail`; the agent uses it to decide whether to retry.
 		var body struct {
 			Detail string `json:"detail"`
 		}
@@ -127,14 +108,7 @@ func Snapshot(width, quality int) (string, error) {
 	return result.Path, nil
 }
 
-// ─── LED ────────────────────────────────────────────────────────────────────
-
-// SetEffect stops any running effect, then starts a new one.
-//
-// All callers from the os-server (statusled health signals, ambient breathing, bootstrap
-// OTA progress) are system-level overlays — they must not clobber the user's
-// saved LED state, which emotion restore reads back from. The transient flag
-// tells HAL to dispatch the effect without writing _user_led_state.
+// SetEffect replaces any running effect with a transient one that never overwrites the user's saved LED state.
 func SetEffect(effect string, r, g, b int, speed float64) {
 	postSilent("/led/effect/stop", "{}")
 	body := fmt.Sprintf(`{"effect":"%s","color":[%d,%d,%d],"speed":%.2f,"transient":true}`, effect, r, g, b, speed)
@@ -146,11 +120,8 @@ func StopEffect() {
 	postSilent("/led/effect/stop", "{}")
 }
 
-// SetStatus applies an os-server status state (booting/error/ota/…) by name.
-// HAL owns the appearance (color/effect/speed) for each state via STATUS_LED_PRESETS
-// — overridable per device in presets.json — so the OS sends only the state name,
-// never an RGB. Like SetEffect this is a transient system overlay (HAL applies it
-// without clobbering the user's saved LED state). Fire-and-forget.
+// SetStatus applies a named status LED state (HAL owns its look) as a transient overlay; fire-and-forget.
+// Example: SetStatus("booting")
 func SetStatus(stateName string) {
 	postSilent("/led/status", fmt.Sprintf(`{"state":%q}`, stateName))
 }
@@ -181,17 +152,12 @@ func SetStatusContext(ctx context.Context, stateName string) error {
 	return nil
 }
 
-// RestoreLED hands the strip back to the user's saved LED state (or clears it
-// when no user state exists). Use after a transient overlay (statusled flash,
-// OTA progress) finishes so the strip doesn't get stuck on the overlay's
-// final frame.
+// RestoreLED returns the strip to the user's saved LED state after a transient overlay.
 func RestoreLED() {
 	postSilent("/led/restore", "{}")
 }
 
-// ResetLEDToResting clears HAL's saved user LED state and turns the strip off.
-// The next restore therefore uses the configured ambient resting look. This is
-// used when setup succeeds to discard the temporary white provisioning cue.
+// ResetLEDToResting clears the saved user LED state and turns the strip off.
 func ResetLEDToResting() {
 	postSilent("/led/off", "{}")
 }
@@ -225,9 +191,7 @@ func GetColor() ([3]int, error) {
 	return color, nil
 }
 
-// ─── Voice / TTS ────────────────────────────────────────────────────────────
-
-// Speak sends text to TTS playback (speaker locks mic during playback).
+// Speak sends text to TTS playback.
 func Speak(text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
 	return post("/voice/speak", body)
@@ -239,10 +203,7 @@ func GrantWakeFocus(source string) error {
 	return post("/voice/wake-focus?source="+url.QueryEscape(source), nil)
 }
 
-// ApplyTTSConfig pushes voice settings into the running hal. The service reads
-// provider and voice per utterance, so this takes effect on the next sentence
-// — where the restart it replaces took the microphone, speaker and wake word
-// down with it for ten to fifteen seconds.
+// ApplyTTSConfig pushes voice settings into the running HAL; applies from the next sentence.
 func ApplyTTSConfig(provider, voice, apiKey, baseURL string, speed float64) error {
 	body, _ := json.Marshal(map[string]any{
 		"speed":    speed,
@@ -254,49 +215,33 @@ func ApplyTTSConfig(provider, voice, apiKey, baseURL string, speed float64) erro
 	return post("/voice/tts/config", body)
 }
 
-// SpeakQueue sends text to /voice/speak-queue — same playback semantics as
-// Speak when the speaker is idle, but queues+pre-synthesizes the audio if
-// the speaker is currently playing another speak(). The queued audio
-// continues on the same ALSA stream when the current speech ends, so the
-// agent's sentence-streamed reply plays as one continuous utterance instead
-// of N speak() calls separated by ~400ms TTFB each.
+// SpeakQueue speaks text, queueing and pre-synthesizing it behind current playback for gapless replies.
 func SpeakQueue(text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
 	return post("/voice/speak-queue", body)
 }
 
-// SpeakReply is Speak for the agentic runtime's actual reply: it sets
-// realtime_feedback so HAL feeds the spoken text back to the realtime voice
-// agent as [TTS HISTORY] (keeping it aware of what the device said). Use this
-// ONLY for genuine agent output — hardcoded TTS (fillers, mumble, system
-// notices) must use plain Speak so it never pollutes the realtime model.
+// SpeakReply speaks an agent reply and feeds it to the realtime voice agent's history.
+// Use only for genuine agent output, never hardcoded phrases.
 func SpeakReply(text string) error {
 	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true})
 	return postSpeak("/voice/speak", body)
 }
 
-// FeedRealtimeHistory records an agent reply with the realtime voice agent
-// WITHOUT speaking it. Needed for a reply the speaker never gets: a turn muted
-// by the physical cancel gesture keeps running and its text is still the
-// answer the user asked for, but the normal history feed rides on TTS
-// completion, so dropping the speech also dropped the realtime session's only
-// record of the answer. Same rule as SpeakReply about what may be sent —
-// genuine agent output only, never hardcoded notices.
+// FeedRealtimeHistory records an agent reply with the realtime voice agent without speaking it.
+// Genuine agent output only, as with SpeakReply.
 func FeedRealtimeHistory(text string) error {
 	body, _ := json.Marshal(map[string]string{"text": text})
 	return post("/voice/realtime/history", body)
 }
 
-// SpeakQueueReply is SpeakQueue with realtime feedback — the queued sibling of
-// SpeakReply for sentence-streamed agent replies. See SpeakReply.
+// SpeakQueueReply is SpeakQueue with realtime feedback (see SpeakReply).
 func SpeakQueueReply(text string) error {
 	body, _ := json.Marshal(map[string]any{"text": text, "realtime_feedback": true})
 	return postSpeak("/voice/speak-queue", body)
 }
 
-// SpeakQueueReplyForTurn is the turn-owned form of SpeakQueueReply. turnSeq
-// is allocated by the agent handler when a turn starts. HAL uses the pair to
-// make the newest turn win even when background HTTP posts arrive out of order.
+// SpeakQueueReplyForTurn is SpeakQueueReply owned by a turn; HAL lets the highest turnSeq win.
 func SpeakQueueReplyForTurn(text, turnID string, turnSeq uint64) error {
 	body, _ := json.Marshal(map[string]any{
 		"text":              text,
@@ -313,16 +258,12 @@ func SpeakInterruptible(text string) error {
 	return post("/voice/speak", body)
 }
 
-// SpeakCached is the non-interruptible cached variant -- used for intent
-// confirms ("Volume up!", "Light on!") where the reply is short and should
-// play to completion. On hit ~50ms playback; on miss render+save+play.
+// SpeakCached plays text via the WAV cache, non-interruptible. Example: SpeakCached("Light on!")
 func SpeakCached(text string) error {
 	return SpeakCachedForTurn(text, "")
 }
 
-// SpeakCachedForTurn is SpeakCached plus the turn (or voice-metrics
-// interaction) the phrase answers. HAL uses turnID for measurement
-// attribution only; playback behaviour is identical.
+// SpeakCachedForTurn is SpeakCached with turnID for metrics attribution only.
 func SpeakCachedForTurn(text, turnID string) error {
 	payload := map[string]any{
 		"text":   text,
@@ -335,18 +276,12 @@ func SpeakCachedForTurn(text, turnID string) error {
 	return post("/voice/speak", body)
 }
 
-// SpeakCachedInterruptible plays text via the WAV cache (instant on hit).
-// On miss, hal renders + saves WAV then plays. Use for fixed phrases
-// like dead-air fillers where a real reply may need to cut it short.
+// SpeakCachedInterruptible plays text via the WAV cache; a real reply may cut it short.
 func SpeakCachedInterruptible(text string) error {
 	return SpeakCachedInterruptibleForTurn(text, "")
 }
 
-// SpeakCachedInterruptibleForTurn is SpeakCachedInterruptible plus the run the
-// phrase belongs to. HAL uses turnID for measurement attribution only (which
-// turn a played filler was for — see hal/telemetry/voice_metrics.py); playback
-// behaviour is identical, and the turn_seq gating stays exclusive to the
-// speak-queue path.
+// SpeakCachedInterruptibleForTurn is SpeakCachedInterruptible with turnID for metrics attribution only.
 func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 	payload := map[string]any{
 		"text":          text,
@@ -360,13 +295,7 @@ func SpeakCachedInterruptibleForTurn(text, turnID string) error {
 	return post("/voice/speak", body)
 }
 
-// SpeakPreview plays a TTS preview using the supplied voice/provider/credentials.
-// The os-server's /api/voice/preview handler uses this to fan out the operator's
-// "test voice" click without exposing the TTS API key in the browser body —
-// the os-server reads the key server-side from config and passes it here. Each arg
-// can be empty: HAL falls back to its own config-loaded defaults when a
-// field is missing, so partial overrides (e.g. just voice) work.
-// An optional speed overrides the saved rate for this preview only.
+// SpeakPreview plays a TTS preview; empty args use HAL defaults, optional speed applies to this preview only.
 func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed ...*float64) error {
 	payload := map[string]any{"text": text}
 	if len(speed) > 0 && speed[0] != nil {
@@ -385,15 +314,11 @@ func SpeakPreview(text, voice, provider, apiKey, baseURL string, speed ...*float
 		payload["tts_base_url"] = baseURL
 	}
 	body, _ := json.Marshal(payload)
-	// Generous timeout: ElevenLabs/OpenAI TTFB on first synthesis can run
-	// 1-3s; the default 5s `post` budget is tight when the preview phrase
-	// is long. Mirror PrerenderCached's window.
+	// First synthesis can exceed the default 5s budget.
 	return postWithTimeout("/voice/speak", body, 30*time.Second)
 }
 
-// PrerenderCached asks hal to render+save WAV for text without playing.
-// Used at startup to warm the cache for known fillers/intent confirms so
-// the first runtime call is a hit. Idempotent: no-op when WAV already exists.
+// PrerenderCached renders and caches the WAV for text without playing it; idempotent.
 func PrerenderCached(text string) error {
 	body, _ := json.Marshal(map[string]any{
 		"text":      text,
@@ -421,9 +346,8 @@ func SetVolume(pct int) error {
 	return post("/audio/volume", body)
 }
 
-// GetVolume reads the current speaker volume and its allowed ceiling together.
-// A missing ceiling is compatible with older HAL versions; a missing or invalid
-// current volume must fail rather than accidentally turn a quiet speaker up.
+// GetVolume returns the current volume and ceiling (100 when HAL reports none).
+// An invalid current volume is an error so callers never turn a quiet speaker up.
 func GetVolume() (current, ceiling int, err error) {
 	resp, err := doGet("/audio/volume")
 	if err != nil {
@@ -453,13 +377,8 @@ func GetVolume() (current, ceiling int, err error) {
 	return *result.Volume, ceiling, nil
 }
 
-// MaxVolume returns the speaker ceiling (%) HAL enforces from the device's
-// SAFETY.md `audio.max_volume`, and true when one is declared. False means the
-// device declares no ceiling — the full 0-100 scale is available.
-//
-// This is advisory only: HAL clamps every /audio/volume request regardless, so a
-// caller that skips this (or whose read fails) cannot exceed the bound — it just
-// loses the ability to scale its steps to the real range.
+// MaxVolume returns the SAFETY.md speaker ceiling (%), false when none is declared.
+// Advisory only: HAL clamps every /audio/volume request regardless.
 func MaxVolume() (int, bool) {
 	resp, err := doGet("/audio/volume")
 	if err != nil {
@@ -478,13 +397,7 @@ func MaxVolume() (int, bool) {
 	return *r.MaxVolume, true
 }
 
-// VoiceStartConfig configures the voice pipeline started by StartVoice.
-// Empty TTSInstructions and TTSProvider are omitted from the payload.
-//
-// LLMKey authenticates LLM-based features. STTKey authenticates
-// AutonomousSTT (used when DeepgramKey is empty); TTSKey authenticates
-// the TTS provider. Empty STTKey/TTSKey means HAL falls back to
-// LLMKey — keep them empty when one credential covers everything.
+// VoiceStartConfig configures StartVoice; empty optional fields are omitted and STTKey/TTSKey fall back to LLMKey.
 type VoiceStartConfig struct {
 	DeepgramKey     string
 	LLMKey          string
@@ -530,18 +443,12 @@ func StartVoice(cfg VoiceStartConfig) error {
 	return post("/voice/start", body)
 }
 
-// StopVoicePipeline stops the voice pipeline entirely (different from StopTTS
-// which only interrupts active playback). Used by healthwatch to clear a stuck
-// ALSA stream before restarting.
+// StopVoicePipeline stops the whole voice pipeline (StopTTS only interrupts playback).
 func StopVoicePipeline() error {
 	return post("/voice/stop", []byte("{}"))
 }
 
-// ListVoices returns available TTS voices for the given provider, filtered
-// to lang's curated bucket when lang is non-empty (BCP-47, e.g. "vi",
-// "zh-CN"). Empty lang returns the full flat list. Returns an error if
-// HAL is unreachable or returns non-2xx — callers should fall back to
-// a static list in that case.
+// ListVoices returns TTS voices for provider, filtered by BCP-47 lang when non-empty.
 func ListVoices(provider, lang string) ([]string, error) {
 	path := "/voice/voices?provider=" + provider
 	if lang != "" {
@@ -574,8 +481,6 @@ func SetVoiceConfig(wakeWords []string) {
 	postSilent("/voice/config", string(b))
 }
 
-// ─── Health / Servo ─────────────────────────────────────────────────────────
-
 // Health mirrors the /health response from HAL.
 type Health struct {
 	Servo   bool `json:"servo"`
@@ -587,8 +492,7 @@ type Health struct {
 	TTS     bool `json:"tts"`
 }
 
-// GetVersion returns HAL's runtime version string (from FastAPI app.version
-// at /version). Empty + error if HAL is unreachable.
+// GetVersion returns HAL's runtime version from /version.
 func GetVersion() (string, error) {
 	resp, err := doGet("/version")
 	if err != nil {
@@ -669,13 +573,9 @@ func PlayServo(recording string) error {
 	return post("/servo/play", body)
 }
 
-// StopServoTracking halts any in-flight servo object-tracking on HAL. Used as a
-// safety reflex when the gateway link drops: tracking is fed by remote vision
-// updates, so without the cloud the device would keep chasing a stale target.
-// Idempotent — safe to call when nothing is tracking.
+// StopServoTracking halts servo object-tracking; idempotent. Called when the gateway link drops
+// so the device never chases a stale target.
 func StopServoTracking() error { return post("/servo/track/stop", nil) }
-
-// ─── Emotion ────────────────────────────────────────────────────────────────
 
 // SetEmotion triggers an emotion animation on HAL.
 func SetEmotion(name string, intensity float64) error {
@@ -683,9 +583,7 @@ func SetEmotion(name string, intensity float64) error {
 	return post("/emotion", body)
 }
 
-// GetSleeping returns HAL's own sleep flag from /emotion/status. HAL updates it
-// on every /emotion call, including the ones that never reach os-server (a
-// button tap wakes the device in-process), so it is the authoritative answer.
+// GetSleeping returns HAL's authoritative sleep flag from /emotion/status.
 func GetSleeping() (bool, error) {
 	resp, err := doGet("/emotion/status")
 	if err != nil {
@@ -726,19 +624,13 @@ func GetEmotion() (string, error) {
 	return r.CurrentEmotion, nil
 }
 
-// ─── Generic passthrough ────────────────────────────────────────────────────
-
-// PostRaw sends a JSON body to the given path. Use when the path is dynamic
-// (e.g. HW markers emitted by the agent or local intent rules). Empty body
-// sends nil request body.
+// PostRaw sends a JSON body to a dynamic path; an empty body sends none.
 func PostRaw(path, body string) error {
 	if body == "" {
 		return post(path, nil)
 	}
 	return post(path, []byte(body))
 }
-
-// ─── Internals ──────────────────────────────────────────────────────────────
 
 // post sends a JSON body and returns an error on transport failure or non-2xx status.
 func post(path string, body []byte) error {
@@ -757,12 +649,8 @@ func post(path string, body []byte) error {
 	return nil
 }
 
-// postSpeak is post() for /voice/speak* endpoints: on 2xx it also decodes the
-// response body and returns ErrSpeakerMuted when HAL reports the request was
-// suppressed (speaker muted). A malformed/unexpected body is NOT an error —
-// the speak itself succeeded, so decode failures are ignored.
+// postSpeak is post for /voice/speak*, returning ErrSpeakerMuted when HAL suppressed the speech.
 func postSpeak(path string, body []byte) (err error) {
-	// Observe the final runtime-sanitized payload without adding wire fields.
 	var timing struct {
 		Text   string `json:"text"`
 		TurnID string `json:"turn_id"`
@@ -798,10 +686,7 @@ func postSpeak(path string, body []byte) (err error) {
 	return nil
 }
 
-// postWithTimeout is post() with a per-call timeout override -- needed for
-// long-running endpoints like /voice/speak prerender that can take 1-3s
-// per ElevenLabs render and would exceed the default httpClient 5s budget
-// when warming many phrases serially.
+// postWithTimeout is post with a per-call timeout for slow endpoints.
 func postWithTimeout(path string, body []byte, timeout time.Duration) error {
 	client := &http.Client{Timeout: timeout}
 	var reader io.Reader
@@ -823,8 +708,7 @@ func postWithTimeout(path string, body []byte, timeout time.Duration) error {
 	return nil
 }
 
-// postSilent is a fire-and-forget variant for LED calls — hardware may be
-// unavailable (e.g. during boot) and callers don't care about the outcome.
+// postSilent is a fire-and-forget post; errors are ignored.
 func postSilent(path, body string) {
 	resp, err := doPost(path, strings.NewReader(body))
 	if err != nil {
@@ -833,16 +717,7 @@ func postSilent(path, body string) {
 	resp.Body.Close()
 }
 
-// SpeakerBusy reports whether HAL is currently speaking a TTS utterance.
-//
-// The agent turn that produced a reply ends when the text is handed to the TTS
-// queue, not when the speaker finishes with it — a long answer keeps playing
-// for tens of seconds after that. Callers that must not step on a reply in
-// progress (sensing replay, see lib/speakergate) ask here instead of trusting
-// the agent's busy flag.
-//
-// Fails open: any transport or decode error reports "not busy", so a HAL that
-// is down or slow can never wedge the sensing pipeline.
+// SpeakerBusy reports whether HAL is speaking; fails open (errors report not busy).
 func SpeakerBusy() bool {
 	resp, err := doGet("/voice/status")
 	if err != nil {

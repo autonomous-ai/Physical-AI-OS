@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# A successful HTTP 101 verifies that PicoClaw has bound its WebSocket endpoint
-# and accepts the device-local bearer credential.
+# A successful HTTP 101 verifies that PicoClaw has bound its WebSocket endpoint and accepts the
+# device-local bearer credential.
 set -euo pipefail
 
 headers="$(curl --http1.1 --silent --max-time 2 -D - -o /dev/null \

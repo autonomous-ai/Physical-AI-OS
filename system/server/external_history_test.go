@@ -23,7 +23,6 @@ func TestHarnessHistoryPersistsInputAndExactAttributedReply(t *testing.T) {
 	if err = s.beginHarnessHistory("origin", "Open Chrome", state); err != nil {
 		t.Fatal(err)
 	}
-	// Reload proves input exists before a final response or mode-off event.
 	store, err = externalhistory.New(dir)
 	if err != nil {
 		t.Fatal(err)

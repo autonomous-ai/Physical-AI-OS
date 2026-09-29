@@ -7,8 +7,6 @@ import (
 	"time"
 )
 
-// ---- splitProviderModel ----
-
 func TestSplitProviderModel(t *testing.T) {
 	tests := []struct {
 		input    string
@@ -18,9 +16,8 @@ func TestSplitProviderModel(t *testing.T) {
 	}{
 		{"autonomous/claude-opus-4-6", "autonomous", "claude-opus-4-6", true},
 		{"openai-codex/gpt-5.5", "openai-codex", "gpt-5.5", true},
-		// Model key may itself contain slashes (e.g. "org/model/variant")
 		{"autonomous/meta/llama-3", "autonomous", "meta/llama-3", true},
-		{"claude-opus-4-6", "", "claude-opus-4-6", false}, // no provider prefix
+		{"claude-opus-4-6", "", "claude-opus-4-6", false},
 		{"", "", "", false},
 	}
 	for _, tc := range tests {
@@ -31,8 +28,6 @@ func TestSplitProviderModel(t *testing.T) {
 		}
 	}
 }
-
-// ---- extractPrimaryModel ----
 
 func TestExtractPrimaryModel(t *testing.T) {
 	cfg := map[string]any{
@@ -64,21 +59,16 @@ func TestExtractPrimaryModel_Missing(t *testing.T) {
 	}
 }
 
-// ---- flag file helpers ----
-
 // TestLampWriteFlag_ContentMatch: flag must match the primary written
 func TestLampWriteFlag_ContentMatch(t *testing.T) {
 	dir := t.TempDir()
 
-	// No flag yet → not a Lamp write.
 	if isOSWrite(dir, "autonomous/claude-opus-4-6") {
 		t.Fatal("expected no match before setOSWriteFlag")
 	}
 
-	// Write flag with opus.
 	setOSWriteFlag(dir, "autonomous/claude-opus-4-6")
 
-	// Same primary → Lamp write.
 	if !isOSWrite(dir, "autonomous/claude-opus-4-6") {
 		t.Fatal("expected match after setOSWriteFlag with same primary")
 	}
@@ -88,7 +78,6 @@ func TestLampWriteFlag_ContentMatch(t *testing.T) {
 		t.Fatal("expected mismatch: flag carries opus but file now has haiku")
 	}
 
-	// After clear, gone.
 	clearOSWriteFlag(dir)
 	if isOSWrite(dir, "autonomous/claude-opus-4-6") {
 		t.Fatal("expected no match after clearOSWriteFlag")
@@ -102,7 +91,6 @@ func TestLampWriteFlag_Expired(t *testing.T) {
 
 	setOSWriteFlag(dir, "autonomous/claude-opus-4-6")
 
-	// Back-date mtime beyond the window.
 	past := time.Now().Add(-(osWriteFlagWindow + time.Second))
 	if err := os.Chtimes(flagPath, past, past); err != nil {
 		t.Fatalf("chtimes: %v", err)

@@ -20,8 +20,6 @@ def request_voice_disable(gesture_id: str) -> dict:
 
 
 def request_focus_step(gesture_id: str, direction: str, generation: int) -> dict:
-    # A 200 here means the app already switched; a focus snapshot that has not
-    # caught up yet is not a failure (the OS poller fills it in).
     return _request_voice_gesture(
         {"gestureId": gesture_id, "direction": direction, "generation": generation},
         url="http://127.0.0.1:5000/api/harness/voice-mode/focus", require_focus=False,

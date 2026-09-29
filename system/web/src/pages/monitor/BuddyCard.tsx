@@ -54,21 +54,18 @@ export function BuddyCard() {
     }
   }, []);
 
-  // Initial + poll every 5s
   useEffect(() => {
     fetchStatus();
     const id = setInterval(fetchStatus, 5000);
     return () => clearInterval(id);
   }, [fetchStatus]);
 
-  // Tick once per second while a code is active (drives countdown + auto-expire UI).
   useEffect(() => {
     if (!codeExpiresAt) return;
     const id = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(id);
   }, [codeExpiresAt]);
 
-  // Clear code on expiry / on successful pair detection.
   useEffect(() => {
     if (codeExpiresAt && now >= codeExpiresAt) {
       setCode(null);
@@ -173,7 +170,6 @@ export function BuddyCard() {
         <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading…</span>
       )}
 
-      {/* Paired state */}
       {status?.paired && (
         <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
           {status.name && (
@@ -214,7 +210,6 @@ export function BuddyCard() {
         </div>
       )}
 
-      {/* Not-paired state — show pair button OR active code */}
       {status && !status.paired && !code && (
         <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
           <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>

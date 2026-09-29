@@ -1,12 +1,4 @@
-"""A trigger the live noise-guard rejects must not erase the pre-roll.
-
-Device-observed on lamp-0c4e (ReSpeaker Lite) 2026-09-21: "Play song for me
-again" — the plosive "Play" opened a trigger the guard scored as noise (span
-0.32s, voiced 0.21) and skipped; "song for me again" re-triggered ~100ms later
-with pre-roll=0 because the skip path had cleared the lookback, so Gemini heard
-'song for me again.'. The lookback is a bounded deque, so keeping it after a
-skip costs nothing and the next trigger carries the rejected word.
-"""
+"""A trigger the live noise-guard rejects must not erase the pre-roll."""
 
 from unittest.mock import Mock, patch
 
@@ -40,7 +32,7 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     service._vad_entry_is_speech = module.VoiceService._vad_entry_is_speech.__get__(service)
     service._silero_vad = None  # energy + webrtc gate only; Silero is opt-in
     service._live_decision.side_effect = [first_decision, "live"]
-    service._live_session.return_value = True  # ends the loop
+    service._live_session.return_value = True
 
     monkeypatch.setattr(module.voice_cfg, "STT_KEEPALIVE", False)
     monkeypatch.setattr(module.voice_cfg, "WARM_MIC", True)

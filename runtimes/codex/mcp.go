@@ -9,12 +9,9 @@ import (
 	"github.com/pelletier/go-toml/v2"
 )
 
-// Codex MCP wiring. Codex keeps MCP servers in /root/.codex/config.toml under
-// [mcp_servers.<name>] (stdio: command/args/env; streamable HTTP: url +
-// http_headers). presync.sh regenerates the config head on every switch but
-// preserves everything from the first `[mcp_servers` line down, so the two
-// owners do not collide; concurrent connector.set writes are serialized under
-// mcpMu.
+// presync.sh regenerates the config head on every switch but preserves everything from the first
+// `[mcp_servers` line down, so the two owners do not collide; concurrent connector.set writes are
+// serialized under mcpMu.
 
 // codexConfigPath returns Codex's config.toml (CODEX_HOME=/root/.codex).
 func codexConfigPath() string {
@@ -22,10 +19,7 @@ func codexConfigPath() string {
 }
 
 // WriteMCPEntry upserts mcp_servers.<name> in config.toml and restarts the
-// gateway so the next `codex exec` picks the server up. entry is the canonical
-// (OpenClaw-shaped) server-config map the connector writer produces —
-// {type:"http", url, headers} for hosted MCP, or {command, args, env} for
-// stdio. The shape is translated in toCodexMCPEntry.
+// gateway so the next `codex exec` picks the server up.
 func (s *CodexService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -50,9 +44,7 @@ func (s *CodexService) WriteMCPEntry(name string, entry map[string]any) error {
 	return nil
 }
 
-// RemoveMCPEntry deletes mcp_servers.<name> from config.toml. Returns
-// removed=false (no write, no restart) when the entry was already absent or
-// the config file does not exist yet. Mirrors OpenclawService.RemoveMCPEntry.
+// RemoveMCPEntry deletes mcp_servers.<name> from config.toml.
 func (s *CodexService) RemoveMCPEntry(name string) (bool, error) {
 	s.mcpMu.Lock()
 	defer s.mcpMu.Unlock()
@@ -91,19 +83,12 @@ func (s *CodexService) RemoveMCPEntry(name string) (bool, error) {
 }
 
 // toCodexMCPEntry translates the canonical OpenClaw-shaped server entry into
-// Codex's config.toml shape:
-//
-//	{type:"http", url, headers}  → {url, http_headers}   (streamable HTTP)
-//	{command, args, env}         → passed through         (stdio)
-//
-// The OpenClaw "type" key is dropped — Codex infers the transport from the
-// presence of `url` — and "headers" is renamed to Codex's "http_headers".
+// Codex's config.toml shape.
 func toCodexMCPEntry(entry map[string]any) map[string]any {
 	out := make(map[string]any, len(entry))
 	for k, v := range entry {
 		switch k {
 		case "type":
-			// dropped — transport inferred from url/command
 		case "headers":
 			out["http_headers"] = v
 		default:
@@ -113,9 +98,7 @@ func toCodexMCPEntry(entry map[string]any) map[string]any {
 	return out
 }
 
-// readCodexConfig loads config.toml into a generic map. Errors (including
-// not-exist) are returned so connector writes surface a clear failure rather
-// than silently no-op'ing on an un-provisioned device.
+// readCodexConfig loads config.toml into a generic map.
 func readCodexConfig(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -128,9 +111,7 @@ func readCodexConfig(path string) (map[string]any, error) {
 	return cfg, nil
 }
 
-// writeCodexConfig marshals + atomically writes config.toml. Key order is not
-// preserved by the map round-trip; presync re-asserts the head structure
-// idempotently on the next switch, so any reordering self-heals.
+// writeCodexConfig marshals + atomically writes config.toml.
 func writeCodexConfig(path string, cfg map[string]any) error {
 	written, err := toml.Marshal(cfg)
 	if err != nil {

@@ -1,31 +1,11 @@
 #!/usr/bin/env bash
-#
-# Reachy Mini first-boot recon — read-only.
-#
-# Runs every Phase-1 discovery command from docs/first-boot-plan.md in one shot,
-# so the first real-device session collects all the unknowns without typing ~30
-# commands by hand. Nothing here modifies the system: it only reads state and
-# prints it. The one exception (a 3s mic->speaker loopback) is opt-in via
-# --audio-test and is the only command that produces sound.
-#
-# Usage (on the robot, over SSH):
-#   scp robots/reachy-mini/recon.sh pollen@reachy-mini.local:/tmp/
-#   ssh pollen@reachy-mini.local 'bash /tmp/recon.sh'            # read-only
-#   ssh pollen@reachy-mini.local 'bash /tmp/recon.sh --audio-test'  # + loopback
-#
-# Or capture the full report to a file and copy it back:
-#   ssh pollen@reachy-mini.local 'bash /tmp/recon.sh' | tee reachy-recon.txt
-#
-# Feed the results into: rootfs/opt/hal/.env, rootfs/etc/asound.conf, and the
-# reachy-mini branch of scripts/provision/setup.sh.
+# recon.sh — read-only first-boot probe of a Reachy Mini (--audio-test adds a 3s loopback that makes sound).
+# Usage: bash recon.sh [--audio-test]
 
-# Do NOT use `set -e`: a missing tool on the shipped OS must not abort the run.
-# Every probe is individually guarded so recon is best-effort and complete.
+# No `set -e`: probes are best-effort; a missing tool must not abort the run.
 
 AUDIO_TEST=0
 [ "${1:-}" = "--audio-test" ] && AUDIO_TEST=1
-
-# --- helpers ----------------------------------------------------------------
 
 section() {
   printf '\n=============================================================\n'
@@ -48,8 +28,6 @@ printf 'Reachy Mini recon — read-only probe\n'
 printf 'host: %s   date: %s\n' "$(hostname 2>/dev/null)" "$(date 2>/dev/null)"
 [ "$AUDIO_TEST" = "1" ] && printf 'audio loopback test: ENABLED (will play 3s of sound)\n'
 
-# --- 1.1 OS & kernel --------------------------------------------------------
-
 section "1.1 OS & Kernel"
 run "cat /etc/os-release"
 step "kernel / arch"
@@ -69,8 +47,6 @@ run "df -h"
 step "RAM"
 run "free -h"
 
-# --- 1.2 Network stack (the most important check) ---------------------------
-
 section "1.2 Network Stack  [decides setup.sh AP/STA path]"
 step "which stack is active?"
 for svc in NetworkManager dhcpcd wpa_supplicant systemd-networkd; do
@@ -89,8 +65,6 @@ run "ls -la /etc/NetworkManager/system-connections/ 2>/dev/null"
 printf '\n>>> DECISION: NetworkManager active  -> setup.sh needs an nmcli-based AP/STA branch\n'
 printf '    dhcpcd active (NM inactive)         -> current setup.sh flow works as-is\n'
 
-# --- 1.3 Pollen daemon ------------------------------------------------------
-
 section "1.3 Pollen Daemon  [never stop/restart this]"
 step "reachy/pollen units"
 run "systemctl list-units --all 2>/dev/null | grep -iE 'reachy|pollen'"
@@ -103,8 +77,6 @@ step "venvs"
 run "ls -la /venvs/ 2>/dev/null; ls -la /restore/venvs/ 2>/dev/null"
 step "reachy python packages"
 run "pip list 2>/dev/null | grep -i reachy; pip3 list 2>/dev/null | grep -i reachy"
-
-# --- 1.4 Audio --------------------------------------------------------------
 
 section "1.4 Audio  [-> .env HAL_AUDIO_*_ALSA, asound.conf]"
 step "capture devices (mic array)"
@@ -127,8 +99,6 @@ else
   step "loopback test skipped (re-run with --audio-test to hear it)"
 fi
 
-# --- 1.5 Camera -------------------------------------------------------------
-
 section "1.5 Camera  [-> .env HAL_CAMERA_INDEX]"
 step "v4l2 devices"
 run "v4l2-ctl --list-devices"
@@ -140,8 +110,6 @@ step "libcamera (if used instead of V4L2)"
 run "libcamera-hello --list-cameras 2>/dev/null"
 printf '\n>>> NOTE: if libcamera (not V4L2) drives the camera, HAL OpenCV VideoCapture(index)\n'
 printf '    may need a gstreamer pipeline or picamera2 — see first-boot-plan.md 2.4.\n'
-
-# --- 1.6 Ports & running services -------------------------------------------
 
 section "1.6 Ports & Services  [our ports: HAL 5001, os-server 5000 (loopback), nginx 80]"
 step "listening TCP ports"
@@ -157,8 +125,6 @@ done
 step "running services"
 run "systemctl list-units --type=service --state=running 2>/dev/null"
 
-# --- 1.7 System dependencies ------------------------------------------------
-
 section "1.7 System Deps  [pygobject/pycairo build for the reachy extra]"
 step "cairo / gobject / pkg-config"
 run "dpkg -l 2>/dev/null | grep -E 'libcairo2-dev|libgirepository|pkg-config' || echo '(none of the build deps installed — setup.sh must apt-install them)'"
@@ -167,19 +133,11 @@ run "python3 --version"
 run "which uv 2>/dev/null || echo '(uv not installed)'"
 run "which pip3 2>/dev/null"
 
-# --- 1.8 Bluetooth ----------------------------------------------------------
-
 section "1.8 Bluetooth  [BLE recovery path]"
 run "systemctl status bluetooth 2>/dev/null | head -8"
 run "hciconfig -a 2>/dev/null"
 
-# --- 1.9 Media ownership ----------------------------------------------------
-# The daemon holds the camera and BOTH ALSA PCMs while it runs, so HAL cannot
-# open them until it calls POST /api/media/release. Probing this is read-only:
-# fuser/lsof only report holders, and the arecord below is expected to FAIL with
-# "Device or resource busy" — that failure IS the finding. Nothing is released
-# here; doing so is a state change and belongs in the deploy phase, not recon.
-
+# Read-only: arecord is expected to fail "busy" while the daemon holds media; never release here.
 section "1.9 Media Ownership  [who holds camera + audio — decides HAL startup]"
 step "camera holders"
 run "fuser -v /dev/video0 /dev/video1 2>&1 | head -12"
@@ -193,8 +151,6 @@ run "curl -s --max-time 3 http://localhost:8000/api/media/status"
 printf '\n'
 step "daemon media handover endpoints (do NOT call them during recon)"
 run "curl -s --max-time 3 http://localhost:8000/openapi.json | grep -o '/api/media/[a-z_]*' | sort -u"
-
-# --- fill-in summary --------------------------------------------------------
 
 section "SUMMARY — copy these into runtime.md / .env / setup.sh"
 cat <<'SUMMARY'

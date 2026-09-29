@@ -4,18 +4,6 @@ import { saveSkill } from "@/lib/api";
 import { ModalShell } from "./ModalShell";
 import { fieldLabel, inputStyle, btnStyle } from "./styles";
 
-// "Write skill" — three-field authoring form (name / description /
-// instructions), the same shape as a SKILL.md: name + description become the
-// front-matter, instructions become the body.
-//
-// Saving POSTs to /api/agent/skills, which writes into whichever skills dir the
-// ACTIVE agent runtime owns (AgentGateway.SaveSkill). A runtime that hasn't
-// implemented it answers 501, and the message surfaces inline here — the skill
-// is not stored, and the form stays open with the draft intact.
-
-// Skill dir names must be filesystem- and prompt-safe: the runtime addresses a
-// skill as "/<name>", so the same lowercase/digit/dash/underscore rule the Go
-// side enforces (skills.ValidateSkillName) applies here for instant feedback.
 const NAME_PATTERN = /^[a-z0-9_-]+$/;
 const NAME_MAX = 64;
 
@@ -40,8 +28,6 @@ export function WriteSkillModal({ onClose }: { onClose: () => void }) {
         description: description.trim(),
         instructions: instructions.trim(),
       });
-      // Confirm where it landed rather than closing instantly — the path tells
-      // the user which runtime's skills dir received it.
       setSavedPath(res.path);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to save skill");

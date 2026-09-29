@@ -3,6 +3,7 @@
 Date: 2026-05-16  
 Repo: `lamp`  
 Scope: Lamp Go server only (`system/server`, `system/`, `system/domain`, nginx `/api/` wiring).  
+Path note (2026-09-28): file paths below were updated to the current `autonomous-os` layout (`lamp/web/` → `system/web/`, `components/edit/*` → `pages/settings/*`, `system/server/openclaw/delivery/sse/` → `system/server/agent/delivery/http/`). `pages/EditConfig.tsx` has since been removed (settings now live under `system/web/src/pages/settings/`); `lib/hardwareApi.ts`, `lib/http.ts` and `lib/safeSearch.ts` are proposed files, not existing ones.  
 Instruction: report issues and exact remediation guidance only; do **not** patch runtime code in this document.
 
 ## Executive summary
@@ -573,9 +574,9 @@ func redactJSON(v any) any {
 
 Files currently fetching config-json:
 
-- `lamp/web/src/pages/GwConfig.tsx`
-- `lamp/web/src/pages/monitor/index.tsx`
-- `lamp/web/src/pages/monitor/ChatSection.tsx`
+- `system/web/src/pages/GwConfig.tsx`
+- `system/web/src/pages/monitor/index.tsx`
+- `system/web/src/pages/monitor/ChatSection.tsx`
 
 Change them to call sanitized endpoint or require local-only dev mode.
 
@@ -1028,7 +1029,7 @@ http.DefaultClient.Do(req)
 
 Frontend exposes buttons:
 
-- `lamp/web/src/pages/monitor/components.tsx`
+- `system/web/src/pages/monitor/components.tsx`
 
 ### Why it is risky
 
@@ -1572,13 +1573,13 @@ Expected: `401`/`403` without auth; redacted with auth.
   - Avoid returning raw `openclaw.json` to remote handlers.
   - Add redacted config summary method.
 
-- `system/server/openclaw/delivery/sse/handler_api_monitor.go`
+- `system/server/agent/delivery/http/handler_api_monitor.go`
   - Replace raw `ConfigJSON` response or local-only guard it.
 
 - Frontend callers to update if endpoint changes:
-  - `lamp/web/src/pages/GwConfig.tsx`
-  - `lamp/web/src/pages/monitor/index.tsx`
-  - `lamp/web/src/pages/monitor/ChatSection.tsx`
+  - `system/web/src/pages/GwConfig.tsx`
+  - `system/web/src/pages/monitor/index.tsx`
+  - `system/web/src/pages/monitor/ChatSection.tsx`
 
 ### Logs
 

@@ -24,8 +24,8 @@
 // ── The one rule that keeps round-trips correct ───────────────────────────────
 // Whatever read() pulls OUT of a slot, write() must put BACK. Every field that you
 // inline or move on the way in needs a matching restore on the way out, or a
-// round-trip (openclaw → you → openclaw) silently drops it (that was the lost-name
-// bug). Fields your runtime has NO slot for are folded by the OTHER side's write —
+// round-trip (openclaw → you → openclaw) silently drops it. Fields your runtime
+// has NO slot for are folded by the OTHER side's write —
 // leave them nil in read(); they survive as content, just flattened in structure.
 
 package migratepersona

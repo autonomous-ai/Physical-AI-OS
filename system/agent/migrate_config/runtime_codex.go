@@ -11,11 +11,7 @@ type codexAdapter struct{}
 
 func (codexAdapter) runtime() Runtime { return RuntimeCodex }
 
-// Codex splits the LLM config across two presync-owned files under
-// /root/.codex: config.toml carries [model_providers.autonomous].base_url,
-// and .env carries the actual key (OPENAI_API_KEY=… — config.toml only holds
-// the env_key NAME). Mirrors the hermes adapter, which reads its own
-// presync-owned config.yaml/.env the same way.
+// read takes the key from .env (OPENAI_API_KEY) and base_url from config.toml.
 func (codexAdapter) read(opts Options) (LLMConfig, error) {
 	return LLMConfig{
 		APIKey:  readEnvVar(filepath.Join(opts.CodexHome, ".env"), "OPENAI_API_KEY"),
@@ -37,8 +33,7 @@ func (codexAdapter) write(cfg LLMConfig, opts Options) error {
 	return nil
 }
 
-// readCodexBaseURL extracts model_providers.autonomous.base_url from
-// config.toml. Missing file/keys → "" (nothing to carry).
+// readCodexBaseURL returns model_providers.autonomous.base_url, or "" if missing.
 func readCodexBaseURL(configTOML string) string {
 	raw, err := os.ReadFile(configTOML)
 	if err != nil {
@@ -54,10 +49,8 @@ func readCodexBaseURL(configTOML string) string {
 	return baseURL
 }
 
-// writeCodexBaseURL patches model_providers.autonomous.base_url in config.toml
-// via a TOML round-trip (the [mcp_servers] entries survive the map round-trip).
-// A missing config.toml is not an error — presync regenerates the whole head
-// from config.json (already synced by the caller) on the next switch/boot.
+// writeCodexBaseURL patches model_providers.autonomous.base_url; a missing config.toml is not
+// an error (presync regenerates it).
 func writeCodexBaseURL(configTOML, baseURL string) error {
 	raw, err := os.ReadFile(configTOML)
 	if err != nil {

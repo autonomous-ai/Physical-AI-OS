@@ -73,10 +73,7 @@ native-app: native-release $(ICNS_FILE) ## Bundle into dist/AutonomousBuddy.app 
 
 icon: $(ICNS_FILE) ## Regenerate AppIcon.icns from the SF Symbol placeholder
 
-# Pipeline: Swift script → 1024 master PNG → sips fans out to all required
-# iconset sizes → iconutil packs the iconset into a single .icns.
-# Re-runs on demand only; the `app` target depends on $(ICNS_FILE) so a missing
-# icon triggers a regen but an existing one is reused.
+# Swift script → 1024 master PNG → sips iconset sizes → iconutil .icns (regenerated only when missing).
 $(ICNS_FILE): $(ICON_SCRIPT)
 	@echo "==> Generating $(ICNS_FILE) from SF Symbol placeholder"
 	@mkdir -p "$(DIST_DIR)"
@@ -144,19 +141,8 @@ mock: ## Run the mock device server (Go) — test buddy without a real device
 mock-build: ## Compile-only check for mock-device
 	cd $(MOCK_DIR) && go vet ./... && go build ./...
 
-# ----------------------------------------------------------------------------
-# Release signing (Apple Developer ID — for distribution to outside users).
-#
-# Required env vars (set in your shell, not committed):
-#   DEV_ID_APP       e.g. "Developer ID Application: Autonomous Inc (ABCDE12345)"
-#                    — exact name as it appears in `security find-identity -v`
-#   NOTARY_PROFILE   keychain profile alias created via:
-#                    `xcrun notarytool store-credentials autonomous-notary --apple-id X --team-id Y --password Z`
-#                    — replace `autonomous-notary` with whatever you stored
-#
-# Quick start for the dev doing the Apple Developer enrolment, full step-by-step:
-#   autonomous-buddy/docs/release-signing.md
-# ----------------------------------------------------------------------------
+# Release signing (Developer ID). Env: DEV_ID_APP (identity from `security find-identity -v`),
+# NOTARY_PROFILE (from `xcrun notarytool store-credentials`). See docs/release-signing.md.
 
 # Auto-detected from the keychain so `make native-app` / `install` / `dmg` sign for
 # distribution without extra env. Override by exporting DEV_ID_APP, or force a

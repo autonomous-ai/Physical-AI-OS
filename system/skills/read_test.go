@@ -33,12 +33,9 @@ func TestReadSkillFiles(t *testing.T) {
 	for i, f := range files {
 		byPath[f.Path] = i
 	}
-	// Flat list, paths relative to the skills root — same shape the store
-	// preview returns, so one component renders both.
 	if _, ok := byPath["music/reference/tempo.md"]; !ok {
 		t.Fatalf("nested file missing: %v", byPath)
 	}
-	// Sorted by path.
 	if files[0].Path != "music/SKILL.md" {
 		t.Errorf("not sorted by path, first = %q", files[0].Path)
 	}
@@ -60,7 +57,6 @@ func TestReadSkillFiles(t *testing.T) {
 func TestReadSkillFilesRejectsBadName(t *testing.T) {
 	dir := t.TempDir()
 	seedSkill(t, dir, "music", map[string]string{"SKILL.md": "x"})
-	// Something readable one level up, to prove traversal can't reach it.
 	if err := os.WriteFile(filepath.Join(dir, "secret.md"), []byte("s"), 0644); err != nil {
 		t.Fatal(err)
 	}
@@ -95,8 +91,7 @@ func TestReadSkillFile(t *testing.T) {
 		t.Errorf("file = %+v", file)
 	}
 
-	// MQTT paths are exact entries from the list, never basenames, cleaned
-	// variants, or dotfiles that the list mode does not expose.
+	// MQTT paths must be exact list entries (no basenames, cleaned variants or dotfiles).
 	for _, bad := range []string{"tempo.md", "music/../music/SKILL.md", "music/.secret", "music/missing.md"} {
 		if _, err := ReadSkillFile(dir, "music", bad); !errors.Is(err, ErrSkillFileNotFound) {
 			t.Errorf("path %q: err = %v, want ErrSkillFileNotFound", bad, err)
@@ -104,8 +99,7 @@ func TestReadSkillFile(t *testing.T) {
 	}
 }
 
-// Hermes namespaces its skills dir, so the reader tries roots in order and the
-// first match wins — same precedence as ListInstalledFrom.
+// Roots are tried in order; the first match wins.
 func TestReadSkillFilesFrom(t *testing.T) {
 	base := t.TempDir()
 	authored := filepath.Join(base, "authored")
@@ -122,7 +116,6 @@ func TestReadSkillFilesFrom(t *testing.T) {
 		t.Errorf("first root must win, got %+v", files)
 	}
 
-	// Only in the second root — still found.
 	files, err = ReadSkillFilesFrom("voice", authored, imported)
 	if err != nil {
 		t.Fatalf("read voice: %v", err)
@@ -146,7 +139,6 @@ func TestBuildFilePreviewTruncates(t *testing.T) {
 	if len(f.Text) > readMaxInlineBytes {
 		t.Errorf("inlined %d bytes, cap is %d", len(f.Text), readMaxInlineBytes)
 	}
-	// Size reports the REAL length, not the truncated preview's.
 	if f.Size != int64(len(big)) {
 		t.Errorf("size = %d, want %d", f.Size, len(big))
 	}

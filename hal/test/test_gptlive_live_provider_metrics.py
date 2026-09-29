@@ -1,9 +1,4 @@
-"""GPT-Live emits the same live-mode contract as Gemini Live — synthesized.
-
-The wire has no turn boundary, no VAD and no interruption event, so these tests
-drive `_pump_events` with `session.*` events and call `_fire_boundary()` where
-the watchdog would (after `turn_gap_ms` / `interrupt_gap_ms` of output silence).
-"""
+"""GPT-Live emits the same live-mode contract as Gemini Live — synthesized."""
 
 import base64
 import json
@@ -106,8 +101,6 @@ def _raw(agent):
     return items
 
 
-# --- ownership + user speech ----------------------------------------------------
-
 def test_reply_owned_by_the_input_it_answers_and_boundary_completes_it():
     agent = _agent()
     assert agent._pump_events(iter([
@@ -115,13 +108,13 @@ def test_reply_owned_by_the_input_it_answers_and_boundary_completes_it():
         out_tx("Looking now"), out_audio(), out_audio(),
     ])) is False
     assert agent._session_started.is_set()
-    assert agent._fire_boundary()  # watchdog: turn_gap_ms of output silence
+    assert agent._fire_boundary()
     events = _drain(agent)
     speech = [e for e in events if isinstance(e, UserSpeechOutput)]
     key = speech[0].turn_id
     assert key.startswith("gptlive-")
     assert [s.transcript for s in speech] == ["Find ", "a flight", ""]
-    assert speech[-1].transcript_finished is True  # the model answered → input complete
+    assert speech[-1].transcript_finished is True
     assert all(s.endpoint_at is None and s.method == "provider_transcript" for s in speech)
     assert all(e.user_turn_id == key for e in events if not isinstance(e, UserSpeechOutput))
     reset = next(e for e in events if isinstance(e, InterruptedOutput))
@@ -129,7 +122,6 @@ def test_reply_owned_by_the_input_it_answers_and_boundary_completes_it():
     assert events.index(reset) < events.index(next(e for e in events if isinstance(e, TextOutput)))
     assert isinstance(events[-1], TurnDoneEvent) and events[-1].execution_completed
     assert events[-1].user_turn_id == key
-    # answered → the key is released so a later remark is not attributed to it
     assert agent._live_user_turn_id == ""
 
 
@@ -153,7 +145,6 @@ def test_input_gap_opens_a_new_turn_even_without_a_reply():
     agent._pump_events(iter([started(), in_tx("first", 0, 500), in_tx("second", 3000, 3500)]))
     speech = [e for e in _drain(agent) if isinstance(e, UserSpeechOutput)]
     assert speech[0].turn_id != speech[1].turn_id
-    # the transcript buffer belongs to the newest turn only
     assert agent._user_transcript == "second"
 
 
@@ -166,20 +157,18 @@ def test_turn_mode_emits_no_live_metadata_but_keeps_the_transcript(monkeypatch):
     assert not any(isinstance(e, (UserSpeechOutput, InterruptedOutput)) for e in events)
     call = next(e for e in events if isinstance(e, FunctionCallOutput))
     assert call.user_transcript == "Turn on the light"
-    assert call.user_turn_id == ""  # keys are published in live mode only
+    assert call.user_turn_id == ""
     agent._pump_events(iter([out_audio()]))
     agent._fire_boundary()
     assert all(e.user_turn_id == "" for e in _drain(agent))
 
-
-# --- barge-in heuristic ------------------------------------------------------------
 
 def test_user_talking_over_then_model_falling_silent_is_an_interruption():
     agent = _agent()
     agent._pump_events(iter([
         started(), in_tx("Tell me a story", 0, 900),
         out_tx("Once upon "), out_audio(300), out_audio(300),
-        in_tx("stop", 2000, 2300),   # user talks over the reply; nothing follows
+        in_tx("stop", 2000, 2300),
     ]))
     assert agent._overlap_pending
     assert agent._fire_boundary()
@@ -188,7 +177,6 @@ def test_user_talking_over_then_model_falling_silent_is_an_interruption():
     speeches = [e for e in events if isinstance(e, UserSpeechOutput)]
     key1, key2 = speeches[0].turn_id, speeches[-1].turn_id
     assert key1 != key2
-    # queued reply dropped, input metadata kept, interruption announced
     assert not any(isinstance(e, (AudioOutput, TextOutput)) for e in events)
     interrupt = next(e for e in events if isinstance(e, InterruptedOutput) and e.reason == "server_interrupt")
     assert interrupt.user_turn_id == key1 and interrupt.at is not None
@@ -196,7 +184,6 @@ def test_user_talking_over_then_model_falling_silent_is_an_interruption():
     assert gens[id(interrupt)] == agent._turn_gen
     assert isinstance(events[-1], TurnDoneEvent)
     assert events[-1].user_turn_id == key1 and not events[-1].execution_completed
-    # the barge-in utterance stays open for its own reply
     assert agent._live_user_turn_id == key2 and not agent._input_answered
 
 
@@ -208,13 +195,11 @@ def test_model_keeps_talking_after_overlap_is_a_backchannel(monkeypatch):
     agent._pump_events(iter([in_tx("mhm", 900, 1000)]))
     assert agent._overlap_pending
     clock[0] += 0.2
-    agent._pump_events(iter([out_audio()]))       # within the grace: still pending
+    agent._pump_events(iter([out_audio()]))
     assert agent._overlap_pending
-    # ...but continuous output keeps moving the (short) deadline: the model is
-    # still talking, so nothing may fire while deltas keep arriving.
     assert agent._boundary_deadline == pytest.approx(clock[0] + 0.4)
     clock[0] += 0.5
-    agent._pump_events(iter([out_audio()]))       # model clearly went on → backchannel
+    agent._pump_events(iter([out_audio()]))
     assert not agent._overlap_pending
     agent._fire_boundary()
     events = _drain(agent)
@@ -234,19 +219,16 @@ def test_dropped_terminal_is_kept_as_execution_evidence():
     assert isinstance(events[-1], TurnDoneEvent)
 
 
-# --- delegation ----------------------------------------------------------------------
-
 def test_client_delegation_becomes_delegate_to_main_with_the_transcript(monkeypatch):
     clock = [50.0]
     monkeypatch.setattr("hal.realtime.voice_agent.gpt_live.time.monotonic", lambda: clock[0])
     agent = _agent()
     agent._pump_events(iter([started(), in_tx("Play some ", 0, 500), in_tx("music", 500, 800), delegation("dlg_9")]))
-    # never forwarded on the spot: the sentence may still be arriving
     early = _drain(agent)
     assert not any(isinstance(e, FunctionCallOutput) for e in early)
     key = next(e for e in early if isinstance(e, UserSpeechOutput)).turn_id
     assert agent._flush_deferred_delegation() is False
-    clock[0] += 0.3  # input quiet for the settle window
+    clock[0] += 0.3
     assert agent._flush_deferred_delegation() is True
     events = _drain(agent)
     call = next(e for e in events if isinstance(e, FunctionCallOutput))
@@ -263,9 +245,9 @@ def test_delegation_waits_for_the_rest_of_the_sentence(monkeypatch):
     agent = _agent(delegation_wait_ms=800)
     agent._pump_events(iter([started(), in_tx("turn off", 0, 400), delegation("dlg_p")]))
     clock[0] += 0.1
-    agent._pump_events(iter([in_tx(" the light", 400, 800)]))   # late fragment
+    agent._pump_events(iter([in_tx(" the light", 400, 800)]))
     clock[0] += 0.1
-    assert agent._flush_deferred_delegation() is False           # still settling
+    assert agent._flush_deferred_delegation() is False
     clock[0] += 0.3
     assert agent._flush_deferred_delegation() is True
     call = next(e for e in _drain(agent) if isinstance(e, FunctionCallOutput))
@@ -277,7 +259,7 @@ def test_delegation_hard_deadline_forwards_whatever_was_heard(monkeypatch):
     monkeypatch.setattr("hal.realtime.voice_agent.gpt_live.time.monotonic", lambda: clock[0])
     agent = _agent(delegation_wait_ms=500)
     agent._pump_events(iter([started(), in_tx("find my", 0, 300), delegation("dlg_h")]))
-    for _ in range(4):  # fragments keep trickling in faster than the settle window
+    for _ in range(4):
         clock[0] += 0.15
         agent._pump_events(iter([in_tx(" x", 300, 400)]))
         assert agent._flush_deferred_delegation() is (clock[0] - 50.0 >= 0.5)
@@ -289,9 +271,9 @@ def test_delegation_before_transcript_waits_for_it(monkeypatch):
     agent = _agent(delegation_wait_ms=500)
     agent._pump_events(iter([started(), delegation("dlg_2")]))
     assert not any(isinstance(e, FunctionCallOutput) for e in _drain(agent))
-    assert agent._flush_deferred_delegation() is False  # nothing heard, deadline not reached
+    assert agent._flush_deferred_delegation() is False
     agent._pump_events(iter([in_tx("Remind me at seven", 0, 900)]))
-    clock[0] += 0.3                                      # settled before the hard deadline
+    clock[0] += 0.3
     assert agent._flush_deferred_delegation() is True
     call = next(e for e in _drain(agent) if isinstance(e, FunctionCallOutput))
     assert json.loads(call.arguments)["message"] == "Remind me at seven"
@@ -305,7 +287,7 @@ def test_delegation_with_no_transcript_at_all_is_forwarded_empty(monkeypatch):
     clock[0] += 1.0
     assert agent._flush_deferred_delegation() is True
     call = next(e for e in _drain(agent) if isinstance(e, FunctionCallOutput))
-    assert json.loads(call.arguments)["message"] == ""   # the orchestrator rejects it and we relay the failure
+    assert json.loads(call.arguments)["message"] == ""
 
 
 def test_responses_delegation_is_ignored():
@@ -324,21 +306,19 @@ def test_delegate_ack_and_main_reply_flow_back_as_thinking_context():
     agent._sync_send_input(FunctionCallResultInput(call_id="dlg_5", output='{"result": "delegated"}'))
     kw = conn.session.thinking.append.call_args.kwargs
     assert kw["delegation_id"] == "dlg_5" and "main agent" in kw["content"]
-    assert "dlg_5" in agent._pending_delegations  # stays open until the main reply
+    assert "dlg_5" in agent._pending_delegations
     agent._sync_send_input(TextInput(text="[TTS HISTORY] Playing jazz for you."))
     kw = conn.session.thinking.append.call_args.kwargs
     assert kw["delegation_id"] == "dlg_5" and kw["content"].startswith("[TTS HISTORY]")
     assert agent._pending_delegations == {}
     agent._sync_send_input(TextInput(text="[TURN CONTEXT] speaker=Leo"))
     assert conn.session.thinking.append.call_args.kwargs["delegation_id"] is None
-    # a failed handoff releases the model to answer itself
     agent._pump_events(iter([in_tx("Find my pen", 3000, 3800), delegation("dlg_6")]))
     agent._flush_deferred_delegation(force=True)
     _drain(agent)
     agent._sync_send_input(FunctionCallResultInput(call_id="dlg_6", output='{"error": "message must not be empty"}'))
     assert "failed" in conn.session.thinking.append.call_args.kwargs["content"]
     assert "dlg_6" not in agent._pending_delegations
-    # results for tools this provider never emits are ignored, not sent
     n = conn.session.thinking.append.call_count
     agent._sync_send_input(FunctionCallResultInput(call_id="call_emotion", output='{"result": "expressed"}'))
     assert conn.session.thinking.append.call_count == n
@@ -352,14 +332,12 @@ def test_context_is_clipped_to_the_append_limit():
     assert len(conn.session.thinking.append.call_args.kwargs["content"]) <= gpt_live._APPEND_MAX_CHARS
 
 
-# --- audio in, commit, errors, usage, session ---------------------------------------
-
 def test_sends_wait_for_session_started_and_commit_pads_silence_in_turn_mode(monkeypatch):
     from hal.realtime.models import AudioInput
     agent = _agent(start_timeout_s=0.05, commit_silence_ms=600, sample_rate=16000)
     conn = Mock(); agent._connection = conn
     agent._sync_send_input(AudioInput(audio=np.zeros(160, dtype=np.float32)))
-    conn.session.input_audio.append.assert_not_called()          # session not started → dropped
+    conn.session.input_audio.append.assert_not_called()
     agent._session_started.set()
     agent._sync_send_input(AudioInput(audio=np.zeros(160, dtype=np.float32)))
     kw = conn.session.input_audio.append.call_args.kwargs
@@ -372,7 +350,7 @@ def test_sends_wait_for_session_started_and_commit_pads_silence_in_turn_mode(mon
     monkeypatch.setattr(config, "LIVE_MODE", True)
     n = conn.session.input_audio.append.call_count
     agent._sync_commit()
-    assert conn.session.input_audio.append.call_count == n          # live: the mic keeps streaming
+    assert conn.session.input_audio.append.call_count == n
 
 
 def test_rejected_own_command_is_a_warning_and_other_errors_are_fatal():
@@ -401,7 +379,7 @@ def test_fail_fast_ends_a_reply_in_flight_or_a_pending_question():
     agent._fail_fast_turn("session closed")
     assert isinstance(_drain(agent)[-1], TurnDoneEvent)
     agent._fail_fast_turn("idle")
-    assert _drain(agent) == []  # nothing waiting → no stray sentinel
+    assert _drain(agent) == []
 
 
 def test_usage_line_prices_session_minutes(caplog):
@@ -441,10 +419,9 @@ def test_web_search_selects_responses_delegation_with_our_delegate_function():
     d = session["delegation"]
     assert d["type"] == "responses" and d["responses"]["model"] == "gpt-5.6-luna"
     kinds = [(t["type"], t.get("name")) for t in d["responses"]["tools"]]
-    assert kinds == [("web_search", None), ("function", "delegate_to_main")]  # express_emotion never crosses
+    assert kinds == [("web_search", None), ("function", "delegate_to_main")]
     assert "Vietnamese" in d["responses"]["instructions"]
     assert d["responses"]["tool_choice"] == "auto" and d["responses"]["parallel_tool_calls"] is False
-    # explicit client wins over web_search; explicit responses without search = function only
     assert not _agent(delegation="client", web_search=True)._config.responses_mode
     only_fn = _agent(delegation="responses", web_search=False)._build_session()["delegation"]["responses"]["tools"]
     assert [t["type"] for t in only_fn] == ["function"]
@@ -462,19 +439,17 @@ def test_reconnect_clears_ownership_and_delegations():
     assert conn.session.start.call_args.kwargs["event_id"] == gpt_live._EVT_START
 
 
-# --- through the orchestrator ---------------------------------------------------------
-
 def test_delegation_reaches_the_orchestrator_as_a_delegate_signal(monkeypatch):
     from hal.realtime.models import InputEvent
     from hal.realtime.models.signal import DelegateSignal
     from hal.realtime.orchestrator import RealtimeOrchestrator
 
     agent = _agent()
-    agent._connected.set()  # send() queues only while "connected"
+    agent._connected.set()
     agent._pump_events(iter([started(), in_tx("Play some jazz", 0, 900), delegation("dlg_42")]))
     agent._flush_deferred_delegation(force=True)
-    agent._fire_boundary()  # nothing spoken → no boundary; the delegate ends the turn
-    agent._recv_queue.put(TurnDoneEvent())  # what the watchdog/next turn would deliver
+    agent._fire_boundary()
+    agent._recv_queue.put(TurnDoneEvent())
 
     orch = object.__new__(RealtimeOrchestrator)
     orch._agent = agent
@@ -494,17 +469,13 @@ def test_delegation_reaches_the_orchestrator_as_a_delegate_signal(monkeypatch):
     key = next(o for o in outputs if isinstance(o, UserSpeechOutput)).turn_id
     assert signal.message == "Play some jazz" and signal.transcript == "Play some jazz"
     assert signal.user_turn_id == key
-    # the orchestrator acknowledged the handoff; the adapter turns it into thinking context
     queued = agent._send_queue.get_nowait()
     assert isinstance(queued, InputEvent) and isinstance(queued.input, FunctionCallResultInput)
     assert queued.input.call_id == "dlg_42" and json.loads(queued.input.output) == {"result": "delegated"}
 
 
-# --- real SDK parsing -----------------------------------------------------------------
-
 def test_adapter_reads_sdk_parsed_events_not_just_fakes(caplog):
-    """Feed wire-shaped JSON through the SDK's own parser (what LiveConnection.recv
-    does) so the attribute paths the adapter uses match the pydantic types."""
+    """Parse wire-shaped JSON through the SDK parser, as LiveConnection.recv does."""
     from openai.resources.live.live import LiveConnection
 
     conn = object.__new__(LiveConnection)
@@ -529,7 +500,7 @@ def test_adapter_reads_sdk_parsed_events_not_just_fakes(caplog):
     agent._flush_deferred_delegation(force=True)
     outputs = _drain(agent)
     assert agent._session_closed.is_set() and agent._usage_ratio == 0.01
-    assert agent._session_id == "sess_x" and not agent._session_started.is_set()  # started, then closed
+    assert agent._session_id == "sess_x" and not agent._session_started.is_set()
     assert agent._session_started_once
     assert next(e for e in outputs if isinstance(e, UserSpeechOutput)).transcript == "Play jazz"
     call = next(e for e in outputs if isinstance(e, FunctionCallOutput))
@@ -540,8 +511,6 @@ def test_adapter_reads_sdk_parsed_events_not_just_fakes(caplog):
     assert any("GPT-Live rejected hal-context" in r.message for r in caplog.records)
 
 
-# --- relay close codes + graceful close ------------------------------------------------
-
 @pytest.mark.parametrize("code", [4001, 4002, 4029])
 def test_no_retry_close_codes_jump_to_max_backoff(code, caplog):
     agent = _agent()
@@ -550,7 +519,7 @@ def test_no_retry_close_codes_jump_to_max_backoff(code, caplog):
         agent._note_close_code(code, "GPT-Live usage limit reached")
     assert agent._reconnect_backoff == agent._reconnect_backoff_max
     assert any(str(code) in r.message and "next retry in ~60s" in r.message for r in caplog.records)
-    agent._note_close_code(1011, "upstream")   # retriable: backoff untouched
+    agent._note_close_code(1011, "upstream")
     assert agent._reconnect_backoff == agent._reconnect_backoff_max
 
 
@@ -562,7 +531,6 @@ def test_graceful_close_waits_for_session_closed_only_on_owner_teardown():
     agent._do_disconnect()
     conn.session.close.assert_called_once()
     conn.close.assert_called_once()
-    # reconnect path (recv thread) never waits: it is the thread that would read the event
     agent._connection = Mock(); agent._session_closed.clear()
     import time as _t
     t0 = _t.monotonic(); agent._sync_disconnect(); assert _t.monotonic() - t0 < 0.1
@@ -577,15 +545,13 @@ def test_connect_sends_the_correlation_header():
     assert headers["x-request-id"].startswith("hal-") and headers["x-request-id"] == agent._request_id
 
 
-# --- output speech gate + backchannels ---------------------------------------------------
-
 def test_silent_output_deltas_are_dropped_and_do_not_start_a_reply():
     agent = _agent()
     agent._pump_events(iter([started(), in_tx("Hi", 0, 300)] + [silent_audio()] * 30))
     assert not agent._output_active and agent._silent_deltas_dropped == 30
     assert not any(isinstance(e, AudioOutput) for e in _drain(agent))
-    assert agent._fire_boundary() is False          # nothing to close
-    assert agent._live_user_turn_id                 # the question is still open
+    assert agent._fire_boundary() is False
+    assert agent._live_user_turn_id
     agent._pump_events(iter([out_tx("Hello"), out_audio()] + [silent_audio()] * 5))
     assert agent._output_active and agent._fire_boundary()
     events = _drain(agent)
@@ -601,7 +567,7 @@ def test_audio_without_words_is_a_backchannel_not_an_answer():
     events = _drain(agent)
     assert not any(isinstance(e, UserSpeechOutput) and e.transcript_finished for e in events)
     assert isinstance(events[-1], TurnDoneEvent) and not events[-1].execution_completed
-    assert agent._live_user_turn_id == key and not agent._input_answered   # still waiting for words
+    assert agent._live_user_turn_id == key and not agent._input_answered
     agent._pump_events(iter([out_tx("Why did"), out_audio(), out_tx(" the lamp…")]))
     assert agent._fire_boundary()
     events = _drain(agent)
@@ -610,8 +576,6 @@ def test_audio_without_words_is_a_backchannel_not_an_answer():
     assert events[-1].execution_completed and events[-1].user_turn_id == key
     assert agent._live_user_turn_id == ""
 
-
-# --- responses delegation -----------------------------------------------------------------
 
 def test_backend_function_call_round_trips_through_the_orchestrator_contract(caplog):
     agent = _agent(delegation="responses", web_search=True)
@@ -625,13 +589,12 @@ def test_backend_function_call_round_trips_through_the_orchestrator_contract(cap
                                                                      "name": "delegate_to_main", "arguments": '{"message": "Play some jazz"}'}}),
         ]))
     events = _drain(agent)
-    assert not any(isinstance(e, FunctionCallOutput) and e.call_id == "dlg_b" for e in events)  # no client-style forward
+    assert not any(isinstance(e, FunctionCallOutput) and e.call_id == "dlg_b" for e in events)
     call = next(e for e in events if isinstance(e, FunctionCallOutput))
     key = next(e for e in events if isinstance(e, UserSpeechOutput)).turn_id
     assert call.call_id == "call_9" and json.loads(call.arguments) == {"message": "Play some jazz"}
     assert call.user_turn_id == key and call.user_transcript == "Play some jazz"
     assert agent._pending_function_calls == {"call_9": "dlg_b"}
-    # the orchestrator's ack goes back to the BACKEND, not as thinking context
     agent._sync_send_input(FunctionCallResultInput(call_id="call_9", output='{"result": "delegated"}'))
     item = conn.response.item.create.call_args.kwargs["item"]
     assert item["type"] == "function_call_output" and item["call_id"] == "call_9"
@@ -639,7 +602,6 @@ def test_backend_function_call_round_trips_through_the_orchestrator_contract(cap
     conn.response.create.assert_called_once()
     conn.session.thinking.append.assert_not_called()
     assert agent._pending_function_calls == {}
-    # session context still flows, but never with a delegation id in this mode
     agent._sync_send_input(TextInput(text="[TTS HISTORY] Playing jazz."))
     assert conn.session.thinking.append.call_args.kwargs["delegation_id"] is None
 
@@ -660,8 +622,7 @@ def test_backend_web_search_and_usage_are_logged(caplog):
 
 
 def test_filler_while_the_backend_works_does_not_count_as_the_answer():
-    """Device-observed 2026-09-17: "Mmm." during a web search took the input key,
-    so the real answer arrived owner-less."""
+    """A filler during a web search must not take the answer's input key."""
     agent = _agent(delegation="responses")
     agent._pump_events(iter([
         started(), in_tx("What is the weather in Hanoi", 0, 1200),
@@ -669,7 +630,7 @@ def test_filler_while_the_backend_works_does_not_count_as_the_answer():
         out_tx(" Mmm."), out_audio(),
     ]))
     key = agent._live_user_turn_id
-    assert agent._fire_boundary()                      # the filler burst ends
+    assert agent._fire_boundary()
     events = _drain(agent)
     assert not events[-1].execution_completed and agent._live_user_turn_id == key
     agent._pump_events(iter([

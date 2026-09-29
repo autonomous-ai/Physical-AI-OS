@@ -19,7 +19,8 @@ install, migration, skills, hooks, reset.
 > [`hermes_vi.md`](hermes_vi.md) (Hermes, backend đầy đủ) ·
 > [`picoclaw_vi.md`](picoclaw_vi.md) (PicoClaw, gateway chỉ-client kèm script install/presync) ·
 > [`claudecode_vi.md`](claudecode_vi.md) (Claude Code sau một bridge cục bộ,
-> channel plugin native cho Telegram/Discord, claude.ai OAuth login). Protocol/quirk
+> kênh Telegram/Slack/Discord do device sở hữu — cố ý không dùng channel plugin
+> native — claude.ai OAuth login). Protocol/quirk
 > đặc thù từng backend nằm ở các file kia; cơ chế generic + checklist nằm ở đây.
 
 ---
@@ -28,10 +29,14 @@ install, migration, skills, hooks, reset.
 
 - `config.agent_runtime` (`/root/config/config.json`) chọn backend đang chạy.
 - `system/agent/factory.go` `ProvideGateway` resolve lúc boot qua Wire DI:
-  `config.agent_runtime` > ROBOT.md `gateway.default` > openclaw.
+  `config.agent_runtime` > `/root/config/f_r_default_agent` (bake vào image qua
+  `DEFAULT_AGENT`, sống sót qua factory reset) > ROBOT.md `gateway.default` > openclaw.
+  Hai mức giữa được resolve bởi `device.ResolveDefaultAgent`
+  (`system/device/runtime.go`), dùng chung với bước seed bên dưới.
 - **Seed-khi-rỗng:** lúc boot `device.ProvideService` gọi
   `SeedAgentRuntimeFromGateway` — khi `config.agent_runtime` rỗng/null **và**
-  ROBOT.md `gateway.default` là runtime hợp lệ, giá trị đó được ghi vào config.json
+  `ResolveDefaultAgent` trả về runtime hợp lệ (`f_r_default_agent`, nếu không thì
+  ROBOT.md `gateway.default`), giá trị đó được ghi vào config.json
   (idempotent; chỉ boot đầu của config fresh/legacy mới ghi). Khi đã có giá trị cụ
   thể trên đĩa, device **sở hữu** runtime của nó: dev đã set (qua switch hoặc sửa
   tay) thì để nguyên, và fallback-resolve ở trên thành no-op. Hệ quả: sửa
@@ -165,7 +170,7 @@ Mẫu fix (dùng cho mọi thứ có state):
 Presync của Hermes (`runtimes/hermes/presync.sh`) giờ làm chủ **cả** model wiring
 trong `config.yaml` (idempotent — coerce `model: ''` bị reset về map, khẳng định
 structure `provider`/`custom_providers`, sync `llm_*`/secrets) **lẫn** restore
-skills (chạy lại `claw migrate` khi `skills/openclaw-imports` rỗng). Giữ `verify`
+skills (chạy lại `claw migrate` khi `~/.hermes/skills/openclaw-imports` rỗng). Giữ `verify`
 chỉ-CLI (`command -v <bin>`) — structure-check trong `verify` sẽ ép full reinstall
 nặng trong khi presync tự lành đủ rồi.
 

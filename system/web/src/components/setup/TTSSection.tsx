@@ -19,9 +19,6 @@ export function TTSSection({
   return (
     <SectionCard id="tts" title="Voice" active={active} icon={<Volume2 size={17} />}
       description="Choose how your robot sounds when it speaks back to you.">
-      {/* tts_api_key + tts_base_url are not exposed in Setup —
-          they're auto-mirrored from AI Brain via useEffect and
-          submitted silently. */}
       <div style={{ marginBottom: FIELD_GAP }}>
         <label htmlFor="tts_provider" style={LABEL_STYLE}>
           Provider

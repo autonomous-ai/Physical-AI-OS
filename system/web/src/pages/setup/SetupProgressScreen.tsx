@@ -4,11 +4,7 @@ import { getInitialSearch } from "@/hooks/setup/useSetupUrlParams";
 import { setupBridge } from "@/lib/setupBridge";
 import { CopyAddress } from "./CopyAddress";
 
-// Post-submit screen: shows progress while the device joins Wi-Fi, then a
-// copyable IP / router hint for the operator to continue setup on the home
-// network once the AP shuts down. Split out of Setup.tsx because it's the
-// single largest JSX block and has three self-contained phase branches
-// (connecting / connected / failed).
+// Post-submit screen: join progress, then the LAN address to continue setup.
 export function SetupProgressScreen({
   setupPhase, setupLanIP, setupErrorMsg, elapsed,
   deviceMdnsHost, deviceTypePrefix, wired = false,
@@ -20,13 +16,8 @@ export function SetupProgressScreen({
   elapsed: number;
   deviceMdnsHost: string;
   deviceTypePrefix: string;
-  // Submitted with no SSID because the device already has an uplink — an
-  // ethernet cable in practice. There is no Wi-Fi join on this path (the
-  // backend verifies the existing uplink and tears down the provisioning AP,
-  // see system/device/setup.go setupWired), so every line of Wi-Fi copy on this
-  // screen would be describing something that never happens.
+  // Submitted with no SSID (wired uplink): no Wi-Fi join happens.
   wired?: boolean;
-  // Resets the wizard back to the Wi-Fi step after a failed join.
   onRetry: () => void;
 }) {
   return (
@@ -54,9 +45,6 @@ export function SetupProgressScreen({
               ? "Your robot is already online over its cable, so there is no Wi-Fi to join. It's turning off its setup hotspot now."
               : "Please be patient while your robot connects to Wi-Fi. Stay on this network."}
           </div>
-          {/* Indeterminate progress + elapsed counter: the join has no
-              knowable %, so a sweeping bar signals "working" while the
-              seconds give the wait a measured feel. */}
           <div className="lm-indeterminate" style={{ marginBottom: 7 }} />
           <div style={{ fontSize: 11, color: C.textMuted }}>
             Elapsed {elapsed}s
@@ -73,35 +61,14 @@ export function SetupProgressScreen({
             Your robot is online!
           </div>
 
-          {/* IP path (only path): we redirect to the device's raw LAN
-              IP, never its `.local` mDNS name — `.local` is unreliable
-              on mDNS-blocking routers, whereas an IP resolves on every
-              network. Shown once the backend's early-capture poll has
-              handed us a LAN IP; otherwise we fall back to a
-              router-admin hint so the operator can find the IP. */}
           {setupLanIP ? (
             <>
-              {/* Action-first ordering: the one thing the user must do
-                  now (rejoin home Wi-Fi, then Continue) leads, with the
-                  primary button right under it. The IP address + router
-                  fallback drop below a divider as a quiet safety-net for
-                  when auto-redirect/Continue doesn't land — mirroring
-                  the connecting screen's hierarchy. */}
               <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
                 Reconnect your computer to your home Wi-Fi, then click
                 Continue.
               </div>
               <a
-                // Carry the current pathname + query params so any
-                // ?llm_api_key=… etc. from the OS server remain in scope on
-                // the new host (redundant — the OS server already persisted
-                // them via submit — but cheap and useful when the
-                // operator re-runs setup with different overrides).
-                // Force reload when the user is already on the device's
-                // IP — otherwise the browser no-ops the same-URL click
-                // and they stay stuck on the "Your device is online!"
-                // screen even though the device is reachable in continue
-                // mode now.
+                // Force reload when already on the device IP (a same-URL click is a no-op).
                 href={`http://${setupLanIP}${window.location.pathname}${getInitialSearch()}`}
                 onClick={(e) => {
                   setupBridge.continueClicked({ mdns_host: deviceMdnsHost });
@@ -118,9 +85,6 @@ export function SetupProgressScreen({
               >
                 Continue setup →
               </a>
-              {/* Safety-net block: divider + the IP address and a
-                  router-admin hint, toned down so it doesn't compete
-                  with the Continue button above. */}
               <div style={{
                 marginTop: 18, paddingTop: 16,
                 borderTop: `1px solid ${C.border}`, textAlign: "left",
@@ -158,13 +122,6 @@ export function SetupProgressScreen({
               : "Couldn't connect to the network you chose.")}
           </div>
 
-          {/* Actionable checklist. Wi-Fi join failures on these
-              devices are overwhelmingly one of these three causes, so
-              we spell them out instead of a generic "try again" —
-              the 2.4GHz one in particular is non-obvious to most
-              people and the single most common cause. The wired list is
-              the same idea for the only way that path fails: the uplink
-              check (ping) didn't pass. */}
           <div style={{
             textAlign: "left", background: C.surface,
             border: `1px solid ${C.border}`, borderRadius: 8,

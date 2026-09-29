@@ -136,7 +136,7 @@ func TestEnsureProviderConfig_SkipsWhenNoAPIKey(t *testing.T) {
 	dir := t.TempDir()
 	writeOpenclawJSON(t, dir, map[string]interface{}{})
 
-	svc := newServiceWithDir(t, dir) // LLMAPIKey is empty
+	svc := newServiceWithDir(t, dir)
 	changed, err := svc.ensureProviderConfig()
 	if err != nil {
 		t.Fatalf("unexpected error: %v", err)

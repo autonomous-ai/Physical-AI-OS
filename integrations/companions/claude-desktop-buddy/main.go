@@ -1,5 +1,4 @@
-// Command claude-desktop-buddy is the entrypoint for the buddy daemon. It only
-// parses flags and sets up logging; all daemon logic lives in package buddy.
+// Command claude-desktop-buddy is the buddy daemon entrypoint.
 package main
 
 import (

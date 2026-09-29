@@ -1,7 +1,4 @@
-"""Configuration for realtime voice agent providers.
-
-All values are read from hal.config (environment variables).
-"""
+"""Configuration for realtime voice agent providers (values from hal.config)."""
 
 from pydantic import BaseModel
 
@@ -26,18 +23,8 @@ def _load_language() -> str | None:
 
 
 def gemini_needs_idle_workaround(model: str | None = None) -> bool:
-    """Whether a Gemini Live model needs the idle-resume WS-1011 workarounds.
+    """Whether a Gemini Live model needs the idle-resume WS-1011 workarounds (2.5 native-audio only).
 
-    True ONLY for the 2.5 native-audio family: through the campaign-api proxy it
-    returns WS 1011 on a turn that follows an idle pause — a backend limitation
-    (the browser raw-WS client fails the same way), not fixable client-side. The
-    workarounds (keepalive ping, pre-turn rebuild, replay, suppressed
-    mid-activity [TURN CONTEXT]) only mitigate it and add churn/latency, so they
-    must stay OFF for models that DON'T have the bug.
-
-    `gemini-3.1-flash-live` handles idle→resume fine → returns False → all
-    workarounds disabled (clean, fast, per-turn context restored). Switch the
-    model back to native-audio in config.json and they re-enable automatically.
     Defaults to the configured model when `model` is omitted.
     """
     m = (model if model is not None else app_config.REALTIME_GEMINI_MODEL) or ""
@@ -55,18 +42,7 @@ def _parse_turn_detection(value: str) -> OpenAITurnDetectionType | None:
         return OpenAITurnDetectionType.SERVER_VAD
 
 
-# max_retries bounds the send/recv attempt loop in every provider — it counts the
-# FIRST attempt, so 1 means "try once", and 0 would disable sending and receiving
-# outright rather than disabling retries (use realtime.enabled for that).
-#
-# 1 is not a behaviour change from the old 3: a failed attempt clears _connected
-# and drops the session, and the next iteration's _ensure_connected is throttled
-# by the reconnect backoff, so attempts 2 and 3 could never do work — they logged
-# "Not connected, skipping attempt" and fell through in microseconds. Recovery
-# lives elsewhere and is unaffected: _fail_fast_turn ends the turn immediately so
-# it falls back to the main agent, and the background reconnect keeps retrying on
-# a 2s → 60s backoff so a session dead from a quota close heals once the limit
-# lifts.
+# max_retries counts the first attempt: 1 = try once, 0 disables send/recv entirely.
 
 
 class OpenAIConfig(BaseModel):
@@ -87,9 +63,6 @@ class OpenAIConfig(BaseModel):
     truncation_retention_ratio: float = 0.5
     transcribe_model: str = app_config.REALTIME_OPENAI_TRANSCRIBE_MODEL
     noise_reduction: str = app_config.REALTIME_OPENAI_NOISE_REDUCTION
-    # Server VAD knobs — the same HAL_LIVE_VAD_* settings Gemini reads, mapped
-    # onto server_vad threshold / prefix_padding_ms / silence_duration_ms and
-    # semantic_vad eagerness (see OpenAIRealtimeAgent._turn_detection).
     vad_threshold: float = app_config.REALTIME_OPENAI_VAD_THRESHOLD
     vad_start_sensitivity: str = app_config.LIVE_VAD_START_SENSITIVITY
     vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
@@ -98,8 +71,7 @@ class OpenAIConfig(BaseModel):
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
     queue_poll_s: float = 1.0
-    # How long a commit / tool result waits for the active response to finish
-    # before forcing response.create anyway.
+    # Wait for the active response before forcing response.create.
     response_wait_s: float = 10.0
 
 
@@ -144,8 +116,7 @@ class GPTLiveConfig(BaseModel):
 
 
 class PipecatV1Config(BaseModel):
-    """On-device Pipecat pipeline (voice_agent/pipecat_v1.py). Text out only —
-    no voice field: HAL's TTS speaks the reply."""
+    """On-device Pipecat pipeline config; text out only (HAL's TTS speaks the reply)."""
 
     api_key: str = app_config.REALTIME_PIPECAT_API_KEY
     base_url: str | None = app_config.REALTIME_PIPECAT_BASE_URL or None
@@ -175,8 +146,7 @@ class PipecatV1Config(BaseModel):
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
     queue_poll_s: float = 1.0
-    # Pipeline build + StartFrame must land within this; else "unavailable".
-    # Loading Silero + Smart Turn ONNX took ~12 s on lamp-ee17 (A55) cold.
+    # Loading Silero + Smart Turn ONNX took ~12 s cold on an A55.
     start_timeout_s: float = 60.0
     join_timeout_s: float = 5.0
 
@@ -205,11 +175,7 @@ class GeminiConfig(BaseModel):
     vad_end_sensitivity: str = app_config.LIVE_VAD_END_SENSITIVITY
     vad_prefix_padding_ms: int = app_config.LIVE_VAD_PREFIX_PADDING_MS
     vad_silence_ms: int = app_config.LIVE_VAD_SILENCE_MS
-    # NO text_only / TEXT-modality field. Opening a TEXT-only Live session to
-    # avoid paying for audio we discard was tried on device 2026-09-08 and the
-    # model refuses it outright: WS 1007 "The requested combination of response
-    # modalities (TEXT) is not supported by the model". Live is audio-out only,
-    # so with REALTIME_NATIVE_AUDIO=false the audio is received and dropped.
+    # No TEXT-only modality: Live rejects it with WS 1007, so audio is received and dropped.
     max_retries: int = 1
     reconnect_delay_s: float = 2.0
     send_timeout_s: float = 10.0

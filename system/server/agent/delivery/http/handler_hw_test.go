@@ -16,8 +16,7 @@ func TestExtractHWCallsCanonical(t *testing.T) {
 }
 
 func TestExtractHWCallsMarkdownLinkForm(t *testing.T) {
-	// Markdown-link form emitted by some LLMs instead of the canonical marker.
-	// Non-ASCII label on purpose: UTF-8 multibyte coverage (original field report).
+	// Markdown-link form marker with a non-ASCII label (UTF-8 multibyte coverage).
 	calls, rest := extractHWCalls(`[Tắt đèn liền đây!](HW:/led/off:{})`)
 	if len(calls) != 1 || calls[0].path != "/led/off" || calls[0].body != "{}" {
 		t.Fatalf("link-form marker not parsed: %+v", calls)
@@ -63,10 +62,7 @@ func TestExtractLeadingHWCallsLinkForm(t *testing.T) {
 }
 
 func TestExtractHWCallsLinkLabelIsCanonicalMarker(t *testing.T) {
-	// LLM link-wraps only the SECOND marker of the mandated back-to-back
-	// pair — the label group captures the first marker's content. Both must
-	// still fire, in emitted order (stop before solid, else the effect
-	// thread overwrites solid every 40ms).
+	// Only the second marker of a back-to-back pair is link-wrapped; both must fire in emitted order.
 	calls, rest := extractHWCalls(`[HW:/led/effect/stop:{}](HW:/led/solid:{"color":[255,0,0]})`)
 	if len(calls) != 2 {
 		t.Fatalf("expected 2 calls, got %+v", calls)

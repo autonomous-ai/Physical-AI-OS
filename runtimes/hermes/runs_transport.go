@@ -15,8 +15,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// managedRunHTTPError retains a definitive control rejection separately from
-// an ambiguous network failure: a lost steer acknowledgement must not be retried.
+// managedRunHTTPError retains a definitive control rejection separately from an ambiguous network failure: a lost steer acknowledgement must not be retried.
 type managedRunHTTPError struct {
 	StatusCode int
 	Body       string
@@ -75,16 +74,14 @@ func (s *HermesService) discoverRunSteering(ctx context.Context) bool {
 			return false
 		}
 	}
-	// Native progress must retain the same tool results and cache evidence as
-	// Responses before changing transport on a production device.
+	// Native progress must retain the same tool results and cache evidence as Responses before changing transport on a production device.
 	var runs struct {
 		Enriched bool `json:"autonomous_run_events_v1"`
 	}
 	return json.Unmarshal(caps.Features["runs_idempotency"], &runs) == nil && runs.Enriched
 }
 
-// managedRunInput emits the canonical content shape consumed directly by
-// Hermes run_conversation. Runs does not normalize Responses input_image parts.
+// managedRunInput emits the canonical content shape consumed directly by Hermes run_conversation.
 func managedRunInput(input any) (any, error) {
 	if text, ok := input.(string); ok {
 		if strings.TrimSpace(text) == "" {
@@ -208,8 +205,7 @@ func (s *HermesService) getManagedRunStatus(ctx context.Context, runID string) (
 	return state, err
 }
 
-// managedRunUsage bridges the native agent counters to Responses' canonical
-// breakdown; retain preexisting details and do not infer missing cache usage.
+// managedRunUsage bridges the native agent counters to Responses' canonical breakdown; retain preexisting details and do not infer missing cache usage.
 func managedRunUsage(raw json.RawMessage) json.RawMessage {
 	var usage map[string]json.RawMessage
 	if json.Unmarshal(raw, &usage) != nil {
@@ -238,9 +234,7 @@ func managedRunUsage(raw json.RawMessage) json.RawMessage {
 	return normalized
 }
 
-// readManagedRun consumes the native Runs stream. Its JSON envelope names the
-// event; there is no SSE event: field. Runs events deliberately omit tool call
-// IDs/results and cache usage without the compatibility capability gate.
+// readManagedRun consumes the native Runs stream.
 func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID string, dispatch func(domain.WSEvent)) (streamResult, string, error) {
 	result := streamResult{DeviceRunID: deviceRunID, ResponseID: runID}
 	pending := ""
@@ -264,7 +258,6 @@ func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID s
 		case "message.delta":
 			emit("response.output_text.delta", map[string]any{"delta": event.Delta})
 		case "tool.call.started":
-			// Preserve real call IDs and arguments for existing hardware/skill hooks.
 			arguments := "{}"
 			if len(event.Arguments) > 0 {
 				if json.Unmarshal(event.Arguments, &arguments) != nil {
@@ -279,8 +272,6 @@ func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID s
 			}
 			emit("response.output_item.added", map[string]any{"item": map[string]any{"type": "function_call_output", "call_id": event.ToolCallID, "output": output}})
 		case "tool.started", "tool.completed":
-			// Enriched native servers also emit legacy progress. Consuming both
-			// would fire the same tool callbacks twice.
 		case "reasoning.available":
 			raw, _ := json.Marshal(map[string]any{"runId": deviceRunID, "sessionKey": s.GetSessionKey(), "stream": "tool", "data": map[string]any{"phase": "update", "name": "_thinking", "text": event.Text}})
 			dispatch(domain.WSEvent{Type: "evt", Event: "agent", Payload: raw})
@@ -305,11 +296,9 @@ func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID s
 		}
 	}
 	recoverOwner := func() (streamResult, string, error) {
-		// Recover the known remote owner before releasing its local busy state.
-		// A broken observer does not cancel /v1/runs execution by itself.
+		// Recover the remote owner before releasing local busy state; a broken observer does not cancel the run.
 		status, recoveryErr := s.stopAndSettleManagedRun(ctx, runID)
 		for recoveryErr != nil && ctx.Err() == nil {
-			// A bounded cleanup attempt failing does not release remote ownership.
 			select {
 			case <-ctx.Done():
 			case <-time.After(time.Second):
@@ -336,8 +325,6 @@ func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID s
 	}
 	emit("response.created", map[string]any{"response": map[string]any{"id": runID, "session_id": status.SessionID}})
 	result.SessionID = status.SessionID
-	// Connect even if already terminal: queued deltas and tool events remain
-	// available until the first subscriber closes the transport.
 	resp, err := s.managedRunRequest(ctx, http.MethodGet, "/v1/runs/"+url.PathEscape(runID)+"/events", nil)
 	if err == nil {
 		defer resp.Body.Close()
@@ -379,9 +366,8 @@ func (s *HermesService) readManagedRun(ctx context.Context, runID, deviceRunID s
 	return recoverOwner()
 }
 
-// stopAndSettleManagedRun bounds cleanup even after the caller cancels. A
-// nonterminal error means ownership is unresolved: the controller must retain
-// busy state and must not launch another request on this session.
+// stopAndSettleManagedRun bounds cleanup even after the caller cancels.
+// stopAndSettleManagedRun bounds cleanup even after cancel; a nonterminal error means ownership is unresolved (keep busy).
 func (s *HermesService) stopAndSettleManagedRun(ctx context.Context, runID string) (managedRunEvent, error) {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 	defer cancel()

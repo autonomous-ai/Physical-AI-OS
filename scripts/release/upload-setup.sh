@@ -5,7 +5,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 
 SETUP_FILE="${RELEASE_DIR}/../provision/setup.sh"
 
-# Bucket and path matching https://storage.googleapis.com/s3-autonomous-upgrade-3/${BUCKET_PREFIX}/setup.sh
 GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/setup.sh}"
 
 SWUPDATE_FILE="${RELEASE_DIR}/../provision/software-update"
@@ -19,12 +18,7 @@ if [[ ! -f "$SWUPDATE_FILE" ]]; then
   exit 1
 fi
 
-# Inline the canonical on-device updater into the published setup.sh. The repo
-# copy of setup.sh carries only a placeholder between the two markers (it is
-# curl'd onto a bare device and cannot read the repo), so the assembly happens
-# here — at release time, never in git. That keeps the imagers, which install
-# the same file directly, and setup.sh on one version without anybody having to
-# regenerate and remember to commit.
+# Inline the canonical updater between setup.sh's markers at release time, never in git.
 BEGIN_MARK='  # >>> BEGIN software-update (generated)'
 END_MARK='  # <<< END software-update (generated)'
 UPLOAD_FILE="$(mktemp)"
@@ -51,17 +45,7 @@ echo "  (software-update inlined from $SWUPDATE_FILE)"
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$UPLOAD_FILE" "gs://${GCS_BUCKET}/${GCS_PATH}"
 echo "Done: gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Also publish the updater as a standalone file. `software-update` otherwise only
-# reaches a device at provisioning time (imager, or setup.sh above), so a device
-# already in the field can never get a newer one — and an old updater silently
-# skips every component it does not know (bootstrap's updaterSupports gate).
-# This gives an operator a one-liner to heal such a device:
-#
-#   sudo curl -fsSL https://cdn.autonomous.ai/os/software-update -o /tmp/su \
-#     && sudo bash -n /tmp/su \
-#     && sudo install -m 0755 /tmp/su /usr/local/bin/software-update
-#
-# Published raw (NOT the setup.sh-inlined form) so the fetch needs no unwrapping.
+# Also publish the raw updater standalone so field devices can fetch a newer one.
 SWUPDATE_GCS_PATH="${SWUPDATE_GCS_PATH:-${BUCKET_PREFIX}/software-update}"
 echo "========== Upload software-update to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" \

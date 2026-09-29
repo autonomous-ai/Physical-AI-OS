@@ -16,38 +16,26 @@ import (
 )
 
 const (
-	// memoryGuardDebounce coalesces the burst of events one agent write
-	// produces (truncate + several writes, or temp + rename) into one pass.
+	// memoryGuardDebounce coalesces the event burst of one agent write into one pass.
 	memoryGuardDebounce = 2 * time.Second
-	// memoryGuardRescan re-adds watch dirs that did not exist at boot — a
-	// runtime installed by a later switch — and re-sweeps as a safety net.
+	// memoryGuardRescan re-adds watch dirs missing at boot and re-sweeps.
 	memoryGuardRescan = 10 * time.Minute
 )
 
 // MemoryGuard keeps self-written agent memory from steering routing (#421).
-//
-// It runs migratepersona.GuardMemoryFiles once at boot (after persona
-// migration, so a freshly migrated poison is caught in the same boot) and then
-// on every write to any runtime's USER.md / MEMORY.md, seconds after the agent
-// writes — before the next OpenClaw turn re-reads the bootstrap files and
-// before the next Hermes session loads memories/. Every runtime is watched,
-// not just the active one: persona files are copies and an untouched copy
-// migrates back on the next switch.
+// Watches every runtime's USER.md/MEMORY.md, not just the active one: an unguarded
+// copy would migrate back on the next switch.
 type MemoryGuard struct {
 	opts    migratepersona.Options
 	execute bool
-	runtime migratepersona.Runtime // active runtime, whose files make up the published state
+	runtime migratepersona.Runtime
 
 	mu sync.Mutex
-	// lastWritten is sha8(content) of what the guard itself last wrote to each
-	// path. The rename that lands our rewrite is itself a watch event; matching
-	// the hash tells it apart from an agent write and stops a rewrite loop.
+	// lastWritten is sha8 of the guard's own last write per path; stops a rewrite loop.
 	lastWritten map[string]string
 
-	// sweepMu serialises whole sweeps so a timer-driven onChange and a rescan
-	// Run cannot guard the same file twice: both would read the poisoned file,
-	// both miss lastWritten, and both back up, quarantine and report it. g.mu
-	// only protects the map, not the read-compare-guard sequence.
+	// sweepMu serialises whole sweeps so onChange and Run can't guard a file twice;
+	// mu only protects the map, not the read-compare-guard sequence.
 	sweepMu sync.Mutex
 }
 
@@ -62,8 +50,7 @@ func ProvideMemoryGuard(cfg *config.Config) *MemoryGuard {
 	}
 }
 
-// Run is one sweep of every runtime's USER.md + MEMORY.md. Logs and never
-// blocks startup; a failure here must never keep the device from booting.
+// Run sweeps every runtime's USER.md + MEMORY.md; errors are logged, never fatal.
 func (g *MemoryGuard) Run(trigger string) {
 	g.sweepMu.Lock()
 	defer g.sweepMu.Unlock()
@@ -100,7 +87,7 @@ func (g *MemoryGuard) Watch(ctx context.Context) {
 			}
 			if err := watcher.Add(dir); err == nil {
 				watched[dir] = true
-			} // a runtime that is not installed has no dir yet; the rescan retries
+			}
 		}
 	}
 	addDirs()
@@ -153,7 +140,7 @@ func (g *MemoryGuard) onChange(path, trigger string) {
 	defer g.sweepMu.Unlock()
 	raw, err := os.ReadFile(path)
 	if err != nil {
-		return // removed between event and timer; nothing to guard
+		return
 	}
 	sum := migratepersona.Sha8(raw)
 	g.mu.Lock()
@@ -171,10 +158,8 @@ func (g *MemoryGuard) onChange(path, trigger string) {
 	g.publishState()
 }
 
-// report records our own write (if any), logs and emits the memory_changed
-// flow event. Emitted for EVERY observed change, clean or not: the point is to
-// let Flow Monitor tie a routing regression to a memory write. No content
-// leaves this function — sizes, hashes, reasons and counts only.
+// report records our own write, logs and emits a memory_changed flow event for every
+// change; no file content leaves this function.
 func (g *MemoryGuard) report(path string, act *migratepersona.GuardAction, trigger string) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -182,9 +167,7 @@ func (g *MemoryGuard) report(path string, act *migratepersona.GuardAction, trigg
 	}
 	sum := migratepersona.Sha8(raw)
 	if act != nil && act.Written {
-		// Record the hash of what WE wrote, not what is on disk now: an agent
-		// write landing between our rename and this read would otherwise be
-		// remembered as our own and skipped until the next rescan.
+		// Record what we wrote, not what is on disk now (an agent write may have landed since).
 		g.mu.Lock()
 		g.lastWritten[path] = act.WrittenSha8
 		g.mu.Unlock()

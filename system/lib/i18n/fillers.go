@@ -5,17 +5,7 @@ import (
 	"strings"
 )
 
-// Dead-air fillers — short TTS cues spoken while the agent is busy. Two
-// pools per language (Opening for first filler of a turn, Continuation for
-// re-arm after a tool finishes) plus per-tool overrides so the spoken
-// filler hints at what's happening without leaking machinery vocabulary.
-//
-// Looked up via:
-//   - FillerOpening(lang)        — short acknowledgement at turn start
-//   - FillerRealtime(lang)       — non-lexical cue while the realtime model waits
-//   - FillerContinuation(lang)   — neutral "still working" between tools
-//   - FillerForTool(lang, tool)  — tool-aware override; nil when no entry,
-//                                  caller falls back to FillerContinuation.
+// Dead-air fillers: short TTS cues spoken while the agent is busy, with per-tool overrides.
 
 var fillerOpening = map[string][]string{
 	LangEN: {
@@ -36,9 +26,7 @@ var fillerOpening = map[string][]string{
 	},
 }
 
-// fillerRealtime is intentionally separate from fillerOpening. The user has
-// already yielded the conversational floor when this plays, so it must sound
-// like a quiet thinking sound rather than an acknowledgement or a promise.
+// fillerRealtime holds quiet thinking sounds, not acknowledgements or promises.
 var fillerRealtime = map[string][]string{
 	LangEN:   {"Hmm...", "Mm..."},
 	LangVI:   {"Ừm...", "Hừm..."},
@@ -63,36 +51,20 @@ var fillerContinuation = map[string][]string{
 	},
 }
 
-// toolFillers indexes per-lang per-tool override pools. Tool name list
-// normalised across runtimes by FillerToolKey. Unknown tools fall back to
-// fillerContinuation via FillerForTool.
+// toolFillers maps lang -> FillerToolKey -> override pool.
 var toolFillers = map[string]map[string][]string{
 	LangEN: {
 		"search_files":   {"Looking it up.", "Let me check."},
 		"memory_store":   {"Making a note.", "One sec."},
 		"audio_generate": {"Preparing the audio.", "One sec."},
-		// Look-aim states (hal/drivers/tracking/aim.py). Spoken only when the
-		// aim actually has to search or takes long enough that the user is
-		// already waiting — narrating every visual question gets old fast.
+		// Look-aim states (hal/drivers/tracking/aim.py).
 		"look_searching": {"Looking...", "Where are you?"},
-		// Said ONCE, at the midpoint of a look-around, because the sweep is
-		// about half a minute of the lamp swinging in silence and one phrase at
-		// the start does not cover it. Repeating look_searching instead would
-		// ask "where are you?" twice, which sounds stuck rather than patient.
+		// Said once, at the midpoint of a look-around sweep.
 		"look_still_searching": {"Still looking...", "Hmm..."},
 		"look_found":           {"There you are.", "Found you."},
-		// The resolution of an announced search that FAILED. look_searching
-		// promises to look; without this the lamp turns away, says "Where are
-		// you?", then goes quiet while the model describes whatever the camera
-		// happened to be pointing at — the question answered about the wrong
-		// thing, with nothing acknowledging that the search came up empty.
-		"look_lost":      {"Can't see you.", "Lost you."},
-		"look_capturing": {"Let's see.", "Hmm..."},
-		// Range-demo narration (hal/drivers/motors/range_demo.py). HAL speaks
-		// each leg AS IT MOVES, which is why these are pools rather than agent
-		// text: a [HW:...] marker fires before TTS, so a marker-narrated demo
-		// would describe a performance that has already finished. Short by
-		// design — the phrase has to land inside one leg of the movement.
+		"look_lost":            {"Can't see you.", "Lost you."},
+		"look_capturing":       {"Let's see.", "Hmm..."},
+		// Range-demo narration (hal/drivers/motors/range_demo.py); must fit inside one movement leg.
 		"demo_intro":     {"Here's what I can do.", "Watch this."},
 		"demo_left":      {"All the way left.", "Left, as far as I go."},
 		"demo_right":     {"And all the way right.", "Right, to the end."},
@@ -163,11 +135,6 @@ var toolFillers = map[string]map[string][]string{
 		"image":                {"Xem chút.", "Để coi."},
 	},
 	LangZhCN: {
-		// The look_* and demo_* pools were absent here while both other
-		// languages had them. A key missing from a KNOWN language used to
-		// resolve to nothing rather than falling back, so every look filler on
-		// a Chinese device was dropped in silence — the aim announced a search
-		// it then never mentioned again.
 		"look_searching":       {"在找...", "你在哪儿？"},
 		"look_still_searching": {"还在找...", "嗯..."},
 		"look_found":           {"你在这儿。", "找到了。"},
@@ -247,8 +214,7 @@ var toolFillers = map[string]map[string][]string{
 	},
 }
 
-// FillerOpening returns the opening (first-of-turn) filler pool for lang.
-// Falls back to English on unknown / empty lang.
+// FillerOpening returns the first-of-turn filler pool for lang (English fallback).
 func FillerOpening(lang string) []string {
 	if p, ok := fillerOpening[lang]; ok && len(p) > 0 {
 		return applyNameAll(p)
@@ -256,8 +222,7 @@ func FillerOpening(lang string) []string {
 	return applyNameAll(fillerOpening[fallbackLang])
 }
 
-// FillerRealtime returns the dedicated pool for the realtime model wait.
-// Falls back to English on unknown / empty lang.
+// FillerRealtime returns the realtime-wait filler pool for lang (English fallback).
 func FillerRealtime(lang string) []string {
 	if p, ok := fillerRealtime[lang]; ok && len(p) > 0 {
 		return applyNameAll(p)
@@ -265,8 +230,7 @@ func FillerRealtime(lang string) []string {
 	return applyNameAll(fillerRealtime[fallbackLang])
 }
 
-// FillerContinuation returns the continuation (between-tools) filler pool
-// for lang. Falls back to English on unknown / empty lang.
+// FillerContinuation returns the between-tools filler pool for lang (English fallback).
 func FillerContinuation(lang string) []string {
 	if p, ok := fillerContinuation[lang]; ok && len(p) > 0 {
 		return applyNameAll(p)
@@ -274,26 +238,20 @@ func FillerContinuation(lang string) []string {
 	return applyNameAll(fillerContinuation[fallbackLang])
 }
 
-// FillerToolKey normalises raw runtime tool names into the small vocabulary
-// used by toolFillers. Names from OpenClaw, Hermes, OpenCode, Codex and Harness do not
-// share a wire-level enum, so unknown tools deliberately pass through and
-// fall back to FillerContinuation.
+// FillerToolKey normalises runtime tool names to toolFillers keys; unknown names pass through.
 func FillerToolKey(tool string) string {
 	key := strings.ToLower(strings.TrimSpace(tool))
 	key = strings.ReplaceAll(key, "-", "_")
 	key = strings.ReplaceAll(key, ".", "_")
 
-	// Match documented Hermes names before the legacy suffix heuristics:
-	// session_search and spotify_search are not web searches. Only recognise
-	// explicit names, including MCP-wrapped ones; unknown names stay intact.
+	// Match explicit Hermes names before suffix heuristics (session_search is not a web search).
 	name := key
 	if strings.HasPrefix(name, "mcp__") {
 		if i := strings.LastIndex(name, "__"); i > len("mcp__") {
 			name = name[i+2:]
 		}
 	}
-	// Source: https://hermes-agent.nousresearch.com/docs/reference/tools-reference
-	// Reviewed 2026-09-11. Keep the registry coverage test and EN/VI docs in sync.
+	// Keep in sync with the Hermes tools reference, its coverage test and EN/VI docs.
 	switch name {
 	case "terminal", "execute_code":
 		return "exec"
@@ -339,8 +297,7 @@ func FillerToolKey(tool string) string {
 		"feishu_drive_add_comment", "feishu_drive_reply_comment", "spotify_playback",
 		"spotify_devices", "spotify_queue", "spotify_playlists", "spotify_albums", "spotify_library",
 		"yb_query_group_info", "yb_query_group_members", "yb_send_dm", "yb_send_sticker":
-		// Mixed read/write or interactive tools use neutral checking phrases;
-		// the name alone cannot tell which action ran or whether it succeeded.
+		// Mixed read/write tools use neutral phrases.
 		return "session_status"
 	}
 
@@ -372,17 +329,8 @@ func FillerToolKey(tool string) string {
 	return key
 }
 
-// FillerForTool returns the tool-specific override pool for (lang, tool).
-// Returns nil when no override exists in ANY language — caller falls back to
-// FillerContinuation. Unknown lang routes to the English pool.
-//
-// A key missing from a KNOWN language also falls back to English rather than
-// to nothing. Silence was the old behaviour and it is indistinguishable from a
-// muted speaker: zh carried no look_* entries at all, so the lang map existed,
-// the unknown-lang fallback never fired, and every look filler on a Chinese
-// device was dropped without a log line. An English phrase on a Chinese device
-// is wrong, but it is wrong out loud — a missing translation should be
-// reported by somebody hearing it, not disappear.
+// FillerForTool returns the override pool for (lang, tool), falling back to English;
+// nil when no language defines it.
 func FillerForTool(lang, tool string) []string {
 	if tool = FillerToolKey(tool); tool == "" {
 		return nil
@@ -394,20 +342,10 @@ func FillerForTool(lang, tool string) []string {
 	if p := pools[tool]; len(p) > 0 {
 		return applyNameAll(p)
 	}
-	// nil in -> nil out through applyNameAll, so a pool that exists nowhere
-	// still reads as "no pool" rather than as an empty one.
 	return applyNameAll(toolFillers[fallbackLang][tool])
 }
 
-// AllPoolKeys returns every tool/pool key defined in any language, sorted.
-//
-// Exists so callers that must cover the WHOLE set — the WAV prewarm — cannot
-// fall behind the maps. The list it replaces was maintained by hand and had
-// already missed two whole pool families.
-//
-// Every key here must be its own FillerToolKey normalised form, or it cannot be
-// looked up through FillerForTool at all; TestEveryPoolKeyIsItsOwnNormalisedForm
-// pins that.
+// AllPoolKeys returns every pool key defined in any language, sorted.
 func AllPoolKeys() []string {
 	seen := make(map[string]struct{})
 	keys := make([]string, 0, 32)
@@ -420,8 +358,6 @@ func AllPoolKeys() []string {
 			keys = append(keys, k)
 		}
 	}
-	// Sorted so the prewarm's log line is stable and diffable; map iteration
-	// order is not.
 	sort.Strings(keys)
 	return keys
 }

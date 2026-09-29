@@ -41,15 +41,16 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
 
 ```json
 {
-  "network_ssid": "MyWiFi",
-  "network_password": "...",
-  "llm_provider": "anthropic",
+  "device_id": "lamp-a1b2",
+  "ssid": "MyWiFi",
+  "password": "...",
   "llm_api_key": "sk-...",
   "llm_base_url": "https://api.anthropic.com",
   "llm_model": "claude-haiku-4-5-20251001",
-  "channel_type": "telegram",
-  "channel_token": "...",
-  "channel_id": "...",
+  "channel": "telegram",
+  "telegram_bot_token": "...",
+  "telegram_user_id": "...",
+  "admin_password": "...",
   "mqtt_endpoint": "broker.example.com",
   "mqtt_port": 8883,
   "mqtt_username": "...",
@@ -60,15 +61,17 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
 }
 ```
 
+Các field lấy từ `SetupRequest` trong `system/domain/device.go`. `device_id`, `llm_api_key` và `llm_base_url` có tag `validate:"required"`; mọi field khác là tuỳ chọn. `ssid` có thể để trống (đường wired/ethernet, xem bên dưới). `channel` là `telegram` (mặc định khi để trống), `slack`, `discord` hoặc `imessage`; các field credential tương ứng là `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, hoặc `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Override voice tuỳ chọn: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
+
 **Response:** Trả về ngay `{"status": 1}`. Setup chạy async trong goroutine sau 2s delay.
 
-**Messaging channel:** Toàn bộ cấu hình Telegram, Slack hoặc Discord là tuỳ chọn ở lần setup đầu. Không gửi chúng không chặn setup; có thể cấu hình channel sau qua `POST /api/device/channel`. Credential gửi cùng `POST /api/device/setup` vẫn đi theo luồng setup hiện tại nhưng không được validate theo channel tại đây; `POST /api/device/channel` sẽ validate credential bắt buộc của channel được chọn.
+**Messaging channel:** Toàn bộ cấu hình Telegram, Slack, Discord hoặc iMessage là tuỳ chọn ở lần setup đầu. Không gửi chúng không chặn setup; có thể cấu hình channel sau qua `POST /api/device/channel`. Credential gửi cùng `POST /api/device/setup` vẫn đi theo luồng setup hiện tại nhưng không được validate theo channel tại đây; `POST /api/device/channel` sẽ validate credential bắt buộc của channel được chọn.
 
 **Admin password mặc định:** `admin_password` là optional. Khi để trống ở first-time setup (`SetUpCompleted=false` và chưa có `AdminPasswordHash`), handler mặc định lấy suffix 4 ký tự từ `device.GetDeviceMac()` — cùng suffix mà `scripts/provision/setup-ap.sh` dùng cho AP SSID (`<DEVICE_TYPE>-<xxxx>`). Suffix in trên nhãn dán dưới đế thiết bị, nên user có thể sign in trang admin mà không cần tự đặt password lúc setup. Web UI Setup V2 ẩn hẳn field DEVICE PASSWORD và dựa vào default này; V1 (Device step riêng) vẫn bắt user chọn. Fail 400 (`device hardware ID unreadable`) khi `GetDeviceMac()` trả empty (không có env `DEVICE_TYPE`, không có serial, không có eth MAC) — silent fallback sẽ khiến mọi device không identify được đều có cùng một password well-known.
 
 ### POST /api/device/channel
 
-Thay đổi messaging channel sau khi đã setup. Chấp nhận `telegram`, `slack`, `discord`.
+Thay đổi messaging channel sau khi đã setup. Chấp nhận `telegram`, `slack`, `discord`, `imessage`. Channel mà runtime đang chạy không hỗ trợ sẽ bị reject với `400 <channel> not supported on the active runtime` (hiện `imessage` chỉ chạy trên Hermes).
 
 **WhatsApp bị reject ở đây** (`400 whatsapp pairing not supported via HTTP; use MQTT add_channel`) — WhatsApp pairing stream rotating QR về caller, HTTP fire-and-forget không carry được. Đường chính tắc là MQTT `add_channel` command (xem `docs/mqtt.md`) — thiết bị publish một message fd_channel cho mỗi pairing event. Re-pair không re-bootstrap dùng MQTT `whatsapp_pair` command.
 
@@ -619,21 +622,19 @@ Sau khi `SetUpCompleted = true`:
 
 ## Config
 
-Config lưu tại `config/config.json`. Managed bởi `server/config/config.go`.
+Config lưu tại `config/config.json`. Managed bởi `system/server/config/config.go`.
 
 | Field | Mô tả |
 |-------|-------|
 | `SetUpCompleted` | `true` khi setup xong |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
-| `LLMProvider` | anthropic, openai, google, ... |
-| `LLMApiKey` | API key cho LLM |
-| `LLMBaseUrl` | LLM API base URL |
+| `LLMAPIKey` | API key cho LLM |
+| `LLMBaseURL` | LLM API base URL |
 | `LLMModel` | Model name |
-| `ChannelType` | telegram, slack |
-| `ChannelToken` | Channel bot token |
-| `ChannelID` | Channel/chat ID |
-| `DeepgramApiKey` | Deepgram STT API key |
+| `Channel` | telegram (mặc định khi trống), slack, discord, whatsapp, imessage |
+| `TelegramBotToken` / `TelegramUserID` | Credential Telegram (Slack/Discord/WhatsApp/BlueBubbles có field riêng `Slack*`, `Discord*`, `WhatsappUserID`, `Bluebubbles*`) |
+| `DeepgramAPIKey` | Deepgram STT API key |
 | `LocalIntent` | Enable/disable local intent matching (default: true) |
 | `MQTTEndpoint` | MQTT broker host |
 | `MQTTPort` | MQTT broker port |

@@ -30,8 +30,7 @@ type turnResult struct {
 	heldFrames     [][]byte // terminal failure frames held back during a resumed attempt
 }
 
-// turnWorker only starts a fresh App Server turn. Once started, later input is
-// sent directly with turn/steer and does not wait for this worker.
+// turnWorker only starts a fresh App Server turn.
 func (s *Server) turnWorker(ctx context.Context) {
 	for {
 		select {
@@ -66,8 +65,6 @@ func (s *Server) turnWorker(ctx context.Context) {
 // runTurn executes one message.send: decode attachments, spawn codex exec
 // (resuming the stored thread when present), retry once fresh if the resume
 // target is gone, and surface terminal failures as bridge.error frames.
-// During a resumed attempt, terminal failure frames are held back (see
-// pumpStdout) so a fresh retry does not leave the client's turn already ended.
 func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	payload = s.prepareSkill(ctx, payload)
 	images := s.decodeAttachments(payload)
@@ -84,15 +81,11 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 	res := s.execTurn(ctx, payload.promptWithSkill(), images, resumeID)
 	if resumeID != "" {
 		if resumeFailed(res) {
-			// Drop the held terminal failure frames: forwarding them would end the
-			// device turn early and the fresh retry's events would re-open an
-			// uncorrelated turn on the translator side.
 			log.Printf("%s resume of thread %s failed (rc=%d) — retrying fresh (%d failure frames dropped)",
 				logPrefix, resumeID, res.rc, len(res.heldFrames))
 			s.clearSession()
 			res = s.execTurn(ctx, payload.promptWithSkill(), images, "")
 		} else if !res.outputRejected {
-			// Resumed attempt is terminal (no fresh retry) — release what was held.
 			for _, frame := range res.heldFrames {
 				s.send(frame)
 			}
@@ -101,22 +94,14 @@ func (s *Server) runTurn(ctx context.Context, payload turnPayload) {
 
 	switch {
 	case res.outputRejected:
-		// Clear even a newly created thread. Its on-disk rollout contains the
-		// rejected output; never resume it or replay the task's earlier mutations.
+		// Clear even a newly created thread.
+		// Its on-disk rollout contains the rejected output; never resume it or replay the task's
+		// earlier mutations.
 		s.clearSession()
 		s.sendError(degenerateOutputError)
 	case res.timedOut:
-		// A resumed turn that ran out of time takes the thread down with it.
-		// Rotation normally rides on a COMPLETED turn (the client's
-		// ShouldRotateSession reads the token count off turn.completed), so a
-		// thread whose every resume hangs can never be rotated — the next turn
-		// resumes the same thread, hangs the same way, and the device stays
-		// wedged across service restarts and reboots because the thread id is
-		// on disk. Measured on lamp-0c89 2026-09-03: thread 01a06665 was
-		// created 15:31 and every turn after 15:40 hung with no turn end, for
-		// over an hour. Dropping the thread here is the only escape that does
-		// not need a human: the next turn starts fresh, and continuity is
-		// restored the same way any other rotation restores it.
+		// A resumed turn that timed out drops its thread: rotation only fires on a completed
+		// turn, so a thread whose every resume hangs would otherwise wedge the device forever.
 		if resumeID != "" {
 			log.Printf("%s resumed thread %s timed out after %s — dropping it so the next turn starts fresh",
 				logPrefix, resumeID, s.cfg.TurnTimeout)
@@ -150,7 +135,7 @@ func resumeFailed(res turnResult) bool {
 		return false
 	}
 	if res.rc == 0 && res.turnEnded {
-		return false // run succeeded — nothing to retry
+		return false
 	}
 	if !res.threadStarted {
 		return true
@@ -164,15 +149,8 @@ func resumeFailed(res turnResult) bool {
 	return false
 }
 
-// buildArgv builds the codex exec command line. The prompt is always the
-// final positional argument; image paths ride repeated -i flags.
-//
-// Flag ordering is load-bearing at rust-v0.142.5: `--cd` (like other
-// non-global exec flags) is NOT accepted after the `resume` subcommand —
-// `codex exec resume <id> --cd …` dies with "unexpected argument" before the
-// turn starts, which would make every resume silently fall back to a fresh
-// thread. Shared flags therefore go BEFORE `resume`; only resume-safe pieces
-// (-i is a resume-own flag) plus the id + prompt follow it.
+// buildArgv builds the codex exec command line.
+// Shared flags must precede `resume`: rust-v0.142.5 rejects `--cd` after it.
 func (s *Server) buildArgv(prompt string, images []string, resumeID string) []string {
 	argv := []string{s.cfg.CodexBin, "exec",
 		"--json", "--dangerously-bypass-approvals-and-sandbox",
@@ -253,7 +231,7 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 	res.rc = cmd.ProcessState.ExitCode()
 	if err != nil && res.rc == 0 {
-		res.rc = -1 // killed / wait error without a real exit code
+		res.rc = -1
 	}
 	if tctx.Err() == context.DeadlineExceeded {
 		log.Printf("%s turn timed out after %s — killed process group",
@@ -266,12 +244,6 @@ func (s *Server) execTurn(ctx context.Context, prompt string, images []string, r
 
 // pumpStdout forwards each JSON stdout line verbatim to the client while
 // watching for thread.started (persist session) and terminal turn events.
-//
-// When holdFailures is set (resumed attempt), terminal failure frames
-// (turn.failed and the top-level error event) are stashed in res.heldFrames
-// instead of forwarded: the caller drops them when it retries fresh, or
-// forwards them when the resumed attempt is terminal. thread.started/item.*
-// frames still flow normally.
 func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, cancel context.CancelFunc) {
 	scanner := bufio.NewScanner(r)
 	scanner.Buffer(make([]byte, scanBufSize), streamLimit)
@@ -304,7 +276,7 @@ func (s *Server) pumpStdout(r io.Reader, res *turnResult, holdFailures bool, can
 				res.outputRejected = true
 				log.Printf("%s rejected degenerate assistant output (bytes=%d); killing process group", logPrefix, len(evt.Item.Text))
 				cancel()
-				return // Do not forward this item, terminal success, or later output.
+				return
 			}
 			switch evt.Type {
 			case "thread.started":
@@ -349,8 +321,6 @@ func tail(s string, max int) string {
 	}
 	return s
 }
-
-// -- image attachments -------------------------------------------------------
 
 // decodeAttachments writes data-URL images to files and returns their paths;
 // codex exec has no stdin image channel, so paths ride repeated -i flags and
@@ -403,8 +373,6 @@ func (s *Server) pruneAttachments() {
 		}
 	}
 }
-
-// -- session persistence -----------------------------------------------------
 
 // loadSession reads the persisted thread id (absent/corrupt file -> "").
 func (s *Server) loadSession() string {

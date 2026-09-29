@@ -3,17 +3,9 @@ import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/s
 import { getRealtimeOptions } from "@/lib/api";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
-// Realtime voice-agent (Gemini Live / OpenAI Realtime / GPT-Live / on-device
-// Pipecat v1) config. Values map 1:1 to the config.json `realtime` block (HAL
-// reads it; os-server restarts HAL on save). Voice + reasoning are
-// provider-specific — keep these lists in sync with
-// system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
+// Keep these lists in sync with system/server/config/realtime.go (ValidateRealtimeKnobs) and the HAL enums.
 const PROVIDERS = ["gemini", "openai", "gptlive", "pipecat_v1", "none"];
 
-// Display labels for the Provider dropdown. Values on the wire stay lowercase
-// (server-side switch keys off "gemini" / "openai" / …); only the human-facing
-// string is title-cased. Unknown providers fall back to first-letter capitalise
-// so the UI never shows a raw lowercase entry.
 const PROVIDER_LABEL: Record<string, string> = {
   gemini: "Gemini",
   openai: "OpenAI",
@@ -26,19 +18,13 @@ const displayProvider = (v: string): string =>
 const VOICES: Record<string, string[]> = {
   gemini: ["Puck", "Charon", "Kore", "Fenrir", "Aoede"],
   openai: ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"],
-  // GPT-Live: the BuiltInVoice literal of openai SDK 3.14.1 (openai.types.live).
-  // The voices gpt-live-1 accepts (BFF integration doc); Realtime-only names
-  // such as alloy/ash are rejected at session.start and must not appear here.
+  // gpt-live-1 voices only; Realtime-only names (alloy/ash) are rejected at session.start.
   gptlive: [
     "marin", "quartz", "ripple", "vesper", "willow", "stone", "gleam",
     "meridian", "bossa", "tempo", "beacon", "delta", "cinder",
   ],
-  // Pipecat v1 emits text; the device's own TTS voice speaks it → no voice.
   pipecat_v1: [],
 };
-// Reasoning depth = cost knob. First entry (cheapest) is the default.
-// GPT-Live has no reasoning knob (the Live model exposes none) and neither
-// does Pipecat v1 → empty list hides the selector.
 const REASONING: Record<string, string[]> = {
   gemini: ["MINIMAL", "LOW", "MEDIUM", "HIGH"],
   openai: ["minimal", "low", "medium", "high", "xhigh"],
@@ -79,19 +65,16 @@ export function RealtimeSection({
   reasoning: string; setReasoning: (v: string) => void;
   apiKey: string; setApiKey: (v: string) => void;
   baseUrl: string; setBaseUrl: (v: string) => void;
-  // pipecat_v1 only: the in-session `web_search` tool (realtime.pipecat_v1.web_search).
   webSearch: boolean; setWebSearch: (v: boolean) => void;
 }) {
-  // Options come from the API (single source = server config); the const lists
-  // above are only a fallback if the fetch fails.
+  // Options come from the API; the const lists above are only a fallback.
   const [opts, setOpts] = useState<{ providers: string[]; voices: Record<string, string[]>; reasoning: Record<string, string[]> } | null>(null);
   useEffect(() => { getRealtimeOptions().then(setOpts).catch(() => {}); }, []);
   const providers = opts?.providers ?? PROVIDERS;
   const voices = (opts?.voices ?? VOICES)[provider] ?? [];
   const reasonings = (opts?.reasoning ?? REASONING)[provider] ?? [];
 
-  // Switching provider resets voice/reasoning to that provider's defaults so we
-  // never submit, e.g., an OpenAI voice while provider=gemini (server rejects it).
+  // Switching provider resets voice/reasoning to that provider's defaults so we never submit, e.g., an OpenAI voice while provider=gemini (server rejects it).
   function onProviderChange(p: string) {
     setProvider(p);
     if (p === "none") return;
@@ -114,8 +97,6 @@ export function RealtimeSection({
 
       {provider !== "none" && (
         <>
-          {/* Realtime voice output is NOT used (device speaks via TTS), so the
-              voice selector is hidden via display:none — code kept for re-enable. */}
           <div style={{ marginBottom: 12, display: "none" }}>
             <label htmlFor="realtime_voice" style={labelStyle}>Voice</label>
             <select id="realtime_voice" value={voice} onChange={(e) => setVoice(e.target.value)} style={selectStyle}>
@@ -134,17 +115,11 @@ export function RealtimeSection({
 
           <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
           {provider === "pipecat_v1" ? (
-            // The shared Base URL carries a WebSocket relay shape (…/ws/gemini) that
-            // HAL never uses for this provider; its chat endpoint is
-            // realtime.pipecat_v1.base_url in config.json (default: the Qwen relay).
             <>
               <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
                 Runs the voice pipeline on the robot (its own STT + a text LLM, spoken by the TTS voice above).
                 LLM endpoint: <code>realtime.pipecat_v1.base_url</code> in config.json — default is the low-latency Qwen relay.
               </div>
-              {/* The relay LLM has no hosted search; this is the client-side
-                  web_search tool (HAL_PIPECAT_WEB_SEARCH). Off → public live
-                  facts (weather, news, scores) delegate to the main agent. */}
               <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: C.text, cursor: "pointer", marginBottom: 12 }}>
                 <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginTop: 3 }} />
                 <span>

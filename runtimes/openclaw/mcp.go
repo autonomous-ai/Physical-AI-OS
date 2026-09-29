@@ -8,13 +8,7 @@ import (
 	"path/filepath"
 )
 
-// mcpConnectorURLs is the catalog of supported remote-MCP connectors. The key
-// is both the connector code (from connector.set.<code>) and the mcp.servers.<name>
-// key written into openclaw.json. The OAuth connectors authenticate with a
-// plain "Bearer <access_token>" header (the backend drives the OAuth/app flow
-// and pushes the resulting access token to the device); Ahrefs authenticates
-// with a static "Bearer <api_key>" the user self-generates — no OAuth, no
-// refresh (the per-connector header builder lives in mcp_connector_writer.go).
+// mcpConnectorURLs is the catalog of supported remote-MCP connectors.
 var mcpConnectorURLs = map[string]string{
 	"notion": "https://mcp.notion.com/mcp",
 	"asana":  "https://mcp.asana.com/v2/mcp",
@@ -23,8 +17,7 @@ var mcpConnectorURLs = map[string]string{
 	"ahrefs": "https://api.ahrefs.com/mcp/mcp",
 }
 
-// MCPConnectorURL returns the remote MCP endpoint for a connector code and
-// whether the code is a known connector.
+// MCPConnectorURL returns the remote MCP endpoint for a connector code and whether the code is a known connector.
 func MCPConnectorURL(name string) (string, bool) {
 	url, ok := mcpConnectorURLs[name]
 	return url, ok
@@ -36,14 +29,7 @@ func IsKnownMCPConnector(name string) bool {
 	return ok
 }
 
-// WriteMCPEntry upserts mcp.servers.<name> in openclaw.json and restarts the
-// gateway so the new server is picked up. entry is the server config map
-// (typically {type, url, headers}). Errors if openclaw.json does not exist —
-// connectors are only configured post-setup.
-//
-// The read-modify-write cycle is serialized under primarySyncMu so it cannot
-// interleave with UpdatePrimaryModel / syncPrimaryFromFile, which mutate the
-// same file.
+// WriteMCPEntry upserts mcp.servers.<name> in openclaw.json and restarts the gateway.
 func (s *OpenclawService) WriteMCPEntry(name string, entry map[string]any) error {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
@@ -71,9 +57,7 @@ func (s *OpenclawService) WriteMCPEntry(name string, entry map[string]any) error
 	return nil
 }
 
-// RemoveMCPEntry deletes mcp.servers.<name> from openclaw.json. Returns
-// removed=false (no write, no restart) when the entry was already absent or the
-// config file does not exist yet.
+// RemoveMCPEntry deletes mcp.servers.<name> from openclaw.json.
 func (s *OpenclawService) RemoveMCPEntry(name string) (bool, error) {
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
@@ -112,9 +96,7 @@ func (s *OpenclawService) RemoveMCPEntry(name string) (bool, error) {
 	return true, nil
 }
 
-// readOpenclawConfig loads openclaw.json into a generic map. Errors (including
-// not-exist) are returned so connector writes surface a clear failure rather
-// than silently no-op'ing on an unconfigured device.
+// readOpenclawConfig loads openclaw.json into a generic map.
 func readOpenclawConfig(path string) (map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -127,8 +109,7 @@ func readOpenclawConfig(path string) (map[string]any, error) {
 	return configData, nil
 }
 
-// writeOpenclawConfig marshals + atomically writes openclaw.json and chowns it
-// back to the gateway runtime user when running as root.
+// writeOpenclawConfig marshals + atomically writes openclaw.json and chowns it back to the gateway runtime user when running as root.
 func writeOpenclawConfig(path string, configData map[string]any) error {
 	written, err := json.MarshalIndent(configData, "", "  ")
 	if err != nil {

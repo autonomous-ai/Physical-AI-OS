@@ -4,13 +4,7 @@ import { uploadSkill } from "@/lib/api";
 import { ModalShell } from "./ModalShell";
 import { btnStyle } from "./styles";
 
-// "Upload a skill" — install a `.skill`/`.zip` the operator picked from their own
-// machine, rather than one from the catalog. Same destination and the same
-// replace-on-name-clash semantics as the store Install button: only the source of
-// the bytes differs (POST /api/agent/skills/upload → InstallSkillArchive).
-
-// Matches the device-side cap in skills.StoreMaxBytes — checked here too so an
-// oversized pick fails instantly instead of after a multi-MB upload.
+// Matches the device-side cap in skills.StoreMaxBytes.
 const MAX_BYTES = 16 * 1024 * 1024;
 
 const ACCEPT = ".skill,.zip,.md,application/zip,text/markdown";
@@ -104,7 +98,6 @@ export function UploadSkillModal({ onClose }: { onClose: () => void }) {
         </div>
       ) : (
         <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-          {/* Drop zone doubles as the picker button. */}
           <div
             onClick={() => inputRef.current?.click()}
             onDragOver={(e) => { e.preventDefault(); setDragging(true); }}
@@ -160,8 +153,6 @@ export function UploadSkillModal({ onClose }: { onClose: () => void }) {
             </div>
           )}
 
-          {/* Requirements, stated up front — the device enforces both, so saying
-              them here turns a 400 into something the user could have avoided. */}
           <div style={{
             fontSize: 11, color: "var(--lm-text-dim)", lineHeight: 1.6,
             padding: "10px 12px", borderRadius: 9,
@@ -170,9 +161,7 @@ export function UploadSkillModal({ onClose }: { onClose: () => void }) {
             <div style={{ fontWeight: 600, color: "var(--lm-text)", marginBottom: 4 }}>
               File requirements
             </div>
-            {/* Tailwind's preflight strips list markers from every ul, so the
-                disc has to be asked for explicitly — without it these read as
-                one run-on paragraph starting "A .md file…". */}
+            {/* Tailwind preflight strips list markers, so request the disc explicitly. */}
             <ul style={{ margin: 0, paddingLeft: 16, listStyle: "disc outside" }}>
               <li style={{ display: "list-item", marginBottom: 3 }}>
                 A <strong>.md</strong> file must carry the skill <strong>name</strong> and{" "}

@@ -16,7 +16,7 @@ def test_confirmed_speech_replies_while_stt_drains(monkeypatch, wake_enabled, in
 
     def read(elapsed):
         if elapsed == 1 and wake_enabled:
-            focus[0] = True  # Gaze grants focus in the current capture.
+            focus[0] = True
 
     def close():
         closing.set()
@@ -73,7 +73,6 @@ def test_punctuation_final_cannot_bypass_noise_gate(monkeypatch):
     with capture(
         monkeypatch, [(1, True, "..."), (4, False, None)], realtime=True,
     ) as result:
-        # The ordinary path owns the noise verdict, never the early reply path.
         assert all("save_history" not in call.kwargs for call in result.realtime.call_args_list)
         result.stt.close.assert_called_once()
 

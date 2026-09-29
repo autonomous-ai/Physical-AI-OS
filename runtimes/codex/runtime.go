@@ -12,20 +12,17 @@ import (
 )
 
 // codexVersionProbeTimeout caps one `/usr/local/bin/codex --version` probe.
-// Codex can be slow to start immediately after boot, so keep this aligned with
-// the generous cold-start allowance used by the other CLI runtimes.
 const codexVersionProbeTimeout = 20 * time.Second
 
 // codexVersionProbeRetries lets a transient first-boot failure self-heal
 // instead of leaving the Monitor's Agent version blank until os-server is
-// restarted. A warm probe returns immediately, so retries affect only failures.
+// restarted.
 const codexVersionProbeRetries = 6
 
 // codexVersionProbeBackoff is the wait between failed Codex version probes.
 const codexVersionProbeBackoff = 10 * time.Second
 
-// codexBinary is the absolute path installed by install.sh. Avoiding PATH keeps
-// the startup probe independent of the os-server service environment.
+// codexBinary is the absolute path installed by install.sh.
 const codexBinary = "/usr/local/bin/codex"
 
 // codexSemverRe extracts the release from `codex --version` output
@@ -43,14 +40,16 @@ func GetCodexVersion() string {
 }
 
 // PopulateCodexVersion shells out to `codex --version`, normalizes the semver,
-// and caches it. It retries failed or unparseable probes so boot-time CLI startup
-// races do not leave the Monitor's Agent version blank for the process lifetime.
+// and caches it.
+// It retries failed or unparseable probes so boot-time CLI startup races do not leave the Monitor's
+// Agent version blank for the process lifetime.
 func PopulateCodexVersion() {
 	codexVersion.Populate(codexVersionProbeRetries, codexVersionProbeBackoff)
 }
 
-// probeCodexVersion runs one version probe. A failed command, timeout, or
-// unparseable output returns ok=false so PopulateCodexVersion can retry.
+// probeCodexVersion runs one version probe.
+// A failed command, timeout, or unparseable output returns ok=false so PopulateCodexVersion can
+// retry.
 func probeCodexVersion(ctx context.Context) (version string, ok bool) {
 	ctx, cancel := context.WithTimeout(ctx, codexVersionProbeTimeout)
 	defer cancel()

@@ -1,24 +1,4 @@
-"""OS-shutdown announce for the lifespan shutdown path.
-
-Lives outside server.py so the lifespan stays short. Wired in by
-`server.lifespan` right after `yield` — runs once per process exit and
-picks one of three audible cues based on what's actually happening:
-
-- Button action already announced (long_press / factory_reset set
-  `state._shutdown_announced = True` before kicking the OS command) →
-  stay silent, the cached clip is still playing.
-- OS-level shutdown/reboot pending (systemd in `stopping` state) →
-  speak PHRASE_REBOOT (reboot/kexec target) or PHRASE_SHUTDOWN
-  (poweroff/halt target). User hears the board is going down for
-  minutes.
-- Service-level restart (`systemctl restart hal` from OTA,
-  deploy, or dev — OS itself stays `running`) → speak
-  PHRASE_SERVICE_RESTART ("Be right back."). User hears the device
-  blinking but will return in seconds.
-
-Three phrases, deliberately distinct tone, so the user knows from the
-cue alone whether to wait or to walk away.
-"""
+"""OS-shutdown announce for the lifespan shutdown path."""
 
 import logging
 import subprocess
@@ -70,35 +50,23 @@ def _phrase(key: str) -> str:
 
 
 def announce_os_shutdown():
-    """Speak the appropriate cue + park servos. Called from
-    server.lifespan before any service teardown, so tts_service + servo
-    bus are still alive. No-op only when a button action already
-    announced; otherwise picks shutdown / reboot / service-restart based
-    on systemd state so the user can tell minutes-of-downtime from
-    seconds-of-blink by sound alone."""
+    """Speak the appropriate cue + park servos."""
     if state._shutdown_announced:
         logger.info("shutdown already announced by button action -- skip TTS")
         return
 
     if _is_os_stopping():
-        # OS-level: board going dark. Pick reboot vs shutdown by target.
         is_reboot = _is_reboot_pending()
         kind = "reboot" if is_reboot else "shutdown"
         text = _phrase(PHRASE_REBOOT if is_reboot else PHRASE_SHUTDOWN)
     else:
-        # Service-level: OTA, deploy, manual restart. The device comes back in
-        # seconds; use the lighter cue so the user doesn't think the
-        # board is dying.
         kind = "service_restart"
         text = _phrase(PHRASE_SERVICE_RESTART)
 
     logger.info("lifespan announce: kind=%s text=%r", kind, text)
 
-    # Park servo before systemd kills the process, otherwise the body
-    # slams down mid-pose. Same reasoning as shutdown_action's servo step.
-    # Runs in parallel with the spoken cue below (park ~2.4s, cue ~1.5s —
-    # sequential they were the two biggest shutdown costs); both must finish
-    # before this function returns.
+    # Park servo before systemd kills the process, otherwise the body slams down
+    # mid-pose.
     def _park_servos():
         try:
             from hal.routes.servo import release_servos
@@ -110,9 +78,6 @@ def announce_os_shutdown():
     park.start()
 
     if state.tts_service and state.tts_service.available and not state._speaker_muted and text:
-        # speak_cached is async — poll the speaking flag instead of a fixed 5s
-        # sleep: the service-restart clip is ~1.5s, so a hard sleep(5) added
-        # ~3.5s of dead time to every HAL restart. 5s stays the worst-case cap.
         state.tts_service.speak_cached(text)
         deadline = time.monotonic() + 5.0
         while time.monotonic() < deadline and not state._tts_speaking:

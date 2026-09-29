@@ -43,7 +43,7 @@ def test_no_aec_blocks_echo_through_tail_then_passes_user(uplink, monkeypatch, m
     assert not service._live_uplink_frame(frame).any()
     clock.now = 11.36
     assert service._live_uplink_frame(frame) is frame
-    assert frame.all()  # Substitution must not mutate the capture buffer.
+    assert frame.all()
 
 
 def test_reference_tail_also_protects_playback_between_capture_reads(uplink, monkeypatch):

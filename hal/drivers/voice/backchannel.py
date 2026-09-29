@@ -1,27 +1,4 @@
-"""
-Backchannel — active listening cues during STT sessions.
-
-Plays short filler words ("Uhm", "Ok", etc.) via TTS when the user pauses
-mid-speech, signaling that the agent is still listening.
-
-Usage:
-    bc = Backchannel(tts_service)
-    bc.on_partial("hello I want to")   # call on every STT partial
-    bc.reset()                          # call when STT session ends
-
-Feature is disabled when HAL_BACKCHANNEL_FILLERS env var is empty.
-
-Does NOT use tts_service.speak() — that would set the speaking flag and
-kill the active STT session. Instead calls TTS API directly and plays
-audio without touching the speaking flag.
-
-Config (env vars):
-    HAL_BACKCHANNEL_FILLERS     comma-separated filler words (empty = disabled)
-    HAL_BACKCHANNEL_STALL_S     partial unchanged for N seconds → play cue (0 = every partial)
-    HAL_BACKCHANNEL_INTERVAL_S  min seconds between cues
-    HAL_BACKCHANNEL_VOLUME      volume multiplier 0.0–1.0
-    HAL_BACKCHANNEL_ECHO_TAIL_S seconds after playback the mic still ignores itself
-"""
+"""Backchannel — active listening cues during STT sessions."""
 
 import logging
 import math
@@ -38,9 +15,7 @@ logger = logging.getLogger("hal.voice.backchannel")
 
 
 def _default_fillers_for_active_lang() -> str:
-    """Pick the default filler list based on the OS server's stt_language. Falls
-    back to DEFAULT_LANG when the config can't be read or the language is
-    empty/unknown. Caller can still override with HAL_BACKCHANNEL_FILLERS."""
+    """Pick the default filler list based on the OS server's stt_language."""
     try:
         from hal.config import _os_cfg_get
         lang = (_os_cfg_get("stt_language") or "").strip()
@@ -49,24 +24,15 @@ def _default_fillers_for_active_lang() -> str:
     return DEFAULT_FILLERS_BY_LANG.get(lang, DEFAULT_FILLERS_BY_LANG[DEFAULT_LANG])
 
 
-# Comma-separated filler words to play as listening cues. Empty string = feature disabled.
 _fillers_env = os.environ.get("HAL_BACKCHANNEL_FILLERS", _default_fillers_for_active_lang())
 FILLERS = [w.strip() for w in _fillers_env.split(",") if w.strip()]
 # How long (seconds) the partial transcript must stay unchanged before playing a cue.
-# 0 = play on every new partial (still throttled by MIN_INTERVAL_S).
-# Kept at 8s so backchannel fires only on real multi-second silence
-# (user lost their train of thought) rather than on every natural
-# breath-pause mid-sentence — those short pauses are what the speaker
-# recognizer needs clean, and backchannel audio bleeds into the mic.
 STALL_TIMEOUT_S = float(os.environ.get("HAL_BACKCHANNEL_STALL_S", "8.0"))
-# Minimum seconds between two consecutive cues (prevents spamming).
 MIN_INTERVAL_S = float(os.environ.get("HAL_BACKCHANNEL_INTERVAL_S", "5.0"))
 # Volume multiplier for cue audio relative to normal TTS (0.0 = silent, 1.0 = full).
 # Kept at 0.5 so backchannel bleed doesn't saturate the mic and corrupt the
 # speaker-ID embedding of whoever is still talking.
 VOLUME = float(os.environ.get("HAL_BACKCHANNEL_VOLUME", "0.5"))
-# Extra seconds after cue playback during which the mic still counts as hearing
-# our own audio. Covers speaker/room reverb tail, which outlasts the samples.
 ECHO_TAIL_S = float(os.environ.get("HAL_BACKCHANNEL_ECHO_TAIL_S", "0.4"))
 
 
@@ -79,12 +45,8 @@ class Backchannel:
         self._last_cue_time: float = 0.0
         self._lock = threading.Lock()
         self._timer: Optional[threading.Timer] = None
-        # A cue can wait behind normal TTS while the STT session that requested
-        # it ends. Tag every request with this epoch so it cannot play into a
-        # later mic session and be transcribed as a user turn.
         self._session_epoch: int = 0
         self._session_active = False
-        # Monotonic deadline until which our own cue audio is in the room.
         self._self_audio_until: float = 0.0
 
         if FILLERS:
@@ -100,11 +62,7 @@ class Backchannel:
         """True while a cue is playing (plus reverb tail).
 
         Deliberately NOT the TTS `speaking` flag: that flag ends the running STT
-        session, which is exactly what backchannel must not do. This one only
-        tells the VAD loop that what it hears right now is us, so it must not
-        OPEN a new session on it. Device-observed 19/08/2026: without this, every
-        cue spawned a phantom session ~1s later whose transcript was the cue
-        itself ('Ok' → 'Okay.', 'Oh' → 'no'), which then ran as a real turn.
+        session, which is exactly what backchannel must not do.
         """
         return time.monotonic() < self._self_audio_until
 
@@ -209,13 +167,9 @@ class Backchannel:
                 x_old = np.linspace(0, 1, len(samples))
                 x_new = np.linspace(0, 1, n_out)
                 samples = np.interp(x_new, x_old, samples).astype(np.float32)
-            # Reuse the TTS persistent stream — the device is held exclusively
-            # so opening a second OutputStream returns PaErrorCode -9985.
             samples_2d = samples.reshape(-1, 1)
-            # Arm the self-audio window BEFORE the first sample leaves, and size
-            # it from the actual clip length: stream.write() blocks until the
-            # audio is consumed, so arming afterwards would already be too late
-            # for the VAD loop running in parallel.
+            # Arm the self-audio window BEFORE the first sample leaves, and size it from
+            # the actual clip length.
             duration_s = len(samples) / float(dst_rate)
             with self._lock:
                 if (
@@ -240,8 +194,6 @@ class Backchannel:
                     stream = tts._ensure_stream(dst_rate)
                     stream.write(samples_2d)
             finally:
-                # Re-anchor the tail to when playback actually ended — waiting on
-                # _stream_lock can push real playback past the estimate above.
                 with self._lock:
                     self._self_audio_until = max(
                         self._self_audio_until, time.monotonic() + ECHO_TAIL_S

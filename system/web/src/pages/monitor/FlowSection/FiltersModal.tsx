@@ -9,16 +9,13 @@ import { TYPE_LUCIDE, TYPE_LABEL } from "./types";
 export type SortKey =
   | "newest" | "oldest" | "time_desc" | "time_asc" | "tokens_desc" | "tokens_asc";
 
-// "HH:MM" for `d` shifted back `minsAgo` minutes, in local time (the turn
-// timestamps the range filters against are local HH:MM, so presets must be too).
+// "HH:MM" for `d` shifted back `minsAgo` minutes, in local time (the turn timestamps the range filters against are local HH:MM, so presets must be too).
 function hhmmAgo(minsAgo: number): string {
   const d = new Date(Date.now() - minsAgo * 60_000);
   return `${String(d.getHours()).padStart(2, "0")}:${String(d.getMinutes()).padStart(2, "0")}`;
 }
 
-// Quick time-range presets. `range()` returns [from, to]; `test()` re-derives
-// the same window to highlight the active preset (tolerant to the minute having
-// ticked since selection — matches if both ends are within 1 min).
+// Preset matching tolerates the minute having ticked since selection.
 const within = (a: string, b: string) => {
   if (!a || !b) return false;
   const toMin = (s: string) => { const [h, m] = s.split(":").map(Number); return h * 60 + m; };
@@ -35,9 +32,7 @@ const TIME_PRESETS: {
   { label: "Today",    range: () => ["00:00", hhmmAgo(0)], test: (f, t) => f === "00:00" && within(t, hhmmAgo(0)) },
 ];
 
-// A single labeled, clock-prefixed time field. Wraps the native <input type=
-// "time"> (de-chromed via .lm-time-input) so it reads as a themed pill: the
-// border + clock tint amber once a value is set, signalling an active bound.
+// A single labeled, clock-prefixed time field.
 function TimeField({ label, value, onChange }: {
   label: string;
   value: string;
@@ -75,13 +70,7 @@ function TimeField({ label, value, onChange }: {
   );
 }
 
-// All advanced filtering for the Flow turn list, hosted in a centered modal so
-// the turn-list header stays compact (just the "Filters" toggle). The modal is
-// rendered inside the FlowSection tree (which lives under .lm-root), so the
-// --lm-* theme tokens resolve in both dark and light mode without a portal
-// re-scope. Every piece of filter state is owned by the parent and threaded in
-// as props — the modal is purely presentational, so closing it never resets a
-// filter and the "active filters" badge stays in sync.
+// Advanced Flow turn-list filters in a modal; all filter state is owned by the parent.
 export function FiltersModal({
   onClose,
   searchText, setSearchText,
@@ -112,11 +101,8 @@ export function FiltersModal({
   setToTime: (v: string) => void;
   onResetAll: () => void;
   activeFilters: number;
-  // Per-category enabled/partial state, computed by the parent from the same
-  // excludedTypes/availableTypes it owns so the modal stays presentational.
   catAvailability: (cat: string) => { active: boolean; partial: boolean };
 }) {
-  // Close on Escape — matches the other monitor modals' dismissal affordances.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     document.addEventListener("keydown", onKey);
@@ -163,7 +149,6 @@ export function FiltersModal({
           boxShadow: "0 24px 64px -24px rgba(0,0,0,0.7)",
         }}
       >
-        {/* Header */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           gap: 10, padding: "16px 18px", borderBottom: "1px solid var(--lm-border)",
@@ -192,12 +177,10 @@ export function FiltersModal({
           ><X size={16} strokeWidth={2} /></button>
         </div>
 
-        {/* Body — scrolls if it overflows */}
         <div style={{
           flex: 1, minHeight: 0, overflowY: "auto", padding: 18,
           display: "flex", flexDirection: "column", gap: 16,
         }}>
-          {/* Search */}
           <div>
             <div style={sectionLabel}>Search</div>
             <div style={{ position: "relative" }}>
@@ -225,7 +208,6 @@ export function FiltersModal({
             </div>
           </div>
 
-          {/* Sources (category quick-toggle) */}
           <div>
             <div style={sectionLabel}>Sources</div>
             <div style={{ display: "flex", gap: 6, rowGap: 6, flexWrap: "wrap" }}>
@@ -264,7 +246,6 @@ export function FiltersModal({
             </div>
           </div>
 
-          {/* Sort */}
           <div>
             <div style={sectionLabel}>Sort</div>
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap" }}>
@@ -292,7 +273,6 @@ export function FiltersModal({
             </div>
           </div>
 
-          {/* Sub-types */}
           {availableTypes.length > 0 && (
             <div>
               <div style={{ ...sectionLabel, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
@@ -339,9 +319,6 @@ export function FiltersModal({
             </div>
           )}
 
-          {/* Time range — labeled clock-prefixed field pills joined by an arrow
-              chip, with quick presets and an inline clear. The native time
-              inputs are de-chromed via .lm-time-input (see index.css). */}
           <div>
             <div style={{ ...sectionLabel, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
               <span>Time range</span>
@@ -359,7 +336,6 @@ export function FiltersModal({
               )}
             </div>
 
-            {/* Quick presets — fill both fields from the current wall clock. */}
             <div style={{ display: "flex", gap: 5, flexWrap: "wrap", marginBottom: 8 }}>
               {TIME_PRESETS.map((p) => {
                 const sel = hasRange && p.test(fromTime, toTime);
@@ -394,7 +370,6 @@ export function FiltersModal({
           </div>
         </div>
 
-        {/* Footer — Reset all + Done */}
         <div style={{
           display: "flex", alignItems: "center", justifyContent: "space-between",
           gap: 10, padding: "12px 18px", borderTop: "1px solid var(--lm-border)",

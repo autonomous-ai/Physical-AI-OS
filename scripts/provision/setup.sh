@@ -3,9 +3,6 @@
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
-# ----------------------------------------------------------
-# Utils
-# ----------------------------------------------------------
 retry() {
   local n=0
   local max=$2
@@ -28,11 +25,8 @@ ensure_root() {
   fi
 }
 
-# Wrapper so a single stage failure doesn't abort the whole script — critical
-# for AP/recovery: stage_ap must always be reached so the device can re-provision
-# via WiFi even if app stages (hal/buddy/openclaw) fail.
-# Inside `if "$name"` bash suspends `set -e` for the function call, so failures
-# inside a stage propagate up as the function's exit code without aborting.
+# Stage failures don't abort setup: stage_ap must always run so the device can re-provision.
+# `if "$name"` suspends set -e inside the stage.
 FAILED_STAGES=""
 run_stage() {
   local name=$1
@@ -47,22 +41,14 @@ run_stage() {
   fi
 }
 
-# Optional: AP band and channel. Pi 5 Bookworm: firmware config is /boot/firmware/config.txt;
-# ensure dtoverlay=disable-wifi is not set or WiFi will stay off.
 AP_BAND="${AP_BAND:-2.4}"       # 2.4 or 5 (5 GHz for better throughput)
 AP_CHANNEL="${AP_CHANNEL:-}"    # default: 6 (2.4 GHz) or 36 (5 GHz); override e.g. AP_CHANNEL=11 or 40
 
-# Device class this install is for — selects robots/<type>/{DEVICE,SOUL}.md at
-# runtime (os-server + HAL) and drives the network identity (<type>-XXXX SSID +
-# mDNS hostname). REQUIRED, no default — provisioning must declare the device class
-# so one OS image can't silently brand itself "lamp". Pass via env, e.g.
-# DEVICE_TYPE=intern (install.sh forwards it).
+# Required; drives the <type>-XXXX SSID/hostname and device profile.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE must be set (e.g. DEVICE_TYPE=lamp) — no default}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
 
-# ----------------------------------------------------------
-# Stage -1: Locale (Bookworm hygiene)
-# ----------------------------------------------------------
+# Stage -1: Locale
 stage_locale() {
   echo "[stage] Fix locale (Bookworm)"
   unset LC_CTYPE
@@ -75,29 +61,18 @@ stage_locale() {
   echo "LANG=C.UTF-8" >> /etc/locale.conf
 }
 
-# ----------------------------------------------------------
 # Stage 0: Prerequisites
-# ----------------------------------------------------------
 stage_prerequisites() {
   echo "[stage] Install system packages"
   apt update
-  # openresolv ships the `resolvconf` binary that dhcpcd's 20-resolv.conf hook
-  # needs to push DHCP-supplied nameservers into /etc/resolv.conf. Without it
-  # (observed on OrangePi Armbian images) /etc/resolv.conf stays empty even
-  # though dhcpcd writes the lease into /run/resolvconf/interface/wlan0.dhcp,
-  # so `ping 8.8.8.8` works but every hostname lookup fails.
+  # openresolv provides resolvconf, needed by dhcpcd to populate /etc/resolv.conf.
   apt install -y \
     hostapd dnsmasq nginx unzip curl jq openssl wpasupplicant dhcpcd iproute2 iptables \
     iw git xvfb xauth chromium chromium-sandbox openresolv \
     avahi-daemon avahi-utils libnss-mdns || true
   systemctl stop hostapd dnsmasq nginx 2>/dev/null || true
   systemctl unmask hostapd dnsmasq 2>/dev/null || true
-  # Some base images (Armbian / older RPi OS images that once ran NetworkManager
-  # or systemd-resolved) ship /etc/resolv.conf as a regular file with no
-  # nameserver lines, so dhcpcd's lease never reaches the glibc resolver. Only
-  # repair when actually broken: if a nameserver is already present (symlink to
-  # /run/resolvconf/resolv.conf or /run/systemd/resolve/*, or a working static
-  # file), leave it alone so we don't disrupt RPi OS / systemd-resolved setups.
+  # Repair a plain resolv.conf with no nameservers; leave working setups alone.
   if ! grep -qE '^[[:space:]]*nameserver[[:space:]]+' /etc/resolv.conf 2>/dev/null; then
     echo "[stage] /etc/resolv.conf has no nameserver — repairing via resolvconf"
     rm -f /etc/resolv.conf
@@ -105,29 +80,22 @@ stage_prerequisites() {
     ln -sf /run/resolvconf/resolv.conf /etc/resolv.conf
     resolvconf -u 2>/dev/null || true
   fi
-  # Static fallback so /etc/resolv.conf is never completely empty — matters in
-  # AP mode (hostapd up, no upstream DHCP lease for wlan0) and during the brief
-  # window between dhcpcd start and the first lease. Appended via openresolv's
-  # name_servers= so it joins, not replaces, the DHCP-supplied nameservers.
+  # Static DNS fallback (joins, not replaces, DHCP nameservers) for AP mode.
   if [ -f /etc/resolvconf.conf ]; then
     grep -q '^name_servers=' /etc/resolvconf.conf || echo 'name_servers="1.1.1.1 8.8.8.8"' >> /etc/resolvconf.conf
   else
     echo 'name_servers="1.1.1.1 8.8.8.8"' > /etc/resolvconf.conf
   fi
   resolvconf -u 2>/dev/null || true
-  # Node.js 22 for OpenClaw CLI
   if ! command -v node &>/dev/null || ! node -v 2>/dev/null | grep -qE '^v(2[2-9]|[3-9][0-9])'; then
     echo "[stage] Install Node.js 22 (NodeSource)"
     curl -fsSL -H "Cache-Control: no-cache" -H "Pragma: no-cache" https://deb.nodesource.com/setup_22.x | bash -
     apt install -y nodejs
   fi
-  # Keep wpa_supplicant running so STA (e.g. Pi Imager WiFi) stays connected during setup.
-  # Global wpa_supplicant is stopped/masked only when we switch to AP in device-ap-mode.
+  # Keep wpa_supplicant running so STA stays connected during setup.
 }
 
-# ----------------------------------------------------------
-# Stage 0a: Disable IPv6 (RPi 5 STA-drop workaround; harmless on OrangePi)
-# ----------------------------------------------------------
+# Stage 0a: Disable IPv6 (RPi 5 STA-drop workaround)
 stage_rpi5_wifi_stability() {
   echo "[stage] Disable IPv6"
 
@@ -140,12 +108,7 @@ EOF
   sysctl -p /etc/sysctl.d/99-${DEVICE_TYPE}-wifi.conf 2>/dev/null || true
 }
 
-# ----------------------------------------------------------
-# Stage 0b: OTA metadata (web, lamp, bootstrap URLs from GCS)
-# ----------------------------------------------------------
-# ----------------------------------------------------------
-# Stage 0c: Enable SPI in firmware config
-# ----------------------------------------------------------device-
+# Stage 0c: Enable SPI + I2C in firmware config
 stage_enable_spi() {
   echo "[stage] Enable SPI + I2C in firmware config"
 
@@ -159,7 +122,6 @@ stage_enable_spi() {
     return 0
   fi
 
-  # For each bus: if the dtparam is present but commented, uncomment it; otherwise append.
   local param
   for param in spi=on i2c_arm=on; do
     if grep -qE "^\s*#?\s*dtparam=$param" "$cfg" 2>/dev/null; then
@@ -178,14 +140,10 @@ stage_enable_spi() {
   echo "[stage] SPI/I2C enablement will take effect after reboot"
 }
 
-# OTA metadata URL must be provided by the caller (install.sh sets it). No
-# fallback — fail fast here, before installing anything, if it is missing.
 OTA_METADATA_URL="${OTA_METADATA_URL:?OTA_METADATA_URL is required — run via install.sh or export it before running setup.sh}"
 OTA_SIGNING_PUBLIC_KEY="${OTA_SIGNING_PUBLIC_KEY:-}"
 
-# verify_ota_metadata writes the authenticated metadata payload to its second
-# argument. The public key is supplied by the trusted installer/image and is
-# never read from the remotely fetched envelope.
+# Writes the verified payload to $2; the public key comes from the trusted installer, never the envelope.
 verify_ota_metadata() {
   local envelope="$1" payload="$2" public_key="$3"
   local public_der signature
@@ -241,10 +199,7 @@ stage_ota_metadata() {
   fi
   echo "[stage] OTA versions: web=$WEB_VERSION os-server=$OS_SERVER_VERSION bootstrap=$BOOTSTRAP_VERSION hal=$HAL_VERSION buddy=$BUDDY_VERSION"
 
-  # Seed metadata_url into the bootstrap worker's config so the OTA metadata URL
-  # comes from /root/config/bootstrap.json (a per-deployment value) instead of a
-  # compiled-in default. Merge-if-empty so re-running setup never clobbers a
-  # custom URL an operator already set.
+  # Merge-if-empty so re-running setup never clobbers an operator's metadata_url.
   mkdir -p /root/config
   local bs_json="/root/config/bootstrap.json"
   if [ -f "$bs_json" ]; then
@@ -265,7 +220,7 @@ stage_ota_metadata() {
   echo "[stage] Seeded metadata_url=$OTA_METADATA_URL into $bs_json"
 }
 
-# Download zip from URL, unzip, copy single binary to dest path (handles os-server, bootstrap-server in zip)
+# Download a zip and install the single binary it contains to a dest path.
 install_binary_from_zip() {
   local url="$1"
   local dest_binary="$2"
@@ -278,7 +233,6 @@ install_binary_from_zip() {
   [ -z "$digest" ] || echo "$digest  $zip_tmp" | sha256sum -c - >/dev/null || { echo "ERROR: SHA-256 mismatch for $name"; rm -f "$zip_tmp"; return 1; }
   unzip -o -q "$zip_tmp" -d "$dir_tmp"
   rm -f "$zip_tmp"
-  # Zip may contain os-server, bootstrap-server or bare binary (at root or in subdir)
   local bin_file
   bin_file=$(find "$dir_tmp" -type f -executable 2>/dev/null | head -1)
   [ -z "$bin_file" ] && bin_file=$(find "$dir_tmp" -type f 2>/dev/null | head -1)
@@ -292,17 +246,13 @@ install_binary_from_zip() {
   rm -rf "$dir_tmp"
 }
 
-# ----------------------------------------------------------
-# Stage 1: Backend (bootstrap + os-server from OTA metadata)
-# ----------------------------------------------------------
+# Stage 1: Backend (bootstrap + os-server)
 stage_backend() {
   echo "[stage] Install backend (bootstrap + os-server)"
 
-  # Migrate old openclaw config dir from /root/openclaw → /root/.openclaw
   if [ -d "/root/openclaw" ] && [ ! -d "/root/.openclaw" ]; then
     echo "[migrate] Moving /root/openclaw → /root/.openclaw"
     mv /root/openclaw /root/.openclaw
-    # Update openclaw_config_dir in lamp config.json if it still points to old path
     if [ -f "/root/config/config.json" ]; then
       sed -i 's|"openclaw_config_dir"[[:space:]]*:[[:space:]]*"/root/openclaw"|"openclaw_config_dir": "/root/.openclaw"|g' /root/config/config.json
       echo "[migrate] Updated config.json openclaw_config_dir"
@@ -353,15 +303,10 @@ EOF
 
   systemctl daemon-reload
   systemctl enable bootstrap os-server
-  # Do NOT start os-server here — it switches to AP mode when unconfigured, killing internet.
-  # Services will start after reboot at the end of setup.
-  # /usr/local/bin/software-update is written later by stage_ap (covers
-  # all six components: os-server, openclaw, bootstrap, web, hal, claude-desktop-buddy).
+  # Don't start os-server here: unconfigured it switches to AP mode and kills internet.
 }
 
-# ----------------------------------------------------------
-# Stage 1a: HAL (Python hardware runtime)
-# ----------------------------------------------------------
+# Stage 1a: HAL
 stage_hal() {
   echo "[stage] Install HAL (Python hardware drivers)"
 
@@ -378,11 +323,9 @@ stage_hal() {
     echo "[stage] WARN: No hal URL in OTA metadata, skipping download"
   fi
 
-  # Install uv + system libs for audio/camera + PulseAudio echo cancellation
   apt update
   apt install -y libportaudio2 portaudio19-dev pulseaudio pulseaudio-utils pulseaudio-module-bluetooth bluez ffmpeg || true
 
-  # PulseAudio WebRTC AEC (echo cancellation for mic/speaker loopback)
   PULSE_CONF="/etc/pulse/default.pa"
   if [ -f "$PULSE_CONF" ] && ! grep -q "module-echo-cancel" "$PULSE_CONF"; then
     echo "[stage] Configuring PulseAudio echo cancellation (WebRTC AEC)"
@@ -395,11 +338,7 @@ set-default-sink aec_sink
 PULSE_EOF
   fi
 
-  # Anonymous unix socket so the root-owned hal service can reach the
-  # uid-1000 PulseAudio daemon (libpulse rejects cookie auth when the socket
-  # owner differs from the connecting uid). Pairs with the PULSE_SERVER env
-  # added to the hal.service unit below. Required for Bluetooth
-  # headset routing (pactl set-default-sink to a bluez sink).
+  # Anonymous socket so root-owned hal can reach uid-1000 PulseAudio (cookie auth fails across uids).
   if [ -f "$PULSE_CONF" ] && ! grep -q "pulse-anon" "$PULSE_CONF"; then
     echo "[stage] Configuring PulseAudio anonymous socket for root access"
     cat >> "$PULSE_CONF" <<PULSE_EOF
@@ -409,14 +348,8 @@ load-module module-native-protocol-unix auth-anonymous=1 socket=/tmp/pulse-anon-
 PULSE_EOF
   fi
 
-  # Keep PulseAudio off the lamp speaker codec. hal's TTS opens this card
-  # directly via ALSA hw for a persistent low-latency OutputStream, and `aplay`
-  # in the music pipeline also writes to it via plug:device_speaker. If PA
-  # auto-loads module-alsa-card for the same card (which it does once udev
-  # finishes settling), the device becomes exclusively held and every other
-  # consumer fails open with EBUSY / PaErrorCode -9985.
-  # ATTR{id} values: sndi2s4 = OrangePi onboard ES8389 codec; wm8960soundcard
-  # = Raspberry Pi (Seeed wm8960 hat).
+  # Keep PulseAudio off the speaker codec; hal and aplay open it directly and PA would hold it (EBUSY).
+  # sndi2s4 = OrangePi ES8389; wm8960soundcard = Raspberry Pi wm8960 hat.
   PA_IGNORE_RULE="/etc/udev/rules.d/91-pulseaudio-hal-ignore.rules"
   if [ ! -f "$PA_IGNORE_RULE" ]; then
     echo "[stage] Adding udev rule so PulseAudio ignores the lamp speaker card"
@@ -434,16 +367,14 @@ UDEV_EOF
     export PATH="$HOME/.local/bin:$PATH"
   fi
 
-  # Clean stale lerobot distutils egg-info that blocks uv uninstall, then recreate venv
   find /root/.cache/uv -name 'lerobot.egg-info' -type d 2>/dev/null | xargs rm -rf
   rm -rf "$HAL_DIR/.venv"
 
-  # uv sync downloads Python 3.12 standalone (includes Python.h) + all deps
   cd "$HAL_DIR"
   uv sync --python 3.12 --extra hardware --extra aec --extra pipecat
   cd /
 
-  # Patch webrtcvad: replace pkg_resources import (removed in Python 3.12+)
+  # webrtcvad imports pkg_resources, removed in Python 3.12+.
   WEBRTCVAD_PY=$(find "$HAL_DIR/.venv" -name "webrtcvad.py" -path "*/site-packages/*" 2>/dev/null | head -1)
   if [ -n "$WEBRTCVAD_PY" ] && grep -q "import pkg_resources" "$WEBRTCVAD_PY" 2>/dev/null; then
     echo "[stage] Patching webrtcvad for Python 3.12+ (pkg_resources removal)"
@@ -475,7 +406,6 @@ def valid_rate_and_frame_length(rate, frame_length):
 WEBRTCVAD_EOF
   fi
 
-  # Write default .env (production mode). Idempotent — only adds the line if absent.
   touch "$HAL_DIR/.env"
   grep -q "^HAL_MODE=" "$HAL_DIR/.env" \
     || echo "HAL_MODE=production" >> "$HAL_DIR/.env"
@@ -517,9 +447,7 @@ EOF
   systemctl restart hal
 }
 
-# ----------------------------------------------------------
-# Stage 1c: Claude Desktop Buddy (BLE plugin, optional)
-# ----------------------------------------------------------
+# Stage 1c: Claude Desktop Buddy (optional)
 stage_buddy() {
   echo "[stage] Install Claude Desktop Buddy"
 
@@ -528,7 +456,6 @@ stage_buddy() {
     return
   fi
 
-  # Ensure Bluetooth is available
   apt install -y bluez 2>/dev/null || true
   bluetoothctl power on 2>/dev/null || true
 
@@ -539,19 +466,16 @@ stage_buddy() {
   unzip -o -q /tmp/buddy.zip -d /tmp/buddy-extract
   rm -f /tmp/buddy.zip
 
-  # Binary
   if [ -f /tmp/buddy-extract/buddy-plugin ]; then
     cp -f /tmp/buddy-extract/buddy-plugin "$BUDDY_DIR/buddy-plugin"
     chmod +x "$BUDDY_DIR/buddy-plugin"
   fi
 
-  # Config (don't overwrite existing)
   if [ ! -f /root/config/buddy.json ] && [ -f /tmp/buddy-extract/config/buddy.json ]; then
     mkdir -p /root/config
     cp -f /tmp/buddy-extract/config/buddy.json /root/config/buddy.json
   fi
 
-  # Version file
   echo "$BUDDY_VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
 
   rm -rf /tmp/buddy-extract
@@ -579,22 +503,16 @@ EOF
 
   systemctl daemon-reload
   systemctl enable claude-desktop-buddy
-  # Don't start yet — starts on reboot
 }
 
-# ----------------------------------------------------------
-# Stage 1b: OpenClaw (CLI + gateway service; runs as root for full system access) - TODO: remove this
-# ----------------------------------------------------------
+# Stage 1b: OpenClaw (runs as root)
 stage_openclaw() {
   echo "[stage] Install OpenClaw"
   OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.6.10}"
   retry "npm install -g openclaw@${OPENCLAW_VERSION}" 5
   openclaw --version || true
 
-  # OpenClaw state root for root-run service (under root's home).
-  # Must match the dot-prefixed path used everywhere else (lamp config default,
-  # migrate-openclaw-path.sh, stage_backend migration). Mismatch causes
-  # OpenClaw WS to close 1008 / token_mismatch.
+  # Must match /root/.openclaw everywhere else, or the OpenClaw WS closes 1008 token_mismatch.
   OPENCLAW_HOME="${OPENCLAW_HOME:-/root/.openclaw}"
   mkdir -p \
     "$OPENCLAW_HOME" \
@@ -629,7 +547,6 @@ stage_openclaw() {
     fi
   fi
 
-  # Seed a minimal valid config so gateway can boot cleanly on first run.
   if [ ! -f "$OPENCLAW_HOME/openclaw.json" ]; then
     cat >"$OPENCLAW_HOME/openclaw.json" <<EOF
 {
@@ -692,18 +609,7 @@ StandardError=journal
 [Install]
 WantedBy=multi-user.target
 EOF
-  # Download skills from GCS into workspace/skills. Derive the base from the OTA
-  # metadata URL (single source of truth) — skills live at <base>/skills, where
-  # <base> is the metadata URL minus "/ota/metadata.json". No hardcoded URL.
-  #
-  # Capability gate: a skill that needs a hardware capability (servo/light/...)
-  # is only seeded when this device's ROBOT.md declares that capability. Skills
-  # with no capability (platform/logic skills) are always seeded. This mirrors
-  # the authoritative gate in os-server (system/skills.Supported); both read
-  # ROBOT.md so a reduced device never ships skills it can't run. Fail-open:
-  # if ROBOT.md declares no capabilities, legacy skills are seeded. Optional
-  # environment sensing still requires its explicit capability.
-  # os-server re-syncs + prunes on boot, so this is only the first-boot seed.
+  # Seed skills from <metadata base>/skills, gated by ROBOT.md capabilities; os-server re-syncs on boot.
   SKILLS_GCS_PREFIX="${OTA_METADATA_URL%/ota/metadata.json}/skills"
   # ---8<--- GENERATED by scripts/skills/gen_catalog.py — edit skills/<name>/skill.json
   SKILLS_CATALOG="audio camera claude-buddy computer-use connectors display emotion environment face-enroll faq guard habit harness-use input-branching led-control mood music music-suggestion scene sensing sensing-track servo-control servo-tracking skill-creator speaker-recognizer user-emotion-detection voice wellbeing"
@@ -735,9 +641,6 @@ EOF
     esac
   }
   # ---8<--- END GENERATED
-  # Capability keys declared in this device's ROBOT.md (one per line).
-  # ROBOT.md is canonical; DEVICE.md is the name it shipped under, still read
-  # because device profiles already on disk carry it.
   DEVICE_MD="$DEVICES_DIR/$DEVICE_TYPE/ROBOT.md"
   [ -f "$DEVICE_MD" ] || DEVICE_MD="$DEVICES_DIR/$DEVICE_TYPE/DEVICE.md"
   DEVICE_CAPS="$(awk '
@@ -780,19 +683,14 @@ EOF
     exit 1
   fi
 
-  # Install official external plugins. Must run after openclaw service is up
-  # because `openclaw plugins install` talks to the local gateway to register
-  # the plugin. Non-fatal: missing plugin only disables that channel, it does
-  # not break the gateway or other channels.
+  # Must run after the gateway is up; failures only disable that channel.
   echo "[stage] Installing openclaw external plugins"
   export PATH="$(npm prefix -g)/bin:$PATH"
   openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "[stage] WARN: discord plugin install failed (non-fatal)"
   openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "[stage] WARN: slack plugin install failed (non-fatal)"
 }
 
-# ----------------------------------------------------------
-# Stage 2: nginx (setup web + API proxy)
-# ----------------------------------------------------------
+# Stage 2: nginx
 stage_nginx() {
   echo "[stage] Setup nginx (setup web + API proxy)"
 
@@ -987,16 +885,11 @@ EOF
   systemctl restart nginx
 }
 
-# ----------------------------------------------------------
 # Stage 3: AP setup (hostapd + dnsmasq)
-# ----------------------------------------------------------
 stage_ap() {
   echo "[stage] Setup WiFi AP"
 
-  # Pi 5: device-tree serial; Pi 4: cpuinfo Serial.
-  # Non-Pi boards (OrangePi 4 Pro etc.) lack both — fall back to the ethernet
-  # MAC so the AP SSID still gets a stable per-device suffix. Keep Pi paths
-  # first so existing Pi devices keep their current SSID.
+  # Pi 5 device-tree serial, Pi 4 cpuinfo Serial, else ethernet MAC; Pi paths first keep existing SSIDs.
   SERIAL=$(tr -d '\0' </proc/device-tree/serial-number 2>/dev/null || true)
   if [ -z "$SERIAL" ]; then
     SERIAL=$(awk '/^Serial/ {print $3}' /proc/cpuinfo 2>/dev/null || true)
@@ -1013,30 +906,18 @@ stage_ap() {
   SUFFIX=${SERIAL: -4}
   SUFFIX_LC=$(echo "$SUFFIX" | tr '[:upper:]' '[:lower:]')
 
-  # Network identity (AP SSID + mDNS hostname) is device-type-driven so one OS
-  # image serves N device classes: `<device_type>-<suffix>`. DEVICE_TYPE is the
-  # immutable hardware identity (env → config.json → "lamp"), the same source Go's
-  # GetDeviceMac and HAL's _resolve_device_type read. Lowercase throughout — avahi
-  # publishes the hostname verbatim and `.local` URLs in the wild aren't
-  # case-normalized, and the web UI derives the redirect target from the lowercase
-  # `mac` field (GetDeviceMac).
+  # Lowercase <device_type>-<suffix>; must match Go GetDeviceMac and HAL.
   AP_SSID="${DEVICE_TYPE}-${SUFFIX_LC}"
   echo "[stage] AP SSID = $AP_SSID (serial=$SERIAL)"
 
   DEVICE_HOSTNAME="${DEVICE_TYPE}-${SUFFIX_LC}"
   hostnamectl set-hostname "$DEVICE_HOSTNAME" 2>/dev/null || hostname "$DEVICE_HOSTNAME"
-  # Replace 127.0.1.1 line if present, otherwise append. /etc/hosts is required
-  # for sudo/getent to resolve the hostname locally.
   if grep -q '^127\.0\.1\.1' /etc/hosts; then
     sed -i "s/^127\.0\.1\.1.*/127.0.1.1 $DEVICE_HOSTNAME/" /etc/hosts
   else
     echo "127.0.1.1 $DEVICE_HOSTNAME" >> /etc/hosts
   fi
-  # Advertise an _autonomous._tcp mDNS service so the Autonomous Buddy (macOS)
-  # auto-discovers this device instead of the user typing <hostname>.local by
-  # hand. Static + device-agnostic: avahi's %h wildcard resolves to the running
-  # hostname (<device_type>-<suffix>), so one file serves every device class.
-  # Port 80 = the nginx front door the buddy pairs through (/api/buddy/pair/confirm).
+  # _autonomous._tcp mDNS service for Buddy auto-discovery.
   mkdir -p /etc/avahi/services
   cat > /etc/avahi/services/autonomous.service <<'AVAHI'
 <?xml version="1.0" standalone='no'?>
@@ -1052,14 +933,7 @@ AVAHI
   systemctl enable avahi-daemon 2>/dev/null || true
   systemctl restart avahi-daemon 2>/dev/null || true
   echo "[stage] mDNS hostname = $DEVICE_HOSTNAME.local"
-  # Sanity check: confirm avahi actually publishes this name locally. A
-  # warning here usually means the daemon failed to start (missing dbus,
-  # masked service) or another device on the bench already claimed the
-  # name (avahi would have renamed ours to ${DEVICE_HOSTNAME}-2). Two devices
-  # with identical last-4 serial chars on the same LAN is rare (1/65536)
-  # but possible — if it happens, the FE's redirect will hit the wrong
-  # device, and we'd need to bump the suffix length here and in
-  # system/device/hardware.go.
+  # Warn if avahi didn't publish this name (daemon down or name conflict); suffix length must match system/device/hardware.go.
   sleep 1
   if command -v avahi-resolve-host-name >/dev/null 2>&1; then
     if ! avahi-resolve-host-name -4 "${DEVICE_HOSTNAME}.local" >/dev/null 2>&1; then
@@ -1072,8 +946,7 @@ AVAHI
     mv /etc/wpa_supplicant/wpa_supplicant.conf /etc/wpa_supplicant/wpa_supplicant.conf.bak 2>/dev/null || true
   fi
 
-  # Many Pi images keep wlan0 down until WiFi country is set. Create minimal config with country
-  # so the system enables wlan0; connect-wifi and hostapd use the same country.
+  # wlan0 stays down until the Wi-Fi country is set.
   COUNTRY_CODE="${COUNTRY_CODE:-US}"
   mkdir -p /etc/wpa_supplicant
   if [ ! -f /etc/wpa_supplicant/wpa_supplicant-wlan0.conf ]; then
@@ -1086,7 +959,6 @@ EOF
     echo "[stage] Created /etc/wpa_supplicant/wpa_supplicant-wlan0.conf with country=$COUNTRY_CODE so wlan0 can appear"
   fi
   
-  # Ensure wpa_supplicant@wlan0 uses the intended config file.
   mkdir -p /etc/systemd/system/wpa_supplicant@wlan0.service.d
   cat >/etc/systemd/system/wpa_supplicant@wlan0.service.d/override.conf <<'WPADROP'
 [Service]
@@ -1134,7 +1006,6 @@ EOF
 DAEMON_CONF="/etc/hostapd/hostapd.conf"
 EOF
 
-  # dnsmasq: use .d drop-in so we don't break system config; bind range to wlan0 explicitly
   mkdir -p /etc/dnsmasq.d
   cat >/etc/dnsmasq.d/99-${DEVICE_TYPE}.conf <<EOF
 interface=wlan0
@@ -1145,14 +1016,11 @@ domain-needed
 bogus-priv
 no-resolv
 EOF
-  # Remove any conflicting global interface in main config (leave rest intact)
   if [ -f /etc/dnsmasq.conf ]; then
     sed -i 's|^interface=wlan0|#interface=wlan0  # use dnsmasq.d/99-${DEVICE_TYPE}.conf|' /etc/dnsmasq.conf 2>/dev/null || true
   fi
 
-  # dhcpcd: remove wlan0 block (including when it's at end-of-file with no trailing blank line)
   sed -i '/^interface wlan0$/,/^$\|^interface /{ /^interface [^w]/!d; }' /etc/dhcpcd.conf
-  # Remove any leftover lines from previous runs
   sed -i '/^static ip_address=192\.168\.100\.1/d' /etc/dhcpcd.conf
   sed -i '/^nohook wpa_supplicant$/d' /etc/dhcpcd.conf
   cat >>/etc/dhcpcd.conf <<EOF
@@ -1162,7 +1030,6 @@ static ip_address=192.168.100.1/24
 nohook wpa_supplicant
 EOF
 
-  # AP mode scripts
   mkdir -p /usr/local/bin
 
   cat >/usr/local/bin/device-ap-mode <<'EOF'
@@ -1367,7 +1234,6 @@ EOF
 
   chmod +x /usr/local/bin/device-sta-mode
 
-  # connect-wifi: write wpa_supplicant config then switch to STA (used by backend /api/network/setup)
   cat >/usr/local/bin/connect-wifi <<'CONNECTWIFI'
 #!/bin/bash
 set -e
@@ -1407,12 +1273,7 @@ chmod 600 "$WPA_CONF"
 CONNECTWIFI
   chmod +x /usr/local/bin/connect-wifi
 
-  # software-update: the on-device OTA updater. GENERATED — do not edit the body
-  # here. The single source of truth is scripts/provision/software-update, which
-  # scripts/release/upload-setup.sh inlines between the two markers below when it
-  # publishes setup.sh to the CDN. The repo copy carries a placeholder that fails
-  # loudly, so a setup.sh that skipped that step can never install a silently
-  # broken updater onto a device.
+  # Generated: upload-setup.sh inlines scripts/provision/software-update between these markers.
   # >>> BEGIN software-update (generated)
   cat >/usr/local/bin/software-update <<'SOFTWAREUPDATE'
 #!/bin/bash
@@ -1423,27 +1284,18 @@ SOFTWAREUPDATE
   # <<< END software-update (generated)
   chmod +x /usr/local/bin/software-update
 
-  # start in AP mode
   /usr/local/bin/device-ap-mode
 }
 
-# ----------------------------------------------------------
 # Main
-# ----------------------------------------------------------
 ensure_root
 
-# Install this device's profile (ROBOT.md + SOUL.md) into DEVICES_DIR/<type>.
-# Per-device: downloads ONLY this device_type's artifact (devices.<type> in OTA
-# metadata). Absent → skip (agent keeps the gateway's default soul; HAL mounts
-# all routes). Read by os-server (soul) and HAL (capability mounting).
+# Install this device's profile (ROBOT.md, SOUL.md) into DEVICES_DIR/<type>.
 stage_devices() {
   echo "[stage] Install device profile ($DEVICE_TYPE)"
   local dest="$DEVICES_DIR/$DEVICE_TYPE"
   mkdir -p "$dest"
-  # Device profile is required — one install = one device type, and the device
-  # is useless without its ROBOT.md/SOUL.md/SAFETY.md. set -e is suspended
-  # inside run_stage's `if stage_devices`, so guard each step explicitly and
-  # return non-zero so the stage is recorded as FAILED (not silently OK).
+  # Required; set -e is suspended under run_stage, so return non-zero explicitly.
   if [ -z "${DEVICES_URL:-}" ]; then
     echo "[stage] ERROR: no devices.$DEVICE_TYPE url in OTA metadata — device profile required. Run 'make upload-device $DEVICE_TYPE'." >&2
     return 1
@@ -1465,7 +1317,6 @@ stage_devices() {
       || { echo "[stage] ERROR: Hardware override configuration failed" >&2; return 1; }
     cp -a "$dest/rootfs/." / \
       || { echo "[stage] ERROR: Hardware overlay failed" >&2; return 1; }
-    # stage_hal ran before this overlay; reload the hardware configuration.
     if systemctl is-active --quiet hal || systemctl is-enabled --quiet hal; then
       systemctl restart hal \
         || { echo "[stage] ERROR: HAL restart after hardware overlay failed" >&2; return 1; }
@@ -1474,7 +1325,7 @@ stage_devices() {
   echo "[stage] Device profile '$DEVICE_TYPE' installed at $dest"
 }
 
-# Stop os-server if running from a previous setup — it switches to AP mode when unconfigured, killing internet.
+# Stop a previous os-server: unconfigured it switches to AP mode and kills internet.
 systemctl stop os-server.service 2>/dev/null || true
 systemctl disable os-server.service 2>/dev/null || true
 

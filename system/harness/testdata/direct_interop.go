@@ -47,8 +47,7 @@ func main() {
 	}
 	_, source, _, _ := runtime.Caller(0)
 
-	// Invoke Node directly so fixture startup does not depend on a tsx shebang
-	// resolving a different executable through /usr/bin/env.
+	// Invoke Node directly rather than through a tsx shebang.
 	node, e := exec.LookPath("node")
 	must(e == nil, "node executable missing")
 	cmd := exec.Command(node, "--import", filepath.Join(cliRoot, "node_modules/tsx/dist/loader.mjs"), filepath.Join(filepath.Dir(source), "direct-interop.mts"))
@@ -154,8 +153,7 @@ func main() {
 	must(s.PairStatus().Code == "", "code persisted after completion")
 	r, e = s.Request(ctx, harness.Frame{"type": "agents.list"})
 	must(e == nil && r["machineId"] == "interop-machine", "encrypted list failed")
-	// The optional per-agent recap headline (CLI PR #35) must cross the
-	// encrypted path untouched and stay absent for an agent with no summary.
+	// The optional recap headline must cross the encrypted path untouched.
 	listed := map[string]map[string]any{}
 	if agents, _ := r["agents"].([]any); agents != nil {
 		for _, a := range agents {
@@ -256,8 +254,6 @@ func main() {
 	must(voice.Submit(ctx, "must not send", "voice-off", mode.Generation) != nil, "disabled voice accepted input")
 	state = api("/state", nil)
 	must(state["submits"] == float64(3) && len(state["answers"].([]any)) == 1, "disabled voice sent mutation")
-	// The fixture simulates a Desktop app_focus acknowledgment; the request
-	// and state response still cross the real encrypted OS/CLI connection.
 	time.Sleep(5 * time.Second)
 	api("/focus", map[string]any{"agentId": nil})
 	mode, e = voice.ToggleGesture(ctx, "interop-gesture")

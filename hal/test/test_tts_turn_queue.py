@@ -52,10 +52,6 @@ def test_delayed_older_turn_is_dropped_before_it_can_rejoin_queue():
     assert service._pending_queue == []
 
 
-# A dropped turn is acknowledged as success to os-server, so HAL is the only
-# place that knows the reply existed and was never heard. A delegated turn has
-# already had save_main_handoff record the question with "its spoken reply
-# follows", so losing this leaves the realtime agent holding the placeholder.
 def test_dropped_older_turn_still_reaches_the_realtime_history_hook():
     service = _queue_service()
     service._latest_queue_turn_id = "new-run"
@@ -84,8 +80,6 @@ def test_conflicting_turn_sequence_also_reports_the_unspoken_reply():
     assert unspoken == ["same seq, other run"]
 
 
-# Only the agentic runtime's own reply may enter the realtime model's context —
-# a dropped filler or system notice must not, exactly as on the playback path.
 def test_dropped_non_agent_speech_is_not_fed_to_realtime():
     service = _queue_service()
     service._latest_queue_turn_id = "new-run"
@@ -98,7 +92,6 @@ def test_dropped_non_agent_speech_is_not_fed_to_realtime():
     assert unspoken == []
 
 
-# A hook that raises must not turn an acknowledged drop into a 500.
 def test_failing_hook_does_not_break_the_drop_path():
     service = _queue_service()
     service._latest_queue_turn_id = "new-run"
@@ -119,7 +112,7 @@ def test_newer_turn_stops_current_speech_and_takes_the_lock(monkeypatch, tmp_pat
     service._latest_queue_turn_id = "old-run"
     service._latest_queue_turn_seq = 1
     service._speaking = True
-    service._lock.acquire()  # Simulate the old playback worker holding it.
+    service._lock.acquire()
     service._tts_cache_path = lambda _: tmp_path / "missing.wav"
 
     stopped = []
@@ -147,12 +140,7 @@ def test_newer_turn_stops_current_speech_and_takes_the_lock(monkeypatch, tmp_pat
     assert service._latest_queue_turn_seq == 2
 
 
-# --- os-server restarting its turn counter -----------------------------------
-#
-# The counter lives in os-server, this threshold lives in HAL, and they restart
-# independently. Device-observed 03/09/2026: after an os-server deploy, seq=1
-# met latest_seq=40 and the wake greeting was dropped — LED and servo ran, no
-# sound — and the next 39 turns would have gone the same way.
+# os-server's turn counter restarts independently of this HAL threshold.
 
 
 def test_a_lower_sequence_from_a_newer_run_is_adopted_not_dropped(monkeypatch, tmp_path):
@@ -164,7 +152,6 @@ def test_a_lower_sequence_from_a_newer_run_is_adopted_not_dropped(monkeypatch, t
     service._speak_sync = played.append
     monkeypatch.setattr(tts_service_module.threading, "Thread", _InlineThread)
 
-    # Same shape as the greeting that was silenced: seq 1, but created later.
     assert service.speak_queue(
         "Good morning", turn_id="device-chat-1-1788422075499", turn_seq=1
     ) is True
@@ -179,15 +166,12 @@ def test_a_genuinely_older_run_is_still_dropped():
     service._latest_queue_turn_id = "device-chat-505-1788422075499"
     service._latest_queue_turn_seq = 40
 
-    # Lower seq AND created earlier: a late POST from a superseded turn.
     assert service.speak_queue(
         "late old reply", turn_id="device-chat-1-1788420332920", turn_seq=1
     ) is True
     assert service._latest_queue_turn_seq == 40
 
 
-# Channel ids carry no creation stamp, so there is nothing to compare and the
-# plain sequence rule must still hold.
 def test_an_id_without_a_stamp_keeps_the_sequence_rule():
     service = _queue_service()
     service._latest_queue_turn_id = "tg-991"
@@ -197,12 +181,7 @@ def test_an_id_without_a_stamp_keeps_the_sequence_rule():
     assert service._latest_queue_turn_seq == 40
 
 
-# A restart resets the counter to 1, so the new run does not always land BELOW
-# the old high-water mark — when that mark is itself low (two restarts in a row,
-# or a restart early in a session) the sequences collide instead. Device-observed
-# 04/09/2026: seq=2 met an unrelated seq=2 from before the restart and the wake
-# greeting was dropped — LED and servo ran, no sound, the same symptom as the
-# 03/09 case one comparison away.
+# A restart resets the counter to 1, so sequences can collide instead of dropping below.
 def test_an_equal_sequence_from_a_newer_run_is_adopted_not_dropped(monkeypatch, tmp_path):
     service = _queue_service()
     service._latest_queue_turn_id = "device-chat-2-1788500426762"
@@ -226,7 +205,6 @@ def test_an_equal_sequence_from_an_older_run_is_still_dropped():
     service._latest_queue_turn_id = "device-chat-2-1788500830940"
     service._latest_queue_turn_seq = 2
 
-    # Same seq, created EARLIER: a late POST from the run that was superseded.
     assert service.speak_queue(
         "late old reply", turn_id="device-chat-2-1788500426762", turn_seq=2
     ) is True

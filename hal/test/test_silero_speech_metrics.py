@@ -1,11 +1,4 @@
-"""Voiced-ratio metrics, and why a captured turn is judged over its span.
-
-A captured turn is padded: the session prepends VAD pre-roll and keeps a 200ms
-tail. That padding costs the same number of chunks whatever was said, so it
-dilutes a short utterance far more than a long one — which is how a real
-"Yes, that's right." scored 0.500 whole-buffer on lamp-0c89 and was dropped as
-noise. span_ratio discounts the padding; sustained noise still fails it.
-"""
+"""Voiced-ratio metrics, and why a captured turn is judged over its span."""
 
 import threading
 
@@ -35,15 +28,12 @@ def _metrics_for(confidences):
     vad._lock = threading.Lock()
     vad._session = _ScriptedSession(confidences)
     vad.reset_state()
-    # One chunk of silent PCM per scripted confidence — the audio content is
-    # irrelevant here, the scripted session decides the verdict.
     pcm = np.zeros(SILERO_CHUNK_SIZE * len(confidences), dtype=np.int16)
     return vad.speech_metrics(pcm, 16000)
 
 
 def test_padded_short_utterance_survives_on_span():
-    # 6 voiced chunks of speech wrapped in 6 chunks of pre-roll and tail: half
-    # the buffer, but unbroken speech once the padding is discounted.
+    # 6 voiced chunks wrapped in 6 chunks of pre-roll and tail.
     confs = [0.0] * 4 + [0.9] * 6 + [0.0] * 2
 
     _peak, _mean, ratio, span_ratio, _span_s = _metrics_for(confs)
@@ -53,8 +43,7 @@ def test_padded_short_utterance_survives_on_span():
 
 
 def test_sustained_noise_still_fails_on_span():
-    # Sparse voiced chunks scattered across the buffer: discounting the padding
-    # cannot rescue it, because the gaps are INSIDE the span.
+    # Sparse voiced chunks: the gaps are inside the span.
     confs = [0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0, 0.0, 0.9, 0.0, 0.0]
 
     _peak, _mean, ratio, span_ratio, _span_s = _metrics_for(confs)
@@ -89,8 +78,7 @@ def test_metrics_fail_open_when_the_model_is_missing():
 
 
 def test_span_seconds_measures_the_utterance_not_the_buffer():
-    # 6 voiced chunks inside a 12-chunk buffer. The span is the speech alone;
-    # the padding must not inflate it. 512 samples @ 16kHz = 32ms per chunk.
+    # 512 samples @ 16kHz = 32ms per chunk.
     confs = [0.0] * 4 + [0.9] * 6 + [0.0] * 2
 
     *_rest, span_seconds = _metrics_for(confs)

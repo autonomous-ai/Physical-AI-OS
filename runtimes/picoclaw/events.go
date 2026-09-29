@@ -28,24 +28,12 @@ type pendingEvent struct {
 	rawChat     bool
 }
 
-// busyTTL bounds how long the busy flag survives without a terminal frame. It
-// exists for ONE case: the turn's final frame was DROPPED, so the sensing
-// pipeline would otherwise wedge forever — never to cap how long a turn may
-// legitimately run.
-//
-// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
-// takes a while, and the same prompt answered over Telegram/OpenClaw runs 35
-// minutes to completion. At the old 5 minutes this path also called clearTurn(),
-// wiping the IN-FLIGHT run id, which orphaned the browser's pending run — every
-// later lifecycle/error frame then allocated a fresh id and attached to an
-// unrelated queued turn, leaving the chat on "no response". Measured on the
-// codex path 2026-09-03 (lamp-0c89); openclaw and hermes never wiped the id and
-// serve long turns fine, which is the behaviour restored here.
+// busyTTL bounds how long the busy flag survives without a terminal frame.
+// It only covers a dropped final frame and must not cap legitimately long turns.
 const busyTTL = 45 * time.Minute
 
 // IsBusy mirrors openclaw.PicoclawService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for its first inbound frame. Auto-clears after
-// busyTTL if the final frame got dropped so the sensing pipeline cannot wedge.
+// chat.send is still waiting for its first inbound frame.
 func (s *PicoclawService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
@@ -53,13 +41,12 @@ func (s *PicoclawService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "picoclaw", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.sendMu.Lock()
-			// A newer turn may have started while this caller waited for admission.
 			if !s.activeTurn.Load() || s.busySince.Load() != since {
 				s.sendMu.Unlock()
 				return s.activeTurn.Load() || s.HasFreshPendingChatSend()
 			}
-			// Responses have no request IDs. Retire the transport before releasing
-			// an expired turn, otherwise its late final could complete the next one.
+			// Responses carry no request IDs: retire the transport before releasing the expired
+			// turn, otherwise its late final could complete the next one.
 			s.wsConnected.Store(false)
 			s.wsMu.Lock()
 			if s.wsConn != nil {
@@ -77,11 +64,10 @@ func (s *PicoclawService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
-// SetBusy flips active state. Drains pending events on idle.
+// SetBusy flips active state.
 func (s *PicoclawService) SetBusy(busy bool) {
 	s.sendMu.Lock()
-	// Both chat.final and lifecycle.end may signal idle. Keep the current turn
-	// reserved until the translator finishes dispatching the complete terminal.
+	// Keep the turn reserved until the translator finishes dispatching its terminal frames.
 	if !busy && (s.getCurrentRunID() != "" || s.peekPendingRunID() != "") {
 		s.sendMu.Unlock()
 		return
@@ -114,13 +100,7 @@ func (s *PicoclawService) QueuePendingEvent(eventType, msg string, images []stri
 	})
 }
 
-// drainPendingEvents replays buffered sensing events. Behaviour matches the
-// openclaw / hermes drain: voice events prioritised, expirable high-frequency
-// types (presence / motion / emotion) coalesced to latest-only and stale entries
-// dropped after expireAfter.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
+// DrainPendingEvents replays buffered sensing events; it also runs when the speaker frees up.
 func (s *PicoclawService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -142,11 +122,7 @@ func (s *PicoclawService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
+	// Put the batch back while the last reply is still playing; replaying now would cut it off.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -256,8 +232,6 @@ func (s *PicoclawService) drainPendingEvents() {
 		msg = strings.ReplaceAll(msg, "\n\n\n", "\n\n")
 		msg = strings.TrimSpace(msg)
 
-		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-		// on the reply (same as the live PostEvent path).
 		if ev.eventType == "voice_agent_handled" {
 			s.MarkSilentRun(runID)
 		}
@@ -271,14 +245,13 @@ func (s *PicoclawService) drainPendingEvents() {
 			sourceType = "user"
 		}
 		if telemetry.TaskGroup(ev.eventType) == "sensing" {
-			// Keep this cohort stable if the socket disappears before dispatch.
 			ev.fixedRunID = runID
 			events[i] = ev
 			telemetry.ReportTaskStarted(ev.eventType, "", runID)
 		}
 		_, err := s.sendChatNow(msg, ev.images, reqID, runID, sourceType)
 		// A missing socket is definitely unsent; a failed write is uncertain
-		// and must not be replayed. Keep the rest locally until this turn ends.
+		// and must not be replayed.
 		tail := events[i+1:]
 		if errors.Is(err, errDisconnectedBeforeSend) {
 			tail = events[i:]

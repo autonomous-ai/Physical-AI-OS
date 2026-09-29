@@ -29,25 +29,29 @@ nào đang chạy.
 
 | `agent_runtime` | Backend |
 |---|---|
-| không set | fallback về `gateway.default` trong `robots/<type>/ROBOT.md`, rồi OpenClaw nếu cái đó cũng trống |
+| không set | fallback về `/root/config/f_r_default_agent` (bake trong image), rồi `gateway.default` trong `robots/<type>/ROBOT.md`, rồi OpenClaw nếu cả hai đều trống (`device.ResolveDefaultAgent`) |
 | `"openclaw"` | OpenClaw (mặc định) |
-| `"hermes"` | Hermes (`hermes.ProvideService`) |
+| `"hermes"` | Hermes (`hermes.ProvideService`) — HTTP+SSE |
+| `"remote"` | Hermes-qua-LAN: cùng client sau `hermes.ApplyExternalEndpoint(agent_remote_url, agent_remote_token)` — xem [`remote-hermes_vi.md`](remote-hermes_vi.md). HAL alias `remote` → `hermes`. |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) — client WebSocket bền; giả định service PicoClaw đã chạy sẵn. Xem `docs/agentic/picoclaw.md` + `runtimes/picoclaw`. |
+| `"codex"` / `"claudecode"` / `"opencode"` | Codex / Claude Code / OpenCode (`<runtime>.ProvideService`) — xem [`codex_vi.md`](codex_vi.md), [`claudecode_vi.md`](claudecode_vi.md), [`opencode_vi.md`](opencode_vi.md) |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
 
 Khi `agent_runtime` không được set trong `config.json`, backend lấy từ
-`gateway.default` của thiết bị (`robots/<type>/ROBOT.md`); chỉ dùng OpenClaw nếu
-giá trị đó cũng trống. Banner log thêm `source` để biết nguồn nào thắng.
+`/root/config/f_r_default_agent` bake trong image (sống sót qua factory reset),
+rồi `gateway.default` của thiết bị (`robots/<type>/ROBOT.md`); chỉ dùng OpenClaw
+nếu cả hai đều trống. Banner log thêm `source` để biết nguồn nào thắng.
 
 Lúc khởi động, `ProvideGateway` in banner `AGENT BACKEND ACTIVE → HERMES` kèm
 `base_url`, `conversation`, `model`, `api_key_set`. **Chưa có config theo từng
-máy** cho các giá trị này — chúng là hằng số compile-time trong
-`runtimes/hermes/constants.go`:
+máy** cho server cục bộ — giá trị mặc định là các `var` cấp package trong
+`runtimes/hermes/constants.go` (có thể thay đổi để runtime `remote` trỏ lại
+`BaseURL`/`APIKey` qua `ApplyExternalEndpoint`, `runtimes/hermes/remote.go`):
 
-| Hằng số | Mặc định | Ý nghĩa |
+| Biến | Mặc định | Ý nghĩa |
 |---|---|---|
 | `BaseURL` | `http://127.0.0.1:8642` | Hermes API server cục bộ |
-| `APIKey` | `hermes-api-key` | Bearer cho Hermes |
+| `APIKey` | `hermes-local-api-key` | Bearer cho Hermes |
 | `Conversation` | `device-main` | Kênh mà mọi lượt đổ vào |
 | `Model` | `hermes-agent` | Model id gửi cho Hermes |
 
@@ -132,8 +136,9 @@ phải dựng lại + nén lại nó mỗi turn — biến một turn đáng l�
   73,5 k), nên lưới nổ mỗi 2–3 turn. Vì đường đang nối là `maybeAutoNewSession`
   (compact bị tắt), mỗi lần nổ là **bỏ luôn lịch sử, không tóm tắt** — thiết bị
   quên mất thứ nó vừa nói. 250 k giữ được ~10 turn ở nhịp đó; lưới phải nằm **trên**
-  mức mà cơ chế nén của gateway ổn định lại, không nằm trong đó (cùng giá trị và
-  cùng lập luận với [`codex`](codex_vi.md)).
+  mức mà cơ chế nén của gateway ổn định lại, không nằm trong đó (cùng lập luận với
+  [`codex`](codex_vi.md), vốn dùng lưới thấp hơn 120 k vì context lớn hơn gặp
+  ngưỡng trễ tăng vọt trên transport `codex exec` theo từng turn).
 
 ## 4. Giao thức request — Runs native và fallback Responses
 
@@ -514,7 +519,7 @@ sẽ mất log install đúng lúc cần. Theo dõi trực tiếp bằng
 
 > Tên unit: gateway chạy dưới `hermes-gateway.service`. Installer khai báo tên
 > này trong `/usr/local/lib/os-runtimes/hermes/service` để `switch-runtime`
-> enable đúng unit (§11); `reset_hermes.go` nhắm tới cùng unit đó.
+> enable đúng unit (§11); `runtimes/hermes/reset.go` nhắm tới cùng unit đó.
 
 ### Unit gateway được tự-vá (pre-bake trong image + backstop runtime)
 
@@ -540,7 +545,7 @@ associate thành công. Hai lớp khắc phục:
   chạy `hermes gateway install --system` theo nhu cầu và khai lại file
   `service`/`verify` cho switch-runtime. Nhanh — binary + venv đã pre-bake, nên chỉ
   ghi unit (không git clone / `uv sync`). `EnsureOnboarding` sau đó **`systemctl
-  enable`** unit (factory reset disable nó — `reset_hermes.go` bước 4, "SetupAgent
+  enable`** unit (factory reset disable nó — `runtimes/hermes/reset.go` bước 4, "SetupAgent
   re-enables" — và unit vừa cài cũng chưa enable cho boot) và (re)start nó khi config
   đổi, khi unit vừa được cài, **hoặc** khi unit có nhưng không active (crash /
   disabled).
@@ -667,7 +672,7 @@ làm 3 việc theo thứ tự:
 | `discord_bot_token` / `discord_guild_id` / `discord_user_id` | → | `.env` `DISCORD_BOT_TOKEN` / `DISCORD_GUILD_ID` / `DISCORD_ALLOWED_USERS` |
 | `whatsapp_user_id` | → | `.env` `WHATSAPP_ALLOWED_USERS` |
 
-`.env` `API_SERVER_KEY` phải bằng `constants.go` `APIKey` (`hermes-api-key`) nếu
+`.env` `API_SERVER_KEY` phải bằng `constants.go` `APIKey` (`hermes-local-api-key`) nếu
 không mọi lượt sẽ 401. Hermes phải listen tại `127.0.0.1:8642` để khớp `BaseURL`.
 
 Để trỏ tới Hermes endpoint / key / model khác ở hiện tại, sửa
@@ -755,7 +760,7 @@ marker đều là block của OS, nên `upsertAgentsMDBlock` strip thẳng, khô
 Block này mang **trọn bộ 8 luật OS mà mọi runtime đều có** — đúng bộ mà
 openclaw/picoclaw/codex/opencode nhận qua block `AGENTS.md` và claudecode qua
 `CLAUDE.md` (trước đây Hermes chỉ có 3): ưu tiên skill
-(`skills/openclaw-imports/` thắng mọi skill bundled của Hermes có mục đích trùng lặp;
+(`~/.hermes/skills/openclaw-imports/` thắng mọi skill bundled của Hermes có mục đích trùng lặp;
 dịch vụ bên-thứ-ba đi qua `connectors`; không cài client/CLI thay thế cho dịch vụ
 connector đã cover), kỷ luật `memories/USER.md`, **skill scope** với protocol chọn
 `SKILL.md` 4 nhánh (tag `[skills: a, b, c]` là whitelist **có thẩm quyền** — chỉ đọc
@@ -912,7 +917,7 @@ backend cũ vẫn đang cài). Các điểm đặc thù Hermes mà switcher gene
 
 - **Tên unit** `hermes-gateway.service` (không phải `hermes.service`) — khai trong
   `/usr/local/lib/os-runtimes/hermes/service` để `switch-runtime` enable đúng unit;
-  `reset_hermes.go` nhắm cùng unit.
+  `runtimes/hermes/reset.go` nhắm cùng unit.
 - **Verify hook** `/usr/local/lib/os-runtimes/hermes/verify` chạy `command -v
   hermes` (check CLI rẻ). Cố tình **không** check structure config — config tự lành
   qua presync (§10), nên verify fail sẽ ép full reinstall vô ích.
@@ -927,7 +932,7 @@ Xác nhận đã switch qua banner `AGENT BACKEND ACTIVE → HERMES` + một l�
 ## 12. Persona, memory & skills mang qua khi switch
 
 Switch openclaw→hermes chạy một migration persona Go
-(`system/agent/migrate_persona/openclaw_to_hermes.go`) lúc os-server boot —
+(`system/agent/migrate_persona/runtime_hermes.go` qua `migrator.go`) lúc os-server boot —
 **tách biệt với `claw migrate`**. Migration này **không còn là nguồn persona duy
 nhất** của Hermes: `ensureSoulMDBlock()` tiêm persona của máy từ `soul_ref` mỗi
 lần boot (§10), nên máy boot thẳng vào Hermes cũng có persona mà không cần đi qua
@@ -965,7 +970,7 @@ không phải persona, runtime đích tự tiêm bộ luật của nó, và mark
 không bị phép strip theo `<!-- OS DO NOT REMOVE -->` của runtime đích dọn giúp.
 **Skills** được giữ tươi dưới Hermes qua hai đường bổ sung nhau:
 `EnsureOnboarding` luôn gate theo capability và đồng bộ toàn bộ catalog được hỗ
-trợ từ CDN vào `skills/openclaw-imports` (sửa cả file local cũ khi OTA đã publish
+trợ từ CDN vào `~/.hermes/skills/openclaw-imports` (sửa cả file local cũ khi OTA đã publish
 trước lúc watcher khởi động), còn `skill_watcher.go` poll metadata OTA mỗi năm phút
 để bắt các bản publish sau đó. Cả hai dùng engine chung
 `system/skills/skillzip.go`; khi nội dung thật sự đổi, gateway được restart rồi
@@ -977,8 +982,8 @@ root riêng của nó (`runtimes/hermes/save_skill.go`):
 
 | Root | Chủ sở hữu | Ai ghi |
 |------|------------|--------|
-| `skills/openclaw-imports/` | `hermes claw migrate` + skill watcher | presync §0, cập nhật CDN |
-| `skills/authored/` | device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
+| `~/.hermes/skills/openclaw-imports/` | `hermes claw migrate` + skill watcher | presync §0, cập nhật CDN |
+| `~/.hermes/skills/authored/` | device | `AgentGateway.SaveSkill` / `InstallSkillArchive` (web UI "Write skill" / "Install") |
 
 Việc tách đôi này là bắt buộc chứ không phải cho đẹp: presync §0 khôi phục skill
 nền tảng đã import **chỉ khi `openclaw-imports` rỗng**, nên một skill soạn tay
@@ -988,8 +993,8 @@ thầm không bao giờ khôi phục lại import thật. `ListSkills` merge c�
 skill ở bất kỳ đâu dưới `~/.hermes/skills` nên không cần đổi config, cũng không
 cần restart gateway — skill được đọc lại theo từng session.
 
-Lưu ý `wipeHermesState` (reset.go) xoá `skills/openclaw-imports` nhưng **không**
-xoá `skills/authored`, nên skill người dùng tự soạn sống sót qua factory reset.
+Lưu ý `wipeHermesState` (reset.go) xoá `~/.hermes/skills/openclaw-imports` nhưng **không**
+xoá `~/.hermes/skills/authored`, nên skill người dùng tự soạn sống sót qua factory reset.
 
 **MCP connector cũng được mang qua** — các remote-MCP server đã cấu hình được clone
 config→config bởi `MCPReconcile` ở cùng boot switch đó (xem §10, *MCP connectors*),

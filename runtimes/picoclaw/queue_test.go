@@ -104,7 +104,7 @@ func TestQueueSerializesDirectAndBufferedTurnsThroughAllTerminalCallbacks(t *tes
 	if payload["content"] != "second\n[harness-reply run_id=run-2 channel=web]"+"\n"+sensingmsg.HarnessConnectedContext || len(payload["attachments"].([]any)) != 1 {
 		t.Fatalf("queued chat changed: %v", f)
 	}
-	s.SetBusy(false) // A repeated idle from the old consumer cannot drain turn 3.
+	s.SetBusy(false)
 	if s.peekPendingRunID() != "run-2" {
 		t.Fatal("duplicate idle cleared next turn")
 	}
@@ -153,7 +153,6 @@ func TestReconnectDrainsOnlyUnsentWithoutTerminalEvent(t *testing.T) {
 		t.Fatal("connection teardown did not finish")
 	}
 	assertLostObservation(t, observations, "unsent")
-	// The just-written request is uncertain on disconnect, not locally queued.
 	if len(s.pendingEvents) != 0 || s.peekPendingRunID() != "" || s.activeTurn.Load() {
 		t.Fatal("disconnect retained transmitted work")
 	}
@@ -168,7 +167,7 @@ func TestMissingSocketRetainsUnsentButFailedWriteDoesNotReplay(t *testing.T) {
 		t.Fatal("missing socket lost unsent request")
 	}
 	queueSocket(t, s)
-	_ = s.wsConn.Close() // A write attempt on this socket returns an uncertain write error.
+	_ = s.wsConn.Close()
 	s.drainPendingEvents()
 	if len(s.pendingEvents) != 1 || s.pendingEvents[0].fixedRunID != "second" {
 		t.Fatalf("wrong retry queue after write failure: %+v", s.pendingEvents)

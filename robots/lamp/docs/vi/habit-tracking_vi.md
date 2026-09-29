@@ -77,6 +77,44 @@ Rebuild khi:
 - File cũ hơn 6 giờ
 - User hỏi về thói quen của mình
 
+### Ví dụ patterns.json
+
+```json
+{
+  "updated_at": "2026-04-22T10:01:00",
+  "days_observed": 3,
+  "wellbeing_patterns": [
+    {
+      "action": "meal",
+      "typical_hour": 9,
+      "typical_minute": 30,
+      "window_minutes": 45,
+      "frequency": 0.67,
+      "days_observed": 3,
+      "strength": "moderate"
+    },
+    {
+      "action": "enter",
+      "typical_hour": 8,
+      "typical_minute": 30,
+      "window_minutes": 45,
+      "frequency": 0.67,
+      "days_observed": 3,
+      "strength": "moderate"
+    }
+  ],
+  "music_patterns": [
+    {
+      "preferred_genre": "lofi hip hop",
+      "peak_hour": 14,
+      "acceptance_rate": 0.8,
+      "days_observed": 5
+    }
+  ]
+}
+```
+
+
 ## Consumer
 
 ### Wellbeing — enrich phrasing nudge (Step 3b)
@@ -115,6 +153,19 @@ Honest-gap mode tồn tại vì freshness guard của Flow A giữ lại `patter
 
 Flow E **override** OUTPUT RULE 1-câu (chỉ áp dụng cho nudge enrichment): cho phép 2–4 câu, được nói ngày/giờ/tần suất xấp xỉ trong câu thoại. Raw timestamp, JSON, pattern math thô vẫn ở trong `thinking`.
 
+## Kích thước cửa sổ (Window Sizes)
+
+| Action | Cửa sổ |
+|--------|--------|
+| `drink` | ±30 phút |
+| `break` | ±30 phút |
+| `meal` | ±45 phút |
+| `coffee` | ±30 phút |
+| `sleep` | ±30 phút |
+| `exercise` | ±60 phút |
+| `enter` (đến nơi) | ±45 phút |
+| Nhãn sedentary | ±60 phút |
+
 ## Test full E2E flow
 
 Validate: Step 1 (đọc history) → Step 2 (tính delta) → Step 3 (fire nudge) → Step 3b (invoke Flow A) → Flow A bootstrap (`patterns.json` được tạo) → Step 4 (speak) → Step 5 (log nudge).
@@ -126,7 +177,7 @@ Validate: Step 1 (đọc history) → Step 2 (tính delta) → Step 3 (fire nudg
 
 ### Seed data hôm nay
 
-Append trực tiếp vào file ngày hôm nay (cùng path lelamp ghi). `enter` sáng + `drink` sáng + `using computer` gần đây — tạo hydration delta vượt threshold 5 phút test.
+Append trực tiếp vào file ngày hôm nay (cùng path lelamp ghi). `enter` sáng + `drink` sáng + `using computer` gần đây — tạo hydration delta vượt xa `HYDRATION_THRESHOLD_MIN` (45 phút trong `skills/wellbeing/SKILL.md`).
 
 ```bash
 ssh pi@<lamp-ip> 'sudo bash' <<'EOF'
@@ -154,7 +205,7 @@ curl -s -X POST 'http://<lamp-ip>/api/sensing/event' \
 | Stage | Observed |
 |---|---|
 | Step 1 query | `GET /api/agent/wellbeing-history?user=gray&last=50` (no slice) |
-| Step 2 delta | hydration ~159 phút vs threshold 5 phút — vượt |
+| Step 2 delta | hydration ~159 phút vs threshold (giá trị test 5 phút lúc đó; production là 45 phút) — vượt |
 | Step 3 decision | nudge hydration (ưu tiên hơn break) |
 | Step 3b invoke | gọi `habit/SKILL.md` Flow A |
 | Flow A guard | mtime check pass (file thiếu → cold path) |
@@ -189,10 +240,10 @@ Tab Users hiện badge **habit** cho mỗi user khi `patterns.json` tồn tại.
 
 | File | Mục đích |
 |------|----------|
-| `lamp/resources/openclaw-skills/habit/SKILL.md` | Skill definition — Flow A–D, algorithm, storage |
-| `runtimes/openclaw/resources/SOUL.md` | Section "Observing Habits" — ghi intent từ hội thoại |
-| `lamp/resources/openclaw-skills/wellbeing/SKILL.md` | Step 3b — invoke Flow A khi có nudge; dùng patterns.json để enrich phrasing nudge |
-| `runtimes/openclaw/onboarding.go` | Đăng ký habit vào danh sách skills |
+| `skills/habit/SKILL.md` | Skill definition — Flow A–D, algorithm, storage |
+| `robots/lamp/SOUL.md` | Section "Observing Habits" — ghi intent từ hội thoại |
+| `skills/wellbeing/SKILL.md` | Step 3b — invoke Flow A khi có nudge và `bootstrap_needed=true`; dùng patterns.json để enrich phrasing nudge |
+| `system/skills/catalog_gen.go` | Đăng ký habit vào skill catalog |
 | `hal/models.py` | Field `habit_patterns` trong FacePersonDetail |
 | `hal/routes/sensing.py` | Check habit/patterns.json trong face/owners API |
-| `lamp/web/src/pages/monitor/FaceOwnersSection.tsx` | Habit badge + folder trong tab Users |
+| `system/web/src/pages/monitor/face-owners/PersonCard.tsx` | Habit badge + folder trong tab Users |

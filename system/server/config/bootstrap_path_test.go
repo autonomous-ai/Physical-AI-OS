@@ -6,10 +6,7 @@ import (
 	"testing"
 )
 
-// The skill path depends on config actually consulting syspath: a metadata_url
-// that never reaches OTAMetadataURL leaves skillsBaseURL empty and
-// downloadSkills silently does nothing. Asserting the syspath default alone
-// would not catch a revert to a hardcoded const here, so read through the env.
+// OTAMetadataURL must be read through syspath, or downloadSkills silently no-ops.
 func TestOTAMetadataURLHonoursBootstrapEnv(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "bootstrap.json")

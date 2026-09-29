@@ -115,14 +115,21 @@ The active scene **survives HAL service restarts** (OTA, deploy, crash): it is p
 
 When HAL restarts while sleeping, scene restoration retains only the active scene identity; it does not reapply LED, servo, camera, mic, or speaker settings. Sleep keeps ownership of the hardware and its mute flags. The saved user LED state is loaded separately; a subsequent normal wake clears the retained scene through the existing scene-off path.
 
-| Scene | Bright | Color (K) | Servo | Camera | Mic | Speaker |
-|-------|--------|-----------|-------|--------|-----|---------|
-| `reading` | 80% | 4000K warm white | desk + hold | off | on | off |
-| `focus` | 70% | 4200K warm-neutral | desk + hold | off | on | off |
-| `relax` | 40% | 2700K warm | wall | on | on | on |
-| `movie` | 15% | 2400K dim amber | wall | off | on | off |
-| `night` | 5% | 1800K deep amber | down | off | on | off |
-| `energize` | 100% | 5000K daylight | up | on | on | on |
+| Scene | Bright (base) | Bright (lamp) | Color (K) | Servo | Camera | Mic | Speaker |
+|-------|--------|--------|-----------|-------|--------|-----|---------|
+| `reading` | 80% | 19% | 4000K warm white | desk + hold | off | on | off |
+| `focus` | 70% | 15% | 4200K warm-neutral | desk + hold | off | on | off |
+| `relax` | 40% | 10% | 2700K warm | wall | on | on | on |
+| `movie` | 15% | 4% | 2400K dim amber | wall | off | on | off |
+| `night` | 5% | 1.2% | 1800K deep amber | down | off | on | off |
+| `energize` | 100% | 24% | 5000K daylight | up | on | on | on |
+
+"Base" is `SCENE_PRESETS` in `hal/presets.py`. On lamp the `scene` block of
+`robots/lamp/presets.json` overrides **brightness only** (0.19 / 0.15 / 0.10 / 0.04 / 0.012 / 0.24);
+color, aim and peripherals stay at the base values. The base levels pushed reading/focus/energize
+past lamp's `max_brightness` ceiling (120), so all three collapsed to the same peak; the overlay
+also accounts for a scene lighting all 32 pixels (lamp peaks: energize 61, reading 48, focus 38,
+relax 25, movie 10, night 3).
 
 ### Scene peripheral control
 
@@ -156,7 +163,7 @@ This means during focus, sensing events (face emotion, motion) still reach OpenC
 
 ### Color temperature rationale
 
-- **Focus 4200K/70%** (not 5000K/100%) — 4000-4300K optimizes alertness without visual fatigue for sustained work
+- **Focus 4200K/70% base** (not 5000K/100%; lamp overlay 15%) — 4000-4300K optimizes alertness without visual fatigue for sustained work
 - **Night 1800K deep amber** — blue-free wavelengths (>580nm) preserve melatonin production
 - **Movie mic on** — allows voice control ("pause", "stop") while watching
 
@@ -164,25 +171,33 @@ This means during focus, sensing events (face emotion, motion) still reach OpenC
 
 See details: [status-led.md](status-led.md)
 
-LED feedback for system states (all `breathing` at speed 3.0 unless noted):
+LED feedback for system states. HAL resolves each state name from `STATUS_LED_PRESETS` in
+`hal/presets.py`; on lamp the `status_led` block of `robots/lamp/presets.json` overrides the color
+(every channel capped at 3) and, for the six long-lived breathing cues, the speed. Effect names always
+come from the base table. Lamp values:
 
-| State | Color | RGB |
-|-------|-------|-----|
-| Connectivity (no internet) | Orange | `(16, 7, 0)` |
-| Booting | Blue | `(0, 6, 16)` |
-| HAL Down | Purple | `(11, 0, 16)` |
-| Agent Down | Cyan | `(0, 12, 12)` |
-| Hardware Failure | Yellow | `(12, 12, 0)` |
-| OTA in progress (bootstrap) | Orange | `(16, 8, 0)` |
-| OTA success (bootstrap) | Green flash | `(0, 12, 4)` |
-| OTA failure (bootstrap) | Red pulse | `(16, 2, 2)` |
+| State (preset) | Color | Effect / speed (lamp) | Lamp RGB | Base RGB / speed |
+|-------|-------|-----|-----|-----|
+| Connectivity (`connectivity`, no internet) | Orange | breathing 0.6 | `(3, 1, 0)` | `(16, 7, 0)` / 3.0 |
+| Error (`error`, reserved) | Red | pulse 1.5 | `(3, 0, 0)` | `(16, 0, 0)` / 1.5 |
+| OTA (`ota`, reserved) | Green | breathing 0.6 | `(0, 3, 0)` | `(0, 12, 0)` / 3.0 |
+| Wi-Fi connecting (`wifi_connecting`, setup) | Blue | blink 0.5 | `(0, 1, 3)` | `(0, 6, 16)` / 0.5 |
+| Booting (`booting`) | Blue | breathing 0.6 | `(0, 1, 3)` | `(0, 6, 16)` / 3.0 |
+| HAL Down (`hal_down`) | Purple | breathing 0.6 | `(2, 0, 3)` | `(11, 0, 16)` / 3.0 |
+| Agent Down (`agent_down`) | Cyan | breathing 0.6 | `(0, 3, 3)` | `(0, 12, 12)` / 3.0 |
+| Hardware Failure (`hardware`) | Yellow | breathing 0.6 | `(3, 3, 0)` | `(12, 12, 0)` / 3.0 |
+| OTA in progress (`ota_progress`, bootstrap) | Orange | breathing 0.4 | `(3, 1, 0)` | `(16, 8, 0)` / 0.4 |
+| OTA success (`ota_success`, bootstrap) | Green | notification_flash 1.0 | `(0, 3, 1)` | `(0, 12, 4)` / 1.0 |
+| OTA failure (`ota_error`, bootstrap) | Red | pulse 1.5 | `(3, 1, 1)` | `(16, 2, 2)` / 1.5 |
 
-Managed by `system/statusled/Service` (lamp) and `lib/hal` directly (bootstrap).
+Priorities, triggers and callers are in [status-led.md](status-led.md).
+
+Managed by `system/statusled/Service` (lamp) and `system/lib/hal` directly (bootstrap).
 
 None of these colors are hardcoded in Go anymore — `system/statusled` states, the
 bootstrap OTA-progress colors, and the setup-needed white all flow through HAL. The OS
 owns the state machine (WHEN a state shows) and sends the state *name* to HAL
-(`POST /led/status`: booting/error/ota/connectivity/hal_down/agent_down/hardware/
+(`POST /led/status`: booting/error/ota/connectivity/wifi_connecting/hal_down/agent_down/hardware/
 ready_flash/ota_progress/ota_error/ota_success/setup); HAL resolves the color/effect/speed
 from `STATUS_LED_PRESETS`, overridable per device via `presets.json`'s `status_led` section
 (see [ROBOT-SPEC.md § Per-device presets](../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
@@ -243,7 +258,7 @@ the strip toward dark, which is what sleep already wants.
 
 ### Setup-needed solid (lamp)
 
-When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `server/server.go` spawns a background goroutine that polls HAL `GET /health` once per second up to 30s, and once `health.led == true` sends `POST /led/status` with state `setup` — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. Polling (not a single call) handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (currently dark/off). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
+When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `system/server/server.go` spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`, only on devices with the `light` capability) that sends `POST /led/status` with state `setup` and retries with backoff (1 s, doubling, capped at 10 s) until HAL acknowledges it, setup completes, or the server shuts down — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. It does not wait on `/health` (LED routes can acknowledge before unrelated drivers are healthy); retrying handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (currently dark/off). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
 
 ## Ambient Idle Behaviors
 

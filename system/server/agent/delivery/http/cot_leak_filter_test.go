@@ -26,7 +26,6 @@ func TestSongPlanningFirstSentenceStream(t *testing.T) {
 		assistantBuf:     make(map[string]*strings.Builder),
 		streamedCleanLen: make(map[string]int),
 	}
-	// Feed the real leak across sentence boundaries, including missing whitespace.
 	for _, delta := range []string{`They named a song: "Eternal Flame" — likely the Bangles song. `, `Play it.Speaker is unknown — no person to attribute. `} {
 		h.accumulateAssistantDelta("song", delta)
 		if got := h.tryFirstSentenceFlush("song"); got != "" {
@@ -54,8 +53,7 @@ func TestSongPlanningDoesNotDropOrdinaryDiscussion(t *testing.T) {
 	}
 }
 
-// The real DeepSeek leak captured on device 2026-07-06 (emotion.detected turn,
-// openclaw + deepseek): full English planning monologue ahead of the reply.
+// Real DeepSeek leak (openclaw + deepseek): English planning monologue ahead of the reply.
 const deepseekLeak = "The `[emotion_context]` shows `mapped_mood: \"sad\"`, `suggestion_worthy: true`, " +
 	"`is_decision_stale: false`, `audio_playing: false`, `last_suggestion_age_min: 19` (not in cooldown). " +
 	"Route = **music**. I need to log the signal, synthesize a decision (prior decision is `happy` 19min ago, " +
@@ -80,8 +78,7 @@ func TestDeepseekLeakVietnamese(t *testing.T) {
 }
 
 func TestDeepseekLeakEnglishModeStillCatchesIdentifiers(t *testing.T) {
-	// Unset language → English mode: only the marker tiers apply, but the
-	// snake_case trigger still catches the context-field analysis sentences.
+	// Unset language = English mode: marker tiers plus the snake_case trigger.
 	f := newCoTLeakFilter("")
 	got := f.filterText(deepseekLeak)
 	for _, leak := range []string{"emotion_context", "telegram_id"} {
@@ -114,7 +111,6 @@ func TestLegitVietnameseReplyUntouched(t *testing.T) {
 }
 
 func TestLegitEnglishReplyUntouched(t *testing.T) {
-	// English device: heuristic tiers are off; a normal reply passes whole.
 	text := "Sure! I'll play some soft music for you. Let me know if you want something else."
 	f := newCoTLeakFilter("en")
 	got := f.filterText(text)
@@ -126,8 +122,7 @@ func TestLegitEnglishReplyUntouched(t *testing.T) {
 }
 
 func TestEnglishLookingDroppedOnlyInCoTMode(t *testing.T) {
-	// Before any trigger, an ASCII-English sentence on a Vietnamese device is
-	// kept (could be a quoted title etc.). After a trigger it is dropped.
+	// Before a trigger an English sentence on a Vietnamese device is kept; after one it is dropped.
 	f := newCoTLeakFilter("vi")
 	pre := f.filterText("Let it be is a great song by The Beatles.")
 	if pre == "" {
@@ -141,8 +136,6 @@ func TestEnglishLookingDroppedOnlyInCoTMode(t *testing.T) {
 }
 
 func TestFuzzyDraftDedup(t *testing.T) {
-	// Draft nearly identical to the kept answer is dropped even after the
-	// filter leaves the marker tiers.
 	f := newCoTLeakFilter("vi")
 	got := f.filterText("Mình sẽ mở bài nhạc hoa nhẹ nhàng cho bạn nhé! " +
 		"The user wants music now. Mình sẽ mở bài nhạc hoa nhẹ nhàng cho bạn ngay nhé!")
@@ -152,8 +145,7 @@ func TestFuzzyDraftDedup(t *testing.T) {
 }
 
 func TestSeededPrefixContinuity(t *testing.T) {
-	// Mirrors the lifecycle:end flow: seed with the streamed prefix, then
-	// filter the remainder — CoT mode must carry over the boundary.
+	// CoT mode must carry over the streamed-prefix boundary.
 	prefix := "The user is asking about the weather."
 	remainder := "I should keep this brief. Trời hôm nay nắng đẹp lắm!"
 	f := newCoTLeakFilter("vi")
@@ -165,8 +157,7 @@ func TestSeededPrefixContinuity(t *testing.T) {
 }
 
 func TestGluedEnderSplit(t *testing.T) {
-	// The leak omits the space after an ender — the label must not drag the
-	// real answer down with it.
+	// A missing space after an ender must not drag the real answer into the label.
 	f := newCoTLeakFilter("vi")
 	got := f.filterText("The user wants a nudge. Finalize response.Khả năng là bạn hơi mệt rồi đó.")
 	if got != "Khả năng là bạn hơi mệt rồi đó." {
@@ -201,8 +192,7 @@ func TestLanguageCodeMapping(t *testing.T) {
 }
 
 func TestAudioTagOnlySentenceSurvives(t *testing.T) {
-	// Pure audio tags steer TTS delivery, not content — they must survive
-	// even in CoT mode.
+	// Pure audio tags steer TTS and must survive CoT mode.
 	f := newCoTLeakFilter("vi")
 	got := f.filterText("The user wants comfort. [nhẹ nhàng] Không sao đâu, mình ở đây với bạn mà.")
 	if !strings.Contains(got, "[nhẹ nhàng]") || !strings.Contains(got, "Không sao đâu") {

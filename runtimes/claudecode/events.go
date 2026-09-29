@@ -25,24 +25,12 @@ type pendingEvent struct {
 	fixedRunID  string
 }
 
-// busyTTL bounds how long the busy flag survives without a terminal frame. It
-// exists for ONE case: the turn's final frame was DROPPED, so the sensing
-// pipeline would otherwise wedge forever — never to cap how long a turn may
-// legitimately run.
-//
-// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
-// takes a while, and the same prompt answered over Telegram/OpenClaw runs 35
-// minutes to completion. At the old 5 minutes this path also called clearTurn(),
-// wiping the IN-FLIGHT run id, which orphaned the browser's pending run — every
-// later lifecycle/error frame then allocated a fresh id and attached to an
-// unrelated queued turn, leaving the chat on "no response". Measured on the
-// codex path 2026-09-03 (lamp-0c89); openclaw and hermes never wiped the id and
-// serve long turns fine, which is the behaviour restored here.
+// busyTTL bounds how long the busy flag survives without a terminal frame.
+// It must stay longer than the gatewayd per-turn timeout, or slow turns lose their run id.
 const busyTTL = 45 * time.Minute
 
 // IsBusy mirrors openclaw.ClaudeCodeService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for its first inbound frame. Auto-clears after
-// busyTTL if the final frame got dropped so the sensing pipeline cannot wedge.
+// chat.send is still waiting for its first inbound frame.
 func (s *ClaudeCodeService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
@@ -50,11 +38,6 @@ func (s *ClaudeCodeService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "claudecode", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
-			// Drop the dead run id: ensureTurnStarted returns early while it is
-			// set, so leaving it would attribute the NEXT turn's frames to the
-			// expired run. The codex runtime additionally tells the waiting
-			// client why (failStuckTurn); mirror that here when this backend is
-			// next exercised on a device.
 			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
@@ -64,7 +47,7 @@ func (s *ClaudeCodeService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
-// SetBusy flips active state. Drains pending events on idle.
+// SetBusy flips active state.
 func (s *ClaudeCodeService) SetBusy(busy bool) {
 	if !busy && (s.getCurrentRunID() != "" || s.hasPendingRuns()) {
 		return
@@ -96,13 +79,7 @@ func (s *ClaudeCodeService) QueuePendingEvent(eventType, msg string, images []st
 	})
 }
 
-// drainPendingEvents replays buffered sensing events. Behaviour matches the
-// openclaw / hermes drain: voice events prioritised, expirable high-frequency
-// types (presence / motion / emotion) coalesced to latest-only and stale entries
-// dropped after expireAfter.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
+// DrainPendingEvents replays buffered sensing events; it also runs when the speaker frees up.
 func (s *ClaudeCodeService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -122,11 +99,7 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
+	// Put the batch back while the last reply is still playing; replaying now would cut it off.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -240,14 +213,11 @@ func (s *ClaudeCodeService) drainPendingEvents() {
 		msg = strings.TrimSpace(msg)
 		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
-		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-		// on the reply (same as the live PostEvent path).
 		if ev.eventType == "voice_agent_handled" {
 			s.MarkSilentRun(runID)
 		}
 
 		if telemetry.TaskGroup(ev.eventType) == "sensing" {
-			// Keep this cohort stable if the socket disappears before dispatch.
 			ev.fixedRunID = runID
 			events[i] = ev
 			telemetry.ReportTaskStarted(ev.eventType, "", runID)

@@ -7,10 +7,7 @@ import (
 	"testing"
 )
 
-// liveDeviceUserMD is the USER.md read off lamp-ac82 on 2026-09-03, byte-identical
-// in .openclaw / .codex / .opencode / .picoclaw. It is the regression fixture:
-// two **Name:** bullets (one empty template slot, one filled with a user who
-// stopped using the device in June) plus the doc template merged in as data.
+// liveDeviceUserMD is the lamp-ac82 USER.md regression fixture (duplicate **Name:** bullets).
 const liveDeviceUserMD = `- _Learn about the person you're helping. Update this as you go._
 - **Name:**
 - **What to call them:**
@@ -46,8 +43,7 @@ func runUserProfileWrite(t *testing.T, dest string, incoming []string) string {
 	return string(got)
 }
 
-// The bug: a new name was APPENDED next to the old one, so the profile could
-// gain a name but never retire one.
+// A new name replaces the old one instead of being appended.
 func TestWriteUserProfileReplacesNameInsteadOfAppending(t *testing.T) {
 	dest := writeTempUserMD(t, liveDeviceUserMD)
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -62,20 +58,13 @@ func TestWriteUserProfileReplacesNameInsteadOfAppending(t *testing.T) {
 		t.Errorf("retired name survived as a field:\n%s", got)
 	}
 
-	// SCOPE: only the singular FIELD is retired. Free-form prose that happens to
-	// mention the old user ("Leo speaks Vietnamese…") is ordinary learned content
-	// and stays — entry-merge is additive by design. Removing stale prose is the
-	// device cleanup's job (plan step C) and, ongoing, the enrollment-keyed prune
-	// (B2a). Asserted here so the boundary is not mistaken for a leak.
+	// Only the singular field is retired; free-form prose stays.
 	if !strings.Contains(got, "Leo speaks Vietnamese") {
 		t.Errorf("free-form entries must be left alone by field replacement:\n%s", got)
 	}
 }
 
-// USER.md is a FORM. The whole template — instructions, prompts, unfilled
-// slots, separator, docs link — must survive a migration verbatim; only the
-// filled fields change. Anything less and the agent loses guidance it reads on
-// every turn, including the only line telling it to maintain this file.
+// The USER.md template survives a migration verbatim; only filled fields change.
 func TestWriteUserProfileKeepsTheEntireTemplate(t *testing.T) {
 	dest := writeTempUserMD(t, liveDeviceUserMD)
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -97,8 +86,7 @@ func TestWriteUserProfileKeepsTheEntireTemplate(t *testing.T) {
 	}
 }
 
-// The blank slot is FILLED where it stands — the template keeps its shape and
-// ordering, and the retired value that earlier merges appended below it goes.
+// The blank slot is filled in place and the appended retired value goes.
 func TestWriteUserProfileFillsTheSlotInPlace(t *testing.T) {
 	dest := writeTempUserMD(t, liveDeviceUserMD)
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -112,8 +100,7 @@ func TestWriteUserProfileFillsTheSlotInPlace(t *testing.T) {
 	}
 }
 
-// Instruction is carried, not accumulated: dedupe keeps exactly one copy however
-// many migrations run.
+// The template instruction is deduped to one copy across migrations.
 func TestWriteUserProfileDoesNotAccumulateInstructions(t *testing.T) {
 	dest := writeTempUserMD(t, liveDeviceUserMD)
 	runUserProfileWrite(t, dest, splitLines(liveDeviceUserMD))
@@ -123,8 +110,7 @@ func TestWriteUserProfileDoesNotAccumulateInstructions(t *testing.T) {
 	}
 }
 
-// splitLines turns a rendered USER.md back into the entries a source adapter
-// would hand the writer.
+// splitLines turns a rendered USER.md back into writer entries.
 func splitLines(doc string) []string {
 	var out []string
 	for _, l := range strings.Split(doc, "\n") {
@@ -135,8 +121,7 @@ func splitLines(doc string) []string {
 	return out
 }
 
-// A source runtime with no profile yet must never erase the name the device
-// already learned. This is the guard against "retire on absence".
+// An empty source profile never erases a learned name.
 func TestWriteUserProfileNeverBlanksAFilledField(t *testing.T) {
 	seeded := "- **Name:** Long\n- Context: Prefers Vietnamese.\n"
 
@@ -156,7 +141,6 @@ func TestWriteUserProfileNeverBlanksAFilledField(t *testing.T) {
 	}
 }
 
-// Free-form content stays additive — only the singular fields are replaced.
 func TestWriteUserProfileStillMergesFreeFormEntries(t *testing.T) {
 	dest := writeTempUserMD(t, "- **Name:** Long\n- Context: Prefers Vietnamese.\n")
 	got := runUserProfileWrite(t, dest, []string{"Context: Works late on Fridays."})
@@ -168,9 +152,7 @@ func TestWriteUserProfileStillMergesFreeFormEntries(t *testing.T) {
 	}
 }
 
-// A destination whose template has no slot for the field (a runtime with a
-// different USER.md shape) gets the bullet appended — the "or-append" half,
-// same as setIdentityField does for IDENTITY.md.
+// A missing slot gets the field bullet appended.
 func TestWriteUserProfileAppendsWhenThereIsNoSlot(t *testing.T) {
 	dest := writeTempUserMD(t, "- Context: An earlier note.\n")
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -183,8 +165,7 @@ func TestWriteUserProfileAppendsWhenThereIsNoSlot(t *testing.T) {
 	}
 }
 
-// An unfilled slot for a field we have no value for stays as it is — the form
-// is still asking, and the agent reads that prompt every turn.
+// An unfilled slot with no value stays as is.
 func TestWriteUserProfileLeavesUnknownFieldSlotsBlank(t *testing.T) {
 	dest := writeTempUserMD(t, "- **Name:**\n- **Timezone:**\n")
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -197,8 +178,7 @@ func TestWriteUserProfileLeavesUnknownFieldSlotsBlank(t *testing.T) {
 	}
 }
 
-// A bold bullet that is not one of the singular fields must not be silently
-// dropped just because it looks like a field.
+// A non-singular bold bullet is not dropped.
 func TestWriteUserProfileKeepsNonProfileBoldBullets(t *testing.T) {
 	dest := writeTempUserMD(t, "- **Notes:** Allergic to cilantro.\n")
 	got := runUserProfileWrite(t, dest, []string{"**Name:** Long"})
@@ -207,7 +187,6 @@ func TestWriteUserProfileKeepsNonProfileBoldBullets(t *testing.T) {
 	}
 }
 
-// Migration must converge: running it twice changes nothing the second time.
 func TestWriteUserProfileIsIdempotent(t *testing.T) {
 	dest := writeTempUserMD(t, liveDeviceUserMD)
 	first := runUserProfileWrite(t, dest, []string{"**Name:** Long"})

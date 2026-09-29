@@ -8,28 +8,14 @@ import { ModalShell } from "./ModalShell";
 import { SkillFilesView } from "./SkillFilesView";
 import { inputStyle, btnStyle, applyCardHover } from "./styles";
 
-// "Browse skills" — the Autonomous Agent Skills catalog, two views in one modal:
-//
-//   list   → GET /api/agent/skills/browse   (catalog listing, keyword-searchable)
-//   detail → GET /api/agent/skills/bundle   (device downloads the .skill archive
-//            to a temp dir, unzips it, and returns the files with text inlined)
-//
-// Both hops go through os-server, never the browser: no CORS round-trip, and
-// the catalog host stays server-side. Opening a skill is a PREVIEW — the temp
-// dir is deleted server-side once the response is built, nothing is installed.
-
 const PAGE_LIMIT = 50;
 
 export function BrowseSkillsModal({ onClose }: { onClose: () => void }) {
   const [selected, setSelected] = useState<StoreSkill | null>(null);
   return selected
-    // key: a detail view is bound to one skill for its whole lifetime, so its
-    // fetch effect never has to reset state for a different id.
     ? <SkillDetail key={selected.id} skill={selected} onBack={() => setSelected(null)} onClose={onClose} />
     : <SkillList onOpen={setSelected} onClose={onClose} />;
 }
-
-// ─── List view ───────────────────────────────────────────────────────────────
 
 function SkillList({
   onOpen, onClose,
@@ -42,8 +28,6 @@ function SkillList({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [query, setQuery] = useState("");
-  // Debounced copy of `query` — the catalog does the keyword match, so every
-  // keystroke would otherwise be a request.
   const [keyword, setKeyword] = useState("");
 
   useEffect(() => {
@@ -111,8 +95,6 @@ function SkillList({
       ) : skills.length === 0 ? (
         <Centered>{keyword ? `No skill matches “${keyword}”.` : "The store returned no skills."}</Centered>
       ) : (
-        // Two per row (auto-fit collapses to one on a narrow viewport) — a
-        // one-per-row list wastes the modal's width on short skill names.
         <div style={{
           display: "grid",
           gridTemplateColumns: "repeat(auto-fit, minmax(250px, 1fr))",
@@ -141,18 +123,11 @@ function StoreRow({ skill, onOpen }: { skill: StoreSkill; onOpen: () => void }) 
     >
       <div style={{ flex: 1, minWidth: 0 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
-          {/* Slash-prefixed like the installed listing — same skill, and that is
-              how the agent is addressed once it's on the device. */}
           <span style={{ fontSize: 13, fontWeight: 600 }}>/{skill.name}</span>
-          {/* Version is deliberately NOT on the card — it means nothing until you
-              open the skill, and it crowded the name row. The detail header
-              still carries it. */}
           {skill.plan_required && skill.plan_required !== "free" && (
             <Chip tone="amber">{skill.plan_required.toUpperCase()}</Chip>
           )}
         </div>
-        {/* Author sits directly under the name — it qualifies WHO wrote the
-            skill, so it belongs with the title, not down among the chips. */}
         {skill.author && (
           <div style={{ fontSize: 10.5, color: "var(--lm-text-dim)", marginTop: 2 }}>{skill.author}</div>
         )}
@@ -172,8 +147,6 @@ function StoreRow({ skill, onOpen }: { skill: StoreSkill; onOpen: () => void }) 
   );
 }
 
-// ─── Detail view ─────────────────────────────────────────────────────────────
-
 function SkillDetail({
   skill, onBack, onClose,
 }: {
@@ -184,8 +157,6 @@ function SkillDetail({
   const [bundle, setBundle] = useState<SkillBundle | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
-  // Install state — separate from the preview fetch above so a failed install
-  // doesn't wipe the file browser the user is reading.
   const [installing, setInstalling] = useState(false);
   const [installed, setInstalled] = useState("");
   const [installError, setInstallError] = useState("");
@@ -275,8 +246,6 @@ function SkillDetail({
     </ModalShell>
   );
 }
-
-// ─── Bits ────────────────────────────────────────────────────────────────────
 
 function Chip({ children, tone }: { children: React.ReactNode; tone?: "amber" }) {
   return (

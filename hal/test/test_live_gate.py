@@ -35,7 +35,6 @@ class GateTests(unittest.TestCase):
             self.assertFalse(gate.barge_in)
             self.assertFalse(np.any(result))
         self.assertFalse(gate.duck)
-        # A rejected warm-up utterance must end before a fresh onset can pass.
         for _ in range(25):
             gate.process(self.frame(0), self.RATE, True, 0.1, playback_seconds=3.0)
         for i in range(12):

@@ -3,8 +3,7 @@ const { test } = require('node:test');
 const fs = require('node:fs');
 const ts = require('typescript');
 
-// Load the pure UI reducers with the project's existing TypeScript compiler.
-// This process-local loader avoids adding a browser or a test-runner dependency.
+// Load the TS reducers with the project's TypeScript compiler (no extra test dependency).
 require.extensions['.ts'] = (module, filename) => {
   const { outputText } = ts.transpileModule(fs.readFileSync(filename, 'utf8'), {
     compilerOptions: { module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022 },
@@ -252,7 +251,6 @@ test('rendered badges preserve realtime handled labels and distinguish Harness o
     });
     module._compile(outputText, filename);
   };
-  // Browser URL configuration does not affect server-rendered badge labels.
   Module._load = function(name, ...args) {
     if (name === '@/lib/api') return { hwUrl: path => path };
     if (name === '@/lib/useTheme') return { useTheme: () => ['dark', () => {}, 'lm-dark'] };

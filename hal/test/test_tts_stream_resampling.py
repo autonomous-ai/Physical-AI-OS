@@ -35,7 +35,6 @@ def _collect(frames):
                                       (48000, 16000), (24000, 24000)])
 @pytest.mark.parametrize("packet_bytes", [1, 7, 4096, 100000])
 def test_pcm_matches_continuous_sample_clock_for_any_packet_boundaries(src, dst, packet_bytes):
-    # A high-frequency signal exposes seams that speech envelopes can hide.
     pcm = (np.sin(2 * np.pi * 3100 * np.arange(2401) / src) * 24000).astype(np.int16)
     raw = pcm.tobytes()
     packets = [raw[i:i + packet_bytes] for i in range(0, len(raw), packet_bytes)]

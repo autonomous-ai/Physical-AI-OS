@@ -7,12 +7,8 @@ import (
 	"strings"
 )
 
-// hermesAdapter reads/writes the Hermes home layout (~/.hermes/). Hermes reads
-// SOUL.md as its identity and has NO separate IDENTITY.md slot, so it inlines the
-// owner's identity as a card in SOUL; and it loads only MEMORY.md + USER.md by
-// name (no KNOWLEDGE/daily slots), so its write FOLDS Knowledge + Daily into the
-// single MEMORY.md. That fold is the one structural asymmetry of a round-trip
-// through Hermes (content is preserved, structure is flattened).
+// hermesAdapter reads/writes the Hermes home: identity is an inlined card in SOUL.md, and
+// Knowledge + Daily fold into MEMORY.md (no separate slots).
 type hermesAdapter struct{}
 
 func (hermesAdapter) runtime() Runtime { return RuntimeHermes }
@@ -24,22 +20,15 @@ func (hermesAdapter) read(opts Options) (*PersonaBundle, error) {
 	soul := string(rawSoul)
 
 	return &PersonaBundle{
-		Soul:     stripIdentityCard(stripHermesOSBlock(soul)), // persona body; card → Identity
+		Soul:     stripIdentityCard(stripHermesOSBlock(soul)),
 		Identity: identityCardFields(soul),
 		Memory:   parseEntries(filepath.Join(mem, "MEMORY.md")),
 		User:     parseEntries(filepath.Join(mem, "USER.md")),
-		// Knowledge / Daily: Hermes has no such slots → nil.
 	}, nil
 }
 
-// hermesOSBlockMarker delimits the OS-managed skill-priority block Hermes keeps
-// at the end of SOUL.md (soulSkillPriorityMarker in runtimes/hermes/onboarding.go —
-// kept as a literal here because this package deliberately imports no runtime).
-//
-// It carries Hermes-specific instructions, not persona, and every destination
-// runtime injects its own equivalent — so it must not ride along in the bundle.
-// It wears a Hermes-only marker, which means the destination's own strip (keyed
-// on `<!-- OS DO NOT REMOVE -->`) will not clear it for us.
+// hermesOSBlockMarker delimits the Hermes-only OS skill-priority block in SOUL.md; it is not
+// persona and destinations won't strip it. Literal copy: this package imports no runtime.
 const hermesOSBlockMarker = "<!-- OS HERMES SKILL PRIORITY -->"
 
 // stripHermesOSBlock removes that block, from its marker line to the next `---`.
@@ -72,31 +61,21 @@ func (hermesAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) erro
 	mem := filepath.Join(root, "memories")
 	soulDest := filepath.Join(root, "SOUL.md")
 
-	// Persona → SOUL.md (rebranded). Identity is NOT in the body — it is inlined
-	// separately below so the card lands even if SOUL was pre-written.
 	m.writePersona("soul", rebrandToHermes(b.Soul), soulDest)
 
-	// Identity → inlined card in SOUL (Hermes has no IDENTITY.md slot). Idempotent
-	// append, independent of the writePersona above.
 	m.inlineIdentityCard(soulDest, buildIdentityBlockFromFields(b.Identity))
 
-	// Long-term memory → MEMORY.md, FOLDING Knowledge + Daily in (no separate
-	// slots). Memory first, then Knowledge (distilled, high-signal — wins dedup +
-	// char budget), then daily logs.
+	// Order Memory, Knowledge, Daily: earlier entries win dedup and the char budget.
 	all := append(append(append([]string{}, b.Memory...), b.Knowledge...), b.Daily...)
 	m.writeMemoryEntries("memory", rebrandEntries(all, rebrandToHermes),
 		filepath.Join(mem, "MEMORY.md"), opts.MemoryCharLimit, hermesFormat)
 
-	// User profile → memories/USER.md.
 	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToHermes),
 		filepath.Join(mem, "USER.md"), opts.UserCharLimit, hermesFormat)
 	return nil
 }
 
-// buildIdentityBlockFromFields renders the owner's identity fields as a
-// "## Your identity card" block for inlining into a Hermes SOUL.md. Returns ""
-// when there are no fields (inlineIdentityCard then no-ops). The body is rebranded
-// to Hermes for brand consistency with the surrounding soul.
+// buildIdentityBlockFromFields renders fields as a rebranded identity card; "" when empty.
 func buildIdentityBlockFromFields(fields []IdentityField) string {
 	if len(fields) == 0 {
 		return ""
@@ -111,15 +90,12 @@ func buildIdentityBlockFromFields(fields []IdentityField) string {
 		body + "\n"
 }
 
-// buildIdentityBlock reads an IDENTITY.md and renders its filled fields as a
-// Hermes identity card. Thin wrapper over readIdentityFields +
-// buildIdentityBlockFromFields; retained as the unit-tested entry point.
+// buildIdentityBlock renders an IDENTITY.md file as a Hermes identity card.
 func buildIdentityBlock(identityPath string) string {
 	return buildIdentityBlockFromFields(readIdentityFields(identityPath))
 }
 
-// Brand rewriting to Hermes — case-preserving. Rebrands the names of OTHER
-// runtimes (OpenClaw and its aliases) onto Hermes when a persona/memory arrives.
+// Brand-name matchers shared by the rebrand functions.
 var (
 	reOpenClaw = regexp.MustCompile(`(?i)\bOpen[\s-]?Claw\b`)
 	reClawdBot = regexp.MustCompile(`(?i)\bClawdBot\b`)
@@ -138,9 +114,7 @@ func rebrandToHermes(text string) string {
 	return text
 }
 
-// personaPaths implements runtimeAdapter. Hermes has no workspace subdir: SOUL.md
-// sits at the home root and MEMORY.md / USER.md under memories/. The home dir
-// itself is NOT listed — it holds the Hermes installation and logs.
+// personaPaths implements runtimeAdapter; the home dir itself (installation, logs) is not listed.
 func (hermesAdapter) personaPaths(opts Options) []string {
 	root := opts.HermesRoot
 	if root == "" {
@@ -152,8 +126,7 @@ func (hermesAdapter) personaPaths(opts Options) []string {
 	}
 }
 
-// userProfilePath implements runtimeAdapter. Hermes has no workspace subdir —
-// the profile lives under memories/, alongside MEMORY.md.
+// userProfilePath implements runtimeAdapter (memories/USER.md).
 func (hermesAdapter) userProfilePath(opts Options) string {
 	if opts.HermesRoot == "" {
 		return ""
@@ -161,8 +134,7 @@ func (hermesAdapter) userProfilePath(opts Options) string {
 	return filepath.Join(opts.HermesRoot, "memories", "USER.md")
 }
 
-// memoryFilePath implements runtimeAdapter. Hermes has no workspace subdir —
-// MEMORY.md lives under memories/, alongside USER.md.
+// memoryFilePath implements runtimeAdapter (memories/MEMORY.md).
 func (hermesAdapter) memoryFilePath(opts Options) string {
 	if opts.HermesRoot == "" {
 		return ""

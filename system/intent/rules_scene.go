@@ -1,7 +1,3 @@
-// Scene rules — activation (focus/reading/relax/movie/night/energize) and
-// scene off. scene_off must run before the activation rules: an off-phrasing
-// containing a scene name ("deactivate focus mode") would otherwise match the
-// activation rule and re-enter the scene the user asked to leave.
 package intent
 
 import (
@@ -11,8 +7,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 )
 
-// Words that mean "leave the scene" — English only; the intent layer always
-// sees the translated voice-instruction text.
+// sceneOffWords mean "leave the scene" (English; input is already translated).
 var sceneOffWords = []string{
 	"turn off", "switch off", "disable", "deactivate", "exit", "stop",
 	"cancel", "quit", "kill", "out of", "end ", " off",
@@ -38,10 +33,7 @@ func hasSceneName(t string) bool {
 	return false
 }
 
-// sceneOn matches a scene-activation phrase only when the text has no
-// off-word — belt and braces on top of scene_off's ordering, so an off
-// phrasing scene_off doesn't know still falls through to the agent instead
-// of re-activating the scene the user asked to leave.
+// sceneOn matches scene activation only when no off-word is present.
 func sceneOn(keywords ...string) func(string) bool {
 	m := anyOf(keywords...)
 	return func(t string) bool {
@@ -58,14 +50,11 @@ func sceneExec(scene, reply string) func(string) *Result {
 }
 
 var sceneRules = []rule{
-	// --- Scene off (must be before scene activation rules) ---
+	// Scene off must run before scene activation.
 	{
 		name:       "scene_off",
 		capability: device.CapLight,
 		match: func(t string) bool {
-			// "Deactivate focus mode" used to slip past ("turn off"/"disable"
-			// only) and fall through to scene_focus, which happily re-ACTIVATED
-			// the scene the user asked to leave.
 			return hasSceneOffWord(t) &&
 				(strings.Contains(t, "mode") || strings.Contains(t, "scene") || hasSceneName(t))
 		},
@@ -75,7 +64,6 @@ var sceneRules = []rule{
 		},
 	},
 
-	// --- Scenes ---
 	{
 		name:       "scene_reading",
 		capability: device.CapLight,

@@ -1,20 +1,5 @@
 // Package picoclaw implements domain.AgentGateway against a PicoClaw runtime
-// reached over a persistent WebSocket. See docs/agentic/picoclaw.md for the protocol
-// mapping and the runtime boundaries with OpenClaw / Hermes.
-//
-// PicoClaw is assumed to be running locally on the Pi as a systemd service at
-// WSURL with all skills already provisioned. os-server only acts as a client:
-// it opens one persistent socket, sends user turns as `message.send`, and
-// translates the inbound frames (typing.*, message.create/update/delete, error,
-// pong) into the same domain.WSEvent shape that the OpenClaw handler at
-// server/agent/delivery/http/handler_events.go consumes — so the downstream
-// pipeline (HAL TTS, [HW:/...] markers, monitor SSE, sensing drain, Telegram
-// fan-out) stays untouched.
-//
-// Unlike OpenClaw, PicoClaw does not stream tokens and has no challenge/pairing
-// handshake: the answer to a turn arrives whole in one final frame, and there is
-// no per-frame runId on the wire. Turns are therefore correlated by a single
-// in-flight runID (PicoClaw processes one turn at a time).
+// reached over a persistent WebSocket.
 package picoclaw
 
 import (
@@ -72,17 +57,14 @@ type PicoclawService struct {
 	monitorBus *monitor.Bus
 	statusLED  *statusled.Service
 
-	// Persistent WebSocket. wsConn is set once connected and nil'd on drop.
+	// Persistent WebSocket.
 	wsMu           sync.Mutex
 	wsConn         *websocket.Conn
 	wsConnected    atomic.Bool
 	wsConnectedAt  atomic.Int64 // unix seconds when the socket last became ready
 	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
 
-	// Turn lifecycle. activeTurn flips true on SendChat (write) and false on the
-	// final / error frame (read). pendingRunID is the runID allocated by an
-	// outbound SendChat, adopted by the first inbound frame of that turn;
-	// currentRunID is the runID of the turn currently being streamed back.
+	// Turn lifecycle.
 	sendMu       sync.Mutex // Serializes admission: this protocol has no response request IDs.
 	activeTurn   atomic.Bool
 	busySince    atomic.Int64
@@ -90,8 +72,7 @@ type PicoclawService struct {
 	currentRunID atomic.Value // string
 	reqCounter   atomic.Int64
 
-	// Session state. sessionUUID is the server-assigned session_id captured from
-	// any inbound frame.
+	// Session state.
 	sessionUUID atomic.Value // string
 
 	// lastCompressAt is PicoClaw's most recent compress_at_tokens
@@ -129,9 +110,7 @@ type PicoclawService struct {
 	recentOutboundMu    sync.Mutex
 	recentOutboundTexts []recentOutbound
 
-	// Serializes read-modify-write of config.json (MCP entry writes). PicoClaw's
-	// presync hook only edits channel_list/model_list via jq, so the two owners do
-	// not collide, but concurrent connector.set writes must not interleave.
+	// Serializes read-modify-write of config.json (MCP entry writes).
 	mcpMu sync.Mutex
 
 	// ackHookEnabled mirrors OpenClaw's emotion-acknowledge hook
@@ -158,8 +137,7 @@ type poseBucketInfo struct {
 	markedAt  time.Time
 }
 
-// ProvideService constructs the PicoClaw service. Wired via system/agent/factory.go
-// when config.AgentRuntime == "picoclaw".
+// ProvideService constructs the PicoClaw service.
 func ProvideService(cfg *config.Config, bus *monitor.Bus, sled *statusled.Service) *PicoclawService {
 	s := &PicoclawService{
 		config:         cfg,
@@ -188,11 +166,10 @@ func (s *PicoclawService) IsReady() bool { return s.wsConnected.Load() }
 func (s *PicoclawService) ConnectedAt() int64 { return s.wsConnectedAt.Load() }
 
 // AgentUptime — PicoClaw does not report process uptime over the wire, so we
-// have no value independent of the local WS reconnect cycle. Returns 0 (unknown).
+// have no value independent of the local WS reconnect cycle.
 func (s *PicoclawService) AgentUptime() int64 { return 0 }
 
-// markOutboundChat / IsRecentOutboundChat mirror openclaw.PicoclawService. Used by the
-// session.message handler to skip echoes of Device-injected user messages.
+// markOutboundChat / IsRecentOutboundChat mirror openclaw.PicoclawService.
 func (s *PicoclawService) markOutboundChat(text string) {
 	if text == "" {
 		return

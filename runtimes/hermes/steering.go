@@ -56,8 +56,7 @@ func (s *HermesService) runContext() context.Context {
 	return context.Background()
 }
 
-// enqueueManagedRun never waits on HTTP or a handler, including when a handler
-// synchronously sends another request while processing a lifecycle event.
+// enqueueManagedRun never waits on HTTP or a handler, including when a handler synchronously sends another request while processing a lifecycle event.
 func (s *HermesService) enqueueManagedRun(runID string, body streamRequest, source string) {
 	s.steeringMu.Lock()
 	s.steeringQueue = append(s.steeringQueue, managedChat{runID, body, source})
@@ -98,8 +97,7 @@ func managedUserInput(message, source string) bool {
 	return text != ""
 }
 
-// Only explicit commands are controls. Natural language is not inferred to be
-// a stop, and text following a stop token is an ordinary request.
+// Only explicit commands are controls.
 var managedReplyRoute = regexp.MustCompile(`^\[harness-reply run_id=[^\s\[\]]+ channel=(?:web|voice)\]$`)
 
 func managedStop(message string) bool {
@@ -107,8 +105,6 @@ func managedStop(message string) bool {
 	lines := strings.Split(text, "\n")
 	command := strings.TrimSpace(lines[0])
 	if command == "/stop" || command == "/interrupt" {
-		// Typed slash commands retain their response route after queueing.
-		// Only this exact metadata suffix may follow the standalone command.
 		for _, line := range lines[1:] {
 			line = strings.TrimSpace(line)
 			if line != "" && !managedReplyRoute.MatchString(line) {
@@ -185,8 +181,7 @@ func managedChildText(text string) string {
 	return strings.TrimSpace(managedHWMarker.ReplaceAllString(text, ""))
 }
 
-// A final result is emitted once per device request, but only one copy carries
-// hardware markers and only the newest audible request may speak.
+// A final result is emitted once per device request, but only one copy carries hardware markers and only the newest audible request may speak.
 func (s *HermesService) finishManaged(ctx context.Context, active *managedTurn, result streamResult, err error) {
 	if active.expireReason != "" {
 		err = errors.New(active.expireReason)
@@ -205,9 +200,7 @@ func (s *HermesService) finishManaged(ctx context.Context, active *managedTurn, 
 			if request.runID != active.owner {
 				text = managedChildText(text)
 			}
-			// The shared handler speaks from assistant deltas, not chat.final.
-			// Deliver held text before lifecycle.end flushes that accumulator.
-			// A normal progressive reply contributes only its missing suffix.
+			// Speech comes from deltas: deliver held text before lifecycle.end flushes the accumulator.
 			streamed := active.streamed[request.runID]
 			if strings.HasPrefix(text, streamed) {
 				delta := strings.TrimPrefix(text, streamed)
@@ -242,8 +235,7 @@ func (s *HermesService) finishManaged(ctx context.Context, active *managedTurn, 
 }
 
 func managedPendingSuffix(requests []managedChat, pending string) int {
-	// The server coalesces accepted steering strings with one newline. Match
-	// original boundaries exactly; never reconstruct a request from model text.
+	// The server coalesces accepted steering strings with one newline.
 	for i := 1; i < len(requests); i++ {
 		texts := make([]string, 0, len(requests)-i)
 		for _, request := range requests[i:] {
@@ -295,8 +287,6 @@ func (state *managedStopContext) prepare(request managedChat) (streamRequest, bo
 		if !managedUserInput(text.String(), request.source) {
 			return body, false
 		}
-		// Copy both containers: the original request is retained unchanged for
-		// device-run correlation and verified pending-steer replay.
 		messages := append([]inputMessage(nil), input...)
 		messages[0].Content = append([]inputContent{{Type: "input_text", Text: managedStopNotice}}, input[0].Content...)
 		body.Input = messages
@@ -332,8 +322,6 @@ func (s *HermesService) managedLoop() {
 				s.releaseManaged(request)
 				continue
 			}
-			// Image-bearing requests wait for idle, then use native Runs as
-			// canonical multimodal content in the same Hermes session.
 			s.steeringMu.Lock()
 			session := s.managedSession
 			if !s.managedSessionSet {
@@ -346,15 +334,11 @@ func (s *HermesService) managedLoop() {
 			cancel()
 			if err != nil {
 				var status *managedRunHTTPError
-				// Only a reply lost AFTER the request went out is uncertain. A
-				// dial failure (connection refused while hermes-gateway restarts —
-				// lamp-0c4e 2026-09-16, presync config change restarted it exactly
-				// as the skill-update turn was sent) means the prompt was never
-				// delivered, so the conversation stays usable.
+				// Only a reply lost AFTER the request went out is uncertain.
 				var dial *net.OpError
 				if !errors.As(err, &status) && !(errors.As(err, &dial) && dial.Op == "dial") {
 					uncertainConversation = request.body.Conversation
-					s.rotateConversation() // see the stream-loss branch below
+					s.rotateConversation()
 				}
 				s.failManaged(ctx, request, fmt.Errorf("create native Hermes run: %w", err))
 				continue
@@ -379,8 +363,6 @@ func (s *HermesService) managedLoop() {
 				case <-ctx.Done():
 				}
 			}(id, request.runID, readerDone)
-			// Requests accumulated during creation must get the same steering
-			// admission as requests arriving after the first SSE frame.
 			if len(waiting) > 0 {
 				s.steeringMu.Lock()
 				s.steeringQueue = append(waiting, s.steeringQueue...)
@@ -398,8 +380,7 @@ func (s *HermesService) managedLoop() {
 				stopCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 				_ = s.controlManagedRun(stopCtx, active.id, "stop", "")
 				cancel()
-				// The reader performs bounded remote stop/status cleanup on
-				// cancellation. Join it before dropping the controller owner.
+				// Join the reader (bounded remote cleanup) before dropping the controller owner.
 				<-readerDone
 				s.finishManaged(context.Background(), active, streamResult{}, ctx.Err())
 			}
@@ -433,7 +414,6 @@ func (s *HermesService) managedLoop() {
 						continue
 					}
 					// The server may have accepted a request whose HTTP reply was lost.
-					// Surface the uncertainty and never send that prompt a second time.
 					s.failManaged(ctx, request, fmt.Errorf("Hermes %s acceptance uncertain: %w", action, err))
 					continue
 				}
@@ -471,9 +451,7 @@ func (s *HermesService) managedLoop() {
 				} else if stream == "tool" {
 					s.managedDispatch(ctx, *update.event)
 				} else if stream == "assistant" && !active.stopping && !active.steered {
-					// Keep ordinary replies progressive. A steering ack is
-					// not consumption evidence: hold subsequent output until
-					// the terminal confirms whether the new input was used.
+					// A steering ack is not consumption evidence: hold output until the terminal confirms.
 					if active.streamed == nil {
 						active.streamed = make(map[string]string)
 					}
@@ -494,15 +472,7 @@ func (s *HermesService) managedLoop() {
 				if update.err == nil {
 					update.err = errors.New("native Hermes stream ended without a terminal")
 				}
-				// Self-heal: the guard below refuses every later request on this
-				// conversation because the lost run may still be acting on the
-				// prompt, and nothing else ever rotates it — lamp-0c4e 2026-09-16:
-				// hermes-gateway restarted mid-run (presync config change), then
-				// every web/voice turn for 6+ minutes failed instantly with
-				// "start a new session before retrying" until os-server was
-				// restarted. Rotate now: requests already queued on the old
-				// conversation still fail (never re-send an uncertain prompt), new
-				// ones go to a fresh conversation the gateway has never seen.
+				// Self-heal: rotate so later turns are not refused forever after a lost run (lamp-0c4e 2026-09-16).
 				s.rotateConversation()
 			}
 			if update.result.Terminal {
@@ -513,14 +483,12 @@ func (s *HermesService) managedLoop() {
 				}
 				s.steeringMu.Unlock()
 			}
-			// An expired request must never be replayed, even if the remote
-			// terminal reports it as an unconsumed steering suffix.
+			// An expired request must never be replayed, even if the remote terminal reports it as an unconsumed steering suffix.
 			if update.pending != "" && active.expireReason == "" {
 				index := managedPendingSuffix(active.requests, update.pending)
 				if index >= 0 && update.result.Terminal {
 					waiting = append(append([]managedChat{}, active.requests[index:]...), waiting...)
 					active.requests = active.requests[:index]
-					// A replayed request still owns its pending trace and in-flight count.
 					active.owner = active.requests[0].runID
 				} else {
 					update.err = errors.New("Hermes returned uncorrelated pending_steer; not replaying uncertain input")

@@ -12,8 +12,7 @@ import (
 	"time"
 )
 
-// A lost backend terminal must not retain an interaction indefinitely. HAL
-// independently bounds its lease, including when this process disappears.
+// followupActivityTTL bounds a lost interaction; HAL also bounds its own lease.
 const followupActivityTTL = 5 * time.Minute
 
 type followupActivity struct {
@@ -40,8 +39,7 @@ type followupTracker struct {
 
 var voiceFollowup = followupTracker{runs: make(map[string]*followupRun), send: sendFollowupActivity}
 
-// Activity must not delay the user turn behind HAL's normal five-second
-// hardware timeout. A lost notification is bounded by HAL's local lease.
+// Short timeout so activity never delays the user turn; HAL's lease bounds lost notifications.
 var followupHTTPClient = &http.Client{Timeout: 250 * time.Millisecond}
 
 func sendFollowupActivity(activity followupActivity) {
@@ -62,20 +60,17 @@ func sendFollowupActivity(activity followupActivity) {
 	}
 }
 
-// StartVoiceFollowup binds an already-authorized HAL interaction to a main run.
-// Call before dispatch, only for voice input; HAL ignores unknown interactions.
+// StartVoiceFollowup binds an authorized HAL interaction to a run; call before dispatch, voice input only.
 func StartVoiceFollowup(interactionID, runID string) { voiceFollowup.start(interactionID, runID) }
 
-// EndVoiceFollowup releases processing after every accepted TTS submission has
-// returned from HAL. Playback itself remains owned and tracked inside HAL.
+// EndVoiceFollowup releases processing once all accepted TTS submissions have returned from HAL.
 func EndVoiceFollowup(runID string) { voiceFollowup.end(runID) }
 
 // BeginVoiceFollowupSpeech reserves a submission before launching its worker.
 // The returned function must run after admission, rejection, or transport error.
 func BeginVoiceFollowupSpeech(runID string) func() { return voiceFollowup.speech(runID) }
 
-// CancelVoiceFollowups mirrors the existing cancellation watermark: stale
-// completions cannot recreate an interaction after its speech was cancelled.
+// CancelVoiceFollowups cancels runs up to the watermark; stale completions cannot revive them.
 func CancelVoiceFollowups(beforeMS int64) { voiceFollowup.cancel(beforeMS) }
 
 func (t *followupTracker) pruneLocked() {
@@ -98,8 +93,7 @@ func (t *followupTracker) start(interaction, id string) {
 	}
 	now := time.Now()
 	createdMS := now.UnixMilli()
-	// Device run IDs retain their allocation time even if preprocessing
-	// overlaps a physical cancel before this dispatch registration.
+	// Run IDs keep allocation time even if a cancel overlaps preprocessing.
 	if i := strings.LastIndex(id, "-"); i >= 0 && len(id[i+1:]) == 13 {
 		if stamp, err := strconv.ParseInt(id[i+1:], 10, 64); err == nil {
 			createdMS = stamp
@@ -109,16 +103,13 @@ func (t *followupTracker) start(interaction, id string) {
 		return
 	}
 	t.runs[id] = &followupRun{interaction: interaction, started: now, createdMS: createdMS}
-	// Serialize notifications with cancellation and terminal delivery. In
-	// particular, an asynchronous start must never arrive after its end.
+	// Serialize with cancel and end: an async start must never arrive after its end.
 	t.send(followupActivity{interaction, id, "start"})
 }
 
 func (t *followupTracker) finishLocked(id string, run *followupRun) {
 	if run.ended && run.pending == 0 && !run.endSent {
-		// Admission completion is not physical playback completion. Retain
-		// this bounded owner so a later speech cancel also reaches HAL while
-		// its accepted audio is still draining.
+		// Admission is not playback: retain the owner so a later cancel reaches draining audio.
 		run.endSent = true
 		t.send(followupActivity{run.interaction, id, "end"})
 	}
@@ -171,10 +162,7 @@ func (t *followupTracker) cancel(beforeMS int64) {
 		cancelled = append(cancelled, followupActivity{run.interaction, id, "cancel"})
 	}
 	t.mu.Unlock()
-	// All preceding start/end requests finished under the lock, and deletion
-	// plus the watermark prevents any later callback from reviving these runs.
-	// Their cancellations are independent: send together so retained playback
-	// owners cost one HTTP timeout, not N timeouts before the speaker is stopped.
+	// Deletion plus the watermark prevents revival; send cancels concurrently to cost one timeout, not N.
 	var pending sync.WaitGroup
 	for _, activity := range cancelled {
 		pending.Add(1)

@@ -29,9 +29,7 @@ func TestBuildIdentityBlock_FilledFieldsOnly(t *testing.T) {
 	}
 }
 
-// A switch must carry the source runtime's soul into the target even when the
-// target already has a SOUL.md (here a factory-reset stub): copyPersona overwrites
-// (Overwrite=true), then the identity card is inlined on top.
+// A switch carries the source soul over an existing target SOUL.md, then inlines the identity card.
 func TestMigrate_OverwritesTargetSoulOnSwitch(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -46,8 +44,6 @@ func TestMigrate_OverwritesTargetSoulOnSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(ws, "IDENTITY.md"), []byte("- **Name:** Hà\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// Target already holds the factory-reset stub — the case that used to
-	// conflict-skip and lose the persona.
 	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte("# Hermes Agent Persona\n"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -76,8 +72,7 @@ func TestMigrate_OverwritesTargetSoulOnSwitch(t *testing.T) {
 	}
 }
 
-// The reverse switch (hermes→openclaw) must NOT carry the Hermes-only identity
-// card back into the OpenClaw SOUL — OpenClaw owns the name via IDENTITY.md.
+// The reverse switch must not carry the Hermes identity card into the OpenClaw SOUL.
 func TestMigrate_StripsIdentityCardOnReverseSwitch(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -85,7 +80,6 @@ func TestMigrate_StripsIdentityCardOnReverseSwitch(t *testing.T) {
 	if err := os.MkdirAll(ws, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// Hermes soul = real soul body + the inlined identity card (trailing).
 	hermesSoul := "# Soul\n\nYou are **Lamp**.\n\n" + identityCardHeading +
 		"\n\nYour owner set this — it overrides any default name or vibe above.\n\n- **Name:** Ngân\n"
 	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte(hermesSoul), 0o644); err != nil {
@@ -113,10 +107,7 @@ func TestMigrate_StripsIdentityCardOnReverseSwitch(t *testing.T) {
 	}
 }
 
-// KNOWLEDGE.md (the agent's distilled learnings) must be folded into the Hermes
-// MEMORY.md — Hermes reads only MEMORY.md/USER.md by name, so a separate file
-// would be ignored. Its section headings survive as entry prefixes, and its
-// `<!-- ... -->` template placeholders must NOT leak in as memory entries.
+// KNOWLEDGE.md folds into Hermes MEMORY.md without leaking `<!-- -->` placeholders.
 func TestMigrate_FoldsKnowledgeIntoMemory(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -160,10 +151,7 @@ func TestMigrate_FoldsKnowledgeIntoMemory(t *testing.T) {
 	}
 }
 
-// The reverse switch must RESTORE the owner's name into workspace/IDENTITY.md
-// (the file OpenClaw reads for wake words) — the name set under Hermes lives only
-// in the SOUL identity card, which is stripped from the OpenClaw SOUL. Restoring
-// into an existing template must replace the placeholder line and keep the rest.
+// The reverse switch restores the owner's name into an existing IDENTITY.md template.
 func TestMigrate_RestoresIdentityNameOnReverseSwitch(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -176,7 +164,6 @@ func TestMigrate_RestoresIdentityNameOnReverseSwitch(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(hermesRoot, "SOUL.md"), []byte(hermesSoul), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	// OpenClaw template with an unfilled Name placeholder + an unrelated slot.
 	tmpl := "# IDENTITY.md - Who Am I?\n\n- **Name:**\n  _(pick something you like)_\n- **Vibe:** calm\n"
 	if err := os.WriteFile(filepath.Join(ws, "IDENTITY.md"), []byte(tmpl), 0o644); err != nil {
 		t.Fatal(err)
@@ -205,8 +192,7 @@ func TestMigrate_RestoresIdentityNameOnReverseSwitch(t *testing.T) {
 	}
 }
 
-// When workspace/IDENTITY.md does not exist yet (first switch, before OpenClaw's
-// own onboard creates it), the reverse restore must create it with the name.
+// The reverse restore creates IDENTITY.md when absent.
 func TestMigrate_CreatesIdentityWhenAbsentOnReverseSwitch(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -236,10 +222,7 @@ func TestMigrate_CreatesIdentityWhenAbsentOnReverseSwitch(t *testing.T) {
 	}
 }
 
-// Hub round-trip: openclaw → hermes → openclaw on one device must preserve the
-// owner's name (restored to IDENTITY.md), the soul body, and memory content
-// (folded into Hermes MEMORY then carried back). Exercises the runtime-keyed
-// RunMigration entry point both ways.
+// openclaw -> hermes -> openclaw preserves name, soul body and memory.
 func TestRoundTrip_OpenclawHermesOpenclaw_PreservesContent(t *testing.T) {
 	cfgDir := t.TempDir()
 	hermesRoot := t.TempDir()
@@ -305,10 +288,7 @@ func TestBuildIdentityBlock_NoFilledFields(t *testing.T) {
 	}
 }
 
-// Hermes keeps its skill-priority block under a Hermes-only marker, so the
-// destination runtime's own strip (keyed on `<!-- OS DO NOT REMOVE -->`) cannot
-// clear it. Migrating out must drop it here, or those Hermes-specific rules ride
-// into the next runtime's SOUL.md and stay there.
+// Migrating out of Hermes drops its Hermes-only skill-priority block.
 func TestHermesRead_DropsOSManagedSkillBlock(t *testing.T) {
 	root := t.TempDir()
 	soul := "<!-- OS DO NOT REMOVE -->\n# Lamp persona\n---\n\n" +

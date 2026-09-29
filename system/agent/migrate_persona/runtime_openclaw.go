@@ -8,17 +8,15 @@ import (
 	"strings"
 )
 
-// openclawAdapter reads/writes the OpenClaw workspace layout. OpenClaw keeps the
-// owner's name in its own IDENTITY.md (not SOUL), and has dedicated KNOWLEDGE.md
-// + daily memory/*.md slots, so its read surfaces those as distinct bundle fields
-// and its write restores them to their own files.
+// openclawAdapter reads/writes the OpenClaw workspace, with separate IDENTITY.md, KNOWLEDGE.md
+// and daily memory/*.md slots.
 type openclawAdapter struct{}
 
 func (openclawAdapter) runtime() Runtime { return RuntimeOpenclaw }
 
 func (openclawAdapter) read(opts Options) (*PersonaBundle, error) {
 	ws := opts.OpenclawWorkspace
-	soul, _ := os.ReadFile(filepath.Join(ws, "SOUL.md")) // missing → "" → writer skips
+	soul, _ := os.ReadFile(filepath.Join(ws, "SOUL.md"))
 
 	b := &PersonaBundle{
 		Soul:      string(soul),
@@ -38,36 +36,26 @@ func (openclawAdapter) read(opts Options) (*PersonaBundle, error) {
 func (openclawAdapter) write(m *baseMigrator, b *PersonaBundle, opts Options) error {
 	ws := opts.OpenclawWorkspace
 
-	// Persona → SOUL.md. Strip any identity card (OpenClaw owns the name via
-	// IDENTITY.md, not SOUL) and rebrand to OpenClaw.
 	m.writePersona("soul", rebrandToOpenclaw(stripIdentityCard(b.Soul)), filepath.Join(ws, "SOUL.md"))
 
-	// Identity → IDENTITY.md (restore into the native slot; the inverse of a
-	// runtime that inlined it into SOUL).
 	m.writeIdentityFields("identity", b.Identity, filepath.Join(ws, "IDENTITY.md"), rebrandToOpenclaw)
 
-	// Long-term memory → MEMORY.md. Daily entries fold in here: OpenClaw's daily
-	// files are date-stamped and cannot be faithfully reconstructed from entries,
-	// so they land in MEMORY rather than being dropped.
+	// Daily entries fold into MEMORY.md; date-stamped daily files cannot be rebuilt from entries.
 	mem := append(append([]string{}, b.Memory...), b.Daily...)
 	m.writeMemoryEntries("memory", rebrandEntries(mem, rebrandToOpenclaw),
 		filepath.Join(ws, "MEMORY.md"), opts.MemoryCharLimit, openclawFormat)
 
-	// Distilled learnings → KNOWLEDGE.md (OpenClaw has the slot). Only when the
-	// source carried it; a source without the slot (Hermes) leaves this untouched.
 	if len(b.Knowledge) > 0 {
 		m.writeMemoryEntries("knowledge", rebrandEntries(b.Knowledge, rebrandToOpenclaw),
 			filepath.Join(ws, "KNOWLEDGE.md"), opts.MemoryCharLimit, openclawFormat)
 	}
 
-	// User profile → USER.md.
 	m.writeUserProfile("user-profile", rebrandEntries(b.User, rebrandToOpenclaw),
 		filepath.Join(ws, "USER.md"), opts.UserCharLimit, openclawFormat)
 	return nil
 }
 
-// dailyMemoryFiles lists workspace/memory/*.md in sorted order so the merge is
-// deterministic across runs.
+// dailyMemoryFiles lists workspace/memory/*.md sorted, for a deterministic merge.
 func dailyMemoryFiles(dir string) []string {
 	ents, err := os.ReadDir(dir)
 	if err != nil {
@@ -84,8 +72,7 @@ func dailyMemoryFiles(dir string) []string {
 	return files
 }
 
-// Brand rewriting to OpenClaw — case-preserving. Rebrands the names of OTHER
-// runtimes (Hermes today) onto OpenClaw when a persona/memory arrives from them.
+// reHermes matches Hermes, for rebranding onto OpenClaw.
 var reHermes = regexp.MustCompile(`(?i)\bHermes\b`)
 
 func rebrandToOpenclaw(text string) string {
@@ -98,12 +85,12 @@ func rebrandToOpenclaw(text string) string {
 	return text
 }
 
-// personaPaths implements runtimeAdapter — OpenClaw's standard workspace layout.
+// personaPaths implements runtimeAdapter.
 func (openclawAdapter) personaPaths(opts Options) []string {
 	return openclawLayoutPersonaPaths(opts.OpenclawWorkspace)
 }
 
-// userProfilePath implements runtimeAdapter — USER.md at the workspace root.
+// userProfilePath implements runtimeAdapter.
 func (openclawAdapter) userProfilePath(opts Options) string {
 	if opts.OpenclawWorkspace == "" {
 		return ""
@@ -111,7 +98,7 @@ func (openclawAdapter) userProfilePath(opts Options) string {
 	return filepath.Join(opts.OpenclawWorkspace, "USER.md")
 }
 
-// memoryFilePath implements runtimeAdapter — MEMORY.md at the workspace root.
+// memoryFilePath implements runtimeAdapter.
 func (openclawAdapter) memoryFilePath(opts Options) string {
 	if opts.OpenclawWorkspace == "" {
 		return ""

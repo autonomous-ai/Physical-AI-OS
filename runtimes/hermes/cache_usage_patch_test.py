@@ -8,7 +8,6 @@ import unittest
 from cache_usage_patch import LEGACY_USAGE, UnsupportedSource, patch_file, patched_source
 
 
-# Mirrors the installed api_server.py usage shapes without importing Hermes deps.
 LEGACY = '''# Unrelated Unicode: tiếng Việt
 _USAGE_TOKEN_KEYS = ("input_tokens", "output_tokens", "total_tokens")
 def _responses_usage_payload(usage):

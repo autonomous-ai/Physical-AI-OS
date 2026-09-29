@@ -19,15 +19,13 @@ import (
 // message plus two rejects (group chat, non-allowlisted sender); the loop must
 // inject exactly one turn, mark the run trackers, upsert the accepted chat
 // into the targets store, and persist the advanced offset — all under temp
-// paths (no /root, no real Bot API, no WebSocket). Mirrors the codex test.
+// paths (no /root, no real Bot API, no WebSocket).
 func TestTelegramPollLoop(t *testing.T) {
 	dir := t.TempDir()
 
 	var calls atomic.Int64
 	var firstOffset atomic.Value // string
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// The typing keeper fires sendChatAction while the (stubbed) turn is
-		// pending — acknowledge and ignore.
 		if r.URL.Path == "/botTESTTOKEN/sendChatAction" {
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -40,8 +38,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		w.Header().Set("Content-Type", "application/json")
 		if n == 1 {
 			firstOffset.Store(r.URL.Query().Get("offset"))
-			// One accepted private message + one group reject + one
-			// non-allowlisted-sender reject.
 			_, _ = w.Write([]byte(`{"ok":true,"result":[
 				{"update_id":100,"message":{"text":"hello lamp","chat":{"id":777,"type":"private"},"from":{"id":777}}},
 				{"update_id":101,"message":{"text":"group spam","chat":{"id":-500,"type":"group"},"from":{"id":777}}},
@@ -63,8 +59,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		telegramOffsetPath:  filepath.Join(dir, "telegram_offset.json"),
 		telegramTargetsPath: filepath.Join(dir, "telegram_targets.json"),
 	}
-	// Stub only the final send step: busy-wait, run marking and silent marking
-	// stay real (they are what this test asserts).
 	s.telegramSendTurn = func(text, reqID, runID string) error {
 		injected <- sent{text: text, reqID: reqID, runID: runID}
 		return nil
@@ -87,8 +81,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		t.Errorf("injected text = %q, want %q", got.text, "[telegram] Message from unknown [id:777]:\nhello lamp")
 	}
 
-	// The offset is persisted after the batch, before the second poll — once
-	// call 2 has happened the state file is guaranteed on disk.
 	deadline := time.Now().Add(5 * time.Second)
 	for calls.Load() < 2 && time.Now().Before(deadline) {
 		time.Sleep(10 * time.Millisecond)
@@ -99,7 +91,6 @@ func TestTelegramPollLoop(t *testing.T) {
 	cancel()
 	<-done
 
-	// Exactly one turn injected: both rejects skipped.
 	select {
 	case extra := <-injected:
 		t.Errorf("unexpected extra injection: %+v", extra)
@@ -110,7 +101,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		t.Errorf("first poll offset = %q, want %q (no prior state file)", off, "0")
 	}
 
-	// Offset persisted: next offset = last update_id + 1.
 	data, err := os.ReadFile(s.telegramOffsetPath)
 	if err != nil {
 		t.Fatalf("read offset file: %v", err)
@@ -123,7 +113,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		t.Errorf("persisted offset = %d, want 103", st.Offset)
 	}
 
-	// Accepted chat upserted into the targets store; rejected chats absent.
 	targets, err := s.GetTelegramTargets()
 	if err != nil {
 		t.Fatalf("GetTelegramTargets: %v", err)
@@ -132,7 +121,6 @@ func TestTelegramPollLoop(t *testing.T) {
 		t.Errorf("targets = %+v, want exactly chat 777 (private)", targets)
 	}
 
-	// Run tracked for reply routing and marked silent (no TTS).
 	if chatID := s.consumeTelegramRun(got.runID); chatID != "777" {
 		t.Errorf("consumeTelegramRun(%q) = %q, want %q", got.runID, chatID, "777")
 	}

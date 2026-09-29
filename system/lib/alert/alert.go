@@ -1,24 +1,5 @@
-// Package alert delivers maintainer/ops alerts about DEVICE ACTIONS to
-// bff-campaign-service, which owns the Telegram bot token + destination chat.
-//
-// Data scope — this is important and load-bearing: these alerts report ONLY
-// device actions and state changes (runtime switches, channel/connector setup
-// outcomes, OAuth-refresh health, install/reset events, default-model swaps)
-// plus device identity (label, MAC, SSID, IP, component versions). They NEVER
-// carry end-customer content — no chat messages, no personal data. Purpose:
-// product improvement and troubleshooting only.
-//
-// This is the autonomous-repo replacement for openclaw-lobster's lib/sendip,
-// which POSTed straight to api.telegram.org with a hardcoded bot token. Because
-// the autonomous repo is public, the token cannot live here; delivery is proxied
-// through bff-campaign-service:
-//
-//	POST {config.LLMBaseURL}/alert   (LLMBaseURL already ends in /v1, so this is
-//	                                  /api/v1/ai/v1/alert — no stripping)
-//	Authorization: Bearer <config.LLMAPIKey>   (the device's lobster API key)
-//
-// Best-effort by design: every failure is logged, never propagated, so an alert
-// path can never break the device action it is reporting on.
+// Package alert sends best-effort ops alerts about device actions via the backend's /alert relay.
+// Alerts carry only device actions and identity, never end-customer content.
 package alert
 
 import (
@@ -39,8 +20,7 @@ import (
 )
 
 const (
-	// maxMessageLen keeps the composed text under Telegram's 4096-char hard cap
-	// with headroom (bff sends it verbatim via sendMessage).
+	// maxMessageLen stays under Telegram's 4096-char cap with headroom.
 	maxMessageLen = 3500
 	// halVersionPath is where the HAL runtime records its version on disk.
 	halVersionPath = "/opt/hal/VERSION_HAL"
@@ -49,8 +29,7 @@ const (
 // httpClient is shared; alerts are infrequent and best-effort.
 var httpClient = &http.Client{Timeout: 10 * time.Second}
 
-// payload is the POST body to bff-campaign-service. `message` is the fully
-// composed text (title + device-info preamble + detail) — bff is a dumb relay.
+// payload is the POST body to the alert relay; Message is the fully composed text.
 type payload struct {
 	DeviceID string `json:"device_id"`
 	Type     string `json:"type"`
@@ -58,9 +37,7 @@ type payload struct {
 	TS       int64  `json:"ts"`
 }
 
-// Notify posts an ops alert about a device action to bff-campaign-service.
-// No-op (logged) when alerts are disabled or LLMBaseURL/LLMAPIKey are unset;
-// all transport/HTTP errors are logged, never returned.
+// Notify posts an ops alert; errors and missing config are logged, never returned.
 func Notify(ctx context.Context, cfg *config.Config, text string) {
 	if cfg == nil || cfg.AlertsDisabled {
 		return
@@ -108,10 +85,7 @@ func Notify(ctx context.Context, cfg *config.Config, text string) {
 	slog.Info("alert sent", "component", "alert", "chars", len(text))
 }
 
-// Compose builds the standard alert body: a title line, the device-info
-// preamble, and an optional detail block. Callers pass an emoji-prefixed title
-// (e.g. "🟢 Runtime setup hermes.setup — SUCCESS") and, on failure, the error
-// text as detail.
+// Compose builds the alert body: title line, device-info preamble and optional detail.
 func Compose(cfg *config.Config, title, detail string) string {
 	var b strings.Builder
 	b.WriteString(title)
@@ -124,25 +98,12 @@ func Compose(cfg *config.Config, title, detail string) string {
 	return b.String()
 }
 
-// Notifyf composes a titled alert and sends it. Convenience for the common
-// title+detail shape.
+// Notifyf composes a titled alert and sends it.
 func Notifyf(ctx context.Context, cfg *config.Config, title, detail string) {
 	Notify(ctx, cfg, Compose(cfg, title, detail))
 }
 
-// DeviceInfo builds the identity preamble (device metadata only — no customer
-// data), formatted for readability like openclaw-lobster's sendip:
-//
-//	[<label>] <board model> <mac>
-//	SSID: <ssid>, IP: <ip>
-//	Versions: os=<osVer> runtime=<name>@<ver> hal=<halVer>
-//	DeviceID: <backend device id>
-//	ActiveAgent: <runtime>
-//	FA: <fa mqtt channel>
-//
-// The human-readable hardware label (e.g. "intern-v2-7f72") leads, followed by
-// the board model (Raspberry Pi / OrangePi …); the long backend device id goes
-// on its own DeviceID line.
+// DeviceInfo builds the device identity preamble (metadata only, no customer data).
 func DeviceInfo(cfg *config.Config) string {
 	label := hardwareLabel()
 	runtime, deviceID, faChannel, netSSID := "", "", "", ""
@@ -159,9 +120,7 @@ func DeviceInfo(cfg *config.Config) string {
 		label = "unknown"
 	}
 
-	// SSID: prefer the configured network name (a required, always-set field on a
-	// provisioned device); fall back to the live interface SSID. iwgetid is often
-	// absent on OrangePi boards, which is why the live probe returns nothing.
+	// Prefer the configured SSID; iwgetid is often absent on OrangePi boards.
 	ssidVal := netSSID
 	if ssidVal == "" {
 		ssidVal = ssid()
@@ -188,8 +147,7 @@ func DeviceInfo(cfg *config.Config) string {
 	return b.String()
 }
 
-// boardModel reads the board model string from the device tree (e.g. "Raspberry
-// Pi 5 Model B", "OrangePi 4 LTS"). Empty on boards without it / non-Linux.
+// boardModel reads the device-tree board model, or "" when unavailable.
 func boardModel() string {
 	b, err := os.ReadFile("/proc/device-tree/model")
 	if err != nil {
@@ -205,9 +163,7 @@ func orNone(s string) string {
 	return s
 }
 
-// hardwareLabel mirrors device.GetDeviceMac's <device_type>-XXXX form without
-// importing the heavy device service package (keeps this a leaf lib). Empty when
-// not on a provisioned Pi.
+// hardwareLabel mirrors device.GetDeviceMac's <device_type>-XXXX form; "" when unprovisioned.
 func hardwareLabel() string {
 	serial := readSerial()
 	if serial == "" {

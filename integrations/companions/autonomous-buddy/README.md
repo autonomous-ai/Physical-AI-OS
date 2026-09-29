@@ -11,6 +11,39 @@ Native companion apps that let an Autonomous device control your computer via vo
 
 ---
 
+## Docs
+
+All docs live in [`docs/`](docs/), Vietnamese in [`docs/vi/`](docs/vi/).
+
+**Design & plan**
+
+- [Design doc](docs/autonomous-buddy.md) · [VI](docs/vi/autonomous-buddy_vi.md) — architecture, protocol and command formats.
+- [MVP plan](docs/autonomous-buddy-mvp.md) · [VI](docs/vi/autonomous-buddy-mvp_vi.md)
+- [Unified native bridge](docs/native-bridge.md) · [VI](docs/vi/native-bridge_vi.md) — one app: Electron manager plus bundled Swift executable.
+- [Orca source review and workflow gaps](docs/orca-gap-review.md) · [VI](docs/vi/orca-gap-review_vi.md)
+
+**Computer use & voice**
+
+- [Computer use](docs/computer-use.md) · [VI](docs/vi/computer-use_vi.md) — device-driven desktop workflows.
+- [Voice routing to desktop agents](docs/voice-agent-routing.md) · [VI](docs/vi/voice-agent-routing_vi.md)
+
+**Agent workspace**
+
+- [Desktop agent manager](docs/agent-manager.md) · [VI](docs/vi/agent-manager_vi.md)
+- [Agent workspace UI](docs/workspace-ui.md) · [VI](docs/vi/workspace-ui_vi.md)
+- [Interactive agent sessions](docs/interactive-sessions.md) · [VI](docs/vi/interactive-sessions_vi.md)
+- [Agent execution mode](docs/agent-execution.md) · [VI](docs/vi/agent-execution_vi.md)
+- [Git review sidebar](docs/git-review.md) · [VI](docs/vi/git-review_vi.md)
+- [Provider usage](docs/provider-usage.md) · [VI](docs/vi/provider-usage_vi.md) — Claude and Codex subscription usage in the footer.
+- [Desktop settings](docs/settings.md) · [VI](docs/vi/settings_vi.md)
+
+**Release**
+
+- [App updates](docs/app-updates.md) · [VI](docs/vi/app-updates_vi.md)
+- [Release signing & notarization](docs/release-signing.md) · [VI](docs/vi/release-signing_vi.md)
+
+---
+
 ## Platforms
 
 | Platform | Status | Folder |

@@ -80,7 +80,6 @@ class HarnessGestures:
         elif event.kind == "swipe":
             self.cancel_capture()
             self._focus(event.direction)
-        # No listening cue, triple tap, shutdown, reset, or sleep in this mode.
 
     def _tap(self):
         from hal.drivers.button_actions import _cancel_agent_speech, play_ack_chime

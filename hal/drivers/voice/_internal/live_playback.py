@@ -13,7 +13,6 @@ from hal.drivers.voice._internal import config
 
 
 def _enabled():
-    # Profiles choose the canceller; no device-name checks or extra feature flag.
     return config.LIVE_MODE and not config.AEC_ENABLED
 
 
@@ -144,7 +143,6 @@ def snapshot():
 def playback(chunk, rate):
     """Meter PCM and apply continuous 15 ms down / 80 ms up gain ramps.
 
-    Bytes contain mono int16 PCM; arrays preserve dtype and channel layout.
     The caller must send the returned PCM to both the speaker and AEC.
     """
     global _level, _written, _gain, _target, _ramp_remaining, _ramp_step, _last_log
@@ -154,7 +152,6 @@ def playback(chunk, rate):
     data = np.frombuffer(chunk, dtype=np.int16) if is_bytes else np.asarray(chunk)
     if not data.size or rate <= 0:
         return chunk
-    # Convert before squaring to avoid int16 overflow at loud playback levels.
     values = data.astype(np.float32)
     scale = 32768.0 if data.dtype == np.int16 else 1.0
     with _lock:

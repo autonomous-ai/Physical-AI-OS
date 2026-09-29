@@ -1,13 +1,4 @@
-"""Reachy music groove repeats until music_stop (hal/drivers/motors/reachy_service.py).
-
-The Pollen SDK's play_move() runs a recorded move exactly once, so without the
-repeat in _play_recording the robot danced a few seconds and then sat still for
-the rest of the track — where the feetech backend loops the groove
-(animation_service._continue_playback).
-
-The reachy_mini SDK is not installed on dev machines, so it is stubbed here;
-numpy/scipy come from hal's venv (imported at module level by the driver).
-"""
+"""Reachy music groove repeats until music_stop (hal/drivers/motors/reachy_service.py)."""
 import os
 import sys
 import threading
@@ -23,7 +14,7 @@ def _install_sdk_stub():
     if "reachy_mini" in sys.modules:
         return
     pkg = types.ModuleType("reachy_mini")
-    pkg.ReachyMini = object          # replaced per-test by a fake instance
+    pkg.ReachyMini = object
     utils = types.ModuleType("reachy_mini.utils")
     utils.create_head_pose = lambda **kwargs: None
     motion = types.ModuleType("reachy_mini.motion")
@@ -108,10 +99,7 @@ class FakeMini:
 
 
 class FakeMoves:
-    """RecordedMoves stand-in — a move IS its HF name, so calls are inspectable.
-
-    Unknown names raise like the real library does (it has `dance1`, not `dance`).
-    """
+    """RecordedMoves stand-in — a move IS its HF name, so calls are inspectable."""
 
     _KNOWN = ("dance1", "dance2", "dance3", "curious1", "cheerful1", "thoughtful1",
               "sad1", "welcoming1", "amazed1")
@@ -142,7 +130,7 @@ class TestReachyPlaybackLoop(unittest.TestCase):
         self.svc = ReachyMotionService()
         self.mini = FakeMini()
         self.svc._mini = self.mini
-        self.svc._moves = [FakeMoves()]   # skip the lazy HF loader
+        self.svc._moves = [FakeMoves()]
 
     def tearDown(self):
         self.svc._music_playing = False
@@ -178,12 +166,11 @@ class TestReachyPlaybackLoop(unittest.TestCase):
 
     def test_emotion_during_music_returns_to_groove(self):
         """Mirrors feetech: a finished one-shot hands the servo back to music."""
-        self.svc.dispatch(P.SERVO_CMD_MUSIC_START, P.SERVO_MUSIC_JAZZ)   # dance2
+        self.svc.dispatch(P.SERVO_CMD_MUSIC_START, P.SERVO_MUSIC_JAZZ)
         self.assertTrue(_wait_until(lambda: self.mini.play_count("dance2") >= 1))
 
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_CURIOUS)
         self.assertTrue(_wait_until(lambda: self.mini.play_count("curious1") >= 1))
-        # The emotion play thread keeps grooving once its one-shot is done.
         played_after = self.mini.play_count("dance2")
         self.assertTrue(
             _wait_until(lambda: self.mini.play_count("dance2") > played_after),
@@ -191,15 +178,11 @@ class TestReachyPlaybackLoop(unittest.TestCase):
         )
 
     def test_unknown_recording_during_music_keeps_the_groove(self):
-        """The agent sends names the HF library lacks (`dance`, not `dance1`).
-
-        That must not end the dance for the rest of the track — it did, which
-        is how the robot went still mid-song on the first live run.
-        """
+        """Unknown recording names during music keep the groove going."""
         self.svc.dispatch(P.SERVO_CMD_MUSIC_START, P.SERVO_MUSIC_GROOVE)
         self.assertTrue(_wait_until(lambda: self.mini.play_count("dance1") >= 1))
 
-        self.svc.dispatch(P.SERVO_CMD_PLAY, "dance")   # not in the HF library
+        self.svc.dispatch(P.SERVO_CMD_PLAY, "dance")
         played_after = self.mini.play_count("dance1")
         self.assertTrue(
             _wait_until(lambda: self.mini.play_count("dance1") > played_after),
@@ -426,8 +409,7 @@ class TestFreezeAndHold(unittest.TestCase):
         )
 
     def test_emotion_still_plays_during_a_hold(self):
-        """The emotion route decides what a hold blocks — the driver must not
-        drop what the route let through."""
+        """The driver does not drop what the emotion route let through."""
         self.svc.hold()
         self.svc.dispatch(P.SERVO_CMD_PLAY, P.SERVO_GREETING)
         self.assertTrue(
@@ -439,7 +421,7 @@ class TestFreezeAndHold(unittest.TestCase):
         self.svc.hold(explicit=True)
         self.assertTrue(self.svc._hold_mode)
         self.assertTrue(self.svc._hold_explicit)
-        self.assertTrue(self.svc.is_suppressed)      # /servo/play refuses
+        self.assertTrue(self.svc.is_suppressed)
 
         self.svc.resume()
         self.assertFalse(self.svc._hold_mode)
@@ -474,8 +456,8 @@ class TestAvailableRecordings(unittest.TestCase):
 
     def test_mapped_moves_are_listed_under_their_hal_name(self):
         listed = self.svc.get_available_recordings()
-        self.assertIn(P.SERVO_MUSIC_GROOVE, listed)       # not 'dance1'
-        self.assertIn(P.SERVO_THINKING_DEEP, listed)      # not 'thoughtful1'
+        self.assertIn(P.SERVO_MUSIC_GROOVE, listed)
+        self.assertIn(P.SERVO_THINKING_DEEP, listed)
         self.assertNotIn("dance1", listed)
         self.assertNotIn("thoughtful1", listed)
 

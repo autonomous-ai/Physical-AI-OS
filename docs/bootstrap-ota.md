@@ -92,23 +92,23 @@ never taken from the feed. Its decoded payload has this shape:
   "os-server": {
     "version": "1.2.3",
     "min_version": "1.2.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3/os-server-1.2.3.zip",
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/os-server/1.2.3.zip",
     "sha256": "<64 lowercase hex characters>"
   },
   "bootstrap": {
     "version": "1.0.5",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/bootstrap/1.0.5/bootstrap-1.0.5.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/bootstrap/1.0.5.zip"
   },
   "web": {
     "version": "0.9.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0/setup-0.9.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/web/0.9.0.zip"
   },
   "openclaw": {
     "version": "2026.6.10"
   },
   "hal": {
     "version": "1.0.0",
-    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/hal/1.0.0/hal-1.0.0.zip"
+    "url": "https://storage.googleapis.com/{BUCKET}/{PREFIX}/ota/hal/1.0.0.zip"
   }
 }
 ```
@@ -131,7 +131,7 @@ Override the path or ID when needed:
 make ota-keygen OTA_SIGNING_KEY_DIR=/secure/ota-keys OTA_SIGNING_KEY_ID=prod-2026-08
 ```
 
-**Domain types** — `domain/ota.go`:
+**Domain types** — `system/domain/ota.go`:
 
 ```go
 const (
@@ -214,57 +214,38 @@ curl -fsSL https://cdn.autonomous.ai/os/install.sh | sudo bash
 | 3 | Setup nginx | Download web bundle, configure reverse proxy + captive portal |
 | 4 | Setup WiFi AP | Configure hostapd, dnsmasq, start AP mode for provisioning |
 
-### Stage 2b: Install HAL Runtime (NEW)
+### Stage 2b: Install HAL Runtime (`stage_hal`)
 
 This stage installs the HAL Python runtime that provides hardware drivers for servos, LEDs, and audio.
 
 ```bash
-stage_install_hal() {
-    echo "=== Stage 2b: Install HAL Runtime ==="
+stage_hal() {
+    HAL_DIR="/opt/hal"
+    mkdir -p "$HAL_DIR"
 
-    # 1. Install Python dependencies
-    apt-get install -y python3 python3-pip python3-venv
+    # 1. Download the zip named by metadata .hal.url (checked against .hal.sha256)
+    curl -fsSL -o /tmp/hal.zip "$HAL_URL"
+    unzip -o -q /tmp/hal.zip -d "$HAL_DIR"
 
-    # 2. Create install directory
-    mkdir -p /opt/hal
+    # 2. Audio libs, PulseAudio AEC + anonymous socket, udev rule keeping PulseAudio off the speaker codec
 
-    # 3. Download from OTA metadata
-    HAL_URL=$(echo "$OTA_JSON" | jq -r '.hal.url')
-    HAL_VERSION=$(echo "$OTA_JSON" | jq -r '.hal.version')
+    # 3. Recreate the venv with uv (downloads a standalone Python 3.12)
+    rm -rf "$HAL_DIR/.venv"
+    cd "$HAL_DIR" && uv sync --python 3.12 --extra hardware --extra aec --extra pipecat
 
-    curl -fsSL "$HAL_URL" -o /tmp/hal.zip
-    unzip -o /tmp/hal.zip -d /opt/hal/
-    rm /tmp/hal.zip
+    # 4. Seed $HAL_DIR/.env (HAL_MODE=production, DEVICE_TYPE, DEVICES_DIR) if absent
 
-    # 4. Install Python dependencies in venv
-    python3 -m venv /opt/hal/venv
-    /opt/hal/venv/bin/pip install -r /opt/hal/requirements.txt
-
-    # 5. Create systemd service
-    cat > /etc/systemd/system/hal.service << 'UNIT'
-[Unit]
-Description=HAL Python Runtime — Hardware Drivers
-After=network.target
-
+    # 5. systemd unit
+    cat >/etc/systemd/system/hal.service <<EOF
 [Service]
-Type=simple
-User=root
-WorkingDirectory=/opt/hal
-ExecStart=/opt/hal/venv/bin/python -m hal.server
+WorkingDirectory=$HAL_DIR
+EnvironmentFile=$HAL_DIR/.env
+Environment="PYTHONPATH=/opt"
+ExecStart=$HAL_DIR/.venv/bin/uvicorn hal.server:app --host 127.0.0.1 --port 5001 --timeout-graceful-shutdown 5
 Restart=always
-RestartSec=5
-StandardOutput=journal
-StandardError=journal
-
-[Install]
-WantedBy=multi-user.target
-UNIT
-
-    systemctl daemon-reload
-    systemctl enable hal.service
-    systemctl start hal.service
-
-    echo "HAL $HAL_VERSION installed at /opt/hal/"
+...
+EOF
+    systemctl daemon-reload && systemctl enable hal && systemctl restart hal
 }
 ```
 
@@ -568,7 +549,7 @@ directory before renaming it into place. If an older state file is malformed
 `state.json.corrupt-<timestamp>`, logs a warning, and resumes with empty state
 instead of failing to start OTA polling.
 
-### Core Loop (`bootstrap/bootstrap.go`)
+### Core Loop (`system/bootstrap/bootstrap.go`)
 
 ```
 checkLoop():
@@ -578,10 +559,12 @@ checkLoop():
 
 checkOnce():
   1. Fetch OTA metadata JSON
-  2. For each key [os-server, bootstrap, web, hal]:
+  2. For each key [os-server, bootstrap, web, hal, buddy, openclaw, codex,
+     claudecode, opencode, picoclaw, hermes]:
      → reconcile(key, metadata[key])
-  NOTE: OpenClaw OTA is temporarily disabled (reconcileOpenClawFromNpm commented out)
-  3. Save state
+     (hermes only when its entry carries `commit` — hermesPinned)
+  3. reconcileDevice() for the nested devices.<device_type> entry
+  4. Save state (only when something changed)
 
 reconcile(key, target):
   1. Detect current installed version
@@ -703,7 +686,7 @@ the MQTT `data` kind `system.ota_versions` (both via `system/ota`; the cloud's
 | `web` | Read file `/usr/share/nginx/html/setup/VERSION` |
 | `device` | Read `/opt/devices/<device_type>/VERSION` |
 | `openclaw` | Run `openclaw --version`, extract semver with regex |
-| `hal` | Run `/opt/hal/venv/bin/python -m hal --version` OR read `/opt/hal/VERSION` file |
+| `hal` | Read file `/opt/hal/VERSION_HAL` |
 | `codex` / `claudecode` / `opencode` | Run `<cli> --version`, extract semver from line one (`cliSemver`) |
 | `picoclaw` | Read `/usr/local/lib/os-runtimes/picoclaw/installed-version` — its `version` output carries no semver |
 | `hermes` | Run `hermes --version` ("Hermes Agent v0.21.1 (2026.9.7)"), extract semver from line one (`cliSemver`) |
@@ -716,7 +699,7 @@ the MQTT `data` kind `system.ota_versions` (both via `system/ota`; the cloud's
 | `bootstrap` | Spawn detached `software-update bootstrap` (self-update, survives restart) |
 | `web` | Run `software-update web` |
 | `device` | Run `software-update device` for `devices.<device_type>`; apply any explicitly selected hardware override, then install rootfs including generated HAL `.env` |
-| `openclaw` | ~~Run `npm install -g openclaw@{version}` → `systemctl restart openclaw`~~ (temporarily disabled) |
+| `openclaw` | Run `software-update openclaw` (npm install of the metadata version → restart `openclaw`); only where the `openclaw` binary is on PATH |
 | `hal` | Run `software-update hal` → `systemctl restart hal` |
 | `codex` / `claudecode` / `opencode` / `picoclaw` | Run `software-update <key>` — only on the device whose `agent_runtime` IS that runtime |
 | `hermes` | Run `software-update hermes` — only when `agent_runtime` is hermes, the metadata entry carries `commit`, AND the on-device updater is the pinning one (`updaterSupportsHermesPin`: it reads `.hermes.commit`). An unpinned entry (no `commit`) is skipped by both the loop and `/versions`, so the web button never appears for it — `hermes update` would land on upstream HEAD and the floor could never be met. |
@@ -969,21 +952,30 @@ at a stable path, it does get a `.previous` backup: `software-update rollback
 opencode` works, unlike claudecode. Publish with `make upload-opencode
 <bare-semver>`, release with `make promote-opencode`.
 
-### Hermes Case (SSH-only — NOT pinnable, so never auto-applied)
+### Hermes Case (auto-applied only when the entry is commit-pinned)
 
 Hermes is a git install; `runtimes/hermes/install.sh` stamps
 `/usr/local/lib/hermes-agent/.install_method=git` precisely so the upstream
 updater recognizes it. That updater takes **no target version** — `hermes update`
-always moves to upstream HEAD. The published `hermes.version` therefore decides
-*when* the fleet updates (via `min_version`), not *which* build it gets.
+always moves to upstream HEAD — so the branch has the two modes described above:
+a **pinned** entry (`hermes.commit`) drives the upstream installer at that commit,
+an **unpinned** one falls back to `hermes update`. Bootstrap only auto-applies a
+pinned entry (`hermesPinned` + `updaterSupportsHermesPin` in
+`system/bootstrap/bootstrap.go`); an unpinned entry is skipped by the loop and
+`/versions`, and can only be applied by running `software-update hermes` over SSH.
 
 ```bash
 "hermes")
-    hermes update                       # no version arg exists upstream
-    hermes --version                    # abort if not runnable
-    # Landed version != metadata version → WARN, not fail: nothing on the
-    # device could have pinned it.
-    systemctl restart hermes-gateway    # unit is hermes-gateway.service, not hermes.service
+    HERMES_COMMIT=$(jq -r '.hermes.commit // empty' metadata)
+    if [ -n "$HERMES_COMMIT" ]; then
+        update_hermes_pinned "$HERMES_COMMIT"   # installer stages at the commit, --force-commit
+    else
+        hermes update                          # unpinned: upstream HEAD
+    fi
+    hermes --version                           # abort if not runnable
+    # Landed version != metadata version → pinned: FAIL (bad metadata pair);
+    # unpinned: WARN only.
+    systemctl restart hermes-gateway           # only if the unit exists; then os-server
     ;;
 ```
 
@@ -1042,10 +1034,10 @@ HAL runtime code is **copied** from the upstream open-source project into this m
 
 **Implementation steps:**
 1. Clone `humancomputerlab/lelamp_runtime` to a temp directory
-2. Copy driver code (`services/motors.py`, `services/rgb.py`, `services/audio.py`, `services/service_base.py`) into `hal/services/`
+2. Copy driver code (`services/motors.py`, `services/rgb.py`, `services/audio.py`, `services/service_base.py`) into `hal/drivers/` (now `hal/drivers/motors/`, `hal/drivers/rgb/`, `hal/drivers/voice/`, `hal/drivers/base.py`)
 3. Remove all LiveKit, OpenAI, and conversation code
 4. Add `hal/server.py` — new HTTP API server (FastAPI)
-5. Add `hal/services/display.py` — new DisplayService for GC9A01
+5. Add `hal/drivers/display/display_service.py` — new DisplayService for GC9A01
 6. Create `hal/UPSTREAM.md` with source commit hash and date
 7. Test on device with actual hardware
 
@@ -1054,55 +1046,55 @@ HAL runtime code is **copied** from the upstream open-source project into this m
 HAL lives inside this repo as a Python subfolder alongside Go and TypeScript:
 
 ```
-autonomous/
-├── system/          # Go code (forked from lobster)
-│   ├── cmd/              # Go entrypoints
+autonomous-os/
+├── system/               # Go os-server + bootstrap worker
+│   ├── cmd/              # Go entrypoints (os-server, bootstrap)
 │   ├── server/           # Go HTTP layer
-│   ├── internal/         # Go business logic
 │   ├── bootstrap/        # Go OTA worker
-│   └── domain/           # Shared structs
-├── system/web/      # TypeScript/React SPA (copied from lobster, renamed intern→lamp)
-├── hal/               # Python hardware drivers (NEW)
-│   ├── __init__.py       # Package init, exposes __version__
-│   ├── server.py         # HTTP API server (FastAPI) — NEW, not from upstream
-│   ├── system/
-│   │   ├── motors.py     # MotorsService — 5x Feetech servo (from upstream)
-│   │   ├── rgb.py        # RGBService — 64x WS2812 LED (from upstream)
-│   │   ├── audio.py      # Audio — amixer, playback (from upstream)
-│   │   ├── display.py    # DisplayService — GC9A01 LCD (NEW, not from upstream)
-│   │   └── service_base.py  # Event-driven ServiceBase (from upstream)
-│   ├── config.py         # Runtime config
-│   ├── requirements.txt  # Python dependencies
-│   ├── VERSION           # Plain text version string
+│   ├── domain/           # Shared structs
+│   └── web/              # TypeScript/React SPA
+├── runtimes/             # Swappable agent runtimes (openclaw, hermes, codex, …)
+├── hal/                  # Python hardware runtime
+│   ├── server.py         # FastAPI app (hal.server:app) — not from upstream
+│   ├── routes/           # FastAPI route modules (servo, led, camera, audio, display, …)
+│   ├── drivers/
+│   │   ├── base.py       # Event-driven ServiceBase (from upstream)
+│   │   ├── motors/       # MotorsService — Feetech servos (from upstream)
+│   │   ├── rgb/          # RGBService — WS2812 LEDs (from upstream)
+│   │   ├── voice/        # Audio, STT, TTS
+│   │   └── display/      # DisplayService — GC9A01 LCD (display_service.py, not from upstream)
+│   ├── config.py         # Runtime config (env vars)
+│   ├── pyproject.toml    # Python dependencies (uv; locked in uv.lock)
+│   ├── VERSION_HAL       # Plain text version string
 │   └── UPSTREAM.md       # Tracks source commit from humancomputerlab/lelamp_runtime
-├── resources/
-│   └── openclaw-skills/  # SKILL.md files
+├── skills/               # Agent SKILL.md files
 ├── scripts/
-│   └── setup.sh
+│   └── provision/setup.sh
 ├── go.mod
 ├── Makefile
 └── CLAUDE.md
 ```
 
-3 languages (Go, Python, TypeScript), 3 folders, 1 repo. Each has its own build, but managed together.
+3 languages (Go, Python, TypeScript), 1 repo. Each has its own build, but managed together.
 
 ### HAL OTA Package
 
-For OTA distribution, HAL is zipped from the `hal/` folder:
+For OTA distribution, `scripts/release/upload-hal.sh` zips the contents of `hal/` (excluding `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`):
 
 ```
-hal-{version}.zip
-├── hal/                  # Full Python package
-├── requirements.txt
-└── VERSION
+hal-{version}.zip         # contents of hal/ at the zip root → unzipped into /opt/hal
+├── server.py, routes/, drivers/, …
+├── pyproject.toml, uv.lock
+└── VERSION_HAL
 ```
 
 ### HAL HTTP API (FastAPI on port 5001)
 
-The HAL Python runtime exposes its own HTTP API on `127.0.0.1:5001`. OS Server (Go, port 5000) bridges OpenClaw skill requests to this API. Nginx proxies `/hw/*` for same-machine callers only — external clients receive 403. Swagger UI at `/hw/docs` is not accessible from LAN.
+The HAL Python runtime exposes its own HTTP API on `127.0.0.1:5001`. Agent skills on the device call it directly on loopback; the web UI goes through OS Server's admin-gated `/api/hardware/*` reverse proxy (`system/server/proxy.go`). Nginx proxies `/hw/*` for same-machine callers only — external clients receive 403. Swagger UI at `/hw/docs` is not accessible from LAN.
 
 ```
-OpenClaw LLM → curl 127.0.0.1:5000/api/servo → OS Server → http://127.0.0.1:5001/servo → HAL Python → Hardware
+Agent skill → curl http://127.0.0.1:5001/servo/play → HAL Python → Hardware
+Web UI       → /api/hardware/servo/play → OS Server (admin auth) → http://127.0.0.1:5001/servo/play → HAL Python
 External     → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 ```
 
@@ -1130,46 +1122,15 @@ External     → http://<device-ip>/hw/docs    → nginx → 403 Forbidden
 
 ## 7. Upload / Publish Scripts
 
-### `scripts/release/upload-hal.sh` (NEW)
+### `scripts/release/upload-hal.sh`
 
-```bash
-#!/usr/bin/env bash
-# Upload HAL runtime to OTA
+Run via `make upload-hal`. It sources `ota-config.sh` / `ota-metadata.sh`, then:
 
-set -euo pipefail
-
-VERSION_FILE="VERSION_HAL"
-BUCKET="s3-autonomous-upgrade-3"
-OTA_PATH="os/ota/hal"
-METADATA_PATH="os/ota/metadata.json"
-
-# Auto-increment patch version
-CURRENT=$(cat "$VERSION_FILE" 2>/dev/null || echo "0.0.0")
-MAJOR=$(echo "$CURRENT" | cut -d. -f1)
-MINOR=$(echo "$CURRENT" | cut -d. -f2)
-PATCH=$(echo "$CURRENT" | cut -d. -f3)
-NEW_VERSION="$MAJOR.$MINOR.$((PATCH + 1))"
-echo "$NEW_VERSION" > "$VERSION_FILE"
-
-# Package
-echo "Packaging HAL $NEW_VERSION..."
-cd path/to/hal-source
-echo "$NEW_VERSION" > VERSION
-zip -r "/tmp/hal-${NEW_VERSION}.zip" hal/ requirements.txt VERSION
-
-# Upload zip
-gsutil cp "/tmp/hal-${NEW_VERSION}.zip" \
-    "gs://${BUCKET}/${OTA_PATH}/${NEW_VERSION}/hal-${NEW_VERSION}.zip"
-
-# Update metadata
-DOWNLOAD_URL="https://storage.googleapis.com/${BUCKET}/${OTA_PATH}/${NEW_VERSION}/hal-${NEW_VERSION}.zip"
-gsutil cp "gs://${BUCKET}/${METADATA_PATH}" /tmp/metadata.json
-jq --arg v "$NEW_VERSION" --arg u "$DOWNLOAD_URL" \
-    '.hal = {"version": $v, "url": $u}' /tmp/metadata.json > /tmp/metadata-updated.json
-gsutil cp /tmp/metadata-updated.json "gs://${BUCKET}/${METADATA_PATH}"
-
-echo "HAL $NEW_VERSION published."
-```
+1. `uv lock --project hal --python 3.12 --check` — refuses to publish a stale lockfile.
+2. Bumps the patch version in `hal/VERSION_HAL` (initializes `1.0.0` if missing).
+3. Zips the contents of `hal/` to `hal-<version>.zip` (excludes `.venv/`, `__pycache__/`, `.git/`, `*.pyc`, `.env`, `.python-version`, `test/`).
+4. Uploads it to `gs://${GCS_BUCKET}/${BUCKET_PREFIX}/ota/hal/<version>.zip` (no-cache).
+5. Unpacks the signed `ota/metadata.json`, sets `hal.version`, `hal.url`, `hal.sha256`, `hal.updated_at` (an existing `min_version` is preserved — raise it with `promote-ota.sh`), re-signs and uploads it.
 
 ### All Upload Scripts
 
@@ -1178,7 +1139,7 @@ echo "HAL $NEW_VERSION published."
 | `scripts/release/upload-os-server.sh` | OS Server binary | Build → zip → GCS → update metadata |
 | `scripts/release/upload-bootstrap.sh` | Bootstrap Server binary | Build → zip → GCS → update metadata |
 | `scripts/release/upload-web.sh` | Web SPA bundle | Build → zip → GCS → update metadata |
-| `scripts/release/upload-hal.sh` | HAL Python runtime (NEW) | Package → zip → GCS → update metadata |
+| `scripts/release/upload-hal.sh` | HAL Python runtime | Lock check → zip → GCS → update metadata |
 | `scripts/release/upload-setup.sh` | Setup script | Upload to GCS |
 | `scripts/release/upload-setup-ap.sh` | AP setup script | Upload to GCS |
 | `scripts/release/upload-skills.sh` | OpenClaw skill files | Upload to GCS |
@@ -1226,9 +1187,9 @@ os-build:
 	GOOS=linux GOARCH=arm64 go build -ldflags "$(LDFLAGS_OS)" -o os-server ./cmd/os-server
 ```
 
-### HAL (VERSION file)
+### HAL (VERSION_HAL file)
 
-HAL version is a plain text `VERSION` file in the package root. Read by bootstrap via file or `python -m hal --version`.
+HAL version is the plain text file `hal/VERSION_HAL` (installed as `/opt/hal/VERSION_HAL`), which bootstrap reads directly. Do not edit it by hand for a release — `make upload-hal` (`scripts/release/upload-hal.sh`) auto-bumps the patch version.
 
 ---
 
@@ -1253,7 +1214,7 @@ HAL version is a plain text `VERSION` file in the package root. Read by bootstra
 - [x] **Bridge protocol**: Simple HTTP proxy. HAL runs FastAPI on `127.0.0.1:5001`, OS Server proxies from port 5000.
 - [x] **Python version**: Pinned to Python 3.12.x (`pyproject.toml`, `.python-version`, `setup.sh` uses `uv sync --python 3.12`).
 - [x] **HAL packaging**: On-device venv via `uv sync --python 3.12 --extra hardware` plus `--extra reachy` for Reachy Mini or `--extra aec --extra pipecat` for other devices. OTA builds a fresh venv using the shared cache, preserves `.env`, and retains the old runtime for rollback.
-- [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/service/display/display_service.py`.
+- [x] **Display driver**: DisplayService (GC9A01) is part of HAL Python at `hal/drivers/display/display_service.py`.
 - [x] **HAL config**: Environment variable-based (`config.py` reads from env vars). `.env` file support via `python-dotenv`. No separate config file needed.
 
 ---

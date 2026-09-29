@@ -1,10 +1,7 @@
 #!/usr/bin/env python3
-"""Report execution completion KPI from saved journal JSONL or AA event exports.
+"""Report execution completion KPI from saved journal JSONL or AA event exports (offline).
 
 Example: python3 scripts/report_voice_task_metrics.py journal.jsonl --device lamp
-By default all observed eligible turns count, including unfinished execution.
-An optional settling horizon selects mature turns; it is never an execution timeout.
-No network calls are made. Completion measures execution, not answer correctness.
 """
 
 import argparse
@@ -54,12 +51,10 @@ def normalize(row, default_device=None):
               or row.get("user_pseudo_id") or default_device)
     if "MESSAGE" in row:
         message = row["MESSAGE"]
-        # journald JSON encodes messages containing control bytes as byte arrays.
         if isinstance(message, list):
             message = bytes(message).decode("utf-8", errors="replace")
         if not isinstance(message, str):
             return None
-        # os-server's console handler preserves ANSI field colors in journald.
         message = re.sub(r"\x1b\[[0-9;]*m", "", message)
         hal_event = re.search(r'\[telemetry\] (voice_metrics_\w+)\s+(\{.*)', message)
         if hal_event:
@@ -116,8 +111,6 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
             coverage["future_events_excluded"] += 1
             continue
         if observed_at_ms is None:
-            # Untimestamped exports remain usable, but cannot establish which
-            # snapshot existed at a historical cutoff. Surface that limitation.
             coverage["missing_observation_timestamp_events"] += 1
         params = event["params"]
         try:
@@ -164,14 +157,11 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
             params["_observed_at_ms"] = observed_at_ms
             starts.setdefault(key, []).append(params)
             continue
-        # Revision is authoritative; canonical JSON makes equal revisions independent
-        # of export ordering. Producers should never change an existing revision.
+            # Revision is authoritative; producers must never change an existing revision.
         rank = (params.get("task_revision") or 0, json.dumps(params, sort_keys=True))
         if key not in interactions or rank > interactions[key][0]:
             interactions[key] = (rank, params)
 
-    # Merge the two cohort sources by device + interaction ID or a bound run.
-    # Starts can arrive before HAL finalizes its snapshot and before run binding.
     records = []
     for key in interactions.keys() | starts.keys():
         hal = interactions.get(key, (None, {}))[1]
@@ -217,8 +207,6 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
     for records_group in groups.values():
         device = records_group[0][0]
         turns = [turn for _, turn in records_group]
-        # Preserve realtime evidence restrictions even when an OS memory-sync
-        # request shares its run. Otherwise prefer a proven accepted task.
         turn = dict(max(turns, key=lambda item: (
             item.get("route") == "realtime_handled",
             str(item.get("task_schema_version")) == "1",
@@ -277,8 +265,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         if turn.get("route") == "realtime_handled":
             candidates = [e for e in candidates if e.get("evidence") == "realtime_turn_done"]
         candidates = [e for e in candidates if (e.get("execution_at_ms") or 0) <= now_ms]
-        # A local agent ending its handoff (NO_REPLY) is not completion of
-        # the remote task. Keep this restriction independent of callback order.
+            # A local handoff end (NO_REPLY) is not completion of the remote task.
         if any(e.get("evidence") == "harness_delegated" for e in candidates):
             candidates = [e for e in candidates if e.get("evidence") in {
                 "harness_delegated", "harness_turn_done", "harness_turn_summary",
@@ -287,8 +274,7 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
             if any(e.get("evidence") != "harness_delegated" for e in candidates):
                 candidates = [e for e in candidates
                               if e.get("evidence") != "harness_delegated"]
-        # Losing transport is absence of observation, not a terminal outcome.
-        # A racing disconnect snapshot must not erase a real terminal event.
+            # Lost transport is absence of observation, not a terminal outcome.
         if any(e.get("outcome") in ("completed", "failed", "cancelled") for e in candidates):
             candidates = [e for e in candidates
                           if e.get("evidence") != "execution_observation_lost"]
@@ -296,15 +282,12 @@ def report(rows, now_ms, settle_seconds=0, default_device=None, include_syntheti
         selected = max(candidates, key=lambda e: (
             e.get("execution_at_ms") or 0, priority.get(e.get("outcome"), 0),
             e["_event_id"]), default={})
-        # A cleanup end is not proof that an earlier terminal failure was
-        # repaired. A recovered error has outcome unknown, not failed.
+            # A recovered error has outcome unknown, not failed.
         outcome = ("failed" if any(e.get("outcome") == "failed" for e in candidates)
                    else "cancelled" if any(e.get("outcome") == "cancelled" for e in candidates)
                    else selected.get("outcome", "incomplete"))
         if outcome not in ("completed", "failed", "cancelled", "unknown", "incomplete"):
             outcome = "unknown"
-        # A terminal completion proves that dispatch landed, even when transport
-        # acknowledgement was lost. Without it dispatch failure counts as failed.
         if not selected and turn.get("failure_reason"):
             outcome = "failed"
         counts["eligible_mature_turns"] += 1

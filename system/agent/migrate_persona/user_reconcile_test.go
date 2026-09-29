@@ -9,15 +9,12 @@ import (
 	"go.autonomous.ai/os/system/lib/usercanon"
 )
 
-// seedDevice builds a device with the given enrolled user dirs and a USER.md
-// for one runtime, returning the Options and that file's path.
+// seedDevice builds a device with enrolled user dirs and one runtime's USER.md.
 func seedDevice(t *testing.T, userMD string, enrolled ...string) (Options, string) {
 	t.Helper()
 	root := t.TempDir()
 
-	// The store dir always exists on a real device (HAL creates it), so an
-	// EMPTY store and a MISSING store are different situations and must not be
-	// collapsed here: empty = fresh device (no-op), missing = cannot judge.
+	// Empty store (fresh device) and missing store (cannot judge) must stay distinct.
 	users := filepath.Join(root, "users")
 	if err := os.MkdirAll(users, 0o755); err != nil {
 		t.Fatalf("seed users dir: %v", err)
@@ -40,8 +37,6 @@ func seedDevice(t *testing.T, userMD string, enrolled ...string) (Options, strin
 		t.Fatalf("seed USER.md: %v", err)
 	}
 
-	// Only the OpenClaw workspace exists; the other runtimes resolve to absent
-	// paths, which the reconcile must skip rather than error on.
 	opts := Options{OpenclawWorkspace: ws}.withDefaults()
 	return opts, path
 }
@@ -55,7 +50,7 @@ func readFile(t *testing.T, p string) string {
 	return string(b)
 }
 
-// THE RULE: a name is stale only when its enrollment is gone.
+// A name is stale only when its enrollment is gone.
 func TestReconcileRetiresNameWithNoEnrollment(t *testing.T) {
 	opts, path := seedDevice(t, liveDeviceUserMD, "long")
 
@@ -71,7 +66,6 @@ func TestReconcileRetiresNameWithNoEnrollment(t *testing.T) {
 	if strings.Contains(got, "**Name:** Leo") {
 		t.Errorf("stale name survived:\n%s", got)
 	}
-	// Cleared back to the blank slot, not deleted — USER.md is a form.
 	if !strings.Contains(got, "- **Name:**\n") {
 		t.Errorf("the slot must remain, asking for the next answer:\n%s", got)
 	}
@@ -80,8 +74,7 @@ func TestReconcileRetiresNameWithNoEnrollment(t *testing.T) {
 	}
 }
 
-// THE GUARANTEE: absence is never the trigger. A person away for any length of
-// time keeps their enrollment directory, so their profile is untouched.
+// Absence is never the trigger.
 func TestReconcileNeverRetiresAnEnrolledUser(t *testing.T) {
 	body := "- **Name:** Long\n- Context: Prefers Vietnamese.\n"
 	opts, path := seedDevice(t, body, "long", "chloe")
@@ -98,8 +91,7 @@ func TestReconcileNeverRetiresAnEnrolledUser(t *testing.T) {
 	}
 }
 
-// A display name is resolved the same way attribution resolves it, so a longer
-// written form still matches its enrollment label.
+// Display names resolve like attribution does.
 func TestReconcileKeepsADisplayNameThatResolvesToAnEnrollment(t *testing.T) {
 	opts, _ := seedDevice(t, "- **Name:** Long Tran\n", "long")
 
@@ -112,8 +104,7 @@ func TestReconcileKeepsADisplayNameThatResolvesToAnEnrollment(t *testing.T) {
 	}
 }
 
-// Writing USER.md costs a prompt-cache miss (~39k tokens), so a pass that finds
-// nothing stale must not touch the file at all.
+// A pass that finds nothing stale must not touch the file (prompt-cache miss).
 func TestReconcileDoesNotWriteWhenNothingIsStale(t *testing.T) {
 	opts, path := seedDevice(t, "- **Name:** Long\n", "long")
 
@@ -148,7 +139,6 @@ func TestReconcileDryRunReportsButDoesNotWrite(t *testing.T) {
 	}
 }
 
-// A `## Users` block for someone with no enrollment goes; an enrolled one stays.
 func TestReconcilePrunesUsersBlocksByEnrollment(t *testing.T) {
 	body := "- **Name:** Long\n" +
 		"- Users: **long (friend)**: prefers Vietnamese\n" +
@@ -167,8 +157,7 @@ func TestReconcilePrunesUsersBlocksByEnrollment(t *testing.T) {
 	}
 }
 
-// A device mid-onboarding has an empty enrollment store. Retiring every profile
-// because nobody is enrolled yet would be far worse than a stale name.
+// An empty enrollment store retires nothing.
 func TestReconcileDoesNothingWhenStoreIsEmpty(t *testing.T) {
 	opts, path := seedDevice(t, liveDeviceUserMD)
 
@@ -184,8 +173,7 @@ func TestReconcileDoesNothingWhenStoreIsEmpty(t *testing.T) {
 	}
 }
 
-// "unknown" is the bucket for unidentified people, not a person — it must never
-// keep a profile alive.
+// "unknown" never keeps a profile alive.
 func TestReconcileTreatsUnknownAsNotAPerson(t *testing.T) {
 	opts, _ := seedDevice(t, "- **Name:** unknown\n", "long", "unknown")
 
@@ -198,7 +186,6 @@ func TestReconcileTreatsUnknownAsNotAPerson(t *testing.T) {
 	}
 }
 
-// A missing enrollment store means we cannot tell stale from absent.
 func TestReconcileErrorsRatherThanGuessWhenStoreIsMissing(t *testing.T) {
 	opts, path := seedDevice(t, liveDeviceUserMD, "long")
 	usercanon.UsersDir = filepath.Join(t.TempDir(), "gone")
@@ -251,8 +238,7 @@ func TestUserProfilePathsCoverEveryRuntime(t *testing.T) {
 	}
 }
 
-// The pass deletes from a live persona and can fire unattended on any boot, so
-// the previous contents must always be recoverable.
+// Retiring always leaves a backup.
 func TestReconcileBacksUpBeforeRetiring(t *testing.T) {
 	opts, path := seedDevice(t, liveDeviceUserMD, "long")
 
@@ -269,7 +255,6 @@ func TestReconcileBacksUpBeforeRetiring(t *testing.T) {
 	}
 }
 
-// A pass that changes nothing must not litter backups either.
 func TestReconcileDoesNotBackUpWhenNothingIsStale(t *testing.T) {
 	opts, path := seedDevice(t, "- **Name:** Long\n", "long")
 
@@ -281,10 +266,7 @@ func TestReconcileDoesNotBackUpWhenNothingIsStale(t *testing.T) {
 	}
 }
 
-// Retiring a name must leave the form asking its question ONCE. The live device
-// had the stale value appended below the template's own blank slot, so clearing
-// it in place produced two empty "- **Name:**" bullets (device-observed
-// 2026-09-03, first applied run).
+// Retiring a name leaves exactly one blank slot.
 func TestReconcileLeavesExactlyOneBlankNameSlot(t *testing.T) {
 	opts, path := seedDevice(t, liveDeviceUserMD, "long")
 
@@ -297,8 +279,7 @@ func TestReconcileLeavesExactlyOneBlankNameSlot(t *testing.T) {
 	}
 }
 
-// The `Users: ` heading prefix is not stable across a serialize round-trip, so a
-// person block must be prunable with or without it.
+// Person blocks are prunable with or without the `Users: ` prefix.
 func TestReconcilePrunesUsersBlockWithoutHeadingPrefix(t *testing.T) {
 	body := "- **long (friend)**: prefers Vietnamese\n- **leo (friend)**: likes Billie Jean\n"
 	opts, path := seedDevice(t, body, "long")
@@ -315,9 +296,7 @@ func TestReconcilePrunesUsersBlockWithoutHeadingPrefix(t *testing.T) {
 	}
 }
 
-// An ordinary field bullet must never be read as a person. Without the required
-// `(role)` parenthetical, `**Notes:**` would parse as someone named "Notes:",
-// resolve to no enrollment, and be deleted.
+// A field bullet without `(role)` is never read as a person.
 func TestReconcileNeverTreatsAFieldBulletAsAPerson(t *testing.T) {
 	body := "- **Name:** Long\n- **Notes:** Allergic to cilantro.\n- **What to call them:** anh Long\n"
 	opts, path := seedDevice(t, body, "long")
@@ -334,9 +313,7 @@ func TestReconcileNeverTreatsAFieldBulletAsAPerson(t *testing.T) {
 	}
 }
 
-// USER.md over the bootstrap cap is truncated from the END, and `## Users` is at
-// the end — so an oversized profile silently loses exactly the person data the
-// sync just wrote. The reconcile must say so while there is still headroom.
+// An oversized USER.md warns while there is still headroom.
 func TestReconcileWarnsBeforeUserProfileWouldBeTruncated(t *testing.T) {
 	if userProfileWarnChars >= userProfileBootstrapCap {
 		t.Fatalf("warn threshold %d must leave headroom below the cap %d",
@@ -348,8 +325,6 @@ func TestReconcileWarnsBeforeUserProfileWouldBeTruncated(t *testing.T) {
 	}
 	opts, _ := seedDevice(t, big, "long")
 
-	// Nothing is stale, so this must still be a clean no-op pass — the warning
-	// is a signal, never a reason to rewrite the file.
 	actions, err := ReconcileUserProfiles(opts, true)
 	if err != nil {
 		t.Fatalf("reconcile: %v", err)

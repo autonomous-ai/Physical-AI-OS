@@ -51,8 +51,7 @@ func TestTrackEvent(t *testing.T) {
 	}
 }
 
-// Both the key and the endpoint come from the body's .env, so a device can be
-// pointed at a staging warehouse without a rebuild.
+// Key and endpoint come from the body's .env.
 func TestEndpointFromEnvFile(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, ".env")
@@ -71,15 +70,14 @@ func TestEndpointFromEnvFile(t *testing.T) {
 	if got := Endpoint(); got != "https://staging.example/api" {
 		t.Errorf("Endpoint() = %q, want the .env value", got)
 	}
-	// The process env still wins — that is how tests redirect the POST.
+	// The process env still wins.
 	t.Setenv("AUTONOMOUS_ANALYTICS_URL", "http://127.0.0.1:1/override")
 	if got := Endpoint(); got != "http://127.0.0.1:1/override" {
 		t.Errorf("Endpoint() = %q, want the process env to win", got)
 	}
 }
 
-// No endpoint anywhere = analytics is off. There is deliberately no built-in
-// default: a device posts only where someone wrote down.
+// No endpoint anywhere means analytics is off; there is no built-in default.
 func TestEndpointIsEmptyWhenNothingIsConfigured(t *testing.T) {
 	origURL := fileURL
 	fileURL = ""

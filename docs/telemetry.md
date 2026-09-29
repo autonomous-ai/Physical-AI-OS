@@ -137,6 +137,8 @@ hostname; `platform` is `device`.
 | Tracker | Question it answers | Doc |
 |---------|--------------------|-----|
 | `hal/telemetry/voice_metrics.py` | How fast the device acknowledges speech, and whether it ever plays a reply the user moved past | [`docs/voice-metrics.md`](voice-metrics.md) |
+| `hal/telemetry/live_voice.py` | Same voice KPIs for realtime (live) sessions: maps each provider turn to one HAL interaction and feeds `voice_metrics` without guessing audio ownership | [`docs/voice-metrics.md`](voice-metrics.md) |
+| `system/telemetry/voice_task.go` | Whether an accepted voice/chat task actually executed (start, run binding, lifecycle end or local-intent return) | [`docs/voice-metrics.md`](voice-metrics.md) |
 
 ## Validation
 

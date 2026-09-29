@@ -16,18 +16,12 @@ import (
 	"go.autonomous.ai/os/system/telemetry"
 )
 
-// hwHostRE matches a HAL or os-server endpoint as it appears in a tool call —
-// the loopback host and port, then the path. Anchoring on the host is what
-// separates a CALL from a MENTION: `cat …/skills/emotion/SKILL.md` contains
-// "/emotion", and a plain substring test emitted a phantom hw_emotion + led_set
-// for a documentation read (#342 defect D, device-chat-13 seq 109). The monitor
-// then showed an emotion the lamp never played.
+// hwHostRE matches a HAL/os-server loopback endpoint in a tool call; anchoring on
+// the host separates a call from a mere mention (e.g. `cat …/emotion/SKILL.md`, #342).
 var hwHostRE = regexp.MustCompile(`127\.0\.0\.1:500[01](/[A-Za-z0-9_./-]*)`)
 
-// hwPathFromToolArgs returns the endpoint path a tool call actually targets, or
-// "" when the text merely mentions one. The first call in the text wins. Query
-// strings and trailing punctuation are trimmed so callers compare against a
-// plain path.
+// hwPathFromToolArgs returns the first endpoint path a tool call targets, or "" for a
+// mere mention. Query strings and trailing punctuation are trimmed.
 func hwPathFromToolArgs(toolArgs string) string {
 	m := hwHostRE.FindStringSubmatch(toolArgs)
 	if len(m) != 2 {
@@ -40,13 +34,7 @@ func hwPathFromToolArgs(toolArgs string) string {
 	return strings.TrimRight(path, "/.")
 }
 
-// servoMovementPaths are the servo endpoints that MOVE the body. Reads
-// (/servo/position, /servo/status, /servo/bearing) are deliberately absent: a
-// hw_servo event means the lamp did something a person could see.
-//
-// /servo/search and /servo/demo were missing from the previous inline list, so
-// the one turn that actually swept (device-chat-9, a 42 s curl) showed an idle
-// lamp in the monitor while the room was being searched.
+// servoMovementPaths are servo endpoints that move the body; reads are deliberately absent.
 var servoMovementPaths = map[string]bool{
 	"/servo/aim":    true,
 	"/servo/play":   true,
@@ -57,41 +45,20 @@ var servoMovementPaths = map[string]bool{
 
 func isServoMovementPath(path string) bool { return servoMovementPaths[path] }
 
-// handleAgentStreamEvent handles WS event=="agent": the OpenClaw agent stream
-// (lifecycle / tool / thinking / assistant) plus the lifecycle-end TTS flush.
-// Extracted verbatim from HandleEvent; dispatch lives in handler_events.go.
+// handleAgentStreamEvent handles WS event=="agent" (lifecycle/tool/thinking/assistant)
+// plus the lifecycle-end TTS flush.
 func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 	var payload domain.AgentPayload
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		return err
 	}
-	// Capture session key from any agent event
 	if payload.SessionKey != "" && h.agentGateway.GetSessionKey() == "" {
 		h.agentGateway.SetSessionKey(payload.SessionKey)
 	}
 
-	// Map OpenClaw UUID → device idempotencyKey on lifecycle_start.
-	// Only map when the lifecycle belongs to the device's own direct session — group/channel
-	// sessions have independent runs that must NOT be merged into sensing traces.
-	//
-	// Two paths depending on payload.RunID format:
-	//   • device-format (device-chat-*): OpenClaw 5.4+ echoes the idempotencyKey as
-	//     the runId — already IS the device trace. Just remove from pending.
-	//   • UUID: produced when OpenClaw drains its followup queue (the
-	//     FollowupRun type does not carry idempotencyKey, so
-	//     agent-runner-execution.ts mints a fresh UUID at lifecycle time).
-	//     Resolve by fetching chat.history and matching the agent's last
-	//     user message against the stored pending text. Correct by content
-	//     rather than by send-order — drain reordering, dropped turns,
-	//     /new session clears, and concurrent channel UUIDs no longer
-	//     shift the mapping.
-	//
-	// This runs synchronously: the WS read loop now dispatches handler
-	// events through a worker goroutine (service_ws.go), so chat.history's
-	// pendingRPC wait no longer deadlocks against the read loop. Sync map
-	// before flowRunID is computed below — every subsequent event for this
-	// UUID resolves to the device id from the very first emit, eliminating
-	// the split-turn race the previous async version had.
+	// Map OpenClaw run ID → device trace on lifecycle start (device session only; group
+	// sessions must not merge into sensing traces). UUID runs are matched by content via
+	// chat.history, synchronously, so every later event resolves to the device ID.
 	agentSession := h.agentGateway.GetSessionKey()
 	isAgentSession := agentSession != "" && payload.SessionKey == agentSession
 	if payload.Stream == "lifecycle" && payload.Data.Phase == "start" && payload.RunID != "" && isAgentSession {
@@ -118,11 +85,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		}
 	}
 
-	// Resolve OpenClaw UUID → device ID for consistent flow tracing across all agent events
 	flowRunID := h.resolveRunID(payload.RunID)
 	if payload.Stream == "lifecycle" && (payload.Data.Phase == "end" || payload.Data.Phase == "error") {
-		// Register all final reply submissions before releasing processing.
-		// The HAL bridge waits for their asynchronous admission callbacks.
+		// Register final reply submissions before releasing processing (HAL waits on admission).
 		defer hal.EndVoiceFollowup(flowRunID)
 	}
 	switch payload.Stream {
@@ -132,13 +97,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			h.ttsTurnSequence(flowRunID)
 		}
 
-		// Track agent-path activity per sessionKey so the session.message
-		// handler can skip turns already driven by the agent stream
-		// (cron heartbeat fires both; real user telegram fires only
-		// session.message because of OpenClaw's isControlUiVisible gate).
-		// Clear on end/error so a subsequent channel turn on the same
-		// session within 30s isn't wrongly skipped — the previous turn
-		// is finished, agent path is no longer handling anything.
+		// Track agent-path activity per session so session.message skips turns the agent stream
+		// already drives; cleared on end/error so the next channel turn isn't skipped.
 		if payload.SessionKey != "" && !payload.Data.MergedIntoActiveTurn {
 			h.agentLifecycleMu.Lock()
 			switch payload.Data.Phase {
@@ -157,17 +117,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			h.agentLifecycleMu.Unlock()
 		}
 
-		// Correlate with the FIFO queue of recent cron "started" events:
-		// the cron event lacks the upcoming runId AND (for sessionTarget=
-		// "main" jobs) lacks sessionKey too, so we consume the oldest
-		// timestamp within cronFireWindowMs. Restricted to UUID runIds
-		// (no device- prefix) so chat.send/sensing turns can't accidentally
-		// claim a queued cron slot.
+		// Correlate with queued cron "started" events (no runId/sessionKey): consume the oldest
+		// within cronFireWindowMs. UUID runIds only, so device turns can't claim a cron slot.
 		if payload.Data.Phase == "start" && payload.RunID != "" && !isDeviceOutboundChatRunID(payload.RunID) {
 			now := time.Now().UnixMilli()
 			cutoff := now - cronFireWindowMs
 			h.cronFireExpectedMu.Lock()
-			// Drop stale entries from the head.
 			idx := 0
 			for idx < len(h.cronFireExpected) && h.cronFireExpected[idx] < cutoff {
 				idx++
@@ -181,24 +136,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				h.cronFireRuns[payload.RunID] = true
 				h.cronFireRunsMu.Unlock()
 				slog.Info("cron fire correlated — will force TTS", "component", "agent", "run_id", payload.RunID, "session", payload.SessionKey, "delta_ms", now-startedAt)
-				// Emit a cron_fire flow event so the web monitor can classify
-				// this turn as cron without re-deriving via string match on
-				// the systemEvent wrapper template.
 				flow.Log("cron_fire", map[string]any{"run_id": payload.RunID, "delta_ms": now - startedAt}, payload.RunID)
 			} else {
 				h.cronFireExpectedMu.Unlock()
 			}
 		}
 
-		// Detect external channel-initiated turns: lifecycle_start arrives from OpenClaw
-		// with a UUID run_id (not device-chat-* prefix). This covers:
-		// 1. No active trace (original case)
-		// 2. Active trace from a different turn (sensing trace still active when Telegram arrives)
-		//
-		// Cron-fire turns also have UUID runIds but are NOT channel input —
-		// the cron_fire flow event represents them in the monitor, so skip
-		// the chat_input emit here to keep the CH IN node from lighting up
-		// for scheduled reminders.
+		// External channel turn: UUID run_id (not device-chat-*), excluding cron-fire turns.
 		h.cronFireRunsMu.Lock()
 		isCronFireTurn := h.cronFireRuns[payload.RunID]
 		h.cronFireRunsMu.Unlock()
@@ -206,14 +150,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			!isDeviceOutboundChatRunID(payload.RunID) && !isDeviceOutboundChatRunID(flowRunID) &&
 			!isCronFireTurn
 		if isChannelTurn {
-			// Emit chat_input immediately so UI shows turn-started.
-			// Use a neutral "[chat]" placeholder rather than claiming the
-			// configured channel — the goroutine below will replace this
-			// with the right label ([telegram:Gray] / [voice] / [emotion]
-			// / ...) once chat.history reveals whether it's a real
-			// channel user or a device-internal sensing/voice merge. If
-			// the goroutine fails or times out, this generic label
-			// stays — better than mis-attributing to Telegram.
+			// Neutral placeholder; the goroutine below relabels it once chat.history reveals the source.
 			flow.Log("chat_input", map[string]any{"run_id": payload.RunID, "source": "channel"}, payload.RunID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "chat_input",
@@ -222,9 +159,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				Detail:  map[string]string{"role": "user"},
 			})
 
-			// Best-effort: fetch chat history in a separate goroutine to avoid
-			// deadlocking the WS read loop (FetchChatHistory waits for a response
-			// that can only arrive after this handler returns).
+			// Separate goroutine: FetchChatHistory would deadlock the WS read loop.
 			capturedRunID := payload.RunID
 			capturedSessionKey := payload.SessionKey
 			go func() {
@@ -237,40 +172,26 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					return
 				}
 				slog.Info("chat.history for channel turn", "component", "agent", "run_id", capturedRunID, "history_bytes", len(historyPayload))
-				// Dump the last message raw JSON — helps identify a cleaner cron-fire
-				// signal (e.g. role:"system", kind:"systemEvent") than string matching.
-				// Temporary — remove once schema is confirmed.
 				if len(historyPayload) < 8000 {
 					slog.Info("chat.history raw payload", "component", "agent", "run_id", capturedRunID, "payload", string(historyPayload))
 				}
 
 				userMsg, senderLabel, msgTime := extractLastUserMessageFromHistory(historyPayload)
-				// Staleness gate: this fetch races OpenClaw persisting the run's
-				// input. A self-fired run (heartbeat) has NO fresh user message, so
-				// the fetch lands on the PREVIOUS turn's — emitting it here made the
-				// heartbeat render as a doppelgänger of the last real turn (same
-				// [activity] text). A genuinely fresh channel message is persisted
-				// seconds before lifecycle_start, so a 120s window keeps every real
-				// case (steer-merges included) while rejecting minutes-old leftovers.
-				// Zero msgTime (no timestamp field) is treated as fresh.
+				// Staleness gate: a self-fired run (heartbeat) has no fresh user message, so the fetch
+				// would land on the previous turn's. Zero msgTime is treated as fresh.
 				if !msgTime.IsZero() && time.Since(msgTime) > 120*time.Second {
 					slog.Info("chat.history last user message is stale — not attributing to this run",
 						"component", "agent", "run_id", capturedRunID, "msg_age_s", int(time.Since(msgTime).Seconds()))
 					return
 				}
-				// Mark as confirmed channel run if a real sender is present.
-				// Guards against race: Telegram UUID mapped to sensing trace
-				// makes flowRunID = device-sensing-* → isChannelRun wrongly false.
+				// Confirmed channel run; guards the race where a Telegram UUID maps to a sensing trace.
 				if senderLabel != "" {
 					h.channelRunsMu.Lock()
 					h.channelRuns[capturedRunID] = true
 					h.channelRunsMu.Unlock()
 				}
-				// Cron-fire detection happens at lifecycle_start (see correlation
-				// against cronFireExpected) — no need to inspect userMsg here.
 				if userMsg != "" {
-					// Legacy: detect old music-proactive cron turns (before event-driven suggestion).
-					// Safe to remove once all devices have been updated and old crons are cleaned up.
+					// Legacy music-proactive cron turns; remove once old crons are cleaned up.
 					if strings.Contains(userMsg, "[music-proactive]") {
 						resolved := h.resolveRunID(capturedRunID)
 						h.agentGateway.MarkBroadcastRun(resolved)
@@ -280,17 +201,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					if len(displayMsg) > 200 {
 						displayMsg = displayMsg[:200] + "…"
 					}
-					// Label selection (priority order):
-					//  1. Real channel user (senderLabel filled by chat.history) →
-					//     `[telegram:Gray]` — keeps existing Telegram UI.
-					//  2. device-internal sensing/voice/wellbeing/system message
-					//     merged into this UUID turn via OpenClaw steer →
-					//     `[voice]` / `[emotion]` / `[activity]` / ... so the
-					//     monitor doesn't mis-label self-fire turns as
-					//     `[telegram]`.
-					//  3. Fallback: generic `[chat]` — UUID with no sender and
-					//     no recognisable internal prefix (rare; was previously
-					//     mis-labelled as the configured channel).
+					// Label: real sender → [channel:sender]; device-internal merge → [voice]/[emotion]/...; else [chat].
 					chName := h.agentGateway.GetConfiguredChannel()
 					var prefix string
 					switch {
@@ -319,23 +230,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}()
 		}
 
-		// Track busy state so passive sensing events can be suppressed during active turns.
-		// Only gate on lifecycles that belong to a device-initiated turn — these are
-		// the only ones whose `end` is reliably round-tripped through SSE.
-		// Heartbeat (target:"none"), channel turns merged by steer mode, and other
-		// OpenClaw self-trigger lifecycles can drop their `end` SSE (per the
-		// busyTTL comment in service_events.go); gating on them strands activeTurn=true
-		// for up to 5 minutes — every device sensing event in that window queues
-		// instead of forwarding.
-		//
-		// External turns don't NEED device-side gating: with messages.queue.mode=steer
-		// (pinned in onboarding), concurrent sensing events arriving during a
-		// channel/cron turn are batched into the active turn at the next model
-		// boundary by OpenClaw itself — no need for the device to pre-suppress them.
-		//
-		// device-initiated turns also flip activeTurn=true at chat.send time
-		// (service_chat.go), so a missed lifecycle.start here is harmless.
-		// LED is managed by the agent via /emotion skill calls — do not override here.
+		// Busy-gate only device-initiated turns: heartbeat/channel/cron lifecycles can drop their
+		// `end` and strand activeTurn, and OpenClaw steer mode batches sensing into them anyway.
 		if payload.Data.Phase == "start" {
 			deviceInitiated := isDeviceOutboundChatRunID(payload.RunID) || isDeviceOutboundChatRunID(flowRunID)
 			if deviceInitiated {
@@ -345,21 +241,14 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					"component", "agent", "run_id", payload.RunID, "flow_run_id", flowRunID,
 					"reason", "not device-initiated — heartbeat/channel/cron handled by OpenClaw steer batching")
 			}
-			// Arm the dead-air filler timer for voice turns. No-op
-			// unless sensing handler called MarkVoiceRun(flowRunID)
-			// before forwarding this turn.
+			// Arm the dead-air filler; no-op unless sensing marked this a voice run.
 			sensinghttp.DefaultFillerManager.OnTurnStart(flowRunID)
 		} else if payload.Data.Phase == "end" || payload.Data.Phase == "error" {
 			h.agentGateway.SetBusy(false)
-			// Cancel on error too — lifecycle.end has its own Cancel
-			// further down (just before TTS flush), but error skips
-			// that block, so clean filler state here.
+			// Error skips the lifecycle-end Cancel below, so clean filler state here.
 			if payload.Data.Phase == "error" {
 				sensinghttp.DefaultFillerManager.Cancel(flowRunID)
-				// The lifecycle-end Slack finalize (further down) is skipped on error,
-				// so clean up any Slack stream here. DeliverSlackReply("") consumes the
-				// origin, stops the per-run stream goroutine, and posts nothing; it's a
-				// no-op for non-Slack runs (and runtimes that aren't a SlackBridge).
+				// Error also skips the Slack finalize below; DeliverSlackReply("") only cleans up.
 				if sb, ok := h.agentGateway.(domain.SlackBridge); ok {
 					go func() {
 						if err := sb.DeliverSlackReply(flowRunID, ""); err != nil {
@@ -370,7 +259,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 
-		// Token usage: try lifecycle_end payload first, fallback to chat.history RPC.
+		// Token usage: lifecycle_end payload first, fallback to chat.history.
 		if payload.Data.Phase == "end" {
 			slog.Info("lifecycle end raw", "component", "agent", "runId", payload.RunID, "raw", string(evt.Payload))
 			if u := payload.Data.Usage; u != nil {
@@ -399,10 +288,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					},
 				})
 
-				// Auto-new-session parity with the chat.history branch below.
 				h.maybeAutoNewSession(h.agentGateway.GetSessionKey(), u.TotalTokens, flowRunID)
 			} else {
-				// OpenClaw lifecycle_end does not include usage. Fetch from chat.history instead.
+				// OpenClaw lifecycle_end has no usage; fetch from chat.history.
 				capturedFlowRunID := flowRunID
 				capturedSessionKey := payload.SessionKey
 				go func() {
@@ -418,20 +306,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						Text     string `json:"text,omitempty"`
 						Thinking string `json:"thinking,omitempty"`
 					}
-					// This run's reply is persisted by OpenClaw around the same
-					// moment lifecycle end reaches us, so the first fetch can race
-					// persistence and see only the PREVIOUS turn's assistant
-					// message. Without the freshness check below that stale
-					// message's usage (and thinking) were attributed to this run —
-					// heartbeat runs cloned the prior turn's token numbers in the
-					// Flow monitor. Messages without a parseable timestamp (older
-					// gateways) are treated as fresh to keep the old behavior.
+					// Reply persistence races lifecycle end: skip assistant messages older than staleAfter so a
+					// prior turn's usage isn't attributed here. Unparseable timestamps count as fresh.
 					const staleAfter = 30 * time.Second
-					// Every non-success path logs and RETRIES (3 attempts, 2s
-					// apart): the silent returns this loop replaces were the
-					// long-standing "some turns never show tokens" hole — a WS
-					// hiccup at boot or a race with reply persistence dropped
-					// the attribution with no trace in the journal.
+					// Retry up to 3 times, 2s apart (WS hiccup or persistence race).
 					for attempt := 0; attempt < 3; attempt++ {
 						if attempt > 0 {
 							time.Sleep(2 * time.Second)
@@ -442,19 +320,12 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 							continue
 						}
 						if histPayload == nil {
-							// nil-with-no-error is the deliberate stub signal from
-							// runtimes without walkable history (codex, claudecode):
-							// no usage to attribute — bail quietly, don't retry.
+							// nil without error: runtime has no walkable history (codex, claudecode); don't retry.
 							slog.Debug("chat.history not supported by this runtime — skipping usage attribution", "component", "agent", "run_id", capturedFlowRunID)
 							return
 						}
-						// Content is RawMessage, NOT []histContent: chat.history mixes
-						// shapes per message (plain string for system/user texts,
-						// block array for assistant replies). Typing it as a slice
-						// made ONE string-content message anywhere in the window fail
-						// the WHOLE unmarshal — the long-standing reason some turns
-						// never showed tokens (e.g. every turn right after the
-						// "[system] wake" message).
+						// RawMessage: chat.history mixes string and block-array content, and a typed slice
+						// would fail the whole unmarshal.
 						var hist struct {
 							Messages []struct {
 								Role      string          `json:"role"`
@@ -467,9 +338,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 							slog.Warn("chat.history usage payload unmarshal failed — retrying", "component", "agent", "run_id", capturedFlowRunID, "attempt", attempt, "err", uerr)
 							continue
 						}
-						// The NEWEST assistant message is the only candidate for this
-						// run's reply — walking further back is exactly how a stale
-						// turn's usage used to get stolen.
+						// Only the newest assistant message can be this run's reply.
 						idx := -1
 						for i := len(hist.Messages) - 1; i >= 0; i-- {
 							if hist.Messages[i].Role == "assistant" {
@@ -488,9 +357,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						if hist.Messages[idx].Usage == nil {
 							continue
 						}
-						// Thinking is emitted only off the accepted (fresh) message so a
-						// stale reply's monologue never replays under this run either.
-						// String-content messages simply have no thinking blocks.
+						// Thinking only from the accepted fresh message.
 						var contentBlocks []histContent
 						_ = json.Unmarshal(hist.Messages[idx].Content, &contentBlocks)
 						for _, c := range contentBlocks {
@@ -547,15 +414,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 									"total_tokens":       fmt.Sprintf("%d", u.TotalTokens),
 								},
 							})
-							// Auto-compact (legacy) — slow but preserves verbatim history
-							// via generated summary. Disabled in favour of new-session
-							// below; restore by uncommenting if new-session causes memory
-							// regressions. See maybeAutoCompact + maybeAutoNewSession in
-							// handler_session_lifecycle.go for trade-offs.
-							// h.maybeAutoCompact(h.agentGateway.GetSessionKey(), u.TotalTokens, capturedFlowRunID)
 
-							// Auto-new-session — instant, drops in-session conversation
-							// history but keeps device external memory (mood/habit/owner).
+							// Auto-new-session: drops in-session history, keeps device external memory.
 							h.maybeAutoNewSession(h.agentGateway.GetSessionKey(), u.TotalTokens, capturedFlowRunID)
 							return
 						}
@@ -566,13 +426,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 
-		// OpenClaw 2026.6.x "incomplete turn" misfire: the gateway surfaces
-		// "couldn't generate a response" even though the model replied
-		// (streamed deltas or session history; payloads=0 counting bug,
-		// openclaw#68076/#67855 family). Salvage the reply BEFORE emitting
-		// the lifecycle event so the turn renders as recovered, not failed.
-		// Runs sync on the WS worker — the chat-stream error for the same
-		// run arrives after this returns, so wasErrorRecovered is reliable.
+		// Salvage OpenClaw "incomplete turn" misfires (openclaw#68076/#67855) before emitting the
+		// lifecycle event. Sync on the WS worker so wasErrorRecovered is set before the chat error.
 		errorRecovered := false
 		if payload.Data.Phase == "error" && !strings.HasPrefix(payload.Data.Error, domain.RunExpiryErrorPrefix) {
 			errorRecovered = h.tryRecoverIncompleteTurn(payload.RunID, flowRunID, payload.SessionKey)
@@ -583,16 +438,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		shortErr := shortError(payload.Data.Error)
 		lcData := map[string]any{"run_id": flowRunID, "error": payload.Data.Error}
 		if errorRecovered {
-			// Blank the error field so the flow monitor doesn't render an
-			// error node over the recovered reply; keep the original for
-			// observability.
+			// Blank error so the monitor shows no error node; keep the original for observability.
 			lcData["error"] = ""
 			lcData["recovered"] = true
 			lcData["original_error"] = payload.Data.Error
 		}
 		if payload.Data.Phase == "start" {
-			// Fingerprint of the memory this turn runs with (sizes + sha8, no
-			// content) so a routing regression can be tied to a memory write.
+			// Memory fingerprint (sizes + sha8, no content) to tie routing regressions to memory writes.
 			if st := migratepersona.MemoryState(); st != nil {
 				lcData["memory"] = st
 			}
@@ -638,9 +490,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		}
 		h.monitorBus.Push(monEvt)
 
-		// Keep flow.GetTrace() "active" for the duration of the device turn so Telegram heuristic
-		// (lifecycle_start arriving while no device trace is active) can work correctly.
-		// Clear only after lifecycle_end so openclaw UUID → device runId mapping still succeeds.
+		// Clear trace only after end so the UUID → device run mapping still succeeds mid-turn.
 		if payload.Data.Phase == "end" || payload.Data.Phase == "error" {
 			flow.ClearTrace()
 		}
@@ -650,16 +500,11 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		toolArgs := payload.ToolArguments()
 		summary := toolName
 		if payload.Data.Phase == "start" {
-			// Hardware-reaction tools soft-cancel any pending filler —
-			// the user already perceives the device reacting. Non-HW
-			// tools leave the timer running so the filler can fire
-			// during a long Bash/curl/Read.
+			// HW-reaction tools soft-cancel pending filler; other tools keep the timer running.
 			sensinghttp.DefaultFillerManager.OnToolStart(flowRunID, toolArgs, toolName)
 			summary = fmt.Sprintf("Tool %s started", toolName)
 			h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
-			// Text streamed before this tool call is narration, not the reply
-			// — see demoteAssistantBufferToThinking. Keep it visible in the
-			// Flow Monitor thinking row, drop it from the reply buffer.
+			// Text streamed before a tool call is narration: move it to the thinking row.
 			if narration := h.demoteAssistantBufferToThinking(payload.RunID); narration != "" {
 				slog.Info("assistant text before tool call demoted to thinking",
 					"component", "agent", "run_id", flowRunID, "tool", toolName,
@@ -667,36 +512,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "thinking", Summary: narration, RunID: flowRunID})
 				flow.Log("narration_demoted", map[string]any{"run_id": flowRunID, "tool": toolName, "text": narration}, flowRunID)
 			}
-			// DEFENSIVE (2026-07-23): the agent sometimes wraps an [HW:...]
-			// marker inside a shell tool call — e.g.
-			// `echo '[HW:/audio/play:{...}]'` — instead of emitting it as
-			// reply text. A shell echo never reaches the reply-text marker
-			// interceptor, so the command no-ops: the flow node lights up
-			// (args contain the marker string) but HAL gets nothing and no
-			// music plays. Fire the echoed markers for real; when it does,
-			// skip the cosmetic-only detection below to avoid duplicate nodes.
+			// The agent sometimes echoes an [HW:...] marker in a shell call, which never reaches HAL;
+			// fire it for real and skip the cosmetic detection below to avoid duplicate nodes.
 			echoedHW := h.fireEchoedHWMarkers(toolName, toolArgs, flowRunID)
-			// Detect music playback tool calls (Music skill uses Bash+curl to
-			// POST /audio/play) — emit the flow/monitor event only.
-			// [2026-06-30] Do NOT suppress TTS here: the agent's reply (e.g.
-			// "Chơi nhạc Ghibli tiếp nha!") must speak BEFORE music plays. The
-			// Python music_service already waits for TTS via wait_for_tts()
-			// before grabbing ALSA, so this Go-side suppress is redundant and
-			// was swallowing the spoken reply. Mirrors the 2026-05-11 fix that
-			// disabled the hwCalls /audio/play suppress below (this tool-call
-			// path was missed then, and re-surfaced in the 2026-06-18 refactor).
+			// Monitor-only: don't suppress TTS here; music_service waits for TTS before taking ALSA.
 			if !echoedHW && strings.Contains(toolArgs, "/audio/play") {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_audio", Summary: toolArgs, RunID: flowRunID})
 				flow.Log("hw_audio", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
-				// music.play logged via flow.Log above
 			}
-			// Emit specific hardware events for flow monitor visualization.
-			// Both flow.Log (for JSONL persistence + UI flow_event triggers) and monitorBus (for SSE).
-			//
-			// Matched on the RESOLVED endpoint path, not on raw shell text. The
-			// /led and /audio branches below still use the substring form: same
-			// weakness, but no evidence of a phantom there yet, and a change to
-			// how they match is a separate decision.
+			// HW events for the flow monitor. /emotion and servo match the resolved path; /led and
+			// /audio still use substring matching.
 			hwPath := hwPathFromToolArgs(toolArgs)
 			if !echoedHW && strings.HasPrefix(hwPath, "/emotion") {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "led_set", Summary: "agent tool: " + toolName})
@@ -723,8 +548,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				h.monitorBus.Push(domain.MonitorEvent{Type: "hw_servo", Summary: toolArgs, RunID: flowRunID})
 				flow.Log("hw_servo", map[string]any{"path": hwPath, "args": toolArgs, "run_id": flowRunID}, flowRunID)
 			}
-			// Intercept OpenClaw built-in tts tool: extract text and route to HAL speaker.
-			// The built-in tts generates audio server-side but never reaches the physical speaker.
+			// Intercept OpenClaw's built-in tts tool (its audio never reaches the speaker); route to HAL.
 			if toolName == "tts" {
 				if ttsText := extractTTSText(toolArgs); ttsText != "" {
 					isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
@@ -736,23 +560,13 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 						h.deliverTTS(h.agentGateway.SendToHALTTS, ttsText, flowRunID, "TTS intercept delivery failed")
 					}
-					// Mark this turn as already spoken so lifecycle_end won't double-speak.
+					// Mark spoken so lifecycle end doesn't double-speak.
 					h.suppressTTS(payload.RunID, "already_spoken")
 				}
 			}
 		} else if payload.Data.Phase == "end" || payload.Data.Phase == "result" {
-			// Tool finished — re-arm the filler timer if the turn is
-			// still active. Long multi-tool turns get a filler at each
-			// dead-air pocket, capped by MaxFillersPerTurn and gated
-			// by FillerCooldown.
-			//
-			// OpenClaw emits phase="result" for native tools (read,
-			// web_search, web_fetch, exec, …) and phase="end" for
-			// some legacy paths; both signal the same boundary. Until
-			// 2026-05-12 this branch only matched "end", which meant
-			// every native tool silently skipped the filler re-arm
-			// and only the very first Continuation ever fired —
-			// observable as "no filler during web_search" UX.
+			// Re-arm the filler after each tool. OpenClaw emits "result" for native tools and "end"
+			// for legacy paths; both mark the boundary.
 			sensinghttp.DefaultFillerManager.OnToolEnd(flowRunID)
 			result := payload.ResultText()
 			if len(result) > 100 {
@@ -785,7 +599,6 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		if delta == "" {
 			delta = payload.Data.Text
 		}
-		// Don't truncate deltas — they are merged in the frontend
 		if delta != "" {
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "thinking",
@@ -804,11 +617,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		if delta == "" {
 			delta = payload.Data.Text
 		}
-		// Don't truncate deltas — they are merged in the frontend
 		if delta != "" {
-			// Assistant text may introduce another tool call. Suspend fillers
-			// during text; only a new tool.start can resume this voice turn.
-			// Lifecycle end/error and explicit interruption still hard-cancel.
+			// Suspend fillers during text; only a new tool.start resumes. End/error still hard-cancel.
 			sensinghttp.DefaultFillerManager.OnAssistantText(flowRunID)
 			h.monitorBus.Push(domain.MonitorEvent{
 				Type:    "assistant_delta",
@@ -822,27 +632,18 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 
-		// When the agent turn ends, the final assistant text should be spoken.
-		// Accumulate deltas per runId and send to TTS when lifecycle "end" arrives.
+		// Accumulate deltas per run; spoken at lifecycle end.
 		h.accumulateAssistantDelta(payload.RunID, delta)
 
-		// Slack (hermes HTTP bridge): stream the reply progressively into the live
-		// Slack message (chat.appendStream). Feed the cleaned cumulative text so far;
-		// the bridge throttles + appends the new tail. Guarded by the SlackBridge
-		// type-assert + IsSlackOriginRun peek — non-Slack runs / openclaw are untouched.
+		// Slack bridge: stream the cleaned cumulative text into the live Slack message.
 		if sb, ok := h.agentGateway.(domain.SlackBridge); ok && sb.IsSlackOriginRun(flowRunID) {
 			if clean, ready := h.cleanedSlackStreamText(payload.RunID); ready {
 				sb.StreamSlackDelta(flowRunID, clean)
 			}
 		}
 
-		// Sentence-streaming: dispatch the FIRST complete sentence to
-		// /voice/speak as soon as the agent emits the boundary so the
-		// device starts speaking before generation finishes. Only the
-		// first sentence streams here — chaining every sentence as its
-		// own POST exposes a per-sentence TTFB gap. Lifecycle:end sends
-		// the remainder through /voice/speak-queue so Python pre-synths
-		// it while sentence 1 plays and chains the rest seamlessly.
+		// Stream only the FIRST sentence early; lifecycle end queues the remainder via
+		// /voice/speak-queue (per-sentence POSTs would add TTFB gaps).
 		if h.canStreamSentenceTTS(payload.RunID, flowRunID) {
 			if sentence := h.tryFirstSentenceFlush(payload.RunID); sentence != "" {
 				cleaned := sanitizeAgentText(sentence)
@@ -853,13 +654,8 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						slog.Info("[tts-timing] sentence_ready", "run_id", flowRunID,
 							"text_key", ttsTextKey(cleaned), "first_delta_to_ready_ms", readyAt.Sub(firstDeltaAt).Milliseconds())
 					}
-					// ADDED 2026-05-26: fire leading HW markers SYNC before TTS POST so
-					// state mutations (e.g. /scene/off → speaker unmute) apply in HAL
-					// before /voice/speak-queue arrives. Without this, TTS races ahead
-					// and gets rejected while speaker is still muted by a prior scene.
-					// extractLeadingHWCalls only picks markers BEFORE first non-marker
-					// text, so inline markers (between sentences) stay deferred to
-					// lifecycle:end and preserve position-in-text semantics.
+					// Fire leading HW markers sync before the TTS POST so state changes (e.g. /scene/off
+					// unmuting the speaker) apply first. Inline markers stay deferred to lifecycle end.
 					h.assistantMu.Lock()
 					buf := h.assistantBuf[payload.RunID]
 					rawSnapshot := ""
@@ -890,15 +686,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 
 	}
 
-	// When agent lifecycle ends, flush accumulated assistant text to TTS.
-	// Suppress TTS if the agent played music or already spoke via tool intercept.
+	// Lifecycle end: flush accumulated assistant text to TTS unless suppressed.
 	if payload.Stream == "lifecycle" && payload.Data.Phase == "end" {
 		lifecycleEndAt := time.Now()
-		// Persist streaming summary to JSONL. Raw deltas only live in
-		// monitorBus (RAM) — Flow Monitor reads JSONL on reload, so
-		// without these summary events the pipeline rect shows no
-		// thinking/assistant rows for past turns. Mirror agent_thinking
-		// which is similarly populated from chat.history at turn end.
+		// Persist stream summaries to JSONL; raw deltas only live in monitorBus (RAM).
 		if s := h.drainStreamStats(flowRunID); s != nil {
 			if s.thinkingChunks > 0 {
 				flow.Log("thinking_last_token", map[string]any{
@@ -922,14 +713,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			}
 		}
 
-		// Hard-cancel any lingering filler before the real TTS flush
-		// — covers edge case where the turn ended without any
-		// assistant delta (NO_REPLY, HW-only reply, error).
+		// Hard-cancel filler before the real flush (covers NO_REPLY / HW-only / error).
 		sensinghttp.DefaultFillerManager.Cancel(flowRunID)
 		suppressReason := h.clearTTSSuppress(payload.RunID)
-		// Pull interleaved Telegram DM target up front so the map entry is
-		// cleared even on NO_REPLY / HW-only / suppressed branches that
-		// never reach the dmTelegramID injection below.
+		// Consume up front so the entry is cleared on every branch.
 		interleavedDMTarget := h.consumeInterleavedDM(payload.RunID)
 		if interleavedDMTarget == "" {
 			interleavedDMTarget = h.consumeInterleavedDM(flowRunID)
@@ -938,71 +725,37 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		if suppressReason == "" && h.agentGateway.ConsumeWebChatRun(flowRunID) {
 			suppressReason = "web_chat"
 		}
-		// Realtime voice agent already spoke this turn (voice_agent_handled):
-		// suppress TTS so OpenClaw's reply isn't double-spoken.
+		// Realtime voice agent already spoke this turn.
 		if suppressReason == "" && h.agentGateway.ConsumeSilentRun(flowRunID) {
 			suppressReason = "voice_agent_handled"
 		}
 		text, hwCalls := h.flushAssistantText(payload.RunID)
 		finalBufferReadyAt := time.Now()
-		// streamedCleanLen > 0 means the first sentence was dispatched
-		// mid-turn via tryFirstSentenceFlush; the remainder TTS POST
-		// below slices `text` at that offset to skip what already
-		// played. Broadcast/DM still use full `text` since it covers
-		// the entire reply the user heard.
+		// Non-zero when sentence 1 was streamed mid-turn; the remainder POST skips it.
 		streamedLen := h.consumeStreamedCleanLen(payload.RunID)
 		if streamedLen > len(text) {
 			streamedLen = len(text)
 		}
 		streamed := streamedLen > 0
-		// ADDED 2026-05-26: skip leading HW markers already fired at stream-time
-		// (see fireHWCallsSync call earlier). extractHWCalls returns markers in
-		// stable source order, so [firedAtStream:] is the remainder.
+		// Skip leading HW markers already fired at stream time (order is stable).
 		firedAtStream := h.consumeFiredHWCount(payload.RunID)
 		if firedAtStream > len(hwCalls) {
 			firedAtStream = len(hwCalls)
 		}
 		hwCalls = hwCalls[firedAtStream:]
 		if text != "" || len(hwCalls) > 0 || streamed {
-			// ADDED 2026-05-27: fire SYNC (was h.fireHWCalls async) so state-
-			// changing markers like /scene/off apply before the lifecycle-end
-			// TTS POST below races ahead and gets rejected on still-muted
-			// speaker. Single-sentence responses skip stream-time fire (no
-			// sentence boundary) — without sync here, the race returns.
-			// fireHWCallsSync has 100ms per-call timeout + async fallback,
-			// so heavy markers (e.g. /servo/track) don't block TTS.
+			// Sync so state-changing markers (e.g. /scene/off) apply before the TTS POST;
+			// fireHWCallsSync has a 100ms per-call timeout with async fallback.
 			h.fireHWCallsSync(hwCalls, flowRunID)
 
-			// [2026-05-11] DISABLED — TTS suppress on /audio/play was killing the
-			// agent's main reply (e.g. "Mình chọn River Flows in You…") and
-			// leaving only the random short backchannel cue. Python music_service
-			// already waits for TTS via wait_for_tts() before grabbing ALSA, so
-			// this Go-side suppress is redundant. Rollback: uncomment to restore
-			// hard-suppress behavior.
-			// if suppressReason == "" {
-			// 	for _, c := range hwCalls {
-			// 		if strings.Contains(c.path, "/audio/play") {
-			// 			suppressReason = "music_playing"
-			// 			break
-			// 		}
-			// 	}
-			// }
-
-			// Consume broadcast marker early to prevent map leak on NO_REPLY/empty/suppressed paths.
+			// Consume early to avoid a map leak on NO_REPLY/empty/suppressed paths.
 			isBroadcastRun := h.agentGateway.ConsumeBroadcastRun(flowRunID)
 
-			// Slack (hermes HTTP bridge): a Slack-origin turn replies in Slack with TTS
-			// suppressed. Peek (don't consume) so the mid-turn streaming gate can also
-			// see it; DeliverSlackReply consumes at reply time. isSlackRun is false for
-			// every non-Slack run and every runtime that isn't a SlackBridge (openclaw).
+			// Peek only; DeliverSlackReply consumes at reply time. False for non-SlackBridge runtimes.
 			slackBridge, _ := h.agentGateway.(domain.SlackBridge)
 			isSlackRun := slackBridge != nil && slackBridge.IsSlackOriginRun(flowRunID)
 
-			// [HW:/broadcast] marker: fan-out reply text to all Telegram chats (guard-only).
-			// [HW:/speak] marker: force TTS on the speaker without any channel fan-out —
-			// used by proactive triggers (e.g. music suggestions) that run inside a
-			// channel session but need to speak out loud anyway.
-			// [HW:/dm:{"telegram_id":"123"}] marker: send reply to a specific Telegram user.
+			// Markers: /broadcast fans out to Telegram, /speak forces TTS, /dm targets one Telegram user.
 			var dmTelegramID string
 			forceTTS := false
 			for _, c := range hwCalls {
@@ -1021,18 +774,14 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					}
 				}
 			}
-			// Queue-mode interleave: when the agent didn't include a /dm
-			// marker but a Telegram message was injected mid-turn, route
-			// the reply back to the originating chat (captured from
-			// session.message metadata in the lifecycle window).
+			// No /dm marker but a Telegram message was interleaved mid-turn: reply to that chat.
 			if dmTelegramID == "" && interleavedDMTarget != "" {
 				dmTelegramID = interleavedDMTarget
 				slog.Info("routing reply to interleaved Telegram chat (queue-mode injection)",
 					"component", "agent", "run_id", flowRunID, "chat_id", dmTelegramID)
 			}
 
-			// Guard mode: broadcast even on NO_REPLY / empty / suppressed paths.
-			// The agent may choose not to speak, but we still want to alert the owner via Telegram.
+			// Guard mode alerts the owner even on NO_REPLY / empty / suppressed paths.
 			if snap, ok := h.agentGateway.ConsumeGuardRun(flowRunID); ok {
 				guardText := text
 				if guardText == "" || isAgentNoReply(guardText) {
@@ -1049,8 +798,6 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			// Detect heartbeat before sanitizing strips the sentinel.
 			isHeartbeatRun := strings.Contains(strings.ToUpper(text), "HEARTBEAT_OK")
 			if isHeartbeatRun {
-				// Tag the turn so the Flow monitor can label it "heartbeat"
-				// instead of rendering an anonymous doppelgänger turn card.
 				flow.Log("heartbeat_run", map[string]any{"run_id": flowRunID}, flowRunID)
 				h.monitorBus.Push(domain.MonitorEvent{
 					Type:    "heartbeat_run",
@@ -1058,25 +805,16 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					RunID:   flowRunID,
 				})
 			}
-			// Extract <say>...</say> wrapper if the skill uses it (wellbeing).
-			// Non-tagged replies pass through unchanged.
+			// Unwrap <say>...</say> if present.
 			text = extractSayTag(text)
 			text = sanitizeAgentText(text)
-			// Slice off the prefix already streamed mid-turn so the
-			// remainder POST doesn't replay sentence 1. Clamp because
-			// extractSayTag / sanitizeAgentText may shorten text below
-			// the previously-tracked offset.
+			// Skip the already-streamed prefix; clamp since sanitizing may shorten text.
 			if streamedLen > len(text) {
 				streamedLen = len(text)
 			}
 			remainderText := strings.TrimSpace(text[streamedLen:])
-			// CoT-leak filter (see cot_leak_filter.go): drop DeepSeek-style
-			// planning monologue from the reply before it reaches TTS, the web
-			// chat (full_text), and channel fan-out (DM/broadcast/Slack). The
-			// remainder is filtered with state seeded from the already-streamed
-			// prefix (CoT-mode + fuzzy-dedup continuity); `text` is replaced by
-			// the fresh full-text pass only when something was dropped, so
-			// clean turns keep their original whitespace/newlines.
+			// Drop CoT planning leaks (cot_leak_filter.go). The remainder filter is seeded with the
+			// streamed prefix; `text` is replaced only when something was dropped.
 			cotLang := h.replyLanguageCode()
 			fullFilter := newCoTLeakFilter(cotLang)
 			if filteredFull := fullFilter.filterText(text); len(fullFilter.dropped) > 0 {
@@ -1103,10 +841,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				return nil
 			}
 			if isAgentNoReply(text) || isMetaNonReply(text) {
-				// NO_REPLY in remainder. If streamed > 0 the agent
-				// already spoke sentence 1; can't unspeak it. Log a
-				// warning so we notice any skill that mixes NO_REPLY
-				// with real speech.
+				// Sentence 1 may already have been spoken and can't be unspoken.
 				if streamed {
 					slog.Warn("NO_REPLY in remainder after first sentence streamed",
 						"component", "agent", "run_id", flowRunID, "streamed_len", streamedLen)
@@ -1124,15 +859,10 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 			} else if remainderText == "" {
 				h.clearHarnessResponseRun(flowRunID)
 				if streamed {
-					// Reply was a single sentence already streamed
-					// mid-turn — nothing left to TTS at end. Log so
-					// the flow monitor shows turn complete instead
-					// of a misleading hw_only_reply.
 					slog.Info("assistant turn complete via first-sentence streaming",
 						"component", "agent", "run_id", flowRunID, "streamed_len", streamedLen)
 					flow.Log("tts_stream_complete", map[string]any{"run_id": flowRunID, "text": text}, flowRunID)
 				} else {
-					// HW-only reply (only markers, no spoken text)
 					flow.Log("hw_only_reply", map[string]any{"run_id": flowRunID}, flowRunID)
 				}
 			} else if suppressReason != "" {
@@ -1141,21 +871,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppressReason, "text": text}, flowRunID)
 			} else {
 				h.clearHarnessResponseRun(flowRunID)
-				// Channel detection: positive-evidence only. tg- runIDs are
-				// synthesised by the device from session.message events (real Telegram
-				// users); anything else (device-chat-*, UUID from steer/cron/
-				// heartbeat) is NOT a channel run unless explicitly marked
-				// via channelRuns below.
-				//
-				// Previously this defaulted to `!isDeviceOutboundChatRunID(...)`,
-				// which mis-classified OpenClaw UUID self-fire / cron / heartbeat
-				// runs as Telegram and suppressed their TTS — most visibly,
-				// music-suggestion replies on emotion.detected events when the
-				// sensing turn got steered into a UUID host turn.
+				// Channel detection is positive-evidence only: tg- runs or runs marked in channelRuns.
 				isChannelRun := isChannelOriginatedRun(payload.RunID, flowRunID)
-				// Cron-fire turns always TTS on the device speaker even though their
-				// UUID runIds look like channel runs. Detected from chat.history
-				// systemEvent template at lifecycle_start (see cronFireRuns map).
+				// Cron-fire turns always speak even though their UUIDs look like channel runs.
 				h.cronFireRunsMu.Lock()
 				isCronFire := h.cronFireRuns[payload.RunID] || h.cronFireRuns[flowRunID]
 				delete(h.cronFireRuns, payload.RunID)
@@ -1173,8 +891,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				if isHeartbeatRun {
 					isChannelRun = true
 				}
-				// Override: confirmed channel turn via senderLabel always suppresses TTS.
-				// Covers race where Telegram UUID mapped to sensing trace (device-sensing-*).
+				// A confirmed channel turn (senderLabel) always suppresses TTS.
 				h.channelRunsMu.Lock()
 				if h.channelRuns[payload.RunID] || h.channelRuns[flowRunID] {
 					isChannelRun = true
@@ -1187,32 +904,18 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					isChannelRun = true
 				}
 				if isChannelRun {
-					// TTS would be gated by channel_run — log suppression so the
-					// monitor doesn't misleadingly show a "tts_send" event when the
-					// speaker stays silent. Channel/Telegram users still receive
-					// the text via OpenClaw's own session fan-out.
+					// Channel users still get the text via OpenClaw's own fan-out.
 					slog.Info("assistant turn done, TTS suppressed (channel run)", "component", "agent", "text", text[:min(len(text), 100)], "broadcast", isBroadcastRun, "force_tts", forceTTS, "cron_fire", isCronFire, "heartbeat", isHeartbeatRun)
 					flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": "channel_run", "text": text}, flowRunID)
 				} else {
-					// remainderText excludes the first sentence already
-					// streamed (when streamed=true). Use /voice/speak-queue
-					// so Python pre-synthesises while sentence 1 is still
-					// playing and chains the remainder seamlessly onto
-					// the open ALSA stream (no inter-sentence gap). Non-
-					// streamed turns also go through the queue endpoint
-					// — when idle it behaves exactly like /voice/speak,
-					// so this is a safe drop-in.
+					// speak-queue pre-synthesises the remainder while sentence 1 plays; idle it acts like /voice/speak.
 					slog.Info("assistant turn done, sending to TTS",
 						"component", "agent",
 						"text", remainderText[:min(len(remainderText), 100)],
 						"streamed_len", streamedLen,
 						"broadcast", isBroadcastRun, "force_tts", forceTTS,
 						"cron_fire", isCronFire, "heartbeat", isHeartbeatRun)
-					// `text` is the FULL reply (sentence 1 + remainder); `remainderText`
-					// excludes sentence 1 when it was streamed mid-turn via
-					// tts_stream_send. Carry `full_text` so the web (chat + flow turn)
-					// can display the complete reply — it only reads tts_send and would
-					// otherwise drop sentence 1 (logged separately as tts_stream_send).
+					// full_text lets the web show the complete reply (sentence 1 was logged as tts_stream_send).
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainderText, "full_text": text, "streamed_len": streamedLen}, flowRunID)
 					slog.Info("[tts-timing] final_dispatch", "run_id", flowRunID,
 						"text_key", ttsTextKey(remainderText), "streamed_len", streamedLen,
@@ -1220,15 +923,9 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						"buffer_ready_to_dispatch_ms", time.Since(finalBufferReadyAt).Milliseconds())
 					h.deliverTTSQueue(remainderText, flowRunID, "TTS delivery failed")
 				}
-				// Guard broadcast is handled above (before the if/else) to ensure
-				// it fires even on NO_REPLY / empty / suppressed paths.
-				// DM run: send agent response to a specific Telegram user.
-				// Takes priority over broadcast — if /dm is present, /broadcast is skipped.
+				// /dm takes priority over /broadcast.
 				if dmTelegramID != "" && len(text) > 10 {
-					// Auto-attach the worst pose frames when this turn was
-					// triggered by a motion.activity that surfaced a posture
-					// nudge. Mirrors the guard-snapshot path: agent doesn't
-					// know any file paths — the device resolved them at ingest.
+					// Attach the worst pose frames when a posture nudge triggered this turn.
 					poseBucket, poseFiles, hasPoseBucket := h.agentGateway.ConsumePoseBucketRun(flowRunID)
 					var poseImagePaths []string
 					if hasPoseBucket {
@@ -1250,8 +947,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 						}
 					}(text, dmTelegramID, poseImagePaths)
 				} else if isBroadcastRun && len(text) > 10 {
-					// Broadcast run (e.g. music.mood): send agent response to all channels
-					// so user can confirm via Telegram instead of only voice.
+					// Broadcast run (e.g. music.mood): send the reply to all channels.
 					go func(t string) {
 						slog.Info("broadcast run response to channels", "component", "agent", "run_id", flowRunID, "text", t[:min(len(t), 80)])
 						if err := h.agentGateway.Broadcast(t, ""); err != nil {
@@ -1261,11 +957,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 				}
 			}
 
-			// Slack (hermes HTTP bridge): finalize the turn for EVERY end-phase outcome
-			// (real reply, NO_REPLY, suppressed, empty), not just the spoken-reply branch
-			// above — otherwise the per-run stream goroutine + origin/stream maps leak.
-			// DeliverSlackReply consumes the origin, stops the stream (chat.stopStream),
-			// and posts nothing when the text is empty. NO_REPLY → deliver "" (cleanup).
+			// Finalize Slack on every end outcome so the stream goroutine doesn't leak; NO_REPLY → "".
 			if isSlackRun && slackBridge != nil {
 				slackText := text
 				if isAgentNoReply(text) {

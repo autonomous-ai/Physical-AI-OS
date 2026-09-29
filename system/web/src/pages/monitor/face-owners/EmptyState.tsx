@@ -1,7 +1,6 @@
 import type { ReactNode } from "react";
 
-// EmptyState replaces the bare italic "No … yet" lines with a centered icon +
-// message that has room to breathe — reads as designed rather than a stub.
+// Centered icon + message for empty lists.
 export function EmptyState({ icon, text }: { icon: ReactNode; text: string }) {
   return (
     <div style={{

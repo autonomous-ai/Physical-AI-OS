@@ -12,25 +12,16 @@ import (
 	"time"
 )
 
-// Coding-session discovery for the Telegram remote-coding feature.
-//
-// The claude CLI stores every session as a JSONL transcript under
-// ~/.claude/projects/<encoded-cwd>/<session-uuid>.jsonl. The device runs claude
-// as root, so the tree lives at /root/.claude/projects. This file reads that
-// tree so Telegram can list resumable sessions and continue any of them (see
-// telegram_coding.go). Sessions are cwd-scoped: `claude --resume <uuid>` only
-// finds the session when run from the folder it was created in — so each
-// session carries its real cwd, recovered from the transcript (NOT decoded from
-// the directory name, whose /→- encoding is lossy for folders containing '-').
+// Sessions are cwd-scoped: `claude --resume <uuid>` only finds the session when run from the folder
+// it was created in — so each session carries its real cwd, recovered from the transcript (NOT
+// decoded from the directory name, whose /→- encoding is lossy for folders containing '-').
 
 const (
-	// claudeProjectsDirDefault is the on-device session store. Overridable via
-	// the claudeProjectsDirPath test seam.
+	// claudeProjectsDirDefault is the on-device session store.
 	claudeProjectsDirDefault = "/root/.claude/projects"
 
 	// transcriptScanLimit bounds how many bytes of a transcript are read while
-	// recovering its cwd + recent prompts. Generous so the tail (recent prompts)
-	// is reached for normal-sized transcripts.
+	// recovering its cwd + recent prompts.
 	transcriptScanLimit = 4 * 1024 * 1024
 
 	// recentPromptsMax is how many recent user prompts a listing shows per
@@ -67,8 +58,7 @@ func (s *ClaudeCodeService) claudeProjectsDir() string {
 }
 
 // allCodingSessions returns every discovered session, most-recently-modified
-// first. Transcripts whose cwd can't be recovered are skipped (they can't be
-// resumed reliably anyway).
+// first.
 func (s *ClaudeCodeService) allCodingSessions() []codingSession {
 	dir := s.claudeProjectsDir()
 	projects, err := os.ReadDir(dir)
@@ -95,7 +85,7 @@ func (s *ClaudeCodeService) allCodingSessions() []codingSession {
 			}
 			folder, recent := readTranscriptMeta(filepath.Join(projDir, f.Name()))
 			if folder == "" || folder == deviceMainWorkspace {
-				continue // skip the device-main persona's own workspace session
+				continue
 			}
 			out = append(out, codingSession{
 				Folder:    folder,
@@ -120,8 +110,7 @@ type CodingSessionInfo struct {
 
 // ListCodingSessions returns every resumable claude session on the device,
 // newest first — the exact discovery Telegram uses (allCodingSessions),
-// exposed for the cc picker. A zero-value service reads the production store
-// (/root/.claude/projects).
+// exposed for the cc picker.
 func ListCodingSessions() []CodingSessionInfo {
 	var s ClaudeCodeService
 	all := s.allCodingSessions()
@@ -138,7 +127,7 @@ func (s *ClaudeCodeService) codingFolders() []codingSession {
 	all := s.allCodingSessions()
 	seen := map[string]bool{}
 	var out []codingSession
-	for _, cs := range all { // already newest-first, so the first hit per folder wins
+	for _, cs := range all {
 		if seen[cs.Folder] {
 			continue
 		}
@@ -170,10 +159,6 @@ func (s *ClaudeCodeService) latestSessionForFolder(folder string) (codingSession
 }
 
 // readTranscriptMeta recovers a transcript's cwd and the recent user prompts.
-// cwd is taken from the first record that carries one; the prompts are the last
-// recentPromptsMax real user messages (synthetic <environment_context>/
-// <system-reminder> blocks skipped), most-recent first. Reads at most
-// transcriptScanLimit bytes.
 func readTranscriptMeta(path string) (folder string, recent []string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -285,8 +270,7 @@ func oneLine(s string) string {
 
 // isInjectedContext reports whether a "user" message is actually a synthetic
 // context block the CLI prepends before the real prompt (environment info,
-// system reminders, IDE/command wrappers) — not something the human typed. Used
-// to skip it when picking a session summary.
+// system reminders, IDE/command wrappers) — not something the human typed.
 func isInjectedContext(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" {

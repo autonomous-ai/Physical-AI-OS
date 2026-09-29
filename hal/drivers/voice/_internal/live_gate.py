@@ -1,9 +1,4 @@
-"""Hardware AEC residual-echo gate; all levels are normalized RMS.
-
-This is an energy heuristic, not a speech classifier. Capture stays open; only
-unconfirmed audio during playback/tail is replaced with silence for the provider.
-Call from one audio consumer and reset when the capture stream/session changes.
-"""
+"""Hardware AEC residual-echo gate; all levels are normalized RMS."""
 
 from collections import deque
 import math
@@ -61,12 +56,7 @@ class AdaptiveLiveGate:
         self._unduck_at = None
 
     def idle_threshold(self, rms, duration=None):
-        """Track ambient only: ignore samples above the existing speech threshold.
-
-        Like the demo, a sudden persistent noise jump above this threshold is
-        deliberately not learned: this energy heuristic cannot distinguish it
-        from speech. Such an environment needs better AEC or a speech classifier.
-        """
+        """Track ambient only: ignore samples above the existing speech threshold."""
         if duration is not None and (not math.isfinite(duration) or duration <= 0):
             raise ValueError("duration must be finite and positive")
         threshold = max(self.IDLE_FLOOR, self.noise * 4)
@@ -99,13 +89,7 @@ class AdaptiveLiveGate:
         self._prefix_samples = 0
 
     def process(self, data, rate, playback, output_level, playback_seconds=0.0):
-        """Return flat mono int16 PCM, optionally prepended with withheld onset.
-
-        Accept mono (N,) or (N, 1). Pass output RMS after duck gain, and actual
-        local playback state. speech_started and barge_in are one-call pulses;
-        consume barge_in once to interrupt locally, rather than testing speaking.
-        Output can exceed input by at most 300 ms; send it once without refeeding.
-        """
+        """Return flat mono int16 PCM, optionally prepended with withheld onset."""
         frame = np.asarray(data)
         if frame.ndim == 2 and frame.shape[1] == 1:
             frame = frame[:, 0]

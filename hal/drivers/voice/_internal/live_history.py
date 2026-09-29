@@ -74,8 +74,6 @@ class LiveHistory:
         turn["output"] = self._clean_reply(turn["output"])
         if not turn["input"].strip() or not turn["output"].strip():
             return
-        # Provider keys are unique per session; use the metrics interaction when
-        # available, with a stable fallback if instrumentation could not create it.
         turn["interaction"] = turn["interaction"] or "live-" + key
         try:
             self._queue.put_nowait(turn)

@@ -5,9 +5,7 @@ import { EmptyState } from "./EmptyState";
 import { fmtCountdown } from "./format";
 import type { CooldownEntry } from "./types";
 
-// Face Recognition Cooldowns. The allCooldownEntries / hasActiveCooldowns
-// derivations stay in the parent and are passed in, so nothing about the
-// cooldown polling/state moves here.
+// Face Recognition Cooldowns.
 export function CooldownsCard({
   allCooldownEntries, cdError, hasActiveCooldowns, resetting, onReset, monCard, cardHeader,
 }: {
@@ -80,9 +78,6 @@ export function CooldownsCard({
                       fontSize: 10,
                       padding: "1px 6px",
                       borderRadius: 4,
-                      // Tint derived from the (theme-aware) kindColor so the
-                      // badge fill flips with dark/light instead of staying a
-                      // hardcoded rgb.
                       background: `color-mix(in srgb, ${kindColor} 14%, transparent)`,
                       color: kindColor,
                       fontWeight: 600,
@@ -99,7 +94,6 @@ export function CooldownsCard({
                     {fmtCountdown(entry.cooldown_remaining)}
                   </span>
                 </div>
-                {/* Progress bar */}
                 <div style={{
                   height: 4,
                   borderRadius: 2,

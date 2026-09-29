@@ -6,9 +6,7 @@ import { getAgentRuntime } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { ChannelLoadedState } from "@/hooks/setup/types";
 
-// Bot tokens now go through SecretUpdateField (write-only) — the server only
-// returns has_* booleans so the previous "show saved token" affordance is
-// gone. Channel IDs stay plain LockedField since they're not secrets.
+// Messaging channel settings; bot tokens are write-only.
 export function ChannelSection({
   active, channel, setChannel, channelLoaded,
   teleToken, setTeleToken, teleUserId, setTeleUserId,
@@ -36,9 +34,6 @@ export function ChannelSection({
   bluebubblesUserAddress: string; setBluebubblesUserAddress: (v: string) => void;
   bluebubblesCallerContext: string; setBluebubblesCallerContext: (v: string) => void;
 }) {
-  // iMessage guide starts collapsed — an operator who already has the three
-  // values in hand should not scroll past a wall of Mac install steps every
-  // time. Persist per-browser so a returning user does not have to re-open.
   const [imessageGuideOpen, setImessageGuideOpen] = useState<boolean>(() => {
     try { return localStorage.getItem("imessage-guide-open") === "1"; } catch { return false; }
   });
@@ -46,13 +41,6 @@ export function ChannelSection({
     try { localStorage.setItem("imessage-guide-open", imessageGuideOpen ? "1" : "0"); } catch { /* private mode: silently skip */ }
   }, [imessageGuideOpen]);
 
-  // Active agent runtime — used only by the iMessage panel to warn when the
-  // current backend can't drive BlueBubbles. Kept as null until the fetch
-  // returns so we render nothing (no false-negative "not Hermes" flash) on
-  // slow devices; the field also stays null if the request errors, which is
-  // the safe fallback since the InfoCard at the bottom already documents the
-  // Hermes-only requirement in prose. Only fetches once the channel section
-  // is actually visible — no point paying the round trip on the LLM tab.
   const [runtimeCurrent, setRuntimeCurrent] = useState<string | null>(null);
   useEffect(() => {
     if (!active) return;
@@ -107,12 +95,6 @@ export function ChannelSection({
       )}
       {channel === "imessage" && (
         <>
-          {/* Runtime mismatch banner — iMessage/BlueBubbles is Hermes-only
-              today. Runs BEFORE the form so an operator on the wrong runtime
-              is stopped from filling in three fields that will never activate
-              a working plugin. Rendered only after the runtime probe has
-              returned a non-Hermes value; a null/loading state stays quiet so
-              a slow API call cannot flash the warning at a Hermes device. */}
           {runtimeMismatch && (
             <div style={{
               background: "rgba(220, 38, 38, 0.10)",
@@ -156,9 +138,6 @@ export function ChannelSection({
             </div>
           )}
 
-          {/* Header row with amber Apple/message logo tile — visually anchors
-              the iMessage form so an operator who scrolled past a wall of
-              other channels knows they landed on the right one. */}
           <div style={{ display: "flex", alignItems: "flex-start", gap: 12, marginBottom: 14 }}>
             <div style={{
               flexShrink: 0,
@@ -179,18 +158,6 @@ export function ChannelSection({
             </div>
           </div>
 
-          {/* WHO IS THIS FOR — most-common misconception this channel hits.
-              Operators buy the device, set up iMessage, then chat their own
-              Mac's phone from their own iPhone expecting the bot to reply.
-              iMessage tags SAME-Apple-ID traffic as isFromMe:true, and the
-              plugin drops those as self-echoes to avoid reply loops. So the
-              operator sees silence and thinks the setup is broken. Same
-              pattern every other messaging bot has (a Telegram bot doesn't
-              reply to itself either) — but iMessage's same-Apple-ID sync
-              across iPhone + Mac makes it easier to trip into by accident.
-              Set that expectation before the operator spends 20 minutes on
-              setup + BlueBubbles install; the amber card below the identity
-              field only covers the narrow testing workaround. */}
           <div style={{
             background: "rgba(10, 132, 255, 0.08)",
             border: "1px solid rgba(10, 132, 255, 0.35)",
@@ -283,21 +250,7 @@ export function ChannelSection({
             Your phone number or email for the operator's home conversation.
             Customer messages from other addresses are accepted by default.
           </div>
-          {/* The amber "Testing from your OWN iPhone?" workaround card used to
-              live here — removed. In practice the two-settings-must-disagree
-              workaround is unreliable (iMessage tags isFromMe inconsistently
-              even after the swap, so tests came back hit-or-miss and the
-              amber block only added noise for shop/service operators reading
-              the form). The blue "Who is this channel for?" callout at the
-              top already tells the operator to borrow a friend's iPhone with
-              a different Apple ID, which is the actually-reliable path. */}
 
-          {/* Optional caller-context prompt — non-secret plaintext prepended
-              to every incoming iMessage as a system-context block so the LLM
-              treats callers correctly (shops / customer support / services
-              set-ups). Uses a plain <textarea> rather than LockedField since
-              it is multi-line and not a secret. Empty preserves default
-              behaviour where the bot treats the caller as the owner. */}
           <FieldLabel htmlFor="bb_caller_context">Customer instructions (optional)</FieldLabel>
           <textarea
             id="bb_caller_context"
@@ -329,11 +282,6 @@ export function ChannelSection({
             behaviour (bot treats caller as owner).
           </div>
 
-          {/* Collapsible walkthrough — 5 steps. Header always visible so a
-              first-time operator sees where to click; body starts collapsed
-              so a returning user with credentials in hand does not scroll
-              past it. The `id` on the outer div is a scroll target for the
-              Server URL hint link above. */}
           <div id="imessage-guide-anchor" style={{
             background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10,
             padding: "10px 14px", marginBottom: 12,
@@ -464,8 +412,6 @@ export function ChannelSection({
     </SectionCard>
   );
 }
-
-// ── Sub-components ──────────────────────────────────────────────────────────
 
 function InfoCard({
   tone,

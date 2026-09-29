@@ -21,9 +21,7 @@ import (
 
 type recordedAlert struct{ title, detail string }
 
-// alertRecorder stands in for the ops-alert transport via the handler's
-// scheduleAlert hook, recording synchronously so a test can assert exactly
-// which alerts one event produced.
+// alertRecorder captures alerts synchronously via the scheduleAlert hook.
 type alertRecorder struct {
 	mu  sync.Mutex
 	got []recordedAlert
@@ -51,8 +49,7 @@ func (a *alertRecorder) onlyAlert(t *testing.T) recordedAlert {
 	return got[0]
 }
 
-// alertTestHandler is a handler with a fake broker (acks and schedule.mutate
-// publishes really go out), temp schedule stores, and the alert recorder.
+// alertTestHandler uses a fake broker, temp stores and the alert recorder.
 func alertTestHandler(t *testing.T) (*DeviceMQTTHandler, *alertRecorder, <-chan []byte) {
 	t.Helper()
 	factory, messages := statusBroker(t)
@@ -96,8 +93,6 @@ func syncEnv(t *testing.T, schedules ...schedule.Schedule) domain.MQTTDataComman
 	}
 	return domain.MQTTDataCommand{Kind: domain.KindScheduleSync, Data: data}
 }
-
-// ── schedule.sync ───────────────────────────────────────────────────────────
 
 func TestScheduleSyncAlertTitle(t *testing.T) {
 	prior := []schedule.Schedule{daily("a", "Morning check-in"), daily("b", "Old digest")}
@@ -175,8 +170,6 @@ func TestHandleScheduleSync_AlertsStoreFailure(t *testing.T) {
 		t.Fatalf("alert = %+v, want the FAILED title and the store error as detail", got)
 	}
 }
-
-// ── device-side create / delete ─────────────────────────────────────────────
 
 func serveCRUD(t *testing.T, handle func(*gin.Context), method, body string, params gin.Params) *httptest.ResponseRecorder {
 	t.Helper()
@@ -258,8 +251,6 @@ func TestDeleteSchedule_AlertsUnknownID(t *testing.T) {
 	}
 }
 
-// ── runs ────────────────────────────────────────────────────────────────────
-
 func TestScheduleRunAlert(t *testing.T) {
 	cases := []struct {
 		name       string
@@ -292,8 +283,7 @@ func TestScheduleRunAlert(t *testing.T) {
 	}
 }
 
-// The alert hangs off the Runner's report callback, so a real Run now through
-// the Runner (a skip, here) produces exactly one alert, suffix included.
+// A real Run now through the Runner produces exactly one alert.
 func TestRunNow_AlertsThroughTheReportCallback(t *testing.T) {
 	h, rec, messages := alertTestHandler(t)
 	if err := h.scheduleStore.Replace([]schedule.Schedule{{ID: "s1", Name: "Inbox digest", Instructions: "x", Enabled: true,
@@ -315,12 +305,7 @@ func TestRunNow_AlertsThroughTheReportCallback(t *testing.T) {
 	}
 }
 
-// ── best-effort: the alert can neither change nor delay the ack ─────────────
-
-// Production path, no test hook: the alert endpoint holds every request open
-// and then fails it with a 500. The acks must still go out immediately and be
-// byte-for-byte what they would have been without alerting — and the alert
-// must still have been attempted with the right title.
+// A stuck, failing alert endpoint neither changes nor delays the acks.
 func TestScheduleAlerts_FailingAlertNeitherChangesNorDelaysTheAck(t *testing.T) {
 	release := make(chan struct{})
 	alerts := make(chan string, 4)
@@ -372,9 +357,6 @@ func TestScheduleAlerts_FailingAlertNeitherChangesNorDelaysTheAck(t *testing.T) 
 		t.Errorf("sync ack status = %s, want success", ack["status"])
 	}
 
-	// Both alerts were attempted on the production transport, each with its
-	// exact title as the first line. They are asynchronous, so they may reach
-	// the endpoint in either order — match them as a set.
 	want := map[string]bool{
 		"⏭️ Schedule skipped: Inbox digest — missing connector: gmail": false,
 		"✅ schedule.sync — applied 1 (created: Morning check-in)":      false,
@@ -393,8 +375,7 @@ func TestScheduleAlerts_FailingAlertNeitherChangesNorDelaysTheAck(t *testing.T) 
 	}
 }
 
-// within fails the test if fn has not returned within 3s — i.e. if it waited
-// on the (deliberately stuck) alert endpoint.
+// within fails the test if fn has not returned within 3s.
 func within(t *testing.T, what string, fn func()) {
 	t.Helper()
 	done := make(chan struct{})

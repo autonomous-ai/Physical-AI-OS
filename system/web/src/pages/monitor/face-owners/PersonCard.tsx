@@ -3,8 +3,7 @@ import { Pencil, Trash2, History, ChevronDown, ChevronRight, X } from "lucide-re
 import { hwUrl } from "@/lib/api";
 import type { FaceOwnerDetail } from "../types";
 
-// One enrolled-person card. All state and handlers stay in the parent
-// (FaceOwnersSection) and are passed in; this is purely the card's presentation.
+// One enrolled-person card.
 export function PersonCard({
   person, idx, currentUser,
   expandedPerson, setExpandedPerson,
@@ -44,8 +43,6 @@ export function PersonCard({
   iconBtnStyle: CSSProperties;
 }) {
   const isCurrent = !!currentUser && currentUser === person.label;
-  // Expand active user by default so the most-relevant card is open;
-  // others stay collapsed until clicked.
   const isExpanded = expandedPerson[person.label] ?? isCurrent;
   const cardStyle: React.CSSProperties = isCurrent
     ? {
@@ -57,17 +54,11 @@ export function PersonCard({
   return (
     <div
       className="lm-mon-card lm-card-in"
-      // Cap the stagger so a long roster doesn't keep the last card waiting;
-      // first ~8 cards cascade, the rest land together.
       style={{ ...cardStyle, ["--lm-stagger" as string]: `${Math.min(idx, 8) * 45}ms` }}
       onMouseEnter={() => setHoveredPerson(person.label)}
       onMouseLeave={() => setHoveredPerson((cur) => (cur === person.label ? null : cur))}
     >
 
-      {/* Row 1 — name + actions. Visually a header strip with its own
-          background + bottom border, extended to span the full card
-          width via negative margins (S.card has 16px padding).
-          Clicking it toggles expand/collapse. */}
       <div
         onClick={() => setExpandedPerson((p) => ({ ...p, [person.label]: !isExpanded }))}
         style={{
@@ -81,9 +72,6 @@ export function PersonCard({
           borderTopRightRadius: 12,
         }}
       >
-        {/* Avatar — first enrolled photo as a round thumbnail; falls back
-            to the capitalized initial on an amber chip when there's no
-            photo (e.g. the "unknown" bucket). Active user gets a teal ring. */}
         {(() => {
           const avatarBorder = isCurrent ? "var(--lm-teal)" : "var(--lm-border)";
           const firstPhoto = person.photos?.[0];
@@ -118,21 +106,13 @@ export function PersonCard({
         {isCurrent && (
           <span className="lm-pulse" style={{
             fontSize: 10, padding: "2px 6px", borderRadius: 4,
-            // Near-black ink on the teal fill, theme-constant (same as the
-            // amber CTA) so it stays legible on teal in both themes.
             background: "var(--lm-teal)", color: "var(--lm-on-amber)",
             fontWeight: 700, letterSpacing: 0.5,
           }}>● HERE NOW</span>
         )}
         <span style={{ flex: 1 }} />
-        {/* Actions: Delete / Edit / Timeline / expand toggle.
-            Edit is hidden for the special "unknown" bucket since it
-            isn't a real user that can be renamed. */}
         {(() => {
           const isHovered = hoveredPerson === person.label;
-          // Keep hovered buttons fully visible; fade out (but keep
-          // interactive) when not hovered so the row stays the same
-          // height — avoids layout shift.
           const hoverStyle: React.CSSProperties = {
             opacity: isHovered ? 1 : 0,
             pointerEvents: isHovered ? "auto" : "none",
@@ -177,8 +157,6 @@ export function PersonCard({
                   transition: "opacity 0.15s ease",
                 }}
               >{deleting === person.label ? "…" : <Trash2 size={14} />}</button>
-              {/* Inline chevron indicator — non-interactive, just a visual
-                  hint that the card is clickable to expand. Always visible. */}
               <span style={{
                 display: "inline-flex", alignItems: "center", justifyContent: "center",
                 width: 18, height: 18, color: "var(--lm-text-muted)",
@@ -198,12 +176,8 @@ export function PersonCard({
         </div>
       )}
 
-      {/* Row 2 — metric tokens (counts of photos/mood/wb/etc.) */}
       {(() => {
         const audioCount = person.voice_samples?.filter((f) => /\.(wav|mp3|ogg)$/i.test(f)).length ?? 0;
-          // Compact metric strip — short tokens, color-coded by category,
-          // tooltip on hover for the full label. Keeps the person card
-          // dense even when 4 cards sit on one row.
           const tags: Array<{ n: number | string; label: string; full: string; color: string }> = [
             { n: person.photo_count, label: "photos", full: `${person.photo_count} face photos`, color: "var(--lm-amber)" },
           ];
@@ -236,8 +210,6 @@ export function PersonCard({
           );
         })()}
 
-      {/* Expandable detail section — photos gallery, folder tree, preview.
-          Hidden when card is collapsed to keep the grid dense. */}
       {isExpanded && (<>
       <div style={{
         fontFamily: "monospace",
@@ -245,9 +217,6 @@ export function PersonCard({
         lineHeight: 1.7,
         color: "var(--lm-text-muted)",
       }}>
-        {/* Photos gallery — single horizontal row of thumbnails so the
-            person card stays dense. Hover a thumbnail to reveal its ✕
-            delete button. */}
         {person.photos.length > 0 && (
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 8 }}>
             {person.photos.map((photo) => {
@@ -283,9 +252,6 @@ export function PersonCard({
                       position: "absolute", top: 3, right: 3,
                       width: 20, height: 20,
                       borderRadius: 5,
-                      // White ✕ on a fixed dark scrim over the thumbnail —
-                      // intentionally theme-constant (the scrim is dark in
-                      // both themes, so a token would harm contrast in light).
                       background: "rgba(0,0,0,0.55)",
                       color: "#fff",
                       border: "none",
@@ -308,8 +274,6 @@ export function PersonCard({
 
         {(() => {
           const items: { name: string; isDir?: boolean; dirKey?: string; children?: string[]; filePath?: string }[] = [];
-          // Photos render as the gallery above — exclude from tree so the
-          // filename listing doesn't repeat what the thumbnails already show.
           person.files?.filter((f) => !person.photos.includes(f)).forEach((f) => items.push({ name: f, filePath: f }));
           if (person.mood_days && person.mood_days.length > 0) {
             items.push({ name: "mood", isDir: true, dirKey: `${person.label}:mood`, children: person.mood_days.map((d) => `${d}.jsonl`) });
@@ -355,8 +319,7 @@ export function PersonCard({
                     const isChildAudio = /\.(wav|mp3|ogg|webm)$/i.test(child);
                     const audioKey = `${person.label}/${childPath}`;
                     const isPlaying = playingAudio === audioKey;
-                    // Per-file delete only for audio in voice/. metadata.json /
-                    // .npy stay protected — deleting them corrupts the profile.
+                    // Only voice audio is deletable; metadata.json/.npy would corrupt the profile.
                     const canDelete = item.name === "voice" && isChildAudio && person.label !== "unknown";
                     const deleteKey = `${person.label}/voice/${child}`;
                     const isDeleting = deletingPhoto === deleteKey;
@@ -419,7 +382,6 @@ export function PersonCard({
         })()}
       </div>
 
-      {/* File preview */}
       {preview && preview.label === person.label && (
         <div style={{
           marginTop: 8,

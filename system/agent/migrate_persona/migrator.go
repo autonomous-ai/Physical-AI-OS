@@ -1,21 +1,5 @@
-// Package migratepersona migrates the persona + long-term memory footprint
-// between agent runtimes when the active backend is switched (see
-// system/agent/factory.go).
-//
-// Design: hub-and-spoke. Each runtime has ONE read adapter (its on-disk layout →
-// PersonaBundle) and ONE write adapter (bundle → its layout); a migration is
-// read[from] → write[to]. Adding a runtime is a single adapter file that
-// interoperates with every existing runtime in both directions — LINEAR (2 files
-// per runtime), not the quadratic N×(N-1) a per-pair migrator needs.
-//
-// Scope is deliberately narrow — persona + long-term memory only:
-//
-//	SOUL.md      the persona / character file   (whole-file, brand-rewritten)
-//	IDENTITY     the owner's name/vibe fields    (native slot per runtime)
-//	MEMORY.md    long-term memory entries        (parsed, merged, deduped)
-//	USER.md      user profile entries            (same entry-merge as memory)
-//	KNOWLEDGE/daily  distilled + per-day memory   (slot-bearing runtimes only)
-
+// Package migratepersona migrates persona + long-term memory (SOUL, IDENTITY, MEMORY, USER,
+// KNOWLEDGE/daily) between agent runtimes on a switch, via a runtime-neutral PersonaBundle.
 package migratepersona
 
 import (
@@ -25,10 +9,8 @@ import (
 	"go.autonomous.ai/os/system/lib/syspath"
 )
 
-// Runtime identifies an agent backend whose persona lives on-device in an
-// os-server-managed layout. Only registered runtimes (see adapters) participate in
-// migration — openclaw, hermes, and picoclaw today. A backend with no adapter is
-// skipped by the reconciler.
+// Runtime identifies an agent backend with an on-device persona layout; only runtimes in
+// adapters migrate.
 type Runtime string
 
 const (
@@ -41,28 +23,20 @@ const (
 )
 
 // runtimeAdapter is the read/write surface every migratable runtime implements.
-//
-// personaPaths is part of the interface (not a side table) so that adding a
-// runtime cannot silently leave its persona behind on a factory reset — the
-// compiler demands it alongside read/write. See PersonaPaths.
+// personaPaths is part of the interface so a new runtime cannot escape factory-reset wipes.
 type runtimeAdapter interface {
 	runtime() Runtime
 	read(opts Options) (*PersonaBundle, error)
 	write(b *baseMigrator, bundle *PersonaBundle, opts Options) error
 	personaPaths(opts Options) []string
 	userProfilePath(opts Options) string
-	// memoryFilePath is where THIS runtime keeps the MEMORY.md it loads every
-	// session. The memory guard (memory_guard_files.go) sweeps it alongside
-	// USER.md; part of the interface so a new runtime cannot be left unguarded.
+	// memoryFilePath is the MEMORY.md this runtime loads; swept by the memory guard.
 	memoryFilePath(opts Options) string
-	// workspaceRoot is the directory HAL's realtime layer treats as the
-	// runtime's workspace (its `realtime/` subdir holds summary.md etc.). Used
-	// by the memory reset to find and back up every runtime's copies.
+	// workspaceRoot is the runtime workspace whose realtime/ subdir holds HAL memory.
 	workspaceRoot(opts Options) string
 }
 
-// adapters is the registry. To make a new runtime migratable, implement
-// runtimeAdapter in runtime_<name>.go and add it here — nothing else changes.
+// adapters is the runtime registry; a new runtime adds its runtime_<name>.go adapter here.
 var adapters = map[Runtime]runtimeAdapter{
 	RuntimeOpenclaw:   openclawAdapter{},
 	RuntimeHermes:     hermesAdapter{},
@@ -72,16 +46,13 @@ var adapters = map[Runtime]runtimeAdapter{
 	RuntimeOpenCode:   opencodeAdapter{},
 }
 
-// CanMigrate reports whether a runtime participates in persona migration (has a
-// registered adapter). Used by the switch reconciler to skip external runtimes.
+// CanMigrate reports whether r has a registered adapter.
 func CanMigrate(r Runtime) bool {
 	_, ok := adapters[r]
 	return ok
 }
 
-// Direction names a migration as "<from>_to_<to>" — the Report label and the
-// legacy entry point. Kept for the two original pairs; new runtimes do NOT need
-// new Direction constants (use RunMigration with Runtime values).
+// Direction names a migration as "<from>_to_<to>"; new runtimes use RunMigration instead.
 type Direction string
 
 const (
@@ -103,41 +74,24 @@ const (
 	DefaultUserCharLimit   = 1375
 )
 
-// Options controls a migration run. Use DefaultOptions to derive the standard
-// on-device paths, then tweak as needed.
+// Options controls a migration run; start from DefaultOptions.
 type Options struct {
-	// OpenclawWorkspace is the OpenClaw workspace dir holding SOUL.md /
-	// MEMORY.md / USER.md / KNOWLEDGE.md / memory/ (e.g. /root/.openclaw/workspace).
+	// OpenclawWorkspace holds SOUL/IDENTITY/MEMORY/USER/KNOWLEDGE.md and memory/.
 	OpenclawWorkspace string
-	// HermesRoot is the Hermes home dir (e.g. /root/.hermes). SOUL.md lives at
-	// its root; MEMORY.md / USER.md live under memories/.
+	// HermesRoot holds SOUL.md; MEMORY.md and USER.md live under memories/.
 	HermesRoot string
-	// PicoclawWorkspace is the PicoClaw workspace dir (e.g.
-	// /root/.picoclaw/workspace). Layout matches OpenClaw — SOUL.md / IDENTITY.md /
-	// USER.md / KNOWLEDGE.md / memory/ — EXCEPT MEMORY.md lives under memory/.
+	// PicoclawWorkspace matches OpenClaw except MEMORY.md lives under memory/.
 	PicoclawWorkspace string
-	// CodexWorkspace is the Codex workspace dir (e.g. /root/.codex/workspace).
-	// Layout matches OpenClaw exactly (presync seeds it as a verbatim copy):
-	// SOUL.md / IDENTITY.md / MEMORY.md / USER.md / KNOWLEDGE.md / memory/.
-	CodexWorkspace string
-	// ClaudecodeWorkspace is the Claude Code workspace dir (e.g.
-	// /root/.claudecode/workspace). Layout is identical to OpenClaw's
-	// (SOUL.md / IDENTITY.md / USER.md / MEMORY.md / KNOWLEDGE.md / memory/).
+	// CodexWorkspace, ClaudecodeWorkspace and OpenCodeWorkspace match the OpenClaw layout.
+	CodexWorkspace      string
 	ClaudecodeWorkspace string
-	// OpenCodeWorkspace is the OpenCode workspace dir (e.g.
-	// /root/.opencode/workspace). Layout is identical to OpenClaw's (presync
-	// seeds it as a verbatim copy): SOUL.md / IDENTITY.md / USER.md / MEMORY.md
-	// / KNOWLEDGE.md / memory/. opencode reads AGENTS.md natively.
-	OpenCodeWorkspace string
+	OpenCodeWorkspace   string
 
-	// Execute writes changes; false performs a dry-run (records intended actions,
-	// touches nothing).
+	// Execute writes changes; false is a dry-run.
 	Execute bool
-	// Overwrite replaces an existing SOUL.md at the destination. Memory files
-	// always merge, never overwrite, so this only affects SOUL.md.
+	// Overwrite replaces an existing destination SOUL.md; memory files always merge.
 	Overwrite bool
-	// IncludeDailyMemory folds a slot-bearing runtime's daily memory/*.md into the
-	// migrated memory (OpenClaw read only; runtimes without daily files ignore it).
+	// IncludeDailyMemory folds OpenClaw daily memory/*.md into the migrated memory.
 	IncludeDailyMemory bool
 
 	MemoryCharLimit int
@@ -193,9 +147,7 @@ type Report struct {
 	Summary   map[string]int `json:"summary"`
 }
 
-// RunMigration migrates persona + memory from one runtime to another: read the
-// source layout into the canonical bundle, then write it into the destination
-// layout. This is the hub — any (from, to) pair of registered runtimes works.
+// RunMigration reads from's layout into a bundle and writes it into to's layout.
 func RunMigration(from, to Runtime, opts Options) (*Report, error) {
 	opts = opts.withDefaults()
 	src, ok := adapters[from]
@@ -219,8 +171,7 @@ func RunMigration(from, to Runtime, opts Options) (*Report, error) {
 	return base.report(Direction(string(from) + "_to_" + string(to))), nil
 }
 
-// Run is the legacy Direction-keyed entry point (used by existing callers/tests).
-// New code should prefer RunMigration with Runtime values.
+// Run is the legacy Direction-keyed entry point; prefer RunMigration.
 func Run(dir Direction, opts Options) (*Report, error) {
 	switch dir {
 	case OpenclawToHermes:

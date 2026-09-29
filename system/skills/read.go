@@ -14,13 +14,8 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// Reading an installed skill's files for the Manage-skills detail view, which
-// shows the same two-pane browser as the store preview. Same per-backend split
-// as ListInstalled: only the directory differs.
-
 const (
-	// readMaxInlineBytes caps how much of one file is inlined as text; longer
-	// files come back marked Truncated.
+	// readMaxInlineBytes caps inlined text per file; longer files are marked Truncated.
 	readMaxInlineBytes = 512 << 10
 	// readMaxFileBytes caps how much of one file is read off disk at all.
 	readMaxFileBytes = 2 << 20
@@ -30,14 +25,10 @@ const (
 	binarySniffSize = 8000
 )
 
-// ErrSkillFileNotFound is returned when an entry path is not a readable file in
-// a skill. It is separate from ErrSkillNotFound so callers can report an exact
-// path mismatch without treating the whole skill as absent.
+// ErrSkillFileNotFound is returned when an entry path is not a readable file in a skill.
 var ErrSkillFileNotFound = errors.New("skill file not found")
 
-// ReadSkillFiles returns every file in <skillsDir>/<name> as a flat list with
-// UTF-8 contents inlined, sorted by path. Deliberately flat (not a tree) so the
-// detail view renders identically to the store preview, which reads a zip.
+// ReadSkillFiles returns every file in <skillsDir>/<name> as a flat, path-sorted list.
 func ReadSkillFiles(skillsDir, name string) ([]domain.SkillBundleFile, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return nil, err
@@ -60,10 +51,7 @@ func ReadSkillFiles(skillsDir, name string) ([]domain.SkillBundleFile, error) {
 	return out, nil
 }
 
-// ReadSkillFilesFrom tries each root in order and returns the first skill that
-// matches — for runtimes that namespace their skills dir (Hermes). Pass the
-// device-owned root first, matching ListInstalledFrom's precedence so the
-// detail view shows the same skill the listing did.
+// ReadSkillFilesFrom returns the skill from the first root that has it.
 func ReadSkillFilesFrom(name string, dirs ...string) ([]domain.SkillBundleFile, error) {
 	var lastErr error
 	for _, dir := range dirs {
@@ -79,10 +67,7 @@ func ReadSkillFilesFrom(name string, dirs ...string) ([]domain.SkillBundleFile, 
 	return nil, lastErr
 }
 
-// ReadSkillFile reads one file from an installed skill. filePath must be the
-// exact relative path reported by ReadSkillFiles, including the skill name.
-// Keeping this separate from ReadSkillFiles avoids loading every reference and
-// asset before an MQTT caller can receive one requested document.
+// ReadSkillFile reads one file; filePath is the relative path from ReadSkillFiles (incl. skill name).
 func ReadSkillFile(skillsDir, name, filePath string) (domain.SkillBundleFile, error) {
 	if err := ValidateSkillName(name); err != nil {
 		return domain.SkillBundleFile{}, err
@@ -113,8 +98,7 @@ func ReadSkillFile(skillsDir, name, filePath string) (domain.SkillBundleFile, er
 	return BuildFilePreview(filePath, content, info.Size()), nil
 }
 
-// ReadSkillFileFrom mirrors ReadSkillFilesFrom's root precedence. A skill in
-// the first root wins even if the requested entry is absent there.
+// ReadSkillFileFrom uses ReadSkillFilesFrom's root precedence; the first root with the skill wins.
 func ReadSkillFileFrom(name, filePath string, dirs ...string) (domain.SkillBundleFile, error) {
 	var lastErr error
 	for _, dir := range dirs {
@@ -154,8 +138,7 @@ func skillFileRelativePath(name, filePath string) (string, error) {
 	return rel, nil
 }
 
-// collectSkillFiles walks dir, appending each file with its content. relBase is
-// the path prefix (relative to the skills root) so paths read "music/SKILL.md".
+// collectSkillFiles appends each file under dir; relBase prefixes paths.
 func collectSkillFiles(dir, relBase string, depth int, out *[]domain.SkillBundleFile) error {
 	if depth >= readMaxDepth || len(*out) >= readMaxFiles {
 		return nil
@@ -177,7 +160,6 @@ func collectSkillFiles(dir, relBase string, depth int, out *[]domain.SkillBundle
 		rel := path.Join(relBase, name)
 
 		if e.IsDir() {
-			// One unreadable subdirectory must not fail the whole skill.
 			_ = collectSkillFiles(filepath.Join(dir, name), rel, depth+1, out)
 			continue
 		}
@@ -196,8 +178,7 @@ func collectSkillFiles(dir, relBase string, depth int, out *[]domain.SkillBundle
 	return nil
 }
 
-// readCapped reads at most readMaxFileBytes from path. LimitReader rather than
-// ReadFile so one oversized file can't pull the whole thing into memory.
+// readCapped reads at most readMaxFileBytes from path.
 func readCapped(path string) ([]byte, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -207,11 +188,7 @@ func readCapped(path string) ([]byte, error) {
 	return io.ReadAll(io.LimitReader(f, readMaxFileBytes))
 }
 
-// BuildFilePreview decides how a file's bytes are presented: valid UTF-8
-// without NUL bytes is inlined as text (truncated at readMaxInlineBytes),
-// anything else is reported as binary with metadata only. Shared by the
-// installed-skill reader and the store-bundle preview so both surfaces make the
-// same call on the same bytes.
+// BuildFilePreview inlines valid UTF-8 without NULs as text, else reports binary metadata.
 func BuildFilePreview(filePath string, content []byte, declaredSize int64) domain.SkillBundleFile {
 	size := declaredSize
 	if size <= 0 {

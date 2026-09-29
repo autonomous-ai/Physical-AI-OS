@@ -57,7 +57,7 @@ func appendAgentRuntime(path, runtime string) error {
 		return err
 	}
 	if st.previousRuntime() == runtime {
-		return nil // already the latest — nothing to record
+		return nil
 	}
 	st.History = append(st.History, agentRuntimeEntry{Runtime: runtime, At: time.Now().Unix()})
 	if len(st.History) > agentStateMaxHistory {
@@ -80,13 +80,8 @@ func appendAgentRuntime(path, runtime string) error {
 	return nil
 }
 
-// Persona migration coordination. A switch is migratable when BOTH runtimes have
-// a registered persona adapter (CanMigrate). This is hub-driven: adding a new
-// device-local runtime needs only its adapter — no new direction enum, no change
-// here. openclaw, hermes, picoclaw, and claudecode all have adapters, so any pair
-// migrates both ways. (PicoClaw's INBOUND skills still come from presync's
-// `picoclaw migrate --workspace-only`; the Go reconciler only carries
-// persona/memory.) A runtime with no adapter is skipped, not migrated.
+// migrationRuntimes reports whether prev->current is migratable: both runtimes need a
+// registered persona adapter; otherwise the switch is skipped, not migrated.
 func migrationRuntimes(prev, current string) (from, to migratepersona.Runtime, ok bool) {
 	from, to = migratepersona.Runtime(prev), migratepersona.Runtime(current)
 	if migratepersona.CanMigrate(from) && migratepersona.CanMigrate(to) {
@@ -97,31 +92,25 @@ func migrationRuntimes(prev, current string) (from, to migratepersona.Runtime, o
 
 // PersonaMigration tracks agent runtime changes and handles persona + memory migration.
 type PersonaMigration struct {
-	Prev    string                 // last recorded runtime ("" on first boot)
-	Current string                 // runtime the gateway is starting now
-	From    migratepersona.Runtime // migration source; valid only when Needed
-	To      migratepersona.Runtime // migration destination; valid only when Needed
-	Needed  bool                   // true when a supported switch was detected
+	Prev    string // last recorded runtime ("" on first boot)
+	Current string
+	From    migratepersona.Runtime // valid only when Needed
+	To      migratepersona.Runtime // valid only when Needed
+	Needed  bool
 
 	firstBoot bool
 	statePath string
 	opts      migratepersona.Options
 }
 
-// ProvidePersonaMigration determines the current and previous runtimes, and prepares the migration plan (read-only; marker is updated after migration).
+// ProvidePersonaMigration builds the migration plan (read-only; the marker is updated by Reconcile).
 func ProvidePersonaMigration(cfg *config.Config) *PersonaMigration {
 	current, _, _ := resolveRuntime(cfg)
 
 	opts := migratepersona.DefaultOptions(cfg.OpenclawConfigDir, hermesHome)
-	opts.Execute = true // a runtime switch is an explicit user action — apply it
-	// Overwrite the destination SOUL.md too: a switch means "carry the persona I
-	// was just using into the runtime I'm switching to", so the source runtime's
-	// soul is the source of truth and must win even when the target already has a
-	// SOUL.md (a prior session, the claw-migrate default, or a factory-reset stub).
-	// Without this, copyPersona conflict-skips any existing target soul and the
-	// persona never actually migrates after the very first switch. copyPersona
-	// backs up the replaced file (.bak-<nano>) first, so this stays recoverable.
-	// Only SOUL.md is affected — memory files always entry-merge regardless.
+	opts.Execute = true
+	// Source SOUL.md must win over an existing target soul (backed up as .bak-<nano>);
+	// without this the persona only migrates on the first switch. Memory always merges.
 	opts.Overwrite = true
 
 	pm := &PersonaMigration{
@@ -142,7 +131,6 @@ func ProvidePersonaMigration(cfg *config.Config) *PersonaMigration {
 	case pm.Prev == "":
 		pm.firstBoot = true
 	case pm.Prev == current:
-		// nothing
 	default:
 		if from, to, ok := migrationRuntimes(pm.Prev, current); ok {
 			pm.Needed = true
@@ -156,7 +144,7 @@ func ProvidePersonaMigration(cfg *config.Config) *PersonaMigration {
 	return pm
 }
 
-// Reconcile runs persona+memory migration after a runtime change, then records the new runtime. Logs errors and never blocks startup; failed migrations are retried on next boot.
+// Reconcile migrates persona+memory after a runtime change, then records the new runtime.
 func (p *PersonaMigration) Reconcile() {
 	if p.firstBoot {
 		if err := appendAgentRuntime(p.statePath, p.Current); err != nil {

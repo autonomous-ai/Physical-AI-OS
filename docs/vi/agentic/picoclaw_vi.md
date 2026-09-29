@@ -47,9 +47,11 @@ não nào đang chạy.
 
 | `agent_runtime` | Backend |
 |---|---|
-| `"openclaw"` / để trống | OpenClaw (mặc định; hoặc `gateway.default` từ `ROBOT.md`) |
-| `"hermes"` | Hermes (`hermes.ProvideService`) |
+| để trống | `/root/config/f_r_default_agent` bake trong image, nếu không thì `gateway.default` từ `ROBOT.md`, nếu không thì OpenClaw |
+| `"openclaw"` | OpenClaw (mặc định) |
+| `"hermes"` / `"remote"` | Hermes (`hermes.ProvideService`; `remote` = Hermes-qua-LAN qua `ApplyExternalEndpoint`) |
 | `"picoclaw"` | PicoClaw (`picoclaw.ProvideService`) |
+| `"codex"` / `"claudecode"` / `"opencode"` | Codex / Claude Code / OpenCode (`<runtime>.ProvideService`) |
 | giá trị khác | OpenClaw (log là `FALLBACK — unknown runtime=…`) |
 
 Khi khởi động, `ProvideGateway` in banner `AGENT BACKEND ACTIVE → PICOCLAW` kèm
@@ -452,7 +454,9 @@ nên reset **xóa sạch** `/root/.picoclaw` rồi onboard lại một baseline 
    crash) nên gateway nằm yên trong lúc wipe. `waitForPicoclawStop` poll `is-active`
    tối đa 5s.
 2. **`systemctl disable picoclaw`** — factory reset cũng xóa `/root/config/config.json`
-   và reboot về runtime **mặc định (openclaw)**, nên PicoClaw KHÔNG được auto-start.
+   và reboot về runtime **mặc định** của thiết bị (`f_r_default_agent`, nếu không thì
+   ROBOT.md `gateway.default` — vd. hermes trên Lamp — chỉ về openclaw khi cả hai đều
+   không set), nên PicoClaw KHÔNG được auto-start.
    `switch-runtime` chỉ re-enable khi user switch trở lại.
 3. **`rm -rf /root/.picoclaw`** — config, `.security.yml`, workspace (persona/memory/
    skills), sessions, và **marker `.openclaw-migrated`** (để `presync.sh` §0 migrate

@@ -115,8 +115,6 @@ class EnvironmentGroup:
             "sources": sources,
             "metric_timestamps": timestamps,
         }
-        # Keep single-component acquisition diagnostics convenient for legacy
-        # clients. Multi-component timings/buses live under components only.
         if len(components) == 1:
             only = next(iter(components.values()))
             result.update(bus=only["bus"], timing=only["timing"])

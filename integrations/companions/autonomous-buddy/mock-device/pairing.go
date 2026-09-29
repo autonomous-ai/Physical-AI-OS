@@ -7,9 +7,6 @@ import (
 	"strings"
 )
 
-// Mirrors the production handlers that will live in
-// `server/buddy/delivery/http/handler_pair.go`.
-
 type pairStartResponse struct {
 	Code      string `json:"code"`
 	ExpiresIn int    `json:"expires_in"`
@@ -27,9 +24,7 @@ type pairConfirmResponse struct {
 	BuddyID string `json:"buddy_id"`
 }
 
-// HandlePairStart issues a fresh 6-digit code. In production this would require admin auth;
-// the mock leaves it open so you can just hit `/api/buddy/pair/start` from curl/browser if
-// you want a new code without restarting the server.
+// HandlePairStart issues a fresh 6-digit code (no admin auth in the mock).
 func (s *State) HandlePairStart(w http.ResponseWriter, r *http.Request) {
 	code := s.IssueCode()
 	writeJSON(w, http.StatusOK, pairStartResponse{Code: code, ExpiresIn: 300})
@@ -58,11 +53,7 @@ func (s *State) HandlePairConfirm(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, pairConfirmResponse{Token: record.Token, BuddyID: record.BuddyID})
 }
 
-// HandleSelfRevoke mirrors production `BuddyHandler.RevokeSelf`: the buddy app
-// calls this (with its own Bearer token) right before clearing local Keychain
-// state, so the mock drops the pairing record at the same time. Without this,
-// re-pairing inside the same mock session would think a stale buddy is still
-// present.
+// HandleSelfRevoke drops the pairing when the buddy app unpairs itself with its own Bearer token.
 func (s *State) HandleSelfRevoke(w http.ResponseWriter, r *http.Request) {
 	auth := r.Header.Get("Authorization")
 	if !strings.HasPrefix(auth, "Bearer ") {

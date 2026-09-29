@@ -51,19 +51,12 @@ import type { SettingsSectionId } from "@/pages/settings/SettingsPanel";
 
 ChartJS.register(CategoryScale, LinearScale, BarElement, PointElement, LineElement, Title, Tooltip, Legend, Filler);
 
-// Sections rendered as full-bleed iframes — they need their own padding/overflow override.
 const EMBED_SECTIONS = new Set<Section>(["api-docs", "agent-config"]);
 
-// Sections shown to non-debug users. Append `?debug=true` to the URL to reveal
-// the rest of the menu (Analytics, Servo, API Docs, Agent gateway).
+// Sections shown without ?debug=true.
 const PUBLIC_SECTIONS = new Set<Section>(["sensing", "chat", "pairing", "overview", "system", "flow", "camera", "face-owners", "bluetooth", "logs", "cli", "settings:device", "settings:wifi", "settings:voice", "settings:face", "settings:mcp", "settings:plugins", "settings:timezone", "settings:scheduled", "settings:facebook"]);
 
-// The capability a section requires, read from its NAV leaf (single source: the
-// nav definition itself declares `cap`). undefined → no hardware dependency, the
-// section is always shown.
-// Prune a group's children by debug mode and per-leaf capability. Recurses one
-// level into subgroups, dropping the subgroup entirely when none of its own
-// leaves survive so an empty header never renders.
+// Prune a group's children by debug mode and capability; drops subgroups left empty.
 function filterNavChildren(
   children: NavChild[],
   isDebug: boolean,
@@ -86,6 +79,7 @@ function filterNavChildren(
   }, []);
 }
 
+// The capability a section requires, from its NAV leaf; undefined = always shown.
 function sectionCap(id: Section): string | readonly string[] | undefined {
   for (const entry of NAV) {
     if (isNavGroup(entry)) {
@@ -111,20 +105,12 @@ const iframeStyle: React.CSSProperties = {
   background: "var(--lm-card)",
 };
 
-// Lucide icon map for the sidebar, keyed by leaf Section id, by group name, and
-// by the Agent-menu pseudo ids. NAV still carries the legacy unicode `icon`
-// string for backwards-compat; the sidebar/topbar render these lucide icons
-// instead, falling back to nothing when a key is missing.
 const NAV_ICONS: Record<string, LucideIcon> = {
-  // top-level leaf
   chat: MessageCircle,
   pairing: Handshake,
-  // group headers
   settings: Settings,
   device: MonitorSmartphone,
-  // Subgroup header shown inside Settings.
   connector: Cable,
-  // settings children
   "settings:device": Cpu,
   "settings:wifi": Wifi,
   "settings:llm": Brain,
@@ -141,7 +127,6 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   "settings:plugins": Blocks,
   "settings:timezone": Clock,
   "settings:scheduled": CalendarClock,
-  // device children
   overview: LayoutGrid,
   system: Cpu,
   flow: Workflow,
@@ -154,14 +139,12 @@ const NAV_ICONS: Record<string, LucideIcon> = {
   logs: ScrollText,
   cli: Terminal,
   "api-docs": FileCode,
-  // Agent gateway menu
   agent: Hexagon,
   "agent-gateway": ExternalLink,
   "agent-config": SlidersHorizontal,
 };
 
-// Renders the lucide icon for a given nav id (leaf Section, group name, or Agent
-// pseudo id). Returns null when no icon is mapped.
+// Renders the lucide icon for a given nav id (leaf Section, group name, or Agent pseudo id).
 const NavIcon = ({ id, size = 16 }: { id: string; size?: number }) => {
   const I = NAV_ICONS[id];
   return I ? <I size={size} strokeWidth={1.9} /> : null;
@@ -178,15 +161,10 @@ function allNavLeaves(): { id: Section; label: string; icon: string }[] {
       });
     } else leaves.push(entry);
   }
-  // Agent config isn't in NAV (rendered by AgentGWMenu) — register it here
-  // so hash routing + topbar title work for the embedded view.
   leaves.push({ id: "agent-config", label: "Agent Config", icon: "◈" });
   return leaves;
 }
 
-// Flat, searchable list of nav leaves carrying their parent-group label (so a
-// result can show "Voice · Settings" for context). Top-level leaves (e.g. Chat)
-// carry no group. Order follows NAV; the sidebar search filters this list.
 type SearchLeaf = { id: Section; label: string; group: string | null };
 function searchableLeaves(): SearchLeaf[] {
   const out: SearchLeaf[] = [];
@@ -209,9 +187,7 @@ function searchableLeaves(): SearchLeaf[] {
   return out;
 }
 
-// Sidebar search box — filters nav by label/group, with a clear (×) button that
-// appears once there's a query. Renders a flat result list under .lm-root so the
-// theme + amber treatment match the rest of the rail.
+// Sidebar search box that filters nav leaves by label/group.
 function SidebarSearch({ query, setQuery, results, section, setSection, closeSidebar, leafHref, onEnter }: {
   query: string;
   setQuery: (q: string) => void;
@@ -341,14 +317,7 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
     return c.id === section;
   });
   const [open, setOpen] = useState(hasActiveChild);
-  // Sync expand state to the active section whenever it changes: a group
-  // auto-opens when navigation lands on one of its children and auto-collapses
-  // when it lands elsewhere (e.g. picking "My Voice" from search closes a Device
-  // group that was left open). Keyed on `section` only, so manual header toggles
-  // — which don't change the section — are preserved.
-  // set-state-in-effect is disabled here for the same reason the dep list is
-  // pinned to `section`: `open` must stay MANUALLY toggleable between
-  // navigations, so it cannot be derived from `hasActiveChild` during render.
+  // Sync expand state on navigation only; `open` must stay manually toggleable between navigations.
   useEffect(() => { setOpen(hasActiveChild); }, [section]); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
   return (
     <div>
@@ -421,15 +390,9 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
 }) {
   const hasActive = section === "agent-config";
   const [open, setOpen] = useState(hasActive);
-  // OpenClaw Control UI 5.2 sets X-Frame-Options: DENY so we open in a new
-  // tab. The gateway auth token used to ride along as a `#token=…` fragment
-  // fetched from /api/agent/config-json — that endpoint is now
-  // loopback-only (audit local F5c), so we drop the fragment entirely and
-  // let the on-device OpenClaw control UI handle its own auth. Off-device
-  // browsers reaching the link will be blocked by nginx /gw/ deny-LAN
-  // anyway (audit local F6).
+  // OpenClaw Control UI denies framing, so open it in a new tab.
   return (
-    // ponytail: parked behind CSS, not deleted — see .lm-nav-agent in index.css.
+    // Parked behind CSS (.lm-nav-agent in index.css).
     <div className="lm-nav-agent">
       <button
         onClick={() => setOpen((v) => !v)}
@@ -472,10 +435,7 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
   );
 }
 
-// Resolve the initial / location-derived section for an area. Falls back to the
-// area default ("overview" for monitor, "settings:device" for setting) when the
-// hash is empty or unknown, and to "overview" when a non-debug user deep-links a
-// private section.
+// Resolve the initial / location-derived section for an area.
 function resolveSection(area: Area, hash: string, isDebug: boolean): Section {
   const parsed = hashToSection(hash, area);
   if (parsed === null) return area === "setting" ? "settings:device" : "overview";
@@ -491,8 +451,6 @@ export default function Monitor() {
   const navigate = useNavigate();
   const isDebug = new URLSearchParams(location.search).get("debug") === "true";
 
-  // Keep every existing query parameter and the current section hash while
-  // enabling or disabling the debug-only Monitor and Settings sections.
   const toggleDebug = useCallback(() => {
     const params = new URLSearchParams(location.search);
     if (isDebug) {
@@ -504,25 +462,18 @@ export default function Monitor() {
     navigate(`${location.pathname}${search ? `?${search}` : ""}${location.hash}`);
   }, [isDebug, location.hash, location.pathname, location.search, navigate]);
 
-  // Area is derived from the route path: /setting → "setting", else "monitor".
   const area: Area = location.pathname.startsWith("/setting") ? "setting" : "monitor";
 
   const [section, setSectionRaw] = useState<Section>(() =>
     resolveSection(area, window.location.hash, isDebug),
   );
 
-  // setSection switches BOTH the in-memory section and the URL. When the target
-  // section's area differs from the current path, navigate to the other route
-  // (no remount — see App.tsx layout route); the hash is always the area's
-  // serialized form (short label in the setting area, e.g. /setting#general).
   const setSection = useCallback((s: Section) => {
     const targetArea = sectionArea(s);
     const hash = sectionToHash(s, targetArea);
     const path = areaPath(targetArea);
     if (targetArea !== area) {
-      // Preserve the query string (?debug=true, etc.) across the area switch —
-      // dropping it would, e.g., hide every debug-only Settings leaf the moment
-      // you cross from /monitor into /setting.
+      // Preserve ?debug=true across the area switch.
       navigate(`${path}${location.search}#${hash}`);
     } else {
       window.location.hash = hash;
@@ -530,9 +481,6 @@ export default function Monitor() {
     setSectionRaw(s);
   }, [area, navigate, location.search]);
 
-  // React to location changes (back/forward, deep-links, path switches): keep
-  // the in-memory section in sync with pathname + hash. Also normalize an empty
-  // setting hash to /setting#general so the URL is always explicit.
   const search = location.search;
   useEffect(() => {
     if (area === "setting" && !location.hash) {
@@ -547,9 +495,6 @@ export default function Monitor() {
   const sectionLabel = sectionLeaf?.label ?? "Monitor";
   useDocumentTitle(area === "setting" ? ["Settings", sectionLabel] : sectionLabel);
 
-  // Clear the session (token + os_session cookie via POST /api/logout), then
-  // send the user to /login. We navigate even if the network call fails — the
-  // local token is already cleared, so the session is effectively gone client-side.
   const handleLogout = useCallback(async () => {
     try {
       await logout();
@@ -558,9 +503,7 @@ export default function Monitor() {
     }
   }, [navigate, location.search]);
 
-  // Build the real href for a nav leaf (path + serialized hash) so middle-click
-  // / open-in-new-tab land on the correct URL. Carry the current query string so
-  // ?debug=true (and friends) survive an open-in-new-tab across areas.
+  // Build the real href for a nav leaf (path + serialized hash) so middle-click / open-in-new-tab land on the correct URL.
   const leafHref = (id: Section): string => {
     const a = sectionArea(id);
     return `${areaPath(a)}${location.search}#${sectionToHash(id, a)}`;
@@ -593,22 +536,12 @@ export default function Monitor() {
     setEvents([]);
   }, []);
 
-  // HAL version comes from /api/system/info (sys.halVersion), populated
-  // by the OS server via a cached loopback call to :5001/version. Avoids a direct
-  // browser fetch to /hw/version which nginx gates to loopback only.
-
-  // One-shot fetch for system info on mount — populates sidebar version /
-  // uptime labels without needing a recurring poll on every section.
   useEffect(() => {
     fetch(`${API}/system/info`).then((r) => r.json()).then((r) => {
       if (r.status === 1) setSys(r.data);
     }).catch(() => {});
   }, []);
 
-  // Device's DECLARED capabilities, served by os-server on /api/system/info
-  // (sys.capabilities) — Go owns the contract and parses ROBOT.md, so the web
-  // asks the OS rather than reaching through to the HAL runtime. Used to gate
-  // tabs + controls. null (not yet loaded) → show everything (fail-open).
   const caps = sys?.capabilities ? new Set(sys.capabilities) : null;
   const hasCap = (c: string): boolean => !caps || caps.has(c);
   const sectionVisible = (id: Section): boolean => {
@@ -616,39 +549,21 @@ export default function Monitor() {
     return !cap || (typeof cap === "string" ? hasCap(cap) : cap.some(hasCap));
   };
 
-  // If the active section is for hardware this device lacks, fall back to overview.
   useEffect(() => {
     if (caps && !sectionVisible(section)) setSection("overview");
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sys?.capabilities, section]);
 
-  // Section ref so polling callback always sees current section without re-mounting
   const sectionRef = useRef(section);
   useEffect(() => { sectionRef.current = section; }, [section]);
 
-  // Sidebar polling: openclaw status only (needed for all tabs).
-  // Runs at 10s via the shared usePolling hook, which adds a 4s hard
-  // timeout, skips ticks that overlap a previous in-flight call, and
-  // pauses entirely while the tab is hidden — that combination is what
-  // keeps the monitor page from saturating Chrome's 6-per-origin HTTP/1.1
-  // connection pool and freezing.
   usePolling(async (signal) => {
     const ocR = await fetch(`${API}/agent/status`, { signal }).then((r) => r.json());
     if (ocR.status === 1) setOc(ocR.data);
     setLastUpdate(new Date().toLocaleTimeString());
   }, 10_000);
 
-  // Section-specific polling at 5s. The fetcher branches on the active
-  // section so hidden sections don't pull data they won't show.
-  //
-  // Every card's fetch is fired CONCURRENTLY and commits its own state the
-  // moment it resolves — no card waits on a slower sibling. Previously this was
-  // three sequential `await Promise.all` waves (system → health → peripherals),
-  // so the Audio panel (last wave) only appeared after system/info + network +
-  // health had all returned, stacking the latency of the `/api/hardware/*`
-  // proxy hops to HAL. The only real dependency is the peripheral panels on
-  // `/health` (it reports which capability routes are mounted), so those alone
-  // chain off it; system/info, network, presence and scene run in parallel.
+  // Section-specific polling; each card's fetch commits independently.
   usePolling(async (signal) => {
     const s = sectionRef.current;
     const json = async (r: Response) => {
@@ -680,13 +595,7 @@ export default function Monitor() {
         fetch(`${HW}/scene`, { signal }).then(json).then((sceneR) => {
           if (sceneR.scenes) setSceneInfo(sceneR);
         }).catch(() => {}),
-        // Each peripheral panel is fetched ONLY when health reports that hardware
-        // present — its HAL route is mounted by the device's declared capability,
-        // so an absent peripheral means the route 404s. Gating here keeps a device
-        // that lacks a peripheral (e.g. intern-v2 has no servo/display, and no
-        // `media` → no music; a device with no speaker has audio:false) from
-        // hitting 404 endpoints every 5s poll. Panels render null-safe when their
-        // state stays at the initial value.
+        // Peripheral panels are fetched only when health reports the hardware (absent routes 404).
         fetch(`${HW}/health`, { signal }).then(json).then((hwR) => {
           setHw(hwR);
           const peripherals: Promise<unknown>[] = [];
@@ -707,9 +616,6 @@ export default function Monitor() {
     await Promise.all(tasks);
   }, 5_000, { timeoutMs: 8000, refreshKey: section });
 
-  // Flow SSE: only open when flow or chat section is active. useEventSource
-  // auto-closes the stream on tab-hidden / unmount, freeing its connection
-  // slot (one per stream against Chrome's 6-per-origin cap).
   const needsFlow = section === "flow" || section === "chat";
   useEventSource(
     needsFlow ? `${API}/agent/flow-stream` : null,
@@ -724,8 +630,7 @@ export default function Monitor() {
           setEvents(next);
           evtIdRef.current = next.length;
         } catch {
-          // A malformed SSE frame drops that frame only: the stream stays open
-          // and the next full snapshot replaces the event list anyway.
+          // A malformed SSE frame drops only that frame.
         }
       },
     },
@@ -735,10 +640,6 @@ export default function Monitor() {
   const closeSidebar = () => setSidebarOpen(false);
   const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
-  // Sidebar feature search. Filters nav leaves by label/group (case-insensitive,
-  // substring), honouring the same debug + hardware visibility gates as the
-  // rendered nav so search never surfaces a tab the user can't open. Enter jumps
-  // to the first result.
   const [navQuery, setNavQuery] = useState("");
   const q = navQuery.trim().toLowerCase();
   const searchResults = q
@@ -752,13 +653,11 @@ export default function Monitor() {
 
   return (
     <div className={`lm-root ${themeClass}`} style={S.root}>
-      {/* Mobile overlay */}
       <div
         className={`lm-sidebar-overlay${sidebarOpen ? " lm-sidebar-overlay--open" : ""}`}
         onClick={closeSidebar}
       />
 
-      {/* Sidebar */}
       <aside style={S.sidebar} className={`lm-sidebar${sidebarOpen ? " lm-sidebar--open" : ""}`}>
         <SidebarSearch
           query={navQuery}
@@ -770,10 +669,7 @@ export default function Monitor() {
           leafHref={leafHref}
           onEnter={gotoFirstResult}
         />
-        {/* When a search query is active the grouped nav is replaced by the flat
-            result list rendered inside SidebarSearch, so skip the normal tree. */}
         <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
-          {/* Chat is the only top-level leaf; Pairing is grouped under Device. */}
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
@@ -788,14 +684,8 @@ export default function Monitor() {
               </a>
             );
           })}
-          {/* Device and Settings rendered explicitly here (Device above
-              Settings, both before Agent) so the visible order stays
-              Chat → Device → Settings → Agent → (other groups). Their children
-              come from NAV; the generic groups loop below excludes both to
-              avoid a duplicate render. */}
           {NAV
             .filter((e) => isNavGroup(e) && (e.group === "device" || e.group === "settings"))
-            // Force Device before Settings regardless of NAV declaration order.
             .sort((a, b) => {
               const rank = (e: NavEntry) => ((e as Extract<NavEntry, { group: string }>).group === "device" ? 0 : 1);
               return rank(a) - rank(b);
@@ -850,16 +740,13 @@ export default function Monitor() {
         </div>
       </aside>
 
-      {/* Main */}
       <main style={S.main}>
-        {/* Topbar: hamburger (mobile-only, left) + display/debug controls (right). */}
         <div style={S.topbar}>
           <button
             className="lm-hamburger"
             onClick={() => setSidebarOpen((v) => !v)}
             aria-label="Menu"
           >☰</button>
-          {/* Current section label — gives the user a visual anchor for where they are. */}
           <span style={{
             display: "flex", alignItems: "center", gap: 8,
             fontSize: 13, fontWeight: 600, color: "var(--lm-text)",
@@ -896,25 +783,16 @@ export default function Monitor() {
           </button>
         </div>
 
-        {/* Content */}
         <div style={{
           ...S.content,
           ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
           ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
-          // display:flex + column is load-bearing, not cosmetic: SettingsPanel
-          // scrolls itself via flex:1/minHeight:0/overflowY:auto, and those do
-          // nothing unless this wrapper is a flex container. Without it the
-          // panel's height stays `auto`, grows past this overflow:hidden box,
-          // and a long list (many schedules) is simply clipped with no
-          // scrollbar anywhere to reach it.
+          // display:flex is load-bearing: SettingsPanel scrolls via flex:1/minHeight:0.
           ...(section.startsWith("settings:")
             ? { padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const }
             : {}),
         }} className="lm-content">
-          {/* Non-chat sections share a keyed wrapper so switching between them
-              re-triggers the fade-in. Chat stays OUTSIDE this wrapper (always
-              mounted) so its history survives tab switches — keying it would
-              remount and wipe it. */}
+          {/* Chat stays outside this keyed wrapper so it is never remounted. */}
           <div key={section === "chat" ? "_keep" : section} className={section === "chat" ? undefined : "lm-fade-in"} style={{ display: "contents" }}>
           {section === "overview" && (
             <OverviewSection
@@ -945,9 +823,7 @@ export default function Monitor() {
                 }).catch(() => {});
               }}
               onMicMutedChange={(muted) => {
-                // Commit on HAL's ack (ms) so the toggle flips immediately instead
-                // of waiting out the 5s poll. A 409 (hardware mic switch off) is
-                // !r.ok → state untouched; the poll stays the reconciler of truth.
+                // Commit on HAL's ack; a 409 (HW mic switch off) leaves state to the poll.
                 fetch(`${HW}/voice/${muted ? "mute" : "unmute"}`, { method: "POST" }).then((r) => {
                   if (r.ok) setVoice((prev) => (prev ? { ...prev, mic_muted: muted } : prev));
                 }).catch(() => {});
@@ -966,16 +842,10 @@ export default function Monitor() {
                 }).catch(() => {});
               }}
               onPlaybackLive={(tts, music) => {
-                // Fired by the mic-level SSE stream only on CHANGE — commits
-                // playback state the moment HAL flips it, so "Speaking…" clears
-                // in ~100ms instead of waiting out the 5s poll (which stays on
-                // as the reconciler when the stream is closed/hidden).
                 setVoice((prev) => (prev && prev.tts_speaking !== tts ? { ...prev, tts_speaking: tts } : prev));
                 setMusicPlaying((prev) => (prev === music ? prev : music));
               }}
               onEmotionPick={(e) => {
-                // Optimistic pill highlight: oc.emotion refreshes on the 10s
-                // sidebar poll, which reconciles if the agent moves on.
                 fetch(`${HW}/emotion`, {
                   method: "POST",
                   headers: { "Content-Type": "application/json" },
@@ -1021,11 +891,7 @@ export default function Monitor() {
           {section === "api-docs" && (
             <iframe
               title="API Docs"
-              // Routed through `/api/hardware/*` (admin-auth gated reverse
-              // proxy to the device) instead of `/hw/docs` directly: nginx /hw/
-              // is `allow 127.0.0.1; deny all;` per audit local F2, so the
-              // direct path is broken from any remote browser. The proxy
-              // accepts the session cookie via fetch credentials.
+              // Via the admin-gated /api/hardware proxy; nginx /hw/ is loopback-only.
               src="/api/hardware/docs"
               style={iframeStyle}
             />
@@ -1037,16 +903,10 @@ export default function Monitor() {
               style={iframeStyle}
             />
           )}
-          {/* Settings leaves render the shared SettingsPanel, which owns its
-              own scroll container + padding (content wrapper is padding:0 above
-              for these sections). The "settings:" prefix is stripped to the
-              SettingsSectionId the panel expects. */}
           {section.startsWith("settings:") && (
             <SettingsPanel activeSection={section.slice("settings:".length) as SettingsSectionId} />
           )}
           </div>
-          {/* Chat lives OUTSIDE the keyed fade wrapper so it stays mounted and
-              keeps its history across tab switches (keying it would remount). */}
           <div style={{ display: section === "chat" ? "contents" : "none" }}>
             <ChatSection events={events} isActive={section === "chat"} />
           </div>

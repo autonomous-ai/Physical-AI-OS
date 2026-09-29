@@ -11,8 +11,7 @@ import (
 	"claude-desktop-buddy/httpapi"
 )
 
-// claudeBrand is the Claude app icon color (#C15F3C) used for all
-// buddy state LED cues so the device visibly speaks "Claude".
+// claudeBrand is the Claude icon color used for buddy LED cues.
 var claudeBrand = [3]int{193, 95, 60}
 
 // Bridge maps buddy state changes to device and OS server HTTP calls.
@@ -36,18 +35,12 @@ func (b *Bridge) OnStateChange(old, next BuddyState, hb *Heartbeat) {
 
 	switch next {
 	case StateSleep:
-		// CHANGED 2026-05-26: was b.ledOff() — that killed the user's ambient LED
-		// when Claude disconnected (user's blue → off forever until Buddy reconnects).
-		// Sleep = Buddy stops being the indicator → hand strip back to user, matching
-		// StateIdle behavior below.
+		// Hand the strip back to the user's LED state instead of turning it off.
 		b.ledRestore()
 		b.displayEyes("sleepy")
 
 	case StateIdle:
-		// Released the strip — hand it back to the user's saved LED state.
-		// Skip when coming from Busy: main.go fires an emotion right
-		// after, and that emotion has its own restore. Avoids a
-		// user-color flash between Busy's effect and the emotion.
+		// Skip restore when leaving Busy; the following emotion restores itself.
 		if old != StateBusy {
 			b.ledRestore()
 		}
@@ -84,12 +77,7 @@ func (b *Bridge) OnStateChange(old, next BuddyState, hb *Heartbeat) {
 	b.postBuddyState(next, hb)
 }
 
-// --- Device calls (port 5001) ---
-//
-// All LED writes from Buddy are marked transient: they paint the strip
-// but don't overwrite the user's saved LED state (e.g. "đèn xanh lá").
-// When Buddy returns to Idle, ledRestore() asks the device to repaint
-// whatever the user had set before Buddy took the strip.
+// All Buddy LED writes are transient; ledRestore repaints the user's saved LED state.
 
 func (b *Bridge) ledOff() {
 	b.post(b.halURL+"/led/off", map[string]interface{}{
@@ -138,8 +126,6 @@ func (b *Bridge) displayEyesMode() {
 	b.post(b.halURL+"/display/eyes-mode", nil)
 }
 
-// --- OS server calls (port 5000) ---
-
 // postBuddyState sends buddy state to the OS server monitor bus.
 func (b *Bridge) postBuddyState(state BuddyState, hb *Heartbeat) {
 	detail := map[string]interface{}{
@@ -165,14 +151,7 @@ func (b *Bridge) postSensingEvent(prompt *Prompt) {
 	})
 }
 
-// --- Claude Code reverse approval ---
-
-// announceCodeApproval cues the device that Claude Code is waiting for the user
-// to approve a tool. Mirrors the Desktop StateAttention cue (blink LED + display)
-// but injects a `claude_code_approval` sensing event so the on-device agent asks
-// the user by voice and then POSTs the decision back to /claude-code/approve|deny.
-// All calls are fire-and-forget (the LED is transient, so it never steals the
-// user's saved strip state).
+// announceCodeApproval cues the device (LED, display, claude_code_approval sensing event) so the agent asks the user; fire-and-forget.
 func (b *Bridge) announceCodeApproval(req httpapi.CodeApprovalRequest) {
 	b.ledEffect("blink", claudeBrand, 1.5, 0)
 	b.displayInfo(
@@ -186,17 +165,13 @@ func (b *Bridge) announceCodeApproval(req httpapi.CodeApprovalRequest) {
 	})
 }
 
-// restoreAfterCodeApproval repaints the user's LED + eyes once a code approval
-// resolves (allow / deny / timeout), so Buddy never holds the attention cue.
+// restoreAfterCodeApproval repaints the user's LED and eyes after a code approval resolves.
 func (b *Bridge) restoreAfterCodeApproval() {
 	b.ledRestore()
 	b.displayEyesMode()
 }
 
-// expressEmotion triggers a coordinated LED + servo animation on
-// the device. Used by the buddy state listener to celebrate the end of a
-// Claude turn ("Claude is done" → happy emotion). The device owns the
-// LED/servo timeline from there so we don't fight its ambient logic.
+// expressEmotion triggers a coordinated LED + servo emotion on the device.
 func (b *Bridge) expressEmotion(name string, intensity float64) {
 	if name == "" {
 		return
@@ -207,11 +182,7 @@ func (b *Bridge) expressEmotion(name string, intensity float64) {
 	})
 }
 
-// prerenderTTS asks the device to synthesize a phrase and store it in the
-// on-disk TTS cache without playing it. Used at startup to warm the
-// cache for every narration phrase the device will need, so the very
-// first announcement of each one plays instantly instead of waiting
-// on a provider round-trip.
+// prerenderTTS asks the device to synthesize and cache a phrase without playing it.
 func (b *Bridge) prerenderTTS(text string) {
 	if text == "" {
 		return
@@ -222,17 +193,7 @@ func (b *Bridge) prerenderTTS(text string) {
 	})
 }
 
-// speakTTS posts a short narration string to the device's TTS endpoint
-// (POST /voice/speak). Fire-and-forget: the device rejects with 409 when
-// music is playing or 503 when TTS isn't initialized; both responses
-// are ignored at the bridge layer so callers (mostly the Narrator)
-// don't have to coordinate with the voice pipeline.
-//
-// `cached: true` tells the device to look the text up in its on-disk TTS
-// cache before calling the provider. Narration phrases are a small,
-// repetitive set ("Đang sửa file", "Xong", …) so after each phrase
-// has been spoken once the rest of the day hits the cache — zero
-// extra TTS API cost and near-instant playback.
+// speakTTS posts a cached narration phrase to the device's /voice/speak; 409/503 responses are ignored.
 func (b *Bridge) speakTTS(text string) {
 	if text == "" {
 		return
@@ -243,11 +204,7 @@ func (b *Bridge) speakTTS(text string) {
 	})
 }
 
-// OnEvent forwards a parsed Event (chat turn etc.) to the OS server so use cases
-// like "speak Claude's reply" or "show recent message on display" can
-// subscribe to /api/monitor/event with type=buddy_event. The bridge is
-// purely fire-and-forget; downstream consumers decide whether to do
-// anything with the payload.
+// OnEvent forwards a parsed Event to the OS server monitor bus as buddy_event; fire-and-forget.
 func (b *Bridge) OnEvent(evt *Event) {
 	if evt == nil {
 		return
@@ -262,8 +219,6 @@ func (b *Bridge) OnEvent(evt *Event) {
 		},
 	})
 }
-
-// --- Helpers ---
 
 func (b *Bridge) post(url string, payload interface{}) {
 	var body []byte
@@ -297,9 +252,7 @@ func formatTokens(n int) string {
 	return fmt.Sprintf("%d", n)
 }
 
-// truncate shortens s to at most max runes, appending "..." when it cuts. Counts
-// runes (not bytes) so multi-byte text (Vietnamese hints, tool args) is never
-// sliced mid-rune, and guards small max so it can't panic.
+// truncate shortens s to at most max runes, appending "..." when it cuts.
 func truncate(s string, max int) string {
 	r := []rune(s)
 	if len(r) <= max {

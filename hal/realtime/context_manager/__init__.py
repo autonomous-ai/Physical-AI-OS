@@ -11,9 +11,7 @@ __all__ = [
     "ClaudeCodeContextManager",
 ]
 
-# Shared by realtime context and voice startup; runtime layouts live here.
-# PicoClaw, Codex and OpenCode reuse the OpenClaw identity/memory layout.
-# Claude Code inherits that layout and changes only its skills directory.
+# PicoClaw, Codex and OpenCode reuse the OpenClaw layout; Claude Code changes only its skills dir.
 CONTEXT_MANAGERS: dict[str, type[ContextManagerBase]] = {
     "openclaw": OpenClawContextManager,
     "hermes": HermesContextManager,

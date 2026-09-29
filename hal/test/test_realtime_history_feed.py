@@ -1,10 +1,4 @@
-"""A reply the user never heard still has to reach the realtime agent.
-
-os-server drops a cancelled turn's speech before it reaches TTS, and the normal
-history feed rides on TTS completion — so without a speaker-free path the
-realtime session keeps save_main_handoff's "its spoken reply follows"
-placeholder and never learns the answer.
-"""
+"""A reply the user never heard still has to reach the realtime agent."""
 
 from hal.drivers.voice.voice_service import VoiceService
 
@@ -45,9 +39,6 @@ def test_spoken_reply_keeps_the_plain_marker():
     assert realtime.sent == ["[TTS HISTORY] Your meeting starts at two."]
 
 
-# The persisted fragment is the processed result and memory wants all of it;
-# only the in-session line is capped, because that one is re-billed on every
-# later turn until the session recycles.
 def test_only_the_in_session_line_is_capped(monkeypatch):
     import hal.config as hal_config
 

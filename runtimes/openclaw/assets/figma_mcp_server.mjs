@@ -1,18 +1,5 @@
 #!/usr/bin/env node
-// Figma REST MCP server (stdio, first-party). Self-contained — Node stdlib only.
-//
-// Wraps the Figma REST API (https://api.figma.com/v1) as MCP tools so OpenClaw
-// can read Figma designs with a user OAuth access token. The token is read from
-// the FIGMA_TOKEN env var (FIGMA_ACCESS_TOKEN is accepted as a back-compat alias),
-// set by the lamp connector writer in the mcp.servers.figma-api entry of
-// openclaw.json, and sent as Authorization: Bearer — it never lives inside this script.
-//
-// Transport: MCP stdio = newline-delimited JSON-RPC 2.0 over stdin/stdout.
-// Implements: initialize, tools/list, tools/call, ping. Notifications ignored.
-//
-// Scopes the token is expected to have (read + comment):
-//   current_user:read, file_content:read, file_metadata:read,
-//   file_versions:read, file_comments:read, file_comments:write
+// Figma REST MCP server (stdio, Node stdlib only); token comes from FIGMA_TOKEN, never stored here.
 
 import https from "node:https";
 import readline from "node:readline";
@@ -25,15 +12,12 @@ function token() {
   return (process.env.FIGMA_TOKEN || process.env.FIGMA_ACCESS_TOKEN || "").trim();
 }
 
-// authHeaderName is the HTTP header the access token rides in. Default
-// "Authorization" (Bearer-prefixed); a custom name like "X-Figma-Token" (used by
-// Figma personal access tokens) sends the raw token with no prefix.
+// authHeaderName: "Authorization" sends Bearer <token>; a custom name (e.g. X-Figma-Token) sends it raw.
 function authHeaderName() {
   return (process.env.FIGMA_AUTH_HEADER || "Authorization").trim();
 }
 
-// ── Figma REST call ─────────────────────────────────────────────────────────
-// Returns { status, json|text }. Auth via Authorization: Bearer <token>.
+// ── Figma REST call ──
 function figmaRequest(method, path, body) {
   return new Promise((resolve, reject) => {
     const url = new URL(FIGMA_BASE + path);
@@ -84,7 +68,7 @@ function qs(params) {
   return parts.length ? "?" + parts.join("&") : "";
 }
 
-// ── Tool definitions ────────────────────────────────────────────────────────
+// ── Tool definitions ──
 const STR = (description) => ({ type: "string", description });
 
 const TOOLS = [
@@ -195,7 +179,7 @@ const TOOLS = [
 
 const TOOL_BY_NAME = new Map(TOOLS.map((t) => [t.name, t]));
 
-// ── JSON-RPC plumbing ───────────────────────────────────────────────────────
+// ── JSON-RPC plumbing ──
 function send(msg) {
   process.stdout.write(JSON.stringify(msg) + "\n");
 }
@@ -234,7 +218,6 @@ async function handleToolCall(id, params) {
 }
 
 function handle(msg) {
-  // Notifications (no id) — acknowledge nothing.
   if (msg.id === undefined || msg.id === null) return;
   const { id, method, params } = msg;
   switch (method) {
@@ -265,7 +248,7 @@ rl.on("line", (line) => {
   try {
     msg = JSON.parse(s);
   } catch {
-    return; // ignore malformed line
+    return;
   }
   try {
     handle(msg);

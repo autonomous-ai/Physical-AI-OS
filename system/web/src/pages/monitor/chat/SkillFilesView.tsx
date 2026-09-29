@@ -2,14 +2,6 @@ import { useMemo, useState } from "react";
 import { FileText } from "lucide-react";
 import type { SkillBundleFile } from "@/lib/api";
 
-// The two-pane skill file browser: files on the left, the selected file's
-// content on the right. Shared by BrowseSkillsModal (files unpacked from a
-// downloaded `.skill` archive) and ManageSkillsModal (files read off the
-// runtime's skills dir) so both detail views are literally the same UI — the
-// backend returns the same `SkillBundleFile[]` shape for either source.
-//
-// Expects to sit inside a ModalShell with bodyPadding={0}.
-
 export function SkillFilesView({
   files, skipped,
 }: {
@@ -19,9 +11,6 @@ export function SkillFilesView({
 }) {
   const [picked, setPicked] = useState<string | null>(null);
 
-  // SKILL.md opens by default — it's the entry point of every skill. Derived
-  // rather than seeded from an effect, so no cascading render and no stale path
-  // when `files` changes: an explicit pick that no longer exists falls back.
   const fallback = useMemo(
     () => files.find((f) => f.path.toLowerCase().endsWith("skill.md")) ?? files[0],
     [files],
@@ -99,9 +88,6 @@ function FileRow({
   active: boolean;
   onClick: () => void;
 }) {
-  // Show the basename prominently with the containing dir dimmed above it —
-  // paths are all nested under a <skill-name>/ root, so the full path on one
-  // line is mostly noise.
   const slash = file.path.lastIndexOf("/");
   const dir = slash >= 0 ? file.path.slice(0, slash + 1) : "";
   const base = slash >= 0 ? file.path.slice(slash + 1) : file.path;

@@ -37,20 +37,17 @@ func writeConfig(t *testing.T, dir string, root map[string]interface{}) string {
 	return configPath
 }
 
-// TestOpenclawWrite_PinsWorkspaceFromNested is the core guard: a config carrying the
-// nested double-".openclaw" workspace must be corrected to the hardcoded default on a
-// switch TO openclaw, even when the LLM auth fields are unchanged.
+// TestOpenclawWrite_PinsWorkspaceFromNested: a nested workspace is corrected even without auth changes.
 func TestOpenclawWrite_PinsWorkspaceFromNested(t *testing.T) {
 	dir := t.TempDir()
 	configPath := writeConfig(t, dir, map[string]interface{}{
 		"agents": map[string]interface{}{
 			"defaults": map[string]interface{}{
-				"workspace": "/root/.openclaw/.openclaw/workspace", // the drift
+				"workspace": "/root/.openclaw/.openclaw/workspace",
 			},
 		},
 	})
 
-	// No apiKey/baseUrl change — the workspace pin alone must make it write.
 	if err := (openclawAdapter{}).write(LLMConfig{}, Options{OpenclawConfigDir: dir}); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -60,8 +57,7 @@ func TestOpenclawWrite_PinsWorkspaceFromNested(t *testing.T) {
 	}
 }
 
-// TestOpenclawWrite_PinsWorkspaceAlongsideAuth verifies the pin also happens when the
-// migration is carrying auth across, and that the auth fields land too.
+// TestOpenclawWrite_PinsWorkspaceAlongsideAuth: pin and auth fields both land.
 func TestOpenclawWrite_PinsWorkspaceAlongsideAuth(t *testing.T) {
 	dir := t.TempDir()
 	configPath := writeConfig(t, dir, map[string]interface{}{
@@ -91,8 +87,7 @@ func TestOpenclawWrite_PinsWorkspaceAlongsideAuth(t *testing.T) {
 	}
 }
 
-// TestOpenclawWrite_NoopWhenAlreadyCanonical ensures we don't rewrite when the
-// workspace is already the default and there is no auth change.
+// TestOpenclawWrite_NoopWhenAlreadyCanonical: no rewrite when nothing changes.
 func TestOpenclawWrite_NoopWhenAlreadyCanonical(t *testing.T) {
 	dir := t.TempDir()
 	configPath := writeConfig(t, dir, map[string]interface{}{

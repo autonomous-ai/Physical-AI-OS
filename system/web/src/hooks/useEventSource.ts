@@ -4,11 +4,7 @@ type OnMessage = (ev: MessageEvent) => void;
 type OnOpen = () => void;
 type OnError = (ev: Event) => void;
 
-// Opens an SSE connection gated on tab visibility. Each EventSource holds
-// one persistent HTTP/1.1 connection slot (Chrome caps at 6 per origin),
-// so a monitor page that subscribes to several streams + an MJPEG img
-// quickly starves its own fetches and can't even reload. When the tab
-// is backgrounded this closes the stream; reopens when visible again.
+// Opens an SSE connection gated on tab visibility.
 export function useEventSource(
   url: string | null,
   handlers: { onMessage?: OnMessage; onOpen?: OnOpen; onError?: OnError } = {},
@@ -16,11 +12,7 @@ export function useEventSource(
 ) {
   const { enabled = true } = opts;
   const handlersRef = useRef(handlers);
-  // Keep the latest handlers in a ref so the stream effect below never
-  // re-opens the EventSource when a caller passes fresh inline callbacks.
-  // Written in an effect (not during render) — refs must not be mutated while
-  // rendering. This effect is declared FIRST, so it commits before the stream
-  // effect runs and `open()` always reads the current handlers.
+  // Latest handlers live in a ref, written by an effect declared before the stream effect.
   useEffect(() => {
     handlersRef.current = handlers;
   });

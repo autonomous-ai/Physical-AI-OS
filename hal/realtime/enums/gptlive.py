@@ -4,12 +4,7 @@ from enum import StrEnum
 
 
 class GPTLiveVoice(StrEnum):
-    """Live voices accepted by gpt-live-1 (BFF integration doc, verified on the
-    real model 2026-09-17). The SDK's `BuiltInVoice` literal is wider — it also
-    carries Realtime-only names (alloy, ash, …) that a Live `session.start`
-    rejects, which would kill the session before the first word. `marin` is the
-    default; `bossa` / `tempo` are Portuguese, the rest English with regional
-    accents."""
+    """Voices accepted by gpt-live-1; Realtime-only SDK names (alloy, ash, ...) kill a Live session."""
 
     MARIN = "marin"
     QUARTZ = "quartz"

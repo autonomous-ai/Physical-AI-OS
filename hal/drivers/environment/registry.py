@@ -32,7 +32,6 @@ class Component:
         return partial(self.driver, **options) if options else self.driver
 
 
-# A new sensor only needs its config loader, protocol driver and this binding.
 COMPONENTS = {
     "sen55": Component(load_sen55_config, SEN55, SEN55Timing, SEN55_FIELDS),
     "scd41": Component(load_scd41_config, SCD41, SCD41Timing, ("co2_ppm",), ("automatic_self_calibration",)),

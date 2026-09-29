@@ -19,9 +19,9 @@ This is the actionable plan for **MVP of Autonomous Buddy** — the macOS compan
 - 6-digit pairing flow (lamp web UI shows code)
 - Persistent WS connection (`buddy → lamp`)
 - Command executors: `open_app`, `close_app`, `open_url`, `type_text`, `key_combo`, `notification`, `ping`
-- Lamp Go: `system/buddy/` package + 7 HTTP routes + WS gateway
+- Lamp Go: `system/buddy/` package + HTTP routes + WS gateway (10 `/api/buddy/*` routes today; see [design doc §4.2](autonomous-buddy.md))
 - OpenClaw skill `computer-use` (basic intent → command mapping)
-- Web UI: "Paired Computers" page in `lamp/web/`
+- Web UI: `BuddyCard` in the Monitor page (`system/web/src/pages/monitor/BuddyCard.tsx`)
 - Audit log (backend file only — no UI in MVP)
 
 **Out of scope (defer to post-MVP):**
@@ -72,11 +72,11 @@ Each phase is independently shippable and reviewable.
 
 ### Phase 1C — Pairing flow
 
-**Status:** ✓ Done — 6-digit code + token persistence in `buddies.json` + Keychain on the Mac. Includes `DELETE /api/buddy/self` (Bearer-auth) so a user-initiated unpair in the buddy app also drops the lamp's record, keeping both sides in sync.
+**Status:** ✓ Done — 6-digit code + token persistence in `buddies.json` on the lamp and `pairing.json` (Application Support, mode 0600) on the Mac. Includes `DELETE /api/buddy/self` (Bearer-auth) so a user-initiated unpair in the buddy app also drops the lamp's record, keeping both sides in sync.
 
 **Buddy files:**
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingManager.swift`
-- `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingStore.swift` (Keychain)
+- `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingStore.swift` (`~/Library/Application Support/AutonomousBuddy/pairing.json`, mode 0600)
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Pairing/PairingWindow.swift` (code entry UI)
 
 **Lamp Go files:**
@@ -89,26 +89,26 @@ Each phase is independently shippable and reviewable.
 - `system/buddy/wire.go`
 - Modify: `system/server/server.go` (register routes)
 - Modify: `system/server/wire.go` (provider)
-- Run: `make generate`
+- Run: `make os-generate`
 
 **Lamp web files:**
-- `lamp/web/src/pages/PairedComputers.tsx` (initial — just code display)
-- Update `lamp/web/src/App.tsx` (route)
-- Update `lamp/web/src/lib/api.ts` (pair endpoints)
+- `system/web/src/pages/monitor/BuddyCard.tsx` (code display, status poll, revoke)
+- `system/web/src/pages/monitor/PairingSection.tsx` (hosts `BuddyCard` in the Monitor page)
 
 **Routes added:**
 - `POST /api/buddy/pair/start`
 - `POST /api/buddy/pair/confirm`
-- `GET  /api/buddy/list`
-- `DELETE /api/buddy/:id`
+- `GET  /api/buddy/status`
+- `DELETE /api/buddy` (admin)
+- `DELETE /api/buddy/self` (buddy Bearer token)
 
 **Acceptance:**
 1. User opens buddy menu → "Pair with device" → device web UI displays 6-digit code
 2. User reads code, types into buddy code entry window
-3. Buddy stores token in Keychain
+3. Buddy stores token in `~/Library/Application Support/AutonomousBuddy/pairing.json` (0600)
 4. Lamp persists buddy in `buddies.json`
 5. Buddy menu now shows "Paired with lamp-xxxx"
-6. `GET /api/buddy/list` returns paired buddy
+6. `GET /api/buddy/status` (admin) returns `paired: true` with the buddy's `buddy_id`/`name`
 
 ### Phase 1D — WebSocket connection
 
@@ -126,18 +126,17 @@ Each phase is independently shippable and reviewable.
 
 **Routes added:**
 - `GET /api/buddy/ws` (WS upgrade)
-- `GET /api/buddy/status`
 
 **Acceptance:**
 - Buddy auto-connects WS on startup (and after pairing)
 - Lamp logs `[buddy] connected: <fingerprint>` on connect
 - Buddy menu shows green dot when connected, red when disconnected
 - WS survives lamp reboot (buddy reconnects with backoff)
-- `GET /api/buddy/status` returns `{"connected": [...], "paired": [...]}`
+- `GET /api/buddy/status` returns `{"paired": true, "connected": true, "buddy_id": …, "name": …, "os_version": …, "fingerprint": …, "paired_at": …}` (only `paired`/`connected` when unpaired)
 
 ### Phase 1E — Command executors (buddy side)
 
-**Status:** ✓ Done — 16 executors (the MVP set above plus `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` via Accessibility, `cursor_pos`, `list_displays`). The vision-shaped executors land here ahead of the formal vision phase so the bash+curl reference skill (`computer-use/references/vision.md`) can use them today.
+**Status:** ✓ Done — 16 executors (the MVP set above plus `screenshot`, `click_at`, `scroll`, `mouse_move`, `drag`, `read_clipboard`, `write_clipboard`, `click_button` via Accessibility, `cursor_pos`, `list_displays`). The vision-shaped executors land here ahead of the formal vision phase so the bash+curl reference skill (`skills/computer-use/references/vision.md`) can use them today.
 
 **Files:**
 - `autonomous-buddy/macos/Sources/AutonomousBuddy/Commands/Command.swift` (types)
@@ -163,24 +162,25 @@ Each phase is independently shippable and reviewable.
 **Files:**
 - `system/buddy/dispatcher.go`
 - `system/server/buddy/delivery/http/handler_command.go`
-- Update: wire providers, run `make generate`
+- Update: wire providers, run `make os-generate`
 
 **Routes added:**
 - `POST /api/buddy/command`
 
 **Acceptance:**
-- `curl -X POST http://lamp/api/buddy/command -H 'Authorization: Bearer <admin-token>' -d '{"action":"ping"}'` returns `{"ok":true,"result":{"pong":true}}`
-- Timeout works (default 5s; 503 if buddy unresponsive)
-- 404 if no buddy connected
+- The route is loopback-only (`localOnlyMiddleware`; LAN callers get 403), so test on the device itself: `curl -X POST http://127.0.0.1:5000/api/buddy/command -H 'Content-Type: application/json' -d '{"action":"ping"}'` returns `{"status":1,"data":{"id":…,"ok":true,"result":{"pong":true,"timestamp":…},…},"message":null}`
+- Timeout works (default 30 s; `timeout_ms` 500–60000 → that value + 5 s); dispatch errors return 502 (`timeout waiting for buddy response`)
+- 502 `no buddy connected` if no buddy is connected
 - Concurrent commands handled (per-command ID matching for responses)
 
 ### Phase 1G — OpenClaw skill
 
 **Status:** ✓ Done — English-only `SKILL.md` following the led-control / scene style, intent-based fire-and-forget HW markers (`[HW:/buddy/exec/<action>:{...}]`). Plus an opt-in `references/vision.md` for tasks that genuinely require seeing the screen (bash + curl loop against `/api/buddy/command`). The vision reference was tuned with Anthropic Computer Use prompting guidance (anchor screenshots at ~1280px wide, evaluate after every step, prefer keyboard shortcuts when coord clicks are risky).
 
-**Files (location depends on OpenClaw skill conventions):**
-- `computer-use/SKILL.md`
-- `computer-use/script.sh` (or whatever scripting OpenClaw uses)
+**Files:**
+- `skills/computer-use/SKILL.md`
+- `skills/computer-use/scripts/buddy.py` (loopback client for `/api/buddy/command`)
+- `skills/computer-use/references/vision.md`
 
 **Acceptance:**
 - User says to lamp: "Mở Chrome trên máy tính" → buddy launches Chrome → lamp speaks "đã mở Chrome rồi"
@@ -193,8 +193,8 @@ Each phase is independently shippable and reviewable.
 **Status:** ✓ Done — `BuddyCard` in the Monitor Overview shows pair/status/revoke. The buddy app side also got a native menu-bar Activity submenu plus a separate "Activity" window (terminal-tail style) so the user can audit recent commands without opening the audit log file. Audit log path: `~/Library/Application Support/AutonomousBuddy/audit.log`.
 
 **Files:**
-- Update `lamp/web/src/pages/PairedComputers.tsx`
-- Update `lamp/web/src/components/` as needed
+- `system/web/src/pages/monitor/BuddyCard.tsx`
+- `system/web/src/pages/monitor/PairingSection.tsx`
 
 **Acceptance:**
 - Page lists paired buddies with name, OS, last seen, online/offline
@@ -226,7 +226,7 @@ Each phase is independently shippable and reviewable.
 
 1. **mDNS browsability** — ✓ Done. The device publishes `_autonomous._tcp` for `NWBrowser` via a static avahi service file (`/etc/avahi/services/autonomous.service`, port 80) baked at provisioning (`setup.sh` + `scripts/imager/build*.sh`), alongside the `<device_type>-xxxx.local` host record. The `%h` wildcard keeps it device-agnostic.
 2. **Admin auth header convention** — confirm whether new buddy endpoints should use `Authorization: Bearer <token>` (cookie or bearer); reuse `project_security_login_ui_batch.md` patterns.
-3. **OpenClaw skill location** — find where existing skills live, naming convention, how lamp registers them. (Possibly in lamp's filesystem `~/.openclaw/skills/<name>/SKILL.md`.)
+3. **OpenClaw skill location** — ✓ Resolved: repo `skills/computer-use/`.
 
 ---
 
@@ -271,7 +271,7 @@ autonomous-buddy/
 
 Subfolders `autonomous-buddy/windows/` and `autonomous-buddy/linux/` will host future ports (v1.2+). Each platform self-contained so toolchains don't cross-contaminate.
 
-### Go (`lamp/`)
+### Go (`system/`)
 ```
 system/buddy/
 ├── types.go
@@ -295,25 +295,25 @@ Modified:
 - `system/server/wire.go` (provider set)
 - `system/server/wire_gen.go` (regenerated)
 
-### Web (`lamp/web/`)
+### Web (`system/web/`)
 ```
-lamp/web/src/
-├── pages/PairedComputers.tsx (new)
-├── App.tsx (modified — add route)
-└── lib/api.ts (modified — add buddy endpoints)
+system/web/src/pages/monitor/
+├── BuddyCard.tsx (pair / status / revoke)
+└── PairingSection.tsx (hosts BuddyCard)
 ```
 
 ### OpenClaw skill
 ```
-<openclaw-skills-dir>/computer-use/
+skills/computer-use/
 ├── SKILL.md
-└── script.sh (or equivalent)
+├── references/vision.md
+└── scripts/buddy.py
 ```
 
 ### Other
 - `CLAUDE.md` — doc table row added
-- `Makefile` — `build-buddy` target
-- `VERSION_BUDDY` (root) — `0.0.1`
+- `integrations/companions/autonomous-buddy/Makefile` — `native-*` targets (Swift helper)
+- `integrations/companions/autonomous-buddy/VERSION_AUTONOMOUS_BUDDY` (started at `0.0.1`)
 
 ---
 
@@ -345,7 +345,7 @@ lamp/web/src/
 - [x] **No code signing for MVP** — right-click → Open OK — confirmed
 - [ ] **Pairing model** — 1 lamp ↔ 1 buddy (MVP). Confirm? (Leo's reply implied yes, but worth confirming)
 - [ ] **"Join Google Meet" — fixed URL or remembered last?** — for MVP, suggest a configurable URL in buddy preferences (so user can set their team's recurring meeting room)
-- [ ] **OpenClaw skill directory location** — need to look up where existing skills live in this repo
+- [x] **OpenClaw skill directory location** — `skills/computer-use/`
 - [ ] **Versioning** — should `VERSION_BUDDY` follow same scheme as `VERSION_OS_SERVER`?
 
 ---
@@ -353,7 +353,7 @@ lamp/web/src/
 ## Risks specific to MVP
 
 1. **mDNS service publishing** — ✓ Resolved. The device publishes `_autonomous._tcp` via `/etc/avahi/services/autonomous.service` (dropped at provisioning), so buddy can browse without manual entry.
-2. **OpenClaw skill conventions** — unknown until inspected. May affect phase 1G design.
+2. **OpenClaw skill conventions** — ✓ Resolved; skill lives in `skills/computer-use/`.
 3. **Permission UX on first launch** — Accessibility prompt is one-shot; if user denies and we don't re-prompt cleanly, keyboard actions silently fail. Need fallback UX.
 4. **WS keepalive across Mac sleep** — Mac sleep kills WS. Reconnect must handle gracefully.
-5. **Bundling** — `swift run` works for dev but for production install we eventually need a `.app` bundle with `Info.plist`. Can defer but document the gap.
+5. **Bundling** — ✓ Resolved. `desktop/scripts/package-macos.mjs` produces the unified `Autonomous Buddy.app` (bundle ID `network.autonomous.ai.buddy.manager`) with the Swift helper embedded at `Contents/Resources/native/AutonomousBuddy`; see [native bridge](native-bridge.md) and [release signing](release-signing.md).

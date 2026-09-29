@@ -12,7 +12,7 @@ Source: colors are what the **lamp** actually shows — `robots/lamp/presets.jso
 | `excited` | 3, 1, 0 | `#030100` dim orange | overlay | candle | 0.5 | excited |
 | `shy` | 3, 0, 1 | `#030001` dim rose | overlay | breathing | 0.3 | shy |
 | `shock` | 2, 2, 2 | `#020202` soft white | overlay | notification_flash | 1.0 | shock |
-| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing_fine (opens at peak) | 1.2 | — (see note) |
+| `listening` | 0, 0, 3 | `#000003` dim blue | overlay | breathing_fine (opens at peak) | 0.3 (base 1.2) | — (see note) |
 | `laugh` | 2, 3, 0 | `#020300` dim lime | overlay | candle | 0.2 | laugh |
 | `confused` | 3, 2, 0 | `#030200` dim amber | overlay | candle | 0.2 | confused |
 | `sleepy` | 0, 0, 0 | `#000000` black (off) | base | solid | — | sleepy |

@@ -85,7 +85,7 @@ func writeScript(t *testing.T, dir, name, content string) string {
 }
 
 // startServer boots a Server on an ephemeral loopback port with all paths
-// under t.TempDir(). Returns the ws URL and the config used.
+// under t.TempDir().
 func startServer(t *testing.T, opencodeBin string, dir string) (string, Config) {
 	t.Helper()
 	cfg := Config{
@@ -205,7 +205,6 @@ func TestHappyPath(t *testing.T) {
 	url, cfg := startServer(t, writeFakeOpenCode(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
 
-	// First frame is bridge.status ready with empty session id.
 	status := readFrame(t, conn)
 	if status["type"] != "bridge.status" || status["state"] != "ready" {
 		t.Fatalf("expected ready status, got %v", status)
@@ -216,8 +215,6 @@ func TestHappyPath(t *testing.T) {
 
 	sendMessage(t, conn, "hi opencode")
 	frames := readTurnFrames(t, conn)
-	// step_start + text + step_finish forwarded verbatim, then the gatewayd's
-	// synthesized terminal session.idle (opencode run emits no session.idle).
 	if len(frames) != 4 {
 		t.Fatalf("expected 4 opencode frames, got %d: %v", len(frames), frames)
 	}
@@ -230,7 +227,6 @@ func TestHappyPath(t *testing.T) {
 	if frames[0]["sessionID"] != "t123" {
 		t.Fatalf("expected sessionID t123, got %v", frames[0]["sessionID"])
 	}
-	// The synthesized terminal frame carries the captured session id.
 	if frames[3]["sessionID"] != "t123" {
 		t.Fatalf("expected synthesized session.idle sessionID t123, got %v", frames[3]["sessionID"])
 	}
@@ -250,7 +246,7 @@ func TestResumeUsesStoredSessionID(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv.txt")
 	url, _ := startServer(t, writeFakeOpenCode(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	sendMessage(t, conn, "first")
 	readTurnFrames(t, conn)
@@ -274,7 +270,7 @@ func TestSessionNewClearsSession(t *testing.T) {
 	argvFile := filepath.Join(dir, "argv.txt")
 	url, cfg := startServer(t, writeFakeOpenCode(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	// session.new races an in-flight turn: it rides the same worker queue, so
 	// it must execute AFTER the turn — the turn's sessionID re-persist cannot
@@ -284,8 +280,6 @@ func TestSessionNewClearsSession(t *testing.T) {
 		t.Fatalf("send session.new: %v", err)
 	}
 
-	// Ordered stream: the full turn first (session persisted from the sessionID
-	// frames), THEN the session_cleared status.
 	sawIdle := false
 	for {
 		frame := readFrame(t, conn)
@@ -336,7 +330,7 @@ func TestAuthRejectsWrongToken(t *testing.T) {
 	header := http.Header{"Authorization": {"Bearer wrong-token"}}
 	conn, _, err := websocket.DefaultDialer.Dial(url, header)
 	if err != nil {
-		return // handshake rejected outright is acceptable too
+		return
 	}
 	defer conn.Close()
 	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
@@ -356,7 +350,6 @@ func TestAuthRejectsWrongToken(t *testing.T) {
 func TestResumeRetryFresh(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Seed a stale session so the first run tries (and fails) to resume it.
 	sessionFile := filepath.Join(dir, "session.json")
 	if err := os.WriteFile(sessionFile, []byte(`{"session_id":"stale-999"}`), 0o600); err != nil {
 		t.Fatalf("seed session file: %v", err)
@@ -364,7 +357,7 @@ func TestResumeRetryFresh(t *testing.T) {
 	url, cfg := startServer(t, writeFakeOpenCodeResumeFails(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
 
-	status := readFrame(t, conn) // ready status carries the stale session id
+	status := readFrame(t, conn)
 	if status["session_id"] != "stale-999" {
 		t.Fatalf("expected seeded session_id, got %v", status["session_id"])
 	}
@@ -394,14 +387,13 @@ func TestResumeRetryFresh(t *testing.T) {
 func TestResumedFailureFramesHeldBack(t *testing.T) {
 	dir := t.TempDir()
 	argvFile := filepath.Join(dir, "argv.txt")
-	// Seed a stale session so the first run resumes and dies with session.error.
 	sessionFile := filepath.Join(dir, "session.json")
 	if err := os.WriteFile(sessionFile, []byte(`{"session_id":"x"}`), 0o600); err != nil {
 		t.Fatalf("seed session file: %v", err)
 	}
 	url, _ := startServer(t, writeFakeOpenCodeResumeSessionErr(t, dir, argvFile), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	sendMessage(t, conn, "retry me")
 	frames := readTurnFrames(t, conn)

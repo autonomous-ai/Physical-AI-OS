@@ -16,9 +16,7 @@ import urllib.parse
 import urllib.request
 
 LOG = logging.getLogger(__name__)
-# Build-time defaults; changing these requires shipping and reloading the plugin.
 ENABLED = True
-# Temporary diagnostic budget for validating the proxy path before latency tuning.
 TIMEOUT_SECONDS = 3.0
 MAX_RESPONSE = 65536
 # Local wire budget, not a provider limit. Never truncate the eligible catalog.
@@ -66,8 +64,7 @@ def read_config(path):
 
 
 def live_skills():
-    # Native listing deduplicates bare names before filtering categories. Scan
-    # the OS namespace directly so a bundled namesake cannot hide an OS skill.
+    # Scan the OS namespace directly so a bundled namesake cannot hide an OS skill.
     from hermes_constants import get_hermes_home
     from tools.skills_tool import skills_list
     from agent.skill_utils import (get_disabled_skill_names, iter_skill_index_files,
@@ -189,8 +186,8 @@ def request_decision(endpoint, key, timeout, payload):
         "Authorization": "Bearer " + key, "Content-Type": "application/json", "Accept": "application/json",
         "User-Agent": "AutonomousOS-Jev/0.1",
     }, method="POST")
-    # No redirects (including same-host redirects), no application retries.
     try:
+        # No redirects (including same-host), no application retries.
         response = urllib.request.build_opener(NoRedirect()).open(request, timeout=timeout)
     except urllib.error.HTTPError as error:
         status = error.code
@@ -217,7 +214,7 @@ class Router:
 
     def before_turn(self, user_message=None, **kwargs):
         started = time.monotonic()
-        # Correlate routing with runtime events without ever logging prompt text.
+        # Never log prompt text.
         correlation = {key: value for key in ("session_id", "turn_id", "task_id")
                        if isinstance(value := kwargs.get(key), str)
                        and re.fullmatch(r"[A-Za-z0-9_.:-]{1,128}", value)}
@@ -312,7 +309,6 @@ class Router:
                 completed.set()
 
         try:
-            # Native skill filters consult session/platform ContextVars.
             turn_context = contextvars.copy_context()
             threading.Thread(target=turn_context.run, args=(decide,), daemon=True).start()
         except Exception:

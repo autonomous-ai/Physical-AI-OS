@@ -39,7 +39,6 @@ def tts(monkeypatch, tmp_path):
         def start(self):
             workers.append(self.target)
 
-    # Admission is real; no synthesis or hardware thread is allowed to run.
     monkeypatch.setattr(tts_module, "threading", SimpleNamespace(Thread=Worker, Lock=threading.Lock))
     service.workers = workers
     return service
@@ -57,7 +56,6 @@ def test_optional_speech_cannot_cut_capture_and_can_play_after_endpoint(monkeypa
             assert not tts.workers
 
     def close():
-        # The reservation must not hold up processing feedback during STT drain.
         assert not tts.input_capture_state[0]
 
     frames = [(1, True, "Help me"), (2, True, "check memory again"), (5, False, None)]
@@ -125,8 +123,6 @@ def test_delayed_button_worker_cannot_stop_speech_after_a_new_capture(monkeypatc
 
 @pytest.mark.parametrize("cached", [False, True])
 def test_capture_starting_during_tts_admission_is_rechecked(monkeypatch, tts, cached):
-    # Simulate the capture taking priority after the early request check but
-    # before speech state is claimed. The second check must release the lock.
     def cache_path(_):
         tts.begin_input_capture()
         return SimpleNamespace(exists=lambda: False, name="cue")

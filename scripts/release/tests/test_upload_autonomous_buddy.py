@@ -1,8 +1,4 @@
-"""Run the real release script against an isolated filesystem and fake GCS.
-
-Usage: python3 scripts/release/tests/test_upload_autonomous_buddy.py
-Requires the release script's local tools (bash, jq, shasum); no GCS access.
-"""
+"""Run the real release script against an isolated filesystem and fake GCS."""
 
 import base64
 import hashlib

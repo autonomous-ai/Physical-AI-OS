@@ -1,11 +1,4 @@
-"""The going-to-sleep line must survive sleepy muting the speaker.
-
-os-server fires `[HW:/emotion:sleepy]` and only waits 100ms before POSTing the
-reply text to TTS, and HAL needs roughly as long to reach
-_finalize_sleepy_peripherals — so muting the speaker there raced the
-announcement and usually won, and `/voice/speak-queue` answered
-`suppressed -- speaker muted`. The drain removes the race.
-"""
+"""The going-to-sleep line must survive sleepy muting the speaker."""
 import os, sys, threading, time, unittest
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..", "..")))
@@ -96,7 +89,6 @@ class SleepySpeakerDrainTest(unittest.TestCase):
             time.sleep(0.01)
         return False
 
-    # --- the bug this exists for -------------------------------------------
 
     def test_announcement_arriving_after_the_marker_still_plays(self):
         """The real shape: sleepy lands first, the line follows ~100ms later."""
@@ -108,7 +100,6 @@ class SleepySpeakerDrainTest(unittest.TestCase):
 
         state._finalize_sleepy_peripherals(mute_mic=False, mute_speaker=True)
 
-        # The window the announcement needs must stay open for it.
         self.assertFalse(state._speaker_muted, "speaker muted before the line arrived")
         time.sleep(0.15)
         self.assertFalse(state._speaker_muted, "speaker muted mid-announcement")
@@ -125,7 +116,6 @@ class SleepySpeakerDrainTest(unittest.TestCase):
         self.assertFalse(state._speaker_muted, "muted before the grace even elapsed")
         self.assertTrue(self._wait_for_mute(), "silent sleep never muted the speaker")
 
-    # --- the regressions it must not cause ---------------------------------
 
     def test_waking_mid_drain_leaves_the_speaker_alone(self):
         state = self.state
@@ -136,7 +126,6 @@ class SleepySpeakerDrainTest(unittest.TestCase):
         state._finalize_sleepy_peripherals(mute_mic=False, mute_speaker=True)
         time.sleep(0.08)
 
-        # What routes/emotion.py does on a wake emotion.
         state._sleeping = False
         state._current_emotion = "stretching"
         state._wake_sleepy_peripherals()
@@ -148,7 +137,7 @@ class SleepySpeakerDrainTest(unittest.TestCase):
     def test_a_stalled_tts_cannot_hold_the_speaker_open_forever(self):
         """The cap is the whole reason the window is safe to open at all."""
         state = self.state
-        tts = FakeTTS(speaking=True)   # never stops
+        tts = FakeTTS(speaking=True)
         state.tts_service = tts
 
         started = time.monotonic()
@@ -159,22 +148,13 @@ class SleepySpeakerDrainTest(unittest.TestCase):
                                 "muted early — the drain did not wait for the announcement")
         self.assertLess(elapsed, state.SLEEPY_SPEAKER_DRAIN_MAX_S + 0.5,
                         "drain ran past its cap")
-        # Muting only gates playback that has not started; the speech still in
-        # progress at the cap has to be stopped or the cap bounds nothing and
-        # a sleeping device keeps talking.
-        # The mute flag is published before stop() runs outside privacy.lock.
-        # Wait for that side effect instead of racing the background worker.
+        # stop() runs after the mute flag is published, outside privacy.lock; wait instead of racing it.
         self.assertTrue(tts.stopped.wait(0.5), "the stalled speech was left playing past the cap")
         self.assertEqual(tts.stop_calls, 1, "the stalled speech was left playing past the cap")
         self.assertFalse(tts.speaking, "device still speaking after the drain capped out")
 
     def test_the_commit_waits_for_the_wake_path_lock(self):
-        """The guard alone was not enough — the commit must hold privacy.lock.
-
-        Without it, a drain already past its guard writes the mute after a
-        wake has restored, leaving an awake device silent, marked sleep-owned,
-        and with nothing left to undo it.
-        """
+        """The guard alone was not enough — the commit must hold privacy.lock."""
         state = self.state
         state.tts_service = FakeTTS()
         committed = threading.Event()
@@ -183,11 +163,10 @@ class SleepySpeakerDrainTest(unittest.TestCase):
             state._mute_speaker_for_sleep()
             committed.set()
 
-        with state.privacy.lock:   # the lock _wake_sleepy_peripherals holds
+        with state.privacy.lock:
             threading.Thread(target=commit, daemon=True).start()
             self.assertFalse(committed.wait(0.15), "the mute committed without taking the lock")
             self.assertFalse(state._speaker_muted, "speaker muted while the wake path held the lock")
-            # The wake this drain lost to.
             state._sleeping = False
             state._current_emotion = "stretching"
 

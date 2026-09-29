@@ -1,36 +1,16 @@
 #!/usr/bin/env python3
-"""PermissionRequest hook: voice-approve Claude Code tool prompts on the device.
+"""PermissionRequest hook: voice-approve Claude Code tool prompts on the device (opt-in).
 
-Fires exactly when Claude Code would show a tool permission dialog. Instead of
-the dialog, this hook asks the connected device — the on-device agent reads the
-request out loud, the user answers "yes/no", and the decision comes back here so
-Claude Code approves/denies WITHOUT showing the dialog.
-
-Opt-in: only runs when `approval_enabled` is true in the config (it changes how
-Claude Code prompts, so it's off by default).
-
-Contract (code.claude.com/docs hooks reference):
-  stdin : {"hook_event_name":"PermissionRequest","tool_name":..,"tool_input":..}
-  stdout: {"hookSpecificOutput":{"hookEventName":"PermissionRequest",
-                                  "decision":{"behavior":"allow"|"deny"}}}
-  exit 0 (JSON only honored on exit 0).
-
-FAIL-SAFE: on disabled / no device / unreachable / timeout / any error, print
-NOTHING and exit 0 — Claude Code falls back to its normal dialog. NEVER prints
-"allow" on an error path.
+Fail-safe: on any error or timeout, print nothing so Claude Code shows its native dialog.
 """
 
 import json
 import sys
 import uuid
 
-# The hook is launched with this script's dir on sys.path, so the sibling
-# shared module imports directly.
 from buddy_client import default_device, load_config, request_approval
 
-# Sit between the device long-poll ttl (55s) and the hook `timeout` in hooks.json
-# (60s): give the server a moment to return its own "timeout" decision first, but
-# still return cleanly before Claude Code kills the hook.
+# Between the device long-poll ttl (55s) and the hooks.json timeout (60s).
 REQUEST_TIMEOUT = 58
 
 

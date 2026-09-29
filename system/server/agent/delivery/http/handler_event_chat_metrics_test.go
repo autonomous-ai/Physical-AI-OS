@@ -31,8 +31,7 @@ func (g *finalMetricsGateway) SetBusy(busy bool) {
 	}
 }
 
-// Observe the synchronous local telemetry record; transport timing must not
-// determine whether the handler emitted an execution event.
+// executionLogCapture observes the synchronous local telemetry record, independent of transport timing.
 type executionLogCapture struct {
 	slog.Handler
 	events chan string

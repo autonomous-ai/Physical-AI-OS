@@ -1,10 +1,6 @@
 import type React from "react";
 
-// Full-screen modal that hosts the Turn Pipeline content on mobile. The
-// inline pipeline card is hidden under .lm-flow-pipeline on small screens,
-// so the user reaches it via the "View pipeline" button on each TurnBadge.
-// Renders whatever the parent passes as children — same JSX it would render
-// inline on desktop, just inside a fixed-position overlay.
+// Full-screen modal that hosts the Turn Pipeline content on mobile.
 export function PipelineModal({
   onClose,
   title,
