@@ -130,6 +130,7 @@ Starting:
 
 Default ports: dlserver=`8001`, lbserver=`7999`, nginx=`8899`, jupyter=`8890`.
 Override with `DLSERVER_PORT`, `LBSERVER_PORT`, `JUPYTER_PORT` make variables.
+`DLSERVER_PORT` defaults to the serving slot (see *Zero-downtime deploy*).
 
 | Target | What it does |
 |--------|-------------|
@@ -140,6 +141,9 @@ Override with `DLSERVER_PORT`, `LBSERVER_PORT`, `JUPYTER_PORT` make variables.
 | `make start-runpod-slave` | Background: nginx + dlserver only (no LB), with auto-restart watchdog |
 | `make start-runpod-slave-ssl` | Same with TLS |
 | `make start-runpod-dlserver` | Background dlserver with auto-restart watchdog |
+| `make start-runpod-dlserver-slot` | Start one dlserver slot without `install` (used by the deploy) |
+| `make deploy-dlserver` | Zero-downtime deploy of new dlserver code (two slots) |
+| `make print-dlserver-pid` | Pid file of the serving slot (used by autostart) |
 | `make start-runpod-lbserver` | Background lbserver with auto-restart watchdog |
 | `make start-nginx` | Start nginx (HTTP) |
 | `make start-nginx-ssl` | Start nginx (HTTPS, auto-generates self-signed cert) |
@@ -158,6 +162,80 @@ Status:
 ```bash
 make info    # port layout + running/stopped state of each process
 ```
+
+### Zero-downtime deploy (two slots)
+
+`make deploy-dlserver` deploys new dlserver code without failing a request. It
+starts the new code on the idle port next to the running one, both on the same
+GPU, and moves traffic only when the new one is ready.
+
+| Slot | Port | PID files | Logs |
+|------|------|-----------|------|
+| A | `8001` | `/tmp/dlserver.pid`, `/tmp/dlserver-wrapper.pid` | `/workspace/logs/dlserver/` |
+| B | `8002` | `/tmp/dlserver-8002.pid`, `/tmp/dlserver-8002-wrapper.pid` | `/workspace/logs/dlserver-8002/` |
+
+`/tmp/dlserver-active` names the slot lbserver sends traffic to
+(`http://127.0.0.1:<port>`); when it is missing that is slot A. Every dlserver make
+target acts on that slot unless you pass `DLSERVER_PORT`. Never edit the file by
+hand.
+
+```bash
+git pull
+nohup make deploy-dlserver &      # or run it in tmux; an SSH drop sends SIGHUP
+tail -f /workspace/logs/deploy/deploy.log
+```
+
+What it does:
+
+1. Refuses, without touching anything, if: another deploy runs (`flock` on
+   `/tmp/dlserver-deploy.lock`; the lock is released when this script exits, so
+   the long-lived daemons `make` starts don't hold it open); lbserver is not
+   listening on its port; lbserver has not acked `/tmp/dlserver-active`, or its
+   ack does not name the active slot (it predates this feature or runs without
+   `LB__STATE_FILE`); the active slot is not running; the idle port is in use;
+   the active slot's commit is unknown (no `dlserver*.rev`, e.g. it predates
+   this feature); `pyproject.toml` changed in the working tree (committed or
+   not) since the active slot started; free GPU memory is below
+   `DEPLOY_MIN_FREE_GPU_MB` (12000); or `/hal/api/dl/health` on the active slot
+   cannot be read.
+2. Starts the idle slot **without** `make install`, and waits (up to
+   `DEPLOY_READY_TIMEOUT`, 900 s) until its `/hal/api/dl/health` reports every model
+   the active slot reports. A missing model aborts and stops the new slot.
+3. Writes the new URL to `/tmp/dlserver-active` and sends `SIGHUP` to lbserver,
+   then waits up to 5 s for lbserver's ack in `/tmp/dlserver-active.applied`. If it
+   is not acked (or the deploy is interrupted here), it rolls back: restores the
+   state file to the old slot, sends `SIGHUP` again, and waits up to 5 s for
+   lbserver's ack of the old slot. Only once that ack arrives does it stop the new
+   slot. If the rollback itself is not confirmed, it leaves **both** slots running
+   and logs the state file, the ack contents and the manual recovery steps — check
+   by hand which slot actually answers before touching either one.
+4. Drains `DEPLOY_DRAIN_SECONDS` (35 s, longer than `lb.http_timeout`), then stops the
+   old slot with `make stop-runpod-dlserver DLSERVER_PORT=<old>`. If that stop
+   fails, traffic is already on the new slot and the log says how to stop the old
+   one by hand.
+
+GPU memory is logged at every step (`gpu=used,free,total MB`).
+
+An interrupt (`SIGINT`/`SIGTERM`/`SIGHUP` — e.g. an SSH drop) is handled by when it
+lands: before the switch (step 3), it stops the new slot and traffic is
+unchanged; during the switch, it rolls back as in step 3; after the switch,
+traffic is already on the new slot and the log says how to stop the old one.
+
+**Use the in-place restart (`make start-runpod-master`) instead** when
+`pyproject.toml` changed (dependency, TensorRT or ONNX Runtime upgrade), when
+lbserver itself changed, and for the first start after installing this feature.
+
+Limits: open WebSocket streams on the old slot drop once and reconnect. A crash of
+the serving slot between deploys is still an outage until the watchdog restarts
+it (only one slot runs between deploys).
+
+Rollback: deploy the previous commit (`git checkout <sha> && make deploy-dlserver`).
+To turn the feature off, stop slot B if it runs
+(`make stop-runpod-dlserver DLSERVER_PORT=8002`), `rm /tmp/dlserver-active*`, and
+`make start-runpod-master`. The Makefile always passes `LB__STATE_FILE` to
+lbserver, so this does not unset it: with the state file gone, lbserver falls
+back to serving from `LB__BACKENDS` directly, which is the two-slot deploy
+effectively off, not the env var unset.
 
 ### Testing
 
@@ -248,6 +326,11 @@ elsewhere"; liveness failing means "restart this process".
    owns its group, covering the child, size guard and liveness probe
 4. **exits non-zero if anything survives**, so `start` refuses to run on a dirty
    slate rather than dying later on `EADDRINUSE`
+5. stops **one** instance: it matches the wrapper and the server by their
+   `--log-dir` (5th argument, default `/workspace/logs/<name>`), anchored so
+   `dlserver` does not match `dlserver-8002`. An instance predating this argument
+   (or started without it) is still found by its pid files and the port it
+   listens on.
 
 It distinguishes two failures, both non-zero:
 
@@ -324,13 +407,20 @@ costs realtime responsiveness -- that is a device-side decision, deployed by OTA
 
 | File | Purpose |
 |------|---------|
-| `/tmp/dlserver.pid` | dlserver process PID |
-| `/tmp/dlserver-wrapper.pid` | dlserver watchdog PID |
+| `/tmp/dlserver.pid` | dlserver process PID (slot A) |
+| `/tmp/dlserver-wrapper.pid` | dlserver watchdog PID (slot A) |
+| `/tmp/dlserver-8002.pid` | dlserver process PID (slot B) |
+| `/tmp/dlserver-8002-wrapper.pid` | dlserver watchdog PID (slot B) |
+| `/tmp/dlserver-active` | serving slot, written by the deploy |
+| `/tmp/dlserver-active.applied` | lbserver's ack: pid + backends |
+| `/tmp/dlserver*.rev` | commit each slot started from |
 | `/tmp/lbserver.pid` | lbserver process PID |
 | `/tmp/lbserver-wrapper.pid` | lbserver watchdog PID |
 | `/tmp/nginx.pid` | nginx master process PID |
-| `/workspace/logs/dlserver/` | dlserver stdout/stderr/watchdog logs |
+| `/workspace/logs/dlserver/` | dlserver stdout/stderr/watchdog logs (slot A) |
+| `/workspace/logs/dlserver-8002/` | dlserver stdout/stderr/watchdog logs (slot B) |
 | `/workspace/logs/lbserver/` | lbserver stdout/stderr/watchdog logs |
+| `/workspace/logs/deploy/deploy.log` | `make deploy-dlserver` log |
 | `/workspace/logs/jupyter/` | Jupyter Lab logs |
 
 Optional: `make start-jupyter` runs Jupyter Lab on `:8890`, reachable at
@@ -451,6 +541,12 @@ actually loaded, not just that `make` returned.
 ```bash
 tail -f /workspace/logs/autostart/autostart.log
 ```
+
+A recreate wipes `/tmp`, so the stack always comes back on slot A. On a manual
+re-run autostart asks `make print-dlserver-pid` which slot is serving before
+deciding it is already up. The script's own paths can be overridden —
+`AUTOSTART_REPO_DIR`, `AUTOSTART_LOG_DIR`, `AUTOSTART_LOCK`,
+`AUTOSTART_HEALTH_URL` — defaults unchanged.
 
 **Two things that must not change.** `/post_start.sh` has to exit 0 immediately,
 for the reason in its comment. And `runpod-autostart.sh` has to `cd` to the repo

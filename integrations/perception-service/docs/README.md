@@ -19,7 +19,8 @@ over WebSocket and HTTP behind an optional encrypting load balancer.
 | [crypto-and-loadbalancer.md](crypto-and-loadbalancer.md) | `lbserver` round-robin proxy + RSA/AES encryption + nginx |
 | [deployment.md](deployment.md) | Install, Makefile targets, watchdog, single-node + master/slave GPU scaling, RunPod, Docker, TLS |
 | [deployment.md#autostart-after-a-container-recreate](deployment.md#autostart-after-a-container-recreate) | Bringing the stack back automatically after RunPod recreates the container |
-| [troubleshooting.md](troubleshooting.md) | Diagnosing an outage: crash vs container recreate vs OOM, reading multilog, disk and GPU checks |
+| [deployment.md#zero-downtime-deploy-two-slots](deployment.md#zero-downtime-deploy-two-slots) | Deploying new dlserver code without an outage (two slots, `make deploy-dlserver`) |
+| [troubleshooting.md](troubleshooting.md) | Diagnosing an outage: crash vs container recreate vs OOM, reading multilog, disk and GPU checks, a failed or refused deploy |
 | [configuration.md](configuration.md) | All environment variables with defaults |
 | [configuration.md#batching](configuration.md#batching) | Batch size / timeout tuning per model (GPU VRAM guide) |
 | [configuration.md#input-limits](configuration.md#input-limits) | Input size guards (image, audio) |
