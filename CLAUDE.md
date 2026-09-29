@@ -70,6 +70,15 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    scoped, documented in English with why it is safe, and has no practical
    compliant alternative. Report the exact commands run and any limitation.
 
+6. **Go validation must follow CI order** - For Go changes, run from the repo
+   root, sequentially: `go build ./...`, then `go vet ./...`, then
+   `go test ./...`. Fix a failed stage before advancing to the next. The vet
+   checks run implicitly by `go test` are only a subset and do not replace
+   the explicit `go vet ./...` gate. For concurrency changes, also run
+   `go test -race` on the affected packages. Complete these checks before
+   reporting the change ready to commit or push; report exact commands and
+   any failures or skipped checks. Device tests do not replace local gates.
+
 See `docs/DEV-MULTI-IDE.md` for full conventions.
 
 ## Subagent Usage

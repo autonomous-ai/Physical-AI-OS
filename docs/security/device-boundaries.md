@@ -46,3 +46,7 @@ Face photo/file routes resolve requested paths and require containment within `U
 ## Scope of the September 2026 corrections
 
 The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS trust and archive supply-chain proposals remain separate review items, not claims of fixed vulnerabilities.
+
+## Buddy handler ownership
+
+The server receives `BuddyHandler` by pointer through Wire so the pairing confirmation limiter and its mutex are never copied during dependency injection. Pairing limits and endpoint behavior are unchanged.

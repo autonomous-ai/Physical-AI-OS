@@ -47,3 +47,7 @@ Các route ảnh/file khuôn mặt resolve đường dẫn và yêu cầu nằm 
 ## Phạm vi sửa lỗi tháng 9/2026
 
 Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, bỏ qua trạng thái privacy, đoán mã pairing, giới hạn tốc độ servo đã khai báo, đường dẫn plugin và file. Giữ nguyên chính sách ký/metadata OTA, credential admin hiện tại, onboarding LAN, quiet-hours của diagnostic và giới hạn góc chưa khai báo. CORS rộng và đề xuất kiểm tra chuỗi cung ứng archive vẫn là mục review riêng, không được coi là lỗi đã sửa.
+
+## Quyền sở hữu Buddy handler
+
+Server nhận `BuddyHandler` qua con trỏ từ Wire để không sao chép bộ giới hạn xác nhận pairing và mutex khi khởi tạo dependency. Giới hạn pairing và hành vi endpoint không thay đổi.
