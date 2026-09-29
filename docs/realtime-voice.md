@@ -973,10 +973,50 @@ as the user. Note what it does **not** say:
 it reports whether a reference *arrived*, not whether cancellation *worked*, so
 a frame with 0.9 dB of ERLE still counts as cancelled.
 
-### ElevenLabs v3 playback speed
+### ElevenLabs v4 default and playback speed
 
-For ElevenLabs HTTP requests whose effective model is `eleven_v3` (including
-the `tts-1` fallback), HAL requests provider `speed=1.0` and applies
+The shared ElevenLabs HTTP backend defaults to `eleven_v4` for both direct
+ElevenLabs and Autonomous proxy requests. An unset or non-ElevenLabs model
+(including the service default `tts-1`) resolves to v4; explicit `eleven_*`
+overrides are preserved. The request still uses `model_id` on the existing
+`text-to-speech/{voice_id}/stream` endpoint with `pcm_24000`; proxy requests
+retain the `/elevenlabs` prefix and existing authentication. The separate
+opt-in `HAL_TTS_ELEVENLABS_WS` backend keeps its Flash default and stream-input
+protocol. This change does not migrate that backend to Text to Dialogue.
+See [ElevenLabs v4 API example](https://elevenlabs.io/pl/v4) and
+[HTTP streaming reference](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
+On 2026-09-29, the existing Autonomous proxy successfully synthesized v4 PCM
+with Rachel, including six English emotion/delivery samples played on macOS.
+No proxy change was needed for that tested route. Subsequent voice-command
+turns on Lamp `172.168.20.142` verified main-agent audio tags reaching v4 through
+the proxy and speaker playback with Rachel; the owner confirmed the tearful
+English sample sounded correct. Direct ElevenLabs routing is covered by mocked
+HTTP tests; live direct API remains untested.
+
+V4 audio tags are natural-language performance directions, not a fixed emotion
+enum: combined cues such as `[excited, happy]`, delivery descriptions such as
+`[sleepy drowsy voice]`, and pauses such as `[long pause]` are documented.
+The ElevenLabs HTTP backend passes tags alongside spoken words unchanged;
+it does not restrict them to a v3 whitelist. Tag-only/blank chunks remain
+suppressed, so standalone sound-effect generation is not added by this upgrade.
+Realtime prompts keep their existing human-reaction/state/pause scope; hardware
+emotion markers remain a separate contract. Other providers do not automatically
+gain v4 tag support. See the [v4 announcement](https://elevenlabs.io/fr/blog/eleven-v4).
+
+Lamp's `robots/lamp/SOUL.md` uses an open palette of v4 voice directions:
+combined emotions, delivery descriptions, reactions and intentional pauses.
+Short replies normally use one appropriate cue or plain speech, replacing the
+old mandatory-tag rule. Requested stories, readings, roleplay and voice demos
+may follow the requested length and change delivery at meaningful beats.
+Crying/sobbing is reserved for requested performance, not an automatic reaction
+to user distress. Exact skill outputs, `NO_REPLY` and Harness handoffs override
+voice styling. Tags stay attached to words and do not extend physical emotion
+names; the usual Emotion skill controls the body. Other voices known not to
+support tags receive plain speech. This is persona guidance, not a new tag
+parser or an expansion of the device's physical emotions.
+
+For ElevenLabs HTTP requests whose effective model is `eleven_v4` or
+explicitly `eleven_v3`, HAL requests provider `speed=1.0` and applies
 `config.json`'s `tts_speed` locally through the existing `get_tts_speed` path.
 A streaming ffmpeg `atempo` filter changes duration while preserving pitch,
 before resampling, speaker output, and AEC reference capture. Speed `1.0`
@@ -992,8 +1032,8 @@ already in flight may remain until data arrives or its configured timeout;
 its late audio is discarded and its source is closed.
 
 
-The v3 WAV cache key includes a discriminator so previously synthesized v3
-audio is not reused under this speed policy. This changes playback duration;
+The ElevenLabs WAV cache revision changes with the v4 default, so cached v3
+audio is not reused when the service model remains `tts-1`. This changes playback duration;
 it does not reduce provider time to first byte (TTFB). Other TTS backends keep
 their existing speed behavior.
 

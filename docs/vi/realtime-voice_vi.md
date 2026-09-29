@@ -942,10 +942,47 @@ lên của chế độ live dựa vào cờ này ở chế độ `cancelled` đ�
 nói: nó báo tham chiếu có *tới* hay không, chứ không báo việc khử có *hiệu quả*
 hay không — một khung ERLE 0,9 dB vẫn được tính là đã khử.
 
-### Tốc độ phát ElevenLabs v3
+### Model mặc định ElevenLabs v4 và tốc độ phát
 
-Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v3` (kể cả fallback
-từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong
+Backend ElevenLabs HTTP dùng chung mặc định chọn `eleven_v4` cho cả gọi trực
+tiếp ElevenLabs và qua Autonomous proxy. Model trống hoặc không thuộc ElevenLabs
+(kể cả mặc định `tts-1` của service) dùng v4; override `eleven_*` được giữ nguyên.
+Request vẫn gửi `model_id` tới endpoint `text-to-speech/{voice_id}/stream`
+với `pcm_24000`; proxy giữ prefix `/elevenlabs` và cơ chế xác thực hiện tại.
+Backend tùy chọn `HAL_TTS_ELEVENLABS_WS` giữ model Flash và giao thức
+stream-input riêng, chưa chuyển sang Text to Dialogue.
+Tham khảo [ví dụ API ElevenLabs v4](https://elevenlabs.io/pl/v4) và
+[HTTP streaming](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
+Ngày 2026-09-29, Autonomous proxy hiện tại đã tổng hợp PCM v4 với Rachel thành
+công, gồm sáu mẫu cảm xúc/diễn đạt tiếng Anh phát trên macOS. Đường đã test không
+cần sửa proxy. Các turn voice-command tiếp theo trên Lamp `172.168.20.142`
+xác nhận tag từ main agent được gửi qua proxy tới v4 và phát qua loa với Rachel;
+chủ máy xác nhận mẫu tiếng Anh giọng mếu nghe đúng. Routing trực tiếp ElevenLabs
+có test HTTP giả lập; chưa test API trực tiếp thật.
+
+Audio tag v4 là chỉ dẫn diễn đạt bằng ngôn ngữ tự nhiên, không phải enum emotion
+cố định: có tag ghép như `[excited, happy]`, mô tả giọng như
+`[sleepy drowsy voice]` và khoảng nghỉ như `[long pause]`.
+Backend ElevenLabs HTTP giữ nguyên tag đi kèm lời nói, không giới hạn bằng
+whitelist v3. Chunk trống hoặc chỉ chứa tag vẫn bị bỏ qua, nên bản nâng cấp này
+chưa thêm khả năng phát hiệu ứng âm thanh độc lập. Prompt realtime giữ phạm vi
+phản ứng/trạng thái/khoảng nghỉ của con người; marker emotion điều khiển phần
+cứng là giao thức riêng. Provider khác không tự có hỗ trợ tag v4.
+Tham khảo [thông báo v4](https://elevenlabs.io/fr/blog/eleven-v4).
+
+`robots/lamp/SOUL.md` dùng palette chỉ dẫn giọng v4 mở: cảm xúc ghép, mô tả
+cách nói, phản ứng và khoảng nghỉ có chủ đích. Câu ngắn thường dùng một cue
+phù hợp hoặc lời nói thuần, thay cho quy tắc bắt buộc mọi câu có tag. Kể chuyện,
+đọc, nhập vai và demo giọng theo yêu cầu được tuân theo độ dài người dùng muốn,
+chuyển cách nói ở đoạn có thay đổi ý nghĩa. Khóc/nức nở dành cho diễn theo yêu
+cầu, không tự kích hoạt khi người dùng buồn. Output chính xác của skill,
+`NO_REPLY` và handoff Harness ưu tiên hơn trang trí giọng. Tag đi kèm lời nói,
+không mở rộng tên emotion phần cứng; cơ thể vẫn theo Emotion skill. Nếu biết
+voice không hỗ trợ tag thì dùng lời nói thuần. Đây là hướng dẫn persona, không
+phải parser tag mới hay bổ sung emotion vật lý của device.
+
+Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v4` hoặc override
+`eleven_v3`, HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong
 `config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
 `atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
 resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
@@ -960,8 +997,8 @@ timeout; xóa stop event cho turn mới không làm producer cũ chạy lại. H
 đã cấu hình; audio về muộn bị bỏ và nguồn được đóng.
 
 
-Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
-theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
+Revision WAV cache ElevenLabs thay đổi cùng mặc định v4 để không dùng lại audio
+v3 khi model trong service vẫn là `tts-1`. Chính sách tốc độ điều chỉnh thời lượng phát, không giảm
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
 
