@@ -15,6 +15,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import re
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -47,6 +48,18 @@ from core.request_context import (
 from lbserver.utils.state import get_crypto, set_crypto
 
 LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# A regex, not json.loads: frames are ~100 KB and this runs on the event loop for
+# every message, only to build a log line.
+_FRAME_B64 = re.compile(r'"frame_b64"\s*:\s*"([^"]*)"')
+
+
+def _loggable_ws_text(data: str) -> str:
+    """Log form of a client WS message: the base64 frame replaced by its length."""
+    return _FRAME_B64.sub(
+        lambda m: f'"frame_b64": "<{len(m.group(1))} chars>"', data
+    )[:100]
+
 
 # Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
 install_request_id_logging()
@@ -348,7 +361,7 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                             path,
                             ws_url,
                             session is not None,
-                            data[:100],
+                            _loggable_ws_text(data),
                         )
                         await backend_ws.send(data)
                 except WebSocketDisconnect:
