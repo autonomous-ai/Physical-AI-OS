@@ -987,7 +987,7 @@ Khi nhận event chỉ có text `voice_command`, `voice_followup`, `voice`, `web
 | "thư giãn", "relax" | scene:relax |
 | "xem phim", "movie mode" | scene:movie |
 | "đèn ngủ", "goodnight" | scene:night + sleepy emotion |
-| "sáng lên", "brighter" | scene:energize |
+| "brighten the light" | tăng sáng tương đối; "brighter" đứng riêng chuyển agent để hiểu ngữ cảnh |
 | "vui lên", "happy" | emotion:happy |
 | "buồn", "sad" | emotion:sad |
 | "tăng âm", "volume up" | volume 100 |
@@ -1073,9 +1073,9 @@ trong cooldown tiếp tục xuống main runtime. Jev từ chối chọn cũng c
 main runtime. Khi bật, bước này tăng latency cho yêu cầu không khớp; chưa có
 benchmark latency thực tế hoặc bảo đảm độ chính xác.
 
-Catalog bao phủ toàn bộ **20 intent local**, cùng `none` để chuyển tiếp:
+Catalog bao phủ toàn bộ **21 intent local**, cùng `none` để chuyển tiếp:
 
-- Đèn: `led_on`, `led_off`, `dim`, `led_color`.
+- Đèn: `led_on`, `led_off`, `dim`, `brighten`, `led_color`.
 - Scene: `scene_off`, `scene_reading`, `scene_focus`, `scene_relax`,
   `scene_movie`, `scene_night`, `scene_energize`.
 - Âm thanh/media: `volume_up`, `volume_down`, `mute_speaker`, `unmute_speaker`,
@@ -1156,7 +1156,7 @@ thuộc nhóm cần từ chối đều chuyển tiếp. Một lượt "Reduce th
 this lamp now" bị bỏ qua vì fit 0,94 dưới ngưỡng 0,95 giữ nguyên; do đó bộ test
 live pass một lần và fail một lần. Đây là quan sát trên mẫu nhỏ, không phải
 ước lượng độ chính xác đã hiệu chuẩn hay kết quả cho catalog mở rộng. Bộ test
-live mở rộng có 65 câu tiếng Anh bao phủ mọi nhóm intent, tham số bắt buộc và
+live mở rộng ngày 23/09/2026 có 65 câu tiếng Anh bao phủ mọi nhóm intent, tham số bắt buộc và
 trường hợp từ chối. Lượt cuối ngày 23/09/2026 đạt 62/65 câu: 29/32 yêu cầu
 hợp lệ và cả 33 trường hợp cần từ chối. Yêu cầu màu warm white, theo dõi người
 nói ("Follow me with your camera") và theo dõi cốc cạnh cửa phòng bị bỏ qua
@@ -1177,6 +1177,31 @@ không gọi HAL. Kết quả model có thể thay đổi; pass bộ câu này k
 hiệu năng mic/STT hay độ chính xác trên mọi cách diễn đạt.
 
 <a id="jev-bff-contract"></a>
+
+### Rà soát intent và corpus tiếng Anh
+
+`brighten` tăng đỉnh RGB hiện tại 25% (ít nhất một mức, tối đa 255), giữ tỷ lệ màu
+với làm tròn xuống. Khi đèn tắt, bắt đầu bằng RGB trắng ấm [32,27,20]. Dùng chung
+khóa điều chỉnh với `dim` và kiểm tra trạng thái ngủ. HAL vẫn áp trần safety; đọc
+lại phải xác nhận đèn thực sự sáng hơn và đúng tỷ lệ màu, kể cả khi bị safety kẹp,
+mới trả “Brighter now.”. Không đổi hoặc sai màu thì báo không xác nhận được. Đây
+là bước mặc định sản phẩm, không phải mức tăng độ sáng cảm nhận đã hiệu chuẩn.
+Than phòng tối mà không nêu nguồn khác có thể chọn `brighten`; đây không phải phép
+đo ánh sáng môi trường.
+
+Scene còn thay đổi servo/camera/mic/loa theo preset. Mô tả JEV yêu cầu chuyển agent
+nếu người dùng yêu cầu giữ nguyên các ngoại vi đó. `energize` là scene cấu hình,
+không bảo đảm sáng tối đa; phản hồi là “Energize mode!”. Yêu cầu sáng tối đa chuyển
+agent thay vì tự chọn scene.
+
+Corpus opt-in `TestJevLiveNaturalLanguage` dùng tiếng Anh, có ít nhất hai câu dương
+cho mỗi intent và các câu phủ định, tương lai/điều kiện, thiết bị khác, tham số không
+hỗ trợ và nhiều hành động. Test ghi latency từng câu, không thực thi phần cứng.
+Kiểm tra offline xác thực độ phủ ID và enum, không chứng minh độ chính xác model
+thật. Các câu phụ thuộc ngữ cảnh còn được kiểm tra tại routing sensing trước JEV.
+Chạy live bằng `JEV_EVAL_CONFIG` trỏ tới config OS riêng tư; `go test` thông thường
+skip khi chưa cung cấp cấu hình này.
+
 
 #### Contract Decisions BFF
 

@@ -10,6 +10,7 @@ import (
 var jevActionDescriptions = map[string]string{
 	"led_on":           "User intent: switch this device's light on, e.g. 'Please switch this light on'. Use the standard on preset when no color or level is specified. Effect: warm-white RGB [255,220,180], possibly a happy expression; the user need not request these implementation details. Defer explicit colors or brightness levels.",
 	"led_off":          "User intent: switch this device's light off now, e.g. 'Switch off this lamp'. Effect: light off. The request must concern this device, not another room or appliance.",
+	"brighten":         "Increase this device's current light brightness by one relative step (25 percent of current peak, at least one RGB level), retaining its hue. If off, start a low warm-white solid light. Accept requests for more light and current complaints that the room is too dark or dim with no other source named. Examples: 'The room is a bit dark', 'This lamp is too dim', 'Make this light brighter'. Stops effects and lighting scenes; HAL safety limits still apply. Defer explicit percentages, numeric levels, maximum requests, preserving animations, images/screens/other lamps, and ambiguous pronouns without an identified light.",
 	"dim":              "Reduce this device's current light brightness by half, preserving its RGB proportions with integer rounding. Accept generic dimming, repeated requests, keeping the current color, and current complaints about excessive brightness, harshness or glare. Examples: 'This lamp is too bright', 'Still too bright', 'Make the light softer'. Uses the current effect base color or brightest pixel and sets a solid color, stopping effects and scenes. Defer explicit percentages, numeric steps, preserving an animation or pattern, and glare from the sun/screen/another light.",
 	"volume_up":        "Increase this device's current speaker volume by one step of 10 percent of its safe range, clamped to its configured safe maximum. Accept generic louder requests and complaints that this device is too quiet. Defer explicit numeric levels, maximum/minimum requests, other devices, or multiple actions.",
 	"volume_down":      "Reduce this device's current speaker volume by half. Accept generic quieter requests, repeated complaints, and complaints that its speech or speaker is too loud, including informal grammar: 'speak too loud', 'lamp speak too loud', 'You are too loud'. Defer explicit numeric levels, muting completely, other people/TVs/external noise, and multiple actions.",
@@ -20,7 +21,7 @@ var jevActionDescriptions = map[string]string{
 	"scene_relax":      "Activate this device's relax lighting scene via /scene with scene relax. Example: 'Switch to relaxing lighting'. This does not start music.",
 	"scene_movie":      "Activate this device's movie lighting scene via /scene with scene movie. Example: 'Set the lamp to movie mode'. This does not play a movie.",
 	"scene_night":      "Activate this device's night lighting scene via /scene with scene night, possibly adding a sleepy expression. Example: 'Set this lamp to night mode'. This does not power down the device or set an alarm.",
-	"scene_energize":   "Activate this device's energize lighting scene via /scene with scene energize. Accept the energize or maximum-brightness preset. Defer numeric brightness levels or relative increments.",
+	"scene_energize":   "Activate this device's energize lighting scene via /scene with scene energize. Accept an explicit energize scene request. This is a configured preset, not guaranteed maximum brightness. Defer maximum or numeric brightness levels and relative increments.",
 	"mute_speaker":     "Mute this device's speaker via /speaker/mute. Example: 'Mute your speaker'. Muting is distinct from interrupting the current spoken reply or stopping music playback.",
 	"unmute_speaker":   "Unmute this device's speaker via /speaker/unmute. Example: 'Unmute your speaker'. This does not start music or set a specific volume.",
 	"music_stop":       "Stop music or audio playback on this device via /audio/stop. Example: 'Stop the music you are playing'. This does not mute the speaker or interrupt only the spoken reply.",
@@ -34,11 +35,14 @@ var jevActionDescriptions = map[string]string{
 func Candidates() []Candidate {
 	var candidates []Candidate
 	for _, id := range []string{
-		"led_on", "led_off", "dim", "volume_up", "volume_down", "led_color",
+		"led_on", "led_off", "dim", "brighten", "volume_up", "volume_down", "led_color",
 		"scene_off", "scene_reading", "scene_focus", "scene_relax", "scene_movie", "scene_night", "scene_energize",
 		"mute_speaker", "unmute_speaker", "music_stop", "stop_talking", "what_time", "servo_track_stop", "servo_track",
 	} {
 		candidate := Candidate{ID: id, Description: jevActionDescriptions[id]}
+		if strings.HasPrefix(id, "scene_") {
+			candidate.Description += " Scene effects include configured servo aiming/hold and camera/mic/speaker changes, not just light. Defer requests to change only lighting while keeping those peripherals unchanged."
+		}
 		switch id {
 		case "led_color":
 			candidate.Parameters = map[string]Parameter{
