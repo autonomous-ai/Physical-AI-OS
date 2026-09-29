@@ -23,6 +23,42 @@ logger = logging.getLogger(__name__)
 # (resources/summarize_prompt.md). expire_open_requests keys off it.
 OPEN_REQUESTS_HEADING = "## Open requests"
 
+# First section of summary.md while an activity (quiz, debate, lesson, game)
+# is in progress — its rules, position and covered items. Written by the
+# summarizer (resources/summarize_prompt.md); fit_summary never drops it.
+CURRENT_ACTIVITY_HEADING: str = "## Current activity"
+
+
+def fit_summary(summary: str, max_chars: int) -> str:
+    """Shrink an over-long summary by whole bullets, oldest history first.
+
+    A hard cut at max_chars dropped the END of the summary — the newest debate
+    rounds and `## Open requests` (#449). The activity and open-request
+    sections are what the next session needs most, so they are kept whole and
+    bullets are removed from the other sections top-down (the summary runs
+    oldest to newest). A hard cut remains only as the last resort.
+    """
+    if len(summary) <= max_chars:
+        return summary
+    protected: set[str] = {CURRENT_ACTIVITY_HEADING, OPEN_REQUESTS_HEADING}
+    lines: list[str] = summary.splitlines()
+    section: str = ""
+    droppable: list[int] = []
+    for i, line in enumerate(lines):
+        if line.startswith("## "):
+            section = line.strip()
+        elif section not in protected and line.lstrip().startswith(("- ", "* ")):
+            droppable.append(i)
+    dropped: set[int] = set()
+    size: int = len(summary)
+    for i in droppable:
+        if size <= max_chars:
+            break
+        dropped.add(i)
+        size -= len(lines[i]) + 1
+    fitted: str = "\n".join(line for i, line in enumerate(lines) if i not in dropped)
+    return fitted[:max_chars]
+
 
 # `- [2026-09-15T11:56:02+00:00] turn off the TV` — the stamp the summariser
 # is told to put at the head of every open-request bullet.
@@ -259,11 +295,13 @@ class ContextManagerBase(ABC):
                     # billed every turn and re-fed as [Previous summary] input
                     # to the next summarize, so an uncapped write compounds.
                     if len(new_summary) > self._summary_max_chars:
+                        fitted: str = fit_summary(new_summary, self._summary_max_chars)
                         logger.warning(
-                            "[realtime] summary truncated %d → %d chars",
-                            len(new_summary), self._summary_max_chars,
+                            "[realtime] summary over cap %d → %d chars "
+                            "(dropped oldest history bullets)",
+                            len(new_summary), len(fitted),
                         )
-                        new_summary = new_summary[: self._summary_max_chars]
+                        new_summary = fitted
                     with self._realtime_memory_lock:
                         self._summary_path.write_text(
                             new_summary + "\n", encoding="utf-8"
