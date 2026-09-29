@@ -1,5 +1,6 @@
 """A stranger joining the user is announced WITH the user in the text (#426, #531)."""
 
+import logging
 import time
 
 import numpy as np
@@ -288,3 +289,55 @@ def test_a_skipped_tick_inside_the_window_still_greets(perception, monkeypatch):
     assert _enters(perception) == [
         "Person detected — new: stranger (stranger_2); faces in frame: 1 (stranger_2)"
     ]
+
+
+# -- gaze log line (#537) ----------------------------------------------------------
+
+
+def _gaze_lines(caplog) -> list[str]:
+    return [
+        r.getMessage() for r in caplog.records
+        if r.getMessage().startswith("[face] stranger gaze:")
+    ]
+
+
+def test_gaze_line_carries_the_measurement(perception, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=perception_mod.__name__)
+    _tick(perception, [STRANGER_AWAY], monkeypatch)
+    _tick(perception, [STRANGER], monkeypatch)
+
+    away, facing = _gaze_lines(caplog)
+    assert away.startswith("[face] stranger gaze: stranger_2 yaw=90.0>")
+    assert away.endswith(" face=120px>=48 edge=0.00 -> away (turned too far) 0/1")
+    assert facing.startswith("[face] stranger gaze: stranger_2 yaw=0.0<=")
+    assert facing.endswith(" face=120px>=48 edge=0.00 -> facing 1/2")
+
+
+def test_gaze_line_names_why_yaw_is_missing(perception, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=perception_mod.__name__)
+    blind = _face(PersonKind.STRANGER, "stranger_2", None)
+    _tick(perception, [blind], monkeypatch)
+
+    assert _gaze_lines(caplog) == [
+        "[face] stranger gaze: stranger_2 yaw=- face=120px>=48 edge=0.00 -> away (no keypoints) 0/1"
+    ]
+
+
+def test_gaze_line_lists_each_stranger_on_one_line(perception, monkeypatch, caplog):
+    caplog.set_level(logging.INFO, logger=perception_mod.__name__)
+    other_away = _face(PersonKind.STRANGER, "stranger_3", PROFILE)
+    _tick(perception, [STRANGER, other_away], monkeypatch)
+
+    (line,) = _gaze_lines(caplog)
+    assert "stranger_2 yaw=0.0<=" in line and " -> facing 1/1; stranger_3 yaw=90.0>" in line
+    assert line.endswith(" -> away (turned too far) 0/1")
+
+
+def test_duplicate_stranger_id_keeps_the_facing_vote(perception, monkeypatch, caplog):
+    """Two boxes with one id: any facing box votes, as before #537."""
+    caplog.set_level(logging.INFO, logger=perception_mod.__name__)
+    _tick(perception, [STRANGER, STRANGER_AWAY], monkeypatch)
+
+    (line,) = _gaze_lines(caplog)
+    assert line.endswith(" -> facing 1/1")
+    assert perception._stranger_gaze_ticks[-1].facing == frozenset({"stranger_2"})

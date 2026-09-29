@@ -343,6 +343,14 @@ A real visitor is unaffected beyond one tick of delay: they are still there 2 s 
 
 The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
 
+Each face-ID tick with an ungreeted stranger in frame logs one line, with the numbers behind each stranger's vote and their running count:
+
+```
+[face] stranger gaze: stranger_16 yaw=51.6<=92.6 face=117px>=48 edge=0.68 -> facing 2/2; stranger_17 yaw=70.2>62.4 face=40px<48 edge=0.05 -> away (face too small, turned too far) 0/1; stranger_18 yaw=- face=120px>=48 edge=0.10 -> away (landmarks off-frame) 0/3
+```
+
+`yaw` is the head yaw in degrees, shown against the cone allowed at that edge (`GAZE_MAX_YAW_DEG` widened by `GAZE_EDGE_CONE_SCALE`): `<=` passes, `>` fails. `face` is the face height in the gaze watcher's 640-wide pixels, shown against `GAZE_MIN_FACE_PX`: `>=` passes, `<` fails. A tick votes `facing` only when both pass. `edge` is the distance from frame centre (0 = centre, 1 = edge). An `away` vote names what failed in brackets: `face too small`, `turned too far`, or, when yaw could not be measured at all (`yaw=-`), `no keypoints`, `landmarks off-frame`, `no yaw` or `no frame`. An unmeasurable face never counts as facing, but it isn't a stranger who turned away either.
+
 **Tuning:**
 
 | Symptom | Fix |
