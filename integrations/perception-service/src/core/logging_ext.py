@@ -133,22 +133,29 @@ DEFAULT_QUEUE_SIZE = 10_000
 class NonBlockingQueueHandler(QueueHandler):
     """Hand records to a background writer; drop instead of blocking when full.
 
-    The stock QueueHandler with a bounded queue raises queue.Full into
-    handleError(), which prints a traceback per record -- the flood the handler
-    above exists to avoid. Here a full queue just counts the loss, and the
-    writer reports the total once it catches up.
+    A full queue just counts the loss, and the writer reports the total once it
+    catches up -- never a traceback per record, the flood the handler above
+    exists to avoid.
+
+    The queue is a SimpleQueue, not a bounded queue.Queue: queue.Queue.put()
+    holds a plain (non-reentrant) Lock in Python code, so a signal handler that
+    logs while the main thread is inside put() -- lbserver's SIGHUP slot switch
+    -- deadlocks the event loop. SimpleQueue.put() is one C call, safe to
+    re-enter from a signal handler. The size limit is enforced here instead.
     """
 
     def __init__(self, maxsize: int = DEFAULT_QUEUE_SIZE) -> None:
-        super().__init__(queue.Queue(maxsize))
+        super().__init__(queue.SimpleQueue())
+        self.maxsize = maxsize
         self._dropped = 0
 
     def enqueue(self, record: logging.LogRecord) -> None:
-        # Runs under self.lock (Handler.handle holds it around emit).
-        try:
-            self.queue.put_nowait(record)
-        except queue.Full:
+        # Runs under self.lock (Handler.handle holds it around emit). The size
+        # check is approximate: the writer draining concurrently only makes room.
+        if self.queue.qsize() >= self.maxsize:
             self._dropped += 1
+        else:
+            self.queue.put_nowait(record)
 
     def take_dropped(self) -> int:
         """Return and reset the drop count. Called from the writer thread."""
@@ -170,19 +177,18 @@ class _DrainingListener(QueueListener):
             super().handle(_dropped_notice(dropped))
         super().handle(record)
 
-    def stop(self, timeout: float = 2.0) -> None:
+    def stop(self, timeout: float = 2.0) -> bool:
+        """Drain and stop; return False if the writer is still stuck after `timeout`."""
         # The stock stop() joins with no timeout: if the writer is stuck in a
         # filesystem call, a clean shutdown would hang with it. The thread is a
         # daemon, so giving up here lets the process exit anyway.
         thread = self._thread
         if thread is None:
-            return
-        try:
-            self.queue.put_nowait(self._sentinel)
-        except queue.Full:
-            pass
+            return True
+        self.queue.put_nowait(self._sentinel)
         thread.join(timeout)
         self._thread = None
+        return not thread.is_alive()
 
 
 def _dropped_notice(count: int) -> logging.LogRecord:
@@ -224,8 +230,14 @@ def queued(target: logging.Handler, maxsize: int = DEFAULT_QUEUE_SIZE) -> NonBlo
 
 def stop_queued_logging(timeout: float = 2.0) -> None:
     """Flush and stop every writer started by queued(), waiting at most `timeout` each."""
+    stuck = False
     while _listeners:
-        _listeners.pop().stop(timeout)
+        stuck |= not _listeners.pop().stop(timeout)
+    if stuck:
+        # A writer is still inside a filesystem call, holding its target
+        # handler's lock. logging.shutdown() -- the next atexit hook -- would wait
+        # on that lock forever, so skip it; the daemon writer dies with the process.
+        atexit.unregister(logging.shutdown)
 
 
 def queued_rotating_file_handler(

@@ -165,3 +165,84 @@ def test_lbserver_setup_logging_is_queued_and_survives_dictconfig(tmp_path: Path
     assert "[lbserver.app] [-] INFO: app-line" in app_log
     assert "uvicorn-error-line" in uv_log
     assert "access-line" in uv_log
+
+
+def _run_script(script: str, timeout: float) -> subprocess.CompletedProcess:
+    src = Path(__file__).resolve().parents[2] / "src"
+    return subprocess.run(
+        [sys.executable, "-c", textwrap.dedent(script)],
+        env={**os.environ, "PYTHONPATH": str(src)},
+        capture_output=True,
+        text=True,
+        timeout=timeout,
+        check=False,
+    )
+
+
+_SIGNAL_DURING_ENQUEUE = """
+    import logging, signal, threading, time, os
+    from core.logging_ext import queued
+
+    class Sink(logging.Handler):
+        def emit(self, record):
+            pass
+
+    log = logging.getLogger("t.sig")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    log.addHandler(queued(Sink()))
+    # Like lbserver's SIGHUP slot switch: the handler logs on the main thread.
+    signal.signal(signal.SIGUSR2, lambda s, f: log.warning("from signal handler"))
+
+    stop = threading.Event()
+    def pester():
+        while not stop.is_set():
+            os.kill(os.getpid(), signal.SIGUSR2)
+            time.sleep(0.01)
+    threading.Thread(target=pester, daemon=True).start()
+    end = time.monotonic() + 8
+    while time.monotonic() < end:
+        log.info("busy loop line")
+    stop.set()
+    print("done")
+"""
+
+
+def test_signal_handler_logging_mid_enqueue_does_not_deadlock():
+    # A signal handler runs between bytecodes on the main thread, possibly while
+    # the main thread is inside the queue's put(). A non-reentrant queue lock
+    # would deadlock the event loop right there.
+    try:
+        result = _run_script(_SIGNAL_DURING_ENQUEUE, timeout=30)
+    except subprocess.TimeoutExpired:
+        pytest.fail("logging from a signal handler deadlocked the main thread")
+    assert "done" in result.stdout, result.stderr
+
+
+_EXIT_WITH_STUCK_WRITER = """
+    import logging, threading
+    from core.logging_ext import queued
+
+    in_emit = threading.Event()
+
+    class Stuck(logging.Handler):
+        def emit(self, record):
+            in_emit.set()
+            threading.Event().wait()   # a write that never returns
+
+    log = logging.getLogger("t.exit")
+    log.setLevel(logging.INFO)
+    log.propagate = False
+    log.addHandler(queued(Stuck()))
+    log.info("this write hangs forever")
+    assert in_emit.wait(5)             # the writer now holds Stuck's lock
+    print("main returned", flush=True)
+"""
+
+
+def test_process_exits_while_writer_is_stuck():
+    try:
+        result = _run_script(_EXIT_WITH_STUCK_WRITER, timeout=15)
+    except subprocess.TimeoutExpired:
+        pytest.fail("process hung at exit behind a stuck log writer")
+    assert "main returned" in result.stdout, result.stderr
