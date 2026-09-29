@@ -1941,6 +1941,20 @@ REALTIME_MEMORY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_MEMORY_MAX_CHA
 # Cap on the rolling realtime summary.md — part of the per-turn floor, so kept
 # tight (~1.5k tokens). Env-overridable for tuning.
 REALTIME_SUMMARY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_SUMMARY_MAX_CHARS", "5000"))
+# Summarize realtime memory once the verbatim turns in memory.jsonl fill this
+# fraction of REALTIME_MEMORY_MAX_CHARS. Turns the loader drops before a
+# summary covers them reach no session at all — the long oral test / debate
+# that "forgets the rules" at turn ~10 (#449). Below 1.0 so the background
+# summarize finishes before the window overflows.
+REALTIME_SUMMARIZE_AT_FRACTION: float = float(
+    os.environ.get("HAL_REALTIME_SUMMARIZE_AT_FRACTION", "0.75")
+)
+# Newest turns left verbatim in memory.jsonl by each summarize, so a fresh
+# session still has the last exchanges word for word (the question just asked,
+# the answer just given) instead of only their paraphrase.
+REALTIME_SUMMARY_KEEP_RECENT_TURNS: int = int(
+    os.environ.get("HAL_REALTIME_SUMMARY_KEEP_RECENT_TURNS", "4")
+)
 # Age after which the `## Open requests` section of summary.md is dropped before
 # the summary is re-fed (to the next summarize or into session context). A
 # request nobody mentioned for this long was handled by the main agent,

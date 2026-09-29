@@ -235,8 +235,12 @@ class ContextManagerBase(ABC):
                         return
 
                     lines: list[str] = raw.splitlines()
-                    lines_read: int = len(lines)
-                    entries: list[str] = self._parse_jsonl_lines(lines)
+                    # The newest turns stay verbatim for the next session;
+                    # only the older ones are folded into summary.md.
+                    keep_recent: int = max(0, app_config.REALTIME_SUMMARY_KEEP_RECENT_TURNS)
+                    to_read: list[str] = lines[: max(0, len(lines) - keep_recent)]
+                    lines_read: int = len(to_read)
+                    entries: list[str] = self._parse_jsonl_lines(to_read)
                     if not entries:
                         return
 
@@ -448,7 +452,11 @@ class ContextManagerBase(ABC):
             logger.warning("[realtime] Failed to read realtime memory: %s", e)
             return entries
 
-        total_chars: int = sum(len(e) for e in entries)
+        # Verbatim turns have their own budget, separate from the summary's
+        # (REALTIME_SUMMARY_MAX_CHARS). Sharing one left ~3k chars of turns
+        # next to a full summary, and the turns it dropped were not summarized
+        # yet (#449).
+        total_chars: int = 0
         selected_lines: list[str] = []
         for line in reversed(lines):
             formatted: str = self._format_jsonl_entry(line)
@@ -472,7 +480,16 @@ class ContextManagerBase(ABC):
                     raw: str = self._realtime_memory_path.read_text(
                         encoding="utf-8"
                     ).strip()
-                    needs_summarize = len(raw) > self._realtime_memory_max_chars
+                    # Measured the way the loader counts (formatted entries),
+                    # against the verbatim budget, with headroom so the
+                    # summary lands before the loader starts dropping turns.
+                    verbatim_chars: int = sum(
+                        len(self._format_jsonl_entry(line)) for line in raw.splitlines()
+                    )
+                    needs_summarize = verbatim_chars > (
+                        self._realtime_memory_max_chars
+                        * app_config.REALTIME_SUMMARIZE_AT_FRACTION
+                    )
 
             with self._realtime_memory_lock:
                 if self._raw_memory_path.exists():
@@ -492,7 +509,9 @@ class ContextManagerBase(ABC):
                             len(kept),
                         )
 
-            if needs_summarize:
+            # One summarize at a time: with the earlier trigger every turn
+            # during a slow summarize would otherwise queue another thread.
+            if needs_summarize and not self._realtime_summarize_lock.locked():
                 logger.info(
                     "[realtime] Memory.jsonl exceeds char limit — summarizing in background"
                 )
