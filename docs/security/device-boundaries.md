@@ -45,7 +45,7 @@ Face photo/file routes resolve requested paths and require containment within `U
 
 ## Scope of the September 2026 corrections
 
-The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS/HAL header trust and archive checksum pinning remain separate review items, not claims of fixed vulnerabilities. Piper extraction containment is fixed as described below.
+The fixes address unauthorized ingestion, credential logging, privacy-state bypasses, pairing brute force, declared servo speed enforcement, plugin paths and file resolution. OTA signing policy/metadata, existing admin credentials, LAN onboarding, diagnostic quiet-hours behavior and undeclared joint-angle limits are unchanged. Broad CORS trust and archive checksum pinning remain outside these fixes. The HAL header finding is accepted without a code change for the current local-only deployment, as explained below. Piper extraction containment is fixed as described below.
 
 ## Buddy handler ownership
 
@@ -60,3 +60,13 @@ Piper engine archives are checked before extraction and filtered while extractin
 ## Verification scope
 
 On 2026-09-29, HAL lint, the full local HAL suite (3,093 passed; 3 skipped; 140 subtests) and the latest focused servo/Piper suite (36 passed) passed. Device `lamp-0c4e` passed sleeping-command rejection, small move/nudge response checks, and temporary valid/malicious Piper archive tests; its original sleep/mute state was restored. No real Piper engine download or replacement was tested. Camera-equipped `lamp-4ace` separately passed real JPEG capture, concurrent snapshots, manual disable across restart and re-enable. Local hardware/audio and optional Pipecat skips remain distinct from these targeted device checks; other robot drivers were not physically tested.
+
+## Filler and voice-sample mutation endpoints
+
+`POST /api/sensing/filler` requires administrator credentials or a direct loopback caller with no non-loopback forwarding headers. HAL's local realtime filler still works; unauthenticated LAN clients cannot queue speech through this route. `POST /api/voice/file/remove` always requires administrator authentication, including loopback callers. Existing web session cookies and supported Bearer credentials work.
+
+Voice removal accepts only single-component profile/sample names and audio sample extensions. Filesystem operations use Go `os.Root` handles scoped to the users directory, selected profile, then its `voice` directory. Traversal and symlink escapes are rejected, including path replacement after opening a directory. A valid deletion removes only the selected sample and its embedding; deleting the last WAV still requests speaker-profile removal through HAL.
+
+Decision for the HAL Origin/Host/forwarded-header finding: no code change is required for the current local-only deployment. HAL binds to loopback, nginx `/hw/` denies LAN callers, and Go hardware/OpenAPI proxies require administrator authentication. Header-spoof tests did not bypass those Go gates. The permissive HAL middleware can be bypassed if directly exposed, so this decision must be revisited before changing the bind/proxy boundary; it is not a claim that Origin headers authenticate callers. These two unprotected mutation routes were separate findings and are now gated; this is not a claim that all endpoints have been audited.
+
+Local verification for this follow-up: native ARM64 `go build ./...`, `go vet ./...`, full `go test -p=2 -count=1 -timeout=120s ./...`, focused race tests for both changed packages, and Linux ARM64 os-server cross-build passed. No device deployment/test was performed for this follow-up. Existing last-WAV cleanup reporting still does not verify HAL success before reporting profile removal; this separate correctness issue was not changed here.

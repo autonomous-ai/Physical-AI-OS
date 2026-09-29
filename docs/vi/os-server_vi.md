@@ -1583,3 +1583,7 @@ HAL nạp driver motion song song với các import độc lập của audio, ca
 `POST /api/sensing/event` yêu cầu xác thực admin cho mọi loại sự kiện từ xa, kể cả sự kiện thụ động vì chúng có thể gọi agent. HAL gọi trực tiếp qua loopback vẫn được phép khi các header chuyển tiếp cũng là loopback hoặc không có. IP LAN và Origin/Referer không cấp quyền. Web chat tiếp tục dùng cookie đăng nhập; dispatch MQTT nội bộ không đổi.
 
 Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music suggestion, monitor) dùng cùng ranh giới admin hoặc loopback; guard đã áp dụng sẵn. Sensing nhận tối đa bốn attachment, mỗi file 10 MiB và tổng dữ liệu giải mã 20 MiB; body JSON giới hạn 29 MiB trước khi parse. Base64 không hợp lệ bị từ chối trước khi ghi file hoặc gọi agent.
+
+### Xác thực thao tác thay đổi dữ liệu giọng nói
+
+`POST /api/sensing/filler` dùng gate admin hoặc loopback trực tiếp, giữ lời đệm realtime nội bộ của HAL và chặn gọi LAN chưa xác thực. `POST /api/voice/file/remove` yêu cầu admin kể cả loopback; cookie phiên đăng nhập hiện có của web vẫn hợp lệ. Thao tác xóa chặn traversal qua tên hồ sơ/file và symlink thoát thư mục bằng `os.Root`. Giữ hành vi xóa mẫu/embedding hợp lệ và dọn hồ sơ khi xóa WAV cuối.

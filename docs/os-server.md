@@ -1617,3 +1617,7 @@ HAL overlaps motion-driver imports with independent audio, camera, sensing and v
 `POST /api/sensing/event` requires admin authentication for every remote event type, including passive events: any event can reach the agent. Direct loopback HAL producers remain permitted when forwarding headers also identify loopback or are absent. LAN membership and Origin/Referer headers do not grant access. Web chat continues using its login cookie; internal MQTT dispatch is unchanged.
 
 All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, monitor) use the same admin-or-loopback boundary; guard already uses it. Sensing accepts at most four attachments, 10 MiB each and 20 MiB decoded total; the JSON body is capped at 29 MiB before parsing. Invalid base64 is rejected before any file write or agent dispatch.
+
+### Voice mutation authentication
+
+`POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.
