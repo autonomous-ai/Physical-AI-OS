@@ -11,17 +11,12 @@ import (
 	"go.autonomous.ai/os/runtimes/openclaw"
 )
 
-// validConnectorCode bounds a connector code to a safe charset before it is used
-// as a filename component (pathFor) or an mcp.servers.<code> key. The code comes
-// from the connector.set.<code> wire payload — untrusted input — so anything
-// outside [a-z0-9_-] (e.g. "/" or ".." for path traversal) is rejected. Every
-// real connector code (notion, google_calendar, figma-api, …) matches; note the
-// charset excludes "/" and "." so no traversal sequence can be formed.
+// validConnectorCode bounds an untrusted connector code to [a-z0-9_-] before
+// it becomes a filename or mcp.servers key (no "/" or ".": no path traversal).
 var validConnectorCode = regexp.MustCompile(`^[a-z0-9_-]{1,64}$`)
 
-// Credential-map keys the backend sets in the connector's connector-auth `extra`.
-// They flow verbatim into ConnectorCreds.Credentials and tell the device how to
-// wire the connector — replacing the former compile-time registry rows.
+// Credential-map keys the backend sets in the connector's connector-auth
+// `extra`.
 const (
 	credentialMCPURL        = "mcp_url"         // remote MCP endpoint; present → MCP connector
 	credentialMCPAuthHeader = "mcp_auth_header" // see authHeader* below
@@ -36,9 +31,8 @@ const (
 	authHeaderCustomPrefix = "header:"
 )
 
-// mcpEntryWriter is the subset of the agent gateway the connector writer needs.
-// domain.AgentGateway (backed by openclaw.OpenclawService) satisfies it; tests supply a
-// fake to assert routing without touching openclaw.json / restarting the gateway.
+// mcpEntryWriter is the subset of the agent gateway the connector writer
+// needs.
 type mcpEntryWriter interface {
 	WriteMCPEntry(name string, entry map[string]any) error
 	RemoveMCPEntry(name string) (bool, error)
@@ -52,32 +46,20 @@ type mcpRouting struct {
 }
 
 // connectorWriter is the single, data-driven ConnectorWriter for every
-// connector. It replaces the former per-code registry (default + mcp + oauth
-// writers). Persistence and the optional mcp.servers.<code> side-effect are
-// decided per-message from ConnectorCreds.Credentials, with a compiled-in
-// fallback table for the connectors that shipped before the contract moved to
-// the wire. Safe for concurrent calls — one mutex guards all per-connector
-// files (low volume; the refresh loop and handler rarely overlap).
+// connector. One mutex guards all per-connector files.
 type connectorWriter struct {
 	mu      sync.Mutex
 	dir     string
 	gateway mcpEntryWriter
 	// fallback maps connector code → routing for the connectors implemented
-	// before mcp_url/mcp_auth_header were carried on the wire. Payload values
-	// always win; this only fills the gap until the dashboard `extra` is set.
+	// before mcp_url/mcp_auth_header were carried on the wire.
 	fallback map[string]mcpRouting
 	// reserved is the set of connector codes owned by a special writer
-	// (handler.specialConnectorWriters). RefreshableEntries skips their token
-	// files so the generic writer never re-Writes a connector it doesn't own
-	// (which would clobber, e.g., figma-api's stdio entry with an http one).
+	// (handler.specialConnectorWriters).
 	reserved map[string]bool
 }
 
-// newConnectorWriter builds the writer. configsDir is typically
-// `<OpenclawConfigDir>/workspace/configs`. The fallback table is sourced from
-// the openclaw catalog (the single source of truth for those URLs) via the
-// mcpConnectorSpecs list. reserved lists codes handled by a special writer
-// (may be nil).
+// newConnectorWriter builds the writer.
 func newConnectorWriter(configsDir string, gw mcpEntryWriter, reserved map[string]bool) *connectorWriter {
 	fallback := make(map[string]mcpRouting, len(mcpConnectorSpecs))
 	for _, sp := range mcpConnectorSpecs {
@@ -99,10 +81,8 @@ func newConnectorWriter(configsDir string, gw mcpEntryWriter, reserved map[strin
 	}
 }
 
-// pathFor is the per-connector token file. Same `<code>_access_tokens.json`
-// convention every former writer used, so existing on-disk files are unchanged.
-// Rejects codes outside the safe charset so an untrusted code can't escape
-// configsDir via path traversal.
+// pathFor is the per-connector token file; rejects codes outside the safe
+// charset.
 func (w *connectorWriter) pathFor(connector string) (string, error) {
 	if !validConnectorCode.MatchString(connector) {
 		return "", fmt.Errorf("invalid connector code %q", connector)
@@ -111,8 +91,7 @@ func (w *connectorWriter) pathFor(connector string) (string, error) {
 }
 
 // resolveRouting decides whether this connector is an MCP server and how to
-// build its Authorization header. Payload (credentials) wins; otherwise the
-// fallback table; otherwise empty url → credential-only connector.
+// build its Authorization header.
 func (w *connectorWriter) resolveRouting(creds ConnectorCreds) mcpRouting {
 	if url := strings.TrimSpace(creds.Credentials[credentialMCPURL]); url != "" {
 		return mcpRouting{
@@ -137,17 +116,14 @@ func buildAuthHeader(style string, creds ConnectorCreds) string {
 }
 
 // connectorAuthHeader renders how a connector's token is presented as an HTTP
-// header for the mcp.servers entry, from the descriptor + creds. Returns the
-// header name, the full header value (Bearer-prefixed for Authorization, raw
-// otherwise), and the raw token (for stdio writers that build their own header).
+// header for the mcp.servers entry, from the descriptor + creds.
 func connectorAuthHeader(descriptor string, creds ConnectorCreds) (name, value, token string) {
 	switch {
 	case descriptor == authHeaderBearerAPIKey:
 		return "Authorization", "Bearer " + creds.APIKey, creds.APIKey
 	case strings.HasPrefix(descriptor, authHeaderCustomPrefix):
 		hdr := strings.TrimSpace(strings.TrimPrefix(descriptor, authHeaderCustomPrefix))
-		// Prefer the pasted api_key (PAT / static key); fall back to access_token
-		// (OAuth). Whichever field is populated is the credential — this avoids
+		// Whichever field is populated is the credential — this avoids
 		// coupling the token source to a specific auth_type string.
 		tok := creds.APIKey
 		if tok == "" {
@@ -163,10 +139,7 @@ func connectorAuthHeader(descriptor string, creds ConnectorCreds) (name, value, 
 }
 
 // Write persists the token file then, when the connector resolves to an MCP
-// server, upserts mcp.servers.<code> in openclaw.json. A token file is always
-// written; the MCP entry is conditional. If the MCP step fails the credentials
-// are still on disk — the refresh loop / a later connector.set retries the
-// openclaw side without re-fetching tokens.
+// server, upserts mcp.servers.<code> in openclaw.json.
 func (w *connectorWriter) Write(ctx context.Context, creds ConnectorCreds) error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -186,7 +159,6 @@ func (w *connectorWriter) Write(ctx context.Context, creds ConnectorCreds) error
 
 	routing := w.resolveRouting(creds)
 	if routing.url == "" {
-		// Credential-only connector (e.g. gmail/google_*): no openclaw entry.
 		return nil
 	}
 	hdrName, hdrValue, _ := connectorAuthHeader(routing.authHeader, creds)
@@ -203,9 +175,8 @@ func (w *connectorWriter) Write(ctx context.Context, creds ConnectorCreds) error
 	return nil
 }
 
-// Remove deletes the token-file entry and the openclaw.json MCP entry (if any).
-// RemoveMCPEntry is idempotent — a no-op (no restart) when the connector never
-// had an entry, so calling it unconditionally is safe for credential-only codes.
+// Remove deletes the token-file entry and the openclaw.json MCP entry (if
+// any).
 func (w *connectorWriter) Remove(ctx context.Context, connector string) (bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -232,10 +203,7 @@ func (w *connectorWriter) Remove(ctx context.Context, connector string) (bool, e
 }
 
 // RefreshableEntries scans every per-connector token file for entries the
-// refresh loop should rotate. Universal rule (BE owns eligibility): a
-// refresh_token AND refresh:true. The connector code is read from each file's
-// map key, not parsed from the filename. The legacy bare access_tokens.json
-// does not match the `*_access_tokens.json` glob.
+// refresh loop should rotate.
 func (w *connectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
 	w.mu.Lock()
 	defer w.mu.Unlock()
@@ -269,17 +237,9 @@ func (w *connectorWriter) RefreshableEntries() []ConnectorRefreshTarget {
 	return out
 }
 
-// hasEntry reports whether connector's token file holds an entry for it —
-// the "is it installed?" question the scheduled-task connector guard asks
-// (see connectorInstalled).
-//
-// Deliberately LOCK-FREE, unlike every other method here: Write holds w.mu
-// across WriteMCPEntry, which restarts the openclaw gateway (30-60s on a Pi),
-// and this is asked from the schedule runner's tick and from the schedule.run
-// MQTT handler, neither of which may stall for that long. It is safe without
-// the lock because writeConnectorsFile replaces the file by tmp+rename, so a
-// reader always sees a complete old or new file, and w.dir never changes after
-// construction.
+// hasEntry reports whether connector's token file holds an entry for it.
+// Deliberately lock-free: Write holds w.mu across a 30-60s gateway restart;
+// safe because files are replaced via tmp+rename.
 func (w *connectorWriter) hasEntry(connector string) (bool, error) {
 	path, err := w.pathFor(connector)
 	if err != nil {
@@ -293,10 +253,7 @@ func (w *connectorWriter) hasEntry(connector string) (bool, error) {
 	return ok, nil
 }
 
-// loadEntry returns the current on-disk entry for a connector. Satisfies
-// entryLoader so the refresh loop preserves fields the BE refresh response does
-// not re-send (scopes, client_id, and the credentials map — which now carries
-// mcp_url/mcp_auth_header, letting a rotation rebuild the openclaw entry).
+// loadEntry returns the current on-disk entry for a connector.
 func (w *connectorWriter) loadEntry(connector string) (ConnectorCreds, bool, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()

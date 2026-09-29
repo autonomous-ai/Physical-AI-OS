@@ -8,8 +8,7 @@ import (
 	"claude-desktop-buddy/httpapi"
 )
 
-// testBridge points at an unreachable host so announce/restore HTTP posts fail
-// fast and are logged — the approval logic under test never depends on them.
+// testBridge points at an unreachable host so HAL posts fail fast.
 func testBridge() *Bridge { return NewBridge("http://127.0.0.1:1", "http://127.0.0.1:1") }
 
 func TestCodeApprovals_AllowUnblocksRequest(t *testing.T) {

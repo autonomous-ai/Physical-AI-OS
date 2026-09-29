@@ -3,21 +3,7 @@ import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import { getAgentRuntime, setAgentRuntime } from "@/lib/api";
 
-// Agent-runtime switch (openclaw / hermes / picoclaw / codex / claudecode / opencode / remote).
-// Unlike the rest of EditConfig this is NOT part of the form's "Save Changes"
-// flow: switching is a heavyweight action that toggles systemd units and
-// restarts os-server, so it has its own Switch button hitting
-// POST /api/device/agent-runtime directly. The POST only means "accepted" —
-// after it, onSwitch polls GET /api/device/agent-runtime until the device
-// reports the target runtime (real confirmation) or times out.
-//
-// "remote" is Hermes-over-LAN — the device reuses its Hermes runtime pointing
-// at a Hermes server on another machine (usually the user's Mac). It goes
-// through the same accepted → restart → poll flow as the other runtimes, plus
-// two required fields (URL + optional token) captured before POST.
-//
-// Options come from the API (single source = domain.AgentRuntimes); the fallback
-// list mirrors it only if the fetch fails.
+// Runtime switch sits outside the form Save flow: POST means accepted, then poll until the target is reported.
 const FALLBACK = ["openclaw", "hermes", "picoclaw", "codex", "claudecode", "opencode", "remote"];
 
 const REMOTE = "remote";
@@ -32,11 +18,6 @@ const RUNTIME_BLURB: Record<string, string> = {
   remote: "Remote (Hermes-over-LAN) — the robot reuses its Hermes runtime pointing at a Hermes server on another machine (typically your Mac). Requires the target Hermes to bind on 0.0.0.0, not just 127.0.0.1, so the robot can reach it.",
 };
 
-// Display labels for the runtime dropdown / status pill. Values on the wire
-// stay lowercase (systemctl unit names / domain.AgentRuntime* constants); only
-// the human-facing string is title-cased. Unknown runtimes (any future addition
-// the API returns before this table is updated) fall back to capitalising the
-// first letter so the UI never shows raw lowercase.
 const RUNTIME_LABEL: Record<string, string> = {
   openclaw: "OpenClaw",
   hermes: "Hermes",
@@ -63,20 +44,10 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
   const [selected, setSelected] = useState<string>("");
   const [loading, setLoading] = useState(true);
   const [switching, setSwitching] = useState(false);
-  // Selected is not the same as answering. config.agent_runtime flips the moment
-  // the switch lands, but the gateway behind it is still booting — a backend
-  // reported "Active" while it cannot take a turn sends the operator to the chat
-  // to meet silence, and they read that as a broken device rather than a slow
-  // start. So the label follows the gateway's own readiness probe.
+  // Label follows the gateway's readiness probe, not just the selected runtime.
   const [ready, setReady] = useState(true);
-  // Remote-runtime config. Persisted server-side under
-  // config.agent_remote_url/token; prefilled on load from the same GET so
-  // re-opening the page shows what was last saved rather than empty fields.
   const [remoteURL, setRemoteURL] = useState<string>("");
   const [remoteToken, setRemoteToken] = useState<string>("");
-  // In-page help modal so operators don't have to leave the settings page to
-  // find the Mac-side setup instructions. Content is inlined below and mirrors
-  // docs/agentic/remote-hermes.md — the full guide is one link away.
   const [showRemoteHelp, setShowRemoteHelp] = useState(false);
 
   useEffect(() => {
@@ -91,13 +62,9 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
           setSelected((sel) => sel || r.current);
           if (r.options?.length) setOptions(r.options);
           setReady(r.ready);
-          // Only seed from the server when the user has not typed anything
-          // yet — otherwise a poll during a keystroke would clobber the input.
+          // Only seed when empty so a poll never clobbers typing.
           setRemoteURL((v) => v || r.remote_url || "");
           setRemoteToken((v) => v || r.remote_token || "");
-          // Keep asking only while it is still coming up. A backend that is
-          // answering does not go back to booting on its own, so there is
-          // nothing to watch for after that.
           if (!r.ready) timer = setTimeout(poll, 3000);
         })
         .catch(() => { if (alive) timer = setTimeout(poll, 3000); })
@@ -109,9 +76,6 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
 
   async function onSwitch() {
     if (switching) return;
-    // "remote" carries two required fields (URL + optional token) — validate
-    // them before the shared confirm/restart/poll flow. Blank URL is the most
-    // common paste mistake; a wrong scheme means the backend would 400 anyway.
     let remoteOpts: { url: string; token: string } | undefined;
     if (selected === REMOTE) {
       const url = remoteURL.trim();
@@ -138,28 +102,18 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
     setSwitching(true);
     const target = selected;
     try {
-      // POST returns 200 = "accepted" immediately; the switch itself runs in the
-      // background (may run install.sh on a first switch — minutes, not seconds).
       await setAgentRuntime(target, remoteOpts);
     } catch (err) {
-      // A different tab/client may already be switching. This is a definitive
-      // rejection, unlike a dropped connection during the expected os-server restart.
       if ((err as Error & { status?: number }).status === 409) {
         toast.error("Another runtime switch is already in progress. Wait for it to finish before trying again.");
         setSwitching(false);
         return;
       }
-      // os-server may restart before the response lands; a dropped connection
-      // here usually means the switch WAS accepted — the poll below finds out.
+      // A dropped connection usually means os-server restarted after accepting.
     }
     toast.message(`Switching to ${displayRuntime(target)} — waiting for the robot to confirm…`);
 
-    // config.agent_runtime is only persisted AFTER switch-runtime lands (a failed
-    // switch rolls back and keeps the old value), so GET /device/agent-runtime is
-    // the source of truth. Poll it until it reports the target: GET errors are the
-    // os-server restart window, the old runtime means install still running (or
-    // rolled back — indistinguishable until timeout). First-time installs download
-    // from the CDN, hence the generous deadline.
+    // GET is the source of truth: the runtime persists only after a successful switch.
     const deadline = Date.now() + 5 * 60_000;
     let landed = false;
     let lastSeen = "";
@@ -169,8 +123,7 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
         const r = await getAgentRuntime();
         lastSeen = r.current;
         setReady(r.ready);
-        // Both conditions: the name lands first, the gateway answers later.
-        // Declaring victory on the name alone is what made "Active" a lie.
+        // Wait for both: the name lands first, the gateway answers later.
         if (r.current === target && r.ready) { landed = true; break; }
       } catch { /* os-server restarting — keep polling */ }
     }
@@ -179,8 +132,6 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
       setCurrent(target);
       toast.success(`Switched to ${displayRuntime(target)} — backend is active.`);
     } else {
-      // Timed out: reflect whatever the device actually reports instead of the
-      // optimistic value, so a rollback is visible without a page reload.
       if (lastSeen) { setCurrent(lastSeen); setSelected(lastSeen); }
       toast.error(
         lastSeen && lastSeen !== target
@@ -275,10 +226,6 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
           )}
 
           {(() => {
-            // Every runtime including "remote" goes through the Switch/Active/Starting
-            // shape. One exception: on "remote" the button stays enabled even
-            // when active, so the operator can update the URL/token in place —
-            // clicking it re-POSTs and restarts os-server exactly like a switch.
             const isRemote = selected === REMOTE;
             const disabled = switching || (selected === current && !isRemote);
             let label: string;
@@ -312,20 +259,12 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
   );
 }
 
-// RemoteHelpModal — one-page walkthrough for getting a Hermes URL + API key
-// off the operator's Mac. Content is a tightened subset of
-// docs/agentic/remote-hermes.md so an operator who just wants to switch a
-// device to a Mac they already have running Hermes doesn't have to leave the
-// settings page for the setup. The full doc is linked at the bottom for the
-// long tail (firewall, troubleshoot, install layout overrides).
+// One-page guide for getting a Hermes URL + API key off the operator's Mac.
 function RemoteHelpModal({ onClose }: { onClose: () => void }) {
   const setupCmd =
     'curl -fsSL https://cdn.autonomous.ai/os/tools/setup-remote-hermes.sh | bash';
   const [copied, setCopied] = useState(false);
-  // navigator.clipboard requires a secure context (https or localhost); the
-  // device serves this page over plain http on the LAN, so the modern API
-  // is blocked. Fall back to a hidden textarea + document.execCommand("copy"),
-  // which works in that context — and flag `copied` so the label confirms.
+  // navigator.clipboard requires a secure context (https or localhost)
   const copyCmd = () => {
     let ok = false;
     try {
@@ -341,8 +280,6 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
       ok = false;
     }
     if (!ok) {
-      // Modern API as a last resort — it will succeed if the browser exposes
-      // it over http, which some Firefox / Safari builds actually do.
       navigator.clipboard?.writeText(setupCmd).then(() => {
         setCopied(true);
         setTimeout(() => setCopied(false), 1500);

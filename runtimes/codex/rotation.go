@@ -15,22 +15,13 @@ func (s *CodexService) CompactSession(sessionKey string) error {
 
 // codexFallbackTokenThreshold is a safety net only: Codex auto-compacts its
 // own context (model_auto_compact_token_limit), so the reported per-turn
-// input stays bounded and this rarely fires. It exists so a runaway thread
-// (compaction bug, oversized tool outputs) still gets rotated.
-//
-// The prior 250_000 cap was too late for the per-turn `codex exec` transport:
-// lamp-0c89 reached 134k context and already spent 100 seconds on a sensing
-// turn; subsequent turns grew to 376k and 473k. Rotate before that latency
-// cliff. 116k was observed on a healthy sensing turn, so leave a small margin
-// above it rather than rotating ordinary short interactions.
+// input stays bounded and this rarely fires.
 const codexFallbackTokenThreshold = 120_000
 
 // ShouldRotateSession rotates on the live CONTEXT size — the raw
 // `input_tokens` of the last turn.completed, which on the Responses API is the
 // whole prompt including its cached prefix (s.lastContextTokens, stashed in
-// translator.go). The totalTokens the shared handler passes folds in this
-// turn's output, which is turn volume rather than context, so it is used only
-// as a fallback before the first usage frame of the process arrives.
+// translator.go).
 func (s *CodexService) ShouldRotateSession(totalTokens, _ int) bool {
 	contextTokens := int(s.lastContextTokens.Load())
 	if contextTokens == 0 {
@@ -41,14 +32,10 @@ func (s *CodexService) ShouldRotateSession(totalTokens, _ int) bool {
 
 // NewSession tells the bridge to drop the persisted thread id (session.new
 // frame) so the next `codex exec` starts a fresh thread, and clears the local
-// session key. Best-effort when the socket is down: the local clear still
-// happens and the bridge's stale thread id will fail resume → the bridge
-// retries fresh on its own.
+// session key.
 func (s *CodexService) NewSession(sessionKey string) error {
 	slog.Info("NewSession: requesting fresh codex thread", "component", "codex", "key", sessionKey)
 	s.sessionUUID.Store("")
-	// The fresh thread starts empty — drop the old thread's context size so a
-	// turn that completes without a usage frame cannot re-trip the net on it.
 	s.lastContextTokens.Store(0)
 	if err := s.sendFrame(map[string]any{"type": "session.new"}); err != nil {
 		slog.Warn("session.new frame send failed (bridge will retry fresh on resume failure)",

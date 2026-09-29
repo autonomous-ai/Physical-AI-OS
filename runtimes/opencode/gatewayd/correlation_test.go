@@ -12,7 +12,7 @@ func TestGatewayCorrelatesThreeQueuedTurns(t *testing.T) {
 	binary := writeFakeOpenCode(t, dir, filepath.Join(dir, "argv.log"))
 	url, _ := startServer(t, binary, dir)
 	conn := dial(t, url, testToken)
-	_ = readFrame(t, conn) // ready
+	_ = readFrame(t, conn)
 	for i := 1; i <= 3; i++ {
 		if err := conn.WriteJSON(map[string]any{"type": "message.send", "id": fmt.Sprintf("req-%d", i), "run_id": fmt.Sprintf("run-%d", i), "payload": map[string]any{"content": fmt.Sprintf("followup-%d", i)}}); err != nil {
 			t.Fatal(err)

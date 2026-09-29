@@ -31,20 +31,14 @@ type TimeSync struct {
 	Time [2]int64 `json:"time"`
 }
 
-// Event streams chat turns and other Claude Desktop events to the device.
-// Currently observed: evt="turn" with role={"user"|"assistant"} and
-// content that is either a plain string (user input) or an array of
-// content blocks (assistant output, matching the API content-block shape).
-// We keep Content as a RawMessage so callers can decode the variant lazily.
+// Event is a Claude Desktop event (e.g. evt="turn"); Content is decoded lazily.
 type Event struct {
 	Evt     string          `json:"evt"`
 	Role    string          `json:"role,omitempty"`
 	Content json.RawMessage `json:"content,omitempty"`
 }
 
-// ContentBlock is one parsed Anthropic content block. Different block
-// types fill different fields; unused fields stay zero. The narrator
-// uses this to react per-block-type without parsing JSON itself.
+// ContentBlock is one parsed Anthropic content block; unused fields stay zero.
 type ContentBlock struct {
 	Type      string          `json:"type"`
 	Text      string          `json:"text,omitempty"`
@@ -57,9 +51,7 @@ type ContentBlock struct {
 	ToolName  string          `json:"tool_name,omitempty"` // tool_reference.tool_name
 }
 
-// Blocks decodes the Event's content as an array of typed content
-// blocks. Returns nil for string-form content (user turns), which is
-// what callers want — there are no per-block reactions on user input.
+// Blocks decodes content as typed blocks; returns nil for string-form (user) content.
 func (e *Event) Blocks() []ContentBlock {
 	if len(e.Content) == 0 {
 		return nil
@@ -72,22 +64,14 @@ func (e *Event) Blocks() []ContentBlock {
 }
 
 // TurnText renders an Event's content as a single log-friendly string.
-// User turns arrive as a bare string; assistant and tool-result turns
-// arrive as an array of typed content blocks (matching the Anthropic
-// API shape). All block types we've observed in the wild are rendered
-// with a compact tag so the journal shows the full picture — text,
-// thinking, tool_use(name+input), tool_result(id+content), and
-// tool_reference. Unknown types fall back to "[<type>]".
 func (e *Event) TurnText() string {
 	if len(e.Content) == 0 {
 		return ""
 	}
-	// Try string form first (user turns).
 	var s string
 	if err := json.Unmarshal(e.Content, &s); err == nil {
 		return s
 	}
-	// Fall back to block-array form (assistant turns + tool results).
 	var blocks []json.RawMessage
 	if err := json.Unmarshal(e.Content, &blocks); err != nil {
 		return ""
@@ -101,9 +85,7 @@ func (e *Event) TurnText() string {
 	return joinNonEmpty(out, "\n")
 }
 
-// formatContentBlock turns one Anthropic content block into a single-line
-// human-readable string for logging. Field names cover the union of
-// shapes seen so a single decode handles every block type.
+// formatContentBlock renders one content block as a single log line.
 func formatContentBlock(raw json.RawMessage) string {
 	var meta struct {
 		Type      string          `json:"type"`
@@ -134,19 +116,14 @@ func formatContentBlock(raw json.RawMessage) string {
 	case "tool_reference":
 		return fmt.Sprintf("[tool_ref: %s]", meta.ToolName)
 	case "":
-		// Tool result with nested content where the outer block lacks a
-		// type field (rare but observed). Return the raw JSON so nothing
-		// is silently swallowed.
+		// Untyped block with nested content: return raw JSON rather than drop it.
 		return string(raw)
 	default:
 		return fmt.Sprintf("[%s]", meta.Type)
 	}
 }
 
-// summarizeContent flattens a tool_result's "content" field, which can
-// be either a bare string or an array of content blocks, into a single
-// line. Nested blocks recurse through formatContentBlock so we don't
-// reinvent the per-type rendering.
+// summarizeContent flattens tool_result content (string or blocks) into one line.
 func summarizeContent(c json.RawMessage) string {
 	if len(c) == 0 {
 		return ""
@@ -237,18 +214,13 @@ type StatsInfo struct {
 	Lvl  int     `json:"lvl"`
 }
 
-// ParseOrSalvage parses data as a JSON message. If parsing fails — typically
-// because a write-without-response ATT packet got dropped, leaving garbage
-// prefixing a valid message — it looks for the last `{"cmd":"` or `{"time":`
-// or `{"total":` opening in the buffer and retries from there. Returns the
-// salvaged message, the number of bytes discarded (0 if clean), and any
-// terminal parse error.
+// ParseOrSalvage parses data, retrying from the last known JSON opener when a dropped packet left a garbage prefix.
+// Returns the message, the number of discarded bytes, and any terminal error.
 func ParseOrSalvage(data []byte) (interface{}, int, error) {
 	msg, err := ParseMessage(data)
 	if err == nil {
 		return msg, 0, nil
 	}
-	// Try each recognizable JSON opener and pick the latest one that parses.
 	openers := [][]byte{[]byte(`{"cmd":"`), []byte(`{"time":`), []byte(`{"total":`), []byte(`{"evt":"`)}
 	best := -1
 	var bestMsg interface{}
@@ -270,15 +242,13 @@ func ParseOrSalvage(data []byte) (interface{}, int, error) {
 	return bestMsg, best, nil
 }
 
-// ParseMessage tries to parse a JSON line from Desktop.
-// Returns one of: *Heartbeat, *TimeSync, *Command, or error.
+// ParseMessage parses a JSON line from Desktop into *Heartbeat, *TimeSync, *Command or *Event.
 func ParseMessage(data []byte) (interface{}, error) {
 	var raw map[string]json.RawMessage
 	if err := json.Unmarshal(data, &raw); err != nil {
 		return nil, fmt.Errorf("parse json: %w", err)
 	}
 
-	// Command messages have "cmd" field
 	if _, ok := raw["cmd"]; ok {
 		var cmd Command
 		if err := json.Unmarshal(data, &cmd); err != nil {
@@ -287,7 +257,6 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return &cmd, nil
 	}
 
-	// TimeSync messages have "time" field
 	if _, ok := raw["time"]; ok {
 		var ts TimeSync
 		if err := json.Unmarshal(data, &ts); err != nil {
@@ -296,7 +265,6 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return &ts, nil
 	}
 
-	// Event messages have "evt" field (e.g. evt:"turn" streams chat).
 	if _, ok := raw["evt"]; ok {
 		var e Event
 		if err := json.Unmarshal(data, &e); err != nil {
@@ -305,7 +273,6 @@ func ParseMessage(data []byte) (interface{}, error) {
 		return &e, nil
 	}
 
-	// Otherwise treat as heartbeat (has total, running, etc.)
 	if _, ok := raw["total"]; ok {
 		var hb Heartbeat
 		if err := json.Unmarshal(data, &hb); err != nil {

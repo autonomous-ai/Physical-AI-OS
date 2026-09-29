@@ -21,8 +21,7 @@ func (h *AgentHandler) correlateTaskRun(backendRunID, message string) {
 		h.taskRunIDs = make(map[string]string)
 	}
 	if len(h.taskRunIDs) >= 1024 {
-		// Missing evidence is preferable to unbounded retention. Eviction
-		// affects only measurement, never runtime behavior.
+		// Evict rather than retain unbounded; eviction affects only metrics, never runtime behavior.
 		for key := range h.taskRunIDs {
 			delete(h.taskRunIDs, key)
 			break

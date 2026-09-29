@@ -11,24 +11,8 @@ import (
 	"github.com/bwmarrin/discordgo"
 )
 
-// Device-owned Discord inbound for the Claude Code runtime.
-//
-// Discord requires a Gateway WebSocket bot session (there is no long-poll
-// receive API like Telegram's getUpdates), so os-server owns a discordgo
-// session — mirroring runtimes/codex/discord.go 1:1. Claude Code DOES ship a
-// native discord channel plugin, but it shares the telegram plugin's failure
-// modes (bun black box: no journal logs, silent allowlist drops, silent death
-// on bridge-restart races), so it is deliberately not used — presync no
-// longer launches any channel plugin. Like the telegram loop
-// (telegram_poll.go), this is started from StartWS and lives inside this
-// service's lifecycle — it runs ONLY while claudecode is the active runtime,
-// so it can never fight another runtime's bot session for the same token.
-//
-// Credentials are read fresh from Device config on every (re)connect attempt
-// (config.DiscordBotToken / DiscordUserID / DiscordGuildID), so saving them
-// needs no restart while disconnected. Accepted messages become regular chat
-// turns; replies are routed back to the originating channel by emitFinal via
-// the discordRuns tracker (translator.go); TTS is suppressed (MarkSilentRun).
+// The native discord channel plugin is deliberately not used: it logs nothing and can die
+// silently on bridge-restart races.
 
 const (
 	// discordNoTokenWait is the idle recheck interval while no bot token is
@@ -47,8 +31,7 @@ const (
 	// timeout so a wedged turn cannot leave the channel "typing…" forever.
 	discordTypingLifetime = 10 * time.Minute
 
-	// discordTypingInterval is the keeper refire period. Discord's native
-	// typing indicator lasts ~10 s, so 8 s keeps it alive without gaps.
+	// discordTypingInterval is the keeper refire period (Discord typing lasts ~10 s).
 	discordTypingInterval = 8 * time.Second
 
 	// discordMaxMessageLen is Discord's hard per-message character limit;
@@ -84,35 +67,26 @@ func stripDiscordMention(content, botUserID string) string {
 	return strings.TrimSpace(discordMentionRE(botUserID).ReplaceAllString(content, ""))
 }
 
-// acceptDiscordMessage is the pure (no-I/O) accept filter. Accepted =
-//   - not from a bot (covers our own messages — loop guard),
-//   - sender id == allowedUser (empty allowlist = closed: Discord bots are
-//     joinable by anyone in the guild, so an explicit allowlist is required),
-//   - a DM (no guild id), OR a message in allowedGuild that mentions the bot
-//     (mirrors common openclaw plugin behavior: guild requires @mention, DM
-//     does not),
-//   - non-empty text once the bot mention is stripped.
-//
-// Returns the cleaned turn text and whether the message starts a turn.
+// acceptDiscordMessage is the pure (no-I/O) accept filter.
 func acceptDiscordMessage(in discordInbound, allowedUser, allowedGuild string) (string, bool) {
 	if in.authorBot || in.authorID == in.botUserID {
-		return "", false // bot message (including our own) — loop guard
+		return "", false
 	}
 	if allowedUser == "" || in.authorID != allowedUser {
-		return "", false // sender not allowlisted
+		return "", false
 	}
 	isDM := in.guildID == ""
 	if !isDM {
 		if allowedGuild == "" || in.guildID != allowedGuild {
-			return "", false // wrong (or unconfigured) guild
+			return "", false
 		}
 		if !in.mentionsBot {
-			return "", false // guild messages must @mention the bot
+			return "", false
 		}
 	}
 	text := stripDiscordMention(in.content, in.botUserID)
 	if text == "" {
-		return "", false // nothing left to say (attachment-only, bare mention, …)
+		return "", false
 	}
 	return text, true
 }
@@ -129,7 +103,6 @@ func discordTurnText(username, userID, text string) string {
 // chunkDiscordMessage splits text into Discord-sendable chunks of at most
 // limit characters (runes — Discord counts characters, not bytes), preferring
 // to cut at the last newline inside the window so paragraphs stay whole.
-// Chunks that end up empty after trimming trailing newlines are dropped.
 func chunkDiscordMessage(text string, limit int) []string {
 	runes := []rune(text)
 	if len(runes) <= limit {
@@ -154,8 +127,6 @@ func chunkDiscordMessage(text string, limit int) []string {
 			out = append(out, c)
 		}
 		runes = runes[cut:]
-		// The boundary newline(s) already separate the chunks — drop them from
-		// the head of the remainder.
 		for len(runes) > 0 && runes[0] == '\n' {
 			runes = runes[1:]
 		}
@@ -164,11 +135,7 @@ func chunkDiscordMessage(text string, limit int) []string {
 }
 
 // startDiscordBot runs the device-owned Discord gateway session until ctx is
-// cancelled. Started ONCE from StartWS (before its reconnect loop), so it
-// survives WS reconnects and dies with the gateway lifecycle. While no token
-// is configured it rechecks every discordNoTokenWait; a failed open backs off
-// discordErrorWait. Once open, discordgo handles gateway reconnects itself;
-// the session is closed when ctx ends.
+// cancelled.
 func (s *ClaudeCodeService) startDiscordBot(ctx context.Context) {
 	slog.Info("discord bot loop started", "component", "claudecode")
 	for {
@@ -197,8 +164,6 @@ func (s *ClaudeCodeService) startDiscordBot(ctx context.Context) {
 			}
 			continue
 		}
-		// Session is up (discordgo auto-reconnects internally). Park until the
-		// gateway lifecycle ends, then close and exit.
 		<-ctx.Done()
 		s.setDiscordSession(nil)
 		if err := sess.Close(); err != nil {
@@ -250,7 +215,7 @@ func (s *ClaudeCodeService) getDiscordSession() *discordgo.Session {
 }
 
 // handleDiscordMessage filters one MessageCreate and injects the accepted
-// message as a chat turn. Rejects are logged at debug only.
+// message as a chat turn.
 func (s *ClaudeCodeService) handleDiscordMessage(ctx context.Context, sess *discordgo.Session, m *discordgo.MessageCreate) {
 	if m.Author == nil {
 		return
@@ -287,9 +252,7 @@ func (s *ClaudeCodeService) handleDiscordMessage(ctx context.Context, sess *disc
 
 // injectDiscordTurn waits for the agent to go idle, then sends the message as
 // a regular chat turn with flow source "discord" (chat_input / chat_send flow
-// events fire as usual, so Flow Monitor shows the origin). The runID is
-// tracked in discordRuns so emitFinal posts the reply back to channelID, and
-// marked silent so the reply is not spoken over TTS. Mirrors injectTelegramTurn.
+// events fire as usual, so Flow Monitor shows the origin).
 func (s *ClaudeCodeService) injectDiscordTurn(ctx context.Context, text, channelID string) {
 	for s.IsBusy() {
 		if !sleepCtx(ctx, discordBusyPoll) {
@@ -298,7 +261,7 @@ func (s *ClaudeCodeService) injectDiscordTurn(ctx context.Context, text, channel
 	}
 	reqID, runID := s.NextChatRunID()
 	s.markDiscordRun(runID, channelID)
-	s.MarkSilentRun(runID) // reply goes back to the Discord channel, not TTS
+	s.MarkSilentRun(runID)
 	send := s.discordSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
@@ -307,24 +270,19 @@ func (s *ClaudeCodeService) injectDiscordTurn(ctx context.Context, text, channel
 		}
 	}
 	if err := send(text, reqID, runID); err != nil {
-		// Un-mark so the trackers don't leak. The message is dropped (Discord
-		// will not re-deliver a gateway event); the user sees no reply and can
-		// resend.
+		// Un-mark so the trackers don't leak.
 		s.consumeDiscordRun(runID)
 		s.ConsumeSilentRun(runID)
 		slog.Error("discord turn injection failed",
 			"component", "claudecode", "runID", runID, "channelID", channelID, "error", err)
 		return
 	}
-	// Keep Discord's native "typing…" indicator alive while the turn runs.
-	// Stops when emitFinal/handleError consumes the run or after the cap.
 	go s.discordTypingKeeper(ctx, channelID, runID)
 }
 
 // discordTypingKeeper fires ChannelTyping immediately and then every
 // discordTypingInterval (the native indicator lasts ~10 s) until the run is
-// consumed by emitFinal or handleError. Best-effort: send errors are logged
-// at debug and ignored.
+// consumed by emitFinal or handleError.
 func (s *ClaudeCodeService) discordTypingKeeper(ctx context.Context, channelID, runID string) {
 	deadline := time.Now().Add(discordTypingLifetime)
 	for {
@@ -350,10 +308,8 @@ func (s *ClaudeCodeService) sendDiscordTyping(channelID string) {
 }
 
 // finishDiscordTurn posts a reply to the originating channel, chunked at
-// Discord's 2000-character message limit. Called from emitFinal (goroutine —
-// the WS read loop must not block on the Discord API). Tests stub the
-// discordSendMessage seam; production sends via the live session (nil session
-// → log + drop, the gateway lifecycle already ended).
+// Discord's 2000-character message limit.
+// Called from emitFinal (goroutine — the WS read loop must not block on the Discord API).
 func (s *ClaudeCodeService) finishDiscordTurn(channelID, reply string) {
 	if reply == "" {
 		return

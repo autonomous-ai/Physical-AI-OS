@@ -5,9 +5,7 @@ import (
 	"runtime/debug"
 )
 
-// Go launches fn in a goroutine with panic recovery.
-// If fn panics, the panic is logged and the goroutine exits cleanly
-// instead of crashing the entire process.
+// Go launches fn in a goroutine that logs a panic instead of crashing the process.
 func Go(name string, fn func()) {
 	go func() {
 		defer func() {

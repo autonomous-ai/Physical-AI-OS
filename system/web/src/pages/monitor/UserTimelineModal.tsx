@@ -43,19 +43,13 @@ const WELLBEING_ICONS: Record<string, { icon: string; title: string }> = {
   noted_yawn: { icon: "🥱", title: "Noted: yawn" },
 };
 
-// Per raw Kinetics label icons. When notes carries a raw label (sedentary /
-// drink / break entries), the timeline shows the raw label as the title with
-// its specific icon — bucket name is dropped for clarity.
 const RAW_LABEL_ICON: Record<string, string> = {
-  // drink
   "drinking": "💧",
   "drinking beer": "🍺",
   "drinking shots": "🥃",
   "tasting beer": "🍺",
-  // de-whitelisted (not in HAL's white_list.txt) — kept so old rows still render
   "opening bottle": "🍾",
   "making tea": "🍵",
-  // break
   "tasting food": "🍴",
   "stretching arm": "💪",
   "stretching leg": "🦵",
@@ -78,22 +72,18 @@ const RAW_LABEL_ICON: Record<string, string> = {
   "kissing": "😘",
   "headbanging": "🤘",
   "sticking tongue out": "😛",
-  // sedentary
   "using computer": "💻",
   "writing": "✍️",
   "texting": "📱",
   "reading": "📖",
-  // legacy raw labels (pre-collapse) kept so old timeline rows still render an icon
   "reading book": "📖",
   "reading newspaper": "📰",
   "drawing": "🎨",
   "playing controller": "🎮",
-  // tired
   "yawning": "🥱",
 };
 
 function rawLabelIcon(notes: string, fallback: string): string {
-  // notes may carry multiple comma-separated labels — pick the first known.
   for (const part of notes.split(",")) {
     const key = part.trim().toLowerCase();
     if (RAW_LABEL_ICON[key]) return RAW_LABEL_ICON[key];
@@ -199,13 +189,6 @@ export function UserTimelineModal({ user, onClose }: Props) {
         const isAgentNudge = action.startsWith("nudge_") || AGENT_WRITTEN_NUDGES.has(action);
         const color = isAgentNudge ? "rgb(251,146,60)" : "rgb(96,165,250)";
 
-        // Three cases, in priority order:
-        //  1. New hybrid — action is a raw Kinetics sedentary label emitted directly
-        //     (e.g. "using computer", "writing"). Use the per-label icon + action as title.
-        //  2. Bucket action (drink / break / nudge_* / enter / leave / legacy sedentary)
-        //     — use WELLBEING_ICONS mapping. Notes act as subtitle when present (legacy
-        //     entries from the pre-hybrid deploy had notes="<raw label>").
-        //  3. Unknown action — bullet fallback.
         if (!bucketMeta && rawIcon) {
           merged.push({
             ts,
@@ -216,8 +199,6 @@ export function UserTimelineModal({ user, onClose }: Props) {
             detail: notes,
           });
         } else if (bucketMeta) {
-          // Legacy pre-hybrid entries: action="sedentary"/"drink"/"break" with notes=raw label.
-          // Keep the old "raw-as-title with per-label icon" rendering so history looks consistent.
           const legacyRawAsTitle = BUCKET_WITH_RAW.has(action) && notes !== "";
           merged.push({
             ts,

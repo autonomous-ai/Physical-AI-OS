@@ -1,33 +1,6 @@
 #!/usr/bin/env bash
-# spike-hal.sh — install the HAL hardware runtime on a Reachy Mini.
-#
-# RUNS ON THE ROBOT. Pulls the `hal` component from OTA metadata into /opt/hal,
-# builds its Python venv, and runs uvicorn under systemd.
-#
-# This used to rsync hal/ straight out of a developer's working tree. That
-# shipped whatever was checked out on someone's laptop rather than what the
-# fleet runs, so anything reproduced here said nothing about anyone else's
-# build. Everything now comes from the OTA feed, like the imager and
-# scripts/provision/setup.sh.
-#
-# Run spike-device.sh FIRST. It installs ROBOT.md (HAL refuses to boot without
-# one, and its board list is what lets HAL accept a CM4), /opt/hal/.env, and
-# /etc/asound.conf — which defines the shared ALSA PCMs and the default device.
-# Without that file PortAudio has no output device at all and every TTS call
-# fails with "Error querying device -1", while aplay from a shell still works.
-#
-# Media: HAL borrows the camera and both ALSA PCMs from the Pollen daemon by
-# itself, because ROBOT.md declares `owner: pollen_daemon` on audio and vision.
-# It releases at the top of startup and hands them back on shutdown. Nothing
-# here has to call /api/media/* — and nothing should: the release has to be
-# ordered against HAL's own audio probe, which only code inside the process can
-# guarantee.
-#
-# Usage:
-#   sudo bash spike-hal.sh              # install + start
-#   sudo bash spike-hal.sh --no-deps    # skip uv sync (fast redeploy)
-#   sudo bash spike-hal.sh --stop
-#   sudo bash spike-hal.sh --uninstall  # stop + remove the unit and /opt/hal
+# spike-hal.sh — install HAL from OTA into /opt/hal on a Reachy Mini (run spike-device.sh first).
+# Usage: sudo bash spike-hal.sh [--no-deps|--stop|--uninstall]
 set -euo pipefail
 
 SPIKE_TAG="spike-hal"
@@ -35,11 +8,7 @@ SPIKE_TAG="spike-hal"
 . "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/spike-lib.sh"
 
 SERVICE="hal"
-# HAL runs as root — config.py hardcodes a dozen state paths under /root — so
-# HOME is /root and the HuggingFace cache would start empty. Point it at the
-# login user's cache instead: the Pollen daemon already downloads the emotes
-# move library there, and a second copy of the same models is not free on a
-# 14 GB eMMC that ships ~60% full.
+# Reuse the pollen user's HuggingFace cache to avoid a second copy on the small eMMC.
 HF_HOME_PATH="${HF_HOME_PATH:-/home/pollen/.cache/huggingface}"
 
 SKIP_DEPS=0
@@ -59,13 +28,10 @@ ensure_root "$@"
 if [ "$STOP_ONLY" = "1" ] || [ "$UNINSTALL" = "1" ]; then
   say "Stopping HAL"
   stop_unit "$SERVICE"
-  # Legacy path: earlier versions of this script ran HAL in tmux.
   tmux kill-session -t hal 2>/dev/null || true
   pkill -f 'uvicorn hal.server:app' 2>/dev/null || true
   sleep 1
-  # HAL hands the media back itself on a clean shutdown. This covers a HAL that
-  # was killed hard enough to skip it — without it the daemon stays deaf and
-  # blind, and so does Pollen's own app stack.
+# Return media to the Pollen daemon in case HAL was killed before releasing it.
   curl -s -m 5 -X POST "$DAEMON_URL/api/media/acquire" >/dev/null 2>&1 || true
   printf '[%s] media: ' "$SPIKE_TAG"; curl -s -m 5 "$DAEMON_URL/api/media/status" || true; echo
   if [ "$UNINSTALL" = "1" ]; then
@@ -83,16 +49,7 @@ fi
   || die "no $DEVICES_DIR/$DEVICE_TYPE/ROBOT.md — run: sudo bash spike-device.sh"
 
 say "1/4  Preflight: disk space"
-# The venv is ~2 GB (torch, opencv, polars, pyarrow) and uv's wheel cache can add
-# as much again. The robot ships a 14 GB eMMC that is already ~60% full, and
-# filling it hurts the Pollen daemon (journal, state writes) far more than
-# anything else this script does. Refuse rather than wedge the robot.
-#
-# The threshold depends on whether the venv already exists, and getting that
-# wrong locks out the update path: a built venv leaves ~1.8 GB free on this eMMC,
-# so a flat 4 GB gate means the FIRST install passes and every re-run after it
-# dies here — while install.sh is exactly how updates are applied. With a venv
-# in place uv only fetches what changed, so the requirement is far smaller.
+# A built venv leaves ~1.8 GB free, so re-runs need a smaller threshold than first install.
 AVAIL_KB="$(df -Pk / | awk 'NR==2 {print $4}')"
 info "free space on /: $(awk -v k="$AVAIL_KB" 'BEGIN {printf "%.1f GB", k/1048576}')"
 if [ "$SKIP_DEPS" = "0" ]; then
@@ -113,21 +70,17 @@ fi
 say "2/4  Install HAL from OTA"
 stop_unit "$SERVICE"
 pkill -f 'uvicorn hal.server:app' 2>/dev/null || true
-# Unzipped over the top rather than into a clean tree: /opt/hal/.env came from
-# the device package and must survive, and so must the venv on a redeploy.
+# Unzip over the top: .env and the venv must survive a redeploy.
 mkdir -p "$HAL_DIR"
 ota_unpack hal "$HAL_DIR"
 [ -f "$HAL_DIR/.env" ] || die "no $HAL_DIR/.env — run spike-device.sh (it ships the overlay)"
 
 if [ "$SKIP_DEPS" = "0" ]; then
   say "3/4  Build the Python venv"
-  # pygobject/pycairo build from source for the `reachy` extra and need system
-  # headers. Pollen OS ships them, but a fresh image may not.
   apt-get install -y --no-install-recommends \
     libcairo2-dev libgirepository1.0-dev pkg-config >/dev/null 2>&1 \
     || info "WARN: apt install failed — pygobject may fail to build"
 
-  # uv is normally a per-user install; root will not have it on PATH.
   UV="$(command -v uv || true)"
   [ -n "$UV" ] || [ ! -x /home/pollen/.local/bin/uv ] || UV=/home/pollen/.local/bin/uv
   if [ -z "$UV" ]; then
@@ -137,11 +90,8 @@ if [ "$SKIP_DEPS" = "0" ]; then
   fi
 
   cd "$HAL_DIR"
-  # Keep the wheel cache inside our tree so `rm -rf /opt/hal` reclaims every
-  # byte this script wrote instead of leaving GBs in ~/.cache/uv.
   export UV_CACHE_DIR="$HAL_DIR/.uv-cache"
-  # 30s is uv's default per-request timeout — too tight for a 300 MB torch
-  # wheel on a shared link, and a single attempt is not a real deploy step.
+# uv's 30s default timeout is too tight for large wheels.
   export UV_HTTP_TIMEOUT=180
   retry "'$UV' sync --python 3.12 --extra hardware --extra reachy" 3 5 \
     || die "uv sync failed 3 times (network?). The cache is kept — re-run to resume."
@@ -186,7 +136,6 @@ WantedBy=multi-user.target
 UNIT
 
 start_unit "$SERVICE"
-# HAL boots slowly on a CM4 — torch and the model stack dominate.
 wait_http "http://localhost:5001/health" 120 "HAL" || true
 echo "--- health ---"; curl -s -m 5 localhost:5001/health; echo
 echo "--- device ---"; curl -s -m 5 localhost:5001/device; echo

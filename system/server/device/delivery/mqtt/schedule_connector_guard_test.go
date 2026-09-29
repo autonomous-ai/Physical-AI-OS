@@ -16,11 +16,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// guardGateway is the AgentGateway double for the scheduled-task connector
-// guard tests: it satisfies every method the Runner (IsBusy, Send/Speak) and
-// the connector writers (Write/RemoveMCPEntry) call, and records sends so a
-// test can prove a skipped task never reached the agent. Any other method
-// panics on the nil embedded interface, which these tests never reach.
+// guardGateway is the AgentGateway double that records sends.
 type guardGateway struct {
 	domain.AgentGateway
 	sent []string
@@ -39,9 +35,7 @@ func (g *guardGateway) WriteMCPEntry(string, map[string]any) error { return nil 
 
 func (g *guardGateway) RemoveMCPEntry(string) (bool, error) { return true, nil }
 
-// guardHandler builds a handler whose connector writers point at a temp
-// OpenclawConfigDir exactly the way ProvideDeviceMQTTHandler wires them, and
-// returns it with the configs dir every token file lands in.
+// guardHandler wires connector writers to a temp OpenclawConfigDir.
 func guardHandler(t *testing.T) (*DeviceMQTTHandler, string) {
 	t.Helper()
 	ocDir := t.TempDir()
@@ -52,8 +46,6 @@ func guardHandler(t *testing.T) (*DeviceMQTTHandler, string) {
 		config:          cfg,
 		connectorWriter: newConnectorWriter(configsDir, gw, specialConnectorCodes),
 		specialConnectorWriters: map[string]ConnectorWriter{
-			// Same name/file convention as the real figma-api writer, minus
-			// its asset drop (irrelevant to presence).
 			"figma-api": newMCPConnectorWriter(mcpConnectorConfig{name: "figma-api"}, configsDir, gw),
 		},
 	}
@@ -75,9 +67,7 @@ func removeConnector(t *testing.T, h *DeviceMQTTHandler, code string) {
 	}
 }
 
-// The guard must read exactly what connector.set.<code> writes and
-// connector.remove.<code> deletes — through the same writer routing — so the
-// generic writer's per-connector token file is the source of truth.
+// The guard reads exactly what connector.set writes and connector.remove deletes.
 func TestConnectorInstalled_FollowsConnectorSetAndRemove(t *testing.T) {
 	h, _ := guardHandler(t)
 
@@ -97,9 +87,7 @@ func TestConnectorInstalled_FollowsConnectorSetAndRemove(t *testing.T) {
 	}
 }
 
-// MCP connectors owned by a special writer (figma-api) keep their own token
-// file with their own lifecycle (Remove deletes the whole file); the guard
-// must see them through that writer too.
+// Special-writer connectors (figma-api) are seen through that writer.
 func TestConnectorInstalled_SpecialWriterConnector(t *testing.T) {
 	h, _ := guardHandler(t)
 
@@ -113,9 +101,7 @@ func TestConnectorInstalled_SpecialWriterConnector(t *testing.T) {
 	}
 }
 
-// Firmware before the per-connector files stored some connectors in the
-// shared connectors.json. Nothing writes it any more, but the connectors skill
-// still reads it, so an entry there means the agent can use the connector.
+// Entries in the legacy shared connectors.json count as installed.
 func TestConnectorInstalled_LegacyConnectorsJSONCounts(t *testing.T) {
 	h, configsDir := guardHandler(t)
 	legacy := domain.ConnectorsFile{Version: 1, Connectors: map[string]domain.ConnectorEntry{"slack": {AccessToken: "tok"}}}
@@ -130,10 +116,7 @@ func TestConnectorInstalled_LegacyConnectorsJSONCounts(t *testing.T) {
 	}
 }
 
-// connector.set holds a writer's mutex across the openclaw gateway restart
-// (30-60s on a Pi). The presence check runs on the runner tick and on the
-// schedule.run MQTT handler, so it must NOT wait on that mutex: token files
-// are replaced atomically (tmp+rename), which makes a lock-free read safe.
+// The presence check must not wait on a writer's mutex.
 func TestConnectorInstalled_DoesNotWaitOnAWriterMidConnectorSet(t *testing.T) {
 	h, _ := guardHandler(t)
 	writeConnector(t, h, "gmail")
@@ -157,8 +140,7 @@ func TestConnectorInstalled_DoesNotWaitOnAWriterMidConnectorSet(t *testing.T) {
 	}
 }
 
-// A code no connector.set could ever install (outside the charset every
-// writer enforces) is simply not installed.
+// A code outside the writer charset is not installed.
 func TestConnectorInstalled_InvalidCodeIsNeverInstalled(t *testing.T) {
 	h, _ := guardHandler(t)
 	for _, code := range []string{"../gmail", "Gmail", "", "gmail/x"} {
@@ -168,10 +150,7 @@ func TestConnectorInstalled_InvalidCodeIsNeverInstalled(t *testing.T) {
 	}
 }
 
-// A code that fails validation came from the backend's requires list, and it
-// will make the task skip every time. The skip summary alone doesn't say the
-// code was malformed rather than merely not connected, so the rejection is
-// logged at Warn with the code.
+// A malformed required code is logged at Warn.
 func TestConnectorInstalled_InvalidCodeLogsWarn(t *testing.T) {
 	h, _ := guardHandler(t)
 	var buf bytes.Buffer
@@ -188,9 +167,7 @@ func TestConnectorInstalled_InvalidCodeLogsWarn(t *testing.T) {
 	}
 }
 
-// An unreadable token file is not evidence of absence: the guard fails OPEN
-// (run the task, as before the guard existed) rather than tell the user to
-// reconnect a connector that may well be connected.
+// An unreadable token file fails OPEN.
 func TestConnectorInstalled_UnreadableTokenFileFailsOpen(t *testing.T) {
 	h, configsDir := guardHandler(t)
 	if err := os.MkdirAll(configsDir, 0o700); err != nil {
@@ -204,9 +181,7 @@ func TestConnectorInstalled_UnreadableTokenFileFailsOpen(t *testing.T) {
 	}
 }
 
-// A skip is not a failure: the ack's top-level "error" stays empty (the
-// backend must not record or alert on it as one); the reason travels in
-// data.summary. Success and failure keep today's mapping.
+// A skip is not a failure: the ack's top-level error stays empty.
 func TestScheduleRunAckError(t *testing.T) {
 	cases := []struct {
 		status, summary, want string
@@ -240,11 +215,7 @@ func TestBuildScheduleRunReportData_SkippedForwardsSummaryAndNextRunAt(t *testin
 	}
 }
 
-// End to end through the production wiring: ProvideDeviceMQTTHandler must hand
-// the Runner a checker backed by the SAME connector files connector.set
-// writes. A template task requiring gmail is skipped (no agent turn, a
-// "skipped" schedule.run ack with the reason and no error) until gmail is
-// connected, and runs normally afterwards.
+// End to end: the production Runner checks the same files connector.set writes.
 func TestProvideDeviceMQTTHandler_RunnerGuardsOnInstalledConnectors(t *testing.T) {
 	t.Chdir(t.TempDir()) // schedules.json lands next to config.json (config.Dir)
 	factory, messages := statusBroker(t)
@@ -309,8 +280,7 @@ func TestProvideDeviceMQTTHandler_RunnerGuardsOnInstalledConnectors(t *testing.T
 	}
 }
 
-// The device web UI renders a skipped run's reason from last_run_summary, so
-// the list endpoint must echo it.
+// The list endpoint echoes last_run_summary.
 func TestToScheduleListItem_EchoesLastRunSummary(t *testing.T) {
 	item := toScheduleListItem(schedule.Schedule{
 		ID: "s1", LastRunStatus: schedule.RunStatusSkipped, LastRunSummary: "missing connector: gmail",

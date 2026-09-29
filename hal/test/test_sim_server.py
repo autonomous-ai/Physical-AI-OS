@@ -1,10 +1,4 @@
-"""Off-device runtime proof for the mock body.
-
-This starts the actual HAL ASGI application in a subprocess, rather than
-calling route functions directly. It proves the declaration gate, mock motion
-driver, safety clamp and stop route work together on a laptop with no GPIO,
-camera, audio device, or servo bus.
-"""
+"""Off-device runtime proof for the mock body."""
 from __future__ import annotations
 
 import json
@@ -40,7 +34,6 @@ class TestSimServer(unittest.TestCase):
                 "HAL_BOARD": "sim",
                 "DEVICE_TYPE": "sim",
                 "HAL_LOG_DIR": cls.logs.name,
-                # A mock body must not borrow an operator's OS-server config.
                 "OS_CONFIG_PATH": str(Path(cls.logs.name) / "missing-config.json"),
             }
         )
@@ -98,11 +91,7 @@ class TestSimServer(unittest.TestCase):
             method=method,
             headers={"Content-Type": "application/json"} if data else {},
         )
-        # Longer than any single simulated motion: the safety gate stretches a
-        # short /servo/move to its minimum duration (1.5s), and the server
-        # answers the NEXT request only once that move is done. At timeout=2
-        # the margin was ~0.5s and the aim call following a clamped move timed
-        # out on a loaded machine.
+        # Longer than any single move: the safety gate stretches /servo/move to 1.5s.
         with urllib.request.urlopen(request, timeout=10) as response:
             return response.status, json.load(response)
 
@@ -136,7 +125,6 @@ class TestSimServer(unittest.TestCase):
             body={"direction": "left", "duration": 0.2},
         )
         self.assertEqual(status, 200)
-        # From the table, not a copy of it — the real left yaw is -91.57.
         from hal.presets import AIM_PRESETS
 
         self.assertAlmostEqual(
@@ -151,7 +139,6 @@ class TestSimServer(unittest.TestCase):
 
         status, position = self._request("/servo/position")
         self.assertEqual(status, 200)
-        # /servo/stop holds the pose it was aimed at — the same table value.
         self.assertAlmostEqual(
             position["positions"]["base_yaw.pos"],
             AIM_PRESETS["left"]["base_yaw.pos"],

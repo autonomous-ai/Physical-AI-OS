@@ -1,11 +1,4 @@
-"""An explicit stop refuses late audio of the stopped turn at TTS admission.
-
-Wires the REAL voice_metrics tracker to a TTSService shell: the click stamps
-the boundary, then a Harness-style reply, a realtime wait filler and native
-audio for the stopped turn are all refused, while a newer turn still gets
-through to the speaker lock. Device-observed 2026-09-17: replies played
-12-28 s after the click because these paths bypassed os-server's watermark.
-"""
+"""An explicit stop refuses late audio of the stopped turn at TTS admission."""
 
 import threading
 from types import SimpleNamespace
@@ -34,8 +27,7 @@ def tts(monkeypatch):
     service._speaker_muted = lambda: False
     service._on_playback_muted = None
     service._on_unspoken_reply = None
-    # Held lock + non-interruptible: an admitted request stops at "busy",
-    # which is how the test tells "admitted" from "refused" without audio.
+    # Held lock + non-interruptible: an admitted request stops at busy.
     service._lock = threading.Lock()
     service._lock.acquire()
     service._interruptible = False
@@ -56,8 +48,6 @@ def _stopped_turn():
 def test_stopped_turn_is_refused_on_every_admission_path(tts, caplog):
     old = _stopped_turn()
     caplog.set_level("INFO")
-    # Harness reply (turn-owned speak) and realtime wait filler (turn_id is the
-    # interaction id itself, as os-server forwards it) both refused before the lock.
     assert tts.speak("late Harness recap", turn_id="device-chat-1-1789600000000") is False
     assert tts.speak_cached("one moment", interruptible=True, turn_id=old) is False
     assert tts.native_play_begin(24000, owner=f"interaction:{old}") is False

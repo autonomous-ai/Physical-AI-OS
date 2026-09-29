@@ -31,7 +31,6 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 		return
 	}
 
-	// Per-day-version metrics keyed by "date|version"
 	type dvKey struct{ date, version string }
 	type dvMetrics struct {
 		TurnCount    int     `json:"turnCount"`
@@ -70,7 +69,6 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 
 	allDates := []string{}
 	versionSet := make(map[string]bool)
-	// turns keyed by traceID, accumulates across a day file
 	dayTurns := make(map[string]map[string]*turnData) // date -> traceID -> turnData
 
 	for d := from; !d.After(to); d = d.AddDate(0, 0, 1) {
@@ -98,7 +96,6 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 			}
 			td := turns[tid]
 
-			// Track version per turn (use first non-empty version seen)
 			if ev.Version != "" && td.version == "" {
 				td.version = ev.Version
 				versionSet[ev.Version] = true
@@ -136,7 +133,6 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 		}
 	}
 
-	// Aggregate per (date, version)
 	type resultRow struct {
 		Date    string    `json:"date"`
 		Version string    `json:"version"`
@@ -156,7 +152,6 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 	for _, dateStr := range allDates {
 		turns := dayTurns[dateStr]
 
-		// Group turns by version
 		grouped := make(map[string][]*turnData)
 		for _, td := range turns {
 			ver := td.version
@@ -176,9 +171,7 @@ func (h *AgentHandler) Analytics(c *gin.Context) {
 				m.TokensTotal += td.tokens
 				m.TokensInput += td.tokensIn
 				m.TokensOutput += td.tokensOut
-				// Billed: the Autonomous backend charges cached reads at FULL
-				// price — billed must match the token count users see in billing,
-				// so no 0.1x cache discount here.
+				// Cached reads are billed at full price (no 0.1x discount) to match backend billing.
 				m.TokensBilled += td.tokensIn + td.cacheWrite + td.cacheRead + td.tokensOut
 				if td.toolCalls > m.InnerMax {
 					m.InnerMax = td.toolCalls

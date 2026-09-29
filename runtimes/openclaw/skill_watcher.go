@@ -14,18 +14,10 @@ import (
 const skillWatchInterval = 5 * time.Minute
 
 // StartSkillWatcher polls OTA metadata for per-skill version changes.
-// When any skill version changes, downloads that skill zip from CDN,
-// extracts atomically, and notifies the agent to re-read it.
-//
-// The CDN fetch / atomic extract / content-hash plumbing is runtime-agnostic and
-// lives in system/skills (FetchSkillVersions / DownloadToTempFile / FolderHash /
-// ExtractSkillZip); this file holds only the OpenClaw-specific loop, target dir,
-// and notify. runtimes/hermes/skill_watcher.go is its parallel under Hermes.
 func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 
 	slog.Info("skill watcher started", "component", "skill-watcher", "interval", skillWatchInterval)
 
-	// Seed last known versions from current metadata so first poll doesn't re-notify
 	lastVersions := map[string]string{}
 	if initial, err := skills.FetchSkillVersions(s.config.OTAMetadataURL); err == nil && initial != nil {
 		lastVersions = initial
@@ -48,9 +40,7 @@ func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 			}
 			slog.Info("skill watcher: checked", "component", "skill-watcher", "skills", len(remote))
 
-			// Find skills with changed versions, gated to what this device
-			// supports so a CDN version bump never re-adds a capability-pruned
-			// skill (e.g. servo-control on a motionless device).
+			// Gate to device support so a CDN bump never re-adds a capability-pruned skill.
 			supported := map[string]bool{}
 			for _, n := range s.supportedSkills() {
 				supported[n] = true
@@ -80,17 +70,12 @@ func (s *OpenclawService) StartSkillWatcher(ctx context.Context) {
 	}
 }
 
-// downloadSkills downloads the skills this device supports from CDN (capability-
-// gated via supportedSkills), returning names of changed ones.
+// downloadSkills downloads the skills this device supports from CDN (capability- gated via supportedSkills), returning names of changed ones.
 func (s *OpenclawService) downloadSkills() []string {
 	return s.downloadSkillsByName(s.supportedSkills())
 }
 
-// downloadSkillsByName downloads specific skill zips from CDN, extracts each
-// atomically into workspace/skills/<name>, returns names of skills that actually
-// changed on disk. Each skill is published as <name>.zip containing the whole
-// skill folder; the version pre-filter + content hash mean a returned name had
-// real content changes.
+// downloadSkillsByName extracts each skill zip atomically into workspace/skills/<name>; returns names that changed.
 func (s *OpenclawService) downloadSkillsByName(names []string) []string {
 	return s.downloadSkillsByNameResult(names).changed
 }
@@ -100,9 +85,7 @@ type skillDownloadResult struct {
 	applied []string
 }
 
-// downloadSkillsByNameResult reports successfully applied skills separately from
-// skills whose content changed. A watcher only advances an OTA version after its
-// archive is downloaded and extracted, so a transient failure is retried.
+// downloadSkillsByNameResult reports successfully applied skills separately from skills whose content changed.
 func (s *OpenclawService) downloadSkillsByNameResult(names []string) skillDownloadResult {
 	base := s.skillsBaseURL()
 	if base == "" {
@@ -121,8 +104,6 @@ func (s *OpenclawService) downloadSkillsByNameResult(names []string) skillDownlo
 
 		targetDir := filepath.Join(skillsDir, name)
 
-		// Hash existing content before extract so we can detect a no-op update —
-		// metadata version bumped but actual files would land identical.
 		oldHash, _ := skills.FolderHash(targetDir)
 
 		if err := skills.ExtractSkillZip(tmpZip, targetDir); err != nil {

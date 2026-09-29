@@ -54,14 +54,12 @@ func TestTTSSpeedPersistsAndAppliesAcrossHTTPAndMQTT(t *testing.T) {
 		{name: "MQTT replay reapplies unchanged rate", mqtt: true, voice: "voice-mqtt", speed: speedPointer(1.0), want: 1.0},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			// Reload between operations to prove disk persistence and keep each async
-			// HAL apply isolated from the next operation's in-memory mutations.
+			// Reload to prove disk persistence and isolate each async HAL apply.
 			loaded, err := config.Load()
 			if err != nil {
 				t.Fatal(err)
 			}
-			// Clear the completion marker so an unchanged MQTT replay also waits
-			// for its own asynchronous HAL apply to finish.
+			// Clear the marker so an unchanged replay waits for its own HAL apply.
 			if err := os.Remove("config/.hal_config_hash"); err != nil && !os.IsNotExist(err) {
 				t.Fatal(err)
 			}
@@ -106,8 +104,7 @@ func TestTTSSpeedPersistsAndAppliesAcrossHTTPAndMQTT(t *testing.T) {
 			case <-time.After(3 * time.Second):
 				t.Fatal("HAL live update not sent")
 			}
-			// Live apply finishes by updating the boot snapshot. Wait for that final
-			// filesystem side effect before changing cwd or starting the next update.
+			// Wait for the boot snapshot write before changing cwd or the next update.
 			deadline := time.Now().Add(3 * time.Second)
 			for config.HALConfigChanged() {
 				if time.Now().After(deadline) {

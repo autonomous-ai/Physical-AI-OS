@@ -181,7 +181,6 @@ class TestStackChanMotionService(unittest.TestCase):
         self.service._tracking_active = False
         self.assertFalse(self.service._tracking_active)
 
-        # An unmatched release must not consume the next owner's claim.
         self.service.release_body()
         self.service.acquire_body()
         self.assertTrue(self.service._tracking_active)
@@ -359,7 +358,6 @@ class TestBodyTransport(unittest.TestCase):
         self.assertIn("motion.get", operations)
         self.assertIn("motion.halt", operations)
         self.assertNotIn("lease.release", operations)
-        # The halt succeeded, so the body is held; closing would only reboot it.
         self.assertEqual(gateway.connection_value.close_reasons, [])
 
     def test_move_renews_lease_until_delayed_firmware_reaches_target(self):
@@ -461,7 +459,6 @@ class TestBodyTransport(unittest.TestCase):
             with self.assertRaisesRegex(StackChanTransportError, "measured target"):
                 transport.release(rest, duration=0.05)
 
-        # HAL halted the short rest move and torque is held; no close.
         self.assertEqual(closed, [])
         self.assertEqual(gateway.closed, [])
         operations = [message["op"] for message in gateway.connection_value.messages]
@@ -493,8 +490,7 @@ class TestBodyTransport(unittest.TestCase):
         move_thread = threading.Thread(target=run_move)
         halt_thread = threading.Thread(target=run_halt)
         move_thread.start()
-        # Both operations must wait at the ownership boundary. Releasing it
-        # allows exactly one to publish or claim the controller first.
+        # Both operations wait at the ownership boundary; releasing it lets exactly one proceed first.
         halt_thread.start()
         time.sleep(0.02)
         transport._active_lock.release()
@@ -635,8 +631,7 @@ class TestBodyTransport(unittest.TestCase):
 
             def send(self, raw):
                 observed.append(json.loads(raw)["type"])
-                # Another HAL thread cannot obtain a published connection
-                # until the acceptance send has finished.
+                # No other thread can obtain a published connection until the acceptance send finishes.
                 test.assertIsNone(gateway._connection)
                 test.assertTrue(gateway._lock.locked())
 
@@ -676,8 +671,6 @@ class TestFirmwareRejections(unittest.TestCase):
             transport.halt()
         self.assertEqual((caught.exception.op, caught.exception.code), ("motion.halt", "halt_failed"))
         self.assertEqual(gateway.connection_value.close_reasons, [])
-        # The warning line is emitted by _DeviceConnection.request; see the
-        # device-connection test below. This fake raises past that layer.
 
     def test_move_rejected_by_firmware_keeps_transport_open(self):
         gateway = self._rejecting("motion.move", "motion_enable_failed")
@@ -770,7 +763,7 @@ class TestFirmwareRejections(unittest.TestCase):
         worker = threading.Thread(target=call)
         worker.start()
         self.assertTrue(sent.wait(2))
-        connection.close()  # what the server handler does when the socket drops
+        connection.close()
         worker.join(2)
         self.assertIsInstance(outcome["exc"], StackChanOffline)
         self.assertNotIsInstance(outcome["exc"], StackChanCommandRejected)

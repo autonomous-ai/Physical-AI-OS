@@ -8,7 +8,7 @@ import (
 // Discovery is intentionally degraded: opencode stores sessions under
 // ~/.local/share/opencode in an internal format with no on-disk cwd we can
 // parse, so allCodingSessions (and everything built on it) is empty until wired
-// up on-device. See coding_sessions.go.
+// up on-device.
 func TestAllCodingSessionsDegraded(t *testing.T) {
 	s := &OpenCodeService{}
 	if got := s.allCodingSessions(); got != nil {

@@ -18,7 +18,6 @@ test("a quarantine carries the runtime it happened in", () => {
 test("an os-server that sends no runtime yields an empty name, not undefined", () => {
   const state = turnMemoryState(turn(flow("memory_changed", { file: "MEMORY.md", quarantined: 0 })));
   assert.equal(state.changed[0].runtime, "");
-  // Missing `execute` means an older os-server that always executed.
   assert.equal(state.changed[0].execute, true);
 });
 
@@ -57,8 +56,6 @@ test("a removal is visible without debug, in the owner's words, and names the ru
   const badge = memoryBadge(removed, false);
   assert.equal(badge.color, "var(--lm-red)");
   assert.equal(badge.text, "✎ memory updated · 1 entry removed in hermes");
-  // "quarantined" reads as a security incident; the active runtime's sizes
-  // must not sit next to a removal that may have happened elsewhere.
   assert.doesNotMatch(badge.text, /quarantin/);
   assert.doesNotMatch(badge.text, /251/);
   assert.equal(badge.title, "USER.md (hermes) — 1 entry removed");

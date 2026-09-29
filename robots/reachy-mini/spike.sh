@@ -1,45 +1,7 @@
 #!/usr/bin/env bash
-# spike.sh — bring the whole Autonomous stack up on a Reachy Mini, in one run.
-#
-# RUNS ON THE ROBOT. Copy this folder over, then:
-#
-#   scp -r robots/reachy-mini pollen@reachy-mini.local:~/
-#   ssh pollen@reachy-mini.local 'sudo bash ~/reachy-mini/spike.sh'
-#
-# Nothing is built here and nothing is copied from a developer machine: every
-# component comes from the OTA metadata feed, the same source the imager and
-# scripts/provision/setup.sh read. So a spike robot runs what the fleet runs,
-# and the only thing you need locally is this folder.
-#
-# This installs onto the Pollen OS that shipped with the robot — it does not
-# replace it. The Pollen daemon keeps running and keeps owning motion; HAL
-# borrows the camera and microphone from it and hands them back on shutdown.
-#
-# It is a thin orchestrator ON PURPOSE. The previous version of this file
-# duplicated what the per-component scripts did, drifted from them within a
-# week, and ended up running os-server against the wrong config directory while
-# every service still reported healthy. Nothing below is reimplemented here — if
-# a step is wrong, it is wrong in that step's own script, for everyone.
-#
-# Order matters:
-#   device     ROBOT.md, /etc/asound.conf and /opt/hal/.env — everything else
-#              reads them, and HAL will not boot without the first
-#   hal         the body: motion, camera, audio, sensing
-#   os-server   the API and agent gateway (reads the same /root/config)
-#   web         nginx in front of both
-#   agent       the OpenClaw runtime os-server drives
-#   bootstrap   LAST — it can restart os-server and hal the moment it finds a
-#               newer build, and doing that mid-install turns a clean bring-up
-#               into a race
-#
-# Usage:
-#   sudo bash spike.sh                  # full bring-up
-#   sudo bash spike.sh --no-deps        # skip HAL's uv sync (fast re-run)
-#   sudo bash spike.sh --skip agent     # skip one or more steps (repeatable)
-#   sudo bash spike.sh --stop           # stop everything, reverse order
-#   sudo bash spike.sh --uninstall      # stop + remove units and artifacts
-#
-#   sudo OTA_METADATA_URL=https://…/metadata.json bash spike.sh   # another feed
+# spike.sh — bring the full Autonomous stack up on a Reachy Mini from OTA (runs on the robot).
+# Usage: sudo bash spike.sh [--no-deps] [--skip STEP]... [--stop|--uninstall]
+# Order matters: bootstrap runs last because it can restart os-server/hal mid-install.
 set -euo pipefail
 
 SPIKE_TAG="spike"
@@ -73,9 +35,7 @@ skipped() {
   return 1
 }
 
-# --- teardown ----------------------------------------------------------------
-# Reverse order: bootstrap first so it cannot reinstall something a later step
-# is still tearing down.
+# Teardown in reverse order so bootstrap cannot reinstall a component being removed.
 if [ "$MODE" != "install" ]; then
   flag="--stop"; [ "$MODE" = "uninstall" ] && flag="--uninstall"
   say "Tearing down (${MODE})"
@@ -83,7 +43,6 @@ if [ "$MODE" != "install" ]; then
     step="${STEPS[$i]}"
     s="$(script_for "$step")"
     [ -f "$s" ] || continue
-    # Keep going on failure: a half-installed robot must still be cleanable.
     bash "$s" "$flag" || info "WARN: $step $flag failed — continuing"
   done
   echo
@@ -91,20 +50,15 @@ if [ "$MODE" != "install" ]; then
   exit 0
 fi
 
-# --- install -----------------------------------------------------------------
 say "Reachy Mini — full spike"
 ensure_tools
-# One snapshot of the feed for the whole run: cleared here so the run is fresh,
-# then shared by all six steps so a publish landing mid-install cannot leave
-# os-server and hal on mismatched builds.
+# One feed snapshot per run so all steps install matching builds.
 clear_metadata_cache
 info "OTA feed : $(metadata_url)"
 info "device   : $DEVICE_TYPE"
 info "steps    : ${STEPS[*]}"
 [ ${#SKIP[@]} -eq 0 ] || info "skipping : ${SKIP[*]}"
 
-# Fail loudly and immediately rather than half-installing: a robot left with
-# HAL but no os-server looks alive and does nothing useful.
 for step in "${STEPS[@]}"; do
   [ -f "$(script_for "$step")" ] || die "missing $(script_for "$step") — copy the whole folder over"
 done
@@ -116,8 +70,7 @@ for step in "${STEPS[@]}"; do
     continue
   fi
   say "STEP: $step"
-  # --no-deps is only meaningful to HAL; passing it to the others would abort
-  # on an unknown flag.
+# --no-deps is HAL-only; other steps reject unknown flags.
   if [ "$step" = "hal" ]; then
     bash "$(script_for "$step")" ${PASS_ARGS[@]+"${PASS_ARGS[@]}"}
   else
@@ -126,10 +79,7 @@ for step in "${STEPS[@]}"; do
 done
 
 say "Bring-up complete in $(( (SECONDS - START_TS) / 60 ))m $(( (SECONDS - START_TS) % 60 ))s"
-# To stderr, like say/info. Mixing the two streams is not cosmetic here: when
-# the run is piped to a file or a log, stderr is unbuffered while stdout is
-# block-buffered, so the labels and their values arrive out of order and the
-# summary comes out shuffled — "hal : " on one line and "up" three lines later.
+# Summary to stderr so it does not interleave with block-buffered stdout.
 {
   printf 'hal       : '; curl -sf -m 5 localhost:5001/health >/dev/null 2>&1 && echo up || echo DOWN
   printf 'os-server : '; curl -sf -m 5 localhost:5000/api/health/live >/dev/null 2>&1 && echo up || echo DOWN
@@ -138,8 +88,6 @@ say "Bring-up complete in $(( (SECONDS - START_TS) / 60 ))m $(( (SECONDS - START
   printf 'motors    : '; curl -s -m 5 "$DAEMON_URL/api/motors/status" 2>/dev/null || echo '?'; echo
 } >&2
 
-# Resolved here, not left as an escaped $( ) inside the heredoc — that printed
-# the command text at the operator instead of the address they need to open.
 IP="$(hostname -I 2>/dev/null | awk '{print $1}')"
 cat >&2 <<EOF
 

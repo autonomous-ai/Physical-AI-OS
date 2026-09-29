@@ -29,19 +29,16 @@ for arch in "${architectures[@]}"; do
     *) echo "Error: unsupported architecture: $arch" >&2; exit 1 ;;
   esac
 done
-# Updater URLs share the DMG destination directory.
 if [[ -n "${GCS_PATH:-}" && "$GCS_PATH" != *.dmg ]] || [[ -n "${BUDDY_URL:-}" && "$BUDDY_URL" != https://*.dmg ]]; then
   echo "Error: custom destinations must end in .dmg and BUDDY_URL must use HTTPS" >&2
   exit 1
 fi
-# One custom destination cannot represent two architecture-specific artifacts.
 if [[ ${#architectures[@]} -gt 1 && ( -n "${GCS_PATH:-}" || -n "${BUDDY_URL:-}" ) ]]; then
   echo "Error: GCS_PATH/BUDDY_URL overrides require a single BUDDY_ARCHS value" >&2
   exit 1
 fi
 if [[ "$DMG_TARGET" == "dmg-signed" && "$SKIP_BUILD" == "0" ]]; then
   : "${NOTARY_PROFILE:?Set NOTARY_PROFILE to your notarytool Keychain profile}"
-  # Check credentials before incrementing the version or starting a long build.
   xcrun notarytool history --keychain-profile "$NOTARY_PROFILE" --output-format json >/dev/null
 fi
 
@@ -59,7 +56,6 @@ if [[ "$SKIP_BUILD" == "0" ]]; then
   (cd "$BUDDY_DIR" && make "$DMG_TARGET" BUDDY_ARCHS="$ARCHS")
 fi
 
-# Verify every requested artifact before uploading any of them.
 for arch in "${architectures[@]}"; do
   dmg_path="${DIST_DIR}/Autonomous-Buddy-${new_version}-${arch}.dmg"
   if [[ ! -f "$dmg_path" ]]; then
@@ -112,16 +108,13 @@ for arch in "${architectures[@]}"; do
   echo "URL (${arch}): ${buddy_url}"
 done
 
-# Fetch after artifact upload and fail closed: a read/auth/network failure must
-# never replace the shared metadata feed with a new, incomplete document.
+# Fail closed: a fetch failure must never replace metadata with an incomplete document.
 gsutil cp "gs://${GCS_BUCKET}/${METADATA_PATH}" "$METADATA_TMP"
 ota_metadata_unpack "$METADATA_TMP" "$PAYLOAD_TMP"
 if jq -e '.signed != null or .format == "autonomous-ota/v1"' "$METADATA_TMP" >/dev/null && [[ -z "${OTA_SIGNING_PRIVATE_KEY:-}" ]]; then
   echo "Error: signing key required to update signed OTA metadata" >&2
   exit 1
 fi
-# Remove the ambiguous legacy download while retaining the other architecture
-# and all unrelated component entries on a single-architecture release.
 updated_metadata=$(jq --slurpfile entries "$ENTRIES_TMP" \
   '."autonomous-buddy" = ((."autonomous-buddy" // {} |
     if .url != null and .arm64 == null then
@@ -133,8 +126,6 @@ printf '%s\n' "$updated_metadata" > "$PAYLOAD_TMP"
 ota_metadata_sign "$PAYLOAD_TMP" "$METADATA_TMP"
 gsutil -h "Content-Type:application/json" -h "Cache-Control:no-cache, no-store, must-revalidate" \
   cp "$METADATA_TMP" "gs://${GCS_BUCKET}/${METADATA_PATH}"
-# All archives and shared metadata are published before clients see a new release.
-# Only touch the requested architecture's feed; dmg-only releases leave it intact.
 if [[ "$DMG_TARGET" == "dmg-signed" ]]; then
   for arch in "${architectures[@]}"; do
     gcs_path="${GCS_PATH:-${BUCKET_PREFIX}/ota/autonomous-buddy/${arch}/${new_version}.dmg}"

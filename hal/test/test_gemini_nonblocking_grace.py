@@ -15,8 +15,7 @@ from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 
 class _Session:
-    # Exercise the installed SDK's iterator boundary: receive() stops immediately
-    # after yielding turn_complete, even while more frames await on the socket.
+    # receive() stops right after turn_complete, even with more frames pending.
     receive = AsyncSession.receive
 
     def __init__(self, messages):
@@ -294,7 +293,6 @@ def test_continuation_after_filler_waits_for_outcome_and_late_routing(
     observed = []
 
     async def check(request, spoken, **kwargs):
-        # Even while the classifier runs, the candidate must stay off-speaker.
         queued = list(agent._recv_queue.queue)
         assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)
                        and e.output.text == answer for e in queued)
@@ -485,8 +483,7 @@ def test_filler_is_emitted_immediately_while_waiting_for_delayed_delegate(monkey
         agent._session = WaitingSession([filler, _terminal()])
         task = asyncio.create_task(agent._async_receive_turn())
         try:
-            # Synchronize on the next socket read, rather than relying on a sleep:
-            # the terminal has arrived and grace is actively waiting for a tool.
+            # Synchronize on the next socket read rather than a sleep.
             await asyncio.wait_for(agent._session.waiting_for_tool.wait(), timeout=1.0)
             assert not task.done()
             assert not agent._turn_done.is_set()
@@ -598,8 +595,6 @@ def test_weather_clarification_routes_through_real_outcome_parser(
             captured.append(json.loads(kwargs['messages'][0]['content']))
             return Stream()
 
-    # Mock only the text-model transport, preserving classification parsing and
-    # Gemini terminal routing together. No live API or device action is needed.
     monkeypatch.setattr(anthropic, 'AsyncAnthropic', Client)
     monkeypatch.setattr(response_outcome.app_config, 'REALTIME_SUMMARIZER_API_KEY', 'test')
     speech = _terminal(generation=generation)
@@ -1145,8 +1140,6 @@ def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, l
     texts = [e.output.text for e in events
              if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
     assert texts == ["Let me look.", "Your shirt says DO IT ANYWAY."]
-    # A provisional pre-status check may run, but never a second check of the
-    # completed interaction. Its result must not override provider IDLE.
     assert all(answer == "Let me look." for answer in checked)
     assert not events[-1].fallback_to_main
     assert events[-1].execution_completed

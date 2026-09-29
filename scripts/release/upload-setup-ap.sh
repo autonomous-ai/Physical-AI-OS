@@ -5,7 +5,6 @@ source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
 
 SETUP_FILE="${RELEASE_DIR}/../provision/setup-ap.sh"
 
-# Bucket and path matching https://storage.googleapis.com/s3-autonomous-upgrade-3/${BUCKET_PREFIX}/setup-ap.sh
 GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/setup-ap.sh}"
 
 if [[ ! -f "$SETUP_FILE" ]]; then

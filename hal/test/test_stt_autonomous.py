@@ -1,12 +1,4 @@
-"""
-Test AutonomousSTT WebSocket connection.
-
-Usage (on Pi):
-  cd /opt/hal
-  .venv/bin/python -m test.test_stt_autonomous --api-key <YOUR_KEY>
-  # or
-  LLM_API_KEY=<YOUR_KEY> .venv/bin/python -m test.test_stt_autonomous
-"""
+"""Test AutonomousSTT WebSocket connection."""
 
 import argparse
 import logging

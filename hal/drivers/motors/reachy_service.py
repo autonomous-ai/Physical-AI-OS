@@ -1,27 +1,4 @@
-"""Reachy Mini motion driver — wraps Pollen's `reachy_mini` SDK.
-
-Satisfies the MotionService protocol (hal/drivers/motors/base.py) so
-routes/servo.py works unchanged on Reachy Mini.
-
-Architecture: Pollen ships a daemon on the robot's Pi that owns hardware I/O,
-safety clamping, and the control loop; this driver is a thin client streaming
-targets to it (REST/WS on localhost:8000). Unlike the feetech backend there is
-no client-side per-frame animation event loop — the daemon holds poses by
-itself, so several protocol methods (ensure_running, freeze) reduce to
-flags/no-ops. The one exception is music: the play thread repeats the groove
-move until music_stop, mirroring the feetech backend (see _play_recording).
-
-Joint model exposed to HAL (degrees + millimeters, matching the deg-based
-safety policy and route error checks; the SDK itself speaks radians + meters):
-
-    head_x.pos / head_y.pos / head_z.pos      head translation, mm
-    head_roll.pos / head_pitch.pos / head_yaw.pos   head rotation, deg
-    body_yaw.pos                              body rotation, deg
-    antenna_left.pos / antenna_right.pos      antennas, deg
-
-DRAFT: written against the public reachy-mini SDK docs (v1.9) before hardware
-arrival. Everything tagged TODO(spike) must be verified on the real robot.
-"""
+"""Reachy Mini motion driver — wraps Pollen's `reachy_mini` SDK."""
 from __future__ import annotations
 
 import logging
@@ -36,7 +13,6 @@ from scipy.spatial.transform import Rotation
 from reachy_mini import ReachyMini
 from reachy_mini.utils import create_head_pose
 
-# SDK motor ids, in get_current_joint_positions() head-list order.
 _HEAD_MOTOR_IDS = (
     "body_rotation",
     "stewart_1", "stewart_2", "stewart_3", "stewart_4", "stewart_5", "stewart_6",
@@ -44,7 +20,6 @@ _HEAD_MOTOR_IDS = (
 
 logger = logging.getLogger(__name__)
 
-# --- Joint keys ---
 
 _HEAD_KEYS = (
     "head_x.pos", "head_y.pos", "head_z.pos",
@@ -58,12 +33,6 @@ JOINT_KEYS: Set[str] = {*_HEAD_KEYS, *_ANTENNA_KEYS, _BODY_KEY}
 # are documented here for reference): head pitch/roll ±40°, head yaw ±180°,
 # body yaw ±160°, head-vs-body yaw delta ≤ 65°.
 
-# HF move libraries, searched in order — the first dataset holding a name wins.
-# Both defaults are pre-downloaded by the daemon at startup (its own
-# DEFAULT_DATASETS), so listing them here costs no extra fetch. Add community
-# datasets with HAL_REACHY_MOVES="owner/dataset,owner/other"; put a dataset
-# ahead of the defaults to shadow an official move with your own recording.
-# Every move, whatever its source, goes through the speed gate (_move_refused).
 _EMOTES_DATASET = "pollen-robotics/reachy-mini-emotions-library"
 _DANCES_DATASET = "pollen-robotics/reachy-mini-dances-library"
 
@@ -80,14 +49,8 @@ def _move_datasets() -> List[str]:
             out.append(n)
     return out
 
-# HAL recording name (CSV stem on lamp) → Pollen HF move name.
-# Keys use preset constants from hal.presets; unmatched names are tried verbatim
-# (in case the caller already uses HF names).
 import hal.presets as P
 
-# Aim table — same direction vocabulary as hal/presets AIM_PRESETS, values are
-# Reachy head kinematics. Convention: +yaw = left, +pitch = up (ROS-style).
-# TODO(spike): verify sign convention and tune angles on the real robot.
 _AIM_TARGETS: Dict[str, Dict[str, float]] = {
     P.AIM_CENTER: {"head_yaw.pos": 0.0, "head_pitch.pos": 0.0, "head_z.pos": 0.0},
     P.AIM_DESK:   {"head_yaw.pos": 0.0, "head_pitch.pos": -30.0, "head_z.pos": 0.0},
@@ -100,7 +63,6 @@ _AIM_TARGETS: Dict[str, Dict[str, float]] = {
 }
 
 _MOVE_MAP: Dict[str, str] = {
-    # emotions
     P.SERVO_CURIOUS:       "curious1",
     P.SERVO_HAPPY_WIGGLE:  "cheerful1",
     P.SERVO_SAD:           "sad1",
@@ -121,7 +83,6 @@ _MOVE_MAP: Dict[str, str] = {
     P.SERVO_SCANNING:      "inquiring1",
     P.SERVO_HEADSHAKE:     "no1",
     P.SERVO_WAKE_UP:       "enthusiastic2",
-    # music grooves — Pollen ships 3 dance moves, spread across the 8 styles
     P.SERVO_MUSIC_GROOVE:    "dance1",
     P.SERVO_MUSIC_JAZZ:      "dance2",
     P.SERVO_MUSIC_CLASSICAL: "dance3",
@@ -135,21 +96,11 @@ _MOVE_MAP: Dict[str, str] = {
 _MIN_MOVE_DURATION_S = 0.1
 
 # Seconds the daemon takes to interpolate into a move's first pose
-# (play_move(initial_goto_duration=...)). The SDK default is 0.0: it jumps
-# there as fast as the controller allows, which is the snap you feel when one
-# emotion interrupts another mid-pose. Shorter than the feetech ramp
-# (HAL_SERVO_PLAY_RAMP_S, 2.0s) because a Pollen move is only ~3s long and this
-# is charged on top of it; stretched further by the safety speed gate when the
-# head has a long way to travel. Tuned by feel on a Wireless unit — 0.5s still
-# read as a flick when one emotion cut another mid-pose.
+# (play_move(initial_goto_duration=...)).
 _PLAY_RAMP_S = float(os.environ.get("HAL_REACHY_PLAY_RAMP_S", "0.8"))
 
-# The SDK client holds one long-lived connection to the daemon. Anything that
-# restarts the daemon — an OS reboot, `systemctl restart reachy-mini-daemon`, an
-# update — leaves this side holding a dead socket that only reports itself when
-# the next command is issued ("Lost connection with the server"). Without a
-# reconnect the first command after every such event is lost and surfaces as a
-# 500, which reads like the robot refusing to move.
+# The SDK client holds one long-lived connection to the daemon. Anything that restarts
+# the daemon — an OS reboot, `systemctl restart reachy-mini-daemon`, an update.
 _RECONNECT_MARKERS = (
     "lost connection",
     "connection closed",
@@ -163,36 +114,22 @@ def _is_disconnect(err: Exception) -> bool:
     return any(m in str(err).lower() for m in _RECONNECT_MARKERS)
 
 
-# Recordings are authored at ~50-60 Hz but their timestamps jitter: the shipped
-# library has duplicate timestamps (1.1% of frames) and gaps as short as 1 ms
-# against a 16 ms median. Differentiating raw frame pairs turns that jitter into
-# speeds the head never reaches — `wake-mini-up` reads 17226 deg/s from a single
-# 1 ms gap. Speed is therefore measured across a window of at least this long,
-# which is also the timescale the daemon's controller actually tracks.
+# Recordings are authored at ~50-60 Hz but their timestamps jitter: the shipped library
+# has duplicate timestamps (1.1% of frames) and gaps as short as 1 ms against a 16 ms
+# median.
 _SPEED_WINDOW_S = 0.02
 
 
 def peak_head_dps(timestamps: List[float], trajectory: List[Dict[str, Any]]) -> float:
     """Highest head rotation speed a recorded move demands, in deg/s.
 
-    Measured as the true angle between two head orientations at least
-    `_SPEED_WINDOW_S` apart, NOT as per-axis euler deltas: xyz euler jumps at
-    gimbal crossings and reports travel the head never makes (measured on the
-    shipped library, euler read 2456 deg/s where the head turned at 2355).
-
-    Head translation is deliberately excluded. `motion.max_speed` is a deg/s
-    ceiling and `head_x/y/z` are millimetres — mixing them would compare
-    millimetres against degrees. Bounding translation needs its own declared
-    limit, which no SAFETY.md has today.
-
-    Takes the raw arrays rather than an SDK object so it is testable without the
-    reachy_mini package installed.
+    Measured as the true angle between two head orientations at least `_SPEED_WINDOW_S`
+    apart, NOT as per-axis euler deltas.
     """
     n = min(len(timestamps), len(trajectory))
     peak = 0.0
     lo = 0
     for hi in range(1, n):
-        # Widen from the left until the window is long enough to be meaningful.
         while lo + 1 < hi and timestamps[hi] - timestamps[lo + 1] >= _SPEED_WINDOW_S:
             lo += 1
         dt = timestamps[hi] - timestamps[lo]
@@ -206,12 +143,7 @@ def peak_head_dps(timestamps: List[float], trajectory: List[Dict[str, Any]]) -> 
 
 
 def _joints_from_sdk(head_pose: Any, antennas: Any, body_yaw_rad: Any) -> Dict[str, float]:
-    """SDK pose (4x4 meters/rad, antennas rad, body yaw rad) → HAL joints (deg/mm).
-
-    Inverse of _compose. Shared by the live pose read and the play ramp, which
-    reads a move's first pose through RecordedMove.evaluate(0.0) — that call
-    returns exactly this triple.
-    """
+    """SDK pose (4x4 meters/rad, antennas rad, body yaw rad) → HAL joints (deg/mm)."""
     xyz = np.asarray(head_pose)[:3, 3] * 1000.0
     rpy = Rotation.from_matrix(np.asarray(head_pose)[:3, :3]).as_euler("xyz", degrees=True)
     return {
@@ -232,11 +164,8 @@ class ReachyMotionService:
 
     def __init__(self, host: Optional[str] = None, port: Optional[int] = None,
                  safety_policy: Any = None):
-        # HAL runs on the robot's own Pi, so the daemon is local by default.
         self._host = host or os.getenv("REACHY_DAEMON_HOST", "localhost")
         self._port = int(port or os.getenv("REACHY_DAEMON_PORT", "8000"))
-        # Used to stretch the play ramp under motion.max_speed. aim/nudge get
-        # the policy from the route; a recorded move has no route to carry it.
         self._safety_policy = safety_policy
         self._mini: Optional[ReachyMini] = None
         # The SDK client documents no thread-safety guarantee — one writer.
@@ -244,45 +173,27 @@ class ReachyMotionService:
         # Held for the whole of one recorded-move pass, so a play thread that
         # lost the servo cannot stream on top of the one that took it.
         self._play_lock = threading.Lock()
-        # Last commanded targets; fallback state when the daemon can't be read.
         self._target: Dict[str, float] = {k: 0.0 for k in JOINT_KEYS}
-        # Suppression, split the way the feetech backend splits it, because the
-        # routes read the pieces separately (routes/emotion.py, routes/scene.py):
-        #   _released  — release(): torque is off, nothing may move until resume
-        #   _zero_mode — zero_pose(): parked, /servo/play refused until resume
-        #   _hold_mode — /servo/hold or a scene preset: no ambient motion, but
-        #                the emotion route still decides which emotions pass
-        #   _hold_explicit — the hold came from an explicit /servo/hold, so even
-        #                scene-change emotions are refused (see emotion.py)
-        # Reachy used to collapse all of this into one `_suppressed` flag that
-        # also gagged /emotion, so after a hold the robot went quiet with only a
-        # debug line to show for it.
         self._released = False
         self._zero_mode = False
         self._hold_mode = False
         self._hold_explicit = False
         self._frozen = False
-        # Body ownership — see MotionService in base.py. Split the same way the
-        # feetech backend splits it: a flag for an owner whose span is a
-        # tracking session, a counter for owners that overlap (a look aim, a
-        # sweep) and must each release exactly once.
+        # Body ownership — see MotionService in base.py. Split the same way the feetech
+        # backend splits it.
         self._tracking_flag = False
         self._body_owners = 0
         self._body_owner_lock = threading.Lock()
-        self._moves = None          # lazy RecordedMoves loader (None=untried, False=failed)
-        # Peak head speed per HF move name, scanned once (see _move_refused).
+        self._moves = None
         self._move_peak_dps: Dict[str, float] = {}
         self._play_thread: Optional[threading.Thread] = None
         # Bumped on every play request; the play thread stops repeating once its
         # own generation is stale (a newer play owns the servo).
         self._play_gen = 0
-        # Music groove state — the only thing that repeats on this backend.
         self._music_playing = False
         self._music_recording: Optional[str] = None
         # Read by GET /servo alongside get_available_recordings().
         self._current_recording: Optional[str] = None
-
-    # --- Lifecycle ---
 
     def start(self, skip_wake: bool = False) -> None:
         with self._lock:
@@ -308,26 +219,7 @@ class ReachyMotionService:
         )
 
     def _enable_motors(self) -> None:
-        """Put torque on the motors (caller holds _lock).
-
-        The robot boots unpowered so its head can be posed by hand, and
-        connecting does not change that: `wake_up()` is a goto plus a sound, and
-        `goto_target` against a torque-off robot is accepted and does nothing.
-        Nothing else in the connect path sets torque — before this, the only
-        caller of enable_motors was resume(), which nothing invokes at startup.
-
-        The failure it caused is invisible from every status surface: start()
-        logs "connected", /health reports servo true, /servo/status shows all
-        nine joints online, /servo/play returns 200, and the robot sits still.
-        It looked like the robot only obeyed once Pollen's own app had been
-        opened — because connecting there is what enabled the motors.
-        Measured on a Wireless unit, same `yes1` move: max joint delta 0.014 rad
-        (sensor noise) with torque off, 0.934 rad with it on.
-
-        Unconditional on purpose: there is no persisted "released" state to
-        honour (release() is a live call, with no sidecar), and it matches the
-        feetech backend, where connecting the bus powers the servos.
-        """
+        """Put torque on the motors (caller holds _lock)."""
         if self._mini is None:
             return
         try:
@@ -336,8 +228,6 @@ class ReachyMotionService:
             logger.warning("[reachy] enable_motors failed — robot will not move: %s", e)
 
     def stop(self, timeout: float = 5.0) -> None:
-        # Clear music first: a groove that is still flagged as playing would
-        # start its next repeat right after cancel_move and outlive the join.
         self._music_playing = False
         self._music_recording = None
         self._take_servo()
@@ -350,7 +240,6 @@ class ReachyMotionService:
                 self._mini.goto_sleep()
             except Exception as e:
                 logger.warning("[reachy] goto_sleep on stop failed: %s", e)
-            # ReachyMini has no public close(); cleanup mirrors its __exit__.
             try:
                 self._mini.client.disconnect()
             except Exception as e:
@@ -361,8 +250,6 @@ class ReachyMotionService:
     def is_connected(self) -> bool:
         return self._mini is not None
 
-    # --- Animation / event dispatch ---
-
     def dispatch(self, event_type: str, payload: Any) -> None:
         if event_type == P.SERVO_CMD_PLAY and payload:
             self._play_recording(str(payload))
@@ -371,16 +258,10 @@ class ReachyMotionService:
         elif event_type == P.SERVO_CMD_MUSIC_STOP:
             self._stop_music()
         else:
-            # Idle/ambient motion stays daemon-owned — no client-side loop.
             logger.debug("[reachy] dispatch %s ignored", event_type)
 
     def _start_music(self, recording: str) -> None:
-        """Groove until music_stop — the move repeats instead of playing once.
-
-        Matches the feetech backend (animation_service._handle_music_start):
-        a single dance move is a few seconds long, so without the repeat the
-        robot dances once and then sits still for the rest of the track.
-        """
+        """Groove until music_stop — the move repeats instead of playing once."""
         logger.info("[reachy] music groove '%s' — repeating until music_stop", recording)
         self._music_recording = recording
         self._music_playing = True
@@ -395,14 +276,7 @@ class ReachyMotionService:
         self._cancel_move()
 
     def _next_groove(self, played: str, gen: int, failed: bool = False) -> Optional[str]:
-        """Recording the play thread runs next, or None to end the thread.
-
-        Keeps the groove alive across everything that ends a single pass —
-        including a move that could not be played. The agent does send names
-        the HF library has no move for (`dance` instead of `dance1`); dropping
-        the groove there left the robot still for the rest of the track, while
-        the feetech backend just ignores the bad name and keeps looping.
-        """
+        """Recording the play thread runs next, or None to end the thread."""
         if gen != self._play_gen:
             return None                       # a newer play owns the servo now
         if not self._music_playing:
@@ -419,17 +293,7 @@ class ReachyMotionService:
         return groove
 
     def get_available_recordings(self) -> List[str]:
-        """Playable names, reported in HAL vocabulary wherever one exists.
-
-        GET /servo returns this list next to `current`, and `current` is the
-        HAL recording name (`music_groove`), not the HF move the daemon
-        actually played (`dance1`). Listing raw HF names put the two fields in
-        different vocabularies: the web monitor highlights the entry matching
-        `current`, so nothing ever highlighted and the same behavior appeared
-        under two names. Mapped moves are listed under their HAL name; the rest
-        of the library is listed verbatim and stays playable — _play_recording
-        passes unknown names straight through.
-        """
+        """Playable names, reported in HAL vocabulary wherever one exists."""
         libs = self._recorded_moves()
         if libs is None:
             return []
@@ -443,13 +307,9 @@ class ReachyMotionService:
         return sorted(mapped | (hf_moves - set(_MOVE_MAP.values())))
 
     def add_recording(self, name: str, actions: List[Dict[str, float]]) -> None:
-        # CSV joint recordings are a feetech-backend concept; Reachy moves are
-        # HF datasets played by the daemon. TODO(spike): translate CSV rows to
-        # a Move if per-device uploaded animations turn out to matter here.
         logger.warning("[reachy] add_recording('%s') not supported on this backend", name)
 
     def ensure_running(self) -> None:
-        # The daemon runs the control loop; nothing to restart client-side.
         pass
 
     @property
@@ -465,8 +325,6 @@ class ReachyMotionService:
 
     @_tracking_active.setter
     def _tracking_active(self, value: bool) -> None:
-        # Assignment sets the FLAG only. It cannot release a writer that is
-        # still running, which is what the tracker clearing it used to do.
         self._tracking_flag = bool(value)
 
     def acquire_body(self) -> None:
@@ -491,11 +349,7 @@ class ReachyMotionService:
 
     @property
     def _ambient_blocked(self) -> bool:
-        """True when self-driven motion (the music groove) must not continue.
-
-        Wider than is_suppressed: a camera freeze also stops ambient motion,
-        while an explicit play the routes let through is still honoured.
-        """
+        """True when self-driven motion (the music groove) must not continue."""
         return self.is_suppressed or self._frozen
 
     @property
@@ -508,27 +362,13 @@ class ReachyMotionService:
             return "hold"
         return "frozen (camera)"
 
-    # --- Freeze (camera stabilization) ---
-
     def freeze(self) -> None:
-        """Stop self-driven motion so a camera consumer can get a still frame.
-
-        Deliberately does NOT cancel the move in flight. Vision snapshots are
-        frequent, and killing a move mid-pose for each one both broke the
-        animation the user was watching and restarted the music groove from
-        frame 0 every few seconds. The flag stops the NEXT pass instead: the
-        head goes still as soon as the current move ends and stays still for as
-        long as a consumer holds the freeze. The feetech backend reaches the
-        same place by pausing servo writes — its playback resumes where it left
-        off, which the daemon-side player has no way to do.
-        """
+        """Stop self-driven motion so a camera consumer can get a still frame."""
         self._frozen = True
 
     def unfreeze(self) -> None:
         was_frozen = self._frozen
         self._frozen = False
-        # Restart the groove only if the freeze actually outlived a pass and
-        # left nothing playing — otherwise the move still running owns it.
         if not was_frozen or not (self._music_playing and self._music_recording):
             return
         if self._play_thread is not None and self._play_thread.is_alive():
@@ -539,20 +379,14 @@ class ReachyMotionService:
     def is_frozen(self) -> bool:
         return self._frozen
 
-    # --- Motion primitives ---
-
     def move_to(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
         gen = self._take_servo()
-        # Read the pose AFTER the claim: mid-move it returns a transient pose,
-        # and the joints this command does not name would be pinned to it.
         merged = {**self._current_or_target(), **target_positions}
         eff = max(duration, _MIN_MOVE_DURATION_S)
         self._goto(merged, eff)
         self._release_servo(gen, eff)
 
     def move_and_hold(self, target_positions: Dict[str, float], duration: float = 2.0) -> None:
-        # The daemon holds the last commanded pose by itself; identical to
-        # move_to on this backend (no idle loop to fight).
         self.move_to(target_positions, duration)
 
     def get_joint_names(self) -> Set[str]:
@@ -563,9 +397,7 @@ class ReachyMotionService:
             if self._mini is None:
                 return dict(self._target)
             try:
-                pose = self._mini.get_current_head_pose()  # 4x4, meters/rad
-                # head list order: body_rotation, stewart_1..6 (rad);
-                # antenna order is [right, left] in the SDK.
+                pose = self._mini.get_current_head_pose()
                 head_joints, ant = self._mini.get_current_joint_positions()
                 return _joints_from_sdk(pose, ant, head_joints[0])
             except Exception as e:
@@ -584,24 +416,13 @@ class ReachyMotionService:
         )
         self._target = merged
 
-    # --- Postures & modes ---
-
     def zero_pose(self) -> None:
-        # Suppress before claiming: the flag is what stops a groove repeat
-        # from starting the next pass and fighting the move to zero.
         self._zero_mode = True
         self._take_servo()
         self._goto({k: 0.0 for k in JOINT_KEYS}, 2.0)
 
     def halt(self) -> None:
-        """Pin the head where it is, motors still enabled.
-
-        The daemon owns interpolation, so there is no frame loop to break out
-        of the way the Feetech driver does. The equivalent is to command the
-        pose it is passing through right now with a ~0 duration: the running
-        goto is superseded and the body stops there. Motors are NOT disabled —
-        that is release().
-        """
+        """Pin the head where it is, motors still enabled."""
         self._take_servo()
         try:
             here = self.get_positions()
@@ -614,7 +435,7 @@ class ReachyMotionService:
 
     def release(self) -> Dict[str, str]:
         errors: Dict[str, str] = {}
-        self._released = True  # before the claim — stops a groove repeat (see zero_pose)
+        self._released = True
         self._take_servo()
         with self._lock:
             mini = self._require_mini()
@@ -629,8 +450,6 @@ class ReachyMotionService:
         return errors
 
     def resume(self) -> None:
-        # Clears every suppression the way the feetech backend's resume does —
-        # zero, hold and release all end here.
         self._zero_mode = False
         self._hold_mode = False
         self._hold_explicit = False
@@ -647,19 +466,14 @@ class ReachyMotionService:
         self._released = False
 
     def hold(self, explicit: bool = False) -> None:
-        # Set before the claim — the flag stops a groove repeat (see zero_pose).
-        # explicit is honoured now: routes/emotion.py reads _hold_mode and
-        # _hold_explicit to decide whether a scene-change emotion may still
-        # play, and both were missing on this backend.
         self._hold_mode = True
         self._hold_explicit = explicit
         self._take_servo()
 
     def joint_status(self) -> Dict[str, dict]:
         with self._lock:
-            head, antennas = self._require_mini().get_current_joint_positions()  # rad
+            head, antennas = self._require_mini().get_current_joint_positions()
         status: Dict[str, dict] = {}
-        # Names match the SDK motor ids (enable_motors/disable_motors vocabulary).
         for i, (name, angle) in enumerate(zip(_HEAD_MOTOR_IDS, head)):
             status[name] = {
                 "online": True, "id": i + 1, "angle": round(math.degrees(float(angle)), 1),
@@ -671,16 +485,12 @@ class ReachyMotionService:
             }
         return status
 
-    # --- Aim & nudge ---
-
     def aim(self, direction: str, duration: float, current_positions: Dict[str, float],
             safety_policy: Any) -> Dict[str, float]:
         from hal.safety.policy import min_move_duration
 
         target = _AIM_TARGETS.get(direction)
         if target is None:
-            # Unknown direction (LLM reached for a non-preset word, e.g. "front")
-            # — aim the neutral center pose instead of failing the HW node.
             logger.warning("[reachy] unknown aim direction %r — defaulting to center", direction)
             target = _AIM_TARGETS[P.AIM_CENTER]
         positions = {**current_positions, **target}
@@ -713,8 +523,6 @@ class ReachyMotionService:
         self._release_servo(gen, eff)
         return positions
 
-    # --- Internals ---
-
     def _reconnect(self) -> None:
         """Drop the dead client and dial the daemon again (caller holds _lock)."""
         try:
@@ -723,18 +531,17 @@ class ReachyMotionService:
         except Exception:
             pass
         self._mini = ReachyMini(host=self._host, port=self._port, media_backend="no_media")
-        # Torque again: whatever killed the connection (a daemon restart, an
-        # update) dropped the motors back to their unpowered boot state too, so
-        # a reconnect without this hands back a client that reports healthy and
-        # moves nothing.
+        # Torque again: whatever killed the connection (a daemon restart, an update)
+        # dropped the motors back to their unpowered boot state too, so a reconnect
+        # without this hands back a client that reports healthy and moves nothing.
         self._enable_motors()
         logger.info("[reachy] reconnected to daemon at %s:%s", self._host, self._port)
 
     def _call(self, what: str, fn):
         """Run a daemon call, reconnecting once if the connection went stale.
 
-        Retries only on disconnect markers: a clamp rejection or a bad pose is a
-        real error and must not be replayed against a fresh connection.
+        Retries only on disconnect markers: a clamp rejection or a bad pose is a real
+        error and must not be replayed against a fresh connection.
         """
         with self._lock:
             self._require_mini()
@@ -767,7 +574,6 @@ class ReachyMotionService:
             yaw=positions["head_yaw.pos"],
             degrees=True, mm=True,
         )
-        # SDK antenna order is [right, left].
         antennas = np.deg2rad(
             [positions["antenna_right.pos"], positions["antenna_left.pos"]]
         )
@@ -787,38 +593,19 @@ class ReachyMotionService:
     def _take_servo(self) -> int:
         """Claim the servo for a direct pose command. Returns the new generation.
 
-        A recorded move and a goto/set_target are two independent target
-        streams into the daemon: it accepts both and the last writer wins each
-        control cycle, which is what made an aim during an animation look like
-        the motors were fighting each other. The feetech backend never has two
-        writers — aim stops the animation event loop before moving
-        (animation_service.aim) — so this is the equivalent claim: invalidate
-        the play thread, then cancel whatever it still has in flight.
+        The feetech backend never has two writers.
         """
         with self._lock:
             self._play_gen += 1
             gen = self._play_gen
-        # The pose command owns the servo now, so no recording is running. The
-        # play thread cannot report that itself: it only clears the field when
-        # its own generation is still current, precisely so a thread dying late
-        # cannot blank what a newer play just set. Without this, GET /servo kept
-        # naming the cancelled animation for the whole pose command.
+        # The pose command owns the servo now, so no recording is running.
         self._current_recording = None
-        # Skip the daemon round-trip when nothing is streaming — send_positions
-        # is a per-frame tracking path, not a one-shot command.
         if self._play_thread is not None and self._play_thread.is_alive():
             self._cancel_move()
         return gen
 
     def _release_servo(self, gen: int, delay: float) -> None:
-        """Hand the servo back to the music groove once the pose command lands.
-
-        Deferred by the move duration: goto_target is not guaranteed to block
-        for the whole interpolation, and restarting the groove on top of a
-        moving head is the very conflict _take_servo just removed. Mirrors the
-        feetech backend, which parks an `__aim_hold__` pose and then falls back
-        into the groove (animation_service.aim + _continue_playback).
-        """
+        """Hand the servo back to the music groove once the pose command lands."""
         if not self._music_playing or not self._music_recording:
             return
 
@@ -845,9 +632,8 @@ class ReachyMotionService:
     def _recorded_moves(self):
         """Lazy-load the HF move libraries. Returns the loaders, or None if none.
 
-        One failing dataset does not take the others down: a community dataset
-        that was renamed or pulled from the Hub must not cost the robot its
-        official emotions.
+        One failing dataset does not take the others down: a community dataset that was
+        renamed or pulled from the Hub must not cost the robot its official emotions.
         """
         if self._moves is None:
             libs = []
@@ -873,26 +659,11 @@ class ReachyMotionService:
             try:
                 return lib.get(hf_name)
             except Exception as e:
-                # A miss raises ValueError here, so this is the normal path for
-                # every library that simply does not hold the name. Logged at
-                # debug so a genuine fault (bad cache, unreadable JSON) is still
-                # findable instead of silently reading as "not found".
                 logger.debug("[reachy] '%s' not in %r: %s", hf_name, lib, e)
         return None
 
     def _ramp_for(self, move: Any) -> float:
-        """Seconds to interpolate into the move's first pose before playing it.
-
-        Pollen moves are absolute trajectories that start at their own frame 0.
-        With the SDK default (initial_goto_duration=0.0) the daemon snaps the
-        head there from wherever the previous move was interrupted — the jolt
-        you feel when one emotion cuts another. The feetech backend has the same
-        ramp, client-side (animation_service._handle_play interpolates
-        current_state → actions[0] over HAL_SERVO_PLAY_RAMP_S).
-
-        Stretched by the SAFETY.md motion.max_speed gate when frame 0 is far
-        from the current pose, exactly like aim/nudge.
-        """
+        """Seconds to interpolate into the move's first pose before playing it."""
         if self._safety_policy is None:
             return _PLAY_RAMP_S
         try:
@@ -910,18 +681,8 @@ class ReachyMotionService:
     def _move_refused(self, move: Any, hf_name: str) -> bool:
         """True when the move demands more head speed than SAFETY.md allows.
 
-        This is the only place the declared ceiling can be applied on this
-        backend. `play_move()` hands the whole trajectory to the Pollen daemon,
-        which streams it without HAL in the loop, so there is no frame to slow
-        down mid-move the way the feetech driver stretches a recording
-        (recording_timing.stretch_timeline). The choice is play or do not play,
-        and it has to be made before the trajectory is handed over (#286).
-
-        Refusing matters once a move can come from a stranger's Hub dataset
-        (#287); the shipped library is measured and passes at the declared
-        ceiling. Applied to every source, deliberately: an official move that
-        trips the gate is evidence the declared number is wrong, and excusing
-        it by origin would hide exactly that signal.
+        The choice is play or do not play, and it has to be made before the trajectory
+        is handed over (#286).
         """
         policy = self._safety_policy
         if policy is None or policy.motion is None or policy.motion.max_speed is None:
@@ -931,8 +692,6 @@ class ReachyMotionService:
             try:
                 peak = peak_head_dps(move.timestamps, move.trajectory)
             except Exception as e:
-                # A move whose shape we cannot read is not evidence of danger;
-                # the same presence-driven rule as an undeclared bound.
                 logger.debug("[reachy] cannot scan '%s' (%s) — not gated", hf_name, e)
                 return False
             self._move_peak_dps[hf_name] = peak
@@ -950,29 +709,18 @@ class ReachyMotionService:
     def _play_move_once(self, move: Any, name: str, gen: int) -> bool:
         """Play one pass of a recorded move (blocking). False if superseded.
 
-        _play_lock is what keeps two passes from overlapping. Cancelling the
-        old move is not enough on its own: a play thread can sit in
-        moves.get() (the first HF load is slow) while the cancel goes by, then
-        stream its move on top of the newer one — two move streams into the
-        same daemon. The generation is re-checked here, under the lock, so a
-        thread that lost the servo while waiting never plays at all.
+        The generation is re-checked here, under the lock, so a thread that lost the
+        servo while waiting never plays at all.
         """
         with self._play_lock:
             if gen != self._play_gen:
                 logger.debug("[reachy] play '%s' superseded before start", name)
                 return False
-            # Report the recording only from the thread that actually owns the
-            # servo: a superseded thread waiting on this lock used to publish
-            # its name after the winner had already published (and finished),
-            # leaving GET /servo naming an animation nobody was playing.
+            # Report the recording only from the thread that actually owns the servo.
             self._current_recording = name
             with self._lock:
                 mini = self._require_mini()
-            # Read the ramp before the move starts — it compares frame 0 with
-            # the pose the head is actually sitting at right now.
             ramp = self._ramp_for(move)
-            # play_move blocks for the move duration — keep it out of _lock so
-            # state reads stay responsive; SDK serializes via the daemon.
             try:
                 mini.play_move(move, initial_goto_duration=ramp)
             except Exception as e:
@@ -989,12 +737,9 @@ class ReachyMotionService:
         return True
 
     def _play_recording(self, name: str) -> None:
-        # Only a limp robot refuses outright. A hold is the routes' call — the
-        # emotion route decides which emotions survive one (routes/emotion.py
-        # reads _hold_mode/_hold_explicit) and /servo/play is already gated on
-        # is_suppressed — and a camera freeze must not swallow an explicit
-        # animation either: dropping them here is what made the robot go quiet
-        # after a hold, with nothing but a debug line to explain it.
+        # Only a limp robot refuses outright. A hold is the routes' call — the emotion
+        # route decides which emotions survive one (routes/emotion.py reads
+        # _hold_mode/_hold_explicit) and /servo/play is already gated on is_suppressed.
         if self._released:
             logger.info("[reachy] play '%s' refused — servos released", name)
             return
@@ -1023,12 +768,8 @@ class ReachyMotionService:
                             "[reachy] move '%s' (HF: '%s') not in any library",
                             current, hf_name,
                         )
-                        # No exception but nothing to play — treat as a failure
-                        # so the loop can't spin without doing any work.
                         failed = True
                     elif self._move_refused(move, hf_name):
-                        # Same shape as an unavailable move: the groove logic
-                        # decides what happens next, nothing reaches the daemon.
                         failed = True
                     else:
                         try:
@@ -1041,10 +782,8 @@ class ReachyMotionService:
                                 "[reachy] play '%s' (HF: '%s') failed: %s", current, hf_name, e
                             )
                             failed = True
-                    # Repeat while music plays — the feetech backend does the
-                    # same in _continue_playback: a finished recording falls
-                    # back to the music groove (and an emotion played mid-track
-                    # hands the servo back to it) instead of stopping.
+                    # Repeat while music plays — the feetech backend does the same in
+                    # _continue_playback.
                     next_rec = self._next_groove(current, gen, failed=failed)
                     if next_rec is None:
                         return

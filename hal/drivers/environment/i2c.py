@@ -11,8 +11,6 @@ logger = logging.getLogger(__name__)
 def limit_sunxi_bus_clock(bus: int, max_hz: int, *, sysfs_root=Path("/sys/class/i2c-adapter")):
     """Limit a Sunxi adapter's shared clock before accessing a slow sensor.
 
-    Other controllers require their platform's clock configuration. The Sunxi
-    kernel exposes a write-only freq attribute and reports it in device/info.
     Do not use the device-tree clock-frequency as runtime readback.
     """
     adapter = sysfs_root / f"i2c-{bus}"
@@ -24,7 +22,6 @@ def limit_sunxi_bus_clock(bus: int, max_hz: int, *, sysfs_root=Path("/sys/class/
         return
 
     def read_frequency():
-        # "freqency" is the spelling in the Sunxi kernel ABI.
         info = (adapter / "device/info").read_text()
         match = re.search(r"^twi->freqency\s*=\s*(\d+)\s*$", info, re.MULTILINE)
         if not match or int(match[1]) <= 0:

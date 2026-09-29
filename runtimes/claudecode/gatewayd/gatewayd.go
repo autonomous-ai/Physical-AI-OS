@@ -1,26 +1,5 @@
 // Package gatewayd bridges a local WebSocket to ONE persistent headless
-// `claude` subprocess. It is a Go port of the former bridge.py (previously
-// materialized on-device by runtimes/claudecode/presync.sh) and runs as
-// `os-server claudecode-gatewayd` under the claudecode.service systemd unit
-// (EnvironmentFile=/root/.claudecode/.env).
-//
-// Protocol (client = os-server runtimes/claudecode):
-//
-//	client -> gatewayd: {"type":"message.send","id":..,"payload":{"content":..,
-//	                     "attachments":[{"type":"image","url":"data:<mt>;base64,<b64>"}]}}
-//	                    {"type":"session.new"}  -> restart claude without --resume
-//	                    {"type":"ping",..}      -> {"type":"pong"}
-//	gatewayd -> client: claude stream-json JSONL events forwarded VERBATIM
-//	                    (system/assistant/user/result), plus {"type":"pong"} and
-//	                    {"type":"bridge.status","payload":{..}} /
-//	                    {"type":"bridge.error","payload":{"message":..}}.
-//
-// Unlike the codex gatewayd (per-turn `codex exec` child), the claude child is
-// PERSISTENT: message.send frames become stream-json `user` lines on its stdin
-// (claude serializes queued turns internally — no per-turn worker here), and a
-// respawn loop restarts the child on exit (5s backoff), resuming the session id
-// persisted in session.json via `--resume`. `session.new` clears the session
-// and terminates the child; the respawn loop restarts it fresh.
+// `claude` subprocess.
 package gatewayd
 
 import (
@@ -51,8 +30,7 @@ const (
 	defaultPort = "18791"
 )
 
-// Config holds every tunable. Main() fills it from environment variables
-// (read once at start); tests construct it directly with temp paths.
+// Config holds every tunable.
 type Config struct {
 	JevConfigPath  string
 	JevEnabled     bool
@@ -78,8 +56,6 @@ func configFromEnv() Config {
 	if f, err := strconv.ParseFloat(envOr("CLAUDECODE_RESTART_BACKOFF_S", "5"), 64); err == nil && f > 0 {
 		backoff = time.Duration(f * float64(time.Second))
 	}
-	// CLAUDECODE_HOME is the backend state dir (/root/.claudecode) — the
-	// defaults below keep existing .env-based deployments working unchanged.
 	home := envOr("CLAUDECODE_HOME", "/root/.claudecode")
 	return Config{
 		JevConfigPath: envOr("JEV_CONFIG_PATH", "/root/config/config.json"),
@@ -104,10 +80,8 @@ type Server struct {
 	cfg             Config
 	ln              net.Listener
 
-	// stdinMu serializes writes to the child stdin pipe (pending flush on
-	// spawn + message.send lines). It is held ACROSS blocking pipe writes, so
-	// it must never be acquired while holding mu (lock order: stdinMu -> mu) —
-	// a full pipe would otherwise stall the stdout pump, which needs mu.
+	// stdinMu serializes writes to the child stdin pipe. Lock order: stdinMu -> mu; it is held
+	// across blocking pipe writes, so never acquire it while holding mu.
 	stdinMu sync.Mutex
 
 	mu         sync.Mutex     // guards everything below (never held across pipe writes)
@@ -125,9 +99,7 @@ func New(cfg Config, ln net.Listener) *Server {
 	return &Server{cfg: cfg, ln: ln, preloadContext: newPreloader(cfg), lifetimeContext: context.Background()}
 }
 
-// Serve blocks until ctx is cancelled or the listener fails. It owns the
-// child respawn loop; on ctx cancellation the running child is killed
-// (process group) and open connections are dropped.
+// Serve blocks until ctx is cancelled or the listener fails.
 func (s *Server) Serve(ctx context.Context) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -144,9 +116,7 @@ func (s *Server) Serve(ctx context.Context) error {
 		defer close(childDone)
 		s.childLoop(ctx)
 	}()
-	// Do not return until the child loop has observed cancellation and reaped
-	// its process group. Besides making shutdown deterministic, this prevents a
-	// just-respawned Claude child from outliving its runtime's temporary state.
+	// Do not return until the child loop has reaped its process group.
 	defer func() {
 		cancel()
 		<-childDone
@@ -174,9 +144,7 @@ func (s *Server) Serve(ctx context.Context) error {
 	}
 }
 
-// Main is the blocking entry point for `os-server claudecode-gatewayd`. It
-// reads config from the environment, listens on 127.0.0.1:CLAUDECODE_PORT and
-// shuts down gracefully on SIGTERM/SIGINT.
+// Main is the blocking entry point for `os-server claudecode-gatewayd`.
 func Main() int {
 	cfg := configFromEnv()
 	ln, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", cfg.Port))

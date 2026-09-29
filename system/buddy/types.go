@@ -1,12 +1,5 @@
-// Package buddy implements the device-side coordinator for the Autonomous Buddy macOS
-// companion app. It owns:
-//   - pairing flow (6-digit code → long-lived token)
-//   - persistent pairing record (config/buddies.json)
-//   - WebSocket gateway to the connected buddy
-//   - command dispatch with request/response matching by ID
-//
-// The HTTP delivery layer lives in server/buddy/delivery/http and is the only
-// caller of this package.
+// Package buddy is the device-side coordinator for the Autonomous Buddy macOS
+// app: pairing, persisted pairing record, WebSocket gateway and command dispatch.
 package buddy
 
 import (

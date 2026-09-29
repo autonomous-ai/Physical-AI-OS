@@ -41,11 +41,9 @@ struct OpenAppExecutor: Executor {
     }
 
     static func resolveAppURL(named name: String) -> URL? {
-        // 1. Bundle ID (e.g. "com.google.Chrome")
         if let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: name) {
             return url
         }
-        // 2. Standard locations
         let suffix = name.hasSuffix(".app") ? name : "\(name).app"
         let bases = ["/Applications", "/System/Applications", "/Applications/Utilities", "/System/Applications/Utilities"]
         for base in bases {
@@ -54,7 +52,6 @@ struct OpenAppExecutor: Executor {
                 return URL(fileURLWithPath: path)
             }
         }
-        // 3. ~/Applications
         let home = FileManager.default.homeDirectoryForCurrentUser
         let homeApps = home.appendingPathComponent("Applications").appendingPathComponent(suffix)
         if FileManager.default.fileExists(atPath: homeApps.path) {

@@ -8,32 +8,18 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// ComponentVersion is one row of GET /versions: what this device runs, what the
-// feed offers, and whether the worker would actually apply it.
+// ComponentVersion is one row of GET /versions.
 type ComponentVersion struct {
 	Current    string `json:"current"`
 	Target     string `json:"target"`
 	MinVersion string `json:"min_version"`
-	// UpdateAvailable is true when the feed offers a build NEWER than what runs
-	// here. It says nothing about the rollout floor — a newer build can be
-	// published and still held back (see HeldByFloor).
+	// UpdateAvailable is true when the feed offers a newer build, regardless of the floor.
 	UpdateAvailable bool `json:"update_available"`
-	// HeldByFloor is true when a newer build exists but min_version has not been
-	// promoted to it, i.e. the automatic worker will not apply it. A manual
-	// force-check ignores the floor... in the sense that it runs the same
-	// reconcile — which also respects it. So a held component only moves once
-	// the floor is promoted; surfacing this keeps the UI from offering a button
-	// that would do nothing.
+	// HeldByFloor is true when a newer build exists but min_version holds it back.
 	HeldByFloor bool `json:"held_by_floor"`
 }
 
-// versionReport answers "what can this device update right now", per component.
-//
-// Only components this device actually HAS are reported (componentInstalled),
-// so the agent-CLI entry is the runtime the device runs and nothing else — the
-// caller does not have to know which runtime that is. Metadata is fetched live:
-// the worker keeps no cache, and this endpoint is hit by a human opening a page,
-// not on a hot path.
+// versionReport lists installed components with their current and published versions.
 func (b *Bootstrap) versionReport(ctx context.Context) map[string]ComponentVersion {
 	out := map[string]ComponentVersion{}
 	meta, err := b.fetchMetadata(ctx)
@@ -68,9 +54,7 @@ func (b *Bootstrap) versionReport(ctx context.Context) map[string]ComponentVersi
 			HeldByFloor:     newer && compareVersions(current, minVersion) >= 0,
 		}
 	}
-	// Device profiles are nested below metadata.devices.<device_type>, rather
-	// than in the flat component map above. Report the resolved profile as the
-	// stable "device" key the Versions card and force-update endpoint use.
+	// Device profiles are nested under metadata.devices.<type>; report them as "device".
 	if deviceType := resolveDeviceType(); deviceType != "" && b.componentInstalled(domain.OTAKeyDevice) {
 		component, ok, err := b.fetchDeviceComponent(ctx, deviceType)
 		if err != nil {

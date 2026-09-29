@@ -1,25 +1,6 @@
 #!/usr/bin/env bash
-#
-# Promote an OTA component's auto-rollout floor (min_version) so the bootstrap
-# worker pushes the build to the whole fleet.
-#
-# Staged-rollout model:
-#   - `upload-<component>.sh` bumps `version` (the build anyone CAN pull manually
-#     via `software-update <key>` over SSH) but PRESERVES `min_version`, so the
-#     auto worker does NOT push it.
-#   - This script bumps `min_version` (default: up to the current `version`).
-#     Bootstrap auto-updates every device whose current version is below it.
-#
-# Usage:
-#   ./scripts/release/promote-ota.sh <component> [min_version]
-#     <component>  flat key (os-server | bootstrap | web | hal |
-#                  claude-desktop-buddy | openclaw | codex) OR device:<type> (e.g. device:lamp)
-#     [min_version] optional explicit floor; defaults to the entry's current version
-#
-# Examples:
-#   ./scripts/release/promote-ota.sh hal             # min_version = hal.version
-#   ./scripts/release/promote-ota.sh os-server 1.4.0 # pin floor explicitly
-#   ./scripts/release/promote-ota.sh device:lamp     # min_version = devices.lamp.version
+# Raise an OTA component's min_version (default: its current version) so bootstrap auto-rolls it out.
+# Usage: ./scripts/release/promote-ota.sh <component|device:<type>> [min_version]
 set -euo pipefail
 
 source "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/ota-config.sh"
@@ -27,7 +8,6 @@ source "${RELEASE_DIR}/ota-metadata.sh"
 
 component="${1:-}"
 override_min="${2:-}"
-# Accept `device <type> [min]` (make-friendly, no colon) as well as `device:<type> [min]`.
 if [[ "$component" == "device" ]]; then
   dtype="${2:-}"
   if [[ -z "$dtype" ]]; then

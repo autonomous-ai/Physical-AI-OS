@@ -11,15 +11,10 @@ import (
 	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
-// claudecodeBinary is the stable installer-owned symlink. Avoid relying on
-// PATH because os-server can start before the interactive shell profile is
-// loaded on the device.
+// claudecodeBinary is the stable installer-owned symlink.
 const claudecodeBinary = "/usr/local/bin/claude"
 
-// claudecodeVersionProbeTimeout caps a single `claude --version` probe. The
-// Claude Code CLI is a Node program whose cold-start can exceed a few seconds on
-// a busy box right after boot; a 5s cap killed the probe and left the version
-// blank for the whole process lifetime.
+// claudecodeVersionProbeTimeout caps a single `claude --version` probe.
 const claudecodeVersionProbeTimeout = 20 * time.Second
 
 // claudecodeVersionProbeRetries bounds retries so a killed/empty boot-time probe
@@ -44,8 +39,8 @@ func GetClaudeCodeVersion() string {
 
 // PopulateClaudeCodeVersion probes `claude --version` and caches the semver,
 // retrying on a killed/empty probe (claudecodeVersionProbeRetries) so a boot-time
-// cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
-// returns on the first try. Stops once a non-empty version is stored.
+// cold-start slowdown self-heals.
+// Runs in a startup goroutine; a warm probe returns on the first try.
 func PopulateClaudeCodeVersion() {
 	claudecodeVersion.Populate(claudecodeVersionProbeRetries, claudecodeVersionProbeBackoff)
 }

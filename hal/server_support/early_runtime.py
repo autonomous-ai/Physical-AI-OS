@@ -9,18 +9,14 @@ logger = logging.getLogger("hal.server")
 
 
 def _fatal_startup():
-    # Uvicorn has already acknowledged startup. A nonzero process exit is needed
-    # so systemd cannot mistake a permanently incomplete HAL for a healthy one.
+    # Nonzero exit so systemd cannot mistake a permanently incomplete HAL for a healthy one.
     os._exit(1)
 
 
 class EarlyRuntime:
     """ASGI dispatcher with one shared hardware owner and bounded shutdown.
 
-    The bootstrap lifespan initializes early hardware but must not tear it down.
-    Before the full lifespan enters, cleanup_early owns teardown; afterwards the
-    full lifespan owns it. The loader and full lifespan run on the same worker,
-    keeping blocking imports and hardware initialization off the HTTP loop.
+    cleanup_early owns teardown until the full lifespan enters; then the full lifespan owns it.
     """
 
     def __init__(self, bootstrap, load_runtime, cleanup_early, *,

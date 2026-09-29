@@ -1,8 +1,4 @@
-"""Compatibility Test Suite — enforces robots/contract/COMPATIBILITY.md against every device.
-
-Static, no hardware: validates each robots/<id>/ROBOT.md against the MUST rules.
-Reuses the HAL's declaration parser so the test and the runtime read the contract the same way.
-"""
+"""Static CTS: validates every robots/<id>/ROBOT.md against robots/contract/COMPATIBILITY.md."""
 import os
 import sys
 import unittest
@@ -24,8 +20,7 @@ KNOWN_CAPABILITIES = {
 }
 # Capabilities that can move, heat, or emit — they require a SAFETY.md.
 SAFETY_CLASS = {"motion", "policy", "light"}
-# Non-device folders under robots/: anything underscore-prefixed (`_base`,
-# `_template`) is a profile or scaffold, not a body.
+# Non-device folders; underscore-prefixed folders are also skipped.
 NOT_DEVICES = {"examples"}
 
 
@@ -54,9 +49,7 @@ class TestCompatibility(unittest.TestCase):
                               f"{dev}: ROBOT.md must declare schema autonomous.device.v1")
                 # MUST 2 — system capability
                 self.assertIn("system", groups, f"{dev}: must declare the 'system' capability")
-                # MUST 3 — a primary sense or output. Exempt: type: mock_body,
-                # a test fixture with no hardware to sense with (COMPATIBILITY.md
-                # rule 3). Everything else about it is still checked.
+                # MUST 3 — a primary sense or output (mock_body exempt)
                 if "type: mock_body" not in raw:
                     self.assertTrue({"audio", "vision"} & groups,
                                     f"{dev}: must declare a primary sense/output (audio or vision)")

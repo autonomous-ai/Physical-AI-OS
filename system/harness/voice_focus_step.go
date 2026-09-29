@@ -55,14 +55,8 @@ func (v *VoiceController) StepFocus(ctx context.Context, id, direction string, g
 		}
 		return v.State(), &VoiceGestureError{Code: code, Cause: err}
 	}
-	// The app has switched. From here nothing may report the gesture as failed:
-	// HAL would announce "could not switch" for a switch that happened. A
-	// successful reply carries the new snapshot; apply it directly. A reply
-	// without a usable agent (single-agent desk, or the step moved focus to a
-	// tile on another computer, which the CLI reports as focus:null) is still a
-	// completed switch: refresh through the polling authority so state.Error
-	// explains why voice cannot deliver, and return that state as-is. Neither a
-	// late RPC nor a late refresh can turn voice mode back on.
+	// Once the app has switched, never report the gesture as failed (HAL would announce a
+	// failure for a switch that happened); a reply without usable focus refreshes via polling.
 	if !v.applyFocusReply(reply, status.MachineID) {
 		_ = v.RefreshFocus(ctx)
 	}

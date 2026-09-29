@@ -10,19 +10,14 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// handleSessionToolEvent handles WS event=="session.tool": tool events for
-// session-subscribed clients (Telegram-initiated turns). Extracted verbatim
-// from HandleEvent.
+// handleSessionToolEvent handles WS "session.tool" events for session-subscribed clients.
 func (h *AgentHandler) handleSessionToolEvent(evt domain.WSEvent) error {
-	// Tool events for session-subscribed clients (covers Telegram-initiated turns).
 	var payload domain.AgentPayload
 	if err := json.Unmarshal(evt.Payload, &payload); err != nil {
 		slog.Warn("session.tool unmarshal error", "component", "agent", "err", err)
 		return nil
 	}
-	// If this tool runs inside a tracked channel turn, map the OpenClaw
-	// UUID to the synthetic device runId so tool_call/hw_* flow events
-	// share the same run_id as chat_input emitted from session.message.
+	// Map the OpenClaw UUID to the synthetic device runId so tool/hw flow events share chat_input's run_id.
 	if payload.SessionKey != "" && payload.RunID != "" {
 		h.channelTurnMu.Lock()
 		if st, ok := h.channelTurns[payload.SessionKey]; ok && st.runID != "" {
@@ -37,24 +32,14 @@ func (h *AgentHandler) handleSessionToolEvent(evt domain.WSEvent) error {
 	if payload.Data.Phase == "start" {
 		summary = fmt.Sprintf("Tool %s started", toolName)
 		h.rememberToolArgs(payload.Data.ToolCallID, toolArgs)
-		// DEFENSIVE (2026-07-23): rescue [HW:...] markers the agent echoed
-		// inside a shell tool call (e.g. `echo '[HW:/audio/play:{...}]'`)
-		// instead of emitting them as reply text — a shell echo never reaches
-		// the reply-text marker interceptor, so it no-ops (node lights up, HAL
-		// gets nothing). Fire them for real; skip the cosmetic-only detection
-		// below when we do, to avoid duplicate flow nodes. See fireEchoedHWMarkers.
+		// Fire [HW:...] markers echoed via a shell tool call (they never reach the reply-text
+		// interceptor); skip the cosmetic detection below to avoid duplicate flow nodes.
 		echoedHW := h.fireEchoedHWMarkers(toolName, toolArgs, flowRunID)
-		// [2026-06-30] Do NOT suppress TTS on /audio/play — the spoken reply
-		// must play before music. Python music_service waits for TTS via
-		// wait_for_tts() before grabbing ALSA, so the Go-side suppress is
-		// redundant and was swallowing the reply. See handler_event_agent.go
-		// for the full rationale (mirrors the 2026-05-11 hwCalls fix).
+		// Do NOT suppress TTS on /audio/play: the reply must play before music (music_service waits for TTS).
 		if !echoedHW && strings.Contains(toolArgs, "/audio/play") {
 			h.monitorBus.Push(domain.MonitorEvent{Type: "hw_audio", Summary: toolArgs, RunID: flowRunID})
 			flow.Log("hw_audio", map[string]any{"args": toolArgs, "run_id": flowRunID}, flowRunID)
 		}
-		// Emit specific hardware events for flow monitor visualization.
-		// Both flow.Log (for JSONL persistence + UI flow_event triggers) and monitorBus (for SSE).
 		if !echoedHW && strings.Contains(toolArgs, "/emotion") {
 			h.monitorBus.Push(domain.MonitorEvent{Type: "led_set", Summary: "agent tool: " + toolName})
 			h.monitorBus.Push(domain.MonitorEvent{Type: "hw_emotion", Summary: toolArgs, RunID: flowRunID})

@@ -8,10 +8,8 @@ import (
 	"net/http"
 )
 
-// GetEnvironmentStatus reads the model-independent environmental snapshot.
-// Preserve measurement keys and nulls so new HAL sensor backends need no MQTT
-// schema change. Status success means acquisition diagnostics were retrieved,
-// not that every reading is fresh or available.
+// GetEnvironmentStatus reads the environmental snapshot, preserving unknown keys and nulls.
+// Success means diagnostics were retrieved, not that every reading is fresh.
 func GetEnvironmentStatus() (json.RawMessage, error) {
 	return GetEnvironmentStatusContext(context.Background())
 }

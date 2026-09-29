@@ -115,14 +115,20 @@ Scene đang active **sống sót qua các lần restart HAL service** (OTA, depl
 
 Khi HAL restart trong lúc đang ngủ, restore scene chỉ giữ tên scene active, không áp dụng lại LED, servo, camera, mic hoặc loa. Sleep tiếp tục giữ quyền điều khiển phần cứng và các cờ mute. User LED state được load riêng; khi thức dậy bình thường, flow scene-off hiện có sẽ xoá scene đã giữ lại.
 
-| Scene | Sáng | Màu (K) | Servo | Camera | Mic | Speaker |
-|-------|------|---------|-------|--------|-----|---------|
-| `reading` | 80% | 4000K trắng ấm | desk + hold | off | off | off |
-| `focus` | 70% | 4200K trung tính ấm | desk + hold | off | off | off |
-| `relax` | 40% | 2700K ấm | wall | on | on | on |
-| `movie` | 15% | 2400K amber mờ | wall | off | on | off |
-| `night` | 5% | 1800K amber đậm | down | off | off | off |
-| `energize` | 100% | 5000K ánh sáng ban ngày | up | on | on | on |
+| Scene | Sáng (base) | Sáng (lamp) | Màu (K) | Servo | Camera | Mic | Speaker |
+|-------|------|------|---------|-------|--------|-----|---------|
+| `reading` | 80% | 19% | 4000K trắng ấm | desk + hold | off | on | off |
+| `focus` | 70% | 15% | 4200K trung tính ấm | desk + hold | off | on | off |
+| `relax` | 40% | 10% | 2700K ấm | wall | on | on | on |
+| `movie` | 15% | 4% | 2400K amber mờ | wall | off | on | off |
+| `night` | 5% | 1.2% | 1800K amber đậm | down | off | on | off |
+| `energize` | 100% | 24% | 5000K ánh sáng ban ngày | up | on | on | on |
+
+"Base" là `SCENE_PRESETS` trong `hal/presets.py`. Trên lamp, khối `scene` của
+`robots/lamp/presets.json` chỉ override **độ sáng** (0.19 / 0.15 / 0.10 / 0.04 / 0.012 / 0.24);
+màu, hướng aim và thiết bị ngoại vi giữ giá trị base. Ở mức base, reading/focus/energize vượt trần
+`max_brightness` của lamp (120) nên cả ba bị kẹp về cùng một peak; overlay cũng tính tới việc scene
+thắp cả 32 pixel (peak trên lamp: energize 61, reading 48, focus 38, relax 25, movie 10, night 3).
 
 ### Điều khiển ngoại vi theo scene
 
@@ -131,7 +137,7 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 1. **LED** — màu đặc = `preset.color × preset.brightness`
 2. **Servo aim** — xoay đầu đèn theo hướng preset (desk, wall, up, down)
 3. **Servo hold** — nếu `"servo": "hold"`, freeze servo **sau khi** aim xong (aim → hold trong cùng 1 thread). Tự release khi chuyển sang scene không có hold.
-4. **Camera** — tự động bật/tắt
+4. **Camera** — tự động bật/tắt qua `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
 6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ tiếp quản drain để wake trả loa lại được. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
 
@@ -156,7 +162,7 @@ Nghĩa là khi focus, sensing event vẫn tới OpenClaw nhưng Lamp giữ nguy�
 
 ### Lý do chọn nhiệt độ màu
 
-- **Focus 4200K/70%** (không phải 5000K/100%) — 4000-4300K tối ưu cho tập trung mà không gây mỏi mắt
+- **Focus 4200K/70% base** (không phải 5000K/100%; overlay lamp 15%) — 4000-4300K tối ưu cho tập trung mà không gây mỏi mắt
 - **Night 1800K amber đậm** — bước sóng >580nm không ảnh hưởng melatonin
 - **Movie mic on** — cho phép điều khiển giọng nói ("pause", "stop") khi xem phim
 
@@ -164,25 +170,33 @@ Nghĩa là khi focus, sensing event vẫn tới OpenClaw nhưng Lamp giữ nguy�
 
 Xem chi tiết: [status-led_vi.md](status-led_vi.md)
 
-LED phản hồi trạng thái hệ thống (tất cả `breathing` speed 3.0 trừ khi ghi rõ):
+LED phản hồi trạng thái hệ thống. HAL tra từng tên state trong `STATUS_LED_PRESETS` của
+`hal/presets.py`; trên lamp, khối `status_led` trong `robots/lamp/presets.json` override màu (mọi
+channel cap ở 3) và, với sáu cue breathing sống lâu, cả speed. Tên effect luôn lấy từ bảng base.
+Giá trị trên lamp:
 
-| Trạng thái | Màu | RGB |
-|-----------|-----|-----|
-| Mất internet (Connectivity) | Cam | `(16, 7, 0)` |
-| Đang khởi động (Booting) | Xanh dương | `(0, 6, 16)` |
-| HAL Down | Tím | `(11, 0, 16)` |
-| Agent Down | Cyan | `(0, 12, 12)` |
-| Hardware Failure | Vàng | `(12, 12, 0)` |
-| OTA đang chạy (bootstrap) | Cam | `(16, 8, 0)` |
-| OTA thành công (bootstrap) | Flash xanh lá | `(0, 12, 4)` |
-| OTA thất bại (bootstrap) | Đỏ pulse | `(16, 2, 2)` |
+| Trạng thái (preset) | Màu | Effect / speed (lamp) | RGB lamp | RGB / speed base |
+|-----------|-----|-----|-----|-----|
+| Mất internet (`connectivity`) | Cam | breathing 0.6 | `(3, 1, 0)` | `(16, 7, 0)` / 3.0 |
+| Lỗi (`error`, dự trữ) | Đỏ | pulse 1.5 | `(3, 0, 0)` | `(16, 0, 0)` / 1.5 |
+| OTA (`ota`, dự trữ) | Xanh lá | breathing 0.6 | `(0, 3, 0)` | `(0, 12, 0)` / 3.0 |
+| Đang vào Wi-Fi (`wifi_connecting`, setup) | Xanh dương | blink 0.5 | `(0, 1, 3)` | `(0, 6, 16)` / 0.5 |
+| Đang khởi động (`booting`) | Xanh dương | breathing 0.6 | `(0, 1, 3)` | `(0, 6, 16)` / 3.0 |
+| HAL Down (`hal_down`) | Tím | breathing 0.6 | `(2, 0, 3)` | `(11, 0, 16)` / 3.0 |
+| Agent Down (`agent_down`) | Cyan | breathing 0.6 | `(0, 3, 3)` | `(0, 12, 12)` / 3.0 |
+| Hardware Failure (`hardware`) | Vàng | breathing 0.6 | `(3, 3, 0)` | `(12, 12, 0)` / 3.0 |
+| OTA đang chạy (`ota_progress`, bootstrap) | Cam | breathing 0.4 | `(3, 1, 0)` | `(16, 8, 0)` / 0.4 |
+| OTA thành công (`ota_success`, bootstrap) | Xanh lá | notification_flash 1.0 | `(0, 3, 1)` | `(0, 12, 4)` / 1.0 |
+| OTA thất bại (`ota_error`, bootstrap) | Đỏ | pulse 1.5 | `(3, 1, 1)` | `(16, 2, 2)` / 1.5 |
 
-Quản lý bởi `system/statusled/Service` (lamp) và `lib/hal` trực tiếp (bootstrap).
+Ưu tiên, trigger và caller xem ở [status-led_vi.md](status-led_vi.md).
+
+Quản lý bởi `system/statusled/Service` (lamp) và `system/lib/hal` trực tiếp (bootstrap).
 
 Không còn màu nào hardcode trong Go nữa — trạng thái `system/statusled`, màu OTA-progress
 của bootstrap, và màu trắng setup-needed đều đi qua HAL. OS giữ máy trạng thái (KHI nào hiện)
 và gửi *tên trạng thái* xuống HAL (`POST /led/status`: booting/error/ota/connectivity/
-hal_down/agent_down/hardware/ready_flash/ota_progress/ota_error/ota_success/setup); HAL tra
+wifi_connecting/hal_down/agent_down/hardware/ready_flash/ota_progress/ota_error/ota_success/setup); HAL tra
 màu/effect/speed từ `STATUS_LED_PRESETS`, override per-device qua section `status_led` trong
 `presets.json` (xem [ROBOT-SPEC.md § Per-device presets](../../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
 `setup` là solid bền khi được gửi qua `POST /led/status`; các trạng thái còn lại là overlay
@@ -238,7 +252,7 @@ về tối, đúng cái sleep đang muốn.
 
 ### Setup-needed solid (lamp)
 
-Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `server/server.go` spawn goroutine background poll `GET /health` của HAL mỗi giây tối đa 30s, khi `health.led == true` thì gửi `POST /led/status` với state `setup` — HAL paint strip trắng solid báo "device ready, vào hotspot đi". Phải poll (không phải call 1 lần) vì cold boot os-server bind :5000 trước HAL :5001. Không dùng state machine `statusled`. Trắng chỉ là tạm thời: `POST /api/device/setup` thành công sẽ xoá saved setup state này thay vì giữ nó thành user LED preference, rồi restore settle về ambient resting look (hiện đang tối/tắt). Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](../../../../docs/vi/setup-flow_vi.md#ap-mode).
+Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisioning mode), `system/server/server.go` spawn goroutine background (`waitAndPaintSetupReady` trong `system/server/config_watch.go`, chỉ trên device có capability `light`) gửi `POST /led/status` với state `setup` và retry có backoff (1 s, nhân đôi, tối đa 10 s) cho tới khi HAL xác nhận, setup hoàn tất, hoặc server tắt — HAL paint strip trắng solid báo "device ready, vào hotspot đi". Không chờ `/health` (route LED có thể xác nhận trước khi các driver không liên quan healthy); retry xử lý race lúc cold boot khi os-server bind :5000 trước HAL :5001. Không dùng state machine `statusled`. Trắng chỉ là tạm thời: `POST /api/device/setup` thành công sẽ xoá saved setup state này thay vì giữ nó thành user LED preference, rồi restore settle về ambient resting look (hiện đang tối/tắt). Blue-breathing booting vẫn show trong lúc init. Xem [setup-flow_vi.md](../../../../docs/vi/setup-flow_vi.md#ap-mode).
 
 ## Ambient Idle Behaviors
 

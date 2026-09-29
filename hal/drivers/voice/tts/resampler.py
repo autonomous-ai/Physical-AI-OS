@@ -4,11 +4,7 @@ import numpy as np
 
 
 class PCMResampler:
-    """Keep the sample clock and boundary sample across network chunks.
-
-    Integer counters keep the output independent of transport chunk sizes.
-    At EOF, hold the final sample to preserve the full input duration.
-    """
+    """Keep the sample clock and boundary sample across network chunks."""
 
     def __init__(self, src_rate: int, dst_rate: int):
         self.src_rate = src_rate
@@ -29,14 +25,12 @@ class PCMResampler:
         if final:
             end = (self._received * self.dst_rate + self.src_rate - 1) // self.src_rate
         else:
-            # Emit only positions for which the right interpolation sample exists.
             end = ((self._received - 1) * self.dst_rate) // self.src_rate + 1
         positions = (
             np.arange(self._emitted, end, dtype=np.int64) * self.src_rate
         ) / self.dst_rate - start
         out = np.interp(positions, np.arange(len(buf)), buf).astype(np.float32)
         self._emitted = end
-        # Keep the last sample even when downsampling skips beyond this chunk.
         keep = min(max(self._emitted * self.src_rate // self.dst_rate - start, 0), len(buf) - 1)
         self._tail = buf[keep:].copy()
         return out

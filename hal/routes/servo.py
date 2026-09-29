@@ -1,10 +1,4 @@
-"""Servo route handlers — all /servo/* endpoints.
-
-Thin delegates: each handler validates the HTTP request, then calls one method
-on state.animation_service (which satisfies the MotionService protocol from
-hal/drivers/motors/base.py). No driver internals (.robot, .bus, .bus_lock,
-raw encoder values) leak into this file.
-"""
+"""Servo route handlers (/servo/*): thin delegates to the MotionService on state.animation_service."""
 
 import csv
 import io
@@ -46,19 +40,9 @@ router = APIRouter(tags=["Servo"])
 
 
 def _sleep_servo_locked() -> bool:
-    """True for the whole sleep, not just after torque-off.
-
-    Gating on `_sleep_servo_released` alone left the window between the sleepy
-    emotion arriving and the auto-release timer firing wide open: a late
-    /servo/play from the agent would drive the bus while release() was ramping
-    to gravity-rest, so torque got cut mid-pose and the body slammed. Sleep is
-    a terminal state — nothing external touches the servos until a wake
-    emotion clears `_sleeping`. The wake path itself resumes the motion
-    service in-process (see routes/emotion.py), not through these routes, so
-    widening the gate cannot lock the device out of waking."""
+    """True for the whole sleep, not just after torque-off (a late play would slam the body mid-release)."""
     return state._sleeping
 
-# --- Constants ---
 
 _SERVO_JOINT_FIELD_RE = re.compile(r"^[A-Za-z0-9_]+\.pos$")
 _MAX_SERVO_RECORDING_UPLOAD_BYTES = 2 * 1024 * 1024  # 2MB
@@ -88,9 +72,6 @@ def _svc_connected():
     if not svc.is_connected:
         raise HTTPException(503, "Servo robot not connected")
     return svc
-
-
-# --- Endpoints ---
 
 
 @router.get("/servo", response_model=ServoStateResponse)
@@ -202,18 +183,13 @@ async def upload_servo_recording(
 
 @router.post("/servo/play", response_model=ServoPlayResponse, response_model_exclude_none=True)
 def play_recording(req: ServoRequest):
-    """Play a pre-recorded servo animation by name.
-
-    Both refusals answer "ignored", not "ok": the caller must be able to tell a
-    body that moved from one that did not.
-    """
+    """Play a pre-recorded servo animation by name ("ignored" when refused)."""
     state.logger.debug("POST /servo/play recording=%s", req.recording)
     if _sleep_servo_locked():
         state.logger.info("servo/play ignored -- device is sleeping")
         return {"status": "ignored", "reason": "sleeping"}
     svc = _svc()
     if svc.is_suppressed:
-        # INFO, not DEBUG: at the default log level this refusal left no trace.
         state.logger.info("servo/play ignored -- %s mode active", svc.motion_mode)
         return {"status": "ignored", "reason": svc.motion_mode}
     svc.ensure_running()
@@ -256,8 +232,8 @@ def move_servo(req: ServoMoveRequest):
             400, f"Unknown joints: {unknown}. Valid: {sorted(valid_joints)}"
         )
 
-    # Safety gate (SAFETY.md motion.max_speed) — stretch the duration so no
-    # joint exceeds the ceiling. A declared speed bound requires a known pose.
+    # Safety gate (SAFETY.md motion.max_speed): stretch the duration so no joint exceeds the ceiling;
+    # a declared speed bound requires a known pose.
     current = {}
     try:
         current = svc.get_positions()
@@ -318,10 +294,8 @@ def zero_servos():
 def release_servos():
     """Move servos to idle position then disable torque (safe release)."""
     svc = _svc_connected()
-    # Stop the vision tracker FIRST — it drives the servo bus from its own
-    # worker thread, so if it's live when we cut torque the arm re-engages.
-    # TODO(reachy): tracker_service reaches into .robot/.bus_lock — port to
-    # MotionService accessors when vision tracking goes multi-device.
+    # Stop the tracker first: it drives the bus from its own thread and would re-engage torque.
+    # TODO(reachy): port tracker_service off .robot/.bus_lock to MotionService accessors.
     if state.tracker_service and state.tracker_service.is_tracking:
         try:
             state.logger.info("release: stopping vision tracker before torque-off")
@@ -336,26 +310,15 @@ def release_servos():
 
 @router.post("/servo/stop", response_model=StatusResponse)
 def stop_servos():
-    """Deterministic stop: abort motion in flight and HOLD. Torque stays ON.
-
-    Not /servo/release, which travels to a rest pose and then cuts torque — a
-    stop that moves first is wrong for anything with legs or wheels
-    (ROBOT-SPEC / COMPATIBILITY rule 6). Not safety-gated either: `motion.
-    stop_always` says a stop is never clamped, delayed or refused, so this
-    route reads no bound and takes no arguments.
-    """
-    # Policy execution is currently dry-run only, but the stop relationship is
-    # part of the interface now: the future executor must be cancelled before
-    # the hardware hold is requested.  This call never generates a target.
+    """Deterministic stop: abort motion in flight and hold with torque on (never safety-gated)."""
+    # The future policy executor must be cancelled before the hardware hold.
     if state.policy_service is not None:
         try:
             state.policy_service.stop()
         except Exception as e:
             state.logger.warning("stop: policy cancellation failed: %s", e)
 
-    # The tracker drives the bus from its own worker thread. Stop it first or it
-    # keeps writing goals and the "stop" holds nothing — same ordering the
-    # release path needs, and for the same reason.
+    # Stop the tracker first, or it keeps writing goals and the stop holds nothing.
     if state.tracker_service and state.tracker_service.is_tracking:
         try:
             state.logger.info("stop: halting vision tracker")
@@ -433,24 +396,9 @@ def aim_servo(req: ServoAimRequest):
 
 @router.post("/servo/search", response_model=ServoSearchResponse)
 def search_for_user(req: Optional[ServoSearchRequest] = None):
-    """Sweep for a subject and report what was found, with a frame to show.
-
-    Deliberately NOT what the look-aim does. The aim runs inside a live turn
-    under a deadline; this takes seconds, so it is only entered when the user
-    asked for it ("where are you?", "find my cup") or accepted an offer after a
-    failed look.
-
-    Seeded from the remembered bearing and expanding outward, so the likely
-    place is checked first.
-
-    Meant to be called with curl DURING a turn, not from a [HW:...] marker:
-    markers fire after the reply is already written, so a marker-driven search
-    can never speak its own result. The response body is the answer, and
-    `image_path` is what the user is shown.
-    """
+    """Sweep for a subject (seeded from the remembered bearing) and report it with a frame."""
     from hal.drivers.tracking.search import search_for_subject
 
-    # An empty body is the common case — every existing caller sends nothing.
     req = req or ServoSearchRequest()
     res = search_for_subject(target=req.target, exhaustive=req.exhaustive)
     where = (f" at yaw {res.found_at_yaw:+.0f}"
@@ -473,17 +421,7 @@ def search_for_user(req: Optional[ServoSearchRequest] = None):
 
 @router.post("/servo/demo", response_model=ServoDemoResponse)
 def range_demo_route():
-    """Perform a narrated tour of the movement range.
-
-    A DEMO, not a search: nothing is detected and nothing is reported. It exists
-    because "show me how far you can move" used to land on the `scan` emotion — a
-    54 deg canned recording narrated as a full turn — for want of anywhere else
-    to go.
-
-    Returns as soon as the demo starts. The performance runs on its own thread
-    and speaks for itself through the filler pools, so the agent's five-second
-    marker budget is never in play.
-    """
+    """Perform a narrated tour of the movement range (demo only; returns once started)."""
     if _sleep_servo_locked():
         state.logger.info("servo/demo ignored -- device is sleeping")
         return {"status": "ok", "started": False, "waypoints": 0,
@@ -501,18 +439,12 @@ def range_demo_route():
 
 @router.get("/servo/bearing")
 def get_user_bearing():
-    """Inspect the remembered user bearing.
-
-    Exists so the estimate can be checked without SSH-ing to the device. The
-    thing to look for is `bearing_deg` settling near where the user actually
-    sits — an estimate mirrored about zero means the yaw sign is inverted, which
-    is silent otherwise because this value is open-loop.
-    """
+    """Inspect the remembered user bearing."""
     from hal.drivers.tracking import user_bearing
 
     est = user_bearing.read_estimate()
     if est is None:
-        # None, not 0.0 — dead ahead is a real bearing, "unknown" must differ.
+        # None, not 0.0: dead ahead is a real bearing.
         return {"status": "ok", "known": False}
     return {
         "status": "ok",
@@ -521,21 +453,13 @@ def get_user_bearing():
         "confidence": est.confidence,
         "samples": est.samples,
         "age_s": round(est.age_s, 1),
-        # The full remembered posture. An empty pose on a known bearing means
-        # the estimate predates the pose schema and has not been re-sighted yet,
-        # so a search will restore direction but not head height.
         "pose": est.pose,
     }
 
 
 @router.post("/servo/bearing/reset", response_model=StatusResponse)
 def reset_user_bearing():
-    """Forget where the user usually is — "I moved you".
-
-    The escape hatch for a relocated lamp. Automatic detection needs several
-    failed predictions before it acts, which is right for avoiding false
-    positives but slow when the user already KNOWS the lamp moved.
-    """
+    """Forget where the user usually is ("I moved you")."""
     from hal.drivers.tracking import user_bearing
 
     user_bearing.clear()
@@ -570,9 +494,7 @@ def start_tracking(req: ServoTrackRequest):
         raise HTTPException(503, "Camera not available")
 
     bbox = tuple(req.bbox) if req.bbox else None
-    # TODO(reachy): tracker_service receives animation_service and reaches into
-    # .robot/.bus_lock internally — port to MotionService accessors when vision
-    # tracking goes multi-device.
+    # TODO(reachy): port tracker_service off .robot/.bus_lock to MotionService accessors.
     ok = state.tracker_service.start(
         bbox=bbox,
         target_label=req.target,

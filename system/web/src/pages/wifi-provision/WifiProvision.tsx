@@ -6,26 +6,12 @@ import { getNetworks, wifiProvision, getSetupStatus } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import type { NetworkItem } from "@/types";
 
-// The provisioning AP's own static IP. Backend's /setup/status fallback used
-// to leak this as `lan_ip` while wlan0 was still in AP mode; even with the
-// server-side filter in place, keep this defensive check so a stale response
-// or a pre-fix device can't strand the operator with a link that's dead the
-// moment the AP tears down.
-//
-// Also used as the "am I actually on the hotspot?" test — /wifi is ONLY
-// meaningful when the browser reached the device via its AP static, which is
-// the hotspot mode where first-time provisioning happens. When the operator
-// hits /wifi via the LAN IP, they already have a working device; the setup
-// wizard is out of scope and we bounce them to /monitor.
+// The AP's own IP: never a valid LAN address, and the "am I on the hotspot?" test.
 const AP_STATIC_IP = "192.168.100.1";
 function isRealLanIp(ip: string | undefined): ip is string {
   return !!ip && ip !== AP_STATIC_IP;
 }
 
-// Key for persisting the last captured device address across browser sessions,
-// so if the operator closes the /wifi tab (or the browser stalls in the
-// AP-teardown window and they refresh), reopening /wifi surfaces the IP
-// again instead of stranding them at "AP is gone, now what?".
 const LAST_DEVICE_STORAGE_KEY = "autonomous.wifi.lastDevice";
 interface LastDevice {
   lanIp: string;
@@ -37,8 +23,6 @@ function readLastDevice(): LastDevice | null {
     const raw = localStorage.getItem(LAST_DEVICE_STORAGE_KEY);
     if (!raw) return null;
     const d = JSON.parse(raw) as LastDevice;
-    // Stale entries (7+ days old) are worse than nothing — the device's DHCP
-    // lease has almost certainly rolled over. Drop them silently.
     if (Date.now() - d.savedAt > 7 * 24 * 60 * 60 * 1000) return null;
     return d;
   } catch { return null; }
@@ -50,39 +34,12 @@ function writeLastDevice(d: { lanIp: string; mac: string }) {
   } catch { /* quota / private mode — best-effort */ }
 }
 
-// WifiProvision — standalone AP-portal page served at /wifi.
-//
-// Purpose: let an operator who is physically on the device's hotspot bring
-// the device online end-to-end WITHOUT depending on autonomous.ai pushing a
-// URL. Wi-Fi is mandatory; LLM + STT + TTS + admin password are optional
-// (empty = keep whatever is on disk).
-//
-// Deliberately separate from /setup — inherits none of the wizard's
-// validation, section-gating, or URL-push state. Body posted to the equally
-// standalone POST /api/device/wifi-provision (gated by apOnlyMiddleware).
-//
-// Post-submit redirect: the AP tears down ~2–5s into the join, so /setup/status
-// is only reachable during that brief window. We poll aggressively and grab
-// `lan_ip` the moment the device publishes it, then show the operator BOTH
-// the captured IP AND the mDNS name (<mac>.local) as reconnect targets — the
-// mDNS fallback covers routers/networks that don't leak the DHCP lease back
-// to the LAN address the poller saw.
+// Standalone AP-portal page (/wifi): Wi-Fi is required, everything else optional (empty = keep on disk).
 
 type Phase = "idle" | "connecting" | "connected" | "failed";
 
 export default function WifiProvision() {
-  // /wifi is a first-time setup screen served from the provisioning AP
-  // (192.168.100.1). Once the operator is on the LAN, they should be on
-  // /monitor — landing on /wifi is either a stale bookmark or a manual URL
-  // edit, so we bounce them straight to the admin app. window.location.replace
-  // (not react-router navigate) so nothing about /wifi ends up in the tab's
-  // history — Back should go where they came from, not back to a redirect.
-  //
-  // wrongOrigin is computed once at first render and used both to short-
-  // circuit the effect below (fires the redirect) and to skip the form paint
-  // (returns null). `.local` mDNS variants are allowed to see the same
-  // fallback screen — some setups reach the device that way during the
-  // AP-teardown window, and the setup wizard is still the right place then.
+  // /wifi only makes sense on the hotspot; elsewhere bounce to /monitor (replace, no history entry).
   const wrongOrigin = typeof window !== "undefined"
     && window.location.hostname !== AP_STATIC_IP
     && !window.location.hostname.endsWith(".local");
@@ -98,16 +55,13 @@ export default function WifiProvision() {
   const [submitting, setSubmitting] = useState(false);
   const [phase, setPhase] = useState<Phase>("idle");
   const [lanIp, setLanIp] = useState("");
-  const [mac, setMac] = useState("");   // e.g. "intern-v2-893f" — mDNS host prefix
+  const [mac, setMac] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [showAdvanced, setShowAdvanced] = useState(false);
-  // set_up_completed from /setup/status. When false (fresh device) the LLM
-  // triplet is promoted out of Advanced and made required — a device with no
-  // brain that joins Wi-Fi just to sit at the admin page saying "chat
-  // unavailable" is worse UX than making the operator paste their key here.
+  // Fresh device (not set up): the LLM fields become required.
   const [provisioned, setProvisioned] = useState<boolean | null>(null);
 
-  // Optional advanced config fields. All empty = "keep on-disk value".
+  // Empty = keep the on-disk value.
   const [llmApiKey, setLlmApiKey] = useState("");
   const [llmBaseUrl, setLlmBaseUrl] = useState("");
   const [llmModel, setLlmModel] = useState("");
@@ -119,8 +73,6 @@ export default function WifiProvision() {
   const [ttsProvider, setTtsProvider] = useState("");
   const [ttsVoice, setTtsVoice] = useState("");
   const [adminPassword, setAdminPassword] = useState("");
-  // Messaging channel. Empty = keep on-disk value. Backend only writes the
-  // sub-tokens (telegram_*, slack_*, discord_*) that match the picked channel.
   const [channel, setChannel] = useState<"" | "telegram" | "slack" | "discord">("");
   const [teleBotToken, setTeleBotToken] = useState("");
   const [teleUserId, setTeleUserId] = useState("");
@@ -130,7 +82,6 @@ export default function WifiProvision() {
   const [discordBotToken, setDiscordBotToken] = useState("");
   const [discordUserId, setDiscordUserId] = useState("");
 
-  // Initial fetch: get mac (for mDNS fallback) + any already-published lan_ip.
   useEffect(() => {
     (async () => {
       try {
@@ -142,10 +93,6 @@ export default function WifiProvision() {
     })();
   }, []);
 
-  // Persist the captured IP the instant we see it: if the operator closes
-  // the tab or the AP-teardown window kills the page mid-flight, they can
-  // still find the device by reopening /wifi later (either from a bookmark
-  // or by rejoining the hotspot) — see the LastKnownBanner below.
   useEffect(() => {
     if (isRealLanIp(lanIp) && mac) writeLastDevice({ lanIp, mac });
   }, [lanIp, mac]);
@@ -169,17 +116,7 @@ export default function WifiProvision() {
 
   useEffect(() => { refreshNetworks(); }, []);
 
-  // Aggressive poller during the connecting phase. Runs while the AP is
-  // still up and grabs the new lan_ip the instant the device publishes it —
-  // that value is our best chance at telling the operator the exact IP to
-  // reconnect to, because once the AP tears down this URL is dead.
-  //
-  // lanIp / mac are tracked via refs (not the state closures) because the
-  // poll's catch block fires MUCH later than the effect setup: by the time
-  // the AP teardown drops the request, the closure's snapshot is often
-  // still "" while state has captured real values one tick earlier. Using
-  // state as an effect dep would restart the poller every tick and race
-  // itself — refs are the correct read-only latest-value handle.
+  // Aggressive poll while the AP is up; refs because the catch fires long after setup.
   const lanIpRef = useRef("");
   const macRef = useRef("");
   useEffect(() => { lanIpRef.current = lanIp; }, [lanIp]);
@@ -201,29 +138,18 @@ export default function WifiProvision() {
           return;
         }
       } catch {
-        // AP tore down mid-poll — expected. Bail out and let the operator
-        // reconnect to their home Wi-Fi and use the captured lan_ip / mDNS.
         if (stopped) return;
-        // AP is gone — this URL is dead. Flip to the success screen with
-        // whatever we managed to capture. It renders three tiers of options
-        // (real IP, mDNS via mac, router-admin instructions) and gracefully
-        // degrades to just the last one when nothing was captured, so even
-        // an empty-refs case is more useful than an eternal "connecting…".
-        // Only stay on the connecting screen if we have LITERALLY nothing —
-        // that means the run probably never made it out the door.
+        // AP gone: show the success screen with whatever was captured.
         const gotIp = isRealLanIp(lanIpRef.current);
         const gotMac = !!macRef.current;
         if (gotIp || gotMac) setPhase("connected");
       }
     };
-    const iv = setInterval(tick, 800);   // faster than /setup (grace window is tiny)
+    const iv = setInterval(tick, 800);
     tick();
     return () => { stopped = true; clearInterval(iv); };
   }, [phase]);
 
-  // Fresh device (never fully set up) MUST have an LLM triplet — the backend
-  // also validates, but front-loading it here catches the mistake before a
-  // pointless network POST + AP teardown cycle.
   const llmRequired = provisioned === false;
   const missingLlm = llmRequired && (!llmApiKey.trim() || !llmBaseUrl.trim() || !llmModel.trim());
 
@@ -236,7 +162,6 @@ export default function WifiProvision() {
     }
     if (missingLlm) {
       setError("This robot isn't set up yet — enter the LLM API key, base URL, and model so the assistant can chat after connecting.");
-      // Force the fields into view even if the operator collapsed them.
       setShowAdvanced(true);
       return;
     }
@@ -257,9 +182,6 @@ export default function WifiProvision() {
         tts_provider: ttsProvider || undefined,
         tts_voice: ttsVoice || undefined,
         admin_password: adminPassword || undefined,
-        // Channel: send the identity only when the operator picked one; the
-        // per-channel sub-tokens ride along and the backend switches on
-        // `channel` before applying them.
         channel: channel || undefined,
         telegram_bot_token: teleBotToken || undefined,
         telegram_user_id: teleUserId || undefined,
@@ -270,17 +192,11 @@ export default function WifiProvision() {
         discord_user_id: discordUserId || undefined,
       });
     } catch {
-      // AP teardown kills the in-flight request on success; the poller
-      // decides the outcome. A truly bad payload would 400 before teardown —
-      // that's rare here (only ssid+password required) and still shows via
-      // the poller.
+      // AP teardown kills the request on success; the poller decides.
     }
     setSubmitting(false);
   };
 
-  // Wrong-origin visits: skip the form entirely so the redirect (fired in
-  // the useEffect above) happens against a blank tree — no flash of setup UI
-  // for an already-provisioned device the operator reached over LAN.
   if (wrongOrigin) return null;
 
   if (phase === "connected") {
@@ -301,12 +217,7 @@ export default function WifiProvision() {
         <Header />
 
         <form onSubmit={onSubmit} noValidate
-          // Suppress Google Password Manager / 1Password / LastPass on the whole
-          // form: Wi-Fi + LLM/STT/TTS keys aren't user-account credentials, so
-          // saving them into a password vault under this origin (192.168.100.1)
-          // is worse than useless — it clutters the vault with entries that
-          // never belong to a real account and pops up the "we saved a strong
-          // password!" dialog every submit.
+          // Keep password managers from saving Wi-Fi/API keys.
           autoComplete="off"
           data-form-type="other"
           style={{
@@ -314,7 +225,6 @@ export default function WifiProvision() {
             borderRadius: 12, padding: "20px 22px",
           }}>
 
-          {/* ── Wi-Fi (required) ── */}
           <SubsectionCard title="Wi-Fi" hint="Required" accent="required">
             <Field label="Network">
               <div style={{ display: "flex", gap: 8 }}>
@@ -350,11 +260,6 @@ export default function WifiProvision() {
             </Field>
           </SubsectionCard>
 
-          {/* ── AI Brain (required for fresh device, optional otherwise) ── */}
-          {/* Hoisted out of Advanced when fresh so the operator can't miss
-              the fields that decide whether chat actually works. On a
-              provisioned device the same block still shows — but placeholder
-              copy makes "leave blank" explicit. */}
           <SubsectionCard title="AI Brain (LLM)"
             accent={llmRequired ? "required" : "default"}
             hint={llmRequired ? "Required — chat needs this" : "Blank = keep current"}>
@@ -375,9 +280,6 @@ export default function WifiProvision() {
             </Field>
           </SubsectionCard>
 
-          {/* ── Messaging Channel (optional, always visible) ── */}
-          {/* Sits between LLM and Advanced because a lot of operators want to
-              set the channel here without expanding the STT/TTS/admin block. */}
           <SubsectionCard title="Messaging Channel"
             hint="Where the agent talks — optional, you can configure this later on the admin page after setup">
             <Field label="Channel">
@@ -442,14 +344,6 @@ export default function WifiProvision() {
             )}
           </SubsectionCard>
 
-          {/* ── Advanced (optional) — collapsed by default ── */}
-          {/* Hint copy is context-aware. This page's whole reason to exist is
-              the "backend / autonomous.ai unavailable" fallback path, so on a
-              FRESH device we tell the operator plainly they can skip these
-              now and finish them from the admin page later — "keep existing"
-              would be nonsense (nothing is on disk yet). On a re-provision
-              (already-set-up device just changing Wi-Fi) the on-disk values
-              genuinely stay, so we keep the original phrasing there. */}
           <button type="button"
             onClick={() => setShowAdvanced((v) => !v)}
             style={{
@@ -573,20 +467,11 @@ export default function WifiProvision() {
   );
 }
 
-// Shows a one-tap link back to whatever device this browser last reached via
-// the /wifi flow. Points at localStorage — survives tab close and browser
-// restart for up to 7 days, so the operator who accidentally lost the success
-// screen mid-teardown can still find their device without hunting the router
-// admin panel.
+// One-tap link to the device this browser last reached via /wifi (kept up to 7 days).
 function LastKnownBanner() {
-  // Age is computed in the effect, not during render: Date.now() is impure and
-  // would make this component re-render to a different value on every pass.
   const [last] = useState<(LastDevice & { ageMin: number }) | null>(() => {
     const d = readLastDevice();
-    // Suppress the banner when the stored IP is the AP static — an older
-    // build wrote it there before the leak was closed, and showing it as
-    // "your device was last at 192.168.100.1" is misleading (that address
-    // only ever means "AP mode is up right now").
+    // Hide a stored AP static IP (written by older builds).
     if (!d || !isRealLanIp(d.lanIp)) return null;
     return { ...d, ageMin: Math.round((Date.now() - d.savedAt) / 60000) };
   });
@@ -642,16 +527,10 @@ function Header() {
 }
 
 function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
-  // mDNS host prefix comes back as "<device-type>-<4 hex>" from
-  // /api/device/setup/status.mac (see handler.SetupStatus). Append `.local`
-  // to get the address Bonjour/Avahi advertises on the LAN.
   const mdns = mac ? `${mac}.local` : "";
   const mdnsHref = mdns ? `http://${mdns}/monitor` : "";
   const ipHref = isRealLanIp(lanIp) ? `http://${lanIp}/monitor` : "";
-  // QR points at the IP first — it works even when the router filters mDNS
-  // multicast (which is common on cheap consumer routers with AP isolation
-  // enabled by default). Falls back to mDNS only when we somehow have a mac
-  // but no IP, since a phone scanning a broken QR has no recourse.
+  // QR prefers the IP: many routers filter mDNS multicast.
   const qrHref = ipHref || mdnsHref;
 
   return (
@@ -684,10 +563,6 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
             </div>
           </div>
 
-          {/* Primary: raw LAN IP. Always works when both machines are on the
-              same LAN — the only failure mode is the router handing out a
-              different lease later, and this address is saved to localStorage
-              so a stale copy can be spotted on the LastKnownBanner. */}
           {isRealLanIp(lanIp) && (
             <div style={{
               padding: "14px 16px", marginBottom: 12,
@@ -706,8 +581,6 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
             </div>
           )}
 
-          {/* QR: scans with phone that's on the same LAN. Uses the IP (not
-              mDNS) so it works regardless of the router's multicast policy. */}
           {qrHref && (
             <div style={{
               padding: "14px", marginBottom: 12,
@@ -726,11 +599,6 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
             </div>
           )}
 
-          {/* mDNS: nice when it works, but many home routers filter multicast
-              between clients (AP isolation / IGMP snooping) — silently, with
-              no way to tell from the UI, so `.local` links look broken. We
-              show it as an OPTION with a plain-language caveat instead of
-              promoting it as the primary. */}
           {mdns && (
             <div style={{ marginBottom: 12 }}>
               <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
@@ -746,7 +614,6 @@ function SuccessPanel({ lanIp, mac }: { lanIp: string; mac: string }) {
             </div>
           )}
 
-          {/* Last resort: router admin page + expected device name. */}
           <div style={{ fontSize: 10, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 6 }}>
             Last resort · router admin page
           </div>
@@ -833,7 +700,6 @@ function LinkCard({ label, href, text, accent }: {
   );
 }
 
-// ─── shared bits ────────────────────────────────────────────────────────────
 const selectStyle: React.CSSProperties = {
   boxSizing: "border-box",
   background: C.bg, border: `1px solid ${C.border}`,
@@ -858,20 +724,7 @@ const errorBox: React.CSSProperties = {
   display: "flex", alignItems: "center", gap: 8, marginTop: 12,
 };
 
-// SubsectionCard wraps a related group of inputs in a bordered card so the
-// operator can visually distinguish "this is my TTS block" from "this is my
-// Channel block" — instead of one long stack of labels where the ownership
-// of each field blurs.
-//
-// Visual design:
-//   - Elevated look via a slightly-brighter background + stronger 1.5px
-//     border than the page surface, so cards read as distinct chips against
-//     the outer form.
-//   - Subtle amber-tinted header divider under the title so the eye lands on
-//     the section name first.
-//   - `accent="required"` swaps the border/background/title to amber so the
-//     LLM section (or any required block) reads as the visual anchor of the
-//     form — the operator can't miss what they have to fill in.
+// Bordered card grouping related inputs.
 function SubsectionCard({ title, hint, accent = "default", children }: {
   title: string;
   hint?: string;
@@ -944,8 +797,6 @@ function PasswordInput({ value, onChange, show, onToggle, placeholder, disabled 
   show?: boolean; onToggle?: (v: boolean) => void;
   placeholder?: string; disabled?: boolean;
 }) {
-  // Local show/hide when caller doesn't manage it (used for all the advanced
-  // fields — they each have their own eye without lifting state up).
   const [localShow, setLocalShow] = useState(false);
   const visible = show ?? localShow;
   const toggle = onToggle ?? setLocalShow;
@@ -954,13 +805,7 @@ function PasswordInput({ value, onChange, show, onToggle, placeholder, disabled 
       <input type={visible ? "text" : "password"} value={value}
         onChange={(e) => onChange(e.target.value)}
         placeholder={placeholder} disabled={disabled}
-        // Suppress Chrome's "strong password" popup + 1Password / LastPass
-        // vault prompts. These fields are Wi-Fi / API-key inputs — not login
-        // credentials — so saving them under this origin's password vault
-        // just clutters the operator's stored passwords. `autoComplete="off"`
-        // alone isn't enough (Chrome ignores it on type=password since ~2015)
-        // — the data-* hints + a non-standard `name` are what actually stop
-        // the suggestion popup.
+        // autoComplete="off" alone is ignored on password fields; the data-* hints and non-standard name stop the vault popup.
         autoComplete="off"
         name="field-a"
         data-form-type="other"

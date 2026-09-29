@@ -9,11 +9,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// fakeGateway embeds domain.AgentGateway so only the methods the Runner
-// actually calls are real; any other call would panic on the nil embedded
-// interface, which is fine because these tests never exercise them. Mirrors
-// the fakeGateway pattern used elsewhere in this repo (e.g.
-// system/device/channel_test.go).
+// fakeGateway implements only the AgentGateway methods the Runner calls; others panic.
 type fakeGateway struct {
 	domain.AgentGateway
 	busy          bool
@@ -21,10 +17,7 @@ type fakeGateway struct {
 	sendErr       error
 	sent          []string
 
-	// spoken records Speak() calls, kept SEPARATE from sent so a test can
-	// prove not just that the right text went out but that it went out on the
-	// right transport — an "agent" task landing in spoken (or vice versa)
-	// would otherwise look identical to a pass.
+	// spoken records Speak() calls, separate from sent to verify the transport.
 	spoken   []string
 	speakErr error
 }
@@ -55,14 +48,8 @@ func newTestStore(t *testing.T) *Store {
 	return NewStore(filepath.Join(t.TempDir(), "schedules.json"))
 }
 
-// seedJitteredSchedule stores sch (and any others already in schedules) via
-// SyncSchedules — the SAME path a real schedule.sync uses — so NextRunAt comes
-// back with this device's real jitter applied, exactly like production data.
-// Deliberately NOT a hand-picked "clean" timestamp: a clean value is what let
-// CRITICAL-2 (fire() feeding a jittered NextRunAt back into NextRun without
-// reversing the jitter first) slip past the first review — a hand-set exact
-// value can accidentally dodge that whole class of bug. Returns the resulting
-// NextRunAt for the LAST schedule passed, for tests that seed one at a time.
+// seedJitteredSchedule stores schedules via SyncSchedules so NextRunAt carries real jitter.
+// Returns the NextRunAt of the last schedule.
 func seedJitteredSchedule(t *testing.T, store *Store, computedFrom time.Time, deviceID string, schedules ...Schedule) time.Time {
 	t.Helper()
 	_, nextRunAt, err := SyncSchedules(store, schedules, "UTC", deviceID, computedFrom)
@@ -107,14 +94,7 @@ func TestRunner_FiresDueScheduleViaSendSystemChatMessage(t *testing.T) {
 	}
 }
 
-// Regression for CRITICAL-2 (final review): fire() computes and persists the
-// next occurrence one statement before reporting, but that value used to
-// never reach the RunReport handed to the report callback — so the
-// schedule.run ack never carried a fresh next-fire time at all, and the web
-// UI's cadence column got stuck on "now" permanently after a schedule's
-// first run (formatCadence.ts treats any non-positive diff as "now").
-// RunReport.NextRunAt must equal exactly what fire() just persisted to the
-// store for the same fire.
+// RunReport.NextRunAt must equal the next occurrence fire() persisted.
 func TestRunner_ReportsFreshlyComputedNextRunAt(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -142,10 +122,7 @@ func TestRunner_ReportsFreshlyComputedNextRunAt(t *testing.T) {
 	}
 }
 
-// Regression for CRITICAL-3: RunReport.RunID must be the id
-// SendSystemChatMessage itself returned (the fake gateway returns "ok"), NOT a
-// locally fabricated "sched-<id>-<timestamp>" string — and Summary must be the
-// schedule's name on success, never the run id.
+// RunID is the gateway's returned id and Summary is the schedule name on success.
 func TestRunner_ReportsGatewayRunIDNotLocalID(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -172,9 +149,7 @@ func TestRunner_ReportsGatewayRunIDNotLocalID(t *testing.T) {
 	}
 }
 
-// Regression for CRITICAL-3, failure branch: no run ever started, so RunID
-// must be empty (mirroring what SendSystemChatMessage itself returns on
-// error), and Summary must carry the actual error text.
+// On send failure RunID is empty and Summary carries the error.
 func TestRunner_ReportsSendErrorAsSummaryWithEmptyRunID(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -201,9 +176,7 @@ func TestRunner_ReportsSendErrorAsSummaryWithEmptyRunID(t *testing.T) {
 	}
 }
 
-// Regression for I5: a send failure must NOT advance NextRunAt — otherwise a
-// transient failure (e.g. a WS reconnect exactly at the due time) permanently
-// loses that occurrence instead of being retried on a later tick.
+// A send failure must not advance NextRunAt (I5).
 func TestRunner_SendFailureDoesNotAdvanceNextRunAt(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -232,8 +205,6 @@ func TestRunner_SendFailureDoesNotAdvanceNextRunAt(t *testing.T) {
 		t.Fatalf("the first failure of an occurrence must ack: reports = %+v", reports)
 	}
 
-	// Still within the catch-up window on the next tick -> retried, but the
-	// retry's ack is suppressed (see the dedicated suppression tests below).
 	r.tick(now.Add(time.Minute))
 	if len(gw.sent) != 2 {
 		t.Fatalf("sent = %v, want a retry attempt on the next tick", gw.sent)
@@ -243,15 +214,7 @@ func TestRunner_SendFailureDoesNotAdvanceNextRunAt(t *testing.T) {
 	}
 }
 
-// IMPORTANT (phase-5 review, round 2): I5's retry means a persistently
-// failing send (agent WebSocket down, MQTT fd_channel up — the two are
-// independent transports, so this is genuinely reachable, not theoretical)
-// gets attempted on every tick for the full 30-minute catch-up window —
-// roughly 31 attempts for ONE missed occurrence. Each attempt used to also
-// invoke the report callback, and the backend writes one schedule_run history
-// row PER ack, so one missed briefing became "failed 31 times". The retries
-// must keep happening (that part is correct); only ONE failure ack may be
-// emitted per occurrence.
+// Retries continue every tick, but only one failure ack is emitted per occurrence.
 func TestRunner_SuppressesRepeatedFailureAcksWithinSameOccurrence(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -264,10 +227,7 @@ func TestRunner_SuppressesRepeatedFailureAcksWithinSameOccurrence(t *testing.T) 
 	var reports []RunReport
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 
-	// Drive the ticker across the FULL 30-minute catch-up window: minute 0
-	// through minute 31 inclusive (32 ticks). Minutes 0-30 (31 ticks) are
-	// still within the window and each attempts a send; minute 31 is past it
-	// and re-anchors instead of attempting anything.
+	// Minutes 0-30 attempt a send; minute 31 is past the window and re-anchors.
 	for i := 0; i <= 31; i++ {
 		r.tick(scheduledAt.Add(time.Duration(i) * time.Minute))
 	}
@@ -283,9 +243,7 @@ func TestRunner_SuppressesRepeatedFailureAcksWithinSameOccurrence(t *testing.T) 
 	}
 }
 
-// A success must always ack, even when it follows earlier suppressed
-// failures in the same occurrence — that outcome is exactly what the backend
-// needs to hear once the agent recovers.
+// A success acks even after suppressed failures in the same occurrence.
 func TestRunner_SuccessAfterSuppressedFailuresStillAcks(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -298,15 +256,12 @@ func TestRunner_SuccessAfterSuppressedFailuresStillAcks(t *testing.T) {
 	var reports []RunReport
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 
-	// Two failed attempts within the same occurrence -> exactly one (failure) ack.
 	r.tick(scheduledAt)
 	r.tick(scheduledAt.Add(time.Minute))
 	if len(reports) != 1 || reports[0].Status != "failure" {
 		t.Fatalf("after 2 failures, reports = %+v, want exactly 1 failure ack", reports)
 	}
 
-	// Agent recovers -> the next attempt succeeds -> must ack despite the
-	// earlier suppressed failure(s).
 	gw.sendErr = nil
 	r.tick(scheduledAt.Add(2 * time.Minute))
 	if len(reports) != 2 || reports[1].Status != "success" {
@@ -314,11 +269,7 @@ func TestRunner_SuccessAfterSuppressedFailuresStillAcks(t *testing.T) {
 	}
 }
 
-// The next occurrence must start clean: once a schedule ages past the
-// catch-up window and is re-anchored, its stale LastFailedOccurrence marker
-// no longer matches the NEW NextRunAt, so the next occurrence's first failure
-// acks again rather than being wrongly suppressed by the previous one's
-// already-ack'd marker.
+// After re-anchoring, the next occurrence's first failure acks again.
 func TestRunner_NextOccurrenceAcksItsFirstFailureAgain(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -331,7 +282,6 @@ func TestRunner_NextOccurrenceAcksItsFirstFailureAgain(t *testing.T) {
 	var reports []RunReport
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 
-	// Exhaust the catch-up window for the FIRST occurrence: exactly one ack.
 	for i := 0; i <= 31; i++ {
 		r.tick(scheduledAt.Add(time.Duration(i) * time.Minute))
 	}
@@ -339,8 +289,6 @@ func TestRunner_NextOccurrenceAcksItsFirstFailureAgain(t *testing.T) {
 		t.Fatalf("first occurrence: reports = %+v, want exactly 1", reports)
 	}
 
-	// It has now been re-anchored to the next occurrence. Drive a tick right
-	// at that new due time: its first failure must ack again.
 	got, _ := store.Get("s1")
 	if got.NextRunAt.IsZero() {
 		t.Fatal("expected a re-anchored NextRunAt for the next occurrence")
@@ -355,18 +303,7 @@ func TestRunner_NextOccurrenceAcksItsFirstFailureAgain(t *testing.T) {
 	}
 }
 
-// Regression for CRITICAL-2: fire() used to feed the JITTERED NextRunAt
-// straight back into NextRun, which (for roughly half of all (device,
-// schedule) id pairs — whichever hash to a NEGATIVE offset) never advances:
-// the schedule re-fires on every 1-minute tick until it ages past the
-// 30-minute catch-up window. "device-3"/"s1" is used deliberately (not
-// "device-1"): JitterOffset("device-3","s1") is confirmed negative
-// (-2m47s at time of writing), which is exactly the case that triggered the
-// bug — a positive-jitter id pair would pass even on the broken code and this
-// test would be worthless as a regression guard. Seeding via SyncSchedules
-// (not a hand-picked clean timestamp) is what actually produces a jittered
-// value in the first place. Simulating 40 ticks across 40 simulated minutes
-// must produce EXACTLY ONE send.
+// A fired occurrence must not re-fire; device-3/s1 has negative jitter, the case that broke.
 func TestRunner_DoesNotReFireWithinTheSameOccurrence(t *testing.T) {
 	const deviceID = "device-3"
 	if off := JitterOffset(deviceID, "s1"); off >= 0 {
@@ -414,7 +351,7 @@ func TestRunner_DefersWhenGatewayBusy(t *testing.T) {
 	}
 }
 
-// 29 minutes overdue -> still within the catch-up window, fires exactly once.
+// 29 minutes overdue fires exactly once.
 func TestRunner_BootCatchUpFiresRecentlyOverdueOnce(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -432,16 +369,13 @@ func TestRunner_BootCatchUpFiresRecentlyOverdueOnce(t *testing.T) {
 		t.Fatalf("sent = %v, want exactly 1", gw.sent)
 	}
 
-	// A tick moments later must not fire it again — NextRunAt has moved on to
-	// tomorrow.
 	r.tick(now.Add(time.Minute))
 	if len(gw.sent) != 1 {
 		t.Fatalf("fired again on a later tick: sent = %v", gw.sent)
 	}
 }
 
-// 31 minutes overdue -> past the catch-up window: skipped, not fired, and
-// re-anchored forward so it doesn't queue up a burst of missed runs.
+// 31 minutes overdue is re-anchored forward, not fired.
 func TestRunner_BootCatchUpSkipsStaleOverdue(t *testing.T) {
 	store := newTestStore(t)
 	sch := Schedule{
@@ -467,8 +401,7 @@ func TestRunner_BootCatchUpSkipsStaleOverdue(t *testing.T) {
 	}
 }
 
-// Two schedules due in the same tick: the second must wait for the first
-// rather than firing concurrently on top of it.
+// Two schedules due in one tick fire sequentially, never concurrently.
 func TestRunner_SingleFlight(t *testing.T) {
 	store := newTestStore(t)
 	computedFrom := time.Date(2026, 8, 26, 7, 0, 0, 0, time.UTC)
@@ -479,7 +412,6 @@ func TestRunner_SingleFlight(t *testing.T) {
 		t.Fatalf("SyncSchedules: %v", err)
 	}
 	scheduledAt1, scheduledAt2 := nextRunAt["s1"], nextRunAt["s2"]
-	// Drive both from whichever is later, so a tick sees both as due at once.
 	now := scheduledAt1
 	if scheduledAt2.After(now) {
 		now = scheduledAt2
@@ -498,7 +430,6 @@ func TestRunner_SingleFlight(t *testing.T) {
 		t.Errorf("deferred schedule's NextRunAt must be untouched: got %v, want %v", got2.NextRunAt, scheduledAt2)
 	}
 
-	// Once the agent frees up, the deferred one gets its turn on a later tick.
 	gw.busy = false
 	r.tick(now.Add(time.Minute))
 	if len(gw.sent) != 2 || gw.sent[1] != "two" {
@@ -508,9 +439,7 @@ func TestRunner_SingleFlight(t *testing.T) {
 
 func TestRunner_DisabledScheduleNeverFires(t *testing.T) {
 	store := newTestStore(t)
-	// Disabled schedules get no computed NextRunAt from SyncSchedules at all
-	// (see its doc comment) — set one directly here to prove that even a
-	// disabled schedule that LOOKS due must never fire.
+	// SyncSchedules gives disabled rows no NextRunAt; set one to prove it still never fires.
 	scheduledAt := time.Date(2026, 8, 26, 8, 0, 0, 0, time.UTC)
 	now := scheduledAt.Add(time.Minute)
 

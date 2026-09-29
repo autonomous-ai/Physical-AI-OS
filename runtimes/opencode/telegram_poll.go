@@ -14,30 +14,16 @@ import (
 	"time"
 )
 
-// Device-owned Telegram inbound for the OpenCode runtime.
-//
-// The OpenCode CLI has no channel layer of its own (unlike PicoClaw, whose
-// runtime binary polls the Telegram Bot API itself), so os-server owns the
-// receive loop: one goroutine long-polls getUpdates and injects each accepted
-// DM as a regular chat turn. The loop is started from StartWS, i.e. it runs
-// inside this service's lifecycle and therefore ONLY while opencode is the
-// active runtime — the openclaw/hermes gateway pollers can never compete for
-// getUpdates (Telegram 409s concurrent pollers; the hermes lesson).
-//
-// Credentials are read fresh from Device config on every iteration
-// (config.TelegramBotToken / TelegramUserID), so saving or rotating them
-// needs no restart. Replies are routed back to the originating chat by
-// emitFinal via the telegramRuns tracker (translator.go); TTS is suppressed
-// for these turns (MarkSilentRun).
+// The OpenCode CLI has no channel layer of its own (unlike PicoClaw, whose runtime binary polls the
+// Telegram Bot API itself), so os-server owns the receive loop: one goroutine long-polls getUpdates
+// and injects each accepted DM as a regular chat turn.
 
 const (
 	// telegramOffsetFile persists the next getUpdates offset across restarts so
-	// already-processed updates are not re-injected. Lives under OpenCode's own
-	// data dir (wiped by factory reset, like telegram_targets.json).
+	// already-processed updates are not re-injected.
 	telegramOffsetFile = "/root/.opencode/telegram_offset.json"
 
-	// telegramAPIBaseDefault is the production Bot API host. Tests override the
-	// service field telegramAPIBase with an httptest URL.
+	// telegramAPIBaseDefault is the production Bot API host.
 	telegramAPIBaseDefault = "https://api.telegram.org"
 
 	// telegramPollTimeoutS is the getUpdates long-poll window in seconds (the
@@ -110,8 +96,7 @@ type telegramOffsetState struct {
 }
 
 // startTelegramPoll runs the device-owned Telegram receive loop until ctx is
-// cancelled. Started ONCE from StartWS (before its reconnect loop), so it
-// survives WS reconnects and dies with the gateway lifecycle.
+// cancelled. Runs only while this runtime is active: Telegram 409s concurrent pollers.
 func (s *OpenCodeService) startTelegramPoll(ctx context.Context) {
 	offset := s.loadTelegramOffset()
 	// Client timeout must exceed the long-poll window or every healthy idle
@@ -145,7 +130,7 @@ func (s *OpenCodeService) startTelegramPoll(ctx context.Context) {
 			continue
 		}
 		if len(updates) == 0 {
-			continue // long-poll window expired with nothing new
+			continue
 		}
 		allowedUser := s.config.TelegramUserID
 		for _, u := range updates {
@@ -153,7 +138,6 @@ func (s *OpenCodeService) startTelegramPoll(ctx context.Context) {
 				offset = u.UpdateID + 1
 			}
 			if ctx.Err() != nil {
-				// Persist what was consumed before bailing out.
 				s.saveTelegramOffset(offset)
 				return
 			}
@@ -164,9 +148,9 @@ func (s *OpenCodeService) startTelegramPoll(ctx context.Context) {
 }
 
 // handleTelegramUpdate filters one update and injects the accepted message as
-// a chat turn. Accepted = non-empty text message, private chat, sender id ==
-// config.TelegramUserID. Everything else is skipped at debug level — the
-// offset was already advanced by the caller, so rejects are never re-delivered.
+// a chat turn.
+// Everything else is skipped at debug level — the offset was already advanced by the caller, so
+// rejects are never re-delivered.
 func (s *OpenCodeService) handleTelegramUpdate(ctx context.Context, u tgUpdate, allowedUser string) {
 	msg := u.Message
 	if msg == nil || strings.TrimSpace(msg.Text) == "" {
@@ -188,27 +172,17 @@ func (s *OpenCodeService) handleTelegramUpdate(ctx context.Context, u tgUpdate, 
 		return
 	}
 	chatID := strconv.FormatInt(msg.Chat.ID, 10)
-	// Remember the chat so outbound Broadcast (proactive alerts) reaches it.
 	s.upsertTelegramTarget(chatID, msg.Chat.Type)
-	// Coding-sessions intercept: a /command, or a plain message while this chat
-	// is attached to a folder's opencode session, is handled here (per-turn
-	// `opencode run --session <id>`) instead of the device-main persona turn below
-	// (telegram_coding.go).
 	if s.handleTelegramCoding(ctx, msg.Text, chatID) {
 		return
 	}
-	// Prefix sender metadata so the agent knows who is talking and on which
-	// channel (openclaw's telegram plugin does the same) — the persona can
-	// address the sender by name and keep the reply channel-appropriate.
 	turnText := fmt.Sprintf("[telegram] Message from %s:\n%s", msg.From.label(), msg.Text)
 	s.injectTelegramTurn(ctx, turnText, chatID)
 }
 
 // injectTelegramTurn waits for the agent to go idle, then sends the message as
 // a regular chat turn with flow source "telegram" (chat_input / chat_send flow
-// events fire as usual, so Flow Monitor shows the origin). The runID is
-// tracked in telegramRuns so emitFinal DMs the reply back to chatID, and
-// marked silent so the reply is not spoken over TTS.
+// events fire as usual, so Flow Monitor shows the origin).
 func (s *OpenCodeService) injectTelegramTurn(ctx context.Context, text, chatID string) {
 	for s.IsBusy() {
 		if !sleepCtx(ctx, telegramBusyPoll) {
@@ -217,7 +191,7 @@ func (s *OpenCodeService) injectTelegramTurn(ctx context.Context, text, chatID s
 	}
 	reqID, runID := s.NextChatRunID()
 	s.markTelegramRun(runID, chatID)
-	s.MarkSilentRun(runID) // reply goes back to the Telegram chat, not TTS
+	s.MarkSilentRun(runID)
 	send := s.telegramSendTurn
 	if send == nil {
 		send = func(text, reqID, runID string) error {
@@ -226,18 +200,13 @@ func (s *OpenCodeService) injectTelegramTurn(ctx context.Context, text, chatID s
 		}
 	}
 	if err := send(text, reqID, runID); err != nil {
-		// Un-mark so the trackers don't leak. The message is dropped (Telegram
-		// will not re-deliver past the advanced offset); the user sees no reply
-		// and can resend.
+		// Un-mark so the trackers don't leak.
 		s.consumeTelegramRun(runID)
 		s.ConsumeSilentRun(runID)
 		slog.Error("telegram turn injection failed",
 			"component", "opencode", "runID", runID, "chatID", chatID, "error", err)
 		return
 	}
-	// Keep Telegram's "typing…" indicator alive while the turn runs (openclaw/
-	// hermes channel plugins do the same). Stops when emitFinal/handleError
-	// consumes the run (reply sent) or after the safety cap.
 	go s.telegramTypingKeeper(ctx, chatID, runID)
 }
 
@@ -247,7 +216,7 @@ const telegramTypingLifetime = 10 * time.Minute
 
 // telegramTypingKeeper fires sendChatAction(typing) immediately and then every
 // 4s (the indicator expires after ~5s) until the run is consumed by emitFinal
-// or handleError. Best-effort: send errors are logged at debug and ignored.
+// or handleError.
 func (s *OpenCodeService) telegramTypingKeeper(ctx context.Context, chatID, runID string) {
 	deadline := time.Now().Add(telegramTypingLifetime)
 	for {
@@ -326,8 +295,7 @@ func (s *OpenCodeService) telegramOffsetFilePath() string {
 	return telegramOffsetFile
 }
 
-// loadTelegramOffset reads the persisted next-update offset. Returns 0
-// (deliver everything pending) on first run or unreadable state.
+// loadTelegramOffset reads the persisted next-update offset.
 func (s *OpenCodeService) loadTelegramOffset() int64 {
 	data, err := os.ReadFile(s.telegramOffsetFilePath())
 	if err != nil {

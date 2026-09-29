@@ -14,14 +14,10 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// hermesSessionHeader is the response header Hermes uses to publish the
-// server-side session UUID (see docs/agentic/hermes.md §3). One UUID per conversation;
-// stays stable across reconnects.
+// hermesSessionHeader is the response header Hermes uses to publish the server-side session UUID (see docs/agentic/hermes.md §3).
 const hermesSessionHeader = "X-Hermes-Session-Id"
 
-// streamRequest is the on-wire POST body to /v1/responses. Fields are
-// pointer-typed (or omitempty) so we never accidentally serialise an
-// unconfigured value (Hermes is strict about input shape).
+// streamRequest is the on-wire POST body to /v1/responses.
 type streamRequest struct {
 	Model        string `json:"model"`
 	Conversation string `json:"conversation,omitempty"`
@@ -31,9 +27,7 @@ type streamRequest struct {
 	Title        string `json:"title,omitempty"`
 }
 
-// inputContent represents one element of the multi-part input array used for
-// vision turns. Plain text turns can pass Input: "<string>" instead and skip
-// this entirely — Hermes accepts both shapes.
+// inputContent represents one element of the multi-part input array used for vision turns.
 type inputContent struct {
 	Type     string `json:"type"`                // "input_text" | "input_image"
 	Text     string `json:"text,omitempty"`      // when Type == "input_text"
@@ -45,17 +39,9 @@ type inputMessage struct {
 	Content []inputContent `json:"content"`
 }
 
-// streamResult is what the SSE consumer hands back once response.completed
-// arrives: the response.id (for caching as last_response_id), full assistant
-// text (caller may want for sync send-and-wait paths), and any reported
-// session UUID.
+// streamResult carries the response.id, full assistant text and session UUID from response.completed.
 type streamResult struct {
-	// DeviceRunID is the device-side idempotency key (device-chat-N-…) the turn
-	// was started with. The translator emits THIS as the runId on every WSEvent
-	// (lifecycle/tool/assistant/chat) instead of Hermes's own response.id, so the
-	// web monitor — which correlates replies by the runId returned from its POST —
-	// matches them, exactly like OpenClaw 5.4+ echoing the idempotencyKey. Without
-	// it, events carry resp_… and the web never renders the hermes reply.
+	// DeviceRunID is the device-side idempotency key (device-chat-N-…) the turn was started with.
 	DeviceRunID string
 	ResponseID  string
 	SessionID   string
@@ -65,13 +51,7 @@ type streamResult struct {
 	ErrorText   string
 }
 
-// postStream issues POST /v1/responses with stream:true and reads the SSE
-// stream until response.completed | response.failed | context cancel | EOF.
-// Translated domain.WSEvent frames are dispatched via dispatch() one by one.
-//
-// The HTTP request is built with NO client-side timeout (the client's
-// Timeout is 0); ctx is the only cancellation handle. Long agent turns are
-// expected (minutes is normal), so a fixed timeout would cut them short.
+// postStream issues POST /v1/responses with stream:true and reads the SSE stream until response.completed | response.failed | context cancel | EOF.
 func (s *HermesService) postStream(ctx context.Context, deviceRunID string, body streamRequest, dispatch func(domain.WSEvent)) (streamResult, error) {
 	bodyBytes, err := json.Marshal(body)
 	if err != nil {
@@ -95,8 +75,6 @@ func (s *HermesService) postStream(ctx context.Context, deviceRunID string, body
 	}
 	defer resp.Body.Close()
 
-	// Capture the session UUID before reading the stream so even an immediate
-	// non-200 response still updates the in-memory key for monitor display.
 	if sid := resp.Header.Get(hermesSessionHeader); sid != "" {
 		s.sessionUUID.Store(sid)
 	}
@@ -109,9 +87,7 @@ func (s *HermesService) postStream(ctx context.Context, deviceRunID string, body
 	return s.readSSE(ctx, deviceRunID, resp.Body, dispatch)
 }
 
-// readSSE consumes the SSE byte stream line-by-line into (event, data) pairs
-// and forwards each to translateAndDispatch. Buffer is sized for the largest
-// tool output a single function_call_output frame might carry (8MB).
+// readSSE consumes the SSE byte stream line-by-line into (event, data) pairs and forwards each to translateAndDispatch.
 func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io.Reader, dispatch func(domain.WSEvent)) (streamResult, error) {
 	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 0, 1<<20), 8<<20)
@@ -144,7 +120,6 @@ func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io
 		default:
 		}
 		line := scanner.Text()
-		// Blank line terminates an event block per SSE spec.
 		if line == "" {
 			flush()
 			if result.Terminal {
@@ -152,7 +127,6 @@ func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io
 			}
 			continue
 		}
-		// Comment lines per SSE spec (used by some servers for keepalive).
 		if strings.HasPrefix(line, ":") {
 			continue
 		}
@@ -171,11 +145,9 @@ func (s *HermesService) readSSE(ctx context.Context, deviceRunID string, body io
 			break
 		}
 	}
-	// Final flush — some servers don't trail with a blank line on close.
 	flush()
 
 	if err := scanner.Err(); err != nil {
-		// Network drop mid-stream. Treat as turn drop per hermes.md §18 #5.
 		slog.Warn("SSE read error mid-stream", "component", "hermes", "error", err)
 		return result, fmt.Errorf("sse read: %w", err)
 	}

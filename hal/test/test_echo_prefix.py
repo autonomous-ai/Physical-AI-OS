@@ -1,12 +1,4 @@
-"""Stripping the reply's own tail off the front of a transcript.
-
-A turn captured on the heels of a reply opens with a pre-roll that starts
-BEFORE the user did, so the last words of that reply sit in front of theirs. The
-existing whole-transcript filter (sensing_sender.is_echo) cannot help: it drops
-the transcript entirely, which would throw the user's turn away with the echo.
-
-Every case here is a transcript observed on lamp-0c89, 27/08/2026.
-"""
+"""Stripping the reply's own tail off the front of a transcript."""
 
 from hal.drivers.voice._internal.session_finalize import strip_echo_prefix
 

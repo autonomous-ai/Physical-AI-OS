@@ -1,9 +1,5 @@
 package gatewayd
 
-// The App Server protocol is JSON-RPC over one JSON object per stdio line.
-// Keep this deliberately small: gatewayd exposes the legacy Codex exec event
-// shape to the rest of OS, while this file owns only the protocol boundary.
-
 import (
 	"bufio"
 	"context"
@@ -59,7 +55,6 @@ func startAppServer(ctx context.Context, s *Server) (*appServer, error) {
 			ready <- fmt.Errorf("initialize app-server: %s", rpcErr)
 			return
 		}
-		// JSON-RPC requires initialized after the initialize response.
 		_ = a.notify("initialized", map[string]any{})
 		ready <- nil
 	})
@@ -170,10 +165,6 @@ func (s *Server) startAppTurn(payload turnPayload) {
 		app.request("turn/start", map[string]any{"threadId": thread, "input": input, "cwd": s.cfg.Workspace}, func(result, rpcErr json.RawMessage) {
 			if len(rpcErr) > 0 {
 				if retryFreshOnMissingThread && missingAppThread(rpcErr) {
-					// App Server owns threads in memory. A gateway restart can
-					// therefore reload a persisted thread id that the new child no
-					// longer knows. Drop only that invalid session and retry this
-					// same device turn once on a fresh thread.
 					log.Printf("%s persisted App Server thread is gone — retrying fresh", logPrefix)
 					s.clearSession()
 					startFresh()
@@ -256,8 +247,6 @@ func (s *Server) steerAppTurn(p turnPayload) {
 		return
 	}
 	p = s.prepareSkill(s.lifetimeContext, p)
-	// Selection can take up to three seconds; the previous turn may finish
-	// meanwhile. Recheck ownership before steering so a new request is not lost.
 	s.mu.Lock()
 	app, thread, turn = s.app, s.threadID, s.activeTurnID
 	s.mu.Unlock()
@@ -268,23 +257,17 @@ func (s *Server) steerAppTurn(p turnPayload) {
 	app.request("turn/steer", map[string]any{"threadId": thread, "expectedTurnId": turn, "input": appSteerInput(p)}, func(_ json.RawMessage, rpcErr json.RawMessage) {
 		if len(rpcErr) > 0 {
 			log.Printf("%s steer rejected: %s", logPrefix, rpcErr)
-			// A steered input has no independent terminal turn event. Tell the
-			// client that this specific request was rejected so it can retire its
-			// pending correlation without ending the currently active turn.
 			s.sendJSON(map[string]any{"type": "bridge.rejected", "error": string(rpcErr), "request_id": p.RequestID, "run_id": p.RunID})
 			return
 		}
 		// The active App Server turn retains the first request/run correlation.
-		// Acknowledge this follow-up explicitly: otherwise the OS client keeps a
-		// second pending run forever, because it will never receive its own
-		// turn.completed frame.
+		// Acknowledge this follow-up explicitly: otherwise the OS client keeps a second pending run
+		// forever, because it will never receive its own turn.completed frame.
 		s.sendJSON(map[string]any{"type": "bridge.steered", "request_id": p.RequestID, "run_id": p.RunID})
 	})
 }
 
 // User requests can arrive while the model is handling a passive sensor event.
-// Keep their response address intact and explicitly distinguish them from the
-// silent realtime history synchronization that also uses turn/steer.
 func appSteerInput(p turnPayload) []map[string]any {
 	if strings.Contains(p.Content, "[harness-reply run_id=") {
 		p.Content = "[system-routing: New direct user request during the active turn. Prioritize this request over unfinished passive sensing or wellbeing work. Use this request's harness-reply address if delegating. When the user requests work from a computer agent, use harness-use; do not search the device filesystem for that computer's project. A steer acknowledgement is not task completion: handle the request before ending the turn.]\n" + p.Content
@@ -326,8 +309,7 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		} `json:"turn"`
 		// Some codex builds put usage on the turn-completed notification (top
 		// level or under `turn`); 0.150.1 sends it on thread/tokenUsage/updated
-		// instead. Accept every shape — usageOf picks the first populated one —
-		// so the device turn card keeps showing tokens across codex upgrades.
+		// instead.
 		Usage      json.RawMessage `json:"usage"`
 		TokenUsage struct {
 			Last  json.RawMessage `json:"last"`
@@ -340,9 +322,7 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 	case "thread/tokenUsage/updated":
 		// Token usage does NOT ride turn/completed — codex-rs 0.150.1 pushes it
 		// on its own notification, in camelCase, ahead of the turn's terminal
-		// event. `last` is this turn; `total` is the whole thread. Stash the
-		// per-turn block and attach it to turn.completed below, which is the
-		// frame the translator reads usage from.
+		// event.
 		s.storeAppUsage(p.TokenUsage.Last, p.TokenUsage.Total)
 	case "turn/started":
 		s.mu.Lock()
@@ -383,7 +363,6 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 		s.resetPending = false
 		s.mu.Unlock()
 		if rejected {
-			// rejectAppOutput already emitted the correlated terminal error.
 		} else if timedOut {
 			s.sendError("timeout")
 		} else if p.Turn.Status != "completed" {
@@ -392,7 +371,6 @@ func (s *Server) handleAppNotification(method string, params json.RawMessage) {
 			// Forward the usage block verbatim: without it the translator's
 			// lifecycle.end carries no usage and the Flow Monitor turn card
 			// shows no in/out/cache tokens at all (the `codex exec` JSONL path
-			// never lost it — it forwards stdout untouched).
 			frame := map[string]any{"type": "turn.completed"}
 			if u := usageOf(p.Usage, p.Turn.Usage, s.takeAppUsage()); u != nil {
 				frame["usage"] = u
@@ -475,9 +453,6 @@ func legacyItem(raw json.RawMessage) map[string]any {
 	if typ, _ := item["type"].(string); typ != "" {
 		item["item_type"] = snakeItemType(typ)
 	}
-	// The App Server uses camelCase whereas the existing OS translator was
-	// built against codex exec's snake_case JSONL. Normalize only fields it
-	// consumes; leave unknown item data intact for forward compatibility.
 	for appKey, execKey := range map[string]string{
 		"aggregatedOutput": "aggregated_output",
 		"exitCode":         "exit_code",
@@ -502,8 +477,7 @@ func snakeItemType(v string) string {
 
 // usageOf returns the first non-empty usage block, normalized to the snake_case
 // field names the exec JSONL path uses (the App Server speaks camelCase), so
-// the translator has one shape to decode. Empty/`null` candidates are skipped;
-// nil means no usage was reported.
+// the translator has one shape to decode.
 func usageOf(candidates ...json.RawMessage) map[string]any {
 	for _, raw := range candidates {
 		if len(raw) == 0 {

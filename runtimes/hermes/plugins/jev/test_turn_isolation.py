@@ -112,7 +112,6 @@ class TurnIsolationTest(unittest.TestCase):
                 self.assertIn("reason=system_message", " ".join(logs.output))
 
     def test_overlapping_turns_never_receive_other_turn_hint(self):
-        # Exercise both same-session turns and independent sessions sharing a router.
         for session in ("shared-session", "other-session"):
             with self.subTest(session=session), patch.object(router, "TIMEOUT_SECONDS", 2):
                 entered, release = threading.Event(), self.gate()
@@ -140,7 +139,6 @@ class TurnIsolationTest(unittest.TestCase):
                 result_b = self.invoke(hook, "B", "calculator_B", session)
                 self.assert_hint(result_b, "calculator_B", "music_A")
                 self.assertEqual([p["state"]["prompt"] for p in seen], ["request-A", "request-B"])
-                # Both responses choose skill_0; the local catalog must resolve it separately.
                 self.assertEqual([p["state"]["candidates"][0]["id"] for p in seen], ["skill_0", "skill_0"])
                 self.assertNotIn("unrelated-history", json.dumps(seen))
 
@@ -162,9 +160,9 @@ class TurnIsolationTest(unittest.TestCase):
             result_a = self.invoke(hook, "A", "music_A")
         self.assertTrue(entered.is_set())
         self.assertIsNone(result_a)
-        self.assertIsNone(self.invoke(hook, "B", "calculator_B"))  # Cooldown.
-        instance.cooldown_until = 0  # Simulate cooldown expiry while A is still stuck.
-        self.assertIsNone(self.invoke(hook, "B", "calculator_B"))  # Still busy.
+        self.assertIsNone(self.invoke(hook, "B", "calculator_B"))
+        instance.cooldown_until = 0
+        self.assertIsNone(self.invoke(hook, "B", "calculator_B"))
         self.assertEqual(seen, ["request-A"])
         release.set()
         with instance.busy:

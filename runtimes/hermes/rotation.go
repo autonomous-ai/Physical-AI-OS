@@ -6,34 +6,14 @@ import (
 	"time"
 )
 
-// rotateMaxTurns / rotateTokenThreshold gate conversation rotation (see
-// ShouldRotateSession). The generic handler's autoSessionThreshold (150k tokens)
-// is useless for Hermes: the gateway compresses history server-side before each
-// call, so os-server only ever observes ~20-60k tokens regardless of the real
-// chain size — which grows to millions of tokens / tens of MB per device-main
-// response blob and makes every turn reconstruct + recompress it (~1min/turn).
-//
-// The token net was 50_000 until 2026-09-09, when it turned out to sit INSIDE
-// the normal operating range instead of above it. Observed on lamp-a0ae: a
-// fresh conversation already reports ~12.3k (system prompt + SOUL + USER.md +
-// skills), and an ordinary turn that reads a SKILL.md and runs a tool adds
-// ~25k — 12.3k → 41.3k → 64.5k → 73.5k. The net fired every 2-3 turns, and
-// because the wired path is maybeAutoNewSession (compact is disabled) each
-// firing DROPPED the history with no summary: the device answered "that isn't
-// in our current chat" about a draft it had written two turns earlier.
-//
-// 250_000 keeps roughly 10 turns at the observed +25k/turn while still catching
-// a runaway chain. Same reasoning and same value as codex's safety net (see
-// runtimes/codex/rotation.go): a net has to sit ABOVE where the backend's own
-// compression settles, not inside it.
+// rotateMaxTurns / rotateTokenThreshold gate conversation rotation (see ShouldRotateSession).
+// 250k sits above where gateway-side compression settles (~12-75k); 50k dropped history every 2-3 turns.
 const (
 	rotateMaxTurns       = 40
 	rotateTokenThreshold = 250_000
 )
 
-// initConversation seeds the active conversation name once per process with a
-// boot-unique suffix, so a restart never re-attaches to a previously bloated
-// chain (the gateway keys its response history on the conversation name).
+// initConversation seeds a boot-unique conversation name so a restart never re-attaches to a bloated chain.
 func (s *HermesService) initConversation() {
 	s.convOnce.Do(func() {
 		s.bootStamp = time.Now().Unix()
@@ -48,10 +28,7 @@ func (s *HermesService) conversationName() string {
 	return name
 }
 
-// rotateConversation switches future turns to a fresh conversation name so the
-// gateway starts a new (small) history chain. The old chain is abandoned (it
-// remains on the gateway under the old name until a separate prune reclaims the
-// disk). Clears lastResponseID so os-server stops correlating the old chain.
+// rotateConversation switches future turns to a fresh conversation name so the gateway starts a new (small) history chain.
 func (s *HermesService) rotateConversation() {
 	s.initConversation()
 	seq := s.rotateSeq.Add(1)
@@ -66,18 +43,12 @@ func (s *HermesService) rotateConversation() {
 	slog.Info("hermes conversation rotated", "component", "hermes", "conversation", name)
 }
 
-// ShouldRotateSession overrides the generic handler's token-threshold rotation
-// decision (the sessionRotator optional interface). Hermes rotates on turn count
-// (primary — the gateway blob grows ~one history snapshot per turn) or a token
-// spike (secondary), because the generic 150k-token trigger never fires: the
-// gateway compresses history before each call so os-server only observes
-// ~20-60k tokens, never the real multi-million-token size.
+// ShouldRotateSession overrides the generic handler's token-threshold rotation decision (the sessionRotator optional interface).
 func (s *HermesService) ShouldRotateSession(totalTokens, turnsSinceRotation int) bool {
 	return turnsSinceRotation >= rotateMaxTurns || totalTokens >= rotateTokenThreshold
 }
 
-// NewSession rotates the conversation. Both the generic handler's auto-new-session
-// path and an explicit factory reset land here. Instant — no gateway RPC.
+// NewSession rotates the conversation.
 func (s *HermesService) NewSession(sessionKey string) error {
 	slog.Info("hermes NewSession: rotating conversation", "component", "hermes", "key", sessionKey)
 	s.rotateConversation()

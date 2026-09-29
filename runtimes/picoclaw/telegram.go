@@ -11,11 +11,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// telegramTargetsFile is the Device-owned store of known Telegram chats. PicoClaw
-// has no plugin/channel layer of its own, so the receive loop populates this
-// file each time a new chat DMs the bot.
-//
-// Schema: {"targets":[{"chat_id":"...","type":"private|group"}, ...]}
+// telegramTargetsFile is the Device-owned store of known Telegram chats.
 const telegramTargetsFile = "/root/.lumi/telegram_targets.json"
 
 type telegramTargetEntry struct {
@@ -30,15 +26,12 @@ type telegramTargetsFileContent struct {
 // targetsFileMu serialises read-modify-write on telegramTargetsFile.
 var targetsFileMu sync.Mutex
 
-// GetTelegramBotToken returns the bot token from Device config. There is no
-// agent-side config to consult under PicoClaw.
+// GetTelegramBotToken returns the bot token from Device config.
 func (s *PicoclawService) GetTelegramBotToken() string {
 	return s.config.TelegramBotToken
 }
 
-// GetTelegramTargets reads the Device-owned target store. Returns nil + nil (no
-// error) when the file doesn't exist yet — that's the steady state before any
-// user has messaged the bot.
+// GetTelegramTargets reads the Device-owned target store.
 func (s *PicoclawService) GetTelegramTargets() ([]domain.TelegramTarget, error) {
 	targetsFileMu.Lock()
 	data, err := os.ReadFile(telegramTargetsFile)

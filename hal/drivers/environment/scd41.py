@@ -17,7 +17,7 @@ class SCD41:
         self._automatic_self_calibration = automatic_self_calibration
         self._fd = os.open(f"/dev/i2c-{bus}", os.O_RDWR)
         try:
-            fcntl.ioctl(self._fd, 0x0703, 0x62)  # I2C_SLAVE, not FORCE.
+            fcntl.ioctl(self._fd, 0x0703, 0x62)
         except BaseException:
             os.close(self._fd)
             raise
@@ -35,7 +35,6 @@ class SCD41:
         return []
 
     def start(self):
-        # Recover a sensor left measuring after an unclean HAL shutdown.
         self._command(0x3F86, delay=0.5)
         if self._automatic_self_calibration is not None:
             self._command(0x2416, word=int(self._automatic_self_calibration))
@@ -44,7 +43,6 @@ class SCD41:
     def read(self):
         if not self._command(0xE4B8, 1)[0] & 0x07FF:
             return None
-        # Validate all three wire words, but publish only this component's CO2.
         co2, _, _ = self._command(0xEC05, 3)
         if co2 == 0:
             return None

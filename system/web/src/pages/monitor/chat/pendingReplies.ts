@@ -2,8 +2,7 @@ import type { MonitorEvent } from "../types";
 
 type PendingMessage = { role: string; pending?: boolean; runId?: string };
 
-// Track persisted bubbles, not the currently selected conversation or a ref
-// filled after an asynchronous POST. The key changes when that POST is accepted.
+// Track persisted bubbles, not the currently selected conversation or a ref filled after an asynchronous POST.
 export function pendingReplyKey(conversations: { messages: PendingMessage[] }[]): string {
   return JSON.stringify([...new Set(conversations.flatMap((conversation) =>
     conversation.messages.flatMap((message) =>
@@ -12,8 +11,7 @@ export function pendingReplyKey(conversations: { messages: PendingMessage[] }[])
   ))].sort());
 }
 
-// Only terminal reply nodes prove there is a complete answer. In particular,
-// agent_last_token and tts_stream_send must not finish a pending chat bubble.
+// Only terminal reply nodes prove there is a complete answer.
 export function replayedReply(events: MonitorEvent[], runId: string): string | undefined {
   for (const event of [...events].reverse()) {
     if (event.type !== "flow_event") continue;

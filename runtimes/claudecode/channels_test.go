@@ -8,10 +8,6 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// The apply path (AddChannel/RefreshChannelConfig → syncChannels →
-// EnsureOnboarding) touches /root/.claudecode + systemd, so unit tests cover
-// only the capability gate; the apply path is exercised on-device.
-
 func TestClaudeCodeSupportedChannels(t *testing.T) {
 	got := (&ClaudeCodeService{}).SupportedChannels()
 	if len(got) != 3 || got[0] != domain.ChannelTelegram || got[1] != domain.ChannelSlack || got[2] != domain.ChannelDiscord {

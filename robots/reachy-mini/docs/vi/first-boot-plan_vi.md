@@ -286,8 +286,12 @@ bằng `cv2.imdecode`. `HAL_CAMERA_INDEX` vô tác dụng trên body này. Chi t
 
 ### 2.3 setup.sh (Mới, Riêng Cho Reachy)
 
-Viết `robots/reachy-mini/setup.sh` (hoặc sửa `scripts/provision/setup.sh`
-chung với phân nhánh `DEVICE_TYPE`). Trinh sát đã chốt nhánh: **NetworkManager** —
+Chưa viết. Không có `robots/reachy-mini/setup.sh`: installer duy nhất trong thư
+mục đó là `robots/reachy-mini/install.sh`, tải device package từ OTA rồi giao cho
+`spike.sh` (cài song song với Pollen, không đổi mạng). Provisioning production cần
+nhánh `DEVICE_TYPE=reachy-mini` trong `scripts/provision/setup.sh` dùng chung,
+script này hiện vẫn dừng NetworkManager (xem
+[recovery_vi.md](recovery_vi.md#đánh-giá-rủi-ro-đã-chốt-pollen-os-dùng-networkmanager)). Trinh sát đã chốt nhánh: **NetworkManager** —
 dùng cột "Nếu NM", và tái sử dụng profile `Hotspot` sẵn có của Pollen thay vì
 dựng một AP stack song song.
 
@@ -518,7 +522,7 @@ Chỉ sau khi spike hoạt động:
 
 ```bash
 ssh pollen@<IP>
-DEVICE_TYPE=reachy-mini bash setup.sh   # bản mới
+DEVICE_TYPE=reachy-mini bash setup.sh   # scripts/provision/setup.sh, khi đã có nhánh NM
 # Khởi động lại
 sudo reboot
 # Xác nhận AP mode hoạt động

@@ -8,33 +8,7 @@ import (
 	"go.autonomous.ai/os/system/lib/osreset"
 )
 
-// ResetAgent performs the Claude Code factory-reset wipe. The factory-reset flow
-// (server/system/factoryreset.go) resolves the active gateway and calls this on
-// it — adding a backend means implementing ResetAgent, not editing a switch.
-//
-// What is wiped vs kept:
-//
-//	WIPED — user data + creds:
-//	  /root/.claudecode/workspace     persona, memory, CLAUDE.md, .mcp.json
-//	  /root/.claudecode/.env          ANTHROPIC_* creds + channel launch flags
-//	  /root/.claudecode/session.json  bridge session-resume state
-//	  /root/.claude/skills            device skills (user-scoped — see claudecodeSkillsDir)
-//	  /root/.claude/CLAUDE.md         user-level OS block (device-wide connector rules)
-//	  /root/.claude/projects          Claude Code conversation transcripts
-//	  /root/.claude/channels          channel tokens, allowlists, inbox media
-//	  /root/.claude/todos             per-session todo state
-//	  /root/.claude/history.jsonl     prompt history
-//
-//	KEPT — installed software (install.sh only re-runs on a failed verify):
-//	  the claude CLI, /root/.claude.json + global settings (the bridge itself
-//	  ships inside the os-server binary — nothing on disk to wipe or keep; no
-//	  bun/plugins anymore: telegram + discord are device-owned loops).
-//
-// Everything wiped has a restore path that runs after the reset: presync +
-// EnsureOnboarding rebuild .env from the (re-entered) config.json (the
-// device-owned channel loops need nothing beyond config), and
-// ensureSkills re-downloads the skill set from the CDN — see
-// docs/agentic/adding-agent-runtime.md §7.
+// ResetAgent performs the Claude Code factory-reset wipe.
 func (s *ClaudeCodeService) ResetAgent() error {
 	wipeClaudeCodeState()
 	return nil
@@ -50,8 +24,7 @@ var claudecodeWipePaths = []string{
 	claudecodeHome + "/session.json",
 	// Skills + the user-level OS block live outside the workspace (user scope, so
 	// coding sessions in any cwd see them) — wipe them explicitly or a factory
-	// reset would leave stale skills behind. ensureSkills/ensureUserClaudeMDBlock
-	// rebuild both on the next onboarding pass.
+	// reset would leave stale skills behind.
 	claudecodeSkillsDir,
 	claudeUserDir + "/CLAUDE.md",
 	"/root/.claude/projects",

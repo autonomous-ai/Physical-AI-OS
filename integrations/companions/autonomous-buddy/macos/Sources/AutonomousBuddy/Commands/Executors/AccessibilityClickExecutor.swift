@@ -2,11 +2,8 @@ import AppKit
 import ApplicationServices
 import Foundation
 
-// click_button uses macOS Accessibility API to find a UI element by label/role and
-// invoke its AXPress action. Works reliably for native macOS apps (Settings, Finder, Notes,
-// Calculator, etc.). For Chrome / Safari, the web content's accessibility tree is exposed
-// but coverage is inconsistent — some sites work, some don't. When this fails, fall back to
-// the Vision phase (screenshot + click_at) from the device/OpenClaw skill side.
+// click_button: find a UI element by label/role via Accessibility and AXPress it.
+// Reliable for native apps; browser web-content coverage is inconsistent.
 
 struct ClickButtonExecutor: Executor {
     let action = "click_button"

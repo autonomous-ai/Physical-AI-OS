@@ -1,15 +1,5 @@
-// Package schedule is the on-device half of the "Scheduled" feature: it
-// stores the recurring-task list the backend pushes over MQTT (schedule.sync),
-// works out when each task is next due, fires it through whichever agentic
-// runtime is currently active, and reports the outcome back.
-//
-// Deliberately lives here — in os-server — rather than inside any runtime
-// (openclaw/hermes/claudecode/codex/picoclaw/opencode): a device owner can
-// switch runtimes at any time, and all six implement the two methods this
-// package needs, domain.AgentGateway.SendSystemChatMessage (for an "agent"
-// task) and domain.AgentGateway.Speak (for a "speak" one). Putting the
-// scheduler in a runtime (e.g. riding OpenClaw's own cron subsystem) would
-// strand every schedule the moment the owner switched away from OpenClaw.
+// Package schedule stores, computes and fires the device's scheduled tasks (MQTT schedule.sync),
+// independent of the active agentic runtime.
 package schedule
 
 import (
@@ -20,9 +10,7 @@ import (
 	"time"
 )
 
-// Repeat cadence values — exact strings per the MQTT schedule.sync wire
-// contract (phase-5 brief). Do not rename: the backend and the web app both
-// send/expect these verbatim.
+// Repeat cadence values (wire values, do not rename).
 const (
 	RepeatDaily    = "daily"
 	RepeatWeekly   = "weekly"
@@ -32,93 +20,38 @@ const (
 	RepeatManual   = "manual"
 )
 
-// maxJitter bounds the deterministic per-device offset NextRunForDevice folds
-// into daily/weekly/monthly occurrences (see JitterOffset). ±5 minutes per the
-// phase-5 brief's ambiguity resolution: enough to spread a fleet of devices
-// that all share the exact same cadence (e.g. everyone's "8am daily briefing")
-// across a 10-minute window instead of every device hitting the backend/MQTT
-// broker in the same instant.
+// maxJitter bounds the per-device offset applied to daily/weekly/monthly occurrences.
 const maxJitter = 5 * time.Minute
 
-// Spec is the cadence half of a schedule — the wire's nested "schedule"
-// object, e.g. {"repeat":"weekly","days":[1,2,3,4,5],"time":"08:00"}. Only the
-// fields relevant to Repeat are populated; the rest are left zero and ignored.
-//
-// EndAt is deliberately a field here even though the wire's end_at is a
-// SIBLING of "schedule", not nested inside it (see Schedule in store.go). This
-// keeps Spec.NextRun fully self-contained and directly testable/usable on its
-// own — exactly how the phase-5 brief's own example constructs a bare
-// Spec{Repeat: "manual"} and calls NextRun on it. Schedule.NextRun (store.go)
-// copies its own top-level EndAt into a working Spec value before delegating,
-// so the wire shape is respected end to end.
+// Spec is the wire's nested "schedule" object, e.g. {"repeat":"weekly","days":[1,2,3,4,5],"time":"08:00"}.
+// EndAt is copied in from the schedule's top-level end_at by Schedule.NextRun.
 type Spec struct {
 	Repeat string `json:"repeat"`
 
-	// Days lists weekdays for "weekly": 0=Sunday..6=Saturday — matching Go's
-	// own time.Weekday AND the backend's tagged proto (the canonical shape per
-	// controller ruling after review). 7 is additionally accepted as an alias
-	// for Sunday, for robustness against an off-by-one payload. The brief's
-	// own example days:[1,2,3,4,5] means Mon-Fri under BOTH this convention
-	// and ISO-8601 — they only disagree on Sunday (0 vs 7), which is exactly
-	// why that example could not disambiguate the convention on its own.
+	// Days lists weekdays for "weekly": 0=Sunday..6=Saturday (7 also means Sunday).
 	Days []int `json:"days,omitempty"`
 
-	// DayOfMonth is the target day for "monthly", 1-31. A short month clamps to
-	// its actual last day (e.g. day_of_month=31 in February -> the 28th, 29th
-	// in a leap year) rather than rolling over into the next month.
+	// DayOfMonth is 1-31 for "monthly"; short months clamp to their last day.
 	DayOfMonth int `json:"day_of_month,omitempty"`
 
-	// Time is the wall-clock fire time "HH:MM" (24h), evaluated in the tz
-	// passed to NextRun. Used by daily/weekly/monthly.
-	//
-	// The backend keeps this equal to Times[0]. Firmware predating Times reads
-	// only this, which is why a multi-time schedule degrades to a single daily
-	// fire on an old device rather than failing — and why nothing here may
-	// stop honouring it.
+	// Time is the "HH:MM" (24h) fire time in tz; kept equal to Times[0] for older firmware.
 	Time string `json:"time,omitempty"`
 
-	// Times is every wall-clock fire time in a day for daily/weekly/monthly.
-	// A weekly with two times and three days fires 6x a week: the cross
-	// product, as cron's hour/day fields compose.
-	//
-	// Empty on every schedule stored before this field, which is why readers
-	// go through effectiveTimes rather than touching it directly.
+	// Times lists every daily fire time (cross product with Days); read via effectiveTimes.
 	Times []string `json:"times,omitempty"`
 
-	// EveryMs is the gap for "interval" schedules, in MILLISECONDS — the
-	// backend sends milliseconds (canonical shape per controller ruling after
-	// review; an earlier revision of this field guessed seconds, a 1000x
-	// error). Unlike the other cadences this is duration-anchored by
-	// definition (next = last run + interval), not a recurring wall-clock
-	// point, so it is deliberately exempt from both the time.Date/DST handling
-	// below and from jitter.
-	//
-	// nextInterval floors this at minInterval: the device is the last line of
-	// defence against a misconfigured (or malicious) near-zero interval, since
-	// SendSystemChatMessage has no rate limiting of its own anywhere in the
-	// send path (see the phase-5 report's rate-limiting finding).
+	// EveryMs is the "interval" gap in milliseconds; not jittered, floored at minInterval.
 	EveryMs uint64 `json:"every_ms,omitempty"`
 
-	// At is the absolute fire time for "once". Never jittered (see
-	// NextRunForDevice) — a user who picked an exact time does not expect it
-	// to move.
+	// At is the absolute fire time for "once"; never jittered.
 	At *time.Time `json:"at,omitempty"`
 
-	// EndAt: see the type doc comment above. json:"-" keeps it out of Spec's
-	// own encoding so it is never double-stored alongside Schedule's real
-	// on-the-wire/on-disk end_at.
+	// EndAt is excluded from JSON; see the type doc.
 	EndAt *time.Time `json:"-"`
 }
 
-// NextRun returns the earliest occurrence of s strictly after `after`, in the
-// wall clock of tz. ok=false means "never fires again": a manual schedule, a
-// "once" whose At has already passed, or a schedule at/past its EndAt.
-//
-// All wall-clock arithmetic goes through time.Date so the stdlib — not manual
-// offset math — resolves DST gaps and overlaps. Interval and once are the two
-// exceptions: they are duration/absolute-anchored by definition rather than
-// recurring wall-clock points, so they use plain time arithmetic instead (see
-// nextInterval/nextOnce).
+// NextRun returns the earliest occurrence strictly after `after` in tz; false if it never fires again.
+// Wall-clock math goes through time.Date so DST is resolved by the stdlib.
 func (s Spec) NextRun(after time.Time, tz *time.Location) (time.Time, bool) {
 	if s.EndAt != nil && !after.Before(*s.EndAt) {
 		return time.Time{}, false
@@ -149,13 +82,12 @@ func (s Spec) nextOccurrence(after time.Time, tz *time.Location) (time.Time, boo
 	case RepeatManual:
 		return time.Time{}, false
 	default:
-		// Unknown repeat value: fail closed (never fires) rather than guessing.
+		// Unknown repeat value: fail closed.
 		return time.Time{}, false
 	}
 }
 
-// parseTime parses "HH:MM" into hour/minute. A malformed or missing time makes
-// the schedule un-computable (ok=false) rather than panicking.
+// parseTime parses "HH:MM"; ok=false on malformed input.
 func parseTime(hhmm string) (hour, minute int, ok bool) {
 	parts := strings.SplitN(hhmm, ":", 2)
 	if len(parts) != 2 {
@@ -169,16 +101,7 @@ func parseTime(hhmm string) (hour, minute int, ok bool) {
 	return h, m, true
 }
 
-// nextDaily finds the next HH:MM occurrence strictly after `after`. Candidates
-// are always built via time.Date for the exact calendar day (never via
-// Add(24*time.Hour), which would drift by an hour across a DST transition) —
-// this is also what makes a nonexistent (spring-forward gap) or repeated
-// (fall-back overlap) wall-clock time resolve to exactly ONE instant per
-// calendar day: the stdlib normalizes it, we never scan through both
-// candidate offsets ourselves.
-// effectiveTimes is every "HH:MM" this schedule fires at. Times when the
-// backend sent a list, else the single Time — a schedule stored before Times
-// existed carries only the latter and must keep behaving identically.
+// effectiveTimes returns Times, or the single Time for schedules stored before Times existed.
 func (s Spec) effectiveTimes() []string {
 	if len(s.Times) > 0 {
 		return s.Times
@@ -189,15 +112,7 @@ func (s Spec) effectiveTimes() []string {
 	return nil
 }
 
-// earliestAcross runs next for each effective time and returns the soonest
-// result. This is what turns each single-time cadence below into a multi-time
-// one WITHOUT touching its wall-clock arithmetic: the DST handling, the
-// weekday matching and the short-month clamping all stay exactly as they were,
-// and only the set of candidates widens.
-//
-// An unparseable entry is skipped rather than failing the whole schedule: one
-// bad time should cost that occurrence, not silence a task that has three
-// other valid ones. The BFF rejects malformed times long before here.
+// earliestAcross returns the soonest result of next over all effective times, skipping unparseable ones.
 func (s Spec) earliestAcross(next func(h, m int) (time.Time, bool)) (time.Time, bool) {
 	var best time.Time
 	found := false
@@ -220,9 +135,6 @@ func (s Spec) earliestAcross(next func(h, m int) (time.Time, bool)) (time.Time, 
 func (s Spec) nextDaily(after time.Time, tz *time.Location) (time.Time, bool) {
 	return s.earliestAcross(func(h, m int) (time.Time, bool) {
 		local := after.In(tz)
-		// dayOffset=1 (tomorrow at HH:MM) is always strictly after `after`, so this
-		// loop always terminates by then; the explicit bound just avoids an
-		// unbounded loop rather than relying on that always being true.
 		for dayOffset := 0; dayOffset <= 1; dayOffset++ {
 			candidate := time.Date(local.Year(), local.Month(), local.Day()+dayOffset, h, m, 0, 0, tz)
 			if candidate.After(after) {
@@ -233,10 +145,7 @@ func (s Spec) nextDaily(after time.Time, tz *time.Location) (time.Time, bool) {
 	})
 }
 
-// normalizeWeekday maps a wire `days` value to time.Weekday. The canonical
-// convention (matching Go's own time.Weekday AND the backend's tagged proto)
-// is 0=Sunday..6=Saturday; 7 is additionally accepted as an alias for Sunday
-// for robustness against an off-by-one payload.
+// normalizeWeekday maps a wire day (0=Sunday..6, 7=Sunday) to time.Weekday.
 func normalizeWeekday(d int) time.Weekday {
 	if d == 7 {
 		return time.Sunday
@@ -244,9 +153,7 @@ func normalizeWeekday(d int) time.Weekday {
 	return time.Weekday(d)
 }
 
-// nextWeekly scans forward day by day (via time.Date, never duration Add) for
-// the next listed weekday at HH:MM. A full week of slack (dayOffset up to 7)
-// guarantees a hit even when today's own slot has already passed.
+// nextWeekly scans up to 7 days ahead (via time.Date) for a listed weekday.
 func (s Spec) nextWeekly(after time.Time, tz *time.Location) (time.Time, bool) {
 	if len(s.Days) == 0 {
 		return time.Time{}, false
@@ -270,16 +177,12 @@ func (s Spec) nextWeekly(after time.Time, tz *time.Location) (time.Time, bool) {
 	})
 }
 
-// lastDayOfMonth returns how many days `month` has in `year`. Day 0 of the
-// following month is, by definition, the last day of this one — a standard Go
-// idiom that naturally accounts for leap Februaries.
+// lastDayOfMonth returns the number of days in month (day 0 of the next month).
 func lastDayOfMonth(year int, month time.Month) int {
 	return time.Date(year, month+1, 0, 0, 0, 0, 0, time.UTC).Day()
 }
 
-// nextMonthly finds the next DayOfMonth (clamped to the month's real last day)
-// at HH:MM. 13 iterations cover this month through a full year out — more
-// headroom than any realistic schedule needs, but bounded rather than open-ended.
+// nextMonthly finds the next clamped DayOfMonth, searching up to 13 months ahead.
 func (s Spec) nextMonthly(after time.Time, tz *time.Location) (time.Time, bool) {
 	if s.DayOfMonth < 1 || s.DayOfMonth > 31 {
 		return time.Time{}, false
@@ -293,7 +196,7 @@ func (s Spec) nextMonthly(after time.Time, tz *time.Location) (time.Time, bool) 
 			mo := time.Month(total%12 + 1)
 			day := s.DayOfMonth
 			if last := lastDayOfMonth(y, mo); day > last {
-				day = last // clamp: day_of_month=31 in February -> the 28th/29th
+				day = last
 			}
 			candidate := time.Date(y, mo, day, h, m, 0, 0, tz)
 			if candidate.After(after) {
@@ -304,17 +207,11 @@ func (s Spec) nextMonthly(after time.Time, tz *time.Location) (time.Time, bool) 
 	})
 }
 
-// minInterval floors "interval" schedules. The device is the LAST line of
-// defence here: SendSystemChatMessage is a fire-and-forget call straight into
-// the active runtime with no rate limiting anywhere in that path (see the
-// phase-5 report's rate-limiting finding), so a misconfigured or malicious
-// tiny every_ms would otherwise spam paid LLM turns as fast as the 1-minute
-// runner ticker allows.
+// minInterval floors "interval" schedules: the send path has no rate limit, so a tiny
+// every_ms would otherwise spam paid LLM turns every tick.
 const minInterval = 5 * time.Minute
 
-// nextInterval anchors on `after` (the last run, per the caller) rather than
-// on wall-clock boundaries — an interval schedule means "this long after it
-// last ran", full stop.
+// nextInterval returns after + EveryMs (clamped to minInterval).
 func (s Spec) nextInterval(after time.Time) (time.Time, bool) {
 	if s.EveryMs == 0 {
 		return time.Time{}, false
@@ -336,29 +233,9 @@ func (s Spec) nextOnce(after time.Time) (time.Time, bool) {
 	return *s.At, true
 }
 
-// JitterOffset deterministically maps (deviceID, scheduleID) to an offset in
-// [-maxJitter, +maxJitter). FNV-1a rather than a cryptographic hash: this is a
-// thundering-herd guard, not a security boundary — every device computing the
-// same two ids must derive the exact same offset, forever, with no shared
-// state or coordination (see NewRunner's deviceID parameter: this function
-// never reaches into global/device config itself).
-//
-// Hashes into whole SECONDS, not nanoseconds. fnv32a's Sum32 is a uint32 —
-// its entire range (~4.29e9) is smaller than 2*maxJitter expressed in
-// nanoseconds (600e9), so `int64(sum) % spanNanos` was a silent no-op and this
-// function used to return a constant ~-5m for every input (CRITICAL finding
-// from the phase-5 review). Reducing the span to whole seconds (600) before
-// the modulo actually exercises the hash's range.
-// Deliberately keyed on device+schedule only, NOT on the individual time: a
-// multi-time schedule shifts all of its occurrences by the SAME offset.
-//
-// That is correct, not an oversight. Jitter exists to stop a fleet firing at
-// 09:00:00 together, and the offset already differs per device, so the herd is
-// spread either way. Within one device a shared offset preserves the spacing
-// the user asked for (09:00/13:00/17:00 stays four hours apart) and keeps
-// DejitterAnchor reversible — a per-time key could not be reversed, because
-// the stored NextRunAt does not record which time produced it, so the runner
-// would have to guess before it could compute the following occurrence.
+// JitterOffset deterministically maps (deviceID, scheduleID) to an offset in [-maxJitter, +maxJitter).
+// Hashes to whole seconds: a uint32 modulo the nanosecond span would be a no-op.
+// Not keyed per time, so DejitterAnchor stays reversible.
 func JitterOffset(deviceID, scheduleID string) time.Duration {
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(deviceID + "\x00" + scheduleID))
@@ -368,12 +245,7 @@ func JitterOffset(deviceID, scheduleID string) time.Duration {
 	return time.Duration(secs)*time.Second - maxJitter
 }
 
-// jitteredRepeat reports whether repeat gets NextRunForDevice's deterministic
-// jitter. Extracted into its own function (rather than duplicating the
-// switch) so NextRunForDevice and DejitterAnchor can never drift on which
-// cadences are jittered — a drift here is exactly how CRITICAL-2 from the
-// phase-5 review happened (fire() didn't know it had to reverse the jitter
-// before feeding a stored occurrence back into NextRun).
+// jitteredRepeat reports whether repeat is jittered; shared by NextRunForDevice and DejitterAnchor.
 func jitteredRepeat(repeat string) bool {
 	switch repeat {
 	case RepeatDaily, RepeatWeekly, RepeatMonthly:
@@ -383,11 +255,7 @@ func jitteredRepeat(repeat string) bool {
 	}
 }
 
-// NextRunForDevice is Spec.NextRun plus the deterministic jitter, applied only
-// to the wall-clock-recurring cadences (daily/weekly/monthly). Interval and
-// once are exempt: an interval schedule is already anchored to a real instant
-// (jittering it would make "every 30s" drift every cycle), and a "once" fires
-// at the exact instant the user picked.
+// NextRunForDevice is Spec.NextRun plus jitter for daily/weekly/monthly (interval and once are exact).
 func NextRunForDevice(spec Spec, after time.Time, tz *time.Location, deviceID, scheduleID string) (time.Time, bool) {
 	next, ok := spec.NextRun(after, tz)
 	if !ok {
@@ -399,19 +267,8 @@ func NextRunForDevice(spec Spec, after time.Time, tz *time.Location, deviceID, s
 	return next, true
 }
 
-// DejitterAnchor reverses the jitter NextRunForDevice may have applied to a
-// stored occurrence, returning the TRUE (unjittered) instant. Required
-// whenever a jittered NextRunAt is fed back in as the `after` cursor to
-// compute the FOLLOWING occurrence: because jitter can shift an occurrence
-// EARLIER than its true wall-clock boundary, passing the jittered value
-// straight back into NextRun/NextRunForDevice can land `after` still inside
-// the very cadence period it was itself part of — so NextRun returns the SAME
-// occurrence again and the schedule never advances.
-//
-// This was CRITICAL-2 from the phase-5 review: runner.fire() called
-// sch.NextRun(sch.NextRunAt, ...) directly, so any schedule whose jitter
-// happened to be negative re-fired on every 1-minute tick until it aged past
-// the 30-minute catch-up window.
+// DejitterAnchor removes the jitter from a stored occurrence. Feed its result, not the jittered
+// value, back into NextRun: a negative jitter would otherwise return the same occurrence again.
 func DejitterAnchor(repeat string, jitteredAt time.Time, deviceID, scheduleID string) time.Time {
 	if !jitteredRepeat(repeat) {
 		return jitteredAt

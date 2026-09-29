@@ -4,11 +4,7 @@ import { createPortal } from "react-dom";
 import { Trash2 } from "lucide-react";
 import { useTheme } from "@/lib/useTheme";
 
-// ConfirmDialog — themed, reusable replacement for window.confirm(). Portalled
-// to <body> with the `lm-root ${themeClass}` re-scope so the --lm-* tokens
-// resolve and position:fixed anchors to the viewport. Closes on overlay click,
-// ✕, and Escape. `danger` tints the confirm button red. Used for every
-// destructive prompt in this section so they all read identically.
+// Themed replacement for window.confirm(), portalled to <body>.
 export function ConfirmDialog({
   title, message, confirmLabel, confirmIcon, danger = false, onConfirm, onCancel,
 }: {

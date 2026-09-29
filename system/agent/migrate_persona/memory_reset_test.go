@@ -42,7 +42,6 @@ func TestResetMemoryFilesBacksUpAndClearsEveryRuntime(t *testing.T) {
 	if len(rep.BackupDirs) != 2 {
 		t.Fatalf("want one backup dir per touched runtime, got %v", rep.BackupDirs)
 	}
-	// USER.md is reset to the blank form (markdown runtimes) / emptied (Hermes).
 	if got := readFile(t, filepath.Join(ows, "USER.md")); !strings.Contains(got, "- **Name:**") || strings.Contains(got, "poison") {
 		t.Errorf("openclaw USER.md not reset to the form:\n%s", got)
 	}
@@ -54,7 +53,6 @@ func TestResetMemoryFilesBacksUpAndClearsEveryRuntime(t *testing.T) {
 			t.Errorf("%s must be removed", p)
 		}
 	}
-	// Backups hold the originals.
 	bak, _ := filepath.Glob(filepath.Join(ows, ".memory-reset-*", "USER.md"))
 	if len(bak) != 1 || readFile(t, bak[0]) != "- poison\n" {
 		t.Errorf("backup of openclaw USER.md missing or wrong: %v", bak)
@@ -69,9 +67,7 @@ func TestResetMemoryFilesSkipsUninstalledRuntimes(t *testing.T) {
 	}
 }
 
-// TestResetMemoryFilesTwiceKeepsTheFirstBackup guards the #421 post-mortem
-// evidence: a double-clicked POST lands in the same second, so both calls
-// must get distinct backup dirs and the first one must keep the original.
+// TestResetMemoryFilesTwiceKeepsTheFirstBackup: same-second calls get distinct backup dirs.
 func TestResetMemoryFilesTwiceKeepsTheFirstBackup(t *testing.T) {
 	ows := filepath.Join(t.TempDir(), "workspace")
 	if err := os.MkdirAll(ows, 0o755); err != nil {

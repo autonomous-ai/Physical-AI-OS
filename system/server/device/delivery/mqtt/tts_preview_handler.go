@@ -10,11 +10,7 @@ import (
 )
 
 // handleTTSPreview plays a one-shot TTS preview on the lamp without
-// persisting any config change. Mirrors the HTTP /api/voice/preview flow:
-// API key + base URL are read server-side from config so the BFF never
-// has to ship credentials over MQTT. Provider/voice/language overrides
-// are optional — empty fields make HAL fall back to current config.
-// Speed applies only to this preview, without changing saved/runtime defaults.
+// persisting any config change.
 func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 	var req domain.MQTTTTSPreviewData
 	if err := json.Unmarshal(env.Data, &req); err != nil {
@@ -33,7 +29,6 @@ func (h *DeviceMQTTHandler) handleTTSPreview(env domain.MQTTDataCommand) error {
 
 	slog.Info("tts.preview: received", "component", "mqtt", "provider", req.Provider, "voice", req.Voice, "language", req.Language)
 
-	// Ack immediately so BFF knows the device received the command.
 	if err := h.publishDataResult(domain.KindTTSPreview, "starting", "", nil); err != nil {
 		slog.Warn("tts.preview: publish starting ack failed", "component", "mqtt", "error", err)
 	}

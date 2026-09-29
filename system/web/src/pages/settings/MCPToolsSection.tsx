@@ -4,12 +4,6 @@ import { C, SectionCard, LABEL_STYLE, INPUT_STYLE } from "@/components/setup/sha
 import { listMCPTools, addMCPTool, removeMCPTool } from "@/lib/api";
 import type { MCPTool } from "@/lib/api";
 
-// MCP Tools section — manages remote MCP tool endpoints (HF Spaces,
-// community tools, authenticated services). Not part of the main form Save
-// flow; each add/remove hits its own API endpoint and takes effect immediately
-// (gateway restart). OAuth-authenticated connectors (Notion, GitHub, …) are
-// managed separately via the MQTT connector.set flow.
-
 type HeaderRow = { key: string; value: string };
 
 export function MCPToolsSection({ active }: { active: boolean }) {
@@ -103,7 +97,6 @@ export function MCPToolsSection({ active }: { active: boolean }) {
         <div style={{ fontSize: 12, color: C.textMuted }}>Loading…</div>
       ) : (
         <>
-          {/* Configured tools list */}
           {tools.length > 0 && (
             <div style={{ marginBottom: 16 }}>
               {tools.map((t) => (
@@ -150,7 +143,6 @@ export function MCPToolsSection({ active }: { active: boolean }) {
             </div>
           )}
 
-          {/* Add form */}
           <div style={{ marginBottom: 6 }}>
             <label htmlFor="mcp-name" style={LABEL_STYLE}>Name</label>
             <input
@@ -174,7 +166,6 @@ export function MCPToolsSection({ active }: { active: boolean }) {
             />
           </div>
 
-          {/* Headers (key-value pairs) */}
           <div style={{ marginBottom: 10 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6 }}>
               <span style={LABEL_STYLE}>Headers <span style={{ color: C.textMuted, fontWeight: 400 }}>(optional)</span></span>

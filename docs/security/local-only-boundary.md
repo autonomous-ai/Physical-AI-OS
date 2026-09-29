@@ -959,7 +959,7 @@ async def verify_api_key(request: Request, api_key: str = Security(api_key_heade
         raise HTTPException(status_code=401, detail="Invalid or missing API key")
 ```
 
-#### File: `integrations/perception-service/src/protocols/utils/common.py`
+#### File: `integrations/perception-service/src/dlserver/utils/common.py`
 
 Update WebSocket API key verification similarly:
 
@@ -1017,7 +1017,7 @@ Expected: `200 OK`.
 
 ### Evidence
 
-`script/setup.sh` writes:
+`script/setup.sh` (now `scripts/provision/setup.sh`, which writes the tightened `controlUi` values — see CHECKLIST F8) wrote:
 
 ```json
 "controlUi": {
@@ -1160,7 +1160,7 @@ Document baseline status codes.
 
 ## Suggested regression script
 
-Create `scripts/security-check-local-only.sh`:
+Create `scripts/security-check-local-only.sh` (proposed; not yet in the repo):
 
 ```sh
 #!/usr/bin/env sh
@@ -1269,7 +1269,7 @@ Files to edit:
   - Default host `127.0.0.1`.
   - Missing `DL_API_KEY` should allow loopback only, reject non-loopback.
 
-- `integrations/perception-service/src/protocols/utils/common.py`
+- `integrations/perception-service/src/dlserver/utils/common.py`
   - Apply same non-loopback API key requirement to WebSocket auth.
 
 - `integrations/perception-service/Makefile`

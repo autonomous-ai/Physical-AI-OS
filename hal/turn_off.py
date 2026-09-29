@@ -9,23 +9,18 @@ from follower import LeLampFollower, LeLampFollowerConfig
 from hal.presets import RGB_CMD_SOLID
 
 def turn_off(port: str, lamp_id: str):
-    # Initialize robot connection
     robot_config = LeLampFollowerConfig(port=port, id=lamp_id)
     robot = LeLampFollower(robot_config)
     
-    # Initialize RGB service
     rgb_service = RGBService()
     
     try:
-        # Connect to robot
         print(f"Connecting to robot on port {port} with ID {lamp_id}...")
         robot.connect(calibrate=False)
         print("Robot connected successfully")
         
-        # Start RGB service
         rgb_service.start()
         
-        # Turn off LED
         print("Turning off LED")
         rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
         
@@ -34,7 +29,6 @@ def turn_off(port: str, lamp_id: str):
     except Exception as e:
         print(f"Error during turn off: {e}")
     finally:
-        # Clean up connections
         if robot.is_connected:
             print("Disconnecting robot...")
             robot.disconnect()

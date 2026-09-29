@@ -27,33 +27,12 @@ type pendingEvent struct {
 	fixedRunID  string
 }
 
-// busyTTL bounds how long the busy flag survives without a terminal frame. It
-// exists for ONE case: the turn's final frame was DROPPED, so the sensing
-// pipeline would otherwise wedge forever. It must therefore stay LONGER than
-// the gatewayd's per-turn timeout — the gatewayd always ends a turn (completed,
-// failed, or its own "timeout"), so any TTL shorter than that fires on turns
-// that are merely SLOW.
-//
-// A chat turn is EXPECTED to be slow: a user opens chat precisely for work that
-// takes a while ("build me a Three.js scene"), and the same prompt answered over
-// Telegram/OpenClaw runs 35 minutes to completion. The old fixed 5 minutes was
-// half the 10-minute turn timeout, so every such turn tripped it — and this path
-// additionally called clearTurn(), wiping the IN-FLIGHT run id. That orphaned the
-// browser's pending run: every later lifecycle/error frame found no current run,
-// allocated a fresh id, and attached to an unrelated queued turn, so the chat sat
-// on a pending bubble until its own deadline and reported "no response".
-// Measured 2026-09-03 on lamp-0c89: run device-chat-139 started 15:40:41, lost
-// its id at 15:45:41, and the 15:50:41 "timeout" landed on device-chat-168.
-//
-// Derived from OPENCODE_TURN_TIMEOUT_S (the same value the gatewayd enforces) plus a
-// margin, so raising the turn timeout cannot silently re-open this bug.
+// busyTTL bounds how long the busy flag survives without a terminal frame.
+// It must stay longer than the gatewayd per-turn timeout, or slow turns lose their run id.
 const busyTTLMargin = 5 * time.Minute
 
 func busyTTL() time.Duration {
-	// Same default as the gatewayd's own Config (10 minutes). Long enough for a
-	// heavy turn, short enough that a WEDGED one — the upstream stream going
-	// silent mid-turn, measured on lamp-0c89 2026-09-03 — is killed and the
-	// device recovers instead of being held for most of an hour.
+	// Matches the gatewayd default turn timeout.
 	timeout := 10 * time.Minute
 	if f, err := strconv.ParseFloat(strings.TrimSpace(os.Getenv("OPENCODE_TURN_TIMEOUT_S")), 64); err == nil && f > 0 {
 		timeout = time.Duration(f * float64(time.Second))
@@ -62,8 +41,7 @@ func busyTTL() time.Duration {
 }
 
 // IsBusy mirrors openclaw's OpenclawService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for its first inbound frame. Auto-clears after
-// busyTTL if the final frame got dropped so the sensing pipeline cannot wedge.
+// chat.send is still waiting for its first inbound frame.
 func (s *OpenCodeService) IsBusy() bool {
 	if s.activeTurn.Load() {
 		since := s.busySince.Load()
@@ -71,11 +49,6 @@ func (s *OpenCodeService) IsBusy() bool {
 			slog.Warn("busy flag expired — auto-clearing (final frame likely missed)",
 				"component", "opencode", "stuck_for_s", int(time.Since(time.UnixMilli(since)).Seconds()))
 			s.activeTurn.Store(false)
-			// Drop the dead run id: ensureTurnStarted returns early while it is
-			// set, so leaving it would attribute the NEXT turn's frames to the
-			// expired run. The codex runtime additionally tells the waiting
-			// client why (failStuckTurn); mirror that here when this backend is
-			// next exercised on a device.
 			s.clearTurn()
 			go s.drainPendingEvents()
 			return s.HasFreshPendingChatSend()
@@ -85,7 +58,7 @@ func (s *OpenCodeService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
-// SetBusy flips active state. Drains pending events on idle.
+// SetBusy flips active state.
 func (s *OpenCodeService) SetBusy(busy bool) {
 	if !busy && (s.getCurrentRunID() != "" || s.hasPendingRuns()) {
 		return
@@ -117,13 +90,7 @@ func (s *OpenCodeService) QueuePendingEvent(eventType, msg string, images []stri
 	})
 }
 
-// drainPendingEvents replays buffered sensing events. Behaviour matches the
-// openclaw / hermes drain: voice events prioritised, expirable high-frequency
-// types (presence / motion / emotion) coalesced to latest-only and stale entries
-// dropped after expireAfter.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
+// DrainPendingEvents replays buffered sensing events; it also runs when the speaker frees up.
 func (s *OpenCodeService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -143,11 +110,7 @@ func (s *OpenCodeService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
+	// Put the batch back while the last reply is still playing; replaying now would cut it off.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -261,14 +224,11 @@ func (s *OpenCodeService) drainPendingEvents() {
 		msg = strings.TrimSpace(msg)
 		msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
-		// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-		// on the reply (same as the live PostEvent path).
 		if ev.eventType == "voice_agent_handled" {
 			s.MarkSilentRun(runID)
 		}
 
 		if telemetry.TaskGroup(ev.eventType) == "sensing" {
-			// Keep this cohort stable if the socket disappears before dispatch.
 			ev.fixedRunID = runID
 			events[i] = ev
 			telemetry.ReportTaskStarted(ev.eventType, "", runID)

@@ -43,13 +43,11 @@ func TestBuildMergedSensing(t *testing.T) {
 	if !strings.HasPrefix(merged, "[ambient signals batched") {
 		t.Errorf("merged should start with the batch header, got:\n%s", merged)
 	}
-	// Every event's rendered prefix must survive into the single message.
 	for _, want := range []string{"[sensing:presence.enter]", "[emotion]", "[activity]"} {
 		if !strings.Contains(merged, want) {
 			t.Errorf("merged missing %q:\n%s", want, merged)
 		}
 	}
-	// types preserves input order and covers every contributing event.
 	wantTypes := []string{"presence.enter", "emotion.detected", "motion.activity"}
 	if len(types) != len(wantTypes) {
 		t.Fatalf("types = %v, want %v", types, wantTypes)
@@ -59,7 +57,6 @@ func TestBuildMergedSensing(t *testing.T) {
 			t.Errorf("types[%d] = %q, want %q", i, types[i], want)
 		}
 	}
-	// oldest tracks the earliest queuedAt so the flow span reports true wait time.
 	if !oldest.Equal(now.Add(-3 * time.Second)) {
 		t.Errorf("oldest = %v, want %v", oldest, now.Add(-3*time.Second))
 	}

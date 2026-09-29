@@ -33,7 +33,6 @@ def _agent_with_missing_outcome():
     agent = Agent()
     agent._recv_queue.put(OutputEvent(output=TextOutput(text=FILLER)))
     agent._recv_queue.put(TurnDoneEvent(
-        # A provider terminal must not override the explicit fallback decision.
         execution_completed=True,
         fallback_to_main=True,
         user_transcript=REQUEST,

@@ -10,45 +10,22 @@ import (
 	"go.autonomous.ai/os/system/lib/flow"
 )
 
-// Incomplete-turn error recovery.
-//
-// OpenClaw 2026.6.x ships an "incomplete turn detected" check that surfaces
-// "⚠️ Agent couldn't generate a response" when its end-of-turn payload count
-// is 0 — even when the model DID reply (text arrived via streamed deltas, or
-// only landed in session history; openclaw#68076 / #67855 family, worst in
-// 2026.6.11 #98528). Without recovery the web UI renders an error banner and
-// the spoken reply is lost while the tools' side effects already ran.
-//
-// tryRecoverIncompleteTurn salvages the reply on lifecycle:error:
-//  1. streamed deltas buffered for this run (authoritative), else
-//  2. chat.history — but ONLY assistant messages that appear AFTER the last
-//     user message, so a turn that truly produced nothing can never re-show
-//     the previous turn's reply.
-//
-// Recovered turns emit the same flow events as the normal lifecycle:end path
-// (tts_send / tts_suppressed + chat_response) so web chat and Flow Monitor
-// render a completed turn; markers from a history-recovered text are stripped
-// but NOT fired (the turn's tool side effects already executed).
+// Incomplete-turn recovery: OpenClaw can report "couldn't generate a response" even when the
+// model replied (openclaw#68076, #67855, #98528); the reply is salvaged on lifecycle:error.
 
-// errorRecoveryTTL is how long a recovered run suppresses follow-up error
-// banners. The gateway auto-retries an incomplete turn and re-surfaces the
-// same error ~15s later on the chat stream; 2 minutes covers retries without
-// masking a genuinely new failure of a later turn (runIDs are unique anyway).
+// errorRecoveryTTL is how long a recovered run suppresses follow-up error banners; covers
+// the gateway's auto-retry error (~15s later) without masking a later turn's failure.
 const errorRecoveryTTL = 2 * time.Minute
 
-// tryRecoverIncompleteTurn attempts to salvage the assistant reply for an
-// errored run. Returns true when a reply was recovered and emitted — the
-// caller then renders the lifecycle event as recovered and later chat-stream
-// errors for this run are suppressed via markErrorRecovered/wasErrorRecovered.
+// tryRecoverIncompleteTurn salvages an errored run's reply from buffered deltas, else from
+// chat.history after the last user message. Returns true when a reply was recovered and emitted.
 func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey string) bool {
-	// Scope: device-originated runs and the agent's main session only.
-	// Sub-session lifecycles (subagents etc.) have no device-facing reply.
+	// Device-originated runs and the main session only; sub-sessions have no device-facing reply.
 	if !isDeviceOutboundChatRunID(flowRunID) && sessionKey != h.agentGateway.GetSessionKey() {
 		return false
 	}
 
-	// Persist streaming counters exactly like lifecycle:end would — the flow
-	// monitor otherwise shows no assistant row for the recovered turn.
+	// Persist streaming counters like lifecycle:end, or Flow Monitor shows no assistant row.
 	if s := h.drainStreamStats(flowRunID); s != nil && s.assistantChunks > 0 {
 		flow.Log("agent_last_token", map[string]any{
 			"run_id": flowRunID,
@@ -69,8 +46,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 		if strings.TrimSpace(raw) == "" {
 			return false
 		}
-		// Strip markers but never fire them from history text: the turn's
-		// tool/marker side effects already ran inside the gateway.
+		// Strip but never fire history markers: their side effects already ran in the gateway.
 		_, text = extractHWCalls(raw)
 		hwCalls = nil
 		source = "chat_history"
@@ -86,7 +62,6 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 		return false
 	}
 
-	// CoT-leak filter parity with the lifecycle:end flush.
 	f := newCoTLeakFilter(h.replyLanguageCode())
 	filtered := strings.TrimSpace(f.filterText(text))
 	if len(f.dropped) > 0 {
@@ -101,8 +76,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 	}
 	text = filtered
 
-	// Buffer-recovered markers: fire the ones not already fired at stream
-	// time (leading markers fire mid-turn via tryFirstSentenceFlush).
+	// Fire only markers not already fired at stream time (tryFirstSentenceFlush).
 	fired := h.consumeFiredHWCount(runID)
 	if fired > len(hwCalls) {
 		fired = len(hwCalls)
@@ -111,8 +85,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 		h.fireHWCallsSync(rest, flowRunID)
 	}
 
-	// Same suppress ladder as lifecycle:end (consuming the flags here is
-	// correct — no lifecycle:end will follow for this run).
+	// Consuming the suppress flags here is correct: no lifecycle:end follows for this run.
 	suppress := h.clearTTSSuppress(runID)
 	if suppress == "" && h.agentGateway.ConsumeWebChatRun(flowRunID) {
 		suppress = "web_chat"
@@ -150,9 +123,7 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 	case suppress != "":
 		flow.Log("tts_suppressed", map[string]any{"run_id": flowRunID, "reason": suppress, "text": text}, flowRunID)
 	case remainder != "":
-		// full_text carries the whole reply for web display (chat + flow
-		// turn read tts_send only); remainder skips the already-streamed
-		// first sentence exactly like the lifecycle:end path.
+		// full_text carries the whole reply for web display; remainder skips the already-streamed first sentence.
 		flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": remainder, "full_text": text, "streamed_len": streamedLen}, flowRunID)
 		h.deliverTTSQueue(remainder, flowRunID, "recovered-reply TTS delivery failed")
 	default:
@@ -162,10 +133,8 @@ func (h *AgentHandler) tryRecoverIncompleteTurn(runID, flowRunID, sessionKey str
 	return true
 }
 
-// extractTrailingAssistantFromHistory returns the joined text of assistant
-// messages that appear AFTER the last user message in a chat.history payload,
-// or "" when the window has no user anchor or nothing follows it. The anchor
-// requirement is the guard against resurfacing the previous turn's reply.
+// extractTrailingAssistantFromHistory returns assistant text after the last user message in a
+// chat.history payload, or "" when there is no user anchor (guards against replaying the previous reply).
 func extractTrailingAssistantFromHistory(payload json.RawMessage) string {
 	var hist struct {
 		Messages []struct {
@@ -197,9 +166,7 @@ func extractTrailingAssistantFromHistory(payload json.RawMessage) string {
 	return strings.TrimSpace(strings.Join(parts, "\n"))
 }
 
-// historyContentText flattens a chat.history message content — plain string
-// or an array of {type,text} blocks (same shapes as
-// extractLastUserMessageFromHistory handles).
+// historyContentText flattens chat.history content (string or [{type,text}] blocks).
 func historyContentText(content json.RawMessage) string {
 	var s string
 	if json.Unmarshal(content, &s) == nil {
@@ -221,9 +188,7 @@ func historyContentText(content json.RawMessage) string {
 	return ""
 }
 
-// markErrorRecovered records that flowRunID's reply was recovered so the
-// chat-stream error (and the gateway's retry error ~15s later) can be
-// suppressed instead of rendering a banner over the recovered reply.
+// markErrorRecovered records that flowRunID's reply was recovered so later chat-stream errors are suppressed.
 func (h *AgentHandler) markErrorRecovered(flowRunID string) {
 	now := time.Now()
 	h.errorRecoveredMu.Lock()
@@ -236,8 +201,7 @@ func (h *AgentHandler) markErrorRecovered(flowRunID string) {
 	h.errorRecoveredRuns[flowRunID] = now
 }
 
-// wasErrorRecovered reports whether flowRunID had its reply recovered within
-// errorRecoveryTTL.
+// wasErrorRecovered reports whether flowRunID had its reply recovered within errorRecoveryTTL.
 func (h *AgentHandler) wasErrorRecovered(flowRunID string) bool {
 	h.errorRecoveredMu.Lock()
 	defer h.errorRecoveredMu.Unlock()

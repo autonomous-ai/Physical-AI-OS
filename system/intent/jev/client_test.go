@@ -311,7 +311,6 @@ func TestJevParameterSchemaValidation(t *testing.T) {
 			t.Fatalf("accepted parameter name %q", name)
 		}
 	}
-	// Underscores may otherwise create an ambiguous question key across candidates.
 	if validateJevCandidates([]Candidate{
 		{ID: "a_b", Description: "first", Parameters: map[string]Parameter{"c": {Description: "value", Options: []string{"red"}}}},
 		{ID: "a", Description: "second", Parameters: map[string]Parameter{"b_c": {Description: "value", Options: []string{"red"}}}},

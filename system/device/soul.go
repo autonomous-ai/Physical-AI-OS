@@ -14,21 +14,9 @@ import (
 // boot path, so a hung artifact host must not hold the gateway back.
 const soulDownloadTimeout = 30 * time.Second
 
-// ResolveSoul returns the soul text declared by robots/<deviceType>/ROBOT.md:
-//
-//   - no soul_ref      → hasSoul=false, no error. A soulless body (e.g. Intern)
-//     keeps whatever default soul its runtime ships; we never override it.
-//   - http(s):// ref   → downloaded artifact.
-//   - any other value  → path read relative to robots/<deviceType>/.
-//
-// A declared soul_ref that fails to resolve returns an error rather than
-// silently going soulless: the body named a character but did not ship it,
-// which is a deploy fault worth surfacing.
-//
-// This is the runtime-agnostic half of the `soul_ref` contract that
-// docs/porting-a-robot.md promises. Each runtime still decides how to lay the
-// text out on disk, but none of them should re-implement the lookup — Hermes
-// shipped without it and its devices booted with no persona at all.
+// ResolveSoul returns the soul text named by soul_ref in robots/<deviceType>/ROBOT.md
+// (http(s) URL or path relative to that dir). No soul_ref returns hasSoul=false;
+// a declared soul_ref that fails to resolve is an error.
 func ResolveSoul(deviceType string) (content []byte, hasSoul bool, err error) {
 	ref := SoulRef(deviceType)
 	if ref == "" {
@@ -41,8 +29,7 @@ func ResolveSoul(deviceType string) (content []byte, hasSoul bool, err error) {
 		}
 		return b, true, nil
 	}
-	// Reject unsupported schemes (ftp://, s3://, …) instead of treating them as
-	// a relative path, which would fail later with a confusing "no such file".
+	// Reject unsupported schemes instead of treating them as a relative path.
 	if strings.Contains(ref, "://") {
 		return nil, false, fmt.Errorf("unsupported soul_ref scheme: %q (use http(s):// or a path)", ref)
 	}

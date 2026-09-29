@@ -70,7 +70,6 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 		"agent":         h.agentInfo(),
 	}
 
-	// Parse /proc/meminfo for RAM + swap (KB).
 	if data, err := os.ReadFile("/proc/meminfo"); err == nil {
 		memTotal, memAvail, swapTotal, swapFree := parseMeminfo(string(data))
 		info["memTotal"] = memTotal
@@ -85,7 +84,6 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 		}
 	}
 
-	// Disk usage for root filesystem
 	diskTotal, diskUsed, diskPercent := readDiskUsage("/")
 	info["diskTotal"] = diskTotal
 	info["diskUsed"] = diskUsed
@@ -94,13 +92,8 @@ func (h *HealthHandler) SystemInfo(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(info))
 }
 
-// deviceCapabilities returns this device's DECLARED capabilities (sorted), read
-// from robots/<type>/ROBOT.md via device.Capabilities. This is the OS contract
-// surface the web gates tabs on ("address capabilities, not routes"): Go is the
-// capability owner — it already parses the same ROBOT.md and gates intent,
-// skills, ambient, etc. on it — so the web asks the OS here rather than reaching
-// through to the HAL runtime for a declaration-level fact. Empty slice (never
-// null) when the device declares none, so the client always gets an array.
+// deviceCapabilities returns this device's DECLARED capabilities (sorted),
+// read from robots/<type>/ROBOT.md via device.Capabilities.
 func (h *HealthHandler) deviceCapabilities() []string {
 	caps := device.Capabilities(h.config.DeviceTypeOrDefault())
 	out := make([]string, 0, len(caps))
@@ -111,10 +104,8 @@ func (h *HealthHandler) deviceCapabilities() []string {
 	return out
 }
 
-// agentInfo returns the OpenClaw agent connection snapshot — name, connected
-// state, emotion, version, and uptime counters. Public (no auth) by virtue of
-// living on /api/system/info; payload is intentionally non-sensitive (no
-// session token value, no PII).
+// agentInfo returns the OpenClaw agent connection snapshot — name,
+// connected state, emotion, version, and uptime counters.
 func (h *HealthHandler) agentInfo() map[string]any {
 	emotion, _ := hal.GetEmotion()
 	var uptime int64
@@ -185,8 +176,7 @@ func getPublicIP() string {
 }
 
 // getTailscaleIP returns the device's Tailscale IPv4 address, or empty string
-// if Tailscale isn't installed/running. Shells out to `tailscale ip -4` —
-// the canonical source whether tailscaled is in kernel or userspace mode.
+// if Tailscale isn't installed/running.
 func getTailscaleIP() string {
 	ctx, cancel := context.WithTimeout(context.Background(), 1500*time.Millisecond)
 	defer cancel()
@@ -194,7 +184,6 @@ func getTailscaleIP() string {
 	if err != nil {
 		return ""
 	}
-	// `tailscale ip -4` prints one IPv4 per line; take the first non-empty.
 	for _, line := range strings.Split(string(out), "\n") {
 		if ip := strings.TrimSpace(line); ip != "" {
 			return ip
@@ -229,9 +218,6 @@ func (h *HealthHandler) NetworkInfo(c *gin.Context) {
 
 	info["tailscaleIp"] = getTailscaleIP()
 
-	// Quick internet check (non-blocking, use cached result if possible).
-	// The probe's round-trip time rides along as pingMs (0 = unmeasured) so
-	// the web can show internet latency, not just a reachable/unreachable bit.
 	if ok, rtt := h.networkService.CheckInternetRTT(); ok {
 		info["internet"] = true
 		info["pingMs"] = int(rtt + 0.5)
@@ -271,7 +257,6 @@ func initCPUSampler() {
 				time.Sleep(2 * time.Second)
 				curAgg, curCores := readCPUStatAll()
 
-				// Aggregate
 				totalDelta := curAgg.total - prevAgg.total
 				idleDelta := curAgg.idle - prevAgg.idle
 				var pct float64
@@ -279,7 +264,6 @@ func initCPUSampler() {
 					pct = float64(totalDelta-idleDelta) / float64(totalDelta) * 100
 				}
 
-				// Per-core
 				perCore := make([]float64, 0, len(curCores))
 				for i := 0; i < len(curCores) && i < len(prevCores); i++ {
 					td := curCores[i].total - prevCores[i].total
@@ -364,11 +348,7 @@ func readCPUTemp() float64 {
 	return float64(milliC) / 1000.0
 }
 
-// halVersionCache holds the most recent /version reading. HAL version
-// only changes on OTA (rare), so a 60s TTL is plenty fresh while sparing the
-// loopback HTTP call from a 5s monitor poll. On error we keep serving the
-// previously cached value so a transient HAL restart doesn't blank out
-// the version row in the UI.
+// halVersionCache holds the most recent /version reading.
 var halVersionCache = struct {
 	mu        sync.Mutex
 	value     string
@@ -403,7 +383,6 @@ func readHALUptime() int64 {
 	if ts == "" || ts == "n/a" {
 		return 0
 	}
-	// systemd format: "Fri 2026-04-03 10:53:50 +0700" or "Fri 2026-04-03 10:53:50 UTC"
 	formats := []string{
 		"Mon 2006-01-02 15:04:05 -0700",
 		"Mon 2006-01-02 15:04:05 MST",

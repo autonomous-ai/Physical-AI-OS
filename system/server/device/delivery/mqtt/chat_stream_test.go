@@ -12,8 +12,7 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// newTestStream builds a stream whose transport captures payloads instead of
-// reaching a broker.
+// newTestStream builds a stream whose transport captures payloads.
 func newTestStream() (*ChatStream, func() []domain.MQTTChatEventData) {
 	var mu sync.Mutex
 	var sent []domain.MQTTChatEventData
@@ -45,9 +44,7 @@ func newTestStream() (*ChatStream, func() []domain.MQTTChatEventData) {
 	}
 }
 
-// The bus carries every turn on the device, including voice ones. Only runs the
-// backend started may be mirrored — otherwise a spoken conversation in the room
-// would stream to whoever last opened the app.
+// The bus carries every turn on the device, including voice ones.
 func TestChatStreamIgnoresUntrackedRuns(t *testing.T) {
 	s, sent := newTestStream()
 
@@ -60,8 +57,7 @@ func TestChatStreamIgnoresUntrackedRuns(t *testing.T) {
 	}
 }
 
-// Deltas are accumulated, not forwarded 1:1 — at QoS 1 each publish is a
-// round-trip, and the bus emits one delta per model chunk.
+// Deltas are accumulated, not forwarded 1:1.
 func TestChatStreamCoalescesDeltas(t *testing.T) {
 	s, sent := newTestStream()
 	s.Track("run1", "sess1")
@@ -95,8 +91,7 @@ func TestChatStreamCoalescesDeltas(t *testing.T) {
 	}
 }
 
-// A tool chip must not overtake the sentence that preceded it: pending delta
-// text is flushed before any other event goes out.
+// Pending delta text is flushed before any other event.
 func TestChatStreamFlushesPendingBeforeOtherEvents(t *testing.T) {
 	s, sent := newTestStream()
 	s.Track("run1", "sess1")
@@ -116,8 +111,7 @@ func TestChatStreamFlushesPendingBeforeOtherEvents(t *testing.T) {
 	}
 }
 
-// chat_response ends the turn: it is published, then the run stops being
-// mirrored so late bus noise doesn't leak onto the wire.
+// A terminal chat_response is published, then the run stops being mirrored.
 func TestChatStreamStopsAtTerminalEvent(t *testing.T) {
 	s, sent := newTestStream()
 	s.Track("run1", "sess1")
@@ -142,11 +136,7 @@ func TestChatStreamStopsAtTerminalEvent(t *testing.T) {
 	}
 }
 
-// OpenClaw pushes chat_response repeatedly while a reply streams in — state
-// "delta"/"partial" chunks before the terminal one. Ending the mirror on the
-// FIRST chat_response regardless of state truncates every reply to its first
-// chunk; only state "complete"/"final"/"error" may end it (must match the web
-// monitor's own reducer — ChatSection.tsx).
+// Only a terminal chat_response state ends the mirror.
 func TestChatStreamChatResponseNotTerminalUntilFinalState(t *testing.T) {
 	s, sent := newTestStream()
 	s.Track("run1", "sess1")
@@ -194,8 +184,7 @@ func TestChatStreamSweepsExpiredRuns(t *testing.T) {
 	}
 }
 
-// The bus puts delta text on Summary; the flow_event shape nests it under
-// detail.text. Both must read.
+// Delta text is read from Summary and from detail.text.
 func TestDeltaText(t *testing.T) {
 	cases := []struct {
 		name string

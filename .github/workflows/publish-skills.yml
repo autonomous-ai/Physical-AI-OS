@@ -1,13 +1,7 @@
 name: Publish skills
 
-# The last manual step between a merged skill folder and every robot (#199).
-# On merge to main this uploads one deterministic zip per skills/<name>/ and
-# rewrites the `skills` block of ota/metadata.json; every body's skill watcher
-# picks the new version up within 5 min.
-#
-# Deliberately NOT part of ci.yml: that workflow's job names are required
-# checks on main, and a publish job that skips without credentials must never
-# be able to block a merge.
+# On merge to main: upload skill zips and update ota/metadata.json.
+# Kept out of ci.yml so a skipped publish never blocks a required check.
 
 on:
   push:
@@ -19,10 +13,7 @@ on:
       - '.github/workflows/publish-skills.yml'
   workflow_dispatch:
 
-# metadata.json is read-modify-write (download, splice the skills block, upload).
-# Two merges publishing at once would lose one side's versions, so runs are
-# serialized — and never cancelled, because a cancel mid-upload leaves the feed
-# half-written.
+# Serialized and never cancelled: metadata.json is read-modify-write.
 concurrency:
   group: publish-skills
   cancel-in-progress: false
@@ -40,13 +31,10 @@ jobs:
         with:
           python-version: '3.12'
 
-      # A stale catalog means the feed and what os-server/setup.sh believe about
-      # it disagree. Cheaper to fail here than to publish a skill no body loads.
       - name: skill catalog matches the skills/ tree
         run: python3 scripts/skills/gen_catalog.py --check
 
-      # The secret is added once by a maintainer with GCS access. Until then this
-      # workflow announces the skip instead of failing every merge to main.
+      # Skip with a warning until the GCS secret is configured.
       - name: credentials present?
         id: creds
         env:
@@ -67,10 +55,6 @@ jobs:
       - uses: google-github-actions/setup-gcloud@v2
         if: steps.creds.outputs.have == 'true'
 
-      # No .skill-hashes cache on a fresh runner, so every skill is re-zipped and
-      # re-uploaded. That is correct, not wasteful-by-accident: the zips are
-      # byte-deterministic, so an unchanged skill uploads identical content and
-      # keeps its content-hash version.
       - name: upload skill zips + metadata.json
         if: steps.creds.outputs.have == 'true'
         run: bash scripts/release/upload-skills.sh

@@ -7,7 +7,7 @@ type Network struct {
 	Channel  int    `json:"channel"`
 	Rate     string `json:"rate"`
 	Signal   int    `json:"signal"`
-	LinkRate int    `json:"linkRate"` // current PHY link rate in Mbps; 0 = unknown
+	LinkRate int    `json:"linkRate"` // Mbps; 0 = unknown
 	Security string `json:"security"`
 }
 

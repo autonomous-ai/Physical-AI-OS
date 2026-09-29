@@ -114,6 +114,6 @@ Phase 0 deliverables only:
 2. LAN binding + systemd unit changes.
 3. `/v1/` route prefix migration.
 4. OpenAPI spec committed (HAL auto, OS server handwritten).
-5. Dev portal skeleton (`docs/dev/index.md` + `docs/vi/dev/index.md`).
+5. Dev portal skeleton (planned `docs/dev/index.md` + `docs/vi/dev/index.md`; not created yet).
 
 Outcome: third-party dev can `curl -H "Authorization: Bearer ..." http://lamp.local:5001/v1/servo/play` from their laptop. Everything else stacks on top.

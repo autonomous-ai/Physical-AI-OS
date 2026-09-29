@@ -95,11 +95,8 @@ final class MenuBarController: NSObject, NSMenuItemValidation {
     // MARK: - header text + icon
 
     private func iconSymbol(for state: AppState) -> NSImage? {
-        // `lit` = device visibly "on": paired, healthy WS, not paused. In that
-        // state we drop template mode and paint the bulb in system yellow so
-        // it actually looks lit against the menu bar — `isTemplate=true` would
-        // flatten lightbulb.fill into the same monochrome silhouette as the
-        // outline, making "paired+connected" indistinguishable from "not paired".
+        // `lit` (paired, connected, not paused) paints a yellow non-template bulb;
+        // template mode would make it look identical to the unpaired outline.
         let name: String
         var lit = false
         switch state.pairing {

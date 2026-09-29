@@ -31,11 +31,9 @@ func reconnectReplayService(t *testing.T) *CodexService {
 
 func TestConnectionReadyDrainsOnlyUnsentEventsOnceWithoutTurnEnd(t *testing.T) {
 	s := reconnectReplayService(t)
-	// Reconstruct the disconnected state: one request was already transmitted
-	// (delivery now uncertain), while another user message only reached the local queue.
 	s.addPendingRun("already-sent", "old-run")
 	s.pendingEvents = []pendingEvent{{eventType: "web_chat", msg: "Please answer in English.", fixedRunID: "queued-user", queuedAt: time.Now()}}
-	s.drainPendingEvents() // An offline idle/speaker callback must retain the user message.
+	s.drainPendingEvents()
 	if len(s.pendingEvents) != 1 {
 		t.Fatal("offline drain discarded unsent event")
 	}
@@ -49,7 +47,6 @@ func TestConnectionReadyDrainsOnlyUnsentEventsOnceWithoutTurnEnd(t *testing.T) {
 			return
 		}
 		defer peer.Close()
-		// Duplicate ready notices do not represent two user requests.
 		for i := 0; i < 2; i++ {
 			if err := peer.WriteJSON(map[string]any{"type": "bridge.status", "state": "ready"}); err != nil {
 				peerDone <- err
@@ -92,7 +89,6 @@ func TestConnectionReadyDrainsOnlyUnsentEventsOnceWithoutTurnEnd(t *testing.T) {
 			t.Error("replay began before event dispatch was initialized")
 		}
 		// Ready-time replay must not consume or resend the old correlation record.
-		// The existing disconnect teardown clears these records later.
 		s.pendingMu.Lock()
 		if len(s.pendingRuns) != 2 || s.pendingRuns[0].reqID != "already-sent" {
 			t.Errorf("ready-time drain changed transmitted request records: %+v", s.pendingRuns)

@@ -1,12 +1,14 @@
 # Agent session compaction — cách hoạt động và vì sao có thể đè SKILL.md
 
-> **Tóm tắt:** Agentic runtime tự compact session agent khi context chạm ~80k tokens. Kết quả compact là một chuỗi `summary` — chuỗi này được **chèn đầu mỗi turn kế tiếp** cho đến lần compact sau. Nếu rule vô tình bị copy/generalize vào summary, chúng có thể đè `SKILL.md` đang load — vì summary nằm trước trong prompt và được coi như "context đã chốt."
+> **Tóm tắt:** Compaction do chính agentic runtime thực hiện (OpenClaw mode `safeguard`, gần giới hạn context của model). Trigger auto-compact của OS server **hiện đang tắt** — thay vào đó OS server xoay sang session mới (`/new`) khi vượt ngưỡng rotation của backend (150k reported tokens trên OpenClaw). Khi compaction xảy ra, kết quả compact là một chuỗi `summary` — chuỗi này được **chèn đầu mỗi turn kế tiếp** cho đến lần compact sau. Nếu rule vô tình bị copy/generalize vào summary, chúng có thể đè `SKILL.md` đang load — vì summary nằm trước trong prompt và được coi như "context đã chốt."
 >
 > Doc này là reference link từ nút **📋 Summary** ở Flow Monitor (modal: `system/web/src/pages/monitor/FlowSection/CompactionModal.tsx`).
 
 ## Vì sao có compact
 
-Agentic runtime giữ conversation history dài. Mỗi turn là tập hợp các entry `user event`, `thinking`, `tool_call`, `tool_result`, `assistant reply` — tất cả được ghi trong session `.jsonl`. Sau vài giờ hoạt động, tokens tăng nhanh. Khi tổng context chạm **~80k tokens**, LLM không nhét thêm input được nữa → runtime (hoặc OS server — xem phần trigger) compact: gộp entry cũ thành 1 đoạn summary, xóa entry gốc, tiếp tục.
+Agentic runtime giữ conversation history dài. Mỗi turn là tập hợp các entry `user event`, `thinking`, `tool_call`, `tool_result`, `assistant reply` — tất cả được ghi trong session `.jsonl`. Sau vài giờ hoạt động, tokens tăng nhanh. Khi context gần chạm giới hạn model, runtime compact: gộp entry cũ thành 1 đoạn summary, xóa entry gốc, tiếp tục.
+
+Hiện nay OS server cố giữ session thấp hơn nhiều so với mốc đó: sau mỗi turn nó gọi `maybeAutoNewSession`, hỏi `ShouldRotateSession(totalTokens, turns)` của backend và khi fire thì gửi `NewSession` (`/new` trên OpenClaw) — tức thì, không summary, external memory của device (mood, habit, owner) vẫn giữ. OpenClaw rotate khi vượt `sessionRotateTokenThreshold = 150_000` reported tokens (≈185k context thực). Compaction riêng của OpenClaw được `runtimes/openclaw/onboarding.go` cấu hình `mode: "safeguard"`, `reserveTokensFloor: 5000` (chốt chặn cuối ở ~195k với model 200k), nên compaction trên device giờ hiếm.
 
 ## Record compaction
 
@@ -47,7 +49,7 @@ Field chính:
 
 ## Quy trình compact
 
-1. Trigger fire (xem phần sau) — `tokens ≥ 80k`.
+1. Trigger fire (xem phần sau) — thường là safeguard của runtime gần giới hạn context.
 2. Runtime đọc history gần đây + các file trong `details.readFiles`.
 3. Gọi 1 LLM riêng để tóm tắt input đó thành 1 chuỗi (≤ ~16000 chars — cap cứng quan sát được).
 4. Ghi record compaction vào session `.jsonl` với `type:"compaction"`.
@@ -73,25 +75,27 @@ Vì summary **đứng trước** SKILL.md trong prompt, LLM có xu hướng coi 
 
 ## Trigger compact (phân biệt manual vs auto)
 
-Có ít nhất 3 cách 1 compaction có thể fire:
+Có 3 nguồn khả dĩ; hiện chỉ nguồn đầu tiên đang active:
 
 | Nguồn | Trigger | Side-effects | `fromHook` quan sát |
 |---|---|---|---|
-| **Hook nội bộ OpenClaw** | tokens ≥ 80k, detect server-side | — | `true` |
-| **OS server RPC** (`system/server/openclaw/delivery/sse/handler_events.go:380-406`) | OS server thấy `u.TotalTokens > 80_000` trên lifecycle event, gọi `agentGateway.CompactSession(sessionKey)` | TTS nói *"Hold on, tidying up a bit."*; cooldown 2 phút qua `h.compacting` atomic | chưa rõ — cần verify từ source OpenClaw |
+| **Hook nội bộ OpenClaw** | OpenClaw mode `safeguard` gần giới hạn context (`reserveTokensFloor` 5000) | — | `true` |
+| **OS server RPC — hiện đang tắt** (`maybeAutoCompact` trong `system/server/agent/delivery/http/handler_session_lifecycle.go`) | Call site bị comment trong `handler_event_agent.go`, thay bằng `maybeAutoNewSession`. Nếu bật lại: fire khi `ShouldRotateSession` trả true, gọi `agentGateway.CompactSession(sessionKey)` | TTS nói câu `PhraseCompactNotice`; cooldown 2 phút qua `h.compacting` atomic; flow event `compact_triggered` | chưa rõ — cần verify từ source OpenClaw |
 | **Manual / debug** | Ai đó gọi `sessions.compact` RPC trực tiếp | — | nhiều khả năng `false` |
 
-**Heuristic tạm để phân biệt:** nếu `timestamp` record cách vài giây sau log `"sessions.compact sent"` của OS server cho cùng `sessionKey` → OS server initiate. Ngược lại → hook nội bộ OpenClaw.
+**Heuristic để phân biệt:** khi trigger OS server đang tắt, mọi record mới đều từ runtime (hoặc gọi tay). Nếu bật lại trigger, record có `timestamp` cách vài giây sau log `"sessions.compact sent"` của OS server cho cùng `sessionKey` → OS server initiate.
 
 Tương lai có thể: modal correlate timestamp của compact mới nhất với log OS server để label trigger.
 
-## Tần suất thực tế (mẫu 48h, session main)
+## Tần suất thực tế (mẫu 48h lịch sử, session main)
+
+Ghi lại khi cả runtime và OS server đều compact ở ~80k; giữ để tham khảo.
 
 | Pattern | Interval giữa các lần compact |
 |---|---|
 | Busy ban ngày | 1–3 h |
 | Idle qua đêm | 10–13 h |
-| Burst bất thường | nhiều lần compact trong vài phút ở `tokensBefore ≈ 45–60k` (dưới ngưỡng 80k) |
+| Burst bất thường | nhiều lần compact trong vài phút ở `tokensBefore ≈ 45–60k` (dưới ngưỡng 80k thời đó) |
 
 Burst bất thường chưa rõ nguyên nhân — có thể session restart / checkpoint restore làm hook fire spurious, hoặc có tool nào đó re-issue `sessions.compact`. Cần điều tra khi tái diễn.
 
@@ -109,7 +113,30 @@ Khi Flow Monitor cho thấy agent viện rule mà `grep` không tìm thấy tron
 
 **UI.** Flow Monitor header → nút **📋 Summary** → modal show `timestamp`, `summary chars`, `session file`, và toàn văn summary.
 
-**API.** `GET /api/agent/compaction-latest?session=<key>` (default: `agent:main:main`). Response schema xem bản [tiếng Anh](../agent-compaction.md#inspecting-the-active-summary).
+**API.** `GET /api/agent/compaction-latest?session=<key>&at=<iso-ts>` (admin auth; session key mặc định: `agent:main:main`; `at` rỗng = record mới nhất, ngược lại là compaction đang active tại thời điểm đó). Chỉ cho OpenClaw: đọc `sessions.json` và scan session `.jsonl`. Đây là viewer read-only — OS server không có HTTP endpoint nào trigger compaction. Response schema:
+
+```json
+{
+  "status": 1,
+  "data": {
+    "found": true,
+    "sessionKey": "agent:main:main",
+    "sessionFile": "/root/.openclaw/agents/main/sessions/<id>.jsonl",
+    "compactionCount": 18,
+    "id": 17170331,
+    "parentId": "369818c9",
+    "timestamp": "2026-04-24T03:21:30.305Z",
+    "nextTimestamp": "",
+    "tokensBefore": 80458,
+    "summaryChars": 14263,
+    "summary": "...",
+    "details": { "readFiles": ["..."], "modifiedFiles": ["..."] },
+    "fromHook": true,
+    "firstKeptEntryId": 17170331,
+    "atQuery": ""
+  }
+}
+```
 
 **Trực tiếp (Pi SSH).** Tất cả compaction record nằm trong session `.jsonl`. Pull kèm timestamp + metadata:
 
@@ -126,10 +153,12 @@ for l in sys.stdin:
 
 | File | Vai trò |
 |---|---|
-| `system/server/openclaw/delivery/sse/handler_api_compaction.go` | HTTP handler: đọc `sessions.json`, scan session `.jsonl` tìm `type:"compaction"` mới nhất. |
-| `system/server/openclaw/delivery/sse/handler_events.go` | RPC trigger phía OS server (auto-compact khi `TotalTokens > 80_000`, TTS notice, cooldown 2 phút). |
-| `runtimes/openclaw/service_chat.go` | `CompactSession(sessionKey)` — sender của `sessions.compact` RPC. |
-| `system/domain/agent.go` | Interface `AgentGateway.CompactSession`. |
+| `system/server/agent/delivery/http/handler_api_compaction.go` | HTTP handler: đọc `sessions.json`, scan session `.jsonl` tìm record `type:"compaction"` active tại `?at` (mặc định mới nhất). |
+| `system/server/agent/delivery/http/handler_session_lifecycle.go` | `maybeAutoNewSession` (active: `/new` khi rotate, cooldown 30 s) và `maybeAutoCompact` (đang tắt: TTS notice, cooldown 2 phút). |
+| `system/server/agent/delivery/http/handler_event_agent.go` | Hook token-usage sau mỗi turn; gọi `maybeAutoNewSession`, lời gọi `maybeAutoCompact` bị comment. |
+| `runtimes/openclaw/service_chat.go` | `CompactSession(sessionKey)` — sender của `sessions.compact` RPC; `sessionRotateTokenThreshold = 150_000`. |
+| `runtimes/openclaw/onboarding.go` | Ép OpenClaw `compaction.mode = "safeguard"`, `reserveTokensFloor = 5000`. |
+| `system/domain/agent.go` | Interface `AgentGateway.CompactSession`, `NewSession`, `ShouldRotateSession`. |
 | `system/web/src/pages/monitor/FlowSection/CompactionModal.tsx` | UI modal — show timestamp, summary chars, session file, toàn văn summary; link về doc này. |
 | `docs/flow-monitor.md` | Doc cha — cross-reference doc này. |
 

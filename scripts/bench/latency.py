@@ -1,19 +1,8 @@
 #!/usr/bin/env python3
-"""Measure what a turn costs on a real robot.
+"""Report p50/p95 per turn stage from the robot's flow log.
 
-Every timing claim about this OS has been a code comment. This reads the flow
-log the robot already writes — one JSONL line per stage of every turn, with a
-trace id and a duration — and prints p50/p95 per stage over real turns. No
-synthetic traffic, no instrumentation: talk to your robot for a while, then run
-this.
-
-    make latency TARGET=lamp-ac82.local PASSWORD=ac82
-    make latency TARGET=lamp-ac82.local PASSWORD=ac82 DATE=2026-08-15
+    make latency TARGET=lamp-ac82.local PASSWORD=ac82 [DATE=2026-08-15]
     python3 scripts/bench/latency.py --file flow_2026-08-16.jsonl   # offline
-
-Output is a markdown table you can paste into docs/benchmarks.md, plus the
-one-line summary the README wants: how long a fixed command takes (the local
-`intent_match` path, no model) and how long a turn through the brain takes.
 """
 import argparse
 import json
@@ -22,10 +11,7 @@ import urllib.error
 import urllib.request
 from collections import defaultdict
 
-# Stages worth reporting, in the order a turn walks them. The node names come
-# from flow.Start/End/Log call sites in system/ and runtimes/; a node not
-# listed here is still measured and printed after these, so a renamed stage is
-# never silently dropped.
+# Report order; unlisted nodes are still printed after these.
 STAGE_ORDER = [
     "sensing_input",         # a mic/camera/sensor event opened a turn
     "chat_input",            # a text message opened a turn
@@ -88,8 +74,7 @@ def parse_lines(lines) -> list:
 
 
 def stage_durations(events: list) -> dict:
-    """node -> [duration_ms]. Prefers the emitted duration_ms on exit events;
-    falls back to exit.ts - enter.ts for the same node and trace."""
+    """node -> [duration_ms], from exit duration_ms or exit.ts - enter.ts."""
     durations = defaultdict(list)
     opened = {}
     for e in events:

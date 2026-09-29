@@ -2,9 +2,7 @@ import type { CSSProperties } from "react";
 import { createPortal } from "react-dom";
 import { Pencil, X, Loader2 } from "lucide-react";
 
-// Rename modal — themed replacement for the native prompt()/alert(). Same popup
-// shell as Add New User for consistency. Fully controlled: all rename state +
-// the submit handler live in the parent and are passed in.
+// Rename modal; fully controlled by the parent.
 export function RenameModal({
   themeClass, renameValue, setRenameValue, renameError, setRenameError, renameSaving,
   onClose, onSubmit, inputStyle, fieldLabel, btnStyle,

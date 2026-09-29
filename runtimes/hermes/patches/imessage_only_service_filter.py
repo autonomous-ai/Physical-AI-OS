@@ -1,18 +1,5 @@
 #!/usr/bin/env python3
-"""Idempotently patch bluebubbles.py so the webhook handler ONLY processes
-messages whose transport is iMessage — SMS from carriers (VinaPhone hotline
-888, Google verification codes, banking OTPs, government notices, …) reach
-Messages.app on macOS through the same inbox and would otherwise trigger
-the agent, creating reply loops with automated SMS senders that keep
-answering back ("Cu phap khong hop le, QK vui long lien he 18001091" →
-bot replies → 888 auto-replies → bot replies again).
-
-Filter: check the message payload's `service` field (BlueBubbles inserts
-either "iMessage" or "SMS"). Also check the chat GUID prefix
-(iMessage;-;… vs SMS;-;…) as a belt-and-braces fallback for payloads that
-omit `service`. Both are compared case-insensitively.
-
-Isolated to bluebubbles.py — no other channel is touched."""
+"""Idempotently patch bluebubbles.py so the webhook handler only processes iMessage (not carrier SMS) messages."""
 import re
 import sys
 from pathlib import Path
@@ -29,10 +16,6 @@ if MARKER in src:
     print("ALREADY_PATCHED")
     sys.exit(0)
 
-# Anchor: insert right after the isFromMe drop block. The isFromMe check
-# already returns early for self-messages; we mirror that pattern for
-# non-iMessage traffic. This keeps the drop close to other early-exit
-# filters, before tapback / attachment / handle-resolution work.
 ANCHOR = '''        if is_from_me:
             return web.Response(text="ok")
 '''

@@ -11,9 +11,7 @@ import (
 	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
-// picoclawVersionProbeTimeout caps a single `picoclaw version` probe. Kept
-// generous so a cold-start slowdown on a busy box right after boot can't get the
-// probe killed and leave the version blank for the whole process lifetime.
+// picoclawVersionProbeTimeout caps a single `picoclaw version` probe.
 const picoclawVersionProbeTimeout = 20 * time.Second
 
 // picoclawVersionProbeRetries bounds retries so a killed/empty boot-time probe
@@ -24,8 +22,7 @@ const picoclawVersionProbeRetries = 6
 const picoclawVersionProbeBackoff = 10 * time.Second
 
 // picoclawNightlyVersionRe extracts PicoClaw's development build identity
-// (e.g. "picoclaw nightly-44-g1959045c-dirty"). Current device builds use
-// this format instead of a semantic release tag.
+// (e.g. "picoclaw nightly-44-g1959045c-dirty").
 var picoclawNightlyVersionRe = regexp.MustCompile(`nightly-\d+-g[0-9A-Fa-f]+(?:-dirty)?`)
 
 var picoclawGoVersionRe = regexp.MustCompile(`(?i)\bgo\d+\.\d+\.\d+\b`)
@@ -43,8 +40,8 @@ func GetPicoclawVersion() string {
 
 // PopulatePicoclawVersion probes `picoclaw version` and caches the semver,
 // retrying on a killed/empty probe (picoclawVersionProbeRetries) so a boot-time
-// cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
-// returns on the first try. Stops once a non-empty version is stored.
+// cold-start slowdown self-heals.
+// Runs in a startup goroutine; a warm probe returns on the first try.
 func PopulatePicoclawVersion() {
 	picoclawVersion.Populate(picoclawVersionProbeRetries, picoclawVersionProbeBackoff)
 }

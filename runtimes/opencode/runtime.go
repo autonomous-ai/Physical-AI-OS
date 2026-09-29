@@ -11,14 +11,10 @@ import (
 	"go.autonomous.ai/os/system/lib/versioncache"
 )
 
-// opencodeVersionProbeTimeout caps a single `opencode --version` probe. OpenCode
-// is a Node CLI whose cold-start can exceed a few seconds on a busy box right
-// after boot; a 5s cap killed the probe and left the version blank for the whole
-// process lifetime.
+// opencodeVersionProbeTimeout caps a single `opencode --version` probe.
 const opencodeVersionProbeTimeout = 20 * time.Second
 
-// opencodeBinary is the installer-owned CLI path. Using it directly avoids a
-// systemd PATH difference leaving the Monitor version blank.
+// opencodeBinary is the installer-owned CLI path.
 const opencodeBinary = "/usr/local/bin/opencode"
 
 // opencodeVersionProbeRetries bounds retries so a killed/empty boot-time probe
@@ -44,8 +40,8 @@ func GetOpenCodeVersion() string {
 
 // PopulateOpenCodeVersion probes `opencode --version` and caches the semver,
 // retrying on a killed/empty probe (opencodeVersionProbeRetries) so a boot-time
-// cold-start slowdown self-heals. Runs in a startup goroutine; a warm probe
-// returns on the first try. Stops once a non-empty version is stored.
+// cold-start slowdown self-heals.
+// Runs in a startup goroutine; a warm probe returns on the first try.
 func PopulateOpenCodeVersion() {
 	opencodeVersion.Populate(opencodeVersionProbeRetries, opencodeVersionProbeBackoff)
 }

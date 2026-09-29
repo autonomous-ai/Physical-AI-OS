@@ -7,35 +7,21 @@ import (
 	"go.autonomous.ai/os/system/lib/usercanon"
 )
 
-// Quarantined is one block the memory guard removed from a file, with why.
-// The text goes to the `.quarantine.txt` sidecar next to the file, never to a
-// flow event — it may contain personal notes.
+// Quarantined is one block the guard removed; its text goes only to the sidecar, never to a
+// flow event (may hold personal notes).
 type Quarantined struct {
 	Text   string
 	Reason string
 }
 
-// Reasons a block is quarantined. Stable strings: they are logged, written to
-// the sidecar and counted in `memory_changed` flow events.
+// Quarantine reasons; stable strings used in logs, sidecars and flow events.
 const (
 	ReasonFreeProse    = "free-prose"    // USER.md: filled content outside the `## Users` shape
 	ReasonUnknownLabel = "unknown-label" // USER.md: `## Users` entry whose label has no enrollment
 	ReasonPrescriptive = "prescriptive"  // names a tool/endpoint and/or says what to DO rather than what happened
 )
 
-// WHY A GUARD. USER.md (and Hermes' memories/USER.md) is loaded into the
-// system prompt on every turn / session; MEMORY.md likewise. The model treats a
-// self-written sentence there as an instruction about HOW TO ACT, and one such
-// sentence outranked the whole skill catalogue and the SOUL "Skill priority
-// (MANDATORY)" block on lamp-dbda (#421): "…Talks about a personal notebook /
-// Obsidian vault notes, wants hands-on action done…" turned "find my keyboard"
-// into shell commands and Obsidian lookups. The prompt already forbids this
-// (SOUL.md "Memory discipline", the People sync block); a collapsed session
-// writes it anyway, and the next hundred sessions inherit it. This is the
-// deterministic version of those rules: what the prompt forbids, the OS removes.
-
-// toolRefRe: the block names a tool, app, shell, CLI, endpoint path or file —
-// something the agent could ACT with. A person's preferences never need one.
+// toolRefRe matches a tool, shell, CLI, endpoint path or file name the agent could act with.
 var toolRefRe = regexp.MustCompile(`(?i)(?:` +
 	`\b(?:obsidian|notebook|vault|terminal|shell|bash|zsh|exec|curl|wget|ssh|sudo|systemctl|journalctl|python|pip|npm|node|docker|git|cron|cli|api|endpoint|skills?|tools?|commands?|scripts?|prompt|model|llm|servo|camera|mqtt)\b` +
 	`|(?:^|[\s(` + "`" + `"'])/[a-z][a-z0-9_-]*(?:/[a-z0-9_{}.-]+)+` + // an endpoint path like /servo/search
@@ -43,19 +29,8 @@ var toolRefRe = regexp.MustCompile(`(?i)(?:` +
 	`|/dev/` +
 	`)`)
 
-// prescriptiveRe: the block says what to DO rather than what HAPPENED. This is
-// SOUL.md's second memory-discipline question made mechanical. Deliberately
-// broad on directive phrasing; a preference stated as a fact ("prefers
-// Vietnamese", "likes jazz") does not match.
-//
-// The verbs use/run/call/try/avoid/skip only count as prescriptive in
-// IMPERATIVE POSITION — at the start of the block, right after
-// sentence/segment punctuation, or right after a directive adverb/modal
-// (always/never/just/please/should/must/only/then). A bare occurrence
-// elsewhere is a troubleshooting OBSERVATION, not an instruction: "Tried to
-// use the camera skill but it returned no faces" reports what happened and
-// must be kept, unlike "Use the camera skill to find things instead of
-// asking".
+// prescriptiveRe matches directive phrasing (what to DO); use/run/call/try/avoid/skip count only
+// in imperative position, so "tried to use X but..." observations survive.
 var prescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 	`always|never|must|should|do not|don'?t|instead of|rather than` +
 	`|prefer(?:s|red)? (?:to|that (?:you|i))` +
@@ -70,22 +45,9 @@ var prescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 func namesToolOrEndpoint(s string) bool { return toolRefRe.MatchString(s) }
 func prescribesBehaviour(s string) bool { return prescriptiveRe.MatchString(s) }
 
-// WHY `## Users` SEGMENTS GET THEIR OWN, NARROWER RULES. A MEMORY.md block
-// trips only when BOTH halves match (isPoisonForMemory), so a broad word list
-// on either side is safe there. A `## Users` segment trips on EITHER half
-// alone (guardUsersEntry), and those segments are exactly what the People-sync
-// heartbeat re-adds every ~30 min from the enrollment store: a false positive
-// is not one bad strip but a write loop — new .bak, new sidecar entry, red
-// badge, forever. "always at the desk by 9", "never drinks coffee", "has a dog
-// named Git", "learning python at school" are ordinary facts about a person
-// and must survive. So the segment rules keep only the phrasing that is
-// unambiguously an instruction: a tool the AGENT would act with (not a hobby
-// camera or a pet named Git), a directive adverb followed by a verb ("never
-// use", "always run"), or a bare imperative at the start of the segment.
-
-// segmentToolRefRe is toolRefRe without the words that are as often a fact
-// about the person as a tool for the agent: python, git, node, model,
-// notebook, camera, prompt. Shell/CLI/endpoint/file references stay.
+// segmentToolRefRe is toolRefRe minus words that are often personal facts (python, git, camera...).
+// `## Users` segments trip on either rule alone and are re-added by People sync, so a false
+// positive becomes a rewrite loop; the segment rules stay narrow.
 var segmentToolRefRe = regexp.MustCompile(`(?i)(?:` +
 	`\b(?:obsidian|vault|terminal|shell|bash|zsh|exec|curl|wget|ssh|sudo|systemctl|journalctl|pip|npm|docker|cron|cli|api|endpoint|skills?|tools?|commands?|scripts?|llm|servo|mqtt)\b` +
 	`|(?:^|[\s(` + "`" + `"'])/[a-z][a-z0-9_-]*(?:/[a-z0-9_{}.-]+)+` + // an endpoint path like /servo/search
@@ -93,13 +55,8 @@ var segmentToolRefRe = regexp.MustCompile(`(?i)(?:` +
 	`|/dev/` +
 	`)`)
 
-// segmentPrescriptiveRe is prescriptiveRe without the bare modals and adverbs
-// (always/never/must/should/prefers to/when asked) that describe a habit as
-// readily as they give an order. always/never/should/must still count — but
-// only when a verb follows them (the imperative-position alternative), which
-// is how an order is actually phrased. The verb list is wider than
-// prescriptiveRe's for the same reason the adverbs are gone: "say", "reply",
-// "keep", "be" at the head of a segment are instructions, not facts.
+// segmentPrescriptiveRe is prescriptiveRe without bare modals: always/never/should/must count
+// only when a verb follows.
 var segmentPrescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 	`do not|don'?t|instead of|rather than` +
 	`|match(?:ing)? the|respond(?:ing)? in|repl(?:y|ying) in|answer(?:ing)? in|speak(?:ing)? in` +
@@ -112,13 +69,8 @@ var segmentPrescriptiveRe = regexp.MustCompile(`(?i)(?:\b(?:` +
 func segmentNamesTool(s string) bool           { return segmentToolRefRe.MatchString(s) }
 func segmentPrescribesBehaviour(s string) bool { return segmentPrescriptiveRe.MatchString(s) }
 
-// isPoisonForMemory is the MEMORY.md rule: a line that names a tool/endpoint
-// AND says what to do belongs in a skill or nowhere ("Full-room scan works best
-// as curl-driven aim + look per direction" is the shape to refuse). Either half
-// alone is fine — "the camera skill returned no faces" is an observation.
+// isPoisonForMemory is the MEMORY.md rule: tool/endpoint AND directive; either half alone is kept.
 func isPoisonForMemory(s string) bool { return namesToolOrEndpoint(s) && prescribesBehaviour(s) }
-
-// ---- block splitting -------------------------------------------------------
 
 type blockKind int
 
@@ -127,9 +79,8 @@ const (
 	blockContent                      // a bullet (+ its continuation lines), a paragraph, or a § entry
 )
 
-// memBlock is one region of the source file. raw is rejoined verbatim when the
-// block is kept, so a clean file round-trips byte for byte — that is what makes
-// "write only when something changed" (and so no prompt-cache miss) possible.
+// memBlock is one source region; raw is rejoined verbatim so a clean file round-trips byte for
+// byte (no write, no prompt-cache miss).
 type memBlock struct {
 	raw  string
 	text string // bullet marker / indentation stripped, whitespace normalised (blockContent only)
@@ -138,10 +89,7 @@ type memBlock struct {
 
 var reBulletMarker = regexp.MustCompile(`^\s*(?:[-*]|\d+\.)\s+`)
 
-// splitMemoryBlocks understands both formats the runtimes use: Hermes keeps
-// entries separated by "\n§\n" (see entryDelimiter); every other runtime is
-// markdown, where a bullet swallows its indented continuation lines and a
-// paragraph runs until a blank line, heading, bullet, fence or comment.
+// splitMemoryBlocks splits Hermes "\n§\n" entries or markdown bullets/paragraphs into blocks.
 func splitMemoryBlocks(raw string) (blocks []memBlock, delimited bool) {
 	if strings.Contains(raw, entryDelimiter) {
 		for _, part := range strings.Split(raw, entryDelimiter) {
@@ -230,22 +178,17 @@ func rebuildBlock(b memBlock, text string, delimited bool) string {
 	return marker + text + "\n"
 }
 
-// ---- USER.md ---------------------------------------------------------------
-
 var (
-	// A single-underscore / single-star italic hint, e.g. `_(optional)_`,
-	// `_Learn about the person you're helping…_`. Bold (`**…**`) is NOT a hint.
+	// Single-underscore/star italic hint; bold is not a hint.
 	italicHintRe = regexp.MustCompile(`^(?:_[^_]+_|\*[^*]+\*)$`)
 	// A bare markdown link, optionally labelled: `Related: [Agent workspace](/concepts/agent-workspace)`.
 	linkOnlyRe = regexp.MustCompile(`^(?:[A-Za-z ]+:\s*)?\[[^\]]+\]\([^)]+\)$`)
-	// A heading prefix left by an earlier flatten of the file ("Context: ",
-	// "Users: ", "A > B: ") — see extractMarkdownEntries. Not content.
+	// Heading prefix left by an earlier flatten ("Users: ", "A > B: ").
 	headingPrefixRe = regexp.MustCompile(`^(?:[A-Za-z][A-Za-z ]{0,30}(?: > [A-Za-z][A-Za-z ]{0,30})*):\s+`)
 )
 
-// userProfileTemplateSentences are the prose lines of the USER.md template the
-// runtimes ship (read off lamp-ac82, see liveDeviceUserMD in user_profile_test.go),
-// normalised by normalizeKey. They are the only free prose the file may carry.
+// userProfileTemplateSentences are the normalised USER.md template prose lines (the only allowed
+// free prose).
 var userProfileTemplateSentences = map[string]bool{
 	normalizeKey("Learn about the person you're helping. Update this as you go."):                                                                              true,
 	normalizeKey("What do they care about? What projects are they working on? What annoys them? What makes them laugh? Build this over time."):                 true,
@@ -259,11 +202,8 @@ func normalizeKey(s string) string {
 	return s
 }
 
-// isUserProfileScaffolding reports whether a USER.md content block is part of
-// the template rather than something the agent learned: an empty field slot, an
-// italic hint, a rule, a link, a known template sentence — or a FILLED singular
-// field (Name / What to call them / Pronouns / Timezone), which the enrollment
-// retire pass owns and which cannot steer routing.
+// isUserProfileScaffolding reports whether a USER.md block is template (empty slot, hint, rule,
+// link, template sentence) or a filled singular field owned by the retire pass.
 func isUserProfileScaffolding(text string) bool {
 	t := strings.TrimSpace(headingPrefixRe.ReplaceAllString(strings.TrimSpace(text), ""))
 	if t == "" || t == "---" || t == "***" {
@@ -281,12 +221,8 @@ func isUserProfileScaffolding(text string) bool {
 	return userProfileTemplateSentences[normalizeKey(t)]
 }
 
-// guardUsersEntry filters the `key: value; …` segments of a `**label (role)**`
-// entry. A segment whose value names a tool/endpoint or prescribes behaviour
-// (segment rules — see segmentToolRefRe / segmentPrescriptiveRe for why they
-// are narrower than the MEMORY.md ones) is dropped; the rest are kept in
-// order. Returns the input unchanged when nothing was dropped so a clean entry
-// is not re-serialised.
+// guardUsersEntry drops `key: value` segments of a `**label (role)**` entry that trip the segment
+// rules; returns the input unchanged when nothing was dropped.
 func guardUsersEntry(text string) (string, []Quarantined) {
 	head := usersBlockRe.FindString(text)
 	rest := strings.TrimLeft(strings.TrimSpace(text[len(head):]), "—–-: ")
@@ -301,10 +237,7 @@ func guardUsersEntry(text string) (string, []Quarantined) {
 			continue
 		}
 		value := seg
-		// `call: Anh Long` — judge the value, not the key (the key "call" would
-		// otherwise trip the "call the/a/it" directive pattern). Trim it: the
-		// imperative-position branch anchors on `^`, and the space after the
-		// colon used to hide "notes: run a full scan…" from it.
+		// Judge the trimmed value, not the key ("call" would trip the directive pattern).
 		if k, v, ok := strings.Cut(seg, ":"); ok && len(strings.Fields(k)) <= 3 {
 			value = strings.TrimSpace(v)
 		}
@@ -323,15 +256,8 @@ func guardUsersEntry(text string) (string, []Quarantined) {
 	return strings.TrimSpace(head) + " — " + strings.Join(kept, "; "), dropped
 }
 
-// GuardUserProfileText applies the strict USER.md allowlist: template
-// scaffolding passes, a `**label (role)**` entry passes (label check when
-// enrollment is known, segments filtered), everything else is quarantined.
-// enrolled is the set of canonical enrollment labels; nil or empty means the
-// store could not be read / nobody is enrolled yet, and the label check is
-// skipped rather than failing every entry (same stance as the retire pass).
-//
-// A clean file is returned unchanged with nil dropped — callers must not write
-// in that case: USER.md sits in the cached prompt prefix.
+// GuardUserProfileText applies the strict USER.md allowlist; enrolled nil/empty skips the label
+// check. A clean file returns unchanged with nil dropped and must not be written (cached prompt).
 func GuardUserProfileText(raw string, enrolled map[string]bool) (string, []Quarantined) {
 	blocks, delimited := splitMemoryBlocks(raw)
 	var dropped []Quarantined
@@ -368,9 +294,7 @@ func GuardUserProfileText(raw string, enrolled map[string]bool) (string, []Quara
 	return joinMemoryBlocks(out, delimited), dropped
 }
 
-// GuardMemoryText applies the MEMORY.md rule (see isPoisonForMemory) to every
-// content block. Free-form observations are untouched. Same "unchanged when
-// clean" contract as GuardUserProfileText.
+// GuardMemoryText applies isPoisonForMemory to every content block; unchanged when clean.
 func GuardMemoryText(raw string) (string, []Quarantined) {
 	blocks, delimited := splitMemoryBlocks(raw)
 	var dropped []Quarantined

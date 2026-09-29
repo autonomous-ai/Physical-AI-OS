@@ -1,5 +1,3 @@
-// LED rules — color, on/off, dim. led_color must run before the generic
-// led_on/led_off so "turn the light red" doesn't hit the plain-white rule.
 package intent
 
 import (
@@ -12,8 +10,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 )
 
-// colorKeywords maps color keywords to RGB values.
-// Checked in order — first match wins.
+// colorKeywords maps color keywords to RGB; first match wins.
 var colorKeywords = []struct {
 	keywords []string
 	rgb      [3]int
@@ -43,7 +40,7 @@ func extractColor(t string) ([3]int, string, bool) {
 	return [3]int{}, "", false
 }
 
-// isLEDOnCommand returns true if t contains a "turn on light" trigger phrase.
+// isLEDOnCommand reports whether t contains a "turn on light" phrase.
 func isLEDOnCommand(t string) bool {
 	triggers := []string{"turn on the light", "light on", "set color", "change color", "set the light"}
 	for _, kw := range triggers {
@@ -55,7 +52,7 @@ func isLEDOnCommand(t string) bool {
 }
 
 var ledRules = []rule{
-	// --- LED color (must be before generic LED on/off) ---
+	// LED color must run before generic LED on/off.
 	{
 		name:       "led_color",
 		capability: device.CapLight,
@@ -75,7 +72,6 @@ var ledRules = []rule{
 		},
 	},
 
-	// --- LED on/off ---
 	{
 		name:       "led_on",
 		capability: device.CapLight,
@@ -91,16 +87,12 @@ var ledRules = []rule{
 		capability: device.CapLight,
 		match:      anyOf("turn off the light", "light off"),
 		exec: func(string) *Result {
-			// No emotion after /led/off: any emotion (even idle) re-lights the
-			// strip with its own color, undoing the off the user just asked for
-			// (the off user-state then makes LED restore "keep emotion color",
-			// so it never goes back to black). Turn off → stay off.
+			// No emotion after /led/off: any emotion would re-light the strip.
 			executionFailed := post("/led/off", "") != nil
 			return &Result{ExecutionFailed: executionFailed, TTSText: "Light off!", LEDOff: true, Actions: []string{"POST /led/off"}}
 		},
 	},
 
-	// --- Dim / brightness ---
 	{
 		name:       "dim",
 		capability: device.CapLight,

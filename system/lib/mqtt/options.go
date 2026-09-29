@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// DefaultKeepAlive is the default MQTT keepalive period in seconds (max per spec; effectively keep forever).
+// DefaultKeepAlive is the default keepalive in seconds (spec maximum).
 const DefaultKeepAlive = 65535
 
 // DefaultConnectTimeout is the default connection timeout.
@@ -19,24 +19,21 @@ const DefaultPort = 1883
 
 // Options configures the MQTT client. Endpoint is required to enable MQTT.
 type Options struct {
-	// Endpoint is the broker host (domain or IP only, e.g. "broker.example.com", "192.168.1.1").
-	// Empty means MQTT disabled.
+	// Endpoint is the broker host (domain or IP only); empty disables MQTT.
 	Endpoint string
 	// Port is the broker port (e.g. 1883, 8883). 0 uses DefaultPort.
 	Port int
-	// ClientID is the MQTT client identifier. If empty, a default is generated.
+	// ClientID defaults to a generated value when empty.
 	ClientID string
-	// Username and Password are optional broker credentials.
 	Username string
 	Password string
-	// KeepAlive is the keepalive period in seconds (default DefaultKeepAlive; 0 = use default).
+	// KeepAlive is in seconds; 0 uses DefaultKeepAlive.
 	KeepAlive uint16
-	// ConnectTimeout is how long to wait for the initial connection (default DefaultConnectTimeout; 0 = use default).
+	// ConnectTimeout bounds the initial connection; 0 uses DefaultConnectTimeout.
 	ConnectTimeout time.Duration
 }
 
-// ServerURL returns the broker URL as *url.URL for Paho (always mqtt://host:port).
-// Validate must have been called first. Endpoint is domain or IP only.
+// ServerURL returns mqtt://host:port for Paho; call Validate first.
 func (o *Options) ServerURL() (*url.URL, error) {
 	host := strings.TrimSpace(o.Endpoint)
 	if host == "" {

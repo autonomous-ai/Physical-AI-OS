@@ -174,8 +174,6 @@ def test_gemini_late_playback_terminal_cannot_complete_new_input():
     second = _drain(agent)
     speech = next(e for e in second if isinstance(e, UserSpeechOutput))
     assert speech.turn_id != first[-1].user_turn_id
-    # Preserve the baseline receive boundary, but do not count the old playback
-    # acknowledgement as completion of the newly observed user input.
     assert isinstance(second[-1], TurnDoneEvent)
     assert second[-1].user_turn_id == ""
     assert not second[-1].execution_completed

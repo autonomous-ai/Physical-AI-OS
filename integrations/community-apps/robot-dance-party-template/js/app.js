@@ -1,8 +1,4 @@
-// app.js — Main orchestrator
-//
-// Wires together all modules and connects them to the UI.
-// Equivalent to duo's index.html inline scripts that bootstrap
-// DuoConnection + BeatBandit/LiveGroove + Visualizer.
+// app.js — Main orchestrator: wires modules to the UI.
 
 import { RobotConnection } from './connection.js';
 import { AudioEngine } from './audio_engine.js';
@@ -10,19 +6,14 @@ import { DanceEngine } from './dance_engine.js';
 import { SafetyThrottle } from './safety.js';
 import { Visualizer } from './visualizer.js';
 
-// --- Singletons ---
 const robot = new RobotConnection();
 const audio = new AudioEngine();
 const safety = new SafetyThrottle();
 let dance = null;
 let visualizer = null;
 
-// --- DOM refs ---
 const $ = id => document.getElementById(id);
 
-// ============================
-// Connect Screen
-// ============================
 $('btn-connect').addEventListener('click', doConnect);
 $('inp-pass').addEventListener('keydown', e => { if (e.key === 'Enter') doConnect(); });
 
@@ -44,7 +35,6 @@ async function doConnect() {
     $('screen-dance').style.display = 'block';
     $('lbl-host').textContent = host;
 
-    // Init visualizer
     visualizer = new Visualizer($('visualizer'));
 
     toast('Connected to ' + host);
@@ -66,7 +56,6 @@ $('btn-disconnect').addEventListener('click', () => {
   $('now-playing').classList.remove('active');
 });
 
-// Connection events
 robot.addEventListener('connection-lost', () => {
   $('status-dot').classList.add('offline');
   toast('Connection lost', true);
@@ -76,11 +65,6 @@ robot.addEventListener('reconnected', () => {
   toast('Reconnected');
 });
 
-// ============================
-// Music Source
-// ============================
-
-// Tab switching
 document.querySelectorAll('.source-tab').forEach((tab, i) => {
   tab.addEventListener('click', () => {
     document.querySelectorAll('.source-tab').forEach(t => t.classList.remove('active'));
@@ -90,7 +74,6 @@ document.querySelectorAll('.source-tab').forEach((tab, i) => {
   });
 });
 
-// File drag & drop
 const dropZone = $('drop-zone');
 dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.classList.add('dragover'); });
 dropZone.addEventListener('dragleave', () => dropZone.classList.remove('dragover'));
@@ -118,7 +101,6 @@ async function loadAudioFile(file) {
   toast('Playing: ' + file.name);
 }
 
-// YouTube
 $('btn-yt-play').addEventListener('click', loadYouTube);
 $('inp-yt-url').addEventListener('keydown', e => { if (e.key === 'Enter') loadYouTube(); });
 
@@ -134,7 +116,6 @@ function extractYouTubeId(input) {
     }
     if (h === 'youtu.be') return url.pathname.slice(1).split('/')[0];
   } catch (_) {}
-  // Bare video ID
   if (/^[a-zA-Z0-9_-]{11}$/.test(input)) return input;
   return null;
 }
@@ -174,7 +155,6 @@ async function loadYouTube() {
   }
 }
 
-// Mic
 $('btn-mic').addEventListener('click', async () => {
   stopDance();
   try {
@@ -190,7 +170,6 @@ $('btn-mic').addEventListener('click', async () => {
   }
 });
 
-// Transport
 $('btn-play').addEventListener('click', () => {
   if (audio.isMicMode) return;
   if (audio.isPlaying) {
@@ -210,41 +189,30 @@ audio.addEventListener('ended', () => {
 });
 
 audio.addEventListener('duration', (e) => {
-  // Duration now available
 });
-
-// ============================
-// Dance Engine
-// ============================
 
 function startDance() {
   if (dance) dance.stop();
   dance = new DanceEngine(audio, robot, safety);
 
-  // Sync UI toggles
   dance.ledEnabled = $('sw-led').classList.contains('on');
   dance.servoEnabled = $('sw-servo').classList.contains('on');
   dance.emotionEnabled = $('sw-emotion').classList.contains('on');
 
-  // Visualizer + BPM update
   dance.addEventListener('tick', (e) => {
     const { bass, mid, high, energy, isBeat, bpm, timestamp } = e.detail;
 
-    // Update visualizer
     if (visualizer && audio.analyser) {
       visualizer.draw(audio.freqData, audio.timeData, { bass, mid, high, energy, isBeat });
     }
 
-    // Update BPM display
     $('bpm-val').textContent = bpm || '--';
 
-    // Beat indicator
     if (isBeat) {
       $('beat-dot').classList.add('beat');
       setTimeout(() => $('beat-dot').classList.remove('beat'), 150);
     }
 
-    // Time display
     if (!audio.isMicMode && audio.duration) {
       $('track-time').textContent = fmt(audio.currentTime) + ' / ' + fmt(audio.duration);
     } else {
@@ -252,7 +220,6 @@ function startDance() {
     }
   });
 
-  // Activity log
   dance.addEventListener('command', (e) => {
     const { type, yaw, pitch, duration, emotion, intensity } = e.detail;
     if (type === 'servo') addLog('servo', `Nudge yaw:${yaw} pitch:${pitch} (${duration}ms)`);
@@ -282,11 +249,6 @@ function stopDance() {
   if (hint) hint.textContent = 'Downloads audio via yt-dlp, plays locally.';
 }
 
-// ============================
-// UI Controls
-// ============================
-
-// Toggle switches
 document.querySelectorAll('.switch').forEach(sw => {
   sw.addEventListener('click', () => {
     sw.classList.toggle('on');
@@ -298,7 +260,6 @@ document.querySelectorAll('.switch').forEach(sw => {
   });
 });
 
-// Sliders
 $('sl-led-rate').addEventListener('input', e => {
   $('val-led-rate').textContent = e.target.value;
   safety.setRate('led', parseInt(e.target.value));
@@ -316,9 +277,6 @@ $('sl-sensitivity').addEventListener('input', e => {
   audio.sensitivity = 0.20 - (v - 20) * (0.18 / 70);
 });
 
-// ============================
-// Activity Log
-// ============================
 const MAX_LOG = 60;
 function addLog(type, msg) {
   const log = $('robot-log');
@@ -332,9 +290,6 @@ function addLog(type, msg) {
   while (log.children.length > MAX_LOG) log.removeChild(log.lastChild);
 }
 
-// ============================
-// Helpers
-// ============================
 function fmt(s) {
   const m = Math.floor(s / 60);
   const sec = Math.floor(s % 60);
@@ -354,9 +309,6 @@ function showError(el, msg) {
   el.style.display = 'block';
 }
 
-// ============================
-// Auto-reconnect on page load
-// ============================
 (async () => {
   if (await robot.tryReconnect()) {
     const host = robot.osBase.replace('http://', '');

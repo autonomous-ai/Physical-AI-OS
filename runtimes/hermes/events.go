@@ -28,23 +28,13 @@ type pendingEvent struct {
 
 const busyTTL = 5 * time.Minute
 
-// mergeDrainEnabled collapses multiple ambient sensing events that survive the
-// drain filter into a single turn, so the agent pays the per-turn prompt floor
-// once instead of once per event. Ambient sensing waits for idle even when
-// native steering is available for user input. Set false to fall back to
-// one-turn-per-event replay.
+// mergeDrainEnabled collapses surviving ambient sensing events into one turn.
 const mergeDrainEnabled = true
 
-// mergedSensingHeader frames a batched drain so the agent treats the joined
-// lines as combined context for a single response instead of separate commands.
+// mergedSensingHeader frames a batched drain so the agent treats the joined lines as combined context for a single response instead of separate commands.
 const mergedSensingHeader = "[ambient signals batched while busy — respond once, using the items below as combined context]\n\n"
 
-// standaloneDrain reports whether an event must keep its own turn rather than be
-// merged: real voice commands (must be answered directly, never buried under
-// ambient signals), voice_agent_handled (silent reply can't share a turn with
-// events that should speak), and image-bearing events (a merged text turn can't
-// carry multiple images cleanly; sensing snapshots are stripped anyway).
-// Environment updates use a separate skill with no mandatory expression.
+// standaloneDrain reports whether an event keeps its own turn (voice commands, voice_agent_handled, images).
 func standaloneDrain(ev pendingEvent) bool {
 	if len(ev.images) > 0 {
 		return true
@@ -56,9 +46,7 @@ func standaloneDrain(ev pendingEvent) bool {
 	return false
 }
 
-// IsBusy mirrors openclaw.HermesService.IsBusy: true while a turn is in flight OR a
-// chat.send is still waiting for response.created. The legacy busy flag may
-// expire after busyTTL, but a live HTTP stream stays busy until it terminates.
+// IsBusy mirrors openclaw.HermesService.IsBusy: true while a turn is in flight OR a chat.send is still waiting for response.created.
 func (s *HermesService) IsBusy() bool {
 	if s.inFlightStreams.Load() > 0 {
 		return true
@@ -77,7 +65,7 @@ func (s *HermesService) IsBusy() bool {
 	return s.HasFreshPendingChatSend()
 }
 
-// SetBusy flips active state. Drains pending events on idle.
+// SetBusy flips active state.
 func (s *HermesService) SetBusy(busy bool) {
 	if !busy && s.inFlightStreams.Load() > 0 {
 		return
@@ -109,13 +97,7 @@ func (s *HermesService) QueuePendingEvent(eventType, msg string, images []string
 	})
 }
 
-// drainPendingEvents replays buffered sensing events. Behaviour matches the
-// openclaw drain: voice events prioritised, expirable high-frequency types
-// (presence / motion / emotion) coalesced to latest-only and stale entries
-// dropped after expireAfter.
-// DrainPendingEvents satisfies domain.AgentGateway. The idle edge is not the
-// only reason a queued event waits — one queued because the SPEAKER was busy
-// has no turn ending behind it to drain the queue.
+// drainPendingEvents replays buffered sensing events.
 func (s *HermesService) DrainPendingEvents() {
 	s.drainPendingEvents()
 }
@@ -135,11 +117,6 @@ func (s *HermesService) drainPendingEvents() {
 		return
 	}
 
-	// The turn that just ended may still be coming out of the speaker: a
-	// runtime goes idle when the reply text is queued for TTS, not when it has
-	// been spoken. Replaying a passive event now would open a newer turn and
-	// HAL would hand it the speaker mid-sentence, cutting the answer the user
-	// asked for. Put the batch back and let speakergate call us again.
 	replayTypes := make([]string, len(events))
 	for i, ev := range events {
 		replayTypes[i] = ev.eventType
@@ -226,12 +203,10 @@ func (s *HermesService) drainPendingEvents() {
 		return
 	}
 
-	// Partition: standalone events (voice commands, silent replays, images) keep
-	// their own turn; the rest are pure-ambient sensing collapsed into one turn.
+	// Partition: standalone events (voice commands, silent replays, images) keep their own turn; the rest are pure-ambient sensing collapsed into one turn.
 	var mergeable []pendingEvent
 	for i, ev := range events {
 		if standaloneDrain(ev) {
-			// One user request per stream; retain the rest until it terminates.
 			remaining := append([]pendingEvent(nil), events[:i]...)
 			remaining = append(remaining, events[i+1:]...)
 			s.restoreUnsent(remaining)
@@ -242,17 +217,14 @@ func (s *HermesService) drainPendingEvents() {
 	}
 	switch len(mergeable) {
 	case 0:
-		// nothing mergeable
 	case 1:
-		s.sendOnePending(mergeable[0]) // single event — merging is pointless
+		s.sendOnePending(mergeable[0])
 	default:
 		s.sendMergedPending(mergeable)
 	}
 }
 
-// sendOnePending replays a single buffered event as its own turn, preserving the
-// original per-event run tracing, pose-bucket marking, silent-run marking and
-// image attachment.
+// sendOnePending replays one buffered event as its own turn.
 func (s *HermesService) sendOnePending(ev pendingEvent) {
 	var reqID, runID string
 	if ev.fixedRunID != "" {
@@ -282,8 +254,6 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	msg = strings.TrimSpace(msg)
 	msg = sensingmsg.AppendHarnessReplyRoute(msg, ev.eventType, runID)
 
-	// Replayed voice_agent_handled: realtime agent already spoke, suppress TTS
-	// on the reply (same as the live PostEvent path).
 	if ev.eventType == "voice_agent_handled" {
 		s.MarkSilentRun(runID)
 	}
@@ -294,9 +264,6 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	} else {
 		_, err = s.SendChatMessageWithRun(msg, reqID, runID)
 	}
-	// An unsent ambient event may merge with others on retry, so wait for the
-	// dispatch result before creating its cohort. A process crash during this
-	// synchronous send remains outside sensing coverage until acceptance.
 	if telemetry.TaskGroup(ev.eventType) == "sensing" && !errors.Is(err, errHermesNotReady) {
 		telemetry.ReportTaskStarted(ev.eventType, "", runID)
 	}
@@ -315,17 +282,11 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	slog.Info("pending event replayed", "component", "sensing", "type", ev.eventType, "runId", runID)
 }
 
-// sendMergedPending collapses multiple ambient sensing events into a single turn:
-// each event's message is built through the same pipeline as sendOnePending, then
-// joined under one runID and sent as one chat. The agent sees all signals at once
-// (so it can respond coherently) and the prompt floor is paid only once. Called
-// only when 2+ mergeable events survive the drain filter.
+// sendMergedPending collapses multiple ambient sensing events into one turn under one runID.
 func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 	reqID, runID := s.NextChatRunID()
 	flow.SetTrace(runID)
 
-	// Pose-bucket markers must be registered against the merged runID before the
-	// markers are stripped from the message text below.
 	for _, ev := range evs {
 		if ev.eventType == "motion.activity" {
 			if bid, worst := extractPoseBucketMarkers(ev.msg); bid != "" {
@@ -355,8 +316,6 @@ func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 	})
 
 	_, err := s.SendChatMessageWithRun(merged, reqID, runID)
-	// Unsent members may be regrouped on retry. Only an accepted/failed dispatch
-	// forms a merged cohort, so no old batch ID can count multiple later runs.
 	if !errors.Is(err, errHermesNotReady) {
 		telemetry.ReportTaskStarted("sensing_drain_merged", "", runID)
 	}
@@ -376,10 +335,6 @@ func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 }
 
 // buildMergedSensing builds the merged chat message from ambient sensing events.
-// Pure (no side effects) so it can be unit-tested without the network. Each event
-// is rendered through the same sensingmsg.Build + marker-strip pipeline as the
-// single-event path, then joined under one header. types and oldest cover only
-// events that produced a non-empty line, so count == merged-line count.
 func buildMergedSensing(evs []pendingEvent) (merged string, types []string, oldest time.Time) {
 	types = make([]string, 0, len(evs))
 	parts := make([]string, 0, len(evs))

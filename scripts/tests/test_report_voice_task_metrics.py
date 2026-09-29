@@ -254,8 +254,6 @@ class ReportTests(unittest.TestCase):
         future = journal(turn(task_revision=2)["params"], "voice_metrics_interaction", 2100000)
         result = metrics.report([old, future, execution()], 2000000)
         self.assertEqual(result["aggregate"]["incomplete_turns"], 1)
-        # A result observed after cutoff cannot be used just because execution
-        # itself happened earlier (e.g. a delayed transport/log write).
         late = journal(execution()["params"], "voice_metrics_task_execution", 2100000)
         result = metrics.report([turn(), late], 2000000)
         self.assertEqual(result["aggregate"]["incomplete_turns"], 1)

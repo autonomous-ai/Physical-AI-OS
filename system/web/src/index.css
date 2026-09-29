@@ -26,61 +26,50 @@
 }
 
 @layer base {
-  /*
-   * ── Unified palette: Amber (primary) + Teal (accent) ──
-   * Hue anchors:  amber ≈ 70 (oklch),  teal ≈ 180 (oklch),  warm-neutral ≈ 70 chroma~0.01.
-   * Two surfaces only need to be defined here — `.dark` (default) and `:root` (light).
-   * The Lamp Monitor `--lm-*` scope is derived from these tokens further down so the
-   * whole app shares one source of truth. Default theme is DARK (see theme-provider).
-   */
-
-  /* Light theme */
   :root {
-    --background: oklch(0.985 0.004 80);          /* warm white  #FAFAF8 */
-    --foreground: oklch(0.205 0.01 60);           /* warm near-black #1C1917 */
-    --card: oklch(1 0 0);                          /* #FFFFFF */
+    --background: oklch(0.985 0.004 80);
+    --foreground: oklch(0.205 0.01 60);
+    --card: oklch(1 0 0);
     --card-foreground: oklch(0.205 0.01 60);
     --popover: oklch(1 0 0);
     --popover-foreground: oklch(0.205 0.01 60);
-    --primary: oklch(0.68 0.165 60);              /* amber  #D97706 */
-    --primary-foreground: oklch(0.99 0.01 90);    /* near-white on amber */
-    --secondary: oklch(0.955 0.008 80);           /* warm surface #F5F4F0 */
+    --primary: oklch(0.68 0.165 60);
+    --primary-foreground: oklch(0.99 0.01 90);
+    --secondary: oklch(0.955 0.008 80);
     --secondary-foreground: oklch(0.30 0.01 60);
     --muted: oklch(0.955 0.008 80);
-    --muted-foreground: oklch(0.50 0.01 60);      /* #57534E */
-    --accent: oklch(0.70 0.12 185);               /* teal  #0D9488 */
+    --muted-foreground: oklch(0.50 0.01 60);
+    --accent: oklch(0.70 0.12 185);
     --accent-foreground: oklch(0.99 0.01 90);
-    --destructive: oklch(0.58 0.21 27);           /* red  #DC2626 */
+    --destructive: oklch(0.58 0.21 27);
     --destructive-foreground: oklch(0.99 0.01 90);
-    --border: oklch(0.90 0.006 80);               /* #E0DED6 */
+    --border: oklch(0.90 0.006 80);
     --input: oklch(0.90 0.006 80);
-    --ring: oklch(0.68 0.165 60);                 /* amber */
+    --ring: oklch(0.68 0.165 60);
     --radius: 1rem;
   }
 
-  /* Dark theme — DEFAULT */
   .dark {
-    --background: oklch(0.16 0.006 70);           /* warm near-black #0C0B09 */
-    --foreground: oklch(0.95 0.008 80);           /* #F0EEE8 */
-    --card: oklch(0.205 0.006 70);                /* #17160F */
+    --background: oklch(0.16 0.006 70);
+    --foreground: oklch(0.95 0.008 80);
+    --card: oklch(0.205 0.006 70);
     --card-foreground: oklch(0.95 0.008 80);
-    --popover: oklch(0.24 0.007 70);              /* #1E1D14 */
+    --popover: oklch(0.24 0.007 70);
     --popover-foreground: oklch(0.95 0.008 80);
-    --primary: oklch(0.78 0.165 65);              /* amber  #F59E0B */
-    --primary-foreground: oklch(0.18 0.02 60);    /* dark text on amber */
-    --secondary: oklch(0.255 0.006 70);           /* #1E1D14 */
+    --primary: oklch(0.78 0.165 65);
+    --primary-foreground: oklch(0.18 0.02 60);
+    --secondary: oklch(0.255 0.006 70);
     --secondary-foreground: oklch(0.95 0.008 80);
     --muted: oklch(0.255 0.006 70);
-    --muted-foreground: oklch(0.66 0.012 80);     /* #9A9080 */
-    --accent: oklch(0.80 0.13 185);               /* teal  #2DD4BF */
+    --muted-foreground: oklch(0.66 0.012 80);
+    --accent: oklch(0.80 0.13 185);
     --accent-foreground: oklch(0.18 0.02 185);
-    --destructive: oklch(0.70 0.18 25);           /* red  #F87171 */
+    --destructive: oklch(0.70 0.18 25);
     --destructive-foreground: oklch(0.18 0.02 25);
-    --border: oklch(0.30 0.008 70);               /* #2A2820 */
+    --border: oklch(0.30 0.008 70);
     --input: oklch(0.30 0.008 70);
-    --ring: oklch(0.78 0.165 65);                 /* amber */
+    --ring: oklch(0.78 0.165 65);
   }
-  /* Select / popover: solid background, no transparency */
   [data-slot="select-content"],
   [data-radix-popper-content-wrapper] [data-slot="select-content"] {
     background-color: var(--popover);
@@ -97,16 +86,12 @@
     min-height: 100vh;
     background-color: var(--background);
     color: var(--foreground);
-    /* Crisper text on the dark theme + tabular-ish numerals for token/usage
-       readouts. Uses the system UI font (SF Pro / Segoe) from Tailwind's
-       default sans stack. */
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
     text-rendering: optimizeLegibility;
   }
 }
 
-/* ── Lamp Monitor — dark theme scope ── */
 .lm-root {
   --lm-bg:          #0C0B09;
   --lm-sidebar:     #111009;
@@ -137,19 +122,13 @@
   --lm-text-dim:    #9A9080;
   --lm-text-muted:  #504A3C;
 
-  /* Text colour that sits ON the amber fill (Save button / primary CTA). Kept
-     identical in dark + light on purpose: the text always rests on the amber
-     surface, which is dark enough (#F59E0B dark / #D97706 light) for a near-
-     black ink to read well in both themes. A theme-flipping value would break
-     contrast on the light theme's near-white background if the fill were ever
-     removed, so we pin it. */
+  /* Theme-constant: this ink always rests on the amber fill. */
   --lm-on-amber:    #1A1206;
 
   background: var(--lm-bg);
   color: var(--lm-text);
 }
 
-/* ── Light theme — toggled via .lm-light class or system preference ── */
 .lm-root.lm-light {
   --lm-bg:          #FAFAF8;
   --lm-sidebar:     #F0EFEB;
@@ -180,7 +159,6 @@
   --lm-text-dim:    #57534E;
   --lm-text-muted:  #A8A29E;
 
-  /* Theme-constant — see the dark-block note. */
   --lm-on-amber:    #1A1206;
 }
 @media (prefers-color-scheme: light) {
@@ -214,33 +192,10 @@
     --lm-text-dim:    #57534E;
     --lm-text-muted:  #A8A29E;
 
-    /* Theme-constant — see the dark-block note. */
     --lm-on-amber:    #1A1206;
   }
 }
 
-/* ──────────────────────────────────────────────────────────────────────────
- * Interactive utilities (lamp scope) — hover / active / focus feedback.
- *
- * For lamp pages that use inline styles but DON'T already ship their own button
- * styling (e.g. Monitor, Login). Add these classes alongside the inline style to
- * get the missing :hover/:active/:focus feedback. They drive off --lm-* tokens
- * so they track the unified amber/teal palette in both dark and light.
- *
- * The `lm-u-` ("utility") prefix is deliberately distinct from the Setup/Edit
- * wizards' own `.lm-setup .lm-btn*` styles further down, so the two never collide
- * regardless of source order. Setup is already fully styled — don't use these
- * there. shadcn <Button>/<Input> also carry their own hover — don't use these there.
- *
- * Usage:
- *   <button className="lm-u-btn" style={...}>           neutral surface button
- *   <button className="lm-u-btn lm-u-btn-primary" ...>  amber call-to-action
- *   <button className="lm-u-icon-btn" ...>              square icon/ghost button
- *   <input  className="lm-u-input" ... />               text field
- *   <div    className="lm-u-interactive" ...>           hoverable card / row
- * ────────────────────────────────────────────────────────────────────────── */
-
-/* Shared: smooth, GPU-cheap transitions on the props we animate. */
 .lm-root .lm-u-btn,
 .lm-root .lm-u-icon-btn,
 .lm-root .lm-u-input,
@@ -253,7 +208,6 @@
     transform 0.08s ease;
 }
 
-/* Neutral / secondary button */
 .lm-root .lm-u-btn {
   cursor: pointer;
   background: var(--lm-surface);
@@ -278,7 +232,6 @@
   transform: none;
 }
 
-/* Primary amber call-to-action — compose with .lm-u-btn */
 .lm-root .lm-u-btn-primary {
   background: var(--lm-amber);
   border-color: var(--lm-amber);
@@ -294,7 +247,6 @@
   box-shadow: 0 0 0 3px var(--lm-amber-glow);
 }
 
-/* Square icon / ghost button */
 .lm-root .lm-u-icon-btn {
   cursor: pointer;
   background: transparent;
@@ -317,7 +269,6 @@
   color: var(--lm-text);
 }
 
-/* Text input / textarea / select */
 .lm-root .lm-u-input {
   background: var(--lm-card);
   border: 1px solid var(--lm-border);
@@ -340,9 +291,6 @@
   cursor: not-allowed;
 }
 
-/* Bluetooth device row: the Connect button stays hidden until the row is
- * hovered (or reached by keyboard), macOS-settings style. Touch devices have
- * no hover, so the button is always visible there. */
 .lm-root .lm-bt-row .lm-bt-hover-reveal {
   opacity: 0;
   transition: opacity 0.15s ease;
@@ -357,7 +305,6 @@
   }
 }
 
-/* Hoverable card / list row */
 .lm-root .lm-u-interactive {
   cursor: pointer;
   border: 1px solid var(--lm-border);
@@ -370,7 +317,6 @@
   transform: translateY(1px);
 }
 
-/* Respect reduced-motion preference: keep color feedback, drop movement. */
 @media (prefers-reduced-motion: reduce) {
   .lm-root .lm-u-btn,
   .lm-root .lm-u-icon-btn,
@@ -385,7 +331,6 @@
   }
 }
 
-/* Scrollbar */
 .lm-root ::-webkit-scrollbar        { width: 4px; height: 4px; }
 .lm-root ::-webkit-scrollbar-track  { background: transparent; }
 .lm-root ::-webkit-scrollbar-thumb  { background: var(--lm-border-hi); border-radius: 2px; }
@@ -393,10 +338,8 @@
 .lm-hide-scroll { scrollbar-width: none; }
 .lm-hide-scroll::-webkit-scrollbar { display: none; }
 
-/* Log viewer (monitor#logs) — subtle row hover for scannability */
 .lm-log-line { transition: background 0.1s; }
 .lm-log-line:hover { background: var(--lm-amber-dim) !important; }
-/* floating "jump to bottom" pill */
 .lm-log-jump {
   position: absolute;
   right: 16px;
@@ -419,10 +362,8 @@
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-/* toolbar control group separators */
 .lm-log-sep { width: 1px; align-self: stretch; background: var(--lm-border); margin: 2px 3px; }
 
-/* Hamburger button — hidden on desktop */
 .lm-hamburger {
   display: none;
   background: none;
@@ -436,7 +377,6 @@
 }
 .lm-hamburger:hover { color: var(--lm-text); background: var(--lm-surface); }
 
-/* Sidebar overlay — hidden on desktop */
 .lm-sidebar-overlay {
   display: none;
   position: fixed;
@@ -446,15 +386,11 @@
 }
 .lm-sidebar-overlay--open { display: block; }
 
-/* Responsive grid utility classes */
 .lm-grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; }
 .lm-grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
 .lm-grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); gap: 14px; }
 .lm-grid-5 { display: grid; grid-template-columns: repeat(5, 1fr); gap: 8px; }
 
-/* Shared Audio-card control rows. These must be base rules rather than
-   phone-only rules: desktop and tablet also need labels and action buttons on
-   the same line. */
 .lm-audio-row {
   display: flex;
   align-items: center;
@@ -465,16 +401,8 @@
 .lm-audio-row-label { min-width: 0; }
 .lm-audio-row .lm-u-btn { flex-shrink: 0; }
 
-/* Flow turn-list width (desktop). Clamps wider on large screens so the dense
-   IN/REPLY text in turn cards stays readable and the canvas loses dead space;
-   the mobile breakpoint below overrides this to full-width. */
 .lm-flow-turns { width: clamp(300px, 24vw, 380px); }
 
-/* ── Flow turn list (monitor#flow LEFTBAR) polish ─────────────────────────
-   Desktop-only depth cues. Mobile keeps the flat collapse behavior below. */
-
-/* Sticky header: stays pinned while the list scrolls, with a soft gradient
-   wash + blur so rows scrolling underneath read as "behind glass". */
 .lm-root .lm-flow-turns-header {
   position: sticky;
   top: 0;
@@ -486,7 +414,6 @@
   box-shadow: inset 0 1px 0 color-mix(in srgb, var(--lm-text) 8%, transparent);
 }
 
-/* Count pill next to the "Turns" label. */
 .lm-root .lm-flow-count {
   font-size: 9px;
   font-weight: 700;
@@ -499,8 +426,6 @@
   font-variant-numeric: tabular-nums;
 }
 
-/* Thin auto-hiding scrollbar for the turn list (replaces fully-hidden
-   scroll). Track stays invisible; thumb fades in on hover of the list. */
 .lm-root .lm-flow-scroll {
   scrollbar-width: thin;
   scrollbar-color: transparent transparent;
@@ -521,14 +446,11 @@
   background: color-mix(in srgb, var(--lm-text) 38%, transparent);
 }
 
-/* Turn card hover/selected depth. Desktop only — the mobile block below owns
-   .lm-turn-card collapse behavior and must not inherit transforms. */
 @media (min-width: 769px) {
   .lm-root .lm-turn-card {
     position: relative;
     transition: transform 0.12s ease, box-shadow 0.16s ease;
   }
-  /* Left accent rail — grows in on hover, full + amber when selected. */
   .lm-root .lm-turn-card::before {
     content: "";
     position: absolute;
@@ -553,8 +475,6 @@
     background: var(--lm-amber);
     box-shadow: 0 0 8px color-mix(in srgb, var(--lm-amber) 60%, transparent);
   }
-  /* Selected card: amber-tinted ring on the inner badge (which owns the
-     visible border), replacing the old hard 2px outline. */
   .lm-root .lm-turn-card[data-expanded="true"] > div {
     border-color: color-mix(in srgb, var(--lm-amber) 55%, var(--lm-border)) !important;
     box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 35%, transparent),
@@ -562,31 +482,22 @@
   }
 }
 
-/* Honor reduced-motion: keep the visual states, drop the movement. */
 @media (prefers-reduced-motion: reduce) {
   .lm-root .lm-turn-card,
   .lm-root .lm-turn-card::before { transition: none; }
   .lm-root .lm-turn-card:hover { transform: none; }
 }
 
-/* Turn card entrance — a new streamed turn fades in once, so the eye catches
-   "something new arrived" instead of a hard pop. Opacity-only on purpose: the
-   card's `transform` is owned by the hover/selected lift below, and animating
-   `transform` here (even with `both`) would freeze that lift once the entrance
-   settled. `forwards` keeps the final opacity without holding transform. */
+/* Opacity-only: `transform` is owned by the hover/selected lift. */
 @keyframes lm-turn-in {
   from { opacity: 0; }
   to   { opacity: 1; }
 }
 .lm-root .lm-turn-card { animation: lm-turn-in 0.28s ease-out forwards; }
 
-/* Source-icon: gentle scale + brighter tint on card hover, for a touch of
-   interactivity. The icon badge owns .lm-turn-src. */
 .lm-root .lm-turn-src { transition: transform 0.15s ease, background 0.15s ease; }
 .lm-root .lm-turn-card:hover .lm-turn-src { transform: scale(1.12); }
 
-/* ACTIVE status chip — soft pulsing dot signalling a live, in-flight turn.
-   Done/error turns render a static chip (no .lm-turn-active class). */
 .lm-root .lm-turn-active::before {
   content: "";
   display: inline-block;
@@ -601,8 +512,6 @@
   .lm-root .lm-turn-active::before { animation: none; }
 }
 
-/* Session divider — gradient hairline that fades toward the center label,
-   replacing the flat dashed rule. */
 .lm-root .lm-flow-session-rule {
   height: 1px;
   flex: 1;
@@ -616,13 +525,10 @@
   .lm-grid-5 { grid-template-columns: repeat(3, 1fr); gap: 8px; }
 }
 
-/* View pipeline button — hidden by default (desktop), then made visible in
-   the mobile media query below. Keep this rule BEFORE that query: both rules
-   use !important to defeat inline display styles, so source order decides it. */
+/* Must precede the mobile query: both use !important, so source order decides. */
 .lm-view-pipeline-btn { display: none !important; }
 
 @media (max-width: 768px) {
-  /* Sidebar becomes a slide-in drawer */
   .lm-sidebar {
     position: fixed !important;
     top: 0;
@@ -642,20 +548,10 @@
 
   .lm-content { padding: 12px !important; }
 
-  /* Flow section on mobile: hide the right-pane Turn Pipeline card entirely
-     and let the turn list fill the full content area. The pipeline is reached
-     by tapping the "View pipeline" button inside the selected turn card,
-     which opens a full-screen PipelineModal. Keeping both stacked on a phone
-     screen squeezed both into unreadable strips — the modal pattern gives
-     the diagram real estate to breathe. */
   .lm-flow-layout { flex-direction: column !important; }
   .lm-flow-turns  { width: 100% !important; flex: 1 !important; min-height: 0 !important; max-height: none !important; }
   .lm-flow-pipeline { display: none !important; }
 
-  /* Mobile collapse: each turn card shows only its header row until tapped.
-     Selected turn (data-expanded="true") shows the full body. Lets the user
-     scan many turns at once on a small screen instead of swiping through
-     a few tall cards. */
   .lm-turn-card[data-expanded="false"] {
     max-height: 60px;
     overflow: hidden;
@@ -670,8 +566,6 @@
     pointer-events: none;
   }
 
-  /* Mobile-only View pipeline button inside each TurnBadge. Hidden on desktop
-     because the pipeline already sits inline next to the turn list. */
   .lm-view-pipeline-btn { display: flex !important; }
 }
 
@@ -680,26 +574,9 @@
   .lm-grid-3 { grid-template-columns: 1fr; }
   .lm-grid-5 { grid-template-columns: 1fr 1fr; gap: 6px; }
 
-  /* The Overview's Audio card contains labelled controls and VU meters. Give
-     it a full-width card on phones instead of squeezing controls into a
-     two-column status grid; this also prevents the short Presence card from
-     being stretched to Audio's height. Other four-card grids remain compact. */
   .lm-overview-status-grid { grid-template-columns: 1fr; }
 }
 
-/* ── Monitor/Settings sidebar — Setup nav styling + fancy upgrades ─────────── */
-
-/* These classes live under the Monitor root (.lm-root), scoped with a distinct
-   `lm-snav-*` prefix to avoid colliding with the Setup `.lm-nav-item` rules.
-   The base treatment (padding, radius, font-size, animated amber left rail,
-   hover) mirrors the Setup nav so both flows feel identical, plus three layers
-   of polish: (1) micro-interactions — icon scales on hover, the whole row nudges
-   right, the active icon goes amber; (2) glow + depth — the active row carries a
-   soft amber shadow and the rail is a rounded amber gradient with its own glow;
-   (3) motion — group children slide+fade open instead of snapping. Colors come
-   from --lm-* vars only, so dark/light flip automatically via the
-   .lm-light / .lm-dark class on the root. `prefers-reduced-motion` neutralises
-   the transforms at the bottom of this block. */
 .lm-snav-item,
 .lm-snav-sub,
 .lm-snav-group {
@@ -716,8 +593,6 @@
   cursor: pointer;
   color: var(--lm-text-dim);
   text-decoration: none;
-  /* transform + box-shadow join the transition so the hover nudge and active
-     glow ease in rather than snap. */
   transition: background 0.15s ease, color 0.15s ease,
               transform 0.15s ease, box-shadow 0.2s ease;
 }
@@ -730,8 +605,6 @@
   user-select: none;
 }
 
-/* Icons ride a fast spring so hover/active feel responsive, not laggy. The SVG
-   is a direct child of the row (no wrapper span), so target `> svg`. */
 .lm-snav-item > svg,
 .lm-snav-sub > svg,
 .lm-snav-group > span > svg {
@@ -739,8 +612,6 @@
   transition: transform 0.2s cubic-bezier(0.34, 1.4, 0.64, 1), color 0.15s ease;
 }
 
-/* Amber active rail — rounded gradient with a soft glow, scales in from the
-   centre. Shared by item + sub. */
 .lm-snav-item::before,
 .lm-snav-sub::before {
   content: "";
@@ -756,7 +627,6 @@
   transition: transform 0.22s cubic-bezier(0.34, 1.4, 0.64, 1);
 }
 
-/* Hover: lift the row a touch to the right, warm the surface, nudge the icon. */
 .lm-snav-item:hover,
 .lm-snav-sub:hover,
 .lm-snav-group:hover {
@@ -768,8 +638,6 @@
 .lm-snav-sub:hover > svg,
 .lm-snav-group:hover > span > svg { transform: scale(1.12); }
 
-/* Active: amber text/weight, amber-dim fill, a soft amber glow for depth, and a
-   slightly enlarged amber icon. The rail snaps to full height. */
 .lm-snav-item--active,
 .lm-snav-sub--active {
   background: var(--lm-amber-dim);
@@ -783,9 +651,6 @@
 .lm-snav-item--active > svg,
 .lm-snav-sub--active > svg { color: var(--lm-amber); transform: scale(1.06); }
 
-/* Sidebar footer logout — quiet by default, turns red on hover to signal it
-   ends the session. Mirrors the nav item's gap/radius so it reads as part of
-   the same rail. */
 .lm-logout-btn {
   display: flex;
   align-items: center;
@@ -807,8 +672,6 @@
   color: var(--lm-red);
 }
 
-/* Confirm-dialog action buttons (Cancel / Confirm). Cancel is quiet; the
-   primary/danger variants carry the action's tone. */
 .lm-confirm-btn {
   padding: 8px 16px;
   border-radius: 8px;
@@ -838,13 +701,9 @@
 }
 .lm-confirm-btn--danger:hover { filter: brightness(1.08); }
 
-/* Group header: when a child is active it reads amber + bold (no fill), and its
-   icon goes amber to anchor the expanded section. */
 .lm-snav-group--active { color: var(--lm-amber); font-weight: 600; }
 .lm-snav-group--active > span > svg { color: var(--lm-amber); }
 
-/* Children reveal — slide + fade down when a group opens, instead of an abrupt
-   show. Applied to the wrapper <div> around the children. */
 @keyframes lm-snav-reveal {
   from { opacity: 0; transform: translateY(-4px); }
   to   { opacity: 1; transform: translateY(0); }
@@ -861,16 +720,7 @@
   .lm-snav-children { animation: none; }
 }
 
-/* ── Sidebar feature search ───────────────────────────────────────────────────
-   A search box pinned to the top of the rail to tame a long nav. The input has a
-   leading magnifier and a trailing clear (×) button that only appears with a
-   query. When searching, the grouped nav is swapped for a flat result list
-   (rendered just below the box) where each row reuses .lm-snav-item so the amber
-   active treatment and hover nudge carry over. Colors come from --lm-* vars so
-   dark/light flips automatically. */
 .lm-snav-search { padding: 12px 12px 4px; }
-/* While a query is active the box owns the rail's vertical space so the result
-   list can scroll independently of the (hidden) grouped nav. */
 .lm-snav-search--active {
   flex: 1;
   display: flex;
@@ -929,16 +779,12 @@
   color: var(--lm-amber);
 }
 
-/* Flat result list — scrolls independently, fills the rail below the box. */
 .lm-snav-search-results {
   margin-top: 6px;
   overflow-y: auto;
   flex: 1;
   animation: lm-snav-reveal 0.16s ease-out both;
 }
-/* Result rows must never wrap: the rail is narrow (~216px), so the label gets
-   the slack (ellipsis when long) while the group chip stays compact and the icon
-   never shrinks. `gap` is tightened from the base nav item to buy label width. */
 .lm-snav-result {
   flex-wrap: nowrap;
   gap: 8px;
@@ -946,8 +792,7 @@
   overflow: hidden;
 }
 .lm-snav-result > svg { flex-shrink: 0; }
-/* Label takes remaining space and truncates rather than pushing the chip onto a
-   second line. min-width:0 is what lets a flex child shrink below its content. */
+/* min-width:0 lets the flex child shrink below its content. */
 .lm-snav-result-label {
   flex: 1 1 auto;
   min-width: 0;
@@ -955,9 +800,6 @@
   overflow: hidden;
   text-overflow: ellipsis;
 }
-/* Parent-group chip — small, muted, right-aligned so a result reads
-   "⚙ General  Settings". Caps its own width and truncates so it can't crowd out
-   the label on a tight rail. */
 .lm-snav-result-group {
   flex: 0 1 auto;
   min-width: 0;
@@ -975,8 +817,6 @@
   padding: 1px 6px;
 }
 .lm-snav-item--active .lm-snav-result-group { color: var(--lm-amber); }
-/* Enter hint on the first (default) result — hidden on very narrow rails so the
-   label keeps its room. */
 .lm-snav-result-enter { flex-shrink: 0; color: var(--lm-text-muted); margin-left: 2px; }
 @media (max-width: 240px) {
   .lm-snav-result-enter { display: none; }
@@ -991,10 +831,6 @@
   .lm-snav-search-results { animation: none; }
 }
 
-/* ── Setup wizard ─────────────────────────────────────────────────────────── */
-
-/* Sidebar nav item: hover lift + animated left active-bar. The ::before is the
-   amber accent rail that grows in when a step is active. */
 .lm-setup .lm-nav-item {
   position: relative;
   display: flex;
@@ -1031,12 +867,6 @@
   color: var(--lm-amber);
   font-weight: 600;
 }
-/* The active row's font-weight:600 widens the label, which used to push a
-   two-word step ("My Voice") sitting next to the OPTIONAL badge onto a second
-   line — the row grew taller and the icon/badge visibly shifted the moment it
-   was selected. Keep the label on one line (ellipsizing if it ever outgrows the
-   192px sidebar) so selecting a step never changes the layout, and stop the
-   icon / trailing badge from being squeezed by a long label. */
 .lm-setup .lm-nav-label {
   white-space: nowrap;
   overflow: hidden;
@@ -1049,7 +879,6 @@
 }
 .lm-setup .lm-nav-item--active::before { transform: translateY(-50%) scaleY(1); }
 
-/* Step progress bar in the topbar. */
 .lm-setup .lm-progress-track {
   height: 3px;
   border-radius: 3px;
@@ -1063,7 +892,6 @@
   transition: width 0.35s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Setup card: subtle elevation; lifts a touch on hover. */
 .lm-setup .lm-card {
   background: var(--lm-card);
   border: 1px solid var(--lm-border);
@@ -1073,7 +901,6 @@
 }
 .lm-setup .lm-card:hover { border-color: var(--lm-border-hi); }
 
-/* Wizard primary/secondary buttons: hover lift + glow on the amber CTA. */
 .lm-setup .lm-btn {
   border-radius: 8px;
   font-size: 14px;
@@ -1098,11 +925,6 @@
 }
 .lm-setup .lm-btn-ghost:hover { border-color: var(--lm-border-hi); }
 
-/* Eye / reveal toggle inside password & masked inputs (PasswordField,
-   LockedPasswordField, MaskedReadField). Rests dim so it doesn't compete with
-   the typed value, then brightens + shows a subtle amber chip on hover/focus so
-   it's clearly tappable. The square chip is inset from the input edge so it
-   reads as a button, not a full-height bar. */
 .lm-root .lm-eye-btn {
   color: var(--lm-text-muted);
   border-radius: 7px;
@@ -1121,10 +943,6 @@
   box-shadow: 0 0 0 2px var(--lm-amber-glow);
 }
 
-/* Face-enroll capture controls (the "Browse" dropzone + "Take photo" button).
-   These set their border/background inline to track selection state, so the
-   hover cue uses box-shadow (an inset amber ring) + a hairline lift, neither of
-   which the inline styles touch — the affordance reads without fighting state. */
 .lm-root .lm-face-drop,
 .lm-root .lm-face-cam {
   transition: box-shadow 0.15s ease, border-color 0.15s ease, transform 0.1s ease;
@@ -1147,7 +965,6 @@
   box-shadow: 0 0 0 2px var(--lm-amber-glow);
 }
 
-/* Mobile tab pill row. */
 .lm-setup .lm-tab {
   padding: 7px 14px;
   border-radius: 999px;
@@ -1167,8 +984,6 @@
   font-weight: 600;
 }
 
-/* Mobile tab row: a right-edge fade hints there are more tabs to scroll to
-   (Voice/Face often sit off-screen). The wrapper clips the gradient overlay. */
 .lm-setup .lm-mobile-tabs-wrap { position: relative; }
 .lm-setup .lm-mobile-tabs-wrap::after {
   content: "";
@@ -1181,9 +996,6 @@
   background: linear-gradient(to right, transparent, var(--lm-bg));
 }
 
-/* Input placeholders: the browser default (~0.5 opacity) reads too faint on the
-   dark surface. Bump toward 0.65 so hints stay legible without competing with
-   real typed text. Scoped to the setup wizard's inputs/selects. */
 .lm-setup input::placeholder,
 .lm-setup textarea::placeholder {
   color: var(--lm-text-dim);
@@ -1196,12 +1008,10 @@
   .lm-setup .lm-main-content { padding: 16px !important; }
 }
 
-/* Animations */
 @keyframes lm-fade-in {
   from { opacity: 0; transform: translateY(6px); }
   to   { opacity: 1; transform: translateY(0); }
 }
-/* Flow filters modal — overlay fades, panel scales in. */
 #FLOW_FILTERS_MODAL_OVERLAY { animation: lm-fade-in 0.16s ease-out; }
 .lm-filters-modal { animation: lm-filters-pop 0.18s cubic-bezier(0.34, 1.4, 0.64, 1) both; }
 @keyframes lm-filters-pop {
@@ -1211,9 +1021,6 @@
 @media (prefers-reduced-motion: reduce) {
   #FLOW_FILTERS_MODAL_OVERLAY, .lm-filters-modal { animation: none; }
 }
-/* Time-range fields — de-chrome the native time input so it sits flush inside
-   the themed .lm-time-field pill (no native border/spinners; themed picker
-   indicator). */
 .lm-time-field:hover { border-color: var(--lm-border-hi); }
 .lm-time-field:focus-within { border-color: var(--lm-amber); }
 .lm-root .lm-time-input { padding: 0; color-scheme: dark; }
@@ -1227,7 +1034,6 @@
 }
 .lm-time-input::-webkit-inner-spin-button,
 .lm-time-input::-webkit-clear-button { display: none; }
-/* Light mode: the native time UI should follow the page, not force dark. */
 .lm-root.lm-light .lm-time-input { color-scheme: light; }
 @media (prefers-color-scheme: light) {
   .lm-root:not(.lm-dark) .lm-time-input { color-scheme: light; }
@@ -1237,7 +1043,6 @@
   50%       { box-shadow: 0 0 14px var(--lm-amber-glow); }
 }
 .lm-fade-in  { animation: lm-fade-in 0.35s ease-out both; }
-/* Pop-in for the sidebar step checkmark — a small spring as a step turns done. */
 @keyframes lm-pop {
   0%   { opacity: 0; transform: scale(0.4); }
   60%  { opacity: 1; transform: scale(1.15); }
@@ -1255,17 +1060,12 @@
 .lm-d3 { animation-delay: 180ms; }
 .lm-d4 { animation-delay: 240ms; }
 
-/* Spinner — amber ring with a transparent top, used on the "connecting" post-
-   submit screen so the wait reads as active work rather than a frozen page. */
 @keyframes lm-spin { to { transform: rotate(360deg); } }
-/* Inline spinner icon (e.g. lucide Loader2 on a busy button) — spins in place. */
 .lm-spin-ico { animation: lm-spin 0.8s linear infinite; }
-/* Recording dot — soft amber/red pulse for an active "● recording" affordance. */
 @keyframes lm-pulse-dot {
   0%, 100% { opacity: 1; transform: scale(1); }
   50%      { opacity: 0.45; transform: scale(0.82); }
 }
-/* Flow Panel brand "live" dot — gentle breathing pulse. */
 .lm-root .lm-live-dot {
   animation: lm-pulse-dot 1.8s ease-in-out infinite;
 }
@@ -1285,17 +1085,12 @@
   .lm-spinner { animation-duration: 1.6s; }
 }
 
-/* Copy button confirm flash — briefly tints the button amber when the address
-   was copied, a clearer "it worked" signal than the label swap alone. */
 .lm-root .lm-copied {
   background: var(--lm-amber) !important;
   border-color: var(--lm-amber) !important;
   color: var(--lm-bg) !important;
 }
 
-/* Indeterminate progress bar — a slim amber sliver that sweeps left↔right while
-   the device joins Wi-Fi. Unlike a fill bar it doesn't imply a known % done
-   (we can't know when the join completes), only that work is in progress. */
 @keyframes lm-indeterminate {
   0%   { left: -40%; }
   100% { left: 100%; }
@@ -1322,12 +1117,6 @@
   .lm-root .lm-indeterminate::after { animation-duration: 2.6s; }
 }
 
-/* ── Wi-Fi pulse rings ──────────────────────────────────────────────────────
-   A centered Wi-Fi glyph with concentric amber rings that scale out and fade,
-   like a radar ping — reads instantly as "connecting to Wi-Fi". Pure CSS, no
-   JS. The .lm-wifi-pulse box is the positioning context; .lm-wifi-ring spans
-   are the expanding circles (staggered via animation-delay); the icon sits on
-   top via a higher z-index. */
 .lm-root .lm-wifi-pulse {
   position: relative;
   width: 72px;
@@ -1363,26 +1152,14 @@
   100% { transform: scale(2.9); opacity: 0; }
 }
 @media (prefers-reduced-motion: reduce) {
-  /* Drop the moving rings; keep just the gently glowing icon. */
   .lm-root .lm-wifi-ring { display: none; }
   .lm-root .lm-wifi-pulse .lm-wifi-icon { animation: lm-pulse-glow 2s ease-in-out infinite; }
 }
 
-/* ── Settings panel polish (Edit page + embedded Monitor settings) ──────────
-   The shared SettingsPanel renders under .lm-edit and plain .lm-root — NOT
-   .lm-setup — so the elevated-card styling defined for the wizard never
-   reached it and the cards read flat. These rules give the section cards real
-   depth, a hover lift, and a hairline amber accent on the leading edge, plus a
-   fancier restart banner. All theme-token based so light + dark both track. */
-/* Settings panel padding. Roomy on desktop, tightened on phones so the
-   max-width:560px content column keeps usable width on a ~360px screen. Lives
-   in CSS (not inline) so the media query can win. */
 .lm-root .lm-settings-panel { padding: 24px 32px; }
 @media (max-width: 768px) {
   .lm-root .lm-settings-panel { padding: 16px 14px; }
-  /* Tighten the section-card inner padding too. SectionCard sets it inline, so
-     !important is needed to win — scoped to the settings panel so other
-     .lm-card users (Setup wizard, monitor) are untouched. */
+  /* SectionCard sets padding inline, so !important is needed. */
   .lm-root .lm-settings-panel .lm-card { padding: 18px 16px !important; }
 }
 
@@ -1397,7 +1174,6 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 30px -18px rgba(0, 0, 0, 0.55);
   transition: border-color 0.18s, box-shadow 0.22s, transform 0.22s;
 }
-/* Hairline accent down the leading edge — lights amber as the card lifts. */
 .lm-edit .lm-card::before,
 .lm-root .lm-settings-panel .lm-card::before {
   content: "";
@@ -1421,12 +1197,6 @@
 .lm-edit .lm-card:hover::before,
 .lm-root .lm-settings-panel .lm-card:hover::before { opacity: 0.9; }
 
-/* ── Monitor Overview cards ──────────────────────────────────────────────────
-   Same depth language as the settings cards (gradient sheen at the top, a
-   hairline amber accent on the leading edge that lights on hover, a subtle
-   lift) so the dashboard feels designed rather than a grid of bordered boxes.
-   Applied via `.lm-mon-card` on top of the inline `S.card` base. All token
-   based → dark + light both track. */
 .lm-root .lm-mon-card {
   position: relative;
   overflow: hidden;
@@ -1436,7 +1206,6 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
   transition: border-color 0.2s, box-shadow 0.24s, transform 0.24s;
 }
-/* Hairline accent down the leading edge. */
 .lm-root .lm-mon-card::before {
   content: "";
   position: absolute;
@@ -1448,7 +1217,6 @@
   transition: opacity 0.24s;
   pointer-events: none;
 }
-/* Soft radial glow that blooms from the top-left on hover — the "cool" touch. */
 .lm-root .lm-mon-card::after {
   content: "";
   position: absolute;
@@ -1474,10 +1242,6 @@
   .lm-root .lm-mon-card:hover { transform: none; }
 }
 
-/* ── Overview hero banner ────────────────────────────────────────────────────
-   A wide gradient header strip at the top of the Overview that gives the page a
-   designed "command-center" feel. Purely presentational — the chips inside it
-   read from already-fetched props. */
 .lm-root .lm-mon-hero {
   position: relative;
   overflow: hidden;
@@ -1490,7 +1254,6 @@
     var(--lm-card);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.18), 0 10px 30px -18px rgba(0, 0, 0, 0.5);
 }
-/* Faint animated sheen sweeping across the hero. */
 .lm-root .lm-mon-hero::after {
   content: "";
   position: absolute;
@@ -1505,9 +1268,6 @@
   100%    { transform: translateX(100%); }
 }
 
-/* ── Card-label icon chip ────────────────────────────────────────────────────
-   A small amber-tinted square holding the section glyph next to each card's
-   label — same affordance as the setup SectionCard header. */
 .lm-root .lm-mon-chip {
   flex-shrink: 0;
   width: 22px;
@@ -1523,7 +1283,6 @@
   box-shadow: inset 0 0 0 1px var(--lm-amber-glow);
 }
 
-/* ── Pairing ──────────────────────────────────────────────────────────────── */
 .lm-root .lm-pairing {
   width: 100%;
 }
@@ -1586,9 +1345,6 @@
   .lm-root .lm-pairing-grid { grid-template-columns: 1fr; gap: 12px; }
 }
 
-/* ── Status-badge pulse ──────────────────────────────────────────────────────
-   A gentle breathing ring on "live" badges (ONLINE, LIVE) to signal real-time
-   activity. Applied alongside the existing badge styles. */
 .lm-root .lm-pulse {
   position: relative;
 }
@@ -1608,10 +1364,6 @@
   100% { opacity: 0;   transform: scale(1.18); }
 }
 
-/* ── Volume slider — amber gradient track ────────────────────────────────────
-   Restyles the range input in the Audio card into a filled amber track with a
-   glowing thumb. Behaviour (value/onChange) is untouched; this is paint only.
-   The filled portion is driven by a --lm-fill custom property set inline. */
 .lm-root input[type="range"].lm-mon-range {
   -webkit-appearance: none;
   appearance: none;
@@ -1652,12 +1404,6 @@
   .lm-root .lm-pulse::after { animation: none; }
 }
 
-/* ── Auto-fit card row ────────────────────────────────────────────────────────
-   Like .lm-grid-4 but the column count follows the number of cards actually
-   rendered, so rows with capability-gated cards (Emotion/Scene/Servo only on
-   some devices) stay flush left and never leave a hole on the right. Each card
-   keeps a comfortable min width and grows to fill — a lone card spans the row
-   rather than collapsing to a quarter-width stub. */
 .lm-root .lm-grid-auto {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
@@ -1667,17 +1413,6 @@
   .lm-root .lm-grid-auto { grid-template-columns: 1fr; gap: 8px; }
 }
 
-/* ── Device-cluster two-column layout ─────────────────────────────────────────
-   Row 2 of the Overview used a single auto-fit grid that forced six cards of
-   very different content density (compact Hardware/Scene vs. tall Emotion/Servo
-   pill clouds vs. Versions/Buddy) into equal-height columns — leaving dead space
-   in the short cards and cramping the tall ones. Instead we split into two
-   masonry-style columns: cards flow top-to-bottom and pack by their natural
-   height, so a short card no longer stretches to match a tall neighbour. The
-   wide left column carries the expressive cards; the narrower right column
-   carries the compact status cards. Each column's cards are spaced by `gap`.
-   On a minimal device (Hardware + Versions + Buddy only) the same markup still
-   reads cleanly because cards simply pack into whatever columns remain. */
 .lm-root .lm-cluster {
   display: grid;
   grid-template-columns: 1fr 1fr;
@@ -1698,23 +1433,12 @@
   .lm-root .lm-cluster-col { gap: 8px; }
 }
 
-/* ── Pill cloud — de-cluttered tag grid ───────────────────────────────────────
-   Emotion presets and Servo recordings render as a uniform wrapped grid of
-   selectable pills. The active pill is hoisted to the front by the component so
-   the current state always reads first. A lamp's full set (~20 emotions / ~30
-   poses) fits in a few wrapped rows, so the cloud shows everything rather than
-   capping + scrolling — a half-cut fade on the last row read as a render bug.
-   Pills keep their existing inline colors (per-emotion / per-pose accent). */
 .lm-root .lm-pillcloud {
   display: flex;
   flex-wrap: wrap;
   gap: 4px;
 }
 
-/* ── Skeleton loaders ─────────────────────────────────────────────────────────
-   Placeholder bars that hold a card's height while data is in flight, replacing
-   the "Loading…" text that caused a layout jump when the real rows arrived. A
-   slow amber-tinted sheen sweeps across to read as "live, fetching". */
 .lm-root .lm-skel {
   border-radius: 6px;
   background: linear-gradient(
@@ -1731,9 +1455,6 @@
   100% { background-position: -80% 0; }
 }
 
-/* ── Hardware badge — offline pulse ───────────────────────────────────────────
-   An offline (red) HW badge gets a soft breathing glow so a failed subsystem
-   (Servo/Camera down) pulls the eye, while healthy green badges stay calm. */
 .lm-root .lm-hw-down {
   animation: lm-hw-down-pulse 1.8s ease-in-out infinite;
 }
@@ -1742,10 +1463,6 @@
   50%      { box-shadow: 0 0 8px 1px color-mix(in srgb, var(--lm-red) 40%, transparent); }
 }
 
-/* ── Cooldown progress fill — live shimmer ────────────────────────────────────
-   A light sweep travels across an active cooldown bar so a counting-down timer
-   reads as "live" rather than a static colored block. The base fill color is set
-   inline (per-kind), this only layers a translucent moving highlight on top. */
 .lm-root .lm-cooldown-fill {
   position: relative;
   overflow: hidden;
@@ -1768,9 +1485,6 @@
   100% { background-position: -80% 0; }
 }
 
-/* ── Spinner — refresh-in-flight ──────────────────────────────────────────────
-   Spins an icon button's glyph while a fetch is running, so the refresh control
-   reads as "working" instead of dead. Applied to the ↻ button when loading. */
 .lm-root .lm-spin {
   animation: lm-spin 0.8s linear infinite;
 }
@@ -1779,10 +1493,6 @@
   to   { transform: rotate(360deg); }
 }
 
-/* ── Card entrance — staggered fade-in ────────────────────────────────────────
-   Person cards rise + fade in instead of snapping in all at once. The per-card
-   delay is set inline via --lm-stagger so each lands a beat after the previous,
-   reading as "dealt out" rather than a hard pop. */
 .lm-root .lm-card-in {
   animation: lm-card-in 0.42s cubic-bezier(0.22, 1, 0.36, 1) both;
   animation-delay: var(--lm-stagger, 0ms);
@@ -1792,10 +1502,6 @@
   to   { opacity: 1; transform: translateY(0); }
 }
 
-/* ── Scroll fade — bottom edge hint ───────────────────────────────────────────
-   A soft fade at the bottom of a scroll region (the Unknown Voices/Faces/
-   Cooldowns lists) signals "more below" without a visible scrollbar. The mask
-   only bites when content overflows; a short list shows no fade. */
 .lm-root .lm-scroll-fade {
   -webkit-mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
   mask-image: linear-gradient(to bottom, #000 calc(100% - 22px), transparent);
@@ -1814,16 +1520,11 @@
   .lm-root .lm-settings-panel .lm-card:hover { transform: none; }
 }
 
-/* Chat composer — lights up with the same amber focus ring as every other
-   input in the app when the textarea inside it gains focus, so the pill reads
-   as a first-class field rather than a flat box. */
 .lm-root .lm-chat-composer:focus-within {
   border-color: var(--lm-amber);
   box-shadow: 0 0 0 3px var(--lm-amber-glow), 0 8px 24px -16px rgba(0, 0, 0, 0.5);
 }
 
-/* Section title gets a soft amber-to-text gradient — a touch of flair on the
-   header without shouting. Falls back to plain text where unsupported. */
 .lm-settings-title {
   background: linear-gradient(90deg, var(--lm-text), color-mix(in srgb, var(--lm-amber) 55%, var(--lm-text)));
   -webkit-background-clip: text;
@@ -1831,22 +1532,12 @@
   -webkit-text-fill-color: transparent;
 }
 
-/* ── Chat polish (warm & premium) ──────────────────────────────────────────
-   Subtle depth + motion that lifts the chat from "dev tool" to "product"
-   without leaving the existing amber/teal system. All effects respect
-   prefers-reduced-motion below. */
-
-/* Each message slides up + fades in as it mounts. Cheap (transform+opacity),
-   GPU-friendly, and reads as the message "arriving". */
 @keyframes lm-msg-in {
   from { opacity: 0; transform: translateY(8px); }
   to   { opacity: 1; transform: translateY(0); }
 }
 .lm-root .lm-chat-msg { animation: lm-msg-in 0.32s cubic-bezier(0.22, 1, 0.36, 1) both; }
 
-/* Message bubbles get a soft drop shadow so they float over the surface
-   instead of sitting flush. Agent bubble is the readable surface; the user
-   bubble keeps a faint amber-tinted shadow to echo its tint. */
 .lm-root .lm-chat-msg [data-bubble] {
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 8px 22px -18px rgba(0, 0, 0, 0.65);
   transition: box-shadow 0.18s ease, transform 0.18s ease;
@@ -1855,8 +1546,6 @@
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.28), 0 10px 28px -16px rgba(0, 0, 0, 0.7);
 }
 
-/* Assistant avatar — a small amber orb that gently breathes. The lamp's
-   "presence" in the conversation. */
 .lm-root .lm-assistant-orb {
   position: relative;
   display: inline-flex; align-items: center; justify-content: center;
@@ -1876,8 +1565,6 @@
   50%      { box-shadow: 0 0 0 1px color-mix(in srgb, var(--lm-amber) 55%, transparent), 0 0 22px 1px var(--lm-amber-glow); }
 }
 
-/* Live status dot on the header avatar — green when idle/online, amber pulse
-   while the assistant is thinking. */
 .lm-root .lm-status-dot {
   width: 9px; height: 9px; border-radius: 50%;
   border: 2px solid var(--lm-sidebar);
@@ -1894,16 +1581,12 @@
   100% { box-shadow: 0 0 0 0 transparent; }
 }
 
-/* Give the chat panel a faint inner top highlight so it reads as a raised
-   surface against the flat sidebars on either side. */
 .lm-root .lm-chat-panel {
   background:
     linear-gradient(180deg, color-mix(in srgb, var(--lm-amber) 3%, transparent), transparent 140px),
     var(--lm-bg);
 }
 
-/* Empty-state suggestion chips — lift + amber-tint on hover so they invite a
-   click rather than just sitting there. */
 .lm-root .lm-suggestion-chip {
   transition: transform 0.15s ease, border-color 0.15s ease, background 0.15s ease, box-shadow 0.15s ease;
 }
@@ -1914,12 +1597,9 @@
   box-shadow: 0 6px 18px -10px var(--lm-amber-glow);
 }
 
-/* Send button — a quick "pop" press feedback when it's armed. */
 .lm-root .lm-send-ready:hover { transform: scale(1.06); }
 .lm-root .lm-send-ready:active { transform: scale(0.92); }
 
-/* Pulse ring around the header avatar while the assistant is thinking — an
-   amber halo that expands and fades. Purely decorative, sits behind the orb. */
 .lm-root .lm-orb-ring::before {
   content: "";
   position: absolute; inset: -3px;
@@ -1933,14 +1613,10 @@
   100% { opacity: 0;    transform: scale(1.5); }
 }
 
-/* Action buttons (copy/retry) under each message: hidden until you hover the
-   message, so the thread stays clean. Fade in, don't pop. */
 .lm-root .lm-msg-action { opacity: 0; transition: opacity 0.15s ease, color 0.15s ease; }
 .lm-root .lm-chat-msg:hover .lm-msg-action,
 .lm-root .lm-msg-action:focus-visible { opacity: 0.7; }
 
-/* iMessage-style tail on the user bubble's lower-right corner — a small amber
-   wedge so the bubble reads as "coming from you" instead of a plain box. */
 .lm-root .lm-chat-msg[data-role="user"] [data-bubble] { position: relative; }
 .lm-root .lm-chat-msg[data-role="user"] [data-bubble]::after {
   content: "";
@@ -1953,13 +1629,9 @@
   pointer-events: none;
 }
 
-/* History conversation rows — a subtle nudge to the right on hover so the
-   list feels responsive without shifting the whole panel. */
 .lm-root .lm-convo-row { transition: background 0.15s ease, transform 0.12s ease; }
 .lm-root .lm-convo-row:hover { transform: translateX(1px); }
 
-/* Slim, rounded scrollbar for the chat scroll area — replaces the chunky
-   default with an amber-muted thumb that brightens on hover. */
 .lm-root .lm-chat-panel *::-webkit-scrollbar { width: 8px; height: 8px; }
 .lm-root .lm-chat-panel *::-webkit-scrollbar-track { background: transparent; }
 .lm-root .lm-chat-panel *::-webkit-scrollbar-thumb {
@@ -1985,6 +1657,5 @@
   .lm-root .lm-convo-row:hover { animation: none; transform: none; }
 }
 
-/* Agent gateway menu — parked, not removed. Flip to `display: block` to bring
-   the whole submenu back; nothing else needs touching. */
+/* Agent gateway menu is parked; `display: block` restores it. */
 .lm-nav-agent { display: none; }

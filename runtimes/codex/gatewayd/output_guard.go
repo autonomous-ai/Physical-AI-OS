@@ -14,10 +14,9 @@ const (
 )
 
 // degenerateAssistantOutput recognizes the observed runaway syllable loop, not
-// merely a long answer. At least 95% of a large message must consist of at most
-// eight short alphabetic tokens, each repeated at least 128 times. Punctuation,
-// code, numbers and ordinary prose count against that threshold. The candidate
-// vocabulary is bounded; a diverse long answer is accepted without truncation.
+// merely a long answer.
+// At least 95% of a large message must consist of at most eight short alphabetic tokens, each
+// repeated at least 128 times.
 func degenerateAssistantOutput(text string) bool {
 	if len(text) < degenerateOutputMinBytes {
 		return false

@@ -17,13 +17,12 @@ import (
 
 const (
 	// oauthRefreshInterval is how often the loop scans access_tokens.json for
-	// soon-to-expire tokens. Tight enough that a 1-hour Google token never
-	// lapses given the skew below; cheap because most ticks find nothing to do.
+	// soon-to-expire tokens.
 	oauthRefreshInterval = 3 * time.Minute
 
-	// oauthRefreshSkew refreshes a token once it has less than this remaining,
-	// so downstream consumers (gws CLI / OpenClaw gateway) never read an
-	// already-expired access token.
+	// oauthRefreshSkew refreshes a token once it has less than this
+	// remaining, so downstream consumers (gws CLI / OpenClaw gateway) never
+	// read an already-expired access token.
 	oauthRefreshSkew = 10 * time.Minute
 
 	// oauthRefreshTimeout bounds a single refresh round-trip to the backend.
@@ -32,17 +31,14 @@ const (
 	// oauthRefreshPath is appended to config.LLMBaseURL.
 	oauthRefreshPath = "/oauth/refresh"
 
-	// defaultOAuthTokenLifetime is assumed when a token arrives (or refreshes)
-	// without any expiry info. Google access tokens last ~1h; assuming this
-	// keeps us from storing expires_at=0, which the loop would treat as
-	// "always expired" and re-refresh every tick.
+	// defaultOAuthTokenLifetime is assumed when a token arrives (or
+	// refreshes) without any expiry info.
 	defaultOAuthTokenLifetime = time.Hour
 )
 
-// errOAuthInvalidGrant marks a refresh the backend rejected as invalid_grant —
-// the refresh_token is revoked/expired and retrying won't help until the user
-// re-authorizes (a fresh oauth.set). Distinguished from transient failures so
-// the loop can stop retrying a dead token.
+// errOAuthInvalidGrant marks a refresh the backend rejected as invalid_grant
+// — the refresh_token is revoked/expired and retrying won't help until the
+// user re-authorizes (a fresh oauth.set).
 var errOAuthInvalidGrant = errors.New("oauth refresh: invalid_grant")
 
 // oauthRefreshableProviders lists providers the backend can refresh today.
@@ -58,9 +54,6 @@ type oauthRefreshResult struct {
 }
 
 // resolveExpiresAt returns the absolute expiry (unix seconds) for a token.
-// An explicit expires_at always wins; when it's absent (0) the expiry is
-// derived from expires_in (seconds-from-now), the same way the refresh loop
-// computes it. Returns the provider default only when neither is usable.
 func resolveExpiresAt(expiresAt int64, expiresIn int, now time.Time) int64 {
 	if expiresAt > 0 {
 		return expiresAt
@@ -73,10 +66,8 @@ func resolveExpiresAt(expiresAt int64, expiresIn int, now time.Time) int64 {
 	return now.Add(defaultOAuthTokenLifetime).Unix()
 }
 
-// needsRefresh reports whether a stored token should be proactively refreshed.
-// Only entries that carry a refresh_token and a known expiry are eligible;
-// expires_at == 0 means "unknown" (non-expiring or never populated) and is
-// refreshed once so it self-heals into a real expires_at.
+// needsRefresh reports whether a stored token should be proactively
+// refreshed.
 func needsRefresh(entry domain.OAuthTokenEntry, now time.Time, skew time.Duration) bool {
 	if entry.RefreshToken == "" || entry.RefreshRevoked {
 		return false
@@ -88,9 +79,7 @@ func needsRefresh(entry domain.OAuthTokenEntry, now time.Time, skew time.Duratio
 }
 
 // StartOAuthRefreshLoop runs until ctx is cancelled, periodically refreshing
-// near-expiry OAuth access tokens stored in access_tokens.json. The device
-// holds the refresh_token but not the Google client_secret, so the actual
-// token exchange is delegated to the backend.
+// near-expiry OAuth access tokens stored in access_tokens.json.
 func (h *DeviceMQTTHandler) StartOAuthRefreshLoop(ctx context.Context) {
 	h.safeRefreshTick(ctx) // eager first pass on boot
 	ticker := time.NewTicker(oauthRefreshInterval)
@@ -116,9 +105,7 @@ func (h *DeviceMQTTHandler) safeRefreshTick(ctx context.Context) {
 	h.refreshExpiringTokens(ctx)
 }
 
-// refreshExpiringTokens performs one scan-and-refresh pass. Errors for any one
-// provider are logged and skipped — a single failure must not block the others
-// or kill the loop.
+// refreshExpiringTokens performs one scan-and-refresh pass.
 func (h *DeviceMQTTHandler) refreshExpiringTokens(ctx context.Context) {
 	tokens, err := h.loadAccessTokens()
 	if err != nil {
@@ -135,10 +122,8 @@ func (h *DeviceMQTTHandler) refreshExpiringTokens(ctx context.Context) {
 		res, err := h.requestTokenRefresh(ctx, provider, entry.RefreshToken)
 		if err != nil {
 			slog.Error("oauth-refresh: refresh failed", "component", "mqtt", "provider", provider, "error", err)
-			// A revoked refresh_token will never succeed until re-auth, so mark
-			// the entry so the loop stops retrying it. A fresh oauth.set rebuilds
-			// the entry (RefreshRevoked back to false). Transient failures fall
-			// through and retry next tick.
+			// A revoked refresh_token will never succeed until re-auth, so
+			// mark the entry so the loop stops retrying it.
 			if errors.Is(err, errOAuthInvalidGrant) {
 				revoked := entry
 				revoked.RefreshRevoked = true
@@ -158,8 +143,6 @@ func (h *DeviceMQTTHandler) refreshExpiringTokens(ctx context.Context) {
 		if res.TokenType != "" {
 			updated.TokenType = res.TokenType
 		}
-		// refresh_token is intentionally preserved — Google does not reissue it
-		// on a refresh grant.
 
 		if err := h.upsertOAuthEntry(provider, updated); err != nil {
 			slog.Error("oauth-refresh: persist refreshed token", "component", "mqtt", "provider", provider, "error", err)
@@ -171,10 +154,7 @@ func (h *DeviceMQTTHandler) refreshExpiringTokens(ctx context.Context) {
 }
 
 // isInvalidGrantResponse reports whether a non-2xx refresh response means the
-// refresh_token is permanently revoked. The server signals this as HTTP 401
-// with a body of {"error":{"type":"invalid_grant"}}; we require both so a
-// generic 401 (e.g. a bad bearer) without that type isn't misread, and the
-// type can't trip on an unrelated 4xx.
+// refresh_token is permanently revoked.
 func isInvalidGrantResponse(statusCode int, body []byte) bool {
 	if statusCode != http.StatusUnauthorized {
 		return false
@@ -191,8 +171,7 @@ func isInvalidGrantResponse(statusCode int, body []byte) bool {
 }
 
 // requestTokenRefresh POSTs the refresh_token to the backend and returns the
-// fresh token. Auth mirrors the privacy-fetch / ping path: a Bearer <LLMAPIKey>
-// header (the device's lobster_api_key) plus X-Device-ID.
+// fresh token.
 func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, refreshToken string) (oauthRefreshResult, error) {
 	var out oauthRefreshResult
 
@@ -200,8 +179,6 @@ func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, r
 	if base == "" {
 		return out, errors.New("LLMBaseURL not configured")
 	}
-	// LLMBaseURL carries a trailing /v1 for OpenAI-compat LLM calls; autonomous
-	// endpoints (/ping, /oauth/refresh) sit one level above. Mirror beclient.Ping.
 	base = strings.TrimSuffix(base, "/v1")
 
 	payload, err := json.Marshal(map[string]string{"provider": provider, "refresh_token": refreshToken})
@@ -234,9 +211,6 @@ func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, r
 		return out, fmt.Errorf("read body: %w", err)
 	}
 	if resp.StatusCode != http.StatusOK {
-		// The server returns 401 with error.type=invalid_grant when the
-		// refresh_token is revoked/expired. Surface that as a sentinel so the
-		// loop can stop retrying instead of hammering the backend forever.
 		if isInvalidGrantResponse(resp.StatusCode, body) {
 			return out, fmt.Errorf("%w: http %d: %s", errOAuthInvalidGrant, resp.StatusCode, strings.TrimSpace(string(body)))
 		}
@@ -248,12 +222,7 @@ func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, r
 	if out.AccessToken == "" {
 		return out, errors.New("backend response missing access_token")
 	}
-	// expires_in must be strictly positive. A 0 or negative value would set
-	// the stored ExpiresAt to now (or earlier), so the very next tick would
-	// see the token as already expiring and refresh it again — spinning the
-	// backend every interval and burning tokens until the bad response goes
-	// away. Reject the response instead so the stale (still-valid) token
-	// stays in place and the next tick retries cleanly.
+	// expires_in must be > 0, or the next tick would re-refresh immediately.
 	if out.ExpiresIn <= 0 {
 		return out, fmt.Errorf("backend response invalid expires_in=%d", out.ExpiresIn)
 	}

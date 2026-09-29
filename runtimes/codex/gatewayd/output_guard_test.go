@@ -75,7 +75,7 @@ fi
 			binary := writeScript(t, dir, "output-codex", script)
 			url, cfg := startServer(t, binary, dir)
 			conn := dial(t, url, testToken)
-			_ = readFrame(t, conn) // ready
+			_ = readFrame(t, conn)
 			start := time.Now()
 			sendMessage(t, conn, "first-task")
 			sendMessage(t, conn, "next-task")

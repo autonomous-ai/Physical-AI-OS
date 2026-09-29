@@ -6,8 +6,7 @@ import (
 	"testing"
 )
 
-// An un-pinned realtime block follows the code defaults on every start; a
-// pinned one (operator edited it) is left alone even when it differs.
+// Un-pinned realtime blocks follow code defaults; pinned ones are left alone.
 func TestProvideConfig_RealtimeReseedUnlessPinned(t *testing.T) {
 	origPath := configPath
 	configPath = filepath.Join(t.TempDir(), "config.json")

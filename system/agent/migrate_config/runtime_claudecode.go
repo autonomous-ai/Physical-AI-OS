@@ -8,9 +8,7 @@ type claudecodeAdapter struct{}
 
 func (claudecodeAdapter) runtime() Runtime { return RuntimeClaudeCode }
 
-// read extracts LLMConfig from /root/.claudecode/.env (ANTHROPIC_API_KEY +
-// ANTHROPIC_BASE_URL) — the file presync.sh writes; reading it directly captures
-// any drift introduced after the last presync run.
+// read extracts LLMConfig from the presync-owned /root/.claudecode/.env.
 func (claudecodeAdapter) read(opts Options) (LLMConfig, error) {
 	env := filepath.Join(opts.ClaudecodeDir, ".env")
 	return LLMConfig{
@@ -19,10 +17,7 @@ func (claudecodeAdapter) read(opts Options) (LLMConfig, error) {
 	}, nil
 }
 
-// write updates /root/.claudecode/.env with the canonical config. The same
-// fields presync.sh owns, so the result matches a fresh presync run.
-// ANTHROPIC_AUTH_TOKEN mirrors ANTHROPIC_API_KEY (presync sets both — claude
-// sends x-api-key from the former, Authorization: Bearer from the latter).
+// write updates the presync-owned .env; ANTHROPIC_AUTH_TOKEN mirrors ANTHROPIC_API_KEY.
 func (claudecodeAdapter) write(cfg LLMConfig, opts Options) error {
 	env := filepath.Join(opts.ClaudecodeDir, ".env")
 	if cfg.BaseURL != "" {

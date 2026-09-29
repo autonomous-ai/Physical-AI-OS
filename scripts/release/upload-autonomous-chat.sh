@@ -7,9 +7,6 @@ source "${RELEASE_DIR}/ota-metadata.sh"
 AUTONOMOUS_CHAT_BIN="${ROOT_DIR}/integrations/chat-bridges/autonomous-chat-hook/autonomous-chat"
 VERSION_FILE="${ROOT_DIR}/integrations/chat-bridges/autonomous-chat-hook/${VERSION_FILE:-VERSION_AUTONOMOUS_CHAT}"
 
-# Bucket and path: ${BUCKET_PREFIX}/ota/autonomous-chat/[semver].zip
-
-# Auto-increment semver (patch) before build
 if [[ -f "$VERSION_FILE" ]]; then
   version=$(cat "$VERSION_FILE" | tr -d '[:space:]')
   IFS='.' read -r major minor patch <<< "$version"
@@ -42,7 +39,6 @@ rm -f "$ZIP_PATH"
 echo "========== Upload ${ZIP_NAME} to Google Cloud Storage (no-cache) =========="
 gsutil -h "Cache-Control:no-cache, no-store, must-revalidate" cp "$ZIP_PATH" "gs://${GCS_BUCKET}/${GCS_PATH}"
 
-# Update metadata.json (${BUCKET_PREFIX}/ota/metadata.json) - backend key
 METADATA_PATH="${BUCKET_PREFIX}/ota/metadata.json"
 METADATA_TMP=$(mktemp)
 PAYLOAD_TMP=$(mktemp)

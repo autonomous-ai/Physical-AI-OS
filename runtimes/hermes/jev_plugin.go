@@ -22,7 +22,6 @@ const jevPluginName = "jev"
 var jevPluginFiles embed.FS
 
 // JevSelectorAssets shares the bounded Python selector with native runtime hooks.
-// Callers supply their own eligible catalog and safe skill loader.
 func JevSelectorAssets() (map[string][]byte, error) {
 	assets := make(map[string][]byte)
 	for _, name := range []string{"router.py", "preload.py"} {
@@ -35,8 +34,7 @@ func JevSelectorAssets() (map[string][]byte, error) {
 	return assets, nil
 }
 
-// ensureJevPlugin reconciles existing devices on OS startup, without invoking
-// installers or adding a gateway restart reason. Remote Hermes is host-owned.
+// ensureJevPlugin reconciles existing devices on OS startup, without invoking installers or adding a gateway restart reason.
 func (s *HermesService) ensureJevPlugin() error {
 	if s.config != nil && s.config.AgentRuntime == "remote" {
 		return nil
@@ -61,12 +59,11 @@ func (s *HermesService) ensureJevPlugin() error {
 	return nil
 }
 
-// syncJevPlugin owns its assets, allow-list entry and unset hook spill default. A user
-// deny-list takes precedence. The sidecar contains a path, never credentials.
+// syncJevPlugin owns its assets, allow-list entry and unset hook spill default.
 func syncJevPlugin(home, configPath string) (bool, error) {
 	yamlPath := filepath.Join(home, "config.yaml")
 	if _, err := os.Stat(yamlPath); os.IsNotExist(err) {
-		return false, nil // Hermes has not been installed on this host.
+		return false, nil
 	} else if err != nil {
 		return false, fmt.Errorf("stat Hermes config: %w", err)
 	}
@@ -120,7 +117,6 @@ func syncJevPlugin(home, configPath string) (bool, error) {
 		plugins = map[string]any{}
 	}
 	alreadyEnabled := false
-	// Do not override an operator disabling the plugin in Hermes itself.
 	for _, key := range []string{"disabled", "enabled"} {
 		values, ok := plugins[key].([]any)
 		if plugins[key] != nil && !ok {
@@ -176,8 +172,7 @@ func writeJevAsset(path string, data []byte) (bool, error) {
 	return true, nil
 }
 
-// Hermes spills each hook result above 10,000 characters by default. Allow the
-// bounded Jev preload inline; preserve every explicit operator spill setting.
+// Hermes spills each hook result above 10,000 characters by default.
 func setJevHookSpillDefault(cfg map[string]any) (bool, error) {
 	hooks, ok := cfg["hooks"].(map[string]any)
 	if cfg["hooks"] != nil && !ok {

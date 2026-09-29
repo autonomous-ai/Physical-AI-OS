@@ -59,15 +59,12 @@ func TestMissingAppThread(t *testing.T) {
 	}
 }
 
-// The App Server reports token usage on turn/completed. gatewayd used to drop
-// it (it emitted a bare {"type":"turn.completed"}), so every device turn card
-// showed no tokens at all — the numbers only existed on the retired
-// `codex exec` JSONL path, which forwards stdout verbatim.
+// The App Server reports token usage on turn/completed.
 func TestAppTurnCompletedForwardsUsage(t *testing.T) {
 	dir := t.TempDir()
 	url, _ := startServer(t, writeFakeCodex(t, dir, filepath.Join(dir, "argv.txt")), dir)
 	conn := dial(t, url, testToken)
-	readFrame(t, conn) // ready status
+	readFrame(t, conn)
 
 	sendMessage(t, conn, "hi codex")
 	var completed map[string]any

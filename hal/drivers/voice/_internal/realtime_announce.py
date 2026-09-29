@@ -1,11 +1,4 @@
-"""Speak a Harness update through the realtime model (device-initiated turn).
-
-The realtime model turns raw Harness output (markdown, file paths, long lists)
-into a few spoken sentences in its own voice. This module builds the text it
-receives and plays its reply the same way run_realtime_turn plays a normal one:
-native model audio straight to the speaker, or text sentences through TTS.
-Pure helper: it touches only the orchestrator / TTS handles passed in.
-"""
+"""Speak a Harness update through the realtime model (device-initiated turn)."""
 
 import logging
 import re
@@ -38,7 +31,7 @@ _ENVELOPE_TAG_RE = re.compile(r"<(/?)\s*(harness_update|instructions|content)\b"
 class AnnouncementItem(NamedTuple):
     """One queued Harness update as the renderer sees it."""
 
-    kind: str  # "result" | "question" | "progress"
+    kind: str
     text: str
     outcome: str = ""
     age_s: float = 0.0
@@ -105,13 +98,7 @@ def play_realtime_announcement(
     owner: str,
     stop_event: threading.Event,
 ) -> AnnouncementResult:
-    """Send the envelope and speak the model's reply; never raises.
-
-    `owner` is the Harness run that owns the speech, so the user's cancel
-    gesture on that run silences it like any other reply. A signal instead of
-    speech (delegate / reject / look) means nothing was said: the caller falls
-    back to its own renderer.
-    """
+    """Send the envelope and speak the model's reply; never raises."""
     native = hal_config.REALTIME_NATIVE_AUDIO
     native_started = False
     chimed = False
@@ -189,7 +176,6 @@ def play_realtime_announcement(
         if native_started:
             tts.native_play_end(clean_transcript(strip_markers("".join(text_parts)), reply_lang))
     if stop_event.is_set():
-        # The user started talking; their turn owns the speaker now.
         if tts.realtime_speaking:
             tts.stop_realtime_reply(turn_id=owner)
         spoken = native_started or first_sent

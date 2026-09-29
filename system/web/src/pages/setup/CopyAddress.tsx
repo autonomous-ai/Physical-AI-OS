@@ -1,18 +1,7 @@
 import { useState } from "react";
 import { C } from "@/components/setup/shared";
 
-// CopyAddress — a device URL with a one-tap Copy button. Shown on the
-// post-submit screen so the operator can capture the address BEFORE they
-// switch Wi-Fi networks (at which point this page loses its connection and any
-// un-copied address is gone). Pass the full URL via `url` — callers prefer the
-// raw-IP address (works on every LAN) over the .local name (fails when the
-// router blocks mDNS).
-//
-// Clipboard: the Setup page is served over plain HTTP (http://192.168.100.1),
-// where `navigator.clipboard` is undefined (it requires a secure context), so
-// the modern API silently no-ops. Fall back to a hidden-textarea +
-// document.execCommand("copy"), which works on http:// origins, so the button
-// actually copies instead of doing nothing.
+// Device URL with a one-tap Copy button, shown before the operator switches networks.
 export function CopyAddress({ url }: { url: string }) {
   const [copied, setCopied] = useState(false);
   const text = url;
@@ -24,7 +13,6 @@ export function CopyAddress({ url }: { url: string }) {
     try {
       const ta = document.createElement("textarea");
       ta.value = text;
-      // Keep it off-screen and non-disruptive to scroll/focus.
       ta.style.position = "fixed";
       ta.style.top = "-9999px";
       ta.setAttribute("readonly", "");

@@ -204,7 +204,7 @@ xcrun notarytool log <submission-id> --keychain-profile autonomous-notary
 
 **Notarization status `Accepted` but Gatekeeper still warns on the user's Mac.** The DMG wasn't stapled. Either re-run `make notarize` against the existing DMG (re-staples) or rebuild with `make dmg-signed`.
 
-**User reports "app is damaged".** Usually means the quarantine xattr is set and the staple ticket is missing or invalid. Have the user run `xattr -d com.apple.quarantine /Applications/AutonomousBuddy.app` as a one-off; permanent fix is to ship a stapled DMG.
+**User reports "app is damaged".** Usually means the quarantine xattr is set and the staple ticket is missing or invalid. Have the user run `xattr -d com.apple.quarantine "/Applications/Autonomous Buddy.app"` as a one-off; permanent fix is to ship a stapled DMG.
 
 ## When to re-notarize
 

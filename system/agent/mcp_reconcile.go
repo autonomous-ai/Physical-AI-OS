@@ -14,51 +14,29 @@ import (
 	"go.autonomous.ai/os/system/server/config"
 )
 
-// MCPReconcile clones the configured MCP connectors into the active runtime after a
-// runtime switch, so a device that had Notion/Linear/… wired under OpenClaw keeps
-// them after switching to Hermes (and vice versa).
-//
-// It mirrors ChannelReconcile: it runs once in the startup sequence, is gated by a
-// persisted marker (config.MCPAppliedRuntime) so it fires only when the runtime
-// actually changed, and never blocks startup. Unlike persona migration — which
-// reads/writes SOUL/MEMORY — the MCP servers live in each runtime's gateway config
-// (OpenClaw `openclaw.json` `mcp.servers`, Hermes `config.yaml` `mcp_servers`), and
-// each entry is self-contained (the auth header carries the token inline), so the
-// clone is a pure config→config copy: read the PREVIOUS runtime's entries from disk,
-// normalize to the canonical (OpenClaw-shaped) entry, and re-push each through the
-// now-active gateway's WriteMCPEntry (which translates to its own native shape and
-// restarts).
-//
-// Only the device-managed runtimes (openclaw, hermes, claudecode) carry MCP
-// config; a switch to/from an external runtime (picoclaw) reads/clones nothing.
+// MCPReconcile clones the previous runtime's MCP servers into the active runtime after a switch.
+// Gated by config.MCPAppliedRuntime; only openclaw, hermes and claudecode carry MCP config.
 type MCPReconcile struct {
 	cfg *config.Config
 	gw  domain.AgentGateway
 }
 
-// ProvideMCPReconcile is the Wire provider. It takes the resolved gateway so the
-// clone targets the runtime that is actually active now.
+// ProvideMCPReconcile is the Wire provider for MCPReconcile.
 func ProvideMCPReconcile(cfg *config.Config, gw domain.AgentGateway) *MCPReconcile {
 	return &MCPReconcile{cfg: cfg, gw: gw}
 }
 
-// Reconcile clones the previous runtime's MCP servers into the current runtime when
-// the runtime changed since the last clone, then advances the marker. A no-op when
-// the runtime is unchanged. Never blocks startup; a transient clone failure leaves
-// the marker un-advanced so the next boot retries.
+// Reconcile clones MCP servers if the runtime changed; failures leave the marker for next-boot retry.
 func (r *MCPReconcile) Reconcile() {
 	current := r.cfg.AgentRuntime
 	if current == "" {
 		current = domain.AgentRuntimeOpenClaw
 	}
 	if r.cfg.MCPAppliedRuntime == current {
-		return // no switch since MCP was last cloned
+		return
 	}
 
-	// First observation (marker never set — e.g. the boot that introduced this
-	// field): the MCP servers already live in the current runtime's config, so
-	// record the baseline WITHOUT cloning. Re-clone only happens on an OBSERVED
-	// switch (marker set to a different runtime).
+	// Unset marker: record a baseline only; servers already live in the current runtime.
 	if r.cfg.MCPAppliedRuntime == "" {
 		if err := r.cfg.WithLockSave(func(c *config.Config) { c.MCPAppliedRuntime = current }); err != nil {
 			slog.Warn("mcp reconcile: record baseline failed", "component", "agent", "error", err)
@@ -97,9 +75,7 @@ func (r *MCPReconcile) Reconcile() {
 		slog.Info("mcp reconcile: cloned MCP server", "component", "agent", "connector", name, "runtime", current)
 	}
 
-	// Advance the marker ONLY on a clean pass. A transient WriteMCPEntry failure
-	// leaves the marker un-advanced so the next boot re-runs the full clone (the
-	// previous runtime's config is still on disk — neither switch wipes the other's).
+	// Advance only on a clean pass; the previous runtime's config stays on disk for retry.
 	if cloneErr {
 		slog.Warn("mcp reconcile: clone error — leaving marker for next-boot retry",
 			"component", "agent", "runtime", current)
@@ -110,10 +86,8 @@ func (r *MCPReconcile) Reconcile() {
 	}
 }
 
-// readMCPEntries reads the MCP server entries from a runtime's on-disk gateway
-// config and returns them as canonical (OpenClaw-shaped) entries keyed by server
-// name. Returns an empty map (not an error) when the config file or its MCP section
-// is absent, so a runtime with no connectors reconciles to a clean no-op.
+// readMCPEntries returns a runtime's MCP servers as canonical (OpenClaw-shaped) entries
+// keyed by name; a missing config yields an empty result, not an error.
 func readMCPEntries(runtime string, cfg *config.Config) (map[string]map[string]any, error) {
 	switch runtime {
 	case domain.AgentRuntimeOpenClaw:
@@ -121,18 +95,13 @@ func readMCPEntries(runtime string, cfg *config.Config) (map[string]map[string]a
 	case domain.AgentRuntimeHermes:
 		return readHermesMCP(filepath.Join(hermesHome, "config.yaml"))
 	case domain.AgentRuntimeClaudeCode:
-		// workspace/.mcp.json `mcpServers` — entries already use the canonical
-		// {type,url,headers} / {command,args,env} shape, pass-through.
 		return claudecode.ReadMCPEntries()
 	default:
-		// External / non-device-managed runtimes (picoclaw): no MCP config to clone.
 		return nil, nil
 	}
 }
 
-// readOpenclawMCP reads openclaw.json `mcp.servers`. Entries are already in the
-// canonical shape ({type:"http", url, headers} or {command, args, env}), so they
-// pass through unchanged.
+// readOpenclawMCP reads openclaw.json mcp.servers (already canonical).
 func readOpenclawMCP(path string) (map[string]map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -156,10 +125,7 @@ func readOpenclawMCP(path string) (map[string]map[string]any, error) {
 	return out, nil
 }
 
-// readHermesMCP reads config.yaml `mcp_servers` and normalizes each entry to the
-// canonical OpenClaw shape: the Hermes-only `enabled` flag is dropped and an
-// explicit `type: "http"` is re-added to url-bearing (hosted) servers, since
-// OpenClaw selects the transport from that discriminator rather than url-vs-command.
+// readHermesMCP reads config.yaml mcp_servers normalized to the canonical shape.
 func readHermesMCP(path string) (map[string]map[string]any, error) {
 	raw, err := os.ReadFile(path)
 	if err != nil {
@@ -182,13 +148,13 @@ func readHermesMCP(path string) (map[string]map[string]any, error) {
 	return out, nil
 }
 
-// hermesToCanonicalMCP converts one Hermes mcp_servers entry into the canonical
-// OpenClaw shape. Inverse of hermes.toHermesMCPEntry.
+// hermesToCanonicalMCP converts one Hermes entry to the canonical shape (inverse of
+// hermes.toHermesMCPEntry): drops `enabled`, adds type "http" to url-bearing servers.
 func hermesToCanonicalMCP(m map[string]any) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
 		if k == "enabled" {
-			continue // Hermes-only activation flag; OpenClaw has no equivalent
+			continue
 		}
 		out[k] = v
 	}

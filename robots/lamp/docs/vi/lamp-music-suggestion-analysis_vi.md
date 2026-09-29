@@ -1,5 +1,9 @@
 # Lamp — Music Suggestion Feature Analysis
 > Generated: 2026-04-09 | Scope: tính năng "suggest music" riêng biệt
+>
+> Bản tiếng Anh: [../lamp-music-suggestion-analysis.md](../lamp-music-suggestion-analysis.md)
+>
+> **Tài liệu phân tích lịch sử.** Thiết kế đã ship khác với cả timer HAL mô tả bên dưới lẫn cron của Option B: gợi ý nhạc là **event-driven, chỉ theo mood, không cron**. `skills/user-emotion-detection/SKILL.md` route event `emotion.detected` / `speech_emotion.detected` sang `skills/music-suggestion/SKILL.md` với context tính sẵn `[emotion_context: ...]` và cooldown 7 phút (dự kiến 30 phút cho production); event activity chỉ đi sang wellbeing. Timer `WellbeingPerception` và `HAL_WELLBEING_MUSIC_S` đã bị gỡ. Xem [music-suggestion_vi.md](music-suggestion_vi.md) cho thiết kế hiện tại.
 
 ---
 
@@ -9,7 +13,7 @@ Music suggestion là tính năng Lamp chủ động đề xuất nhạc phù h�
 
 ---
 
-## Luồng hoạt động hiện tại
+## Luồng hoạt động lúc đó (tính đến 2026-04-09)
 
 ```
 [HAL - Python]
@@ -39,7 +43,7 @@ Music suggestion là tính năng Lamp chủ động đề xuất nhạc phù h�
 
 ### Layer 1 — Trigger (HAL Python)
 
-**File:** `hal/drivers/sensing/perceptions/wellbeing.py`
+**File (đã gỡ):** `WellbeingPerception` trong HAL sensing
 
 - Timer chạy mỗi **60 phút** (default, config qua `HAL_WELLBEING_MUSIC_S`)
 - Chỉ fire khi `PresenceState.PRESENT`
@@ -59,8 +63,8 @@ Music suggestion là tính năng Lamp chủ động đề xuất nhạc phù h�
 ### Layer 3 — AI Decision (OpenClaw skill)
 
 **Files:**
-- `lamp/resources/openclaw-skills/sensing/SKILL.md` — nhận `[sensing:music.mood]`
-- `lamp/resources/openclaw-skills/music/SKILL.md` — mood → music mapping
+- `skills/sensing/SKILL.md` — nhận `[sensing:music.mood]` (lúc đó)
+- `skills/music/SKILL.md` — mood → music mapping (lúc đó)
 
 **Logic LLM:**
 
@@ -95,7 +99,7 @@ Music suggestion là tính năng Lamp chủ động đề xuất nhạc phù h�
 
 **File:** `system/skillcontext/mood/mood.go`
 
-Log 2 loại event vào `/root/local/mood_YYYY-MM-DD.jsonl`:
+Log 2 loại event vào `/root/local/mood_YYYY-MM-DD.jsonl` (lúc đó; nay là per-user `/root/local/users/{user}/mood/YYYY-MM-DD.jsonl`):
 1. **Sensing input:** `music.mood`, `presence.enter`, `wellbeing.break`, etc.
 2. **`mood.assessed`:** Kết quả LLM — `emotion`, `source`, `response`, `no_reply` flag
 
@@ -200,7 +204,7 @@ Bỏ proactive timer, chỉ suggest khi:
    - AI correlate `music.play` với thời điểm suggest để biết accepted/rejected
 
 3. **OpenClaw Skills:**
-   - Viết lại `music/SKILL.md` — AI tự schedule via `cron.add`, tự query mood-history + audio/history, tự learn thói quen user, tự adjust timing/genre
+   - Viết lại `music/SKILL.md` — AI tự schedule via `cron.add` *(về sau đã thay bằng `skills/music-suggestion/SKILL.md` event-driven, không cron)*, tự query mood-history + audio/history, tự learn thói quen user, tự adjust timing/genre
    - Cập nhật `sensing/SKILL.md` — bỏ reference đến `[sensing:music.mood]` event
 
 4. **Docs:**
@@ -210,14 +214,16 @@ Bỏ proactive timer, chỉ suggest khi:
 
 ## Files liên quan
 
+Trạng thái hiện tại của các file được phân tích lúc đó:
+
 | File | Layer | Mô tả |
 |---|---|---|
-| `hal/drivers/sensing/perceptions/wellbeing.py` | Trigger | Timer 60min fire music.mood |
-| `hal/config.py` | Config | `HAL_WELLBEING_MUSIC_S` |
-| `hal/drivers/voice/music_service.py` | Playback | yt-dlp + ffmpeg + ALSA |
-| `hal/server.py` | API | `POST /audio/play` (có `person`), `POST /audio/stop` |
+| `WellbeingPerception` (HAL, đã gỡ) | Trigger | Timer 60 phút fire music.mood — đã bỏ |
+| `hal/config.py` | Config | `HAL_WELLBEING_MUSIC_S` — đã bỏ |
+| `hal/drivers/voice/music_service.py` | Playback | yt-dlp + ffmpeg + ALSA, per-user audio history |
+| `hal/routes/music.py` | API | `POST /audio/play` (có `person`), `POST /audio/stop`, `GET /audio/history` |
 | `system/skillcontext/mood/mood.go` | Data | Mood history logger |
-| `system/server/sensing/delivery/http/handler.go` | Pipeline | Event routing + queueing |
-| `lamp/resources/openclaw-skills/sensing/SKILL.md` | AI | Nhận + process music.mood event |
-| `lamp/resources/openclaw-skills/music/SKILL.md` | AI | Mood→music mapping, suggestion rules |
-| `lamp/resources/openclaw-skills/scheduling/SKILL.md` | AI | cron.add tool (nếu dùng Option B) |
+| `system/server/sensing/delivery/http/handler.go` | Pipeline | Event routing + queueing, music-suggestion log/status |
+| `skills/user-emotion-detection/SKILL.md` | AI | Router cảm xúc (thiết kế đã ship) |
+| `skills/music-suggestion/SKILL.md` | AI | Gợi ý chủ động (thiết kế đã ship) |
+| `skills/music/SKILL.md` | AI | Nhạc reactive, phát nhạc |

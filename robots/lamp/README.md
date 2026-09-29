@@ -94,3 +94,67 @@ Shipping — [$499 at autonomous.ai/lamp](https://www.autonomous.ai/lamp). Build
 - [`SAFETY.md`](SAFETY.md) — the deterministic bounds (e-stop, motion limits)
 - [Architecture](../../docs/architecture/overview.md)
 - [`hardware/`](hardware/) — assembly, wiring, power, BOM, CAD
+
+## Docs
+
+Lamp-specific docs live in [`docs/`](docs/) (Vietnamese in [`docs/vi/`](docs/vi/)).
+Platform docs: [`docs/README.md`](../../docs/README.md).
+
+**Product & architecture**
+
+- [Product vision](docs/product-vision.md) · [VI](docs/vi/product-vision.md) — what the AI lamp is for.
+- [Architecture decision — hybrid hardware control](docs/architecture-decision.md) · [VI](docs/vi/architecture-decision.md)
+- [Agent runtime](docs/agent-runtime.md) · [VI](docs/vi/agent-runtime_vi.md) — Lamp's default brain (Hermes) and how it is declared.
+- [HW call strategy](docs/hw-call-strategy.md) — inline `[HW:...]` markers vs a batch API.
+- [Claude Desktop Buddy](docs/claude-desktop-buddy.md) · [VI](docs/vi/claude-desktop-buddy_vi.md) — Lamp as a BLE hardware buddy for Claude Desktop.
+
+**Light & motion**
+
+- [LED control](docs/led-control.md) · [VI](docs/vi/led-control_vi.md) — LED hardware, effects, states, animations.
+- [Emotion → LED + animation mapping](docs/emotion-led-mapping.md) · [VI](docs/vi/emotion-led-mapping_vi.md)
+- [Status LED](docs/status-led.md) · [VI](docs/vi/status-led_vi.md) — boot / update / disconnected feedback.
+- [Motion playback](docs/motion-playback.md) · [VI](docs/vi/motion-playback_vi.md) — servo recordings: timing, resampling, speed limits.
+- [Vision tracking](docs/vision-tracking.md) · [VI](docs/vi/vision-tracking_vi.md) — object follow with servo.
+- [Physical controls](docs/physical-controls.md) · [VI](docs/vi/physical-controls_vi.md) — GPIO button, TTP223, MPR121, pet response.
+
+**Sensing & perception**
+
+- [Sensing behavior](docs/sensing-behavior.md) · [VI](docs/vi/sensing-behavior_vi.md) — sound escalation, reactions, spoken brevity.
+- [Sensing threshold tuning](docs/sensing-tuning.md) · [VI](docs/vi/sensing-tuning_vi.md)
+- [Environmental sensing](docs/environment-sensing.md) · [VI](docs/vi/environment-sensing_vi.md) — the optional `environment` capability.
+- [Motion activity whitelist](docs/motion-activity-whitelist.md) — action classes forwarded as `motion.activity`.
+- [Camera lifecycle](docs/camera-lifecycle.md) · [VI](docs/vi/camera-lifecycle_vi.md) — reactive camera on/off.
+- [Mic lifecycle](docs/mic-lifecycle.md) — mic mute/unmute for privacy.
+- [Speaker lifecycle](docs/speaker-lifecycle.md) — mute/unmute all audio output.
+- [Speaker voice enrollment](docs/speaker-enrollment.md) · [VI](docs/vi/speaker-enrollment_vi.md)
+- [Plan: face enroll via Telegram](docs/plan-face-enroll.md) — implemented plan.
+- [Plan: HAL owns wellbeing log](docs/plan-presence-logging.md) — partially implemented plan.
+- [Emotion spam guard prompt](docs/lamp-emotion-spam-guard-prompt.md) — task prompt for fixing camera emotion spam.
+
+**Proactive skills**
+
+- [Habit tracking](docs/habit-tracking.md) · [VI](docs/vi/habit-tracking_vi.md) — pattern building and habit-aware nudges.
+- [Wellbeing — hydration + break](docs/wellbeing-hydration.md) · [VI](docs/vi/wellbeing-hydration_vi.md)
+- [Music suggestion](docs/music-suggestion.md) · [VI](docs/vi/music-suggestion_vi.md)
+- [Music suggestion feature analysis](docs/lamp-music-suggestion-analysis.md) · [VI](docs/vi/lamp-music-suggestion-analysis_vi.md)
+- [Mood skill — marketing copy brief](docs/mood-marketing-copy.md) (VI-language)
+- [Wellbeing skill — marketing copy brief](docs/wellbeing-marketing-copy.md) (VI-language)
+
+**Testing & proof**
+
+- [Pi hardware test checklist](docs/pi-test-checklist.md)
+- [Security test checklist](docs/security-test.md)
+- [Product proof benchmarks](docs/lamp-proof-benchmarks.html) — standalone HTML page.
+
+**Debug playbooks** ([`docs/debug/`](docs/debug/))
+
+- [Busy-flag wedge](docs/debug/busy-stuck.md) — sensing pipeline stuck on `IsBusy()`.
+- [Sleep stuck](docs/debug/sleep-stuck.md) — events suppressed while sleeping.
+- [Sensing → mood → wellbeing → TTS pipeline](docs/debug/sensing-pipeline.md)
+- [Flow Monitor event pipeline](docs/debug/flow-monitor-pipeline.md)
+- [OpenClaw self-replay](docs/debug/openclaw-selfreplay.md) — same sensing event processed twice.
+- [RunId mis-attribution race](docs/debug/runid-race.md)
+- [`chat_send` missing `type`](docs/debug/chat-send-missing-type.md) — fixed 2026-04-22.
+- [Proactive skills audit](docs/debug/proactive-skills-audit.md) — 2026-05-15.
+- [Stateless skills bypass](docs/debug/stateless-skills-bypass.md) — fresh sessions for proactive skills.
+- [Reactive turn speed-up phases](docs/debug/turn-speed-phases.md) — 2026-05-07.

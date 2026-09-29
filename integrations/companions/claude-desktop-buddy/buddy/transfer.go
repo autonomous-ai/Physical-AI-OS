@@ -9,8 +9,7 @@ import (
 	"strings"
 )
 
-// CharsRoot is the on-disk location for received character folders.
-// Under systemd as root (see setup-claude-desktop-buddy.sh), this is writable.
+// CharsRoot is where received character folders are written.
 const CharsRoot = "/opt/claude-desktop-buddy/chars"
 
 // Transfer handles an in-progress folder push from Claude Desktop.

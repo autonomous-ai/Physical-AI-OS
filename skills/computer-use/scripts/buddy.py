@@ -312,8 +312,7 @@ def save_screenshot(data, output_dir=None):
         raise
 
 
-# Only desktop mutations supported by the existing server; each keeps its normal
-# snapshot, focus, permission and pause validation on the companion.
+# Desktop mutations; the companion still validates each one.
 INSPECT_AFTER_ACTIONS = frozenset({
     "cua_action", "perform_ui_action", "open_app", "close_app", "open_url", "open_path", "click_button",
     "click_at", "mouse_move", "drag", "scroll", "type_text", "key_combo",

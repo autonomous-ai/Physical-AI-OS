@@ -1,18 +1,13 @@
 import { useEffect, useRef, useState } from "react";
 import { HW } from "../types";
 
-// Owner-mutation flows for the Users page: enroll a new user, rename, and remove
-// a user / photo / voice sample (each with its themed confirm dialog). Takes the
-// owners-list `refresh` so it can reload after a successful change.
+// Owner mutations (enroll, rename, remove user/photo/voice) with their confirm dialogs.
 export function useOwnerActions(refresh: () => void) {
-  // Enroll form state
   const [showEnroll, setShowEnroll] = useState(false);
   const [enrollName, setEnrollName] = useState("");
   const [enrollTgUsername, setEnrollTgUsername] = useState("");
   const [enrollTgId, setEnrollTgId] = useState("");
   const [enrollFile, setEnrollFile] = useState<File | null>(null);
-  // Object-URL preview of the chosen photo so the operator sees the actual face
-  // before enrolling. Recreated on file change, revoked on cleanup to avoid leaks.
   const [enrollPreview, setEnrollPreview] = useState<string | null>(null);
   const [enrolling, setEnrolling] = useState(false);
   const [enrollError, setEnrollError] = useState("");
@@ -20,24 +15,17 @@ export function useOwnerActions(refresh: () => void) {
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  // Rename modal state. `renaming` holds the current label being edited (null =
-  // closed); replaces the native prompt()/alert() with a themed dialog.
   const [renaming, setRenaming] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [renameError, setRenameError] = useState("");
   const [renameSaving, setRenameSaving] = useState(false);
 
-  // Label pending the themed delete confirmation (null = no dialog open). Used
-  // instead of window.confirm() so the prompt matches the dark-amber theme.
   const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
-  // Photo pending themed delete confirmation: { label, filename } or null.
   const [confirmPhoto, setConfirmPhoto] = useState<{ label: string; filename: string } | null>(null);
-  // Voice sample pending themed delete confirmation: { label, filename } or null.
   const [confirmVoice, setConfirmVoice] = useState<{ label: string; filename: string } | null>(null);
 
-  // Delete-in-flight state
   const [deleting, setDeleting] = useState<string | null>(null);
-  const [deletingPhoto, setDeletingPhoto] = useState<string | null>(null); // "label/filename"
+  const [deletingPhoto, setDeletingPhoto] = useState<string | null>(null);
 
   useEffect(() => {
     if (!enrollFile) { setEnrollPreview(null); return; }
@@ -46,8 +34,6 @@ export function useOwnerActions(refresh: () => void) {
     return () => URL.revokeObjectURL(url);
   }, [enrollFile]);
 
-  // Close the enroll / rename modals on Escape. (Confirm dialogs handle their
-  // own Escape inside ConfirmDialog.)
   useEffect(() => {
     if (!showEnroll && renaming == null) return;
     const onKey = (e: KeyboardEvent) => {
@@ -66,7 +52,7 @@ export function useOwnerActions(refresh: () => void) {
         const reader = new FileReader();
         reader.onload = () => {
           const result = reader.result as string;
-          resolve(result.split(",")[1]); // strip "data:image/...;base64,"
+          resolve(result.split(",")[1]);
         };
         reader.onerror = () => reject(new Error("Failed to read file"));
         reader.readAsDataURL(enrollFile);
@@ -129,8 +115,7 @@ export function useOwnerActions(refresh: () => void) {
     setRenameError("");
   };
 
-  // Commit the rename from the dialog. Validation surfaces inline (no alert),
-  // and the dialog closes on success.
+  // Commit the rename from the dialog.
   const submitRename = async () => {
     if (renaming == null) return;
     const oldLabel = renaming;
@@ -186,11 +171,7 @@ export function useOwnerActions(refresh: () => void) {
     }
   };
 
-  // Voice sample delete — only audio files. metadata.json is profile state, and
-  // a sample's .npy sidecar is deleted together with its WAV by the backend, so
-  // neither is individually deletable here. /api/voice/file/remove removes the
-  // pair; the remaining samples are independent bank rows and need no rebuild.
-  // Open the themed confirm dialog for removing a voice sample.
+  // Open the themed confirm dialog for removing a voice sample (audio files only).
   const handleRemoveVoiceFile = (label: string, filename: string) => setConfirmVoice({ label, filename });
 
   // Execute the voice-sample removal once confirmed.
@@ -215,7 +196,6 @@ export function useOwnerActions(refresh: () => void) {
   };
 
   return {
-    // enroll
     showEnroll, setShowEnroll,
     enrollName, setEnrollName,
     enrollTgUsername, setEnrollTgUsername,
@@ -225,13 +205,11 @@ export function useOwnerActions(refresh: () => void) {
     enrollDragging, setEnrollDragging,
     fileInputRef,
     handleEnroll,
-    // rename
     renaming, setRenaming,
     renameValue, setRenameValue,
     renameError, setRenameError,
     renameSaving,
     handleRename, submitRename,
-    // delete user / photo / voice
     confirmDelete, setConfirmDelete,
     confirmPhoto, setConfirmPhoto,
     confirmVoice, setConfirmVoice,

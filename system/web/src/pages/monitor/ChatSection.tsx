@@ -23,13 +23,7 @@ import { pendingReplyKey, replayedReply } from "./chat/pendingReplies";
 const CREATE_SKILL_WITH_AGENT_PROMPT =
   "Let's create a skill together using your skill-creator skill. First ask me what the skill should do.";
 
-// ─── Markdown ───────────────────────────────────────────────────────────────
-
-// normalizeHref accepts http/https URLs as-is and repairs mangled schemes
-// (e.g. "hthtps://" seen in upstream usage-limit banners): a scheme built only
-// from the letters {h,t,p,s} with a "tp" core is treated as http(s), keeping
-// the trailing-s distinction. Returns null for any other scheme so it stays
-// plain text.
+// Accepts http(s) URLs and repairs mangled schemes like "hthtps://"; null otherwise.
 function normalizeHref(raw: string): string | null {
   const m = raw.match(/^([a-zA-Z][a-zA-Z0-9+.-]*):\/\/(.*)$/);
   if (!m) return null;
@@ -43,9 +37,7 @@ function normalizeHref(raw: string): string | null {
 
 const linkStyle: React.CSSProperties = { color: "var(--lm-teal)", textDecoration: "underline" };
 
-// linkifyPlain makes URLs clickable in user-authored bubbles WITHOUT any other
-// markdown transformation — what the user typed must stay verbatim (asterisks,
-// backticks, brackets), only recognizable http(s) URLs become anchors.
+// linkifyPlain makes URLs clickable in user-authored bubbles WITHOUT any other markdown transformation
 function linkifyPlain(text: string, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const re = /[a-zA-Z]{2,10}:\/\/[^\s<>)"]+/g;
@@ -53,7 +45,7 @@ function linkifyPlain(text: string, keyPrefix: string): ReactNode[] {
   let match: RegExpExecArray | null;
   while ((match = re.exec(text)) !== null) {
     const href = normalizeHref(match[0]);
-    if (!href) continue; // unrecognized scheme — leave in the surrounding text
+    if (!href) continue;
     if (match.index > last) parts.push(text.slice(last, match.index));
     parts.push(
       <a key={`${keyPrefix}-${match.index}`} href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>
@@ -62,12 +54,12 @@ function linkifyPlain(text: string, keyPrefix: string): ReactNode[] {
     );
     last = match.index + match[0].length;
   }
-  if (parts.length === 0) return [text]; // fast path: no links
+  if (parts.length === 0) return [text];
   if (last < text.length) parts.push(text.slice(last));
   return parts;
 }
 
-// Inline: **bold**, *italic*, ~~strikethrough~~, `code`, [links](url), URLs
+// Inline markdown: bold, italic, strikethrough, code, links and bare URLs.
 function renderInline(line: string, keyPrefix: string): ReactNode[] {
   const parts: ReactNode[] = [];
   const re = /(\*\*(.+?)\*\*|\*(.+?)\*|~~(.+?)~~|`(.+?)`|\[([^\]]+)\]\(([a-zA-Z][a-zA-Z0-9+.-]*:\/\/[^\s)]+)\)|([a-zA-Z]{2,10}:\/\/[^\s<>)"]+))/g;
@@ -85,7 +77,7 @@ function renderInline(line: string, keyPrefix: string): ReactNode[] {
     } else if (match[8]) {
       const href = normalizeHref(match[8]);
       if (href) parts.push(<a key={k} href={href} target="_blank" rel="noopener noreferrer" style={linkStyle}>{match[8].length > 50 ? match[8].slice(0, 50) + "…" : match[8]}</a>);
-      else parts.push(match[8]); // unrecognized scheme — leave as plain text
+      else parts.push(match[8]);
     }
     last = match.index + match[0].length;
   }
@@ -99,15 +91,14 @@ function renderMarkdown(text: string): ReactNode {
   let i = 0;
 
   while (i < lines.length) {
-    // Code block: ```
     if (lines[i].startsWith("```")) {
       const codeLines: string[] = [];
-      i++; // skip opening ```
+      i++;
       while (i < lines.length && !lines[i].startsWith("```")) {
         codeLines.push(lines[i]);
         i++;
       }
-      if (i < lines.length) i++; // skip closing ```
+      if (i < lines.length) i++;
       result.push(
         <pre key={`cb-${i}`} style={{
           background: "var(--lm-bg)", padding: "10px 13px", borderRadius: 8,
@@ -122,7 +113,6 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Headings: # ## ### #### ##### ######
     const headingMatch = lines[i].match(/^(#{1,6})\s+(.+)/);
     if (headingMatch) {
       const level = headingMatch[1].length;
@@ -139,14 +129,12 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Horizontal rule: --- or *** or ___
     if (/^([-*_])\1{2,}\s*$/.test(lines[i])) {
       result.push(<hr key={`hr-${i}`} style={{ border: "none", borderTop: "1px solid var(--lm-border)", margin: "8px 0" }} />);
       i++;
       continue;
     }
 
-    // Blockquote: > text
     if (lines[i].startsWith("> ")) {
       const quoteLines: ReactNode[] = [];
       while (i < lines.length && lines[i].startsWith("> ")) {
@@ -166,10 +154,9 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Table: | col | col | with separator row | --- | --- |
     if (lines[i].includes("|") && i + 1 < lines.length && /^\|?\s*[-:]+[-| :]*$/.test(lines[i + 1])) {
       const headerCells = lines[i].split("|").map((c) => c.trim()).filter(Boolean);
-      i += 2; // skip header + separator
+      i += 2;
       const rows: string[][] = [];
       while (i < lines.length && lines[i].includes("|")) {
         rows.push(lines[i].split("|").map((c) => c.trim()).filter(Boolean));
@@ -215,7 +202,6 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Unordered list: - item or * item
     if (/^[-*]\s/.test(lines[i])) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^[-*]\s/.test(lines[i])) {
@@ -226,7 +212,6 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Ordered list: 1. item
     if (/^\d+\.\s/.test(lines[i])) {
       const items: ReactNode[] = [];
       while (i < lines.length && /^\d+\.\s/.test(lines[i])) {
@@ -237,7 +222,6 @@ function renderMarkdown(text: string): ReactNode {
       continue;
     }
 
-    // Regular line
     const inline = renderInline(lines[i], `l-${i}`);
     result.push(
       <span key={`s-${i}`}>
@@ -251,54 +235,37 @@ function renderMarkdown(text: string): ReactNode {
   return result;
 }
 
-// Strip inline HW control markers like [HW:/emotion:{"emotion":"curious","intensity":0.7}]
-// and the markdown-link form [label](HW:/led/off:{}) some LLMs emit (keep the label).
-// Both patterns mirror the Go executor grammar (handler_hw.go hwMarkerRe/hwLinkRe)
-// exactly — never looser, so a variant the executor won't fire stays visible as raw
-// text instead of being scrubbed into a confident-looking label. The brace-anchored
-// body keeps `]` / `)` inside JSON from truncating the match.
+// Strip HW control markers; patterns mirror the Go executor grammar (handler_hw.go) exactly, never looser.
 const HW_LINK_RE = /\[([^\]]*)\]\(\s*HW:\s*(?:\/[^(){:\s]+(?::[^(){:\s]+)*)(?::\{[^}]*\})?:?\s*\)/gi;
 const HW_MARKER_RE = /\[HW:\/[^{\]]*(?:\{[^}]*\})?\]/g;
 function stripHWMarkers(text: string): string {
   return text
     .replace(HW_LINK_RE, (_m, label: string) =>
-      // Label may itself be a canonical marker's content (LLM link-wrapped the
-      // second of a back-to-back pair) — both are markers, show neither.
       /^hw:/i.test(label) ? "" : label,
     )
     .replace(HW_MARKER_RE, "")
     .trim();
 }
 
-// ─── Tool call parsing ──────────────────────────────────────────────────────
-
-// Dynamic wire payload: SSE/flow event `detail` blobs and LLM tool-call args.
-// Their shape is per-event-node / per-tool and decided by the server or the
-// model at runtime (nested `data` objects, arbitrary tool arguments), so they
-// are read defensively with optional chaining instead of a fixed interface.
+// Dynamic wire payload (SSE detail blobs, tool args), read defensively.
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type JsonObject = Record<string, any>;
 
 type IconKind = "tool" | "led" | "scene" | "led_off" | "music" | "servo" | "emotion" | "search";
 interface ToolChip {
-  id: string;       // dedup key
+  id: string;
   iconKind: IconKind;
   label: string;
-  detail?: string;  // formatted arg summary, e.g. for web_search → query
-  args?: JsonObject; // raw args for expanded view
-  result?: string;  // result summary (when "result" phase arrives)
+  detail?: string;
+  args?: JsonObject;
+  result?: string;
 }
 
 const TOOL_EVENT_TYPES = new Set(["tool_call", "hw_emotion", "hw_led", "hw_audio", "hw_servo", "led_set", "led_off"]);
 
-// Tools that route through hw_* events already — skip the generic tool_call
-// chip for them to avoid duplicates.
+// Tools already shown via hw_* events; skip their generic chip.
 const HW_SHADOW_TOOLS = new Set(["set_emotion", "set_led", "play_music", "move_servo"]);
 
-// Starter prompts shown on the empty chat screen. Clicking one fills the
-// composer (not auto-send) so the user can tweak before sending. Kept short and
-// device-flavoured (music, status, LED) to hint at what the assistant can do.
-// `key` resolves to the localized text via i18n at render time.
 const CHAT_SUGGESTIONS: { icon: ReactNode; key: string }[] = [
   { icon: <Music size={14} />, key: "chat.suggest.music" },
   { icon: <Smile size={14} />, key: "chat.suggest.howAreYou" },
@@ -306,8 +273,7 @@ const CHAT_SUGGESTIONS: { icon: ReactNode; key: string }[] = [
   { icon: <Sparkles size={14} />, key: "chat.suggest.whatCanYouDo" },
 ];
 
-// Map a tool name to which lucide icon best represents it. web_search and
-// similar lookup tools get a search icon, the rest fall back to Wrench.
+// Map a tool name to which lucide icon best represents it.
 function iconForTool(name: string): IconKind {
   const n = name.toLowerCase();
   if (n.includes("search") || n.includes("lookup") || n.includes("query")) return "search";
@@ -329,11 +295,9 @@ function renderToolIcon(kind: IconKind, size = 12) {
   }
 }
 
-// Compact one-line preview of args — typically the user-relevant input like
-// the search query. Falls back to a JSON-ish stringification.
+// Compact one-line preview of tool args.
 function summarizeArgs(args: JsonObject | undefined): string | undefined {
   if (!args || typeof args !== "object") return undefined;
-  // Common keys we prefer to surface as the "headline" of the chip.
   for (const key of ["query", "q", "url", "command", "text", "name", "recording"]) {
     if (typeof args[key] === "string" && args[key]) {
       const v = args[key];
@@ -356,10 +320,7 @@ interface ToolEventInput {
   phase?: string;
 }
 
-// parseToolChip turns a flow event into a chip. For `tool_call`:
-// - start phase carries the args in `detail.args` (JSON string)
-// - end phase summary is `"Tool <name> done: <result up to 100 chars>"` —
-//   we extract the result tail so users see what the tool actually returned.
+// Turns a tool_call flow event into a chip.
 function parseToolChip(ev: ToolEventInput): ToolChip | null {
   const s = ev.summary;
   switch (ev.type) {
@@ -389,8 +350,7 @@ function parseToolChip(ev: ToolEventInput): ToolChip | null {
     }
     case "tool_call": {
       const d = ev.detail as JsonObject | undefined;
-      // Server (handler_events.go) sets phase as a top-level event field; older
-      // flow_event paths nest it under detail.data.phase — accept both.
+      // phase is top-level on newer servers, nested under detail on older ones.
       const phase: string = ev.phase ?? d?.data?.phase ?? d?.phase ?? "";
       const name: string =
         d?.tool ?? d?.data?.tool ?? d?.data?.name ?? d?.name
@@ -404,8 +364,6 @@ function parseToolChip(ev: ToolEventInput): ToolChip | null {
         } catch { /* keep undefined */ }
       }
       const isResult = phase === "result" || phase === "end";
-      // Lift the truncated result text out of the summary for end-phase events.
-      // Format: "Tool <name> done: <result>" — we keep what comes after ": ".
       let resultText: string | undefined;
       if (isResult) {
         const m = s.match(/done:\s*(.+)$/);
@@ -424,50 +382,19 @@ function parseToolChip(ev: ToolEventInput): ToolChip | null {
   }
 }
 
-// ─── Storage ────────────────────────────────────────────────────────────────
-
 const CONVOS_KEY = "os_chat_convos";
 const ACTIVE_KEY = "os_chat_active";
 const MAX_MESSAGES = 200;
 const MAX_CONVOS = 50;
 
-// Conversation history TTL — auto-purge anything older than this on next load.
-// Chat content can include voice transcripts, names, schedules, mood notes —
-// not the kind of data to keep indefinitely in localStorage where any
-// same-origin script or browser extension can read it. 7 days is enough to
-// resume a recent conversation without piling up months of history.
+// Chat history TTL: stored content can be personal, so it is not kept indefinitely.
 const HISTORY_TTL_MS = 7 * 24 * 60 * 60 * 1000;
-// Give-up window for a pending reply. IDLE, not absolute: every event that
-// belongs to the run (delta, thinking, tool call) refreshes it, so a turn that
-// legitimately takes a while — "build me a Three.js train yard" — stays pending
-// as long as the agent keeps working. An ABSOLUTE cap used to finalize such a
-// turn as "no response" while the run was still going; MQTT chat and Telegram
-// never showed the symptom because neither has a client-side deadline.
-//
-// Sized to outlast the backend's own per-turn cap (10 min, see
-// CODEX_TURN_TIMEOUT_S) rather than to guess how long an answer should take:
-// the gatewayd always terminates a turn — completed, failed, or its own
-// "timeout" — and that terminal frame now carries the run id the browser is
-// waiting on, so this deadline is only a last-resort net for a frame that never
-// arrives at all. A shorter window cannot be used here because `codex exec`
-// emits nothing at all while it works: the measured 2026-09-03 run streamed
-// zero deltas in ten minutes, so ANY idle window shorter than the turn itself
-// finalizes a healthy turn as "no response".
+// Idle (not absolute) give-up window: every run event refreshes it.
 const REPLY_IDLE_TIMEOUT_MS = 12 * 60 * 1000;
-// A reload must preserve the same idle budget as a live turn. Harness and
-// Codex can legitimately take longer than a short replay window to finish, and
-// a reload while they are still working must not turn a later final event into
-// a discarded "no response".
 const RECOVERY_IDLE_TIMEOUT_MS = REPLY_IDLE_TIMEOUT_MS;
-// A fallback for a lost live EventSource connection. This is deliberately only
-// active while a reply is pending: Flow SSE remains the normal path, while a
-// short replay poll ensures a terminal result written during a transient proxy
-// or browser SSE disconnect is rendered without requiring a page reload.
+// Replay poll while a reply is pending, in case the live SSE drops.
 const PENDING_FLOW_REPLAY_MS = 3_000;
 
-// Storage envelope so the TTL check has a timestamp to look at. Legacy
-// devices have a bare Conversation[] under CONVOS_KEY; loadConvos() handles
-// both shapes and re-saves into the envelope on next save.
 interface ConvosEnvelope {
   savedAt: number;
   convos: Conversation[];
@@ -481,18 +408,16 @@ interface ChatMessage {
   role: "user" | "agent";
   text: string;
   time: string;
-  ts?: number;         // epoch ms — used to age-gate pending-run recovery after reload
-  date?: string;       // YYYY-MM-DD for date separators
-  imageUrls?: string[]; // data: URLs for attached images — stripped from localStorage
-                       // (quota), persisted separately in IndexedDB (chatImageStore)
-                       // and re-attached by the mount rehydrate effect
-  fileName?: string;   // original filename for non-image files
-  fileSize?: number;   // bytes
-  attachmentCount?: number; // set when the turn carried more than one attachment
+  ts?: number;
+  date?: string;
+  imageUrls?: string[];
+  fileName?: string;
+  fileSize?: number;
+  attachmentCount?: number;
   runId?: string;
   pending?: boolean;
   error?: boolean;
-  tools?: ToolChip[];  // tool calls made during this response
+  tools?: ToolChip[];
   tokenUsage?: { input: number; output: number; cacheRead?: number; cacheWrite?: number; total: number };
 }
 
@@ -515,13 +440,10 @@ function loadConvos(): Conversation[] {
     }
     const parsed = JSON.parse(raw) as Conversation[] | ConvosEnvelope;
 
-    // Legacy shape: bare Conversation[]. Treat as still-fresh (the user is
-    // upgrading right now); the next saveConvos() wraps it into the envelope.
     if (Array.isArray(parsed)) {
       return parsed.map((c) => ({ ...c, messages: cleanPending(c.messages) }));
     }
 
-    // Envelope shape: enforce TTL. Stale → drop and start clean.
     if (parsed && typeof parsed.savedAt === "number" && Array.isArray(parsed.convos)) {
       if (Date.now() - parsed.savedAt > HISTORY_TTL_MS) {
         localStorage.removeItem(CONVOS_KEY);
@@ -537,17 +459,12 @@ function loadConvos(): Conversation[] {
   }
 }
 
-// How long after send a pending turn is still recoverable across a page
-// reload. Within this window the pending bubble is kept alive and the
-// mount-recovery effect re-attaches to the run (the reply is backfilled
-// from the flow JSONL replay); beyond it the turn is finalized as lost.
+// Pending turns younger than this are recovered across a reload.
 const PENDING_RECOVERY_WINDOW_MS = 10 * 60 * 1000;
 
 function cleanPending(msgs: ChatMessage[]): ChatMessage[] {
   return msgs.map((m) => {
     if (!m.pending) return m;
-    // Recent pending turn with a runId → keep it pending so recovery can
-    // re-attach after reload instead of dropping the in-flight reply.
     if (m.runId && m.ts && Date.now() - m.ts < PENDING_RECOVERY_WINDOW_MS) return m;
     return { ...m, pending: false, text: m.text || "…", error: !m.text };
   });
@@ -566,9 +483,7 @@ function titleFromMessages(msgs: ChatMessage[]): string {
   return userMsg.text.length > 36 ? userMsg.text.slice(0, 36) + "…" : userMsg.text;
 }
 
-// A conversation should follow the last message, not the moment it was first
-// created. Besides matching what people expect from a chat inbox, this keeps
-// active threads at the front when the local cache reaches its size limit.
+// A conversation should follow the last message, not the moment it was first created.
 function conversationActivityAt(convo: Conversation): number {
   const lastMessage = convo.messages[convo.messages.length - 1];
   return lastMessage?.ts ?? convo.createdAt;
@@ -582,30 +497,23 @@ function saveConvos(convos: Conversation[]) {
   try {
     const trimmed = newestFirst(convos).slice(0, MAX_CONVOS).map((c) => ({
       ...c,
-      // Strip large data from localStorage (imageUrls data: URLs are too large).
-      // The images themselves live in IndexedDB (chatImageStore) keyed by
-      // message id and are re-attached on mount.
+      // imageUrls are too large for localStorage; they live in IndexedDB (chatImageStore).
       messages: c.messages.slice(-MAX_MESSAGES).map(({ imageUrls: _, ...m }) => m),
-      // fileName/fileSize are kept — they're small strings/numbers
     }));
     const envelope: ConvosEnvelope = { savedAt: Date.now(), convos: trimmed };
     localStorage.setItem(CONVOS_KEY, JSON.stringify(envelope));
   } catch {
-    // localStorage can be full or blocked (private mode, quota). The cache is
-    // an optimisation — chat keeps working from server history without it.
+    // Storage full or blocked; the cache is optional.
   }
 }
 
-// clearLocalChatHistory wipes the conversation cache from localStorage —
-// exposed via the Clear button in the chat header so the user can drop
-// stored history immediately without waiting for the TTL to fire.
+// clearLocalChatHistory wipes the conversation cache from localStorage
 function clearLocalChatHistory() {
   try {
     localStorage.removeItem(CONVOS_KEY);
     localStorage.removeItem(ACTIVE_KEY);
   } catch {
-    // Nothing to recover from: if localStorage is unavailable there is no
-    // cached history to clear, and the IndexedDB wipe below still runs.
+    // No localStorage: nothing to clear.
   }
   void clearChatImages();
 }
@@ -619,16 +527,12 @@ function saveActiveId(id: string | null) {
     if (id) localStorage.setItem(ACTIVE_KEY, id);
     else localStorage.removeItem(ACTIVE_KEY);
   } catch {
-    // Same as saveConvos: losing the active-conversation pointer only costs
-    // the "reopen where you left off" convenience on the next mount.
+    // Best-effort, like saveConvos.
   }
 }
 
-// ─── Clipboard helper ───────────────────────────────────────────────────────
-
 function copyToClipboard(text: string): Promise<void> {
   if (navigator.clipboard) return navigator.clipboard.writeText(text);
-  // Fallback for older browsers / non-HTTPS
   return new Promise((resolve) => {
     const ta = document.createElement("textarea");
     ta.value = text;
@@ -642,20 +546,9 @@ function copyToClipboard(text: string): Promise<void> {
   });
 }
 
-// ─── Component ──────────────────────────────────────────────────────────────
-
-// Attachment size ceiling. Module-level constant so it keeps a stable identity
-// across renders (it is read inside a memoized callback).
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
-// Cap on attachments per turn. Each one is base64 in the POST body and every
-// image additionally costs one describe call when the main model is text-only,
-// so an accidental "select all" in a photo folder has to bounce off something.
+const MAX_FILE_SIZE = 10 * 1024 * 1024;
 const MAX_ATTACHMENTS = 8;
 
-// Attachment is one file staged in the composer. The composer holds a LIST:
-// a turn can carry several photos and several documents, which is what the
-// sensing endpoint (`images[]` + `files[]`) and every wire format behind it
-// already accept.
 type Attachment = {
   id: string;
   name: string;
@@ -663,23 +556,17 @@ type Attachment = {
   size: number;
   isImage: boolean;
   base64: string;
-  previewUrl: string | null; // data: URL, images only
+  previewUrl: string | null;
 };
 
 interface Props {
   events: DisplayEvent[];
-  // ChatSection stays mounted (display:none) across section switches so
-  // chat state and scroll position persist. isActive tells it whether
-  // the user is actually viewing the Chat tab right now — when false,
-  // we don't open the live /openclaw/events SSE, which otherwise would
-  // hold an HTTP/1.1 connection slot from every other section.
+  // False when the tab is hidden; the live SSE only opens while active.
   isActive: boolean;
 }
 
 export function ChatSection({ events, isActive }: Props) {
   const navigate = useNavigate();
-  // Language-aware string lookup; re-renders when the active language resolves
-  // from the device config (see lib/i18n).
   const t = useT();
   const [convos, setConvos] = useState<Conversation[]>(loadConvos);
   const [activeId, setActiveId] = useState<string | null>(() => {
@@ -690,19 +577,11 @@ export function ChatSection({ events, isActive }: Props) {
   const [sending, setSending] = useState(false);
   const [editingId, setEditingId] = useState<string | null>(null);
 
-  // Rehydrate image attachments from IndexedDB — saveConvos() strips
-  // `imageUrls` from localStorage (quota), so after a reload the thumbnails
-  // are gone until this re-attaches them by message id. Also prunes stored
-  // images whose message no longer exists in any conversation (trimmed by
-  // MAX_MESSAGES/MAX_CONVOS, deleted convos, or TTL-dropped history) —
-  // fresh entries are age-guarded inside pruneChatImages, so an image
-  // written moments ago for a not-yet-saved message survives.
+  // Rehydrate images from IndexedDB and prune orphans (fresh entries are age-guarded).
   useEffect(() => {
     let cancelled = false;
     getAllChatImages().then((stored) => {
       if (cancelled) return;
-      // Keep-set from the persisted snapshot (same source the state was
-      // initialized from) — computed outside the updater to keep it pure.
       const keepIds = new Set(loadConvos().flatMap((c) => c.messages.map((m) => m.id)));
       void pruneChatImages(keepIds);
       if (stored.size === 0) return;
@@ -720,26 +599,15 @@ export function ChatSection({ events, isActive }: Props) {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
-  // Track hovered conversation so pin/delete buttons fade in only over the
-  // active row — keeps the sidebar list visually quiet at rest.
   const [hoveredConvoId, setHoveredConvoId] = useState<string | null>(null);
 
-  // Resolve the active model name so we can label each assistant message
-  // ("claude-haiku-4-5-20251001" → "haiku-4-5"). Pulled from the sanitized
-  // /api/device/config; the old `${AGENT_API}/config-json` path is now
-  // loopback-only (audit local F5c) and unreachable from a browser.
   const [modelLabel, setModelLabel] = useState<string>("");
   useEffect(() => {
     getDeviceConfig()
       .then((cfg) => {
-        // Keep the UI language in sync with the device's STT language. App.tsx
-        // also sets this on first load; doing it here too covers the case where
-        // the chat is reached without that gate having resolved config yet.
         setLanguage(cfg.stt_language);
         const primary = cfg.llm_model;
         if (!primary) return;
-        // Strip provider prefix and collapse Anthropic's trailing version
-        // suffix so the badge stays compact.
         const raw = primary.includes("/") ? primary.split("/").pop() ?? primary : primary;
         const compact = raw
           .replace(/^claude-/i, "")
@@ -757,8 +625,6 @@ export function ChatSection({ events, isActive }: Props) {
     color,
   });
 
-  // Shared header pill button — used by both Export and History buttons in the
-  // chat top bar so the right-side toolbar is visually uniform.
   const headerPillBtnStyle: React.CSSProperties = {
     background: "var(--lm-surface)",
     border: "1px solid var(--lm-border)",
@@ -770,19 +636,11 @@ export function ChatSection({ events, isActive }: Props) {
     fontSize: 11, fontWeight: 600,
   };
   const [attachments, setAttachments] = useState<Attachment[]>([]);
-  // Full-size viewer for an attached photo. A chat thumbnail is 120-200px, which
-  // is too small to check what was actually sent — the same lightbox the Flow
-  // section uses for snapshots (FlowSection/PoseBucketModal).
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
-  // Desktop (≥768px) always opens history by default; user can still collapse
-  // for a session. Mobile (<768px) stays collapsed so the chat area gets the
-  // full width. We don't persist the desktop preference — the request was that
-  // history is ALWAYS open on desktop by default.
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(
     () => typeof window !== "undefined" && window.innerWidth >= 768,
   );
   const [dragging, setDragging] = useState(false);
-  // Which Skills surface the composer's "+" menu opened, if any.
   const [skillsView, setSkillsView] = useState<SkillsAction | null>(null);
 
   const bottomRef = useRef<HTMLDivElement>(null);
@@ -790,39 +648,31 @@ export function ChatSection({ events, isActive }: Props) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingRunIdRef = useRef<string | null>(null);
-  // The POST can still be awaiting its run id when the user presses Stop.
-  // Keep the provisional bubble id and sequence so that a late HTTP response
-  // cannot revive a reply the user explicitly dismissed.
+  // Lets Stop win over a late HTTP response that would revive the reply.
   const pendingLocalReplyIdRef = useRef<string | null>(null);
   const sendSequenceRef = useRef(0);
   const sendAbortRef = useRef<AbortController | null>(null);
-  // Snapshot of the user's outgoing text for the pending run. Used to pair a
-  // steered/merged turn (OpenClaw re-fires the same input under a fresh UUID
-  // run) — see steered-pair branch in the events useEffect below.
+  // Pairs a steered turn that OpenClaw re-fires under a new run id.
   const pendingUserTextRef = useRef<string | null>(null);
   const resolvedIds = useRef<Set<string>>(new Set());
-  const deltaBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated delta text
-  // Bubble time = when the reply's first content arrived, not when the user
-  // sent. Streaming runtimes stamp it on the first delta; non-streaming ones
-  // (codex/harness reply via tts_send, chat_response final) stamp it here.
+  const deltaBufRef = useRef<Map<string, string>>(new Map());
+  // Bubble time = when the reply's first content arrived.
   const firstReplyTime = (runId: string, m: ChatMessage) =>
     deltaBufRef.current.has(runId) ? m.time : clockTime();
-  const thinkingBufRef = useRef<Map<string, string>>(new Map()); // runId → accumulated thinking text
-  const rafRef = useRef<number | null>(null); // requestAnimationFrame handle for batched rendering
-  const dirtyRef = useRef(false); // whether there are pending delta/thinking updates to flush
-  const [thinkingText, setThinkingText] = useState<string | null>(null); // current thinking display
-  const [toolChips, setToolChips] = useState<ToolChip[]>([]); // tool calls for current pending response
+  const thinkingBufRef = useRef<Map<string, string>>(new Map());
+  const rafRef = useRef<number | null>(null);
+  const dirtyRef = useRef(false);
+  const [thinkingText, setThinkingText] = useState<string | null>(null);
+  const [toolChips, setToolChips] = useState<ToolChip[]>([]);
   const [replayedFlowEvents, setReplayedFlowEvents] = useState<MonitorEvent[]>([]);
 
   const active = convos.find((c) => c.id === activeId) ?? null;
   const messages = active?.messages ?? EMPTY_MESSAGES;
 
-  // Persist
   useEffect(() => { saveConvos(convos); }, [convos]);
   useEffect(() => { saveActiveId(activeId); }, [activeId]);
 
-  // Esc closes the full-size viewer. Window-level because the lightbox is a
-  // plain div — nothing inside it holds focus to receive a key event.
+  // Window-level: nothing inside the lightbox holds focus.
   useEffect(() => {
     if (!lightboxUrl) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setLightboxUrl(null); };
@@ -830,7 +680,6 @@ export function ChatSection({ events, isActive }: Props) {
     return () => window.removeEventListener("keydown", onKey);
   }, [lightboxUrl]);
 
-  // Keyboard shortcut: Cmd/Ctrl+N for new chat
   useEffect(() => {
     const handler = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === "n") {
@@ -842,7 +691,6 @@ export function ChatSection({ events, isActive }: Props) {
     return () => window.removeEventListener("keydown", handler);
   });
 
-  // Auto-resize textarea
   useEffect(() => {
     const ta = textareaRef.current;
     if (!ta) return;
@@ -850,7 +698,6 @@ export function ChatSection({ events, isActive }: Props) {
     ta.style.height = Math.min(ta.scrollHeight, 120) + "px";
   }, [input]);
 
-  // Scroll detection for scroll-to-bottom button
   const onScroll = useCallback(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -862,7 +709,6 @@ export function ChatSection({ events, isActive }: Props) {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, []);
 
-  // Update messages helper
   const updateMessages = useCallback((fn: (prev: ChatMessage[]) => ChatMessage[]) => {
     setConvos((prev) =>
       prev.map((c) => {
@@ -874,9 +720,7 @@ export function ChatSection({ events, isActive }: Props) {
     );
   }, [activeId]);
 
-  // Idle watchdog for the pending reply (see REPLY_IDLE_TIMEOUT_MS). Held in a
-  // ref so the SSE handler, sendText and the reload-recovery path all refresh
-  // the SAME timer instead of each owning a separate deadline.
+  // One shared idle watchdog, refreshed by SSE, send and reload recovery.
   const replyWatchdogRef = useRef<{ runId: string; convoId: string; timer: number } | null>(null);
 
   const clearReplyWatchdog = useCallback(() => {
@@ -885,11 +729,6 @@ export function ChatSection({ events, isActive }: Props) {
     replyWatchdogRef.current = null;
   }, []);
 
-  // EventSource delivers live monitor events with minimal latency. It can still
-  // be interrupted by a proxy reconnect or a browser connection-slot change.
-  // While any chat reply is pending, replay the persisted flow periodically so a
-  // final `tts_send` or `harness_response` cannot leave the bubble on `…`
-  // until the user reloads the page.
   const pendingRepliesKey = pendingReplyKey(convos);
   useEffect(() => {
     if (pendingRepliesKey === "[]") return;
@@ -903,7 +742,6 @@ export function ChatSection({ events, isActive }: Props) {
         const next = payload?.data?.events;
         if (!cancelled && Array.isArray(next)) {
           const flowEvents = next as MonitorEvent[];
-          // The active-run watcher below owns its streaming buffers/tool chips.
           setReplayedFlowEvents(flowEvents);
           const replies = new Map<string, string>();
           for (const runId of JSON.parse(pendingRepliesKey) as string[]) {
@@ -972,31 +810,23 @@ export function ChatSection({ events, isActive }: Props) {
     [clearReplyWatchdog],
   );
 
-  // Real-time monitor bus SSE — streaming deltas, thinking, tool calls
-  // Uses /api/agent/events (live bus) instead of flow-stream (file-based JSONL)
-  const toolChipsRef = useRef<Map<string, ToolChip>>(new Map()); // key → chip for dedup
-  const tokenUsageRef = useRef<ChatMessage["tokenUsage"]>(undefined); // token usage for current run
+  const toolChipsRef = useRef<Map<string, ToolChip>>(new Map());
+  const tokenUsageRef = useRef<ChatMessage["tokenUsage"]>(undefined);
 
   useEffect(() => {
-    // EventSource holds one HTTP/1.1 connection slot for its lifetime.
-    // ChatSection is always mounted (hidden via display:none to preserve
-    // scroll/input when switching tabs), so keeping this open when the
-    // whole browser tab is backgrounded burns a slot + Pi CPU for nothing.
-    // Close it while hidden, reopen on visible.
+    // Close the EventSource while the tab is hidden (connection-slot limit).
     let es: EventSource | null = null;
 
     // Batch delta/thinking updates into a single render per animation frame
     const scheduleFlush = () => {
-      if (rafRef.current != null) return; // already scheduled
+      if (rafRef.current != null) return;
       rafRef.current = requestAnimationFrame(() => {
         rafRef.current = null;
         if (!dirtyRef.current) return;
         dirtyRef.current = false;
         const p = pendingRunIdRef.current;
         if (!p) return;
-        // Flush thinking
         setThinkingText(thinkingBufRef.current.get(p) ?? null);
-        // Flush assistant text
         const buf = deltaBufRef.current.get(p);
         if (buf) {
           const cleaned = stripHWMarkers(buf);
@@ -1040,25 +870,13 @@ export function ChatSection({ events, isActive }: Props) {
 
         const evRunId = ev.runId ?? (ev.detail as JsonObject | undefined)?.run_id ?? (ev.detail as JsonObject | undefined)?.runId;
         if (!evRunId || evRunId !== pending) return;
-        // The run is alive — push the give-up deadline back. Without this a
-        // turn longer than the window was declared "no response" mid-work.
+        // The run is alive: push the idle deadline back.
         const watchdog = replyWatchdogRef.current;
         if (watchdog && watchdog.runId === pending) {
           armReplyWatchdog(pending, watchdog.convoId, REPLY_IDLE_TIMEOUT_MS);
         }
 
-        // Tool call chips. Dedup key on iconKind+label so the start + result
-        // phases of the same tool merge into a single chip — the latest event
-        // wins so `result`'s completion flag overwrites the placeholder.
-        //
-        // Server emits tool events in two shapes:
-        //   1. ev.type === "tool_call" (live monitor bus path)
-        //   2. ev.type === "flow_event" with detail.node === "tool_call"
-        //      (re-played from flow JSONL on reconnect)
-        // We accept both — previously the chips were missed half the time
-        // because only shape #1 matched, which is why chips appeared "lúc có
-        // lúc không" depending on whether the user was watching live or
-        // reconnected mid-turn.
+        // Tool call chips: the start and result phases of one call merge into a single chip.
         const detailNode = (ev.detail as JsonObject | undefined)?.node;
         const isToolCall =
           TOOL_EVENT_TYPES.has(ev.type) ||
@@ -1072,7 +890,6 @@ export function ChatSection({ events, isActive }: Props) {
             detailNode === "led_off"
           ));
         if (isToolCall) {
-          // Normalize flow_event into the same shape parseToolChip expects.
           const normalizedType = TOOL_EVENT_TYPES.has(ev.type) ? ev.type : detailNode;
           const chip = parseToolChip({
             type: normalizedType,
@@ -1082,11 +899,6 @@ export function ChatSection({ events, isActive }: Props) {
             phase: ev.phase ?? (ev.detail as JsonObject | undefined)?.data?.phase,
           });
           if (chip) {
-            // Dedup key on iconKind+label+args so the start+result phases of
-            // the SAME invocation merge — but two distinct invocations of the
-            // same tool (e.g. two `Read` calls on different files) each get
-            // their own chip. Earlier the key was just iconKind:label, which
-            // collapsed all Read/Bash calls in a turn into one row.
             const argsKey = chip.detail ?? (chip.args ? JSON.stringify(chip.args) : "");
             const key = chip.iconKind + ":" + chip.label + ":" + argsKey;
             const existing = toolChipsRef.current.get(key);
@@ -1102,10 +914,6 @@ export function ChatSection({ events, isActive }: Props) {
           }
         }
 
-        // Token usage — save for attaching to message on finalize.
-        // Accept both shapes: direct `token_usage` event AND flow_event with
-        // node === "token_usage" (replayed path). Also try `.data.*` nesting
-        // since flow_event wraps the payload one level deeper.
         const isTokenUsage =
           ev.type === "token_usage" ||
           (ev.type === "flow_event" && (ev.detail as JsonObject | undefined)?.node === "token_usage");
@@ -1125,7 +933,6 @@ export function ChatSection({ events, isActive }: Props) {
           return;
         }
 
-        // Thinking deltas — accumulate, flush on next animation frame
         if (ev.type === "thinking") {
           const delta = ev.summary ?? "";
           if (delta) {
@@ -1137,12 +944,10 @@ export function ChatSection({ events, isActive }: Props) {
           return;
         }
 
-        // Assistant streaming deltas — accumulate, flush on next animation frame
         if (ev.type === "assistant_delta") {
           const delta = ev.summary ?? "";
           if (delta) {
             const buf = deltaBufRef.current.get(pending) ?? "";
-            // First token: update message time to now
             if (!buf) {
               const firstTokenTime = clockTime();
               updateMessages((prev) =>
@@ -1156,7 +961,6 @@ export function ChatSection({ events, isActive }: Props) {
           return;
         }
 
-        // Chat response (partial or final) from "chat" event path
         if (ev.type === "chat_response") {
           const d = ev.detail as JsonObject | undefined;
           const chatMsg = d?.message ?? ev.summary ?? "";
@@ -1175,8 +979,7 @@ export function ChatSection({ events, isActive }: Props) {
 
           if (ev.state === "complete" || ev.state === "final") {
             const finalText = chatMsg || deltaBufRef.current.get(pending) || "";
-            // Skip empty finals — OpenClaw sends acknowledgment-only finals with no message.
-            // Wait for the actual response or let the timeout handle it.
+            // Skip empty finals: OpenClaw sends acknowledgment-only finals.
             if (!finalText) return;
             const { savedChips, usage } = resolveRun(pending);
             const cleaned = stripHWMarkers(finalText);
@@ -1203,7 +1006,6 @@ export function ChatSection({ events, isActive }: Props) {
             return;
           }
 
-          // Partial (non-delta path)
           if (chatMsg && !deltaBufRef.current.has(pending)) {
             const cleaned = stripHWMarkers(chatMsg);
             updateMessages((prev) =>
@@ -1241,36 +1043,13 @@ export function ChatSection({ events, isActive }: Props) {
       close();
       if (rafRef.current != null) cancelAnimationFrame(rafRef.current);
     };
-    // armReplyWatchdog/clearReplyWatchdog are useCallback-stable (they depend on
-    // nothing that changes), so listing them cannot make this effect tear the
-    // EventSource down and reconnect more often than before.
   }, [updateMessages, isActive, armReplyWatchdog, clearReplyWatchdog]);
 
-  // Watch flow events for final response (tts_send, no_reply from JSONL)
-  // This catches responses that only appear in flow logs, not on the live bus
   useEffect(() => {
     const pending = pendingRunIdRef.current;
     if (!pending || resolvedIds.current.has(pending)) return;
 
-    // Steered/merged pattern: OpenClaw closes the device run with chat_final_empty
-    // and re-fires the same input under a fresh UUID-keyed turn (see
-    // docs/debug/openclaw-selfreplay.md). The actual reply (tts_send,
-    // lifecycle_end, etc.) flows under the UUID, not the device run id, so
-    // the loop below would never see it without this pairing.
-    //
-    // Pair by matching the user's outgoing text against a chat_input
-    // (source=channel) that arrives AFTER chat_final_empty in the events
-    // array — `events` is oldest-first, so index comparison gives temporal
-    // order. The forward-only scan prevents accidental pairing with an
-    // earlier same-text Telegram turn from elsewhere in the day.
-    //
-    // Exact-equal after prefix strip — Flow Monitor's pair-tint uses
-    // substring containment with a 32-char guard, but we have the user's
-    // full original text in pendingUserTextRef so exact match works for
-    // short inputs like "hello" too.
-    // `events` is the live Flow SSE snapshot. `replayedFlowEvents` is a
-    // pending-only HTTP fallback for when that EventSource silently drops; map
-    // by stable event id so the same JSONL event is considered once.
+    // Steered/merged turn: OpenClaw re-fires the input under a new run id; pair it by the user's text.
     const observedEvents = Array.from(
       new Map([...replayedFlowEvents, ...events].map((event) => [event.id, event])).values(),
     );
@@ -1317,9 +1096,7 @@ export function ChatSection({ events, isActive }: Props) {
 
       const d = ev.detail as JsonObject | undefined;
       if (ev.type === "flow_event" && (d?.node === "tts_send" || d?.node === "tts_suppressed" || d?.node === "harness_response")) {
-        // Prefer full_text: tts_send.text is only the remainder when sentence 1
-        // streamed mid-turn (logged as tts_stream_send, never read here). full_text
-        // is the complete reply. Fall back to text for older JSONL / tts_suppressed.
+        // Prefer full_text: tts_send.text is only the remainder after a streamed first sentence.
         const text: string = d?.data?.full_text ?? d?.full_text ?? d?.data?.text ?? d?.text ?? "";
         if (text) {
           resolvedIds.current.add(pending);
@@ -1361,33 +1138,18 @@ export function ChatSection({ events, isActive }: Props) {
         return;
       }
     }
-    // `sending` is here so the reload-recovery effect below (which attaches
-    // pendingRunIdRef and flips sending on) forces a re-scan of the already
-    // replayed events even when no new flow event arrives afterwards.
+    // `sending` forces a re-scan once reload recovery attaches the run.
   }, [events, replayedFlowEvents, updateMessages, sending]);
 
-  // Recover an in-flight turn after a page reload. The run-tracking refs
-  // (pendingRunIdRef & co.) live only in memory, so a reload while waiting
-  // used to orphan the turn: the reply never landed even though the device
-  // finished it and the flow JSONL replay (last 500 events, re-sent on every
-  // flow-stream connect) already carried the tts_send. cleanPending() keeps
-  // recent pending bubbles alive (see PENDING_RECOVERY_WINDOW_MS); here we
-  // re-attach the refs so the flow-events watcher above backfills the reply.
-  // Runs once, on the first render where the chat tab is actually active —
-  // before that no flow events reach this component anyway.
+  // Recover an in-flight turn after reload by re-attaching the run refs.
   const recoveryDoneRef = useRef(false);
   useEffect(() => {
     if (!isActive || recoveryDoneRef.current) return;
     recoveryDoneRef.current = true;
-    if (pendingRunIdRef.current) return; // a live send is already tracked
+    if (pendingRunIdRef.current) return;
     const convo = convos.find((c) => c.id === activeId);
     if (!convo) return;
-    // A pending bubble with NO run id belongs to a send whose POST was still
-    // in flight when the page went away — the composer shows the waiting bubble
-    // immediately, and the run id only arrives when the request returns. Nothing
-    // will ever resolve it (the request died with the page), so finalize it
-    // instead of leaving three dots spinning forever. The device may well have
-    // run the turn; the retry button is the honest exit.
+    // A pending bubble without a run id died with the page; finalize it.
     const strandedIds: string[] = [];
     for (const m of convo.messages) {
       if (m.pending && !m.runId && m.role === "agent") strandedIds.push(m.id);
@@ -1415,27 +1177,19 @@ export function ChatSection({ events, isActive }: Props) {
     pendingRunIdRef.current = runId;
     pendingUserTextRef.current = prevUser?.text ?? null;
     setSending(true);
-    // Same give-up guard as sendText: if neither the live bus nor the flow
-    // replay resolves the run, finalize as timed out instead of spinning
-    // forever. 30s is plenty — a completed turn backfills within ~2s.
     armReplyWatchdog(runId, convo.id, RECOVERY_IDLE_TIMEOUT_MS);
     return () => clearReplyWatchdog();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isActive]);
 
-  // Scroll to bottom on conversation switch
   useEffect(() => {
-    // Use setTimeout to let DOM render messages first
     setTimeout(() => {
       const el = scrollContainerRef.current;
       if (el) el.scrollTop = el.scrollHeight;
     }, 50);
   }, [activeId]);
 
-  // Scroll to bottom when chat tab becomes active. Chat stays mounted with
-  // display:none on other tabs, so scrollHeight is 0 during background render
-  // — auto-scroll on activeId/messages never lands the user at the bottom on
-  // first reveal. Jumping on isActive flip closes the gap.
+  // Chat stays mounted while hidden, so scroll once it becomes active.
   useEffect(() => {
     if (!isActive) return;
     setTimeout(() => {
@@ -1444,7 +1198,6 @@ export function ChatSection({ events, isActive }: Props) {
     }, 50);
   }, [isActive]);
 
-  // Auto-scroll on new messages — always scroll if last message is pending (streaming)
   useEffect(() => {
     const el = scrollContainerRef.current;
     if (!el) return;
@@ -1453,8 +1206,6 @@ export function ChatSection({ events, isActive }: Props) {
     const nearBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 200;
     if (nearBottom || hasPending) scrollToBottom();
   }, [messages, scrollToBottom]);
-
-  // ─── Actions ────────────────────────────────────────────────────────────
 
   const newChat = useCallback(() => {
     if (active && active.messages.length === 0) return;
@@ -1520,9 +1271,7 @@ export function ChatSection({ events, isActive }: Props) {
       const dataUrl = reader.result as string;
       const base64 = dataUrl.split(",")[1] ?? "";
       if (!base64) return;
-      // Cap checked HERE, not at the call site: files arrive one FileReader at
-      // a time, so a multi-select of 20 would each pass an up-front check and
-      // still land 20.
+      // Cap checked here: files arrive one FileReader at a time.
       setAttachments((prev) => prev.length >= MAX_ATTACHMENTS ? prev : [...prev, {
         id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
         name: file.name,
@@ -1551,7 +1300,6 @@ export function ChatSection({ events, isActive }: Props) {
 
   const clearFile = () => setAttachments([]);
 
-  // Drag & drop
   const onDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     setDragging(true);
@@ -1567,7 +1315,6 @@ export function ChatSection({ events, isActive }: Props) {
     if (e.dataTransfer.files?.length) attachFiles(e.dataTransfer.files);
   }, [attachFiles]);
 
-  // Paste image from clipboard
   const onPaste = useCallback((e: React.ClipboardEvent) => {
     const items = e.clipboardData.items;
     const images: File[] = [];
@@ -1604,24 +1351,18 @@ export function ChatSection({ events, isActive }: Props) {
   };
 
   const retryMessage = (errorMsg: ChatMessage) => {
-    // Find the user message right before this error
     const idx = messages.findIndex((m) => m.id === errorMsg.id);
     if (idx < 1) return;
     const userMsg = messages[idx - 1];
     if (userMsg.role !== "user") return;
 
-    // Remove the error message and resend
     updateMessages((prev) => prev.filter((m) => m.id !== errorMsg.id));
     setInput(userMsg.text);
-    // Remove the user message too, send() will re-add it
     setTimeout(() => {
       updateMessages((prev) => prev.filter((m) => m.id !== userMsg.id));
-      // Trigger send with the text
       sendText(userMsg.text);
     }, 50);
   };
-
-  // ─── Send logic ─────────────────────────────────────────────────────────
 
   const sendText = useCallback(async (text: string, attachedImage?: string | null) => {
     if (!text || sending) return;
@@ -1640,9 +1381,6 @@ export function ChatSection({ events, isActive }: Props) {
     const dateStr = nowDate.toISOString().slice(0, 10);
     const userMsg: ChatMessage = {
       id: `u-${Date.now()}`, role: "user", text, time: now, ts: nowDate.getTime(), date: dateStr,
-      // EVERY attached photo, not just the first: the bubble is the user's only
-      // record of what they actually sent, and showing one thumbnail for a
-      // two-image turn reads as "the second one was dropped".
       imageUrls: attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean),
       fileName: attachments.find((a) => !a.isImage)?.name,
       fileSize: attachments.find((a) => !a.isImage)?.size,
@@ -1650,8 +1388,6 @@ export function ChatSection({ events, isActive }: Props) {
         ? attachments.filter((a) => !a.isImage).length
         : undefined,
     };
-    // Persist the attachments out-of-band: localStorage strips them on save,
-    // IndexedDB keeps them so the thumbnails survive a reload.
     void putChatImages(userMsg.id, attachments.filter((a) => a.isImage).map((a) => a.previewUrl!).filter(Boolean));
 
     setConvos((prev) =>
@@ -1665,13 +1401,7 @@ export function ChatSection({ events, isActive }: Props) {
     setInput("");
     clearFile();
     setSending(true);
-    // Show the waiting bubble NOW, before the POST — not after it returns with a
-    // run id. The request itself can take a minute: the sensing handler runs the
-    // describe-first vision gate inline, once per attached image, so a two-photo
-    // turn sat ~53 s with an empty thread (measured 2026-09-03). With no sign the
-    // message went anywhere, the natural move is to reload the page — which
-    // cancels the in-flight POST, so the reply had nowhere to land and the turn
-    // looked lost even though the device answered it fine.
+    // Show the waiting bubble before the POST, which can take a minute.
     const localReplyId = `l-pending-${Date.now()}`;
     const sendSequence = ++sendSequenceRef.current;
     pendingLocalReplyIdRef.current = localReplyId;
@@ -1684,13 +1414,7 @@ export function ChatSection({ events, isActive }: Props) {
     );
     setTimeout(scrollToBottom, 50);
 
-    // Images ride `image` (the device runs its describe-first vision gate on
-    // that field); anything else rides `file`, which lands on disk with its real
-    // extension. They used to share `image`, so a PDF was written as `.jpg` and
-    // then failed the vision gate.
-    // Photos and documents ride separate fields because os-server handles them
-    // oppositely: an image goes through the describe-first vision gate, a
-    // document must not (it would fail there) and is only saved + tagged.
+    // Images ride `image` (vision gate); other files ride `file`.
     const staged = attachments;
     const sendImages = [
       ...(attachedImage ? [attachedImage] : []),
@@ -1714,9 +1438,7 @@ export function ChatSection({ events, isActive }: Props) {
       });
       const json = await res.json();
 
-      // Stop was pressed while this request was being accepted. The agent may
-      // still finish its already-accepted work, but this chat must never show
-      // that late reply.
+      // Stop was pressed while this request was being accepted; drop the late reply.
       if (sendSequenceRef.current !== sendSequence) {
         if (json.status === 1 && json.data?.runId) resolvedIds.current.add(json.data.runId);
         return;
@@ -1729,10 +1451,7 @@ export function ChatSection({ events, isActive }: Props) {
         pendingLocalReplyIdRef.current = null;
         pendingUserTextRef.current = text;
         const replyTime = clockTime();
-        // Adopt the bubble that has been spinning since the click — attaching the
-        // run id to it rather than appending a second one, so the user never sees
-        // two agent bubbles for one message. The id changes with it: `l-<runId>`
-        // is what the reload-recovery path looks for.
+        // Adopt the spinning bubble; `l-<runId>` is what reload recovery looks for.
         setConvos((prev) =>
           prev.map((c) =>
             c.id === targetId
@@ -1792,23 +1511,12 @@ export function ChatSection({ events, isActive }: Props) {
         ),
       );
     }
-    // scrollToBottom is a useCallback with an empty dep list — stable identity,
-    // so listing it here cannot change how often sendText is recreated.
-    // updateMessages is not referenced in this callback (retryMessage uses it);
-    // it only changed with activeId, which is already listed, so dropping it
-    // leaves the recreation frequency identical.
-    // armReplyWatchdog is useCallback-stable, so listing it leaves sendText's
-    // recreation frequency unchanged.
   }, [activeId, sending, attachments, scrollToBottom, armReplyWatchdog]);
 
-  // sendText splits the staged attachments by kind itself. Passing the raw
-  // base64 here would make every attachment look like an image.
+  // sendText splits the staged attachments by kind itself.
   const send = () => { sendText(input.trim()); };
 
-  // Stop is intentionally scoped to this browser's pending reply. It aborts a
-  // still-unaccepted HTTP send and permanently ignores a late result once a
-  // run id exists; it does not cancel the agent's underlying task or alter its
-  // session/memory.
+  // Stop is intentionally scoped to this browser's pending reply.
   const stopPendingReply = () => {
     const runId = pendingRunIdRef.current;
     const localReplyId = pendingLocalReplyIdRef.current;
@@ -1842,7 +1550,6 @@ export function ChatSection({ events, isActive }: Props) {
     if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
   };
 
-  // ─── Filtered conversations ─────────────────────────────────────────────
   const filtered = search.trim()
     ? convos.filter((c) => {
         const q = search.toLowerCase();
@@ -1851,18 +1558,10 @@ export function ChatSection({ events, isActive }: Props) {
       })
     : convos;
   const grouped = groupConvosByDate(filtered);
-  // Single timestamp reference for all relative-time labels this render, so
-  // rows in the same list stay consistent.
   const nowTs = Date.now();
-
-  // ─── Render ─────────────────────────────────────────────────────────────
 
   return (
     <div style={{ display: "flex", height: "100%", gap: 0, position: "relative" }}>
-      {/* History panel is persistent — clicking outside does NOT close it.
-          Only the explicit collapse button (▶ in the panel header) closes it.
-          Lives as a normal flex item (NOT absolute) so opening it pushes the
-          chat area narrower instead of overlaying it. */}
       {sidebarOpen && (
       <div style={{
         width: 280, flexShrink: 0, order: 2,
@@ -1870,7 +1569,6 @@ export function ChatSection({ events, isActive }: Props) {
         display: "flex", flexDirection: "column",
         background: "var(--lm-sidebar)",
       }}>
-        {/* Header: title strip + actions. Consistent padding with rest of sidebar (14px horizontal). */}
         <div style={{
           padding: "14px 14px 10px",
           borderBottom: "1px solid var(--lm-border)",
@@ -1966,8 +1664,6 @@ export function ChatSection({ events, isActive }: Props) {
                     </span>
                   ) : label}
                 </span>
-                {/* Hairline divider + count so each date group reads as a
-                    distinct section without heavy chrome. */}
                 <span style={{ flex: 1, height: 1, background: "var(--lm-border)", opacity: 0.6 }} />
                 <span style={{
                   fontSize: 9, fontWeight: 600, color: "var(--lm-text-muted)",
@@ -1994,8 +1690,6 @@ export function ChatSection({ events, isActive }: Props) {
                     transition: "background 0.15s",
                   }}
                 >
-                  {/* Active rail — amber vertical bar on the left edge marking the
-                      open conversation (Linear/Slack style). */}
                   {isActive && (
                     <span style={{
                       position: "absolute", left: 0, top: 7, bottom: 7, width: 3,
@@ -2003,7 +1697,6 @@ export function ChatSection({ events, isActive }: Props) {
                       boxShadow: "0 0 8px -1px var(--lm-amber-glow)",
                     }} />
                   )}
-                  {/* Pin badge — small inline marker top-right when pinned */}
                   {c.pinned && !isHovered && (
                     <span style={{
                       position: "absolute", top: 6, right: 8,
@@ -2012,8 +1705,6 @@ export function ChatSection({ events, isActive }: Props) {
                     }}><Pin size={10} fill="currentColor" /></span>
                   )}
                   <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {/* Per-conversation avatar dot — deterministic on-palette hue
-                        so the list is quicker to scan. */}
                     <span style={{
                       flexShrink: 0, width: 7, height: 7, borderRadius: "50%",
                       background: convoColor(c.id),
@@ -2052,8 +1743,6 @@ export function ChatSection({ events, isActive }: Props) {
                           >
                             {c.title}
                           </div>
-                          {/* Relative timestamp — hidden on hover so it doesn't
-                              collide with the pin badge / action buttons. */}
                           {!isHovered && (
                             <span style={{
                               flexShrink: 0, fontSize: 9.5, fontWeight: 500,
@@ -2076,7 +1765,6 @@ export function ChatSection({ events, isActive }: Props) {
                         </div>
                       )}
                     </div>
-                    {/* Hover-reveal actions — keep the row clean when idle. */}
                     <div style={{
                       display: "flex", gap: 2, flexShrink: 0,
                       opacity: isHovered ? 1 : 0,
@@ -2136,7 +1824,6 @@ export function ChatSection({ events, isActive }: Props) {
       </div>
       )}
 
-      {/* ── Chat area ── */}
       <div
         className="lm-chat-panel"
         onDragOver={onDragOver}
@@ -2144,7 +1831,6 @@ export function ChatSection({ events, isActive }: Props) {
         onDrop={onDrop}
         style={{ flex: 1, display: "flex", flexDirection: "column", minWidth: 0, position: "relative" }}
       >
-        {/* Drop overlay */}
         {dragging && (
           <div style={{
             position: "absolute", inset: 0, zIndex: 10,
@@ -2159,17 +1845,12 @@ export function ChatSection({ events, isActive }: Props) {
             </span>
           </div>
         )}
-        {/* Chat header bar — matches the monitor topbar rhythm (10px/14px pad,
-            44px tall) so Chat reads as part of the same shell as Overview /
-            System rather than a denser one-off. */}
         <div style={{
           padding: "10px 16px", borderBottom: "1px solid var(--lm-border)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
           background: "var(--lm-sidebar)", minHeight: 44, gap: 12,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 10, minWidth: 0, flex: 1 }}>
-            {/* Assistant presence: a breathing amber orb + live status dot. Gives
-                the chat a "someone's here" feel and a clear thinking/idle cue. */}
             <span className={sending ? "lm-orb-ring" : undefined} style={{ position: "relative", flexShrink: 0, display: "inline-flex" }}>
               <span
                 className={`lm-assistant-orb${sending ? " lm-orb-live" : ""}`}
@@ -2202,8 +1883,6 @@ export function ChatSection({ events, isActive }: Props) {
               </span>
             </div>
           </div>
-          {/* Header actions — Export + History sharing the same pill style for a
-              uniform right-side toolbar. */}
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
             {active && active.messages.length > 0 && (
               <button
@@ -2236,9 +1915,6 @@ export function ChatSection({ events, isActive }: Props) {
             )}
           </div>
         </div>
-        {/* Messages — scroll happens on the outer wrapper; the inner column is
-            constrained to a comfortable reading width (centered) so messages
-            don't sprawl edge-to-edge on wide displays. */}
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
@@ -2247,16 +1923,10 @@ export function ChatSection({ events, isActive }: Props) {
             display: "flex", flexDirection: "column",
           }}
         >
-          {/* When there are messages, marginTop:auto anchors a short thread to
-              the bottom of the viewport (iMessage/ChatGPT style) instead of
-              floating at the top with empty space below; once it overflows it
-              scrolls normally. Empty state keeps full auto-centering so the
-              greeting sits in the middle. */}
+          {/* marginTop:auto anchors a short thread to the bottom. */}
           <div style={{ maxWidth: 760, margin: messages.length === 0 ? "auto" : "auto auto 0", width: "100%", display: "flex", flexDirection: "column", gap: 12 }}>
           {messages.length === 0 && (
             <div style={{ margin: "auto", textAlign: "center", color: "var(--lm-text-dim)", maxWidth: 460 }}>
-              {/* Large breathing lamp orb — the device's "presence" greeting the
-                  user in an otherwise empty room. */}
               <div style={{ display: "flex", justifyContent: "center", marginBottom: 16 }}>
                 <span className="lm-assistant-orb lm-orb-live" style={{ width: 56, height: 56 }}>
                   <Sparkles size={26} />
@@ -2268,8 +1938,6 @@ export function ChatSection({ events, isActive }: Props) {
               <div style={{ fontSize: 12.5, marginTop: 5, lineHeight: 1.6 }}>
                 {t("chat.empty.subtitle")}
               </div>
-              {/* Suggestion chips — click fills the composer so the user can edit
-                  before sending. Lowers the blank-page barrier. */}
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, justifyContent: "center", marginTop: 16 }}>
                 {CHAT_SUGGESTIONS.map((s) => {
                   const label = t(s.key);
@@ -2295,7 +1963,6 @@ export function ChatSection({ events, isActive }: Props) {
             </div>
           )}
           {messages.map((msg, i) => {
-            // Date separator
             const prevDate = i > 0 ? messages[i - 1].date : null;
             const showDate = msg.date && msg.date !== prevDate;
             return (
@@ -2313,9 +1980,6 @@ export function ChatSection({ events, isActive }: Props) {
                 data-role={msg.role}
                 style={{ display: "flex", flexDirection: msg.role === "user" ? "row-reverse" : "row", alignItems: "flex-end" }}
               >
-              {/* Assistant avatar gutter — small breathing orb aligned to the
-                  bubble's bottom. Only on the agent side; rendered as a spacer
-                  for follow-up agent turns so bubbles stay aligned. */}
               {msg.role === "agent" && (() => {
                 const isFirstOfTurn = i === 0 || messages[i - 1]?.role === "user";
                 return (
@@ -2330,16 +1994,12 @@ export function ChatSection({ events, isActive }: Props) {
                 );
               })()}
               <div style={{ maxWidth: msg.role === "user" ? "72%" : "85%", display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: 3 }}>
-                {/* Sender label for first device message or after user message */}
                 {msg.role === "agent" && (i === 0 || messages[i - 1]?.role === "user") && (
                   <span style={{ fontSize: 11, color: "var(--lm-amber)", fontWeight: 600, letterSpacing: "0.01em", paddingLeft: 4 }}>Assistant</span>
                 )}
-                {/* Thinking indicator — shown only for the active pending message */}
                 {msg.pending && msg.role === "agent" && msg.runId === pendingRunIdRef.current && thinkingText && (
                   <ThinkingBlock text={thinkingText} />
                 )}
-                {/* Tool call chips — live during pending, persisted after finalize.
-                    Click a chip to expand its args/result panel. */}
                 {msg.role === "agent" && (() => {
                   const isActivePending = !!msg.pending && msg.runId === pendingRunIdRef.current;
                   const chips = isActivePending ? toolChips : msg.tools;
@@ -2420,12 +2080,8 @@ export function ChatSection({ events, isActive }: Props) {
                       }} />
                     </>
                   ) : msg.role === "agent" ? renderMarkdown(msg.text) : linkifyPlain(msg.text, msg.id)}
-                  {/* Device paths the agent named become viewable attachments.
-                      Only once the turn is done — a path half-streamed would
-                      render as a broken one and then re-mount. */}
                   {msg.role === "agent" && !msg.pending && <AgentFiles text={msg.text} tools={msg.tools} />}
                 </div>
-                {/* Action bar: time + copy + retry */}
                 <div style={{ display: "flex", alignItems: "center", gap: 6, paddingInline: 4 }}>
                   <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>{msg.time}</span>
                   {!msg.pending && msg.text && msg.text !== "…" && (
@@ -2469,7 +2125,6 @@ export function ChatSection({ events, isActive }: Props) {
           </div>
         </div>
 
-        {/* Scroll to bottom */}
         {showScrollBtn && (
           <button
             onClick={scrollToBottom}
@@ -2486,11 +2141,6 @@ export function ChatSection({ events, isActive }: Props) {
           ><ArrowDown size={16} /></button>
         )}
 
-        {/* Input — ChatGPT-style pill. File preview lives INSIDE the pill (top
-            slot) so the attach state is visually part of the input, not a
-            separate banner. Centered with max-width like the messages column.
-            flexShrink:0 pins the composer so it can never be squeezed/clipped by
-            the scroll area above it. */}
         <div  id="CHAT_BOX" style={{
           flexShrink: 0,
           padding: "10px 16px 12px",
@@ -2510,10 +2160,6 @@ export function ChatSection({ events, isActive }: Props) {
                 boxShadow: "0 1px 2px rgba(0,0,0,0.18), 0 8px 24px -16px rgba(0,0,0,0.5)",
                 transition: "border-color 0.15s, box-shadow 0.15s",
               }}>
-              {/* Staged attachments inside the pill — one chip per file, each
-                  removable on its own so a wrong pick in a multi-select does not
-                  force clearing the whole set. Wraps rather than scrolls: the
-                  count is capped at MAX_ATTACHMENTS, so it stays a few rows. */}
               {attachments.length > 0 && (
                 <div style={{ display: "flex", flexWrap: "wrap", gap: 6, margin: "0 2px 4px" }}>
                   {attachments.map((att) => (
@@ -2574,10 +2220,6 @@ export function ChatSection({ events, isActive }: Props) {
                   requestAnimationFrame(() => textareaRef.current?.focus());
                 }}
                 onScheduledAction={(action) => {
-                  // Scheduled tasks live in Settings, so the composer hands the
-                  // user off there rather than growing a second editor here.
-                  // "new" carries ?new=1 so the section opens with the create
-                  // form already open — one click from chat to typing a task.
                   navigate(action === "new" ? "/setting?new=1#scheduled" : "/setting#scheduled");
                 }}
               />
@@ -2633,11 +2275,6 @@ export function ChatSection({ events, isActive }: Props) {
         </div>
       </div>
 
-      {/* Skills surfaces opened from the composer's "+" menu. Portalled from
-          inside each modal, so mounting them here doesn't affect chat layout. */}
-      {/* Full-size viewer — click anywhere (or Esc via the backdrop click) to
-          close. Same shape as FlowSection's snapshot lightbox so the two feel
-          like one control. */}
       {lightboxUrl && (
         <div
           onClick={() => setLightboxUrl(null)}
@@ -2671,10 +2308,7 @@ export function ChatSection({ events, isActive }: Props) {
   );
 }
 
-// ─── Usage Badge ─────────────────────────────────────────────────────────────
-
-// Claude 4.x context window — used to derive a "% ctx" indicator. If you
-// switch models you can bump this constant or fetch it from openclaw config.
+// Assumed context window for the "% ctx" indicator.
 const CONTEXT_WINDOW = 200_000;
 
 function formatTokens(n: number): string {
@@ -2683,8 +2317,7 @@ function formatTokens(n: number): string {
   return k >= 100 ? `${k.toFixed(0)}k` : `${k.toFixed(1)}k`;
 }
 
-// Compact one-line usage strip under each device message — mirrors the style
-// of agent CLIs: ↑input  ↓output  R<cacheRead>  N% ctx  model.
+// Compact one-line usage strip under each device message
 function UsageBadge({ usage, model }: { usage: NonNullable<ChatMessage["tokenUsage"]>; model?: string }) {
   const ctxPct = usage.total > 0 ? Math.min(100, (usage.total / CONTEXT_WINDOW) * 100) : 0;
   return (
@@ -2719,12 +2352,7 @@ function UsageBadge({ usage, model }: { usage: NonNullable<ChatMessage["tokenUsa
   );
 }
 
-// ─── Tool Chip group ─────────────────────────────────────────────────────────
-
-// Collapses a run's tool calls into a single tidy summary row ("🔧 N steps")
-// so the conversation reads like a product, not a debug log. A single tool
-// renders as its own chip directly (no point hiding one behind a summary).
-// Click the summary to fan the individual chips open.
+// Collapses a run's tool calls into one summary row; a single tool renders as its own chip.
 function ToolChipGroup({ chips, live }: { chips: ToolChip[]; live: boolean }) {
   const [open, setOpen] = useState(false);
 
@@ -2737,7 +2365,6 @@ function ToolChipGroup({ chips, live }: { chips: ToolChip[]; live: boolean }) {
   }
 
   const accent = "var(--lm-teal)";
-  // Up to 4 distinct icons, stacked, as a glanceable preview of what ran.
   const previewIcons: ToolChip[] = [];
   const seen = new Set<string>();
   for (const c of chips) {
@@ -2759,7 +2386,6 @@ function ToolChipGroup({ chips, live }: { chips: ToolChip[]; live: boolean }) {
         }}
         title={open ? "Hide steps" : "Show steps"}
       >
-        {/* Stacked tool icons */}
         <span style={{ display: "inline-flex", alignItems: "center" }}>
           {previewIcons.map((c, idx) => (
             <span key={c.id} style={{
@@ -2797,10 +2423,7 @@ function ToolChipGroup({ chips, live }: { chips: ToolChip[]; live: boolean }) {
   );
 }
 
-// ─── Tool Chip ───────────────────────────────────────────────────────────────
-
-// Collapsed: pill with icon, name, and a one-line headline (truncated query).
-// Expanded: also shows the full args block (JSON) plus a completion marker.
+// Tool chip: collapsed headline, expandable to the full args.
 function ToolChipView({ chip }: { chip: ToolChip }) {
   const [open, setOpen] = useState(false);
   const hasDetail = chip.args || chip.detail || chip.result;
@@ -2897,8 +2520,6 @@ function ToolChipView({ chip }: { chip: ToolChip }) {
   );
 }
 
-// ─── Thinking Block ──────────────────────────────────────────────────────────
-
 function ThinkingBlock({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
   const preview = text.length > 80 ? text.slice(0, 80) + "…" : text;
@@ -2944,8 +2565,6 @@ function ThinkingBlock({ text }: { text: string }) {
   );
 }
 
-// ─── Helpers ──────────────────────────────────────────────────────────────────
-
 function formatDateLabel(dateStr: string): string {
   const d = new Date(dateStr + "T00:00:00");
   const now = new Date();
@@ -2956,10 +2575,7 @@ function formatDateLabel(dateStr: string): string {
   return d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
 }
 
-// Compact relative timestamp for a conversation row ("now", "5m", "2h",
-// "yesterday", "3d"). Localized via the passed-in t(); `now` is injected so the
-// value stays stable within a render (Date.now() is banned in some contexts and
-// jitter here would be noise). Falls back to an absolute date past a week.
+// Compact relative timestamp ("now", "5m", "2h", "yesterday", "3d"); `now` keeps it stable within a render.
 function relativeTime(ts: number, now: number, t: (k: string, p?: Record<string, string | number>) => string): string {
   const sec = Math.max(0, Math.floor((now - ts) / 1000));
   if (sec < 60) return t("chat.time.now");
@@ -2973,9 +2589,6 @@ function relativeTime(ts: number, now: number, t: (k: string, p?: Record<string,
   return new Date(ts).toLocaleDateString(undefined, { month: "short", day: "numeric" });
 }
 
-// Deterministic accent colour for a conversation's avatar dot, derived from its
-// id so the same chat always gets the same hue. Drawn from the theme's existing
-// accent tokens so it stays on-palette (no random rainbow).
 const CONVO_DOT_COLORS = [
   "var(--lm-amber)", "var(--lm-teal)", "var(--lm-green)",
   "var(--lm-blue)", "var(--lm-purple)", "var(--lm-orange)",
@@ -2992,7 +2605,6 @@ function groupConvosByDate(convos: Conversation[]): { label: string; items: Conv
   const yesterday = today - 86400_000;
   const weekAgo = today - 7 * 86400_000;
 
-  // Pinned first
   const pinned = newestFirst(convos.filter((c) => c.pinned));
   const unpinned = newestFirst(convos.filter((c) => !c.pinned));
 

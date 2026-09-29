@@ -9,16 +9,12 @@ import (
 	"go.autonomous.ai/os/system/lib/runtimereg"
 )
 
-// embeddedInstallerDir is where os-server materializes binary-embedded backend
-// installers. switch_runtime.sh looks here FIRST (before the CDN fallback), so
-// any backend compiled into os-server installs fully offline. Keep this path in
-// sync with switch_runtime.sh.
+// embeddedInstallerDir holds embedded backend installers; switch_runtime.sh
+// checks it before the CDN. Keep in sync with switch_runtime.sh.
 const embeddedInstallerDir = "/usr/local/lib/os-runtimes"
 
-// materializeInstaller writes the target runtime's embedded installer (registered
-// by its backend package via runtimereg) to embeddedInstallerDir/<runtime>/install.sh.
-// Idempotent — a no-op once the on-disk copy matches. Runtimes with no embedded
-// installer return nil; switch_runtime.sh then fetches them from the CDN.
+// materializeInstaller writes the runtime's embedded installer to
+// embeddedInstallerDir/<runtime>/install.sh (idempotent; nil if none embedded).
 func materializeInstaller(runtime string) error {
 	script, ok := runtimereg.Get(runtime)
 	if !ok {
@@ -44,16 +40,9 @@ func presyncHookPath(runtime string) string {
 	return filepath.Join("/usr/local/bin", "runtime-"+runtime+"-presync")
 }
 
-// materializePresync writes the target runtime's embedded pre-start hook (registered
-// via runtimereg) to /usr/local/bin/runtime-<runtime>-presync. Idempotent — a no-op
-// once the on-disk copy matches. Runtimes that ship no embedded presync return nil
-// (the hook is then whatever their installer wrote, if any).
-//
-// Doing this from os-server — rather than letting install.sh write the hook — is what
-// makes a plain os-server OTA refresh the hook on disk: install.sh only re-runs on a
-// first install or a failed verify, so a config fix shipped only inside it would never
-// reach an already-installed backend. The hermes hook owns config.yaml's model wiring,
-// so refreshing it here lets that self-heal on the very next switch.
+// materializePresync writes the runtime's embedded pre-start hook to
+// /usr/local/bin/runtime-<runtime>-presync (idempotent; nil if none embedded).
+// Done here, not in install.sh, so an os-server OTA refreshes the hook on disk.
 func materializePresync(runtime string) error {
 	script, ok := runtimereg.GetPresync(runtime)
 	if !ok {

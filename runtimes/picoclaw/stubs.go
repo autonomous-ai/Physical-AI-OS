@@ -10,15 +10,10 @@ import (
 	"go.autonomous.ai/os/system/domain"
 )
 
-// AddChannel + RefreshChannelConfig + SupportedChannels live in channels.go —
-// PicoClaw runs telegram only (device-owned receive loop); slack/discord/whatsapp
-// return domain.ErrChannelNotSupported.
-
 func (s *PicoclawService) HasWhatsappSession(_ string) bool { return false }
 
 // PairWhatsapp — WhatsApp pairing requires a Baileys-style plugin which lives
-// only in OpenClaw. Returns a one-shot failure event so the caller's drain loop
-// exits cleanly.
+// only in OpenClaw.
 func (s *PicoclawService) PairWhatsapp(_ context.Context) <-chan domain.PairingEvent {
 	ch := make(chan domain.PairingEvent, 1)
 	ch <- domain.PairingEvent{
@@ -29,13 +24,8 @@ func (s *PicoclawService) PairWhatsapp(_ context.Context) <-chan domain.PairingE
 	return ch
 }
 
-// ResetAgent lives in reset.go — PicoClaw's factory-reset wipe (stop+disable
-// gateway → rm -rf /root/.picoclaw → picoclaw onboard), so it does real work.
-
 // RestartAgent restarts the picoclaw gateway via systemctl so callers that need a
-// full gateway reload (config/workspace re-read) get it. Delegates to
-// restartPicoclawGateway (service_gateway.go), which no-ops gracefully when
-// systemctl is unavailable (non-root / dev box).
+// full gateway reload (config/workspace re-read) get it.
 func (s *PicoclawService) RestartAgent() error {
 	slog.Info("RestartAgent: restarting picoclaw gateway", "component", "picoclaw")
 	return restartPicoclawGateway()
@@ -49,19 +39,18 @@ func (s *PicoclawService) RefreshModelsConfig() error {
 
 // EnsureOnboarding lives in onboarding.go — it keeps the OS-managed block in the
 // workspace AGENTS.md current (the rest of provisioning is owned by install.sh /
-// presync.sh). Kept out of this stub file because it does real work.
+// presync.sh).
 
 // FetchChatHistory — PicoClaw history is server-side and we don't walk it.
-// Returns empty so callers degrade gracefully (also keeps the read loop's
-// synchronous dispatch deadlock-free since the handler never blocks on a WS RPC).
+// Returns empty so callers degrade gracefully (also keeps the read loop's synchronous dispatch
+// deadlock-free since the handler never blocks on a WS RPC).
 func (s *PicoclawService) FetchChatHistory(_ string, _ int) (json.RawMessage, error) {
 	return nil, nil
 }
 
 // GetConfigJSON returns the raw bytes of PicoClaw's config.json (the structure
 // file: agents/model_list/gateway/channel_list/tools — secrets live in .security.yml,
-// which we never expose). Read-only; feeds the gw-config debug UI. Path helper +
-// MCP writers live in mcp.go.
+// which we never expose).
 func (s *PicoclawService) GetConfigJSON() (json.RawMessage, error) {
 	data, err := os.ReadFile(picoclawConfigPath())
 	if err != nil {
@@ -70,14 +59,7 @@ func (s *PicoclawService) GetConfigJSON() (json.RawMessage, error) {
 	return json.RawMessage(data), nil
 }
 
-// WatchIdentity + UpdateIdentityName live in identity.go — PicoClaw's IDENTITY.md
-// is a 1-for-1 copy of OpenClaw's (same format), so it watches/rewrites the
-// `**Name:**` card line just like OpenClaw does.
-
-// StartSkillWatcher lives in skill_watcher.go — it polls OTA metadata and
-// auto-updates workspace skills from the CDN (capability-gated), mirroring openclaw.
-
-// StartModelSync — model registry is owned by PicoClaw. No-op.
+// StartModelSync — model registry is owned by PicoClaw.
 func (s *PicoclawService) StartModelSync(ctx context.Context) {
 	<-ctx.Done()
 }
@@ -94,7 +76,6 @@ func (s *PicoclawService) StartPrimaryModelWatch(ctx context.Context) {
 }
 
 // GetConfiguredChannel — Device config is the source of truth under PicoClaw.
-// Returns "telegram" when a bot token is set, otherwise the generic label.
 func (s *PicoclawService) GetConfiguredChannel() string {
 	if s.config.TelegramBotToken != "" {
 		return "telegram"
@@ -120,13 +101,9 @@ func (s *PicoclawService) ShouldRotateSession(totalTokens, _ int) bool {
 	return totalTokens > picoclawFallbackTokenThreshold
 }
 
-// NewSession — PicoClaw has no sessions.new RPC. Dropping the local session id
-// makes the next turn start a fresh server-side session.
+// NewSession — PicoClaw has no sessions.new RPC.
 func (s *PicoclawService) NewSession(sessionKey string) error {
 	slog.Info("NewSession: clearing session (picoclaw backend)", "component", "picoclaw", "key", sessionKey)
 	s.sessionUUID.Store("")
 	return nil
 }
-
-// WriteMCPEntry + RemoveMCPEntry live in mcp.go — PicoClaw writes tools.mcp.servers
-// in config.json (nested, gated by tools.mcp.enabled), so they do real work.

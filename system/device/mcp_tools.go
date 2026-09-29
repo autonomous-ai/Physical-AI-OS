@@ -37,21 +37,18 @@ func (s *Service) AddMCPTool(tool config.MCPTool) error {
 		return fmt.Errorf("mcp tool name and url are required")
 	}
 
-	// Check for duplicate name.
 	for _, t := range s.config.MCPTools {
 		if t.Name == tool.Name {
 			return fmt.Errorf("mcp tool %q already exists", tool.Name)
 		}
 	}
 
-	// Persist to config.json.
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		c.MCPTools = append(c.MCPTools, tool)
 	}); err != nil {
 		return fmt.Errorf("save mcp tool: %w", err)
 	}
 
-	// Write to runtime config → gateway restart.
 	if err := s.agentGateway.WriteMCPEntry(mcpToolServerName(tool.Name), mcpToolEntry(tool.URL, tool.Headers)); err != nil {
 		slog.Warn("[mcp-tools] write entry failed (config saved, gateway not updated)",
 			"component", "device", "tool", tool.Name, "err", err)
@@ -87,7 +84,6 @@ func (s *Service) RemoveMCPTool(name string) error {
 		return fmt.Errorf("mcp tool %q not found", name)
 	}
 
-	// Remove from openclaw.json.
 	if _, err := s.agentGateway.RemoveMCPEntry(mcpToolServerName(name)); err != nil {
 		slog.Warn("[mcp-tools] remove entry failed", "component", "device", "tool", name, "err", err)
 	}

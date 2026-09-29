@@ -15,25 +15,16 @@ import (
 	"go.autonomous.ai/os/system/lib/syspath"
 )
 
-// Coding-session (codex thread) discovery for the Telegram remote-coding
-// feature. The codex CLI stores every session as a "rollout" JSONL transcript
-// under ~/.codex/sessions/YYYY/MM/DD/rollout-<ts>-<uuid>.jsonl (root ⇒
-// /root/.codex/sessions). The first line is a `session_meta` record carrying
-// the thread id (`payload.id`) and the working dir (`payload.cwd`). Unlike
-// claude, codex resumes by thread id GLOBALLY — `codex exec --cd <dir> resume
-// <id>` sets the cwd independently and does NOT require it to match the
-// original (device-verified: resuming an old thread echoes its id back). This
-// file lists resumable threads so Telegram can continue any of them
-// (telegram_coding.go).
+// Unlike claude, codex resumes by thread id GLOBALLY — `codex exec --cd <dir> resume <id>` sets
+// the cwd independently and does NOT require it to match the original (device-verified: resuming an
+// old thread echoes its id back).
 
-// codexSessionsDirDefault is the on-device rollout store. Overridable via the
-// codexSessionsDirPath test seam.
+// codexSessionsDirDefault is the on-device rollout store.
 var codexSessionsDirDefault = codexHome + "/sessions"
 
 const (
 	// rolloutMetaScanLimit bounds how many bytes of a rollout are read while
-	// recovering its thread id / cwd / recent prompts. Generous so the tail
-	// (recent prompts) is reached for normal-sized rollouts.
+	// recovering its thread id / cwd / recent prompts.
 	rolloutMetaScanLimit = 4 * 1024 * 1024
 
 	// recentPromptsMax is how many recent user prompts a listing shows per
@@ -67,14 +58,13 @@ func (s *CodexService) codexSessionsDir() string {
 
 // allCodingSessions returns every discovered thread, most-recently-modified
 // first, deduped by thread id (codex may write more than one rollout file for a
-// resumed thread — keep the newest). Rollouts whose thread id or cwd can't be
-// recovered are skipped.
+// resumed thread — keep the newest).
 func (s *CodexService) allCodingSessions() []codingSession {
 	root := s.codexSessionsDir()
 	byThread := map[string]codingSession{}
 	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
-			return nil // unreadable subtree — skip, keep walking
+			return nil
 		}
 		if d.IsDir() || !strings.HasPrefix(d.Name(), "rollout-") || !strings.HasSuffix(d.Name(), ".jsonl") {
 			return nil
@@ -112,7 +102,7 @@ func (s *CodexService) codingFolders() []codingSession {
 	all := s.allCodingSessions()
 	seen := map[string]bool{}
 	var out []codingSession
-	for _, cs := range all { // already newest-first, so the first hit per folder wins
+	for _, cs := range all {
 		if seen[cs.Folder] {
 			continue
 		}
@@ -144,10 +134,7 @@ func (s *CodexService) latestSessionForFolder(folder string) (codingSession, boo
 }
 
 // readRolloutMeta recovers a rollout's thread id, cwd and the recent user
-// prompts. The thread id + cwd come from the first `session_meta` record; the
-// prompts are the last recentPromptsMax real user messages (synthetic
-// <environment_context> blocks skipped), most-recent first. Reads at most
-// rolloutMetaScanLimit bytes.
+// prompts.
 func readRolloutMeta(path string) (threadID, folder string, recent []string) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -185,7 +172,7 @@ func readRolloutMeta(path string) (threadID, folder string, recent []string) {
 
 // rolloutUserText returns the text of a response_item ONLY when it is a user
 // message (role == "user"), whose content is an array of {type:input_text,text}
-// blocks. Non-user items (developer/assistant/tool) yield "".
+// blocks.
 func rolloutUserText(raw json.RawMessage) string {
 	var p struct {
 		Type    string `json:"type"`
@@ -257,8 +244,7 @@ func oneLine(s string) string {
 
 // isInjectedContext reports whether a "user" message is actually a synthetic
 // context block the CLI prepends before the real prompt (environment info,
-// system reminders, IDE/command wrappers) — not something the human typed. Used
-// to skip it when picking a session summary.
+// system reminders, IDE/command wrappers) — not something the human typed.
 func isInjectedContext(s string) bool {
 	t := strings.TrimSpace(s)
 	if t == "" {

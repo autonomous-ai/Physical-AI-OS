@@ -34,13 +34,13 @@ class HomePeer:
         self.close_reasons = []
         self.positions = {"pan": 0.6, "tilt": 2.5}
         self.arrival = {"pan": 0.6, "tilt": 7.8}
-        self.arrivals = None  # optional list consumed per motion.move_home
+        self.arrivals = None
         self.post_hold_positions = None
         self.motion_started = threading.Event()
         self.result_override = None
         self.after_read = None
         self.lease_active = False
-        self.fail_move_number = None  # raise on the Nth motion.move_home
+        self.fail_move_number = None
         self.move_count = 0
 
     def request(self, message, timeout):
@@ -163,7 +163,6 @@ class TestHomeCommissioning(unittest.TestCase):
         for value in cases:
             with self.subTest(value=value):
                 svc, peer = service(enabled=True)
-                # None is tested as a non-object result, not the fixture's no-override sentinel.
                 peer.result_override = [] if value is None else value
                 with self.assertRaises(StackChanTransportError):
                     svc.move_home({"tilt": 8.0})
@@ -352,7 +351,6 @@ class TestHomeCommissioning(unittest.TestCase):
     def test_no_recommand_when_the_head_did_not_move(self):
         svc, peer = service(enabled=True)
         peer.arrivals = [{"pan": 0.6, "tilt": 2.5}]
-        # Below the hold floor the halt itself is rejected; either way, no second move.
         with self.assertRaises(StackChanTransportError):
             svc.move_home({"tilt": 8}, 2)
         self.assertEqual([m["op"] for m in peer.commands].count("motion.move_home"), 1)
@@ -369,7 +367,6 @@ class TestHomeCommissioning(unittest.TestCase):
         peer.arrivals = [{"pan": 0.6, "tilt": 6.0}]
 
         def wobble():
-            # Still oscillating around 6.5: never stable, never within tolerance.
             if peer.motion_started.is_set():
                 tilt = 6.8 if peer.positions["tilt"] <= 6.5 else 6.2
                 peer.positions = {"pan": 0.6, "tilt": tilt}

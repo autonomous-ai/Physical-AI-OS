@@ -131,20 +131,26 @@ portal AP-mode và chuyển đổi STA-mode của Autonomous. Chi tiết:
 | `/etc/dhcpcd.conf` | **Sửa** (xóa block `interface wlan0` cũ, thêm block AP mới) | Một phần — block gốc không được backup |
 | `wpa_supplicant.service` (toàn cục) | **Bị mask** (chỉ dùng instance `wpa_supplicant@wlan0`) | Có — `systemctl unmask wpa_supplicant` |
 
-### Đánh Giá Rủi Ro
+### Đánh Giá Rủi Ro (đã chốt: Pollen OS dùng NetworkManager)
 
-- **Nếu Pollen OS dùng `dhcpcd` + `wpa_supplicant`** (stack Raspberry Pi OS
-  classic): setup.sh được thiết kế cho stack này. WiFi sẽ hoạt động, AP mode sẽ
-  hoạt động, và các script `device-sta-mode` / `device-ap-mode` xử lý chuyển
-  đổi. Rủi ro thấp.
+Recon ngày 2026-07-29 ([first-boot-plan_vi.md §1.2](first-boot-plan_vi.md)) cho
+thấy `NetworkManager` **đang chạy**, `wpa_supplicant` đang chạy và `dhcpcd` tắt,
+kèm hai profile NM của Pollen là `Glinks` (STA) và `Hotspot` (AP). Vì vậy trường
+hợp NetworkManager là trường hợp áp dụng cho thiết bị thật:
 
-- **Nếu Pollen OS dùng `NetworkManager`** (mặc định Bookworm mới): setup.sh sẽ
-  dừng và vô hiệu hóa NetworkManager. Điều này phá vỡ quản lý WiFi của Pollen.
-  Robot có thể mất kết nối mạng cho đến khi hoàn tất Autonomous setup flow hoặc
-  bật lại NetworkManager thủ công. **Kiểm tra stack nào Pollen dùng trước khi
-  chạy setup.sh trên thiết bị thật.**
+> **Cảnh báo:** `scripts/provision/setup.sh` dùng chung hiện chưa có nhánh
+> NetworkManager cho Reachy. Script nhắm vào stack dhcpcd + wpa_supplicant và
+> bước chuyển AP-mode chạy `systemctl stop NetworkManager`. Điều này phá vỡ quản
+> lý WiFi của Pollen; robot có thể mất kết nối mạng cho đến khi hoàn tất
+> Autonomous setup flow hoặc bật lại NetworkManager thủ công. **Không chạy
+> `setup.sh` trên Reachy Mini** cho đến khi có nhánh dựa trên `nmcli`. Cách
+> bring-up được hỗ trợ hiện nay là `robots/reachy-mini/install.sh` (→ `spike.sh`),
+> cài song song với Pollen và không đụng tới network stack.
 
-### Cách Kiểm Tra (Trước Khi Chạy setup.sh)
+Bảng trên mô tả stack dhcpcd mà `setup.sh` giả định; giữ lại để tham khảo và để
+khôi phục máy lỡ đã chạy script này.
+
+### Cách Kiểm Tra Lại
 
 ```bash
 ssh pollen@reachy-mini.local

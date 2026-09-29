@@ -1,41 +1,8 @@
-"""Voice metrics measurement — observations only, no behaviour change.
+"""Voice metrics measurement: observations only, no behaviour change.
 
-Acknowledgement and audio observations, timed on HAL:
-
-  the response metric  Was the user's voice command acknowledged within
-         ``ACK_DEADLINE_MS`` of the detected end of their speech?
-  the stale-reply metric  Did an outdated reply actually get played after a suppression
-         boundary (an explicit stop, or the realtime agent answering a newer
-         question)?
-
-Both targets (3 s / ≥95 % / <5 %) are **provisional**: every raw duration is
-stored, so thresholds can be re-decided from the data instead of by
-re-instrumenting devices.
-
-KPI-3 reuses the utterance cohort with independent task eligibility and joins
-explicit execution terminals from realtime or os-server. It measures finished
-execution without observed terminal errors, not answer correctness. See
-``docs/voice-metrics.md`` for the reporting horizon and the 85% target.
-
-Design rules that decide whether a number is trustworthy:
-
-* **Explicit acknowledgement evidence.** Schema 2 accepts either owned audio
-  actually written to the stream or an OS receipt accepting this user task.
-  Queued TTS, a model delegate tool alone and history sync are not receipts.
-  First-audio latency stays separate; a stream write is not acoustic onset.
-* **Explicit ownership.** Every playback carries the owner that claimed the
-  speaker (``run:<turn_id>`` or ``interaction:<id>``). Audio with **no** owner
-  is recorded as ``unknown`` and never counted as an acknowledgement — a
-  guess is how an old filler gets credited to a new command.
-* **Monotonic, one process.** Every elapsed time is a difference of two
-  ``time.monotonic()`` reads inside HAL. os-server's clock is never
-  subtracted from HAL's.
-* **A detected endpoint, not the acoustic truth.** ``speech_end_method``
-  records how the endpoint was decided, and the clock starts at that
-  detection — before transcript assembly, not after it.
-* **Incomplete is not success.** A suppression whose window closes while the
-  suppressed turns are still alive reports ``observation_complete = false``,
-  not "no stale reply".
+Tracks the response (ack) metric, the stale-reply metric and task execution (KPI-3).
+All elapsed times are HAL time.monotonic() differences; unowned audio never counts as an ack.
+See docs/voice-metrics.md.
 """
 
 import logging
@@ -47,36 +14,21 @@ from hal.telemetry import client
 
 logger = logging.getLogger("hal.telemetry")
 
-# --- metrics thresholds (provisional) -------------------------------------------
 ACK_DEADLINE_MS = 3000
-# Keep watching past the target so a LATE ack is reported with its real
-# latency instead of collapsing into "no ack at all".
+# Watch past the target so a late ack keeps its real latency.
 ACK_OBSERVE_WINDOW_MS = 10000
 
-# Playback does not stop the instant a boundary is stamped: TTSService.stop()
-# sets an event and wakes the drain loops, and the worker still has to release
-# the lock (device-observed on lamp-0c89: up to ~4s in the pathological case
-# the wake-the-queues fix was written for; sub-second normally). Audio inside
-# this grace is not counted as stale — but stop_to_silence_ms and every
-# playback interval are recorded raw, so the choice stays auditable.
+# Grace after a boundary before audio counts as stale (stop can take up to ~4s to drain).
 STALE_GRACE_MS = 2000
-# How long a suppression is watched. A main-agent reply can arrive tens of
-# seconds after the boundary, so this is deliberately long; when it expires
-# with suppressed turns still alive the event says so instead of passing.
+# A main-agent reply can arrive tens of seconds after the boundary.
 SUPPRESSION_OBSERVE_MS = 60000
 
-# How long a turn is assumed to still be ABLE to speak. Separate from the
-# acknowledgement window on purpose: reporting the the response metric verdict after 10s
-# does not mean the main agent finished — it can answer much later, and a
-# stop pressed at second 12 must still find the turn alive. The clock is
-# refreshed by any playback that turn produces, so a turn that keeps talking
-# keeps counting as active.
+# How long a turn can still speak; refreshed by every playback it produces.
 TURN_ACTIVE_TTL_MS = 45000
 
 EVENT_INTERACTION = "voice_metrics_interaction"
 EVENT_SUPPRESSION = "voice_metrics_suppression"
 
-# --- Playback kinds (what was heard) ---------------------------------------
 ACK_SCHEMA_VERSION = 2
 KIND_DELEGATE_ACCEPTED = "delegate_accepted"
 KIND_LOCAL_ACCEPTED = "local_accepted"
@@ -88,10 +40,7 @@ KIND_WAITING_AUDIO = "waiting_audio"      # filler / "one moment"
 KIND_SYSTEM_AUDIO = "system_audio"        # OS notice, cached phrase, greeting
 KIND_UNKNOWN = "unknown"                  # nobody claimed this playback
 
-# Acknowledgement modality per kind — the user-perceivable receipt signal.
-# All AUDIO. Visual feedback (the listening LED) is NOT counted: its real
-# activation is not instrumented, and counting it unmeasured would overstate
-# the response metric.
+# Audio only: the listening LED is not instrumented, so it is not counted.
 _ACK_MODALITY = {
     KIND_AGENT_REPLY: "spoken_answer",
     KIND_NATIVE_REALTIME: "spoken_answer_realtime",
@@ -100,12 +49,8 @@ _ACK_MODALITY = {
     KIND_SYSTEM_AUDIO: "acknowledgement_audio",
 }
 
-# Which playback kinds are the ANSWER rather than a receipt. Waiting audio and
-# system phrases tell the user they were heard; these kinds tell them what
-# the device actually has to say.
 _ANSWER_KINDS = (KIND_AGENT_REPLY, KIND_NATIVE_REALTIME, KIND_REALTIME_TTS)
 
-# --- Outcomes ---------------------------------------------------------------
 OUTCOME_ACKED = "acknowledged"
 OUTCOME_NO_ACK = "no_ack"
 OUTCOME_EXCLUDED = "excluded"
@@ -116,9 +61,7 @@ EXCL_NO_TRANSCRIPT = "no_transcript"
 EXCL_NOT_ADDRESSED = "not_addressed"
 EXCL_SPEAKER_MUTED = "speaker_muted"
 EXCL_INTERRUPTED = "interrupted_by_user"
-# NOT an exclusion: the request was valid, the device simply failed to serve
-# it. Recorded as a failure reason on an ELIGIBLE interaction — dropping it
-# would inflate the success rate with exactly the cases that hurt the user.
+# Not an exclusion: stays eligible so the failure is counted.
 FAIL_DISPATCH_FAILED = "dispatch_failed"
 
 BOUNDARY_EXPLICIT_STOP = "explicit_stop"
@@ -161,30 +104,19 @@ class _Interaction:
         self.speaker_muted = False
         self.ack_modality = ""
         self.ack_kind = ""
-        # When the ANSWER itself was heard, as opposed to the receipt. A
-        # filler counts as an acknowledgement (a deliberate decision, see
-        # docs/voice-metrics.md), so ack_latency_ms alone cannot say how long
-        # the user waited for the actual reply — this can.
+        # When the answer itself was heard (fillers count as acks, not answers).
         self.answer_latency_ms = None
         self.answer_played_at = None
         self.answer_kind = ""
         self.exclusion_reason = ""
-        # A failure that is NOT an exclusion: the request was valid and went
-        # unserved. Stays in the denominator (see _interaction_params).
         self.failure_reason = ""
         self.reported = False
         self.report_event_id = ""
         self.timer = None       # the response metric verdict deadline
         self.life_timer = None  # turn-lifetime deadline
-        # `closed` means "can no longer speak" — NOT "already reported".
-        # Reporting the acknowledgement verdict must not retire a turn the
-        # main agent is still working on, or a later stop finds nothing to
-        # suppress.
+        # `closed` means "can no longer speak", not "already reported".
         self.closed = False
-        # Set by an explicit stop that covered this turn. Audio owned by a
-        # suppressed turn is refused at TTS admission (see is_suppressed):
-        # the user asked for silence, and a reply or filler that lands tens
-        # of seconds later must not undo that.
+        # Audio of a suppressed turn is refused at TTS admission (see is_suppressed).
         self.suppressed = False
         self.last_activity = speech_end
 
@@ -194,8 +126,7 @@ _interactions: "dict[str, _Interaction]" = {}
 _order: "list[str]" = []
 _by_run: "dict[str, str]" = {}
 _watchers: "list[dict]" = []
-# The playback currently on the speaker: dict(kind, owner, interaction_id,
-# started, ended). One at a time — the TTS service holds a single lock.
+# One at a time: the TTS service holds a single lock.
 _playing = None
 _unknown_owner_playbacks = 0
 
@@ -208,19 +139,11 @@ def _ms(seconds: float) -> int:
     return int(round(seconds * 1000))
 
 
-# --- Capture boundary -------------------------------------------------------
-
 def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
                mode: str = "turn") -> str:
-    """Register the detected end of a user utterance. Returns its id.
+    """Register the detected end of a user utterance and return its id.
 
-    ``at`` is the monotonic timestamp of the detection itself (when the
-    silence clock fired / the session was cut). Pass it so transcript
-    assembly, trimming and speaker-ID do not inflate every latency. Defaults
-    to now for callers that have no earlier stamp.
-
-    ``method``: ``silence_clock``, ``stt_final``, ``tts_started``,
-    ``music_started``, ``max_duration``, ``stt_error``.
+    ``at`` is the monotonic detection time (defaults to now); ``method`` e.g. ``silence_clock``, ``stt_final``.
     """
     if mode == "live" and not _valid_endpoint(at):
         endpoint_known = False
@@ -235,9 +158,7 @@ def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
         evicted = []
         while len(_order) > _MAX_TRACKED:
             oldest = _order[0]
-            # Report before forgetting: an evicted interaction that never had
-            # its verdict sent would otherwise vanish from the metrics entirely,
-            # which is the one thing this module must never do.
+            # Report before forgetting so an evicted interaction never vanishes.
             if not _interactions[oldest].reported:
                 _interactions[oldest].report_event_id = "int-" + oldest
                 evicted.append(_interaction_params(_interactions[oldest]))
@@ -259,8 +180,7 @@ def speech_end(method: str, at: float = 0.0, *, endpoint_known: bool = True,
 
 
 def _arm_lifetime(it: "_Interaction") -> None:
-    """(Re)start the turn-lifetime clock. Any playback the turn produces is
-    proof it is still alive, so the clock restarts from that moment."""
+    """(Re)start the turn-lifetime clock."""
     if it.life_timer is not None:
         it.life_timer.cancel()
     it.life_timer = threading.Timer(TURN_ACTIVE_TTL_MS / 1000.0, _retire_interaction, args=(it.id,))
@@ -269,14 +189,7 @@ def _arm_lifetime(it: "_Interaction") -> None:
 
 
 def _retire_interaction(iid: str) -> None:
-    """The turn has been silent for TURN_ACTIVE_TTL_MS: assume it can no
-    longer speak. Only then does it leave the suppression denominator.
-
-    A turn whose audio is STILL PLAYING is not silent, however long it has
-    been running — the TTL restarts on the first frame of a playback, so a
-    single long answer would otherwise time out mid-sentence and a stop
-    pressed at second 46 would find nothing to suppress.
-    """
+    """Retire a turn silent for TURN_ACTIVE_TTL_MS (a still-playing turn is never silent)."""
     with _lock:
         it = _interactions.get(iid)
         if it is None:
@@ -314,13 +227,7 @@ def provider_interaction(provider_turn_id: str) -> str:
 
 
 def current_interaction() -> str:
-    """The utterance currently being served, or "" if none is open.
-
-    For audio that os-server starts on HAL's behalf (the look-aim's filler)
-    and therefore has no turn id of its own to carry. Only an interaction that
-    is still active counts: a stale id would credit new audio to a finished
-    turn, which is the guessing this module exists to avoid.
-    """
+    """The utterance currently being served, or "" (only still-active interactions count)."""
     with _lock:
         for iid in reversed(_order):
             it = _interactions.get(iid)
@@ -330,8 +237,7 @@ def current_interaction() -> str:
 
 
 def set_route(iid: str, route: str, event_type: str = "") -> None:
-    """Record how the turn was routed. Late arrivals amend an already-reported
-    verdict rather than being silently lost (see _amend)."""
+    """Record how the turn was routed; late arrivals amend the verdict."""
     with _lock:
         it = _interactions.get(iid)
         if it is None:
@@ -353,11 +259,7 @@ def _valid_endpoint(at: float) -> bool:
 
 
 def set_endpoint(iid: str, method: str, at: float) -> None:
-    """Upgrade transcript-only evidence when a real provider endpoint arrives.
-
-    Arrival may follow acknowledgement if it carries an earlier real endpoint.
-    An endpoint after first acceptance/audio cannot establish an ack latency.
-    """
+    """Upgrade transcript-only evidence when a real provider endpoint arrives."""
     with _lock:
         it = _interactions.get(iid)
         if (it is None or it.endpoint_known or not _valid_endpoint(at)
@@ -378,8 +280,7 @@ def set_endpoint(iid: str, method: str, at: float) -> None:
 
 
 def bind_run(iid: str, run_id: str) -> None:
-    """Attach the os-server run id so the reply that comes back through the
-    TTS queue is attributed to the utterance that asked for it."""
+    """Attach the os-server run id so the TTS-queue reply is attributed to its utterance."""
     if not iid or not run_id:
         return
     with _lock:
@@ -394,11 +295,7 @@ def bind_run(iid: str, run_id: str) -> None:
 
 
 def dispatch_accepted(iid: str, *, local: bool = False) -> None:
-    """Observe confirmed OS admission, not task completion or audio playback.
-
-    Call only for a user-task receipt, never history sync or an unconfirmed POST.
-    Earlier owned audio wins. A late receipt amends the existing verdict.
-    """
+    """Observe confirmed OS admission of a user task (not completion or playback)."""
     at = _now()
     with _lock:
         it = _interactions.get(iid)
@@ -417,11 +314,7 @@ def dispatch_accepted(iid: str, *, local: bool = False) -> None:
 
 
 def task_execution_finished(iid: str) -> None:
-    """Realtime confirmed turn completion; this is execution, not correctness.
-
-    No playback requirement: queued speech can drain after the model finishes.
-    The backend memory-sync run must never be credited as task execution.
-    """
+    """Realtime confirmed turn completion (execution, not correctness)."""
     if iid:
         client.report("voice_metrics_task_execution", {
             "schema_version": 1,
@@ -441,18 +334,12 @@ def is_playing(iid: str) -> bool:
 
 
 def mark_failed(iid: str, reason: str) -> None:
-    """Record that this interaction could not be served (the POST to
-    os-server never landed, a backend error, a timeout).
-
-    Deliberately NOT an exclusion: the user asked a valid question and got
-    nothing. It stays eligible, so the metric counts it as the failure it is.
-    """
+    """Record that this interaction could not be served; it stays eligible (not an exclusion)."""
     with _lock:
         it = _interactions.get(iid)
         if it is None or it.failure_reason:
             return
         it.failure_reason = reason
-        # Nothing will answer it, so it can no longer produce stale speech.
         it.closed = True
         amendment = _amend_params(it, "late_failure") if it.reported else None
     if amendment:
@@ -462,15 +349,12 @@ def mark_failed(iid: str, reason: str) -> None:
 
 
 def exclude(iid: str, reason: str) -> None:
-    """Mark an interaction as not a metric sample, with a reason. Reported, never
-    silently discarded. An exclusion that arrives after the verdict was sent
-    emits an amendment."""
+    """Mark an interaction as not a metric sample, with a reason; late ones emit an amendment."""
     with _lock:
         it = _interactions.get(iid)
         if it is None:
             return
-        # Muting or stopping speech does not cancel execution. Keep task
-        # eligibility independent of KPI-1, including when mute arrived first.
+        # Muting or stopping speech does not cancel execution.
         task_excluded = reason in (
             EXCL_REJECTED_NOISE, EXCL_REJECTED_NON_USER,
             EXCL_NO_TRANSCRIPT, EXCL_NOT_ADDRESSED,
@@ -490,15 +374,10 @@ def exclude(iid: str, reason: str) -> None:
     logger.info("[voice-metrics] excluded (interaction=%s reason=%s)", iid, reason)
 
 
-# --- Playback boundary ------------------------------------------------------
-
 def playback_audio(owner: str, tts=None) -> None:
-    """The first frame of a playback actually reached the audio stream.
+    """The first frame of a playback reached the audio stream.
 
-    ``owner`` is what claimed the speaker: ``run:<turn_id>`` (agent reply or a
-    filler armed for that turn), ``interaction:<id>`` (realtime native voice),
-    or "" when nobody claimed it. An unclaimed playback is recorded as
-    ``unknown`` and NEVER counts as an acknowledgement.
+    ``owner``: ``run:<turn_id>``, ``interaction:<id>``, or "" (recorded as unknown, never an ack).
     """
     started = _now()
     amendment = None
@@ -507,9 +386,7 @@ def playback_audio(owner: str, tts=None) -> None:
         kind = _classify(owner, tts)
         global _playing, _unknown_owner_playbacks
         if _playing:
-            # Queue segments can share one physical stream and therefore have
-            # no intervening stream-end callback. The next segment's first
-            # write closes the previous measured interval without touching audio.
+            # Queue segments share one stream; the next segment's first write closes the previous interval.
             _observe_playback(
                 _playing["kind"], _playing["interaction_id"], _playing["started"], started,
             )
@@ -526,8 +403,7 @@ def playback_audio(owner: str, tts=None) -> None:
         else:
             it = _interactions.get(iid)
             if it is not None:
-                # Proof the turn is still alive: restart its lifetime clock so
-                # a stop pressed later still sees something to suppress.
+                # Restart the lifetime clock so a later stop still sees this turn.
                 it.last_activity = started
                 it.closed = False
                 _arm_lifetime(it)
@@ -567,18 +443,12 @@ def playback_audio(owner: str, tts=None) -> None:
 
 
 def playback_muted(owner: str) -> None:
-    """The speaker refused this speech because the device is muted.
-
-    Record the observed refusal, not the mute flag at report time. Schema 2
-    keeps valid silent tasks eligible: only accepted dispatch or owned audio
-    acknowledges them. Unowned muted notices cannot mark another interaction.
-    """
+    """The speaker refused this speech because the device is muted."""
     with _lock:
         iid = _owner_interaction(owner)
         it = _interactions.get(iid) if iid else None
         if it is None or it.speaker_muted:
             return
-        # Mute does not prevent accepting a silent task under ack schema 2.
         it.speaker_muted = True
         amendment = _amend_params(it, "late_mute") if it.reported else None
     if amendment:
@@ -601,13 +471,7 @@ def playback_end() -> None:
 
 
 def _owner_interaction(owner: str) -> str:
-    """Resolve the owner tag to an interaction.
-
-    ``run:<id>`` normally carries an os-server run id, but the realtime paths
-    (its wait filler, and text replies spoken before the turn ever reaches
-    os-server) have no run id yet and tag themselves with the interaction id
-    directly. Both are accepted; anything unresolvable stays unknown.
-    """
+    """Resolve an owner tag (``run:<id>`` or interaction id) to an interaction."""
     if not owner:
         return ""
     if owner.startswith("run:"):
@@ -620,32 +484,14 @@ def _owner_interaction(owner: str) -> str:
 
 
 def is_suppressed(owner: str) -> bool:
-    """True when the owner of a playback is a turn the user explicitly stopped.
-
-    The one admission gate for late audio: os-server mutes replies it can
-    attribute to a cancelled run, but a Harness result or a realtime wait
-    filler reaches the speaker without passing that check. Unowned audio is
-    never suppressed -- guessing would silence the sentence the user just
-    asked for.
-    """
+    """True when a playback's owner is a turn the user explicitly stopped (unowned: never)."""
     with _lock:
         it = _interactions.get(_owner_interaction(owner))
         return bool(it is not None and it.suppressed)
 
 
 def _classify(owner: str, tts) -> str:
-    """What the user heard, read from the speaking service's segment snapshots.
-
-    The audio code reports only WHO owns the playback; the vocabulary below is
-    this module's business:
-
-      native voice      → the realtime model answering in its own voice
-      realtime_reply    → the realtime model's text answer spoken through TTS
-      realtime_feedback → the agent's reply (the only speech fed back to the
-                          realtime session)
-      interruptible     → a filler, i.e. waiting audio
-      anything else     → system audio (notices, greetings, cached phrases)
-    """
+    """Classify what the user heard from the speaking service's segment snapshots."""
     try:
         if tts is not None and getattr(tts, "native_mode", False):
             return KIND_NATIVE_REALTIME
@@ -664,19 +510,12 @@ def _classify(owner: str, tts) -> str:
     return KIND_SYSTEM_AUDIO if owner else KIND_UNKNOWN
 
 
-# --- Suppression boundary (the stale-reply metric) ------------------------------------------
-
 def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: bool = True,
              *, target_interaction_ids: set[str] | None = None,
              at: float | None = None) -> None:
     """Stamp a suppression boundary and watch for stale audio.
 
-    ``policy_applied`` must be the OS's ANSWER, not an assumption: automatic
-    supersession only happens when os-server has
-    ``OS_REALTIME_SUPERSEDES_MAIN_REPLY`` enabled and actually stamped its
-    watermark. A boundary that was never applied is not a the stale-reply metric situation and
-    is not recorded — counting it would inflate the denominator with
-    situations where nothing was ever suppressed.
+    ``policy_applied`` must be the OS's answer; unapplied boundaries are not recorded.
     """
     if not policy_applied:
         logger.info("[voice-metrics] boundary skipped -- policy not applied (reason=%s)", reason)
@@ -685,8 +524,7 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
     with _lock:
         applicable = _active_interactions_before(at, triggering_interaction_id)
         if target_interaction_ids is not None:
-            # Server interruption identifies the cancelled response, not every
-            # input already waiting behind it in the receive queue.
+            # Server interruption identifies the cancelled response, not every queued input.
             applicable = target_interaction_ids.intersection(_interactions)
         if reason == BOUNDARY_EXPLICIT_STOP:
             for iid in applicable:
@@ -709,8 +547,7 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
         }
         _watchers.append(state)
         if playing and playing["interaction_id"] in applicable:
-            # Interval already in progress: re-evaluate it against this new
-            # boundary so audio that merely CONTINUES past the grace counts.
+            # Re-evaluate an in-progress interval against this new boundary.
             _observe_playback(playing["kind"], playing["interaction_id"],
                               playing["started"], None)
     logger.info(
@@ -723,19 +560,9 @@ def boundary(reason: str, triggering_interaction_id: str = "", policy_applied: b
 
 
 def _active_interactions_before(at: float, trigger_id: str) -> "set[str]":
-    """Which ACTIVE interactions the boundary applies to.
-
-    Only turns that can still speak count: an interaction that was excluded or
-    already closed cannot produce a stale reply, so keeping it in the
-    denominator would dilute the stale-reply metric with situations that never existed.
-    Explicit stop covers everything in flight; automatic supersession covers
-    only what is older than the utterance that triggered it.
-    """
+    """Active interactions the boundary applies to (stop: all; supersession: older only)."""
     trigger = _interactions.get(trigger_id)
     if trigger is None:
-        # Explicit stop: everything still able to speak, including an
-        # utterance that just ended (the user can say "stop" the moment they
-        # finish talking).
         return {iid for iid, it in _interactions.items()
                 if it.speech_end <= at and not it.closed}
     return {
@@ -745,13 +572,7 @@ def _active_interactions_before(at: float, trigger_id: str) -> "set[str]":
 
 
 def _observe_playback(kind: str, iid: str, started: float, ended) -> None:
-    """Score one playback interval against every open boundary.
-
-    Stale means audio of a suppressed turn was audible AFTER the boundary plus
-    the grace — whether it STARTED then, or merely kept going. Scoring the
-    interval (not just its start) is what catches audio that began before the
-    boundary and ran past the grace.
-    """
+    """Score one playback interval against every open boundary (audible past boundary + grace = stale)."""
     if not iid:
         return
     for state in _watchers:
@@ -784,8 +605,7 @@ def _close_boundary(state: dict) -> None:
         if playing and playing["interaction_id"] in state["applicable"]:
             _observe_playback(playing["kind"], playing["interaction_id"],
                               playing["started"], None)
-        # Honest verdict: if a suppressed turn can still speak when the window
-        # closes, "no stale reply" has not been established.
+        # Suppressed turns still able to speak at window close: "no stale reply" is not established.
         still_active = [
             iid for iid in state["applicable"]
             if iid in _interactions and not _interactions[iid].closed
@@ -809,16 +629,12 @@ def _close_boundary(state: dict) -> None:
             "stop_to_silence_ms": state["stop_to_silence_ms"],
             "grace_ms": STALE_GRACE_MS,
             "observe_window_ms": SUPPRESSION_OBSERVE_MS,
-            # False = the window closed with suppressed turns still able to
-            # speak. Such a row is NOT evidence of a clean suppression.
             "observation_complete": not still_active,
             "unobserved_interactions": len(still_active),
         },
         event_id=state["event_id"],
     )
 
-
-# --- Reporting --------------------------------------------------------------
 
 def _forget(iid: str) -> None:
     it = _interactions.pop(iid, None)
@@ -846,13 +662,9 @@ def _close_interaction(iid: str) -> None:
 
 
 def _amend_params(it: "_Interaction", why: str) -> dict:
-    """Build a corrected verdict for an interaction whose routing, failure or
-    exclusion arrived after its row was already sent. The warehouse keeps
-    both; the amendment wins (see the docs' metrics queries).
+    """Build a corrected verdict row for a late routing/failure/exclusion.
 
-    Returns the row instead of sending it: the caller holds the tracker lock,
-    and that lock is also taken from the audio thread — reporting under it
-    would put telemetry work on the playback path.
+    Returned, not sent: the caller holds the tracker lock, also taken on the audio thread.
     """
     params = _interaction_params(it)
     params["amends_event_id"] = it.report_event_id
@@ -869,9 +681,7 @@ def _report_amendment(params: dict) -> None:
 
 
 def _interaction_params(it: "_Interaction") -> dict:
-    # A failure reason does NOT remove eligibility: the command was valid and
-    # was not served. Only an exclusion (noise, not addressed, muted, …) means
-    # "this was never a metric sample".
+    # A failure reason does not remove eligibility; only an exclusion does.
     it.task_revision += 1
     exclusion_reason = it.exclusion_reason or (
         "speech_endpoint_unavailable" if not it.endpoint_known else ""
@@ -886,8 +696,6 @@ def _interaction_params(it: "_Interaction") -> dict:
     return {
         "interaction_id": it.id,
         "run_id": it.run_id,
-        # KPI-3 reuses the utterance cohort, not the 10-second ack verdict.
-        # Terminal execution observations are joined separately by id/run id.
         "task_schema_version": 1,
         "task_started_at_ms": it.task_started_at_ms,
         "task_revision": it.task_revision,
@@ -903,8 +711,6 @@ def _interaction_params(it: "_Interaction") -> dict:
         "eligible": eligible,
         "outcome": outcome,
         "exclusion_reason": exclusion_reason,
-        # Raw observation, kept whatever the verdict, so the (provisional)
-        # threshold can change without re-instrumenting the device.
         "ack_schema_version": ACK_SCHEMA_VERSION,
         "ack_latency_ms": it.ack_latency_ms,
         "audio_latency_ms": it.audio_latency_ms,
@@ -912,9 +718,7 @@ def _interaction_params(it: "_Interaction") -> dict:
         "speaker_muted": it.speaker_muted,
         "ack_modality": it.ack_modality,
         "ack_kind": it.ack_kind,
-        # The wait for the real reply, independent of the receipt above. null
-        # when the answer had not been heard by the end of the window — which
-        # is itself the finding, not missing data.
+        # null when the answer was not heard by window end (a finding, not missing data).
         "answer_latency_ms": it.answer_latency_ms,
         "answer_kind": it.answer_kind,
         "ack_deadline_ms": ACK_DEADLINE_MS,

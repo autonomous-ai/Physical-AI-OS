@@ -1,11 +1,4 @@
-"""Tests for hal.drivers.base.ServiceBase — the single-slot event mailbox.
-
-Regression coverage for the lost-event race: a dispatch() that lands while
-the worker is inside handle_event replaces _current_event, and the worker's
-finally block used to clear the mailbox unconditionally — silently deleting
-the just-dispatched event (user LED commands vanished whenever they arrived
-mid-frame while an effect was animating).
-"""
+"""Tests for hal.drivers.base.ServiceBase — the single-slot event mailbox."""
 
 import threading
 import time
@@ -14,8 +7,7 @@ from hal.drivers.base import ServiceBase
 
 
 class _RecordingService(ServiceBase):
-    """Records handled payloads; handler blocks until `proceed` is set so a
-    test can dispatch while the worker is provably inside handle_event."""
+    """Records payloads; handler blocks until `proceed` is set."""
 
     def __init__(self):
         super().__init__("test")
@@ -40,7 +32,7 @@ def _wait_for(predicate, timeout=2.0):
 
 def test_dispatch_then_handle():
     svc = _RecordingService()
-    svc.proceed.set()  # handler never blocks
+    svc.proceed.set()
     svc.start()
     try:
         svc.dispatch("evt", "a")
@@ -57,7 +49,7 @@ def test_dispatch_during_handling_is_not_lost():
         assert svc.in_handler.wait(timeout=2.0)  # worker is inside handle_event("a")
 
         svc.dispatch("evt", "b")  # lands while "a" is being handled
-        svc.proceed.set()  # release the handler
+        svc.proceed.set()
 
         assert _wait_for(lambda: svc.handled == ["a", "b"]), (
             f"second event lost: handled={svc.handled}"

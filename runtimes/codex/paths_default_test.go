@@ -7,8 +7,7 @@ import (
 )
 
 // The device (OrangePi) contract: with no env set, every path-derived value
-// must equal the literal it replaced. This test is what keeps the off-device
-// env plumbing from changing what ships to a board.
+// must equal the literal it replaced.
 func TestDeviceDefaultsUnchanged(t *testing.T) {
 	for _, k := range []string{"CODEX_HOME", "CODEX_PORT", "CODEX_WS_TOKEN", "OS_AGENT_HOME"} {
 		if v := os.Getenv(k); v != "" {
@@ -51,7 +50,6 @@ func TestDeviceDefaultsUnchanged(t *testing.T) {
 		t.Error("userAgentsMDBlock missing the absolute connectors skill path")
 	}
 
-	// normalizeFolder resolves against /root on device.
 	if got := normalizeFolder("~/myapp"); got != "/root/myapp" {
 		t.Errorf("normalizeFolder(~/myapp) = %q, want /root/myapp", got)
 	}

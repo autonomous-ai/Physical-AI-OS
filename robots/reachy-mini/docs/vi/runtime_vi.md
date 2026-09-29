@@ -60,138 +60,6 @@ skipped: [buddy]
 — `companion` được khai nhưng optional, và HAL không có driver `buddy` nào, nên
 route đó bị skip chứ không làm sập boot.
 
-## Recon Máy Thật (đo ngày 2026-07-29)
-
-Các số liệu dưới đây đo trên con Wireless đầu tiên (`hardware_id
-e4a0ef5f04fafb94`) bằng [`../../recon.sh`](../../recon.sh) cộng vài probe bổ
-sung. Chúng thay thế phần phỏng đoán mà tài liệu này từng ghi.
-
-| Hạng mục | Đo được |
-|----------|---------|
-| Board | `Raspberry Pi Compute Module 4 Rev 1.1`, RAM 3.7 GiB, 46 °C lúc idle |
-| OS / kernel | Debian 13.3 (trixie), `6.12.62+rpt-rpi-v8`, aarch64 |
-| Ổ đĩa | eMMC 14 GB, dùng 7.7 GB / trống 5.5 GB (59 %) |
-| Boot config | `/boot/firmware/config.txt` — `imx708` cam0+cam1, `uart3`, quạt i2c (`emc2301`), IMU trên i2c4 |
-| Network stack | **NetworkManager** active (`wpa_supplicant` active, `dhcpcd` inactive) |
-| Profile NM | `Glinks` (STA) + `Hotspot` (`mode=ap`, ssid `reachy-mini-ap`, `ipv4=shared`, `autoconnect=false`) |
-| Unit của Pollen | `reachy-mini-daemon.service` (AP launcher → daemon), `reachy-mini-bluetooth.service` (GATT), `gpio-shutdown-daemon.service` |
-| Daemon | `reachy_mini` 1.9.0 trong `/venvs/mini_daemon` (Python 3.12), chạy dưới user `pollen` |
-| Port daemon | `:8000` REST+WS, `:8443`. Port của mình — `5001` (HAL), `5000` (os-server, chỉ loopback), `80` — đều trống |
-| WS path daemon | `/ws/sdk`, `/ws/daemon`, `/ws/full`, `/ws/raw`, `/ws/set_target`, `/ws/apps`, `/ws/logs`, `/ws/updates` |
-| Control loop | đo được ~**49 Hz** (`/api/daemon/status`), không phải 100 Hz như hay được nhắc |
-| Audio | một card USB duy nhất: `card 0: Audio [Reachy Mini Audio], device 0` — vừa thu vừa phát |
-| Camera | CSI `imx708_wide` (4608×2592 10-bit RGGB) qua unicam/libcamera; có `rpicam-apps` + `gstreamer1.0-libcamera`, **chưa** có `python3-picamera2` |
-| Python hệ thống | 3.13.5; **chưa** cài `uv`; `libcairo2-dev` + `libgirepository1.0-dev` + `pkg-config` đã có sẵn |
-| SSH | `pollen@reachy-mini.local` (mật khẩu `root`); SSH thẳng bằng `root@` bị từ chối |
-| Recovery | có `/restore/venvs/`; BLE GATT đang chạy (`bluetoothd`, tên `reachy-mini`) |
-
-Hai hệ quả không có trong plan port ban đầu, mô tả ngay bên dưới: daemon giữ
-media, và camera không phải thiết bị UVC.
-
-## Quyền Sở Hữu Media: daemon giữ camera và audio
-
-Mặc định daemon Pollen mở sẵn `/dev/video0`, `/dev/video1`, các node ISP, và
-**cả hai** PCM ALSA (`pcmC0D0c` thu, `pcmC0D0p` phát). Tiến trình khác không
-giành được:
-
-```bash
-arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 1 /tmp/t.wav
-# arecord: main:850: audio open error: Device or resource busy
-```
-
-Daemon có sẵn API bàn giao đúng cho tình huống này:
-
-```bash
-curl -s -X POST http://localhost:8000/api/media/release   # {"status":"ok"}
-curl -s        http://localhost:8000/api/media/status     # {"available":false,"released":true,"no_media":false}
-# ... HAL sở hữu mic, loa, camera ...
-curl -s -X POST http://localhost:8000/api/media/acquire   # trả lại
-```
-
-Đã verify trên máy: sau `release`, `arecord` thu được và `rpicam-jpeg` chụp được
-khung 1280×720; sau `acquire`, media status trở lại
-`{"available":true,"released":false}`. Daemon vẫn `active` và trả HTTP suốt quá
-trình — nhả media **không** ảnh hưởng điều khiển motion.
-
-**HAL tự làm việc bàn giao này** — không phải script, không phải launcher.
-`ROBOT.md` khai `owner: pollen_daemon` trên capability `audio` và `vision`;
-`hal/drivers/media_owner/factory.py` map tên đó tới `PollenDaemonMediaOwner`,
-gọi `release` ở đầu startup và `acquire` khi shutdown. `release` retry 5 lần cách
-nhau 2 s vì daemon là systemd service khởi động song song với HAL và có thể chưa
-listen lúc cold boot; `acquire` chỉ thử một lần vì lúc đó systemd đang đếm ngược
-tới SIGKILL, và lượt `release` sau sẽ tự sửa nếu lỡ.
-
-Lý do phải nằm trong tiến trình HAL là **thứ tự**: release phải xong trước khi
-HAL probe audio. Thua cuộc đua đó thì hỏng âm thầm và hỏng toàn bộ — card còn bị
-daemon giữ nên PortAudio không probe nổi sample rate nào, output ALSA đã cấu hình
-không enumerate, TTS chốt ở device -1 và raise mọi lần nói, trong khi mọi endpoint
-status vẫn báo healthy.
-
-Không script spike nào gọi `/api/media/*` nữa. Ngoại lệ duy nhất là một lệnh
-`acquire` best-effort trong `spike-hal.sh --stop`, dành cho HAL bị kill đủ gắt để
-bỏ qua bước trả media — thiếu nó thì daemon nằm im, câm và mù, kéo theo cả app
-stack của Pollen.
-
-Một tác dụng phụ đã đo: handler `release` của daemon reset luôn mixer của card về
-mức của nó (90% trước khi gọi, 62% sau). Driver ghi mức đúng xuống qua route
-`/audio/volume` ngay sau release, nếu không một lần restart HAL đơn thuần sẽ để
-loa ở mức của Pollen trong khi slider, file state và agent đều vẫn báo mức của
-người dùng. Có mức đã persist thì lấy mức đó; chưa có thì lấy `startup_volume`
-trong ROBOT.md của thân máy — máy chưa ai đụng slider mà bỏ qua sẽ nằm luôn ở
-mức −23 dB của daemon, và lần boot đầu của người dùng mới đọc y như hỏng loa.
-
-Việc này đi kèm — chứ không thay thế — `media_backend="no_media"` của SDK, vì
-tham số đó chỉ ngăn *SDK client* giành media.
-
-## Camera Stack: libcamera, không phải UVC
-
-Camera trong đầu là **CSI `imx708_wide`** (Camera Module 3 wide) chạy qua pipeline
-unicam + libcamera của Raspberry Pi. `/dev/video0` là node unicam Bayer thô, không
-phải luồng YUV đọc thẳng được:
-
-| Probe | Kết quả |
-|-------|---------|
-| `cv2.VideoCapture(0)` | `isOpened() == True`, `read() -> False` (`select() timeout`) |
-| `cv2.getBuildInformation()` | `GStreamer: NO` — bản `opencv-python` từ wheel không dùng được pipeline `libcamerasrc` |
-| `rpicam-jpeg -o t.jpg --width 1280 --height 720` | chạy được (JPEG 216 KB) |
-| `python3-picamera2` | chưa cài; apt có candidate `0.3.33-1` |
-
-**Đã giải quyết (2026-07-29)** bằng một camera backend thứ hai, không phải bằng
-giá trị config. `ROBOT.md` chọn backend giống hệt cách motion chọn driver:
-
-```yaml
-vision:
-  routes: [camera]
-  driver: rpicam
-  required: true
-```
-
-`hal/drivers/camera/factory.py` map tên đó tới `RpicamVideoCaptureDevice`: chạy
-`rpicam-vid --codec mjpeg -o -` như tiến trình con, tách luồng theo marker JPEG,
-decode frame mới nhất bằng `cv2.imdecode`. Cả hai backend đều thoả
-`VideoCaptureDeviceBase`, nên routes, sensing và tracker không hề biết đang chạy
-cái nào. Lamp khai `driver: opencv` cho đường UVC.
-
-Vì sao không chọn hai hướng kia:
-
-- **`python3-picamera2`** — gói apt build cho python hệ thống (3.13 trên trixie),
-  còn venv của HAL là 3.12; extension nhị phân của libcamera không nạp chéo
-  phiên bản. Dùng nó đồng nghĩa đẩy toàn bộ HAL sang 3.13.
-- **Camera qua daemon** — `/api/media/release` bàn giao camera **và** audio cùng
-  lúc, nên lấy frame từ daemon sẽ kéo theo phải cho audio đi qua daemon nốt,
-  thay thế một đường đang chạy tốt.
-
-Đo trên máy: 1280×720 MJPEG yêu cầu 15 fps cho ra ~14 fps, tốn ~21% một core,
-trong khi daemon vẫn chạy control loop. Driver idle ở 5 fps và chỉ lên 15 khi có
-consumer đăng ký (`acquire_consumer()`) — lúc đó nó respawn tiến trình con vì
-frame rate là tham số dòng lệnh. `HAL_CAMERA_INDEX` vô tác dụng với backend này
-(libcamera chọn sensor theo pipeline), và `requires_v4l2_index = False` giúp boot
-không đi dò `/dev/video*` cho node sẽ không bao giờ mở.
-
-Điểm còn phải tune: ở mức idle 5 fps, libcamera có thể chọn thời gian phơi sáng
-đủ dài để làm nhoè vật thể chuyển động. Nâng idle rate hoặc chặn trần
-`--shutter` khi cần ảnh tĩnh nét hơn là cần tiết kiệm CPU.
-
 ## Deploy: cài chồng, không bao giờ flash
 
 Reachy Mini ship kèm **OS Pollen** trên Pi, chứa daemon own serial bus, control
@@ -334,6 +202,138 @@ là package npm — rồi bỏ số 0 đệm (`2026.06.10` → `2026.6.10`) trư
 `npm install`, nếu không npm đọc spec như dist-tag và chết với "No matching
 version found". `OPENCLAW_VERSION=…` override được pin đó.
 
+## Recon Máy Thật (đo ngày 2026-07-29)
+
+Các số liệu dưới đây đo trên con Wireless đầu tiên (`hardware_id
+e4a0ef5f04fafb94`) bằng [`../../recon.sh`](../../recon.sh) cộng vài probe bổ
+sung. Chúng thay thế phần phỏng đoán mà tài liệu này từng ghi.
+
+| Hạng mục | Đo được |
+|----------|---------|
+| Board | `Raspberry Pi Compute Module 4 Rev 1.1`, RAM 3.7 GiB, 46 °C lúc idle |
+| OS / kernel | Debian 13.3 (trixie), `6.12.62+rpt-rpi-v8`, aarch64 |
+| Ổ đĩa | eMMC 14 GB, dùng 7.7 GB / trống 5.5 GB (59 %) |
+| Boot config | `/boot/firmware/config.txt` — `imx708` cam0+cam1, `uart3`, quạt i2c (`emc2301`), IMU trên i2c4 |
+| Network stack | **NetworkManager** active (`wpa_supplicant` active, `dhcpcd` inactive) |
+| Profile NM | `Glinks` (STA) + `Hotspot` (`mode=ap`, ssid `reachy-mini-ap`, `ipv4=shared`, `autoconnect=false`) |
+| Unit của Pollen | `reachy-mini-daemon.service` (AP launcher → daemon), `reachy-mini-bluetooth.service` (GATT), `gpio-shutdown-daemon.service` |
+| Daemon | `reachy_mini` 1.9.0 trong `/venvs/mini_daemon` (Python 3.12), chạy dưới user `pollen` |
+| Port daemon | `:8000` REST+WS, `:8443`. Port của mình — `5001` (HAL), `5000` (os-server, chỉ loopback), `80` — đều trống |
+| WS path daemon | `/ws/sdk`, `/ws/daemon`, `/ws/full`, `/ws/raw`, `/ws/set_target`, `/ws/apps`, `/ws/logs`, `/ws/updates` |
+| Control loop | đo được ~**49 Hz** (`/api/daemon/status`), không phải 100 Hz như hay được nhắc |
+| Audio | một card USB duy nhất: `card 0: Audio [Reachy Mini Audio], device 0` — vừa thu vừa phát |
+| Camera | CSI `imx708_wide` (4608×2592 10-bit RGGB) qua unicam/libcamera; có `rpicam-apps` + `gstreamer1.0-libcamera`, **chưa** có `python3-picamera2` |
+| Python hệ thống | 3.13.5; **chưa** cài `uv`; `libcairo2-dev` + `libgirepository1.0-dev` + `pkg-config` đã có sẵn |
+| SSH | `pollen@reachy-mini.local` (mật khẩu `root`); SSH thẳng bằng `root@` bị từ chối |
+| Recovery | có `/restore/venvs/`; BLE GATT đang chạy (`bluetoothd`, tên `reachy-mini`) |
+
+Hai hệ quả không có trong plan port ban đầu, mô tả ngay bên dưới: daemon giữ
+media, và camera không phải thiết bị UVC.
+
+## Quyền Sở Hữu Media: daemon giữ camera và audio
+
+Mặc định daemon Pollen mở sẵn `/dev/video0`, `/dev/video1`, các node ISP, và
+**cả hai** PCM ALSA (`pcmC0D0c` thu, `pcmC0D0p` phát). Tiến trình khác không
+giành được:
+
+```bash
+arecord -D plughw:0,0 -f S16_LE -r 16000 -c 1 -d 1 /tmp/t.wav
+# arecord: main:850: audio open error: Device or resource busy
+```
+
+Daemon có sẵn API bàn giao đúng cho tình huống này:
+
+```bash
+curl -s -X POST http://localhost:8000/api/media/release   # {"status":"ok"}
+curl -s        http://localhost:8000/api/media/status     # {"available":false,"released":true,"no_media":false}
+# ... HAL sở hữu mic, loa, camera ...
+curl -s -X POST http://localhost:8000/api/media/acquire   # trả lại
+```
+
+Đã verify trên máy: sau `release`, `arecord` thu được và `rpicam-jpeg` chụp được
+khung 1280×720; sau `acquire`, media status trở lại
+`{"available":true,"released":false}`. Daemon vẫn `active` và trả HTTP suốt quá
+trình — nhả media **không** ảnh hưởng điều khiển motion.
+
+**HAL tự làm việc bàn giao này** — không phải script, không phải launcher.
+`ROBOT.md` khai `owner: pollen_daemon` trên capability `audio` và `vision`;
+`hal/drivers/media_owner/factory.py` map tên đó tới `PollenDaemonMediaOwner`,
+gọi `release` ở đầu startup và `acquire` khi shutdown. `release` retry 5 lần cách
+nhau 2 s vì daemon là systemd service khởi động song song với HAL và có thể chưa
+listen lúc cold boot; `acquire` chỉ thử một lần vì lúc đó systemd đang đếm ngược
+tới SIGKILL, và lượt `release` sau sẽ tự sửa nếu lỡ.
+
+Lý do phải nằm trong tiến trình HAL là **thứ tự**: release phải xong trước khi
+HAL probe audio. Thua cuộc đua đó thì hỏng âm thầm và hỏng toàn bộ — card còn bị
+daemon giữ nên PortAudio không probe nổi sample rate nào, output ALSA đã cấu hình
+không enumerate, TTS chốt ở device -1 và raise mọi lần nói, trong khi mọi endpoint
+status vẫn báo healthy.
+
+Không script spike nào gọi `/api/media/*` nữa. Ngoại lệ duy nhất là một lệnh
+`acquire` best-effort trong `spike-hal.sh --stop`, dành cho HAL bị kill đủ gắt để
+bỏ qua bước trả media — thiếu nó thì daemon nằm im, câm và mù, kéo theo cả app
+stack của Pollen.
+
+Một tác dụng phụ đã đo: handler `release` của daemon reset luôn mixer của card về
+mức của nó (90% trước khi gọi, 62% sau). Driver ghi mức đúng xuống qua route
+`/audio/volume` ngay sau release, nếu không một lần restart HAL đơn thuần sẽ để
+loa ở mức của Pollen trong khi slider, file state và agent đều vẫn báo mức của
+người dùng. Có mức đã persist thì lấy mức đó; chưa có thì lấy `startup_volume`
+trong ROBOT.md của thân máy — máy chưa ai đụng slider mà bỏ qua sẽ nằm luôn ở
+mức −23 dB của daemon, và lần boot đầu của người dùng mới đọc y như hỏng loa.
+
+Việc này đi kèm — chứ không thay thế — `media_backend="no_media"` của SDK, vì
+tham số đó chỉ ngăn *SDK client* giành media.
+
+## Camera Stack: libcamera, không phải UVC
+
+Camera trong đầu là **CSI `imx708_wide`** (Camera Module 3 wide) chạy qua pipeline
+unicam + libcamera của Raspberry Pi. `/dev/video0` là node unicam Bayer thô, không
+phải luồng YUV đọc thẳng được:
+
+| Probe | Kết quả |
+|-------|---------|
+| `cv2.VideoCapture(0)` | `isOpened() == True`, `read() -> False` (`select() timeout`) |
+| `cv2.getBuildInformation()` | `GStreamer: NO` — bản `opencv-python` từ wheel không dùng được pipeline `libcamerasrc` |
+| `rpicam-jpeg -o t.jpg --width 1280 --height 720` | chạy được (JPEG 216 KB) |
+| `python3-picamera2` | chưa cài; apt có candidate `0.3.33-1` |
+
+**Đã giải quyết (2026-07-29)** bằng một camera backend thứ hai, không phải bằng
+giá trị config. `ROBOT.md` chọn backend giống hệt cách motion chọn driver:
+
+```yaml
+vision:
+  routes: [camera]
+  driver: rpicam
+  required: true
+```
+
+`hal/drivers/camera/factory.py` map tên đó tới `RpicamVideoCaptureDevice`: chạy
+`rpicam-vid --codec mjpeg -o -` như tiến trình con, tách luồng theo marker JPEG,
+decode frame mới nhất bằng `cv2.imdecode`. Cả hai backend đều thoả
+`VideoCaptureDeviceBase`, nên routes, sensing và tracker không hề biết đang chạy
+cái nào. Lamp khai `driver: opencv` cho đường UVC.
+
+Vì sao không chọn hai hướng kia:
+
+- **`python3-picamera2`** — gói apt build cho python hệ thống (3.13 trên trixie),
+  còn venv của HAL là 3.12; extension nhị phân của libcamera không nạp chéo
+  phiên bản. Dùng nó đồng nghĩa đẩy toàn bộ HAL sang 3.13.
+- **Camera qua daemon** — `/api/media/release` bàn giao camera **và** audio cùng
+  lúc, nên lấy frame từ daemon sẽ kéo theo phải cho audio đi qua daemon nốt,
+  thay thế một đường đang chạy tốt.
+
+Đo trên máy: 1280×720 MJPEG yêu cầu 15 fps cho ra ~14 fps, tốn ~21% một core,
+trong khi daemon vẫn chạy control loop. Driver idle ở 5 fps và chỉ lên 15 khi có
+consumer đăng ký (`acquire_consumer()`) — lúc đó nó respawn tiến trình con vì
+frame rate là tham số dòng lệnh. `HAL_CAMERA_INDEX` vô tác dụng với backend này
+(libcamera chọn sensor theo pipeline), và `requires_v4l2_index = False` giúp boot
+không đi dò `/dev/video*` cho node sẽ không bao giờ mở.
+
+Điểm còn phải tune: ở mức idle 5 fps, libcamera có thể chọn thời gian phơi sáng
+đủ dài để làm nhoè vật thể chuyển động. Nâng idle rate hoặc chặn trần
+`--shutter` khi cần ảnh tĩnh nét hơn là cần tiết kiệm CPU.
+
 ## Motion Driver
 
 Reachy chọn motion backend của HAL qua:
@@ -372,6 +372,28 @@ Joint keys của Reachy trong HAL dùng độ/mm, dù SDK dùng radian/mét:
 - chuyển động: `/servo/move`, `/servo/aim`, `/servo/nudge`
 - recovery/mode: `/servo/zero`, `/servo/hold`, `/servo/release`, `/servo/resume`
 - expression moves: `/servo/play` khi recorded-move library của Reachy sẵn sàng
+
+### Emotion → HF Move Mapping
+
+Tên emotion của HAL (CSV stem trên Lamp) được map sang HF move của Pollen trong
+`_MOVE_MAP` (reachy\_service.py). Map dùng hằng số preset từ `hal/presets.py` và
+nhắm tới các move trong
+[pollen-robotics/reachy-mini-emotions-library](https://huggingface.co/datasets/pollen-robotics/reachy-mini-emotions-library)
+(85 move). Ví dụ:
+
+| HAL emotion | HF move |
+|-------------|---------|
+| `curious` | `curious1` |
+| `happy_wiggle` | `cheerful1` |
+| `sad` | `sad1` |
+| `greeting` | `welcoming1` |
+| `nod` | `yes1` |
+| `headshake` | `no1` |
+| `music_groove` | `dance1` |
+
+Tên chưa map sẽ được thử nguyên văn (caller có thể gửi thẳng tên HF). 8 style
+nhạc được chia cho 3 dance move của Pollen. Test bảo vệ việc phủ đủ preset và
+kiểm tra mọi giá trị trong map có trong thư viện HF.
 
 `GET /servo` trả `available_recordings` cùng vốn từ với field `current`: move đã
 map thì liệt kê theo tên HAL (`music_groove`, không phải `dance1`), phần còn lại

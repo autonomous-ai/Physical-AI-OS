@@ -16,7 +16,6 @@ func TestFigmaStdioEntry_OAuthAndPAT(t *testing.T) {
 		t.Fatalf("oauth FIGMA_ACCESS_TOKEN alias = %v, want oauthtok", env["FIGMA_ACCESS_TOKEN"])
 	}
 
-	// PAT: token in api_key, custom header descriptor -> X-Figma-Token, raw token.
 	pat := figmaStdioEntry("/tmp/ocdir/server.mjs", ConnectorCreds{
 		AuthType: "pat", APIKey: "pat123",
 		Credentials: map[string]string{"mcp_auth_header": "header:X-Figma-Token"},

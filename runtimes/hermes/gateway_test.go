@@ -18,8 +18,6 @@ func TestHardwareStartupRejectedByLegacyFlags(t *testing.T) {
 		t.Fatal("hardware wait must remain an optional pre-start command")
 	}
 	args := strings.Fields(strings.TrimPrefix(gatewayHardwareStartupConfig, prefix))
-	// Legacy main only registers --version; a positional argument would parse
-	// successfully and continue into server initialization instead of exiting.
 	legacy := flag.NewFlagSet("legacy-os-server", flag.ContinueOnError)
 	legacy.SetOutput(io.Discard)
 	legacy.Bool("version", false, "print version")

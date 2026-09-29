@@ -143,11 +143,9 @@ def test_realtime_turn_marks_every_reply_segment(monkeypatch, cap, chunks, spoke
         for index, text in enumerate(chunks):
             yield TextOutput(text=text)
             if cap == 0 and index == 0:
-                # A comma alone must not start a separate provider request.
                 tts.speak.assert_not_called()
                 tts.speak_queue.assert_not_called()
             if cap == 0 and index == 1:
-                # The first sentence starts before the model sends sentence 2.
                 tts.speak.assert_called_once_with(
                     spoken[0], turn_id="vi-test", realtime_reply=True,
                 )
@@ -196,8 +194,6 @@ def test_tagged_reply_flushes_before_provider_finishes(monkeypatch, chunks, read
     def outputs():
         for text, should_speak in zip(chunks, ready):
             yield TextOutput(text=text)
-            # This runs while the provider is still waiting for tool/routing
-            # completion. No terminal or iterator exhaustion has happened yet.
             assert tts.speak.called is should_speak
         if any(ready):
             tts.speak.assert_called_once_with(expected, turn_id="vi-tag", realtime_reply=True)
@@ -215,8 +211,7 @@ def test_tagged_reply_flushes_before_provider_finishes(monkeypatch, chunks, read
 
 
 def test_realtime_turn_reuses_a_filler_armed_before_the_handshake(monkeypatch):
-    """The caller may arm the dead-air filler before the Gemini reconnect and
-    hand it in; the turn must not create a second one (one filler per turn)."""
+    """A filler handed in by the caller is reused, not duplicated."""
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_NATIVE_AUDIO", False)
     monkeypatch.setattr(realtime_turn.hal_config, "REALTIME_PROVIDER", "openai")

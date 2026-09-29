@@ -204,7 +204,7 @@ xcrun notarytool log <submission-id> --keychain-profile autonomous-notary
 
 **Notarize status `Accepted` nhưng Gatekeeper vẫn cảnh báo trên máy user.** DMG chưa staple. Hoặc chạy lại `make notarize` trên DMG hiện có (re-staple), hoặc build lại với `make dmg-signed`.
 
-**User báo "app is damaged".** Thường là quarantine xattr đã set mà staple ticket thiếu/invalid. Bảo user chạy `xattr -d com.apple.quarantine /Applications/AutonomousBuddy.app` 1 lần; fix triệt để là ship DMG đã staple.
+**User báo "app is damaged".** Thường là quarantine xattr đã set mà staple ticket thiếu/invalid. Bảo user chạy `xattr -d com.apple.quarantine "/Applications/Autonomous Buddy.app"` 1 lần; fix triệt để là ship DMG đã staple.
 
 ## Khi nào cần re-notarize
 

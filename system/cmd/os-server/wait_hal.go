@@ -11,9 +11,8 @@ import (
 	"go.autonomous.ai/os/system/lib/hal"
 )
 
-// waitHALMain is an optional systemd ExecStartPre for the agent gateway. It
-// gives hardware first access to storage at boot without holding up os-server.
-// A failed HAL must not prevent text-only agent access indefinitely.
+// waitHALMain is an optional ExecStartPre that lets HAL boot first; a failed HAL
+// must not block text-only agent access indefinitely.
 func waitHALMain() int {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()

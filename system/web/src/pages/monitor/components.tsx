@@ -23,16 +23,10 @@ export function StatusDot({ ok }: { ok: boolean }) {
   );
 }
 
-// "agent" is a virtual target: os-server resolves it to the configured runtime's
-// CLI (codex / claudecode / opencode / picoclaw). The browser deliberately does
-// not learn which runtime is active just to build this URL.
+// "agent" is a virtual target that os-server resolves to the active runtime's CLI.
 export function SoftwareUpdateButton({ target, label, onTriggered }: {
   target: "os-server" | "bootstrap" | "web" | "hal" | "device" | "agent";
   label: string;
-  // Called the moment the POST is accepted. The card needs this because a small
-  // component (os-server, web) finishes in a few seconds — faster than the idle
-  // poll interval — so waiting for the server to report it would show no
-  // "updating" state at all for exactly the updates that look most abrupt.
   onTriggered?: (target: string) => void;
 }) {
   const [busy, setBusy] = useState(false);
@@ -45,14 +39,8 @@ export function SoftwareUpdateButton({ target, label, onTriggered }: {
       const headers: HeadersInit = token ? { Authorization: `Bearer ${token}` } : {};
       const r = await fetch(`${API}/system/software-update/${target}`, { method: "POST", headers });
       if (r.ok) {
-        // No "OK" here on purpose: the request only STARTS the install, and a
-        // success word next to a button that is about to be replaced by
-        // "updating…" reads as "already done" — the wrong story in the wrong
-        // order. The row's own state tells the truth from here.
         onTriggered?.(target);
       } else {
-        // Surface what the server said (e.g. "rate-limited, retry in 8s",
-        // "bootstrap unreachable") instead of a bare "Failed" that hides it.
         let reason = "Failed";
         try {
           const j = await r.json();
@@ -89,18 +77,12 @@ export function SoftwareUpdateButton({ target, label, onTriggered }: {
   );
 }
 
-// Icon-sized restart button for the Agent Gateway card. POSTs /api/agent/restart
-// which does "enable + start/restart" recovery: backend re-enables the systemd
-// unit (survives reboot) and then calls the runtime's RestartAgent() — which
-// resolves to `systemctl restart <unit>` (starts the service even if currently
-// stopped). Confirm() prompt keeps a stray click from cycling the gateway.
+// Icon-sized restart button for the Agent Gateway card.
 export function RestartAgentButton({ agentName }: { agentName?: string }) {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
   const trigger = async () => {
     const label = agentName ? ` (${agentName})` : "";
-    // Guard against a stray second click landing during the confirm dialog
-    // (rare but possible if the operator double-clicks the icon).
     if (busy) return;
     if (!window.confirm(
       `Restart the agent gateway${label}?\n\n` +
@@ -118,8 +100,6 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
       setMsg("Unreachable");
     } finally {
       setBusy(false);
-      // Longer than the fetch response so the operator has time to read the
-      // outcome before it fades — avoids the "did it work?" second click.
       setTimeout(() => setMsg(null), 4000);
     }
   };
@@ -165,10 +145,7 @@ export function RestartAgentButton({ agentName }: { agentName?: string }) {
   );
 }
 
-// DevicePowerButtons uses os-server rather than HAL directly. The server owns
-// admin auth and gives the browser a response before it asks HAL to start the
-// cue-aware power action; a direct HAL call could disappear before the UI knows
-// whether the request was accepted.
+// DevicePowerButtons uses os-server rather than HAL directly.
 export function DevicePowerButtons() {
   const [busy, setBusy] = useState<"reboot" | "shutdown" | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -198,8 +175,6 @@ export function DevicePowerButtons() {
     } catch {
       setMessage("Unreachable");
     } finally {
-      // Keep both buttons disabled after an accepted request: the device is
-      // deliberately about to leave the network, so a second request is never useful.
       if (!accepted) {
         setBusy(null);
         setTimeout(() => setMessage(null), 5000);
@@ -263,8 +238,6 @@ export function SoftwareUpdateButtons() {
 
 export function HWBadge({ label, ok }: { label: string; ok: boolean }) {
   return (
-    // Offline badges get .lm-hw-down so a failed subsystem breathes a red glow
-    // and pulls the eye; healthy (green) ones stay static.
     <div
       className={ok ? undefined : "lm-hw-down"}
       style={{
@@ -286,9 +259,7 @@ export function HWBadge({ label, ok }: { label: string; ok: boolean }) {
   );
 }
 
-// Skeleton — a shimmering placeholder bar (see .lm-skel in index.css) that holds
-// a card's vertical space while its data is loading, so the real content slides
-// in without a layout jump. `lines` stacks several bars at typical row heights.
+// Shimmering placeholder bar that holds a card's height while loading.
 export function Skeleton({ width = "100%", height = 12, style }: {
   width?: number | string;
   height?: number;
@@ -340,14 +311,12 @@ export function GaugeRing({
             </feMerge>
           </filter>
         </defs>
-        {/* Track */}
         <circle
           cx={size / 2} cy={size / 2} r={r}
           fill="none"
           stroke="var(--lm-border)"
           strokeWidth={8}
         />
-        {/* Filled arc */}
         <circle
           cx={size / 2} cy={size / 2} r={r}
           fill="none"
@@ -359,7 +328,6 @@ export function GaugeRing({
           transform={`rotate(-90 ${size / 2} ${size / 2})`}
           style={{ filter: `url(#${glowId})`, transition: "stroke-dasharray 0.7s ease" }}
         />
-        {/* Center value */}
         <text
           x={size / 2} y={size / 2 - 4}
           textAnchor="middle"
@@ -397,10 +365,8 @@ export function Sparkline({
   data: number[];
   color?: string;
   height?: number;
-  // If set, locks the chart's Y scale to this maximum (e.g. 100 for %).
-  // Otherwise auto-scales to the largest value in `data`.
+  // Locks the Y scale max; otherwise auto-scales.
   max?: number;
-  // Draws faint horizontal gridlines at 25/50/75% of `max`. Implies fixed max.
   grid?: boolean;
 }) {
   if (data.length < 2) return <div style={{ height }} />;
@@ -417,12 +383,10 @@ export function Sparkline({
     pts.join(" L ") +
     ` L ${w},${h} Z`;
 
-  // Always label 0 and yMax bounds when grid is on; add 25/50/75 intermediates too.
   const gridLevels = grid ? [0, 0.25, 0.5, 0.75, 1] : [];
 
   const svg = (
-    // Pin SVG height in pixels — without this, width:100% + viewBox + preserveAspectRatio="none"
-    // lets the SVG grow proportionally to its container's width, blowing past the requested height.
+    // Pin pixel height: width:100% + preserveAspectRatio="none" would scale it.
     <svg width="100%" height={h} viewBox={`0 0 ${w} ${h}`} preserveAspectRatio="none" style={{ display: "block", height: h }}>
       <defs>
         <linearGradient id={`sg-${color.replace(/[^a-z]/gi, "")}`} x1="0" y1="0" x2="0" y2="1">
@@ -430,7 +394,6 @@ export function Sparkline({
           <stop offset="100%" stopColor={color} stopOpacity={0} />
         </linearGradient>
       </defs>
-      {/* Horizontal gridlines. Dashed and faint so they don't fight the line. */}
       {gridLevels.map((g) => {
         const y = h - g * (h - 4) - 2;
         return (
@@ -462,9 +425,7 @@ export function Sparkline({
 
   if (!grid) return svg;
 
-  // Y-axis labels overlaid on the right edge. Using absolute HTML positioning
-  // instead of SVG <text> so labels keep a fixed pixel size regardless of
-  // the SVG's non-uniform stretching from preserveAspectRatio="none".
+  // HTML labels keep a fixed pixel size despite the SVG's non-uniform stretch.
   return (
     <div style={{ position: "relative", paddingRight: 28 }}>
       {svg}
@@ -495,8 +456,6 @@ export function Sparkline({
 export function SignalBars({ value }: { value: number }) {
   const bars = 4;
   const active = value >= -50 ? 4 : value >= -65 ? 3 : value >= -75 ? 2 : value >= -85 ? 1 : 0;
-  // Tier color: green when signal is strong, amber/red when weak.
-  // Reading amber for a 360 Mbps link is misleading — that's a strong connection.
   const tierColor =
     active >= 3 ? "var(--lm-green)" :
     active === 2 ? "var(--lm-amber)" :
@@ -522,8 +481,6 @@ export function StatPill({ label, value, color, bullet }: {
   label: string;
   value: string | number;
   color?: string;
-  // bullet draws a small colored disc before the label so visually-related rows
-  // (e.g. OS server vs device uptimes) can be scanned apart at a glance.
   bullet?: string;
 }) {
   return (
@@ -555,11 +512,7 @@ export function StatPill({ label, value, color, bullet }: {
   );
 }
 
-// StatRow renders the recurring "label left / value right" row used across the
-// Overview status cards (Agent Gateway, Network, Presence, Versions…). value can
-// be a plain string/number (styled via `color`/`mono`) or any node for custom
-// content (badges, signal bars). Centralizes the fontSize/spacing that was
-// previously copy-pasted ~12 times.
+// StatRow renders the recurring "label left / value right" row used across the Overview status cards (Agent Gateway, Network, Presence, Versions…).
 export function StatRow({ label, value, color, mono }: {
   label: string;
   value: React.ReactNode;
@@ -582,9 +535,6 @@ export function StatRow({ label, value, color, mono }: {
   );
 }
 
-// STATUS_TONE maps a semantic status to its (text color, soft background, border)
-// triple. Replaces the rgba(…,0.1)/(…,0.3) literals that were hand-written per
-// pill. `ok`/`error`/`active` mirror the green/red/amber states already used.
 export const STATUS_TONE = {
   ok:     { color: "var(--lm-green)",      bg: "rgba(52,211,153,0.1)",  border: "rgba(52,211,153,0.3)" },
   error:  { color: "var(--lm-red)",        bg: "rgba(239,68,68,0.1)",   border: "rgba(239,68,68,0.3)" },
@@ -594,14 +544,11 @@ export const STATUS_TONE = {
 
 export type StatusTone = keyof typeof STATUS_TONE;
 
-// StatusBadge is the uppercase pill in card headers (ONLINE/OFFLINE, ACTIVE,
-// session Active/Pending). Pass an explicit tone, or let `ok` pick ok/error.
+// StatusBadge is the uppercase pill in card headers (ONLINE/OFFLINE, ACTIVE, session Active/Pending).
 export function StatusBadge({ text, tone, ok, pulse }: {
   text: string;
   tone?: StatusTone;
   ok?: boolean;
-  // pulse adds a gentle breathing ring (see `.lm-pulse` in index.css) to signal
-  // a live/real-time state. Purely decorative.
   pulse?: boolean;
 }) {
   const t = STATUS_TONE[tone ?? (ok ? "ok" : "error")];
@@ -615,10 +562,7 @@ export function StatusBadge({ text, tone, ok, pulse }: {
   );
 }
 
-// CardLabel renders a card's uppercase heading with a small amber icon chip in
-// front — the same header affordance as the setup SectionCard. Shared across the
-// Overview and System tabs. `icon` is a lucide glyph (inherits the chip's amber
-// color via currentColor).
+// CardLabel renders a card's uppercase heading with a small amber icon chip in front
 export function CardLabel({ icon, text }: { icon: ReactNode; text: string }) {
   return (
     <div style={{ ...S.cardLabel, display: "flex", alignItems: "center", gap: 8, marginBottom: 0 }}>
@@ -628,10 +572,7 @@ export function CardLabel({ icon, text }: { icon: ReactNode; text: string }) {
   );
 }
 
-// ConfirmDialog — a small modal that asks the user to confirm an action before
-// it runs. Follows the repo's modal convention (fixed full-screen scrim, click
-// the backdrop or press Esc to cancel, stopPropagation on the card). Set
-// `destructive` for actions like logout/delete so the confirm button reads red.
+// Confirmation modal; Esc or backdrop cancels, `destructive` reads red.
 export function ConfirmDialog({
   title,
   message,
@@ -650,7 +591,6 @@ export function ConfirmDialog({
   onCancel: () => void;
 }) {
   const [, , themeClass] = useTheme();
-  // Esc cancels — matches the click-outside affordance for keyboard users.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onCancel();
@@ -659,8 +599,7 @@ export function ConfirmDialog({
     return () => window.removeEventListener("keydown", onKey);
   }, [onCancel]);
 
-  // Portal to <body>: Overview cards use overflow:hidden and a hover transform,
-  // either of which would otherwise clip a position:fixed dialog to the card.
+  // Portal to <body>: card overflow/transform would clip a fixed dialog.
   return createPortal(
     <div
       className={`lm-root ${themeClass}`}
