@@ -19,6 +19,8 @@ LOG = logging.getLogger(__name__)
 ENABLED = True
 TIMEOUT_SECONDS = 3.0
 MAX_RESPONSE = 65536
+# Local wire budget, not a provider limit. Never truncate the eligible catalog.
+MAX_REQUEST = 256 * 1024
 # Skill selection only; these thresholds never authorize a tool action.
 MIN_CHOICE_PROBABILITY = .70
 MIN_CHOICE_MARGIN = .20
@@ -64,6 +66,7 @@ def read_config(path):
 def live_skills():
     # Scan the OS namespace directly so a bundled namesake cannot hide an OS skill.
     from hermes_constants import get_hermes_home
+    from tools.skills_tool import skills_list
     from agent.skill_utils import (get_disabled_skill_names, iter_skill_index_files,
                                   parse_frontmatter, skill_matches_environment,
                                   skill_matches_platform)
@@ -85,12 +88,23 @@ def live_skills():
             continue
         skills.append({"name": name, "lookup_name": lookup,
                        "description": frontmatter.get("description", ""), "category": "openclaw-imports"})
+    # Use the runtime's public catalog for authored, bundled and plugin skills.
+    # Keep the direct OS scan above: native bare-name deduplication can hide an
+    # OS skill behind a namesake. Native names are also its skill_view handles.
+    native = json.loads(skills_list())
+    if not isinstance(native, dict) or native.get("success") is not True or not isinstance(native.get("skills"), list):
+        raise ValueError("Native skill catalog unavailable")
+    for skill in native["skills"]:
+        if not isinstance(skill, dict):
+            raise ValueError("Invalid native skill metadata")
+        if skill.get("category") != "openclaw-imports":
+            skills.append({**skill, "lookup_name": skill.get("name")})
     return skills
 
 
 def candidates_for(skills):
-    skills = sorted((s for s in skills if s.get("category") == "openclaw-imports"),
-                    key=lambda s: s.get("name", ""))
+    skills = sorted((s for s in skills if isinstance(s, dict) and isinstance(s.get("name"), str)),
+                    key=lambda s: (s.get("category") != "openclaw-imports", s["name"]))
     candidates, names, seen = [], {}, set()
     for skill in skills:
         name, description = skill.get("name"), skill.get("description")
@@ -105,9 +119,6 @@ def candidates_for(skills):
         candidate_id = "skill_" + str(len(candidates))
         candidates.append({"id": candidate_id, "description": (name + ": " + description)[:500]})
         names[candidate_id] = lookup
-        if len(candidates) > 32:
-            # Never choose from an arbitrarily truncated roster.
-            return [], {}
     return candidates, names
 
 
@@ -254,8 +265,12 @@ class Router:
                 if not candidates:
                     output.append({"outcome": "skipped", "reason": "no_candidates"})
                     return
+                payload = payload_for(user_message, candidates)
+                if len(json.dumps(payload).encode()) > MAX_REQUEST:
+                    output.append({"outcome": "skipped", "reason": "catalog_budget"})
+                    return
                 stage, stage_start = "request", time.monotonic()
-                result = self.request(*config, payload_for(user_message, candidates))
+                result = self.request(*config, payload)
                 timings["request_ms"] = round((time.monotonic() - stage_start) * 1000)
                 stage = "parse"
                 evaluated = evaluate_decision(result, names)

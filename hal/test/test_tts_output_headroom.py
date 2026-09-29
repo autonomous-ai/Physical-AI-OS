@@ -159,6 +159,18 @@ def test_cold_reference_setup_happens_before_the_first_speaker_sample(monkeypatc
     assert owner._write_started_ts is None
 
 
+def test_output_open_prepares_reference_without_playback(monkeypatch):
+    owner, _, sinks = _owner(monkeypatch)
+    rates = []
+    monkeypatch.setattr(module.aec, "prepare_playback", rates.append)
+    first = owner._ensure_stream(44100)
+    assert rates == [44100]
+    assert not sinks[0].writes
+    assert owner._audio_written_fired is False
+    assert owner._ensure_stream(44100) is first
+    assert rates == [44100]
+
+
 def test_stop_during_cold_setup_never_starts_cancelled_speech(monkeypatch):
     import threading
 

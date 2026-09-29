@@ -497,25 +497,30 @@ existing onboarding gateway restart; an unchanged reconcile is a no-op.
 **Jev is disabled by default** by `const jevEnabled = false` in `runtimes/picoclaw/jev_hook.go`. When disabled, bridges construct no selector; native onboarding installs no assets and creates no Jev registration. If an older Jev registration exists, Go only disables that registration and preserves unrelated settings. Disabled integrations do not read skills, call the provider, or add Jev content to requests. Enabling after validation requires changing the Go switch, rebuilding and restarting through runtime management. The observer still manages the global `hooks.enabled` gate; Jev leaves that gate unchanged.
 The sidecar stores only the absolute OS config path; credentials are read at use.
 
-The hook shares Hermes's selector implementation: at most 32 candidates, a
-3-second total selection/load budget, choice >= 0.70, margin >= 0.20 and
+The hook shares Hermes's selector implementation: a 256 KiB serialized request
+budget instead of a fixed candidate count (oversized catalogs abstain without
+truncation), a 3-second total selection/load budget, choice >= 0.70, margin >= 0.20 and
 independent fit >= 0.60. Errors, busy workers, timeout, abstention, slash commands
 and explicit `[skills: ...]` instructions preserve ordinary runtime discovery.
 Only current user text and candidate descriptions reach Jev, never chat history.
 Logs use `[picoclaw-jev]` and omit prompts, credentials and skill contents.
 
 The candidate roster comes from PicoClaw's native system `<skills>` summary,
-restricted to existing files inside `/root/.picoclaw/workspace/skills`. No extra
-filesystem catalog is invented. Missing/unsupported roster shapes fail open.
+including workspace, global and built-in skills. Native discovery determines
+workspace > global > built-in precedence and applies the turn's `AllowedSkills`
+filter before publishing; the hook does not scan other directories or restore
+omitted skills. Identical entries repeated across system message parts are
+deduplicated. Missing/unsupported roster shapes fail open.
 The selected complete SKILL.md, absolute path and reference directory are loaded
 as transient current-user-message context, preserving system messages and tools.
-Files larger than 128 KiB, paths escaping that skill root, ambiguous names and
+Files larger than 128 KiB, non-absolute or traversal paths, ambiguous names and
 inline shell templates are rejected; nothing in a skill is executed by preloading.
 A bounded 256-turn in-memory cache remembers only the selected skill and original
 prompt. Every model iteration rechecks the current native roster and safely
 reloads the complete file; removal or load failure invalidates that selection.
 Attachment/content-part, system, sensing and already-handled turns bypass Jev.
-Descriptor-relative no-follow opens reject symlinks and non-regular files; the
+Descriptor-relative no-follow opens start at the filesystem root and reject
+symlinks in every ancestor, symlink files and non-regular files; the
 128 KiB limit also applies to the composed context. No persona or conversation-history file is written.
 Unknown turn IDs/iterations and child turns abstain.
 

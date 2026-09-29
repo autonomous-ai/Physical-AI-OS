@@ -29,7 +29,7 @@ def test_elevenlabs_normal_speed_is_sent_explicitly():
     backend._base_url = "https://proxy.example/v1/elevenlabs"
     with httpx.Client(transport=httpx.MockTransport(respond)) as client:
         backend._client = client
-        list(backend.stream_pcm("Hello", "Rachel", "eleven_v3", 1.0))
+        list(backend.stream_pcm("Hello", "Rachel", ElevenLabsTTSBackend.DEFAULT_MODEL, 1.0))
     assert requests[0]["voice_settings"]["speed"] == 1.0
 
     class Socket:
@@ -39,15 +39,16 @@ def test_elevenlabs_normal_speed_is_sent_explicitly():
         def close(self):
             pass
 
-        def __iter__(self):
-            return iter([])
+        def recv(self, timeout):
+            return json.dumps({"is_final_audio_for_turn": True})
 
-    ws = object.__new__(ElevenLabsWSTTSBackend)
+    ws = ElevenLabsWSTTSBackend("test-only", "https://proxy.example/v1")
     ws._api_key = "test-only"
     ws._url_tmpl = "wss://proxy.example/{voice_id}?model_id={model}"
     ws._connect = lambda *args, **kwargs: Socket()
     list(ws.stream_pcm("Hello", "Rachel", "", 1.0))
     assert requests[1]["voice_settings"]["speed"] == 1.0
+    ws.close()
 
 
 @pytest.mark.parametrize("saved", [None, 0, 5, "bad", True])
@@ -95,7 +96,7 @@ def test_preview_speed_reaches_head_and_tail_without_changing_next_turn():
     svc._np = np
     svc._speed = 1.2
     svc._voice = "Rachel"
-    svc._model = "eleven_v3"
+    svc._model = ElevenLabsTTSBackend.DEFAULT_MODEL
     svc._instructions = None
     svc._max_retries = 0
     svc._stop_event = threading.Event()

@@ -366,6 +366,7 @@ class TTSService:
             stream.start()
         self._stream = _WatchedStream(stream, self)
         self._stream_rate = dst_rate
+        aec.prepare_playback(dst_rate)
         logger.info(
             "Persistent OutputStream opened at %d Hz (requested_latency=%.3fs, actual_latency=%s)",
             dst_rate, latency, stream.latency,

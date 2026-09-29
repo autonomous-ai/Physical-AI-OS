@@ -478,24 +478,28 @@ gateway hiện có của onboarding; reconcile không đổi không restart.
 **Jev mặc định tắt** bằng `const jevEnabled = false` trong `runtimes/picoclaw/jev_hook.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật sau kiểm chứng, đổi cờ Go rồi build và restart qua luồng quản lý runtime. Observer vẫn quản lý global gate `hooks.enabled`; Jev không thay đổi gate đó.
 Sidecar chỉ chứa đường dẫn tuyệt đối tới config OS; credential được đọc khi dùng.
 
-Hook dùng chung selector Hermes: tối đa 32 ứng viên, ngân sách chọn/nạp tổng cộng
-3 giây, choice >= 0.70, margin >= 0.20, fit độc lập >= 0.60. Lỗi, worker bận,
+Hook dùng chung selector Hermes: ngân sách request sau serialize 256 KiB thay
+cho giới hạn số ứng viên (catalog quá lớn thì abstain, không cắt bớt), ngân sách
+chọn/nạp tổng cộng 3 giây, choice >= 0.70, margin >= 0.20, fit độc lập >= 0.60. Lỗi, worker bận,
 timeout, abstain, slash command hoặc chỉ dẫn `[skills: ...]` giữ cơ chế tìm skill
 bình thường. Chỉ câu người dùng hiện tại và mô tả ứng viên được gửi tới Jev,
 không gửi lịch sử chat. Log `[picoclaw-jev]` không ghi prompt, credential hay nội
 dung skill.
 
 Danh sách ứng viên lấy từ `<skills>` trong system prompt native của PicoClaw,
-giới hạn ở file tồn tại trong `/root/.picoclaw/workspace/skills`. Không tự tạo
-catalog bằng cách quét thư mục khác. Thiếu roster hoặc sai định dạng thì bỏ qua.
+gồm skill workspace, global và built-in. Discovery native quyết định ưu tiên
+workspace > global > built-in và áp dụng bộ lọc `AllowedSkills` của turn trước
+khi công bố; hook không quét thư mục khác hay thêm lại skill bị loại. Các entry
+giống hệt lặp ở nhiều phần system message được gộp lại. Thiếu roster hoặc sai
+định dạng thì bỏ qua.
 Toàn bộ SKILL.md được chọn, đường dẫn tuyệt đối và thư mục tham chiếu được nạp
 vào context tạm của user message hiện tại; giữ nguyên system message và tools.
-Từ chối file quá 128 KiB, đường dẫn vượt skill root, tên trùng không rõ ràng và
+Từ chối file quá 128 KiB, đường dẫn tương đối hoặc có traversal, tên trùng không rõ ràng và
 inline shell template; preload không thực thi nội dung skill. Cache RAM giới hạn 256 turn chỉ nhớ skill đã chọn và prompt gốc. Mỗi iteration
 kiểm tra lại roster native hiện tại và đọc lại toàn bộ file an toàn; skill bị gỡ
 hoặc lỗi đọc sẽ hủy lựa chọn. Turn có attachment/content-part, system, sensing
-hay đã handled đều bỏ qua Jev. Đọc theo descriptor với no-follow chặn symlink
-và file không phải regular; context sau đóng gói cũng giới hạn 128 KiB. Không ghi persona
+hay đã handled đều bỏ qua Jev. Đọc theo descriptor từ gốc filesystem với
+no-follow chặn symlink ở mọi thư mục cha, symlink file và file không phải regular; context sau đóng gói cũng giới hạn 128 KiB. Không ghi persona
 hoặc file lịch sử. Turn thiếu ID/iteration và child turn được bỏ qua.
 
 Hook native bao phủ kênh WebSocket `pico` (voice/Web/MQTT qua OS) lẫn kênh trực

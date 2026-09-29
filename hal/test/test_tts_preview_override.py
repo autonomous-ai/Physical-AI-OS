@@ -8,6 +8,7 @@ import numpy as np
 import pytest
 from fastapi import HTTPException
 
+from hal.drivers.voice.tts.elevenlabs import ElevenLabsTTSBackend
 from hal.drivers.voice.tts.service import TTSService
 from hal.models import SpeakRequest
 from hal.routes import voice
@@ -26,7 +27,7 @@ def test_preview_backend_and_voice_reach_head_and_tail_only():
     svc._np = np
     svc._speed = 1.0
     svc._voice = "Ngan"
-    svc._model = "eleven_v3"
+    svc._model = ElevenLabsTTSBackend.DEFAULT_MODEL
     svc._instructions = None
     svc._max_retries = 0
     svc._stop_event = threading.Event()

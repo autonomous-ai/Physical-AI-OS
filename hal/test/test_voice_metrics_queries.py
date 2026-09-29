@@ -1,4 +1,4 @@
-"""Execute the documented KPI-2 aggregation against tracker observations."""
+"""Execute the documented KPI-1 and KPI-2 aggregations against tracker observations."""
 
 import sqlite3
 from pathlib import Path
@@ -73,22 +73,33 @@ def _aggregate_ack(rows):
     query = "SELECT\n" + block.split("\nSELECT\n", 1)[1].split("```", 1)[0]
     with sqlite3.connect(":memory:") as db:
         db.create_aggregate("COUNTIF", 1, _CountIf)
-        db.execute("CREATE TABLE i (eligible TEXT, outcome TEXT, exclusion_reason TEXT, endpoint_known TEXT, ack_ms INTEGER)")
-        db.executemany("INSERT INTO i VALUES (?, ?, ?, ?, ?)", rows)
-        return db.execute(query).fetchone()
+        db.execute("CREATE TABLE i (ack_schema_version INTEGER, eligible TEXT, outcome TEXT, exclusion_reason TEXT, endpoint_known TEXT, ack_ms INTEGER)")
+        db.executemany("INSERT INTO i VALUES (?, ?, ?, ?, ?, ?)", rows)
+        return sorted(db.execute(query).fetchall())
 
 
 def test_kpi1_missing_endpoint_cohort_stays_na_with_visible_coverage():
-    rows = [("false", "excluded", "speech_endpoint_unavailable", "false", None)] * 44
-    rows += [("false", "excluded", "interrupted_by_user", "false", None)] * 13
-    rows += [("false", "excluded", "rejected_non_user", "false", None)] * 30
-    assert _aggregate_ack(rows) == (87, 0, 87, 44, 0, 0, 0, None)
+    rows = [(2, "false", "excluded", "speech_endpoint_unavailable", "false", None)] * 44
+    rows += [(2, "false", "excluded", "interrupted_by_user", "false", None)] * 13
+    rows += [(2, "false", "excluded", "rejected_non_user", "false", None)] * 30
+    assert _aggregate_ack(rows) == [(2, 87, 0, 87, 44, 0, 0, 0, None)]
 
 
 def test_kpi1_no_ack_remains_in_denominator():
     rows = [
-        ("true", "acknowledged", "", "true", 300),
-        ("true", "no_ack", "", "true", None),
-        ("false", "excluded", "speech_endpoint_unavailable", "false", None),
+        (2, "true", "acknowledged", "", "true", 300),
+        (2, "true", "no_ack", "", "true", None),
+        (2, "false", "excluded", "speech_endpoint_unavailable", "false", None),
     ]
-    assert _aggregate_ack(rows) == (3, 2, 1, 1, 2, 1, 1, 50.0)
+    assert _aggregate_ack(rows) == [(2, 3, 2, 1, 1, 2, 1, 1, 50.0)]
+
+
+def test_kpi1_different_ack_schemas_are_not_combined():
+    rows = [
+        (1, "true", "acknowledged", "", "true", 300),
+        (2, "true", "no_ack", "", "true", None),
+    ]
+    assert _aggregate_ack(rows) == [
+        (1, 1, 1, 0, 0, 1, 0, 1, 100.0),
+        (2, 1, 1, 0, 0, 1, 1, 0, 0.0),
+    ]

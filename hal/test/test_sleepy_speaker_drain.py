@@ -10,10 +10,12 @@ class FakeTTS:
     def __init__(self, speaking=False):
         self.speaking = speaking
         self.stop_calls = 0
+        self.stopped = threading.Event()
 
     def stop(self):
         self.stop_calls += 1
         self.speaking = False
+        self.stopped.set()
 
     def speak_after(self, delay_s, duration_s):
         """Start speaking `delay_s` from now and stop `duration_s` later."""
@@ -146,6 +148,8 @@ class SleepySpeakerDrainTest(unittest.TestCase):
                                 "muted early — the drain did not wait for the announcement")
         self.assertLess(elapsed, state.SLEEPY_SPEAKER_DRAIN_MAX_S + 0.5,
                         "drain ran past its cap")
+        # stop() runs after the mute flag is published, outside privacy.lock; wait instead of racing it.
+        self.assertTrue(tts.stopped.wait(0.5), "the stalled speech was left playing past the cap")
         self.assertEqual(tts.stop_calls, 1, "the stalled speech was left playing past the cap")
         self.assertFalse(tts.speaking, "device still speaking after the drain capped out")
 

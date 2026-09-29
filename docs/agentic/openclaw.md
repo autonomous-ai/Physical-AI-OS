@@ -15,15 +15,19 @@ Full skill contents stay local and are added to the current native request.
 
 The plugin reads the host-produced session skill snapshot, checks the active
 session ID, and intersects resolved skills with the native advertised roster.
-It rechecks config and files after selection. Initial support deliberately covers
-simple skills in the active workspace's `skills/` directory. Skills with
+It rechecks config and files after selection. Simple workspace, bundled, managed
+and plugin skills can participate, using the exact canonical `SKILL.md` paths
+resolved by the native snapshot; no workspace-directory restriction applies.
+Native snapshot ordering resolves duplicate names. Skills with
 dependency/platform metadata, custom invocation policy, unknown tool policies,
 active sandboxing, symlinks or oversized files defer to normal native loading.
 Missing/incompatible snapshots also defer, including runtimes that do not expose
 the required native session accessors. There is no filesystem-wide skill scan.
 
-The provider receives at most 32 candidates. More than 32 defers instead of
-arbitrarily truncating. Choice probability must be at least 0.70, margin at least
+There is no 32-candidate cutoff. The full serialized UTF-8 request must fit
+256 KiB; an oversized request defers before credential access or network I/O,
+without truncating the roster. Skill files remain bounded to 32 KiB; responses
+and preload envelopes remain bounded to 64 KiB. Choice probability must be at least 0.70, margin at least
 0.20 and independent fit at least 0.60, matching Hermes skill selection. The
 complete operation has a 3-second deadline, no retry, one in-flight operation,
 and a 30-second error cooldown. Timeout, malformed responses, abstention or

@@ -15,15 +15,19 @@ giữ ở local và được thêm vào yêu cầu hiện tại trong runtime.
 
 Plugin đọc snapshot skill do native tạo, kiểm tra ID session đang chạy, rồi lấy
 giao giữa các skill đã resolve và danh sách native quảng bá. Sau khi chọn, plugin
-kiểm tra lại cấu hình và file. Bản đầu chỉ hỗ trợ skill đơn giản trong thư mục
-`skills/` của workspace hiện tại. Skill có metadata dependency/platform, policy
+kiểm tra lại cấu hình và file. Skill đơn giản từ workspace, bundled, managed và
+plugin đều có thể tham gia qua đường dẫn `SKILL.md` canonical chính xác do snapshot
+native cung cấp, không giới hạn thư mục workspace. Thứ tự snapshot native quyết
+định ưu tiên khi trùng tên. Skill có metadata dependency/platform, policy
 invocation riêng, tool policy chưa hỗ trợ, sandbox đang bật, symlink hoặc file quá
 lớn được giao cho cơ chế nạp native. Snapshot thiếu hoặc không tương thích cũng
 bỏ qua, kể cả runtime không cung cấp accessor session cần thiết. Không quét skill
 trên toàn filesystem.
 
-Tối đa 32 ứng viên được gửi tới provider. Có hơn 32 thì bỏ qua, không cắt danh sách
-tùy ý. Ngưỡng choice ít nhất 0.70, margin ít nhất 0.20 và fit độc lập ít nhất 0.60,
+Không còn giới hạn 32 ứng viên. Request đầy đủ sau serialize UTF-8 phải nằm trong
+256 KiB; vượt mức thì bỏ qua trước khi đọc credential hay gọi mạng, không cắt danh
+sách tùy ý. File skill vẫn giới hạn 32 KiB; response và envelope preload giới hạn
+64 KiB. Ngưỡng choice ít nhất 0.70, margin ít nhất 0.20 và fit độc lập ít nhất 0.60,
 giống chọn skill trong Hermes. Toàn thao tác có deadline 3 giây, không retry, tối đa
 một thao tác đang chạy và cooldown 30 giây sau lỗi. Timeout, response sai schema,
 abstain hay thay đổi điều kiện skill đều giữ nguyên yêu cầu ban đầu.

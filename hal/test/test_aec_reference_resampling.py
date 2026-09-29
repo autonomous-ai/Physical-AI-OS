@@ -152,3 +152,43 @@ def test_prepare_dependency_failure_is_best_effort(monkeypatch):
     with patch.object(aec, "_reference_resample_filter", side_effect=ImportError("unavailable")):
         aec.prepare_reference(44100)
     assert bytes(aec._reference._buffer) == b""
+
+
+@pytest.mark.parametrize("speaker_first", [True, False])
+def test_startup_primes_reference_before_first_turn_in_either_device_order(monkeypatch, speaker_first):
+    from hal.drivers.voice._internal import config
+
+    monkeypatch.setattr(config, "AEC_ENABLED", True)
+    monkeypatch.setattr(aec, "_reference", None)
+    monkeypatch.setattr(aec, "_canceller", None)
+    monkeypatch.setattr(aec, "_playback_rate", None)
+    monkeypatch.setattr(aec, "EchoCanceller", lambda rate, *args: SimpleNamespace(_rate=rate))
+    with patch.object(scipy.signal, "firwin", wraps=scipy.signal.firwin) as design:
+        if speaker_first:
+            aec.prepare_playback(44100)
+            assert design.call_count == 0
+        assert aec.configure(16000)
+        if not speaker_first:
+            aec.prepare_playback(44100)
+        assert design.call_count == 1
+        assert not aec._reference._buffer
+        assert aec._reference.idle_for() == float("inf")
+        # The first filler and repeated capture setup reuse the warm filter.
+        assert aec.configure(16000)
+        aec.prepare_reference(44100)
+        aec.reference_write(np.zeros(441, dtype=np.float32), 44100)
+        assert design.call_count == 1
+
+
+def test_new_playback_rate_primes_without_resetting_reference(monkeypatch):
+    reference = aec.EchoReference(16000)
+    monkeypatch.setattr(aec, "_reference", reference)
+    monkeypatch.setattr(aec, "_canceller", SimpleNamespace(_rate=16000))
+    monkeypatch.setattr(aec, "_playback_rate", None)
+    aec.prepare_playback(44100)
+    aec.reference_write(np.ones(441, dtype=np.float32), 44100)
+    before = bytes(reference._buffer)
+    aec.prepare_playback(48000)
+    assert bytes(reference._buffer) == before
+    assert aec._reference is reference
+    assert aec._reference_resample_filter.cache_info().misses == 2

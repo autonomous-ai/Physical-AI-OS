@@ -19,20 +19,22 @@ from hal.drivers.voice.tts.tempo import change_tempo
 
 logger = logging.getLogger("hal.voice.tts")
 
+# Chunks with only audio tags (e.g. "[laughs]") have no speakable text; ElevenLabs 400s them.
 _AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 
 
 class ElevenLabsTTSBackend(TTSBackend):
     """ElevenLabs TTS backend with streaming support."""
 
-    DEFAULT_MODEL = "eleven_v3"
-    cache_revision = "local-v3-tempo-v1"
+    DEFAULT_MODEL = "eleven_v4_turbo"
+    cache_revision = "default-v4-turbo-local-tempo-v1"
     supports_synthesis_cancellation = True
     ELEVENLABS_PATH = "/elevenlabs"
 
     # Voice name -> voice_id mapping, grouped by trained language. The web UI filters
     # this by stt_language so VN/CN owners don't have to scroll past 22 American voices
     # to find one that fits.
+    # "zh" is an internal bucket (not a stt_language code) shared by zh-CN and zh-TW.
     _LANG_BUCKET_ZH = "zh"
 
     VOICE_IDS_BY_LANG = {
@@ -174,7 +176,8 @@ class ElevenLabsTTSBackend(TTSBackend):
             "text": text,
             "model_id": el_model,
         }
-        local_tempo = el_model == "eleven_v3"
+        # v3/v4 get speed 1.0 explicitly (omitting it inherits the voice's stored speed); tempo is applied locally.
+        local_tempo = el_model in ("eleven_v3", "eleven_v4", "eleven_v4_turbo")
         body["voice_settings"] = {
             "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
         }
@@ -240,7 +243,7 @@ class ElevenLabsTTSBackend(TTSBackend):
 
         chunks = fetch_chunks()
         if local_tempo:
-            logger.info("TTS v3 local tempo: speed=%.2f provider_speed=1.00", speed)
+            logger.info("TTS %s local tempo: speed=%.2f provider_speed=1.00", el_model, speed)
             chunks = change_tempo(chunks, speed, self.sample_rate,
                                   **({"cancelled": cancelled} if cancelled is not None else {}))
         try:

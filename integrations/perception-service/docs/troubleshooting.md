@@ -24,17 +24,21 @@ cd /workspace/autonomous-os/integrations/perception-service
 | Service restarts every few seconds | Application crash loop | [3](#3-crash-or-group-kill) |
 | Process killed with no traceback | Out of memory | [5](#5-out-of-memory) |
 | `make` fails on start | Disk full on `/` | [6](#6-disk) |
+| `make deploy-dlserver` prints `ABORT: …` | A refusal or a failed new slot; traffic did not move | [8](#8-a-deploy-failed-or-refused) |
+| dlserver runs on both 8001 and 8002 after a deploy | Deploy interrupted, or its rollback was not confirmed | [8](#8-a-deploy-failed-or-refused) |
 
 ## 1. What is actually running
 
 ```bash
 make info                      # dlserver / lbserver / nginx + PIDs
 ps -eo pid,lstart,etime,rss,args | grep -E "[d]lserver|[l]bserver|run-with-restart"
-ss -lntp | grep -E "8899|8001|7999"
+ss -lntp | grep -E "8899|8001|8002|7999"
+cat /tmp/dlserver-active       # serving dlserver slot; no file = 8001
 ```
 
 `make info` reads the PID files, which can be stale. Trust `ps` and `ss` over it
-when they disagree.
+when they disagree. After a [two-slot deploy](deployment.md#zero-downtime-deploy-two-slots)
+the serving slot may be `8002`; `make info` shows only the serving slot.
 
 Then check whether the stack is actually serving, not just listening:
 
@@ -92,6 +96,18 @@ unwritable it rolls over **once** to a fresh inode; if that still fails it mutes
 for `retry_after` (30s) and tries again. Failure notices on stderr are
 rate-limited to one per window instead of a ~40-line traceback per record.
 
+Writes are also **queued** (#530). Each file handler is wrapped by
+`core.logging_ext.queued()`: `logger.info()` only puts the record on an in-memory
+queue (10,000 records max), and a background thread writes it. A write that
+*hangs* on the volume, instead of failing, then stalls only that thread. On
+2026-09-28 a hung write froze lbserver's event loop for ~3 minutes, and every
+request, WebSocket and `/livez` stalled behind it.
+
+If the writer stays stuck long enough to fill the queue, new records are dropped,
+not waited on. Once it recovers, one line reports the loss:
+
+    2026-09-28 04:03:10,512 [core.logging_ext] [-] WARNING: [logging] queue full: dropped 1234 record(s) while the log writer was stalled
+
 So a log that is *permanently* frozen now means the fault outlasted every retry.
 Check:
 
@@ -114,6 +130,8 @@ ls -l /proc/$(cat /tmp/lbserver.pid)/fd | grep -a workspace
 | fd shows `(deleted)` | An unlinked-but-open file. Should not happen since the handlers were merged -- if it does, the double-handler bug is back |
 | fd on a live inode, NUL tail, size frozen | Storage-side fault on that file's backing chunks. Not preventable from the app; the handler should have rolled over |
 | `[logging] write failed` on stderr | The handler is retrying. One line per 30s is normal during a fault |
+| `[logging] queue full: dropped N record(s)` | The log writer was stuck long enough to fill the queue. The server kept serving; the log has a gap |
+| Server froze and was SIGKILLed | Read its stack file in `/tmp` (`lbserver-stack.log`, `dlserver-stack.log`, `dlserver-8002-stack.log`): the watchdog asks for a stack dump (SIGUSR1) before the kill. The last block before the next `--- <name> pid=… started` header is the frozen process |
 
 > `/workspace` is MooseFS. The client tools that would identify a bad chunk
 > (`mfsfileinfo`, `mfscheckfile`) are **not installed** -- worth adding, since
@@ -135,8 +153,9 @@ tail -50  /workspace/logs/autostart/autostart.log
 | `<svc>/stdout.log` | server stdout |
 | `<svc>/stderr.log` | server stderr (library warnings, tracebacks) |
 | `<svc>/watchdog.log` | restart events from `run-with-restart.sh` |
-| `<svc>/<svc>.log` | application log (`RotatingFileHandler`, 1 MB × 3) |
+| `<svc>/<svc>.log` | application log (queued writes, `ResilientRotatingFileHandler`, 1 MB × 3) |
 | `<svc>/uvicorn.log` | uvicorn error **and** access log (one shared handler) |
+| `/tmp/<log-dir name>-stack.log` | all-thread stack dumps taken just before a watchdog SIGKILL (`lbserver`, `dlserver`, `dlserver-8002`). Local disk on purpose; lost on container recreate |
 
 Rotation keeps 3 generations as `.1`, `.2`, `.3`:
 
@@ -145,7 +164,7 @@ Rotation keeps 3 generations as `.1`, `.2`, `.3`:
   every `GUARD_INTERVAL` seconds, default 60). The size guard **copies then
   truncates in place**; it must never rename, because the server holds an
   `O_APPEND` fd and would keep writing to the renamed inode.
-- `<svc>.log` and `uvicorn.log` are rotated by Python's `RotatingFileHandler`.
+- `<svc>.log` and `uvicorn.log` are rotated by `ResilientRotatingFileHandler` (a `RotatingFileHandler` subclass) on the background log-writer thread.
 
 > **Historical note.** Before 2026-08-18 these were
 > [multilog](https://cr.yp.to/daemontools/multilog.html) *directories* (`stdout/`,
@@ -287,16 +306,73 @@ allocates GPU memory. It is a symptom of [1](#1-what-is-actually-running), not a
 GPU fault. If `nvidia-smi` itself fails or hangs, the driver or device is the
 problem and no restart will help until the pod is recreated.
 
+## 8. A deploy failed or refused
+
+`make deploy-dlserver` logs to `/workspace/logs/deploy/deploy.log`. Every
+`ABORT: … -- traffic unchanged` line means devices are still served by the old
+slot, and a new slot it started has already been stopped. Slot logs:
+`/workspace/logs/dlserver/` (8001), `/workspace/logs/dlserver-8002/` (8002).
+lbserver logs each switch as a `[switch]` line in
+`/workspace/logs/lbserver/lbserver.log`.
+
+| Message | Meaning | Do |
+|---------|---------|----|
+| `another deploy is running` | Another `deploy-dlserver` holds the lock | Wait for it; check with `ps -ef \| grep [d]eploy-dlserver` |
+| `nothing listens on :7999 (lbserver down)` | lbserver is not running | `make start-runpod-lbserver`, then deploy again |
+| `lbserver (pid N) has not acked /tmp/dlserver-active, or its ack does not name slot …` | lbserver predates the switch or runs without `LB__STATE_FILE` | `make start-runpod-lbserver` (a few seconds of 502), then deploy again |
+| `active slot N is not running` | The serving slot is down: an outage, not a deploy problem | [Recovering](#recovering) |
+| `idle port N is in use` | A slot is left over from an interrupted deploy | Confirm it is not the serving one (`cat /tmp/dlserver-active`), then `make stop-runpod-dlserver DLSERVER_PORT=N` |
+| `no /tmp/dlserver….rev: unknown commit on slot N` | The serving slot was started by a build without this feature | One in-place restart: `make start-runpod-master` |
+| `pyproject.toml changed since slot N started` | Dependency change (packages, TensorRT, ONNX Runtime) | In-place restart: `make start-runpod-master` |
+| `cannot compare pyproject.toml with <rev> (git exit N)` | git no longer knows the commit the slot started from | In-place restart: `make start-runpod-master` |
+| `only N MB GPU free, a second copy needs 12000` | No room for a second copy on the GPU | Check `nvidia-smi` for other GPU users; otherwise in-place restart |
+| `cannot read /hal/api/dl/health on active slot N` | The serving slot does not answer health (or the API key is wrong) | [1](#1-what-is-actually-running) |
+| `slot N is up but missing models: …` | The new code failed to load a model | Read the new slot's `stderr.log`; fix the code |
+| `slot N not ready after 900s` | The new slot crash-loops or loads too slowly | Read the new slot's `stderr.log` and `watchdog.log` |
+| `lbserver did not confirm the switch; state file restored to N` | lbserver did not apply the switch; it was rolled back | Check the `[switch]` lines in `lbserver.log`, then deploy again |
+| `rollback NOT confirmed` | Both slots are left running; lbserver may use either | Below |
+| `interrupted after the switch: traffic is on N` | Deploy stopped after the switch | Run the `make stop-runpod-dlserver DLSERVER_PORT=…` it prints |
+| `ERROR: old slot N did not stop cleanly` | Traffic is on the new slot; the old one survived | Run the stop command it prints; read the `stop-tree` output above it |
+
+**Both slots running.** Find the slot lbserver really uses, keep it, stop the
+other:
+
+```bash
+API_KEY=$(grep -E '^DL_API_KEY=' .env | head -1 | cut -d= -f2-)
+cat /tmp/dlserver-active            # slot the files say is serving
+cat /tmp/dlserver-active.applied    # what lbserver applied: {"pid": …, "backends": […]}
+curl -s -H "X-API-Key: $API_KEY" http://127.0.0.1:8001/hal/api/dl/health
+curl -s -H "X-API-Key: $API_KEY" http://127.0.0.1:8002/hal/api/dl/health
+```
+
+If both files name the same healthy slot, stop the other one
+(`make stop-runpod-dlserver DLSERVER_PORT=<other>`). If they disagree, point
+lbserver at the healthy slot first and check it acked, then stop the other:
+
+```bash
+printf 'http://127.0.0.1:%s\n' 8001 > /tmp/dlserver-active    # the healthy slot
+kill -HUP "$(ss -lntpH 'sport = :7999' | grep -oE 'pid=[0-9]+' | head -1 | cut -d= -f2)"
+cat /tmp/dlserver-active.applied                              # must name that slot
+make stop-runpod-dlserver DLSERVER_PORT=8002                  # the other slot
+```
+
+To undo a bad deploy, deploy the previous commit:
+`git checkout <sha> && make deploy-dlserver`.
+
 ## Recovering
 
 ```bash
 cd /workspace/autonomous-os/integrations/perception-service
-make stop-runpod-dlserver stop-runpod-lbserver stop-nginx
+make stop-runpod-dlserver DLSERVER_PORT=8001
+make stop-runpod-dlserver DLSERVER_PORT=8002
+make stop-runpod-lbserver stop-nginx
 make start-runpod-master
 make info
 ```
 
-Always stop before starting.
+Always stop before starting. Stop both dlserver slots: a bare
+`make stop-runpod-dlserver` stops only the serving slot. `make start-runpod-master`
+restarts the slot named in `/tmp/dlserver-active` (8001 if there is none).
 
 > The stop targets still `rm -f /workspace/logs/*/stderr/lock`. That is now a
 > no-op left over from multilog and will be removed — the lock files are not

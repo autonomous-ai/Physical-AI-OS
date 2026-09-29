@@ -15,6 +15,7 @@ import asyncio
 import logging
 import logging.handlers
 import os
+import re
 import signal
 import sys
 from contextlib import asynccontextmanager
@@ -35,8 +36,10 @@ from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
 from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from lbserver.utils.switch import read_active, resolve_backends, write_ack
 from core.livez import router as livez_router
-from core.logging_ext import ResilientRotatingFileHandler
+from core.logging_ext import ResilientRotatingFileHandler, queued, uvicorn_file_log_config
+from core.stackdump import install_stack_dump, stack_dump_name
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -46,6 +49,18 @@ from core.request_context import (
 from lbserver.utils.state import get_crypto, set_crypto
 
 LOG_FORMAT = "%(asctime)s [%(name)s] [%(request_id)s] %(levelname)s: %(message)s"
+
+# A regex, not json.loads: frames are ~100 KB and this runs on the event loop for
+# every message, only to build a log line.
+_FRAME_B64 = re.compile(r'"frame_b64"\s*:\s*"([^"]*)"')
+
+
+def _loggable_ws_text(data: str) -> str:
+    """Log form of a client WS message: the base64 frame replaced by its length."""
+    return _FRAME_B64.sub(
+        lambda m: f'"frame_b64": "<{len(m.group(1))} chars>"', data
+    )[:100]
+
 
 # Must run before any record is emitted: LOG_FORMAT references %(request_id)s.
 install_request_id_logging()
@@ -68,6 +83,47 @@ if not BACKENDS:
 
 http_rr = RoundRobin(BACKENDS)
 ws_rr = RoundRobin(BACKENDS)
+
+STATE_FILE: Path | None = Path(settings.lb.state_file) if settings.lb.state_file else None
+
+
+def apply_state_file() -> list[str]:
+    """Point http_rr/ws_rr at the slot named in lb.state_file and ack it.
+
+    proxy_http/proxy_ws read these module globals on every request, so rebinding
+    them moves new requests; in-flight requests and open WebSockets keep the
+    backend they already picked.
+    """
+    global http_rr, ws_rr
+    if STATE_FILE is None:
+        return list(BACKENDS)
+    backends = resolve_backends(BACKENDS, read_active(STATE_FILE))
+    http_rr, ws_rr = RoundRobin(backends), RoundRobin(backends)
+    write_ack(STATE_FILE, backends)
+    logger.warning("[switch] backends -> %s", ", ".join(backends))
+    return backends
+
+
+def install_switch() -> None:
+    """Apply lb.state_file now and again on every SIGHUP.
+
+    A bad state file never takes lbserver down: the error is logged, the current
+    backends stay and no ack is written, so the deploy script sees the switch did
+    not happen and rolls back.
+    """
+    if STATE_FILE is None:
+        return
+
+    def _apply(context: str) -> None:
+        try:
+            apply_state_file()
+        except Exception:
+            logger.exception(
+                "[switch] %s: state file not applied, keeping backends", context
+            )
+
+    _apply("startup")
+    signal.signal(signal.SIGHUP, lambda signum, frame: _apply("SIGHUP"))
 
 
 # ---------------------------------------------------------------------------
@@ -306,7 +362,7 @@ async def proxy_ws(client_ws: WebSocket, path: str) -> None:
                             path,
                             ws_url,
                             session is not None,
-                            data[:100],
+                            _loggable_ws_text(data),
                         )
                         await backend_ws.send(data)
                 except WebSocketDisconnect:
@@ -405,37 +461,16 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logging.basicConfig(level=logging.INFO, handlers=[handler])
+        file_handler = ResilientRotatingFileHandler(
+            str(log_path), maxBytes=1_048_576, backupCount=3
+        )
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        # Queued: logger.info() on the event loop only enqueues. A write that hangs
+        # on the log volume blocks the writer thread, not every request (#530).
+        logging.basicConfig(level=logging.INFO, handlers=[queued(file_handler)])
 
-        # Route uvicorn/fastapi logs to a separate file.
-        # NOTE: "uvicorn" and "uvicorn.access" MUST share a single handler instance.
-        # Two RotatingFileHandlers on the same path keep independent byte counters and
-        # roll over independently, so one eventually unlinks the inode the other still
-        # holds open. On MooseFS (/workspace) writing to a deleted-but-open file returns
-        # EIO, which floods stderr with logging tracebacks and can wedge the process.
-        return {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {
-                "default": {"format": LOG_FORMAT},
-            },
-            "handlers": {
-                "file": {
-                    "formatter": "default",
-                    "class": "core.logging_ext.ResilientRotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-            },
-            "loggers": {
-                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
-                "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
-            },
-        }
+        # Route uvicorn/fastapi logs to a separate file (one shared, queued handler).
+        return uvicorn_file_log_config(str(uvicorn_log_path), LOG_FORMAT)
     except InstanceAlreadyRunning:
         # Never fall back to console here: continuing would run a second instance
         # that clobbers the live one's log files. Propagate and let main() exit.
@@ -458,6 +493,12 @@ def main() -> None:
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    install_switch()
+    try:
+        dump = install_stack_dump(stack_dump_name(args.log_dir, "lbserver"))
+        logger.info("Stack dump on SIGUSR1 → %s", dump)
+    except OSError as e:
+        logger.warning("Stack dump not installed: %s", e)
 
     if args.pid_file:
         try:

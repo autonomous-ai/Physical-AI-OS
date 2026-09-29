@@ -11,11 +11,10 @@
 
 set -uo pipefail
 
-REPO_DIR=/workspace/autonomous-os/integrations/perception-service
-LOG_DIR=/workspace/logs/autostart
-LOCK=/tmp/perception-autostart.lock
-DLSERVER_PID=/tmp/dlserver.pid
-HEALTH_URL=http://127.0.0.1:8899/hal/api/dl/health
+REPO_DIR=${AUTOSTART_REPO_DIR:-/workspace/autonomous-os/integrations/perception-service}
+LOG_DIR=${AUTOSTART_LOG_DIR:-/workspace/logs/autostart}
+LOCK=${AUTOSTART_LOCK:-/tmp/perception-autostart.lock}
+HEALTH_URL=${AUTOSTART_HEALTH_URL:-http://127.0.0.1:8899/hal/api/dl/health}
 
 mkdir -p "$LOG_DIR"
 exec >>"$LOG_DIR/autostart.log" 2>&1
@@ -51,6 +50,13 @@ for i in $(seq 1 30); do
 done
 nvidia-smi >/dev/null 2>&1 || log "WARNING: no GPU visible — continuing (CPU fallback)"
 
+# After a two-slot deploy the serving dlserver may be slot 8002; the Makefile owns
+# the slot -> pid-file mapping, so ask it instead of assuming /tmp/dlserver.pid.
+# fd 9 (the autostart lock) is closed for the make call so a detached daemon it
+# might spawn can't inherit and hold it.
+DLSERVER_PID=$(make -s --no-print-directory -C "$REPO_DIR" print-dlserver-pid 9>&- 2>/dev/null)
+DLSERVER_PID=${DLSERVER_PID:-/tmp/dlserver.pid}
+
 # Already serving? Nothing to do. This is the common case for a manual re-run.
 if [[ -f "$DLSERVER_PID" ]] && kill -0 "$(cat "$DLSERVER_PID")" 2>/dev/null; then
     log "dlserver already running (pid=$(cat "$DLSERVER_PID")) — nothing to do"
@@ -63,7 +69,10 @@ fi
 cd "$REPO_DIR" || { log "FATAL: cannot cd to $REPO_DIR"; exit 1; }
 
 log "starting master stack (nginx + dlserver + lbserver)"
-make start-runpod-master
+# Close fd 9 (the autostart lock) for make: its recipes start detached daemons
+# (nohup setsid ... &) that would otherwise inherit the fd and hold the lock
+# forever, making every later autostart run see "already running" and exit.
+make start-runpod-master 9>&-
 log "make start-runpod-master exited with code $?"
 
 # Verify rather than assume: make returning 0 only means the watchdogs were
@@ -80,5 +89,5 @@ for i in $(seq 1 60); do
 done
 
 log "ERROR: stack did not become healthy within 10min (last HTTP code: ${code:-none})"
-make info
+make info 9>&-
 exit 1

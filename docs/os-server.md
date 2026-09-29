@@ -464,6 +464,10 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/servo/track` | Get tracking status (active, target, bbox, confidence) |
 | POST | `/servo/track/update` | Re-initialize tracker with new bounding box |
 
+`/servo/move`, `/servo/aim`, `/servo/nudge`, `/servo/resume`, and `/servo/track` return HTTP 409 while sleeping, without starting motion or waking the device. `/servo/play` retains its `ignored` response. Movement limits remain driver-specific.
+
+Move responses separate `requested` from `actual` readback. The legacy `clamped` field is now `null`: drivers do not expose a confirmed clamped goal. Aim/nudge return command targets in `requested` and observed readback in `positions`. These values come from the driver, not proof the target was reached: some drivers move asynchronously, and Reachy can return its cached target when a hardware read fails. Readback failures exposed by the driver populate `errors.read_position` and leave observations partial or empty; they do not repeat the command. Clients must tolerate `clamped: null` and use readback for observed positions.
+
 ### LED (64 WS2812, 8x5 grid)
 
 | Method | Endpoint | Description |
@@ -1681,3 +1685,13 @@ Speaker-ID and SER initialization runs in separate background workers and does n
 The setup-white worker calls `/led/status` directly and retries failures; it does not wait for full `/health`. LED command acknowledgement means the command was accepted; physical timing should also verify strip output. Measure from systemd process start to that acknowledgement, separately from full-health readiness. `[startup] led_ready` marks driver initialization, while `[startup] full HTTP API ready` marks the handoff.
 
 HAL overlaps motion-driver imports with independent audio, camera, sensing and voice imports. It resolves the motion class only after those imports, before route availability checks and lifespan initialization, preserving required-driver failures. Startup logs `[startup] driver_imports_complete` (including `motion_wait_ms`), `lifespan_begin`, and `lifespan_ready` separate module-loading time from device initialization. Elapsed time starts inside `hal.server`, so it excludes interpreter/Uvicorn setup. Background vision warm-up can continue after lifespan readiness; this is not a guarantee that every subsystem or an intentionally muted microphone is ready.
+
+### Sensing event authentication
+
+`POST /api/sensing/event` requires admin authentication for every remote event type, including passive events: any event can reach the agent. Direct loopback HAL producers remain permitted when forwarding headers also identify loopback or are absent. LAN membership and Origin/Referer headers do not grant access. Web chat continues using its login cookie; internal MQTT dispatch is unchanged.
+
+All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, monitor) use the same admin-or-loopback boundary; guard already uses it. Sensing accepts at most four attachments, 10 MiB each and 20 MiB decoded total; the JSON body is capped at 29 MiB before parsing. Invalid base64 is rejected before any file write or agent dispatch.
+
+### Voice mutation authentication
+
+`POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.

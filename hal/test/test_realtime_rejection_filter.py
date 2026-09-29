@@ -1,6 +1,9 @@
-"""Regression coverage for the explicit AI rejection gate."""
+"""Regression coverage for the explicit AI rejection gate (empty output is not a rejection)."""
 
 from unittest import mock
+
+import pytest
+from hal.test.test_voice_metrics import kpi  # noqa: F401
 
 import hal.config as hal_config
 from hal.drivers.voice._internal.realtime_turn import (
@@ -237,3 +240,113 @@ def test_manual_late_reject_preserves_existing_output_policy(monkeypatch):
     assert list(orchestrator.stream_output()) == [text]
     assert agent.end_turn_calls == 1
     assert "error" in agent.sent[0][0].output
+
+
+@pytest.mark.parametrize('parts,completed,expected', [
+    (['<no ', 'speech>'], True, True),
+    ([' <NO SPEECH>\n<no speech> '], True, True),
+    (['<no speech>'], False, False),
+    ([], True, False),
+    (['<no spe'], True, False),
+    (['<no speech>Sorry, a system error occurred.'], True, False),
+    (['The marker is <no speech>.'], True, False),
+    (['<no speech>Hello.'], True, False),
+])
+def test_only_complete_marker_only_output_is_intentional_silence(monkeypatch, parts, completed, expected):
+    from hal.realtime.models import TextOutput
+
+    monkeypatch.setattr(hal_config, 'REALTIME_PROVIDER', 'gemini')
+    monkeypatch.setattr(hal_config, 'REALTIME_SESSION_MAX_TURNS', 0)
+    orchestrator, agent = _orchestrator_for_reject()
+    agent.execution_completed = completed
+    agent.receive = lambda **kwargs: iter(TextOutput(text=p) for p in parts)
+    list(orchestrator.stream_output())
+    assert orchestrator.intentional_silence is expected
+    # A later failed/empty receive must not inherit the previous decision.
+    agent.execution_completed = False
+    agent.receive = lambda **kwargs: iter(())
+    list(orchestrator.stream_output())
+    assert not orchestrator.intentional_silence
+
+
+def test_marker_after_tool_does_not_discard_a_real_task(monkeypatch):
+    from hal.realtime.models import TextOutput
+
+    monkeypatch.setattr(hal_config, 'REALTIME_PROVIDER', 'gemini')
+    monkeypatch.setattr(hal_config, 'REALTIME_SESSION_MAX_TURNS', 0)
+    orchestrator, agent = _orchestrator_for_reject()
+    agent.execution_completed = True
+    agent.receive = lambda **kwargs: iter([
+        FunctionCallOutput(name='express_emotion', arguments='{}', call_id='emotion'),
+        TextOutput(text='<no speech>'),
+    ])
+    monkeypatch.setattr(orchestrator, '_handle_emotion_call', lambda *a, **kw: None)
+    list(orchestrator.stream_output())
+    assert not orchestrator.intentional_silence
+
+
+@pytest.mark.parametrize('completed,filter_enabled,native', [
+    (True, True, False), (False, True, False),
+    (True, False, False), (True, True, True),
+])
+def test_silent_marker_replay_dispatch_and_kpi(monkeypatch, kpi, completed, filter_enabled, native):
+    """Replay the split marker observed on lamp-4ace, not a text-length guess."""
+    from hal.drivers.voice.voice_service import VoiceService
+    from hal.realtime.models import TextOutput
+    from hal.telemetry import voice_metrics
+
+    monkeypatch.setattr(hal_config, 'REALTIME_ENABLED', True)
+    monkeypatch.setattr(hal_config, 'REALTIME_PROVIDER', 'gemini')
+    monkeypatch.setattr(hal_config, 'REALTIME_NATIVE_AUDIO', native)
+    monkeypatch.setattr(hal_config, 'REALTIME_AI_REJECT_FILTER', filter_enabled)
+    monkeypatch.setattr(hal_config, 'REALTIME_SESSION_MAX_TURNS', 0)
+    monkeypatch.setattr('hal.drivers.voice._internal.realtime_turn._thinking_cue_start', lambda: None)
+    monkeypatch.setattr('hal.drivers.voice._internal.realtime_turn._thinking_cue_clear', lambda: None)
+    orchestrator, agent = _orchestrator_for_reject()
+    agent.execution_completed = completed
+    agent.receive = lambda **kwargs: iter([
+        TextOutput(text='<no '), TextOutput(text='speech>'),
+    ])
+
+    class Replay(_RejectingRealtime):
+        def stream_output(self):
+            yield from orchestrator.stream_output()
+            self.execution_completed = orchestrator.execution_completed
+            self.intentional_silence = orchestrator.intentional_silence
+
+    iid = voice_metrics.speech_end('smart_turn')
+    tts = mock.Mock()
+    tts.provider = 'elevenlabs'
+    result = run_realtime_turn(Replay(), tts, VoiceService.strip_rt_markers,
+                               'on check', [object()], 2.69, interaction_id=iid)
+    sender = _Sender()
+    with mock.patch('hal.drivers.voice._internal.turn_dispatch._take_vision_handoff', return_value=('', '')):
+        dispatch_turn(_Decorator(), sender, 'on check', [], [], result, interaction_id=iid)
+    tts.speak.assert_not_called()
+    tts.speak_queue.assert_not_called()
+    kpi.close_all()
+    row = kpi.of(voice_metrics.EVENT_INTERACTION)[-1]['params']
+    if completed and filter_enabled and not native:
+        assert result.rejected and result.route == ROUTE_AI_REJECTED
+        assert not result.execution_completed
+        assert not sender.sent
+        assert not row['eligible'] and row['exclusion_reason'] == 'rejected_non_user'
+    else:
+        assert not result.rejected or not filter_enabled
+        assert sender.sent  # A failed receive keeps the original fallback.
+        assert row['eligible']
+
+
+def test_interrupted_marker_is_not_an_intentional_silent_completion(monkeypatch):
+    from hal.realtime.models import TextOutput
+    from hal.realtime.models.output import InterruptedOutput
+
+    monkeypatch.setattr(hal_config, 'REALTIME_PROVIDER', 'gemini')
+    monkeypatch.setattr(hal_config, 'REALTIME_SESSION_MAX_TURNS', 0)
+    orchestrator, agent = _orchestrator_for_reject()
+    agent.execution_completed = True
+    agent.receive = lambda **kwargs: iter([
+        TextOutput(text='<no speech>'), InterruptedOutput(reason='server_interrupt'),
+    ])
+    list(orchestrator.stream_output())
+    assert not orchestrator.intentional_silence

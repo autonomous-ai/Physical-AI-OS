@@ -329,13 +329,18 @@ Harness được nối thêm. Envelope rỗng/sai định dạng và câu phụ 
 (như “brighter”, “continue”) chuyển cho runtime. Yêu cầu gốc chuyển tiếp không đổi. Không retry, redirect, fallback provider trực tiếp hoặc
 upload lịch sử hội thoại. Tổng ngân sách chọn tối đa 3 giây, cooldown lỗi 30 giây
 và bỏ qua ngay khi bộ chọn đang bận. Ngưỡng xác suất >= 0.70, margin >= 0.20 và
-fit độc lập >= 0.60. Hơn 32 skill đủ điều kiện thì abstain, không cắt danh sách.
+fit độc lập >= 0.60. Toàn bộ request sau serialize có ngân sách cục bộ 256 KiB
+thay cho giới hạn 32 skill. Vượt ngân sách thì bỏ qua với `catalog_budget`, không
+cắt danh sách và không tạo cooldown lỗi.
 Đây là ngưỡng tìm skill, khác ngưỡng intent phần cứng nghiêm ngặt hơn.
 
 Preload chứa toàn bộ SKILL.md trong giới hạn kích thước và thư mục tuyệt đối.
-Adapter Go chỉ nạp skill tĩnh đơn giản từ thư mục cài đặt của runtime; template
-động, frontmatter điều khiển riêng, thư mục skill project xung đột và policy
-native chưa hỗ trợ đều chuyển về tìm skill native. Sau inference, adapter kiểm
+Adapter Go nạp skill tĩnh đơn giản từ các thư mục global và project được công bố
+(xem docs từng runtime). Project dừng ở ranh giới repo/worktree gần nhất; nếu
+không xác định được thì chỉ lấy thư mục làm việc. Tên skill trùng, template động,
+metadata invocation và policy chưa hỗ trợ đều nhường native discovery; không
+tự quét cache plugin. Skill Codex có `agents/openai.yaml` vẫn do native xử lý.
+OpenClaw và PicoClaw dùng roster runtime công bố, gồm skill đủ điều kiện ngoài workspace. Sau inference, adapter kiểm
 tra lại điều kiện và nội dung skill. Lượt system/slash/attachments giữ đường cũ.
 Các tích hợp mới ngoài Hermes đều **mặc định tắt** trong khi chờ kiểm chứng native;
 Hermes giữ nguyên. Mỗi runtime mới có cờ build Go `const jevEnabled = false`: bridge dùng `gatewayd/jev.go`, PicoClaw dùng `jev_hook.go`, OpenClaw dùng `jev_plugin.go`. Khi tắt, bridge không tạo selector; onboarding native không cài asset hay tạo đăng ký Jev mới. Nếu có đăng ký Jev cũ, Go chỉ tắt đăng ký đó; các cấu hình khác được giữ nguyên. Không đọc skill, gọi provider hay thêm nội dung Jev vào yêu cầu khi tắt. Muốn bật phải đổi cờ, build và restart qua luồng quản lý runtime; env/config không thay thế cờ build. `JEV_CONFIG_PATH` chọn file cấu hình OS của bridge.

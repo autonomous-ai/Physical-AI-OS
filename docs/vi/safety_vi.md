@@ -162,6 +162,8 @@ route mà tính chất đó tồn tại vì nó — cắt ngang move hoặc reco
 Nó KHÔNG phải `/servo/release` — cái đó đi về tư thế nghỉ rồi mới tắt torque; một
 lệnh dừng mà lại di chuyển trước là sai với mọi thân có bánh hoặc có chân (#201).
 
+`POST /servo/move` từ chối target joint không hữu hạn với 422. Khi có giới hạn `motion.max_speed`, mọi joint được yêu cầu phải có vị trí hiện tại hữu hạn; lỗi đọc pose, thiếu joint hoặc pose không hợp lệ trả 503 trước khi phát lệnh di chuyển. Không khai báo giới hạn này thì giữ nguyên pass-through. Không thêm giới hạn góc joint mới. `/servo/stop` dừng worker tracking trước khi kiểm tra kết nối motor, tránh để tracking chạy khi motor mất kết nối; vẫn trả 503 nếu không thể halt phần cứng.
+
 Vòng lặp vision-tracking cũng đã được gate, nhưng cần cơ chế riêng:
 `min_move_duration` không bound được nó vì không có đích nào để kéo dài duration,
 chỉ có speed profile theo từng frame. `cap_speed_dps` kẹp trần pursuit/saccade của

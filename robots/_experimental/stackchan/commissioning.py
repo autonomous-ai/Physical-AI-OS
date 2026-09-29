@@ -104,7 +104,8 @@ def create_app():
     """Explicit Uvicorn factory sharing one HAL lifecycle and body connection."""
     if os.getenv("DEVICE_TYPE") != "stackchan" or os.getenv("HAL_SIMULATE") != "0":
         raise RuntimeError("Commissioning requires DEVICE_TYPE=stackchan and HAL_SIMULATE=0")
-    from hal.server import app
+    # Bench routes extend FastAPI before startup, not the early-LED ASGI wrapper.
+    from hal.runtime import app
 
     if not any(route.path == "/stackchan/home" for route in app.routes):
         app.include_router(router)

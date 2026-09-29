@@ -52,7 +52,7 @@ Work credit: PRs by `31803smith` — #69 (aa98a207), #77 (e9d8a1f1), #79 (039b25
 
 | # | Finding | Status | Notes |
 |---|---|---|---|
-| F1 | No auth on `/api/*` | ✅ | 2026-05-19 `adminAuthMiddleware` (Bearer = `llm_api_key`). 2026-05-20 Login UI batch: the middleware also accepts a `lamp_session` HMAC cookie set by `POST /api/login` (bcrypt verifies `admin_password_hash`). `GET /api/device/config` is gated (returns `ConfigPublicResponse` — `has_*` booleans, no secrets). 2026-05-20 follow-up: every `/api/agent/*` route (status, events, flow-stream, flow-events, recent, flow-logs, analytics, compaction-latest, mood/wellbeing/posture/music-suggestion histories, tts/stop, busy) is now admin-gated — conversation history + behavioural data require auth. `config-json` keeps `localOnlyMiddleware` (stricter than admin auth). Remaining open endpoints are intentional pre-auth bootstrap (`/api/health/*`, `/api/network/*`, `/api/device/setup/status`, `/api/device/voices`, `/api/device/tts-providers`, `/api/system/{info,network,dashboard}`) and `sameOriginOrLAN`-gated sensing ingestion paths |
+| F1 | No auth on `/api/*` | ✅ | 2026-05-19 `adminAuthMiddleware` (Bearer = `llm_api_key`). 2026-05-20 Login UI batch: the middleware also accepts a `lamp_session` HMAC cookie set by `POST /api/login` (bcrypt verifies `admin_password_hash`). `GET /api/device/config` is gated (returns `ConfigPublicResponse` — `has_*` booleans, no secrets). 2026-05-20 follow-up: every `/api/agent/*` route (status, events, flow-stream, flow-events, recent, flow-logs, analytics, compaction-latest, mood/wellbeing/posture/music-suggestion histories, tts/stop, busy) is now admin-gated — conversation history + behavioural data require auth. `config-json` keeps `localOnlyMiddleware` (stricter than admin auth). Remaining open endpoints are intentional pre-auth bootstrap (`/api/health/*`, `/api/network/*`, `/api/device/setup/status`, `/api/device/voices`, `/api/device/tts-providers`, `/api/system/{info,network,dashboard}`) and ingestion paths now protected by admin authentication or direct loopback (September correction below) |
 | F2 | Wildcard CORS | ✅ | PR #79 (`b7d5bc49`) |
 | F3 | `/api/system/exec` RCE | ➖ | 2-layer defense locked: PR #69 nginx `location = /api/system/exec` `allow 127.0.0.1; deny all;` + PR #81 Go `localOnlyMiddleware` re-checks `RemoteAddr` / `X-Forwarded-For` / `X-Real-IP` for loopback. **Decision skip "remove"** (locked 2026-05-20): the OpenClaw agent on-device legitimately uses exec for debug; any caller reaching loopback already has root anyway under the shared-secret threat model, so removing the endpoint subtracts the agent feature without adding protection. Command-whitelist + admin-auth-on-top were considered (options B + C) and rejected — effort exceeds ROI given the threat model |
 | F4 | `/api/system/shell` | ✅ | 2026-05-20 Login UI batch: `system.GET("shell")` gated by `adminAuthMiddleware` — browser WebSockets carry the `lamp_session` cookie automatically. Scripts can still pass `?token=<llm_api_key>` since WS upgrade can't set Bearer headers in browsers |
@@ -63,7 +63,7 @@ Work credit: PRs by `31803smith` — #69 (aa98a207), #77 (e9d8a1f1), #79 (039b25
 | F8b | `POST /api/device/channel` hijack | ✅ | 2026-05-19: `adminAuthMiddleware` applied |
 | F9 | Logs leak secrets | ✅ | 2026-05-19: admin auth. 2026-05-20: `redactLogLine()` regex scrubs 3 patterns (key=value secrets, `Authorization: Bearer`, bare `sk-...` keys) on file-based + journal tail + SSE stream + journal stream |
 | F10 | `/api/system/software-update/:target` OTA trigger | ✅ | 2026-05-19: admin auth. 2026-05-20: per-target rate limit 30s (in-memory map + mutex), 429 with `Retry-After` header |
-| F11 | Ingestion endpoints unauthenticated | ✅ | PR #81 — `sameOriginOrLAN` applied to mood/log, wellbeing/log, posture/log, music-suggestion/log+status, monitor/event, guard/alert. `sensing/event` per `a0ccfd23` |
+| F11 | Ingestion endpoints unauthenticated | ✅ | AOS-1: sensing/event, telemetry/event, mood/log, wellbeing/log, posture/log, music-suggestion/log+status and monitor/event require admin or direct loopback; guard already uses this gate. Origin/LAN alone no longer grants ingestion access. Sensing attachments are bounded (4 files, 10 MiB each, 20 MiB total) |
 | F12 | Lamp Go bind 0.0.0.0 | ✅ | PR #81 — bind `127.0.0.1:5000` |
 | F13 | Bootstrap server bind 0.0.0.0 | ✅ | PR #81 — bind `127.0.0.1:8080` |
 
@@ -132,3 +132,28 @@ Day-by-day 2026-05-20 batches:
 - **Web F13** — TTS preview routed through `POST /api/voice/preview` (Go reads the TTS key server-side); the browser body carries `{text, voice, provider}` only.
 - **Web F12 (with F9 trade-off → reverted)** — `/hw/docs` iframe now loads via `/api/hardware/docs` (Go reverse proxy, admin-auth gated). New `/openapi.json` route (Go + nginx location) returns the HAL spec through the same auth gate. The initial CSP loosening (`cdn.jsdelivr.net` + `'unsafe-inline'` script-src) needed for FastAPI's auto-generated Swagger HTML was reverted later the same day by self-hosting Swagger assets in HAL; CSP is now back to strict.
 - **Go F1 / F3 / web F6 closeout** — gated every `/api/agent/*` endpoint with admin auth (F1 → ✅), locked the `/api/system/exec` 2-layer-defense decision as skip-remove (F3 → ➖), and locked the CliSection 3-layer-defense decision as accept-as-is (web F6 → ✅).
+
+## September 2026 confirmed-bug corrections
+
+See [device security boundaries](device-boundaries.md) ([Vietnamese](../vi/security/device-boundaries_vi.md)) for current behavior. AOS identifiers follow the private fix brief.
+
+| Items | Correction | Local verification |
+|-------|------------|--------------------|
+| AOS-1 | Admin or direct loopback ingestion; bounded attachments | Go authentication/attachment regressions |
+| AOS-2 | Query-free access logs, safe recovery, proxy token stripping | Go logger/proxy regressions |
+| AOS-3/4/5/9 | Mic/speaker mute respected; bounded audio; no muted enrollment restart | Mock HAL privacy regressions |
+| AOS-6 | Pairing code burns after five misses; bounded confirmation attempts | Go race tests |
+| AOS-10 | Finite servo targets, known pose for declared speed limits, tracker stop before disconnected motor error | Mock HAL safety tests |
+| AOS-11 | Manual camera disable preserved; concurrent snapshot lifecycle serialized | Mock HAL snapshot tests |
+| AOS-12 | Plugin path validation and Git option separation | Go plugin regressions |
+| AOS-13 (file subset) | Resolved file types/containment and private temporary enrollment WAV | Go resolver and mock HAL file tests |
+
+This is not a blanket closure of the report: OTA, credential migration, setup policy, CORS/HAL header policy, archive checksum pinning and additional joint-limit proposals remain outside these corrections. Piper extraction containment is covered by the follow-up below.
+
+Follow-up fixes: sleeping servo commands now return 409, motion responses distinguish requested targets from readback, and Piper extraction rejects paths/links outside the release tree. Driver calibration limits remain unchanged; checksum pinning and CORS/HAL header policy are still outside these fixes.
+
+Verification on 2026-09-29: HAL lint passed; the full local HAL suite passed (3,093 tests, 3 skips, 140 subtests), and the latest focused servo/Piper suite passed (36 tests). On `lamp-0c4e`, all five sleeping servo requests returned 409; after waking, a same-position move and small yaw nudge verified the response fields. Original sleep/mute state was restored. Piper tests ran the actual worker with valid and traversal fixtures in temporary directories; the installed engine and network download were not exercised. Camera snapshot/disable/re-enable and concurrent snapshots had separately passed on camera-equipped `lamp-4ace`. These checks do not certify every robot driver or every report proposal.
+
+Additional findings from the HAL boundary review: `/api/sensing/filler` now requires admin or direct loopback; `/api/voice/file/remove` requires admin. Profile-name traversal and symlink escape during sample deletion are blocked with directory-scoped Go `os.Root` operations. Regression coverage includes spoofed headers, valid sessions/Bearer, internal HAL filler access, traversal/symlink refusal, selected sample/embedding deletion and last-WAV profile cleanup. HAL Origin/Host/forwarded-header finding: accepted without a code change for the current local-only deployment (loopback bind, nginx `/hw/` LAN denial, authenticated Go hardware/OpenAPI proxies). Re-review is required before exposing HAL or changing those boundaries; spoofed headers did not bypass the current Go gates.
+
+These additional route/file fixes passed local build → vet → full Go tests, focused race tests and Linux ARM64 cross-build. Commit `0a38cfb07` subsequently passed all CI jobs and os-server-only testing on `lamp-0c4e`: 20 device checks plus 6 real-LAN denial checks passed, with temporary fixtures removed and HAL/sleep/mute state preserved. Filler used a silent unknown pool; audible playback and last-sample profile cleanup were not part of device testing. Existing last-WAV profile cleanup success reporting remains a separate correctness follow-up.

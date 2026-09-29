@@ -1370,12 +1370,14 @@ class VoiceService:
                         if out.transcript_finished and not out.transcript and out.endpoint_at is None:
                             continue
                         iid = metrics.speech(out.turn_id, out.endpoint_at, out.method)
+                        # Classify before this input opens/holds its own focus window.
+                        turn_type = classify_input(out.turn_id, input_text.get(out.turn_id, out.transcript))
                         hold_live_focus(out.turn_id)
                         history.input(
                             out.turn_id,
                             "" if opener is not None and out.turn_id == opener["key"] else out.transcript,
                             iid,
-                            classify_input(out.turn_id, input_text.get(out.turn_id, out.transcript)),
+                            turn_type,
                         )
                         continue
                     if isinstance(out, ExecutionOutput):

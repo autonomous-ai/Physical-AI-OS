@@ -1,4 +1,4 @@
-"""Whether `express_emotion` is acknowledged decides if the turn survives."""
+"""Emotion tool results must always acknowledge the call, or Gemini stays pending and recycles the session."""
 
 from unittest import mock
 
@@ -35,12 +35,15 @@ def test_ack_sent_when_the_model_has_not_spoken_yet():
     assert _sent_inputs(orch)[0].trigger_response is True
 
 
-def test_ack_withheld_once_the_model_has_spoken():
-    """No ack mid-reply, to avoid re-speaking the turn."""
+def test_ack_still_resolves_tool_once_the_model_has_spoken():
+    """A spoken reply must not leave the emotion call pending in Gemini."""
     orch = _orchestrator_with_agent()
     with mock.patch.object(RealtimeOrchestrator, "_fire_emotion"):
         orch._handle_emotion_call(_call(), spoken=True)
-    assert _sent_inputs(orch)[0].trigger_response is False
+    result = _sent_inputs(orch)[0]
+    assert result.trigger_response is True
+    assert result.call_id == "call-1"
+    assert "do not react to this ack" in result.output
 
 
 class _SyncThread:
@@ -99,3 +102,28 @@ def test_capture_settle_survives_a_missing_aim_result():
     from hal.realtime.orchestrator import CAPTURE_SETTLE_BASE_S, _capture_settle_s
 
     assert _capture_settle_s(None) == CAPTURE_SETTLE_BASE_S
+
+
+def test_spoken_emotion_ack_clears_gemini_pending_call_without_recycle():
+    import asyncio
+    from types import SimpleNamespace
+    from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
+
+    orch = _orchestrator_with_agent()
+    with mock.patch.object(RealtimeOrchestrator, '_fire_emotion'):
+        orch._handle_emotion_call(_call(), spoken=True)
+    result = _sent_inputs(orch)[0]
+    agent = object.__new__(GeminiLiveAgent)
+    agent._session = SimpleNamespace(send_tool_response=mock.AsyncMock())
+    agent._pending_tool_calls = {'call-1'}
+    agent._pending_tool_names = {'call-1': 'express_emotion'}
+    agent._pending_image = None
+    agent._gated_audio_frames = 0
+    agent._requires_fresh_session = False
+    asyncio.run(agent._async_send_input(result))
+    agent._session.send_tool_response.assert_awaited_once()
+    response = agent._session.send_tool_response.call_args.kwargs['function_responses'][0]
+    assert response.id == 'call-1'
+    assert response.name == 'express_emotion'
+    assert not agent._pending_tool_calls
+    assert not agent._requires_fresh_session

@@ -162,6 +162,8 @@ HTTP routes (registered in `system/server/server.go`, handlers in `system/server
 | `POST /api/buddy/observe` | loopback only | Screenshot + auxiliary vision-model description |
 | `POST /api/buddy/suggest` | loopback only | Suggestion endpoint used by device-side agents |
 
+Pairing codes remain single-use with a 60-second TTL and are invalidated after five wrong submissions. The anonymous confirmation endpoint permits at most ten requests per minute across all clients (including malformed requests), returning HTTP 429 with `Retry-After: 60` when exhausted. Issuing a new code requires authorization and does not reset this request budget. No IP or forwarded header is trusted to bypass the limit. This device-wide budget also temporarily delays legitimate confirmations during a flood; wait 60 seconds and request a fresh code if needed.
+
 ### 4.3 `lelamp` (Python) — **no changes for MVP**
 
 Hardware-only per `feedback_lelamp_external.md`. STT → OpenClaw, OpenClaw → TTS already work. The buddy flow only touches OpenClaw's skill layer, which lives in OpenClaw's skill directory, not in lelamp Python source.

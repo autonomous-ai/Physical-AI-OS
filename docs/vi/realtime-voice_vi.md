@@ -319,7 +319,7 @@ cuối một turn. Các giá trị (`ROUTE_*` trong `realtime_turn.py`):
 |---|---|
 | `realtime_handled` | Realtime đã nói. Agent chính nhận `voice_agent_handled` và im lặng. |
 | `delegated` | Model gọi `delegate_to_main`. |
-| `ai_rejected` | Model gọi `reject_turn` rõ ràng; turn không tới đâu cả. |
+| `ai_rejected` | Model gọi `reject_turn`, hoặc Gemini hoàn tất quyết định chỉ có marker im lặng ở đường turn text-to-TTS (xem bên dưới); không dispatch khi bật rejection filter. |
 | `realtime_no_output` | Đã commit nhưng không có gì trả về (`receive()` timeout, WS chết) — agent chính trả lời. |
 | `realtime_error` | Turn ném lỗi; forward xuống thay vì mất luôn. |
 | `realtime_unavailable` | Không có session sống để commit — agent chính trả lời. |
@@ -908,6 +908,12 @@ và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm kh
 khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
 `EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
 Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+HAL chuẩn bị trước bộ lọc tham chiếu khi đã biết tần số loa và mic lúc khởi tạo
+audio, bất kể thiết bị nào mở trước. Nhờ vậy lần import SciPy đầu tiên diễn ra
+trước đường phát filler/câu trả lời đầu; chỉ thêm việc lúc khởi tạo, không phát
+audio giả hay ghi ack. Khi đổi tần số đầu ra, bộ lọc mới cũng được chuẩn bị.
+Bước chuẩn bị từ 50 ms trở lên được log cùng tần số nguồn và thời gian. Vẫn giữ
+đường dự phòng trước lần ghi đầu cho route chưa chuẩn bị.
 Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
 import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
@@ -936,10 +942,47 @@ lên của chế độ live dựa vào cờ này ở chế độ `cancelled` đ�
 nói: nó báo tham chiếu có *tới* hay không, chứ không báo việc khử có *hiệu quả*
 hay không — một khung ERLE 0,9 dB vẫn được tính là đã khử.
 
-### Tốc độ phát ElevenLabs v3
+### Model mặc định ElevenLabs v4 và tốc độ phát
 
-Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v3` (kể cả fallback
-từ `tts-1`), HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong
+Backend ElevenLabs HTTP dùng chung mặc định chọn `eleven_v4` cho cả gọi trực
+tiếp ElevenLabs và qua Autonomous proxy. Model trống hoặc không thuộc ElevenLabs
+(kể cả mặc định `tts-1` của service) dùng v4; override `eleven_*` được giữ nguyên.
+Request vẫn gửi `model_id` tới endpoint `text-to-speech/{voice_id}/stream`
+với `pcm_24000`; proxy giữ prefix `/elevenlabs` và cơ chế xác thực hiện tại.
+Backend tùy chọn `HAL_TTS_ELEVENLABS_WS` giữ model Flash và giao thức
+stream-input riêng, chưa chuyển sang Text to Dialogue.
+Tham khảo [ví dụ API ElevenLabs v4](https://elevenlabs.io/pl/v4) và
+[HTTP streaming](https://elevenlabs.io/docs/api-reference/text-to-speech/stream).
+Ngày 2026-09-29, Autonomous proxy hiện tại đã tổng hợp PCM v4 với Rachel thành
+công, gồm sáu mẫu cảm xúc/diễn đạt tiếng Anh phát trên macOS. Đường đã test không
+cần sửa proxy. Các turn voice-command tiếp theo trên Lamp `172.168.20.142`
+xác nhận tag từ main agent được gửi qua proxy tới v4 và phát qua loa với Rachel;
+chủ máy xác nhận mẫu tiếng Anh giọng mếu nghe đúng. Routing trực tiếp ElevenLabs
+có test HTTP giả lập; chưa test API trực tiếp thật.
+
+Audio tag v4 là chỉ dẫn diễn đạt bằng ngôn ngữ tự nhiên, không phải enum emotion
+cố định: có tag ghép như `[excited, happy]`, mô tả giọng như
+`[sleepy drowsy voice]` và khoảng nghỉ như `[long pause]`.
+Backend ElevenLabs HTTP giữ nguyên tag đi kèm lời nói, không giới hạn bằng
+whitelist v3. Chunk trống hoặc chỉ chứa tag vẫn bị bỏ qua, nên bản nâng cấp này
+chưa thêm khả năng phát hiệu ứng âm thanh độc lập. Prompt realtime giữ phạm vi
+phản ứng/trạng thái/khoảng nghỉ của con người; marker emotion điều khiển phần
+cứng là giao thức riêng. Provider khác không tự có hỗ trợ tag v4.
+Tham khảo [thông báo v4](https://elevenlabs.io/fr/blog/eleven-v4).
+
+`robots/lamp/SOUL.md` dùng palette chỉ dẫn giọng v4 mở: cảm xúc ghép, mô tả
+cách nói, phản ứng và khoảng nghỉ có chủ đích. Câu ngắn thường dùng một cue
+phù hợp hoặc lời nói thuần, thay cho quy tắc bắt buộc mọi câu có tag. Kể chuyện,
+đọc, nhập vai và demo giọng theo yêu cầu được tuân theo độ dài người dùng muốn,
+chuyển cách nói ở đoạn có thay đổi ý nghĩa. Khóc/nức nở dành cho diễn theo yêu
+cầu, không tự kích hoạt khi người dùng buồn. Output chính xác của skill,
+`NO_REPLY` và handoff Harness ưu tiên hơn trang trí giọng. Tag đi kèm lời nói,
+không mở rộng tên emotion phần cứng; cơ thể vẫn theo Emotion skill. Nếu biết
+voice không hỗ trợ tag thì dùng lời nói thuần. Đây là hướng dẫn persona, không
+phải parser tag mới hay bổ sung emotion vật lý của device.
+
+Với yêu cầu ElevenLabs HTTP có model thực tế là `eleven_v4` hoặc override
+`eleven_v3`, HAL gửi `speed=1.0` tới provider và áp dụng `tts_speed` trong
 `config.json` ở máy cục bộ qua đường `get_tts_speed` sẵn có. Bộ lọc ffmpeg
 `atempo` dạng streaming thay đổi thời lượng nhưng giữ cao độ, trước khi
 resample, phát loa và lấy tham chiếu AEC. Tốc độ `1.0` bỏ qua bộ lọc.
@@ -954,8 +997,8 @@ timeout; xóa stop event cho turn mới không làm producer cũ chạy lại. H
 đã cấu hình; audio về muộn bị bỏ và nguồn được đóng.
 
 
-Khóa WAV cache của v3 có dấu phân biệt để không dùng lại audio v3 đã tổng hợp
-theo chính sách tốc độ cũ. Thay đổi này điều chỉnh thời lượng phát, không giảm
+Revision WAV cache ElevenLabs thay đổi cùng mặc định v4 để không dùng lại audio
+v3 khi model trong service vẫn là `tts-1`. Chính sách tốc độ điều chỉnh thời lượng phát, không giảm
 thời gian chờ byte đầu tiên (TTFB) từ provider. Các backend TTS khác giữ nguyên
 hành vi tốc độ hiện có.
 
@@ -3176,7 +3219,7 @@ Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó
 
 Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
 
-Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
+Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input, lấy trạng thái trước khi input giữ cửa sổ focus của chính nó. Input đầu tiên không tự gắn nhãn follow-up; input tiếp theo có thể dùng cửa sổ vừa mở. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
 
 Chẩn đoán: `[realtime][timing]` ghi lúc đưa audio commit vào hàng đợi, progress đầu tiên được xác nhận, nhận grounding, bắt đầu giữ continuation, phát/bỏ continuation, hết thời gian chờ và receive timeout. Thời gian dùng đồng hồ monotonic tính từ commit gần nhất được đưa vào hàng đợi (không phải lúc người dùng nói xong), kèm generation và thời gian progress/output còn lại. Event đến muộn có thể xuất hiện sau commit mới; các trường này không chứng minh request nào đã khởi tạo search. `Google Search metadata received (search start unknown)` đánh dấu lúc nhận metadata grounding, không phải lúc bắt đầu search. Provider không cung cấp mốc bắt đầu search ở đây; không suy ra thời gian chạy search từ log này.
 
@@ -3255,3 +3298,14 @@ Regression test: `hal/test/test_voice_capture_lifecycle.py` kiểm tra đọc su
 bị kẹt, kill/reap, mute/unmute nhanh, hủy restart đang đợi, join timeout, capture
 đã stop và abort qua AEC wrapper. Test local không thay thế test microphone
 trên device.
+
+### Marker im lặng Gemini kết thúc bình thường (turn text-to-TTS)
+
+Turn Gemini kết thúc bình thường, toàn bộ output thô chỉ gồm một hoặc nhiều
+marker `<no speech>` (kể cả bị chia fragment), được xử lý là `ai_rejected`
+nếu không có tool, interruption, look replay, delegate hay câu đã phát.
+Không fallback main và không ghi task execution thành công. Cờ hiện hữu
+`HAL_REALTIME_AI_REJECT_FILTER` điều khiển việc bỏ dispatch và loại KPI với
+`rejected_non_user`. Output rỗng, timeout, marker dở dang, marker kèm câu trả
+lời, câu báo lỗi hệ thống và `NO_REPLY` của main không đủ điều kiện. Native
+audio và output pump LIVE liên tục không đổi.

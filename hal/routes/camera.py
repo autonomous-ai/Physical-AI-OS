@@ -2,6 +2,8 @@
 
 import os
 import time
+import threading
+from functools import wraps
 
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -12,6 +14,18 @@ from hal.models import CameraInfoResponse, CameraZoomRequest, StatusResponse
 from hal.config import CAMERA_WIDTH, CAMERA_HEIGHT
 
 router = APIRouter(tags=["Camera"])
+_snapshot_lock = threading.Lock()
+
+
+def _serialized_snapshot(fn):
+    @wraps(fn)
+    def wrapped(*args, **kwargs):
+        # Serialize temporary starts/stops, without holding the privacy lock:
+        # physical and manual disable must remain responsive during capture.
+        with _snapshot_lock:
+            return fn(*args, **kwargs)
+    return wrapped
+
 
 # Lazy import -- cv2 may not be available
 cv2 = None
@@ -80,6 +94,9 @@ def disable_camera():
         state._persist_camera_state()
         return {"status": "already_disabled"}
     if state._camera_disabled:
+        # An explicit disable must claim manual ownership even after an auto-pause.
+        state._camera_manual_override = True
+        state._persist_camera_state()
         return {"status": "already_disabled"}
     state._camera_disabled = True
     state._camera_manual_override = True
@@ -108,6 +125,7 @@ def enable_camera():
 
 
 @router.get("/camera/snapshot")
+@_serialized_snapshot
 def camera_snapshot(
     save: bool = False,
     width: int | None = Query(default=None, ge=1, le=4096, description="Resize output width (preserves aspect ratio). Capped at source width — never upscales."),
@@ -121,8 +139,8 @@ def camera_snapshot(
     box. Upscaling above source is not allowed (just blurs without detail) —
     requests above source are clamped.
     """
-    if privacy.camera_muted:
-        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
+    if privacy.camera_muted or (state._camera_disabled and state._camera_manual_override):
+        raise HTTPException(409, "Camera is disabled by the user or privacy switch")
     if not state.camera_capture or cv2 is None:
         raise HTTPException(503, "Camera not available")
 
@@ -162,11 +180,11 @@ def camera_snapshot(
                 )
             raise HTTPException(500, "Failed to capture frame")
     finally:
-        if was_disabled:
+        if was_disabled and state._camera_disabled:
             state.camera_capture.stop()
 
-    if privacy.camera_muted:
-        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
+    if privacy.camera_muted or (state._camera_disabled and state._camera_manual_override):
+        raise HTTPException(409, "Camera is disabled by the user or privacy switch")
 
     if width is not None or height is not None:
         src_h, src_w = frame.shape[:2]
@@ -186,8 +204,8 @@ def camera_snapshot(
 
     _, buf = cv2.imencode(".jpg", frame, [cv2.IMWRITE_JPEG_QUALITY, quality])
 
-    if privacy.camera_muted:
-        raise HTTPException(409, "Privacy switch is on -- camera capture is blocked")
+    if privacy.camera_muted or (state._camera_disabled and state._camera_manual_override):
+        raise HTTPException(409, "Camera is disabled by the user or privacy switch")
     if not save:
         return Response(content=buf.tobytes(), media_type="image/jpeg")
 

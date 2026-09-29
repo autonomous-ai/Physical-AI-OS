@@ -49,10 +49,38 @@ func readRegular(path string, limit int64) ([]byte, error) {
 func ReadPolicyFile(path string) ([]byte, error) { return readRegular(path, 1<<20) }
 
 func (r *Router) catalog(ctx context.Context) ([]skill, error) {
-	root, err := filepath.Abs(r.opts.SkillsDir)
-	if err != nil || r.opts.SkillsDir == "" {
-		return nil, errors.New("invalid skill root")
+	if r.opts.Allowed != nil && !r.opts.Allowed() {
+		return nil, nil
 	}
+	roots := []string{r.opts.SkillsDir}
+	if r.opts.AdditionalRoots != nil {
+		roots = append(roots, r.opts.AdditionalRoots()...)
+	}
+	seenRoots, seenNames := map[string]bool{}, map[string]bool{}
+	visited := 0
+	var found []skill
+	for _, dir := range roots {
+		if dir == "" {
+			return nil, errors.New("invalid skill root")
+		}
+		root, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		if seenRoots[root] {
+			continue
+		}
+		seenRoots[root] = true
+		items, err := r.catalogRoot(ctx, root, seenNames, &visited)
+		if err != nil {
+			return nil, err
+		}
+		found = append(found, items...)
+	}
+	return found, nil
+}
+
+func (r *Router) catalogRoot(ctx context.Context, root string, seen map[string]bool, visited *int) ([]skill, error) {
 	info, err := os.Lstat(root)
 	if os.IsNotExist(err) {
 		return nil, nil
@@ -72,8 +100,6 @@ func (r *Router) catalog(ctx context.Context) ([]skill, error) {
 		return nil, errors.New("skill root changed")
 	}
 	var found []skill
-	seen := map[string]bool{}
-	visited := 0
 	err = filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
@@ -81,8 +107,8 @@ func (r *Router) catalog(ctx context.Context) ([]skill, error) {
 		if walkErr != nil {
 			return errors.New("skill directory unavailable")
 		}
-		visited++
-		if visited > 4096 {
+		(*visited)++
+		if *visited > 4096 {
 			return errors.New("skill directory too large")
 		}
 		if path == root {
@@ -117,25 +143,32 @@ func (r *Router) catalog(ctx context.Context) ([]skill, error) {
 		}
 		content := string(data)
 		front, ok := frontmatter(content)
-		if !ok || !simpleSkill(front, content) {
+		if !ok {
 			return nil
 		}
 		name, _ := front["name"].(string)
 		description, _ := front["description"].(string)
-		if !skillName.MatchString(name) || strings.TrimSpace(description) == "" {
+		if !skillName.MatchString(name) {
 			return nil
 		}
-		if r.opts.Eligible != nil && !r.opts.Eligible(name, front) {
-			return nil
-		}
+		// Reserve the name even for unsupported metadata: a disabled/native-only
+		// namesake must not expose a different copy from another skill root.
 		if seen[name] {
 			return errors.New("ambiguous skill name")
 		}
 		seen[name] = true
-		found = append(found, skill{name, description, path, filepath.Dir(path), content})
-		if len(found) > 32 {
-			return errors.New("too many skills")
+		if strings.TrimSpace(description) == "" || !simpleSkill(front, content) {
+			return nil
 		}
+		for _, sidecar := range r.opts.NativeSidecars {
+			if _, err := anchor.Lstat(filepath.Join(filepath.Dir(rel), sidecar)); !os.IsNotExist(err) {
+				return nil
+			}
+		}
+		if r.opts.Eligible != nil && !r.opts.Eligible(name, front) {
+			return nil
+		}
+		found = append(found, skill{name, description, path, filepath.Dir(path), content})
 		return nil
 	})
 	return found, err
@@ -178,4 +211,36 @@ func simpleSkill(front map[string]any, content string) bool {
 		}
 	}
 	return true
+}
+
+// ProjectSkillDirs includes the current directory and its ancestors only when
+// a repository boundary exists. Without one, parent trust is unknown.
+func ProjectSkillDirs(workspace string, folders ...string) []string {
+	cwd, err := filepath.Abs(workspace)
+	if err != nil || workspace == "" {
+		return nil
+	}
+	dirs := []string{cwd}
+	for dir := cwd; ; dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(filepath.Join(dir, ".git")); err == nil {
+			dirs = nil
+			for p := cwd; ; p = filepath.Dir(p) {
+				dirs = append(dirs, p)
+				if p == dir {
+					break
+				}
+			}
+			break
+		}
+		if filepath.Dir(dir) == dir {
+			break
+		}
+	}
+	var roots []string
+	for _, dir := range dirs {
+		for _, folder := range folders {
+			roots = append(roots, filepath.Join(dir, folder, "skills"))
+		}
+	}
+	return roots
 }

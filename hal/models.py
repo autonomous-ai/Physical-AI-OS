@@ -2,7 +2,7 @@
 
 from typing import Literal, Optional, Union
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, FiniteFloat
 
 
 class ServoRequest(BaseModel):
@@ -462,7 +462,9 @@ class ServoNudgeRequest(BaseModel):
 class ServoAimResponse(BaseModel):
     status: str
     direction: str
-    positions: dict[str, float]
+    positions: dict[str, float] = Field(description="Driver-reported positions after the command, not clamped goals; may be cached targets on some drivers, or partial/empty on read failure.")
+    requested: dict[str, float]
+    errors: Optional[dict[str, str]] = None
 
 
 class SceneListResponse(BaseModel):
@@ -589,7 +591,7 @@ class HealthResponse(BaseModel):
 
 
 class ServoMoveRequest(BaseModel):
-    positions: dict[str, float] = Field(
+    positions: dict[str, FiniteFloat] = Field(
         ...,
         description=(
             "Joint positions (degrees). Ordered by servo ID: "
@@ -636,7 +638,8 @@ class ServoMoveRequest(BaseModel):
 class ServoMoveResponse(BaseModel):
     status: str
     requested: dict[str, float]
-    clamped: dict[str, float]  # kept for API compat, same as requested
+    clamped: Optional[dict[str, float]] = Field(default=None, description="Legacy field; null because drivers do not expose a confirmed clamped target.")
+    actual: dict[str, float] = Field(default_factory=dict, description="Driver-reported positions after the command; some drivers fall back to cached targets. Not a guarantee the target was reached.")
     duration: float
     errors: Optional[dict[str, str]] = None
 

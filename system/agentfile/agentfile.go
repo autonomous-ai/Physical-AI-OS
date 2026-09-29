@@ -88,6 +88,13 @@ func Resolve(raw string, roots []string) (path, contentType string, err error) {
 		return "", "", ErrOutsideRoots
 	}
 
+	// An allowed suffix on a symlink must not expose a forbidden target type.
+	// Use the resolved target's type so HTTP/MQTT agree with the actual file.
+	ct, ok = Types[strings.ToLower(filepath.Ext(resolved))]
+	if !ok {
+		return "", "", ErrType
+	}
+
 	info, err := os.Stat(resolved)
 	if err != nil || !info.Mode().IsRegular() {
 		return "", "", ErrNotFound
