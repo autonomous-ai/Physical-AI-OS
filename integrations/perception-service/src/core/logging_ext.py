@@ -208,6 +208,10 @@ def queued(target: logging.Handler, maxsize: int = DEFAULT_QUEUE_SIZE) -> NonBlo
     Set the formatter on `target`, not on the returned handler.
     """
     handler = NonBlockingQueueHandler(maxsize)
+    # prepare() bakes this formatter's output into record.msg before `target`
+    # applies the real format. Pin it: basicConfig() would otherwise give a
+    # formatter-less handler BASIC_FORMAT and every line would read "INFO:name:msg".
+    handler.setFormatter(logging.Formatter("%(message)s"))
     listener = _DrainingListener(handler, target)
     listener.start()
     if not _listeners:

@@ -1,8 +1,13 @@
 """Queued logging: a stuck log writer must never block the caller (#530)."""
 
 import logging
+import os
+import subprocess
+import sys
+import textwrap
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -116,3 +121,47 @@ def test_exception_text_survives_the_queue():
 
 def test_queue_handler_type():
     assert isinstance(queued(_GatedHandler()), NonBlockingQueueHandler)
+
+
+_WIRING = textwrap.dedent(
+    """
+    import logging, logging.config, sys
+    from lbserver.app import _setup_logging
+    from core.logging_ext import NonBlockingQueueHandler
+
+    cfg = _setup_logging(sys.argv[1])
+    logging.config.dictConfig(cfg)   # exactly what uvicorn.run(log_config=cfg) does
+
+    root = logging.getLogger()
+    uv = logging.getLogger("uvicorn")
+    assert isinstance(root.handlers[0], NonBlockingQueueHandler), root.handlers
+    assert isinstance(uv.handlers[0], NonBlockingQueueHandler), uv.handlers
+    assert uv.handlers[0] is logging.getLogger("uvicorn.access").handlers[0]
+
+    logging.getLogger("lbserver.app").info("app-line")
+    logging.getLogger("uvicorn.error").info("uvicorn-error-line")
+    logging.getLogger("uvicorn.access").info("access-line")
+    """
+)
+
+
+def test_lbserver_setup_logging_is_queued_and_survives_dictconfig(tmp_path: Path):
+    # Subprocess: pytest puts its own handlers on the root logger, which would
+    # make basicConfig() a no-op, and dictConfig() closes every live handler.
+    src = Path(__file__).resolve().parents[2] / "src"
+    result = subprocess.run(
+        [sys.executable, "-c", _WIRING, str(tmp_path)],
+        cwd=src.parent,
+        env={**os.environ, "PYTHONPATH": str(src)},
+        capture_output=True,
+        text=True,
+        timeout=60,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+
+    app_log = (tmp_path / "lbserver.log").read_text()
+    uv_log = (tmp_path / "uvicorn.log").read_text()
+    assert "[lbserver.app] [-] INFO: app-line" in app_log
+    assert "uvicorn-error-line" in uv_log
+    assert "access-line" in uv_log

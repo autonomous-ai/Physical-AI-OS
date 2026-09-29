@@ -37,7 +37,7 @@ from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
 from lbserver.utils.switch import read_active, resolve_backends, write_ack
 from core.livez import router as livez_router
-from core.logging_ext import ResilientRotatingFileHandler
+from core.logging_ext import ResilientRotatingFileHandler, queued, uvicorn_file_log_config
 from core.request_context import (
     InstanceAlreadyRunning,
     acquire_instance_lock,
@@ -447,37 +447,16 @@ def _setup_logging(log_dir: str | None) -> dict[str, Any] | None:
                 bak.unlink()
             for old in Path(log_dir).glob(f"{prefix}*"):
                 old.rename(Path(str(old) + ".bak"))
-        handler = ResilientRotatingFileHandler(str(log_path), maxBytes=1_048_576, backupCount=3)
-        handler.setFormatter(logging.Formatter(LOG_FORMAT))
-        logging.basicConfig(level=logging.INFO, handlers=[handler])
+        file_handler = ResilientRotatingFileHandler(
+            str(log_path), maxBytes=1_048_576, backupCount=3
+        )
+        file_handler.setFormatter(logging.Formatter(LOG_FORMAT))
+        # Queued: logger.info() on the event loop only enqueues. A write that hangs
+        # on the log volume blocks the writer thread, not every request (#530).
+        logging.basicConfig(level=logging.INFO, handlers=[queued(file_handler)])
 
-        # Route uvicorn/fastapi logs to a separate file.
-        # NOTE: "uvicorn" and "uvicorn.access" MUST share a single handler instance.
-        # Two RotatingFileHandlers on the same path keep independent byte counters and
-        # roll over independently, so one eventually unlinks the inode the other still
-        # holds open. On MooseFS (/workspace) writing to a deleted-but-open file returns
-        # EIO, which floods stderr with logging tracebacks and can wedge the process.
-        return {
-            "version": 1,
-            "disable_existing_loggers": False,
-            "formatters": {
-                "default": {"format": LOG_FORMAT},
-            },
-            "handlers": {
-                "file": {
-                    "formatter": "default",
-                    "class": "core.logging_ext.ResilientRotatingFileHandler",
-                    "filename": str(uvicorn_log_path),
-                    "maxBytes": 1_048_576,
-                    "backupCount": 3,
-                },
-            },
-            "loggers": {
-                "uvicorn": {"handlers": ["file"], "level": "INFO", "propagate": False},
-                "uvicorn.error": {"level": "INFO"},
-                "uvicorn.access": {"handlers": ["file"], "level": "INFO", "propagate": False},
-            },
-        }
+        # Route uvicorn/fastapi logs to a separate file (one shared, queued handler).
+        return uvicorn_file_log_config(str(uvicorn_log_path), LOG_FORMAT)
     except InstanceAlreadyRunning:
         # Never fall back to console here: continuing would run a second instance
         # that clobbers the live one's log files. Propagate and let main() exit.
