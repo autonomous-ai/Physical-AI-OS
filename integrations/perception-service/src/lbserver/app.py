@@ -35,6 +35,7 @@ from lbserver.models import WSCipherMessage, WSKeyExchangeRequest
 from lbserver.routes.crypto import router as crypto_router
 from lbserver.utils import RoundRobin
 from lbserver.utils.crypto import encrypt_http_response, try_decrypt_http_body
+from lbserver.utils.switch import read_active, resolve_backends, write_ack
 from core.livez import router as livez_router
 from core.logging_ext import ResilientRotatingFileHandler
 from core.request_context import (
@@ -68,6 +69,47 @@ if not BACKENDS:
 
 http_rr = RoundRobin(BACKENDS)
 ws_rr = RoundRobin(BACKENDS)
+
+STATE_FILE: Path | None = Path(settings.lb.state_file) if settings.lb.state_file else None
+
+
+def apply_state_file() -> list[str]:
+    """Point http_rr/ws_rr at the slot named in lb.state_file and ack it.
+
+    proxy_http/proxy_ws read these module globals on every request, so rebinding
+    them moves new requests; in-flight requests and open WebSockets keep the
+    backend they already picked.
+    """
+    global http_rr, ws_rr
+    if STATE_FILE is None:
+        return list(BACKENDS)
+    backends = resolve_backends(BACKENDS, read_active(STATE_FILE))
+    http_rr, ws_rr = RoundRobin(backends), RoundRobin(backends)
+    write_ack(STATE_FILE, backends)
+    logger.warning("[switch] backends -> %s", ", ".join(backends))
+    return backends
+
+
+def install_switch() -> None:
+    """Apply lb.state_file now and again on every SIGHUP.
+
+    A bad state file never takes lbserver down: the error is logged, the current
+    backends stay and no ack is written, so the deploy script sees the switch did
+    not happen and rolls back.
+    """
+    if STATE_FILE is None:
+        return
+
+    def _apply(context: str) -> None:
+        try:
+            apply_state_file()
+        except Exception:
+            logger.exception(
+                "[switch] %s: state file not applied, keeping backends", context
+            )
+
+    _apply("startup")
+    signal.signal(signal.SIGHUP, lambda signum, frame: _apply("SIGHUP"))
 
 
 # ---------------------------------------------------------------------------
@@ -458,6 +500,7 @@ def main() -> None:
         logger.critical("SIGTERM received — shutting down (pid=%d)", os.getpid())
 
     signal.signal(signal.SIGTERM, _handle_sigterm)
+    install_switch()
 
     if args.pid_file:
         try:

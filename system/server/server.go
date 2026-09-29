@@ -82,7 +82,7 @@ type Server struct {
 	deviceMQTTHandler _deviceMQTTDeliver.DeviceMQTTHandler
 	agentHandler      *_agentHttpDeliver.AgentHandler
 	sensingHandler    *_sensingHttpDeliver.SensingHandler
-	buddyHandler      _buddyHttpDeliver.BuddyHandler
+	buddyHandler      *_buddyHttpDeliver.BuddyHandler
 	pluginHandler     _pluginHttpDeliver.PluginHandler
 
 	agentGateway     domain.AgentGateway
@@ -159,7 +159,7 @@ func ProvideServer(
 	dqth _deviceMQTTDeliver.DeviceMQTTHandler,
 	agentH *_agentHttpDeliver.AgentHandler,
 	sensingH *_sensingHttpDeliver.SensingHandler,
-	buddyH _buddyHttpDeliver.BuddyHandler,
+	buddyH *_buddyHttpDeliver.BuddyHandler,
 	pluginH _pluginHttpDeliver.PluginHandler,
 	ds *device.Service,
 	agentGW domain.AgentGateway,
@@ -396,10 +396,11 @@ func (s *Server) Serve(closeFn func()) error {
 	// race on first boot (sync's atomic write vs ensureAgentDefaults' plain
 	// os.WriteFile would clobber each other).
 
-	r := gin.Default()
+	r := gin.New()
+	r.Use(credentialSafeLogger(gin.DefaultWriter))
 	r.RedirectTrailingSlash = false // avoid 301 redirect loop on /network vs /network/
 	r.Use(corsMiddleware())
-	r.Use(gin.Recovery())
+	r.Use(credentialSafeRecovery(gin.DefaultErrorWriter))
 
 	api := r.Group("api")
 	s.registerHarnessRoutes(api, eventCtx)
@@ -483,13 +484,14 @@ func (s *Server) Serve(closeFn func()) error {
 	network.GET("check-internet", s.networkHandler.CheckInternet)
 
 	// Product analytics ingestion for on-device producers (HAL voice metrics
-	// today). Loopback/LAN only, same gate as sensing: the poster is another
+	// today). Admin or direct loopback only, same gate as sensing: the poster is another
 	// process on this device, never a browser session.
 	telemetryGroup := api.Group("telemetry")
-	telemetryGroup.POST("event", sameOriginOrLAN(), _telemetryHttpDeliver.ProvideTelemetryHandler().PostEvent)
+	telemetryGroup.POST("event", adminOrLoopbackAuth(s.config), _telemetryHttpDeliver.ProvideTelemetryHandler().PostEvent)
 
 	sensing := api.Group("sensing")
-	sensing.POST("event", sameOriginOrLAN(), s.sensingHandler.PostEvent)
+	// Every event can become an agent turn; LAN membership and Origin are not credentials.
+	sensing.POST("event", adminOrLoopbackAuth(s.config), s.sensingHandler.PostEvent)
 	sensing.GET("snapshot/:category/:name", s.sensingHandler.GetSnapshot)
 	sensing.GET("agent-snapshot/:runtime/:source/:name", s.sensingHandler.GetAgentSnapshot)
 	sensing.GET("audio/:name", s.sensingHandler.GetAudio)
@@ -524,20 +526,20 @@ func (s *Server) Serve(closeFn func()) error {
 	guard.POST("alert", s.sensingHandler.PostGuardAlert)
 
 	moodGroup := api.Group("mood")
-	moodGroup.POST("log", sameOriginOrLAN(), s.sensingHandler.PostMoodLog)
+	moodGroup.POST("log", adminOrLoopbackAuth(s.config), s.sensingHandler.PostMoodLog)
 
 	wellbeingGroup := api.Group("wellbeing")
-	wellbeingGroup.POST("log", sameOriginOrLAN(), s.sensingHandler.PostWellbeingLog)
+	wellbeingGroup.POST("log", adminOrLoopbackAuth(s.config), s.sensingHandler.PostWellbeingLog)
 
 	postureGroup := api.Group("posture")
-	postureGroup.POST("log", sameOriginOrLAN(), s.sensingHandler.PostPostureLog)
+	postureGroup.POST("log", adminOrLoopbackAuth(s.config), s.sensingHandler.PostPostureLog)
 
 	musicSuggGroup := api.Group("music-suggestion")
-	musicSuggGroup.POST("log", sameOriginOrLAN(), s.sensingHandler.PostMusicSuggestionLog)
-	musicSuggGroup.POST("status", sameOriginOrLAN(), s.sensingHandler.PostMusicSuggestionStatus)
+	musicSuggGroup.POST("log", adminOrLoopbackAuth(s.config), s.sensingHandler.PostMusicSuggestionLog)
+	musicSuggGroup.POST("status", adminOrLoopbackAuth(s.config), s.sensingHandler.PostMusicSuggestionStatus)
 
 	monitor := api.Group("monitor")
-	monitor.POST("event", sameOriginOrLAN(), s.sensingHandler.PostMonitorEvent)
+	monitor.POST("event", adminOrLoopbackAuth(s.config), s.sensingHandler.PostMonitorEvent)
 
 	// Autonomous Buddy (macOS companion app for remote computer use):
 	//   - /pair/start, /status, /command, DELETE admin-gated

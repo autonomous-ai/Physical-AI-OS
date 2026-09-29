@@ -384,6 +384,10 @@ Truy cập qua nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/servo/track` | Trạng thái tracking (active, target, bbox, confidence) |
 | POST | `/servo/track/update` | Khởi tạo lại tracker với bbox mới |
 
+`/servo/move`, `/servo/aim`, `/servo/nudge`, `/servo/resume` và `/servo/track` trả HTTP 409 khi đang ngủ, không khởi động chuyển động hay đánh thức thiết bị. `/servo/play` giữ phản hồi `ignored`. Giới hạn chuyển động vẫn do từng driver xử lý.
+
+Phản hồi move tách `requested` khỏi vị trí đọc lại `actual`. Trường cũ `clamped` nay là `null`: driver không cung cấp mục tiêu sau clamp đã xác nhận. Aim/nudge trả mục tiêu lệnh trong `requested`, vị trí quan sát trong `positions`. Đây là vị trí do driver báo, không bảo đảm đã tới đích: một số driver chạy bất đồng bộ và Reachy có thể trả mục tiêu cache khi lỗi đọc phần cứng. Lỗi đọc lại do driver trả ra được ghi vào `errors.read_position`, số đo có thể thiếu hoặc rỗng; không chạy lại lệnh. Client cần chấp nhận `clamped: null` và dùng số đo cho vị trí quan sát.
+
 ### LED (64 WS2812, grid 8x5)
 
 | Method | Endpoint | Mô tả |
@@ -1560,6 +1564,8 @@ nhận summary sau đó; đối chiếu receipt dùng key answer gốc, không g
 
 Với `PUT /api/device/config`, bỏ qua hoặc gửi null cho `bluebubbles_server_url`, `bluebubbles_user_address`, `bluebubbles_caller_context` sẽ giữ giá trị đã lưu. Chuỗi rỗng được gửi rõ ràng chỉ xoá field đó. Bỏ qua hoặc gửi rỗng `bluebubbles_password` vẫn giữ mật khẩu. Đổi setting không liên quan không được reset channel hoặc caller context.
 
+Khi `PUT /api/device/config` đổi SSID Wi-Fi đã lưu, việc reconnect được lên lịch sau khoảng chờ hai giây, tính từ khi các side effect đồng bộ của config hoàn tất. Nhờ đó response lưu config có thời gian về client trước khi AP/STA ngắt. HTTP thành công chỉ xác nhận đã lưu config, không xác nhận đã vào Wi-Fi; client cần kiểm tra `/api/network/current` sau khi kết nối lại. Request bị đứt mạng không đủ để kết luận lưu thất bại.
+
 ### HAL startup timing
 
 `hal.server:app` là entrypoint HTTP nhẹ; `hal/runtime.py` giữ runtime phần cứng đầy đủ. Startup kiểm tra device/board, nạp giới hạn safety và preset LED trước, rồi khởi tạo một RGB service và mở các route `/led/*` hiện có với middleware bảo vệ HTTP như cũ. Import và khởi tạo runtime đầy đủ chạy trong thread nền cùng process. Trước khi xong, các HTTP endpoint khác (gồm `/health`) trả `503` kèm `Retry-After: 1`. Sau đó request chuyển sang app đầy đủ; app dùng lại RGB instance, không mở lại strip. Không thêm service, cổng, chế độ setup hay flow UI. Nếu startup runtime bắt buộc thất bại, process thoát mã khác 0 để service supervisor phục hồi.
@@ -1571,3 +1577,9 @@ Speaker-ID và SER khởi tạo bằng các worker nền độc lập, không ch
 Worker đèn trắng setup gọi thẳng `/led/status` và retry khi lỗi, không đợi `/health` đầy đủ. Acknowledge LED nghĩa là đã nhận lệnh; khi đo thực tế còn cần kiểm tra đầu ra strip. Đo từ lúc systemd chạy process đến acknowledge, tách riêng với mốc full health. `[startup] led_ready` đánh dấu khởi tạo driver, còn `[startup] full HTTP API ready` đánh dấu chuyển sang app đầy đủ.
 
 HAL nạp driver motion song song với các import độc lập của audio, camera, sensing và voice. Chỉ resolve lớp motion sau các import này, trước kiểm tra khả dụng route và khởi tạo lifespan, giữ nguyên cơ chế báo lỗi driver bắt buộc. Log `[startup] driver_imports_complete` (gồm `motion_wait_ms`), `lifespan_begin` và `lifespan_ready` tách thời gian nạp module khỏi khởi tạo thiết bị. Thời gian bắt đầu tính bên trong `hal.server`, chưa gồm interpreter/Uvicorn. Warm-up vision nền có thể tiếp tục sau khi lifespan sẵn sàng; mốc này không khẳng định mọi subsystem hoặc mic đang mute đã sẵn sàng.
+
+### Xác thực sự kiện sensing
+
+`POST /api/sensing/event` yêu cầu xác thực admin cho mọi loại sự kiện từ xa, kể cả sự kiện thụ động vì chúng có thể gọi agent. HAL gọi trực tiếp qua loopback vẫn được phép khi các header chuyển tiếp cũng là loopback hoặc không có. IP LAN và Origin/Referer không cấp quyền. Web chat tiếp tục dùng cookie đăng nhập; dispatch MQTT nội bộ không đổi.
+
+Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music suggestion, monitor) dùng cùng ranh giới admin hoặc loopback; guard đã áp dụng sẵn. Sensing nhận tối đa bốn attachment, mỗi file 10 MiB và tổng dữ liệu giải mã 20 MiB; body JSON giới hạn 29 MiB trước khi parse. Base64 không hợp lệ bị từ chối trước khi ghi file hoặc gọi agent.

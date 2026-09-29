@@ -894,3 +894,9 @@ Harness delivery warnings no longer pause new voice requests or disable question
 ### iMessage operator address
 
 The iMessage settings handle identifies the operator home conversation. It is not a promise of sender isolation: Hermes presync accepts customer messages from other addresses by default (`BLUEBUBBLES_ALLOW_ALL_USERS=true` unless explicitly overridden).
+
+### Settings Wi-Fi save and network handoff
+
+At `/setting#wifi` (also with `?debug=true`), saving can interrupt the browser connection when the device changes Wi-Fi. An acknowledged save means configuration was persisted, not that association succeeded. Settings shows a reconnect notice naming the target SSID and checks the live `GET /api/network/current` association every three seconds for up to two minutes (each request is capped at four seconds). Checks are cancelled when the panel unmounts; the configuration write is never retried automatically.
+
+A fetch transport failure during a Wi-Fi edit or a save from the Wi-Fi section is shown as an **unknown save result**, not a definite failure or success. Dirty fields remain in memory; even if the device later reports the target SSID, the user is asked to reload to confirm all settings. HTTP/API errors still show the server error. If the browser cannot reach the new network/address before the deadline, the notice asks the user to join the target network and reopen the device page. No credentials are stored in browser storage. The standalone `/wifi` provisioning page is unchanged.

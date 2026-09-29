@@ -1100,23 +1100,34 @@ instructions prioritize the explicitly requested action over small talk,
 question/context modifiers, and proactive or supporting skills. Missing action
 parameters do not prevent routing: the selected skill can resolve them later.
 
-Only the current user message and OS platform skill names/descriptions are
-sent. The roster scans `skills/openclaw-imports` under the active Hermes home,
-using Hermes's native `agent.skill_utils` helpers: `iter_skill_index_files`,
-`parse_frontmatter`, `get_disabled_skill_names`, `skill_matches_platform`, and
-`skill_matches_environment`. This avoids `skills_list()` deduplication by first matching
-name hiding an OS skill behind a bundled skill with the same name. Other bundled,
-authored, and plugin skill categories are excluded. Metadata reads are bounded;
-conversation history and skill bodies are not sent. Each candidate description
-is capped at 500 characters. Native `skill_view` lookups use the qualified
-`openclaw-imports/<relative directory>` path to avoid name collisions.
+Only the current user message and eligible skill names/descriptions are sent.
+The roster combines two sources under the current Hermes context:
 
-If there are more than 32 eligible candidates, the router skips Jev entirely
-rather than truncating the catalog. Empty messages, messages over 8,000 UTF-8
-bytes, slash commands, `[system]` notices, and explicit `[skills:...]` selections also bypass the
-router. The catalog worker inherits the current Hermes context so
-session/platform skill filters still apply. This preloading experiment covers
-OS platform skills; normal Hermes discovery continues to handle other skills.
+- OS skills: scan `skills/openclaw-imports` with native `agent.skill_utils`
+  metadata, disabled, platform, and environment filters. Keep qualified
+  `openclaw-imports/<relative directory>` lookup paths so a bundled namesake
+  cannot hide or replace an OS skill.
+- Runtime skills: use native `skills_list()` for bundled, authored (including
+  `session-recall`), external/project, and plugin skills visible to Hermes.
+  Preserve native eligibility and lookup names; ignore its OS-category entries
+  because the direct scan above already handles them. When names collide, the
+  eligible OS entry wins; otherwise native listing order resolves duplicates.
+
+Native catalog failures leave discovery to Hermes rather than routing against
+an incomplete roster. Metadata reads are bounded; conversation history and skill
+bodies are not sent. Each candidate description is capped at 500 characters.
+The selected skill is rechecked against the current combined catalog and loaded
+through native `skill_view`, with the same preload checks for both sources.
+
+There is no 32-skill cutoff. The complete serialized JSON request (including
+prompt and questions) has a local 256 KiB wire budget, not a declared provider
+limit. If exceeded, log `skipped reason=catalog_budget` and fall back to normal
+Hermes discovery without truncating the roster or making a request. The existing
+3-second turn budget, 64 KiB response cap, and confidence thresholds still apply;
+large catalogs are not guaranteed to finish within that budget. Empty messages,
+messages over 8,000 UTF-8 bytes, slash commands, `[system]` notices, and explicit
+`[skills:...]` selections also bypass the router. The catalog worker inherits the
+current Hermes context so session/platform skill filters still apply.
 
 A selection requires choice probability at least 0.70, a margin of at least
 0.20 over the runner-up, and fit at least 0.60. These are provisional thresholds
@@ -1138,7 +1149,7 @@ failures instead of grouping them as `deferred`:
 | `preloaded` | A valid decision passed all acceptance thresholds and native skill content was loaded for this turn |
 | `abstained` | A valid decision selected `none` or failed `low_choice`, `low_margin`, or `low_fit` |
 | `error` | `http_error`, `network_error`, `invalid_json`, `response_too_large`, `provider_error`, `invalid_schema`, `catalog_error`, `thread_error`, `config_error`, `skill_unavailable`, `skill_load_failed`, or `preload_timeout` |
-| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, or `no_candidates` |
+| `skipped` | `disabled`, `invalid_message`, `explicit_selection`, `system_message`, `unconfigured`, `cooldown`, `busy`, `no_candidates`, or `catalog_budget` |
 | `timeout` | The decision wait budget expired |
 
 Logs include validated `session_id`, `turn_id` and `task_id` when supplied by
@@ -1181,9 +1192,9 @@ based on the [TypeSafe skill-suggestion cookbook](https://docs.typesafe.ai/cookb
 | Area | Reference plugin | OS plugin |
 |---|---|---|
 | Hook | `pre_llm_call`, returns optional user-message context | Same hook; accepted skill content is loaded natively into ephemeral current-turn context; no system-prompt modification |
-| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | Bounded metadata from `openclaw-imports` files with native Hermes eligibility filters, descriptions capped at 500 characters, no body text; qualified skill lookup avoids name collisions |
+| Skill data | Filesystem roster; shortlist receives full descriptions and up to 700 body characters | OS metadata scan plus native Hermes `skills_list()` (runtime and plugin skills); OS wins name collisions; descriptions capped at 500 characters, no body text |
 | Decision | Stage 1 ranks and gates skill need; stage 2 reranks a shortlist of 3 (per chunk) | One request with choice, `none`, and per-candidate fit |
-| Large catalogs | Splits into chunks of 240 choices | Skips when more than 32 eligible skills |
+| Large catalogs | Splits into chunks of 240 choices | Full catalog up to a local 256 KiB serialized request budget; skips without truncation above it |
 | Acceptance | Catalog pin: gate 0.30 and winner fit 0.40; newer upstream also arbitrates disagreeing choice/fit signals | Choice 0.70, margin 0.20, fit 0.60; provisional preloading thresholds, uncalibrated for this workload |
 | Latency | Default hook budget 10 seconds, answer cache and retry-capable client | Temporary 3-second diagnostic budget, no retries/cache, busy bypass and cooldown |
 | Credentials | TypeSafe API with separate key | Shared OS proxy credentials |

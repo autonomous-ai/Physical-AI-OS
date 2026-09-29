@@ -88,8 +88,34 @@ test("rechecks native eligibility after selection and never arbitrarily truncate
   const handler = createHandler(api(true), { catalog: async () => ++reads === 1 ? [skill] : [], configure: async () => ({}), request: async () => { requests++; return result(); } });
   assert.equal(await handler({ prompt: "report" }, {}), undefined);
   assert.equal(requests, 1);
-  const crowded = createHandler(api(true), { catalog: async () => Array(33).fill(skill), configure() { assert.fail("too many"); } });
-  assert.equal(await crowded({ prompt: "report" }, {}), undefined);
+});
+
+test("more than 32 native skills are eligible within the serialized request budget", async () => {
+  const skills = Array.from({ length: 86 }, (_, i) => ({ ...skill, name: `skill-${i}` }));
+  let requests = 0;
+  const handler = createHandler(api(true), { catalog: async () => skills, configure: async () => ({}), request: async (_, payload) => {
+    requests++;
+    assert.equal(payload.state.candidates.length, 86);
+    const probabilities = Object.fromEntries(skills.map((_, i) => [`skill_${i}`, 0]));
+    probabilities.skill_0 = .9;
+    return { answers: { skill: { type: "choice", choice: "skill_0", probabilities: { ...probabilities, none: .1 } },
+      ...Object.fromEntries(skills.map((_, i) => [`fit_skill_${i}`, { type: "noul", noul: .9 }])) } };
+  } });
+  assert.ok((await handler({ prompt: "report" }, {})).prependContext.includes("skill-0"));
+  assert.equal(requests, 1);
+});
+
+test("oversized serialized request defers before credentials and never truncates", async () => {
+  const skills = Array.from({ length: 150 }, (_, i) => ({ ...skill, name: `skill-${i}`, description: "室".repeat(500) }));
+  const payload = payloadFor("report", skills);
+  assert.ok(JSON.stringify(payload).length < 256 * 1024);
+  assert.ok(Buffer.byteLength(JSON.stringify(payload)) > 256 * 1024);
+  const logs = [];
+  const handler = createHandler({ ...api(true), logger: { info: line => logs.push(line) } }, {
+    catalog: async () => skills, configure() { assert.fail("oversized request must not read credentials"); }, request() { assert.fail("oversized request"); },
+  });
+  assert.equal(await handler({ prompt: "report" }, {}), undefined);
+  assert.ok(logs.some(line => line.includes("reason=request_too_large")));
 });
 
 test("native snapshot, fresh disables, policies, metadata, missing roster and symlinks", async t => {
@@ -132,4 +158,32 @@ test("native snapshot, fresh disables, policies, metadata, missing roster and sy
   await assert.rejects(boundedRead(file, 100));
   await assert.rejects(boundedRead(path.join(root, "outside"), 2));
   for (const cfg of [{ tools: { deny: ["read"] } }, { agents: { defaults: { sandbox: { mode: "all" } } } }, { channels: { telegram: { groups: { all: { tools: {} } } } } }, { plugins: { entries: { "autonomous-jev": { enabled: false } } } }]) assert.equal(policyAllows({ ...enabled, ...cfg }, ctx), false);
+});
+
+
+test("native bundled and private paths work without workspace skills; unknown and stale paths stay excluded", async t => {
+  const root = await realpath(await mkdtemp(path.join(os.tmpdir(), "openclaw-native-")));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = { plugins: { entries: { "autonomous-jev": { config: { enabled: true } } } } };
+  const skills = [];
+  for (const [source, name] of [["package/skills", "bundled"], ["private", "session-recall"], ["extensions/plugin", "plugin-skill"]]) {
+    const dir = path.join(root, source, name);
+    await mkdir(dir, { recursive: true });
+    const filePath = path.join(dir, "SKILL.md");
+    await writeFile(filePath, `---\nname: ${name}\ndescription: native skill\n---\nNative body`);
+    skills.push({ name, description: "native skill", filePath });
+  }
+  const snapshot = { resolvedSkills: skills, prompt: skills.map(s => `<skill><name>${s.name}</name></skill>`).join("") };
+  const ctx = { workspaceDir: path.join(root, "workspace"), sessionKey: "key", sessionId: "session", agentId: "main" };
+  const host = { runtime: { config: { current: () => config }, agent: { session: { getSessionEntry: () => ({ sessionId: "session", skillsSnapshot: snapshot }) } } } };
+  assert.deepEqual((await nativeCatalog(host, ctx)).map(s => s.name), ["bundled", "plugin-skill", "session-recall"]);
+  snapshot.prompt = "<skill><name>session-recall</name></skill>";
+  assert.deepEqual((await nativeCatalog(host, ctx)).map(s => s.name), ["session-recall"]);
+  snapshot.skillFilter = [];
+  assert.deepEqual(await nativeCatalog(host, ctx), []);
+  delete snapshot.skillFilter;
+  snapshot.prompt += "<name>bundled</name><name>plugin-skill</name>";
+  await rm(skills[0].filePath);
+  skills[2].disableModelInvocation = true;
+  assert.deepEqual((await nativeCatalog(host, ctx)).map(s => s.name), ["session-recall"]);
 });

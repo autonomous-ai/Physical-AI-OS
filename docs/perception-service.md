@@ -83,6 +83,12 @@ and a `Makefile`; the two processes launch via `python -m dlserver` and
 `python -m lbserver`. Install, single-node vs master/slave GPU scaling, RunPod,
 Docker and TLS: [`integrations/perception-service/docs/deployment.md`](../integrations/perception-service/docs/deployment.md).
 
+New dlserver code is deployed with `make deploy-dlserver`: it starts the new code
+on a second port on the same GPU and switches lbserver over (state file +
+`SIGHUP`) only once every model is loaded, so devices see no errors. Dependency
+changes still use a planned in-place restart. Details:
+[Zero-downtime deploy](../integrations/perception-service/docs/deployment.md#zero-downtime-deploy-two-slots).
+
 ---
 
 > **Doc-sync:** this page is an overview only. When code changes, update the

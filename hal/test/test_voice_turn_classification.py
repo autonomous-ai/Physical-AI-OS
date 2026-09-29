@@ -55,3 +55,31 @@ def test_sender_sends_metadata_without_rewriting_type(monkeypatch):
     payload = post.call_args.kwargs["json"]
     assert payload["type"] == "voice_agent_handled"
     assert payload["voice_turn_type"] == "voice_followup"
+
+
+def test_first_live_input_does_not_classify_its_own_focus_as_followup(monkeypatch, kpi):
+    import threading
+
+    monkeypatch.setattr(config, 'WAKEWORD_ENABLED', True)
+    focus = WakeWordFocus(60)
+    complete = threading.Event()
+
+    class TwoTurnSender(Sender):
+        def send(self, *args, **kwargs):
+            result = super().send(*args, **kwargs)
+            if len(self.calls) == 2:
+                complete.set()
+            return result
+
+    sender = TwoTurnSender()
+    _pump(monkeypatch, kpi, [([
+        UserSpeechOutput(turn_id='first', transcript='How '),
+        UserSpeechOutput(turn_id='first', transcript='are you?'),
+        TextOutput(user_turn_id='first', text='Fine.'),
+    ], 'first', True), ([
+        UserSpeechOutput(turn_id='next', transcript='And tomorrow?'),
+        TextOutput(user_turn_id='next', text='Also fine.'),
+    ], 'next', True)], focus=focus, sender=sender)
+    assert complete.wait(2)
+    assert [kwargs['voice_turn_type'] for _, kwargs in sender.calls] == ['voice', 'voice_followup']
+    assert all(kwargs['event_type'] == 'voice_agent_handled' for _, kwargs in sender.calls)

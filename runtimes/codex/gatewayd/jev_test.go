@@ -2,9 +2,13 @@ package gatewayd
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -202,5 +206,109 @@ func TestJevDisabledIsNoop(t *testing.T) {
 		if got.Content != original.Content || got.Source != original.Source || got.preload != "" || got.preloadChecked || got.promptWithSkill() != original.Content {
 			t.Fatalf("disabled turn changed: %#v", got)
 		}
+	}
+}
+
+func TestJevNativeProjectCatalogAndPolicy(t *testing.T) {
+	for _, key := range []string{"CODEX_CONFIG", "CLAUDE_CONFIG_DIR", "OPENCODE_CONFIG", "OPENCODE_CONFIG_CONTENT", "OPENCODE_CONFIG_DIR", "XDG_CONFIG_HOME"} {
+		t.Setenv(key, "")
+	}
+	for _, folder := range []string{".agents"} {
+		t.Run(folder, func(t *testing.T) {
+			root := t.TempDir()
+			project := filepath.Join(root, "project")
+			cfg := Config{Home: filepath.Join(root, "home"), Workspace: filepath.Join(project, "nested"), CodexHome: filepath.Join(root, "home", ".codex"), JevEnabled: true, JevConfigPath: filepath.Join(root, "config.json")}
+			write := func(path, content string) {
+				t.Helper()
+				if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte(content), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := os.MkdirAll(filepath.Join(project, ".git"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(cfg.Workspace, 0700); err != nil {
+				t.Fatal(err)
+			}
+			skillRoot := filepath.Join(project, folder, "skills")
+			skillPath := filepath.Join(skillRoot, "recall", "SKILL.md")
+			write(skillPath, "---\nname: recall\ndescription: Recall our previous conversation\n---\nPROJECT_RECALL_INSTRUCTIONS\n")
+			roots := nativeSkillDirs(cfg)
+			contains := func(want string) bool {
+				for _, got := range roots {
+					if got == want {
+						return true
+					}
+				}
+				return false
+			}
+			for _, want := range []string{skillRoot, filepath.Join(cfg.Workspace, folder, "skills"), filepath.Join(cfg.CodexHome, "skills"), filepath.Join(cfg.CodexHome, "skills", ".system"), filepath.Join(cfg.Home, ".agents", "skills"), "/etc/codex/skills"} {
+				if !contains(want) {
+					t.Fatalf("missing native root %s from %#v", want, roots)
+				}
+			}
+			outside := filepath.Join(root, folder, "skills")
+			if contains(outside) {
+				t.Fatalf("catalog escaped repository root: %#v", roots)
+			}
+			if !nativePreloadAllowed(cfg) {
+				t.Fatal("covered project catalog incorrectly blocks preloading")
+			}
+			var calls atomic.Int32
+			provider := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+				calls.Add(1)
+				var body struct {
+					State struct {
+						Prompt     string
+						Candidates []struct{ Description string }
+					}
+				}
+				if err := json.NewDecoder(req.Body).Decode(&body); err != nil {
+					t.Error(err)
+				}
+				if body.State.Prompt != "Recall our previous conversation" || len(body.State.Candidates) != 1 || !strings.Contains(body.State.Candidates[0].Description, "Recall our previous conversation") {
+					t.Errorf("unexpected selection input: %#v", body)
+				}
+				_, _ = w.Write([]byte(`{"answers":{"skill":{"type":"choice","choice":"skill_0","probabilities":{"none":0.01,"skill_0":0.99}},"fit_skill_0":{"type":"noul","noul":0.99}}}`))
+			}))
+			defer provider.Close()
+			settings, err := json.Marshal(map[string]string{"llm_base_url": provider.URL, "llm_api_key": "mock"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			write(cfg.JevConfigPath, string(settings))
+			preload := newPreloader(cfg)
+			if preload == nil {
+				t.Fatal("enabled bridge did not construct preloader")
+			}
+			got := preload(context.Background(), "Recall our previous conversation")
+			if !strings.Contains(got, "PROJECT_RECALL_INSTRUCTIONS") || !strings.Contains(got, skillPath) || calls.Load() != 1 {
+				t.Fatalf("native project skill not preloaded: calls=%d result=%q", calls.Load(), got)
+			}
+			// Native policy changes apply to the same already-constructed preloader.
+			policyPath := filepath.Join(project, ".codex/config.toml")
+			write(policyPath, "[skills]\nconfig=[]")
+			if nativePreloadAllowed(cfg) {
+				t.Fatal("native skill policy was bypassed")
+			}
+			if got := preload(context.Background(), "Recall our previous conversation"); got != "" || calls.Load() != 1 {
+				t.Fatalf("policy denied skill reached selector: calls=%d result=%q", calls.Load(), got)
+			}
+			if err := os.Remove(policyPath); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.MkdirAll(outside, 0700); err != nil {
+				t.Fatal(err)
+			}
+			if nativePreloadAllowed(cfg) {
+				t.Fatal("unsupported ancestor catalog was ignored")
+			}
+			if got := preload(context.Background(), "Recall our previous conversation"); got != "" || calls.Load() != 1 {
+				t.Fatalf("unsupported catalog reached selector: calls=%d result=%q", calls.Load(), got)
+			}
+		})
 	}
 }
