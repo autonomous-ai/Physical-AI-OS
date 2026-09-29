@@ -938,6 +938,12 @@ drift and repeated filter boundaries. The same anti-alias filter adds about
 0.625 ms of delay when the lower sample rate is 16 kHz; FIFO pacing is unchanged.
 `EchoReference.clear()` or a source-rate switch resets the resampling state.
 Acoustic improvement still requires an A/B check on the device.
+HAL primes the reference filter when both speaker and microphone rates become
+known during audio initialization, regardless of which device opens first. This
+moves the cold SciPy import off the first filler/answer path; it adds startup
+work, not synthetic audio or an acknowledgement. Output-rate changes prime the
+new filter too. Preparations taking at least 50 ms are logged with source rate
+and duration. The first-write fallback remains for unprepared routes.
 Before the first speaker write of a playback, HAL prepares the reference filter
 so a cold SciPy import/filter design cannot stall playback after its first 40 ms. This
 preparation is skipped when AEC is inactive or sample rates match. Cancellation

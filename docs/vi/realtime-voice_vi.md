@@ -908,6 +908,12 @@ và việc lặp lại biên bộ lọc. Cùng bộ lọc chống alias thêm kh
 khi tần số lấy mẫu thấp hơn là 16 kHz; nhịp ghi FIFO không đổi.
 `EchoReference.clear()` hoặc đổi tần số nguồn sẽ reset trạng thái resample.
 Mức cải thiện khử vọng vẫn cần được kiểm tra A/B trên thiết bị.
+HAL chuẩn bị trước bộ lọc tham chiếu khi đã biết tần số loa và mic lúc khởi tạo
+audio, bất kể thiết bị nào mở trước. Nhờ vậy lần import SciPy đầu tiên diễn ra
+trước đường phát filler/câu trả lời đầu; chỉ thêm việc lúc khởi tạo, không phát
+audio giả hay ghi ack. Khi đổi tần số đầu ra, bộ lọc mới cũng được chuẩn bị.
+Bước chuẩn bị từ 50 ms trở lên được log cùng tần số nguồn và thời gian. Vẫn giữ
+đường dự phòng trước lần ghi đầu cho route chưa chuẩn bị.
 Trước lần ghi loa đầu của mỗi lượt phát, HAL chuẩn bị bộ lọc tham chiếu để lần
 import SciPy/thiết kế bộ lọc đầu tiên không làm khựng sau 40 ms audio đầu. Bỏ qua chuẩn bị khi AEC chưa hoạt
 động hoặc sample rate bằng nhau. Kiểm tra hủy giữa các lát, kể cả sau chuẩn bị;
