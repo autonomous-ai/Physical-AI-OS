@@ -45,6 +45,8 @@ def test_extended_thinking_declares_non_blocking() -> None:
     completion, = [tool for tool in declarations if tool.name == "complete_response"]
     assert completion.parameters.required in (None, [])
     assert "Never use for an action" in completion.description
+    assert "recall of this conversation" in completion.description
+    assert "past conversations" not in completion.description
 
 
 def test_plain_live_leaves_tool_blocking() -> None:

@@ -103,3 +103,20 @@ def test_gemini_routing_policy_follows_memory_context(tmp_path, monkeypatch):
             assert 'for visual questions use look' in instructions
         else:
             assert '# Routing before speech' not in instructions
+
+
+ROUTING = (RESOURCES_DIR / "routing_prompt_gemini.md").read_text(encoding="utf-8")
+
+
+# #449: "what was the question you just asked me?" was delegated to the main
+# agent, which was not part of the quiz and has no record of it.
+def test_current_conversation_recall_is_answered_directly():
+    assert "**This conversation:**" in PROMPT
+    assert "the question you just asked" in PROMPT
+    assert "`## Current activity`" in PROMPT
+    assert "the main agent was not part of this conversation" in PROMPT
+    assert "NOT this conversation" in PROMPT
+    assert "Use for conversational awareness, delegate specific recall." not in PROMPT
+    assert "memory recall of earlier sessions" in ROUTING
+    assert "checking conversation memory" not in ROUTING
+    assert "Questions about THIS conversation" in ROUTING

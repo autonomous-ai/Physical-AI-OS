@@ -345,8 +345,9 @@ class GeminiLiveAgent(VoiceAgentBase):
                     name="complete_response",
                     description=(
                         "Confirm a finished direct answer ONLY for a greeting, general knowledge, "
-                        "a completed public lookup, or a visual question answered from look. "
-                        "Never use for an action, music playback, stored memory or past conversations, "
+                        "a completed public lookup, a visual question answered from look, or recall "
+                        "of this conversation (question number, score, what was just asked or said). "
+                        "Never use for an action, music playback, stored memory or earlier sessions, "
                         "account access, Harness/code work, a promise/filler, an error or unresolved work. "
                         "Those require delegate_to_main, even if you already said you would help. "
                         "Call only AFTER delivering the actual answer; a receipt such as "
