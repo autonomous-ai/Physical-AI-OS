@@ -51,3 +51,9 @@ Các bản sửa xử lý ingestion thiếu xác thực, credential trong log, b
 ## Quyền sở hữu Buddy handler
 
 Server nhận `BuddyHandler` qua con trỏ từ Wire để không sao chép bộ giới hạn xác nhận pairing và mutex khi khởi tạo dependency. Giới hạn pairing và hành vi endpoint không thay đổi.
+
+## Phản hồi servo và giải nén Piper
+
+Lệnh move/aim/nudge/resume/track khi ngủ trả 409, không đánh thức body. Move tách mục tiêu yêu cầu và vị trí quan sát, trả `clamped: null`; aim/nudge cũng tách mục tiêu khỏi số đo. Không đổi giới hạn driver hoặc calibration. Vị trí driver báo có thể là mục tiêu cache trên driver như Reachy, không chứng minh body đã tới đích. Xem [HAL API](../os-server_vi.md) về tương thích phản hồi.
+
+Archive engine Piper được kiểm tra trước và lọc trong lúc giải nén vào thư mục tạm mới. Đường dẫn và link phải nằm trong cây release `piper`; từ chối file đặc biệt, symlink thư mục hoặc đích không tồn tại. Vẫn hỗ trợ link file thư viện hợp lệ bên trong release. Giữ nguyên URL release HTTPS cố định; chưa thêm checksum pinning.

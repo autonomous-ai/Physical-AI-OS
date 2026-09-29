@@ -390,6 +390,10 @@ Accessed via nginx proxy: `/hw/*` → `127.0.0.1:5001`
 | GET | `/servo/track` | Get tracking status (active, target, bbox, confidence) |
 | POST | `/servo/track/update` | Re-initialize tracker with new bounding box |
 
+`/servo/move`, `/servo/aim`, `/servo/nudge`, `/servo/resume`, and `/servo/track` return HTTP 409 while sleeping, without starting motion or waking the device. `/servo/play` retains its `ignored` response. Movement limits remain driver-specific.
+
+Move responses separate `requested` from `actual` readback. The legacy `clamped` field is now `null`: drivers do not expose a confirmed clamped goal. Aim/nudge return command targets in `requested` and observed readback in `positions`. These values come from the driver, not proof the target was reached: some drivers move asynchronously, and Reachy can return its cached target when a hardware read fails. Readback failures exposed by the driver populate `errors.read_position` and leave observations partial or empty; they do not repeat the command. Clients must tolerate `clamped: null` and use readback for observed positions.
+
 ### LED (64 WS2812, 8x5 grid)
 
 | Method | Endpoint | Description |

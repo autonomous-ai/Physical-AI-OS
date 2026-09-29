@@ -149,3 +149,5 @@ See [device security boundaries](device-boundaries.md) ([Vietnamese](../vi/secur
 | AOS-13 (file subset) | Resolved file types/containment and private temporary enrollment WAV | Go resolver and mock HAL file tests |
 
 This is not a blanket closure of the report: OTA, credential migration, setup policy, CORS and additional archive/joint-limit proposals are outside these corrections. No device validation is claimed by this checklist entry.
+
+Follow-up local fixes: sleeping servo commands now return 409, motion responses distinguish requested targets from readback, and Piper extraction rejects paths/links outside the release tree. Driver calibration limits remain unchanged; checksum pinning and CORS/HAL header policy are still outside these fixes.
