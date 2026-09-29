@@ -27,8 +27,8 @@ _AUDIO_TAG_RE = re.compile(r"\[[^\]]*\]")
 class ElevenLabsTTSBackend(TTSBackend):
     """ElevenLabs TTS backend with streaming support."""
 
-    DEFAULT_MODEL = "eleven_v4"
-    cache_revision = "default-v4-local-tempo-v1"
+    DEFAULT_MODEL = "eleven_v4_turbo"
+    cache_revision = "default-v4-turbo-local-tempo-v1"
     supports_synthesis_cancellation = True
     ELEVENLABS_PATH = "/elevenlabs"
 
@@ -223,7 +223,7 @@ class ElevenLabsTTSBackend(TTSBackend):
         # stored settings, which may use a different speaking speed.
         # Keep the full HAL speed range and pitch-preserving playback policy
         # when upgrading the default model, including explicit v3 overrides.
-        local_tempo = el_model in ("eleven_v3", "eleven_v4")
+        local_tempo = el_model in ("eleven_v3", "eleven_v4", "eleven_v4_turbo")
         body["voice_settings"] = {
             "speed": 1.0 if local_tempo else max(0.7, min(1.2, speed)),
         }

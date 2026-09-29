@@ -20,7 +20,7 @@ from hal.drivers.voice.tts.tempo import change_tempo
     "[excited, happy] Xin chào. [long pause] Chào bạn!",
     "[sleepy drowsy voice] Chào buổi sáng. [yawning] Mình đây.",
 ])
-def test_v4_default_request_on_direct_and_proxy(base_url, prefix, text):
+def test_v4_turbo_default_request_on_direct_and_proxy(base_url, prefix, text):
     requests = []
 
     def respond(request):
@@ -41,17 +41,18 @@ def test_v4_default_request_on_direct_and_proxy(base_url, prefix, text):
     }
 
 
-def test_default_is_v4():
-    assert ElevenLabsTTSBackend.DEFAULT_MODEL == "eleven_v4"
+def test_default_is_v4_turbo():
+    assert ElevenLabsTTSBackend.DEFAULT_MODEL == "eleven_v4_turbo"
 
 
-def test_v4_default_invalidates_cached_v3_audio():
+@pytest.mark.parametrize("revision", ["local-v3-tempo-v1", "default-v4-local-tempo-v1"])
+def test_v4_turbo_default_invalidates_previous_cached_audio(revision):
     from types import SimpleNamespace
     from hal.drivers.voice.tts.service import TTSService
 
     svc = object.__new__(TTSService)
     svc._provider, svc._voice, svc._model, svc._speed = "elevenlabs", "Ngan", "tts-1", 1.0
-    svc._backend = SimpleNamespace(cache_revision="local-v3-tempo-v1")
+    svc._backend = SimpleNamespace(cache_revision=revision)
     old_key = svc._tts_cache_key("Xin chào")
     svc._backend = SimpleNamespace(cache_revision=ElevenLabsTTSBackend.cache_revision)
     assert svc._tts_cache_key("Xin chào") != old_key
@@ -94,6 +95,7 @@ def test_streams_before_input_eof_and_closes():
 
 @pytest.mark.parametrize("model,provider_speed,local", [
     ("eleven_v3", 1.0, True), ("eleven_v4", 1.0, True),
+    ("eleven_v4_turbo", 1.0, True),
     ("tts-1", 1.0, True), ("", 1.0, True),
     ("eleven_multilingual_v2", 1.2, False),
 ])
