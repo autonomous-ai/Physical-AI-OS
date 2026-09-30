@@ -155,8 +155,9 @@ after an animation ends — it interpolates to idle. Restoring that pose belongs
 The servo hold has owners: `scene`, `tracking` and `explicit` (`POST /servo/hold`), kept in
 `hal/drivers/motors/hold.py`. `_hold_mode` is true while at least one owner remains, and each
 path releases only its own claim. Ending a scene never drops a tracking or explicit hold, and a
-tracking session that ends during a reading scene leaves the scene's hold in place.
-`POST /servo/resume` clears every owner.
+tracking session that ends during a reading scene leaves the scene's hold in place and does not
+restart idle: the arm stays where tracking left it. `POST /servo/resume` clears every owner. An LED
+override that ends a scene also deletes the persisted scene, so a HAL restart does not bring it back.
 
 **Safety net.** A `scene` hold with no active scene is stale. It is released, with
 `[hold] scene hold released -- no scene is active (stale)`, the next time something reads the

@@ -155,7 +155,8 @@ Servo hold có chủ sở hữu: `scene`, `tracking` và `explicit` (`POST /serv
 trong `hal/drivers/motors/hold.py`. `_hold_mode` là true khi còn ít nhất một chủ sở hữu, và mỗi
 đường chỉ nhả phần giữ của chính nó. Kết thúc scene không bao giờ nhả hold của tracking hay
 explicit, và một phiên tracking kết thúc giữa lúc scene reading đang bật vẫn để nguyên hold của
-scene. `POST /servo/resume` xoá mọi chủ sở hữu.
+scene và không khởi động lại idle: tay đèn ở lại chỗ tracking để lại. `POST /servo/resume` xoá mọi
+chủ sở hữu. Lệnh LED kết thúc scene cũng xoá scene đã lưu, nên HAL khởi động lại sẽ không bật lại nó.
 
 **Lưới an toàn.** Một hold `scene` mà không có scene nào đang active là hold cũ (stale). Nó được
 nhả, kèm log `[hold] scene hold released -- no scene is active (stale)`, ở lần kế tiếp có chỗ đọc
