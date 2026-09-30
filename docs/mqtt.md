@@ -1056,7 +1056,8 @@ Implementation notes that matter to a backend author:
   opening filler, queued the same way when the agent is busy, same `[user] `
   prefix to the model). The separate type exists so the Flow Monitor's turn
   badge shows **where the message was typed** — 📱 `mqtt_chat` for a phone app
-  vs 🖥 `web_chat` for the monitor composer. With `speak: true` the turn forwards
+  vs 🖥 `web_chat` for the monitor composer — and so the message ends with
+  `[via:mobile]` instead of `[via:web]` (see os-server.md, "Source marker"). With `speak: true` the turn forwards
   as `voice` instead and shows as a voice turn.
 - **A dedicated broker client** (`device-<id>-chat`) is held open for the stream.
   The shared `publish` helper opens and closes a connection per message, which is

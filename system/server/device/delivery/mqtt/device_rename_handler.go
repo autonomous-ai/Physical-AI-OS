@@ -49,6 +49,10 @@ func (h *DeviceMQTTHandler) handleDeviceRename(env domain.MQTTDataCommand) error
 // renameGreetingPrompt builds the [system] message that tells the agent it
 // was just renamed.
 func renameGreetingPrompt(name string) string {
+	return domain.AppendVia(renameGreetingText(name), domain.ViaSystem)
+}
+
+func renameGreetingText(name string) string {
 	switch i18n.Lang() {
 	case i18n.LangVI:
 		return fmt.Sprintf("[system] Chủ nhân vừa đổi tên cho bạn thành \"%s\". Chào lại ngắn gọn, ấm áp.", name)
