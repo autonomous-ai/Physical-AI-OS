@@ -596,6 +596,14 @@ cos(45) của mỗi trục, tức một hình vuông bo góc chứ không phải
 sang bên đúng bằng các lần nhìn trái/phải và xuống thấp đúng bằng lần nhìn đáy, tức thêm vùng đất mới
 thay vì phủ lại phần giữa.
 
+**Pha nhìn quanh tìm user thì vòng qua đỉnh (#545).** `search_for_subject(for_user=True)` (pha nhìn
+quanh của gaze watcher) đi theo `USER_LOOK_CIRCLE`: vẫn sáu lần nhìn đó nhưng pitch được lật ngược, tức
+tâm, trái, vòng qua **đỉnh**, ra phải. Khuôn mặt nằm ngang hoặc cao hơn góc nhìn lúc ngồi mà pha quét
+bắt đầu từ đó; các lần nhìn đáy chỉ vào bàn và bàn phím. Đo trên green-lamp 30/09/2026: một user đang
+đứng, đầu cao hơn mọi lần nhìn, đã bị bỏ sót qua cả 18 lần nhìn. Tìm đồ vật (`POST /servo/search`,
+"tìm đồ của tôi") và pha quét dự phòng của look-aim vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
+lần nhìn lên dùng chung giới hạn `WRIST_PITCH_MIN` mô tả bên dưới.
+
 **Chỉ `wrist_roll` và `wrist_pitch` di chuyển trong một lần nhìn.** Đế chỉ xoay một lần cho mỗi bearing
 và cánh tay không bao giờ tự đổi dáng. Một thiết kế trước đó rải độ nghiêng lên `base_pitch`,
 `elbow_pitch` và `wrist_pitch` qua `servo_follow.distribute_pitch` — đúng cho một hiệu chỉnh tracking,

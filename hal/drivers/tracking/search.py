@@ -57,6 +57,10 @@ LOOK_CIRCLE = (
     (-ROLL_DIAG_DEG, -PITCH_DIAG_DEG),
 )
 HALF_LOOKS: int = 6
+# The half ring mirrored UP, for the user look-around only (#545). Faces sit at or
+# above the seated view the sweep starts from; the down looks point at desks, and a
+# standing user was missed through all 18 looks. Object searches keep looking down.
+USER_LOOK_CIRCLE = tuple((roll, -dp) for roll, dp in LOOK_CIRCLE[:HALF_LOOKS])
 
 # Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on lamp-ac82:
 # wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN, not by the joint) and
@@ -472,7 +476,8 @@ def search_for_subject(target: str = "person", detector: Any = None,
     return res
 
 
-def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
+def _look_list(seed_pose: Optional[dict], exhaustive: bool,
+               for_user: bool = False) -> list:
     """Absolute (roll, wrist_pitch) for every look at one bearing."""
     base_wp = None
     if seed_pose:
@@ -480,7 +485,10 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
             base_wp = float(seed_pose["wrist_pitch.pos"])
         except (KeyError, TypeError, ValueError):
             base_wp = None
-    pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
+    if for_user:
+        pattern = USER_LOOK_CIRCLE
+    else:
+        pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
     lo = C.WRIST_PITCH_MIN + WRIST_PITCH_MARGIN
     hi = C.WRIST_PITCH_MAX - WRIST_PITCH_MARGIN
     out = []
@@ -502,7 +510,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    looks = _look_list(seed_pose, exhaustive)
+    looks = _look_list(seed_pose, exhaustive, for_user)
     total_looks = len(stops) * len(looks)
     logger.info("[search] sweeping %d bearings x %d looks (%d total) for '%s': %s",
                 len(stops), len(looks), total_looks, target,

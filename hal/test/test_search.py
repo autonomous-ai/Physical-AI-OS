@@ -1118,3 +1118,39 @@ def test_the_user_probe_keeps_the_face_it_was_given():
 def test_the_user_probe_never_jumps_to_another_face():
     far_away = (600, 400, 30, 30)
     assert _probe_on([far_away], anchor=(40, 20, 60, 60)) is None
+
+
+def _look_pitches(svc):
+    """wrist_pitch of every look the sweep made (looks always carry wrist_roll)."""
+    return {round(h["wrist_pitch.pos"], 1) for h in svc.holds
+            if "wrist_roll.pos" in h and "wrist_pitch.pos" in h}
+
+
+_SEATED = _FakeSvc.IDLE_BASELINE["wrist_pitch.pos"]
+
+
+def test_the_user_sweep_looks_up_never_down():
+    """Faces are at or above seated height: a standing user was missed by the down looks."""
+    res, _obs, _centred, svc = _user_run({})
+    pitches = _look_pitches(svc)
+    assert round(_SEATED - search.PITCH_LOOK_DEG, 1) in pitches, f"never looked up: {pitches}"
+    assert round(_SEATED + search.PITCH_LOOK_DEG, 1) not in pitches, f"looked down: {pitches}"
+
+
+def test_the_user_sweep_keeps_six_looks_per_stop():
+    res, _obs, _centred, _svc = _user_run({})
+    assert res.looks_visited == 3 * search.HALF_LOOKS
+
+
+def test_the_other_sweeps_still_look_down_at_the_desk():
+    """/servo/search ("find my things") and look-aim's fallback sweep are unchanged."""
+    _res, svc = _run(bearing=None)
+    pitches = _look_pitches(svc)
+    assert round(_SEATED + search.PITCH_LOOK_DEG, 1) in pitches, f"never looked down: {pitches}"
+    assert round(_SEATED - search.PITCH_LOOK_DEG, 1) not in pitches, f"looked up: {pitches}"
+
+
+def test_the_up_pattern_is_the_down_pattern_mirrored():
+    assert search.USER_LOOK_CIRCLE == tuple(
+        (roll, -dp) for roll, dp in search.LOOK_CIRCLE[:search.HALF_LOOKS]
+    )

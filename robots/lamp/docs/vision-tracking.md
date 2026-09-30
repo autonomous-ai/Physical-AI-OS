@@ -598,6 +598,14 @@ bottom, out to the right, and (exhaustive only) over the top. The corners go to 
 corner sees as far to the side as the left/right looks and as far down as the bottom look, adding new
 ground instead of re-covering the middle.
 
+**The user look-around rounds the top instead (#545).** `search_for_subject(for_user=True)` (the
+gaze watcher's look-around) walks `USER_LOOK_CIRCLE`: the same six looks with the pitch mirrored,
+so centre, left, round the **top**, out to the right. Faces sit at or above the seated view the sweep
+starts from; the bottom looks point at desks and keyboards. Device-observed 2026-09-30 on green-lamp:
+a standing user whose head was above every look was missed through all 18 looks. Object searches
+(`POST /servo/search`, "find my things") and look-aim's fallback sweep keep the downward ring, where
+things on the desk are. The upward looks share the `WRIST_PITCH_MIN` clamp described below.
+
 **Only `wrist_roll` and `wrist_pitch` move during a look.** The base turns once per bearing and the
 arm never reshapes itself. An earlier design spread the tilt across `base_pitch`, `elbow_pitch` and
 `wrist_pitch` via `servo_follow.distribute_pitch` — right for a tracking correction, wrong for a
