@@ -14,6 +14,7 @@ import numpy as np
 import numpy.typing as npt
 
 from hal import app_state
+from hal.drivers.motors import hold
 from hal.drivers.tracking import constants as C
 from hal.safety.policy import cap_speed_dps
 from hal.drivers.tracking.detection import ObjectDetector
@@ -298,7 +299,7 @@ class TrackerService:
         """Background loop: tracker update at FAST_LOOP_FPS + YOLO background correction."""
         state = self._state
 
-        animation_service._hold_mode = True
+        hold.claim(animation_service, hold.TRACKING)
         animation_service._tracking_active = True
         logger.info("Servo hold mode + tracking lock ON")
 
@@ -783,7 +784,7 @@ class TrackerService:
 
         finally:
             animation_service._tracking_active = False
-            animation_service._hold_mode = False
+            hold.release(animation_service, hold.TRACKING)
             state.running.clear()
 
             self._follower.join(timeout=2.0)
@@ -815,4 +816,10 @@ class TrackerService:
             # Restart idle. The tracking lock in _continue_playback cleared
             # _current_recording, so the revived event loop has nothing to play and
             # would return at its first guard forever — arm rigid with torque on.
-            animation_service.dispatch("play", animation_service.idle_recording)
+            # Unless another owner still holds the body: idle would play once, then
+            # freeze at its last frame. The arm stays where tracking left it.
+            held = hold.holder(animation_service)
+            if held:
+                logger.info("Tracking ended — servo still held by %s, idle not resumed", held)
+            else:
+                animation_service.dispatch("play", animation_service.idle_recording)

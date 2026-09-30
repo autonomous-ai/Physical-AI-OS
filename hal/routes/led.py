@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Body, HTTPException
 
 import hal.app_state as state
+from hal.drivers.motors import hold
 from hal.models import (
     LEDColorResponse,
     LEDEffectRequest,
@@ -38,6 +39,21 @@ def _sleep_led_locked(route: str) -> bool:
         return False
     state.logger.info("%s skipped -- sleepy owns the strip", route)
     return True
+
+
+def _end_scene() -> None:
+    """A non-transient LED override ends the scene, its servo hold, and its restore-on-restart."""
+    from hal.routes.scene import _persist_scene
+
+    state._active_scene = None
+    _persist_scene(None)
+    if hold.release(state.animation_service, hold.SCENE):
+        still = hold.holder(state.animation_service)
+        if still:
+            state.logger.info("Scene ended by an LED override: scene hold released, "
+                              "servo still held by %s", still)
+        else:
+            state.logger.info("Scene ended by an LED override: servo released")
 
 
 @router.get("/led", response_model=LEDStateResponse)
@@ -108,7 +124,7 @@ def set_led_solid(req: LEDSolidRequest):
     state.rgb_service.dispatch(RGB_CMD_SOLID, color)
     # Transient overlays must not exit the active scene.
     if not req.transient:
-        state._active_scene = None
+        _end_scene()
     if state.sensing_service and isinstance(color, tuple):
         state.sensing_service.presence.set_last_color(color)
     if req.transient:
@@ -158,7 +174,7 @@ def set_led_paint(req: LEDPaintRequest):
     state._stop_current_effect()
     state.rgb_service.dispatch(RGB_CMD_PAINT, colors)
     if not req.transient:
-        state._active_scene = None
+        _end_scene()
     if state.sensing_service:
         avg = state._avg_paint_color(colors)
         if avg:
@@ -186,7 +202,7 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
     state._stop_current_effect()
     state.rgb_service.clear()
     if not transient:
-        state._active_scene = None
+        _end_scene()
     if state.sensing_service:
         state.sensing_service.presence.set_last_color((0, 0, 0))
     if transient:
@@ -228,7 +244,7 @@ def start_led_effect(req: LEDEffectRequest):
     # No "light is off" guard: transient status cues may light a resting strip.
     state._stop_current_effect()
     if not req.transient:
-        state._active_scene = None
+        _end_scene()
 
     base_color = tuple(req.color) if req.color else (255, 180, 100)
     # Transient effects overlay on the user's saved color; non-transient replace the strip.

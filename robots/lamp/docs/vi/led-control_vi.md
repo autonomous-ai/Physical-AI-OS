@@ -151,7 +151,7 @@ POST /scene
 
 Mỗi scene điều khiển **toàn bộ thiết bị ngoại vi** — không chỉ LED mà cả camera, mic, speaker và servo.
 
-Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idle, bật lại camera/speaker, nhả servo hold.
+Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idle, bật lại camera/speaker, nhả servo hold của scene. Một lệnh LED không transient (`/led/solid`, `/led/paint`, `/led/off`, `/led/effect`) cũng kết thúc scene và nhả hold của scene.
 
 Scene đang active **sống sót qua các lần restart HAL service** (OTA, deploy, crash): trạng thái được persist vào sidecar theo phiên boot (`/tmp/hal-scene-state.json`, gắn với `boot_id` của kernel) và tự động kích hoạt lại khi HAL chạy trở lại, nên niềm tin của agent ("focus mode đang bật") luôn đồng bộ. Reboot toàn bộ thiết bị thì chủ đích khởi động không có scene. Các lệnh LED transient (`/led/solid`, `/led/off`, `/led/effect` với `"transient": true`, vd hiệu ứng breathing lúc boot) chỉ overlay lên strip mà không thoát scene đang active; chỉ LED override non-transient mới xoá scene.
 
@@ -178,7 +178,7 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 
 1. **LED** — màu đặc = `preset.color × preset.brightness`
 2. **Servo aim** — xoay đầu đèn theo hướng preset (desk, wall, up, down)
-3. **Servo hold** — nếu `"servo": "hold"`, freeze servo **sau khi** aim xong (aim → hold trong cùng 1 thread). Tự release khi chuyển sang scene không có hold.
+3. **Servo hold** — nếu `"servo": "hold"`, giữ servo **sau khi** aim xong (aim → hold trong cùng 1 thread), với chủ sở hữu là `scene`. Không giữ nếu scene đã kết thúc trong lúc tay đèn còn đang di chuyển. Được nhả khi chuyển sang scene không có hold, khi tắt scene, hoặc khi có lệnh LED không transient.
 4. **Camera** — tự động bật/tắt qua `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
 6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ tiếp quản drain để wake trả loa lại được. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
@@ -191,6 +191,33 @@ trong 5s (#314). Hệ quả: khi một scene `hold` đang bật, đầu không c
 khi animation kết thúc — nó nội suy về idle. Muốn khôi phục tư thế đó thì việc ấy thuộc về
 `servo: hold` của scene, không thuộc về một lần vẽ lại LED.
 
+### Chủ sở hữu của hold (#544)
+
+Servo hold có chủ sở hữu: `scene`, `tracking` và `explicit` (`POST /servo/hold`), được quản lý
+trong `hal/drivers/motors/hold.py`. `_hold_mode` là true khi còn ít nhất một chủ sở hữu, và mỗi
+đường chỉ nhả phần giữ của chính nó. Kết thúc scene không bao giờ nhả hold của tracking hay
+explicit, và một phiên tracking kết thúc giữa lúc scene reading đang bật vẫn để nguyên hold của
+scene và không khởi động lại idle: tay đèn ở lại chỗ tracking để lại. `POST /servo/resume` xoá mọi
+chủ sở hữu. Lệnh LED kết thúc scene cũng xoá scene đã lưu, nên HAL khởi động lại sẽ không bật lại nó.
+Log khi nhả cho biết tay đèn đã rảnh chưa: `Scene off: servo released` khi không còn chủ sở hữu nào,
+`Scene off: scene hold released, servo still held by explicit` khi vẫn còn. Tương tự, gaze log
+`framing released (servo held by scene, idle waits)` thay cho `(idle has the arm)` khi kết thúc
+một cuộc hội thoại lúc servo đang bị giữ.
+
+**Lưới an toàn.** Một hold `scene` mà không có scene nào đang active là hold cũ (stale). Nó được
+nhả, kèm log `[hold] scene hold released -- no scene is active (stale)`, ở lần kế tiếp có chỗ đọc
+hold: `GET /servo`, `/servo/play`, `/servo/demo`, bước trả thân về idle, hoặc một chuyển động gaze.
+
+**Hold chặn những gì.** Animation idle và ambient, và các chuyển động tự động của gaze watcher
+(pan và tilt khi canh khung, leo tìm mặt, repoint khi bắt đầu nói, nhìn quanh). Mỗi cái log lý do,
+ví dụ `[gaze] no pan: servo held by scene`. Các lệnh di chuyển tường minh vẫn chạy: `/servo/aim`,
+`/servo/nudge`, `/servo/move`, `/servo/search` và aim của lệnh look realtime. Trong lúc có scene,
+hold ở lại tư thế mới và scene vẫn active, nên "chỉnh đèn sang trái một chút" là tinh chỉnh chế độ
+đọc chứ không tắt nó.
+
+**Camera.** Một emotion có preset bật camera sẽ để camera tắt khi scene đang active giữ nó tắt
+(`reading`, `focus`, `movie`, `night`).
+
 ### Chặn emotion khi hold mode
 
 Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để tránh phân tâm:
@@ -198,7 +225,7 @@ Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để
 - `happy`, `thinking`, `curious`, `sad`, v.v. → servo + LED bị bỏ qua
 - `greeting`, `sleepy`, `stretching` → **cho qua** (đây là emotion thay đổi trạng thái: chào, ngủ, thức dậy) — **chỉ áp dụng cho hold do scene preset**
 
-**`/servo/hold` tường minh** (lệnh agent kiểu "nhìn lên tường giữ đó") set `_hold_explicit` và chặn servo với **mọi** emotion, kể cả nhóm scene-change — trước đây `[HW:/emotion:greeting]` đứng cuối reply lợi dụng miễn trừ này, đè pose đã lệnh bằng pose cuối của animation greeting. `/servo/resume` và chuyển scene sẽ xoá cờ.
+**`/servo/hold` tường minh** (lệnh agent kiểu "nhìn lên tường giữ đó") set `_hold_explicit` và chặn servo với **mọi** emotion, kể cả nhóm scene-change — trước đây `[HW:/emotion:greeting]` đứng cuối reply lợi dụng miễn trừ này, đè pose đã lệnh bằng pose cuối của animation greeting. `/servo/resume` sẽ xoá cờ. Đổi scene và lệnh LED không đụng tới hold tường minh.
 
 Nghĩa là khi focus, sensing event vẫn tới OpenClaw nhưng Lamp giữ nguyên trạng thái vật lý — không cử động, LED ổn định.
 

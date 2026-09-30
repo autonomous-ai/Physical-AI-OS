@@ -427,10 +427,19 @@ def _note_conversation_edge() -> None:
     _conversation_was_open = open_now
     if first:
         return
+    held = None
+    if not open_now:
+        import hal.app_state as state
+        from hal.drivers.motors import hold
+
+        # "idle has the arm" is only true when nothing holds the servo.
+        held = hold.holder(getattr(state, "animation_service", None))
     logger.info(
         "[gaze] conversation %s — framing %s",
         "open" if open_now else "closed",
-        "live" if open_now else "released (idle has the arm)",
+        "live" if open_now
+        else f"released (servo held by {held}, idle waits)" if held
+        else "released (idle has the arm)",
     )
 
 
@@ -643,6 +652,12 @@ def _maybe_yaw(now: float) -> None:
     if getattr(svc, "_music_playing", False):
         _yaw_quiet("music has the body", now)
         return
+    from hal.drivers.motors import hold
+
+    held = hold.holder(svc)
+    if held:
+        _yaw_quiet(f"servo held by {held}", now)
+        return
     try:
         current = svc.get_positions()
     except Exception as e:
@@ -851,8 +866,10 @@ def _return_to_known_height(now: float) -> None:
 
     from hal.drivers.tracking import face_height
 
+    from hal.drivers.motors import hold
+
     svc = getattr(state, "animation_service", None)
-    if svc is None or getattr(svc, "_tracking_active", False):
+    if svc is None or getattr(svc, "_tracking_active", False) or hold.holder(svc):
         return
     try:
         current = svc.get_positions()
@@ -937,6 +954,12 @@ def _maybe_pitch(now: float, *, prompt: bool = False) -> None:
         return
     if getattr(svc, "_music_playing", False):
         _pitch_quiet("music has the body", now)
+        return
+    from hal.drivers.motors import hold
+
+    held = hold.holder(svc)
+    if held:
+        _pitch_quiet(f"servo held by {held}", now)
         return
 
     try:
@@ -1068,6 +1091,12 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     if getattr(svc, "_music_playing", False):
         _repoint_quiet("music has the body", now)
         return False
+    from hal.drivers.motors import hold
+
+    held = hold.holder(svc)
+    if held:
+        _repoint_quiet(f"servo held by {held}", now)
+        return False
 
     est = user_bearing.read_estimate()
     if est is None:
@@ -1165,6 +1194,14 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
             "somebody was here recently", now,
             f"{now - _last_face_t:.0f}s of {config.GAZE_SWEEP_AFTER_S:.0f}s",
         )
+        return
+    import hal.app_state as state
+    from hal.drivers.motors import hold
+
+    # Checked before the cooldown starts: a skipped look-around must not cost one.
+    held = hold.holder(getattr(state, "animation_service", None))
+    if held:
+        _sweep_quiet(f"servo held by {held}", now)
         return
 
     try:
