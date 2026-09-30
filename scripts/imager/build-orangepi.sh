@@ -3,6 +3,7 @@
 # Run via the imager Makefile (Docker, --privileged for losetup/mount).
 
 set -euo pipefail
+source "$(dirname "${BASH_SOURCE[0]}")/lib/check_ext4.sh"
 
 PI_HOSTNAME="autonomous"
 PI_TIMEZONE="America/New_York"
@@ -53,7 +54,8 @@ MNT="/mnt/opi"
 SRC_7Z="/input/orangepi.7z"
 SRC_IMG="/work/base-${DEVICE_TYPE}.img"
 OUT_DIR="/output/${DEVICE_TYPE}"
-OUT_IMG="${OUT_DIR}/golden-opi.img"
+FINAL_IMG="${OUT_DIR}/golden-opi.img"
+OUT_IMG="${FINAL_IMG}.building"
 
 LOOP_DEV=""
 PART_LOOP=""
@@ -156,6 +158,9 @@ fi
 log "Source image: ${SRC_IMG} ($(du -h "${SRC_IMG}" | cut -f1))"
 
 log "Copying source → ${OUT_IMG} and expanding to ${OUT_IMG_SIZE}…"
+TARGET_BYTES=$(numfmt --from=iec "${OUT_IMG_SIZE}")
+[ "$(stat -c %s "${SRC_IMG}")" -le "${TARGET_BYTES}" ] \
+  || err "OUT_IMG_SIZE would truncate the source image"
 cp -f "${SRC_IMG}" "${OUT_IMG}"
 truncate -s "${OUT_IMG_SIZE}" "${OUT_IMG}"
 
@@ -174,7 +179,7 @@ PART="${PART_LOOP}"
 [ -b "${PART}" ] || err "partition loop device ${PART} did not appear"
 
 log "Filesystem check + resize…"
-e2fsck -fy "${PART}" || true
+prepare_ext4_for_resize "${PART}"
 resize2fs "${PART}"
 
 log "Mounting at ${MNT}…"
@@ -1505,7 +1510,12 @@ umount "${MNT}/proc"
 # Flush + unmount before xz so the filesystem is consistent.
 sync
 umount "${MNT}"
+log "Validating final ext4 filesystem before publishing image…"
+check_ext4 "${PART}"
+losetup -d "${PART_LOOP}"; PART_LOOP=""
 losetup -d "${LOOP_DEV}"; LOOP_DEV=""
+mv -f "${OUT_IMG}" "${FINAL_IMG}"
+OUT_IMG="${FINAL_IMG}"
 
 # COMPRESS=0 skips xz (slow under Docker's memory cap); the raw .img is flashable.
 if [ "${COMPRESS:-1}" = "0" ]; then
@@ -1514,8 +1524,8 @@ if [ "${COMPRESS:-1}" = "0" ]; then
   exit 0
 fi
 log "Compressing ${OUT_IMG} → ${OUT_IMG}.xz (this takes a few minutes)…"
-rm -f "${OUT_IMG}.xz"
-xz -9 -k --threads=0 "${OUT_IMG}"
+xz -9 -c --threads=0 "${OUT_IMG}" > "${OUT_IMG}.xz.building"
+mv -f "${OUT_IMG}.xz.building" "${OUT_IMG}.xz"
 
 log "DONE: ${OUT_IMG}.xz ($(du -h "${OUT_IMG}.xz" | cut -f1))"
 log "Flash:  make sd-card-flash DISK=N    (decompresses on the fly via xz | dd)"

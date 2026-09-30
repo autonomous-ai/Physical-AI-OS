@@ -10,6 +10,22 @@ for activation, limits and rollback.
 
 OrangePi images defer the vendor MOTD update-count job (`orangepi-apt-updates`) by 120 seconds after boot to avoid competing with HAL for storage reads. Only its exact `@reboot root /usr/lib/orangepi/orangepi-apt-updates` cron entry changes; the daily count and APT/security update schedules remain unchanged. Existing devices can apply the same tuning with `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` after copying the script onto the device. The helper is idempotent, skips missing/customized entries, and keeps the original at `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Restore that file to `/etc/cron.d/orangepi-updates` to undo the tuning. This is an image/device configuration change, not part of a HAL-only OTA.
 
+OrangePi image builds use `golden-opi.img.building`, reject a source larger than
+`OUT_IMG_SIZE`, and run writable `e2fsck -fp` before resizing (only exit 0/1 is
+accepted). After final unmount, read-only `e2fsck -fn` must exit 0. Both loop
+devices are detached before the raw image is atomically
+published; compression also uses a staging file before rename. Failed builds can
+leave an older completed artifact, and `COMPRESS=0` does not refresh an existing
+compressed image. Select the intended build when flashing.
+
+Both Makefile flash targets require Python 3 and use
+`scripts/imager/lib/verify_flash.py` to compare every image byte against SD readback
+before success/ejection. Compressed flashing uses Bash `pipefail` so decompression
+errors fail the target; mismatches or truncated reads also fail. Ext4 checks assess
+filesystem structure, while readback checks the written bytes; neither guarantees
+boot success or establishes the source of filesystem corruption. See the
+[imager workflow](../scripts/imager/README.md#flashing-an-sd-card).
+
 ## 1. Overview
 
 The device runs **5 software components** on a supported board (Raspberry Pi 4, Pi 5, or OrangePi). All components are installed via an initial setup script and kept up-to-date by a background OTA worker.

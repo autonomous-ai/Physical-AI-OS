@@ -9,6 +9,22 @@ Xem [vòng đời shutdown LED](../../robots/lamp/docs/vi/led-control_vi.md#fall
 
 Image OrangePi trì hoãn tác vụ đếm cập nhật cho MOTD của vendor (`orangepi-apt-updates`) 120 giây sau boot để giảm tranh chấp đọc storage với HAL. Chỉ dòng cron chính xác `@reboot root /usr/lib/orangepi/orangepi-apt-updates` được đổi; lịch đếm hằng ngày và lịch cập nhật APT/bảo mật giữ nguyên. Device hiện có có thể áp dụng bằng `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` sau khi chép script lên device. Helper chạy lại không đổi thêm, bỏ qua dòng thiếu/đã tùy chỉnh và lưu bản gốc tại `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Chép bản gốc về `/etc/cron.d/orangepi-updates` để hoàn tác. Đây là thay đổi cấu hình image/device, không nằm trong OTA chỉ cập nhật HAL.
 
+Build image OrangePi dùng `golden-opi.img.building`, từ chối source lớn hơn
+`OUT_IMG_SIZE` và chạy `e2fsck -fp` có ghi trước khi resize (chỉ chấp nhận mã 0/1).
+Sau khi unmount cuối cùng, `e2fsck -fn` chỉ đọc bắt buộc trả mã 0.
+Cả hai loop device được detach trước khi công bố raw image
+bằng đổi tên nguyên tử; bước nén cũng ghi file staging rồi mới đổi tên. Build lỗi
+có thể để lại artifact hoàn tất cũ; `COMPRESS=0` không cập nhật image nén đã có.
+Khi flash cần chọn đúng bản build mong muốn.
+
+Cả hai target flash trong Makefile cần Python 3 và dùng
+`scripts/imager/lib/verify_flash.py` để đọc lại SD, đối chiếu toàn bộ byte của image
+trước khi báo thành công/eject. Flash image nén dùng Bash `pipefail` để lỗi giải nén
+làm target thất bại; dữ liệu khác biệt hoặc đọc thiếu cũng gây thất bại. Kiểm tra
+ext4 đánh giá cấu trúc filesystem; đọc lại kiểm tra byte đã ghi. Hai phép kiểm tra
+không bảo đảm boot thành công và không tự xác định nguyên nhân hỏng filesystem.
+Xem [quy trình imager](../../scripts/imager/README.md#flashing-an-sd-card).
+
 ## 1. Tổng Quan
 
 Thiết bị chạy **5 thành phần phần mềm** trên board được hỗ trợ (Raspberry Pi 4, Pi 5, hoặc OrangePi). Tất cả được cài đặt qua script setup ban đầu và cập nhật tự động qua OTA worker chạy nền.

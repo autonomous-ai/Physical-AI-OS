@@ -19,8 +19,8 @@ make clean-all                     # wipe both output/ and input/
 ```
 
 First build takes ~25–40 min (download/decompress base image, qemu-arm64 chroot apt
-install + HAL uv sync, OTA backend bake, xz compress). Re-runs are much faster —
-base image is cached at `input/`; only Phase 3+ reruns.
+install + HAL uv sync, OTA backend bake, xz compress). OrangePi reuses the source
+archive in `input/`, but reruns all provisioning phases on each build.
 
 ## Base image — per device type
 
@@ -70,8 +70,9 @@ Phase 0  Source base image
          - other device types: gdown Google Drive .7z → input/orangepi.7z (cached, 734 MB)
 Phase 1  Extract (stock only) + expand
          - Stock: 7z e → /work/*.img; lamp/intern-v2 skip this step (already .img from Phase 0)
-         - cp → /output/<type>/golden-opi.img, truncate to OUT_IMG_SIZE (default 14 GB)
-         - growpart, losetup --offset/--sizelimit, e2fsck + resize2fs
+         - Reject source larger than OUT_IMG_SIZE (default 14 GiB)
+         - cp → /output/<type>/golden-opi.img.building, expand to OUT_IMG_SIZE
+         - growpart, losetup --offset/--sizelimit, writable e2fsck -fp (exit 0/1 only), resize2fs
          - mount /mnt/opi
 Phase 2  chroot qemu-arm64:
          - apt install (hostapd, dnsmasq, nginx, avahi, bluez, pulseaudio, alsa-utils,
@@ -96,12 +97,17 @@ Phase 3  OTA bake from metadata.json:
          - Claude Desktop Buddy BLE plugin (optional)
 Phase 4  resize-once.service (first-boot self-destructing growpart + resize2fs)
 Phase 5  Finalize
-         - Read OTA versions back, write output/<type>/manifest-opi.json
-         - Unmount, detach loop devices
-         - xz -9 --threads=0 → output/<type>/golden-opi.img.xz (~190 MB)
+         - OTA versions were recorded in output/manifest-opi.json during Phase 3
+         - Sync, unmount, strict e2fsck -fn; detach both loop devices
+         - Atomically publish output/<type>/golden-opi.img from .building
+         - Unless COMPRESS=0, xz → golden-opi.img.xz.building, then rename to .xz
+         - Makefile renames .xz to golden-opi-<type>[-<agent>][-<variant>].img.xz
 ```
 
-**Typical sizes**: base .img.xz ≈ 1–2 GB, expanded image 14 GB, final `.img.xz` ≈ 190 MB.
+The raw image defaults to 14 GiB; compressed size depends on the base and installed
+software. A failed filesystem check stops the build without publishing the staged
+image. An older completed output can remain after a failed build or `COMPRESS=0`;
+check that the chosen raw or compressed artifact is the intended build.
 
 ## Raspberry Pi build flow
 
@@ -152,7 +158,23 @@ rebuild. Anything that must follow `DEFAULT_AGENT` lives in Phase 2 for this rea
 2. Choose OS → "Use custom" → `output/<type>/golden-opi-<type>.img.xz`
 3. Choose Storage → select SD card → Write
 
-`make sd-card-flash DISK=N` is also available (requires `make sd-card-list` to find disk number).
+The Makefile flash targets require Python 3. Run `make sd-card-list` to identify
+the disk, then choose the intended artifact:
+
+```bash
+make sd-card-flash DEVICE_TYPE=lamp DISK=N       # compressed image; add DEFAULT_AGENT/VARIANT if used at build time
+make sd-card-flash-raw DEVICE_TYPE=lamp DISK=N   # latest completed raw image for this device type
+```
+
+Both targets sync writes, then use `lib/verify_flash.py` to read back and compare
+all image bytes before reporting success and ejecting. The compressed target
+also propagates decompression failures through Bash `pipefail`. A mismatch,
+truncated read, or invalid compressed stream fails the target. Verification covers
+the image length, not unused space on a larger card, and adds a full read pass.
+
+Builder filesystem checks validate ext4 structure; flash readback checks that the
+card matches the selected image. Neither guarantees a successful boot or by itself
+identifies the cause of an initramfs/ext4 failure.
 
 ## Configuration knobs
 
