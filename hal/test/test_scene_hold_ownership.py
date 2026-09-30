@@ -287,3 +287,26 @@ def test_the_idle_handback_heals_an_orphaned_scene_hold(body):
     body.dispatch = Mock()
     hold.claim(body, hold.SCENE)
     assert handback.release_to_idle("test") is True
+
+
+# --- camera (fix 5) --------------------------------------------------------
+
+@pytest.mark.parametrize("name", list(scene.SCENE_PRESETS))
+def test_camera_held_off_matches_the_preset(monkeypatch, name):
+    monkeypatch.setattr(state, "_active_scene", name)
+    keeps_off = scene.SCENE_PRESETS[name].get("camera") == "off"
+    assert scene.camera_held_off_by_scene() == (name if keeps_off else None)
+
+
+def test_no_scene_holds_no_camera(monkeypatch):
+    monkeypatch.setattr(state, "_active_scene", None)
+    assert scene.camera_held_off_by_scene() is None
+
+
+def test_the_emotion_route_asks_the_scene_before_reopening_the_camera():
+    import inspect
+
+    from hal.routes import emotion
+
+    src = inspect.getsource(emotion.express_emotion)
+    assert "camera_held_off_by_scene()" in src

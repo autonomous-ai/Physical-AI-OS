@@ -3,6 +3,7 @@
 import json
 import threading
 from pathlib import Path
+from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 
@@ -60,6 +61,13 @@ def restore_persisted_scene() -> None:
         state.logger.info("Scene restore: re-activated '%s' after service restart", scene)
     except Exception as e:
         state.logger.warning("scene restore failed: %s", e)
+
+
+def camera_held_off_by_scene() -> Optional[str]:
+    """The active scene's name when that scene keeps the camera off, else None."""
+    name = state._active_scene
+    preset = SCENE_PRESETS.get(name) if name else None
+    return name if preset and preset.get("camera") == LST_OFF else None
 
 
 @router.get("/scene", response_model=SceneListResponse)
