@@ -42,8 +42,13 @@ def test_the_neighbouring_co_worker_face_is_not_near():
 
 
 def test_the_users_smallest_measured_face_is_near():
-    """Same device and session: the user facing the lamp measured 64 px of 432 at the least."""
-    assert user_check.near_enough(64 / 432)
+    """green-lamp 2026-09-30, frames: the user sitting back measured 19.2% at the least."""
+    assert user_check.near_enough(0.192)
+
+
+def test_the_largest_co_worker_face_is_not_near():
+    """Same session: the neighbouring co-worker's largest face, 13.6%, confirmed a repoint."""
+    assert not user_check.near_enough(0.136)
 
 
 def test_adopt_rejects_a_near_face_that_is_not_facing():
@@ -87,7 +92,7 @@ def test_the_bearing_settings_are_their_own():
     """Separate from the wake gate (0.6, 25 deg widened at the edge) and look-aim's 8% floor."""
     assert config.GAZE_BEARING_MIN_FACING_RATIO == pytest.approx(0.4)
     assert config.GAZE_BEARING_MAX_YAW_DEG == pytest.approx(25.0)
-    assert config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC == pytest.approx(0.125)
+    assert config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC == pytest.approx(0.15)
     assert config.GAZE_MIN_FACING_RATIO == pytest.approx(0.6)
     assert config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC == pytest.approx(0.08)
 

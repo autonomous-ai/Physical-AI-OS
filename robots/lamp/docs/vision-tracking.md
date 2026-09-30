@@ -638,7 +638,7 @@ calls `search_for_subject(for_user=True)`. Every other caller keeps today's beha
 `POST /servo/search` (objects, `exhaustive`) and look-aim's own fallback sweep. At each look it
 watches the faces in view for about 1.5 s (`user_check.observe_faces`, 6 frames; it skips the dwell
 when the first frame has no face) and stops only on a face that passes `user_check.adopts_bearing`:
-at least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) of the frame tall, within
+at least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, within
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (25%) of frame centre, and facing the lamp (head yaw within
 `HAL_GAZE_BEARING_MAX_YAW_DEG`, 25°, never widened at the frame edge) in
 `HAL_GAZE_BEARING_MIN_FACING_RATIO` (40%) of the measured samples. Candidates are ranked by facing,
@@ -647,8 +647,8 @@ fresh label would let every near face through while the user is in view. Every a
 logs the per-frame head yaw, face height and offset (`yaw=[…] h=[…]% dx=…`). Device-observed
 2026-09-30 on green-lamp: a side-on co-worker at the frame edge (`dx=+45%`, 58 px of 720 = 8.1%)
 passed as "facing 100%", because gaze wake's cone there (`HAL_GAZE_MAX_YAW_DEG` 60 × edge widening
-≈ 103°) accepts any head. A co-worker one desk over measured 8.6–11.1% and confirmed a repoint
-while the user was away. The user measured 14.8–30% on the same lamp. A body alone never ends the sweep, and centring follows that face
+≈ 103°) accepts any head. A co-worker one desk over measured up to 13.6% and confirmed a repoint
+while the user was away. The user measured 19.2–46% in frames on the same lamp. A body alone never ends the sweep, and centring follows that face
 (`_user_face_probe`), not the nearest person box. If no face passes, the sweep reports not found and
 takes the ordinary exit back to its starting pose. Device-observed 2026-09-29: the sweep took "the
 nearest" of 2–3 co-workers (`h=304px`) and framing then followed a side-on stranger to
@@ -909,13 +909,14 @@ spoke, the lamp turned to where it thought they were, and they were not there.
 Three further behaviours are worth stating because each was a bug first:
 
 - **The verdict is judged on a face, never on a body (#545).** A face at least
-  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) of the frame tall confirms the bearing. Facing and identity
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall confirms the bearing. Facing and identity
   are not required, because the user often talks while looking at their own monitor. Only a smaller
   face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
   face across the room became "the user". **Size alone decides near or far.** Position does not: a
   bearing a few degrees off the user's seat puts them at the frame side, and a ±15% centre gate tried
-  on 2026-09-30 ruled the user's own 35% face (dx +34%) "far". The accepted cost is that a neighbour one
-  desk over who reaches 12.5% (measured up to 14%) can confirm the bearing. The watcher stamps a
+  on 2026-09-30 ruled the user's own 35% face (dx +34%) "far". Size separates the two instead: in the
+  2026-09-30 frames a neighbour one desk over reached at most 13.6% and the user was never under
+  19.2%, so the floor sits at 15%. The watcher stamps a
   near-face and a far-face clock (`_note_face_size`) for every face it detects, and the verdict reads
   those.
 - **Only a body with its head above the frame waits for the climb.** A person box cut off by the frame
@@ -981,7 +982,7 @@ count as repoint evidence only if seen after the turn.
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Facing share needed to adopt a new bearing. Lower than the wake gate's 0.6: a still user measured 50%. Not 0.3: the window holds 2–3 samples, so that is one glance. |
 | `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Head yaw that counts as facing for a new bearing. Its own limit, never widened at the frame edge, so wake-gate tuning cannot loosen it. |
-| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.125 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Measured: office co-workers 8.0–11.1%, user 14.8–30%. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Measured in frames: office co-workers 8.3–13.6%, user 19.2–46%. A lamp placed further from its user may need it lower in `.env`. |
 
 ### Remembered user bearing
 
@@ -1016,7 +1017,7 @@ too weak to use and too strong to replace.
 
 Sightings reach it two ways:
 
-- **From a look aim**, only for a face that passes the strict user check (#545): at least 12.5% of the
+- **From a look aim**, only for a face that passes the strict user check (#545): at least 15% of the
   frame tall, within 25% of frame centre, and facing the lamp (yaw ≤ 25°) in 40% of about 1.5 s of
   samples. The
   bearing is recovered as `yaw + dx × scale` under the sampler's `HAL_BEARING_SAMPLE_MAX_DX_FRAC`

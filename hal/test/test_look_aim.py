@@ -1068,7 +1068,7 @@ def test_an_already_centred_aim_leaves_playback_alone():
     later.assert_not_called()
 
 
-_NEAR = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC + 0.05
+_NEAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.05
 
 
 def test_no_verdict_scores_nothing():

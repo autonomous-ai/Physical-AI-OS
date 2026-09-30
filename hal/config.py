@@ -779,9 +779,9 @@ GAZE_BEARING_MAX_YAW_DEG: float = float(
     os.environ.get("HAL_GAZE_BEARING_MAX_YAW_DEG", "25")
 )
 # Face height (fraction of frame height) that counts as near enough to be at the desk.
-# Device-measured 2026-09-30: office co-workers 8.0-11.1%, the user 14.8-30%.
+# Device-measured 2026-09-30 on green-lamp frames: office co-workers 8.3-13.6%, the user 19.2-46%.
 GAZE_BEARING_MIN_FACE_HEIGHT_FRAC: float = float(
-    os.environ.get("HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC", "0.125")
+    os.environ.get("HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC", "0.15")
 )
 # Minimum samples to decide; the loop achieves ~2 samples/s regardless of GAZE_SAMPLE_FPS.
 GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))

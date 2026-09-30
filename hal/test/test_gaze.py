@@ -1897,7 +1897,7 @@ def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
 
 
 @pytest.mark.parametrize("face_h, dx, near", [
-    (0.13, 0.0, True), (0.11, 0.0, False), (0.14, -0.41, True), (0.35, 0.34, True),
+    (0.16, 0.0, True), (0.136, 0.0, False), (0.19, -0.41, True), (0.35, 0.34, True),
 ])
 def test_face_size_and_offset_feed_the_near_or_far_clock(face_h, dx, near):
     """Near = size alone: an off-side face is still near (green-lamp 16:55, the user at dx +34%).

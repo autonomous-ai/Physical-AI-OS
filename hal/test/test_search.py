@@ -1017,7 +1017,7 @@ def test_no_handback_when_the_sweep_never_took_the_body():
     later.assert_not_called()
 
 
-_NEAR = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC + 0.05
+_NEAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.05
 
 
 def _user_run(tracks_at_look, target="person"):
