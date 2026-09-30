@@ -1093,6 +1093,11 @@ GAZE_REPOINT_MIN_CONFIDENCE: float = float(
 GAZE_REPOINT_VERIFY_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_VERIFY_S", "6")
 )
+# A repoint that landed on a body waits this long for its climb to turn up a face
+# before giving its verdict (#545). The climb budget is 4 steps x 4 s cooldown.
+GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
+)
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.
 # Open-loop against a coupled arm: the step cap and blind-step budget bound it.

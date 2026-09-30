@@ -1214,7 +1214,7 @@ def test_a_repoint_that_finds_the_user_confirms_the_bearing(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_face_t = t - 1.0
+    gaze._last_near_face_t = t - 1.0
 
     gaze._verify_repoint(t)
     assert calls == [True]
@@ -1250,7 +1250,7 @@ def test_each_repoint_is_scored_exactly_once(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_subject_t = t - 1.0
+    gaze._last_near_face_t = t - 1.0
 
     for _ in range(5):
         gaze._verify_repoint(t)
@@ -1816,9 +1816,10 @@ def test_the_automatic_repoint_still_waits_out_its_cooldown(body):
     )
 
 
-def test_a_repoint_that_lands_on_a_torso_found_the_user(monkeypatch):
-    """A repoint landing on a torso counts as finding the user."""
+def test_a_repoint_that_lands_on_a_torso_waits_for_the_climb(monkeypatch):
+    """A torso is not scored yet (#545): a co-worker's back must not confirm the bearing."""
     calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: None)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
@@ -1826,7 +1827,95 @@ def test_a_repoint_that_lands_on_a_torso_found_the_user(monkeypatch):
     gaze._last_subject_t = t - 1.0
 
     gaze._verify_repoint(t)
-    assert calls == [True], "a torso at the bearing is the user, not nobody"
+    assert calls == [], "a torso confirmed the bearing before the climb found a face"
+    assert gaze._repoint_climb_t == t
+
+
+def _torso_repoint(monkeypatch):
+    """A repoint that landed on a torso, with its climb now pending."""
+    calls = _repoint_scored(monkeypatch)
+    climbs = []
+    monkeypatch.setattr(gaze, "_maybe_pitch",
+                        lambda now, prompt=False: climbs.append(prompt))
+    sweeps = []
+    monkeypatch.setattr(gaze, "_maybe_sweep",
+                        lambda now, confirmed_miss=False: sweeps.append(confirmed_miss))
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = gaze._last_near_face_t = gaze._last_far_face_t = t - 100.0
+    gaze._last_subject_t = t - 1.0
+    gaze._verify_repoint(t)
+    return t, calls, climbs, sweeps
+
+
+def test_a_climb_that_finds_a_near_face_confirms_the_bearing(monkeypatch):
+    t, calls, _climbs, _ = _torso_repoint(monkeypatch)
+    gaze._last_near_face_t = t + 3.0
+    gaze._verify_repoint(t + 4.0)
+    assert calls == [True]
+    assert gaze._repoint_climb_t == 0.0
+
+
+def test_a_pending_climb_keeps_climbing(monkeypatch):
+    """The climb must not stall just because no conversation is open."""
+    t, calls, climbs, _ = _torso_repoint(monkeypatch)
+    gaze._verify_repoint(t + 4.0)
+    gaze._verify_repoint(t + 8.0)
+    assert calls == []
+    assert climbs.count(True) >= 3
+
+
+def test_a_climb_that_finds_only_a_far_face_is_a_miss(monkeypatch):
+    """The #545 office case: a body, then a 12-25 px side-on face."""
+    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
+    gaze._last_far_face_t = t + 3.0
+    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
+    assert calls == [False]
+    assert sweeps == [True]
+
+
+def test_a_climb_that_finds_no_face_is_not_scored(monkeypatch):
+    """No face at all says nothing: scoring it a miss once deleted correct bearings."""
+    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
+    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
+    assert calls == []
+    assert sweeps == []
+    assert gaze._repoint_climb_t == 0.0
+
+
+def test_a_far_face_with_no_body_is_a_miss(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = gaze._last_near_face_t = gaze._last_subject_t = t - 100.0
+    gaze._last_far_face_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [False]
+
+
+def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
+    """The user at their desk, looking at their own monitor."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze.discard_samples()
+    for i in range(4):
+        gaze.record_sample(80.0, 120.0, 0.0, now=t - 2.0 + i * 0.3)  # side-on
+    gaze._last_near_face_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("face_h, near", [(0.10, True), (0.05, False)])
+def test_face_size_feeds_the_near_or_far_clock(face_h, near):
+    gaze._last_near_face_t = gaze._last_far_face_t = 0.0
+    gaze._note_face_size(face_h * 480.0, 480.0, now=123.0)
+    assert (gaze._last_near_face_t == 123.0) is near
+    assert (gaze._last_far_face_t == 123.0) is (not near)
 
 
 def test_the_wake_gate_still_wants_a_real_face():

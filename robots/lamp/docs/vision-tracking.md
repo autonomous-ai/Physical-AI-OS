@@ -879,11 +879,17 @@ spoke, the lamp turned to where it thought they were, and they were not there.
 
 Three further behaviours are worth stating because each was a bug first:
 
-- **A body counts as finding the user.** The verifier tracks faces and bodies on separate clocks; a
-  torso at the bearing means the bearing was *right*. Scoring it as a miss deleted correct bearings
-  while the user sat in front of the lamp.
-- **A repoint must end on a face.** Landing on a body is a half-success, so it prompts the climb
-  above rather than returning "found them" — which is why the climb has a `_PROMPT_MIN_SAMPLES` of 2.
+- **The verdict is judged on a face, never on a body (#545).** A face at least
+  `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%) of the frame tall confirms the bearing. Facing and identity
+  are not required, because the user often talks while looking at their own monitor. Only a smaller
+  face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
+  face across the room became "the user". The watcher stamps a near-face and a far-face clock
+  (`_note_face_size`) for every face it detects, and the verdict reads those.
+- **A body waits for the climb.** Landing on a body prompts the climb above and holds the verdict
+  for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
+  conversation open. A near face = hit, only a far face = miss, no face at all = **not scored**.
+  Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
+  the lamp.
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
@@ -901,7 +907,7 @@ prints once a minute rather than once a pass.
 
 ### Looking around on its own
 
-If a repoint turns up nothing, `_verify_repoint` calls the same `/servo/search` sweep documented above
+If a repoint is scored a miss (nobody, or only a far face), `_verify_repoint` calls the same `/servo/search` sweep documented above
 with `confirmed_miss=True`. Since the repoint above is speech-driven, so is the sweep: the lamp
 searches because somebody spoke and it could not find them, never because a room merely looks empty.
 An absence trigger (`HAL_GAZE_SWEEP_AFTER_S`) still exists in `_maybe_sweep` but nothing reaches it —

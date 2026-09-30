@@ -876,12 +876,17 @@ bearing đúng có thể bị bào mòn bởi một cái ghế trống. Chỉ ch
 
 Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
-- **Thấy thân người cũng tính là tìm được user.** Bộ kiểm tra theo dõi mặt và thân trên hai đồng hồ
-  riêng; một cái thân ở đúng bearing nghĩa là bearing *đúng*. Chấm nó là trượt đã xoá mất những bearing
-  đúng trong khi user đang ngồi ngay trước đèn.
-- **Một lần repoint phải kết thúc trên một cái mặt.** Dừng ở thân người mới là nửa thành công, nên nó
-  kích hoạt phần leo tìm ở trên thay vì báo "đã thấy" — đó là lý do phần leo có `_PROMPT_MIN_SAMPLES`
-  bằng 2.
+- **Kết luận dựa trên một cái mặt, không bao giờ dựa trên thân người (#545).** Một cái mặt cao ít nhất
+  `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
+  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
+  trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
+  phía bên kia phòng đã trở thành "user". Watcher đóng dấu đồng hồ mặt-gần và mặt-xa
+  (`_note_face_size`) cho mỗi mặt phát hiện được, và phần kết luận đọc hai đồng hồ đó.
+- **Thấy thân người thì chờ phần leo tìm.** Dừng ở thân người sẽ kích hoạt phần leo tìm ở trên và giữ
+  kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
+  cuộc hội thoại nào đang mở. Mặt gần = trúng, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
+  Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
+  ngồi ngay trước đèn.
 - **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
@@ -899,7 +904,7 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu một lần repoint không ra ai, `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
+Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có mặt xa), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
 `confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
