@@ -42,8 +42,11 @@ def _sleep_led_locked(route: str) -> bool:
 
 
 def _end_scene() -> None:
-    """A non-transient LED override ends the scene, and with it the scene's servo hold."""
+    """A non-transient LED override ends the scene, its servo hold, and its restore-on-restart."""
+    from hal.routes.scene import _persist_scene
+
     state._active_scene = None
+    _persist_scene(None)
     if hold.release(state.animation_service, hold.SCENE):
         state.logger.info("Scene ended by an LED override: servo released")
 

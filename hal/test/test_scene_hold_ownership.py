@@ -184,9 +184,10 @@ def test_servo_hold_claims_as_explicit(body, monkeypatch):
 # --- LED routes that end a scene -------------------------------------------
 
 @pytest.fixture
-def led_env(body, monkeypatch):
+def led_env(body, monkeypatch, tmp_path):
     from hal.routes import led
 
+    monkeypatch.setattr(scene, "_SCENE_STATE_PATH", tmp_path / "scene.json")
     monkeypatch.setattr(state, "rgb_service", Mock(), raising=False)
     monkeypatch.setattr(state, "sensing_service", None, raising=False)
     monkeypatch.setattr(state, "_sleeping", False)
@@ -310,3 +311,11 @@ def test_the_emotion_route_asks_the_scene_before_reopening_the_camera():
 
     src = inspect.getsource(emotion.express_emotion)
     assert "camera_held_off_by_scene()" in src
+
+
+def test_an_led_override_forgets_the_scene_across_a_restart(led_env):
+    """Otherwise a HAL restart re-activates the scene, hold and all."""
+    path = scene._SCENE_STATE_PATH
+    path.write_text('{"scene": "reading", "boot_id": ""}')
+    _led_calls(led_env)["off"](False)
+    assert not path.exists()
