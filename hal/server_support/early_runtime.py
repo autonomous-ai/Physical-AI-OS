@@ -9,7 +9,7 @@ logger = logging.getLogger("hal.server")
 
 
 def _fatal_startup():
-    # Nonzero exit so systemd cannot mistake a permanently incomplete HAL for a healthy one.
+    # Nonzero exit: incomplete startup or teardown must not look healthy to systemd.
     os._exit(1)
 
 
@@ -20,7 +20,7 @@ class EarlyRuntime:
     """
 
     def __init__(self, bootstrap, load_runtime, cleanup_early, *,
-                 fatal=_fatal_startup, shutdown_timeout=5.0):
+                 fatal=_fatal_startup, shutdown_timeout=20.0):
         self.bootstrap = bootstrap
         self.load_runtime = load_runtime
         self.cleanup_early = cleanup_early
@@ -29,6 +29,17 @@ class EarlyRuntime:
         self._runtime = None
         self._stop = threading.Event()
         self._worker = None
+        self._worker_failed = threading.Event()
+        self._fatal_lock = threading.Lock()
+        self._fatal_called = False
+
+    def _fail_process(self):
+        # The worker and the ASGI owner can observe the same failure concurrently.
+        with self._fatal_lock:
+            if self._fatal_called:
+                return
+            self._fatal_called = True
+        self.fatal()
 
     async def __call__(self, scope, receive, send):
         if scope["type"] == "lifespan":
@@ -68,7 +79,10 @@ class EarlyRuntime:
                     failed = True
                     logger.exception("[startup] early hardware cleanup failed")
         if failed:
-            self.fatal()
+            self._worker_failed.set()
+            # During shutdown the ASGI owner reports failure before terminating.
+            if not self._stop.is_set():
+                self._fail_process()
 
     async def _lifespan(self, receive, send):
         message = await receive()
@@ -87,16 +101,26 @@ class EarlyRuntime:
                     await receive()
                 finally:
                     self._stop.set()
+                    # Unit timeout is 30s; reserve 5s for HTTP drain and 5s overhead.
                     await asyncio.to_thread(self._worker.join, self.shutdown_timeout)
                     if self._worker.is_alive():
-                        logger.warning("[shutdown] HAL startup worker did not stop within %.1fs",
-                                       self.shutdown_timeout)
+                        raise TimeoutError(
+                            "HAL hardware cleanup did not finish within "
+                            f"{self.shutdown_timeout:.1f}s; worker still running"
+                        )
+                    if self._worker_failed.is_set():
+                        raise RuntimeError("HAL hardware worker failed during startup or shutdown")
             await send({"type": "lifespan.shutdown.complete"})
         except BaseException as exc:
             self._stop.set()
             if self._worker is None:
                 self.cleanup_early()
-            await send({
-                "type": "lifespan.shutdown.failed" if started else "lifespan.startup.failed",
-                "message": str(exc),
-            })
+            try:
+                await send({
+                    "type": "lifespan.shutdown.failed" if started else "lifespan.startup.failed",
+                    "message": str(exc),
+                })
+            finally:
+                # Never race the hardware owner with a second cleanup attempt.
+                # Uvicorn's failure event alone does not ensure a nonzero exit.
+                self._fail_process()
