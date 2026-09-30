@@ -979,9 +979,12 @@ too weak to use and too strong to replace.
 
 Sightings reach it two ways:
 
-- **From a look aim**, when the subject ends within **2%** of frame centre — tighter than the aim's
-  own framing tolerance, and deliberately so: at frame centre the servo position **is** the bearing,
-  with no pixel→angle conversion and therefore no dependency on the disputed camera FOV constant.
+- **From a look aim**, only for a face that passes the strict user check (#545): at least 8% of the
+  frame tall, and recognised by face-ID or facing the lamp in 40% of about 1.5 s of samples. The
+  bearing is recovered as `yaw + dx × scale` under the sampler's `HAL_BEARING_SAMPLE_MAX_DX_FRAC`
+  (0.25) limit, on a background thread (`_record_bearing_worker`) so the capture never waits, and it is
+  dropped if the head moved meanwhile. It used to record whatever box was centred, and a co-worker's
+  centred body taught the bearing.
 - **From the passive sampler** (`bearing_sampler.py`), every `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
   The aim-only path recorded roughly two sightings a day, which is too slow to build an estimate the
   aim will act on — confidence grows with sightings, and at that rate a fresh device spends days
@@ -1056,7 +1059,8 @@ Nothing on this device can observe that directly:
 
 So it is **inferred from failed predictions**: when aim priority 3 turns to the remembered bearing
 and finds nobody, that is a miss. `PREDICTION_MISS_LIMIT` misses drops the estimate, and it rebuilds
-from live sightings.
+from live sightings. Look-aim scores a turn to the bearing as a hit only when it sees a near face, as
+a miss when it sees nothing, and not at all when it sees only a body (#545).
 
 Three guards keep ordinary life from looking like a relocation:
 

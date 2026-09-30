@@ -975,9 +975,12 @@ chạy được, hoặc bị bỏ; nó không còn phai dần vào vùng xám v�
 
 Các lần nhìn thấy đi vào đây theo hai đường:
 
-- **Từ một lần look aim**, khi đối tượng kết thúc trong phạm vi **2%** quanh tâm khung — chặt hơn cả
-  dung sai căn khung của chính pha ngắm, và cố ý như vậy: ở tâm khung thì vị trí servo **chính là**
-  bearing, không có phép quy đổi pixel→góc nào và do đó không phụ thuộc vào hằng số FOV đang tranh cãi.
+- **Từ một lần look aim**, chỉ với một cái mặt qua được kiểm tra user chặt (#545): cao ít nhất 8%
+  khung hình, và được face-ID nhận ra hoặc nhìn về đèn trong 40% số mẫu của khoảng 1.5 s. Bearing được
+  tính lại bằng `yaw + dx × scale` trong giới hạn `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25) của bộ lấy
+  mẫu, trên một thread nền (`_record_bearing_worker`) để việc chụp không bao giờ phải chờ, và bị bỏ nếu
+  đầu đã cử động trong lúc đó. Trước đây nó ghi lại bất kỳ box nào ở giữa khung, và thân của một đồng
+  nghiệp nằm giữa khung đã dạy sai bearing.
 - **Từ bộ lấy mẫu thụ động** (`bearing_sampler.py`), mỗi `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
   Đường chỉ-qua-aim ghi được khoảng hai lần nhìn thấy một ngày, quá chậm để dựng nên một ước lượng mà
   pha ngắm chịu dùng — độ tin cậy lớn lên theo số lần nhìn thấy, và với nhịp đó một máy mới toanh mất
@@ -1053,7 +1056,8 @@ Không có gì trên thiết bị này quan sát được điều đó một cá
 
 Nên nó được **suy ra từ các dự đoán sai**: khi ưu tiên 3 của pha ngắm quay tới bearing đã ghi nhớ mà
 không thấy ai, đó là một lần trượt. `PREDICTION_MISS_LIMIT` lần trượt sẽ hủy ước lượng, và nó tự dựng
-lại từ các lần nhìn thấy mới.
+lại từ các lần nhìn thấy mới. Look-aim chấm một lần quay tới bearing là trúng chỉ khi thấy một mặt gần,
+là trượt khi không thấy gì, và không chấm khi chỉ thấy thân người (#545).
 
 Ba lớp bảo vệ giúp sinh hoạt bình thường không bị hiểu nhầm thành dời chỗ:
 

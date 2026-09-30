@@ -8,7 +8,8 @@ import pytest
 
 import hal.config as config
 import hal.app_state as state
-from hal.drivers.tracking import aim
+from hal.drivers.tracking import aim, user_check
+from hal.drivers.tracking.user_check import FaceEvidence, FaceTrack
 from test.body_ownership import BodyOwnership
 
 
@@ -1065,3 +1066,94 @@ def test_an_already_centred_aim_leaves_playback_alone():
     assert res.iterations == 0
     assert not svc.nudge.called
     later.assert_not_called()
+
+
+_NEAR = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC + 0.05
+
+
+def test_no_verdict_scores_nothing():
+    with mock.patch("hal.drivers.tracking.user_bearing.record_prediction") as rp:
+        aim._score_prediction(2, None)
+    rp.assert_not_called()
+
+
+def test_a_verdict_is_scored_only_when_the_bearing_was_used():
+    with mock.patch("hal.drivers.tracking.user_bearing.record_prediction") as rp:
+        aim._score_prediction(0, True)
+        aim._score_prediction(1, False)
+    rp.assert_called_once_with(False)
+
+
+def _bearing_svc(yaw=10.0):
+    svc = mock.Mock()
+    svc.get_positions = mock.Mock(return_value={"base_yaw.pos": yaw, "wrist_roll.pos": 0.0})
+    return svc
+
+
+def _worker(tracks, frame_w=640):
+    frame = np.zeros((480, frame_w, 3), np.uint8)
+    with (
+        mock.patch.object(user_check, "observe_faces", return_value=tracks),
+        mock.patch.object(aim, "_grab_frame", return_value=frame),
+        mock.patch("hal.drivers.tracking.user_bearing.record_sighting",
+                   return_value=True) as rs,
+    ):
+        ok = aim._record_bearing_worker(_bearing_svc(), mock.Mock())
+    return ok, rs
+
+
+def test_a_centred_body_with_no_qualifying_face_records_nothing():
+    """#545: look-aim used to teach the bearing from any centred body."""
+    side_on = FaceTrack((300, 100, 60, 60), FaceEvidence(_NEAR, 0.0, 6))
+    ok, rs = _worker([side_on])
+    assert not ok
+    rs.assert_not_called()
+
+
+def test_a_facing_face_at_centre_records_the_bearing():
+    facing = FaceTrack((290, 100, 60, 60), FaceEvidence(_NEAR, 1.0, 6))
+    ok, rs = _worker([facing])
+    assert ok
+    assert abs(rs.call_args[0][0] - 10.0) < 1.0  # face centred -> bearing ~= current yaw
+
+
+def test_a_qualifying_face_too_far_off_centre_is_not_recorded():
+    """The same dx limit bearing_sampler applies (it leans on the FOV constant)."""
+    edge = FaceTrack((600, 100, 30, 60), FaceEvidence(_NEAR, 1.0, 6))
+    ok, rs = _worker([edge])
+    assert not ok
+    rs.assert_not_called()
+
+
+def test_the_record_never_delays_the_look(monkeypatch):
+    """The dwell runs on its own thread; the live aim must return immediately."""
+    started = []
+
+    class _T:
+        def __init__(self, target, args, daemon, name):
+            started.append(name)
+
+        def start(self):
+            pass
+
+    monkeypatch.setattr(aim.threading, "Thread", _T)
+    with mock.patch.object(aim, "_record_bearing_worker") as w:
+        aim._record_bearing_if_centred(_bearing_svc(), mock.Mock())
+    w.assert_not_called()
+    assert started == ["look-aim-bearing"]
+
+
+def test_a_near_face_in_frame_is_seen(monkeypatch):
+    frame = np.zeros((480, 640, 3), np.uint8)
+    monkeypatch.setattr("hal.drivers.tracking.detection.detect_faces_with_landmarks",
+                        lambda small: [((0, 0, 60, int(480 * _NEAR) + 2), ())])
+    monkeypatch.setattr("hal.drivers.tracking.frame_utils.downscale", lambda f: (f, 1.0))
+    assert aim._near_face_in(frame)
+
+
+def test_a_far_face_in_frame_is_not_near(monkeypatch):
+    frame = np.zeros((480, 640, 3), np.uint8)
+    monkeypatch.setattr("hal.drivers.tracking.detection.detect_faces_with_landmarks",
+                        lambda small: [((0, 0, 20, 20), ())])
+    monkeypatch.setattr("hal.drivers.tracking.frame_utils.downscale", lambda f: (f, 1.0))
+    assert not aim._near_face_in(frame)
