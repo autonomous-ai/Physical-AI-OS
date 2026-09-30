@@ -38,9 +38,10 @@ func enrolledOnly(o *hal.FaceOwners) *hal.FaceOwners {
 	return &hal.FaceOwners{EnrolledCount: o.EnrolledCount, Persons: persons}
 }
 
-// handleFaceRemove handles kind="face.remove" — deletes one person via HAL
-// POST /face/remove. Acks `starting`, then runs off the MQTT callback since
-// HAL retrains from the remaining photos.
+// handleFaceRemove handles kind="face.remove" — deletes the person's whole
+// users/<label>/ folder (face, voice, metadata, history) via HAL POST
+// /face/remove. Acks `starting`, then runs off the MQTT callback since HAL
+// retrains every remaining person from disk.
 func (h *DeviceMQTTHandler) handleFaceRemove(env domain.MQTTDataCommand) error {
 	var d domain.MQTTFaceRemoveData
 	if err := json.Unmarshal(env.Data, &d); err != nil {

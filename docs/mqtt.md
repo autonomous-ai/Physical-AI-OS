@@ -366,7 +366,7 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `skills.upload` | Install one `.md`, `.zip`, or `.skill` file on the active runtime (synchronous) | `filename`, `content_base64` |
 | `face.enroll` | Enroll one face photo via HAL `POST /face/enroll` (async; acks `starting`) | `image_base64`, `label`, optional `telegram_username`/`telegram_id` |
 | `face.owners` | List enrolled people via HAL `GET /face/owners` (synchronous) | _(none)_ |
-| `face.remove` | Delete one enrolled person via HAL `POST /face/remove` (async; acks `starting`) | `label` |
+| `face.remove` | Delete one person's whole `users/<label>/` folder (face, voice, Telegram, history) via HAL `POST /face/remove` (async; acks `starting`) | `label` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
 | `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
@@ -998,8 +998,9 @@ without a lock (`face.remove` shares that lock). A `failure` carries HAL's reaso
 }
 ```
 
-`data` is present only on `success`. `enrolled_count` is the number of
-enrolled people after this photo, not the number of photos.
+`data` is present only on `success`. `enrolled_count` is the number of people
+face recognition knows after this photo (not photos, and not voice-only
+people). It is not the same count as `face.owners`' `enrolled_count`.
 
 #### `face.owners` / `face.remove`
 
@@ -1007,6 +1008,12 @@ enrolled people after this photo, not the number of photos.
 synchronously (a directory scan), so there is no `starting` ack. HAL's shared
 `unknown` bucket for unidentified people is dropped from the list, and only
 identity fields are returned; the per-day logs HAL also reports are not.
+
+The list holds everyone with a face photo, a voice sample or a
+`metadata.json`, so a voice-only person appears with `photo_count: 0`.
+`enrolled_count` counts those same people, so it can be higher than the
+face-only count that `face.enroll` and `face.remove` return. `photos` are
+filenames only; there is no MQTT kind to fetch the image bytes.
 
 ```json
 {"cmd": "data", "kind": "face.owners"}
@@ -1020,8 +1027,12 @@ identity fields are returned; the per-day logs HAL also reports are not.
 }
 ```
 
-`face.remove` deletes one person's photos via HAL `POST /face/remove`, and
-HAL retrains from the photos that remain. It acks `starting`, then `success`
+`face.remove` deletes the person, not only their face: HAL `POST /face/remove`
+removes the whole `users/<label>/` folder, taking the face photos, enrolled
+voice samples, `metadata.json` (Telegram) and the mood, wellbeing, posture
+and habit history with it. It cannot be undone, so clients should label the
+action "remove this person" and confirm first. HAL then retrains every
+remaining person from disk, so the time grows with people and photos. It acks `starting`, then `success`
 or `failure`, and shares the `face.enroll` lock so a remove never overlaps an
 enrollment. `label` is required (1–64 characters); `unknown` is rejected
 without calling HAL. An unknown label fails with `POST /face/remove returned

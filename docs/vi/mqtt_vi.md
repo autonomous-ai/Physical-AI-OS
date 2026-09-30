@@ -357,7 +357,7 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `skills.upload` | Cài một file `.md`, `.zip`, hoặc `.skill` vào runtime đang chạy (đồng bộ) | `filename`, `content_base64` |
 | `face.enroll` | Đăng ký một ảnh khuôn mặt qua HAL `POST /face/enroll` (bất đồng bộ; ack `starting`) | `image_base64`, `label`, tùy chọn `telegram_username`/`telegram_id` |
 | `face.owners` | Liệt kê người đã đăng ký qua HAL `GET /face/owners` (đồng bộ) | _(không có)_ |
-| `face.remove` | Xoá một người đã đăng ký qua HAL `POST /face/remove` (bất đồng bộ; ack `starting`) | `label` |
+| `face.remove` | Xoá toàn bộ thư mục `users/<label>/` của một người (khuôn mặt, giọng, Telegram, lịch sử) qua HAL `POST /face/remove` (bất đồng bộ; ack `starting`) | `label` |
 | `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
@@ -970,8 +970,9 @@ sensing không chạy. Ảnh không bao giờ bị ghi vào log.
 }
 ```
 
-`data` chỉ có khi `success`. `enrolled_count` là số người đã đăng ký sau ảnh
-này, không phải số ảnh.
+`data` chỉ có khi `success`. `enrolled_count` là số người mà nhận diện khuôn
+mặt biết sau ảnh này (không phải số ảnh, và không tính người chỉ có giọng).
+Con số này khác `enrolled_count` của `face.owners`.
 
 #### `face.owners` / `face.remove`
 
@@ -979,6 +980,12 @@ này, không phải số ảnh.
 chạy đồng bộ (chỉ quét thư mục) nên không có ack `starting`. Bucket chung
 `unknown` của HAL (người chưa nhận diện) bị loại khỏi danh sách, và chỉ trả về
 các trường danh tính; log theo ngày mà HAL cũng trả thì không có.
+
+Danh sách gồm mọi người có ảnh khuôn mặt, mẫu giọng hoặc `metadata.json`, nên
+người chỉ enroll giọng vẫn xuất hiện với `photo_count: 0`. `enrolled_count`
+đếm đúng những người này, nên có thể lớn hơn con số chỉ tính khuôn mặt mà
+`face.enroll` và `face.remove` trả về. `photos` chỉ là tên file; không có kind
+MQTT nào để tải ảnh về.
 
 ```json
 {"cmd": "data", "kind": "face.owners"}
@@ -992,8 +999,12 @@ các trường danh tính; log theo ngày mà HAL cũng trả thì không có.
 }
 ```
 
-`face.remove` xoá ảnh của một người qua HAL `POST /face/remove`, rồi HAL
-train lại từ các ảnh còn lại. Lệnh ack `starting`, rồi `success` hoặc
+`face.remove` xoá cả người, không chỉ khuôn mặt: HAL `POST /face/remove` xoá
+toàn bộ thư mục `users/<label>/`, gồm ảnh khuôn mặt, mẫu giọng đã enroll,
+`metadata.json` (Telegram) và lịch sử mood, wellbeing, posture, habit. Không
+hoàn tác được, nên client cần ghi rõ "Xoá người này" và hỏi xác nhận trước.
+Sau đó HAL train lại tất cả người còn lại từ đĩa, nên thời gian tăng theo số
+người và số ảnh. Lệnh ack `starting`, rồi `success` hoặc
 `failure`, và dùng chung khóa với `face.enroll` nên remove không bao giờ chạy
 chồng lên một lần đăng ký. `label` bắt buộc (1–64 ký tự); `unknown` bị từ chối
 mà không gọi HAL. Label không tồn tại trả lỗi `POST /face/remove returned

@@ -423,7 +423,7 @@ const (
 	// KindFaceOwners lists enrolled people via HAL GET /face/owners.
 	KindFaceOwners = "face.owners"
 
-	// KindFaceRemove deletes one enrolled person via HAL POST /face/remove.
+	// KindFaceRemove deletes one person's whole users/<label>/ folder via HAL POST /face/remove.
 	KindFaceRemove = "face.remove"
 )
 

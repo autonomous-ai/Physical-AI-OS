@@ -65,7 +65,8 @@ func FaceEnroll(r FaceEnrollRequest) (*FaceEnrollResult, error) {
 	return &out, nil
 }
 
-// GetFaceOwners lists enrolled people (plus HAL's shared "unknown" bucket, if present).
+// GetFaceOwners lists people with a face photo, voice sample or metadata.json
+// (plus HAL's shared "unknown" bucket, if present).
 func GetFaceOwners() (*FaceOwners, error) {
 	var out FaceOwners
 	if err := faceDo("GET", "/face/owners", nil, &out); err != nil {
@@ -74,7 +75,8 @@ func GetFaceOwners() (*FaceOwners, error) {
 	return &out, nil
 }
 
-// FaceRemove deletes one person's photos and retrains; HAL answers 404 for an unknown label.
+// FaceRemove deletes one person's whole users/{label}/ folder (face, voice, metadata,
+// history) and retrains the rest; HAL answers 404 for an unknown label.
 func FaceRemove(label string) (*FaceRemoveResult, error) {
 	var out FaceRemoveResult
 	if err := faceDo("POST", "/face/remove", map[string]string{"label": label}, &out); err != nil {
