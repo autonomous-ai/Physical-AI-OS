@@ -179,3 +179,58 @@ def test_servo_hold_claims_as_explicit(body, monkeypatch):
     servo.hold_servos()
     assert hold.owners(body) == {"explicit"}
     assert body._hold_explicit
+
+
+# --- LED routes that end a scene -------------------------------------------
+
+@pytest.fixture
+def led_env(body, monkeypatch):
+    from hal.routes import led
+
+    monkeypatch.setattr(state, "rgb_service", Mock(), raising=False)
+    monkeypatch.setattr(state, "sensing_service", None, raising=False)
+    monkeypatch.setattr(state, "_sleeping", False)
+    for name in ("_stop_current_effect", "_save_user_led_state",
+                 "_dismiss_mic_muted_led", "_cancel_pending_restore"):
+        monkeypatch.setattr(state, name, Mock())
+    monkeypatch.setattr(state, "_active_scene", "reading")
+    hold.claim(body, hold.SCENE)
+    return led
+
+
+def _led_calls(led):
+    from hal.models import LEDOffRequest, LEDPaintRequest, LEDSolidRequest
+
+    return {
+        "off": lambda transient: led.turn_off_leds(LEDOffRequest(transient=transient)),
+        "solid": lambda transient: led.set_led_solid(
+            LEDSolidRequest(color=[10, 10, 10], transient=transient)),
+        "paint": lambda transient: led.set_led_paint(
+            LEDPaintRequest(colors=[[10, 10, 10]], transient=transient)),
+    }
+
+
+@pytest.mark.parametrize("route", ["off", "solid", "paint"])
+def test_an_led_override_ends_the_scene_and_its_hold(led_env, body, route):
+    _led_calls(led_env)[route](False)
+    assert state._active_scene is None
+    assert not body._hold_mode
+
+
+@pytest.mark.parametrize("route", ["off", "solid", "paint"])
+def test_a_transient_overlay_keeps_the_scene_and_its_hold(led_env, body, route):
+    _led_calls(led_env)[route](True)
+    assert state._active_scene == "reading"
+    assert hold.owners(body) == {"scene"}
+
+
+def test_an_led_override_leaves_an_explicit_hold_alone(led_env, body):
+    hold.claim(body, hold.EXPLICIT)
+    _led_calls(led_env)["off"](False)
+    assert hold.owners(body) == {"explicit"}
+
+
+def test_end_scene_releases_the_scene_hold(led_env, body):
+    led_env._end_scene()
+    assert state._active_scene is None
+    assert not body._hold_mode
