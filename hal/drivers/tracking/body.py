@@ -25,7 +25,9 @@ def release_to_idle(reason: str) -> bool:
         return False
     if getattr(svc, "_tracking_active", False):
         return False
-    if getattr(svc, "_hold_mode", False) or getattr(svc, "_zero_mode", False):
+    from hal.drivers.motors import hold
+
+    if hold.holder(svc) is not None or getattr(svc, "_zero_mode", False):
         return False
     if getattr(svc, "_current_recording", None) is not None:
         return False

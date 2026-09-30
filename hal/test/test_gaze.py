@@ -1966,3 +1966,103 @@ def test_the_watcher_loop_watches_the_edge():
     import inspect
 
     assert "_note_conversation_edge()" in inspect.getsource(gaze._loop)
+
+
+# --- #544: a held body is not the watcher's to move ------------------------
+
+@pytest.fixture
+def reading_scene(monkeypatch):
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "_active_scene", "reading", raising=False)
+
+
+def test_a_pan_never_moves_a_body_a_scene_holds(pan, reading_scene, caplog):
+    from hal.drivers.motors import hold
+
+    hold.claim(pan, hold.SCENE)
+    gaze._yaw_quiet_logged.clear()
+    _fill_dx(0.5)
+    with caplog.at_level("INFO"):
+        gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves == []
+    assert "no pan: servo held by scene" in caplog.text
+
+
+def test_a_pitch_correction_never_moves_a_held_body(neck, reading_scene):
+    from hal.drivers.motors import hold
+
+    hold.claim(neck, hold.EXPLICIT)
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic())
+    assert neck.moves == []
+
+
+def test_a_prompted_climb_never_moves_a_held_body(neck, reading_scene):
+    from hal.drivers.motors import hold
+
+    hold.claim(neck, hold.SCENE)
+    _fill_dy(-0.4)
+    gaze._maybe_pitch(gaze.time.monotonic(), prompt=True)
+    assert neck.moves == []
+
+
+def test_a_repoint_never_moves_a_held_body(body, reading_scene):
+    from hal.drivers.motors import hold
+
+    hold.claim(body, hold.SCENE)
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is False
+    assert body.moves == []
+
+
+def test_the_watcher_does_not_look_around_while_held(sweeper, reading_scene, monkeypatch):
+    import hal.app_state as state
+    from hal.drivers.motors import hold
+
+    svc = _Svc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    hold.claim(svc, hold.SCENE)
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    assert sweeper == []
+    assert gaze._last_sweep_t == 0.0, "a skipped sweep must not start the cooldown"
+
+
+def test_an_orphaned_scene_hold_does_not_block_a_pan(pan, monkeypatch):
+    """The safety net: with no scene active the scene's hold is stale, not a block."""
+    import hal.app_state as state
+    from hal.drivers.motors import hold
+
+    monkeypatch.setattr(state, "_active_scene", None, raising=False)
+    hold.claim(pan, hold.SCENE)
+    _fill_dx(0.5)
+    gaze._maybe_yaw(gaze.time.monotonic())
+    assert pan.moves
+
+
+def _close_conversation(monkeypatch):
+    gaze._conversation_was_open = True
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+
+
+def test_closing_a_conversation_under_a_hold_says_idle_waits(monkeypatch, reading_scene, caplog):
+    import hal.app_state as state
+    from hal.drivers.motors import hold
+
+    svc = _Svc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    hold.claim(svc, hold.SCENE)
+    _close_conversation(monkeypatch)
+    with caplog.at_level("INFO"):
+        gaze._note_conversation_edge()
+    assert "framing released (servo held by scene, idle waits)" in caplog.text
+
+
+def test_closing_a_conversation_with_no_hold_hands_idle_the_arm(monkeypatch, caplog):
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    _close_conversation(monkeypatch)
+    with caplog.at_level("INFO"):
+        gaze._note_conversation_edge()
+    assert "framing released (idle has the arm)" in caplog.text

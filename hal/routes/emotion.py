@@ -268,7 +268,14 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
     if cam == LST_OFF:
         state._auto_camera_off(f"emotion:{req.emotion}")
     elif cam == "on" and state._camera_disabled:
-        state._auto_camera_on(f"emotion:{req.emotion}")
+        from hal.routes.scene import camera_held_off_by_scene
+
+        held_by = camera_held_off_by_scene()
+        if held_by:
+            state.logger.info("Emotion %s: camera stays off -- scene %s keeps it off",
+                              req.emotion, held_by)
+        else:
+            state._auto_camera_on(f"emotion:{req.emotion}")
 
     if req.emotion == EMO_SLEEPY:
         state._finalize_sleepy_peripherals(
