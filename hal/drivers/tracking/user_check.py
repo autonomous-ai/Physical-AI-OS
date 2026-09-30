@@ -55,8 +55,7 @@ def faces_lamp(yaw_deg: Optional[float], face_px: float) -> bool:
     )
 
 
-def confirms_bearing(ev: Optional[FaceEvidence]) -> Verdict:
-    """Loose: is somebody at the desk where the bearing points?"""
+def _size_verdict(ev: Optional[FaceEvidence]) -> Verdict:
     if ev is None:
         return Verdict(False, "no face")
     floor = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC
@@ -68,11 +67,27 @@ def confirms_bearing(ev: Optional[FaceEvidence]) -> Verdict:
     return Verdict(True, f"near face (h={ev.face_h_frac * 100:.0f}%)")
 
 
-def adopts_bearing(ev: Optional[FaceEvidence]) -> Verdict:
-    """Strict: may this face become the user's bearing?"""
-    base = confirms_bearing(ev)
+def confirms_bearing(ev: Optional[FaceEvidence]) -> Verdict:
+    """Loose: is somebody at the desk where the bearing points? No facing needed."""
+    base = _size_verdict(ev)
     if not base.ok or ev is None:
         return base
+    max_dx = config.GAZE_REPOINT_MAX_DX_FRAC
+    if abs(ev.dx_frac) > max_dx:
+        return Verdict(
+            False,
+            f"too far off centre for the bearing (dx={ev.dx_frac * 100:+.0f}%, "
+            f"max {max_dx * 100:.0f}%)",
+        )
+    return base
+
+
+def adopts_bearing(ev: Optional[FaceEvidence]) -> Verdict:
+    """Strict: may this face become the user's bearing?"""
+    base = _size_verdict(ev)
+    if not base.ok or ev is None:
+        return base
+    # Wider than the repoint's gate: the sweep's looks overlap only at +/-25%.
     max_dx = config.BEARING_SAMPLE_MAX_DX_FRAC
     if abs(ev.dx_frac) > max_dx:
         return Verdict(

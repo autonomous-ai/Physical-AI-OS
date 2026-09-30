@@ -912,13 +912,25 @@ Three further behaviours are worth stating because each was a bug first:
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) of the frame tall confirms the bearing. Facing and identity
   are not required, because the user often talks while looking at their own monitor. Only a smaller
   face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
-  face across the room became "the user". The watcher stamps a near-face and a far-face clock
-  (`_note_face_size`) for every face it detects, and the verdict reads those.
+  face across the room became "the user". The face must also sit within `HAL_GAZE_REPOINT_MAX_DX_FRAC`
+  (±15%) of frame centre: the lamp has just turned to the user's bearing, so the user lands near the
+  middle, while a co-worker one desk over stays off to the side (device-measured 2026-09-30: the user
+  within ±11%, a neighbour at 14% tall and dx −41% confirmed a repoint while the user stood in front).
+  It is narrower than the look-around's ±25%, whose looks only overlap at that width. The watcher stamps a near-face and a far-face clock (`_note_face_size`) for every face it
+  detects, and the verdict reads those. An off-side face counts as far.
 - **A body waits for the climb.** Landing on a body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
   conversation open. A near face = hit, only a far face = miss, no face at all = **not scored**.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
   the lamp.
+- **A far face does not hide a body while a repoint is judged.** The watcher normally looks for a body
+  only when it finds no face, so a co-worker's small face across the room (below
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) hid a user standing in front of the lamp with their head
+  above the frame: no body, no climb, "found only a far face", a miss (device-observed 2026-09-30 on
+  green-lamp). While a repoint verdict or its climb is pending (`_judging_repoint`), a far face also
+  runs person detection (`_body_behind_a_far_face`). A body found that way counts as the body and
+  drives the climb's `dy` from its top edge instead of the far face. Outside that window it does not
+  run: an office almost always has a far face, and person detection on most samples costs CPU.
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.

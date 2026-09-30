@@ -1896,10 +1896,13 @@ def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
     assert calls == [True]
 
 
-@pytest.mark.parametrize("face_h, near", [(0.13, True), (0.11, False)])
-def test_face_size_feeds_the_near_or_far_clock(face_h, near):
+@pytest.mark.parametrize("face_h, dx, near", [
+    (0.13, 0.0, True), (0.11, 0.0, False), (0.14, -0.41, False), (0.30, 0.11, True),
+])
+def test_face_size_and_offset_feed_the_near_or_far_clock(face_h, dx, near):
+    """Near = the confirm rule: big enough AND where the repoint turned (not a neighbour's seat)."""
     gaze._last_near_face_t = gaze._last_far_face_t = 0.0
-    gaze._note_face_size(face_h * 480.0, 480.0, now=123.0)
+    gaze._note_face_size(face_h * 480.0, 480.0, now=123.0, dx_frac=dx)
     assert (gaze._last_near_face_t == 123.0) is near
     assert (gaze._last_far_face_t == 123.0) is (not near)
 
@@ -2094,3 +2097,122 @@ def test_a_user_sweep_records_the_face_it_checked(monkeypatch):
 def test_an_uncentred_sweep_hit_records_nothing(monkeypatch):
     _svc, sampled, recorded = _found_sweep(monkeypatch, centred=False)
     assert sampled == [] and recorded == []
+
+
+class _PersonDetector:
+    """Counts person detections and returns one fixed box."""
+
+    def __init__(self, box):
+        self.box = box
+        self.calls = 0
+
+    def detect(self, frame, target, strict=True, min_conf=None):
+        if target == "person":
+            self.calls += 1
+            return self.box
+        return None
+
+
+def _sample_far_face_with_body(monkeypatch, face_h, pending=True, x=40.0):
+    """One watcher sample: a face `face_h` px tall in a 360 px frame + a torso clipped at the top."""
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    person = _PersonDetector((200, 0, 260, 360))
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: person)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    y = 60.0
+    monkeypatch.setattr(
+        det, "detect_face_with_landmarks",
+        lambda f: ((int(x), int(y), int(face_h), int(face_h)),
+                   _landmarks((x + face_h * 0.3, y + face_h * 0.4),
+                              (x + face_h * 0.7, y + face_h * 0.4),
+                              (x + face_h * 0.5, y + face_h * 0.6))),
+    )
+    gaze.reset_for_test()
+    t = gaze.time.monotonic()
+    if pending:
+        gaze._repoint_pending_t = gaze._repoint_started_t = t - 1.0
+    gaze._last_subject_t = 0.0
+    assert gaze._sample_once() is None
+    return person, t
+
+
+def test_a_far_face_does_not_hide_a_standing_user_during_a_repoint(monkeypatch):
+    """green-lamp 2026-09-30 16:21: a co-worker's 8-11% face hid the user's torso -> no climb."""
+    person, t = _sample_far_face_with_body(monkeypatch, face_h=30)  # 8% of 360
+    assert person.calls == 1, "the body was never looked for"
+    assert gaze._last_subject_t >= t, "the torso did not count as a body"
+    assert gaze._last_far_face_t >= t, "the far face must still count for a miss"
+    assert gaze._last_dy_from_face is False, "the climb would aim at the far face"
+    assert gaze._last_dy_frac == pytest.approx(-0.5)
+
+
+def test_a_far_face_plus_a_body_starts_the_climb_not_a_miss(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    climbs = []
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: climbs.append(prompt))
+    _person, t = _sample_far_face_with_body(monkeypatch, face_h=30)
+    gaze._repoint_subject_t_before = 0.0
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [], "scored before the climb could find the face"
+    assert gaze._repoint_climb_t == t and climbs == [True]
+
+
+def test_a_far_face_outside_a_repoint_skips_the_body_check(monkeypatch):
+    """Offices always have a far face: running person detection all day costs CPU."""
+    person, _t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
+    assert person.calls == 0
+    assert gaze._last_dy_from_face is True
+
+
+def test_a_near_face_never_runs_the_body_check(monkeypatch):
+    """A face that confirms the repoint (33%, centred) needs no body behind it."""
+    person, _t = _sample_far_face_with_body(monkeypatch, face_h=120, x=260.0)
+    assert person.calls == 0
+    assert gaze._last_dy_from_face is True
+
+
+def test_a_pending_climb_also_looks_for_the_body(monkeypatch):
+    person, t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
+    assert person.calls == 0
+    gaze._repoint_climb_t = t
+    assert gaze._sample_once() is None
+    assert person.calls == 1
+
+
+def test_a_big_face_off_to_the_side_still_looks_for_the_body(monkeypatch):
+    """The co-worker at 14% / dx -41% must not hide a user standing at the bearing either."""
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    person = _PersonDetector((200, 0, 260, 360))
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: person)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    h, x, y = 50.0, 40.0, 60.0  # 14% of 360, centre at x=65 -> dx = -40%
+    monkeypatch.setattr(
+        det, "detect_face_with_landmarks",
+        lambda f: ((int(x), int(y), int(h), int(h)),
+                   _landmarks((x + h * 0.3, y + h * 0.4), (x + h * 0.7, y + h * 0.4),
+                              (x + h * 0.5, y + h * 0.6))),
+    )
+    gaze.reset_for_test()
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = gaze._repoint_started_t = t - 1.0
+    assert gaze._sample_once() is None
+    assert person.calls == 1
+    assert gaze._last_near_face_t < t, "a neighbour's face confirmed the bearing"
+    assert gaze._last_far_face_t >= t

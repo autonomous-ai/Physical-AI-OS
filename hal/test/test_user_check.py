@@ -235,3 +235,25 @@ def test_a_fresh_face_id_label_no_longer_lets_a_face_in(monkeypatch):
     side_on = _face(270, 100, 100, yaw_deg=70)
     tracks = _observe(monkeypatch, [[side_on]] * 4)
     assert user_check.best_user_face(tracks, "[test]") is None
+
+
+def test_confirm_rejects_a_near_face_off_to_the_side():
+    """green-lamp 16:39: the neighbouring co-worker reached 14% at dx=-41% and confirmed a repoint."""
+    v = user_check.confirms_bearing(FaceEvidence(face_h_frac=0.14, dx_frac=-0.41))
+    assert not v.ok and "centre" in v.reason
+
+
+def test_confirm_accepts_the_user_where_the_repoint_turned():
+    """The user's repoint faces measured dx within +/-11%."""
+    assert user_check.confirms_bearing(FaceEvidence(face_h_frac=0.30, dx_frac=0.11)).ok
+
+
+def test_adopt_keeps_its_wider_centre_gate():
+    """The sweep's looks overlap only at +/-25%; a tighter gate would leave gaps between them."""
+    ev = FaceEvidence(face_h_frac=0.30, facing_ratio=1.0, facing_samples=6, dx_frac=0.20)
+    assert user_check.adopts_bearing(ev).ok
+
+
+def test_the_repoint_centre_gate_is_its_own_setting():
+    assert config.GAZE_REPOINT_MAX_DX_FRAC == pytest.approx(0.15)
+    assert config.BEARING_SAMPLE_MAX_DX_FRAC == pytest.approx(0.25)

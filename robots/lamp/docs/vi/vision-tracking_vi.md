@@ -909,13 +909,27 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
   cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
   trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
-  phía bên kia phòng đã trở thành "user". Watcher đóng dấu đồng hồ mặt-gần và mặt-xa
-  (`_note_face_size`) cho mỗi mặt phát hiện được, và phần kết luận đọc hai đồng hồ đó.
+  phía bên kia phòng đã trở thành "user". Cái mặt đó còn phải nằm trong `HAL_GAZE_REPOINT_MAX_DX_FRAC`
+  (±15%) quanh tâm khung: đèn vừa quay về bearing của user, nên user rơi vào gần giữa khung, còn một đồng
+  nghiệp ngồi bàn bên cạnh thì lệch hẳn sang một bên (đo trên thiết bị 30/09/2026: user nằm trong ±11%,
+  một người ngồi bên cạnh cao 14% ở dx −41% đã xác nhận một lần repoint trong lúc user đang đứng ngay
+  trước đèn). Giới hạn này hẹp hơn mức ±25% của pha nhìn quanh, vì các lần nhìn của pha đó chỉ chồng lên
+  nhau ở độ rộng ấy. Watcher đóng dấu đồng hồ mặt-gần và mặt-xa (`_note_face_size`) cho mỗi mặt phát hiện
+  được, và phần kết luận đọc hai đồng hồ đó. Một mặt lệch sang bên được tính là mặt xa.
 - **Thấy thân người thì chờ phần leo tìm.** Dừng ở thân người sẽ kích hoạt phần leo tìm ở trên và giữ
   kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
   cuộc hội thoại nào đang mở. Mặt gần = trúng, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
   Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
   ngồi ngay trước đèn.
+- **Một mặt xa không che mất thân người trong lúc đang chấm repoint.** Bình thường watcher chỉ tìm thân
+  người khi không thấy mặt nào, nên khuôn mặt nhỏ của một đồng nghiệp bên kia phòng (dưới
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) đã che mất một user đang đứng ngay trước đèn với đầu nằm trên
+  khung hình: không có thân, không leo tìm, "found only a far face", thành trượt (đo trên green-lamp
+  30/09/2026). Trong lúc kết luận repoint hoặc phần leo tìm của nó còn đang chờ (`_judging_repoint`),
+  một mặt xa cũng kích hoạt phát hiện người (`_body_behind_a_far_face`). Thân người tìm được theo cách
+  đó được tính là thân, và `dy` của phần leo tìm lấy từ mép trên của thân chứ không từ mặt xa. Ngoài
+  khoảng thời gian đó thì không chạy: văn phòng gần như lúc nào cũng có một mặt xa, và chạy phát hiện
+  người trên hầu hết các mẫu sẽ tốn CPU.
 - **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
