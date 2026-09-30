@@ -196,7 +196,8 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 `SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; kiểm tra
 thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, thành công thì xóa
 state này. Mỗi lần kiểm tra là ping `8.8.8.8`, nếu ICMP thất bại thì bắt tay TLS
-với host cloud API của thiết bị, nên mạng chặn ICMP không bị báo là offline. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+với host cloud API của thiết bị, nên mạng chặn ICMP không bị báo là offline. Overview của trang monitor dùng cùng
+fallback này (`CheckInternetRTT`), không hiện thời gian ping khi chỉ TLS đi qua. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
 và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
 Monitor không còn reboot thiết bị.
 
@@ -981,7 +982,10 @@ từng record.
   `OS_GELF_SPOOL_DIR` (mặc định `/var/lib/autonomous/gelf-spool`, 1 MiB mỗi service, bỏ record cũ
   nhất trước) và được replay đúng thứ tự, có giãn nhịp, gắn `_spooled`, khi gửi thành
   công; các mã 4xx khác thì bỏ record. Backoff giữa các lần replay lỗi là 5s tới 5 phút.
-  Khi shutdown hoặc đổi target, worker dừng ngay và queue của nó vào spool. Xem
+  Khi shutdown hoặc đổi target, worker dừng sau request đang gửi và queue của nó vào
+  spool; khi đổi target, worker mới chỉ chạy sau khi worker cũ đã dừng, nên spool
+  không bao giờ bị replay hai lần. Replay bỏ qua record ghi dưới device id khác, và
+  factory reset xóa spool. Xem
   [setup-flow_vi.md](setup-flow_vi.md).
 - **Collector trực tiếp.** Khi có cấu hình `GELF_URL`, worker gửi thẳng tới đó bằng
   basic auth và không có spool: khi collector chậm/không hoạt động và queue đầy, record

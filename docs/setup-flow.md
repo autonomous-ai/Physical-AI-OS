@@ -520,7 +520,7 @@ which that path deliberately never raises.
 `setup_failure_reason` field — on `network setup failed` (component `network`)
 for the WiFi join, and on `setup failed` (component `device`) for every stage —
 so failed setups can be grouped by cause in Graylog
-(`setup_failure_reason:* AND spooled:true` finds the ones replayed after the
+(`_exists_:setup_failure_reason AND spooled:true` finds the ones replayed after the
 device came online). The WiFi join is classified from `wpa_supplicant`'s own log
 for the attempt plus the last observed state (`system/network/setup_failure.go`):
 
@@ -780,6 +780,10 @@ sent was dropped. Now:
   in-flight ceiling), each tagged `_spooled: "true"` and moved from the
   pre-config host onto the device id, so a failed first attempt shows up under
   the device next to the attempt that worked.
+- **Never another device's records.** Replay ships only records logged before
+  the device id was known or under the current device id; records under any
+  other id (a previous setup or a previous owner) are dropped, never sent with
+  the current key. Factory reset also wipes `OS_GELF_SPOOL_DIR`.
 
 A device that never gets online again cannot deliver its spool; it stays on the
 device until it does.

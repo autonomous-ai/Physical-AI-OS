@@ -299,10 +299,15 @@ func (s *Service) CheckInternet() (bool, error) {
 	return false, fmt.Errorf("connected but no internet: ping 8.8.8.8 failed (%v) and %s unreachable: %w", icmpErr, addr, tlsErr)
 }
 
-// CheckInternetRTT is CheckInternet plus the RTT in ms (0 if unparsed).
+// CheckInternetRTT is CheckInternet plus the ICMP RTT in ms (0 if unparsed or
+// reachable only over TLS).
 func (s *Service) CheckInternetRTT() (ok bool, rttMs float64) {
 	rtt, err := s.pingRTT()
-	return err == nil, rtt
+	if err == nil {
+		return true, rtt
+	}
+	_, tlsErr := s.reachableOverTLS()
+	return tlsErr == nil, 0
 }
 
 // pingRTT runs one probe; rtt 0 with nil error when output didn't parse.

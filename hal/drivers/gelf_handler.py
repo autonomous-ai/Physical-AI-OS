@@ -307,8 +307,11 @@ class GELFHandler(logging.Handler):
                 msg = json.loads(line)
             except ValueError:
                 continue  # corrupt line: skip rather than stall the replay
+            host = msg.get("host")
+            if host not in (self._default_host, self._host):
+                continue  # another device id's record (previous setup/owner): never ship it with this key
             msg["_spooled"] = "true"
-            if msg.get("host") == self._default_host and self._host != self._default_host:
+            if host == self._default_host and self._host != self._default_host:
                 msg["host"] = self._host
             if not self._post(msg):
                 self._spool.keep(lines[i:])

@@ -194,14 +194,20 @@ func (s *gelfSpool) keepReplay(rest [][]byte) error {
 
 // prepareReplay tags a spooled record and, when it was logged before the
 // device knew its id, moves it onto the current host so it is found under the
-// device in Graylog like every other record of that device.
+// device like every other record of that device. A record logged under another
+// device id belongs to a previous setup (possibly a previous owner) and returns
+// nil: it must never ship with the current device's key.
 func prepareReplay(body []byte, preConfigHost, currentHost string) []byte {
 	var m map[string]any
 	if err := json.Unmarshal(body, &m); err != nil {
 		return nil // corrupt line: skip it rather than stall the replay
 	}
+	h, _ := m["host"].(string)
+	if h != preConfigHost && h != currentHost {
+		return nil
+	}
 	m[gelfSpooledField] = "true"
-	if h, _ := m["host"].(string); h == preConfigHost && currentHost != "" && currentHost != preConfigHost {
+	if h == preConfigHost && currentHost != "" && currentHost != preConfigHost {
 		m["host"] = currentHost
 	}
 	out, err := json.Marshal(m)

@@ -493,7 +493,7 @@ bật.
 **Lý do setup thất bại.** Mọi lần setup thất bại đều được log với trường cố định
 `setup_failure_reason` — ở dòng `network setup failed` (component `network`) cho bước
 join WiFi, và ở dòng `setup failed` (component `device`) cho mọi bước — để gom nhóm
-theo nguyên nhân trên Graylog (`setup_failure_reason:* AND spooled:true` ra các lần
+theo nguyên nhân trên Graylog (`_exists_:setup_failure_reason AND spooled:true` ra các lần
 được replay sau khi thiết bị online). Bước join WiFi được phân loại từ chính log của
 `wpa_supplicant` cho lần thử đó cùng trạng thái quan sát được cuối cùng
 (`system/network/setup_failure.go`):
@@ -752,6 +752,10 @@ gửi được thì bị drop. Hiện tại:
   nhịp (~10 record/s — cloud relay drop im lặng khi vượt trần in-flight), mỗi record
   gắn `_spooled: "true"` và được chuyển từ host tạm lúc chưa có config sang device
   id, nên lần setup hỏng hiện ra dưới thiết bị, cạnh lần setup thành công.
+- **Không bao giờ gửi record của thiết bị khác.** Replay chỉ gửi record ghi trước khi
+  có device id hoặc dưới device id hiện tại; record dưới id khác (lần setup trước
+  hoặc chủ máy trước) bị bỏ, không bao giờ gửi bằng key hiện tại. Factory reset cũng
+  xóa `OS_GELF_SPOOL_DIR`.
 
 Thiết bị không bao giờ online lại thì không gửi được spool; nó nằm trên máy cho tới
 khi thiết bị online.

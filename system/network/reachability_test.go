@@ -99,3 +99,27 @@ func TestTLSReachAcceptsAnyServerCertificate(t *testing.T) {
 		t.Fatal("tlsReach(closed port) = nil, want an error")
 	}
 }
+
+func TestCheckInternetRTTFallsBackToTLSWhenICMPIsBlocked(t *testing.T) {
+	blocked := errors.New("100% packet loss")
+	cases := []struct {
+		name            string
+		icmpErr, tlsErr error
+		wantOK          bool
+		wantRTT         float64
+	}{
+		{name: "ICMP works", wantOK: true, wantRTT: 12.3},
+		{name: "ICMP blocked, cloud reachable", icmpErr: blocked, wantOK: true, wantRTT: 0},
+		{name: "no internet", icmpErr: blocked, tlsErr: errors.New("i/o timeout"), wantOK: false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			stubProbes(t, tc.icmpErr, tc.tlsErr)
+			s := &Service{config: &config.Config{}}
+			ok, rtt := s.CheckInternetRTT()
+			if ok != tc.wantOK || rtt != tc.wantRTT {
+				t.Fatalf("CheckInternetRTT() = (%v, %v), want (%v, %v)", ok, rtt, tc.wantOK, tc.wantRTT)
+			}
+		})
+	}
+}

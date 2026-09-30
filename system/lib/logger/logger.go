@@ -214,6 +214,8 @@ type gelfSender struct {
 	// waiting there, so delivery order is preserved.
 	backlog atomic.Bool
 	wake    chan struct{}
+	// stopping ends a spooled sender between records, never mid-request.
+	stopping chan struct{}
 }
 
 func newGELFSender(client *http.Client, url string, auth func(*http.Request)) *gelfSender {
@@ -223,16 +225,17 @@ func newGELFSender(client *http.Client, url string, auth func(*http.Request)) *g
 func newSpooledGELFSender(client *http.Client, url string, auth func(*http.Request), spool *gelfSpool, host func() string) *gelfSender {
 	ctx, cancel := context.WithCancel(context.Background())
 	s := &gelfSender{
-		client: client,
-		url:    url,
-		auth:   auth,
-		spool:  spool,
-		host:   host,
-		queue:  make(chan []byte, gelfQueueSize),
-		ctx:    ctx,
-		cancel: cancel,
-		done:   make(chan struct{}),
-		wake:   make(chan struct{}, 1),
+		client:   client,
+		url:      url,
+		auth:     auth,
+		spool:    spool,
+		host:     host,
+		queue:    make(chan []byte, gelfQueueSize),
+		ctx:      ctx,
+		cancel:   cancel,
+		done:     make(chan struct{}),
+		wake:     make(chan struct{}, 1),
+		stopping: make(chan struct{}),
 	}
 	if spool != nil && spool.pending() {
 		s.backlog.Store(true)
@@ -297,6 +300,11 @@ func (s *gelfSender) run() {
 	defer check.Stop()
 	backoff := gelfRetryMin
 	for {
+		select {
+		case <-s.stopping:
+			return
+		default:
+		}
 		if s.spool != nil && s.backlog.Load() {
 			if !s.drainSpool() {
 				if !s.sleep(backoff) {
@@ -310,6 +318,8 @@ func (s *gelfSender) run() {
 		}
 		select {
 		case <-s.ctx.Done():
+			return
+		case <-s.stopping:
 			return
 		case body, ok := <-s.queue:
 			if !ok {
@@ -375,6 +385,8 @@ func (s *gelfSender) sleep(d time.Duration) bool {
 	select {
 	case <-s.ctx.Done():
 		return false
+	case <-s.stopping:
+		return false
 	case <-t.C:
 		return true
 	}
@@ -423,11 +435,11 @@ func (s *gelfSender) close() {
 	s.mu.Unlock()
 
 	if s.spool != nil {
-		// Stop at once: a re-targeted relay starts a new sender on the same
-		// spool, and two senders replaying one spool would duplicate records.
-		// In-flight and queued records land in the spool; the next sender (or
-		// the next boot) delivers them.
-		s.cancel()
+		// Stop after the in-flight send (bounded by the client timeout), not
+		// during it: aborting a request the collector may already have
+		// accepted would replay that record again. Queued records land in the
+		// spool; the next sender (or the next boot) delivers them.
+		close(s.stopping)
 		<-s.done
 		for body := range s.queue {
 			s.spool.append(body)
@@ -642,6 +654,9 @@ func EnableGELFSpool(dir, name string) {
 	h.sink.spool.Store(spool)
 }
 
+// relayMu serializes EnableGELFRelay, so only one re-target runs at a time.
+var relayMu sync.Mutex
+
 // EnableGELFRelay arms the dormant handler to POST {baseURL}/logs/gelf with apiKey as Bearer.
 // Call whenever config.json reloads: the same target is a no-op, a new URL or key
 // re-targets without dropping queued records. No-op when GELF_URL is set or inputs are blank.
@@ -652,21 +667,28 @@ func EnableGELFRelay(baseURL, apiKey string) {
 	if h == nil || h.sink.direct || baseURL == "" || apiKey == "" {
 		return
 	}
+	relayMu.Lock()
+	defer relayMu.Unlock()
 	target := baseURL + gelfRelayPath
-	old := h.sink.load()
+	sink := h.sink
+	old := sink.load()
 	if old != nil && old.url == target && old.key == apiKey {
 		return
 	}
-	sink := h.sink
+	if old != nil {
+		// Stop the old sender before the new one starts: both replaying the
+		// same spool would ship its records twice. Records logged meanwhile
+		// go to the spool (no sender) and the new sender replays them.
+		sink.sender.Store(nil)
+		old.close()
+	}
 	sender := newSpooledGELFSender(h.client, target, bearerAuth(apiKey), sink.spool.Load(),
 		func() string { return sink.identity().host })
 	sender.key = apiKey
-	if !sink.sender.CompareAndSwap(old, sender) {
-		sender.close() // lost a race with a concurrent call; keep the winner
-		return
-	}
-	if old != nil {
-		go old.close()
+	sink.sender.Store(sender)
+	if spool := sink.spool.Load(); spool != nil && spool.pending() {
+		sender.backlog.Store(true) // records spooled while no sender was set
+		sender.nudge()
 	}
 }
 

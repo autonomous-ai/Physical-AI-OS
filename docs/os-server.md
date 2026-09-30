@@ -201,7 +201,8 @@ when `SetUpCompleted` is true). Internet checks run on a 5s monitor tick; 5
 consecutive failed checks raise the `Connectivity` LED state, and a successful
 one clears it. A check is a ping to `8.8.8.8`, falling back to a TLS handshake
 with the device's cloud API host when ICMP fails, so networks that drop ICMP are
-not reported offline. Internet status is separate from WiFi recovery:
+not reported offline. The monitor page's Overview uses the same fallback
+(`CheckInternetRTT`), showing no ping time when only TLS got through. Internet status is separate from WiFi recovery:
 association and a usable station IPv4 address keep WiFi active even without
 Internet. The monitor no longer reboots the device.
 
@@ -999,8 +1000,10 @@ path or creates a goroutine per record.
   (default `/var/lib/autonomous/gelf-spool`, 1 MiB per service, oldest dropped first) and
   are replayed in order, paced, tagged `_spooled`, once a send succeeds; other
   4xx answers drop the record. Backoff between failed replays is 5s to 5 min. On
-  shutdown or re-target the worker stops at once and its queue goes to the
-  spool. See [setup-flow.md](setup-flow.md#setup-logs-reach-graylog-even-when-setup-fails).
+  shutdown or re-target the worker stops after its in-flight send and its queue
+  goes to the spool; a re-target starts the new worker only once the old one has
+  stopped, so the spool is never replayed twice. Replay skips records logged
+  under another device id, and factory reset wipes the spool. See [setup-flow.md](setup-flow.md#setup-logs-reach-graylog-even-when-setup-fails).
 - **Direct collector.** When `GELF_URL` is configured the worker ships straight
   to it with basic auth and no spool: when the collector is slow or unavailable
   and the queue is full, newly produced records are dropped (with rate-limited

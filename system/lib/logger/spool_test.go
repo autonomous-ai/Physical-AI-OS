@@ -205,3 +205,92 @@ func TestGELFIdentityReachesLoggersBuiltBeforeConfig(t *testing.T) {
 		}
 	}
 }
+
+func TestGELFRelayRetargetDoesNotReplayTheSpoolTwice(t *testing.T) {
+	shortReplayTiming(t)
+	// The first target accepts slowly, so its sender is mid-replay when the
+	// relay re-targets. A request cancelled by the client is not accepted.
+	var mu sync.Mutex
+	var accepted []string
+	accept := func(body []byte) {
+		mu.Lock()
+		accepted = append(accepted, string(body))
+		mu.Unlock()
+	}
+	count := func() int {
+		mu.Lock()
+		defer mu.Unlock()
+		return len(accepted)
+	}
+	slow := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		select {
+		case <-time.After(30 * time.Millisecond):
+			accept(body)
+			w.WriteHeader(http.StatusAccepted)
+		case <-r.Context().Done():
+		}
+	}))
+	t.Cleanup(slow.Close)
+	fast := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		accept(body)
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	t.Cleanup(fast.Close)
+
+	done := initTestLogger(t, "")
+	EnableGELFSpool(t.TempDir(), "os-server")
+	for i := 0; i < 10; i++ {
+		slog.Info(fmt.Sprintf("record-%d", i)) // spooled: relay not armed yet
+	}
+	EnableGELFRelay(slow.URL, "key-1")
+	waitFor(t, func() bool { return count() >= 2 }) // old sender is mid-replay
+	EnableGELFRelay(fast.URL, "key-2")
+	waitFor(t, func() bool { return count() >= 10 })
+	time.Sleep(150 * time.Millisecond) // room for any duplicate to arrive
+	done()
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(accepted) != 10 {
+		t.Fatalf("accepted %d records across both targets, want exactly 10 (no duplicates)", len(accepted))
+	}
+	for i, b := range accepted {
+		if !strings.Contains(b, fmt.Sprintf(`"record-%d"`, i)) {
+			t.Fatalf("record %d = %s, want record-%d: replay must keep order", i, b, i)
+		}
+	}
+}
+
+func TestGELFReplayNeverShipsAnotherDevicesRecords(t *testing.T) {
+	shortReplayTiming(t)
+	collector := newGELFCollector(t)
+	dir := t.TempDir()
+
+	// Previous owner: records logged while the relay could not deliver stay
+	// in the spool across the reboot that follows a factory reset.
+	done := initTestLogger(t, "")
+	EnableGELFSpool(dir, "os-server")
+	SetGELFHost("previous-device")
+	slog.Info("previous owner's speech")
+	done()
+
+	// Next boot: the new owner sets the device up.
+	done = initTestLogger(t, "")
+	EnableGELFSpool(dir, "os-server")
+	slog.Info("setup: wifi joined")
+	SetGELFHost("new-device")
+	EnableGELFRelay(collector.URL, "new-owner-key")
+	waitFor(t, func() bool { return len(collector.received()) >= 1 })
+	time.Sleep(100 * time.Millisecond)
+	done()
+
+	got := collector.received()
+	if len(got) != 1 {
+		t.Fatalf("requests = %d, want 1 (only this setup's record)", len(got))
+	}
+	if strings.Contains(got[0].body, "previous owner") || !strings.Contains(got[0].body, `"host":"new-device"`) {
+		t.Errorf("shipped %s, want only this device's setup record", got[0].body)
+	}
+}

@@ -204,8 +204,8 @@ def test_failed_sends_replay_in_order_after_the_collector_recovers(monkeypatch, 
         os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
         spool_dir=str(tmp_path), start_worker=False,
     )
-    assert handler._send({"short_message": "one", "host": "x"}) is False
-    assert handler._send({"short_message": "two", "host": "x"}) is False
+    assert handler._send({"short_message": "one", "host": handler._host}) is False
+    assert handler._send({"short_message": "two", "host": handler._host}) is False
 
     assert handler.replay_once() is True
     posts = _FakeSession.instances[0].posts
@@ -219,12 +219,30 @@ def test_replay_stops_at_the_first_failure_and_keeps_the_rest(monkeypatch, tmp_p
         os_cfg_get=_cfg({"llm_base_url": API_BASE, "llm_api_key": "lobster"}),
         spool_dir=str(tmp_path), start_worker=False,
     )
-    handler._send({"short_message": "a"})
-    handler._send({"short_message": "b"})
+    handler._send({"short_message": "a", "host": handler._host})
+    handler._send({"short_message": "b", "host": handler._host})
     assert handler.replay_once() is False  # "a" ships, "b" fails again
     assert handler.replay_once() is True
     # "a" shipped once in the first round, "b" in the second: nothing resent.
     assert [p[1]["short_message"] for p in _FakeSession.instances[-1].posts] == ["a", "b"]
+
+
+def test_replay_never_ships_another_devices_records(monkeypatch, tmp_path):
+    # Records a previous owner's device could not ship stay in the spool; after
+    # a factory reset and a new setup they must not go out with the new key.
+    monkeypatch.delenv("GELF_URL", raising=False)
+    _use_scripted_requests(monkeypatch, [])
+    config = {}
+    handler = GELFHandler(os_cfg_get=_cfg(config), spool_dir=str(tmp_path), start_worker=False)
+    handler._spool.append({"short_message": "previous owner's speech", "host": "previous-device"})
+    handler.emit(_record("setup: wifi joined"))  # this boot, before the device id is known
+
+    config.update({"llm_base_url": API_BASE, "llm_api_key": "new-owner", "device_id": "new-device"})
+    handler.refresh_target()
+    assert handler.replay_once() is True
+
+    posts = _FakeSession.instances[0].posts
+    assert [(p[1]["short_message"], p[1]["host"]) for p in posts] == [("setup: wifi joined", "new-device")]
 
 
 def test_rejected_record_is_dropped_not_retried(monkeypatch, tmp_path):
