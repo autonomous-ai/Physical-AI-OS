@@ -816,4 +816,10 @@ class TrackerService:
             # Restart idle. The tracking lock in _continue_playback cleared
             # _current_recording, so the revived event loop has nothing to play and
             # would return at its first guard forever — arm rigid with torque on.
-            animation_service.dispatch("play", animation_service.idle_recording)
+            # Unless another owner still holds the body: idle would play once, then
+            # freeze at its last frame. The arm stays where tracking left it.
+            held = hold.holder(animation_service)
+            if held:
+                logger.info("Tracking ended — servo still held by %s, idle not resumed", held)
+            else:
+                animation_service.dispatch("play", animation_service.idle_recording)
