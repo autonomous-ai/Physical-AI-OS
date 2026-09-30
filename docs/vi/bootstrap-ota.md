@@ -1,5 +1,12 @@
 # Bootstrap & OTA
 
+Rootfs device lamp có service tắt LED sau HAL dành riêng Orange Pi (chờ 5 giây).
+Device OTA reload systemd sau khi áp overlay và sau khi khôi phục rollback,
+trước khi restart service; setup cũng reload sau khi áp hardware override.
+Image builder đã copy rootfs này. Update riêng HAL không cài fallback.
+Xem [vòng đời shutdown LED](../../robots/lamp/docs/vi/led-control_vi.md#fallback-shutdown-cho-orange-pi)
+để biết cách kích hoạt, giới hạn và rollback.
+
 Image OrangePi trì hoãn tác vụ đếm cập nhật cho MOTD của vendor (`orangepi-apt-updates`) 120 giây sau boot để giảm tranh chấp đọc storage với HAL. Chỉ dòng cron chính xác `@reboot root /usr/lib/orangepi/orangepi-apt-updates` được đổi; lịch đếm hằng ngày và lịch cập nhật APT/bảo mật giữ nguyên. Device hiện có có thể áp dụng bằng `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` sau khi chép script lên device. Helper chạy lại không đổi thêm, bỏ qua dòng thiếu/đã tùy chỉnh và lưu bản gốc tại `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Chép bản gốc về `/etc/cron.d/orangepi-updates` để hoàn tác. Đây là thay đổi cấu hình image/device, không nằm trong OTA chỉ cập nhật HAL.
 
 ## 1. Tổng Quan

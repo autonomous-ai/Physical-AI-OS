@@ -49,6 +49,38 @@ stopping the worker, allowing queued frames to relight the strip or touch a clos
 SPI handle. Regression tests use a fake strip and real worker threads; they do not
 prove that GPIO remains electrically quiet after the kernel powers down.
 
+### Orange Pi shutdown fallback
+
+The lamp rootfs ships `lamp-led-shutdown.service`, pulled in by the HAL unit's
+`20-led-shutdown.conf` drop-in. The service starts without touching the LEDs.
+At shutdown/reboot, reversed ordering waits for HAL to exit, waits **5 seconds**,
+then runs `/usr/local/libexec/lamp-led-off.py` while local filesystems remain
+mounted. Its stop timeout is **15 seconds**. A HAL-only restart does not run this
+independent service's stop action. `ExecCondition` skips boards other than
+sun60iw2 or a missing SPI3.0 device; this fallback is not enabled for Raspberry Pi.
+
+The standalone off frame matches the hardware team's reference: 32 black GRB
+pixels, 6.4 MHz, 8 LOW primer bytes and 64 LOW reset bytes. It does not import HAL,
+run a demo, or change GPIO muxing. It refuses writes while HAL is active or
+stopping, propagates SPI failures, and only logs transfer completion, not physical
+LED readback. On device `.142`, two observed shutdowns with the five-second
+fallback had no residual dot, including TTS/emotion playback; 300 ms did not
+resolve the issue. This is a fallback, not proof of the underlying cause.
+
+Deployment is through the **lamp device package/rootfs**, not a HAL-only update.
+After manual copying, run `systemctl daemon-reload` then restart HAL to arm it.
+Remove older experimental LED/demo units before enabling it so only one fallback
+owns the strip. To roll back, stop HAL, stop the fallback, remove its HAL drop-in,
+unit and helper, reload systemd, then start HAL. Do not manually stop the fallback
+while HAL is running.
+
+The HAL lifecycle also waits up to **20 seconds** for hardware cleanup (previously
+5); unfinished or failed cleanup reports shutdown failure and exits nonzero rather
+than reporting completion. The systemd HAL limit remains 30 seconds, with room
+for the 5-second HTTP drain. No second cleanup is started against a still-running
+hardware owner. This fixes observed premature shutdown completion but does not
+establish the cause of every residual LED dot.
+
 ## Endpoints
 
 | Method | Endpoint | Description |

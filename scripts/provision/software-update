@@ -372,6 +372,7 @@ restore_device_backup() {
   [ ! -e "$DEVICE_DEST" ] || mv "$DEVICE_DEST" "$failed"
   mv "$backup" "$DEVICE_DEST"
   restore_device_rootfs
+  systemctl daemon-reload
 }
 
 save_hal_service_state() {
@@ -968,6 +969,7 @@ elif [ "$APP" = "device" ]; then
   # Apply the profile rootfs overlay including /opt/hal/.env; the repo is the source of truth,
   # so on-device .env edits are intentionally overwritten. Do not re-add a backup.
   if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
+      || ! systemctl daemon-reload \
       || ! restore_device_service_state || ! check_device_profile; then
     echo "device profile apply or health check failed; restoring the known-good profile" >&2
     systemctl stop os-server 2>/dev/null || true
