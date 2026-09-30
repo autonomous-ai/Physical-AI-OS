@@ -148,6 +148,7 @@ class RGBService(ServiceBase):
         self.led_count = led_count
         self._driver = None
         self._driver_lock = threading.RLock()
+        self._closing = False
         # SAFETY.md brightness ceiling (None = no bound → pass-through). Every
         # pixel write — routes AND effects — funnels through _handle_solid /
         # _handle_paint, so clamping here is the single, bypass-proof gate.
@@ -189,10 +190,11 @@ class RGBService(ServiceBase):
 
     def getPixelColor(self, index: int) -> int:
         """Return packed 0xRRGGBB int for server.py compatibility."""
-        if not self._driver:
-            return 0
-        r, g, b = self._driver.getPixelColor(index)
-        return (r << 16) | (g << 8) | b
+        with self._driver_lock:
+            if not self._driver:
+                return 0
+            r, g, b = self._driver.getPixelColor(index)
+            return (r << 16) | (g << 8) | b
 
     def handle_event(self, event_type: str, payload: Any):
         if event_type == RGB_CMD_SOLID:
@@ -212,6 +214,8 @@ class RGBService(ServiceBase):
             return
         color = clamp_color(self._safety, color)  # safety gate (brightness ceiling)
         with self._driver_lock:
+            if self._closing or self._driver is None:
+                return
             self._driver.fill(color, self.led_count)
             self._driver.show()
 
@@ -225,6 +229,8 @@ class RGBService(ServiceBase):
             self.logger.error(f"Paint payload must be a list, got: {type(colors)}")
             return
         with self._driver_lock:
+            if self._closing or self._driver is None:
+                return
             max_pixels = min(len(colors), self.led_count)
             for i in range(max_pixels):
                 color = _color_tuple(colors[i])
@@ -245,6 +251,8 @@ class RGBService(ServiceBase):
         # fault nobody can see from the outside. Hold the driver lock through both shows
         # and read-back so another frame cannot repaint it mid-check.
         with self._driver_lock:
+            if self._driver is None:
+                return
             before = self._read_brightest_pixel()
             self._driver.fill((0, 0, 0), self.led_count)
             self._driver.show()
@@ -281,8 +289,19 @@ class RGBService(ServiceBase):
         return max(pixels, key=max) if pixels else None
 
     def stop(self, timeout: float = 5.0):
-        """Override stop to clear LEDs before stopping"""
-        self.clear()
-        if self._driver:
-            self._driver.deinit()
+        """Reject late frames, stop the worker, then blank and close the driver."""
+        with self._driver_lock:
+            self._closing = True
+        # Never join while holding the driver lock: an in-flight worker may need it.
+        # Even if the join times out, the closing gate prevents any later paint.
         super().stop(timeout)
+        with self._driver_lock:
+            if self._driver is None:
+                return
+            try:
+                self.clear()
+            finally:
+                try:
+                    self._driver.deinit()
+                finally:
+                    self._driver = None

@@ -36,6 +36,18 @@ khi clear đã trả về; quản lý và hủy effect vẫn thuộc bên gọi.
 bộ nhớ phần mềm, không phải phản hồi từ LED thật, nên buffer đen không chứng minh
 phần cứng đã tắt.
 
+### Graceful shutdown
+
+`RGBService.stop()` đánh dấu đang đóng dưới khóa driver, sau đó dừng/join worker
+**không giữ khóa này**. Handler solid và paint kiểm tra lại trạng thái đang đóng
+bên trong khóa, nên worker chạy tiếp sau timeout cũng không thể ghi frame muộn.
+Cuối cùng giữ khóa trong suốt lần clear đen kép và đóng driver, rồi xóa tham chiếu
+driver. Gọi stop nhiều lần hoặc clear muộn đều an toàn; clear lỗi vẫn đóng driver
+và truyền lỗi ra ngoài. Trước đây clear/deinit chạy trước khi dừng worker, khiến
+frame đang chờ có thể bật LED lại hoặc chạm vào SPI đã đóng. Regression test dùng
+strip giả và worker thread thật; chưa chứng minh tín hiệu GPIO không bị nhiễu sau
+khi kernel tắt.
+
 ## Endpoints
 
 | Method | Endpoint | Mô tả |
