@@ -212,13 +212,30 @@ restart gateway, tới khi os-server được restart. **Lỗi dial** khi `POST 
 hề rời thiết bị, nên request đó lỗi nhưng conversation vẫn dùng được.
 
 Native mode còn yêu cầu marker tương thích OS ở trên: Runs chưa vá thiếu
-ID/kết quả tool và chi tiết cache mà handler hiện tại cần. Bản vá tương thích
+ID/arguments/kết quả tool đầy đủ mà handler hiện tại cần (0.21.1 còn thiếu
+chi tiết cache). Bản vá tương thích
 thêm `tool.call.started` / `tool.call.completed` với ID, arguments, kết quả thật,
 cùng `cache_read_tokens`, `cache_write_tokens` trong usage. Adapter dùng lại
 translator Responses và chuyển cache vào `input_tokens_details`; bỏ progress
 `tool.started` / `tool.completed` cũ để callback không chạy trùng. Khi thiếu bản
 vá hoặc source không khớp cấu trúc đã xác minh, giữ Responses cho tới khi cài
 bản vá hợp lệ và restart gateway.
+
+Bản vá nhúng trong OS chấp nhận cấu trúc source đã xác minh của Hermes 0.21.1
+(`v2026.9.7`) và 0.21.5 (`v2026.9.24`). Với 0.21.5, giữ nguyên bộ đếm cache và
+callback interim assistant của upstream; chỉ bổ sung bằng chứng tool có cấu
+trúc và marker capability. Việc chọn dựa trên cấu trúc source và capability
+runtime, không dựa vào chuỗi version. Cấu trúc lạ hoặc vá dở vẫn bị từ chối.
+Đây vẫn là bản vá tương thích local, chưa phải adapter native không cần vá:
+preview tool của upstream không thể thay thế kết quả tool đầy đủ.
+
+`TestLocalHermesRunsIntegration` chỉ chạy khi được bật: đặt
+`HERMES_INTEGRATION_ENDPOINT_FILE` tới file JSON riêng tư chứa `url` và `key`
+của API Hermes đã vá trong môi trường test riêng, rồi chạy
+`go test -count=1 -run '^TestLocalHermesRunsIntegration$' -v ./runtimes/hermes`.
+Test gọi LLM đang cấu hình, chèn steer khi tool terminal thật đang chạy, kiểm
+tra kết quả tool đầy đủ cùng call ID và dừng run thứ hai. Dùng session/home
+test riêng, tắt hook cá nhân; bộ test thường bỏ qua integration có phí này.
 
 Marker sensing/pose bị strip trước khi gửi bằng đúng các regex như OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) để agent không bao giờ
