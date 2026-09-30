@@ -416,6 +416,9 @@ const (
 
 	// KindScheduleMutateAck is the backend's terminal verdict on one proposal; the device stops retrying it.
 	KindScheduleMutateAck = "schedule.mutate.ack"
+
+	// KindFaceEnroll enrolls one face photo via HAL (MQTT twin of HAL POST /face/enroll).
+	KindFaceEnroll = "face.enroll"
 )
 
 // Connector (MCP) data-kind prefixes; the connector code is the suffix (e.g. "connector.set.notion").
@@ -989,6 +992,14 @@ type AgentRuntimeSetAck struct {
 	Status string               `json:"status"`
 	Error  string               `json:"error,omitempty"`
 	Data   *AgentRuntimeSetData `json:"data,omitempty"`
+}
+
+// MQTTFaceEnrollData is the Data payload for kind:"face.enroll"; fields mirror HAL's FaceEnrollRequest.
+type MQTTFaceEnrollData struct {
+	ImageBase64      string `json:"image_base64"`
+	Label            string `json:"label"`
+	TelegramUsername string `json:"telegram_username,omitempty"`
+	TelegramID       string `json:"telegram_id,omitempty"`
 }
 
 // MQTTTTSPreviewData is the data payload for kind:"tts.preview".
