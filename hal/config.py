@@ -766,15 +766,22 @@ GAZE_WINDOW_S: float = float(os.environ.get("HAL_GAZE_WINDOW_S", "1.5"))
 GAZE_MIN_FACING_RATIO: float = float(
     os.environ.get("HAL_GAZE_MIN_FACING_RATIO", "0.6")
 )
-# Adopting a NEW user bearing: fraction of window samples facing the lamp (#545).
+# Adopting a NEW user bearing: fraction of observed samples facing the lamp (#545).
 # Lower than GAZE_MIN_FACING_RATIO (the wake gate): a still, centred user measured 50%
 # against 60%. Not lower than 0.4: the window holds 2-3 samples, so 0.3 is one glance.
 GAZE_BEARING_MIN_FACING_RATIO: float = float(
     os.environ.get("HAL_GAZE_BEARING_MIN_FACING_RATIO", "0.4")
 )
-# A face-ID friend label counts as "this face" only if that friend was seen this recently.
-GAZE_BEARING_IDENTITY_FRESH_S: float = float(
-    os.environ.get("HAL_GAZE_BEARING_IDENTITY_FRESH_S", "5")
+# Head yaw that still counts as facing the lamp for a NEW bearing (#545). Its own limit,
+# never widened at the frame edge: gaze wake's cone (HAL_GAZE_MAX_YAW_DEG x
+# GAZE_EDGE_CONE_SCALE) reached 103 deg on a lamp tuned to 60 and passed every profile.
+GAZE_BEARING_MAX_YAW_DEG: float = float(
+    os.environ.get("HAL_GAZE_BEARING_MAX_YAW_DEG", "25")
+)
+# Face height (fraction of frame height) that counts as near enough to be at the desk.
+# Device-measured 2026-09-30: office co-workers 8.0-11.1%, the user 14.8-30%.
+GAZE_BEARING_MIN_FACE_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC", "0.125")
 )
 # Minimum samples to decide; the loop achieves ~2 samples/s regardless of GAZE_SAMPLE_FPS.
 GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))

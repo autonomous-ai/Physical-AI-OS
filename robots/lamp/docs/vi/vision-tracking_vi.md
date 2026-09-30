@@ -628,10 +628,17 @@ gọi `search_for_subject(for_user=True)`. Mọi nơi gọi khác giữ nguyên 
 `POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
 nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
 chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
-`user_check.adopts_bearing`: cao ít nhất 8% khung hình, **và** hoặc có nhãn bạn bè face-ID còn mới
-(`HAL_GAZE_BEARING_IDENTITY_FRESH_S`, 5 s), hoặc nhìn về đèn trong
+`user_check.adopts_bearing`: cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) khung hình,
+nằm trong `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (25%) quanh tâm khung, và nhìn về đèn (góc yaw của đầu trong
+`HAL_GAZE_BEARING_MAX_YAW_DEG`, 25°, không bao giờ nới rộng ở mép khung) trong
 `HAL_GAZE_BEARING_MIN_FACING_RATIO` (40%) số mẫu đo được. Ứng viên được xếp theo mức nhìn về đèn, rồi
-theo kích thước mặt. Chỉ có thân người thì không bao giờ kết thúc pha quét, và bước căn giữa bám theo
+theo kích thước mặt. Face-ID không phải là một đường vào: nó cho biết ai vừa được thấy, không cho biết
+box này là của ai, nên một nhãn còn mới sẽ cho mọi mặt gần lọt qua khi user đang ở trong khung. Mỗi lần
+chấp nhận hay từ chối đều ghi yaw đầu, chiều cao mặt và độ lệch theo từng frame (`yaw=[…] h=[…]% dx=…`).
+Đo trên green-lamp 30/09/2026: một đồng nghiệp nghiêng mặt ở mép khung (`dx=+45%`, 58 px trên 720 =
+8.1%) lọt qua với "facing 100%", vì cone của gaze wake ở đó (`HAL_GAZE_MAX_YAW_DEG` 60 × hệ số nới ở mép
+≈ 103°) chấp nhận mọi hướng đầu. Một đồng nghiệp ngồi bàn bên cạnh đo được 8.6–11.1% và đã xác nhận
+một lần repoint trong lúc user đi vắng. User đo được 14.8–30% trên cùng đèn đó. Chỉ có thân người thì không bao giờ kết thúc pha quét, và bước căn giữa bám theo
 cái mặt đó (`_user_face_probe`) chứ không bám box người gần nhất. Nếu không mặt nào qua được, pha quét
 báo không tìm thấy và đi theo lối thoát bình thường về tư thế lúc bắt đầu. Đo trên thiết bị
 29/09/2026: pha quét chọn "người gần nhất" trong 2–3 đồng nghiệp (`h=304px`) và phần framing sau đó
@@ -891,7 +898,7 @@ bearing đúng có thể bị bào mòn bởi một cái ghế trống. Chỉ ch
 Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
 - **Kết luận dựa trên một cái mặt, không bao giờ dựa trên thân người (#545).** Một cái mặt cao ít nhất
-  `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
   cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
   trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
   phía bên kia phòng đã trở thành "user". Watcher đóng dấu đồng hồ mặt-gần và mặt-xa
@@ -946,7 +953,8 @@ nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoin
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |
-| `HAL_GAZE_BEARING_IDENTITY_FRESH_S` | 5 | Nhãn bạn bè face-ID chỉ được tính là "cái mặt này" trong khoảng thời gian này kể từ lúc thấy người đó. |
+| `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Góc yaw của đầu được tính là nhìn về đèn khi nhận bearing mới. Giới hạn riêng, không bao giờ nới ở mép khung, nên việc chỉnh cổng wake không làm nó lỏng ra. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.125 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Đo được: đồng nghiệp trong văn phòng 8.0–11.1%, user 14.8–30%. |
 
 ### Bearing người dùng đã ghi nhớ
 
@@ -980,8 +988,9 @@ chạy được, hoặc bị bỏ; nó không còn phai dần vào vùng xám v�
 
 Các lần nhìn thấy đi vào đây theo hai đường:
 
-- **Từ một lần look aim**, chỉ với một cái mặt qua được kiểm tra user chặt (#545): cao ít nhất 8%
-  khung hình, và được face-ID nhận ra hoặc nhìn về đèn trong 40% số mẫu của khoảng 1.5 s. Bearing được
+- **Từ một lần look aim**, chỉ với một cái mặt qua được kiểm tra user chặt (#545): cao ít nhất 12.5%
+  khung hình, nằm trong 25% quanh tâm khung, và nhìn về đèn (yaw ≤ 25°) trong 40% số mẫu của khoảng
+  1.5 s. Bearing được
   tính lại bằng `yaw + dx × scale` trong giới hạn `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25) của bộ lấy
   mẫu, trên một thread nền (`_record_bearing_worker`) để việc chụp không bao giờ phải chờ, và bị bỏ nếu
   đầu đã cử động trong lúc đó. Trước đây nó ghi lại bất kỳ box nào ở giữa khung, và thân của một đồng

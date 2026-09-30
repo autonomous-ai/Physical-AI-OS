@@ -10,38 +10,8 @@ import hal.config as config
 from hal.drivers.tracking import detection, user_check
 from hal.drivers.tracking.user_check import FaceEvidence
 
-NEAR = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC + 0.02
-FAR = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC - 0.02
-
-
-@pytest.mark.parametrize("label, known", [
-    ("", False), ("unknown", False), ("stranger_16", False), ("loc", True),
-])
-def test_only_a_friend_label_is_recognised(label, known):
-    assert user_check.is_recognised(label) is known
-
-
-def test_a_fresh_friend_label_is_used(monkeypatch):
-    monkeypatch.setattr(state, "face_user", lambda: ("loc", 1.0))
-    assert user_check.fresh_identity() == "loc"
-
-
-def test_a_stale_friend_label_is_not_fresh(monkeypatch):
-    """The owner seen a minute ago says nothing about the face in frame now."""
-    monkeypatch.setattr(state, "face_user", lambda: ("loc", 60.0))
-    assert user_check.fresh_identity() == ""
-
-
-def test_a_stranger_label_is_never_an_identity(monkeypatch):
-    monkeypatch.setattr(state, "face_user", lambda: ("unknown", 0.5))
-    assert user_check.fresh_identity() == ""
-
-
-def test_identity_lookup_failure_is_no_identity(monkeypatch):
-    def boom():
-        raise RuntimeError("no face-ID")
-    monkeypatch.setattr(state, "face_user", boom)
-    assert user_check.fresh_identity() == ""
+NEAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.02
+FAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC - 0.02
 
 
 def test_confirm_needs_a_face():
@@ -53,22 +23,35 @@ def test_confirm_rejects_a_far_face():
     assert not v.ok and "far" in v.reason
 
 
-def test_a_near_face_confirms_without_facing_or_identity():
+def test_a_near_face_confirms_without_facing():
     """The user talks while looking at their own monitor."""
     assert user_check.confirms_bearing(FaceEvidence(face_h_frac=NEAR)).ok
 
 
-def test_adopt_rejects_a_near_face_that_is_neither_known_nor_facing():
+def test_the_office_co_worker_face_is_not_near():
+    """green-lamp 2026-09-30: a side-on co-worker's face was 58 px of a 720 px frame."""
+    assert not user_check.near_enough(58 / 720)
+
+
+def test_the_neighbouring_co_worker_face_is_not_near():
+    """green-lamp 2026-09-30 14:31: a co-worker one desk over, 40 px of 360 = 11.1%.
+
+    It confirmed a repoint while the user was away.
+    """
+    assert not user_check.near_enough(40 / 360)
+
+
+def test_the_users_smallest_measured_face_is_near():
+    """Same device and session: the user facing the lamp measured 64 px of 432 at the least."""
+    assert user_check.near_enough(64 / 432)
+
+
+def test_adopt_rejects_a_near_face_that_is_not_facing():
     ev = FaceEvidence(face_h_frac=NEAR, facing_ratio=0.0, facing_samples=6)
     assert not user_check.adopts_bearing(ev).ok
 
 
-def test_adopt_accepts_a_recognised_face_without_facing():
-    ev = FaceEvidence(face_h_frac=NEAR, identity="loc")
-    assert user_check.adopts_bearing(ev).ok
-
-
-def test_adopt_accepts_a_face_facing_at_the_bar():
+def test_adopt_accepts_a_centred_face_facing_at_the_bar():
     ev = FaceEvidence(face_h_frac=NEAR,
                       facing_ratio=config.GAZE_BEARING_MIN_FACING_RATIO,
                       facing_samples=config.GAZE_MIN_SAMPLES)
@@ -88,16 +71,25 @@ def test_adopt_rejects_facing_measured_on_too_few_samples():
     assert not user_check.adopts_bearing(ev).ok
 
 
-def test_adopt_never_accepts_a_far_face_even_if_recognised():
-    ev = FaceEvidence(face_h_frac=FAR, identity="loc", facing_ratio=1.0, facing_samples=6)
+def test_adopt_never_accepts_a_far_face():
+    ev = FaceEvidence(face_h_frac=FAR, facing_ratio=1.0, facing_samples=6)
     assert not user_check.adopts_bearing(ev).ok
 
 
-def test_the_bearing_bar_is_lower_than_the_wake_bar():
-    """Separate settings: 0.40 for bearings, the wake gate stays at 0.6."""
-    assert config.GAZE_BEARING_MIN_FACING_RATIO == pytest.approx(0.4)
-    assert config.GAZE_MIN_FACING_RATIO == pytest.approx(0.6)
+def test_adopt_rejects_a_facing_face_at_the_frame_edge():
+    """The office false accept sat at dx=+45%: badly measured and maybe out of reach."""
+    ev = FaceEvidence(face_h_frac=NEAR, facing_ratio=1.0, facing_samples=6, dx_frac=0.45)
+    v = user_check.adopts_bearing(ev)
+    assert not v.ok and "centre" in v.reason
 
+
+def test_the_bearing_settings_are_their_own():
+    """Separate from the wake gate (0.6, 25 deg widened at the edge) and look-aim's 8% floor."""
+    assert config.GAZE_BEARING_MIN_FACING_RATIO == pytest.approx(0.4)
+    assert config.GAZE_BEARING_MAX_YAW_DEG == pytest.approx(25.0)
+    assert config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC == pytest.approx(0.125)
+    assert config.GAZE_MIN_FACING_RATIO == pytest.approx(0.6)
+    assert config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC == pytest.approx(0.08)
 
 
 def _yunet_rows(*faces):
@@ -145,14 +137,13 @@ def _face(x, y, h, yaw_deg):
     return (x, y, w, h), lm
 
 
-def _observe(monkeypatch, per_frame, identity=""):
+def _observe(monkeypatch, per_frame):
     """per_frame: one face list per grabbed frame (480x640, no downscale)."""
     frames = iter(per_frame)
     current = {}
     monkeypatch.setattr(user_check, "_downscale", lambda f: (f, 1.0))
     monkeypatch.setattr(detection, "detect_faces_with_landmarks",
                         lambda small: current["faces"])
-    monkeypatch.setattr(user_check, "fresh_identity", lambda: identity)
 
     def grab():
         current["faces"] = next(frames)
@@ -207,7 +198,40 @@ def test_nobody_qualifies_returns_none(monkeypatch):
     assert user_check.best_user_face(tracks, "[test]") is None
 
 
-def test_a_fresh_identity_lets_a_near_face_qualify_without_facing(monkeypatch):
-    side_on = _face(300, 100, 100, yaw_deg=70)
-    tracks = _observe(monkeypatch, [[side_on]] * 4, identity="loc")
-    assert user_check.best_user_face(tracks, "[test]") is not None
+def test_a_profile_at_the_frame_edge_does_not_face_even_with_a_wide_wake_cone(monkeypatch):
+    """green-lamp's HAL_GAZE_MAX_YAW_DEG=60 x edge widening passed every edge face."""
+    monkeypatch.setattr(config, "GAZE_MAX_YAW_DEG", 60.0)
+    monkeypatch.setattr(config, "GAZE_EDGE_CONE_SCALE", 1.8)
+    edge_profile = _face(560, 100, 100, yaw_deg=70)
+    ev = _observe(monkeypatch, [[edge_profile]] * 4)[0].evidence
+    assert ev.facing_ratio == 0.0
+
+
+def test_facing_uses_its_own_limit_not_the_wake_cone(monkeypatch):
+    monkeypatch.setattr(config, "GAZE_MAX_YAW_DEG", 60.0)
+    turned = _face(270, 100, 100, yaw_deg=40)
+    ev = _observe(monkeypatch, [[turned]] * 4)[0].evidence
+    assert ev.facing_ratio == 0.0
+
+
+def test_the_track_carries_its_offset_from_centre(monkeypatch):
+    f = _face(560, 100, 60, yaw_deg=5)  # centre x=590 of 640
+    ev = _observe(monkeypatch, [[f]] * 3)[0].evidence
+    assert ev.dx_frac == pytest.approx((590 - 320) / 640)
+
+
+def test_a_rejection_logs_the_per_frame_numbers(monkeypatch, caplog):
+    side_on = _face(270, 100, 100, yaw_deg=70)
+    tracks = _observe(monkeypatch, [[side_on]] * 3)
+    with caplog.at_level("INFO"):
+        user_check.best_user_face(tracks, "[test]")
+    line = next(r.getMessage() for r in caplog.records if "rejected" in r.getMessage())
+    assert "yaw=[" in line and "h=[" in line and "dx=" in line
+
+
+def test_a_fresh_face_id_label_no_longer_lets_a_face_in(monkeypatch):
+    """The recognised route is gone: face-ID names who was here, not whose face this is."""
+    monkeypatch.setattr(state, "face_user", lambda: ("loc", 0.5))
+    side_on = _face(270, 100, 100, yaw_deg=70)
+    tracks = _observe(monkeypatch, [[side_on]] * 4)
+    assert user_check.best_user_face(tracks, "[test]") is None

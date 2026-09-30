@@ -2,8 +2,11 @@
 
 Two strengths. CONFIRMING a bearing the lamp already holds needs only a face near enough
 to be at the desk: the user often talks while looking at their own monitor. ADOPTING a
-new bearing also needs that face recognised or facing the lamp: a co-worker's back, or a
-side-on face across the office, must never become the user.
+new bearing also needs that face near the frame centre and facing the lamp: a
+co-worker's back, or a side-on face across the office, must never become the user.
+
+Face-ID is deliberately not a way in. It names who was seen recently, not whose box
+this is, so a fresh label would let every near face through while the user is in view.
 """
 
 from __future__ import annotations
@@ -17,8 +20,6 @@ import hal.config as config
 
 logger = logging.getLogger(__name__)
 
-STRANGER_PREFIX: str = "stranger_"
-
 
 @dataclass(frozen=True)
 class FaceEvidence:
@@ -28,8 +29,11 @@ class FaceEvidence:
     facing_ratio: float = 0.0
     # Samples that measured a head at all. Only these may vote on facing.
     facing_samples: int = 0
-    # Fresh face-ID friend label, or "".
-    identity: str = ""
+    # Latest horizontal offset of the face centre, as a fraction of frame width (0 = centre).
+    dx_frac: float = 0.0
+    # Per-frame head yaw (None = not measured) and face height fraction, for the log.
+    yaws: Tuple[Optional[float], ...] = ()
+    heights: Tuple[float, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -38,41 +42,24 @@ class Verdict:
     reason: str
 
 
-def is_recognised(label: str) -> bool:
-    return bool(label) and label != "unknown" and not label.startswith(STRANGER_PREFIX)
-
-
-def fresh_identity() -> str:
-    """The friend face-ID currently places in front of the lamp, or "".
-
-    Face-ID answers "who was here recently", not "whose box is this", so a label only
-    counts while it is fresh.
-    """
-    try:
-        import hal.app_state as state
-
-        label, age = state.face_user()
-    except Exception as e:
-        logger.debug("[user-check] identity lookup skipped: %s", e)
-        return ""
-    label = label or ""
-    if not is_recognised(label):
-        return ""
-    if float(age or 0.0) > config.GAZE_BEARING_IDENTITY_FRESH_S:
-        return ""
-    return label
-
-
 def near_enough(face_h_frac: float) -> bool:
-    """The same floor bearing_sampler and look-aim apply to a face."""
-    return face_h_frac >= config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC
+    return face_h_frac >= config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC
+
+
+def faces_lamp(yaw_deg: Optional[float], face_px: float) -> bool:
+    """One sample facing the lamp, by the bearing's own limit (no edge widening)."""
+    return (
+        yaw_deg is not None
+        and face_px >= config.GAZE_MIN_FACE_PX
+        and yaw_deg <= config.GAZE_BEARING_MAX_YAW_DEG
+    )
 
 
 def confirms_bearing(ev: Optional[FaceEvidence]) -> Verdict:
     """Loose: is somebody at the desk where the bearing points?"""
     if ev is None:
         return Verdict(False, "no face")
-    floor = config.LOOK_AIM_MIN_FACE_HEIGHT_FRAC
+    floor = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC
     if not near_enough(ev.face_h_frac):
         return Verdict(
             False,
@@ -86,21 +73,21 @@ def adopts_bearing(ev: Optional[FaceEvidence]) -> Verdict:
     base = confirms_bearing(ev)
     if not base.ok or ev is None:
         return base
-    if is_recognised(ev.identity):
-        return Verdict(True, f"recognised {ev.identity}")
+    max_dx = config.BEARING_SAMPLE_MAX_DX_FRAC
+    if abs(ev.dx_frac) > max_dx:
+        return Verdict(
+            False,
+            f"too far off centre (dx={ev.dx_frac * 100:+.0f}%, max {max_dx * 100:.0f}%)",
+        )
     bar = config.GAZE_BEARING_MIN_FACING_RATIO
     if ev.facing_samples < config.GAZE_MIN_SAMPLES:
         return Verdict(
             False,
-            f"not recognised, facing unmeasured "
-            f"({ev.facing_samples} of {config.GAZE_MIN_SAMPLES} samples)",
+            f"facing unmeasured ({ev.facing_samples} of {config.GAZE_MIN_SAMPLES} samples)",
         )
     if ev.facing_ratio >= bar:
         return Verdict(True, f"facing {ev.facing_ratio * 100:.0f}%")
-    return Verdict(
-        False,
-        f"not recognised, facing {ev.facing_ratio * 100:.0f}% < {bar * 100:.0f}%",
-    )
+    return Verdict(False, f"facing {ev.facing_ratio * 100:.0f}% < {bar * 100:.0f}%")
 
 
 # One observation spans about GAZE_WINDOW_S (1.5 s): enough samples for a facing vote.
@@ -135,11 +122,7 @@ def observe_faces(grab: Callable[[], Optional[Any]],
                   frames: int = OBSERVE_FRAMES,
                   interval_s: float = OBSERVE_INTERVAL_S,
                   sleep: Callable[[float], None] = time.sleep) -> List[FaceTrack]:
-    """Watch the faces in view for a moment. Ranked best first: facing, then size.
-
-    Identity is not per box (face-ID says who was here, not which box), so a fresh
-    label is attached to every track. The rules still demand a near face.
-    """
+    """Watch the faces in view for a moment. Ranked best first: facing, then size."""
     from hal.drivers.tracking import gaze
 
     tracks: List[Dict[str, Any]] = []
@@ -156,29 +139,32 @@ def observe_faces(grab: Callable[[], Optional[Any]],
             return []
         for (x, y, w, h), lm in faces:
             cx = x + w / 2.0
-            edge = min(1.0, abs(cx - sw / 2.0) / (sw / 2.0))
             yaw = gaze.head_yaw_deg(lm) if gaze.landmarks_in_frame(lm, sw, sh) else None
-            measured = yaw is not None and float(h) >= config.GAZE_MIN_FACE_PX
             s = 1.0 / scale if scale else 1.0
             box = (int(x * s), int(y * s), int(w * s), int(h * s))
             match = next((t for t in tracks
                           if abs(t["cx"] - cx) <= TRACK_MATCH_FRAC * sw), None)
             if match is None:
-                match = {"cx": cx, "h_frac": 0.0, "n": 0, "facing": 0, "box": box}
+                match = {"cx": cx, "h_frac": 0.0, "n": 0, "facing": 0, "box": box,
+                         "yaws": [], "heights": []}
                 tracks.append(match)
             match["cx"], match["box"] = cx, box
+            match["dx"] = (cx - sw / 2.0) / sw
             match["h_frac"] = max(match["h_frac"], float(h) / sh)
-            if measured:
+            match["yaws"].append(yaw)
+            match["heights"].append(float(h) / sh)
+            if yaw is not None and float(h) >= config.GAZE_MIN_FACE_PX:
                 match["n"] += 1
-                if gaze.facing_lamp(yaw, float(h), edge):
+                if faces_lamp(yaw, float(h)):
                     match["facing"] += 1
-    identity = fresh_identity()
     out = [
         FaceTrack(t["box"], FaceEvidence(
             face_h_frac=t["h_frac"],
             facing_ratio=(t["facing"] / t["n"]) if t["n"] else 0.0,
             facing_samples=t["n"],
-            identity=identity,
+            dx_frac=t["dx"],
+            yaws=tuple(t["yaws"]),
+            heights=tuple(t["heights"]),
         ))
         for t in tracks
     ]
@@ -186,12 +172,20 @@ def observe_faces(grab: Callable[[], Optional[Any]],
     return out
 
 
+def _trail(ev: FaceEvidence) -> str:
+    """Per-frame numbers behind a verdict, so thresholds are tuned from data."""
+    yaws = ",".join("-" if y is None else f"{y:.0f}" for y in ev.yaws)
+    hs = ",".join(f"{h * 100:.0f}" for h in ev.heights)
+    return f"yaw=[{yaws}] h=[{hs}]% dx={ev.dx_frac * 100:+.0f}%"
+
+
 def best_user_face(tracks: List[FaceTrack], log_prefix: str) -> Optional[FaceTrack]:
     """The best-ranked track that may become the user's bearing, or None."""
     for t in tracks:
         v = adopts_bearing(t.evidence)
         if v.ok:
-            logger.info("%s user check passed: %s", log_prefix, v.reason)
+            logger.info("%s user check passed: %s — %s", log_prefix, v.reason, _trail(t.evidence))
             return t
-        logger.info("%s user check rejected a face: %s", log_prefix, v.reason)
+        logger.info("%s user check rejected a face: %s — %s", log_prefix, v.reason,
+                    _trail(t.evidence))
     return None

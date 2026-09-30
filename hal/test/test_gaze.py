@@ -1896,7 +1896,7 @@ def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
     assert calls == [True]
 
 
-@pytest.mark.parametrize("face_h, near", [(0.10, True), (0.05, False)])
+@pytest.mark.parametrize("face_h, near", [(0.13, True), (0.11, False)])
 def test_face_size_feeds_the_near_or_far_clock(face_h, near):
     gaze._last_near_face_t = gaze._last_far_face_t = 0.0
     gaze._note_face_size(face_h * 480.0, 480.0, now=123.0)
