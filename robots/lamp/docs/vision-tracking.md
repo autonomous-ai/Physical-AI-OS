@@ -934,8 +934,13 @@ from trying — device-observed: three failed repoints dropped the estimate, and
 to repoint (nothing to turn to) and unable to sweep (11 minutes left) while the user was talking to it.
 
 `confirmed_miss` skips the absence wait by design — a repoint that moved and missed is the strongest
-evidence there is, so there is nothing to wait for. A successful sweep samples a fresh bearing on the
-spot.
+evidence there is, so there is nothing to wait for. A successful sweep records the bearing it is now
+pointing at, which is the face its user check passed (`_learn_from_user_sweep`), and only when centring
+succeeded. It no longer re-samples with `bearing_sampler`, which picked whichever near face the
+detector returned, sometimes the co-worker the check had just ranked below the user. While a
+body-only repoint's climb is still pending, a new repoint is declined (`a climb is still judging the
+last repoint`). Turning again would drop the head the climb raised and score one sighting twice. Faces
+count as repoint evidence only if seen after the turn.
 
 | Knob | Default | Meaning |
 |---|---|---|

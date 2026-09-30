@@ -931,8 +931,13 @@ thật: ba lần repoint hỏng đã xoá ước lượng, rồi đèn ngồi đ
 về) vừa không quét được (còn 11 phút cooldown) trong khi user đang nói chuyện với nó.
 
 `confirmed_miss` bỏ qua thời gian chờ vắng mặt một cách có chủ ý — một lần repoint đã di chuyển rồi
-trượt là bằng chứng mạnh nhất có thể có, nên không còn gì để chờ. Một pha quét thành công sẽ lấy mẫu
-một bearing mới ngay tại chỗ.
+trượt là bằng chứng mạnh nhất có thể có, nên không còn gì để chờ. Một pha quét thành công ghi lại
+bearing mà nó đang hướng tới, tức là cái mặt đã qua kiểm tra user (`_learn_from_user_sweep`), và chỉ
+khi căn giữa thành công. Nó không còn lấy mẫu lại bằng `bearing_sampler`, vì bộ lấy mẫu đó chọn bất kỳ
+mặt gần nào detector trả về, có khi là chính đồng nghiệp vừa bị xếp dưới user. Trong lúc phần leo tìm
+của một lần repoint chỉ thấy thân người vẫn đang chờ, một lần repoint mới sẽ bị từ chối (`a climb is
+still judging the last repoint`). Quay tiếp sẽ hạ cái đầu mà phần leo tìm vừa nâng lên và chấm một lần
+nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoint nếu thấy sau khi đã quay.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
