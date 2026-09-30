@@ -28,6 +28,10 @@ state.safety_policy = _boot.safety
 @asynccontextmanager
 async def _led_lifespan(app):
     if "led" in _boot.profile.declared_routes():
+        from hal.server_support.boot_led import stop_boot_indicator
+
+        # A failed ownership transfer must abort startup, not retry RGB elsewhere.
+        stop_boot_indicator()
         try:
             from hal.drivers.rgb.rgb_service import RGBService
 

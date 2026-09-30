@@ -26,6 +26,41 @@ data làm vài pixel chốt nhầm một màu rác (hay gặp nhất là xanh l�
 đầu tiên của mỗi frame WS2812). Không có bước xoá này thì màu rác đó sáng cho tới
 lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
+### LED báo boot sớm trên Orange Pi
+
+Khi chuyển device đã có unit `lamp-led-*` cũ, stop HAL, sau đó stop/disable
+`lamp-led-boot.service` và stop `lamp-led-shutdown.service` trước khi gỡ hai unit,
+symlink enable và helper `lamp-led-boot.py`/`lamp-led-off.py` cũ. Áp dụng rootfs mới
+(gồm drop-in shutdown của HAL), reload systemd rồi start HAL. Chép overlay không
+tự xóa file đã đổi tên. HAL nhận cả hai tên boot unit trong lúc chuyển đổi, nhưng
+không được enable hai bản indicator cùng lúc.
+
+`led-boot.service` được kéo vào qua `sysinit.target.wants`, sau filesystem
+local và trước các service thông thường, không chờ mạng hay os-server. Trên lamp
+sun60iw2, nó điều khiển 32 LED qua SPI3.0, thở trắng chu kỳ ba giây, từ tắt đến
+RGB **[3, 3, 3]**, 20 frame/giây. Script chờ node SPI tối đa mười giây nhưng không
+chặn boot. Đây là báo đang khởi động, không phải sẵn sàng; không báo được lúc vừa
+cấp điện hoặc lỗi trước khi Linux/systemd chạy tới unit này.
+
+HAL dừng indicator đồng bộ ngay trước lúc khởi tạo RGB trong early LED lifespan,
+sau phần Python import.
+SIGTERM kết thúc vòng animation duy nhất, clear hai lần, flush LOW rồi đóng SPI;
+systemd đợi tiến trình thoát trước khi HAL mở SPI. Timeout stop là ba giây. Hiệu ứng tiếp tục
+trong lúc HAL import; bàn giao khi khởi tạo RGB, không đợi voice/camera sẵn sàng. Script từ chối start thủ công khi HAL đang active,
+starting hoặc stopping. Indicator không tự restart và không tiếp quản lúc
+shutdown. Fallback tắt LED trễ khi shutdown vẫn độc lập. Unit boot kéo fallback
+vào và start sau nó; khi shutdown, thứ tự đảo lại nên boot writer thoát trước khi
+fallback bắt đầu chờ năm giây. Khi chưa có ràng buộc này, log device cho thấy
+fallback gửi frame đen ở giây 103 nhưng boot writer vẫn chạy tới giây 109.
+
+Thành phần nằm trong rootfs device lamp; ZIP giữ symlink target.wants.
+`ConditionPathExists` yêu cầu helper boot-led của HAL mới; HAL cũ bỏ qua indicator.
+Cần cập nhật HAL trước khi bật service. Có hiệu lực
+ở lần boot tiếp theo sau update device/daemon-reload. Không start đè lên HAL đang
+chạy để test. Rollback: stop indicator, gỡ symlink sysinit, unit và helper của indicator, rồi daemon-reload. Test local kiểm tra frame, hủy, đóng driver
+khi lỗi và điều kiện bàn giao; kiểm tra unit systemd chưa xác nhận màu/thời gian
+LED trên phần cứng thật.
+
 ### Ghi frame đồng thời và chẩn đoán clear
 
 Solid, paint từng pixel và clear dùng chung khóa driver cho toàn bộ thao tác.
@@ -50,10 +85,10 @@ khi kernel tắt.
 
 ### Fallback shutdown cho Orange Pi
 
-Rootfs lamp có `lamp-led-shutdown.service`, được HAL kéo vào qua drop-in
+Rootfs lamp có `led-shutdown.service`, được HAL kéo vào qua drop-in
 `20-led-shutdown.conf`. Khi start, service không ghi LED. Khi shutdown/reboot,
-thứ tự đảo lại: đợi HAL thoát, chờ **5 giây**, rồi chạy
-`/usr/local/libexec/lamp-led-off.py` khi filesystem vẫn còn mount. Timeout stop
+thứ tự đảo lại: đợi HAL và boot LED writer thoát, chờ **5 giây**, rồi chạy
+`/usr/local/libexec/led-off.py` khi filesystem vẫn còn mount. Timeout stop
 là **15 giây**. Restart riêng HAL không chạy stop của service độc lập này.
 `ExecCondition` bỏ qua board khác sun60iw2 hoặc thiếu SPI3.0; Raspberry Pi không
 chạy fallback này.

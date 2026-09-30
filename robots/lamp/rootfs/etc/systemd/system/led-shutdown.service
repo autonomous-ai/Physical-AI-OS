@@ -2,14 +2,14 @@
 Description=Orange Pi lamp LED blackout after HAL shutdown
 DefaultDependencies=no
 After=local-fs.target
-Before=hal.service shutdown.target
+Before=led-boot.service hal.service shutdown.target
 Conflicts=shutdown.target
 
 [Service]
 Type=oneshot
-ExecCondition=/usr/bin/python3 /usr/local/libexec/lamp-led-off.py --supported
+ExecCondition=/usr/bin/python3 /usr/local/libexec/led-off.py --supported
 RemainAfterExit=yes
 ExecStart=/usr/bin/true
 ExecStop=/bin/sleep 5
-ExecStop=/usr/bin/python3 /usr/local/libexec/lamp-led-off.py
+ExecStop=/usr/bin/python3 /usr/local/libexec/led-off.py
 TimeoutStopSec=15s

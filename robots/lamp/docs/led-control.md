@@ -26,6 +26,43 @@ on the data line leave a few pixels latched to a garbage colour (green shows up
 most, being the leading byte of a WS2812 frame). Without the clear that garbage
 stays lit until the first LED command, which may be minutes after boot.
 
+### Early Orange Pi boot indicator
+
+When migrating a device that has the earlier `lamp-led-*` units installed,
+stop HAL, then stop/disable `lamp-led-boot.service` and stop
+`lamp-led-shutdown.service` before removing those two unit files, their enablement
+symlinks and the old `lamp-led-boot.py`/`lamp-led-off.py` helpers. Apply the new
+rootfs (including the HAL shutdown drop-in), reload systemd and start HAL. A
+rootfs overlay alone does not remove renamed files. HAL accepts either boot-unit
+name during migration, but two copies of the boot indicator must not be enabled.
+
+`led-boot.service` starts from `sysinit.target.wants` after local filesystems,
+before the normal services and without waiting for network or os-server. On the
+sun60iw2 lamp it drives 32 LEDs on SPI3.0 with a three-second white breath, ranging
+from off to RGB **[3, 3, 3]**, at 20 frames/second. It waits up to ten seconds for
+the SPI node without blocking boot. This indicates startup, not readiness; it
+cannot signal power-on or a boot failure before Linux/systemd reaches this unit.
+
+HAL synchronously stops the indicator immediately before initializing RGB in
+its early LED lifespan, after Python imports. SIGTERM ends the single animation loop, clears twice, flushes LOW
+and closes SPI; systemd waits for exit before HAL opens SPI. The stop timeout is
+three seconds. Breathing continues through HAL imports; handoff is at RGB initialization,
+not full voice/camera readiness. Manual starts while HAL is
+active, starting or stopping are refused. The indicator does not restart itself
+and does not take over during shutdown. The existing delayed shutdown blackout
+remains separate. The boot unit pulls in and starts after the shutdown fallback;
+shutdown ordering reverses, so the boot writer exits before the fallback begins
+its five-second delay. Without this ordering, a device test showed the fallback
+sending black at 103 seconds while the boot writer continued until 109 seconds.
+
+This ships in the lamp device rootfs; package ZIPs preserve the target.wants
+symlink. `ConditionPathExists` requires the matching HAL boot-led helper, so an
+older HAL skips the indicator. Deploy the updated HAL before enabling it. It takes effect on the next boot after device update/daemon-reload.
+Do not start it over a running HAL for testing. Rollback: stop the boot indicator,
+remove its sysinit symlink, service and helper, then daemon-reload.
+Local tests check frames, cancellation, error cleanup and ownership guards;
+systemd unit validation does not establish physical LED timing or colour.
+
 ### Concurrent frame writes and clear diagnostics
 
 Solid, per-pixel paint and clear share a driver lock for the entire operation.
@@ -51,10 +88,11 @@ prove that GPIO remains electrically quiet after the kernel powers down.
 
 ### Orange Pi shutdown fallback
 
-The lamp rootfs ships `lamp-led-shutdown.service`, pulled in by the HAL unit's
+The lamp rootfs ships `led-shutdown.service`, pulled in by the HAL unit's
 `20-led-shutdown.conf` drop-in. The service starts without touching the LEDs.
-At shutdown/reboot, reversed ordering waits for HAL to exit, waits **5 seconds**,
-then runs `/usr/local/libexec/lamp-led-off.py` while local filesystems remain
+At shutdown/reboot, reversed ordering waits for HAL and the boot LED writer to
+exit, waits **5 seconds**,
+then runs `/usr/local/libexec/led-off.py` while local filesystems remain
 mounted. Its stop timeout is **15 seconds**. A HAL-only restart does not run this
 independent service's stop action. `ExecCondition` skips boards other than
 sun60iw2 or a missing SPI3.0 device; this fallback is not enabled for Raspberry Pi.

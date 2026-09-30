@@ -6,8 +6,8 @@ import sys
 import unittest
 from unittest.mock import Mock, patch
 
-SCRIPT = Path(__file__).resolve().parents[2] / 'robots/lamp/rootfs/usr/local/libexec/lamp-led-off.py'
-spec = importlib.util.spec_from_file_location('lamp_led_off', SCRIPT)
+SCRIPT = Path(__file__).resolve().parents[2] / 'robots/lamp/rootfs/usr/local/libexec/led-off.py'
+spec = importlib.util.spec_from_file_location('led_off', SCRIPT)
 off = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(off)
 
