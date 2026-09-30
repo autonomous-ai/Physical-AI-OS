@@ -36,6 +36,19 @@ still paint after clear returns; effect ownership and cancellation remain the
 caller's responsibility. The diagnostic reads software memory, not physical
 LED feedback, so a black buffer does not prove the hardware is dark.
 
+### Graceful shutdown
+
+`RGBService.stop()` first marks the service as closing under the driver lock,
+then stops/joins the event worker **without holding that lock**. Solid and paint
+handlers recheck the closing state inside the lock, so even a worker that exceeds
+the join timeout cannot apply a late frame. Finally stop holds the lock across the
+last double-black clear and driver deinitialization, then removes the driver
+reference. Repeated stops and late clears are harmless; a clear failure still
+closes the driver and propagates the error. Previously clear and deinit ran before
+stopping the worker, allowing queued frames to relight the strip or touch a closed
+SPI handle. Regression tests use a fake strip and real worker threads; they do not
+prove that GPIO remains electrically quiet after the kernel powers down.
+
 ## Endpoints
 
 | Method | Endpoint | Description |
