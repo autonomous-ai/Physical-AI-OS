@@ -228,6 +228,7 @@ def _summarize_for_speech(instructions: str, content: str) -> str:
 
     return RealtimeSummarizer(
         system_prompt=instructions, max_tokens=400, disable_thinking=True,
+        source="harness_announce",
     ).summarize([content])
 
 

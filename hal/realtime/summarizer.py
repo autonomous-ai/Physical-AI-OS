@@ -25,10 +25,14 @@ class RealtimeSummarizer:
         system_prompt: str | None = None,
         max_tokens: int = 4096,
         disable_thinking: bool = False,
+        source: str = "voice_summary",
     ) -> None:
         # anthropic is imported lazily (~1.3s on device) so cold boot doesn't pay for it.
         self._api_key = api_key
         self._base_url = base_url
+        # Sent as X-Auto-Source to name where this call came from (logging
+        # only); it is not an agent turn and carries no [via:] marker.
+        self._source = source
         self._client = None
         self._client_lock = threading.Lock()
         self._model: str = model
@@ -59,6 +63,7 @@ class RealtimeSummarizer:
                         api_key=self._api_key,
                         base_url=self._base_url,
                         timeout=120.0,
+                        default_headers={"X-Auto-Source": self._source},
                     )
         return self._client
 

@@ -108,7 +108,7 @@ func (s *HermesService) HandleInboundSlack(in domain.SlackInbound) (string, bool
 	// Register the stream. chat.startStream opens lazily on the first content chunk (seeded with that text), so the bubble is never empty.
 	s.startSlackStreamSession(runID, msg.channel, threadTS, msg.teamID)
 
-	if _, err := s.SendChatMessageWithRun(msg.text, reqID, runID); err != nil {
+	if _, err := s.SendChatMessageWithRun(domain.AppendVia(msg.text, domain.ViaSlack), reqID, runID); err != nil {
 		s.consumeSlackOrigin(runID)
 		s.finishSlackStream(runID, "")
 		_ = s.setSlackAssistantStatus(msg.channel, threadTS, "")

@@ -53,6 +53,7 @@ async def spoken_response_complete(request: str, answer: str, *, grounded: bool,
             api_key=app_config.REALTIME_SUMMARIZER_API_KEY,
             base_url=app_config.REALTIME_SUMMARIZER_BASE_URL or None,
             timeout=timeout, max_retries=0,
+            default_headers={"X-Auto-Source": "voice_outcome"},
         ) as client:
             # SSE like the summarizer: the non-streaming response can be binary despite its JSON content type.
             async with client.messages.stream(

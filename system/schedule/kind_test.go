@@ -172,8 +172,8 @@ func TestRunnerFiresScheduleWithNoKindThroughTheAgent(t *testing.T) {
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 	r.tick(scheduledAt.Add(time.Minute))
 
-	if len(gw.sent) != 1 || gw.sent[0] != sch.Instructions {
-		t.Fatalf("sent = %v, want exactly [%q]", gw.sent, sch.Instructions)
+	if want := sch.Instructions + "\n[via:schedule]"; len(gw.sent) != 1 || gw.sent[0] != want {
+		t.Fatalf("sent = %v, want exactly [%q]", gw.sent, want)
 	}
 	if len(gw.spoken) != 0 {
 		t.Fatalf("a kind-less schedule must never reach TTS, but spoken = %v", gw.spoken)

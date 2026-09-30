@@ -14,6 +14,33 @@ func IsChat(eventType string) bool {
 	return eventType == "web_chat" || eventType == "mqtt_chat"
 }
 
+// TurnSource names where a sensing event came from; Build stamps it as a
+// trailing [via:<source>] line so the origin survives once the turn leaves the
+// device (voice, web chat and phone chat all read "[user] <text>"). Values: web,
+// mobile, voice, voice_handoff, voice_history, voice_ambient, sensing. Never
+// feeds routing.
+func TurnSource(eventType, message string) string {
+	switch eventType {
+	case "web_chat":
+		return "web"
+	case "mqtt_chat":
+		return "mobile"
+	case "voice_agent_handled":
+		return "voice_history"
+	case "voice", "voice_command", "voice_followup":
+		// HAL keeps the wake-word classification on a delegated turn, so the
+		// prefix decides first whatever the voice type is.
+		if strings.HasPrefix(message, "[voice-instruction]") {
+			return "voice_handoff"
+		}
+		if eventType == "voice" {
+			return "voice_ambient"
+		}
+		return "voice"
+	}
+	return "sensing"
+}
+
 // EnterNamesNewFriend reports whether a presence.enter text announces a newly visible friend.
 // Mirrors HAL's enter_message.has_new_friend (only the `new:` segment counts).
 func EnterNamesNewFriend(message string) bool {
@@ -28,7 +55,12 @@ func EnterHasPresentFriend(message string) bool {
 
 // Build returns the agent message for a sensing event.
 // currentUser "" means unknown; guardTag is the guard-mode prefix, or "" (always "" on the drain path).
+// Every result ends with a [via:<source>] line (see TurnSource), except slash commands.
 func Build(eventType, message, currentUser, guardTag string) string {
+	return domain.AppendVia(buildBody(eventType, message, currentUser, guardTag), TurnSource(eventType, message))
+}
+
+func buildBody(eventType, message, currentUser, guardTag string) string {
 	switch eventType {
 	case "voice_command", "voice_followup":
 		return domain.AppendEnrollNudge("[user] " + message)

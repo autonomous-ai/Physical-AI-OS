@@ -4,6 +4,7 @@ import (
 	"sort"
 	"strings"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/i18n"
 )
 
@@ -13,7 +14,8 @@ func wakeGreetingPrompt(agentRuntime, deviceType string, capabilities map[string
 	contextTags := i18n.LangContextTag() +
 		"\n[context: agent_runtime=" + agentRuntime + "]" +
 		"\n[context: device_type=" + deviceType + "]" +
-		"\n[context: device_capabilities=" + strings.Join(sortedCapabilityNames(capabilities), ",") + "]"
+		"\n[context: device_capabilities=" + strings.Join(sortedCapabilityNames(capabilities), ",") + "]" +
+		"\n" + domain.ViaMarker(domain.ViaSystem)
 
 	switch i18n.Lang() {
 	case i18n.LangVI:

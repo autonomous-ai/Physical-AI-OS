@@ -1022,8 +1022,9 @@ Vài điểm triển khai mà người viết backend cần biết:
 - **Forward bằng sensing type `mqtt_chat`, không phải `web_chat`.** Mọi gate xử lý
   hai type như nhau (`sensingmsg.IsChat`: suppress TTS, không wake vật lý, không
   opening filler, queue giống hệt khi agent bận, cùng prefix `[user] ` gửi model).
-  Tách type chỉ để badge turn trên Flow Monitor cho biết **tin nhắn gõ ở đâu** —
-  📱 `mqtt_chat` (app điện thoại) vs 🖥 `web_chat` (composer của monitor). Nếu
+  Tách type để badge turn trên Flow Monitor cho biết **tin nhắn gõ ở đâu** —
+  📱 `mqtt_chat` (app điện thoại) vs 🖥 `web_chat` (composer của monitor) — và để
+  tin nhắn kết thúc bằng `[via:mobile]` thay vì `[via:web]` (xem os-server_vi.md, "Marker nguồn"). Nếu
   `speak: true` thì turn forward thành `voice` và hiện như turn voice.
 - **Một client broker riêng** (`device-<id>-chat`) được giữ mở cho stream. Helper
   `publish` dùng chung mở rồi đóng kết nối cho từng message — hợp lý với kết quả

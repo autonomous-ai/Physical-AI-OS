@@ -256,7 +256,9 @@ func (r *Runner) send(sch Schedule, attemptID string) RunReport {
 	if kind == KindSpeak {
 		err = r.gw.Speak(sch.Instructions)
 	} else {
-		runID, err = r.gw.SendSystemChatMessage(sch.Instructions)
+		// The [via:schedule] line marks this as a schedule run: the instructions
+		// are plain prompt text that otherwise reads like a typed request.
+		runID, err = r.gw.SendSystemChatMessage(domain.AppendVia(sch.Instructions, domain.ViaSchedule))
 	}
 	latency := time.Since(started)
 
