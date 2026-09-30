@@ -1105,12 +1105,6 @@ GAZE_REPOINT_VERIFY_S: float = float(
 GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
 )
-# A repoint turned to the user's bearing, so their face lands near frame centre: a face
-# further off to the side (fraction of frame width) is a neighbour, not a confirmation.
-# Device-measured 2026-09-30: the user within +/-11%, a co-worker one desk over 18-47%.
-GAZE_REPOINT_MAX_DX_FRAC: float = float(
-    os.environ.get("HAL_GAZE_REPOINT_MAX_DX_FRAC", "0.15")
-)
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.
 # Open-loop against a coupled arm: the step cap and blind-step budget bound it.

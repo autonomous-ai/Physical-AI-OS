@@ -237,10 +237,9 @@ def test_a_fresh_face_id_label_no_longer_lets_a_face_in(monkeypatch):
     assert user_check.best_user_face(tracks, "[test]") is None
 
 
-def test_confirm_rejects_a_near_face_off_to_the_side():
-    """green-lamp 16:39: the neighbouring co-worker reached 14% at dx=-41% and confirmed a repoint."""
-    v = user_check.confirms_bearing(FaceEvidence(face_h_frac=0.14, dx_frac=-0.41))
-    assert not v.ok and "centre" in v.reason
+def test_a_near_face_off_to_the_side_still_confirms():
+    """green-lamp 16:55: the user at 35%, dx +34% (bearing ~20 deg off their seat) was ruled far."""
+    assert user_check.confirms_bearing(FaceEvidence(face_h_frac=0.35, dx_frac=0.34)).ok
 
 
 def test_confirm_accepts_the_user_where_the_repoint_turned():
@@ -254,6 +253,7 @@ def test_adopt_keeps_its_wider_centre_gate():
     assert user_check.adopts_bearing(ev).ok
 
 
-def test_the_repoint_centre_gate_is_its_own_setting():
-    assert config.GAZE_REPOINT_MAX_DX_FRAC == pytest.approx(0.15)
+def test_near_or_far_is_decided_by_size_alone():
+    """Position does not belong in near/far: the repoint centre gate is gone."""
+    assert not hasattr(config, "GAZE_REPOINT_MAX_DX_FRAC")
     assert config.BEARING_SAMPLE_MAX_DX_FRAC == pytest.approx(0.25)

@@ -68,18 +68,13 @@ def _size_verdict(ev: Optional[FaceEvidence]) -> Verdict:
 
 
 def confirms_bearing(ev: Optional[FaceEvidence]) -> Verdict:
-    """Loose: is somebody at the desk where the bearing points? No facing needed."""
-    base = _size_verdict(ev)
-    if not base.ok or ev is None:
-        return base
-    max_dx = config.GAZE_REPOINT_MAX_DX_FRAC
-    if abs(ev.dx_frac) > max_dx:
-        return Verdict(
-            False,
-            f"too far off centre for the bearing (dx={ev.dx_frac * 100:+.0f}%, "
-            f"max {max_dx * 100:.0f}%)",
-        )
-    return base
+    """Loose: is somebody at the desk where the bearing points? Size alone decides.
+
+    Neither facing nor position: the user talks while looking at their monitor, and a
+    bearing a few degrees off their seat puts them at the frame side (device-observed
+    2026-09-30: a +/-15% centre gate ruled the user's 35% face "far").
+    """
+    return _size_verdict(ev)
 
 
 def adopts_bearing(ev: Optional[FaceEvidence]) -> Verdict:

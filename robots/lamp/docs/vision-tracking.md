@@ -912,13 +912,17 @@ Three further behaviours are worth stating because each was a bug first:
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (12.5%) of the frame tall confirms the bearing. Facing and identity
   are not required, because the user often talks while looking at their own monitor. Only a smaller
   face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
-  face across the room became "the user". The face must also sit within `HAL_GAZE_REPOINT_MAX_DX_FRAC`
-  (±15%) of frame centre: the lamp has just turned to the user's bearing, so the user lands near the
-  middle, while a co-worker one desk over stays off to the side (device-measured 2026-09-30: the user
-  within ±11%, a neighbour at 14% tall and dx −41% confirmed a repoint while the user stood in front).
-  It is narrower than the look-around's ±25%, whose looks only overlap at that width. The watcher stamps a near-face and a far-face clock (`_note_face_size`) for every face it
-  detects, and the verdict reads those. An off-side face counts as far.
-- **A body waits for the climb.** Landing on a body prompts the climb above and holds the verdict
+  face across the room became "the user". **Size alone decides near or far.** Position does not: a
+  bearing a few degrees off the user's seat puts them at the frame side, and a ±15% centre gate tried
+  on 2026-09-30 ruled the user's own 35% face (dx +34%) "far". The accepted cost is that a neighbour one
+  desk over who reaches 12.5% (measured up to 14%) can confirm the bearing. The watcher stamps a
+  near-face and a far-face clock (`_note_face_size`) for every face it detects, and the verdict reads
+  those.
+- **Only a body with its head above the frame waits for the climb.** A person box cut off by the frame
+  top (the `_headroom_from_person` test) stamps `_last_headless_body_t`, and only that starts a climb.
+  A body fully in frame already shows whatever face it has, so it is judged on the faces: near = hit,
+  only far = miss, none = miss (`found a body but no face`). Device-observed 2026-09-30: the user's
+  whole body in frame started a "climb" that never moved the head. A headless body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
   conversation open. A near face = hit, only a far face = miss, no face at all = **not scored**.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of

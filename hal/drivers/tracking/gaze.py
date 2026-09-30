@@ -36,6 +36,9 @@ _last_near_face_t: float = 0.0
 _last_far_face_t: float = 0.0
 # A repoint that landed on a body is waiting for its climb; 0.0 when none is.
 _repoint_climb_t: float = 0.0
+# Last time a person box was cut off by the frame top: a head above the frame, the only
+# body worth climbing for. A body fully in frame already shows whatever face it has.
+_last_headless_body_t: float = 0.0
 # When the last repoint turned. A face seen before this was seen from the OLD pose.
 _repoint_started_t: float = 0.0
 _blind_pitch_steps: int = 0
@@ -528,39 +531,43 @@ def _judging_repoint() -> bool:
     return _repoint_pending_t > 0.0 or _repoint_climb_t > 0.0
 
 
-def _confirms_repoint(face_h: float, frame_h: float, dx_frac: float) -> bool:
-    """This face is big enough and where the repoint turned (user_check's confirm rule)."""
+def _confirms_repoint(face_h: float, frame_h: float) -> bool:
+    """This face is big enough to confirm a repoint (user_check's confirm rule)."""
     from hal.drivers.tracking import user_check
 
     return user_check.confirms_bearing(
-        user_check.FaceEvidence(face_h_frac=face_h / (frame_h or 1.0), dx_frac=dx_frac)
+        user_check.FaceEvidence(face_h_frac=face_h / (frame_h or 1.0))
     ).ok
 
 
-def _body_behind_a_far_face(frame: Any, detector: Any, face_h: float, frame_h: float,
-                            dx_frac: float = 0.0) -> Tuple[Optional[float], bool]:
-    """``(dy, seen)`` for a body the far (or off-side) face in frame would otherwise hide.
+def _body_behind_a_far_face(frame: Any, detector: Any, face_h: float,
+                            frame_h: float) -> Tuple[Optional[float], bool]:
+    """``(dy, seen)`` for a body the far face in frame would otherwise hide.
 
     Only while a repoint is judged: the watcher looks for a body only when it finds no
     face, so a co-worker's small face hid a user standing in front of the lamp with
     their head above the frame, and the climb never started (device-observed
     2026-09-30). Always-on would run person detection on most office samples.
     """
-    if not _judging_repoint() or _confirms_repoint(face_h, frame_h, dx_frac):
+    if not _judging_repoint() or _confirms_repoint(face_h, frame_h):
         return None, False
     return _headroom_from_person(frame, detector)
 
 
-def _note_face_size(face_h: float, frame_h: float, now: float,
-                    dx_frac: float = 0.0) -> None:
-    """Stamp the near- or far-face clock for one detected face.
+def _note_headless_body(body_dy: Optional[float]) -> None:
+    """Stamp the headless-body clock when the person box was cut off at the frame top."""
+    global _last_headless_body_t
 
-    Near means the repoint's confirm rule: big enough AND near frame centre, where the
-    turn to the bearing puts the user. A neighbour's face off to the side counts as far.
-    """
+    # _headroom_from_person gives a dy only for a box clipped by the top edge.
+    if body_dy is not None:
+        _last_headless_body_t = time.monotonic()
+
+
+def _note_face_size(face_h: float, frame_h: float, now: float) -> None:
+    """Stamp the near- or far-face clock for one detected face (size alone decides)."""
     global _last_near_face_t, _last_far_face_t
 
-    if _confirms_repoint(face_h, frame_h, dx_frac):
+    if _confirms_repoint(face_h, frame_h):
         _last_near_face_t = now
     else:
         _last_far_face_t = now
@@ -618,6 +625,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         _last_dy_from_face = False
         if saw_person:
             _last_subject_t = time.monotonic()
+        _note_headless_body(_last_dy_frac)
         if _last_dy_frac is None:
             _pitch_quiet(
                 "nothing measurable in frame", time.monotonic(),
@@ -632,12 +640,11 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     (fx, fy, fw, fh), landmarks = face
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
-    face_dx = ((fx + fw / 2.0) - frame_w / 2.0) / frame_w
-    body_dy, body_seen = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h,
-                                                 face_dx)
+    body_dy, body_seen = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h)
     if body_seen:
         # Climb toward the body's head, not toward a far face across the room.
         _last_subject_t = time.monotonic()
+        _note_headless_body(body_dy)
         _last_dy_frac, _last_dy_from_face = body_dy, False
         record_dy(body_dy, False)
     else:
@@ -646,7 +653,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         record_dy(_last_dy_frac, True)
     record_dx(((fx + fw / 2.0) - frame_w / 2.0) / frame_w, True)
     _last_frame, _last_box = small, (fx, fy, fw, fh)
-    _note_face_size(float(fh), frame_h, time.monotonic(), face_dx)
+    _note_face_size(float(fh), frame_h, time.monotonic())
 
     edge = min(1.0, abs((fx + fw / 2.0) - frame_w / 2.0) / (frame_w / 2.0))
     if float(fh) >= config.GAZE_MIN_FACE_PX and edge <= config.GAZE_WELL_FRAMED_EDGE:
@@ -1231,15 +1238,17 @@ def _verify_repoint(now: float) -> None:
     if _last_near_face_t > since:
         _score_repoint(True, "found a face near enough to be them", now)
         return
-    if _last_subject_t > _repoint_subject_t_before:
-        logger.info("[gaze] repoint found a body, no near face yet — climbing before "
-                    "judging the bearing")
+    if _last_headless_body_t > since:
+        logger.info("[gaze] repoint found a body with its head above the frame — climbing "
+                    "before judging the bearing")
         _repoint_climb_t = now
         _maybe_pitch(now, prompt=True)
         return
     _score_repoint(
         False,
-        "found only a far face" if _last_far_face_t > since else "found nobody",
+        "found only a far face" if _last_far_face_t > since
+        else "found a body but no face" if _last_subject_t > _repoint_subject_t_before
+        else "found nobody",
         now,
     )
 
@@ -1442,6 +1451,7 @@ def reset_for_test() -> None:
     globals()["_last_far_face_t"] = 0.0
     globals()["_repoint_climb_t"] = 0.0
     globals()["_repoint_started_t"] = 0.0
+    globals()["_last_headless_body_t"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None
