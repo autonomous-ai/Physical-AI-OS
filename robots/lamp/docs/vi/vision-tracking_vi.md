@@ -1034,7 +1034,11 @@ Các lần nhìn thấy đi vào đây theo hai đường:
 Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim
 sinh ra để khỏi phải tin. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
-khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó.
+khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó. Một cái
+mặt phải cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình, cùng ngưỡng với mọi
+đường bearing khác (#545). Trước đây nó dùng `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%) của look-aim, nên
+một đồng nghiệp ở giữa khung với kích thước 8–15% có thể dạy sai bearing. Không có kiểm tra nhìn về
+đèn: nó chỉ lấy một frame, và user đang làm việc với màn hình của mình vẫn phải được học.
 
 **Nó chỉ học từ `face`, không bao giờ từ box `person`.** Box person cho biết một thân người ở đâu, mà
 thân người thì lấp đầy khung mỗi khi camera tình cờ chĩa thấp — nên học từ nó là ghi nhớ đúng cái tư

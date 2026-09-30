@@ -1036,7 +1036,11 @@ Sightings reach it two ways:
 The sampler declines rather than guess. Horizontal offset is tolerated only to
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), because that correction leans on the very FOV constant the
 aim exists to avoid trusting. It also skips while the body is aiming or tracking, while the camera is
-disabled, and takes the detector lock non-blocking so a user's question never waits on it.
+disabled, and takes the detector lock non-blocking so a user's question never waits on it. A face
+must be at least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, the same floor as
+every other bearing path (#545). It used look-aim's `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%), so a
+centred co-worker at 8–15% could teach the bearing. There is no facing check: it samples a single
+frame, and the user working at their own monitor must still be learned.
 
 **It learns from faces only, never from `person` boxes.** A person box says where a body is, and a
 body fills the frame whenever the camera happens to be aimed low — so learning from one memorises

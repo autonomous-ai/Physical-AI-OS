@@ -158,3 +158,20 @@ def test_snapshots_can_be_disabled(tmp_path, monkeypatch):
     monkeypatch.setattr(cfg, "BEARING_SNAPSHOT_ENABLED", False, raising=False)
     _run((490, 210, 300, 300))
     assert not (tmp_path / bearing_sampler.SNAPSHOT_CATEGORY).exists()
+
+
+def test_a_co_worker_sized_face_is_not_recorded():
+    """#545: the sampler used look-aim's 8% floor, so a centred co-worker at 8-15% taught the bearing.
+
+    green-lamp 2026-09-30: the neighbouring co-worker measured up to 13.6%.
+    """
+    h = int(0.136 * 720)
+    rec, _ = _run((640 - h // 2, 210, h, h))
+    assert rec is None
+
+
+def test_a_face_at_the_bearing_floor_is_recorded():
+    """The same floor every other bearing path uses (GAZE_BEARING_MIN_FACE_HEIGHT_FRAC)."""
+    h = int((cfg.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.01) * 720)
+    rec, _ = _run((640 - h // 2, 210, h, h))
+    assert rec is not None
