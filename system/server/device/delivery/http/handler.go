@@ -113,7 +113,8 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 	go func() {
 		time.Sleep(2 * time.Second)
 		if err := h.service.Setup(req); err != nil {
-			slog.Error("setup failed", "component", "device", "error", err)
+			slog.Error("setup failed", "component", "device", "error", err,
+				"setup_failure_reason", device.SetupFailureReason(err))
 			h.networkService.SwitchToAPMode()
 			return
 		}

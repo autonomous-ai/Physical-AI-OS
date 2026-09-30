@@ -73,6 +73,8 @@ OS_AGENT_HOME       ?= $(OS_STATE_DIR)
 OS_AGENT_STATE_PATH ?= $(OS_STATE_DIR)/config/agent_state.json
 OS_BOOTSTRAP_CONFIG ?= $(OS_STATE_DIR)/config/bootstrap.json
 OS_LOG_FILE         ?= $(OS_STATE_DIR)/os-server.log
+# Unshipped device log records (system/lib/logger spool); /var/lib/autonomous on a device.
+OS_GELF_SPOOL_DIR   ?= $(OS_STATE_DIR)/gelf-spool
 # `make codex-dev` tees the bridge here; os-server reads it for the Agent tab.
 OS_AGENT_BRIDGE_LOG ?= $(OS_STATE_DIR)/codex-gatewayd.log
 # HAL writes it (HAL_LOG_DIR, HAL section below); os-server reads it for the HAL tab.
@@ -91,6 +93,7 @@ OS_DEV_ENV = \
 	OS_BACKEND_UPLINK=$(OS_BACKEND_UPLINK) \
 	OS_HAL_LOG_FILE=$(OS_HAL_LOG_FILE) \
 	OS_AGENT_BRIDGE_LOG=$(OS_AGENT_BRIDGE_LOG) \
+	OS_GELF_SPOOL_DIR=$(OS_GELF_SPOOL_DIR) \
 	OS_LOG_FILE=$(OS_LOG_FILE)
 
 .PHONY: os-dev os-dev-all os-dev-build os-dev-seed os-dev-config codex-dev

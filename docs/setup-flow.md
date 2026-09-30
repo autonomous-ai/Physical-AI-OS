@@ -17,7 +17,8 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       goroutine publishes the STA LAN IP into setup state as soon as wlan0
       gets one (before internet is up), so the Web UI can read it while the
       AP is still briefly alive (see "AP→STA Auto-Redirect")
-   b. Wait for internet (poll 60s)
+   b. Wait for internet (up to 60s wall clock; ICMP to 8.8.8.8, falling back
+      to a TLS handshake with the cloud API host for networks that drop ICMP)
    c. Save config
    d. Early backend ping (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publishes the device's fresh LAN IP (local_ip) to the
@@ -86,8 +87,11 @@ an SSID. Everything after the network phase (LLM config, channel, agent setup,
 1. Call `connect-wifi` CLI tool with SSID + password
 2. Poll checks:
    - SSID match? (`iwgetid`)
-   - Internet OK? (`ping`)
-3. Timeout 60s → fail
+   - Internet OK? (`ping 8.8.8.8`, else a TLS handshake with the device's cloud
+     API host — `system/network/reachability.go`)
+3. Timeout 60s of wall-clock time → fail. (It used to count 60 attempts, and
+   each failed ping waits 5s, so a network that drops ICMP kept the device
+   trying for ~6 minutes after the web client gave up at 80s.)
 4. Success → save SSID + password to config
 
 `connect-wifi` ends by running `device-sta-mode`, which is what tears the AP down.
@@ -512,14 +516,30 @@ Both still emit `setup_failed` on the bridge. The screen is hidden from the
 directly, since the effect that normally sends it is gated on `setupWorking`,
 which that path deliberately never raises.
 
-**Not covered.** The device's own reason is still coarse: `SetupNetwork` only
-polls `CheckInternet()` + SSID match, so a wrong password, a 5GHz-only network,
-and a router rejecting the client all surface as
-`"no internet or SSID did not match within 60s"` after a full 60s.
-`wpa_supplicant` knows the difference immediately (`4WAY_HANDSHAKE_FAILED`,
-`WRONG_KEY`); reading `wpa_cli status` in the poll loop would fail in ~5s with
-an exact cause — while the AP is still alive, so the phase poll would deliver it
-and the timeout above would become a rare fallback rather than the primary path.
+**Setup failure reasons.** Every failed setup is logged with a stable
+`setup_failure_reason` field — on `network setup failed` (component `network`)
+for the WiFi join, and on `setup failed` (component `device`) for every stage —
+so failed setups can be grouped by cause in Graylog
+(`_exists_:setup_failure_reason AND spooled:true` finds the ones replayed after the
+device came online). The WiFi join is classified from `wpa_supplicant`'s own log
+for the attempt plus the last observed state (`system/network/setup_failure.go`):
+
+| `setup_failure_reason` | Evidence | Setup-screen message |
+|---|---|---|
+| `wrong_password` | `4-Way Handshake failed` / `CTRL-EVENT-SSID-TEMP-DISABLED … reason=WRONG_KEY` | wrong WiFi password: the router rejected the key |
+| `association_rejected` | `CTRL-EVENT-ASSOC-REJECT`, `reason=AUTH_FAILED`/`CONN_FAILED` | the router refused the connection |
+| `ssid_not_found` | `CTRL-EVENT-NETWORK-NOT-FOUND`, or no association attempt at all | WiFi network not found: out of range or on a channel the device cannot use |
+| `no_dhcp` | `wpa_state=COMPLETED` but no address from the router | connected to WiFi but the router gave no IP address |
+| `no_internet` | address on the requested SSID, but neither ICMP nor the cloud TLS probe gets out | connected to WiFi but there is no internet (captive portal or firewall?) |
+| `ssid_too_long` / `wifi_connect_error` | SSID over 32 bytes / the `connect-wifi` helper failed | as before |
+| `agent_setup_failed` / `agent_timeout` | the agent runtime could not be set up / never became ready (after the WiFi join) | as before |
+| `unknown` | none of the above could be established | no internet or SSID did not match within 60s |
+
+A rejected key fails fast: once `wpa_supplicant` has rejected it twice the loop
+stops instead of waiting out the 60s window. The `network setup failed` line
+also carries `wpa_state`, `has_ip`, `ssid_matched`, `wrong_key_failures` and
+`elapsed_s`. 5 GHz networks are not a failure cause on Intern 2 hardware — the
+wrong-password capture above was on a 5745 MHz network.
 
 ### Marking the Wi-Fi step done after the reload
 
@@ -736,3 +756,34 @@ full listener example lives in the file header of `lib/setupBridge.ts`.
 ### iMessage setup credentials
 
 Setup and Wi-Fi provisioning accept the BlueBubbles server URL, password, and operator address for `channel=imessage`. These credentials must be persisted before runtime setup; Wi-Fi provisioning forwards the saved credentials into `SetupAgent`. Hermes consumes the saved config through presync.
+
+## Setup logs reach Graylog even when setup fails
+
+A first setup runs with no device key and, until WiFi joins, no internet, so a
+failed setup used to ship **nothing**: os-server and HAL armed the log relay
+only at process start, bootstrap never armed it, and a record that could not be
+sent was dropped. Now:
+
+- **Spool from boot.** os-server, bootstrap and HAL write records that cannot
+  ship yet — no key, no internet, relay or collector error — to a bounded
+  on-disk spool in `OS_GELF_SPOOL_DIR` (default `/var/lib/autonomous/gelf-spool` — on the
+  SD card, not `/var/log`, which devices keep in RAM (zram) — so a power cycle
+  keeps it): `<service>.jsonl` + `<service>.1.jsonl`, at most
+  1 MiB per service, oldest records dropped first.
+- **Armed as soon as a key exists.** os-server re-arms the relay from its
+  config-change listener (the moment setup saves the key, and again when a
+  re-setup replaces it); bootstrap and HAL re-read `config.json` every
+  minute / 30s. Only the device's Autonomous credential is used, never an
+  owner's own provider.
+- **Replayed in order.** Once a send succeeds the spool drains before live
+  records, paced (~10 records/s — the cloud relay drops silently past its
+  in-flight ceiling), each tagged `_spooled: "true"` and moved from the
+  pre-config host onto the device id, so a failed first attempt shows up under
+  the device next to the attempt that worked.
+- **Never another device's records.** Replay ships only records logged before
+  the device id was known or under the current device id; records under any
+  other id (a previous setup or a previous owner) are dropped, never sent with
+  the current key. Factory reset also wipes `OS_GELF_SPOOL_DIR`.
+
+A device that never gets online again cannot deliver its spool; it stays on the
+device until it does.

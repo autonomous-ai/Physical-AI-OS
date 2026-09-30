@@ -13,6 +13,7 @@ import (
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/urlnorm"
+	"go.autonomous.ai/os/system/network"
 	"go.autonomous.ai/os/system/statusled"
 )
 
@@ -81,7 +82,7 @@ func (s *Service) setupWired() error {
 	if _, err := s.networkService.CheckInternet(); err != nil {
 		const msg = "no WiFi credentials given and the device has no working internet connection"
 		s.setupState.set(SetupPhaseFailed, "", msg)
-		return fmt.Errorf("%s: %w", msg, err)
+		return &stageError{reason: string(network.FailureNoInternet), err: fmt.Errorf("%s: %w", msg, err)}
 	}
 
 	// Publish the address before leaving AP mode, which can drop the client connection.
@@ -369,11 +370,11 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 
 	// Run after config.json is saved: Hermes presync reads it.
 	if err := s.agentGateway.SetupAgent(data); err != nil {
-		return err
+		return &stageError{reason: failureAgentSetup, err: err}
 	}
 
 	if ok := s.WaitForAgentReady(120 * time.Second); !ok {
-		return fmt.Errorf("agent gateway ready timeout, something went wrong")
+		return &stageError{reason: failureAgentTimeout, err: fmt.Errorf("agent gateway ready timeout, something went wrong")}
 	}
 
 	s.config.SetUpCompleted = true
