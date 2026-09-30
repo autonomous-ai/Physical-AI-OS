@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, TypeVar
 
+from hal import cpu_affinity
 from hal.drivers.sensing.perceptions.typing import SendEventCallable
 from hal.drivers.sensing.perceptions.utils import PerceptionStateObservers
 
@@ -15,7 +16,12 @@ T = TypeVar("T")
 class Perception[T](ABC):
     """Base class for a single camera-frame perception check."""
 
-    _pool: ThreadPoolExecutor = ThreadPoolExecutor(max_workers=2)
+    # Face ID is HAL's biggest idle CPU user; keep it off the cores the voice path uses.
+    _pool: ThreadPoolExecutor = ThreadPoolExecutor(
+        max_workers=2,
+        initializer=cpu_affinity.pin_current_thread,
+        initargs=(cpu_affinity.SLOW,),
+    )
 
     def __init__(
         self,

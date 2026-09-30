@@ -14,6 +14,7 @@ from typing import Optional
 import requests
 
 from hal import config as hal_config
+from hal import cpu_affinity
 from hal import presets
 from hal.realtime.enums import AgentGateway
 from hal.realtime.models import AudioOutput as RTAudioOutput
@@ -757,6 +758,8 @@ class VoiceService:
 
     def _loop(self):
         """Main loop: local VAD → STT on speech → disconnect on silence."""
+        # Before arecord starts, so the mic child inherits the fast cores too.
+        cpu_affinity.pin_current_thread(cpu_affinity.FAST)
         if hal_config.REALTIME_ENABLED:
             threading.Thread(
                 target=self._realtime.start, daemon=True, name="realtime-start"

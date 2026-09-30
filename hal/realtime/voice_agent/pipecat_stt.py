@@ -26,6 +26,7 @@ from pipecat.processors.frame_processor import FrameDirection
 from pipecat.services.stt_service import STTService
 from pipecat.utils.time import time_now_iso8601
 
+from hal import cpu_affinity
 from hal.drivers.voice.stt.provider import STTProvider, STTSession
 
 logger = logging.getLogger(__name__)
@@ -80,7 +81,8 @@ class HALSTTService(STTService):
         self._loop = asyncio.get_running_loop()
         if self._sender is None or not self._sender.is_alive():
             self._sender = threading.Thread(
-                target=self._sender_loop, daemon=True, name="pipecat-stt"
+                target=cpu_affinity.on_cores(cpu_affinity.FAST, self._sender_loop),
+                daemon=True, name="pipecat-stt"
             )
             self._sender.start()
 
