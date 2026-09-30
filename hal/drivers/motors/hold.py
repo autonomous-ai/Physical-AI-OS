@@ -69,11 +69,31 @@ def owners(svc: Any) -> FrozenSet[str]:
 
 
 def holder(svc: Any) -> Optional[str]:
-    """Who holds the body, or None. "hold" means held by a path that named no owner."""
+    """Who holds the body, or None. "hold" means held by a path that named no owner.
+
+    Drops a stale scene hold first, so every reader of the hold heals it.
+    """
     if svc is None:
         return None
+    release_stale_scene_hold(svc)
     with _lock:
         if not getattr(svc, "_hold_mode", False):
             return None
         live = _live_owners(svc)
         return next((o for o in _PRIORITY if o in live), "hold")
+
+
+def release_stale_scene_hold(svc: Any) -> bool:
+    """Drop a scene hold that no active scene backs. True if one was dropped.
+
+    Every path that ends a scene should release its hold; this catches the one that
+    forgot, instead of leaving the arm frozen until someone resumes it by hand.
+    """
+    import hal.app_state as state
+
+    if svc is None or getattr(state, "_active_scene", None) is not None:
+        return False
+    if not release(svc, SCENE):
+        return False
+    logger.info("[hold] scene hold released -- no scene is active (stale)")
+    return True

@@ -234,3 +234,56 @@ def test_end_scene_releases_the_scene_hold(led_env, body):
     led_env._end_scene()
     assert state._active_scene is None
     assert not body._hold_mode
+
+
+# --- safety net ------------------------------------------------------------
+
+def test_a_scene_hold_with_no_scene_is_released(body):
+    hold.claim(body, hold.SCENE)  # _active_scene is None: an orphan
+    assert hold.release_stale_scene_hold(body) is True
+    assert not body._hold_mode
+
+
+def test_a_scene_hold_under_a_live_scene_is_kept(body, monkeypatch):
+    monkeypatch.setattr(state, "_active_scene", "reading")
+    hold.claim(body, hold.SCENE)
+    assert hold.release_stale_scene_hold(body) is False
+    assert body._hold_mode
+
+
+def test_the_safety_net_never_touches_other_owners(body):
+    hold.claim(body, hold.TRACKING)
+    hold.claim(body, hold.EXPLICIT)
+    hold.release_stale_scene_hold(body)
+    assert hold.owners(body) == {"tracking", "explicit"}
+
+
+def test_holder_sees_through_an_orphaned_scene_hold(body):
+    hold.claim(body, hold.SCENE)
+    assert hold.holder(body) is None
+
+
+def test_idle_play_heals_an_orphaned_scene_hold(body, monkeypatch):
+    """The #544 incident: 15 idle plays refused for 50 minutes."""
+    from hal.models import ServoRequest
+    from hal.routes import servo
+
+    body.ensure_running = Mock()
+    body.dispatch = Mock()
+    monkeypatch.setattr(servo, "_svc", lambda: body)
+    monkeypatch.setattr(state, "_sleeping", False)
+    hold.claim(body, hold.SCENE)
+
+    assert servo.play_recording(ServoRequest(recording="idle")) == {"status": "ok"}
+    body.dispatch.assert_called_once()
+
+
+def test_the_idle_handback_heals_an_orphaned_scene_hold(body):
+    from hal.drivers.tracking import body as handback
+
+    body.idle_recording = "idle"
+    body._tracking_active = False
+    body._current_recording = None
+    body.dispatch = Mock()
+    hold.claim(body, hold.SCENE)
+    assert handback.release_to_idle("test") is True
