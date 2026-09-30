@@ -55,6 +55,9 @@ func main() {
 
 	cleanup := logger.Init(syspath.LogFile())
 	defer cleanup()
+	// Keep what cannot ship yet: a first setup runs with no key and no internet,
+	// and its records are the ones that explain a failed registration.
+	logger.EnableGELFSpool(syspath.GELFSpoolDir(), "os-server")
 
 	// CLI version probes wait for HAL readiness so they don't compete for storage at boot.
 	probeCtx, cancelProbes := context.WithCancel(context.Background())

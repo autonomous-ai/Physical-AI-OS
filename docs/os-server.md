@@ -198,8 +198,11 @@ Config field: `timezone` in `config/config.json` (IANA zone string, omitempty) �
 
 **Connectivity monitor** (`system/network/service.go` and `recovery.go`, active
 when `SetUpCompleted` is true). Internet checks run on a 5s monitor tick; 5
-consecutive failed pings to `8.8.8.8` raise the `Connectivity` LED state, and a
-successful ping clears it. Internet status is separate from WiFi recovery:
+consecutive failed checks raise the `Connectivity` LED state, and a successful
+one clears it. A check is a ping to `8.8.8.8`, falling back to a TLS handshake
+with the device's cloud API host when ICMP fails, so networks that drop ICMP are
+not reported offline. The monitor page's Overview uses the same fallback
+(`CheckInternetRTT`), showing no ping time when only TLS got through. Internet status is separate from WiFi recovery:
 association and a usable station IPv4 address keep WiFi active even without
 Internet. The monitor no longer reboots the device.
 
@@ -983,13 +986,29 @@ OS Server, and bootstrap. Allowed values are `DEBUG`, `INFO` (the default),
 and the rotating local file `/var/log/os-server.log` (2 MB per file, retaining
 the 10 newest backups).
 
-When `GELF_URL` is configured, OS Server ships records at the same configured
-level and higher to that central collector through one worker with a bounded queue
-of 256 records. Logging never blocks the request path or creates a goroutine per
-record: when the collector is slow or unavailable and the queue is full, newly
-produced GELF records are dropped (with rate-limited stderr notices) while console
-and local rotating-file logging continue. On shutdown, the worker flushes queued
-records for up to five seconds before cancelling any remaining delivery.
+Records at the same level and higher are also shipped to Graylog through one
+worker with a bounded queue of 256 records; logging never blocks the request
+path or creates a goroutine per record.
+
+- **Relay (shipped devices).** Without `GELF_URL` the worker POSTs each record
+  to `{llm_base_url}/logs/gelf` on the cloud API with the device key as a Bearer
+  token (`config.GELFRelayCredentials`: the Autonomous credential only). It is
+  (re)armed from the config-change listener, not only at startup, so it starts
+  the moment setup saves the key and follows a re-setup's new key; the same
+  target is a no-op. Records that cannot ship — relay not armed yet, network
+  error, 401/403/408/429/5xx — go to the on-disk spool in `OS_GELF_SPOOL_DIR`
+  (default `/var/lib/autonomous/gelf-spool`, 1 MiB per service, oldest dropped first) and
+  are replayed in order, paced, tagged `_spooled`, once a send succeeds; other
+  4xx answers drop the record. Backoff between failed replays is 5s to 5 min. On
+  shutdown or re-target the worker stops after its in-flight send and its queue
+  goes to the spool; a re-target starts the new worker only once the old one has
+  stopped, so the spool is never replayed twice. Replay skips records logged
+  under another device id, and factory reset wipes the spool. See [setup-flow.md](setup-flow.md#setup-logs-reach-graylog-even-when-setup-fails).
+- **Direct collector.** When `GELF_URL` is configured the worker ships straight
+  to it with basic auth and no spool: when the collector is slow or unavailable
+  and the queue is full, newly produced records are dropped (with rate-limited
+  stderr notices) while console and local rotating-file logging continue. On
+  shutdown it flushes queued records for up to five seconds.
 
 ## Local Intent Matching
 

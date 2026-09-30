@@ -2,6 +2,7 @@ package urlnorm
 
 import (
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -24,3 +25,7 @@ func IsAutonomousHost(baseURL string) bool {
 	}
 	return false
 }
+
+// AutonomousDomains returns the registrable domains IsAutonomousHost accepts,
+// production first.
+func AutonomousDomains() []string { return slices.Clone(autonomousHosts) }

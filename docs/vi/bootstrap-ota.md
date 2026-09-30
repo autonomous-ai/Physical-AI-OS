@@ -520,6 +520,14 @@ setup), `Serve()` không khởi động poll loop lẫn healthcheck server. Nó 
 `/root/config/bootstrap.json` mỗi 30s tới khi có URL rồi mới chạy tiếp. Không có
 gì silent.
 
+**Gửi log**: bootstrap ghi log qua logger dùng chung với
+`_service_name: "bootstrap"` (trước đây bị ghi là `os-server`). Bootstrap không có
+tín hiệu thay đổi config, nên `RunLogRelay` (`system/bootstrap/log_relay.go`) đọc
+lại `/root/config/config.json` mỗi phút và bật relay bằng key Autonomous của thiết
+bị (cùng quy tắc với os-server). Khi chưa có key — thiết bị mới, hoặc OTA chạy trong
+lúc setup — record nằm chờ trong spool (`/var/lib/autonomous/gelf-spool/bootstrap.jsonl`) và
+được replay khi gửi được. Xem [setup-flow_vi.md](setup-flow_vi.md).
+
 ### State (`/root/bootstrap/state.json`)
 
 Lưu version đã cài của mỗi thành phần:

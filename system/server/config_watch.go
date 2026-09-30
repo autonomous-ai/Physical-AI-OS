@@ -11,6 +11,7 @@ import (
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/intent"
 	"go.autonomous.ai/os/system/lib/hal"
+	"go.autonomous.ai/os/system/lib/logger"
 	"go.autonomous.ai/os/system/lib/safego"
 	"go.autonomous.ai/os/system/server/config"
 	_sensingHttpDeliver "go.autonomous.ai/os/system/server/sensing/delivery/http"
@@ -30,8 +31,18 @@ func (s *Server) runConfigChangeListener(ctx context.Context) {
 			s.handleSetUpCompleteChange(s.config.SetUpCompleted)
 			s.handleDeviceIDChange(s.config.DeviceID)
 			s.handleMQTTConfigChange()
+			s.refreshLogRelay()
 		}
 	}
+}
+
+// refreshLogRelay points the log relay at the current device id and key, so a
+// first setup ships logs without a restart. Same target is a no-op.
+func (s *Server) refreshLogRelay() {
+	if s.config.DeviceID != "" {
+		logger.SetGELFHost(s.config.DeviceID)
+	}
+	logger.EnableGELFRelay(s.config.GELFRelayCredentials())
 }
 
 // handleDeviceIDChange restarts claude-desktop-buddy when device_id changes.
