@@ -158,6 +158,10 @@ path releases only its own claim. Ending a scene never drops a tracking or expli
 tracking session that ends during a reading scene leaves the scene's hold in place and does not
 restart idle: the arm stays where tracking left it. `POST /servo/resume` clears every owner. An LED
 override that ends a scene also deletes the persisted scene, so a HAL restart does not bring it back.
+The release logs say whether the arm is free: `Scene off: servo released` when no owner is left,
+`Scene off: scene hold released, servo still held by explicit` when one is. Likewise gaze logs
+`framing released (servo held by scene, idle waits)` instead of `(idle has the arm)` at the end of
+a conversation under a hold.
 
 **Safety net.** A `scene` hold with no active scene is stale. It is released, with
 `[hold] scene hold released -- no scene is active (stale)`, the next time something reads the

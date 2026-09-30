@@ -2038,3 +2038,31 @@ def test_an_orphaned_scene_hold_does_not_block_a_pan(pan, monkeypatch):
     _fill_dx(0.5)
     gaze._maybe_yaw(gaze.time.monotonic())
     assert pan.moves
+
+
+def _close_conversation(monkeypatch):
+    gaze._conversation_was_open = True
+    monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
+
+
+def test_closing_a_conversation_under_a_hold_says_idle_waits(monkeypatch, reading_scene, caplog):
+    import hal.app_state as state
+    from hal.drivers.motors import hold
+
+    svc = _Svc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    hold.claim(svc, hold.SCENE)
+    _close_conversation(monkeypatch)
+    with caplog.at_level("INFO"):
+        gaze._note_conversation_edge()
+    assert "framing released (servo held by scene, idle waits)" in caplog.text
+
+
+def test_closing_a_conversation_with_no_hold_hands_idle_the_arm(monkeypatch, caplog):
+    import hal.app_state as state
+
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    _close_conversation(monkeypatch)
+    with caplog.at_level("INFO"):
+        gaze._note_conversation_edge()
+    assert "framing released (idle has the arm)" in caplog.text

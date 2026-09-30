@@ -48,7 +48,12 @@ def _end_scene() -> None:
     state._active_scene = None
     _persist_scene(None)
     if hold.release(state.animation_service, hold.SCENE):
-        state.logger.info("Scene ended by an LED override: servo released")
+        still = hold.holder(state.animation_service)
+        if still:
+            state.logger.info("Scene ended by an LED override: scene hold released, "
+                              "servo still held by %s", still)
+        else:
+            state.logger.info("Scene ended by an LED override: servo released")
 
 
 @router.get("/led", response_model=LEDStateResponse)

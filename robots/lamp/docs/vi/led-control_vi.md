@@ -157,6 +157,10 @@ trong `hal/drivers/motors/hold.py`. `_hold_mode` là true khi còn ít nhất m�
 explicit, và một phiên tracking kết thúc giữa lúc scene reading đang bật vẫn để nguyên hold của
 scene và không khởi động lại idle: tay đèn ở lại chỗ tracking để lại. `POST /servo/resume` xoá mọi
 chủ sở hữu. Lệnh LED kết thúc scene cũng xoá scene đã lưu, nên HAL khởi động lại sẽ không bật lại nó.
+Log khi nhả cho biết tay đèn đã rảnh chưa: `Scene off: servo released` khi không còn chủ sở hữu nào,
+`Scene off: scene hold released, servo still held by explicit` khi vẫn còn. Tương tự, gaze log
+`framing released (servo held by scene, idle waits)` thay cho `(idle has the arm)` khi kết thúc
+một cuộc hội thoại lúc servo đang bị giữ.
 
 **Lưới an toàn.** Một hold `scene` mà không có scene nào đang active là hold cũ (stale). Nó được
 nhả, kèm log `[hold] scene hold released -- no scene is active (stale)`, ở lần kế tiếp có chỗ đọc

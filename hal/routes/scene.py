@@ -176,7 +176,11 @@ def deactivate_scene():
     state._cancel_scene_speaker_drain()
 
     if hold.release(state.animation_service, hold.SCENE):
-        state.logger.info("Scene off: servo released")
+        still = hold.holder(state.animation_service)
+        if still:
+            state.logger.info("Scene off: scene hold released, servo still held by %s", still)
+        else:
+            state.logger.info("Scene off: servo released")
 
     # Under a privacy lock, retarget the overlay snapshot instead of restoring the scene's mute.
     with privacy.lock:

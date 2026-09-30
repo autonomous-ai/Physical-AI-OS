@@ -427,10 +427,19 @@ def _note_conversation_edge() -> None:
     _conversation_was_open = open_now
     if first:
         return
+    held = None
+    if not open_now:
+        import hal.app_state as state
+        from hal.drivers.motors import hold
+
+        # "idle has the arm" is only true when nothing holds the servo.
+        held = hold.holder(getattr(state, "animation_service", None))
     logger.info(
         "[gaze] conversation %s — framing %s",
         "open" if open_now else "closed",
-        "live" if open_now else "released (idle has the arm)",
+        "live" if open_now
+        else f"released (servo held by {held}, idle waits)" if held
+        else "released (idle has the arm)",
     )
 
 

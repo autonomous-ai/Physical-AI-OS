@@ -319,3 +319,32 @@ def test_an_led_override_forgets_the_scene_across_a_restart(led_env):
     path.write_text('{"scene": "reading", "boot_id": ""}')
     _led_calls(led_env)["off"](False)
     assert not path.exists()
+
+
+# --- release log lines say whether the arm is still held -------------------
+
+def _logged(logger):
+    return " ".join(str(c.args[0]) % c.args[1:] for c in logger.info.call_args_list)
+
+
+def test_scene_off_says_the_arm_is_still_held(scene_env, body, monkeypatch):
+    hold.claim(body, hold.EXPLICIT)
+    scene.activate_scene(SceneRequest(scene="reading"))
+    monkeypatch.setattr(state, "logger", Mock())
+    scene.deactivate_scene()
+    assert "Scene off: scene hold released, servo still held by explicit" in _logged(state.logger)
+
+
+def test_scene_off_with_no_other_owner_says_released(scene_env, body, monkeypatch):
+    scene.activate_scene(SceneRequest(scene="reading"))
+    monkeypatch.setattr(state, "logger", Mock())
+    scene.deactivate_scene()
+    assert "Scene off: servo released" in _logged(state.logger)
+
+
+def test_led_override_says_the_arm_is_still_held(led_env, body, monkeypatch):
+    hold.claim(body, hold.EXPLICIT)
+    monkeypatch.setattr(state, "logger", Mock())
+    led_env._end_scene()
+    assert ("Scene ended by an LED override: scene hold released, servo still held by explicit"
+            in _logged(state.logger))
