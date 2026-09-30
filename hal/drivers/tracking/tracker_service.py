@@ -14,6 +14,7 @@ import numpy as np
 import numpy.typing as npt
 
 from hal import app_state
+from hal.drivers.motors import hold
 from hal.drivers.tracking import constants as C
 from hal.safety.policy import cap_speed_dps
 from hal.drivers.tracking.detection import ObjectDetector
@@ -298,7 +299,7 @@ class TrackerService:
         """Background loop: tracker update at FAST_LOOP_FPS + YOLO background correction."""
         state = self._state
 
-        animation_service._hold_mode = True
+        hold.claim(animation_service, hold.TRACKING)
         animation_service._tracking_active = True
         logger.info("Servo hold mode + tracking lock ON")
 
@@ -783,7 +784,7 @@ class TrackerService:
 
         finally:
             animation_service._tracking_active = False
-            animation_service._hold_mode = False
+            hold.release(animation_service, hold.TRACKING)
             state.running.clear()
 
             self._follower.join(timeout=2.0)

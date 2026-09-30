@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
+from hal.drivers.motors import hold
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
@@ -214,6 +215,8 @@ def resume_servos():
 def hold_servos():
     """Hold current pose -- suppress idle/ambient animations, torque stays ON."""
     svc = _svc()
+    # Claim first: a claim on an unheld body drops owners left over from before a resume.
+    hold.claim(svc, hold.EXPLICIT)
     svc.hold(explicit=True)
     return {"status": "ok"}
 

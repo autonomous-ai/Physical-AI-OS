@@ -8,6 +8,7 @@ from fastapi import APIRouter, HTTPException
 
 import hal.app_state as state
 from hal import config, privacy
+from hal.drivers.motors import hold
 from hal.models import (
     SceneListResponse,
     SceneRequest,
@@ -95,28 +96,24 @@ def activate_scene(req: SceneRequest):
 
     aim_dir = preset.get("aim")
     servo_mode = preset.get("servo")
-    if aim_dir and state.animation_service:
+    svc = state.animation_service
+    # Only this scene's own hold is ours to drop; tracking and explicit holds stay.
+    if svc and hold.release(svc, hold.SCENE) and servo_mode != "hold":
+        state.logger.info("Scene %s: servo released", req.scene)
+    if aim_dir and svc:
         from hal.routes.servo import aim_servo
-
-        # Release hold before aiming so the move isn't blocked.
-        if state.animation_service._hold_mode:
-            state.animation_service._hold_mode = False
-            state.animation_service._hold_explicit = False
 
         def _aim_then_hold():
             aim_servo(ServoAimRequest(direction=aim_dir))
-            if servo_mode == "hold":
-                state.animation_service._hold_mode = True
+            # The scene may have ended while the arm was moving.
+            if servo_mode == "hold" and state._active_scene == req.scene:
+                hold.claim(svc, hold.SCENE)
                 state.logger.info("Scene %s: servo hold (after aim)", req.scene)
 
         threading.Thread(target=_aim_then_hold, daemon=True, name=f"scene-aim-{aim_dir}").start()
-    elif servo_mode == "hold" and state.animation_service:
-        state.animation_service._hold_mode = True
+    elif servo_mode == "hold" and svc:
+        hold.claim(svc, hold.SCENE)
         state.logger.info("Scene %s: servo hold", req.scene)
-    elif servo_mode != "hold" and state.animation_service and state.animation_service._hold_mode:
-        state.animation_service._hold_mode = False
-        state.animation_service._hold_explicit = False
-        state.logger.info("Scene %s: servo released", req.scene)
 
     cam = preset.get("camera")
     if cam == LST_OFF:
@@ -170,9 +167,7 @@ def deactivate_scene():
     state._save_user_led_state(None)
     state._cancel_scene_speaker_drain()
 
-    if state.animation_service and state.animation_service._hold_mode:
-        state.animation_service._hold_mode = False
-        state.animation_service._hold_explicit = False
+    if hold.release(state.animation_service, hold.SCENE):
         state.logger.info("Scene off: servo released")
 
     # Under a privacy lock, retarget the overlay snapshot instead of restoring the scene's mute.
