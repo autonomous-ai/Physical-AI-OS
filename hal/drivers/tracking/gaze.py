@@ -36,6 +36,8 @@ _last_near_face_t: float = 0.0
 _last_far_face_t: float = 0.0
 # A repoint that landed on a body is waiting for its climb; 0.0 when none is.
 _repoint_climb_t: float = 0.0
+# When the last repoint turned. A face seen before this was seen from the OLD pose.
+_repoint_started_t: float = 0.0
 _blind_pitch_steps: int = 0
 _climb_gave_up: bool = False
 # A VAD-confirmed utterance found no recent usable face. The watcher consumes
@@ -1057,6 +1059,10 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     if not (config.GAZE_REPOINT_ENABLED and config.GAZE_WAKE_ENABLED):
         _repoint_quiet("disabled", now)
         return False
+    if _repoint_climb_t > 0.0:
+        # Turning again would drop the head the climb raised and judge one sighting twice.
+        _repoint_quiet("a climb is still judging the last repoint", now)
+        return False
     if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
         return False
     if (now - _last_face_t) < config.GAZE_REPOINT_SKIP_IF_FACE_S:
@@ -1119,8 +1125,8 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # Owe the estimate a verdict. Deliberately not measured here: a synchronous
         # detect would need the detector lock and a settle, inside a watcher whose whole
         # design is never to make a live look wait.
-        global _repoint_pending_t, _repoint_subject_t_before
-        _repoint_pending_t = now
+        global _repoint_pending_t, _repoint_subject_t_before, _repoint_started_t
+        _repoint_pending_t = _repoint_started_t = now
         _repoint_subject_t_before = _last_subject_t
         if force:
             logger.info(
@@ -1158,6 +1164,11 @@ def _score_repoint(hit: bool, why: str, now: float) -> None:
         _maybe_sweep(now, confirmed_miss=True)
 
 
+def _face_evidence_since() -> float:
+    """Faces count only if seen after the turn: before it they were seen from the old pose."""
+    return max(_repoint_subject_t_before, _repoint_started_t)
+
+
 def _verify_repoint(now: float) -> None:
     """Tell the bearing whether turning to it actually found the user.
 
@@ -1175,11 +1186,11 @@ def _verify_repoint(now: float) -> None:
     if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
         return
     _repoint_pending_t = 0.0
-    since = _repoint_subject_t_before
+    since = _face_evidence_since()
     if _last_near_face_t > since:
         _score_repoint(True, "found a face near enough to be them", now)
         return
-    if _last_subject_t > since:
+    if _last_subject_t > _repoint_subject_t_before:
         logger.info("[gaze] repoint found a body, no near face yet — climbing before "
                     "judging the bearing")
         _repoint_climb_t = now
@@ -1196,7 +1207,7 @@ def _finish_repoint_climb(now: float) -> None:
     """Judge a body-only repoint on the face its climb turned up."""
     global _repoint_climb_t
 
-    since = _repoint_subject_t_before
+    since = _face_evidence_since()
     if _last_near_face_t > since:
         _repoint_climb_t = 0.0
         _score_repoint(True, "climb found a face near enough to be them", now)
@@ -1259,13 +1270,28 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     if res.found:
         discard_samples()
         discard_dx_samples()
-        try:
-            from hal.drivers.tracking import bearing_sampler
+        _learn_from_user_sweep(res)
 
-            if bearing_sampler.sample_now():
-                logger.info("[gaze] learned a bearing from the look-around")
-        except Exception as e:
-            logger.debug("[gaze] could not sample after the look-around: %s", e)
+
+def _learn_from_user_sweep(res: Any) -> None:
+    """Record the face the sweep's user check passed, and only that face (#545).
+
+    Re-sampling here would pick whichever near face the detector returns, which can be
+    the co-worker the check just ranked below the user.
+    """
+    if not getattr(res, "centred", False):
+        logger.info("[gaze] look-around found the user but never centred — bearing not recorded")
+        return
+    try:
+        import hal.app_state as state
+        from hal.drivers.tracking import user_bearing
+
+        positions = state.animation_service.get_positions()
+        yaw = float(positions.get("base_yaw.pos", 0.0))
+        if user_bearing.record_sighting(yaw, pose=dict(positions)):
+            logger.info("[gaze] learned a bearing from the look-around: %+.1f", yaw)
+    except Exception as e:
+        logger.debug("[gaze] could not record the look-around bearing: %s", e)
 
 
 def _loop() -> None:
@@ -1374,6 +1400,7 @@ def reset_for_test() -> None:
     globals()["_last_near_face_t"] = 0.0
     globals()["_last_far_face_t"] = 0.0
     globals()["_repoint_climb_t"] = 0.0
+    globals()["_repoint_started_t"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None

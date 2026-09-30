@@ -1746,25 +1746,6 @@ def test_with_a_bearing_the_long_cooldown_still_holds(sweeper):
     assert len(sweeper) == 1, "the short leash leaked into the normal case"
 
 
-def test_finding_someone_teaches_the_lamp_where_they_are(monkeypatch):
-    """Finding the user refreshes the bearing sample immediately."""
-    from hal.drivers.tracking import bearing_sampler, search, user_bearing
-
-    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
-    monkeypatch.setattr(
-        search, "search_for_subject",
-        lambda *a, **kw: search.SearchResult(True, "found person", 2, 40.0))
-    asked = []
-    monkeypatch.setattr(bearing_sampler, "sample_now",
-                        lambda: asked.append(True) or True)
-    gaze._last_sweep_t = 0.0
-    gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
-
-    gaze._maybe_sweep(gaze.time.monotonic())
-    assert asked, "it found someone and learned nothing from it"
-
-
 def test_a_sweep_that_finds_nobody_teaches_nothing(sweeper, monkeypatch):
     """There is no sighting to learn from, and asking would only cost a look."""
     from hal.drivers.tracking import bearing_sampler
@@ -2060,3 +2041,56 @@ def test_the_watcher_loop_watches_the_edge():
     import inspect
 
     assert "_note_conversation_edge()" in inspect.getsource(gaze._loop)
+
+
+def test_no_repoint_while_a_climb_is_pending(body):
+    """Review I1: a new repoint would drop the head back and re-judge the same sighting."""
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._repoint_climb_t = gaze.time.monotonic() - 1.0
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is False
+    assert body.moves == []
+
+
+def test_a_face_seen_before_the_turn_is_not_evidence(body, monkeypatch):
+    """Review I2: a near face at the OLD pose must not confirm the bearing."""
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._last_subject_t = 0.0
+    t = gaze.time.monotonic()
+    gaze._last_near_face_t = t - 2.0  # before the move, after the last body
+    assert gaze._maybe_repoint(t, force=True) is True
+    gaze._verify_repoint(t + config.GAZE_REPOINT_VERIFY_S + 1.0)
+    assert calls == [False], "a face seen before the turn confirmed the bearing"
+
+
+def _found_sweep(monkeypatch, centred=True):
+    import hal.app_state as state
+    from hal.drivers.tracking import bearing_sampler, search, user_bearing
+
+    svc = _Svc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
+    monkeypatch.setattr(search, "search_for_subject", lambda **kw: search.SearchResult(
+        True, "found face", 3, 12.0, 0.0, 1, "face", (300, 100, 60, 60), centred))
+    sampled, recorded = [], []
+    monkeypatch.setattr(bearing_sampler, "sample_now", lambda: sampled.append(1) or True)
+    monkeypatch.setattr(user_bearing, "record_sighting",
+                        lambda yaw, pose=None, now=None: recorded.append((yaw, pose)) or True)
+    gaze._last_sweep_t = 0.0
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    return svc, sampled, recorded
+
+
+def test_a_user_sweep_records_the_face_it_checked(monkeypatch):
+    """Review I3: re-sampling picked any near face, not the one that passed the check."""
+    svc, sampled, recorded = _found_sweep(monkeypatch)
+    assert sampled == [], "the loose sampler replaced the checked face"
+    assert len(recorded) == 1
+    assert recorded[0][0] == pytest.approx(svc.get_positions()["base_yaw.pos"])
+
+
+def test_an_uncentred_sweep_hit_records_nothing(monkeypatch):
+    _svc, sampled, recorded = _found_sweep(monkeypatch, centred=False)
+    assert sampled == [] and recorded == []
