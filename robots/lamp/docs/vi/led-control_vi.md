@@ -48,6 +48,36 @@ frame đang chờ có thể bật LED lại hoặc chạm vào SPI đã đóng. 
 strip giả và worker thread thật; chưa chứng minh tín hiệu GPIO không bị nhiễu sau
 khi kernel tắt.
 
+### Fallback shutdown cho Orange Pi
+
+Rootfs lamp có `lamp-led-shutdown.service`, được HAL kéo vào qua drop-in
+`20-led-shutdown.conf`. Khi start, service không ghi LED. Khi shutdown/reboot,
+thứ tự đảo lại: đợi HAL thoát, chờ **5 giây**, rồi chạy
+`/usr/local/libexec/lamp-led-off.py` khi filesystem vẫn còn mount. Timeout stop
+là **15 giây**. Restart riêng HAL không chạy stop của service độc lập này.
+`ExecCondition` bỏ qua board khác sun60iw2 hoặc thiếu SPI3.0; Raspberry Pi không
+chạy fallback này.
+
+Frame off độc lập khớp bản hardware: 32 pixel GRB đen, 6.4 MHz, primer LOW 8 byte
+và reset LOW 64 byte. Script không import HAL, không chạy demo và không đổi mux
+GPIO. Script từ chối ghi khi HAL còn active/đang dừng, báo lỗi SPI ra ngoài và
+chỉ log gửi xong, không coi đó là đọc lại trạng thái LED thật. Trên `.142`, hai
+lượt shutdown quan sát với delay 5 giây không còn đốm, gồm lượt đang TTS/emotion;
+delay 300 ms chưa giải quyết được. Đây là fallback, chưa chứng minh nguyên nhân gốc.
+
+Triển khai bằng **gói device/rootfs lamp**, không phải update riêng HAL. Sau khi
+copy thủ công, chạy `systemctl daemon-reload` rồi restart HAL để kích hoạt.
+Gỡ các unit thử LED/demo cũ trước để tránh nhiều fallback cùng ghi LED.
+Rollback: stop HAL, stop fallback, xóa drop-in HAL, unit và helper, reload systemd
+rồi start HAL. Không stop fallback thủ công khi HAL đang chạy.
+
+Vòng đời HAL cũng đợi tối đa **20 giây** để cleanup phần cứng (trước là 5);
+cleanup chưa xong hoặc lỗi sẽ báo shutdown thất bại và thoát khác 0, thay vì báo
+hoàn tất. Timeout systemd HAL vẫn là 30 giây, có khoảng cho HTTP drain 5 giây.
+Không chạy cleanup thứ hai song song với owner phần cứng còn sống. Thay đổi này
+sửa lỗi báo shutdown hoàn tất quá sớm đã quan sát, chưa chứng minh nguyên nhân
+của mọi lần LED sáng đốm.
+
 ## Endpoints
 
 | Method | Endpoint | Mô tả |
