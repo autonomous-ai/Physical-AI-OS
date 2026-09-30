@@ -625,6 +625,20 @@ attend to me", and the pose an interrupted sweep freezes in is not a resting one
 cocked 45° over, facing a wall. Found → the head is straightened by turning the *base* as far as the
 head was turned, so the camera keeps pointing at the subject with the head level.
 
+**When the gaze watcher sweeps, it looks for the user, not for anybody (#545).** `gaze._maybe_sweep`
+calls `search_for_subject(for_user=True)`. Every other caller keeps today's behaviour:
+`POST /servo/search` (objects, `exhaustive`) and look-aim's own fallback sweep. At each look it
+watches the faces in view for about 1.5 s (`user_check.observe_faces`, 6 frames; it skips the dwell
+when the first frame has no face) and stops only on a face that passes `user_check.adopts_bearing`:
+at least 8% of the frame tall, **and** either a fresh face-ID friend label
+(`HAL_GAZE_BEARING_IDENTITY_FRESH_S`, 5 s) or facing the lamp in
+`HAL_GAZE_BEARING_MIN_FACING_RATIO` (40%) of the measured samples. Candidates are ranked by facing,
+then face size. A body alone never ends the sweep, and centring follows that face
+(`_user_face_probe`), not the nearest person box. If no face passes, the sweep reports not found and
+takes the ordinary exit back to its starting pose. Device-observed 2026-09-29: the sweep took "the
+nearest" of 2–3 co-workers (`h=304px`) and framing then followed a side-on stranger to
+`base_yaw −97.4`.
+
 **With no bearing yet** — a fresh unit, or one whose bearing was reset — the sweep first rests the arm
 on the idle recording's own pose rather than starting from wherever it happens to stand. A loop that
 has been walking the head around does not leave it in a pose anyone chose, and a sweep from a camera
@@ -929,6 +943,8 @@ spot.
 | `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~20 s sweep stays the escalation, not the reflex. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Between sweeps when a bearing exists. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
+| `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Facing share needed to adopt a new bearing. Lower than the wake gate's 0.6: a still user measured 50%. Not 0.3: the window holds 2–3 samples, so that is one glance. |
+| `HAL_GAZE_BEARING_IDENTITY_FRESH_S` | 5 | A face-ID friend label counts as "this face" only this long after that friend was seen. |
 
 ### Remembered user bearing
 

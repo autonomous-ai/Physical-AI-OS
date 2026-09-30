@@ -1250,7 +1250,7 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     try:
         from hal.drivers.tracking.search import search_for_subject
 
-        res = search_for_subject()
+        res = search_for_subject(for_user=True)
     except Exception as e:
         logger.warning("[gaze] look-around unavailable: %s", e)
         return

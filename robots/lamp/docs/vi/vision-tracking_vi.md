@@ -623,6 +623,20 @@ tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng
 đang nghiêng 45°, mặt hướng vào tường. Tìm thấy → đầu được dựng thẳng lại bằng cách xoay ĐẾ đúng bằng
 góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn.
 
+**Khi gaze watcher tự quét, nó tìm user chứ không tìm bất kỳ ai (#545).** `gaze._maybe_sweep`
+gọi `search_for_subject(for_user=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
+`POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
+nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
+chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
+`user_check.adopts_bearing`: cao ít nhất 8% khung hình, **và** hoặc có nhãn bạn bè face-ID còn mới
+(`HAL_GAZE_BEARING_IDENTITY_FRESH_S`, 5 s), hoặc nhìn về đèn trong
+`HAL_GAZE_BEARING_MIN_FACING_RATIO` (40%) số mẫu đo được. Ứng viên được xếp theo mức nhìn về đèn, rồi
+theo kích thước mặt. Chỉ có thân người thì không bao giờ kết thúc pha quét, và bước căn giữa bám theo
+cái mặt đó (`_user_face_probe`) chứ không bám box người gần nhất. Nếu không mặt nào qua được, pha quét
+báo không tìm thấy và đi theo lối thoát bình thường về tư thế lúc bắt đầu. Đo trên thiết bị
+29/09/2026: pha quét chọn "người gần nhất" trong 2–3 đồng nghiệp (`h=304px`) và phần framing sau đó
+bám theo một người lạ đang nghiêng mặt tới tận `base_yaw −97.4`.
+
 **Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
 thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng
 không để lại tư thế nào do ai chọn cả, và quét từ một camera đang chúc xuống bàn thì có kỹ đến mấy
@@ -926,6 +940,8 @@ một bearing mới ngay tại chỗ.
 | `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và pha quét ~20 s vẫn là bước leo thang chứ không phải phản xạ. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
+| `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |
+| `HAL_GAZE_BEARING_IDENTITY_FRESH_S` | 5 | Nhãn bạn bè face-ID chỉ được tính là "cái mặt này" trong khoảng thời gian này kể từ lúc thấy người đó. |
 
 ### Bearing người dùng đã ghi nhớ
 

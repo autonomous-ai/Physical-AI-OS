@@ -1579,7 +1579,7 @@ def sweeper(monkeypatch):
     calls = []
 
     def fake(*a, **kw):
-        calls.append(True)
+        calls.append(kw)
         return search.SearchResult(False, "nobody found", 9)
 
     monkeypatch.setattr(search, "search_for_subject", fake)
@@ -1592,6 +1592,11 @@ def sweeper(monkeypatch):
     gaze._last_sweep_t = 0.0
     gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
     return calls
+
+
+def test_the_gaze_sweep_looks_for_the_user(sweeper):
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    assert sweeper and sweeper[0].get("for_user") is True
 
 
 def test_a_repoint_that_finds_nobody_looks_around(sweeper):
