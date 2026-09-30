@@ -46,6 +46,10 @@ func BackendUplink() bool {
 // LogFile is os-server's rotating log file.
 func LogFile() string { return envOr("OS_LOG_FILE", "/var/log/os-server.log") }
 
+// GELFSpoolDir holds log records not shipped yet (first setup has no key or
+// internet). Under /var/lib because /var/log is RAM (zram) on devices.
+func GELFSpoolDir() string { return envOr("OS_GELF_SPOOL_DIR", "/var/lib/autonomous/gelf-spool") }
+
 // HALLogFile is HAL's rotating log file, read for the web UI's HAL log tab.
 func HALLogFile() string { return envOr("OS_HAL_LOG_FILE", "/var/log/hal/server.log") }
 

@@ -220,14 +220,30 @@ restarts) is *not* uncertain: the prompt never left the device, so the request
 fails but the conversation stays usable.
 
 Native mode also requires the OS compatibility marker above: the unpatched
-Runs API omits tool-call IDs/results and cache details needed by the existing
-handler. The compatibility patch adds `tool.call.started` / `tool.call.completed`
+Runs API omits full tool-call IDs/arguments/results needed by the existing
+handler (0.21.1 also omits cache details). The compatibility patch adds `tool.call.started` / `tool.call.completed`
 with real call IDs, arguments and results, plus `cache_read_tokens` and
 `cache_write_tokens` in usage. The adapter reuses the Responses translator and
 maps cache counters into `input_tokens_details`; legacy `tool.started` /
 `tool.completed` progress is ignored to avoid duplicate callbacks. If the patch
 is absent or refuses an unknown source shape, keep Responses until a verified
 patch is installed and the gateway restarts.
+
+The embedded OS patch accepts the verified source shapes of Hermes 0.21.1
+(`v2026.9.7`) and 0.21.5 (`v2026.9.24`). For 0.21.5 it preserves upstream cache
+counters and the interim assistant callback; it only adds structured tool
+evidence and the capability marker. Selection uses source shape and runtime
+capabilities, not a version-string switch. Unknown or partially patched shapes
+remain rejected. This is still a local compatibility patch, not a patch-free
+native adapter: upstream tool previews cannot replace full tool results.
+
+`TestLocalHermesRunsIntegration` is opt-in: point
+`HERMES_INTEGRATION_ENDPOINT_FILE` at a private JSON file containing `url` and
+`key` for an isolated, patched Hermes API, then run
+`go test -count=1 -run '^TestLocalHermesRunsIntegration$' -v ./runtimes/hermes`.
+It calls the configured LLM, steers during a real terminal tool call, checks full
+tool results and call IDs, and stops a second run. Use a scratch session/home
+with personal hooks disabled; normal tests skip this paid integration check.
 
 Sensing/pose markers are stripped before send using the same regexes as OpenClaw
 (`[snapshot: …]`, `[pose_bucket: …]`, `[pose_worst: …]`) so the agent never sees

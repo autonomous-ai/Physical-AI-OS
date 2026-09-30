@@ -14,6 +14,7 @@ import (
 	migratepersona "go.autonomous.ai/os/system/agent/migrate_persona"
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/osreset"
+	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/server/serializers"
 )
 
@@ -24,6 +25,7 @@ var deviceWipePaths = []string{
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
 	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
+	syspath.GELFSpoolDir(),                          // unshipped logs (may hold speech) must not ship with the next owner's key
 }
 
 // FactoryResetMinInterval is the minimum gap between two factory-reset

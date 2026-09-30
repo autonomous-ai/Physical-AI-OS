@@ -30,6 +30,7 @@ def _service(driver):
     svc = RGBService.__new__(RGBService)
     svc._driver_lock = threading.RLock()
     svc._safety = None
+    svc._closing = False
     svc._driver = driver
     svc.led_count = 32
     svc.logger = mock.Mock()

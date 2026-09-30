@@ -1,5 +1,13 @@
 # Bootstrap & OTA System
 
+Lamp device rootfs updates include an Orange Pi-only post-HAL LED blackout
+service (5-second delay). Device OTA reloads systemd after applying the overlay
+and after restoring a rollback, before restarting services; setup also reloads
+after applying a hardware override. Image builders already copy this rootfs.
+No HAL-only OTA installs this fallback. See the
+[LED shutdown lifecycle](../robots/lamp/docs/led-control.md#orange-pi-shutdown-fallback)
+for activation, limits and rollback.
+
 OrangePi images defer the vendor MOTD update-count job (`orangepi-apt-updates`) by 120 seconds after boot to avoid competing with HAL for storage reads. Only its exact `@reboot root /usr/lib/orangepi/orangepi-apt-updates` cron entry changes; the daily count and APT/security update schedules remain unchanged. Existing devices can apply the same tuning with `sudo python3 scripts/imager/lib/defer_orangepi_update_count.py` after copying the script onto the device. The helper is idempotent, skips missing/customized entries, and keeps the original at `/var/backups/autonomous/orangepi-updates.before-boot-delay`. Restore that file to `/etc/cron.d/orangepi-updates` to undo the tuning. This is an image/device configuration change, not part of a HAL-only OTA.
 
 ## 1. Overview
@@ -526,6 +534,15 @@ set up yet), `Serve()` does not start the poll loop or healthcheck server. It lo
 `waiting for metadata_url in bootstrap config` and reloads
 `/root/config/bootstrap.json` every 30s until a URL appears, then proceeds.
 Nothing is silent.
+
+**Log shipping**: bootstrap logs through the shared logger as
+`_service_name: "bootstrap"` (it used to be filed as `os-server`). It has no
+config-change signal, so `RunLogRelay` (`system/bootstrap/log_relay.go`) re-reads
+`/root/config/config.json` every minute and arms the relay with the device's
+Autonomous key (same rule as os-server). Until a key exists — a fresh device, or
+an OTA that runs during setup — its records wait in the spool
+(`/var/lib/autonomous/gelf-spool/bootstrap.jsonl`) and are replayed once it ships. See
+[setup-flow.md](setup-flow.md#setup-logs-reach-graylog-even-when-setup-fails).
 
 ### State (`/root/bootstrap/state.json`)
 

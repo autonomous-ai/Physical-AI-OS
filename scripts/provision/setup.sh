@@ -1317,6 +1317,8 @@ stage_devices() {
       || { echo "[stage] ERROR: Hardware override configuration failed" >&2; return 1; }
     cp -a "$dest/rootfs/." / \
       || { echo "[stage] ERROR: Hardware overlay failed" >&2; return 1; }
+    systemctl daemon-reload \
+      || { echo "[stage] ERROR: Hardware service reload failed" >&2; return 1; }
     if systemctl is-active --quiet hal || systemctl is-enabled --quiet hal; then
       systemctl restart hal \
         || { echo "[stage] ERROR: HAL restart after hardware overlay failed" >&2; return 1; }
