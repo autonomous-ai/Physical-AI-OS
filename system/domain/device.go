@@ -419,6 +419,12 @@ const (
 
 	// KindFaceEnroll enrolls one face photo via HAL (MQTT twin of HAL POST /face/enroll).
 	KindFaceEnroll = "face.enroll"
+
+	// KindFaceOwners lists enrolled people via HAL GET /face/owners.
+	KindFaceOwners = "face.owners"
+
+	// KindFaceRemove deletes one enrolled person via HAL POST /face/remove.
+	KindFaceRemove = "face.remove"
 )
 
 // Connector (MCP) data-kind prefixes; the connector code is the suffix (e.g. "connector.set.notion").
@@ -1000,6 +1006,11 @@ type MQTTFaceEnrollData struct {
 	Label            string `json:"label"`
 	TelegramUsername string `json:"telegram_username,omitempty"`
 	TelegramID       string `json:"telegram_id,omitempty"`
+}
+
+// MQTTFaceRemoveData is the Data payload for kind:"face.remove".
+type MQTTFaceRemoveData struct {
+	Label string `json:"label"`
 }
 
 // MQTTTTSPreviewData is the data payload for kind:"tts.preview".

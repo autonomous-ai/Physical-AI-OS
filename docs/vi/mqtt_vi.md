@@ -356,6 +356,8 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `skills.save` | Ghi một skill soạn sẵn vào thư mục skill của runtime đang chạy (đồng bộ) | `name`, `description`, `instructions` |
 | `skills.upload` | Cài một file `.md`, `.zip`, hoặc `.skill` vào runtime đang chạy (đồng bộ) | `filename`, `content_base64` |
 | `face.enroll` | Đăng ký một ảnh khuôn mặt qua HAL `POST /face/enroll` (bất đồng bộ; ack `starting`) | `image_base64`, `label`, tùy chọn `telegram_username`/`telegram_id` |
+| `face.owners` | Liệt kê người đã đăng ký qua HAL `GET /face/owners` (đồng bộ) | _(không có)_ |
+| `face.remove` | Xoá một người đã đăng ký qua HAL `POST /face/remove` (bất đồng bộ; ack `starting`) | `label` |
 | `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
@@ -953,7 +955,7 @@ TLS thay vì đi qua broker.
 **Bất đồng bộ**: payload không hợp lệ bị báo lỗi ngay, không gọi HAL. Payload
 hợp lệ ack `starting`, rồi `success` hoặc `failure` khi HAL xong. Trên device,
 các lệnh đăng ký chạy lần lượt từng lệnh một vì HAL ghi lại file metadata của
-người đó mà không khóa. `failure` mang lý do từ HAL trong `error`, ví dụ
+người đó mà không khóa (`face.remove` dùng chung khóa này). `failure` mang lý do từ HAL trong `error`, ví dụ
 `POST /face/enroll returned 400: <detail>` khi HAL từ chối ảnh, hoặc `503` khi
 sensing không chạy. Ảnh không bao giờ bị ghi vào log.
 
@@ -970,6 +972,42 @@ sensing không chạy. Ảnh không bao giờ bị ghi vào log.
 
 `data` chỉ có khi `success`. `enrolled_count` là số người đã đăng ký sau ảnh
 này, không phải số ảnh.
+
+#### `face.owners` / `face.remove`
+
+`face.owners` liệt kê những người đã đăng ký qua HAL `GET /face/owners`. Lệnh
+chạy đồng bộ (chỉ quét thư mục) nên không có ack `starting`. Bucket chung
+`unknown` của HAL (người chưa nhận diện) bị loại khỏi danh sách, và chỉ trả về
+các trường danh tính; log theo ngày mà HAL cũng trả thì không có.
+
+```json
+{"cmd": "data", "kind": "face.owners"}
+```
+```json
+{
+  "kind": "face.owners", "status": "success | failure", "error": "<message>",
+  "data": { "enrolled_count": 1, "persons": [
+    { "label": "alice", "telegram_username": "alice_tg", "telegram_id": "123456789",
+      "photo_count": 2, "photos": ["1711929600000.jpg", "1711929700000.jpg"] } ] }
+}
+```
+
+`face.remove` xoá ảnh của một người qua HAL `POST /face/remove`, rồi HAL
+train lại từ các ảnh còn lại. Lệnh ack `starting`, rồi `success` hoặc
+`failure`, và dùng chung khóa với `face.enroll` nên remove không bao giờ chạy
+chồng lên một lần đăng ký. `label` bắt buộc (1–64 ký tự); `unknown` bị từ chối
+mà không gọi HAL. Label không tồn tại trả lỗi `POST /face/remove returned
+404: person not found`.
+
+```json
+{"cmd": "data", "kind": "face.remove", "data": {"label": "alice"}}
+```
+```json
+{
+  "kind": "face.remove", "status": "starting | success | failure", "error": "<message>",
+  "data": { "status": "ok", "label": "alice", "enrolled_count": 0 }
+}
+```
 
 #### `chat.send` + `chat.event`
 
@@ -1299,6 +1337,7 @@ Router MQTT của os-server không có case `ota`: message bị log là `unknown
 | `system/server/device/delivery/mqtt/skills_install_store_handler.go` | Handle `skills.install_store` (async catalog download → `AgentGateway.InstallSkillArchive`) |
 | `system/server/device/delivery/mqtt/skills_upload_handler.go` | Handle `skills.upload` (SKILL.md inline → `AgentGateway.InstallSkillMarkdown`) |
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (kiểm tra payload, rồi gọi bất đồng bộ `hal.FaceEnroll` → HAL `POST /face/enroll`) |
+| `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, bỏ bucket `unknown`) và `face.remove` (bất đồng bộ → HAL `POST /face/remove`) |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (đọc file của một skill đã cài: danh sách, hoặc nội dung một file) |
 | `system/server/device/delivery/mqtt/skills_uninstall_handler.go` | Handle `skills.uninstall` |
 | `system/server/device/delivery/mqtt/chat_send_handler.go` | Handle `chat.send` — forward turn qua loopback tới sensing endpoint |

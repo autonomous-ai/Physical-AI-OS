@@ -317,6 +317,10 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleScheduleRun(env)
 	case domain.KindFaceEnroll:
 		return h.handleFaceEnroll(env)
+	case domain.KindFaceOwners:
+		return h.handleFaceOwners(env)
+	case domain.KindFaceRemove:
+		return h.handleFaceRemove(env)
 	default:
 		slog.Warn("unknown data kind", "component", "mqtt", "kind", env.Kind)
 		return h.publishDataResult(env.Kind, "failure", "unknown kind: "+env.Kind, nil)

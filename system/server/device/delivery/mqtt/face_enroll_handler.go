@@ -17,8 +17,8 @@ const faceEnrollMaxBytes = 10 << 20
 // faceEnrollLabelMaxLen matches HAL FaceEnrollRequest.label max_length.
 const faceEnrollLabelMaxLen = 64
 
-// faceEnrollMu serializes enrollments: HAL rewrites the user's metadata.json
-// without a lock, so back-to-back photos for one person must not overlap.
+// faceEnrollMu serializes face.enroll and face.remove: HAL rewrites the
+// user's metadata.json and retrains without a lock, so they must not overlap.
 var faceEnrollMu sync.Mutex
 
 // handleFaceEnroll handles kind="face.enroll" — the MQTT counterpart of
