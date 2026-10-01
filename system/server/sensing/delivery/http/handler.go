@@ -673,13 +673,19 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	hasImage := len(req.Images) > 0 && req.Type != "motion.activity"
 
 	sourceLabel := "HAL"
-	if isChat {
+	switch req.Type {
+	case "web_chat":
 		sourceLabel = "WebMonitor"
+	case "mqtt_chat":
+		sourceLabel = "MobileApp"
 	}
 	slog.Info("INBOUND from "+sourceLabel+" → agent",
 		"component", "sensing",
 		"backend", h.agentGateway.Name(),
 		"type", req.Type,
+		// The agent gets the same "[user] " text for voice, monitor chat and
+		// phone chat; this field is the only place they are told apart.
+		"source", sensingmsg.TurnSource(req.Type, req.Message),
 		"runId", runID,
 		"reqId", reqID,
 		"hasImage", hasImage,

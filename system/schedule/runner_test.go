@@ -78,8 +78,8 @@ func TestRunner_FiresDueScheduleViaSendSystemChatMessage(t *testing.T) {
 	r := NewRunner(store, gw, "device-1", func(rr RunReport) { reports = append(reports, rr) })
 	r.tick(now)
 
-	if len(gw.sent) != 1 || gw.sent[0] != sch.Instructions {
-		t.Fatalf("sent = %v, want exactly [%q]", gw.sent, sch.Instructions)
+	if want := sch.Instructions + "\n[via:schedule]"; len(gw.sent) != 1 || gw.sent[0] != want {
+		t.Fatalf("sent = %v, want exactly [%q]", gw.sent, want)
 	}
 	if len(reports) != 1 || reports[0].Status != "success" || reports[0].ScheduleID != "s1" {
 		t.Fatalf("reports = %+v", reports)
@@ -422,7 +422,7 @@ func TestRunner_SingleFlight(t *testing.T) {
 	r := NewRunner(store, gw, "device-1", nil)
 	r.tick(now)
 
-	if len(gw.sent) != 1 || gw.sent[0] != "one" {
+	if len(gw.sent) != 1 || gw.sent[0] != "one\n[via:schedule]" {
 		t.Fatalf("sent = %v, want exactly [\"one\"] in this tick — the second schedule must wait, not run concurrently", gw.sent)
 	}
 	got2, _ := store.Get("s2")
@@ -432,7 +432,7 @@ func TestRunner_SingleFlight(t *testing.T) {
 
 	gw.busy = false
 	r.tick(now.Add(time.Minute))
-	if len(gw.sent) != 2 || gw.sent[1] != "two" {
+	if len(gw.sent) != 2 || gw.sent[1] != "two\n[via:schedule]" {
 		t.Fatalf("sent = %v, want the deferred schedule to run once the agent is free", gw.sent)
 	}
 }
@@ -486,7 +486,7 @@ func TestRunner_RunNowDefersWhenBusyAndDoesNotTouchNextRunAt(t *testing.T) {
 	if !ok {
 		t.Fatal("RunNow should have run against a free gateway")
 	}
-	if len(freeGW.sent) != 1 || freeGW.sent[0] != "hi" {
+	if len(freeGW.sent) != 1 || freeGW.sent[0] != "hi\n[via:schedule]" {
 		t.Fatalf("sent = %v", freeGW.sent)
 	}
 	if len(reports) != 1 {

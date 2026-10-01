@@ -659,6 +659,11 @@ class GeminiLiveAgent(VoiceAgentBase):
         _outcome_received = False
         _routing_received = False
         _direct_answer_confirmed = False
+        # Log-only: whether the model called complete_response this turn. In an
+        # IDLE session that call is advisory and sets nothing else, so without
+        # this the "closed without handoff" log could not tell a real answer
+        # from a filler. Never read by any routing decision.
+        _complete_response_seen = False
         interaction_status = None
         interaction_deadline = 0.0
         _turn_transcript = ""
@@ -825,6 +830,23 @@ class GeminiLiveAgent(VoiceAgentBase):
                 await asyncio.gather(pending_message, return_exceptions=True)
                 pending_message = None
 
+        def _log_closed_without_handoff(transcript: str, fallback: bool, path: str) -> None:
+            # Log-only; nothing here changes the outcome. One line for every
+            # turn the realtime model answered by itself (spoke, no handoff).
+            # Most are real answers; a filler such as "Let me take a look at
+            # that" here promised work nobody will do. The model does not call
+            # complete_response reliably, so it is reported, not filtered on.
+            # Silence-marker-only generations ("<no speech>", "{pause}") are skipped.
+            reply = _spoken_response.replace("<no speech>", "").replace("{pause}", "").strip()
+            if fallback or _routing_received or not reply:
+                return
+            logger.info(
+                "[realtime] voice answered without handoff: path=%s status=%s complete_response_seen=%s "
+                "model=%s transcript=%r reply=%r",
+                path, interaction_status, _complete_response_seen, _grace_model,
+                transcript.strip()[:200], reply[:200],
+            )
+
         async def _finalize_turn_complete(delayed_playback_ack: bool) -> None:
             await cancel_pending_read()
             transcript = getattr(self, "_user_transcript", "") or _turn_transcript
@@ -833,6 +855,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
                 if _initial_speech or _continuation or _progress_until:
                     self._requires_fresh_session = True
+            _log_closed_without_handoff(transcript, fallback, "turn_complete")
             self._awaiting_playback_turn_complete = False
             self._first_audio_received = False
             self._user_transcript = ""
@@ -860,6 +883,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 logger.warning("[realtime] No confirmed outcome after NON_BLOCKING response — forwarding to main")
                 if _initial_speech or _continuation or _progress_until:
                     self._requires_fresh_session = True
+            _log_closed_without_handoff(transcript, fallback, "generation_complete")
             self._user_transcript = ""
             self._awaiting_playback_turn_complete = True
             self._first_audio_received = False
@@ -931,6 +955,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _last_continuation_output_until = _progress_until = 0.0
                 _outcome_received = _routing_received = False
                 _direct_answer_confirmed = _initial_speech = False
+                _complete_response_seen = False
                 _empty_terminal_pending = False
                 _spoken_response = _continuation_text = ""
                 _continuation.clear()
@@ -1513,6 +1538,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     logger.info("[realtime] Function call: %s (call_id=%s, after_terminal=%s)",
                                 fc.name, fc.id, _deferred_finalize is not None)
                     if _requires_outcome and fc.name == "complete_response":
+                        _complete_response_seen = True
                         _continuation_active_until = 0.0
                         await _check_continuation()
                         # This backend does not support scheduling=SILENT.

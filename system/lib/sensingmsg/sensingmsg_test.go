@@ -93,3 +93,43 @@ func TestBuildPresenceEnterNewFriendHasNoJoinRule(t *testing.T) {
 		t.Fatalf("friend-joins-friend presence.enter = %q, must not carry the stranger join rule", got)
 	}
 }
+
+func TestTurnSource(t *testing.T) {
+	tests := []struct {
+		eventType, message, want string
+	}{
+		{"web_chat", "hello", "web"},
+		{"mqtt_chat", "hello", "mobile"},
+		{"voice_command", "turn off the lights", "voice"},
+		{"voice_followup", "and the fan", "voice"},
+		{"voice_command", "[voice-instruction] Turn off the LEDs\n[transcript] …", "voice_handoff"},
+		{"voice", "[voice-instruction] Check my email\n[transcript] …", "voice_handoff"},
+		{"voice", "Unknown Speaker: [voice:voice_7] Clearly a disease.", "voice_ambient"},
+		{"voice_agent_handled", "[HANDLED] \"…\"", "voice_history"},
+		{"presence.enter", "Person detected", "sensing"},
+	}
+	for _, tt := range tests {
+		if got := TurnSource(tt.eventType, tt.message); got != tt.want {
+			t.Errorf("TurnSource(%q, %q) = %q, want %q", tt.eventType, tt.message, got, tt.want)
+		}
+	}
+}
+
+func TestBuildStampsExplicitSource(t *testing.T) {
+	tests := []struct{ eventType, message, wantPrefix, wantVia string }{
+		{"mqtt_chat", "turn on the fan", "[user] turn on the fan", "[via:mobile]"},
+		{"web_chat", "turn on the fan", "[user] turn on the fan", "[via:web]"},
+		{"voice_command", "turn on the fan", "[user] turn on the fan", "[via:voice]"},
+		{"voice", "overheard", "[user] [ambient] overheard", "[via:voice_ambient]"},
+		{"motion.activity", "sitting", "[activity] sitting", "[via:sensing]"},
+	}
+	for _, tt := range tests {
+		got := Build(tt.eventType, tt.message, "", "")
+		if !strings.HasPrefix(got, tt.wantPrefix) || !strings.HasSuffix(got, "\n"+tt.wantVia) {
+			t.Errorf("Build(%q) = %q, want prefix %q and last line %q", tt.eventType, got, tt.wantPrefix, tt.wantVia)
+		}
+	}
+	if got := Build("web_chat", "/status", "", ""); got != "/status" {
+		t.Errorf("slash command must pass through verbatim, got %q", got)
+	}
+}

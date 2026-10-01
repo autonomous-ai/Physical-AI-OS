@@ -229,6 +229,8 @@ func describeImage(ctx context.Context, cfg *config.Config, imageB64, prompt, mo
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("x-api-key", cfg.LLMAPIKey)
 	req.Header.Set("anthropic-version", "2023-06-01")
+	// Names where this call came from (logging only).
+	req.Header.Set("X-Auto-Source", "vision")
 
 	resp, err := httpClient.Do(req)
 	if err != nil {
