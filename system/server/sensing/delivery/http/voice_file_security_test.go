@@ -12,6 +12,8 @@ import (
 	"testing"
 
 	"github.com/gin-gonic/gin"
+
+	"go.autonomous.ai/os/system/lib/voicefile"
 )
 
 func removeSampleRequest(root, name, file string) *httptest.ResponseRecorder {
@@ -136,7 +138,7 @@ func TestVoiceDirectoryHandleSurvivesPathReplacement(t *testing.T) {
 	root := t.TempDir()
 	dir := makeVoiceFixture(t, root, "alice")
 	outside := makeVoiceFixture(t, t.TempDir(), "outside")
-	handle, err := openVoiceDirectory(root, "alice")
+	handle, err := voicefile.OpenDir(root, "alice")
 	if err != nil {
 		t.Fatal(err)
 	}
