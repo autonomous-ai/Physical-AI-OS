@@ -1,6 +1,6 @@
 ---
 name: harness-use
-description: Delegate digital work to agents on the computer paired through Harness; discover Store packages and prepare an agent when needed. For Lamp, prefer when connected for coding, research, documents, slides, spreadsheets, data analysis, design, CAD, simulation and media or music creation, without requiring an agent name or the words ask Harness. Select a suitable real agent or prepare one through the negotiated Store interface; continue tasks, inspect progress and answer agent questions. For a fresh task before any dispatch, confirmed offline/unpaired Harness lets main use its other available tools unless the user specified Harness or a remote target. Other devices use their persona routing policy. Conversation and device-local tasks keep their own workflows; explicit Buddy requests belong to Buddy.
+description: Delegate digital work to agents on the computer paired through Harness; discover Store packages and prepare an agent when needed. For Lamp, prefer when connected for coding, research deliverables, documents, slides, spreadsheets, data analysis, design, CAD, simulation and media or music creation, without requiring an agent name or the words ask Harness. Select a suitable real agent or prepare one through the negotiated Store interface; continue tasks, inspect progress and answer agent questions. For a fresh task before any dispatch, confirmed offline/unpaired Harness lets main use its other available tools unless the user specified Harness or a remote target. Other devices use their persona routing policy. Ordinary web lookup, reading, summarizing and explaining stay with main unless explicitly delegated or continuing a Harness task. Conversation and device-local tasks keep their own workflows; explicit Buddy requests belong to Buddy.
 ---
 
 # Harness use
@@ -13,7 +13,20 @@ When the current input includes `[harness-reply run_id=... channel=voice|web]`, 
 
 ## Connection and fallback before delegation
 
-Harness is Lamp's preferred digital assistant when connected, not a prerequisite for all digital work. Apply this policy before agent discovery or Store preparation:
+Harness is Lamp's preferred digital assistant for computer work and deliverables when connected.
+
+Route by the requested outcome, not by words such as website, latest, check, or research. For a fresh request whose result is an answer in this conversation, main uses its own available tools to search, read, summarize, explain or compare information, even when Harness is connected. Do not start Harness discovery or Store preparation just to read a blog. Prefer connected Harness for work in a computer app/project/workspace or creating/editing a deliverable such as code, a report, slides, a spreadsheet, a design or media. Do not invent a deliverable or broaden an information question into a research project. Explicit Harness/remote-agent/workspace requests and clear continuations of existing Harness tasks retain their target, including simple information questions. Device connectors and explicit alternative routes keep their workflows. If main cannot access a requested source, explain the missing capability; use Harness only when a concrete computer capability is needed, preserving the original task. Connection or a harness-reply marker alone does not select Harness.
+
+Examples of the boundary (same topic, different requested outcomes):
+
+- "Check the latest blog and explain what it is about" → main reads the source and answers.
+- "Compare these two articles for me" → main answers; comparison alone is not a request for a report or file.
+- "Research competitors and create a report with sources" → connected Harness produces the requested report.
+- "Update my website with a blog section" → connected Harness performs the project work.
+- "Ask my Harness agent to summarize this blog" → Harness, because the user selected that execution target.
+- "Summarize what you found" in an existing Harness research task → continue with that task's agent.
+
+Apply this policy before agent discovery or Store preparation:
 
 - For a **fresh task**, when trusted OS connection context or the helper's preflight confirms `HARNESS_OFFLINE` / `HARNESS_UNPAIRED` **before any dispatch**, and the user did not require Harness or a particular remote agent/workspace, stop the Harness path and execute with main's other available tools/skills. Do not wait, poll for reconnect, require opening/pairing the app, or promise deferred execution. Return the actual main-agent result through the normal response flow, not `NO_REPLY`.
 - Preserve the user's app, project and output constraints during fallback. A named app such as Blender alone is not an explicit Harness target, but main must have the tools to use that app; do not silently substitute an app, fabricate access to the remote workspace, or give a tutorial as if execution were done. If no available tool can satisfy the task, explain the limitation and give relevant Harness connection guidance. Buddy remains available only when explicitly requested.
@@ -64,7 +77,7 @@ Code to search for sushi restaurants” even when the requested agent may use a
 browser while it works. Do not fall back to `computer-use` or
 `agent-management` because an Autonomous Buddy pairing is absent.
 
-**Lamp's default digital assistant:** When the device persona is Lamp, a request to produce or change digital work prefers connected Harness without explicit delegation wording, subject to the connection and fallback policy above. This includes coding, research, reports, slides, spreadsheets, data analysis, design, CAD, engineering/scientific simulations and media or music creation; the list is illustrative, not an app-to-agent routing table. Preserve named apps, project constraints, output formats, dimensions and quantities. Do not replace an execution request with advice, or ask whether to use Harness merely because no agent was named. Other device personas keep their routing policy.
+**Lamp's default digital assistant:** When the device persona is Lamp, a request to produce or change digital work prefers connected Harness without explicit delegation wording, subject to the connection and fallback policy above. This includes coding, research producing a requested deliverable, reports, slides, spreadsheets, data analysis, design, CAD, engineering/scientific simulations and media or music creation; the list is illustrative, not an app-to-agent routing table. Preserve named apps, project constraints, output formats, dimensions and quantities. Do not replace an execution request with advice, or ask whether to use Harness merely because no agent was named. Other device personas keep their routing policy.
 
 Conversation and knowledge explanations, physical-device actions, lighting, sensing, music playback, reminders, memory and device-linked channels/connectors keep their existing workflows. "Explain CAD" is a knowledge question; "design a printable gear" is digital work. "Play a song" uses the device Music skill; "compose and export a soundtrack" is digital work. For mixed requests, preserve all parts and coordinate local work before the terminal Harness handoff when dependencies allow; do not drop a clause or claim an unperformed step is done.
 
@@ -79,7 +92,7 @@ Use `list` to discover real agents. New CLIs may also return `packageId`, `works
 
 ### Choose the execution target before sending
 
-First apply the device persona and the user's explicit route. For Lamp, a digital work request prefers delegation when connected, even without an agent name; apply the connection and fallback policy first. For other devices, task suitability alone does not imply Harness delegation. Ordinary conversation and device-linked contact requests keep their appropriate main-agent workflows.
+First apply the device persona and the user's explicit route. For Lamp, computer work or a requested deliverable prefers delegation when connected, even without an agent name; ordinary information requests stay with main unless explicitly delegated or continuing a Harness task; apply the connection and fallback policy first. For other devices, task suitability alone does not imply Harness delegation. Ordinary conversation and device-linked contact requests keep their appropriate main-agent workflows.
 
 - **Explicit target:** the user's current agent name or ID overrides the retained selection. Resolve it against `list` and send using the returned `agentId`, even when another agent was selected. Do not substitute a better-ranked agent. If the name is ambiguous, ask which returned agent; if absent, report that it is unavailable. An engine name such as Claude Code may identify several sessions, not one agent.
 - **Pending Store preparation:** if the user is continuing setup or responding to preparation guidance, read `workflow-status`, identify the saved intent from the actual conversation and resume its operation. Do not send that response as a fresh task or prepare another agent. Ask which intent only if multiple retained tasks fit.
