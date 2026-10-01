@@ -2183,11 +2183,25 @@ về bảng đắt nhất (cost là trần, không bao giờ báo thiếu).
 Cơ cấu chi phí giống nhau ở hai provider tính theo token (Gemini, OpenAI
 Realtime): `in_text` chiếm áp đảo (system
 prompt ~7-10k token + context session tích lũy bị re-bill mỗi turn, phình dần
-tới khi session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
+tới khi provider nén context hoặc session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
 `HAL_REALTIME_SESSION_MAX_TURNS`); token audio chỉ là phần lẻ. Gemini tính
 thêm phí Google Search theo từng request grounded, ngoài token. GPT-Live nằm
 ngoài cơ cấu này: chi phí tỉ lệ với thời gian session mở, không phụ thuộc độ dài
 prompt hay số turn.
+
+### Nén context Gemini 3.8
+
+HAL bật sliding-window compression phía provider cho Gemini 3.8 Live (bao gồm
+Extended Thinking), cả LIVE ON và chế độ turn. `HAL_GEMINI_CONTEXT_TRIGGER_TOKENS`
+mặc định **32768**, với `HAL_GEMINI_CONTEXT_TARGET_TOKENS=24576`. Đặt trigger bằng
+**0** để không gửi compression; nếu bật thì target phải dương và nhỏ hơn trigger.
+Cấu hình có hiệu lực khi kết nối session Gemini mới. Các model khác không đổi.
+
+Provider bỏ lịch sử hội thoại cũ và giữ system instructions; thao tác này không xóa
+bộ nhớ bền vững của device. Các lượt gần đây được giữ, nhưng có thể mất khả năng nhớ
+chi tiết cũ trong session. Mức tiết kiệm xuất hiện ở các lượt sau compression, không
+nhất thiết ở lượt vượt ngưỡng. Compression có thể tạm tăng latency và không giảm
+thinking level (vẫn mặc định LOW).
 
 ## Orchestrator
 

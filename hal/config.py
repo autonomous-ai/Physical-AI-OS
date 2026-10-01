@@ -680,6 +680,10 @@ REALTIME_GEMINI_MODEL: str = _rt_str("HAL_GEMINI_LIVE_MODEL", _RT_GEMINI.get("mo
 REALTIME_GEMINI_VOICE: str = _rt_str("HAL_GEMINI_LIVE_VOICE", _RT_GEMINI.get("voice"), "Kore")
 REALTIME_GEMINI_SAMPLE_RATE: int = 16000
 REALTIME_GEMINI_THINKING_LEVEL: str = _rt_str("HAL_GEMINI_THINKING_LEVEL", _RT_GEMINI.get("thinking_level"), "LOW")
+# Gemini 3.8: bound re-billed session history without changing thinking or reconnecting.
+# A zero trigger omits compression from setup.
+REALTIME_GEMINI_CONTEXT_TRIGGER_TOKENS: int = int(os.environ.get("HAL_GEMINI_CONTEXT_TRIGGER_TOKENS", "32768"))
+REALTIME_GEMINI_CONTEXT_TARGET_TOKENS: int = int(os.environ.get("HAL_GEMINI_CONTEXT_TARGET_TOKENS", "24576"))
 REALTIME_GEMINI_USE_LANGUAGE_CODES: bool = os.environ.get("HAL_GEMINI_USE_LANGUAGE_CODES", "false").lower() in ("1", "true", "yes")
 # Off: the campaign-api proxy does not forward resumption (zombie sessions).
 REALTIME_GEMINI_SESSION_RESUMPTION: bool = os.environ.get(
