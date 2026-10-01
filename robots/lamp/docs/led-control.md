@@ -73,6 +73,18 @@ still paint after clear returns; effect ownership and cancellation remain the
 caller's responsibility. The diagnostic reads software memory, not physical
 LED feedback, so a black buffer does not prove the hardware is dark.
 
+### Transient emotion status
+
+Transient expressions (such as `laugh` and `shock`) return `/emotion/status`'s
+`current_emotion` to `idle` at the scheduled expression deadline (recording duration
+plus 0.5 seconds, 3.5 seconds without a recording, or 2 seconds for shock).
+The status timer is independent of LED restoration, so TTS cancelling the LED
+restore timer cannot leave the emotion label stuck. Each accepted expression
+invalidates the previous deadline, including repeated expressions of the same kind.
+Expiry updates status only; it does not move servos or interrupt speech/LED owners.
+`idle`, `sleepy`, `listening`, and `thinking` retain their existing lifecycles.
+This deadline is not a physical servo completion acknowledgement.
+
 ### Graceful shutdown
 
 `RGBService.stop()` first marks the service as closing under the driver lock,

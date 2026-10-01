@@ -112,7 +112,7 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
         state._log_sleep_transition(
             "sleep" if state._sleeping else "wake", req.emotion, source
         )
-    state._current_emotion = req.emotion
+    emotion_generation = state._begin_emotion(req.emotion)
     # Drop the thinking cue's claim so a restore never repaints thinking.
     if req.emotion != EMO_THINKING:
         state._thinking_cue_active = False
@@ -257,12 +257,15 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
         pass
     elif req.emotion == EMO_SHOCK:
         state._schedule_led_restore(2.0)
+        state._schedule_emotion_idle(2.0, emotion_generation)
         state.logger.info("Emotion: shock -- LED restore scheduled in 2.0s")
     else:
         servo_name = preset.get("servo", "")
         restore_delay = state._get_recording_duration(servo_name) + 0.5 if servo_name else 3.5
         state.logger.info("Emotion: %s -- LED restore scheduled in %.1fs (servo=%s)", req.emotion, restore_delay, servo_name)
         state._schedule_led_restore(restore_delay)
+        if req.emotion != EMO_THINKING:
+            state._schedule_emotion_idle(restore_delay, emotion_generation)
 
     cam = preset.get("camera")
     if cam == LST_OFF:

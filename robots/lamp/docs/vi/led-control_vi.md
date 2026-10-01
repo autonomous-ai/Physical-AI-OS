@@ -71,6 +71,17 @@ khi clear đã trả về; quản lý và hủy effect vẫn thuộc bên gọi.
 bộ nhớ phần mềm, không phải phản hồi từ LED thật, nên buffer đen không chứng minh
 phần cứng đã tắt.
 
+### Trạng thái emotion tạm thời
+
+Biểu cảm tạm thời (như `laugh`, `shock`) đưa `current_emotion` của
+`/emotion/status` về `idle` khi hết thời hạn biểu cảm: thời lượng recording cộng
+0.5 giây, 3.5 giây nếu không có recording, hoặc 2 giây cho shock.
+Timer trạng thái độc lập với restore LED, nên TTS hủy timer LED không làm nhãn
+emotion bị kẹt. Mỗi biểu cảm được chấp nhận vô hiệu hóa thời hạn cũ, kể cả khi
+lặp cùng loại biểu cảm. Hết hạn chỉ đổi trạng thái, không di chuyển servo hay
+ngắt bên đang điều khiển giọng nói/LED. `idle`, `sleepy`, `listening`, `thinking`
+giữ vòng đời hiện có. Thời hạn này không xác nhận servo vật lý đã chạy xong.
+
 ### Graceful shutdown
 
 `RGBService.stop()` đánh dấu đang đóng dưới khóa driver, sau đó dừng/join worker
