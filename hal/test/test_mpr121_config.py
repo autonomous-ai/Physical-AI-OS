@@ -52,6 +52,7 @@ class TestMPR121Config(unittest.TestCase):
             {"electrodes": [True]}, {"touch_threshold": 256},
             {"release_threshold": 2}, {"autoconfig": "true"},
             {"poll_ms": 0}, {"debounce_ms": -1},
+            {"ffi": 7}, {"sfi": 8}, {"esi_ms": 3}, {"ffi": True},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):
                 MPR121Config(**({"bus": 5} | overrides))

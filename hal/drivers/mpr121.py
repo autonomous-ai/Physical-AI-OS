@@ -9,7 +9,7 @@ import threading
 import time
 from dataclasses import dataclass
 
-from hal.board.mpr121 import MPR121Config
+from hal.board.mpr121 import ESI_CODES, FFI_CODES, SFI_CODES, MPR121Config
 from hal.drivers.button_gestures import (
     DOUBLE_CLICK_WINDOW, LONG_PRESS_DURATION, SLEEP_HOLD_DURATION,
 )
@@ -433,6 +433,7 @@ class MPR121Handler:
         write(0x5E, 0x00)
         if bus.read_regs(config.address, 0x5D, 1) != b"\x24":
             raise RuntimeError("MPR121 CONFIG2 reset value is not 0x24")
+        ffi = FFI_CODES[config.ffi]  # autoconfig FFI must match CONFIG1
         for electrode in range(12):
             write(0x41 + 2 * electrode, config.touch_threshold)
             write(0x42 + 2 * electrode, config.release_threshold)
@@ -440,13 +441,14 @@ class MPR121Handler:
             (0x2B, 1), (0x2C, 1), (0x2D, 14), (0x2E, 0),
             (0x2F, 1), (0x30, 1), (0x31, 0xFF), (0x32, 0x02),
             (0x33, 0), (0x34, 0), (0x35, 0),
-            # CONFIG2: CDT 0.5 us, SFI 10 samples, ESI 1 ms. Chip debounce stays 0:
-            # contact/footprint debounce is done in software.
-            (0x5B, 0), (0x5C, 0x10), (0x5D, 0x30),
+            # CONFIG1: FFI from config, 16 uA. CONFIG2: CDT 0.5 us, SFI/ESI from config.
+            # Chip debounce stays 0: contact/footprint debounce is done in software.
+            (0x5B, 0), (0x5C, ffi << 6 | 0x10),
+            (0x5D, 0x20 | SFI_CODES[config.sfi] << 3 | ESI_CODES[config.esi_ms]),
         ):
             write(register, value)
         if config.autoconfig:
-            for register, value in ((0x7D, 200), (0x7F, 180), (0x7E, 130), (0x7B, 0x0B)):
+            for register, value in ((0x7D, 200), (0x7F, 180), (0x7E, 130), (0x7B, ffi << 6 | 0x0B)):
                 write(register, value)
         write(0x5E, 0x8F)
 
@@ -474,10 +476,11 @@ class MPR121Handler:
         if any(thread and thread.is_alive() for thread in (self._poll_thread, self._action_thread)):
             raise RuntimeError("MPR121 handler already running or stopping")
         logger.info(
-            "MPR121 event=start bus=%d address=0x%02x electrodes=%s touch_threshold=%d release_threshold=%d autoconfig=%s poll_ms=%d debounce_ms=%d settle_ms=100 pending_capacity=2",
+            "MPR121 event=start bus=%d address=0x%02x electrodes=%s touch_threshold=%d release_threshold=%d autoconfig=%s poll_ms=%d debounce_ms=%d ffi=%d sfi=%d esi_ms=%d settle_ms=100 pending_capacity=2",
             self._config.bus, self._config.address, self._config.electrodes,
             self._config.touch_threshold, self._config.release_threshold,
             self._config.autoconfig, self._config.poll_ms, self._config.debounce_ms,
+            self._config.ffi, self._config.sfi, self._config.esi_ms,
         )
         logger.info("MPR121 event=swipe_config axis=%s release_ms=120 max_gap_ms=150 min_travel_ms=30 footprint_debounce_ms=5", self._config.swipe_axis)
         self._last_raw_mask = None

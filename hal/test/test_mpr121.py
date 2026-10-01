@@ -187,6 +187,9 @@ class TestMPR121(unittest.TestCase):
         for electrode in range(12):
             self.assertIn(mock.call(0x5A, 0x41 + electrode * 2, 6), bus.write_reg.call_args_list)
             self.assertIn(mock.call(0x5A, 0x42 + electrode * 2, 3), bus.write_reg.call_args_list)
+        # Lamp filter: FFI 34 (code 3), SFI 10 (code 2), ESI 1 ms (code 0).
+        for register, value in ((0x5C, 0xD0), (0x5D, 0x30), (0x7B, 0xCB)):
+            self.assertIn(mock.call(0x5A, register, value), bus.write_reg.call_args_list)
 
     def test_autoconfig_disabled(self):
         handler = self.make_handler(autoconfig=False)

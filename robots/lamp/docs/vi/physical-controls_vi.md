@@ -280,7 +280,10 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
-      "debounce_ms": 30
+      "debounce_ms": 30,
+      "ffi": 34,
+      "sfi": 10,
+      "esi_ms": 1
     }
   }
 }
@@ -288,7 +291,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 
 `bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
 `mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
-`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis` là mặc định;
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis` và `ffi` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -300,13 +303,19 @@ Driver đặt bộ lọc baseline chiều xuống (`0x2F`–`0x32`) thành
 [giá trị quick-start NXP AN3944](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
 Thiết lập này làm chậm baseline khi giảm để tránh bám nhanh theo ngón tay
 đang tiếp cận. Bộ lọc baseline chiều lên và khi đang chạm giữ nguyên.
-`CONFIG2` (`0x5D`) là `0x30`: thời gian nạp 0,5 µs, bộ lọc cấp hai 10 mẫu
-(`SFI=2`) và chu kỳ lấy mẫu 1 ms, nên dữ liệu electrode cập nhật mỗi ~10 ms,
-khớp với chu kỳ poll 10 ms. Bộ lọc 10 mẫu giảm nửa nhiễu nền so với mặc định
-4 mẫu (đo trên `lamp-52e6`: 2 → 1 count). Debounce trên chip (`0x5B`) giữ 0:
+Bộ lọc mẫu của chip đặt trong `mpr121.json`: `ffi` (số lần lọc cấp một,
+`CONFIG1` `0x5C` và autoconfig `0x7B`; 6, 10, 18 hoặc 34), `sfi` (số mẫu lọc
+cấp hai, `CONFIG2` `0x5D`; 4, 6, 10 hoặc 18) và `esi_ms` (chu kỳ lấy mẫu,
+`0x5D`; 1–128 ms, lũy thừa của 2). Mặc định `6 / 10 / 1`. Dữ liệu electrode cập
+nhật mỗi `sfi × esi_ms` ms; giữ gần chu kỳ poll 10 ms để vuốt vẫn nhạy. Thời
+gian nạp giữ 0,5 µs. Lamp đặt `ffi: 34, sfi: 10, esi_ms: 1`: trên `lamp-a0ae`
+(01/10/2026, dừng HAL, 7 s mỗi cấu hình, không chạm) delta dương cao nhất lúc
+không chạm giảm từ 4 count (mặc định) xuống 0, vẫn cập nhật mỗi 10 ms;
+`lamp-8e2c` từng có đỉnh nhiễu 8 so với ngưỡng chạm 6 ở mặc định, gây tự chạm.
+Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) giữ 0:
 debounce contact (30 ms) và footprint vuốt (5 ms) làm ở phần mềm, còn debounce
-trên chip sẽ làm mọi footprint trễ hai mẫu. HAL đặt các register này, không
-cấu hình qua `mpr121.json`; chỉ đổi ngưỡng chạm không làm thay đổi bộ lọc.
+trên chip sẽ làm mọi footprint trễ hai mẫu. HAL kiểm tra giá trị bộ lọc lúc khởi
+động.
 Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
 các pad đã lắp (script probe độc lập `mpr121_opi_test.py` mà phần này từng nhắc
 tới không có trong repo; `hal/test/test_mpr121*.py` chỉ kiểm tra logic driver).
