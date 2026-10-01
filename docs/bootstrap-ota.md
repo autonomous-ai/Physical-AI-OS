@@ -388,6 +388,13 @@ renderer validates these inputs before writing changes and rejects invalid
 capabilities or replacement files. Product-specific values live only in the
 device package. For example:
 
+Standard Lamp C-Media speaker gain is pinned to mixer step **9 (-28 dB)**,
+3 dB above the previous step 6. The `pro` rootfs override retains **6 (-31 dB)**;
+ReSpeaker profiles keep their own audio paths. The existing softvol slider
+(-30..0 dB) and saved user volume are unchanged. This is shipped in the device
+rootfs package; the pin is applied when `lamp-cmedia-speaker.service` next runs
+(e.g. reboot), not by a HAL-only update.
+
 | Profile | Voice microphone | Sensing microphone | Speaker | Startup / maximum volume | SEN63C |
 |---|---|---|---|---|---|
 | `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Base speaker | Base defaults | Disabled |

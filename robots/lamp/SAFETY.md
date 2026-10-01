@@ -14,7 +14,7 @@ light:
   quiet_hours: { start: "22:00", end: "07:00", max_brightness: 40 }   # 22:00–07:00 → ring dims to 40, agent-independent
 
 audio:
-  max_volume: 100            # 0–100 % of the softvol stage in /etc/asound.conf (-30..0 dB on top of a hardware pin at -31 dB): 100 is exactly the loudness the old 15 ceiling on the raw C-Media mixer produced, so nothing got louder — the slider just gained a usable range (lamp-4ace, 2026-09-21).
+  max_volume: 100            # 0–100 % softvol (-30..0 dB); C-Media pin: standard -28 dB, pro -31 dB. Standard is 3 dB louder at the same slider value.
   # quiet_hours: { start: "22:00", end: "07:00" }   # (optional) suppress loud discretionary output (music) in-window; spoken replies still play
 
 motion:

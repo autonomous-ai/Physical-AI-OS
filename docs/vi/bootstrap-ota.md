@@ -381,6 +381,13 @@ tồn tại, không merge nội dung. Renderer kiểm tra các input này trư�
 và từ chối capability hay file thay thế không hợp lệ. Giá trị riêng sản phẩm
 chỉ nằm trong package device. Ví dụ:
 
+Gain loa C-Media của Lamp standard được cố định ở mức mixer **9 (-28 dB)**,
+tăng 3 dB so với mức 6 trước đây. Override rootfs `pro` giữ **6 (-31 dB)**;
+các profile ReSpeaker giữ đường audio riêng. Slider softvol (-30..0 dB) và
+volume user đã lưu không đổi. Cấu hình nằm trong gói device/rootfs; mức gain
+được áp dụng khi `lamp-cmedia-speaker.service` chạy lại (ví dụ reboot), không
+phải qua update riêng HAL.
+
 | Profile | Mic hội thoại | Mic sensing | Loa | Âm lượng khởi động / tối đa | SEN63C |
 |---|---|---|---|---|---|
 | `standard` | Jieli `device_micro2` | CMedia `device_cmedia` | Loa gốc | Mặc định gốc | Tắt |
