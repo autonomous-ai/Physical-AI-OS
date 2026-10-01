@@ -66,6 +66,7 @@ func (h *DeviceMQTTHandler) handleSystemSoftwareUpdate(env domain.MQTTDataComman
 	status, errMsg, data := softwareUpdateAck(req.Target, resolved, err)
 	if err != nil {
 		slog.Warn("system.software_update rejected", "component", "mqtt", "target", req.Target, "resolved", resolved, "error", err)
+		go h.alertOps(softwareUpdateAlert("rejected", req.Target, resolved, err.Error()))
 		return h.publishDataResult(env.Kind, status, errMsg, data)
 	}
 	slog.Info("system.software_update started", "component", "mqtt", "target", req.Target, "resolved", resolved)
@@ -100,6 +101,8 @@ func softwareUpdateAck(requested, resolved string, err error) (string, string, m
 // publishes the unsolicited completion report.
 func (h *DeviceMQTTHandler) watchSoftwareUpdate(requested, resolved string) {
 	defer softwareUpdateWatchers.Delete(resolved)
+	started := time.Now()
+	h.alertSoftwareUpdateStarted(requested, resolved)
 	ctx, cancel := context.WithTimeout(context.Background(), softwareUpdateWatchTimeout)
 	defer cancel()
 
@@ -120,6 +123,62 @@ func (h *DeviceMQTTHandler) watchSoftwareUpdate(requested, resolved string) {
 	if err := h.publishDataResult(domain.KindSystemSoftwareUpdate, status, errMsg, data); err != nil {
 		slog.Error("system.software_update: completion publish failed", "component", "mqtt", "error", err)
 	}
+	h.alertOps(softwareUpdateAlert(status, requested, resolved,
+		softwareUpdateDoneDetail(status, errMsg, data, time.Since(started))))
+}
+
+// alertSoftwareUpdateStarted announces an accepted update with the version it
+// moves from and to (omitted when bootstrap's report is unreadable).
+func (h *DeviceMQTTHandler) alertSoftwareUpdateStarted(requested, resolved string) {
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	versions, err := ota.Versions(ctx, h.config)
+	if err != nil {
+		versions = nil
+	}
+	h.alertOps(softwareUpdateAlert("started", requested, resolved, softwareUpdateStartDetail(versions, resolved)))
+}
+
+// softwareUpdateAlert builds the ops alert for one stage of an update requested
+// over MQTT, so an install started remotely is visible from start to finish.
+// stage: "started", "rejected", "success" or "failure".
+func softwareUpdateAlert(stage, requested, resolved, detail string) (string, string) {
+	label := requested
+	if resolved != "" && resolved != requested {
+		label = requested + " (" + resolved + ")"
+	}
+	switch stage {
+	case "started":
+		return "⬆️ Software update " + label + " — started", detail
+	case "rejected":
+		return "❌ Software update " + label + " — rejected", detail
+	case "success":
+		return "✅ Software update " + label + " — done", detail
+	default:
+		return "❌ Software update " + label + " — failed", detail
+	}
+}
+
+// softwareUpdateStartDetail is "<current> → <published>", or "" when unknown.
+func softwareUpdateStartDetail(versions map[string]any, resolved string) string {
+	cv, ok := ota.Component(versions, resolved)
+	if !ok || cv.Current == "" {
+		return ""
+	}
+	return cv.Current + " → " + cv.Target
+}
+
+// softwareUpdateDoneDetail reports the installed version (or the failure) and
+// how long the update took.
+func softwareUpdateDoneDetail(status, errMsg string, data map[string]any, took time.Duration) string {
+	d := took.Round(time.Second).String()
+	if status == "success" {
+		if current, _ := data["current"].(string); current != "" {
+			return "now " + current + " · took " + d
+		}
+		return "took " + d
+	}
+	return errMsg + " · after " + d
 }
 
 // softwareUpdateCompletion builds the unsolicited completion report.

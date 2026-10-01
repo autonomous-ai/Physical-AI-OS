@@ -394,6 +394,7 @@ SSID, IP, version các thành phần) cùng kết quả hành động bên dư�
 | Soft reset thiết bị | `device.soft_reset` |
 | Claude Code login / WhatsApp pair | kết quả pairing cuối (paired / failure / timeout) |
 | Đổi default model | model sync — chỉ khi primary/image model (đã gate theo version) thực sự đổi |
+| Software update (từ xa) | MQTT `system.software_update` — bắt đầu (kèm `<hiện tại> → <bản phát hành>`), xong (version đã cài + thời gian), thất bại hoặc bị từ chối (lý do) |
 
 Chuyển runtime là thao tác độc quyền. Trong khi một lượt cài đặt hoặc chuyển
 backend đang chạy, `POST /api/device/agent-runtime` tiếp theo nhận `409 Conflict`
