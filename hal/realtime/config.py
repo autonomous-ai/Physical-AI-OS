@@ -1,6 +1,6 @@
 """Configuration for realtime voice agent providers (values from hal.config)."""
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 
 import hal.config as app_config
 from hal.realtime.enums import (
@@ -165,6 +165,15 @@ class GeminiConfig(BaseModel):
     thinking_level: GeminiThinkingLevel = GeminiThinkingLevel(
         app_config.REALTIME_GEMINI_THINKING_LEVEL
     )
+    context_trigger_tokens: int = Field(default=app_config.REALTIME_GEMINI_CONTEXT_TRIGGER_TOKENS, ge=0)
+    context_target_tokens: int = Field(default=app_config.REALTIME_GEMINI_CONTEXT_TARGET_TOKENS, ge=0)
+
+    @model_validator(mode="after")
+    def validate_context_window(self):
+        if self.context_trigger_tokens and not 0 < self.context_target_tokens < self.context_trigger_tokens:
+            raise ValueError("Gemini context target must be positive and below the trigger; use trigger=0 to disable")
+        return self
+
     vad_enabled: bool = app_config.REALTIME_TURN_DETECTION.strip().lower() not in (
         "off",
         "none",
