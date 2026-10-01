@@ -289,7 +289,10 @@ does not modify boot overlays automatically:
       "release_threshold": 3,
       "autoconfig": true,
       "poll_ms": 10,
-      "debounce_ms": 30
+      "debounce_ms": 30,
+      "ffi": 34,
+      "sfi": 10,
+      "esi_ms": 1
     }
   }
 }
@@ -297,7 +300,7 @@ does not modify boot overlays automatically:
 
 `bus` is required for an enabled entry. Lamp explicitly sets touch/release
 thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
-`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis` are defaults;
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis` and `ffi` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -309,14 +312,19 @@ The driver sets the falling baseline filter (`0x2F`–`0x32`) to
 [NXP AN3944 quick-start values](https://www.nxp.com/docs/en/application-note/AN3944.pdf).
 This slows downward baseline tracking so it does not quickly follow an
 approaching finger. Rising and touched baseline filters are unchanged.
-`CONFIG2` (`0x5D`) is `0x30`: 0.5 µs charge time, a 10-sample second-level
-filter (`SFI=2`) and a 1 ms sample interval, so electrode data updates every
-~10 ms, in step with the 10 ms poll. The 10-sample filter halves idle noise
-against the 4-sample default (2 → 1 count measured on `lamp-52e6`). Chip
-debounce (`0x5B`) stays 0: contact (30 ms) and swipe footprint (5 ms)
-debounce happen in software, and a chip-side debounce would delay every
-footprint by two samples. These registers are set by HAL, not exposed in
-`mpr121.json`; changing touch thresholds alone does not change filtering.
+The chip sample filter is set from `mpr121.json`: `ffi` (first filter
+iterations, `CONFIG1` `0x5C` and autoconfig `0x7B`; 6, 10, 18 or 34), `sfi`
+(second filter samples, `CONFIG2` `0x5D`; 4, 6, 10 or 18) and `esi_ms`
+(sample interval, `0x5D`; 1–128 ms, powers of two). Defaults are `6 / 10 / 1`.
+Electrode data updates every `sfi × esi_ms` ms; keep it near the 10 ms poll so
+swipes stay responsive. Charge time stays 0.5 µs. Lamp sets `ffi: 34, sfi: 10,
+esi_ms: 1`: on `lamp-a0ae` (2026-10-01, HAL stopped, 7 s per setting, no touch)
+the highest positive idle delta fell from 4 counts at the defaults to 0, with
+the same 10 ms update; `lamp-8e2c` had shown idle peaks of 8 against touch
+threshold 6 at the defaults, causing phantom taps. Filtering does not change the
+touch delta itself. Chip debounce (`0x5B`) stays 0: contact (30 ms) and swipe
+footprint (5 ms) debounce happen in software, and a chip-side debounce would
+delay every footprint by two samples. HAL validates the filter values at boot.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
 thresholds (the standalone `mpr121_opi_test.py` probe this section used to
 reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver

@@ -5,6 +5,11 @@ from dataclasses import dataclass, fields
 from pathlib import Path
 from typing import Optional
 
+# Allowed MPR121 filter values mapped to their register codes (datasheet CONFIG1/CONFIG2).
+FFI_CODES = {6: 0, 10: 1, 18: 2, 34: 3}
+SFI_CODES = {4: 0, 6: 1, 10: 2, 18: 3}
+ESI_CODES = {1: 0, 2: 1, 4: 2, 8: 3, 16: 4, 32: 5, 64: 6, 128: 7}
+
 
 @dataclass(frozen=True)
 class MPR121Config:
@@ -16,6 +21,9 @@ class MPR121Config:
     autoconfig: bool = True
     poll_ms: int = 10
     debounce_ms: int = 30
+    ffi: int = 6
+    sfi: int = 10
+    esi_ms: int = 1
     swipe_axis: tuple[int, ...] | None = None
 
     def __post_init__(self):
@@ -32,6 +40,9 @@ class MPR121Config:
             raise ValueError("autoconfig must be a boolean")
         if not 1 <= self.poll_ms <= 1000 or not 0 <= self.debounce_ms <= 1000:
             raise ValueError("poll_ms must be 1..1000; debounce_ms must be 0..1000")
+        for name, codes in (("ffi", FFI_CODES), ("sfi", SFI_CODES), ("esi_ms", ESI_CODES)):
+            if type(getattr(self, name)) is not int or getattr(self, name) not in codes:
+                raise ValueError(f"{name} must be one of {sorted(codes)}")
         if not isinstance(self.electrodes, (list, tuple)) or not self.electrodes:
             raise ValueError("electrodes must be a non-empty list")
         if any(type(i) is not int or not 0 <= i < 12 for i in self.electrodes):

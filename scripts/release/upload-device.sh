@@ -42,7 +42,8 @@ GCS_PATH="${GCS_PATH:-${BUCKET_PREFIX}/ota/devices/${DEVICE_TYPE}/${new_version}
 
 echo "========== Zipping robots/${DEVICE_TYPE} (contract + rootfs) to ${ZIP_NAME} =========="
 rm -f "$ZIP_PATH"
-(cd "$DEVICE_DIR" && zip -r "$ZIP_PATH" . \
+# Keep systemd target.wants entries as links when the rootfs is extracted.
+(cd "$DEVICE_DIR" && zip -ry "$ZIP_PATH" . \
   -x "docs/*" "hardware/*" "images/*" ".git/*" "*/__pycache__/*" "*.pyc")
 
 # Not under rootfs/: `cp -a` there would overwrite the running software-update script mid-execution.

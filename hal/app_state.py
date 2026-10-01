@@ -181,6 +181,46 @@ _user_led_state: Optional[dict] = None
 _restore_timer: Optional[threading.Timer] = None
 _sleeping: bool = False
 _current_emotion: Optional[str] = None
+_emotion_state_lock = threading.Lock()
+_emotion_generation = 0
+_emotion_idle_timer: Optional[threading.Timer] = None
+
+
+def _begin_emotion(emotion):
+    """Give each accepted expression its own status lifetime, separate from LEDs."""
+    global _current_emotion, _emotion_generation, _emotion_idle_timer
+    with _emotion_state_lock:
+        _emotion_generation += 1
+        if _emotion_idle_timer is not None:
+            _emotion_idle_timer.cancel()
+            _emotion_idle_timer = None
+        _current_emotion = emotion
+        return _emotion_generation
+
+
+def _schedule_emotion_idle(delay_s, generation):
+    """Expire transient status without moving servos or interrupting TTS LEDs."""
+    global _emotion_idle_timer
+
+    def finish():
+        global _current_emotion, _emotion_idle_timer
+        with _emotion_state_lock:
+            if generation != _emotion_generation or _sleeping:
+                return
+            previous = _current_emotion
+            _current_emotion = EMO_IDLE
+            _emotion_idle_timer = None
+            logger.info("Emotion status: %s -> idle (expression elapsed)", previous)
+
+    with _emotion_state_lock:
+        if generation != _emotion_generation:
+            return
+        timer = threading.Timer(delay_s, finish)
+        timer.daemon = True
+        _emotion_idle_timer = timer
+        timer.start()
+
+
 # While set, restore repaints the thinking cue instead of the user state.
 _thinking_cue_active: bool = False
 # Cancelled the moment the emotion changes away from sleepy.

@@ -178,15 +178,19 @@ sd-card-flash:
 ifndef DISK
 	$(error DISK is required. Usage: make sd-card-flash DISK=4)
 endif
+	@command -v python3 >/dev/null
+	@[ -s ./output/$(IMG_FILE) ] || { echo "ERROR: image missing or empty"; exit 1; }
 	@echo "==> Flashing ./output/$(IMG_FILE) to /dev/disk$(DISK)..."
 	diskutil unmountDisk force /dev/disk$(DISK)
 	@# Compressed (.xz) images decompress on the fly; raw .img dd directly.
-	@if [ "$(suffix $(IMG_FILE))" = ".xz" ]; then \
+	@bash -eu -o pipefail -c 'if [ "$(suffix $(IMG_FILE))" = ".xz" ]; then \
 		xz -dc ./output/$(IMG_FILE) | sudo dd of=/dev/disk$(DISK) bs=64m conv=fsync status=progress; \
 	else \
 		sudo dd if=./output/$(IMG_FILE) of=/dev/disk$(DISK) bs=64m conv=fsync status=progress; \
-	fi
+	fi'
 	sync
+	diskutil unmountDisk /dev/disk$(DISK)
+	sudo "$$(command -v python3)" lib/verify_flash.py ./output/$(IMG_FILE) /dev/rdisk$(DISK)
 	diskutil eject /dev/disk$(DISK) 2>/dev/null || true
 	@echo "==> Flash complete"
 
@@ -199,11 +203,14 @@ sd-card-flash-raw:
 ifndef DISK
 	$(error DISK is required. Usage: make sd-card-flash-raw DEVICE_TYPE=lamp DISK=12)
 endif
-	@[ -f ./output/$(RAW_IMG) ] || { echo "ERROR: ./output/$(RAW_IMG) not found — pass DEVICE_TYPE, or the raw .img isn't built yet"; exit 1; }
+	@command -v python3 >/dev/null
+	@[ -s ./output/$(RAW_IMG) ] || { echo "ERROR: ./output/$(RAW_IMG) not found — pass DEVICE_TYPE, or the raw .img isn't built yet"; exit 1; }
 	@echo "==> Flashing ./output/$(RAW_IMG) to /dev/rdisk$(DISK) (raw, fast)..."
 	diskutil unmountDisk force /dev/disk$(DISK)
 	sudo dd if=./output/$(RAW_IMG) of=/dev/rdisk$(DISK) bs=64m conv=fsync status=progress
 	sync
+	diskutil unmountDisk /dev/disk$(DISK)
+	sudo "$$(command -v python3)" lib/verify_flash.py ./output/$(RAW_IMG) /dev/rdisk$(DISK)
 	diskutil eject /dev/disk$(DISK) 2>/dev/null || true
 	@echo "==> Flash complete"
 

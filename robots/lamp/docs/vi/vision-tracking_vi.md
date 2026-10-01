@@ -778,6 +778,13 @@ có pose nào phải khôi phục và không có quyền sở hữu nào phải 
 không có voice. Ngoại lệ duy nhất là một lần leo *được yêu cầu* (`prompt`), vốn do một repoint từ
 speech đòi, nếu từ chối thì đầu sẽ nằm chĩa vào ngực suốt cả câu nói.
 
+**Servo đang bị giữ thì không được đụng vào.** Pan, tilt, leo tìm mặt và bước quay về độ cao đã
+biết, repoint khi bắt đầu nói và nhìn quanh đều bỏ qua khi có bất kỳ servo hold nào (scene
+`reading`/`focus`, hoặc `/servo/hold` tường minh), và log lý do qua dòng throttle quen thuộc, ví dụ
+`[gaze] no pan: servo held by scene` hoặc `[gaze] not looking around: servo held by explicit`. Một
+lần nhìn quanh bị bỏ qua không bắt đầu cooldown. Tracking vốn đã giữ thân qua `_tracking_active`.
+Xem `led-control_vi.md`, mục "Chủ sở hữu của hold".
+
 ### Canh giữa theo chiều dọc, và vì sao nó đọc trung vị
 
 Đèn bàn đứng thấp hơn tầm đầu người, nên camera của nó chĩa vào ngực. Phép hiệu chỉnh lấy **trung vị**

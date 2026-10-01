@@ -193,9 +193,11 @@ Config field: `timezone` trong `config/config.json` (chuỗi IANA zone, omitempt
 | GET | `/api/network/check-internet` | Kiểm tra kết nối internet |
 
 **Monitor kết nối** (`system/network/service.go` và `recovery.go`, hoạt động khi
-`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; ping `8.8.8.8`
-thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, ping thành công thì
-xóa state này. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
+`SetUpCompleted` là true). Kiểm tra Internet theo nhịp monitor 5s; kiểm tra
+thất bại 5 lần liên tiếp thì bật LED state `Connectivity`, thành công thì xóa
+state này. Mỗi lần kiểm tra là ping `8.8.8.8`, nếu ICMP thất bại thì bắt tay TLS
+với host cloud API của thiết bị, nên mạng chặn ICMP không bị báo là offline. Overview của trang monitor dùng cùng
+fallback này (`CheckInternetRTT`), không hiện thời gian ping khi chỉ TLS đi qua. Trạng thái Internet độc lập với phục hồi WiFi: nếu còn association
 và IPv4 dùng được ở chế độ STA, thiết bị giữ WiFi ngay cả khi mất Internet.
 Monitor không còn reboot thiết bị.
 
@@ -273,6 +275,8 @@ Config field: `guard_mode` trong `config/config.json` (bool, mặc định `fals
 | `sound` | Mic (RMS energy) | Không | Tiếng động lớn |
 | `presence.away` | PresenceService (15 phút không có chuyển động hay hoạt động voice/chạm) | Không | Không ai xung quanh 15+ phút — thiết bị đi ngủ |
 | `motion.activity` | MotionPerception (khi PRESENT) | Không | Phát hiện hoạt động khi user có mặt — emotional actions được ghi qua Mood skill |
+
+**Marker nguồn (`[via:…]`):** mọi tin nhắn os-server gửi agent đều kết thúc bằng một dòng ghi nguồn gốc, để nguồn gốc của turn vẫn đọc được sau khi rời thiết bị — vì lệnh voice, chat trên monitor và chat từ app điện thoại đều tới model dưới dạng `[user] <text>`. `sensingmsg.Build` gắn marker cho turn sensing theo `sensingmsg.TurnSource`: `[via:web]` (`web_chat`), `[via:mobile]` (`mqtt_chat`), `[via:voice]` (`voice_command` / `voice_followup`), `[via:voice_ambient]` (`voice`), `[via:voice_handoff]` (turn `[voice-instruction]` do realtime voice agent bàn giao), `[via:voice_history]` (`voice_agent_handled`), `[via:sensing]` (còn lại). Các nơi gửi khác tự gắn: `[via:schedule]` (schedule runner), `[via:system]` (wake greeting, cập nhật skill, đổi tên), `[via:slack]` (Hermes Slack relay), `[via:voice_history]` / `[via:external]` (bản sao lịch sử từ agent ngoài). Dòng marker nằm SAU nội dung nên các prefix `[user]` / `[sensing:…]` mà skill dựa vào vẫn giữ nguyên; slash command giữ nguyên văn. Các lời gọi LLM không phải turn agent (summarizer realtime `voice_summary`, Harness announcer `harness_announce`, outcome classifier `voice_outcome`, vision describe `vision`) gửi cùng giá trị qua header `X-Auto-Source`. Helper: `domain.AppendVia` / `domain.ViaMarker`. Tin nhắn Telegram/Discord mà Hermes nhận trực tiếp không đi qua os-server nên không có marker.
 
 **Flow xử lý:**
 1. `voice_command`, `voice_followup` hoặc `voice` + local intent enabled → khớp rule local → thực thi trực tiếp (~50ms); yêu cầu không khớp có thể qua fallback Jev bên dưới trước khi tới main runtime. `voice_followup` có cùng độ ưu tiên người dùng như `voice_command`; `web_chat` / `mqtt_chat` chỉ có text cũng thử rule local và Jev, không phát TTS. Yêu cầu kèm ảnh hoặc file giữ luồng agent. Phản hồi local trả `handler: "local"`, `response`, `handledLocally: "true"` và `localRunId` (không có `runId` của agent); web chat hiển thị ngay, MQTT dùng `localRunId` để xác nhận và gửi `chat.event` cuối.
@@ -967,12 +971,28 @@ OS Server và bootstrap. Các giá trị hợp lệ là `DEBUG`, `INFO` (mặc �
 và file cục bộ xoay vòng `/var/log/os-server.log` (mỗi file 2 MB, giữ lại 10
 bản sao mới nhất).
 
-Khi có cấu hình `GELF_URL`, OS Server gửi các record từ cùng mức đã cấu hình trở lên
-tới collector tập trung bằng một worker với queue giới hạn 256 record. Logging không
-block request path và không tạo goroutine theo từng record: khi collector chậm/không
-hoạt động và queue đầy, GELF record mới bị drop (có stderr notice rate-limit); log
-console và rotating file cục bộ vẫn tiếp tục. Khi shutdown, worker flush record trong
-queue tối đa năm giây trước khi hủy delivery còn lại.
+Các record từ cùng mức trở lên cũng được gửi lên Graylog bằng một worker với queue
+giới hạn 256 record; logging không block request path và không tạo goroutine theo
+từng record.
+
+- **Relay (thiết bị xuất xưởng).** Không có `GELF_URL` thì worker POST từng record tới
+  `{llm_base_url}/logs/gelf` trên cloud API với device key làm Bearer token
+  (`config.GELFRelayCredentials`: chỉ credential Autonomous). Relay được bật (lại) từ
+  config-change listener chứ không chỉ lúc khởi động, nên bắt đầu ngay khi setup lưu
+  key và đi theo key mới của lần re-setup; cùng target thì không làm gì. Record không
+  gửi được — relay chưa bật, lỗi mạng, 401/403/408/429/5xx — vào spool trên đĩa trong
+  `OS_GELF_SPOOL_DIR` (mặc định `/var/lib/autonomous/gelf-spool`, 1 MiB mỗi service, bỏ record cũ
+  nhất trước) và được replay đúng thứ tự, có giãn nhịp, gắn `_spooled`, khi gửi thành
+  công; các mã 4xx khác thì bỏ record. Backoff giữa các lần replay lỗi là 5s tới 5 phút.
+  Khi shutdown hoặc đổi target, worker dừng sau request đang gửi và queue của nó vào
+  spool; khi đổi target, worker mới chỉ chạy sau khi worker cũ đã dừng, nên spool
+  không bao giờ bị replay hai lần. Replay bỏ qua record ghi dưới device id khác, và
+  factory reset xóa spool. Xem
+  [setup-flow_vi.md](setup-flow_vi.md).
+- **Collector trực tiếp.** Khi có cấu hình `GELF_URL`, worker gửi thẳng tới đó bằng
+  basic auth và không có spool: khi collector chậm/không hoạt động và queue đầy, record
+  mới bị drop (có stderr notice rate-limit); log console và rotating file cục bộ vẫn
+  tiếp tục. Khi shutdown, worker flush record trong queue tối đa năm giây.
 
 ## Local Intent Matching
 

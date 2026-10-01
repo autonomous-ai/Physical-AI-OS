@@ -7,7 +7,7 @@ import time
 import pytest
 
 from hal import config
-from hal.realtime.models import OutputEvent, TextOutput, TurnDoneEvent
+from hal.realtime.models import OutputEvent, TextOutput, TextSegmentEndOutput, TurnDoneEvent
 from hal.realtime.orchestrator import RealtimeOrchestrator
 from hal.realtime.voice_agent.base import VoiceAgentBase
 
@@ -96,3 +96,33 @@ def test_orchestrator_cancel_does_not_count_silent_or_completed_turn(monkeypatch
     assert orchestrator._consecutive_silent == 2
     assert orchestrator._turns_since_recycle == 4
     assert orchestrator._last_turn_monotonic == 123.0
+
+
+def test_segment_metadata_obeys_generation_and_does_not_consume_replay_guard():
+    agent = Agent()
+    agent._newest_output_gen = 2
+    agent._skip_stale_turn_done = True
+    agent._recv_queue.put(OutputEvent(gen=1, output=TextSegmentEndOutput(user_turn_id="old")))
+    boundary = TextSegmentEndOutput(user_turn_id="current")
+    agent._recv_queue.put(OutputEvent(gen=2, output=boundary))
+    agent._recv_queue.put(TurnDoneEvent(execution_completed=False))
+    agent._recv_queue.put(TurnDoneEvent(execution_completed=True))
+    assert list(agent.receive()) == [boundary]
+    assert agent.execution_completed
+
+
+def test_segment_metadata_alone_does_not_count_as_spoken_turn(monkeypatch):
+    monkeypatch.setattr(config, "REALTIME_SESSION_MAX_TURNS", 0)
+    agent = Agent()
+    boundary = TextSegmentEndOutput(user_turn_id="current")
+    agent._recv_queue.put(OutputEvent(output=boundary))
+    agent._recv_queue.put(TurnDoneEvent())
+    orchestrator = object.__new__(RealtimeOrchestrator)
+    orchestrator._agent = agent
+    orchestrator._consecutive_silent = 0
+    orchestrator._skip_post_idle_recycle = False
+    orchestrator._turns_since_recycle = 0
+    orchestrator._idle_reset_pending = False
+    assert list(orchestrator.stream_output()) == [boundary]
+    assert orchestrator._consecutive_silent == 1
+    assert not orchestrator.execution_completed

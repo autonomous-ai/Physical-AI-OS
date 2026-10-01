@@ -413,6 +413,18 @@ proof of useful progress. This change adds no new filler schedule; the existing
 once-per-turn acknowledgement remains. The stricter progress watchdog applies
 to Gemini extended-thinking with Live off; OpenAI, GPT-Live and Pipecat keep
 their existing behavior.
+
+Gemini `generation_complete` also seals the current output-transcription segment
+(the [Live API contract](https://ai.google.dev/api/live#BidiGenerateContentServerContent)
+places its last transcript before that event). HAL forwards this as text-boundary
+metadata, so Live ON/OFF can queue already accepted trailing text and delivery tags
+without waiting for routing grace to expire. This is not an acknowledgement,
+execution completion, or permission to release quarantined continuation speech.
+Late tool calls, rejection, interruption, and reply ownership retain their existing
+rules. Boundaries for held continuation stay held with that continuation. Native
+Gemini audio is unchanged. This removes post-generation buffering only; it cannot
+shorten Gemini's generation time or gaps between transcript chunks.
+
 HAL reopens the SDK's per-turn `receive()` iterator
 on the same session after `turn_complete`, retaining the logical turn identity.
 Delegate/reject/end-conversation calls end the grace early; `complete_response` records

@@ -26,6 +26,41 @@ data làm vài pixel chốt nhầm một màu rác (hay gặp nhất là xanh l�
 đầu tiên của mỗi frame WS2812). Không có bước xoá này thì màu rác đó sáng cho tới
 lệnh LED đầu tiên, có thể vài phút sau khi boot.
 
+### LED báo boot sớm trên Orange Pi
+
+Khi chuyển device đã có unit `lamp-led-*` cũ, stop HAL, sau đó stop/disable
+`lamp-led-boot.service` và stop `lamp-led-shutdown.service` trước khi gỡ hai unit,
+symlink enable và helper `lamp-led-boot.py`/`lamp-led-off.py` cũ. Áp dụng rootfs mới
+(gồm drop-in shutdown của HAL), reload systemd rồi start HAL. Chép overlay không
+tự xóa file đã đổi tên. HAL nhận cả hai tên boot unit trong lúc chuyển đổi, nhưng
+không được enable hai bản indicator cùng lúc.
+
+`led-boot.service` được kéo vào qua `sysinit.target.wants`, sau filesystem
+local và trước các service thông thường, không chờ mạng hay os-server. Trên lamp
+sun60iw2, nó điều khiển 32 LED qua SPI3.0, thở trắng chu kỳ ba giây, từ tắt đến
+RGB **[3, 3, 3]**, 20 frame/giây. Script chờ node SPI tối đa mười giây nhưng không
+chặn boot. Đây là báo đang khởi động, không phải sẵn sàng; không báo được lúc vừa
+cấp điện hoặc lỗi trước khi Linux/systemd chạy tới unit này.
+
+HAL dừng indicator đồng bộ ngay trước lúc khởi tạo RGB trong early LED lifespan,
+sau phần Python import.
+SIGTERM kết thúc vòng animation duy nhất, clear hai lần, flush LOW rồi đóng SPI;
+systemd đợi tiến trình thoát trước khi HAL mở SPI. Timeout stop là ba giây. Hiệu ứng tiếp tục
+trong lúc HAL import; bàn giao khi khởi tạo RGB, không đợi voice/camera sẵn sàng. Script từ chối start thủ công khi HAL đang active,
+starting hoặc stopping. Indicator không tự restart và không tiếp quản lúc
+shutdown. Fallback tắt LED trễ khi shutdown vẫn độc lập. Unit boot kéo fallback
+vào và start sau nó; khi shutdown, thứ tự đảo lại nên boot writer thoát trước khi
+fallback bắt đầu chờ năm giây. Khi chưa có ràng buộc này, log device cho thấy
+fallback gửi frame đen ở giây 103 nhưng boot writer vẫn chạy tới giây 109.
+
+Thành phần nằm trong rootfs device lamp; ZIP giữ symlink target.wants.
+`ConditionPathExists` yêu cầu helper boot-led của HAL mới; HAL cũ bỏ qua indicator.
+Cần cập nhật HAL trước khi bật service. Có hiệu lực
+ở lần boot tiếp theo sau update device/daemon-reload. Không start đè lên HAL đang
+chạy để test. Rollback: stop indicator, gỡ symlink sysinit, unit và helper của indicator, rồi daemon-reload. Test local kiểm tra frame, hủy, đóng driver
+khi lỗi và điều kiện bàn giao; kiểm tra unit systemd chưa xác nhận màu/thời gian
+LED trên phần cứng thật.
+
 ### Ghi frame đồng thời và chẩn đoán clear
 
 Solid, paint từng pixel và clear dùng chung khóa driver cho toàn bộ thao tác.
@@ -35,6 +70,59 @@ Clear giữ khóa qua hai lần ghi frame đen, hai khoảng chờ 10 ms, SPI id
 khi clear đã trả về; quản lý và hủy effect vẫn thuộc bên gọi. Chẩn đoán này đọc
 bộ nhớ phần mềm, không phải phản hồi từ LED thật, nên buffer đen không chứng minh
 phần cứng đã tắt.
+
+### Trạng thái emotion tạm thời
+
+Biểu cảm tạm thời (như `laugh`, `shock`) đưa `current_emotion` của
+`/emotion/status` về `idle` khi hết thời hạn biểu cảm: thời lượng recording cộng
+0.5 giây, 3.5 giây nếu không có recording, hoặc 2 giây cho shock.
+Timer trạng thái độc lập với restore LED, nên TTS hủy timer LED không làm nhãn
+emotion bị kẹt. Mỗi biểu cảm được chấp nhận vô hiệu hóa thời hạn cũ, kể cả khi
+lặp cùng loại biểu cảm. Hết hạn chỉ đổi trạng thái, không di chuyển servo hay
+ngắt bên đang điều khiển giọng nói/LED. `idle`, `sleepy`, `listening`, `thinking`
+giữ vòng đời hiện có. Thời hạn này không xác nhận servo vật lý đã chạy xong.
+
+### Graceful shutdown
+
+`RGBService.stop()` đánh dấu đang đóng dưới khóa driver, sau đó dừng/join worker
+**không giữ khóa này**. Handler solid và paint kiểm tra lại trạng thái đang đóng
+bên trong khóa, nên worker chạy tiếp sau timeout cũng không thể ghi frame muộn.
+Cuối cùng giữ khóa trong suốt lần clear đen kép và đóng driver, rồi xóa tham chiếu
+driver. Gọi stop nhiều lần hoặc clear muộn đều an toàn; clear lỗi vẫn đóng driver
+và truyền lỗi ra ngoài. Trước đây clear/deinit chạy trước khi dừng worker, khiến
+frame đang chờ có thể bật LED lại hoặc chạm vào SPI đã đóng. Regression test dùng
+strip giả và worker thread thật; chưa chứng minh tín hiệu GPIO không bị nhiễu sau
+khi kernel tắt.
+
+### Fallback shutdown cho Orange Pi
+
+Rootfs lamp có `led-shutdown.service`, được HAL kéo vào qua drop-in
+`20-led-shutdown.conf`. Khi start, service không ghi LED. Khi shutdown/reboot,
+thứ tự đảo lại: đợi HAL và boot LED writer thoát, chờ **5 giây**, rồi chạy
+`/usr/local/libexec/led-off.py` khi filesystem vẫn còn mount. Timeout stop
+là **15 giây**. Restart riêng HAL không chạy stop của service độc lập này.
+`ExecCondition` bỏ qua board khác sun60iw2 hoặc thiếu SPI3.0; Raspberry Pi không
+chạy fallback này.
+
+Frame off độc lập khớp bản hardware: 32 pixel GRB đen, 6.4 MHz, primer LOW 8 byte
+và reset LOW 64 byte. Script không import HAL, không chạy demo và không đổi mux
+GPIO. Script từ chối ghi khi HAL còn active/đang dừng, báo lỗi SPI ra ngoài và
+chỉ log gửi xong, không coi đó là đọc lại trạng thái LED thật. Trên `.142`, hai
+lượt shutdown quan sát với delay 5 giây không còn đốm, gồm lượt đang TTS/emotion;
+delay 300 ms chưa giải quyết được. Đây là fallback, chưa chứng minh nguyên nhân gốc.
+
+Triển khai bằng **gói device/rootfs lamp**, không phải update riêng HAL. Sau khi
+copy thủ công, chạy `systemctl daemon-reload` rồi restart HAL để kích hoạt.
+Gỡ các unit thử LED/demo cũ trước để tránh nhiều fallback cùng ghi LED.
+Rollback: stop HAL, stop fallback, xóa drop-in HAL, unit và helper, reload systemd
+rồi start HAL. Không stop fallback thủ công khi HAL đang chạy.
+
+Vòng đời HAL cũng đợi tối đa **20 giây** để cleanup phần cứng (trước là 5);
+cleanup chưa xong hoặc lỗi sẽ báo shutdown thất bại và thoát khác 0, thay vì báo
+hoàn tất. Timeout systemd HAL vẫn là 30 giây, có khoảng cho HTTP drain 5 giây.
+Không chạy cleanup thứ hai song song với owner phần cứng còn sống. Thay đổi này
+sửa lỗi báo shutdown hoàn tất quá sớm đã quan sát, chưa chứng minh nguyên nhân
+của mọi lần LED sáng đốm.
 
 ## Endpoints
 
@@ -109,7 +197,7 @@ POST /scene
 
 Mỗi scene điều khiển **toàn bộ thiết bị ngoại vi** — không chỉ LED mà cả camera, mic, speaker và servo.
 
-Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idle, bật lại camera/speaker, nhả servo hold.
+Tắt scene: `POST /scene/off` — xoá scene đang active, khôi phục LED idle, bật lại camera/speaker, nhả servo hold của scene. Một lệnh LED không transient (`/led/solid`, `/led/paint`, `/led/off`, `/led/effect`) cũng kết thúc scene và nhả hold của scene.
 
 Scene đang active **sống sót qua các lần restart HAL service** (OTA, deploy, crash): trạng thái được persist vào sidecar theo phiên boot (`/tmp/hal-scene-state.json`, gắn với `boot_id` của kernel) và tự động kích hoạt lại khi HAL chạy trở lại, nên niềm tin của agent ("focus mode đang bật") luôn đồng bộ. Reboot toàn bộ thiết bị thì chủ đích khởi động không có scene. Các lệnh LED transient (`/led/solid`, `/led/off`, `/led/effect` với `"transient": true`, vd hiệu ứng breathing lúc boot) chỉ overlay lên strip mà không thoát scene đang active; chỉ LED override non-transient mới xoá scene.
 
@@ -136,7 +224,7 @@ Khi kích hoạt scene, `POST /scene` thực hiện theo thứ tự:
 
 1. **LED** — màu đặc = `preset.color × preset.brightness`
 2. **Servo aim** — xoay đầu đèn theo hướng preset (desk, wall, up, down)
-3. **Servo hold** — nếu `"servo": "hold"`, freeze servo **sau khi** aim xong (aim → hold trong cùng 1 thread). Tự release khi chuyển sang scene không có hold.
+3. **Servo hold** — nếu `"servo": "hold"`, giữ servo **sau khi** aim xong (aim → hold trong cùng 1 thread), với chủ sở hữu là `scene`. Không giữ nếu scene đã kết thúc trong lúc tay đèn còn đang di chuyển. Được nhả khi chuyển sang scene không có hold, khi tắt scene, hoặc khi có lệnh LED không transient.
 4. **Camera** — tự động bật/tắt qua `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute dừng voice pipeline (STT), unmute khởi động lại
 6. **Speaker** — `off` dừng nhạc ngay và mute giọng nói theo **drain** (`_start_scene_speaker_drain`, xem `sensing-behavior_vi.md`): câu xác nhận của chính scene, do os-server gửi sau marker `/scene`, vẫn phát xong rồi loa mới đóng; `sleepy` ghép trong cùng reply sẽ tiếp quản drain để wake trả loa lại được. `on` bật lại output. Tắt scene khi privacy đang khoá sẽ đổi snapshot của khoá để lúc nhả loa/camera mở lại (xem `physical-controls_vi.md`).
@@ -149,6 +237,33 @@ trong 5s (#314). Hệ quả: khi một scene `hold` đang bật, đầu không c
 khi animation kết thúc — nó nội suy về idle. Muốn khôi phục tư thế đó thì việc ấy thuộc về
 `servo: hold` của scene, không thuộc về một lần vẽ lại LED.
 
+### Chủ sở hữu của hold (#544)
+
+Servo hold có chủ sở hữu: `scene`, `tracking` và `explicit` (`POST /servo/hold`), được quản lý
+trong `hal/drivers/motors/hold.py`. `_hold_mode` là true khi còn ít nhất một chủ sở hữu, và mỗi
+đường chỉ nhả phần giữ của chính nó. Kết thúc scene không bao giờ nhả hold của tracking hay
+explicit, và một phiên tracking kết thúc giữa lúc scene reading đang bật vẫn để nguyên hold của
+scene và không khởi động lại idle: tay đèn ở lại chỗ tracking để lại. `POST /servo/resume` xoá mọi
+chủ sở hữu. Lệnh LED kết thúc scene cũng xoá scene đã lưu, nên HAL khởi động lại sẽ không bật lại nó.
+Log khi nhả cho biết tay đèn đã rảnh chưa: `Scene off: servo released` khi không còn chủ sở hữu nào,
+`Scene off: scene hold released, servo still held by explicit` khi vẫn còn. Tương tự, gaze log
+`framing released (servo held by scene, idle waits)` thay cho `(idle has the arm)` khi kết thúc
+một cuộc hội thoại lúc servo đang bị giữ.
+
+**Lưới an toàn.** Một hold `scene` mà không có scene nào đang active là hold cũ (stale). Nó được
+nhả, kèm log `[hold] scene hold released -- no scene is active (stale)`, ở lần kế tiếp có chỗ đọc
+hold: `GET /servo`, `/servo/play`, `/servo/demo`, bước trả thân về idle, hoặc một chuyển động gaze.
+
+**Hold chặn những gì.** Animation idle và ambient, và các chuyển động tự động của gaze watcher
+(pan và tilt khi canh khung, leo tìm mặt, repoint khi bắt đầu nói, nhìn quanh). Mỗi cái log lý do,
+ví dụ `[gaze] no pan: servo held by scene`. Các lệnh di chuyển tường minh vẫn chạy: `/servo/aim`,
+`/servo/nudge`, `/servo/move`, `/servo/search` và aim của lệnh look realtime. Trong lúc có scene,
+hold ở lại tư thế mới và scene vẫn active, nên "chỉnh đèn sang trái một chút" là tinh chỉnh chế độ
+đọc chứ không tắt nó.
+
+**Camera.** Một emotion có preset bật camera sẽ để camera tắt khi scene đang active giữ nó tắt
+(`reading`, `focus`, `movie`, `night`).
+
 ### Chặn emotion khi hold mode
 
 Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để tránh phân tâm:
@@ -156,7 +271,7 @@ Khi servo đang hold (reading/focus), **animation cảm xúc bị chặn** để
 - `happy`, `thinking`, `curious`, `sad`, v.v. → servo + LED bị bỏ qua
 - `greeting`, `sleepy`, `stretching` → **cho qua** (đây là emotion thay đổi trạng thái: chào, ngủ, thức dậy) — **chỉ áp dụng cho hold do scene preset**
 
-**`/servo/hold` tường minh** (lệnh agent kiểu "nhìn lên tường giữ đó") set `_hold_explicit` và chặn servo với **mọi** emotion, kể cả nhóm scene-change — trước đây `[HW:/emotion:greeting]` đứng cuối reply lợi dụng miễn trừ này, đè pose đã lệnh bằng pose cuối của animation greeting. `/servo/resume` và chuyển scene sẽ xoá cờ.
+**`/servo/hold` tường minh** (lệnh agent kiểu "nhìn lên tường giữ đó") set `_hold_explicit` và chặn servo với **mọi** emotion, kể cả nhóm scene-change — trước đây `[HW:/emotion:greeting]` đứng cuối reply lợi dụng miễn trừ này, đè pose đã lệnh bằng pose cuối của animation greeting. `/servo/resume` sẽ xoá cờ. Đổi scene và lệnh LED không đụng tới hold tường minh.
 
 Nghĩa là khi focus, sensing event vẫn tới OpenClaw nhưng Lamp giữ nguyên trạng thái vật lý — không cử động, LED ổn định.
 

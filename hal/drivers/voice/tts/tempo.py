@@ -5,6 +5,8 @@ import select
 import threading
 from collections.abc import Callable, Iterable, Iterator
 
+from hal import cpu_affinity
+
 
 def change_tempo(chunks: Iterable[bytes], speed: float, sample_rate: int,
                  cancelled: Callable[[], bool] = lambda: False) -> Iterator[bytes]:
@@ -34,6 +36,7 @@ def change_tempo(chunks: Iterable[bytes], speed: float, sample_rate: int,
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
         bufsize=0,
     )
+    cpu_affinity.pin_pid(process.pid, cpu_affinity.FAST)
     stopped = threading.Event()
     errors = []
 

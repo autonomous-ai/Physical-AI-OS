@@ -15,6 +15,7 @@ from typing import Callable, Optional
 import numpy as np
 
 from hal import config as hal_config
+from hal import cpu_affinity
 from hal.drivers.voice import aec
 from hal.drivers.voice._internal import live_playback
 from hal.drivers.voice.tts.resampler import PCMResampler
@@ -1348,6 +1349,7 @@ class TTSService:
 
     def _drain_live_queue(self) -> None:
         """Resume accepted speech after a LIVE playback worker finishes."""
+        cpu_affinity.pin_current_thread(cpu_affinity.FAST)
         try:
             with self._stream_lock:
                 stream = self._ensure_stream(self._device_rate or TTS_SAMPLE_RATE)

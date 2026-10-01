@@ -1,0 +1,18 @@
+[Unit]
+Description=Early lamp boot indicator (dim white breathing)
+DefaultDependencies=no
+Wants=led-shutdown.service
+After=local-fs.target led-shutdown.service
+Before=sysinit.target hal.service shutdown.target
+Conflicts=shutdown.target
+ConditionPathExists=/opt/hal/server_support/boot_led.py
+
+[Service]
+Type=simple
+ExecCondition=/usr/bin/python3 /usr/local/libexec/led-boot.py --supported
+ExecStart=/usr/bin/python3 /usr/local/libexec/led-boot.py
+TimeoutStopSec=3s
+Restart=no
+
+[Install]
+WantedBy=sysinit.target

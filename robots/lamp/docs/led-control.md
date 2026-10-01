@@ -26,6 +26,43 @@ on the data line leave a few pixels latched to a garbage colour (green shows up
 most, being the leading byte of a WS2812 frame). Without the clear that garbage
 stays lit until the first LED command, which may be minutes after boot.
 
+### Early Orange Pi boot indicator
+
+When migrating a device that has the earlier `lamp-led-*` units installed,
+stop HAL, then stop/disable `lamp-led-boot.service` and stop
+`lamp-led-shutdown.service` before removing those two unit files, their enablement
+symlinks and the old `lamp-led-boot.py`/`lamp-led-off.py` helpers. Apply the new
+rootfs (including the HAL shutdown drop-in), reload systemd and start HAL. A
+rootfs overlay alone does not remove renamed files. HAL accepts either boot-unit
+name during migration, but two copies of the boot indicator must not be enabled.
+
+`led-boot.service` starts from `sysinit.target.wants` after local filesystems,
+before the normal services and without waiting for network or os-server. On the
+sun60iw2 lamp it drives 32 LEDs on SPI3.0 with a three-second white breath, ranging
+from off to RGB **[3, 3, 3]**, at 20 frames/second. It waits up to ten seconds for
+the SPI node without blocking boot. This indicates startup, not readiness; it
+cannot signal power-on or a boot failure before Linux/systemd reaches this unit.
+
+HAL synchronously stops the indicator immediately before initializing RGB in
+its early LED lifespan, after Python imports. SIGTERM ends the single animation loop, clears twice, flushes LOW
+and closes SPI; systemd waits for exit before HAL opens SPI. The stop timeout is
+three seconds. Breathing continues through HAL imports; handoff is at RGB initialization,
+not full voice/camera readiness. Manual starts while HAL is
+active, starting or stopping are refused. The indicator does not restart itself
+and does not take over during shutdown. The existing delayed shutdown blackout
+remains separate. The boot unit pulls in and starts after the shutdown fallback;
+shutdown ordering reverses, so the boot writer exits before the fallback begins
+its five-second delay. Without this ordering, a device test showed the fallback
+sending black at 103 seconds while the boot writer continued until 109 seconds.
+
+This ships in the lamp device rootfs; package ZIPs preserve the target.wants
+symlink. `ConditionPathExists` requires the matching HAL boot-led helper, so an
+older HAL skips the indicator. Deploy the updated HAL before enabling it. It takes effect on the next boot after device update/daemon-reload.
+Do not start it over a running HAL for testing. Rollback: stop the boot indicator,
+remove its sysinit symlink, service and helper, then daemon-reload.
+Local tests check frames, cancellation, error cleanup and ownership guards;
+systemd unit validation does not establish physical LED timing or colour.
+
 ### Concurrent frame writes and clear diagnostics
 
 Solid, per-pixel paint and clear share a driver lock for the entire operation.
@@ -35,6 +72,64 @@ and buffer read-back. An animation cannot repaint the buffer midway and cause
 still paint after clear returns; effect ownership and cancellation remain the
 caller's responsibility. The diagnostic reads software memory, not physical
 LED feedback, so a black buffer does not prove the hardware is dark.
+
+### Transient emotion status
+
+Transient expressions (such as `laugh` and `shock`) return `/emotion/status`'s
+`current_emotion` to `idle` at the scheduled expression deadline (recording duration
+plus 0.5 seconds, 3.5 seconds without a recording, or 2 seconds for shock).
+The status timer is independent of LED restoration, so TTS cancelling the LED
+restore timer cannot leave the emotion label stuck. Each accepted expression
+invalidates the previous deadline, including repeated expressions of the same kind.
+Expiry updates status only; it does not move servos or interrupt speech/LED owners.
+`idle`, `sleepy`, `listening`, and `thinking` retain their existing lifecycles.
+This deadline is not a physical servo completion acknowledgement.
+
+### Graceful shutdown
+
+`RGBService.stop()` first marks the service as closing under the driver lock,
+then stops/joins the event worker **without holding that lock**. Solid and paint
+handlers recheck the closing state inside the lock, so even a worker that exceeds
+the join timeout cannot apply a late frame. Finally stop holds the lock across the
+last double-black clear and driver deinitialization, then removes the driver
+reference. Repeated stops and late clears are harmless; a clear failure still
+closes the driver and propagates the error. Previously clear and deinit ran before
+stopping the worker, allowing queued frames to relight the strip or touch a closed
+SPI handle. Regression tests use a fake strip and real worker threads; they do not
+prove that GPIO remains electrically quiet after the kernel powers down.
+
+### Orange Pi shutdown fallback
+
+The lamp rootfs ships `led-shutdown.service`, pulled in by the HAL unit's
+`20-led-shutdown.conf` drop-in. The service starts without touching the LEDs.
+At shutdown/reboot, reversed ordering waits for HAL and the boot LED writer to
+exit, waits **5 seconds**,
+then runs `/usr/local/libexec/led-off.py` while local filesystems remain
+mounted. Its stop timeout is **15 seconds**. A HAL-only restart does not run this
+independent service's stop action. `ExecCondition` skips boards other than
+sun60iw2 or a missing SPI3.0 device; this fallback is not enabled for Raspberry Pi.
+
+The standalone off frame matches the hardware team's reference: 32 black GRB
+pixels, 6.4 MHz, 8 LOW primer bytes and 64 LOW reset bytes. It does not import HAL,
+run a demo, or change GPIO muxing. It refuses writes while HAL is active or
+stopping, propagates SPI failures, and only logs transfer completion, not physical
+LED readback. On device `.142`, two observed shutdowns with the five-second
+fallback had no residual dot, including TTS/emotion playback; 300 ms did not
+resolve the issue. This is a fallback, not proof of the underlying cause.
+
+Deployment is through the **lamp device package/rootfs**, not a HAL-only update.
+After manual copying, run `systemctl daemon-reload` then restart HAL to arm it.
+Remove older experimental LED/demo units before enabling it so only one fallback
+owns the strip. To roll back, stop HAL, stop the fallback, remove its HAL drop-in,
+unit and helper, reload systemd, then start HAL. Do not manually stop the fallback
+while HAL is running.
+
+The HAL lifecycle also waits up to **20 seconds** for hardware cleanup (previously
+5); unfinished or failed cleanup reports shutdown failure and exits nonzero rather
+than reporting completion. The systemd HAL limit remains 30 seconds, with room
+for the 5-second HTTP drain. No second cleanup is started against a still-running
+hardware owner. This fixes observed premature shutdown completion but does not
+establish the cause of every residual LED dot.
 
 ## Endpoints
 
@@ -109,7 +204,7 @@ POST /scene
 
 Each scene controls **all peripherals** — not just LED, but also camera, mic, speaker, and servo.
 
-Deactivate: `POST /scene/off` — clears active scene, restores idle LED, re-enables camera/speaker, releases servo hold.
+Deactivate: `POST /scene/off` — clears active scene, restores idle LED, re-enables camera/speaker, releases the scene's servo hold. A non-transient LED override (`/led/solid`, `/led/paint`, `/led/off`, `/led/effect`) also ends the scene and releases the scene's hold.
 
 The active scene **survives HAL service restarts** (OTA, deploy, crash): it is persisted to a boot-scoped sidecar (`/tmp/hal-scene-state.json`, keyed to the kernel `boot_id`) and re-activated automatically when HAL comes back up, so the agent's belief ("focus mode is on") stays in sync. A full device reboot intentionally starts scene-less. Transient LED calls (`/led/solid`, `/led/off`, `/led/effect` with `"transient": true`, e.g. the boot breathing effect) overlay the strip without exiting the active scene; only non-transient LED overrides clear it.
 
@@ -137,7 +232,7 @@ When a scene activates, `POST /scene` applies in order:
 
 1. **LED** — solid color = `preset.color × preset.brightness`
 2. **Servo aim** — moves lamp head to preset direction (desk, wall, up, down)
-3. **Servo hold** — if `"servo": "hold"`, freezes servo **after** aim completes (aim → hold in one thread). Released when switching to a scene without hold.
+3. **Servo hold** — if `"servo": "hold"`, holds the servo **after** the aim completes (aim → hold in one thread), as the `scene` owner. Not claimed if the scene ended while the arm was moving. Released when switching to a scene without hold, on scene off, or on a non-transient LED override.
 4. **Camera** — auto on/off via `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
 6. **Speaker** — `off` stops music at once and mutes speech on a **drain** (`_start_scene_speaker_drain`, see `sensing-behavior.md`): the scene's own confirmation line, sent by os-server after the `/scene` marker, still plays before the speaker closes; `sleepy` chained in the same reply takes the drain over so wake can restore the speaker. `on` re-enables output. Scene off under a held privacy lock retargets the lock's snapshot so release reopens the speaker/camera (see `physical-controls.md`).
@@ -150,6 +245,33 @@ saved LED state, which killed the running animation and parked the head as `__ai
 after an animation ends — it interpolates to idle. Restoring that pose belongs in the scene's
 `servo: hold`, not in an LED repaint.
 
+### Hold ownership (#544)
+
+The servo hold has owners: `scene`, `tracking` and `explicit` (`POST /servo/hold`), kept in
+`hal/drivers/motors/hold.py`. `_hold_mode` is true while at least one owner remains, and each
+path releases only its own claim. Ending a scene never drops a tracking or explicit hold, and a
+tracking session that ends during a reading scene leaves the scene's hold in place and does not
+restart idle: the arm stays where tracking left it. `POST /servo/resume` clears every owner. An LED
+override that ends a scene also deletes the persisted scene, so a HAL restart does not bring it back.
+The release logs say whether the arm is free: `Scene off: servo released` when no owner is left,
+`Scene off: scene hold released, servo still held by explicit` when one is. Likewise gaze logs
+`framing released (servo held by scene, idle waits)` instead of `(idle has the arm)` at the end of
+a conversation under a hold.
+
+**Safety net.** A `scene` hold with no active scene is stale. It is released, with
+`[hold] scene hold released -- no scene is active (stale)`, the next time something reads the
+hold: `GET /servo`, `/servo/play`, `/servo/demo`, the idle handback, or a gaze mover.
+
+**What a hold stops.** Idle and ambient animation, and the gaze watcher's automatic moves
+(framing pan and tilt, face climb, speech-start repoint, look-around). Each logs the reason,
+e.g. `[gaze] no pan: servo held by scene`. Explicit moves still run: `/servo/aim`,
+`/servo/nudge`, `/servo/move`, `/servo/search` and a realtime look aim. During a scene the hold
+stays at the new pose and the scene stays active, so "aim a bit left" refines reading mode
+instead of ending it.
+
+**Camera.** An emotion whose preset turns the camera on leaves it off while the active scene
+keeps it off (`reading`, `focus`, `movie`, `night`).
+
 ### Emotion suppression during hold mode
 
 When servo is in hold mode (reading/focus), **emotion animations are suppressed** to avoid distraction:
@@ -157,7 +279,7 @@ When servo is in hold mode (reading/focus), **emotion animations are suppressed*
 - `happy`, `thinking`, `curious`, `sad`, etc. → servo + LED skipped
 - `greeting`, `sleepy`, `stretching` → **allowed** (these signal state changes: wake, sleep, scene transition) — **scene-preset holds only**
 
-An **explicit `/servo/hold`** (agent command like "face the wall and stay there") sets `_hold_explicit` and suppresses the servo for **all** emotions, scene-change set included — a trailing `[HW:/emotion:greeting]` in the same reply used to ride the exemption and park the arm at the greeting pose instead of the commanded one. `/servo/resume` and scene transitions clear the flag.
+An **explicit `/servo/hold`** (agent command like "face the wall and stay there") sets `_hold_explicit` and suppresses the servo for **all** emotions, scene-change set included — a trailing `[HW:/emotion:greeting]` in the same reply used to ride the exemption and park the arm at the greeting pose instead of the commanded one. `/servo/resume` clears the flag. Scene changes and LED overrides leave an explicit hold alone.
 
 This means during focus, sensing events (face emotion, motion) still reach OpenClaw but Lamp stays physically still and visually stable.
 

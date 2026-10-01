@@ -780,6 +780,13 @@ pose to restore and no ownership to drop. The check fails **closed** when voice 
 exception is a *prompted* climb, which a speech-driven repoint asked for and which would otherwise
 leave the head aimed at a chest for the whole utterance.
 
+**A held servo is off limits.** Pan, tilt, the face climb and its return to a known height,
+the speech-start repoint and the look-around all skip while any servo hold is active (a
+`reading`/`focus` scene, an explicit `/servo/hold`), and log why through the usual throttled
+line, e.g. `[gaze] no pan: servo held by scene` or `[gaze] not looking around: servo held by
+explicit`. A skipped look-around does not start its cooldown. Tracking already had the body
+through `_tracking_active`. See `led-control.md`, "Hold ownership".
+
 ### Vertical centring, and why it reads a median
 
 A desk lamp sits below head height, so its camera points at a chest. The correction is a median of

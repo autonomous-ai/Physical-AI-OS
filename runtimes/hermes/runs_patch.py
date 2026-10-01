@@ -31,6 +31,12 @@ FIXED_CREATE = '''self._create_agent(
     tool_complete_callback=lambda call_id, name, args, result: _autonomous_run_tool_event(
         run, loop, "tool.call.completed", call_id, name, args, result),
     **run.agent_kwargs)'''
+# Hermes 0.21.5 already reports cache usage and adds interim assistant output.
+# Keep that callback intact while enriching the same native Runs transport.
+MODERN_CREATE = LEGACY_CREATE.replace(
+    "**run.agent_kwargs", "interim_assistant_callback=_interim_cb, **run.agent_kwargs")
+FIXED_MODERN_CREATE = FIXED_CREATE.replace(
+    "**run.agent_kwargs", "interim_assistant_callback=_interim_cb, **run.agent_kwargs")
 HELPER = '''def _autonomous_run_tool_event(run, loop, event, call_id, name, arguments, result=None):
     """Observe existing tool callbacks without affecting execution or progress events."""
     with suppress(Exception):
@@ -70,10 +76,13 @@ def patched_source(source):
     caps = [node.value for node in functions["_idempotency_capabilities"].body if isinstance(node, ast.Return)]
     creates = [node for node in ast.walk(functions["_execute_run"]) if isinstance(node, ast.Call)
                and isinstance(node.func, ast.Attribute) and node.func.attr == "_create_agent"]
+    modern = len(creates) == 1 and any(
+        same(creates[0], expr(shape)) for shape in (MODERN_CREATE, FIXED_MODERN_CREATE))
     states = []
     for nodes, legacy, fixed in ((usage, LEGACY_USAGE, FIXED_USAGE),
                                  (caps, LEGACY_CAPS, FIXED_CAPS),
-                                 (creates, LEGACY_CREATE, FIXED_CREATE)):
+                                 (creates, MODERN_CREATE if modern else LEGACY_CREATE,
+                                  FIXED_MODERN_CREATE if modern else FIXED_CREATE)):
         if len(nodes) != 1:
             raise UnsupportedSource("unsupported native Runs target count")
         node = nodes[0]
@@ -93,7 +102,8 @@ def patched_source(source):
         if len(helpers) != 1 or not same(helpers[0], ast.parse(HELPER).body[0]):
             raise UnsupportedSource("unverified native Runs helper")
         return source
-    if states != ["legacy"] * 3 or helpers:
+    expected = ["fixed", "legacy", "legacy"] if modern else ["legacy"] * 3
+    if states != expected or helpers:
         raise UnsupportedSource("partially patched native Runs source")
     for start, end, replacement in sorted(edits, reverse=True):
         raw = raw[:start] + replacement + raw[end:]

@@ -12,6 +12,7 @@ from typing import Optional
 from fastapi import APIRouter, HTTPException, File, Form, UploadFile
 
 import hal.app_state as state
+from hal.drivers.motors import hold
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
@@ -78,6 +79,7 @@ def _svc_connected():
 def get_servo_state():
     """Get available recordings and current animation state."""
     svc = _svc()
+    hold.release_stale_scene_hold(svc)
     return {
         "available_recordings": svc.get_available_recordings(),
         "current": svc._current_recording,
@@ -189,6 +191,7 @@ def play_recording(req: ServoRequest):
         state.logger.info("servo/play ignored -- device is sleeping")
         return {"status": "ignored", "reason": "sleeping"}
     svc = _svc()
+    hold.release_stale_scene_hold(svc)
     if svc.is_suppressed:
         state.logger.info("servo/play ignored -- %s mode active", svc.motion_mode)
         return {"status": "ignored", "reason": svc.motion_mode}
@@ -214,6 +217,8 @@ def resume_servos():
 def hold_servos():
     """Hold current pose -- suppress idle/ambient animations, torque stays ON."""
     svc = _svc()
+    # Claim first: a claim on an unheld body drops owners left over from before a resume.
+    hold.claim(svc, hold.EXPLICIT)
     svc.hold(explicit=True)
     return {"status": "ok"}
 
@@ -427,6 +432,7 @@ def range_demo_route():
         return {"status": "ok", "started": False, "waypoints": 0,
                 "reason": "sleeping"}
     svc = _svc_connected()
+    hold.release_stale_scene_hold(svc)
     if svc.is_suppressed:
         state.logger.info("servo/demo ignored -- %s mode active", svc.motion_mode)
         return {"status": "ok", "started": False, "waypoints": 0,

@@ -20,6 +20,7 @@ import numpy as np
 from typing_extensions import override
 
 from hal import config as app_config
+from hal import cpu_affinity
 from hal.drivers.voice.stt.provider import STTProvider
 from hal.realtime.config import PipecatV1Config
 from hal.realtime.exceptions import PipecatV1Error
@@ -147,6 +148,7 @@ class PipecatV1Agent(VoiceAgentBase):
         ready = threading.Event()
 
         def _run() -> None:
+            cpu_affinity.pin_current_thread(cpu_affinity.FAST)
             asyncio.set_event_loop(loop)
             ready.set()
             loop.run_forever()

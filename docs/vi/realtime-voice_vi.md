@@ -395,6 +395,7 @@ trong câu trả lời đều đúng.
 Text/audio filler vẫn stream ngay để phục vụ KPI-1 (Voice Acknowledge).
 HAL thông thường chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S`
 (mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
+
 Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
 sau đơn thuần không kéo dài thời hạn. Query/chunk Google Search hoặc tool thực
 hiện công việc ngoài routing và biểu cảm có thể kéo dài thời gian chờ outcome
@@ -407,6 +408,18 @@ output thông thường **8 giây**: thought, usage và heartbeat chung không c
 minh tiến độ hữu ích. Thay đổi này không thêm lịch phát filler; giữ câu xác nhận
 một lần mỗi lượt hiện có. Watchdog progress chặt hơn áp dụng cho Gemini
 extended-thinking khi Live tắt; OpenAI, GPT-Live và Pipecat giữ hành vi hiện có.
+
+Gemini `generation_complete` cũng chốt đoạn output-transcription hiện tại
+([hợp đồng Live API](https://ai.google.dev/api/live#BidiGenerateContentServerContent)
+quy định transcript cuối đến trước event này). HAL chuyển mốc đó thành metadata
+để Live ON/OFF đưa phần text đã được chấp nhận cùng tag cuối đoạn vào hàng đợi TTS,
+không phải đợi grace định tuyến hết hạn. Metadata này không phải ACK, không xác nhận
+execution hoàn tất và không cho phép phát continuation đang bị giữ. Tool đến muộn,
+reject, interrupt và quyền sở hữu reply vẫn theo quy tắc hiện có; mốc kết thúc của
+continuation bị giữ cùng continuation. Audio native Gemini không đổi. Cách này chỉ
+bỏ chờ sau generation, không rút ngắn thời gian Gemini sinh câu hoặc khoảng cách
+giữa các chunk transcript.
+
 HAL mở iterator `receive()` kế tiếp của SDK trên
 cùng session sau `turn_complete`, giữ định danh lượt logic.
 Delegate/reject/end-conversation kết thúc cửa sổ sớm. `complete_response` ghi nhận xác nhận

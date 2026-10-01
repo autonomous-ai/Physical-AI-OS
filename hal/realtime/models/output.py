@@ -22,6 +22,12 @@ class TextOutput(OutputBase):
     text: str
 
 
+class TextSegmentEndOutput(OutputBase):
+    """The accepted text generation ended; routing and tool work may continue."""
+
+    type: OutputTypeEnum = OutputTypeEnum.TEXT_SEGMENT_END
+
+
 class MainAgentFallbackOutput(OutputBase):
     """Provider explicitly could not establish an outcome for the user's turn."""
 

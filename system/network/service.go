@@ -27,6 +27,8 @@ const (
 	networkMonitorFailsRequired = 5
 	networkMonitorInterval      = 5 * time.Second
 	networkMonitorPingTimeout   = 3 * time.Second
+	// setupInternetWait bounds the internet check after connect-wifi.
+	setupInternetWait = 60 * time.Second
 )
 
 // Service provides WiFi scan, current network, setup and connectivity monitoring.
@@ -282,23 +284,35 @@ func ReadCurrentSSID() string {
 // rePingTime extracts the RTT from a ping reply line.
 var rePingTime = regexp.MustCompile(`time=([0-9.]+) ms`)
 
-// CheckInternet pings 8.8.8.8.
+// CheckInternet pings 8.8.8.8, then falls back to a TLS handshake with the
+// cloud API host for networks that drop ICMP.
 func (s *Service) CheckInternet() (bool, error) {
-	if _, err := s.pingRTT(); err != nil {
-		return false, fmt.Errorf("connected but no internet: ping 8.8.8.8 failed: %w", err)
+	_, icmpErr := s.pingRTT()
+	if icmpErr == nil {
+		return true, nil
 	}
-	return true, nil
+	addr, tlsErr := s.reachableOverTLS()
+	if tlsErr == nil {
+		slog.Info("internet reachable over TLS while ICMP is blocked", "component", "network", "probe", addr)
+		return true, nil
+	}
+	return false, fmt.Errorf("connected but no internet: ping 8.8.8.8 failed (%v) and %s unreachable: %w", icmpErr, addr, tlsErr)
 }
 
-// CheckInternetRTT is CheckInternet plus the RTT in ms (0 if unparsed).
+// CheckInternetRTT is CheckInternet plus the ICMP RTT in ms (0 if unparsed or
+// reachable only over TLS).
 func (s *Service) CheckInternetRTT() (ok bool, rttMs float64) {
 	rtt, err := s.pingRTT()
-	return err == nil, rtt
+	if err == nil {
+		return true, rtt
+	}
+	_, tlsErr := s.reachableOverTLS()
+	return tlsErr == nil, 0
 }
 
 // pingRTT runs one probe; rtt 0 with nil error when output didn't parse.
 func (s *Service) pingRTT() (float64, error) {
-	out, err := exec.Command("ping", "-c", "1", "-W", "5", "8.8.8.8").CombinedOutput()
+	out, err := icmpPing("5")
 	if err != nil {
 		return 0, err
 	}
@@ -317,6 +331,33 @@ func (s *Service) pingNetworkMonitor(target string) bool {
 	}
 	cmd := exec.Command("ping", "-c", "1", "-W", strconv.Itoa(sec), target)
 	return cmd.Run() == nil
+}
+
+// setupHotspotIP is the device's own address while it serves the setup hotspot.
+const setupHotspotIP = "192.168.100.1"
+
+// wifiJoinFailure classifies a failed join and logs it with `setup_failure_reason`.
+func (s *Service) wifiJoinFailure(joinStart time.Time, ssid string) *SetupError {
+	o := wifiObservation{events: wpaEventsSince(joinStart), wpaState: wpaState()}
+	if ip, err := s.GetCurrentIP(); err == nil && ip != "" && ip != setupHotspotIP {
+		o.hasIP = true
+	}
+	if cur, _ := s.CurrentNetwork(); cur != nil && cur.SSID == ssid {
+		o.ssidMatched = true
+	}
+	se := newSetupError(classifyWiFiFailure(o), nil)
+	slog.Warn("network setup failed", "component", "network",
+		"setup_failure_reason", string(se.Reason), "detail", se.Detail,
+		"wpa_state", o.wpaState, "has_ip", o.hasIP, "ssid_matched", o.ssidMatched,
+		"wrong_key_failures", wrongKeyFailures(o.events), "wpa_events", len(o.events),
+		"elapsed_s", int(time.Since(joinStart).Seconds()))
+	return se
+}
+
+// monitorReachesCloud is the monitor's fallback when ICMP fails.
+func (s *Service) monitorReachesCloud() bool {
+	_, err := s.reachableOverTLS()
+	return err == nil
 }
 
 // StartNetworkMonitor runs the monitor loop until ctx ends; call only in STA mode.
@@ -359,7 +400,8 @@ func (s *Service) runNetworkMonitorTick(ctx context.Context) {
 	} else {
 		s.recovery = wifiRecovery{}
 	}
-	if s.pingNetworkMonitor(networkMonitorPingTarget) {
+	// ICMP first; a network that drops ICMP but reaches our cloud is online.
+	if s.pingNetworkMonitor(networkMonitorPingTarget) || s.monitorReachesCloud() {
 		s.networkMonitorMu.Lock()
 		prev := s.networkMonitorConsecutive
 		s.networkMonitorConsecutive = 0
@@ -423,7 +465,8 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 	}
 	// 802.11 caps SSID at 32 bytes (not chars).
 	if n := len(ssid); n > 32 {
-		return false, fmt.Errorf("ssid too long: %d bytes, max 32 (802.11 limit)", n)
+		return false, &SetupError{Reason: FailureSSIDTooLong,
+			Detail: fmt.Sprintf("ssid too long: %d bytes, max 32 (802.11 limit)", n)}
 	}
 
 	// Fast path: skip reconnecting when ssid+password are unchanged.
@@ -445,15 +488,21 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		args = append(args, password)
 	}
 	slog.Debug("running connect-wifi", "component", "network", "args", args)
+	// connect-wifi restarts wpa_supplicant, so its log from here on is this
+	// attempt's evidence (see setup_failure.go).
+	joinStart := time.Now()
 	cmd := exec.Command("connect-wifi", args...)
 	slog.Debug("connect-wifi command", "component", "network", "cmd", cmd)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
-		return false, fmt.Errorf("connect-wifi: %w: %s", err, string(out))
+		return false, newSetupError(FailureWiFiConnectError, fmt.Errorf("connect-wifi: %w: %s", err, string(out)))
 	}
 	slog.Debug("connect-wifi output", "component", "network", "output", string(out))
+	// Wall-clock bound: each failed ping waits its own timeout, so a fixed
+	// attempt count stretched "60s" to ~6 minutes.
 	success := false
-	for i := 0; i < 60; i++ {
+	deadline := time.Now().Add(setupInternetWait)
+	for i := 0; time.Now().Before(deadline); i++ {
 		slog.Debug("checking internet", "component", "network", "attempt", i)
 		if ok, _ := s.CheckInternet(); ok {
 			slog.Debug("internet ok", "component", "network", "attempt", i)
@@ -472,10 +521,15 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		} else {
 			slog.Debug("internet not ok", "component", "network", "attempt", i)
 		}
+		// A rejected key will not be accepted on retry: stop instead of
+		// burning the rest of the window while the customer waits.
+		if i%3 == 2 && wrongKeyFailures(wpaEventsSince(joinStart)) >= wifiFailFastThreshold {
+			break
+		}
 		time.Sleep(1 * time.Second)
 	}
 	if !success {
-		return false, fmt.Errorf("network setup failed, no internet or SSID did not match within 60s")
+		return false, s.wifiJoinFailure(joinStart, ssid)
 	}
 	s.config.NetworkSSID = ssid
 	s.config.NetworkPassword = password
