@@ -71,6 +71,26 @@ func TestTriggerUpdateResolvesAgentAndRateLimits(t *testing.T) {
 	}
 }
 
+// The Agent update button sends "agent"; on an OpenClaw device that must reach
+// bootstrap as openclaw instead of being rejected as an unknown target.
+func TestTriggerUpdateAgentResolvesToOpenClaw(t *testing.T) {
+	var got string
+	fakeBootstrap(t, func(w http.ResponseWriter, r *http.Request) {
+		got = r.Method + " " + r.URL.Path
+		w.WriteHeader(http.StatusOK)
+	})
+	resolved, err := TriggerUpdate(context.Background(), &config.Config{AgentRuntime: "openclaw"}, AgentTarget)
+	if err != nil {
+		t.Fatalf("trigger agent on openclaw: %v", err)
+	}
+	if resolved != "openclaw" {
+		t.Fatalf("resolved = %q, want openclaw", resolved)
+	}
+	if got != "POST /force-update/openclaw" {
+		t.Fatalf("bootstrap call = %q, want POST /force-update/openclaw", got)
+	}
+}
+
 func TestTriggerUpdateUnknownTarget(t *testing.T) {
 	fakeBootstrap(t, func(w http.ResponseWriter, r *http.Request) {
 		t.Errorf("unknown target must not reach bootstrap: %s", r.URL.Path)

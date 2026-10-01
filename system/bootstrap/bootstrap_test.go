@@ -108,6 +108,9 @@ func TestForceTargetAllowedIncludesDebugVersionTargets(t *testing.T) {
 	if !forceTargetAllowed[domain.OTAKeyDevice] {
 		t.Fatal("device must be a force-update target so the debug Versions card can update the installed profile")
 	}
+	if !forceTargetAllowed[domain.OTAKeyOpenClaw] {
+		t.Fatal("openclaw must be a force-update target so the Agent update button works on OpenClaw devices")
+	}
 }
 
 func TestOTAErrorLEDSchedulesRestore(t *testing.T) {

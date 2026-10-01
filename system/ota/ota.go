@@ -33,6 +33,9 @@ var allowedTargets = map[string]bool{
 	domain.OTAKeyDevice: true,
 	domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
 	domain.OTAKeyHermes: true,
+	// OpenClaw is the default agent runtime: "agent" resolves to it, so without
+	// this entry the Agent update button always failed with "unknown target".
+	domain.OTAKeyOpenClaw: true,
 }
 
 // lastFire tracks the last trigger time per resolved target.
