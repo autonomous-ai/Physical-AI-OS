@@ -203,14 +203,20 @@ sd-card-flash-raw:
 ifndef DISK
 	$(error DISK is required. Usage: make sd-card-flash-raw DEVICE_TYPE=lamp DISK=12)
 endif
+ifneq ($(VERIFY),0)
 	@command -v python3 >/dev/null
+endif
 	@[ -s ./output/$(RAW_IMG) ] || { echo "ERROR: ./output/$(RAW_IMG) not found — pass DEVICE_TYPE, or the raw .img isn't built yet"; exit 1; }
 	@echo "==> Flashing ./output/$(RAW_IMG) to /dev/rdisk$(DISK) (raw, fast)..."
 	diskutil unmountDisk force /dev/disk$(DISK)
 	sudo dd if=./output/$(RAW_IMG) of=/dev/rdisk$(DISK) bs=64m conv=fsync status=progress
 	sync
 	diskutil unmountDisk /dev/disk$(DISK)
+ifneq ($(VERIFY),0)
 	sudo "$$(command -v python3)" lib/verify_flash.py ./output/$(RAW_IMG) /dev/rdisk$(DISK)
+else
+	@echo "==> Readback verification skipped (VERIFY=0)"
+endif
 	diskutil eject /dev/disk$(DISK) 2>/dev/null || true
 	@echo "==> Flash complete"
 

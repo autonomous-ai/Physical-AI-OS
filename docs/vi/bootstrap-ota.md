@@ -17,6 +17,8 @@ bằng đổi tên nguyên tử; bước nén cũng ghi file staging rồi mới
 có thể để lại artifact hoàn tất cũ; `COMPRESS=0` không cập nhật image nén đã có.
 Khi flash cần chọn đúng bản build mong muốn.
 
+Với flash raw, `make sd-card-flash-raw DEVICE_TYPE=lamp DISK=17 VERIFY=0` bỏ bước đọc lại đối chiếu và yêu cầu Python của bước này; vẫn sync và eject. Mặc định vẫn bật verify.
+
 Cả hai target flash trong Makefile cần Python 3 và dùng
 `scripts/imager/lib/verify_flash.py` để đọc lại SD, đối chiếu toàn bộ byte của image
 trước khi báo thành công/eject. Flash image nén dùng Bash `pipefail` để lỗi giải nén
@@ -732,11 +734,11 @@ chung của hệ thống; nếu đã nâng Node thành công nhưng cài OpenCla
 updater không rollback Node. Xử lý prerequisite này không thay đổi gate cập
 nhật tự động ở trên.
 
-Mặc định image OrangePi khớp OTA metadata đã kiểm tra ngày 2026-09-11: OpenClaw
-`2026.9.3` và Hermes `0.21.1`. Builder cài package NodeSource 26.x mới nhất kể cả
+Image OrangePi mặc định dùng OpenClaw `2026.9.3` và Hermes `0.21.5` (khớp
+bản Hermes OTA công bố ngày 2026-10-01). Builder cài package NodeSource 26.x mới nhất kể cả
 khi dùng lại base image, và yêu cầu tối thiểu Node `26.8.2` (bản upstream mới nhất
 tại thời điểm kiểm tra). Installer và checkout Hermes được pin vào release
-`v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`; version CLI báo về
+`v2026.9.24`, commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`; version CLI báo về
 khác sẽ làm build thất bại. Đây là mặc định lúc build image; presync và hành vi
 `software-update` sau đó giữ nguyên.
 

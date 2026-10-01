@@ -18,6 +18,8 @@ published; compression also uses a staging file before rename. Failed builds can
 leave an older completed artifact, and `COMPRESS=0` does not refresh an existing
 compressed image. Select the intended build when flashing.
 
+For raw flashing, `make sd-card-flash-raw DEVICE_TYPE=lamp DISK=17 VERIFY=0` skips readback verification and its Python requirement; sync and eject still run. Verification remains enabled by default.
+
 Both Makefile flash targets require Python 3 and use
 `scripts/imager/lib/verify_flash.py` to compare every image byte against SD readback
 before success/ejection. Compressed flashing uses Bash `pipefail` so decompression
@@ -755,11 +757,11 @@ the OpenClaw install and restart. Node is a shared system dependency; a
 successful Node upgrade is not rolled back if the later OpenClaw install fails.
 This prerequisite handling does not change the automatic-update gate above.
 
-OrangePi image defaults match OTA metadata checked on 2026-09-11: OpenClaw
-`2026.9.3` and Hermes `0.21.1`. The builder installs the latest NodeSource 26.x
+OrangePi images default to OpenClaw `2026.9.3` and Hermes `0.21.5` (matching
+the Hermes OTA release published on 2026-10-01). The builder installs the latest NodeSource 26.x
 package even on reused base images and requires at least Node `26.8.2` (the
 current upstream release at that check). Hermes's installer and checkout are
-pinned to release `v2026.9.7`, commit `2237be355906fbe6065ce1815711eee52b2d646e`,
+pinned to release `v2026.9.24`, commit `f97608f178d1ffeca59860195ab7da295f7c8e5f`,
 and a different reported CLI version fails the build. These are image-build
 defaults; presync and subsequent `software-update` behavior are unchanged.
 

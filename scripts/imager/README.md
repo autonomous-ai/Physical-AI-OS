@@ -78,7 +78,7 @@ Phase 2  chroot qemu-arm64:
          - apt install (hostapd, dnsmasq, nginx, avahi, bluez, pulseaudio, alsa-utils,
            chromium, xvfb, …)
          - Node.js 26 latest package (at least 26.8.2) + OpenClaw 2026.9.3 + Discord/Slack plugins
-         - Hermes 0.21.1 pinned to release v2026.9.7; verify CLI version before continuing
+         - Hermes 0.21.5 pinned to release v2026.9.24; verify CLI version before continuing
          - openclaw onboard --skip-health
          - uv (Python pkg mgr for HAL)
          - systemd units: os-server, bootstrap, hal, openclaw
@@ -165,6 +165,8 @@ the disk, then choose the intended artifact:
 make sd-card-flash DEVICE_TYPE=lamp DISK=N       # compressed image; add DEFAULT_AGENT/VARIANT if used at build time
 make sd-card-flash-raw DEVICE_TYPE=lamp DISK=N   # latest completed raw image for this device type
 ```
+
+To skip raw-image readback, add `VERIFY=0` to `sd-card-flash-raw`. This also skips its Python requirement; sync and eject still run. Verification is enabled by default.
 
 Both targets sync writes, then use `lib/verify_flash.py` to read back and compare
 all image bytes before reporting success and ejecting. The compressed target

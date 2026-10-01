@@ -18,9 +18,9 @@ AP_CHANNEL="${AP_CHANNEL:-}"
 COUNTRY_CODE="${COUNTRY_CODE:-US}"
 # Match OTA metadata checked on 2026-09-11.
 OPENCLAW_VERSION="${OPENCLAW_VERSION:-2026.9.3}"
-# Release v2026.9.7 reports Hermes 0.21.1; pin the image checkout only.
-HERMES_VERSION="0.21.1"
-HERMES_COMMIT="2237be355906fbe6065ce1815711eee52b2d646e"
+# Release v2026.9.24 reports Hermes 0.21.5; match the tested OTA release.
+HERMES_VERSION="0.21.5"
+HERMES_COMMIT="f97608f178d1ffeca59860195ab7da295f7c8e5f"
 # Required; one device type per image.
 DEVICE_TYPE="${DEVICE_TYPE:?DEVICE_TYPE is required — build via 'make build DEVICE_TYPE=...'}"
 DEVICES_DIR="${DEVICES_DIR:-/opt/devices}"
