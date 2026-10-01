@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import pytest
 from google.genai.live import AsyncSession
 
-from hal.realtime.models import AudioOutput, FunctionCallOutput, OutputEvent, TextOutput, TurnDoneEvent
+from hal.realtime.models import AudioOutput, FunctionCallOutput, OutputEvent, TextOutput, TextSegmentEndOutput, TurnDoneEvent
 from hal.realtime.voice_agent import gemini_live
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
@@ -304,6 +304,10 @@ def test_continuation_after_filler_waits_for_outcome_and_late_routing(
     texts = [e.output.text for e in events if isinstance(e, OutputEvent)
              and isinstance(e.output, TextOutput)]
     assert texts == ([filler, answer] if release else [filler])
+    boundaries = [e.output for e in events if isinstance(e, OutputEvent)
+                  and isinstance(e.output, TextSegmentEndOutput)]
+    expected_boundaries = int(generation) * (1 + int(bool(release and terminal is True)))
+    assert len(boundaries) == expected_boundaries
     audio = [e for e in events if isinstance(e, OutputEvent) and isinstance(e.output, AudioOutput)]
     assert len(audio) == (2 if release else 1)
     assert bool(_calls(events)) is delegate
@@ -1490,3 +1494,49 @@ def test_live_same_frame_reject_never_publishes_speech(monkeypatch, empty_termin
             and isinstance(e.output, TextOutput)] == ['Only the new answer.']
     assert all(e.output.user_turn_id != 'user-1' for e in next_events
                if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput))
+
+
+def test_text_segment_boundary_precedes_routing_grace_and_preserves_tags(monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_NONBLOCKING_TOOL_GRACE_S", 1.0)
+
+    async def scenario():
+        agent = _agent([_speech("All done."), _speech(" [laughs]"), _terminal(generation=True)])
+        task = asyncio.create_task(agent._async_receive_turn())
+        try:
+            # Wait for the boundary itself, independently of the routing deadline.
+            async def boundary_seen():
+                while not any(isinstance(e, OutputEvent) and isinstance(e.output, TextSegmentEndOutput)
+                              for e in agent._recv_queue.queue):
+                    await asyncio.sleep(0.001)
+            await asyncio.wait_for(boundary_seen(), 0.2)
+            assert not task.done()
+            assert not agent._turn_done.is_set()
+            outputs = [e.output for e in agent._recv_queue.queue if isinstance(e, OutputEvent)]
+            text_and_end = [o for o in outputs if isinstance(o, (TextOutput, TextSegmentEndOutput))]
+            assert [o.text for o in text_and_end[:-1]] == ["All done.", " [laughs]"]
+            assert isinstance(text_and_end[-1], TextSegmentEndOutput)
+            assert text_and_end[-1].user_turn_id == "user-1"
+            agent._session.messages.put_nowait(_tool())
+            await asyncio.wait_for(task, 0.2)
+            assert not list(agent._recv_queue.queue)[-1].fallback_to_main
+        finally:
+            if not task.done():
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+
+    asyncio.run(scenario())
+
+
+@pytest.mark.parametrize("mode", ["empty", "interrupted", "reject", "delegate"])
+def test_generation_boundary_does_not_release_empty_or_cancelled_text(mode, monkeypatch):
+    monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", True)
+    terminal = _terminal(generation=True)
+    messages = [] if mode == "empty" else [_speech("Do not flush this.")]
+    if mode == "interrupted":
+        terminal.server_content.interrupted = True
+    elif mode in {"reject", "delegate"}:
+        terminal.tool_call = _tool("reject_turn" if mode == "reject" else "delegate_to_main").tool_call
+    messages.append(terminal)
+    events = _receive(_agent(messages))
+    assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextSegmentEndOutput)
+                   for e in events)

@@ -26,6 +26,7 @@ from hal.realtime.models import (
     TurnDoneEvent,
     UserSpeechOutput,
     ExecutionOutput,
+    TextSegmentEndOutput,
     InterruptedOutput,
     MainAgentFallbackOutput,
 )
@@ -368,6 +369,10 @@ class VoiceAgentBase(ABC):
                             )
                             stale = 0
                         self._newest_output_gen = event.gen
+                    if isinstance(event.output, TextSegmentEndOutput):
+                        # Metadata obeys generation ownership but is not real speech.
+                        yield event.output
+                        continue
                     self._skip_stale_turn_done = False  # real output → next done is live
                     yield event.output
         finally:

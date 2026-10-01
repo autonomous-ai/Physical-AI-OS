@@ -23,6 +23,7 @@ class InputTypeEnum(StrEnum):
 
 class OutputTypeEnum(StrEnum):
     TEXT = "text"
+    TEXT_SEGMENT_END = "text_segment_end"
     AUDIO = "audio"
     FUNCTION_CALL = "function_call"
     INTERRUPTED = "interrupted"

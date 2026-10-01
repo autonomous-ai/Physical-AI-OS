@@ -16,6 +16,7 @@ from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
 from hal.realtime.models import TextOutput as RTTextOutput
+from hal.realtime.models import TextSegmentEndOutput as RTTextSegmentEndOutput
 from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectSignal
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice.tts.gemini import native_voice
@@ -583,8 +584,34 @@ def run_realtime_turn(
                     if isinstance(output, RejectSignal):
                         rejected = True
                         wait_filler.cancel()
+                        if first_sentence_sent and tts is not None:
+                            tts.stop_realtime_reply(turn_id=interaction_id)
                         break
                     if delegated:
+                        continue
+                    if isinstance(output, RTTextSegmentEndOutput):
+                        # Generation completion seals the text, not the routing
+                        # decision. Keep listening for tools after queuing speech.
+                        if native or foreign_suppressed or tts is None:
+                            continue
+                        visible = realtime_visible_text(sentence_buf, tts, strip_markers)
+                        if not visible:
+                            continue
+                        speech = leak_filter.filter_text(
+                            realtime_speech_text(sentence_buf, tts, strip_markers)
+                        )
+                        sentence_buf = ""
+                        if speech:
+                            logger.info("[realtime] Completed text segment → speak (+%.2fs after commit): %r",
+                                        time.monotonic() - t_commit, speech[:80])
+                            wait_filler.cancel()
+                            if first_sentence_sent:
+                                tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
+                            else:
+                                if not tts.speak(speech, turn_id=interaction_id, realtime_reply=True):
+                                    tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
+                                first_sentence_sent = True
+                                _thinking_cue_clear()
                         continue
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:

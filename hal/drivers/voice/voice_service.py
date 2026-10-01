@@ -22,6 +22,7 @@ from hal.realtime.models import InterruptedOutput as RTInterruptedOutput
 from hal.realtime.models.signal import DelegateSignal, EndCallSignal, RejectSignal
 from hal.realtime.models.output import ExecutionOutput, UserSpeechOutput
 from hal.realtime.models import TextOutput as RTTextOutput
+from hal.realtime.models import TextSegmentEndOutput as RTTextSegmentEndOutput
 from hal.realtime.orchestrator import (
     RealtimeOrchestrator, AudioTurnSessionChanged, PREWARM_JOIN_TIMEOUT_S,
 )
@@ -1339,7 +1340,7 @@ class VoiceService:
                 for out in self._realtime.stream_output(**output_options):
                     if not (self._live_running and generation == self._live_generation):
                         break
-                    if (isinstance(out, (RTAudioOutput, RTTextOutput, ExecutionOutput))
+                    if (isinstance(out, (RTAudioOutput, RTTextOutput, RTTextSegmentEndOutput, ExecutionOutput))
                             and out.user_turn_id and out.user_turn_id in rejected_inputs):
                         continue
                     if (deferred_marker_tail is not None
@@ -1581,6 +1582,27 @@ class VoiceService:
                         if out.transcript:
                             history.output(out.user_turn_id, out.transcript)
                             transcript += out.transcript
+                        continue
+                    if isinstance(out, RTTextSegmentEndOutput):
+                        # A boundary cannot acquire ownership or complete a turn.
+                        # Only flush speech already accepted for this exact reply.
+                        if (native or buffer_mixed or not sentence_buf
+                                or (out.user_turn_id or fallback_key) != buffer_reply_key
+                                or self._pending_rt_silence_marker(sentence_buf)):
+                            continue
+                        visible = realtime_visible_text(sentence_buf, self._tts, self.strip_rt_markers)
+                        speech = realtime_speech_text(sentence_buf, self._tts, self.strip_rt_markers) if visible else ""
+                        if speech:
+                            logger.info("[live] Completed text segment → speak: %r", speech[:80])
+                            if cues is not None:
+                                cues.finish(out.user_turn_id)
+                            speak_live(speech, speech_iid, buffer_reply_key, first=not first_sent)
+                            first_sent = True
+                            sentence_buf = ""
+                            if opener is not None:
+                                opener["consumed"] = True
+                                if speech_iid == opener["interaction_id"]:
+                                    opener["replied"] = True
                         continue
                     if isinstance(out, RTTextOutput):
                         if (not native and getattr(self._tts, "_provider", None) == "elevenlabs"

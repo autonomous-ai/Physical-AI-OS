@@ -5,7 +5,7 @@ import queue
 import threading
 from types import SimpleNamespace
 
-from hal.realtime.models import InterruptedOutput, OutputEvent, TextOutput, TurnDoneEvent
+from hal.realtime.models import InterruptedOutput, OutputEvent, TextOutput, TextSegmentEndOutput, TurnDoneEvent
 from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
 
@@ -50,6 +50,8 @@ def test_generation_complete_ends_consumer_turn_without_waiting_for_playback_ack
     assert isinstance(reset.output, InterruptedOutput)
     assert reset.output.reason == "output_reset"
     output = agent._recv_queue.get_nowait()
+    boundary = agent._recv_queue.get_nowait()
+    assert isinstance(boundary.output, TextSegmentEndOutput)
     done = agent._recv_queue.get_nowait()
     assert isinstance(output, OutputEvent)
     assert isinstance(output.output, TextOutput)

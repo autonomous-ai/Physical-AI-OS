@@ -43,6 +43,7 @@ from hal.realtime.models import (
     OutputEvent,
     TextInput,
     TextOutput,
+    TextSegmentEndOutput,
     TurnDoneEvent,
 )
 from hal.realtime.utils import float32_to_pcm16_bytes, pcm16_bytes_to_float32
@@ -669,6 +670,7 @@ class GeminiLiveAgent(VoiceAgentBase):
         _turn_transcript = ""
         _spoken_response = ""
         _initial_speech = False
+        _text_segment_open = _held_text_segment_open = False
         _empty_terminal_pending = False
         _initial_active_until = 0.0
         _continuation_active_until = 0.0
@@ -957,6 +959,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 _direct_answer_confirmed = _initial_speech = False
                 _complete_response_seen = False
                 _empty_terminal_pending = False
+                _text_segment_open = _held_text_segment_open = False
                 _spoken_response = _continuation_text = ""
                 _continuation.clear()
                 _continuation_bytes = 0
@@ -1055,6 +1058,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                     self._live_speech_emitted = False
                     self._user_transcript = ""
                     response_user_turn_id = None
+                    _text_segment_open = _held_text_segment_open = False
                     _routing_received = _outcome_received = False
                     _empty_terminal_pending = False
                     _continuation.clear()
@@ -1221,6 +1225,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                                 and not execution_interrupted and not content.interrupted):
                             for event in _continuation:
                                 self._recv_queue.put(event)
+                            _text_segment_open = _text_segment_open or _held_text_segment_open
+                            _held_text_segment_open = False
                             _spoken_response += _continuation_text
                             _initial_speech = bool(_spoken_response.strip())
                             _continuation.clear()
@@ -1279,6 +1285,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ))
                     if content.output_transcription and content.output_transcription.text:
                         text = content.output_transcription.text
+                        _held_text_segment_open = True
                         _continuation_text += text
                         held_outputs.append(TextOutput(text=text, user_turn_id=response_user_turn_id or ""))
                     if _continuation_bytes > 2_000_000 or len(_continuation_text) > 16_000:
@@ -1375,6 +1382,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             ),
                         ))
 
+                    _text_segment_open = True
                     _spoken_response += content.output_transcription.text
                     valid_transcription_chunk_cnt += 1
 
@@ -1388,7 +1396,28 @@ class GeminiLiveAgent(VoiceAgentBase):
                         )
                     )
 
+                # Gemini guarantees the last output transcription precedes generationComplete.
+                # This is a text boundary, not a routing/turn-complete decision. Keep held
+                # continuation metadata quarantined with its speech until validation releases it.
+                if (getattr(content, "generation_complete", False)
+                        and not content.interrupted and not execution_interrupted
+                        and not _routing_received and not any(
+                            call.name in {"delegate_to_main", "reject_turn", "end_conversation"}
+                            for call in (message.tool_call.function_calls if message.tool_call else []))):
+                    boundary = OutputEvent(
+                        gen=getattr(self, "_turn_gen", 0),
+                        output=TextSegmentEndOutput(user_turn_id=response_user_turn_id or ""),
+                    )
+                    if accept_speech and _text_segment_open:
+                        self._recv_queue.put(boundary)
+                        _text_segment_open = False
+                    elif (_held_text_segment_open and not _continuation_overflow
+                          and not _direct_answer_confirmed):
+                        _continuation.append(boundary)
+                        _held_text_segment_open = False
+
                 if content.interrupted:
+                    _text_segment_open = _held_text_segment_open = False
                     self._invalidate_look_images(self._pending_tool_calls)
                     # A late sibling ACK must not flush the old frame into the new user's interaction.
                     self._pending_image = None

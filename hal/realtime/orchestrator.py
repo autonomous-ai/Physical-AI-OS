@@ -48,7 +48,7 @@ from hal.realtime.models.signal import (
     LookReplaySignal,
     RejectSignal,
 )
-from hal.realtime.models.output import AudioOutput, TextOutput, ExecutionOutput, InterruptedOutput, UserSpeechOutput
+from hal.realtime.models.output import AudioOutput, TextOutput, TextSegmentEndOutput, ExecutionOutput, InterruptedOutput, UserSpeechOutput
 from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged, VoiceAgentBase
 
@@ -1123,7 +1123,7 @@ class RealtimeOrchestrator:
                     handoff_context=output.handoff_context,
                 )
                 break
-            if isinstance(output, ExecutionOutput):
+            if isinstance(output, (ExecutionOutput, TextSegmentEndOutput)):
                 yield output
                 continue
             if isinstance(output, InterruptedOutput) and output.reason == "server_interrupt":

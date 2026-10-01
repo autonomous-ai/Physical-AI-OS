@@ -26,6 +26,7 @@ from hal.realtime.models.output import (
     ExecutionOutput,
     OutputBase,
     TextOutput,
+    TextSegmentEndOutput,
 )
 
 __all__ = [
@@ -44,6 +45,7 @@ __all__ = [
     "FunctionCallResultInput",
     "OutputBase",
     "TextOutput",
+    "TextSegmentEndOutput",
     "AudioOutput",
     "FunctionCallOutput",
     "InterruptedOutput",
