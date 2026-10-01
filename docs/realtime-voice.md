@@ -118,6 +118,16 @@ voice/text, emotion, movement, look, or delegation. The tool description allows
 rejecting an overheard request even when the device could fulfill it. Uncertainty,
 silent completion, and errors retain the existing fallback behavior.
 
+A device can opt in to answering overheard speech with `answer_overheard_speech: true` in its ROBOT.md front
+matter (Intern v2 sets it; Lamp does not). `build_instructions()` then appends
+`resources/answer_overheard_override.md` as the last prompt section (`overheard=`
+in the floor breakdown, ~280 tokens per turn). It supersedes the addressed-speech
+rules above: clear speech in the configured language gets a one-sentence spoken
+reply even when not addressed to the device, and the owner mutes the mic when
+unwanted. `reject_turn` still applies to noise, filler, garbled fragments, bare
+acknowledgments and other-language speech, and overheard speech never authorizes
+delegation or action tools.
+
 The Gemini prompt additionally requires audio evidence before interpreting a
 request: do not complete noise/echo into words or repair an unrelated transcript
 using the date, location, memory, or conversation history. Unexpected foreign

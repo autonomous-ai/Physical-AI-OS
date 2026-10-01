@@ -120,6 +120,16 @@ emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối
 lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
 lặng và lỗi vẫn giữ hành vi fallback hiện có.
 
+Thiết bị có thể tắt quy tắc này bằng `answer_overheard_speech: true` trong front
+matter ROBOT.md (Intern v2 bật; Lamp không). Khi đó `build_instructions()` nối
+`resources/answer_overheard_override.md` làm section cuối của prompt (`overheard=`
+trong floor breakdown, ~280 token mỗi turn). Section này thay thế các quy tắc lời
+nói hướng đến thiết bị ở trên: lời nói rõ bằng ngôn ngữ đã cấu hình được trả lời
+một câu kể cả khi không nói với thiết bị; chủ máy tắt mic nếu thấy phiền.
+`reject_turn` vẫn áp dụng cho tiếng ồn, filler, mảnh câu méo, xác nhận cụt và
+lời nói khác ngôn ngữ; lời nghe lỏm không bao giờ cho phép delegate hay gọi tool
+hành động.
+
 Prompt Gemini còn yêu cầu có bằng chứng âm thanh trước khi diễn giải yêu cầu:
 không ghép tiếng ồn/echo thành câu hay sửa transcript không liên quan bằng ngày,
 vị trí, memory hoặc lịch sử hội thoại. Input đột ngột sang ngôn ngữ khác không
