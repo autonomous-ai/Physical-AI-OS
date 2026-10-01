@@ -1,11 +1,9 @@
 package http
 
 import (
-	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -32,6 +30,7 @@ import (
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/lib/syspath"
 	"go.autonomous.ai/os/system/lib/usercanon"
+	"go.autonomous.ai/os/system/lib/voicefile"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/server/serializers"
@@ -1373,7 +1372,7 @@ type VoiceFileRemoveRequest struct {
 	File string `json:"file" validate:"required"`
 }
 
-const usersDir = "/root/local/users"
+const usersDir = voicefile.UsersDir
 
 func (h *SensingHandler) RemoveVoiceFile(c *gin.Context) {
 	h.removeVoiceFile(c, usersDir)
@@ -1389,104 +1388,20 @@ func (h *SensingHandler) removeVoiceFile(c *gin.Context, root string) {
 		c.JSON(http.StatusBadRequest, serializers.ResponseError(err.Error()))
 		return
 	}
-	name := strings.ToLower(strings.TrimSpace(req.Name))
-	file := strings.TrimSpace(req.File)
-	// Both profile and sample names must be single path components.
-	if !voicePathComponent(name) || !voicePathComponent(file) {
-		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid name or file"))
-		return
-	}
-	// Audio samples only: a .npy goes with its WAV, and metadata.json is
-	// profile state.
-	switch strings.ToLower(filepath.Ext(file)) {
-	case ".wav", ".ogg", ".mp3", ".webm", ".m4a":
-	default:
-		c.JSON(http.StatusBadRequest, serializers.ResponseError("only audio samples can be deleted"))
-		return
-	}
-
-	voiceDir := filepath.Join(root, name, "voice")
-	target := filepath.Join(voiceDir, file)
-	voiceRoot, err := openVoiceDirectory(root, name)
+	res, err := voicefile.Remove(root, req.Name, req.File)
 	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, serializers.ResponseError("file not found"))
-		} else {
-			c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid voice directory"))
-		}
+		c.JSON(voicefile.ErrorStatus(err), serializers.ResponseError(err.Error()))
 		return
 	}
-	defer voiceRoot.Close()
-	info, err := voiceRoot.Stat(file)
-	if err != nil {
-		if os.IsNotExist(err) {
-			c.JSON(http.StatusNotFound, serializers.ResponseError("file not found"))
-		} else {
-			c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid sample path"))
-		}
-		return
-	}
-	if !info.Mode().IsRegular() {
-		c.JSON(http.StatusBadRequest, serializers.ResponseError("sample must be a regular file"))
-		return
-	}
-	if err := voiceRoot.Remove(file); err != nil {
-		slog.Warn("voice file remove failed", "component", "voice", "path", target, "error", err)
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError("delete failed: "+err.Error()))
-		return
-	}
-	// Remove the .npy sidecar too: the UI cannot delete a .npy directly, so an orphan would linger.
-	sidecar := strings.TrimSuffix(file, filepath.Ext(file)) + ".npy"
-	if err := voiceRoot.Remove(sidecar); err != nil && !os.IsNotExist(err) {
-		slog.Warn("voice sidecar remove failed", "component", "voice", "path", sidecar, "error", err)
-	}
-	slog.Info("voice file deleted", "component", "voice", "name", name, "file", file)
-
-	directory, err := voiceRoot.Open(".")
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError("cannot inspect remaining voice samples"))
-		return
-	}
-	entries, err := directory.ReadDir(-1)
-	directory.Close()
-	if err != nil {
-		c.JSON(http.StatusInternalServerError, serializers.ResponseError("cannot inspect remaining voice samples"))
-		return
-	}
-	remainingWavs := []string{}
-	for _, e := range entries {
-		if e.IsDir() {
-			continue
-		}
-		if strings.HasSuffix(strings.ToLower(e.Name()), ".wav") {
-			remainingWavs = append(remainingWavs, filepath.Join(voiceDir, e.Name()))
-		}
-	}
-
-	// No WAVs left → remove the speaker profile entirely so list endpoints
-	// don't show a phantom user with 0 samples.
-	if len(remainingWavs) == 0 {
-		body, _ := json.Marshal(map[string]any{"name": name})
-		resp, err := http.Post("http://127.0.0.1:5001/speaker/remove", "application/json", bytes.NewReader(body))
-		if err != nil {
-			slog.Warn("speaker/remove call failed", "component", "voice", "error", err)
-		} else {
-			io.Copy(io.Discard, resp.Body)
-			resp.Body.Close()
-		}
+	if res.ProfileRemoved {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{
-			"deleted": file,
+			"deleted": res.Deleted,
 			"profile": "removed",
 		}))
 		return
 	}
-
-	// No re-enroll: the bank is one row per WAV, and enroll would duplicate
-	// the remaining samples.
-	slog.Info("voice file deleted", "component", "voice", "name", name,
-		"file", file, "remaining", len(remainingWavs))
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{
-		"deleted":   file,
-		"remaining": len(remainingWavs),
+		"deleted":   res.Deleted,
+		"remaining": res.Remaining,
 	}))
 }

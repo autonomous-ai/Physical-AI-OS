@@ -308,6 +308,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                 handle=self._resumption_handle,
             )
 
+        trigger = getattr(self._config, "context_trigger_tokens", 0)
+        if "gemini-3.8-live" in self._config.model and trigger > 0:
+            target = self._config.context_target_tokens
+            live_config.context_window_compression = types.ContextWindowCompressionConfig(
+                trigger_tokens=trigger,
+                sliding_window=types.SlidingWindow(target_tokens=target),
+            )
+            logger.info("[realtime] context compression: trigger=%d target=%d tokens", trigger, target)
+
         return live_config
 
     async def _async_connect(self) -> None:

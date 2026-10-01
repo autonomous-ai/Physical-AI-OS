@@ -358,6 +358,11 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `face.enroll` | Đăng ký một ảnh khuôn mặt qua HAL `POST /face/enroll` (bất đồng bộ; ack `starting`) | `image_base64`, `label`, tùy chọn `telegram_username`/`telegram_id` |
 | `face.owners` | Liệt kê người đã đăng ký qua HAL `GET /face/owners` (đồng bộ) | _(không có)_ |
 | `face.remove` | Xoá toàn bộ thư mục `users/<label>/` của một người (khuôn mặt, giọng, Telegram, lịch sử) qua HAL `POST /face/remove` (bất đồng bộ; ack `starting`) | `label` |
+| `voice.enroll` | Ghi âm 15 giây bằng mic của chính đèn rồi đăng ký giọng qua HAL `POST /speaker/record-enroll` (bất đồng bộ; ack `starting` kèm thời lượng) | `label` |
+| `voice.owners` | Liệt kê file mẫu giọng của mọi người từ `users/<label>/voice/` (đồng bộ) | _(không có)_ |
+| `voice.remove` | Xoá toàn bộ hồ sơ giọng của một người qua HAL `POST /speaker/remove`; dữ liệu khuôn mặt giữ nguyên (bất đồng bộ; ack `starting`) | `label` |
+| `voice.file.get` | Trả về một file mẫu giọng dạng base64 để phát lại (đồng bộ) | `label`, `file` |
+| `voice.file.remove` | Xoá một mẫu giọng và file `.npy` đi kèm, giống `POST /api/voice/file/remove` (đồng bộ) | `label`, `file` |
 | `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
@@ -1020,6 +1025,121 @@ mà không gọi HAL. Label không tồn tại trả lỗi `POST /face/remove re
 }
 ```
 
+#### `voice.*` — Cài đặt Voice qua MQTT
+
+Các kind `voice.*` cho điện thoại làm đúng những gì phần cài đặt Voice trên
+web (`VoiceSection.tsx`) làm qua HTTP:
+
+| Thao tác trên web | Lệnh HTTP của web | MQTT kind |
+|-------------------|-------------------|-----------|
+| Start Recording (15 giây trên robot) | HAL `POST /speaker/record-enroll` | `voice.enroll` |
+| Danh sách Voice Files | `voice_samples` của HAL `GET /face/owners` | `voice.owners` |
+| Phát một mẫu | HAL `GET /face/file/<label>/voice/<file>` | `voice.file.get` |
+| Nút × trên một mẫu | os-server `POST /api/voice/file/remove` | `voice.file.remove` |
+| Remove all (giữ dữ liệu khuôn mặt) | HAL `POST /speaker/remove` | `voice.remove` |
+
+`label` được trim và chuyển chữ thường như web (1–64 ký tự). Đăng ký và hai
+lệnh xoá chạy lần lượt từng lệnh một trên device.
+
+**`voice.enroll`** ghi âm từ **chính mic của đèn** — không bao giờ dùng audio
+từ điện thoại, vì nhận diện giọng nghe qua mic đó. Thời lượng ghi là 15 giây,
+bằng web; người dùng nên đứng gần đèn và đọc to suốt thời gian ghi (web hiển
+thị các câu trong `components/setup/voice-phrases.ts`; đếm ngược 3 giây
+"chuẩn bị" là việc của app). Payload không hợp lệ bị báo lỗi ngay, không gọi
+HAL. Payload hợp lệ ack `starting` khi bắt đầu ghi — `data` mang `label` và
+`duration_sec` để đếm ngược — rồi `success` kèm hồ sơ giọng, hoặc `failure`
+kèm lý do từ HAL, vài giây sau khi ghi xong. Nếu đang có thay đổi giọng khác
+chạy, `starting` sẽ chờ lệnh đó xong. Gửi lại lệnh với cùng `label` sẽ thêm
+một mẫu. Mẫu mang origin mặc định của HAL là `web`.
+
+```json
+{"cmd": "data", "kind": "voice.enroll", "data": {"label": "alice"}}
+```
+```json
+{
+  "kind": "voice.enroll", "status": "starting | success | failure", "error": "<message>",
+  "data": { "label": "alice", "duration_sec": 15 }
+}
+```
+
+Khi `success`, `data` là hồ sơ giọng:
+
+```json
+{ "name": "alice", "display_name": "alice", "enrollment_sources": ["web"],
+  "num_samples": 2, "num_extended": 0,
+  "enrolled_at": "2026-10-01T07:00:00Z", "updated_at": "2026-10-01T07:05:00Z" }
+```
+
+Ví dụ lỗi: `POST /speaker/record-enroll returned 409: Privacy switch is on --
+microphone recording is blocked`, `503: voice enroll needs a real microphone`
+trong simulator, `503: embedding service unavailable — please try again`.
+
+**`voice.owners`** liệt kê mọi người có ít nhất một file trong
+`users/<label>/voice/`, kèm tên file đã sắp xếp — đúng `voice_samples` mà web
+hiển thị. Danh sách gồm cả file embedding `.npy` và các file khác cạnh WAV,
+giống web. os-server đọc thư mục trực tiếp, không gọi HAL. Bucket `unknown`
+của HAL và thư mục ẩn bị bỏ qua.
+
+```json
+{"cmd": "data", "kind": "voice.owners"}
+```
+```json
+{
+  "kind": "voice.owners", "status": "success | failure", "error": "<message>",
+  "data": { "persons": [
+    { "label": "alice", "voice_samples": ["sample_web_1711929600_ab12.npy", "sample_web_1711929600_ab12.wav"] } ] }
+}
+```
+
+**`voice.file.get`** trả về một file trong `users/<label>/voice/` dạng base64
+để phát lại. `file` phải là một tên trong `voice_samples`; đường dẫn, symlink
+ra ngoài thư mục và file lớn hơn 2 MiB đều bị từ chối. Một mẫu 15 giây
+khoảng 480 KB.
+
+```json
+{"cmd": "data", "kind": "voice.file.get", "data": {"label": "alice", "file": "sample_web_1711929600_ab12.wav"}}
+```
+```json
+{
+  "kind": "voice.file.get", "status": "success | failure", "error": "<message>",
+  "data": { "label": "alice", "file": "sample_web_1711929600_ab12.wav",
+            "content_type": "audio/wav", "size": 480044, "content_base64": "UklGR..." }
+}
+```
+
+**`voice.file.remove`** xoá một mẫu audio (`.wav`, `.ogg`, `.mp3`, `.webm`,
+`.m4a`) và file embedding `.npy` của nó. Lệnh chạy cùng code với
+`POST /api/voice/file/remove` (`system/lib/voicefile`): file khác bị từ chối
+với `only audio samples can be deleted`, mẫu không tồn tại trả lỗi
+`file not found`. Khi WAV cuối cùng bị xoá, HAL `POST /speaker/remove` xoá
+toàn bộ hồ sơ giọng và `profile_removed` là `true`. Lệnh trả lỗi
+`voice enrollment in progress — try again` khi đang có thay đổi giọng chạy.
+
+```json
+{"cmd": "data", "kind": "voice.file.remove", "data": {"label": "alice", "file": "sample_web_1711929600_ab12.wav"}}
+```
+```json
+{
+  "kind": "voice.file.remove", "status": "success | failure", "error": "<message>",
+  "data": { "deleted": "sample_web_1711929600_ab12.wav", "remaining": 1, "profile_removed": false }
+}
+```
+
+**`voice.remove`** xoá toàn bộ hồ sơ giọng của người đó qua HAL
+`POST /speaker/remove`; ảnh khuôn mặt, `metadata.json` và lịch sử giữ nguyên.
+Lệnh ack `starting`, rồi `success` hoặc `failure`. Người không có hồ sơ giọng
+trả lỗi `POST /speaker/remove returned 404: voice profile not found: <label>`.
+
+```json
+{"cmd": "data", "kind": "voice.remove", "data": {"label": "alice"}}
+```
+```json
+{
+  "kind": "voice.remove", "status": "starting | success | failure", "error": "<message>",
+  "data": { "status": "ok", "name": "alice", "removed": true }
+}
+```
+
 #### `chat.send` + `chat.event`
 
 Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
@@ -1350,6 +1470,8 @@ Router MQTT của os-server không có case `ota`: message bị log là `unknown
 | `system/server/device/delivery/mqtt/skills_upload_handler.go` | Handle `skills.upload` (SKILL.md inline → `AgentGateway.InstallSkillMarkdown`) |
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (kiểm tra payload, rồi gọi bất đồng bộ `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, bỏ bucket `unknown`) và `face.remove` (bất đồng bộ → HAL `POST /face/remove`) |
+| `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (bất đồng bộ → HAL `POST /speaker/record-enroll`, mic của đèn, 15 giây), `voice.owners`, `voice.file.get`, `voice.file.remove` (qua `system/lib/voicefile`) và `voice.remove` (bất đồng bộ → HAL `POST /speaker/remove`) |
+| `system/lib/voicefile/voicefile.go` | Liệt kê, đọc và xoá mẫu giọng trong `users/<label>/voice/`; dùng chung cho `POST /api/voice/file/remove` và các kind `voice.*` |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (đọc file của một skill đã cài: danh sách, hoặc nội dung một file) |
 | `system/server/device/delivery/mqtt/skills_uninstall_handler.go` | Handle `skills.uninstall` |
 | `system/server/device/delivery/mqtt/chat_send_handler.go` | Handle `chat.send` — forward turn qua loopback tới sensing endpoint |

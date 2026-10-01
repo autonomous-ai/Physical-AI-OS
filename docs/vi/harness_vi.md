@@ -55,6 +55,8 @@ Repo riêng `autonomous-harness-desktop` đã archive; thay đổi Desktop hiệ
 
 ## Chính sách công việc số của Lamp
 
+Định tuyến theo đầu ra người dùng yêu cầu, không theo từ website, latest, check hay research. Task mới chỉ cần câu trả lời trong hội thoại (tra cứu, đọc, tóm tắt, giải thích, so sánh thông tin) do main dùng tool sẵn có, kể cả khi Harness connected; không discovery hay prepare agent chỉ để đọc blog. Ưu tiên Harness cho công việc trong app/project/workspace trên máy tính hoặc tạo/sửa sản phẩm như code, báo cáo, slide, bảng tính, thiết kế, media. Không tự mở rộng câu hỏi thành dự án research hay tự thêm deliverable. Yêu cầu chỉ định Harness/agent/workspace từ xa và tiếp tục task Harness vẫn giữ đích, kể cả câu hỏi đơn giản. Connector và route khác được yêu cầu rõ giữ workflow riêng. Nếu main không truy cập được nguồn, nói rõ giới hạn; chỉ dùng Harness khi cần một năng lực cụ thể trên máy tính, giữ nguyên yêu cầu. Kết nối hoặc marker harness-reply không tự chọn route Harness.
+
 Ưu tiên Harness khi đang kết nối. Với task số mới chưa từng gửi, Harness offline/
 chưa pair không còn bắt người dùng mở hoặc pair app: main thực hiện bằng tool và
 skill đang có, giữ nguyên yêu cầu app, file và đầu ra. Nếu thiếu khả năng, main

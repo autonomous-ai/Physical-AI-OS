@@ -55,6 +55,8 @@ The standalone `autonomous-harness-desktop` repository is archived; current Desk
 
 ## Lamp digital-work policy
 
+Route by the requested outcome, not by words such as website, latest, check, or research. For a fresh request whose result is an answer in this conversation, main uses its own available tools to search, read, summarize, explain or compare information, even when Harness is connected. Do not start Harness discovery or Store preparation just to read a blog. Prefer connected Harness for work in a computer app/project/workspace or creating/editing a deliverable such as code, a report, slides, a spreadsheet, a design or media. Do not invent a deliverable or broaden an information question into a research project. Explicit Harness/remote-agent/workspace requests and clear continuations of existing Harness tasks retain their target, including simple information questions. Device connectors and explicit alternative routes keep their workflows. If main cannot access a requested source, explain the missing capability; use Harness only when a concrete computer capability is needed, preserving the original task. Connection or a harness-reply marker alone does not select Harness.
+
 Harness is preferred when connected. For a new digital task that has never been
 dispatched, an offline/unpaired Harness no longer requires opening or pairing the
 app: main executes with its available tools and skills, preserving the requested

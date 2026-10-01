@@ -21,6 +21,7 @@ soul_ref:   SOUL.md
 safety_ref: SAFETY.md
 memory:     { backend: local }
 startup_volume: 100
+answer_overheard_speech: true
 ---
 
 # Autonomous Intern

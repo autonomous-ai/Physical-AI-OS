@@ -425,6 +425,21 @@ const (
 
 	// KindFaceRemove deletes one person's whole users/<label>/ folder via HAL POST /face/remove.
 	KindFaceRemove = "face.remove"
+
+	// KindVoiceEnroll records from the lamp's own mic and enrolls the voice via HAL POST /speaker/record-enroll.
+	KindVoiceEnroll = "voice.enroll"
+
+	// KindVoiceOwners lists everyone's voice sample files from users/<label>/voice/.
+	KindVoiceOwners = "voice.owners"
+
+	// KindVoiceRemove deletes one person's whole voice profile via HAL POST /speaker/remove.
+	KindVoiceRemove = "voice.remove"
+
+	// KindVoiceFileGet returns one voice sample file inline (base64) for playback.
+	KindVoiceFileGet = "voice.file.get"
+
+	// KindVoiceFileRemove deletes one voice sample and its embedding (same as POST /api/voice/file/remove).
+	KindVoiceFileRemove = "voice.file.remove"
 )
 
 // Connector (MCP) data-kind prefixes; the connector code is the suffix (e.g. "connector.set.notion").
@@ -1011,6 +1026,32 @@ type MQTTFaceEnrollData struct {
 // MQTTFaceRemoveData is the Data payload for kind:"face.remove".
 type MQTTFaceRemoveData struct {
 	Label string `json:"label"`
+}
+
+// MQTTVoiceData is the Data payload for kind:"voice.enroll" and kind:"voice.remove".
+type MQTTVoiceData struct {
+	Label string `json:"label"`
+}
+
+// MQTTVoiceEnrollStarting is the `starting` ack data for kind:"voice.enroll" so the app can run a countdown.
+type MQTTVoiceEnrollStarting struct {
+	Label       string `json:"label"`
+	DurationSec int    `json:"duration_sec"`
+}
+
+// MQTTVoiceFileData is the Data payload for kind:"voice.file.get" and kind:"voice.file.remove".
+type MQTTVoiceFileData struct {
+	Label string `json:"label"`
+	File  string `json:"file"`
+}
+
+// MQTTVoiceFileContent is the success data for kind:"voice.file.get".
+type MQTTVoiceFileContent struct {
+	Label         string `json:"label"`
+	File          string `json:"file"`
+	ContentType   string `json:"content_type"`
+	Size          int    `json:"size"`
+	ContentBase64 string `json:"content_base64"`
 }
 
 // MQTTTTSPreviewData is the data payload for kind:"tts.preview".

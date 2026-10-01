@@ -173,6 +173,9 @@ class DeviceProfile:
     memory_backend: str
     startup_volume: int
     capabilities: Dict[str, Capability]
+    # `answer_overheard_speech: true` lets the realtime voice agent reply to speech
+    # that is not addressed to the device (default: stay silent).
+    answer_overheard_speech: bool = False
 
     def declared_routes(self) -> Dict[str, bool]:
         """route -> required. A route is required if ANY capability that
@@ -215,6 +218,7 @@ def parse_device(device_type: str, text: str) -> DeviceProfile:
         memory_backend=_parse_memory_backend(front_matter),
         startup_volume=_parse_startup_volume(front_matter),
         capabilities=capabilities,
+        answer_overheard_speech=_parse_scalar(front_matter, "answer_overheard_speech").lower() == "true",
     )
 
 

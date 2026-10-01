@@ -1,5 +1,7 @@
 # Realtime Voice Agent
 
+Current web lookup, reading, summarizing and explaining are handed to main without selecting Harness. Main uses its available tools for ordinary information requests; connected Harness remains preferred for computer work or requested deliverables, while explicit remote targets and task continuations retain ownership.
+
 Low-latency, speech-to-speech voice layer that runs **in parallel** with the
 normal STT → agent pipeline. The realtime model handles casual conversation
 directly (sub-second audio replies) and **delegates** anything that needs the
@@ -115,6 +117,16 @@ Confidently overheard speech calls only `reject_turn` when available, with no
 voice/text, emotion, movement, look, or delegation. The tool description allows
 rejecting an overheard request even when the device could fulfill it. Uncertainty,
 silent completion, and errors retain the existing fallback behavior.
+
+A device can opt in to answering overheard speech with `answer_overheard_speech: true` in its ROBOT.md front
+matter (Intern v2 sets it; Lamp does not). `build_instructions()` then appends
+`resources/answer_overheard_override.md` as the last prompt section (`overheard=`
+in the floor breakdown, ~280 tokens per turn). It supersedes the addressed-speech
+rules above: clear speech in the configured language gets a one-sentence spoken
+reply even when not addressed to the device, and the owner mutes the mic when
+unwanted. `reject_turn` still applies to noise, filler, garbled fragments, bare
+acknowledgments and other-language speech, and overheard speech never authorizes
+delegation or action tools.
 
 The Gemini prompt additionally requires audio evidence before interpreting a
 request: do not complete noise/echo into words or repair an unrelated transcript
@@ -2218,9 +2230,23 @@ order as a substring** of the configured model: `mini` first (so
 
 Cost anatomy is the same on both token-billed providers: `in_text` dominates (the ~7-10k
 token system prompt plus accumulated session context is re-billed every turn
-and grows until a session recycle — see `HAL_REALTIME_SESSION_IDLE_RESET_S` /
+and grows until provider compression or a session recycle — see `HAL_REALTIME_SESSION_IDLE_RESET_S` /
 `HAL_REALTIME_SESSION_MAX_TURNS`); audio tokens are comparatively marginal.
 Gemini additionally bills Google Search per grounded request on top of tokens.
+
+### Gemini 3.8 context compression
+
+HAL enables provider-side sliding-window compression for Gemini 3.8 Live (including
+Extended Thinking), in both LIVE ON and turn mode. `HAL_GEMINI_CONTEXT_TRIGGER_TOKENS`
+defaults to **32768**, with `HAL_GEMINI_CONTEXT_TARGET_TOKENS=24576`. Set the trigger
+to **0** to omit compression; otherwise the target must be positive and below the
+trigger. Settings apply when a new Gemini session connects. Other models are unchanged.
+
+The provider drops older conversation history while preserving system instructions;
+this does not delete persistent device memory. Recent turns remain, but old-session
+recall can be lost. Savings affect subsequent turns after compression, not necessarily
+the turn that crosses the threshold. Compression can temporarily add latency and is
+not a reduction of the thinking level (which remains LOW by default).
 
 ## Orchestrator
 

@@ -153,6 +153,15 @@ def expire_current_activity(summary: str, now_s: float, file_age_s: float, ttl_s
     return "\n".join(lines[:start] + lines[end:]).strip()
 
 
+def _device_answers_overheard_speech() -> bool:
+    """ROBOT.md `answer_overheard_speech: true`; False when the profile is unavailable."""
+    try:
+        from hal.server_support.boot_config import boot_config
+        return bool(boot_config().profile.answer_overheard_speech)
+    except Exception:
+        return False
+
+
 class ContextManagerBase(ABC):
     """Abstract base for realtime voice agent context managers."""
 
@@ -382,6 +391,10 @@ class ContextManagerBase(ABC):
             add("routing", (RESOURCES_DIR / "routing_prompt_gemini.md").read_text(
                 encoding="utf-8").strip())
 
+        # Last so it supersedes the addressed-speech rules above (ROBOT.md opt-in).
+        if _device_answers_overheard_speech():
+            add("overheard", self._render_prompt_file(RESOURCES_DIR / "answer_overheard_override.md"))
+
         result: str = "\n\n".join(sections)
         total: int = len(result)
         breakdown: str = "  ".join(f"{label}={c}c(~{c // 4}t)" for label, c in sizes)
@@ -441,12 +454,16 @@ class ContextManagerBase(ABC):
         )
         if not prompt_path.exists():
             prompt_path = self.DEFAULT_PROMPT_PATH
+        return self._render_prompt_file(prompt_path)
+
+    def _render_prompt_file(self, path: Path) -> str:
+        """Read a prompt resource with its {language} placeholder resolved; '' if missing."""
         try:
-            template: str = prompt_path.read_text(encoding="utf-8").strip()
-            lang_name: str = self.LANGUAGE_NAMES.get(self._language, self._language)
-            return template.replace("{language}", lang_name)
+            template: str = path.read_text(encoding="utf-8").strip()
         except FileNotFoundError:
             return ""
+        lang_name: str = self.LANGUAGE_NAMES.get(self._language, self._language)
+        return template.replace("{language}", lang_name)
 
     def load_realtime_memory(self) -> list[str]:
         """Load existing summary + latest entries from realtime memory JSONL."""

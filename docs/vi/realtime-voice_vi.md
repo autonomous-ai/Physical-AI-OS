@@ -1,5 +1,7 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
+Tra cứu, đọc, tóm tắt và giải thích nội dung web hiện tại được chuyển sang main nhưng không tự chọn Harness. Main dùng tool sẵn có cho câu hỏi thông tin; Harness connected vẫn được ưu tiên cho công việc máy tính hoặc sản phẩm được yêu cầu. Đích từ xa chỉ định rõ và việc tiếp tục task giữ nguyên quyền xử lý.
+
 Lớp giọng nói speech-to-speech độ trễ thấp, chạy **song song** với pipeline STT
 → agent thông thường. Model realtime xử lý hội thoại tán gẫu trực tiếp (trả lời
 âm thanh dưới 1 giây) và **delegate** (chuyển giao) những gì cần đến agent chính
@@ -117,6 +119,16 @@ Khi chắc chắn là lời nghe lỏm, chỉ gọi `reject_turn` nếu có; kh�
 emotion, cử động, look hoặc delegate. Mô tả tool cho phép từ chối yêu cầu nghe
 lỏm kể cả khi thiết bị có thể thực hiện. Trường hợp chưa chắc chắn, kết thúc im
 lặng và lỗi vẫn giữ hành vi fallback hiện có.
+
+Thiết bị có thể tắt quy tắc này bằng `answer_overheard_speech: true` trong front
+matter ROBOT.md (Intern v2 bật; Lamp không). Khi đó `build_instructions()` nối
+`resources/answer_overheard_override.md` làm section cuối của prompt (`overheard=`
+trong floor breakdown, ~280 token mỗi turn). Section này thay thế các quy tắc lời
+nói hướng đến thiết bị ở trên: lời nói rõ bằng ngôn ngữ đã cấu hình được trả lời
+một câu kể cả khi không nói với thiết bị; chủ máy tắt mic nếu thấy phiền.
+`reject_turn` vẫn áp dụng cho tiếng ồn, filler, mảnh câu méo, xác nhận cụt và
+lời nói khác ngôn ngữ; lời nghe lỏm không bao giờ cho phép delegate hay gọi tool
+hành động.
 
 Prompt Gemini còn yêu cầu có bằng chứng âm thanh trước khi diễn giải yêu cầu:
 không ghép tiếng ồn/echo thành câu hay sửa transcript không liên quan bằng ngày,
@@ -2181,11 +2193,25 @@ về bảng đắt nhất (cost là trần, không bao giờ báo thiếu).
 Cơ cấu chi phí giống nhau ở hai provider tính theo token (Gemini, OpenAI
 Realtime): `in_text` chiếm áp đảo (system
 prompt ~7-10k token + context session tích lũy bị re-bill mỗi turn, phình dần
-tới khi session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
+tới khi provider nén context hoặc session recycle — xem `HAL_REALTIME_SESSION_IDLE_RESET_S` /
 `HAL_REALTIME_SESSION_MAX_TURNS`); token audio chỉ là phần lẻ. Gemini tính
 thêm phí Google Search theo từng request grounded, ngoài token. GPT-Live nằm
 ngoài cơ cấu này: chi phí tỉ lệ với thời gian session mở, không phụ thuộc độ dài
 prompt hay số turn.
+
+### Nén context Gemini 3.8
+
+HAL bật sliding-window compression phía provider cho Gemini 3.8 Live (bao gồm
+Extended Thinking), cả LIVE ON và chế độ turn. `HAL_GEMINI_CONTEXT_TRIGGER_TOKENS`
+mặc định **32768**, với `HAL_GEMINI_CONTEXT_TARGET_TOKENS=24576`. Đặt trigger bằng
+**0** để không gửi compression; nếu bật thì target phải dương và nhỏ hơn trigger.
+Cấu hình có hiệu lực khi kết nối session Gemini mới. Các model khác không đổi.
+
+Provider bỏ lịch sử hội thoại cũ và giữ system instructions; thao tác này không xóa
+bộ nhớ bền vững của device. Các lượt gần đây được giữ, nhưng có thể mất khả năng nhớ
+chi tiết cũ trong session. Mức tiết kiệm xuất hiện ở các lượt sau compression, không
+nhất thiết ở lượt vượt ngưỡng. Compression có thể tạm tăng latency và không giảm
+thinking level (vẫn mặc định LOW).
 
 ## Orchestrator
 

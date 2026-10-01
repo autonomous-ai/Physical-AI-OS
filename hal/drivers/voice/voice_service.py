@@ -2776,7 +2776,7 @@ class VoiceService:
             if turn_endpoint is not None and endpoint_method == "max_duration":
                 logger.warning("Hands-free capture limit reached; unfinished request discarded")
                 if realtime_turn_started and hal_config.REALTIME_ENABLED:
-                    self._realtime.discard_open_activity()
+                    self._realtime.discard_open_activity("max-duration")
                 return
             if manual_capture is not None and (
                 not self._running
