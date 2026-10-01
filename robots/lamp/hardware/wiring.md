@@ -79,7 +79,7 @@ SBC → USB → USB audio board (DAC) → 3.5 mm line-out → PAM8610 L/R in →
 |---|---|---|
 | Audio source | USB audio board (line-out) | USB audio board (line-out) |
 | Connection | USB-A | USB-A |
-| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` = softvol stage (-30..0 dB) in front of card `device_cmedia`, whose hardware mixer is pinned at -31 dB by `lamp-cmedia-speaker.service`; the PAM8610 is hot enough that the raw mixer's bottom step was already audible, so the slider needed its own range |
+| ALSA alias | `plug:device_speaker` (mapped to USB DAC card) | `plug:device_speaker` = softvol stage (-30..0 dB) in front of card `device_cmedia`, whose hardware mixer is pinned at -28 dB (standard) or -31 dB (pro) by `lamp-cmedia-speaker.service`; the PAM8610 is hot enough that the raw mixer's bottom step was already audible, so the slider needed its own range |
 | DAC out → amp | 3.5 mm TRS → PAM8610 L/R inputs (twisted pair, short run) | same |
 | Speaker A | PAM8610 L+ / L− → speaker A | same |
 | Speaker B | PAM8610 R+ / R− → speaker B | same |

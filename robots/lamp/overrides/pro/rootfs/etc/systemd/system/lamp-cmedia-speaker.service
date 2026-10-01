@@ -7,7 +7,7 @@ ConditionPathExists=/etc/asound.conf
 
 [Service]
 Type=oneshot
-# Standard profile: step 9 = -28 dB, 3 dB above the previous step 6.
-ExecStart=/usr/bin/amixer -q -c device_cmedia sset Speaker 9
+# Pro retains its existing hardware gain: step 6 = -31 dB.
+ExecStart=/usr/bin/amixer -q -c device_cmedia sset Speaker 6
 ExecStart=/bin/sh -c 'head -c 64 /dev/zero | aplay -q -D device_speaker -t raw -f S16_LE -c 2 -r 16000 -'
 RemainAfterExit=yes
