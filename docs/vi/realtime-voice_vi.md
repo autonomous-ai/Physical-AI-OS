@@ -1,5 +1,7 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
+Tra cứu, đọc, tóm tắt và giải thích nội dung web hiện tại được chuyển sang main nhưng không tự chọn Harness. Main dùng tool sẵn có cho câu hỏi thông tin; Harness connected vẫn được ưu tiên cho công việc máy tính hoặc sản phẩm được yêu cầu. Đích từ xa chỉ định rõ và việc tiếp tục task giữ nguyên quyền xử lý.
+
 Lớp giọng nói speech-to-speech độ trễ thấp, chạy **song song** với pipeline STT
 → agent thông thường. Model realtime xử lý hội thoại tán gẫu trực tiếp (trả lời
 âm thanh dưới 1 giây) và **delegate** (chuyển giao) những gì cần đến agent chính
