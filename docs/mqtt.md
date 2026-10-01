@@ -367,6 +367,11 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `face.enroll` | Enroll one face photo via HAL `POST /face/enroll` (async; acks `starting`) | `image_base64`, `label`, optional `telegram_username`/`telegram_id` |
 | `face.owners` | List enrolled people via HAL `GET /face/owners` (synchronous) | _(none)_ |
 | `face.remove` | Delete one person's whole `users/<label>/` folder (face, voice, Telegram, history) via HAL `POST /face/remove` (async; acks `starting`) | `label` |
+| `voice.enroll` | Record 15s on the lamp's own mic and enroll the voice via HAL `POST /speaker/record-enroll` (async; acks `starting` with the duration) | `label` |
+| `voice.owners` | List everyone's voice sample files from `users/<label>/voice/` (synchronous) | _(none)_ |
+| `voice.remove` | Delete one person's whole voice profile via HAL `POST /speaker/remove`; face data stays (async; acks `starting`) | `label` |
+| `voice.file.get` | Return one voice sample file as base64 for playback (synchronous) | `label`, `file` |
+| `voice.file.remove` | Delete one voice sample and its `.npy`, like `POST /api/voice/file/remove` (synchronous) | `label`, `file` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
 | `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
@@ -1048,6 +1053,124 @@ without calling HAL. An unknown label fails with `POST /face/remove returned
 }
 ```
 
+#### `voice.*` — Voice settings over MQTT
+
+The `voice.*` kinds give the phone exactly what the web Voice settings
+(`VoiceSection.tsx`) do over HTTP:
+
+| Web action | Web HTTP call | MQTT kind |
+|------------|---------------|-----------|
+| Start Recording (15s on robot) | HAL `POST /speaker/record-enroll` | `voice.enroll` |
+| Voice Files list | `voice_samples` of HAL `GET /face/owners` | `voice.owners` |
+| Play a sample | HAL `GET /face/file/<label>/voice/<file>` | `voice.file.get` |
+| × on a sample | os-server `POST /api/voice/file/remove` | `voice.file.remove` |
+| Remove all (face data is preserved) | HAL `POST /speaker/remove` | `voice.remove` |
+
+`label` is trimmed and lowercased, as the web does (1–64 characters).
+Enroll and both removals run one at a time on the device.
+
+**`voice.enroll`** records from the **lamp's own microphone** — never phone
+audio, because speaker recognition listens through that mic. Recording is
+15 seconds, the web's length; the person should stand near the lamp and read
+aloud for the whole time (the web shows phrases from
+`components/setup/voice-phrases.ts`; any 3-second "get ready" countdown is
+the app's own). Invalid payloads fail at once, without calling HAL. A valid
+one acks `starting` when recording begins — `data` carries `label` and
+`duration_sec` for the countdown — then `success` with the voice profile, or
+`failure` with HAL's reason, a few seconds after the recording ends. If
+another voice change is running, `starting` waits for it. Repeating the
+command for the same `label` adds another sample. Samples carry HAL's
+default origin, `web`.
+
+```json
+{"cmd": "data", "kind": "voice.enroll", "data": {"label": "alice"}}
+```
+```json
+{
+  "kind": "voice.enroll", "status": "starting | success | failure", "error": "<message>",
+  "data": { "label": "alice", "duration_sec": 15 }
+}
+```
+
+On `success`, `data` is the profile:
+
+```json
+{ "name": "alice", "display_name": "alice", "enrollment_sources": ["web"],
+  "num_samples": 2, "num_extended": 0,
+  "enrolled_at": "2026-10-01T07:00:00Z", "updated_at": "2026-10-01T07:05:00Z" }
+```
+
+Failure examples: `POST /speaker/record-enroll returned 409: Privacy switch
+is on -- microphone recording is blocked`, `503: voice enroll needs a real
+microphone` in the simulator, `503: embedding service unavailable — please
+try again`.
+
+**`voice.owners`** lists everyone with at least one file in
+`users/<label>/voice/`, with the sorted file names — the same `voice_samples`
+the web shows. The list includes `.npy` embeddings and other files next to
+the WAVs, as the web does. os-server reads the folder directly; HAL is not
+called. HAL's `unknown` bucket and hidden folders are skipped.
+
+```json
+{"cmd": "data", "kind": "voice.owners"}
+```
+```json
+{
+  "kind": "voice.owners", "status": "success | failure", "error": "<message>",
+  "data": { "persons": [
+    { "label": "alice", "voice_samples": ["sample_web_1711929600_ab12.npy", "sample_web_1711929600_ab12.wav"] } ] }
+}
+```
+
+**`voice.file.get`** returns one file from `users/<label>/voice/` inline as
+base64 for playback. `file` must be one name from `voice_samples`; paths,
+symlinks out of the folder and files over 2 MiB fail. A 15-second sample is
+about 480 KB.
+
+```json
+{"cmd": "data", "kind": "voice.file.get", "data": {"label": "alice", "file": "sample_web_1711929600_ab12.wav"}}
+```
+```json
+{
+  "kind": "voice.file.get", "status": "success | failure", "error": "<message>",
+  "data": { "label": "alice", "file": "sample_web_1711929600_ab12.wav",
+            "content_type": "audio/wav", "size": 480044, "content_base64": "UklGR..." }
+}
+```
+
+**`voice.file.remove`** deletes one audio sample (`.wav`, `.ogg`, `.mp3`,
+`.webm`, `.m4a`) and its `.npy` embedding. It runs the same code as
+`POST /api/voice/file/remove` (`system/lib/voicefile`): other files are
+refused with `only audio samples can be deleted`, and a missing sample fails
+with `file not found`. When the last WAV is gone, HAL `POST /speaker/remove`
+drops the whole voice profile and `profile_removed` is `true`. It fails with
+`voice enrollment in progress — try again` while a voice change is running.
+
+```json
+{"cmd": "data", "kind": "voice.file.remove", "data": {"label": "alice", "file": "sample_web_1711929600_ab12.wav"}}
+```
+```json
+{
+  "kind": "voice.file.remove", "status": "success | failure", "error": "<message>",
+  "data": { "deleted": "sample_web_1711929600_ab12.wav", "remaining": 1, "profile_removed": false }
+}
+```
+
+**`voice.remove`** deletes the person's whole voice profile via HAL
+`POST /speaker/remove`; face photos, `metadata.json` and history stay. It
+acks `starting`, then `success` or `failure`. A person with no voice profile
+fails with `POST /speaker/remove returned 404: voice profile not found: <label>`.
+
+```json
+{"cmd": "data", "kind": "voice.remove", "data": {"label": "alice"}}
+```
+```json
+{
+  "kind": "voice.remove", "status": "starting | success | failure", "error": "<message>",
+  "data": { "status": "ok", "name": "alice", "removed": true }
+}
+```
+
 #### `chat.send` + `chat.event`
 
 Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
@@ -1388,6 +1511,8 @@ There is no `ota` case in the os-server MQTT router: the message is logged as `u
 | `system/server/device/delivery/mqtt/skills_upload_handler.go` | Handle `skills.upload` (inline SKILL.md → `AgentGateway.InstallSkillMarkdown`) |
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (validate, then async `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, `unknown` bucket dropped) and `face.remove` (async → HAL `POST /face/remove`) |
+| `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (async → HAL `POST /speaker/record-enroll`, lamp mic, 15s), `voice.owners`, `voice.file.get`, `voice.file.remove` (via `system/lib/voicefile`) and `voice.remove` (async → HAL `POST /speaker/remove`) |
+| `system/lib/voicefile/voicefile.go` | List, read and delete voice samples under `users/<label>/voice/`; shared by `POST /api/voice/file/remove` and the `voice.*` kinds |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (read one installed skill's files: list, or one file's contents) |
 | `system/server/device/delivery/mqtt/skills_uninstall_handler.go` | Handle `skills.uninstall` |
 | `system/server/device/delivery/mqtt/chat_send_handler.go` | Handle `chat.send` — forwards the turn over loopback to the sensing endpoint |
