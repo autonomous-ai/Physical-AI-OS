@@ -411,6 +411,8 @@ Three conditions are enforced today; setup-incomplete and servo over-current are
 
 ### Slice 5 — `audio.max_volume` (checklist)
 
+The Lamp `pro-respeaker-lite` profile sets `max_volume` to 50% and keeps `startup_volume` at 35%. The web volume scale maps 100% to that 50% mixer limit.
+
 An all-day speaker ceiling, independent of `audio.quiet_hours`: the window suppresses
 *discretionary* output (music), while the ceiling bounds *how loud anything gets*,
 including spoken replies.

@@ -398,7 +398,7 @@ Cards included:
 **Voice & TTS**
 - Mic available + listening (LIVE badge)
 - TTS available + speaking (SPEAKING badge)
-- Volume is displayed and controlled on a normalized 0–100% scale: 100% maps to the robot’s `max_volume` safety limit (for example, 35% mixer volume on `pro-respeaker-lite`). Reads divide the mixer volume by the limit; writes multiply by the limit and round to an integer. The UI uses HAL’s applied value after a write and does not show the internal ceiling. A missing limit defaults to 100; a zero limit displays 0% and disables the slider. HAL continues enforcing safety for every caller.
+- Volume is displayed and controlled on a normalized 0–100% scale: 100% maps to the robot’s `max_volume` safety limit (for example, 50% mixer volume on `pro-respeaker-lite`). Reads divide the mixer volume by the limit; writes multiply by the limit and round to an integer. The UI uses HAL’s applied value after a write and does not show the internal ceiling. A missing limit defaults to 100; a zero limit displays 0% and disables the slider. HAL continues enforcing safety for every caller.
 - **Mic level VU meters** (under the volume slider), fed by the `GET
   /hw/voice/mic-level` SSE stream (~10Hz, via the `/api/hardware` proxy);
   raw RMS is mapped to percent on a dBFS scale (-60dBFS → 0%, 0dBFS → 100%)
