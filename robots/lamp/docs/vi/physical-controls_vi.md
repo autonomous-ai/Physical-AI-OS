@@ -8,7 +8,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 |---|---|---|
 | **Nút GPIO** | Nút cơ chính cho click và giữ, thêm nút reset riêng trên OrangePi. Action giữ destructive chỉ thực hiện khi nhả. | Pi 4/5 và OrangePi sun60 |
 | **Touchpad cảm ứng TTP223** | Headpad chỉ để vuốt ve: chạm đơn, chạm đôi, vuốt một chiều và vuốt qua lại đều phản hồi PET. Gesture điều khiển thuộc GPIO/MPR121. | Chỉ OrangePi sun60 (4 Pro / A733) |
-| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và giữ rồi nhả như GPIO, gồm shutdown. Reboot bằng chạm 3 lần đã bị vô hiệu hóa. Không bao giờ factory-reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
+| **Bộ điều khiển cảm ứng MPR121** | Tối đa 12 electrode, hỗ trợ click và vuốt; đã tắt giữ để sleep/shutdown. Reboot bằng chạm 3 lần đã bị vô hiệu hóa. Không bao giờ factory-reset. | Lamp khai báo cấu hình I²C cụ thể trong `mpr121.json` |
 
 ## Wiring
 
@@ -340,8 +340,8 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
 | 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Phát cue nghe; các tap lặp không gọi lại action single-click ban đầu. |
 | Đúng 3 tap ngắn, rồi yên 0.4 s | Reboot bị vô hiệu hóa tại wrapper MPR121; không có action bổ sung hoặc cue nghe. Action single-click ở tap đầu vẫn chạy. |
-| Giữ 2–<5 s rồi nhả | `hold_release_action` vào sleepy. |
-| Giữ ≥5 s rồi nhả | `hold_release_action` shutdown. MPR121 không bao giờ factory reset. |
+| Giữ 2–<5 s rồi nhả | Đã tắt; không sleep. |
+| Giữ ≥5 s rồi nhả | Đã tắt; không shutdown hay factory reset. |
 | Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
 | Vuốt phải sang trái rồi nhả | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
@@ -375,20 +375,10 @@ cử chỉ/vòng đời giả lập. Runtime và JSON swipe đã deploy lên Lam
 ngày 2026-09-11; startup xác nhận MPR121 ready với trục cấu hình, GPIO và TTP223
 ready, mic switch Lamp ready trên chip1/line9 sau khi cài JSON. Chờ live test cử chỉ.
 
-Event `hold_tier` đã debounce truyền vào cùng `HoldLEDFeedback` với GPIO,
-dùng chung `BUTTON_LED_PRESETS`, xử lý nháy, dọn phản hồi khi nhả và phản hồi
-chốt action. Override `button_led` theo device áp dụng cho cả hai input:
-
-| Thời gian giữ | LED MPR121 |
-|---|---|
-| <2 s | Không có phản hồi giữ |
-| 2–<5 s | Tím sleepy, nháy 2 Hz |
-| ≥5 s | Đỏ, nháy 2 Hz (không có mức đỏ đứng factory-reset) |
-
-Nhả thì dừng nháy. Action shutdown hoặc factory-reset được chấp nhận đặt lại
-đỏ đứng trước khi chạy; sleepy tắt LED qua action dùng chung. Chạm giữ lúc
-startup không hiện phản hồi giữ. Stop hoặc lỗi phần cứng hủy phản hồi; thiếu
-RGB service không ngăn các action đầu vào hoạt động.
+Đã tắt action giữ để sleep/shutdown của MPR121 cùng LED tím/đỏ báo sắp
+thực hiện. Detector vẫn nhận chạm giữ để lúc nhả không bị đổi thành tap.
+Giữ nút GPIO, vuốt theo hướng và giữ 2 giây thoát Harness khi Harness ON
+không đổi. MPR121 không factory reset.
 
 Worker action bất đồng bộ có hàng đợi giới hạn giữ polling phản hồi kịp thời.
 Action dư có thể bị bỏ; chạm mới, stop hoặc lỗi phần cứng làm mất
@@ -616,7 +606,7 @@ Các handler đầu vào được khởi động trong startup lifespan `hal/ser
 
 ### Gesture MPR121 theo Harness mode
 
-Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON thay thế action click cũ, triple tap reboot, giữ shutdown/reset, sleep và listening cue: tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (`mpr121.json` của Lamp khai báo E11…E0; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
+Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON dùng mapping riêng thay cho click, vuốt sleep và listening cue (giữ sleep/shutdown và triple tap reboot thường đã tắt): tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (`mpr121.json` của Lamp khai báo E11…E0; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Harness ON dùng thu giọng thủ công bằng tap, không tự nghe môi trường. Tap khi TTS đang nói chỉ ngắt phát âm thanh. Ngoài trường hợp đó, tap đầu bắt đầu thu; beep sẵn sàng chỉ phát sau khi recorder/STT đã sẵn sàng. Tap tiếp đóng capture và gửi một transcript STT đã chốt qua route OS hiện có tới agent Harness đang focus. Im lặng không tự gửi. Đạt `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, mặc định 30 giây) thì hủy, không dispatch. Khi rảnh, mode không ghi lời nói xung quanh. Đổi mode, generation hoặc focus và privacy/stop đều loại bỏ capture; vuốt chuyển focus hủy capture trước khi đổi focus. Sleep và khóa privacy microphone phần cứng vẫn có ưu tiên.
 

@@ -371,8 +371,10 @@ def triple_click_action(*, source):
 
 
 def hold_release_action(held_s, *, source):
-    from hal.drivers.button_actions import hold_release_action as action
-    action(held_s, source=source, factory_reset=False)
+    # Disabled for MPR121: holds must not sleep or shut down the device.
+    # from hal.drivers.button_actions import hold_release_action as action
+    # action(held_s, source=source, factory_reset=False)
+    return
 
 
 def swipe_action(*, source):
@@ -563,8 +565,10 @@ class MPR121Handler:
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold")
             elif event.kind == "hold_tier":
-                if not (self._harness_gestures and self._harness_gestures.snapshot.get("enabled")):
-                    self._feedback().set_tier(event.count)
+                # Sleep/shutdown holds are disabled; do not show arming LEDs.
+                # if not (self._harness_gestures and self._harness_gestures.snapshot.get("enabled")):
+                #     self._feedback().set_tier(event.count)
+                pass
             elif event.kind == "release":
                 if self._hold_led is not None:
                     self._hold_led.release()
@@ -627,9 +631,10 @@ class MPR121Handler:
         elif event.kind == "swipe":
             self._execute_swipe(event.direction)
         elif event.kind == "hold":
-            if self._feedback().commit(event.held_s, factory_reset=False) is False:
-                logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
-                return
+            # Disabled together with the sleep/shutdown action below.
+            # if self._feedback().commit(event.held_s, factory_reset=False) is False:
+            #     logger.info("MPR121 event=action_discarded gesture_id=%d action=hold reason=feedback_cancelled", event.gesture_id)
+            #     return
             hold_release_action(event.held_s, source="MPR121")
 
     def _dispatch(self):

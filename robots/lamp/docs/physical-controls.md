@@ -8,7 +8,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 |---|---|---|
 | **GPIO button** | A primary mechanical button for click and hold actions, plus a dedicated reset button on OrangePi. Destructive hold actions require release. | Both Pi 4/5 and OrangePi sun60 |
 | **TTP223 capacitive touchpad** | Headpad for petting only: tap, double tap, swipe and back-and-forth strokes all give the same PET response. Control gestures belong to GPIO/MPR121. | OrangePi sun60 only (4 Pro / A733) |
-| **MPR121 capacitive touch controller** | Up to 12 electrodes with GPIO-like click and release-to-commit hold actions, including shutdown. Triple-tap reboot is disabled. Never factory-resets. | Lamp with an explicit I²C configuration in `mpr121.json` |
+| **MPR121 capacitive touch controller** | Up to 12 electrodes with click and swipe actions; hold-to-sleep/shutdown disabled. Triple-tap reboot is disabled. Never factory-resets. | Lamp with an explicit I²C configuration in `mpr121.json` |
 
 ## Wiring
 
@@ -350,8 +350,8 @@ functions **while Harness mode is OFF**. Harness ON uses the separate policy bel
 | First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
 | 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
 | Exactly 3 short taps, then 0.4 s quiet | Reboot is disabled in the MPR121 wrapper; no additional action or listening cue. The first-tap single-click action still runs. |
-| Hold 2–<5 s, then release | `hold_release_action` enters sleepy. |
-| Hold ≥5 s, then release | `hold_release_action` shuts down. MPR121 never factory-resets. |
+| Hold 2–<5 s, then release | Disabled; no sleep action. |
+| Hold ≥5 s, then release | Disabled; no shutdown or factory reset. |
 | Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
 | Swipe right to left, then release | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
 
@@ -392,20 +392,10 @@ Startup confirmed MPR121 ready with the configured axis, GPIO buttons and TTP223
 ready, and the Lamp mic switch ready on chip1/line9 after its JSON was installed.
 Live gesture testing is pending.
 
-Debounced `hold_tier` events feed the same `HoldLEDFeedback` component as
-GPIO, sharing `BUTTON_LED_PRESETS`, blinking, release cleanup and final action
-feedback. Per-device `button_led` overrides apply to both inputs:
-
-| Hold elapsed | MPR121 LED |
-|---|---|
-| <2 s | No hold feedback |
-| 2–<5 s | Sleepy purple, blinking at 2 Hz |
-| ≥5 s | Red, blinking at 2 Hz (no solid-red factory-reset tier) |
-
-Release stops blinking. An accepted shutdown or factory-reset action reaffirms
-solid red before execution; sleepy turns the LED off through the shared action.
-A contact held at startup produces no hold feedback. Stop or hardware failure
-cancels feedback, and an unavailable RGB service does not prevent input actions.
+MPR121 sleep/shutdown hold actions and their purple/red arming LEDs are
+disabled. The detector still consumes long contacts so release cannot become a
+tap. GPIO holds, directional swipes and the Harness ON 2-second exit hold are
+unchanged. MPR121 never factory-resets.
 
 The bounded asynchronous action worker keeps polling responsive. Excess
 actions may be dropped; a newer touch, stop or hardware error
@@ -636,7 +626,7 @@ Input handlers are started in `hal/server.py` lifespan startup. Missing optional
 
 ### Harness-mode MPR121 gestures
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON replaces the old click, triple-tap reboot, shutdown/reset holds, sleep and listening-cue actions: tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp's `mpr121.json` declares E11…E0; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON uses a separate mapping for clicks, sleep swipes and listening cues (normal sleep/shutdown holds and triple-tap reboot are disabled): tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp's `mpr121.json` declares E11…E0; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 Harness ON uses manual tap-to-record capture, not ambient listening. A tap while TTS is speaking only interrupts playback. Otherwise, the first tap starts capture; the ready beep plays only after the recorder/STT is ready. The next tap closes capture and sends one finalized STT transcript through the existing OS route to the focused Harness agent. Silence never sends automatically. Reaching `MAX_SESSION_DURATION_S` (`HAL_MAX_SESSION_DURATION_S`, default 30 seconds) cancels without dispatch. Idle mode does not record surrounding speech. Mode, generation or focus changes and privacy/stop events discard capture; a focus swipe cancels capture before changing focus. Sleep and hardware microphone privacy remain authoritative.
 
