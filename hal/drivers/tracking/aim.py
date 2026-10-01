@@ -33,10 +33,6 @@ AIM_GAIN: float = 0.85
 # exceed SAFETY.md max_speed, so this is a floor, not a promise.
 MOVE_DURATION_S: float = 0.25
 MAX_ITERATIONS: int = 6
-# Recording a bearing needs a TIGHTER centre than framing does. The aim stops at
-# CENTRE_DEADBAND_FRAC because that frames the subject well enough, but at that offset
-# the servo position is not the bearing.
-RECORD_DEADBAND_FRAC: float = 0.02
 RECENT_SIGHTING_S: float = 4.0
 RECENT_SIGHTING_YAW_TOL_DEG: float = 25.0
 # Priority 3 — the remembered-bearing fallback. `0dc1b667` removed the hops: the lens
@@ -614,37 +610,79 @@ def _bearing_step_target(svc: Any, est: Any, current: dict):
     return target, step
 
 
-def _score_prediction(bearing_steps: int, found: bool) -> None:
-    """Tell the estimate whether turning to it actually found anyone.
+def _score_prediction(bearing_steps: int, verdict: Optional[bool]) -> None:
+    """Tell the estimate whether turning to it found the user.
 
-    Only meaningful when we actually turned to the bearing — an aim that never consulted
-    it says nothing about whether it is still right.
+    Only meaningful when the aim actually turned to the bearing. `verdict` is None when
+    it saw a body but no face: that proves nothing either way (#545).
     """
-    if bearing_steps <= 0:
+    if bearing_steps <= 0 or verdict is None:
         return
     try:
         from hal.drivers.tracking import user_bearing
 
-        user_bearing.record_prediction(found)
+        user_bearing.record_prediction(verdict)
     except Exception as e:
         logger.debug("[look-aim] prediction scoring skipped: %s", e)
 
 
-def _record_bearing_if_centred(svc: Any, dx_frac: float) -> None:
-    """Fold this sighting into the remembered bearing, if it is centred enough.
-
-    Failures are swallowed — losing a sample must never cost the user their answer.
-    """
-    if abs(dx_frac) > RECORD_DEADBAND_FRAC:
-        return
+def _near_face_in(frame: Any) -> bool:
+    """Whether this frame holds a face near enough to be at the desk."""
     try:
-        from hal.drivers.tracking import user_bearing
+        from hal.drivers.tracking import detection, frame_utils, user_check
 
-        positions = svc.get_positions()
-        yaw = float(positions.get("base_yaw.pos", 0.0))
-        user_bearing.record_sighting(yaw, pose=positions)
+        small, _ = frame_utils.downscale(frame)
+        sh = float(small.shape[0]) or 1.0
+        with _detector_lock_use:
+            faces = detection.detect_faces_with_landmarks(small)
+        return any(user_check.near_enough(float(b[3]) / sh) for b, _lm in faces)
+    except Exception as e:
+        logger.debug("[look-aim] near-face check skipped: %s", e)
+        return False
+
+
+def _record_bearing_worker(svc: Any, cap: Any) -> bool:
+    """Record the bearing only for a face that passes the strict user check (#545).
+
+    The same standard bearing_sampler applies, plus identity or facing. Never raises.
+    """
+    try:
+        from hal.drivers.tracking import user_bearing, user_check
+
+        yaw0 = _yaw_of(svc)
+        with _camera_consumer(cap):
+            tracks = user_check.observe_faces(lambda: _grab_frame(cap))
+            frame = _grab_frame(cap)
+        track = user_check.best_user_face(tracks, "[look-aim]")
+        if track is None or frame is None or yaw0 is None:
+            return False
+        now_yaw = _yaw_of(svc)
+        if now_yaw is not None and abs(now_yaw - yaw0) > 1.0:
+            logger.info("[look-aim] head moved while checking the face — bearing not recorded")
+            return False
+        x, _y, w, _h = track.box
+        frame_w = float(frame.shape[1]) or 1.0
+        dx_frac = ((x + w / 2.0) - frame_w / 2.0) / frame_w
+        if abs(dx_frac) > config.BEARING_SAMPLE_MAX_DX_FRAC:
+            return False
+        bearing = yaw0 + dx_frac * float(config.LOOK_AIM_FOV_DEG)
+        pose = dict(svc.get_positions())
+        pose["base_yaw.pos"] = bearing
+        return bool(user_bearing.record_sighting(bearing, pose=pose))
     except Exception as e:
         logger.debug("[look-aim] bearing record skipped: %s", e)
+        return False
+
+
+def _record_bearing_if_centred(svc: Any, cap: Any) -> None:
+    """Check the face and fold it into the bearing, off the live path.
+
+    The ~1.5 s dwell must never delay the capture the user is waiting for.
+    """
+    threading.Thread(
+        target=_record_bearing_worker, args=(svc, cap), daemon=True,
+        name="look-aim-bearing",
+    ).start()
 
 
 def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
@@ -684,6 +722,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
     announced_found = False
     announced_search = False
     found_any = False
+    saw_near_face = False
     start_yaw = _yaw_of(svc)
     steps: list = []
     bearing_consulted: Optional[dict] = None
@@ -692,7 +731,11 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
         """Build the outcome with the pose actually reached, so a trace shows
         whether the head moved rather than just what was decided.
         """
-        _score_prediction(bearing_steps, found=found_any)
+        # A near face = hit, only a body = not scored, nothing = miss (#545).
+        _score_prediction(
+            bearing_steps,
+            True if saw_near_face else (None if found_any else False),
+        )
         # A moved head is a parked head (`nudge` and `_step_toward_bearing` both end in
         # `move_and_hold`) — hand it back to idle after the capture the caller is about
         # to take.
@@ -777,6 +820,11 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 announced_found = True
                 _say("look_found")
             found_any = True
+            if bearing_steps > 0 and not saw_near_face:
+                saw_near_face = (
+                    (kind == "face" and _is_near_enough(box, frame, "face"))
+                    or _near_face_in(frame)
+                )
             _note_sighting(svc)
             x, _y, w, _h = box
             w_fr = float(frame.shape[1])
@@ -801,7 +849,7 @@ def aim_for_look(deadline_s: float, detector: Any = None) -> AimResult:
                 pending_calib = None
 
             if abs(last_dx_frac) <= CENTRE_DEADBAND_FRAC:
-                _record_bearing_if_centred(svc, last_dx_frac)
+                _record_bearing_if_centred(svc, cap)
                 return _result(True, f"centred on {kind}")
 
             # Yaw sign per the tracker's verified convention: dx>0 (subject right of

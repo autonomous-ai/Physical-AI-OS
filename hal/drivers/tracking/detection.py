@@ -9,7 +9,7 @@ import math
 import os
 import threading
 import time
-from typing import Callable, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import cv2
 import numpy as np
@@ -273,6 +273,31 @@ def detect_face_with_landmarks(
     x = max(0, x); y = max(0, y)
     fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
     return (x, y, fw, fh), tuple(float(v) for v in best[4:14])
+
+
+def detect_faces_with_landmarks(
+    frame: npt.NDArray[np.uint8],
+) -> List[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
+    """Every face as ``((x, y, w, h), landmarks)``, largest first. [] when none."""
+    detector = _get_yunet()
+    if detector is None:
+        return []
+    h, w = frame.shape[:2]
+    try:
+        detector.setInputSize((w, h))
+        _, faces = detector.detect(frame)
+    except Exception as e:
+        logger.debug("YuNet landmark detect failed: %s", e)
+        return []
+    out = []
+    for f in sorted(_measurable_faces(faces), key=lambda f: -float(f[2]) * float(f[3])):
+        x, y, fw, fh = int(f[0]), int(f[1]), int(f[2]), int(f[3])
+        x = max(0, x)
+        y = max(0, y)
+        fw = max(1, min(fw, w - x))
+        fh = max(1, min(fh, h - y))
+        out.append(((x, y, fw, fh), tuple(float(v) for v in f[4:14])))
+    return out
 
 
 class ObjectDetector:

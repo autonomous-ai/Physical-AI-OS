@@ -766,6 +766,23 @@ GAZE_WINDOW_S: float = float(os.environ.get("HAL_GAZE_WINDOW_S", "1.5"))
 GAZE_MIN_FACING_RATIO: float = float(
     os.environ.get("HAL_GAZE_MIN_FACING_RATIO", "0.6")
 )
+# Adopting a NEW user bearing: fraction of observed samples facing the lamp (#545).
+# Lower than GAZE_MIN_FACING_RATIO (the wake gate): a still, centred user measured 50%
+# against 60%. Not lower than 0.4: the window holds 2-3 samples, so 0.3 is one glance.
+GAZE_BEARING_MIN_FACING_RATIO: float = float(
+    os.environ.get("HAL_GAZE_BEARING_MIN_FACING_RATIO", "0.4")
+)
+# Head yaw that still counts as facing the lamp for a NEW bearing (#545). Its own limit,
+# never widened at the frame edge: gaze wake's cone (HAL_GAZE_MAX_YAW_DEG x
+# GAZE_EDGE_CONE_SCALE) reached 103 deg on a lamp tuned to 60 and passed every profile.
+GAZE_BEARING_MAX_YAW_DEG: float = float(
+    os.environ.get("HAL_GAZE_BEARING_MAX_YAW_DEG", "25")
+)
+# Face height (fraction of frame height) that counts as near enough to be at the desk.
+# Device-measured 2026-09-30 on green-lamp frames: office co-workers 8.3-13.6%, the user 19.2-46%.
+GAZE_BEARING_MIN_FACE_HEIGHT_FRAC: float = float(
+    os.environ.get("HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC", "0.15")
+)
 # Minimum samples to decide; the loop achieves ~2 samples/s regardless of GAZE_SAMPLE_FPS.
 GAZE_MIN_SAMPLES: int = int(os.environ.get("HAL_GAZE_MIN_SAMPLES", "2"))
 # Min face height in pixels of the DOWNSCALED frame (VISION_MAX_WIDTH); smaller faces give noise.
@@ -1082,6 +1099,11 @@ GAZE_REPOINT_MIN_CONFIDENCE: float = float(
 # Wait after a repoint before judging whether anyone was there (feeds the estimate).
 GAZE_REPOINT_VERIFY_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_VERIFY_S", "6")
+)
+# A repoint that landed on a body waits this long for its climb to turn up a face
+# before giving its verdict (#545). The climb budget is 4 steps x 4 s cooldown.
+GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
 )
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.

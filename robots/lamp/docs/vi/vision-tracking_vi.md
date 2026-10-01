@@ -596,6 +596,14 @@ cos(45) của mỗi trục, tức một hình vuông bo góc chứ không phải
 sang bên đúng bằng các lần nhìn trái/phải và xuống thấp đúng bằng lần nhìn đáy, tức thêm vùng đất mới
 thay vì phủ lại phần giữa.
 
+**Pha nhìn quanh tìm user thì vòng qua đỉnh (#545).** `search_for_subject(for_user=True)` (pha nhìn
+quanh của gaze watcher) đi theo `USER_LOOK_CIRCLE`: vẫn sáu lần nhìn đó nhưng pitch được lật ngược, tức
+tâm, trái, vòng qua **đỉnh**, ra phải. Khuôn mặt nằm ngang hoặc cao hơn góc nhìn lúc ngồi mà pha quét
+bắt đầu từ đó; các lần nhìn đáy chỉ vào bàn và bàn phím. Đo trên green-lamp 30/09/2026: một user đang
+đứng, đầu cao hơn mọi lần nhìn, đã bị bỏ sót qua cả 18 lần nhìn. Tìm đồ vật (`POST /servo/search`,
+"tìm đồ của tôi") và pha quét dự phòng của look-aim vẫn giữ vòng nhìn xuống, nơi có đồ trên bàn. Các
+lần nhìn lên dùng chung giới hạn `WRIST_PITCH_MIN` mô tả bên dưới.
+
 **Chỉ `wrist_roll` và `wrist_pitch` di chuyển trong một lần nhìn.** Đế chỉ xoay một lần cho mỗi bearing
 và cánh tay không bao giờ tự đổi dáng. Một thiết kế trước đó rải độ nghiêng lên `base_pitch`,
 `elbow_pitch` và `wrist_pitch` qua `servo_follow.distribute_pitch` — đúng cho một hiệu chỉnh tracking,
@@ -622,6 +630,27 @@ tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng
 để ý tới tôi", mà tư thế một pha quét bị cắt ngang đóng băng lại không phải tư thế nghỉ — đầu có thể
 đang nghiêng 45°, mặt hướng vào tường. Tìm thấy → đầu được dựng thẳng lại bằng cách xoay ĐẾ đúng bằng
 góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn.
+
+**Khi gaze watcher tự quét, nó tìm user chứ không tìm bất kỳ ai (#545).** `gaze._maybe_sweep`
+gọi `search_for_subject(for_user=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
+`POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
+nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
+chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
+`user_check.adopts_bearing`: cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình,
+nằm trong `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (25%) quanh tâm khung, và nhìn về đèn (góc yaw của đầu trong
+`HAL_GAZE_BEARING_MAX_YAW_DEG`, 25°, không bao giờ nới rộng ở mép khung) trong
+`HAL_GAZE_BEARING_MIN_FACING_RATIO` (40%) số mẫu đo được. Ứng viên được xếp theo mức nhìn về đèn, rồi
+theo kích thước mặt. Face-ID không phải là một đường vào: nó cho biết ai vừa được thấy, không cho biết
+box này là của ai, nên một nhãn còn mới sẽ cho mọi mặt gần lọt qua khi user đang ở trong khung. Mỗi lần
+chấp nhận hay từ chối đều ghi yaw đầu, chiều cao mặt và độ lệch theo từng frame (`yaw=[…] h=[…]% dx=…`).
+Đo trên green-lamp 30/09/2026: một đồng nghiệp nghiêng mặt ở mép khung (`dx=+45%`, 58 px trên 720 =
+8.1%) lọt qua với "facing 100%", vì cone của gaze wake ở đó (`HAL_GAZE_MAX_YAW_DEG` 60 × hệ số nới ở mép
+≈ 103°) chấp nhận mọi hướng đầu. Một đồng nghiệp ngồi bàn bên cạnh đo được tới 13.6% và đã xác nhận
+một lần repoint trong lúc user đi vắng. User đo được 19.2–46% trong các frame trên cùng đèn đó. Chỉ có thân người thì không bao giờ kết thúc pha quét, và bước căn giữa bám theo
+cái mặt đó (`_user_face_probe`) chứ không bám box người gần nhất. Nếu không mặt nào qua được, pha quét
+báo không tìm thấy và đi theo lối thoát bình thường về tư thế lúc bắt đầu. Đo trên thiết bị
+29/09/2026: pha quét chọn "người gần nhất" trong 2–3 đồng nghiệp (`h=304px`) và phần framing sau đó
+bám theo một người lạ đang nghiêng mặt tới tận `base_yaw −97.4`.
 
 **Khi chưa có bearing** — máy mới, hoặc bearing vừa bị reset — pha quét trước hết đưa tay về đúng tư
 thế của bản ghi idle thay vì bắt đầu từ chỗ nó đang đứng. Một vòng lặp vừa dắt đầu đèn đi lòng vòng
@@ -883,12 +912,36 @@ bearing đúng có thể bị bào mòn bởi một cái ghế trống. Chỉ ch
 
 Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
-- **Thấy thân người cũng tính là tìm được user.** Bộ kiểm tra theo dõi mặt và thân trên hai đồng hồ
-  riêng; một cái thân ở đúng bearing nghĩa là bearing *đúng*. Chấm nó là trượt đã xoá mất những bearing
-  đúng trong khi user đang ngồi ngay trước đèn.
-- **Một lần repoint phải kết thúc trên một cái mặt.** Dừng ở thân người mới là nửa thành công, nên nó
-  kích hoạt phần leo tìm ở trên thay vì báo "đã thấy" — đó là lý do phần leo có `_PROMPT_MIN_SAMPLES`
-  bằng 2.
+- **Kết luận dựa trên một cái mặt, không bao giờ dựa trên thân người (#545).** Một cái mặt cao ít nhất
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
+  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
+  trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
+  phía bên kia phòng đã trở thành "user". **Chỉ kích thước quyết định gần hay xa.** Vị trí thì không:
+  một bearing lệch vài độ so với chỗ ngồi của user sẽ đẩy họ ra mép khung, và một cổng ±15% quanh tâm
+  khung thử ngày 30/09/2026 đã xếp chính khuôn mặt 35% của user (dx +34%) vào loại "xa". Thay vào đó kích thước
+  tách hai người ra: trong các frame ngày 30/09/2026, người ngồi bàn bên cạnh chỉ đạt tối đa 13.6% còn
+  user không bao giờ dưới 19.2%, nên ngưỡng đặt ở 15%. Watcher
+  đóng dấu đồng hồ mặt-gần và mặt-xa (`_note_face_size`) cho mỗi mặt phát hiện được, và phần kết luận đọc
+  hai đồng hồ đó.
+- **Chỉ thân người có đầu nằm trên khung mới chờ phần leo tìm.** Một box người bị mép trên khung cắt
+  (phép kiểm tra của `_headroom_from_person`) đóng dấu `_last_headless_body_t`, và chỉ nó mới bắt đầu leo
+  tìm. Một thân người nằm trọn trong khung thì đã cho thấy khuôn mặt nếu có, nên được chấm theo các mặt:
+  mặt gần = trúng, chỉ mặt xa = trượt, không có mặt = trượt (`found a body but no face`). Đo trên thiết
+  bị 30/09/2026: cả người user nằm trong khung đã kích hoạt một lần "leo tìm" mà đầu không hề di chuyển.
+  Thân người mất đầu sẽ kích hoạt phần leo tìm ở trên và giữ
+  kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
+  cuộc hội thoại nào đang mở. Mặt gần = trúng, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
+  Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
+  ngồi ngay trước đèn.
+- **Một mặt xa không che mất thân người trong lúc đang chấm repoint.** Bình thường watcher chỉ tìm thân
+  người khi không thấy mặt nào, nên khuôn mặt nhỏ của một đồng nghiệp bên kia phòng (dưới
+  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) đã che mất một user đang đứng ngay trước đèn với đầu nằm trên
+  khung hình: không có thân, không leo tìm, "found only a far face", thành trượt (đo trên green-lamp
+  30/09/2026). Trong lúc kết luận repoint hoặc phần leo tìm của nó còn đang chờ (`_judging_repoint`),
+  một mặt xa cũng kích hoạt phát hiện người (`_body_behind_a_far_face`). Thân người tìm được theo cách
+  đó được tính là thân, và `dy` của phần leo tìm lấy từ mép trên của thân chứ không từ mặt xa. Ngoài
+  khoảng thời gian đó thì không chạy: văn phòng gần như lúc nào cũng có một mặt xa, và chạy phát hiện
+  người trên hầu hết các mẫu sẽ tốn CPU.
 - **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
@@ -906,7 +959,7 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu một lần repoint không ra ai, `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
+Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có mặt xa), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
 `confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
@@ -919,8 +972,13 @@ thật: ba lần repoint hỏng đã xoá ước lượng, rồi đèn ngồi đ
 về) vừa không quét được (còn 11 phút cooldown) trong khi user đang nói chuyện với nó.
 
 `confirmed_miss` bỏ qua thời gian chờ vắng mặt một cách có chủ ý — một lần repoint đã di chuyển rồi
-trượt là bằng chứng mạnh nhất có thể có, nên không còn gì để chờ. Một pha quét thành công sẽ lấy mẫu
-một bearing mới ngay tại chỗ.
+trượt là bằng chứng mạnh nhất có thể có, nên không còn gì để chờ. Một pha quét thành công ghi lại
+bearing mà nó đang hướng tới, tức là cái mặt đã qua kiểm tra user (`_learn_from_user_sweep`), và chỉ
+khi căn giữa thành công. Nó không còn lấy mẫu lại bằng `bearing_sampler`, vì bộ lấy mẫu đó chọn bất kỳ
+mặt gần nào detector trả về, có khi là chính đồng nghiệp vừa bị xếp dưới user. Trong lúc phần leo tìm
+của một lần repoint chỉ thấy thân người vẫn đang chờ, một lần repoint mới sẽ bị từ chối (`a climb is
+still judging the last repoint`). Quay tiếp sẽ hạ cái đầu mà phần leo tìm vừa nâng lên và chấm một lần
+nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoint nếu thấy sau khi đã quay.
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
@@ -928,6 +986,9 @@ một bearing mới ngay tại chỗ.
 | `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và pha quét ~20 s vẫn là bước leo thang chứ không phải phản xạ. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
+| `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |
+| `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Góc yaw của đầu được tính là nhìn về đèn khi nhận bearing mới. Giới hạn riêng, không bao giờ nới ở mép khung, nên việc chỉnh cổng wake không làm nó lỏng ra. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Đo trong các frame: đồng nghiệp trong văn phòng 8.3–13.6%, user 19.2–46%. Đèn đặt xa user hơn có thể cần hạ giá trị này trong `.env`. |
 
 ### Bearing người dùng đã ghi nhớ
 
@@ -961,9 +1022,13 @@ chạy được, hoặc bị bỏ; nó không còn phai dần vào vùng xám v�
 
 Các lần nhìn thấy đi vào đây theo hai đường:
 
-- **Từ một lần look aim**, khi đối tượng kết thúc trong phạm vi **2%** quanh tâm khung — chặt hơn cả
-  dung sai căn khung của chính pha ngắm, và cố ý như vậy: ở tâm khung thì vị trí servo **chính là**
-  bearing, không có phép quy đổi pixel→góc nào và do đó không phụ thuộc vào hằng số FOV đang tranh cãi.
+- **Từ một lần look aim**, chỉ với một cái mặt qua được kiểm tra user chặt (#545): cao ít nhất 15%
+  khung hình, nằm trong 25% quanh tâm khung, và nhìn về đèn (yaw ≤ 25°) trong 40% số mẫu của khoảng
+  1.5 s. Bearing được
+  tính lại bằng `yaw + dx × scale` trong giới hạn `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25) của bộ lấy
+  mẫu, trên một thread nền (`_record_bearing_worker`) để việc chụp không bao giờ phải chờ, và bị bỏ nếu
+  đầu đã cử động trong lúc đó. Trước đây nó ghi lại bất kỳ box nào ở giữa khung, và thân của một đồng
+  nghiệp nằm giữa khung đã dạy sai bearing.
 - **Từ bộ lấy mẫu thụ động** (`bearing_sampler.py`), mỗi `HAL_BEARING_SAMPLE_INTERVAL_S` (300 s).
   Đường chỉ-qua-aim ghi được khoảng hai lần nhìn thấy một ngày, quá chậm để dựng nên một ước lượng mà
   pha ngắm chịu dùng — độ tin cậy lớn lên theo số lần nhìn thấy, và với nhịp đó một máy mới toanh mất
@@ -976,7 +1041,11 @@ Các lần nhìn thấy đi vào đây theo hai đường:
 Bộ lấy mẫu thà từ chối còn hơn đoán. Độ lệch ngang chỉ được chấp nhận tới
 `HAL_BEARING_SAMPLE_MAX_DX_FRAC` (0.25), vì phép hiệu chỉnh đó dựa vào đúng cái hằng số FOV mà aim
 sinh ra để khỏi phải tin. Nó cũng bỏ qua khi thân đang aim hoặc đang bám, khi camera bị tắt, và lấy
-khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó.
+khóa bộ phát hiện theo kiểu không chặn để câu hỏi của người dùng không bao giờ phải chờ nó. Một cái
+mặt phải cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình, cùng ngưỡng với mọi
+đường bearing khác (#545). Trước đây nó dùng `HAL_LOOK_AIM_MIN_FACE_HEIGHT_FRAC` (8%) của look-aim, nên
+một đồng nghiệp ở giữa khung với kích thước 8–15% có thể dạy sai bearing. Không có kiểm tra nhìn về
+đèn: nó chỉ lấy một frame, và user đang làm việc với màn hình của mình vẫn phải được học.
 
 **Nó chỉ học từ `face`, không bao giờ từ box `person`.** Box person cho biết một thân người ở đâu, mà
 thân người thì lấp đầy khung mỗi khi camera tình cờ chĩa thấp — nên học từ nó là ghi nhớ đúng cái tư
@@ -1039,7 +1108,8 @@ Không có gì trên thiết bị này quan sát được điều đó một cá
 
 Nên nó được **suy ra từ các dự đoán sai**: khi ưu tiên 3 của pha ngắm quay tới bearing đã ghi nhớ mà
 không thấy ai, đó là một lần trượt. `PREDICTION_MISS_LIMIT` lần trượt sẽ hủy ước lượng, và nó tự dựng
-lại từ các lần nhìn thấy mới.
+lại từ các lần nhìn thấy mới. Look-aim chấm một lần quay tới bearing là trúng chỉ khi thấy một mặt gần,
+là trượt khi không thấy gì, và không chấm khi chỉ thấy thân người (#545).
 
 Ba lớp bảo vệ giúp sinh hoạt bình thường không bị hiểu nhầm thành dời chỗ:
 

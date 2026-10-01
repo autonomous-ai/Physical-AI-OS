@@ -74,7 +74,7 @@ def _sample_once() -> bool:
     """One observation. Returns True when a sighting was recorded."""
     import hal.app_state as state
 
-    from hal.drivers.tracking import aim, user_bearing
+    from hal.drivers.tracking import aim, user_bearing, user_check
 
     if getattr(state, "_camera_disabled", False):
         return False  # privacy: never watch someone who asked us not to
@@ -114,7 +114,10 @@ def _sample_once() -> bool:
                 continue
             if found is None:
                 continue
-            if aim._is_near_enough(found, frame, target):
+            # The bearing's own floor, not look-aim's 8%: a centred co-worker at 8-15%
+            # taught the bearing (#545). No facing check: this samples one frame, and
+            # the user at their monitor must still be learned.
+            if user_check.near_enough(float(found[3]) / float(frame.shape[0] or 1)):
                 box, kind = found, target
                 conf = getattr(detector, "last_confidence", None)
                 break

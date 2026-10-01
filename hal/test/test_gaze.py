@@ -1214,7 +1214,7 @@ def test_a_repoint_that_finds_the_user_confirms_the_bearing(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_face_t = t - 1.0
+    gaze._last_near_face_t = t - 1.0
 
     gaze._verify_repoint(t)
     assert calls == [True]
@@ -1250,7 +1250,7 @@ def test_each_repoint_is_scored_exactly_once(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_subject_t = t - 1.0
+    gaze._last_near_face_t = t - 1.0
 
     for _ in range(5):
         gaze._verify_repoint(t)
@@ -1579,7 +1579,7 @@ def sweeper(monkeypatch):
     calls = []
 
     def fake(*a, **kw):
-        calls.append(True)
+        calls.append(kw)
         return search.SearchResult(False, "nobody found", 9)
 
     monkeypatch.setattr(search, "search_for_subject", fake)
@@ -1592,6 +1592,11 @@ def sweeper(monkeypatch):
     gaze._last_sweep_t = 0.0
     gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
     return calls
+
+
+def test_the_gaze_sweep_looks_for_the_user(sweeper):
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    assert sweeper and sweeper[0].get("for_user") is True
 
 
 def test_a_repoint_that_finds_nobody_looks_around(sweeper):
@@ -1741,25 +1746,6 @@ def test_with_a_bearing_the_long_cooldown_still_holds(sweeper):
     assert len(sweeper) == 1, "the short leash leaked into the normal case"
 
 
-def test_finding_someone_teaches_the_lamp_where_they_are(monkeypatch):
-    """Finding the user refreshes the bearing sample immediately."""
-    from hal.drivers.tracking import bearing_sampler, search, user_bearing
-
-    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
-    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
-    monkeypatch.setattr(
-        search, "search_for_subject",
-        lambda *a, **kw: search.SearchResult(True, "found person", 2, 40.0))
-    asked = []
-    monkeypatch.setattr(bearing_sampler, "sample_now",
-                        lambda: asked.append(True) or True)
-    gaze._last_sweep_t = 0.0
-    gaze._last_face_t = gaze.time.monotonic() - config.GAZE_SWEEP_AFTER_S - 1.0
-
-    gaze._maybe_sweep(gaze.time.monotonic())
-    assert asked, "it found someone and learned nothing from it"
-
-
 def test_a_sweep_that_finds_nobody_teaches_nothing(sweeper, monkeypatch):
     """There is no sighting to learn from, and asking would only cost a look."""
     from hal.drivers.tracking import bearing_sampler
@@ -1816,17 +1802,112 @@ def test_the_automatic_repoint_still_waits_out_its_cooldown(body):
     )
 
 
-def test_a_repoint_that_lands_on_a_torso_found_the_user(monkeypatch):
-    """A repoint landing on a torso counts as finding the user."""
+def test_a_repoint_that_lands_on_a_torso_waits_for_the_climb(monkeypatch):
+    """A torso is not scored yet (#545): a co-worker's back must not confirm the bearing."""
     calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: None)
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
     gaze._last_face_t = t - 100.0
-    gaze._last_subject_t = t - 1.0
+    gaze._last_headless_body_t = t - 1.0
 
     gaze._verify_repoint(t)
-    assert calls == [True], "a torso at the bearing is the user, not nobody"
+    assert calls == [], "a torso confirmed the bearing before the climb found a face"
+    assert gaze._repoint_climb_t == t
+
+
+def _torso_repoint(monkeypatch):
+    """A repoint that landed on a torso, with its climb now pending."""
+    calls = _repoint_scored(monkeypatch)
+    climbs = []
+    monkeypatch.setattr(gaze, "_maybe_pitch",
+                        lambda now, prompt=False: climbs.append(prompt))
+    sweeps = []
+    monkeypatch.setattr(gaze, "_maybe_sweep",
+                        lambda now, confirmed_miss=False: sweeps.append(confirmed_miss))
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = gaze._last_near_face_t = gaze._last_far_face_t = t - 100.0
+    gaze._last_headless_body_t = t - 1.0
+    gaze._verify_repoint(t)
+    return t, calls, climbs, sweeps
+
+
+def test_a_climb_that_finds_a_near_face_confirms_the_bearing(monkeypatch):
+    t, calls, _climbs, _ = _torso_repoint(monkeypatch)
+    gaze._last_near_face_t = t + 3.0
+    gaze._verify_repoint(t + 4.0)
+    assert calls == [True]
+    assert gaze._repoint_climb_t == 0.0
+
+
+def test_a_pending_climb_keeps_climbing(monkeypatch):
+    """The climb must not stall just because no conversation is open."""
+    t, calls, climbs, _ = _torso_repoint(monkeypatch)
+    gaze._verify_repoint(t + 4.0)
+    gaze._verify_repoint(t + 8.0)
+    assert calls == []
+    assert climbs.count(True) >= 3
+
+
+def test_a_climb_that_finds_only_a_far_face_is_a_miss(monkeypatch):
+    """The #545 office case: a body, then a 12-25 px side-on face."""
+    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
+    gaze._last_far_face_t = t + 3.0
+    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
+    assert calls == [False]
+    assert sweeps == [True]
+
+
+def test_a_climb_that_finds_no_face_is_not_scored(monkeypatch):
+    """No face at all says nothing: scoring it a miss once deleted correct bearings."""
+    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
+    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
+    assert calls == []
+    assert sweeps == []
+    assert gaze._repoint_climb_t == 0.0
+
+
+def test_a_far_face_with_no_body_is_a_miss(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_face_t = gaze._last_near_face_t = gaze._last_subject_t = t - 100.0
+    gaze._last_far_face_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [False]
+
+
+def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
+    """The user at their desk, looking at their own monitor."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze.discard_samples()
+    for i in range(4):
+        gaze.record_sample(80.0, 120.0, 0.0, now=t - 2.0 + i * 0.3)  # side-on
+    gaze._last_near_face_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [True]
+
+
+@pytest.mark.parametrize("face_h, dx, near", [
+    (0.16, 0.0, True), (0.136, 0.0, False), (0.19, -0.41, True), (0.35, 0.34, True),
+])
+def test_face_size_and_offset_feed_the_near_or_far_clock(face_h, dx, near):
+    """Near = size alone: an off-side face is still near (green-lamp 16:55, the user at dx +34%).
+
+    The clock takes no offset at all; `dx` documents where each measured face sat.
+    """
+    gaze._last_near_face_t = gaze._last_far_face_t = 0.0
+    gaze._note_face_size(face_h * 480.0, 480.0, now=123.0)
+    assert (gaze._last_near_face_t == 123.0) is near
+    assert (gaze._last_far_face_t == 123.0) is (not near)
 
 
 def test_the_wake_gate_still_wants_a_real_face():
@@ -1850,7 +1931,7 @@ def test_a_repoint_that_lands_on_a_body_asks_the_head_to_climb(neck, monkeypatch
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
     gaze._last_face_t = t - 100.0
-    gaze._last_subject_t = t - 1.0
+    gaze._last_headless_body_t = t - 1.0
     gaze.discard_samples()
     for i in range(2):
         gaze.record_dy(-0.5, False, now=t - 1.0 + i * 0.2)
@@ -1966,6 +2047,183 @@ def test_the_watcher_loop_watches_the_edge():
     import inspect
 
     assert "_note_conversation_edge()" in inspect.getsource(gaze._loop)
+
+
+def test_no_repoint_while_a_climb_is_pending(body):
+    """Review I1: a new repoint would drop the head back and re-judge the same sighting."""
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._repoint_climb_t = gaze.time.monotonic() - 1.0
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is False
+    assert body.moves == []
+
+
+def test_a_face_seen_before_the_turn_is_not_evidence(body, monkeypatch):
+    """Review I2: a near face at the OLD pose must not confirm the bearing."""
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._last_subject_t = 0.0
+    t = gaze.time.monotonic()
+    gaze._last_near_face_t = t - 2.0  # before the move, after the last body
+    assert gaze._maybe_repoint(t, force=True) is True
+    gaze._verify_repoint(t + config.GAZE_REPOINT_VERIFY_S + 1.0)
+    assert calls == [False], "a face seen before the turn confirmed the bearing"
+
+
+def _found_sweep(monkeypatch, centred=True):
+    import hal.app_state as state
+    from hal.drivers.tracking import bearing_sampler, search, user_bearing
+
+    svc = _Svc()
+    monkeypatch.setattr(state, "animation_service", svc, raising=False)
+    monkeypatch.setattr(config, "GAZE_SWEEP_ENABLED", True, raising=False)
+    monkeypatch.setattr(user_bearing, "read_estimate", lambda: None)
+    monkeypatch.setattr(search, "search_for_subject", lambda **kw: search.SearchResult(
+        True, "found face", 3, 12.0, 0.0, 1, "face", (300, 100, 60, 60), centred))
+    sampled, recorded = [], []
+    monkeypatch.setattr(bearing_sampler, "sample_now", lambda: sampled.append(1) or True)
+    monkeypatch.setattr(user_bearing, "record_sighting",
+                        lambda yaw, pose=None, now=None: recorded.append((yaw, pose)) or True)
+    gaze._last_sweep_t = 0.0
+    gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
+    return svc, sampled, recorded
+
+
+def test_a_user_sweep_records_the_face_it_checked(monkeypatch):
+    """Review I3: re-sampling picked any near face, not the one that passed the check."""
+    svc, sampled, recorded = _found_sweep(monkeypatch)
+    assert sampled == [], "the loose sampler replaced the checked face"
+    assert len(recorded) == 1
+    assert recorded[0][0] == pytest.approx(svc.get_positions()["base_yaw.pos"])
+
+
+def test_an_uncentred_sweep_hit_records_nothing(monkeypatch):
+    _svc, sampled, recorded = _found_sweep(monkeypatch, centred=False)
+    assert sampled == [] and recorded == []
+
+
+class _PersonDetector:
+    """Counts person detections and returns one fixed box."""
+
+    def __init__(self, box):
+        self.box = box
+        self.calls = 0
+
+    def detect(self, frame, target, strict=True, min_conf=None):
+        if target == "person":
+            self.calls += 1
+            return self.box
+        return None
+
+
+def _sample_far_face_with_body(monkeypatch, face_h, pending=True, x=40.0):
+    """One watcher sample: a face `face_h` px tall in a 360 px frame + a torso clipped at the top."""
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    person = _PersonDetector((200, 0, 260, 360))
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: person)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    y = 60.0
+    monkeypatch.setattr(
+        det, "detect_face_with_landmarks",
+        lambda f: ((int(x), int(y), int(face_h), int(face_h)),
+                   _landmarks((x + face_h * 0.3, y + face_h * 0.4),
+                              (x + face_h * 0.7, y + face_h * 0.4),
+                              (x + face_h * 0.5, y + face_h * 0.6))),
+    )
+    gaze.reset_for_test()
+    t = gaze.time.monotonic()
+    if pending:
+        gaze._repoint_pending_t = gaze._repoint_started_t = t - 1.0
+    gaze._last_subject_t = 0.0
+    assert gaze._sample_once() is None
+    return person, t
+
+
+def test_a_far_face_does_not_hide_a_standing_user_during_a_repoint(monkeypatch):
+    """green-lamp 2026-09-30 16:21: a co-worker's 8-11% face hid the user's torso -> no climb."""
+    person, t = _sample_far_face_with_body(monkeypatch, face_h=30)  # 8% of 360
+    assert person.calls == 1, "the body was never looked for"
+    assert gaze._last_headless_body_t >= t, "the cut-off torso did not count as a body"
+    assert gaze._last_far_face_t >= t, "the far face must still count for a miss"
+    assert gaze._last_dy_from_face is False, "the climb would aim at the far face"
+    assert gaze._last_dy_frac == pytest.approx(-0.5)
+
+
+def test_a_far_face_plus_a_body_starts_the_climb_not_a_miss(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    climbs = []
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: climbs.append(prompt))
+    _person, t = _sample_far_face_with_body(monkeypatch, face_h=30)
+    gaze._repoint_subject_t_before = 0.0
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [], "scored before the climb could find the face"
+    assert gaze._repoint_climb_t == t and climbs == [True]
+
+
+def test_a_far_face_outside_a_repoint_skips_the_body_check(monkeypatch):
+    """Offices always have a far face: running person detection all day costs CPU."""
+    person, _t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
+    assert person.calls == 0
+    assert gaze._last_dy_from_face is True
+
+
+def test_a_near_face_never_runs_the_body_check(monkeypatch):
+    """A face that confirms the repoint (33%, centred) needs no body behind it."""
+    person, _t = _sample_far_face_with_body(monkeypatch, face_h=120, x=260.0)
+    assert person.calls == 0
+    assert gaze._last_dy_from_face is True
+
+
+def test_a_pending_climb_also_looks_for_the_body(monkeypatch):
+    person, t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
+    assert person.calls == 0
+    gaze._repoint_climb_t = t
+    assert gaze._sample_once() is None
+    assert person.calls == 1
+
+
+def test_a_body_fully_in_frame_does_not_start_a_climb(monkeypatch):
+    """green-lamp 16:55: the whole body was in frame, so there was no head above to climb to."""
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+    gaze._last_near_face_t = gaze._last_far_face_t = gaze._last_headless_body_t = t - 100.0
+    gaze._last_subject_t = t - 1.0  # a person box, head inside the frame
+    gaze._verify_repoint(t)
+    assert gaze._repoint_climb_t == 0.0
+    assert calls == [False]
+
+
+@pytest.mark.parametrize("box_top, headless", [(0, True), (60, False)])
+def test_only_a_top_clipped_person_stamps_the_headless_clock(monkeypatch, box_top, headless):
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    person = _PersonDetector((200, box_top, 260, 300))
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: person)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    monkeypatch.setattr(det, "detect_face_with_landmarks", lambda f: None)
+    gaze.reset_for_test()
+    t = gaze.time.monotonic()
+    assert gaze._sample_once() is None
+    assert (gaze._last_headless_body_t >= t) is headless
 
 
 # --- #544: a held body is not the watcher's to move ------------------------

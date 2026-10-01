@@ -57,6 +57,10 @@ LOOK_CIRCLE = (
     (-ROLL_DIAG_DEG, -PITCH_DIAG_DEG),
 )
 HALF_LOOKS: int = 6
+# The half ring mirrored UP, for the user look-around only (#545). Faces sit at or
+# above the seated view the sweep starts from; the down looks point at desks, and a
+# standing user was missed through all 18 looks. Object searches keep looking down.
+USER_LOOK_CIRCLE = tuple((roll, -dp) for roll, dp in LOOK_CIRCLE[:HALF_LOOKS])
 
 # Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on lamp-ac82:
 # wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN, not by the joint) and
@@ -251,6 +255,40 @@ def _sticky_probe(detector: Any, target: str, first_box: tuple) -> Callable[[Any
     return probe
 
 
+def _user_face_probe(first_box: tuple) -> Callable[[Any], Optional[tuple]]:
+    """Centre on the FACE the user check passed, never on a nearby body.
+
+    `_sticky_probe` falls back to `_detect_subject`, which prefers the nearest person
+    box, and that is the #545 bug.
+    """
+    anchor = {"box": tuple(first_box)}
+
+    def probe(frame: Any) -> Optional[tuple]:
+        from hal.drivers.tracking import aim, detection, frame_utils
+
+        small, scale = frame_utils.downscale(frame)
+        with aim._detector_lock_use:
+            faces = detection.detect_faces_with_landmarks(small)
+        if not faces:
+            return None
+        s = 1.0 / scale if scale else 1.0
+        boxes = [(int(x * s), int(y * s), int(w * s), int(h * s))
+                 for (x, y, w, h), _lm in faces]
+        ax = anchor["box"][0] + anchor["box"][2] / 2.0
+        ay = anchor["box"][1] + anchor["box"][3] / 2.0
+        box = min(boxes, key=lambda b: (b[0] + b[2] / 2.0 - ax) ** 2
+                  + (b[1] + b[3] / 2.0 - ay) ** 2)
+        fh, fw = frame.shape[0], frame.shape[1]
+        if (abs(box[0] + box[2] / 2.0 - ax) > STICKY_MAX_JUMP_FRAC * fw
+                or abs(box[1] + box[3] / 2.0 - ay) > STICKY_MAX_JUMP_FRAC * fh):
+            logger.info("[search] probe: nearest face jumped too far — not the same one")
+            return None
+        anchor["box"] = box
+        return box
+
+    return probe
+
+
 def _detect_target(detector: Any, frame: Any, target: str):
     """Find `target` in the frame. Returns (box, kind), or (None, None)."""
     from hal.drivers.tracking.aim import _detect_subject
@@ -383,14 +421,22 @@ def _say_at_the_midpoint() -> Callable[[int, int], None]:
 
 def search_for_subject(target: str = "person", detector: Any = None,
                        on_progress: Optional[Callable[[int, int], None]] = None,
-                       exhaustive: bool = False) -> SearchResult:
-    """Sweep for a subject, stopping at the first one seen."""
+                       exhaustive: bool = False, for_user: bool = False) -> SearchResult:
+    """Sweep for a subject, stopping at the first one seen.
+
+    `for_user`: the subject is the lamp's user, not anybody (#545). Each look must
+    turn up a face that passes user_check.adopts_bearing; a body alone never ends it.
+    """
     _abort_evt.clear()
 
     if exhaustive and target not in ("person", "face"):
         logger.info("[search] exhaustive ignored for '%s' — an object search "
                     "stops at the first sighting", target)
         exhaustive = False
+    if for_user and (exhaustive or target != "person"):
+        logger.info("[search] for_user ignored for '%s'%s", target,
+                    " (exhaustive)" if exhaustive else "")
+        for_user = False
 
     cap = getattr(state, "camera_capture", None)
     svc = getattr(state, "animation_service", None)
@@ -417,7 +463,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
     with aim.servo_ownership():
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
-            res = _sweep(svc, cap, detector, target, on_progress, exhaustive)
+            res = _sweep(svc, cap, detector, target, on_progress, exhaustive, for_user)
         finally:
             if capped:
                 svc.set_joint_speed(
@@ -430,7 +476,8 @@ def search_for_subject(target: str = "person", detector: Any = None,
     return res
 
 
-def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
+def _look_list(seed_pose: Optional[dict], exhaustive: bool,
+               for_user: bool = False) -> list:
     """Absolute (roll, wrist_pitch) for every look at one bearing."""
     base_wp = None
     if seed_pose:
@@ -438,7 +485,10 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
             base_wp = float(seed_pose["wrist_pitch.pos"])
         except (KeyError, TypeError, ValueError):
             base_wp = None
-    pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
+    if for_user:
+        pattern = USER_LOOK_CIRCLE
+    else:
+        pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
     lo = C.WRIST_PITCH_MIN + WRIST_PITCH_MARGIN
     hi = C.WRIST_PITCH_MAX - WRIST_PITCH_MARGIN
     out = []
@@ -450,7 +500,7 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool) -> list:
 
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
            on_progress: Optional[Callable[[int, int], None]] = None,
-           exhaustive: bool = False) -> SearchResult:
+           exhaustive: bool = False, for_user: bool = False) -> SearchResult:
     """The sweep itself, with the body already owned."""
     from hal.drivers.tracking import aim
 
@@ -460,7 +510,7 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    looks = _look_list(seed_pose, exhaustive)
+    looks = _look_list(seed_pose, exhaustive, for_user)
     total_looks = len(stops) * len(looks)
     logger.info("[search] sweeping %d bearings x %d looks (%d total) for '%s': %s",
                 len(stops), len(looks), total_looks, target,
@@ -498,7 +548,15 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
             if frame is None:
                 continue
             _t_det = time.monotonic()
-            box, kind = _detect_target(detector, frame, target)
+            if for_user:
+                from hal.drivers.tracking import user_check
+
+                track = user_check.best_user_face(
+                    user_check.observe_faces(lambda: _grab_frame(cap)), "[search]",
+                )
+                box, kind = (track.box, "face") if track is not None else (None, None)
+            else:
+                box, kind = _detect_target(detector, frame, target)
             logger.info("[search] look %d/%d: grab %.0fms detect %.0fms -> %s",
                         visited, total_looks, _grab_ms,
                         (time.monotonic() - _t_det) * 1000,
@@ -513,9 +571,9 @@ def _sweep(svc: Any, cap: Any, detector: Any, target: str,
                 if not exhaustive:
                     # Correct FIRST, straighten AFTER. And without any correction at all
                     # the sweep pointed at `yaw + roll`.
-                    centred = aim.centre_on_box(
-                        svc, cap, probe=_sticky_probe(detector, target, box),
-                    )
+                    probe = (_user_face_probe(box) if for_user
+                             else _sticky_probe(detector, target, box))
+                    centred = aim.centre_on_box(svc, cap, probe=probe)
                     hit.centred = centred.centred
                     if centred.box is not None:
                         hit.box = centred.box

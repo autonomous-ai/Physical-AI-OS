@@ -30,6 +30,17 @@ _last_dy_from_face: bool = False
 _last_pitch_t: float = 0.0
 _repoint_pending_t: float = 0.0
 _repoint_subject_t_before: float = 0.0
+# Last time a face near enough to be at the desk (user_check.near_enough) was seen, and
+# last time only a smaller one was. The repoint verdict is judged on these (#545).
+_last_near_face_t: float = 0.0
+_last_far_face_t: float = 0.0
+# A repoint that landed on a body is waiting for its climb; 0.0 when none is.
+_repoint_climb_t: float = 0.0
+# Last time a person box was cut off by the frame top: a head above the frame, the only
+# body worth climbing for. A body fully in frame already shows whatever face it has.
+_last_headless_body_t: float = 0.0
+# When the last repoint turned. A face seen before this was seen from the OLD pose.
+_repoint_started_t: float = 0.0
 _blind_pitch_steps: int = 0
 _climb_gave_up: bool = False
 # A VAD-confirmed utterance found no recent usable face. The watcher consumes
@@ -524,6 +535,53 @@ def _skip(reason: str) -> str:
     return reason
 
 
+def _judging_repoint() -> bool:
+    """A repoint verdict, or the climb it started, is still waiting on evidence."""
+    return _repoint_pending_t > 0.0 or _repoint_climb_t > 0.0
+
+
+def _confirms_repoint(face_h: float, frame_h: float) -> bool:
+    """This face is big enough to confirm a repoint (user_check's confirm rule)."""
+    from hal.drivers.tracking import user_check
+
+    return user_check.confirms_bearing(
+        user_check.FaceEvidence(face_h_frac=face_h / (frame_h or 1.0))
+    ).ok
+
+
+def _body_behind_a_far_face(frame: Any, detector: Any, face_h: float,
+                            frame_h: float) -> Tuple[Optional[float], bool]:
+    """``(dy, seen)`` for a body the far face in frame would otherwise hide.
+
+    Only while a repoint is judged: the watcher looks for a body only when it finds no
+    face, so a co-worker's small face hid a user standing in front of the lamp with
+    their head above the frame, and the climb never started (device-observed
+    2026-09-30). Always-on would run person detection on most office samples.
+    """
+    if not _judging_repoint() or _confirms_repoint(face_h, frame_h):
+        return None, False
+    return _headroom_from_person(frame, detector)
+
+
+def _note_headless_body(body_dy: Optional[float]) -> None:
+    """Stamp the headless-body clock when the person box was cut off at the frame top."""
+    global _last_headless_body_t
+
+    # _headroom_from_person gives a dy only for a box clipped by the top edge.
+    if body_dy is not None:
+        _last_headless_body_t = time.monotonic()
+
+
+def _note_face_size(face_h: float, frame_h: float, now: float) -> None:
+    """Stamp the near- or far-face clock for one detected face (size alone decides)."""
+    global _last_near_face_t, _last_far_face_t
+
+    if _confirms_repoint(face_h, frame_h):
+        _last_near_face_t = now
+    else:
+        _last_far_face_t = now
+
+
 def _sample_once() -> Optional[str]:  # noqa: C901
     """One camera observation folded into the buffer."""
     global _last_face_t
@@ -576,6 +634,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         _last_dy_from_face = False
         if saw_person:
             _last_subject_t = time.monotonic()
+        _note_headless_body(_last_dy_frac)
         if _last_dy_frac is None:
             _pitch_quiet(
                 "nothing measurable in frame", time.monotonic(),
@@ -590,11 +649,20 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     (fx, fy, fw, fh), landmarks = face
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
-    _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
-    _last_dy_from_face = True
-    record_dy(_last_dy_frac, True)
+    body_dy, body_seen = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h)
+    if body_seen:
+        # Climb toward the body's head, not toward a far face across the room.
+        _last_subject_t = time.monotonic()
+        _note_headless_body(body_dy)
+        _last_dy_frac, _last_dy_from_face = body_dy, False
+        record_dy(body_dy, False)
+    else:
+        _last_dy_frac = ((fy + fh / 2.0) - frame_h / 2.0) / frame_h
+        _last_dy_from_face = True
+        record_dy(_last_dy_frac, True)
     record_dx(((fx + fw / 2.0) - frame_w / 2.0) / frame_w, True)
     _last_frame, _last_box = small, (fx, fy, fw, fh)
+    _note_face_size(float(fh), frame_h, time.monotonic())
 
     edge = min(1.0, abs((fx + fw / 2.0) - frame_w / 2.0) / (frame_w / 2.0))
     if float(fh) >= config.GAZE_MIN_FACE_PX and edge <= config.GAZE_WELL_FRAMED_EDGE:
@@ -1062,6 +1130,10 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
     if not (config.GAZE_REPOINT_ENABLED and config.GAZE_WAKE_ENABLED):
         _repoint_quiet("disabled", now)
         return False
+    if _repoint_climb_t > 0.0:
+        # Turning again would drop the head the climb raised and judge one sighting twice.
+        _repoint_quiet("a climb is still judging the last repoint", now)
+        return False
     if not force and (now - _last_face_t) < config.GAZE_REPOINT_AFTER_S:
         return False
     if (now - _last_face_t) < config.GAZE_REPOINT_SKIP_IF_FACE_S:
@@ -1130,8 +1202,8 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # Owe the estimate a verdict. Deliberately not measured here: a synchronous
         # detect would need the detector lock and a settle, inside a watcher whose whole
         # design is never to make a live look wait.
-        global _repoint_pending_t, _repoint_subject_t_before
-        _repoint_pending_t = now
+        global _repoint_pending_t, _repoint_subject_t_before, _repoint_started_t
+        _repoint_pending_t = _repoint_started_t = now
         _repoint_subject_t_before = _last_subject_t
         if force:
             logger.info(
@@ -1151,17 +1223,8 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         return False
 
 
-def _verify_repoint(now: float) -> None:
-    """Tell the bearing whether turning to it actually found the user."""
-    global _repoint_pending_t
-
-    if _repoint_pending_t <= 0.0:
-        return
-    if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
-        return
-    saw_face = _last_face_t > _repoint_subject_t_before
-    hit = _last_subject_t > _repoint_subject_t_before
-    _repoint_pending_t = 0.0
+def _score_repoint(hit: bool, why: str, now: float) -> None:
+    """Hand the bearing one verdict, and look around after a miss."""
     try:
         from hal.drivers.tracking import user_bearing
 
@@ -1170,18 +1233,76 @@ def _verify_repoint(now: float) -> None:
         logger.debug("[gaze] repoint scoring skipped: %s", e)
         return
     logger.info(
-        "[gaze] repoint %s — %s%s",
-        "found their face" if saw_face
-        else "found their body, no face yet" if hit
-        else "found nobody",
+        "[gaze] repoint %s — %s%s", why,
         "bearing confirmed" if hit else "counted against the bearing",
         " (estimate dropped)" if dropped else "",
     )
-    if hit and not saw_face:
-        logger.info("[gaze] climbing to find the face the repoint turned up")
-        _maybe_pitch(now, prompt=True)
     if not hit:
         _maybe_sweep(now, confirmed_miss=True)
+
+
+def _face_evidence_since() -> float:
+    """Faces count only if seen after the turn: before it they were seen from the old pose."""
+    return max(_repoint_subject_t_before, _repoint_started_t)
+
+
+def _verify_repoint(now: float) -> None:
+    """Tell the bearing whether turning to it actually found the user.
+
+    Judged on a FACE near enough to be at the desk, never on a body (#545): a
+    co-worker's back must not confirm the bearing. A body only starts the climb, and
+    the verdict waits for what the climb turns up.
+    """
+    global _repoint_pending_t, _repoint_climb_t
+
+    if _repoint_climb_t > 0.0:
+        _finish_repoint_climb(now)
+        return
+    if _repoint_pending_t <= 0.0:
+        return
+    if (now - _repoint_pending_t) < config.GAZE_REPOINT_VERIFY_S:
+        return
+    _repoint_pending_t = 0.0
+    since = _face_evidence_since()
+    if _last_near_face_t > since:
+        _score_repoint(True, "found a face near enough to be them", now)
+        return
+    if _last_headless_body_t > since:
+        logger.info("[gaze] repoint found a body with its head above the frame — climbing "
+                    "before judging the bearing")
+        _repoint_climb_t = now
+        _maybe_pitch(now, prompt=True)
+        return
+    _score_repoint(
+        False,
+        "found only a far face" if _last_far_face_t > since
+        else "found a body but no face" if _last_subject_t > _repoint_subject_t_before
+        else "found nobody",
+        now,
+    )
+
+
+def _finish_repoint_climb(now: float) -> None:
+    """Judge a body-only repoint on the face its climb turned up."""
+    global _repoint_climb_t
+
+    since = _face_evidence_since()
+    if _last_near_face_t > since:
+        _repoint_climb_t = 0.0
+        _score_repoint(True, "climb found a face near enough to be them", now)
+        return
+    if (now - _repoint_climb_t) < config.GAZE_REPOINT_CLIMB_TIMEOUT_S:
+        # Prompted: the ordinary climb only runs inside a conversation.
+        _maybe_pitch(now, prompt=True)
+        return
+    _repoint_climb_t = 0.0
+    if _last_far_face_t > since:
+        _score_repoint(False, "climb found only a far face", now)
+    else:
+        # No face at all proves nothing either way. A torso-only miss once deleted
+        # correct bearings while the user sat in front of the lamp.
+        logger.info("[gaze] repoint climb found no face in %.0fs — not scored",
+                    config.GAZE_REPOINT_CLIMB_TIMEOUT_S)
 
 
 def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
@@ -1227,7 +1348,7 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     try:
         from hal.drivers.tracking.search import search_for_subject
 
-        res = search_for_subject()
+        res = search_for_subject(for_user=True)
     except Exception as e:
         logger.warning("[gaze] look-around unavailable: %s", e)
         return
@@ -1236,13 +1357,28 @@ def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
     if res.found:
         discard_samples()
         discard_dx_samples()
-        try:
-            from hal.drivers.tracking import bearing_sampler
+        _learn_from_user_sweep(res)
 
-            if bearing_sampler.sample_now():
-                logger.info("[gaze] learned a bearing from the look-around")
-        except Exception as e:
-            logger.debug("[gaze] could not sample after the look-around: %s", e)
+
+def _learn_from_user_sweep(res: Any) -> None:
+    """Record the face the sweep's user check passed, and only that face (#545).
+
+    Re-sampling here would pick whichever near face the detector returns, which can be
+    the co-worker the check just ranked below the user.
+    """
+    if not getattr(res, "centred", False):
+        logger.info("[gaze] look-around found the user but never centred — bearing not recorded")
+        return
+    try:
+        import hal.app_state as state
+        from hal.drivers.tracking import user_bearing
+
+        positions = state.animation_service.get_positions()
+        yaw = float(positions.get("base_yaw.pos", 0.0))
+        if user_bearing.record_sighting(yaw, pose=dict(positions)):
+            logger.info("[gaze] learned a bearing from the look-around: %+.1f", yaw)
+    except Exception as e:
+        logger.debug("[gaze] could not record the look-around bearing: %s", e)
 
 
 def _loop() -> None:
@@ -1348,6 +1484,11 @@ def reset_for_test() -> None:
     _last_repoint_t = 0.0
     globals()["_repoint_pending_t"] = 0.0
     globals()["_repoint_subject_t_before"] = 0.0
+    globals()["_last_near_face_t"] = 0.0
+    globals()["_last_far_face_t"] = 0.0
+    globals()["_repoint_climb_t"] = 0.0
+    globals()["_repoint_started_t"] = 0.0
+    globals()["_last_headless_body_t"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None

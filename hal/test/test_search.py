@@ -10,7 +10,9 @@ import pytest
 import hal.app_state as state
 import hal.config as config
 from hal.drivers.tracking import constants as C
-from hal.drivers.tracking import search
+from hal.drivers.tracking import search, user_check
+from hal.drivers.tracking.aim import CentreResult
+from hal.drivers.tracking.user_check import FaceEvidence, FaceTrack
 from test.body_ownership import BodyOwnership
 
 
@@ -1013,3 +1015,142 @@ def test_no_handback_when_the_sweep_never_took_the_body():
     with mock.patch("hal.drivers.tracking.body.release_to_idle_later") as later:
         _run(disabled=True)
     later.assert_not_called()
+
+
+_NEAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.05
+
+
+def _user_run(tracks_at_look, target="person"):
+    """tracks_at_look: {1-based look number: [FaceTrack, ...]}; other looks see no face.
+
+    A body is in view at every look, so only the user check can end the sweep.
+    """
+    looks = {"n": 0}
+
+    def fake_observe(grab, *a, **kw):
+        looks["n"] += 1
+        return tracks_at_look.get(looks["n"], [])
+
+    centred = []
+
+    def fake_centre(svc, cap, probe):
+        centred.append(probe)
+        return CentreResult(True, "ok")
+
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    svc = _FakeSvc()
+    det = mock.Mock()
+    det.detect = mock.Mock(return_value=(300, 100, 40, 200))
+    with (
+        mock.patch.object(user_check, "observe_faces", side_effect=fake_observe) as obs,
+        mock.patch("hal.drivers.tracking.aim.centre_on_box", side_effect=fake_centre),
+        mock.patch.object(search, "_persist_hit", return_value=None),
+        mock.patch.object(state, "camera_capture", _FakeCap(frame)),
+        mock.patch.object(state, "animation_service", svc),
+        mock.patch.object(state, "safety_policy", None),
+        mock.patch.object(state, "_camera_disabled", False, create=True),
+        mock.patch.object(search.time, "sleep"),
+        mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
+    ):
+        res = search.search_for_subject(target=target, detector=det,
+                                        for_user=(target == "person"))
+    return res, obs, centred, svc
+
+
+def test_a_user_sweep_never_stops_on_a_body_alone():
+    """#545: bodies at every look, no qualifying face -> not found."""
+    res, _obs, centred, _svc = _user_run({})
+    assert not res.found
+    assert centred == [], "it centred on somebody who never passed the user check"
+
+
+def test_a_user_sweep_rejects_a_side_on_face():
+    side_on = FaceTrack((300, 100, 60, 60),
+                        FaceEvidence(_NEAR, facing_ratio=0.0, facing_samples=6))
+    res, _obs, centred, _svc = _user_run({1: [side_on]})
+    assert not res.found
+    assert centred == []
+
+
+def test_a_user_sweep_stops_on_a_face_that_passes():
+    facing = FaceTrack((300, 100, 60, 60),
+                       FaceEvidence(_NEAR, facing_ratio=1.0, facing_samples=6))
+    res, _obs, centred, _svc = _user_run({2: [facing]})
+    assert res.found and res.kind == "face"
+    assert len(centred) == 1
+
+
+def test_a_failed_user_sweep_returns_to_where_it_started():
+    res, _obs, _centred, svc = _user_run({})
+    assert not res.found
+    last = svc.holds[-1]
+    assert last.get("wrist_roll.pos") == pytest.approx(
+        _FakeSvc.IDLE_BASELINE["wrist_roll.pos"]
+    ), f"did not return to the starting pose: {last}"
+
+
+def test_an_object_search_never_runs_the_user_check():
+    _res, obs, _centred, _svc = _user_run({}, target="cup")
+    obs.assert_not_called()
+
+
+def test_the_default_sweep_still_stops_on_a_body():
+    """/servo/search and look-aim's own sweep keep today's behaviour."""
+    res, _svc = _run(detect_at_stop=1)
+    assert res.found and res.kind == "person"
+
+
+def _probe_on(faces, anchor):
+    frame = np.zeros((480, 640, 3), dtype=np.uint8)
+    with (
+        mock.patch("hal.drivers.tracking.frame_utils.downscale", lambda f: (f, 1.0)),
+        mock.patch("hal.drivers.tracking.detection.detect_faces_with_landmarks",
+                   return_value=[(b, ()) for b in faces]),
+    ):
+        return search._user_face_probe(anchor)(frame)
+
+
+def test_the_user_probe_keeps_the_face_it_was_given():
+    user, coworker = (300, 100, 60, 60), (40, 120, 90, 90)
+    assert _probe_on([coworker, user], anchor=(290, 110, 60, 60)) == user
+
+
+def test_the_user_probe_never_jumps_to_another_face():
+    far_away = (600, 400, 30, 30)
+    assert _probe_on([far_away], anchor=(40, 20, 60, 60)) is None
+
+
+def _look_pitches(svc):
+    """wrist_pitch of every look the sweep made (looks always carry wrist_roll)."""
+    return {round(h["wrist_pitch.pos"], 1) for h in svc.holds
+            if "wrist_roll.pos" in h and "wrist_pitch.pos" in h}
+
+
+_SEATED = _FakeSvc.IDLE_BASELINE["wrist_pitch.pos"]
+
+
+def test_the_user_sweep_looks_up_never_down():
+    """Faces are at or above seated height: a standing user was missed by the down looks."""
+    res, _obs, _centred, svc = _user_run({})
+    pitches = _look_pitches(svc)
+    assert round(_SEATED - search.PITCH_LOOK_DEG, 1) in pitches, f"never looked up: {pitches}"
+    assert round(_SEATED + search.PITCH_LOOK_DEG, 1) not in pitches, f"looked down: {pitches}"
+
+
+def test_the_user_sweep_keeps_six_looks_per_stop():
+    res, _obs, _centred, _svc = _user_run({})
+    assert res.looks_visited == 3 * search.HALF_LOOKS
+
+
+def test_the_other_sweeps_still_look_down_at_the_desk():
+    """/servo/search ("find my things") and look-aim's fallback sweep are unchanged."""
+    _res, svc = _run(bearing=None)
+    pitches = _look_pitches(svc)
+    assert round(_SEATED + search.PITCH_LOOK_DEG, 1) in pitches, f"never looked down: {pitches}"
+    assert round(_SEATED - search.PITCH_LOOK_DEG, 1) not in pitches, f"looked up: {pitches}"
+
+
+def test_the_up_pattern_is_the_down_pattern_mirrored():
+    assert search.USER_LOOK_CIRCLE == tuple(
+        (roll, -dp) for roll, dp in search.LOOK_CIRCLE[:search.HALF_LOOKS]
+    )
