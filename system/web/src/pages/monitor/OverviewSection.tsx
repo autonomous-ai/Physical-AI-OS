@@ -197,12 +197,12 @@ export function OverviewSection({
   }, [audio?.volume]);
 
   const animatedLinkRate = useCountUp(net?.linkRate ?? 0);
-  const animatedVolume = useCountUp(localVolume ?? audio?.volume ?? 0);
 
-  // SAFETY.md audio.max_volume ceiling; HAL enforces it.
+  // Present the robot's allowed volume range as 0–100%; HAL still receives raw mixer percentages.
   const volumeCeiling = audio?.max_volume ?? 100;
-  const volumeValue = Math.min(localVolume ?? audio?.volume ?? 50, volumeCeiling);
-  const volumeFillPct = volumeCeiling > 0 ? (volumeValue / volumeCeiling) * 100 : 0;
+  const rawVolume = Math.max(0, Math.min(localVolume ?? audio?.volume ?? 0, volumeCeiling));
+  const volumeValue = volumeCeiling > 0 ? Math.round((rawVolume / volumeCeiling) * 100) : 0;
+  const animatedVolume = useCountUp(volumeValue);
 
   const commitVolume = useCallback((vol: number) => {
     draggingVolume.current = false;
@@ -210,7 +210,7 @@ export function OverviewSection({
     fetch(`${HW}/audio/volume`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ volume: vol }),
+      body: JSON.stringify({ volume: Math.round((vol / 100) * volumeCeiling) }),
     })
       // Snap to what HAL actually applied.
       .then((r) => r.json())
@@ -218,7 +218,7 @@ export function OverviewSection({
         if (typeof r?.volume === "number") setLocalVolume(r.volume);
       })
       .catch(() => {});
-  }, []);
+  }, [volumeCeiling]);
 
   const monCard = { ...S.card, boxShadow: undefined };
 
@@ -382,35 +382,34 @@ export function OverviewSection({
                 <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 6 }}>
                   <span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--lm-text-dim)" }}>Volume</span>
                   <span style={{ display: "flex", alignItems: "baseline", gap: 8 }}>
-                    {audio?.max_volume != null && (
-                      <span
-                        style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)" }}
-                        title="Speaker ceiling from this robot's SAFETY.md (audio.max_volume). Enforced in HAL for every caller, not just this slider."
-                      >
-                        ceiling {audio.max_volume}%
-                      </span>
-                    )}
                     <span style={{ fontSize: 14, fontWeight: 700, color: "var(--lm-amber)", fontFamily: "monospace" }}>
-                      {dragging ? (localVolume ?? audio?.volume ?? "—") : animatedVolume}%
+                      {dragging ? volumeValue : animatedVolume}%
                     </span>
                   </span>
                 </div>
                 <input
                   type="range"
                   min={0}
-                  max={volumeCeiling}
+                  max={100}
+                  aria-label="Volume"
+                  disabled={volumeCeiling <= 0}
                   value={volumeValue}
                   onChange={(e) => {
                     draggingVolume.current = true;
                     setDragging(true);
-                    setLocalVolume(Number(e.target.value));
+                    setLocalVolume((Number(e.target.value) / 100) * volumeCeiling);
                   }}
                   onMouseUp={(e) => commitVolume(Number((e.target as HTMLInputElement).value))}
                   onTouchEnd={(e) => commitVolume(Number((e.target as HTMLInputElement).value))}
+                  onKeyUp={(e) => {
+                    if (["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown", "Home", "End", "PageUp", "PageDown"].includes(e.key)) {
+                      commitVolume(Number(e.currentTarget.value));
+                    }
+                  }}
                   className="lm-mon-range"
                   style={{
                     width: "100%", cursor: "pointer",
-                    ["--lm-fill" as string]: `${volumeFillPct}%`,
+                    ["--lm-fill" as string]: `${volumeValue}%`,
                   }}
                 />
               </div>
