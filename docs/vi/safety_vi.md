@@ -393,6 +393,8 @@ kiện đã thực thi; setup-incomplete và over-current servo còn dự trữ.
 
 ### Slice 5 — `audio.max_volume` (checklist)
 
+Profile Lamp `pro-respeaker-lite` đặt `max_volume` là 50% và giữ `startup_volume` ở 35%. Thang volume trên web quy đổi 100% thành giới hạn mixer 50% này.
+
 Trần âm lượng áp dụng cả ngày, độc lập với `audio.quiet_hours`: khung giờ chỉ chặn
 output *tuỳ ý* (nhạc), còn trần giới hạn *mọi thứ to tới đâu*, kể cả câu trả lời nói.
 

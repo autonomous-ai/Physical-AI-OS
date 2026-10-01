@@ -386,7 +386,7 @@ Gồm các card:
 **Voice & TTS**
 - Mic available + đang listening (badge LIVE)
 - TTS available + đang speaking (badge SPEAKING)
-- Volume hiện tại
+- Volume hiển thị và điều chỉnh theo thang chuẩn hóa 0–100%: 100% tương ứng giới hạn safety `max_volume` của robot (ví dụ volume mixer 50% trên `pro-respeaker-lite`). Khi đọc, chia volume mixer cho giới hạn; khi ghi, nhân với giới hạn và làm tròn thành số nguyên. UI dùng giá trị HAL thực sự áp dụng sau khi ghi và không hiển thị trần nội bộ. Nếu thiếu giới hạn, mặc định là 100; giới hạn bằng 0 thì hiển thị 0% và vô hiệu hóa slider. HAL tiếp tục áp dụng safety cho mọi caller.
 - **Thanh VU mic level** (ngay dưới slider volume), lấy từ SSE stream `GET
   /hw/voice/mic-level` (~10Hz, qua proxy `/api/hardware`); RMS thô được map
   sang phần trăm theo thang dBFS (-60dBFS → 0%, 0dBFS → 100%), mỗi bar có

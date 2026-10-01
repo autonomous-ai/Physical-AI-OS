@@ -66,7 +66,7 @@ class DeviceOverrideTests(unittest.TestCase):
                       "HAL_GEMINI_USE_LANGUAGE_CODES=true"):
             self.assertIn(value + "\n", env)
         self.assertIn("startup_volume: 35", (self.profile / "ROBOT.md").read_text())
-        self.assertIn("max_volume: 35", (self.profile / "SAFETY.md").read_text())
+        self.assertIn("max_volume: 50", (self.profile / "SAFETY.md").read_text())
         self.assertIn("max_speed: 120", (self.profile / "SAFETY.md").read_text())
         alsa = (self.profile / "rootfs/etc/asound.conf").read_text()
         self.assertEqual(alsa, (SOURCE / "overrides/pro-respeaker-lite/rootfs/etc/asound.conf").read_text())
