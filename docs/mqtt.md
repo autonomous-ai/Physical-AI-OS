@@ -375,6 +375,11 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `led.resting.get` | Read the owner's resting light choice, device default and look in effect via HAL `GET /led/resting` (synchronous) | _(none)_ |
 | `led.resting.set` | Save the resting light (`default`, `off` or `custom` colour) via HAL `PUT /led/resting`; survives reboots (synchronous) | `mode`, `color` for `custom` |
 | `led.resting.preview` | Paint a candidate colour without saving via HAL `POST /led/resting/preview`; reverts 10 s after the last preview; acks failures only | `color` |
+| `volume.get` | Read the speaker volume as 0-100% of the allowed range (synchronous) | _(none)_ |
+| `volume.set` | Set the speaker volume, 0-100% of the allowed range, via HAL `POST /audio/volume` (synchronous) | `volume` |
+| `mic.get` | Read the mic mute state and the hardware mic switch (synchronous) | _(none)_ |
+| `mic.set` | Mute or unmute the mic via HAL `POST /voice/mute` / `/voice/unmute`; the hardware switch wins (synchronous) | `muted` |
+| `realtime.get` | Read the realtime settings (key only as `has_api_key`) and the valid provider/voice/reasoning options (synchronous) | _(none)_ |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
 | `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
@@ -1215,6 +1220,94 @@ hundred milliseconds of lag.
 Devices without the `light` capability reply `failure` with
 `this device has no light`. Invalid input fails before HAL is called.
 
+#### `volume.*` / `mic.*` — Speaker volume and mic over MQTT
+
+The phone twin of the web Overview **Audio** card. Both need the `audio`
+capability (`this device has no audio` otherwise) and reply synchronously.
+
+| App action | HAL call | MQTT kind |
+|------------|----------|-----------|
+| Show the volume | `GET /audio/volume` | `volume.get` |
+| Release the volume slider | `POST /audio/volume` | `volume.set` |
+| Show the mic | `GET /voice/status` | `mic.get` |
+| Mute / Unmute button | `POST /voice/mute` / `/voice/unmute` | `mic.set` |
+
+```json
+{"cmd": "data", "kind": "volume.set", "data": {"volume": 90}}
+{"cmd": "data", "kind": "mic.set", "data": {"muted": false}}
+```
+
+**Volume** uses the slider's scale, like the web: `volume` is 0-100% of the
+allowed range, where 100% is the SAFETY.md `audio.max_volume` ceiling (or the
+mixer's 100% when the device declares none). os-server maps it onto raw mixer
+percent (`raw = round(volume × max_volume / 100)`); HAL clamps and persists it.
+`volume.get` and `volume.set` reply with:
+
+```json
+{"volume": 90, "raw": 72, "max_volume": 80}
+```
+
+Show `volume`; `raw` and `max_volume` are informational. Send `volume.set` when
+the user releases the slider, as the web does. If the app also wants the
+speaker to follow during the drag, throttle to about one per 200 ms and always
+send the final value. Each call writes the mixer and replies.
+
+**Mic**: `muted` is required (`true` mutes, `false` unmutes). `mic.get` and a
+successful `mic.set` reply with:
+
+```json
+{"muted": true, "hw_switch_muted": true, "available": true}
+```
+
+`hw_switch_muted` is the physical mic switch, `null` on devices without one.
+While it is `true` the mic cannot be unmuted: `mic.set` with `muted: false`
+fails with `Hardware mic switch is off — flip the physical switch to unmute`.
+Disable the Unmute button and show that line. `available` is false when the
+voice pipeline is down. Muting also lights the mic-muted LED, and the choice
+survives HAL restarts.
+
+#### `realtime.get` / `realtime.set` — Realtime voice settings over MQTT
+
+The phone twin of the web **Settings → Realtime** page (debug-only on the web).
+
+```json
+{"cmd": "data", "kind": "realtime.get"}
+```
+
+`realtime.get` replies `success` synchronously with the saved settings and the
+choices to offer:
+
+```json
+{
+  "config": {"enabled": true, "provider": "gemini", "model": "…", "voice": "Kore",
+             "reasoning": "LOW", "base_url": "", "has_api_key": false},
+  "options": {"providers": ["gemini", "openai", "gptlive", "pipecat_v1", "none"],
+              "voices": {"gemini": ["…"], "openai": ["…"], "gptlive": ["…"], "pipecat_v1": []},
+              "reasoning": {"gemini": ["MINIMAL", "LOW", "MEDIUM", "HIGH"], "openai": ["…"], "gptlive": [], "pipecat_v1": []}}
+}
+```
+
+The key is never returned; `has_api_key` says whether an override is stored.
+`base_url` is only the explicit override (empty means derived from the AI brain).
+`web_search` appears only for `pipecat_v1`. An empty voice or reasoning list
+means that provider has no such knob, so hide the selector.
+
+`realtime.set` saves any subset of `enabled`, `provider`, `model`, `voice`,
+`reasoning`, `api_key`, `base_url` and `web_search` (pipecat_v1 only). Omitted
+fields stay unchanged. It acks `starting`, validates against the same option
+lists, saves `config.json`, restarts HAL, then acks `success` or `failure`:
+
+```json
+{"cmd": "data", "kind": "realtime.set", "data": {"enabled": true, "provider": "gemini", "voice": "Kore", "reasoning": "LOW"}}
+```
+
+Model, voice and reasoning are stored per provider and apply to the provider
+being set (or the current one). A switch without them keeps that provider's
+saved choices; a voice or reasoning not in that provider's list is rejected.
+An empty string leaves a field unchanged, so a stored `api_key` or `base_url`
+cannot be cleared over MQTT. The ack echoes the request without `api_key`. Expect HAL to be unavailable for a few seconds after
+`success` while it restarts.
+
 #### `chat.send` + `chat.event`
 
 Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
@@ -1556,6 +1649,7 @@ There is no `ota` case in the os-server MQTT router: the message is logged as `u
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (validate, then async `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, `unknown` bucket dropped) and `face.remove` (async → HAL `POST /face/remove`) |
 | `system/server/device/delivery/mqtt/led_resting_handler.go` | Handle `led.resting.get`, `led.resting.set` and `led.resting.preview` (HAL `/led/resting`, capability `light`) |
+| `system/server/device/delivery/mqtt/audio_handler.go` | Handle `volume.get`, `volume.set` (0-100% of the SAFETY.md range → HAL `/audio/volume`), `mic.get` and `mic.set` (HAL `/voice/status`, `/voice/mute`, `/voice/unmute`; 409 → hardware-switch message) |
 | `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (async → HAL `POST /speaker/record-enroll`, lamp mic, 15s), `voice.owners`, `voice.file.get`, `voice.file.remove` (via `system/lib/voicefile`) and `voice.remove` (async → HAL `POST /speaker/remove`) |
 | `system/lib/voicefile/voicefile.go` | List, read and delete voice samples under `users/<label>/voice/`; shared by `POST /api/voice/file/remove` and the `voice.*` kinds |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (read one installed skill's files: list, or one file's contents) |

@@ -78,17 +78,22 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		HasNetworkPassword:       s.config.NetworkPassword != "",
 		HasMQTTPassword:          s.config.MQTTPassword != "",
 		HasAdminPassword:         s.config.AdminPasswordHash != "",
-		Realtime: domain.RealtimePublic{
-			Enabled:   s.config.RealtimeEnabled(),
-			Provider:  s.config.RealtimeProvider(),
-			Model:     s.config.RealtimeModel(),
-			Voice:     s.config.RealtimeVoice(),
-			Reasoning: s.config.RealtimeReasoning(),
-			// Only the explicit override: re-persisting a derived URL breaks /ws/gemini.
-			BaseURL:   s.config.RealtimeBaseURLOverride(),
-			HasAPIKey: s.config.RealtimeHasAPIKey(),
-			WebSearch: s.config.RealtimeWebSearch(),
-		},
+		Realtime:                 s.RealtimePublic(),
+	}
+}
+
+// RealtimePublic is the realtime config for read-back (web and MQTT); the key appears only as HasAPIKey.
+func (s *Service) RealtimePublic() domain.RealtimePublic {
+	return domain.RealtimePublic{
+		Enabled:   s.config.RealtimeEnabled(),
+		Provider:  s.config.RealtimeProvider(),
+		Model:     s.config.RealtimeModel(),
+		Voice:     s.config.RealtimeVoice(),
+		Reasoning: s.config.RealtimeReasoning(),
+		// Only the explicit override: re-persisting a derived URL breaks /ws/gemini.
+		BaseURL:   s.config.RealtimeBaseURLOverride(),
+		HasAPIKey: s.config.RealtimeHasAPIKey(),
+		WebSearch: s.config.RealtimeWebSearch(),
 	}
 }
 

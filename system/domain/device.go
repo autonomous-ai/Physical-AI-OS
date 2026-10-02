@@ -337,6 +337,8 @@ const (
 	KindOAuthSet     = "oauth.set"
 	KindOAuthRemove  = "oauth.remove"
 	KindRealtimeSet  = "realtime.set"
+	// KindRealtimeGet reads the realtime settings and the valid provider/voice/reasoning options.
+	KindRealtimeGet  = "realtime.get"
 	KindWakeWordGate = "wakeword.gate"
 	KindTimezoneSet  = "timezone.set"
 	// KindDeviceSoftReset wipes config.json and restarts os-server into AP setup mode (no reboot).
@@ -449,6 +451,18 @@ const (
 
 	// KindLEDRestingPreview shows a candidate colour without saving it via HAL POST /led/resting/preview.
 	KindLEDRestingPreview = "led.resting.preview"
+
+	// KindVolumeGet reads the speaker volume as a share of the device's allowed range.
+	KindVolumeGet = "volume.get"
+
+	// KindVolumeSet sets the speaker volume (0-100% of the allowed range) via HAL POST /audio/volume.
+	KindVolumeSet = "volume.set"
+
+	// KindMicGet reads the mic mute state and the hardware mic switch.
+	KindMicGet = "mic.get"
+
+	// KindMicSet mutes or unmutes the mic via HAL POST /voice/mute | /voice/unmute.
+	KindMicSet = "mic.set"
 )
 
 // Connector (MCP) data-kind prefixes; the connector code is the suffix (e.g. "connector.set.notion").
@@ -1058,6 +1072,39 @@ type MQTTVoiceFileData struct {
 type MQTTLEDRestingData struct {
 	Mode  string `json:"mode"`
 	Color []int  `json:"color"`
+}
+
+// MQTTVolumeData is the Data payload for kind:"volume.set".
+type MQTTVolumeData struct {
+	// Volume is 0-100% of the allowed range, like the web slider; nil is rejected.
+	Volume *int `json:"volume"`
+}
+
+// MQTTVolumeState is the success data for kind:"volume.get" and kind:"volume.set".
+type MQTTVolumeState struct {
+	Volume    int `json:"volume"`     // 0-100% of the allowed range (what the slider shows)
+	Raw       int `json:"raw"`        // mixer percentage HAL applied
+	MaxVolume int `json:"max_volume"` // SAFETY.md ceiling; 100 when none is declared
+}
+
+// MQTTMicData is the Data payload for kind:"mic.set"; Muted is a pointer so omission is rejected.
+type MQTTMicData struct {
+	Muted *bool `json:"muted"`
+}
+
+// MQTTMicState is the success data for kind:"mic.get" and kind:"mic.set".
+type MQTTMicState struct {
+	Muted bool `json:"muted"`
+	// HWSwitchMuted is the physical mic switch; true blocks unmuting. Null on devices without one.
+	HWSwitchMuted *bool `json:"hw_switch_muted"`
+	// Available is false when the voice pipeline is down (no mic, or HAL still starting).
+	Available bool `json:"available"`
+}
+
+// MQTTRealtimeGetData is the success data for kind:"realtime.get".
+type MQTTRealtimeGetData struct {
+	Config  RealtimePublic         `json:"config"`
+	Options config.RealtimeOptions `json:"options"`
 }
 
 // MQTTVoiceFileContent is the success data for kind:"voice.file.get".
