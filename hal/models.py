@@ -167,6 +167,20 @@ class StatusResponse(BaseModel):
     status: str
 
 
+class LEDRestingRequest(BaseModel):
+    """Owner's resting LED look: device default, off, or a custom solid colour."""
+
+    mode: Literal["default", "off", "custom"]
+    color: Optional[list[int]] = Field(None, description="[R, G, B] 0-255; required for custom.")
+
+
+class LEDRestingResponse(BaseModel):
+    mode: str
+    color: Optional[list[int]]  # the custom colour, or null
+    default: dict  # device preset from presets.json (effect, color, optional speed)
+    effective: dict  # look the strip settles on while resting
+
+
 class ServoPlayResponse(BaseModel):
     """"ok" only when the recording started; else "ignored" plus the reason."""
 

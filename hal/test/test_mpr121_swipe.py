@@ -9,8 +9,8 @@ from hal.drivers.mpr121 import MPR121Handler, _GestureEvent, _SpatialGestureReco
 ACTIONS = {"single", "cue", "triple", "hold", "swipe"}
 
 
-def replay(samples, axis=tuple(range(12)), debounce_ms=30):
-    detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=axis, debounce_ms=debounce_ms, poll_ms=1))
+def replay(samples, axis=tuple(range(12)), debounce_ms=30, tap_min_electrodes=1, button_factory=None):
+    detector = _SpatialGestureRecognizer(MPR121Config(bus=0, swipe_axis=axis, debounce_ms=debounce_ms, poll_ms=1, tap_min_electrodes=tap_min_electrodes), button_factory)
     detector.update(0, -1)
     events = []
     index = 0
@@ -26,6 +26,41 @@ def replay(samples, axis=tuple(range(12)), debounce_ms=30):
 
 def kinds(events):
     return [e.kind for e in events if e.kind in ACTIONS]
+
+
+class TestTapFootprint(unittest.TestCase):
+    def test_small_contacts_never_produce_taps_or_burst_cues(self):
+        for axis in (tuple(range(12)), None):
+            for mask in (0x004, 0x006):
+                samples = [(1, mask), (1.10, 0), (1.25, mask), (1.35, 0), (1.5, mask), (1.6, 0)]
+                self.assertEqual(kinds(replay(samples, axis=axis, tap_min_electrodes=3)), [])
+
+    def test_three_pad_tap_qualifies_even_when_release_is_staggered(self):
+        for axis in (tuple(range(12)), None):
+            events = replay([(1, 7), (1.08, 3), (1.10, 1), (1.12, 0)], axis=axis, tap_min_electrodes=3)
+            self.assertEqual(kinds(events), ["single", "cue"])
+
+    def test_short_third_pad_spike_does_not_qualify(self):
+        self.assertEqual(kinds(replay([(1, 3), (1.05, 7), (1.06, 3), (1.12, 0)], tap_min_electrodes=3)), [])
+
+    def test_qualification_does_not_leak_to_next_contact(self):
+        events = replay([(1, 7), (1.1, 0), (2, 1), (2.1, 0)], tap_min_electrodes=3)
+        self.assertEqual(kinds(events), ["single", "cue"])
+
+    def test_single_pad_travel_still_swipes(self):
+        samples = [(1 + i * .04, 1 << i) for i in range(8)] + [(1.4, 0)]
+        self.assertEqual(kinds(replay(samples, tap_min_electrodes=3)), ["swipe"])
+
+    def test_single_pad_hold_keeps_its_existing_behavior(self):
+        self.assertEqual(kinds(replay([(1, 1), (3.1, 0)], tap_min_electrodes=3)), ["hold"])
+
+    def test_harness_taps_filter_without_disabling_exit_hold(self):
+        from hal.drivers.harness.gestures import harness_button_recognizer
+        for mask, expected in ((1, []), (3, []), (7, ["single"])):
+            events = replay([(1, mask), (1.1, 0)], tap_min_electrodes=3, button_factory=harness_button_recognizer)
+            self.assertEqual(kinds(events), expected)
+        events = replay([(1, 1), (3.2, 0)], tap_min_electrodes=3, button_factory=harness_button_recognizer)
+        self.assertEqual(kinds(events), ["hold"])
 
 
 class TestSpatialGestures(unittest.TestCase):

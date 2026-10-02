@@ -141,7 +141,7 @@ export interface DisplayEvent extends MonitorEvent {
   _seq: number;
 }
 
-export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "pairing" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:scheduled" | "settings:facebook";
+export type Section = "overview" | "system" | "flow" | "camera" | "servo" | "face-owners" | "analytics" | "logs" | "chat" | "pairing" | "cli" | "sensing" | "bluetooth" | "api-docs" | "agent-config" | "settings:device" | "settings:wifi" | "settings:llm" | "settings:runtime" | "settings:voice" | "settings:face" | "settings:tts" | "settings:realtime" | "settings:stt" | "settings:channel" | "settings:mqtt" | "settings:mcp" | "settings:plugins" | "settings:timezone" | "settings:led" | "settings:scheduled" | "settings:facebook";
 
 export type Area = "monitor" | "setting";
 
@@ -171,6 +171,7 @@ const SHORT_TO_SETTING: Record<string, Section> = {
   mcp: "settings:mcp",
   plugins: "settings:plugins",
   timezone: "settings:timezone",
+  led: "settings:led",
   scheduled: "settings:scheduled",
   facebook: "settings:facebook",
 };
@@ -201,6 +202,7 @@ export const Cap = {
   Environment: "environment",
   Connectivity: "connectivity",
   Expression: "expression",
+  Light: "light",
 } as const;
 
 export type NavLeaf = { id: Section; label: string; icon: string; cap?: string | readonly string[] };
@@ -245,6 +247,7 @@ export const NAV: NavEntry[] = [
       { id: "settings:mcp",      label: "MCP Tools", icon: "⬡" },
       { id: "settings:plugins",  label: "Plugins",   icon: "⧉" },
       { id: "settings:timezone", label: "Timezone",  icon: "◷" },
+      { id: "settings:led",      label: "Resting light", icon: "☀", cap: Cap.Light },
       { id: "settings:scheduled", label: "Scheduled", icon: "⏰" },
       // Third-party integrations grouped under a collapsible header inside
       // Settings, mirroring the Connectors menu on autonomous.ai admin. Leaf

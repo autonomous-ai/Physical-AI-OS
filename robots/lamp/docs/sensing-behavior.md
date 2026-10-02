@@ -851,7 +851,7 @@ The whole suite is opt-in per device: the routeless `lifelike` capability (decla
 
 | Loop | Capability | Cadence | What it does |
 |------|-----------|---------|--------------|
-| Resting LED | `light` | tick 2s; once per resume | Requests `/led/restore`; HAL restores the saved user preference or device `ambient_led.resting`. Lamp defaults to steady [5,4,3]; explicit off stays dark. |
+| Resting LED | `light` | tick 2s; once per resume | Requests `/led/restore`; HAL restores the saved user preference or device `ambient_led.resting`. Lamp defaults to steady [1,1,1]; explicit off stays dark. |
 | Micro-movements | `motion` | random 45–120 s | Plays one safe servo recording from `idle`, `curious`, `nod`. Servo only — never touches the LED. |
 | Mumble (self-talk) | `audio` | random 5–15 min | Picks from six shared `PhraseMumble` entries per language (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): short vocalizations mixed with playful self-talk, such as “No need to rush.” and “I like little moments like this.” One entry uses `[chuckle]`; none uses sigh or whisper tags. Uses `hal.SpeakCached` — the first render of each phrase hits the TTS provider, replays come from HAL's WAV cache, so idle mumbling costs no API calls. |
 

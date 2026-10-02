@@ -61,4 +61,7 @@ def boot_config():
     device_dir = os.path.join(_devices_dir(), _resolve_device_type())
     safety = load_safety(device_dir, profile.safety_ref)
     led_count = apply_device_presets(_resolve_device_type(), _devices_dir())
+    # The owner's resting LED choice layers over the device preset just applied.
+    from hal import resting_led
+    resting_led.init()
     return SimpleNamespace(profile=profile, board=board, safety=safety, led_count=led_count)

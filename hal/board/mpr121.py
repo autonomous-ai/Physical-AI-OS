@@ -25,6 +25,7 @@ class MPR121Config:
     sfi: int = 10
     esi_ms: int = 1
     swipe_axis: tuple[int, ...] | None = None
+    tap_min_electrodes: int = 1
 
     def __post_init__(self):
         for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms"):
@@ -50,6 +51,9 @@ class MPR121Config:
         if len(set(self.electrodes)) != len(self.electrodes):
             raise ValueError("electrodes must not contain duplicates")
         object.__setattr__(self, "electrodes", tuple(self.electrodes))
+        if (type(self.tap_min_electrodes) is not int
+                or not 1 <= self.tap_min_electrodes <= len(self.electrodes)):
+            raise ValueError("tap_min_electrodes must be 1..number of selected electrodes")
         if self.swipe_axis is not None:
             axis = self.swipe_axis
             if (not isinstance(axis, (list, tuple)) or not 2 <= len(axis) <= 12

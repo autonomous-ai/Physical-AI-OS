@@ -23,12 +23,14 @@ class TestMPR121Config(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / "robots"
         config = load_mpr121_config(root / "lamp", "orangepi_sun60")
         self.assertIsInstance(config, MPR121Config)
+        self.assertEqual(config.tap_min_electrodes, 3)
         self.assertIsNone(load_mpr121_config(root / "intern-v2", "orangepi_sun60"))
         self.assertIsNone(load_mpr121_config(root / "lamp", "raspberry_pi_5"))
 
     def test_defaults_match_supplied_script(self):
         config = MPR121Config(bus=5)
         self.assertEqual(config.address, 0x5A)
+        self.assertEqual(config.tap_min_electrodes, 1)
         self.assertEqual((config.touch_threshold, config.release_threshold), (2, 1))
         self.assertEqual(config.electrodes, tuple(range(12)))
 
@@ -52,6 +54,9 @@ class TestMPR121Config(unittest.TestCase):
             {"electrodes": [True]}, {"touch_threshold": 256},
             {"release_threshold": 2}, {"autoconfig": "true"},
             {"poll_ms": 0}, {"debounce_ms": -1},
+            {"tap_min_electrodes": 0}, {"tap_min_electrodes": True},
+            {"tap_min_electrodes": 13}, {"tap_min_electrodes": 1.5},
+            {"electrodes": [0, 1], "tap_min_electrodes": 3},
             {"ffi": 7}, {"sfi": 8}, {"esi_ms": 3}, {"ffi": True},
         ):
             with self.subTest(overrides=overrides), self.assertRaises(ValueError):

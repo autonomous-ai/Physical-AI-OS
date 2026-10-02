@@ -69,14 +69,14 @@ class TestApplyDevicePresets(unittest.TestCase):
     def test_device_resting_presets_update_existing_reference(self):
         reference = presets.AMBIENT_RESTING_LED
         root = os.path.join(os.path.dirname(__file__), "..", "..", "robots")
-        apply_device_presets("lamp", root)
-        self.assertIs(reference, presets.AMBIENT_RESTING_LED)
-        self.assertEqual(reference["effect"], "solid")
-        self.assertEqual(reference["color"], [5, 4, 3])
-        self.assertFalse(presets.ambient_resting_is_dark())
-        apply_device_presets("intern-v2", root)
-        self.assertEqual(reference["color"], [0, 0, 0])
-        self.assertTrue(presets.ambient_resting_is_dark())
+        for device_type in ("lamp", "intern-v2"):
+            with self.subTest(device_type=device_type):
+                with open(os.path.join(root, device_type, "presets.json"), encoding="utf-8") as f:
+                    expected = json.load(f)["ambient_led"]["resting"]
+                apply_device_presets(device_type, root)
+                self.assertIs(reference, presets.AMBIENT_RESTING_LED)
+                self.assertEqual(reference, expected)
+                self.assertEqual(presets.ambient_resting_is_dark(), not any(expected["color"]))
 
     def test_no_file_keeps_base_and_default_count(self):
         with tempfile.TemporaryDirectory() as tmp:

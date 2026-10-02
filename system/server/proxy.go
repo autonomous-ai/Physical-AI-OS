@@ -32,6 +32,10 @@ var openapiProxy = func() http.Handler {
 // /api/hardware/* → HAL).
 func (s *Server) ambientLEDGate() gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// A new resting look clears HAL's saved colour, so ambient restore resumes.
+		if s.ambientService != nil && c.Request.Method == http.MethodPut && c.Param("path") == "/led/resting" {
+			s.ambientService.UnlockLED()
+		}
 		if s.ambientService != nil && c.Request.Method == http.MethodPost {
 			switch c.Param("path") {
 			case "/led/solid", "/led/effect", "/scene":

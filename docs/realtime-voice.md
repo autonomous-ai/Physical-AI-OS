@@ -1250,7 +1250,28 @@ capture loop's `last_upload_ms` measures enqueue time, not a successful wire sen
 The model is told (`resources/system_prompt*.md`, "Expression Exception") to
 never wait for, announce, or speak the emotion aloud. Note this is distinct from
 the non-realtime path, where the agent emits a `[HW:/emotion:…]` text marker that
-the Go layer parses and strips — the realtime path never uses text markers.
+the Go layer parses and strips.
+
+For Gemini 3.8 with external TTS and the device's `expression` capability,
+HAL now replaces `express_emotion` with the inline protocol in
+`hal/realtime/resources/emotion_markers.md`. The model puts
+`[HW:/emotion:{"emotion":"happy","intensity":0.8}]` before the accompanying
+words. The orchestrator consumes it incrementally, starts the local expression
+without waiting for the full reply, and removes it before yielding text to TTS,
+turn history, or UI consumers. No emotion tool response is sent to Gemini.
+The parser buffers split brackets, drops incomplete/oversized markers, validates
+emotion and finite intensity (0–1), ignores other hardware commands, and deduplicates
+identical emotion/intensity pairs within a turn. Other complete delivery tags
+remain available to ElevenLabs. Expression is optional; prompt compliance and
+physical timing still require device validation.
+
+Native Gemini audio (including Gemini TTS voice selection), other realtime
+providers, and Gemini models outside 3.8 retain the emotion tool. A change
+between native and external speech modes rebuilds the Gemini session before
+the next turn even when its voice name is unchanged. This avoids applying a
+text-only control protocol to unfiltered native audio. The marker experiment
+has been exercised on Mac; it does not establish that native Gemini audio
+will never pronounce control markers.
 
 ## Google Search grounding (Gemini only)
 

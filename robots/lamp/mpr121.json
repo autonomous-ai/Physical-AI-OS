@@ -23,6 +23,7 @@
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
       "esi_ms": 1,

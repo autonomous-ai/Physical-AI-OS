@@ -290,6 +290,7 @@ does not modify boot overlays automatically:
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
       "esi_ms": 1
@@ -300,12 +301,32 @@ does not modify boot overlays automatically:
 
 `bus` is required for an enabled entry. Lamp explicitly sets touch/release
 thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
-`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis` and `ffi` are defaults;
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi` and `tap_min_electrodes` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
 debounce accepts 0–1000 ms. Tune thresholds against the installed electrodes
 and motor noise. Configuration is loaded at boot; restart HAL after changes.
+
+Lamp sets `tap_min_electrodes: 3`: a contact must contain at least three selected
+pads active simultaneously, after the per-pad filter, continuously for
+`debounce_ms` (30 ms) to qualify as a tap. Qualification is retained until full
+release, so staggered finger lift still produces one tap. One/two-pad contacts
+and brief third-pad spikes produce no single-tap action or multi-tap cue/count.
+The count uses active selected pads, not the newly touched delta in the log and
+not the union of pads visited. Once resolved as a swipe, the existing travel
+rules still apply even when only one pad is active at a time. Hold detection,
+including Harness's two-second exit hold, is unchanged. This filter also applies
+to Harness capture taps and declarations without a swipe axis.
+
+The generic default is 1 (legacy behavior); valid values are integers from 1 to
+the number of selected electrodes. Small real fingertip taps covering fewer
+than three pads will also be ignored. This is a gesture filter, not a fix for
+sensor noise. Startup logs the configured threshold; rejected short contacts log
+`event=tap_discarded reason=insufficient_electrodes`.
+
+Deploy HAL with this field support **before** the updated device declaration;
+older HAL rejects the new key as invalid configuration. Restart HAL to load it.
 
 The driver sets the falling baseline filter (`0x2F`–`0x32`) to
 `MHDF=1, NHDF=1, NCLF=255, FDLF=2`, following the
