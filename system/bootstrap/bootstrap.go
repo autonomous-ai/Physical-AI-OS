@@ -82,6 +82,9 @@ var forceTargetAllowed = map[string]bool{
 	domain.OTAKeyDevice: true,
 	domain.OTAKeyCodex:  true, domain.OTAKeyClaudeCode: true, domain.OTAKeyOpenCode: true, domain.OTAKeyPicoClaw: true,
 	domain.OTAKeyHermes: true,
+	// Must match os-server's ota.allowedTargets: the Agent update button on an
+	// OpenClaw device arrives here as "openclaw".
+	domain.OTAKeyOpenClaw: true,
 }
 
 // Bootstrap is the simplified OTA worker.

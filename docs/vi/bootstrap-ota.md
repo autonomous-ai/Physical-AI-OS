@@ -680,9 +680,13 @@ Hai việc khác nhau, và lẫn lộn chúng chính là thứ làm nút web tr�
 | `force-check/<key>` | Chạy lại quyết định TỰ ĐỘNG cho component đó | **tôn trọng** — component đã bằng/cao hơn sàn thì không làm gì |
 
 Nút `update` trong card Versions là `force-update` (qua
-`POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target,
-bao gồm `bootstrap` và `device`; Bootstrap tách installer nền để worker thay thế restart an
-toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
+`POST /api/system/software-update/:target`). Cả hai dùng chung allowlist target —
+`os-server`, `bootstrap`, `web`, `hal`, `device`, `openclaw`, `codex`, `claudecode`,
+`opencode`, `picoclaw`, `hermes` — được giữ ở hai nơi và phải khớp nhau:
+`ota.allowedTargets` của os-server và `forceTargetAllowed` của bootstrap. Alias `agent`
+được đổi sang runtime đang cấu hình trước, nên trên thiết bị OpenClaw nút của dòng
+Agent đến nơi dưới dạng `openclaw`. Bootstrap tách installer nền để worker thay thế
+restart an toàn. `componentInstalled` vẫn từ chối component thiết bị không có.
 
 ### `GET /versions` (bootstrap, loopback)
 

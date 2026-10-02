@@ -64,3 +64,35 @@ func TestSoftwareUpdateCompletion(t *testing.T) {
 		t.Fatalf("missing entry must fail, got %q", status)
 	}
 }
+
+func TestSoftwareUpdateAlertTitles(t *testing.T) {
+	tests := []struct{ stage, requested, resolved, want string }{
+		{"started", "agent", "openclaw", "⬆️ Software update agent (openclaw) — started"},
+		{"success", "agent", "openclaw", "✅ Software update agent (openclaw) — done"},
+		{"failure", "hal", "hal", "❌ Software update hal — failed"},
+		{"rejected", "agent", "openclaw", "❌ Software update agent (openclaw) — rejected"},
+		{"rejected", "nope", "", "❌ Software update nope — rejected"},
+	}
+	for _, tt := range tests {
+		if got, _ := softwareUpdateAlert(tt.stage, tt.requested, tt.resolved, ""); got != tt.want {
+			t.Errorf("softwareUpdateAlert(%q, %q, %q) title = %q, want %q", tt.stage, tt.requested, tt.resolved, got, tt.want)
+		}
+	}
+}
+
+func TestSoftwareUpdateAlertDetails(t *testing.T) {
+	versions := map[string]any{"openclaw": map[string]any{"current": "2026.6.10", "target": "2026.9.3"}}
+	if got := softwareUpdateStartDetail(versions, "openclaw"); got != "2026.6.10 → 2026.9.3" {
+		t.Errorf("start detail = %q", got)
+	}
+	if got := softwareUpdateStartDetail(nil, "openclaw"); got != "" {
+		t.Errorf("start detail without a version report = %q, want empty", got)
+	}
+	took := 4*time.Minute + 6*time.Second + 400*time.Millisecond
+	if got := softwareUpdateDoneDetail("success", "", map[string]any{"current": "2026.9.3"}, took); got != "now 2026.9.3 · took 4m6s" {
+		t.Errorf("success detail = %q", got)
+	}
+	if got := softwareUpdateDoneDetail("failure", "update did not finish: timeout", nil, took); got != "update did not finish: timeout · after 4m6s" {
+		t.Errorf("failure detail = %q", got)
+	}
+}

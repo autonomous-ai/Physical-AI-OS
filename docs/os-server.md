@@ -399,6 +399,7 @@ action outcome below.
 | Device soft reset | `device.soft_reset` |
 | Claude Code login / WhatsApp pair | terminal pairing outcome (paired / failure / timeout) |
 | Default model swap | model sync — only when the version-gated primary/image model actually changes |
+| Software update (remote) | MQTT `system.software_update` — started (with `<current> → <published>`), done (installed version + duration), failed or rejected (reason) |
 
 Runtime switches are exclusive. While a backend install or switch is running,
 another `POST /api/device/agent-runtime` receives `409 Conflict` rather than

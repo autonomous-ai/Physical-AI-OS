@@ -702,8 +702,12 @@ Two different acts, and mixing them up is what made the web button look broken:
 
 The web Versions card's `update` button is `force-update` (via
 `POST /api/system/software-update/:target`). Both are limited to the same target
-allowlist, including `bootstrap` and `device`; a Bootstrap update detaches its installer so
-the replacement worker can restart safely. `componentInstalled` still refuses a
+allowlist — `os-server`, `bootstrap`, `web`, `hal`, `device`, `openclaw`, `codex`,
+`claudecode`, `opencode`, `picoclaw`, `hermes` — kept in two places that must match:
+os-server's `ota.allowedTargets` and bootstrap's `forceTargetAllowed`. The `agent`
+alias resolves to the configured runtime first, so on an OpenClaw device the Agent
+row's button arrives as `openclaw`. A Bootstrap update detaches its installer so the
+replacement worker can restart safely. `componentInstalled` still refuses a
 component this device does not have.
 
 ### `GET /versions` (bootstrap, loopback)
