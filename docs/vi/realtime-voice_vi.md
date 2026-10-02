@@ -1182,12 +1182,24 @@ thay thế sẽ bắt đầu activity kế tiếp một cách sạch sẽ.
 
 Một handoff `delegate_to_main` hợp lệ cũng đánh dấu session cần thay mới
 **trước khi** phát sự kiện tool, kể cả khi Gemini chưa nói câu nào.
-Ack `delegated` thành công xoá pending call nhưng không xoá yêu cầu thay
-session. `prepare_turn()` kế tiếp rebuild trước khi gửi audio thu mới.
+Khi được gửi, ACK `delegated` thành công xoá pending call nhưng không xoá
+yêu cầu thay session. `prepare_turn()` kế tiếp rebuild trước khi gửi audio thu mới.
 Cách này ngăn lời nói đến muộn sau handoff (kể cả câu xin lỗi hệ thống do
 provider sinh) lọt sang phiên live tiếp theo với turn ID rỗng. Message
 delegate rỗng/không hợp lệ không bật cờ này. Rebuild tốn thêm thời gian kết
 nối sau handoff; đây không phải bộ lọc câu lỗi hay sửa lỗi thực thi tool upstream.
+
+Với handoff Gemini hợp lệ ở **LIVE OFF**, khi không có capture live hoạt động
+và provider đã yêu cầu session mới, đồng thời session resumption bị tắt, HAL
+không gửi tool response `delegated`
+(`trigger_response=False`). Handoff vẫn tới main ngay; chính sách thay session
+hiện có rebuild trước capture tiếp theo và loại session cũ nếu kết nối thay
+thế thất bại. Cách này tránh yêu cầu session đã bỏ tiếp tục sinh lời đáp,
+không thêm chính sách recycle mới. LIVE mode, lỗi delegate rỗng và ACK của
+reject, emotion, look không đổi. Session bật resumption vẫn giữ ACK để reconnect
+không resume một handoff chưa được trả kết quả. Inference đã bắt đầu trước handoff (ví dụ
+sau một emotion response trước đó) vẫn có thể phát sinh usage; tối ưu này
+không bảo đảm không còn token bổ sung.
 
 Khi receive timeout, `[realtime][transport]` ghi trạng thái kết nối/luồng gửi,
 số input đang chờ, tuổi lần gửi audio thành công cuối, số tool pending và số

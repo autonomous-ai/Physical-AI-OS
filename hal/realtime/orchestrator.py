@@ -1253,11 +1253,26 @@ class RealtimeOrchestrator:
                     "[realtime] Model delegated to main flow (message=%r)",
                     delegate_msg[:100],
                 )
+                # A quarantined manual Gemini session will be replaced before the next
+                # capture anyway. Do not ask it to generate an unused handoff response.
+                # Live sessions still need the ACK to keep their continuous input usable.
+                abandon_handoff = (
+                    config.REALTIME_PROVIDER.strip().lower() == "gemini"
+                    and not config.LIVE_MODE
+                    and not getattr(self, "_live_active", False)
+                    and not config.REALTIME_GEMINI_SESSION_RESUMPTION
+                    and getattr(
+                        getattr(self._agent, "_config", None),
+                        "session_resumption_enabled", True,
+                    ) is False
+                    and getattr(self._agent, "requires_fresh_session", False) is True
+                )
                 self._agent.send(
                     [
                         FunctionCallResultInput(
                             call_id=output.call_id,
                             output='{"result": "delegated"}',
+                            trigger_response=not abandon_handoff,
                         )
                     ]
                 )

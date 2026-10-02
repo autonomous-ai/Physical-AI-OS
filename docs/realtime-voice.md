@@ -1221,13 +1221,26 @@ tool result; the replacement session starts its next activity cleanly.
 
 A valid `delegate_to_main` handoff also marks the session for replacement
 **before** publishing the tool event, even if Gemini has said nothing yet.
-The successful `delegated` acknowledgement clears the pending call but does
-not clear this replacement requirement. The next `prepare_turn()` rebuilds
+When sent, a successful `delegated` acknowledgement clears the pending call but
+does not clear this replacement requirement. The next `prepare_turn()` rebuilds
 before streaming new capture. This prevents delayed post-handoff speech
 (including provider-generated system-error apologies) from leaking into the
 next live session with an empty turn ID. Empty/invalid delegation messages do
 not set this flag. Rebuilding adds connection overhead after a handoff; this
 is not an error-text filter and does not fix upstream tool execution errors.
+
+For a valid Gemini handoff in **LIVE OFF**, when no live capture is active and
+the provider already requires a fresh session and session resumption is disabled,
+HAL withholds the `delegated`
+tool response (`trigger_response=False`). The handoff still reaches main
+immediately; the existing replacement policy rebuilds before the next capture,
+and discards the old session if replacement fails. This avoids asking the
+abandoned session to generate another response and does not introduce a new
+recycle policy. LIVE mode, empty delegation errors, reject, emotion and look
+acknowledgements remain unchanged. Sessions with resumption enabled retain the
+ACK so reconnect cannot resume an unanswered handoff. Inference already started before the handoff
+(for example after an earlier emotion response) can still produce usage; this
+optimization does not guarantee zero additional tokens.
 
 On receive timeout, `[realtime][transport]` logs connection/sender state,
 queued input count, age of the last successful audio send, pending tools and

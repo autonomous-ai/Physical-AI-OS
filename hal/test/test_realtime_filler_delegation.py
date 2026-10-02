@@ -1,6 +1,7 @@
 """A spoken Gemini acknowledgement must not consume the main-agent handoff."""
 
 import json
+from types import SimpleNamespace
 
 import pytest
 from unittest.mock import Mock
@@ -19,6 +20,7 @@ FILLER = "I can help with that."
 def _orchestrator(monkeypatch):
     monkeypatch.setattr(config, "REALTIME_SESSION_MAX_TURNS", 0)
     agent = Mock(execution_completed=False)
+    agent._config = SimpleNamespace(session_resumption_enabled=False)
     agent.receive.return_value = iter([
         TextOutput(text=FILLER),
         FunctionCallOutput(
@@ -54,6 +56,49 @@ def test_filler_then_delegate_emits_handoff_with_plain_ack(monkeypatch):
     assert ack.call_id == "play-song"
     assert json.loads(ack.output) == {"result": "delegated"}
     assert "scheduling" not in ack.model_dump()
+
+
+@pytest.mark.parametrize("provider,live_mode,live_active,quarantined,ack", [
+    ("gemini", False, False, True, False),
+    ("gemini", True, True, True, True),
+    ("gemini", False, True, True, True),
+    ("gemini", True, False, True, True),
+    ("gemini", False, False, False, True),
+    ("openai", False, False, True, True),
+    ("pipecat_v1", False, False, True, True),
+])
+def test_only_quarantined_manual_gemini_handoff_skips_generation(
+    monkeypatch, provider, live_mode, live_active, quarantined, ack,
+):
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", provider)
+    monkeypatch.setattr(config, "LIVE_MODE", live_mode)
+    monkeypatch.setattr(config, "REALTIME_GEMINI_SESSION_RESUMPTION", False)
+    orchestrator, agent = _orchestrator(monkeypatch)
+    orchestrator._live_active = live_active
+    agent.requires_fresh_session = quarantined
+
+    outputs = list(orchestrator.stream_output())
+
+    assert outputs == [TextOutput(text=FILLER), DelegateSignal(
+        message=REQUEST, transcript=REQUEST, user_turn_id="voice-turn-42",
+    )]
+    result, = agent.send.call_args.args[0]
+    assert result.trigger_response is ack
+    assert result.call_id == "play-song"
+    agent.end_turn.assert_called_once_with()
+
+
+@pytest.mark.parametrize("global_enabled,session_enabled", [(True, False), (False, True)])
+def test_resumable_gemini_handoff_keeps_ack(monkeypatch, global_enabled, session_enabled):
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", "gemini")
+    monkeypatch.setattr(config, "LIVE_MODE", False)
+    monkeypatch.setattr(config, "REALTIME_GEMINI_SESSION_RESUMPTION", global_enabled)
+    orchestrator, agent = _orchestrator(monkeypatch)
+    agent._config.session_resumption_enabled = session_enabled
+    agent.requires_fresh_session = True
+    list(orchestrator.stream_output())
+    result, = agent.send.call_args.args[0]
+    assert result.trigger_response is True
 
 
 def test_spoken_filler_keeps_request_on_main_agent_route(monkeypatch):
@@ -119,3 +164,72 @@ def test_silent_delegation_keeps_existing_handoff(monkeypatch):
     assert sender.send.call_args.args[0] == (
         f"[voice-instruction] {REQUEST}\n[transcript] {REQUEST}"
     )
+
+
+@pytest.mark.parametrize("connect_fails", [False, True])
+def test_unacked_handoff_rebuilds_before_next_turn_and_discards_on_failure(
+    monkeypatch, connect_fails,
+):
+    import threading
+
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", "gemini")
+    monkeypatch.setattr(config, "LIVE_MODE", False)
+    monkeypatch.setattr(config, "REALTIME_GEMINI_SESSION_RESUMPTION", False)
+    orchestrator, agent = _orchestrator(monkeypatch)
+    orchestrator._live_active = False
+    agent.requires_fresh_session = True
+    list(orchestrator.stream_output())
+    result, = agent.send.call_args.args[0]
+    assert result.trigger_response is False
+
+    replacement = Mock(requires_fresh_session=False)
+    if connect_fails:
+        replacement.connect.side_effect = RuntimeError("replacement unavailable")
+    orchestrator._context = Mock()
+    orchestrator._context.build_instructions.return_value = "test instructions"
+    orchestrator._make_agent = Mock(return_value=replacement)
+    orchestrator._rebuild_lock = threading.Lock()
+    orchestrator._rebuild_done = threading.Event()
+    orchestrator._lifecycle_lock = threading.Lock()
+    orchestrator._started = threading.Event()
+    orchestrator._started.set()
+    orchestrator._disconnect_in_background = Mock()
+    rebuild = Mock(wraps=orchestrator._rebuild_now)
+    orchestrator._rebuild_now = rebuild
+
+    orchestrator.prepare_turn()
+
+    rebuild.assert_called_once_with(
+        "gemini-unresolved-tool-call", discard_old_on_failure=True,
+    )
+    replacement.connect.assert_called_once_with()
+    assert orchestrator._agent is (None if connect_fails else replacement)
+    assert orchestrator._skip_post_idle_recycle is (not connect_fails)
+    orchestrator._disconnect_in_background.assert_called_once_with(
+        agent, "gemini-unresolved-tool-call",
+    )
+    if connect_fails:
+        replacement.disconnect.assert_called_once_with()
+
+
+def test_empty_delegate_still_acks_error_when_session_needs_replacement(monkeypatch):
+    monkeypatch.setattr(config, "REALTIME_PROVIDER", "gemini")
+    monkeypatch.setattr(config, "LIVE_MODE", False)
+    monkeypatch.setattr(config, "REALTIME_GEMINI_SESSION_RESUMPTION", False)
+    orchestrator, agent = _orchestrator(monkeypatch)
+    orchestrator._live_active = False
+    agent.requires_fresh_session = True
+    agent.receive.return_value = iter([
+        FunctionCallOutput(
+            name="delegate_to_main", arguments='{"message": "  "}',
+            call_id="empty-delegate",
+        ),
+        TextOutput(text="Could you clarify?"),
+    ])
+
+    assert list(orchestrator.stream_output()) == [TextOutput(text="Could you clarify?")]
+    result, = agent.send.call_args.args[0]
+    assert result.trigger_response is True
+    assert result.call_id == "empty-delegate"
+    assert json.loads(result.output) == {"error": "message must not be empty"}
+    agent.end_turn.assert_not_called()
