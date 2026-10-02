@@ -1,6 +1,7 @@
 package server
 
 import (
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -27,7 +28,14 @@ func credentialSafeLogger(out io.Writer) gin.HandlerFunc {
 func credentialSafeRecovery(out io.Writer) gin.HandlerFunc {
 	// Gin's default recovery dumps the URL, headers and panic value. Any of
 	// these may contain credentials. Retain a stack trace without that data.
-	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, _ any) {
+	return gin.CustomRecoveryWithWriter(nil, func(c *gin.Context, recovered any) {
+		// The reverse proxy panics with ErrAbortHandler when a streamed
+		// response is cut short (browser closed an SSE stream, HAL restarted).
+		// That is a normal disconnect, not a bug worth a stack trace.
+		if err, ok := recovered.(error); ok && errors.Is(err, http.ErrAbortHandler) {
+			c.Abort()
+			return
+		}
 		fmt.Fprintf(out, "[HTTP] panic recovered\n%s", debug.Stack())
 		c.AbortWithStatus(http.StatusInternalServerError)
 	})
