@@ -893,6 +893,12 @@ script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback s
     ;;
 ```
 
+Bắt buộc kiểm tra runtime nếu HAL chạy trước update hoặc service đang enabled.
+Khi đó service inactive/failed làm update thất bại, không được bỏ qua health check.
+HAL phải active trước và sau khi `/health` thành công; lỗi sẽ kích hoạt rollback.
+Chỉ HAL trước đó inactive và disabled mới bỏ qua kiểm tra runtime. Rollback trả
+về bản cài trước, không đảm bảo sửa được dependency hoặc cache dùng chung đã hỏng.
+
 ### Xử lý Codex
 
 Codex CLI là binary musl tĩnh publish trên GitHub releases, nên khác mọi thành

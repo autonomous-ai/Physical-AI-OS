@@ -390,8 +390,12 @@ restore_hal_service_state() {
 
 check_hal() {
   [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
-  systemctl is-active --quiet hal || return 0
-  wait_for_url http://127.0.0.1:5001/health 120
+  # Only an intentionally stopped, disabled HAL may skip runtime validation.
+  # A failed start must not turn the new runtime into an accepted update.
+  hal_was_active || return 0
+  systemctl is-active --quiet hal || return 1
+  wait_for_url http://127.0.0.1:5001/health 120 || return 1
+  systemctl is-active --quiet hal
 }
 
 # mktemp -d staging dirs are 0700; publish with the live tree's mode (nginx needs to read the web root).

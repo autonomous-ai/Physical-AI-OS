@@ -922,6 +922,13 @@ to retain the Pollen SDK; every other device uses `hardware + aec + pipecat`.
     ;;
 ```
 
+HAL runtime validation is required when HAL was active before the update or its
+service is enabled. An inactive/failed service then fails the update instead of
+skipping health checks. HAL must be active before and after a successful `/health`
+probe; failures trigger rollback. Only a previously inactive, disabled HAL skips
+the runtime probe. Rollback restores the previous installation, not a verified
+repair of corrupted dependency files or their shared cache.
+
 ### Codex Case
 
 The Codex CLI is a static musl binary published on GitHub releases, so unlike

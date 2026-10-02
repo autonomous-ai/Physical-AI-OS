@@ -105,5 +105,55 @@ class HALUpdateTests(unittest.TestCase):
         self.assertIn('sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}"', script)
 
 
+class HALHealthTests(unittest.TestCase):
+    def test_runtime_failure_cannot_skip_rollback(self):
+        script = SCRIPT.read_text()
+        functions = "\n".join(
+            re.search(rf"^{name}\(\) \{{\n.*?^\}}$", script, re.M | re.S).group(0)
+            for name in ("unit_wanted_active", "hal_was_active", "check_hal")
+        )
+        # Run in the same conditional context as the updater; set -e alone
+        # must not hide a failed health probe or an early service crash.
+        cases = (
+            ("active", False, False, True, False, False),
+            ("inactive", True, False, True, False, False),
+            ("active", True, True, False, True, False),
+            ("active", True, True, True, False, False),
+            ("active", True, True, True, True, True),
+            ("inactive", False, False, False, False, True),
+        )
+        for saved, enabled, active, healthy, final_active, accepted in cases:
+            with self.subTest(saved=saved, enabled=enabled, active=active,
+                              healthy=healthy, final_active=final_active):
+                with tempfile.TemporaryDirectory() as tmp:
+                    root = Path(tmp)
+                    (root / "VERSION_HAL").write_text("test")
+                    (root / "hal.service-state").write_text(saved)
+                    result = subprocess.run(
+                        ["/bin/bash", "-c", functions + """
+checks=0
+systemctl() {
+  if [ "$1" = is-enabled ]; then return "$ENABLED_RC"; fi
+  checks=$((checks + 1))
+  if [ "$checks" -eq 1 ]; then return "$ACTIVE_RC"; fi
+  return "$FINAL_RC"
+}
+wait_for_url() { echo probe; return "$HEALTH_RC"; }
+if ! check_hal; then echo rollback; exit 1; fi
+echo accepted
+"""],
+                        env={**os.environ, "HAL_DIR": tmp, "ROLLBACK_DIR": tmp,
+                             "ENABLED_RC": str(int(not enabled)),
+                             "ACTIVE_RC": str(int(not active)),
+                             "HEALTH_RC": str(int(not healthy)),
+                             "FINAL_RC": str(int(not final_active))},
+                        capture_output=True, text=True,
+                    )
+                    self.assertEqual(result.returncode, 0 if accepted else 1, result.stderr)
+                    self.assertIn("accepted" if accepted else "rollback", result.stdout)
+                    if saved == "inactive" and not enabled:
+                        self.assertNotIn("probe", result.stdout)
+
+
 if __name__ == "__main__":
     unittest.main()
