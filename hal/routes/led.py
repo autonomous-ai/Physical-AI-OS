@@ -13,6 +13,8 @@ from hal.models import (
     LEDEffectResponse,
     LEDOffRequest,
     LEDPaintRequest,
+    LEDRestingRequest,
+    LEDRestingResponse,
     LEDSolidRequest,
     LEDStateResponse,
     LEDStatusRequest,
@@ -321,6 +323,31 @@ def restore_led():
     state._restore_user_led()
     return {"status": "ok"}
 
+
+@router.get("/led/resting", response_model=LEDRestingResponse)
+def get_led_resting():
+    """The owner's resting LED choice, the device default and the look in effect."""
+    from hal import resting_led
+
+    return resting_led.snapshot()
+
+
+@router.put("/led/resting", response_model=LEDRestingResponse)
+def set_led_resting(req: LEDRestingRequest):
+    """Save the owner's resting LED look and show it now when the strip is resting."""
+    from hal import resting_led
+
+    if not state.rgb_service:
+        raise HTTPException(503, "LED not available")
+    try:
+        snap = resting_led.set_choice(req.mode, req.color)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # The new resting look replaces an earlier explicit colour or off.
+    state._save_user_led_state(None)
+    if not _sleep_led_locked("led/resting"):
+        state._restore_user_led()
+    return snap
 
 
 @router.post("/led/effect/stop", response_model=StatusResponse)

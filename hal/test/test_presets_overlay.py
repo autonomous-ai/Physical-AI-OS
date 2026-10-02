@@ -75,8 +75,8 @@ class TestApplyDevicePresets(unittest.TestCase):
         self.assertEqual(reference["color"], [5, 4, 3])
         self.assertFalse(presets.ambient_resting_is_dark())
         apply_device_presets("intern-v2", root)
-        self.assertEqual(reference["color"], [0, 0, 0])
-        self.assertTrue(presets.ambient_resting_is_dark())
+        self.assertIs(reference, presets.AMBIENT_RESTING_LED)
+        self.assertEqual(reference, {"effect": "solid", "color": [5, 4, 3]})
 
     def test_no_file_keeps_base_and_default_count(self):
         with tempfile.TemporaryDirectory() as tmp:

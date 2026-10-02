@@ -819,6 +819,10 @@ DEFAULT_USER: str = os.environ.get("HAL_DEFAULT_USER", "unknown")
 USER_BEARING_PATH: str = os.environ.get(
     "HAL_USER_BEARING_PATH", "/var/lib/hal/user_bearing.json"
 )
+# Owner's resting LED choice from the web UI; survives reboots and OTA.
+RESTING_LED_PATH: str = os.environ.get(
+    "HAL_RESTING_LED_PATH", "/var/lib/hal/resting_led.json"
+)
 # Speak while the aim searches for the user.
 LOOK_AIM_SPEAK: bool = (
     os.environ.get("HAL_LOOK_AIM_SPEAK", "true").lower() in ("1", "true", "yes")

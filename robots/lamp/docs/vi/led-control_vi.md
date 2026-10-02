@@ -381,7 +381,7 @@ Cấu hình riêng theo device tại `robots/<type>/presets.json`:
 "ambient_led": {"resting": {"effect": "solid", "color": [5, 4, 3]}}
 ```
 
-Lamp dùng giá trị trên; intern-v2 giữ [0, 0, 0] (tắt). Nếu không khai báo thì
+Lamp và intern-v2 dùng giá trị trên. Nếu không khai báo thì
 fallback platform vẫn tắt. HAL merge vào `AMBIENT_RESTING_LED` khi khởi động.
 Preset solid chỉ ghi màu một lần, không tạo effect worker. Khi emotion/TTS/music
 kết thúc hoặc bỏ mic-mute, cùng resting look được khôi phục nếu chưa có tùy chọn
@@ -395,6 +395,28 @@ Speaking wave giữ RGB nền của preset solid lúc nghỉ hoặc emotion soli
 chưa lưu màu của user. Với Lamp nghỉ ở [5, 4, 3], wave biến thiên trên màu mờ
 này, không chuyển sang trắng ấm sáng mạnh. Màu user đã lưu vẫn được ưu tiên;
 tắt đèn rõ ràng vẫn giữ tối.
+
+### Chủ máy chọn trên web UI
+
+Settings → **Resting light** (`/setting#led`) cho chủ máy thay mặc định của device
+mà không phải sửa `presets.json`. HAL cung cấp `GET /led/resting` và
+`PUT /led/resting {mode, color}`:
+
+| `mode` | Resting look |
+|--------|--------------|
+| `default` | Preset của device trong `presets.json` |
+| `off` | Tắt (solid [0, 0, 0]) |
+| `custom` | Solid `color` [R, G, B], 0-255; màu đen được chuẩn hóa thành `off` |
+
+`hal/resting_led.py` chụp lại preset của device lúc boot, rồi ghi đè
+`AMBIENT_RESTING_LED` tại chỗ, nên mọi đường restore ở trên đều theo lựa chọn này.
+Lựa chọn lưu ở `/var/lib/hal/resting_led.json` (`HAL_RESTING_LED_PATH`), giữ qua
+reboot và OTA, khác với user LED state chỉ sống trong một lần boot. `PUT` cũng xoá
+user LED state đã lưu (kể cả lệnh tắt đèn) và vẽ lại strip trừ khi device đang
+ngủ; hardware proxy của os-server mở khóa ambient restore trong cùng request.
+Trang có các ô màu gợi ý, thanh trượt hue / trắng↔màu / độ sáng (tối đa kênh 64),
+và cảnh báo khi màu bão hòa nằm trong 20° hue của một màu trạng thái (đỏ, vàng,
+xanh lá, cyan, xanh dương, tím).
 
 ### User tắt đèn
 

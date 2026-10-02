@@ -393,7 +393,7 @@ The device owns this setting in `robots/<type>/presets.json`:
 "ambient_led": {"resting": {"effect": "solid", "color": [5, 4, 3]}}
 ```
 
-Lamp uses the value above; intern-v2 explicitly keeps [0, 0, 0] (off). Missing
+Lamp and intern-v2 use the value above. Missing
 configuration retains the dark platform fallback. HAL merges this into
 `AMBIENT_RESTING_LED` at startup. A solid preset paints once; it does not start
 an effect worker. Emotion/TTS/music release and mic-unmute restore the same look
@@ -409,6 +409,28 @@ Speaking waves preserve the base RGB of a solid resting preset or solid emotion
 when no user color is saved. With Lamp resting at [5, 4, 3], the wave modulates
 that dim color; it does not fall back to bright warm white. A saved user color
 still takes priority, and explicit off stays dark.
+
+### Owner choice from the web UI
+
+Settings → **Resting light** (`/setting#led`) lets the owner replace the device
+default without editing `presets.json`. HAL exposes it as `GET /led/resting` and
+`PUT /led/resting {mode, color}`:
+
+| `mode` | Resting look |
+|--------|--------------|
+| `default` | The device preset from `presets.json` |
+| `off` | Dark (solid [0, 0, 0]) |
+| `custom` | Solid `color` [R, G, B], 0-255; black normalizes to `off` |
+
+`hal/resting_led.py` snapshots the device preset at boot, then rewrites
+`AMBIENT_RESTING_LED` in place, so every restore path above follows the choice.
+The choice is saved in `/var/lib/hal/resting_led.json` (`HAL_RESTING_LED_PATH`)
+and survives reboots and OTA, unlike the boot-scoped user LED state. A `PUT`
+also clears that saved user state (including an explicit off) and repaints the
+strip unless the device is asleep; os-server's hardware proxy unlocks ambient
+restore for the same request. The page offers preset chips, hue / white↔colour /
+brightness sliders capped at channel 64, and warns when a saturated colour sits
+within 20° of hue of a status cue (red, yellow, green, cyan, blue, purple).
 
 ### Explicit off
 
