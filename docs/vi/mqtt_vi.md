@@ -366,6 +366,11 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `led.resting.get` | Đọc lựa chọn đèn nghỉ của chủ máy, mặc định của device và màu đang áp qua HAL `GET /led/resting` (đồng bộ) | _(không có)_ |
 | `led.resting.set` | Lưu đèn nghỉ (`default`, `off` hoặc màu `custom`) qua HAL `PUT /led/resting`; giữ qua reboot (đồng bộ) | `mode`, `color` khi `custom` |
 | `led.resting.preview` | Hiện thử một màu mà không lưu qua HAL `POST /led/resting/preview`; tự quay về sau 10 giây kể từ lần preview cuối; chỉ ack khi lỗi | `color` |
+| `volume.get` | Đọc âm lượng loa theo 0-100% của dải cho phép (đồng bộ) | _(không có)_ |
+| `volume.set` | Đặt âm lượng loa, 0-100% của dải cho phép, qua HAL `POST /audio/volume` (đồng bộ) | `volume` |
+| `mic.get` | Đọc trạng thái tắt mic và công tắc mic phần cứng (đồng bộ) | _(không có)_ |
+| `mic.set` | Tắt/bật mic qua HAL `POST /voice/mute` / `/voice/unmute`; công tắc phần cứng được ưu tiên (đồng bộ) | `muted` |
+| `realtime.get` | Đọc cài đặt realtime (key chỉ hiện dưới dạng `has_api_key`) và danh sách provider/voice/reasoning hợp lệ (đồng bộ) | _(không có)_ |
 | `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
@@ -1183,6 +1188,92 @@ thêm vài trăm mili giây.
 Device không có capability `light` trả `failure` với `this device has no light`.
 Input sai bị từ chối trước khi gọi HAL.
 
+#### `volume.*` / `mic.*` — Âm lượng loa và mic qua MQTT
+
+Bản điện thoại của thẻ **Audio** trong Overview trên web. Cả hai cần capability
+`audio` (nếu không sẽ báo `this device has no audio`) và trả lời đồng bộ.
+
+| Thao tác trên app | Gọi HAL | MQTT kind |
+|-------------------|---------|-----------|
+| Hiện âm lượng | `GET /audio/volume` | `volume.get` |
+| Thả thanh trượt âm lượng | `POST /audio/volume` | `volume.set` |
+| Hiện trạng thái mic | `GET /voice/status` | `mic.get` |
+| Nút Mute / Unmute | `POST /voice/mute` / `/voice/unmute` | `mic.set` |
+
+```json
+{"cmd": "data", "kind": "volume.set", "data": {"volume": 90}}
+{"cmd": "data", "kind": "mic.set", "data": {"muted": false}}
+```
+
+**Âm lượng** dùng đúng thang của thanh trượt trên web: `volume` là 0-100% của dải
+cho phép, trong đó 100% là trần `audio.max_volume` trong SAFETY.md (hoặc 100% của
+mixer nếu device không khai báo). os-server đổi sang % mixer thật
+(`raw = round(volume × max_volume / 100)`); HAL kẹp trong giới hạn và lưu lại.
+`volume.get` và `volume.set` trả về:
+
+```json
+{"volume": 90, "raw": 72, "max_volume": 80}
+```
+
+Hiển thị `volume`; `raw` và `max_volume` chỉ để tham khảo. Gửi `volume.set` khi
+người dùng thả thanh trượt, giống web. Nếu app muốn loa đổi theo trong lúc kéo,
+giới hạn khoảng 200 ms một lần và luôn gửi giá trị cuối. Mỗi lệnh ghi mixer và
+trả lời.
+
+**Mic**: bắt buộc có `muted` (`true` tắt, `false` bật). `mic.get` và `mic.set`
+thành công trả về:
+
+```json
+{"muted": true, "hw_switch_muted": true, "available": true}
+```
+
+`hw_switch_muted` là công tắc mic vật lý, `null` trên device không có công tắc.
+Khi nó là `true` thì không bật mic được: `mic.set` với `muted: false` báo lỗi
+`Hardware mic switch is off — flip the physical switch to unmute`. Hãy vô hiệu nút
+Unmute và hiện dòng đó. `available` là false khi voice pipeline không chạy. Tắt
+mic cũng bật đèn báo tắt mic, và lựa chọn được giữ qua các lần restart HAL.
+
+#### `realtime.get` / `realtime.set` — Cài đặt realtime voice qua MQTT
+
+Bản điện thoại của trang **Settings → Realtime** trên web (trên web chỉ hiện ở chế độ debug).
+
+```json
+{"cmd": "data", "kind": "realtime.get"}
+```
+
+`realtime.get` trả `success` đồng bộ, gồm cài đặt đã lưu và các lựa chọn để hiển thị:
+
+```json
+{
+  "config": {"enabled": true, "provider": "gemini", "model": "…", "voice": "Kore",
+             "reasoning": "LOW", "base_url": "", "has_api_key": false},
+  "options": {"providers": ["gemini", "openai", "gptlive", "pipecat_v1", "none"],
+              "voices": {"gemini": ["…"], "openai": ["…"], "gptlive": ["…"], "pipecat_v1": []},
+              "reasoning": {"gemini": ["MINIMAL", "LOW", "MEDIUM", "HIGH"], "openai": ["…"], "gptlive": [], "pipecat_v1": []}}
+}
+```
+
+Key không bao giờ được trả về; `has_api_key` cho biết có key riêng đã lưu hay không.
+`base_url` chỉ là giá trị override (rỗng nghĩa là lấy từ AI brain). `web_search`
+chỉ xuất hiện với `pipecat_v1`. Danh sách voice hay reasoning rỗng nghĩa là provider
+đó không có tùy chọn này, nên ẩn ô chọn.
+
+`realtime.set` lưu bất kỳ trường nào trong `enabled`, `provider`, `model`, `voice`,
+`reasoning`, `api_key`, `base_url` và `web_search` (chỉ pipecat_v1). Trường bỏ trống
+giữ nguyên. Lệnh ack `starting`, kiểm tra theo cùng danh sách lựa chọn, lưu
+`config.json`, restart HAL rồi ack `success` hoặc `failure`:
+
+```json
+{"cmd": "data", "kind": "realtime.set", "data": {"enabled": true, "provider": "gemini", "voice": "Kore", "reasoning": "LOW"}}
+```
+
+Model, voice và reasoning được lưu riêng theo từng provider và áp cho provider
+đang được đặt (hoặc provider hiện tại). Đổi provider mà không gửi các trường này
+thì giữ lựa chọn đã lưu của provider đó; voice hay reasoning không có trong danh
+sách của provider sẽ bị từ chối. Chuỗi rỗng giữ nguyên trường, nên không xoá được
+`api_key` hay `base_url` đã lưu qua MQTT. Ack trả lại request nhưng bỏ `api_key`. Sau `success`, HAL sẽ
+không phản hồi vài giây trong lúc restart.
+
 #### `chat.send` + `chat.event`
 
 Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
@@ -1514,6 +1605,7 @@ Router MQTT của os-server không có case `ota`: message bị log là `unknown
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (kiểm tra payload, rồi gọi bất đồng bộ `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, bỏ bucket `unknown`) và `face.remove` (bất đồng bộ → HAL `POST /face/remove`) |
 | `system/server/device/delivery/mqtt/led_resting_handler.go` | Handle `led.resting.get`, `led.resting.set` và `led.resting.preview` (HAL `/led/resting`, capability `light`) |
+| `system/server/device/delivery/mqtt/audio_handler.go` | Handle `volume.get`, `volume.set` (0-100% của dải SAFETY.md → HAL `/audio/volume`), `mic.get` và `mic.set` (HAL `/voice/status`, `/voice/mute`, `/voice/unmute`; 409 → thông báo công tắc phần cứng) |
 | `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (bất đồng bộ → HAL `POST /speaker/record-enroll`, mic của đèn, 15 giây), `voice.owners`, `voice.file.get`, `voice.file.remove` (qua `system/lib/voicefile`) và `voice.remove` (bất đồng bộ → HAL `POST /speaker/remove`) |
 | `system/lib/voicefile/voicefile.go` | Liệt kê, đọc và xoá mẫu giọng trong `users/<label>/voice/`; dùng chung cho `POST /api/voice/file/remove` và các kind `voice.*` |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (đọc file của một skill đã cài: danh sách, hoặc nội dung một file) |

@@ -337,6 +337,16 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleLEDRestingSet(env)
 	case domain.KindLEDRestingPreview:
 		return h.handleLEDRestingPreview(env)
+	case domain.KindVolumeGet:
+		return h.handleVolumeGet(env)
+	case domain.KindVolumeSet:
+		return h.handleVolumeSet(env)
+	case domain.KindMicGet:
+		return h.handleMicGet(env)
+	case domain.KindMicSet:
+		return h.handleMicSet(env)
+	case domain.KindRealtimeGet:
+		return h.handleRealtimeGet(env)
 	default:
 		slog.Warn("unknown data kind", "component", "mqtt", "kind", env.Kind)
 		return h.publishDataResult(env.Kind, "failure", "unknown kind: "+env.Kind, nil)

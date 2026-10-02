@@ -6,9 +6,16 @@ import (
 
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/server/config"
 )
 
 func (h *DeviceMQTTHandler) publishRealtimeSetAck(status, errMsg string, data *domain.RealtimeSetData) {
+	if data != nil && data.APIKey != "" {
+		// Never echo the key back over fd_channel.
+		redacted := *data
+		redacted.APIKey = ""
+		data = &redacted
+	}
 	ack := domain.MQTTRealtimeSetAck{
 		MQTTInfoResponse: domain.NewMQTTInfoResponse(h.config, "data", device.GetDeviceMac()),
 		Kind:             domain.KindRealtimeSet,
@@ -44,4 +51,14 @@ func (h *DeviceMQTTHandler) handleRealtimeSet(env domain.MQTTDataCommand) error 
 	}()
 
 	return nil
+}
+
+// handleRealtimeGet handles kind="realtime.get": the saved realtime settings
+// (the key only as has_api_key) and the provider/voice/reasoning lists the
+// app should offer, the same data the web Realtime page loads. Synchronous.
+func (h *DeviceMQTTHandler) handleRealtimeGet(env domain.MQTTDataCommand) error {
+	return h.publishDataResult(domain.KindRealtimeGet, "success", "", domain.MQTTRealtimeGetData{
+		Config:  h.deviceService.RealtimePublic(),
+		Options: config.GetRealtimeOptions(),
+	})
 }
