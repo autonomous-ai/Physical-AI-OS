@@ -87,7 +87,7 @@ Technical notes:
 
   `speaking_wave_rainbow` also generates its own hue, so it takes the same `music_strong` `brightness` and rides its VU envelope under it. `music/routes` never emits the `music_strong` emotion itself — the agent does.
 - **This table lives in `robots/lamp/presets.json`**, the per-device overlay merged field by field at boot via `hal/board/presets_overlay.py` — `hal/presets.py` is *not* edited. Other robots (reachy, intern) therefore keep the base palette, and reverting the lamp to the base palette is just deleting the `emotion` section from that JSON file.
-- **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter comes from `presets.json` → `ambient_led.resting` (Lamp: steady `[5, 4, 3]`); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
+- **Do not confuse `EMO_IDLE` with `AMBIENT_RESTING_LED`.** The latter comes from `presets.json` → `ambient_led.resting` (Lamp: steady `[1, 1, 1]`); `EMO_IDLE` is an emotion the agent actively emits and still has a color.
 
 ### `listening` opens at the peak of its breath
 

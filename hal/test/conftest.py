@@ -20,3 +20,16 @@ for _var, _leaf in (
 if os.environ["HAL_STATE_DIR"].startswith(_TEST_ROOT):
     shutil.rmtree(os.environ["HAL_STATE_DIR"], ignore_errors=True)
 os.makedirs(os.environ["HAL_STATE_DIR"], exist_ok=True)
+
+
+import json
+from pathlib import Path
+
+import pytest
+
+
+@pytest.fixture
+def lamp_presets():
+    """Read fresh device declarations so tests follow tuning without sharing mutations."""
+    path = Path(__file__).resolve().parents[2] / "robots" / "lamp" / "presets.json"
+    return json.loads(path.read_text(encoding="utf-8"))

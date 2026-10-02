@@ -377,23 +377,23 @@ the strip toward dark, which is what sleep already wants.
 
 ### Setup-needed solid (lamp)
 
-When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `system/server/server.go` spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`, only on devices with the `light` capability) that sends `POST /led/status` with state `setup` and retries with backoff (1 s, doubling, capped at 10 s) until HAL acknowledges it, setup completes, or the server shuts down — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. It does not wait on `/health` (LED routes can acknowledge before unrelated drivers are healthy); retrying handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (dim steady warm white). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
+When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `system/server/server.go` spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`, only on devices with the `light` capability) that sends `POST /led/status` with state `setup` and retries with backoff (1 s, doubling, capped at 10 s) until HAL acknowledges it, setup completes, or the server shuts down — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. It does not wait on `/health` (LED routes can acknowledge before unrelated drivers are healthy); retrying handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (dim steady white). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
 
 ## Ambient Idle Behaviors
 
-When Lamp is idle, its default is steady warm white RGB **[5, 4, 3]**, approximately
-2% of the RGB channel range. There is no breathing effect or animation thread.
+When Lamp is idle, its default is steady white RGB **[1, 1, 1]**, approximately
+0.4% of the RGB channel range. There is no breathing effect or animation thread.
 Actual perceived brightness depends on the LEDs, not just the channel percentage.
 
-### The resting look (default: dim warm white)
+### The resting look (default: dim white)
 
 The device owns this setting in `robots/<type>/presets.json`:
 
 ```json
-"ambient_led": {"resting": {"effect": "solid", "color": [5, 4, 3]}}
+"ambient_led": {"resting": {"effect": "solid", "color": [1, 1, 1]}}
 ```
 
-Lamp and intern-v2 use the value above. Missing
+Lamp uses the value above; intern-v2 keeps [5, 4, 3]. Missing
 configuration retains the dark platform fallback. HAL merges this into
 `AMBIENT_RESTING_LED` at startup. A solid preset paints once; it does not start
 an effect worker. Emotion/TTS/music release and mic-unmute restore the same look
@@ -406,7 +406,7 @@ resume instead of choosing a color or starting breathing. HAL remains the single
 source of the resting look and the user's saved color/effect.
 
 Speaking waves preserve the base RGB of a solid resting preset or solid emotion
-when no user color is saved. With Lamp resting at [5, 4, 3], the wave modulates
+when no user color is saved. With Lamp resting at [1, 1, 1], the wave modulates
 that dim color; it does not fall back to bright warm white. A saved user color
 still takes priority, and explicit off stays dark.
 

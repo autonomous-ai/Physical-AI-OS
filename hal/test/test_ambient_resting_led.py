@@ -10,9 +10,9 @@ from hal.routes import led
 
 
 @pytest.fixture
-def lamp(monkeypatch, tmp_path):
-    monkeypatch.setitem(presets.AMBIENT_RESTING_LED, "effect", "solid")
-    monkeypatch.setitem(presets.AMBIENT_RESTING_LED, "color", [5, 4, 3])
+def lamp(monkeypatch, tmp_path, lamp_presets):
+    for key, value in lamp_presets["ambient_led"]["resting"].items():
+        monkeypatch.setitem(presets.AMBIENT_RESTING_LED, key, value)
     monkeypatch.setattr(state, "rgb_service", Mock())
     monkeypatch.setattr(state, "sensing_service", None)
     monkeypatch.setattr(state, "_user_led_state", None)
@@ -34,9 +34,9 @@ def lamp(monkeypatch, tmp_path):
     return state.rgb_service
 
 
-def test_default_restores_solid_without_effect_thread(lamp):
+def test_default_restores_solid_without_effect_thread(lamp, lamp_presets):
     led.restore_led()
-    lamp.dispatch.assert_called_once_with("solid", (5, 4, 3))
+    lamp.dispatch.assert_called_once_with("solid", tuple(lamp_presets["ambient_led"]["resting"]["color"]))
     assert state._user_led_state is None
     assert not state.led_should_stay_dark()
 
@@ -49,11 +49,11 @@ def test_off_survives_restore_and_sidecar_reload(lamp):
     lamp.dispatch.assert_called_once_with("solid", (0, 0, 0))
 
 
-def test_transient_off_returns_to_device_default(lamp):
+def test_transient_off_returns_to_device_default(lamp, lamp_presets):
     led.turn_off_leds(LEDOffRequest(transient=True))
     assert state._user_led_state is None
     led.restore_led()
-    lamp.dispatch.assert_called_once_with("solid", (5, 4, 3))
+    lamp.dispatch.assert_called_once_with("solid", tuple(lamp_presets["ambient_led"]["resting"]["color"]))
 
 
 @pytest.mark.parametrize("flag", ["_tts_speaking", "_music_playing"])
@@ -70,11 +70,11 @@ def test_explicit_color_survives_ambient_restore(lamp, monkeypatch):
 
 
 @pytest.mark.parametrize("emotion", [None, "thinking", "acknowledge"])
-def test_speaking_wave_preserves_dim_display_color(lamp, monkeypatch, emotion):
+def test_speaking_wave_preserves_dim_display_color(lamp, monkeypatch, emotion, lamp_presets):
     monkeypatch.setattr(state, "_effect_base_color", None)
     monkeypatch.setattr(state, "display_service", None)
     led.restore_led()
-    expected = (5, 4, 3)
+    expected = tuple(lamp_presets["ambient_led"]["resting"]["color"])
     if emotion:
         expected = (2, 0, 3) if emotion == "thinking" else (0, 3, 0)
         monkeypatch.setitem(state.EMOTION_PRESETS, emotion, {"color": list(expected)})
@@ -86,9 +86,9 @@ def test_speaking_wave_preserves_dim_display_color(lamp, monkeypatch, emotion):
     worker.return_value.start.assert_called_once()
 
 
-def test_speaking_color_before_first_restore_uses_dim_default(lamp, monkeypatch):
+def test_speaking_color_before_first_restore_uses_dim_default(lamp, monkeypatch, lamp_presets):
     monkeypatch.setattr(state, "_effect_base_color", None)
-    assert state._get_current_led_color() == (5, 4, 3)
+    assert state._get_current_led_color() == tuple(lamp_presets["ambient_led"]["resting"]["color"])
 
 
 def test_explicit_off_blocks_stale_emotion_wave_color(lamp, monkeypatch):
