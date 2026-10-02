@@ -2867,8 +2867,11 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
    locally, then sends it once in order when the replacement session is ready.
    A slow/failed reconnect falls back to the main agent with the STT transcript;
    it never drops the opening audio or commits it to the old activity.
-3. **Turn context + speaker-ID prepass.** `[TURN CONTEXT]` (time, reply-language
-   reminder, current user) is sent as non-response text. The **current user is the
+3. **Turn context + speaker-ID prepass.** `[TURN CONTEXT]` (time, device location —
+   the city from `/etc/timezone` via `hal.clock.device_city()`, omitted for
+   `UTC`/`Etc/*` zones — reply-language reminder, current user) is sent as
+   non-response text. The location is a default for weather and local searches; a
+   place the user names wins. The **current user is the
    VOICE speaker** identified this turn — it overrides the face-derived
    `current_user`, and falls back to the face identity when there is no voice ID
    (unknown / gate-reject / no transcript).
