@@ -928,6 +928,8 @@ skipping health checks. HAL must be active before and after a successful `/healt
 probe; failures trigger rollback. Only a previously inactive, disabled HAL skips
 the runtime probe. Rollback restores the previous installation, not a verified
 repair of corrupted dependency files or their shared cache.
+After recovery restarts HAL successfully, the updater disarms its exit cleanup
+so returning failure does not restart the recovered service a second time.
 
 ### Codex Case
 

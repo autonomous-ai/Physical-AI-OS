@@ -898,6 +898,8 @@ Khi đó service inactive/failed làm update thất bại, không được bỏ 
 HAL phải active trước và sau khi `/health` thành công; lỗi sẽ kích hoạt rollback.
 Chỉ HAL trước đó inactive và disabled mới bỏ qua kiểm tra runtime. Rollback trả
 về bản cài trước, không đảm bảo sửa được dependency hoặc cache dùng chung đã hỏng.
+Sau khi khởi động lại HAL thành công để phục hồi, updater tắt cleanup lúc thoát
+để việc trả mã lỗi không restart service đã phục hồi thêm lần nữa.
 
 ### Xử lý Codex
 

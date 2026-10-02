@@ -919,8 +919,12 @@ elif [ "$APP" = "hal" ]; then
     echo "HAL health check failed; restoring the known-good runtime" >&2
     systemctl stop hal 2>/dev/null || true
     restore_hal_backup
-    restore_hal_service_state || true
-    check_hal || true
+    if restore_hal_service_state; then
+      # Recovery already restored the service. The EXIT trap must not restart
+      # it again after the health probe succeeds and interrupt the recovered HAL.
+      disarm_service_restore
+      check_hal || true
+    fi
     exit 1
   fi
   disarm_service_restore
