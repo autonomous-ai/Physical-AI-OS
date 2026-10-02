@@ -8,7 +8,7 @@
        test test-api test-local \
        test-action test-action-api test-action-local \
        test-fer test-fer-api test-fer-local \
-       test-ser test-ser-unit test-ser-api test-ser-local \
+       test-ser test-ser-unit test-ser-api test-ser-local test-embed-unit \
        test-pose test-pose-api test-pose-local \
        test-object test-object-api test-object-local \
        test-audio test-audio-api test-audio-local \
@@ -338,6 +338,9 @@ test-ser: test-ser-unit test-ser-api test-ser-local
 
 test-ser-unit:
 	-DL_API_KEY=$${DL_API_KEY:-test} python -m pytest tests/audio_emotion_unit/ -v
+
+test-embed-unit:
+	-DL_API_KEY=$${DL_API_KEY:-test} python -m pytest tests/audio_unit/ -v
 
 test-ser-api:
 	-python -m pytest tests/audio_emotion_api/ -v

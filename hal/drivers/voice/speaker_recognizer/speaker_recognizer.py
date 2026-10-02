@@ -66,6 +66,7 @@ _MAX_EXTENDED_SAMPLES = config.SPEAKER_MAX_EXTENDED_SAMPLES
 _MAX_CLUSTER_SAMPLES = config.SPEAKER_MAX_CLUSTER_SAMPLES
 _MAX_CLUSTER_FILES = config.SPEAKER_MAX_CLUSTER_FILES
 _EXTEND_MIN_DURATION_S = config.SPEAKER_EXTEND_MIN_DURATION_SEC
+_MAX_EMBED_AUDIO_S = config.SPEAKER_MAX_EMBED_AUDIO_S
 _EXTEND_MIN_MARGIN_COS = config.SPEAKER_EXTEND_MIN_MARGIN_COS
 _EXTEND_REQUIRE_UNANIMOUS = config.SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS
 _EXTEND_MIN_CHUNK_COS = config.SPEAKER_EXTEND_MIN_CHUNK_COS
@@ -1127,6 +1128,13 @@ class SpeakerRecognizer:
             out = np.asarray(cleaned.waveform, dtype=np.float32)
             if out.shape[0] == 0:
                 raise SpeakerRecognizerError("preprocessing produced empty audio")
+            max_samples = int(_MAX_EMBED_AUDIO_S * _TARGET_SR)
+            if out.shape[0] > max_samples:
+                logger.info(
+                    "Speaker clip %.1fs > %.0fs cap — keeping the first %.0fs",
+                    out.shape[0] / _TARGET_SR, _MAX_EMBED_AUDIO_S, _MAX_EMBED_AUDIO_S,
+                )
+                out = out[:max_samples]
 
             with self._debug_stage("encode_wav"):
                 cleaned_wav = _float32_waveform_to_wav_bytes(out)
