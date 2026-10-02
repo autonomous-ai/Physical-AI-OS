@@ -372,6 +372,9 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `voice.remove` | Delete one person's whole voice profile via HAL `POST /speaker/remove`; face data stays (async; acks `starting`) | `label` |
 | `voice.file.get` | Return one voice sample file as base64 for playback (synchronous) | `label`, `file` |
 | `voice.file.remove` | Delete one voice sample and its `.npy`, like `POST /api/voice/file/remove` (synchronous) | `label`, `file` |
+| `led.resting.get` | Read the owner's resting light choice, device default and look in effect via HAL `GET /led/resting` (synchronous) | _(none)_ |
+| `led.resting.set` | Save the resting light (`default`, `off` or `custom` colour) via HAL `PUT /led/resting`; survives reboots (synchronous) | `mode`, `color` for `custom` |
+| `led.resting.preview` | Paint a candidate colour without saving via HAL `POST /led/resting/preview`; reverts 10 s after the last preview; acks failures only | `color` |
 | `chat.file.get` | Fetch one device-local file a turn named (synchronous) | `path` (required), optional `session_id`/`run_id` |
 | `chat.send` | Start an agent turn from the backend and stream it back (acks a run id, then emits `chat.event`) | `message` (required), optional `images[]`/`files[]`/`session_id`/`speak` |
 | `environment.status` | Read the HAL environment snapshot by capability, independent of sensor model | _(none)_ |
@@ -1171,6 +1174,47 @@ fails with `POST /speaker/remove returned 404: voice profile not found: <label>`
 }
 ```
 
+#### `led.resting.*` — Resting light over MQTT
+
+The `led.resting.*` kinds give the phone the web **Resting light** settings
+(`LedSection.tsx`). HAL owns the look and saves the choice in
+`/var/lib/hal/resting_led.json`; os-server only validates and relays.
+
+| App action | HAL call | MQTT kind |
+|------------|----------|-----------|
+| Open the screen | `GET /led/resting` | `led.resting.get` |
+| Drag a colour (live on the device) | `POST /led/resting/preview` | `led.resting.preview` |
+| Save / toggle off / back to default | `PUT /led/resting` | `led.resting.set` |
+
+```json
+{"cmd": "data", "kind": "led.resting.set", "data": {"mode": "custom", "color": [8, 4, 1]}}
+{"cmd": "data", "kind": "led.resting.preview", "data": {"color": [20, 0, 10]}}
+```
+
+`mode` is `default` (device preset), `off`, or `custom`; `custom` needs `color`
+`[r, g, b]` with channels 0-255, and black is stored as `off`. `color` is
+ignored for the other modes. `get` and `set` reply `success` with HAL's snapshot:
+
+```json
+{"mode": "custom", "color": [8, 4, 1],
+ "default": {"effect": "solid", "color": [5, 4, 3]},
+ "effective": {"effect": "solid", "color": [8, 4, 1]}}
+```
+
+**Live preview.** While the owner drags, send `led.resting.preview`, throttled
+to about 5 per second (one every ~200 ms) plus the final position. Each preview
+paints immediately without touching the saved choice or the SD card, and does
+not reply on success, so a drag does not flood fd_channel. HAL skips the paint
+while the device sleeps, speaks, plays music or shows the mic-muted light. If no `set` follows, the strip
+returns to the saved look 10 s after the last preview, so an abandoned screen
+never leaves a colour behind. Send `led.resting.set` when the owner taps Save;
+it cancels any pending preview, stores the choice, clears an earlier explicit
+off/colour and repaints. Expect the round trip through the broker to add a few
+hundred milliseconds of lag.
+
+Devices without the `light` capability reply `failure` with
+`this device has no light`. Invalid input fails before HAL is called.
+
 #### `chat.send` + `chat.event`
 
 Internal `NO_REPLY` handoff sentinels are suppressed from `chat.event`; clients receive Harness progress and the final Harness response instead.
@@ -1511,6 +1555,7 @@ There is no `ota` case in the os-server MQTT router: the message is logged as `u
 | `system/server/device/delivery/mqtt/skills_upload_handler.go` | Handle `skills.upload` (inline SKILL.md → `AgentGateway.InstallSkillMarkdown`) |
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (validate, then async `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, `unknown` bucket dropped) and `face.remove` (async → HAL `POST /face/remove`) |
+| `system/server/device/delivery/mqtt/led_resting_handler.go` | Handle `led.resting.get`, `led.resting.set` and `led.resting.preview` (HAL `/led/resting`, capability `light`) |
 | `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (async → HAL `POST /speaker/record-enroll`, lamp mic, 15s), `voice.owners`, `voice.file.get`, `voice.file.remove` (via `system/lib/voicefile`) and `voice.remove` (async → HAL `POST /speaker/remove`) |
 | `system/lib/voicefile/voicefile.go` | List, read and delete voice samples under `users/<label>/voice/`; shared by `POST /api/voice/file/remove` and the `voice.*` kinds |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (read one installed skill's files: list, or one file's contents) |

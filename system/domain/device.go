@@ -440,6 +440,15 @@ const (
 
 	// KindVoiceFileRemove deletes one voice sample and its embedding (same as POST /api/voice/file/remove).
 	KindVoiceFileRemove = "voice.file.remove"
+
+	// KindLEDRestingGet reads the owner's resting light choice via HAL GET /led/resting.
+	KindLEDRestingGet = "led.resting.get"
+
+	// KindLEDRestingSet saves the resting light (default, off, or custom colour) via HAL PUT /led/resting.
+	KindLEDRestingSet = "led.resting.set"
+
+	// KindLEDRestingPreview shows a candidate colour without saving it via HAL POST /led/resting/preview.
+	KindLEDRestingPreview = "led.resting.preview"
 )
 
 // Connector (MCP) data-kind prefixes; the connector code is the suffix (e.g. "connector.set.notion").
@@ -1043,6 +1052,12 @@ type MQTTVoiceEnrollStarting struct {
 type MQTTVoiceFileData struct {
 	Label string `json:"label"`
 	File  string `json:"file"`
+}
+
+// MQTTLEDRestingData is the Data payload for kind:"led.resting.set" and kind:"led.resting.preview".
+type MQTTLEDRestingData struct {
+	Mode  string `json:"mode"`
+	Color []int  `json:"color"`
 }
 
 // MQTTVoiceFileContent is the success data for kind:"voice.file.get".

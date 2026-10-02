@@ -174,6 +174,17 @@ class LEDRestingRequest(BaseModel):
     color: Optional[list[int]] = Field(None, description="[R, G, B] 0-255; required for custom.")
 
 
+class LEDRestingPreviewRequest(BaseModel):
+    """Show a candidate resting colour without saving it (live colour pickers)."""
+
+    color: list[int] = Field(..., description="[R, G, B] 0-255.")
+
+
+class LEDRestingPreviewResponse(BaseModel):
+    status: str
+    painted: bool  # False when sleep, speech or music owns the strip right now
+
+
 class LEDRestingResponse(BaseModel):
     mode: str
     color: Optional[list[int]]  # the custom colour, or null

@@ -432,6 +432,11 @@ restore for the same request. The page offers preset chips, hue / white↔colour
 brightness sliders capped at channel 64, and warns when a saturated colour sits
 within 20° of hue of a status cue (red, yellow, green, cyan, blue, purple).
 
+`POST /led/resting/preview {color}` paints a candidate colour without saving it
+(the phone app's live picker, MQTT `led.resting.preview`). It never interrupts
+sleep, speech, music or the mic-muted indicator (`painted: false`), and the strip returns to the saved
+look 10 s after the last preview unless a `PUT` saves first.
+
 ### Explicit off
 
 `POST /led/off` saves a solid black preference [0, 0, 0]. Ambient and post-effect

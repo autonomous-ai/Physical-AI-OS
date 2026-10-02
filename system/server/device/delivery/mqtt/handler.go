@@ -331,6 +331,12 @@ func (h *DeviceMQTTHandler) dispatchData(env domain.MQTTDataCommand) error {
 		return h.handleVoiceFileGet(env)
 	case domain.KindVoiceFileRemove:
 		return h.handleVoiceFileRemove(env)
+	case domain.KindLEDRestingGet:
+		return h.handleLEDRestingGet(env)
+	case domain.KindLEDRestingSet:
+		return h.handleLEDRestingSet(env)
+	case domain.KindLEDRestingPreview:
+		return h.handleLEDRestingPreview(env)
 	default:
 		slog.Warn("unknown data kind", "component", "mqtt", "kind", env.Kind)
 		return h.publishDataResult(env.Kind, "failure", "unknown kind: "+env.Kind, nil)
