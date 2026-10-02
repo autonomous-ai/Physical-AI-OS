@@ -55,6 +55,9 @@ Input được giới hạn kích thước (ảnh, audio) để chống tấn c�
 Đầu vào SER được giới hạn 2–8 giây với batch 1 phía server, nằm trong dải kích
 thước của engine TensorRT đã cache, nên không độ dài clip nào có thể kích hoạt
 việc build lại engine trong lúc xử lý request.
+Tương tự, đầu vào speaker embedding bị cắt còn 3000 frame (30 giây) trước khi
+suy luận, thấp hơn giới hạn 5546 frame của engine đã cache, nên clip dài được
+embed từ 30 giây đầu thay vì phải build lại engine (#555).
 Lựa chọn model và output:
 [`integrations/perception-service/docs/perceptions.md`](../../integrations/perception-service/docs/perceptions.md).
 

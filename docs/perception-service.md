@@ -52,7 +52,10 @@ per-label gate on the device. Face and person detection run internally to feed
 those pipelines. Requests from concurrent sessions are batched before GPU dispatch —
 tune `BATCH_SIZE` and `BATCH_TIMEOUT` per model. SER input is bounded to 2–8 s
 at batch 1 server-side, which stays inside the cached TensorRT engine's shape
-range, so no clip length can trigger an engine rebuild during a request. Model choices and outputs:
+range, so no clip length can trigger an engine rebuild during a request.
+Speaker-embedding input is likewise cropped to 3000 frames (30 s) before
+inference, below the cached engine's 5546-frame limit, so a long clip is
+embedded from its first 30 s instead of rebuilding the engine (#555). Model choices and outputs:
 [`integrations/perception-service/docs/perceptions.md`](../integrations/perception-service/docs/perceptions.md).
 
 ## Using it from a device

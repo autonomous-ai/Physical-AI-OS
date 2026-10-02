@@ -36,6 +36,9 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
     DEFAULT_WINDOW_FRAMES: int = 600
     DEFAULT_HOP_FRAMES: int = 400
     DEFAULT_CHUNK_THRESHOLD_FRAMES: int = 1000
+    # Frame cap (~100 frames/s); must stay inside the cached TensorRT profile
+    # (max T = 5546) so no request can force a live engine rebuild (#555).
+    MAX_FRAMES: int = 3000
     DEFAULT_SAMPLE_RATE: int = 16000
     DEFAULT_NUM_MEL_BINS: int = 80
     ONNX_INPUT_NAME: str = "feats"
@@ -192,7 +195,7 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
         otherwise windows of window_frames with hop_frames stride (last one shifted back).
 
         Args:
-            feat: Shape (T, num_mel_bins), ~100 frames per second.
+            feat: Shape (T, num_mel_bins), ~100 frames per second, T <= MAX_FRAMES.
             use_sliding_window: False never splits (enroll path).
 
         Returns:
@@ -279,6 +282,11 @@ class AudioEmbedder(PredictorBase[Audio, RawAudioEmbedding]):
 
         for audio in input:
             feat = self._compute_fbank(audio)
+            if feat.shape[0] > self.MAX_FRAMES:
+                self._logger.info(
+                    "Embed input %d frames > %d — cropping", feat.shape[0], self.MAX_FRAMES,
+                )
+                feat = feat[: self.MAX_FRAMES]
             windows = self._sliding_windows(
                 feat, use_sliding_window=use_sliding_window
             )
