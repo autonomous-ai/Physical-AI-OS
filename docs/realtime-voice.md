@@ -1242,6 +1242,17 @@ ACK so reconnect cannot resume an unanswered handoff. Inference already started 
 (for example after an earlier emotion response) can still produce usage; this
 optimization does not guarantee zero additional tokens.
 
+For an accepted `reject_turn` in **LIVE OFF**, HAL also withholds the result
+when the Gemini session is non-resumable, no live capture owns it, and a pending
+tool already requires replacement. The same `RejectSignal` is emitted: ambient
+speech remains rejected, silent, and subject to the existing KPI exclusion rules.
+The unanswered call forces a fresh connection through `prepare_turn()` before
+the next capture; a failed replacement discards the old session. This avoids
+requesting post-rejection inference but adds a reconnect before the next turn.
+Provider inference already in flight can still produce additional usage. LIVE ON,
+resumable sessions, other providers, and a late reject after output has already
+started retain their existing ACK behavior. No rejection criteria changed.
+
 On receive timeout, `[realtime][transport]` logs connection/sender state,
 queued input count, age of the last successful audio send, pending tools and
 tool-gated frames. These are transport metadata, not recorded audio. The live

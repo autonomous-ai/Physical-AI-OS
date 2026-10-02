@@ -3452,3 +3452,17 @@ Không fallback main và không ghi task execution thành công. Cờ hiện h�
 `rejected_non_user`. Output rỗng, timeout, marker dở dang, marker kèm câu trả
 lời, câu báo lỗi hệ thống và `NO_REPLY` của main không đủ điều kiện. Native
 audio và output pump LIVE liên tục không đổi.
+
+
+### Reject LIVE OFF không sinh thêm lượt sau ACK
+
+Khi chấp nhận `reject_turn` trong **LIVE OFF**, HAL không gửi tool response nếu
+session Gemini không bật resumption, không có live capture sở hữu session và
+tool còn chờ đã yêu cầu thay session. Vẫn phát cùng `RejectSignal`: lời nói ngoài
+vẫn bị bỏ qua, không phát tiếng và giữ nguyên quy tắc loại khỏi KPI.
+`prepare_turn()` dựng kết nối mới trước capture tiếp theo; nếu dựng thất bại thì
+loại session cũ, không dùng lại tool còn treo. Cách này không yêu cầu inference tiếp sau reject
+nhưng thêm thời gian reconnect trước turn sau; inference provider đã chạy vẫn có
+thể phát sinh thêm usage. LIVE ON, session bật resumption,
+provider khác và reject đến muộn sau khi output đã bắt đầu vẫn giữ ACK như cũ.
+Không thay tiêu chí nhận diện turn cần reject.
