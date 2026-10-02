@@ -7,7 +7,7 @@ from fastapi import HTTPException
 
 from hal import app_state as state, presets, resting_led
 from hal.drivers.harness import led as harness_led
-from hal.models import LEDRestingRequest
+from hal.models import LEDRestingPreviewRequest, LEDRestingRequest
 from hal.routes import led
 
 
@@ -100,3 +100,69 @@ def test_put_while_asleep_saves_without_painting(strip, monkeypatch):
     led.set_led_resting(LEDRestingRequest(mode="custom", color=[8, 4, 1]))
     assert presets.AMBIENT_RESTING_LED["color"] == [8, 4, 1]
     strip.dispatch.assert_not_called()
+
+
+@pytest.fixture
+def no_timer(monkeypatch):
+    """Capture preview timers instead of letting them fire on their own."""
+    timers = []
+
+    class FakeTimer:
+        def __init__(self, interval, fn):
+            self.interval, self.fn, self.cancelled, self.daemon = interval, fn, False, False
+            timers.append(self)
+
+        def start(self):
+            pass
+
+        def cancel(self):
+            self.cancelled = True
+
+    monkeypatch.setattr(led.threading, "Timer", FakeTimer)
+    monkeypatch.setattr(led, "_preview_timer", None)
+    monkeypatch.setattr(state, "_cancel_pending_restore", Mock())
+    return timers
+
+
+def test_preview_paints_without_saving(strip, no_timer, device):
+    reply = led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))
+    assert reply == {"status": "ok", "painted": True}
+    strip.dispatch.assert_called_once_with("solid", (20, 0, 10))
+    assert presets.AMBIENT_RESTING_LED["color"] == [5, 4, 3]
+    assert not device.exists()
+
+
+def test_preview_expiry_restores_saved_look(strip, no_timer, monkeypatch):
+    monkeypatch.setattr(state, "_user_led_state", None)
+    led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))
+    led.preview_led_resting(LEDRestingPreviewRequest(color=[30, 0, 10]))
+    first, latest = no_timer
+    assert first.cancelled and latest.interval == led.RESTING_PREVIEW_HOLD_S
+    first.fn()  # a superseded timer must not repaint
+    assert strip.dispatch.call_count == 2
+    latest.fn()
+    strip.dispatch.assert_called_with("solid", (5, 4, 3))
+
+
+def test_save_cancels_pending_preview(strip, no_timer):
+    led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))
+    led.set_led_resting(LEDRestingRequest(mode="custom", color=[8, 4, 1]))
+    assert no_timer[0].cancelled
+    strip.dispatch.assert_called_with("solid", (8, 4, 1))
+
+
+@pytest.mark.parametrize("flag", ["_sleeping", "_tts_speaking", "_music_playing", "mic_muted"])
+def test_preview_never_cuts_into_sleep_speech_music_or_mic_privacy(strip, no_timer, monkeypatch, flag):
+    if flag == "mic_muted":
+        monkeypatch.setattr(state, "_mic_muted_led_owns_strip", lambda: True)
+    else:
+        monkeypatch.setattr(state, flag, True)
+    assert led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))["painted"] is False
+    strip.dispatch.assert_not_called()
+    assert no_timer == []
+
+
+def test_preview_rejects_bad_color(strip, no_timer):
+    with pytest.raises(HTTPException) as e:
+        led.preview_led_resting(LEDRestingPreviewRequest(color=[1, 2]))
+    assert e.value.status_code == 400

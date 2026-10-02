@@ -123,6 +123,12 @@ def snapshot() -> dict:
         }
 
 
+def valid_preview_color(color) -> tuple[int, int, int]:
+    """A previewable [r, g, b]; raises ValueError like set_choice does."""
+    r, g, b = _valid_color(color)
+    return (r, g, b)
+
+
 def set_choice(mode: str, color=None) -> dict:
     """Validate, save and apply a new choice; raises ValueError on bad input."""
     global _device_default, _choice

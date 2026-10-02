@@ -13,6 +13,8 @@ from hal.models import (
     LEDEffectResponse,
     LEDOffRequest,
     LEDPaintRequest,
+    LEDRestingPreviewRequest,
+    LEDRestingPreviewResponse,
     LEDRestingRequest,
     LEDRestingResponse,
     LEDSolidRequest,
@@ -343,11 +345,65 @@ def set_led_resting(req: LEDRestingRequest):
         snap = resting_led.set_choice(req.mode, req.color)
     except ValueError as e:
         raise HTTPException(400, str(e))
+    _cancel_resting_preview()
     # The new resting look replaces an earlier explicit colour or off.
     state._save_user_led_state(None)
     if not _sleep_led_locked("led/resting"):
         state._restore_user_led()
     return snap
+
+
+# A preview the app never follows with a save falls back to the saved look.
+RESTING_PREVIEW_HOLD_S = 10.0
+_preview_lock = threading.Lock()
+_preview_timer: Optional[threading.Timer] = None
+
+
+def _cancel_resting_preview() -> None:
+    global _preview_timer
+    with _preview_lock:
+        if _preview_timer is not None:
+            _preview_timer.cancel()
+            _preview_timer = None
+
+
+def _end_resting_preview(timer: threading.Timer) -> None:
+    global _preview_timer
+    with _preview_lock:
+        if _preview_timer is not timer:
+            return
+        _preview_timer = None
+    state.logger.info("LED resting preview expired -- restoring saved look")
+    state._restore_user_led()
+
+
+@router.post("/led/resting/preview", response_model=LEDRestingPreviewResponse)
+def preview_led_resting(req: LEDRestingPreviewRequest):
+    """Paint a candidate resting colour now without saving it; reverts after 10 s of no previews."""
+    global _preview_timer
+    from hal import resting_led
+
+    if not state.rgb_service:
+        raise HTTPException(503, "LED not available")
+    try:
+        color = resting_led.valid_preview_color(req.color)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    # Never cut into sleep, speech, music or the mic-privacy indicator; the saved look is unchanged either way.
+    if (state._sleeping or state._tts_speaking or state._music_playing
+            or state._mic_muted_led_owns_strip()):
+        return {"status": "ok", "painted": False}
+    state._cancel_pending_restore()
+    state._stop_current_effect()
+    state.rgb_service.dispatch(RGB_CMD_SOLID, color)
+    timer = threading.Timer(RESTING_PREVIEW_HOLD_S, lambda: _end_resting_preview(timer))
+    timer.daemon = True
+    with _preview_lock:
+        if _preview_timer is not None:
+            _preview_timer.cancel()
+        _preview_timer = timer
+    timer.start()
+    return {"status": "ok", "painted": True}
 
 
 @router.post("/led/effect/stop", response_model=StatusResponse)

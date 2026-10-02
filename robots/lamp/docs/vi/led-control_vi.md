@@ -418,6 +418,11 @@ Trang có các ô màu gợi ý, thanh trượt hue / trắng↔màu / độ sá
 và cảnh báo khi màu bão hòa nằm trong 20° hue của một màu trạng thái (đỏ, vàng,
 xanh lá, cyan, xanh dương, tím).
 
+`POST /led/resting/preview {color}` vẽ thử một màu mà không lưu (bộ chọn màu
+trực tiếp trên app, MQTT `led.resting.preview`). Nó không bao giờ cắt ngang lúc
+ngủ, đang nói, phát nhạc hay đèn báo tắt mic (`painted: false`), và đèn quay về màu đã lưu 10 giây
+sau lần preview cuối, trừ khi có `PUT` lưu trước đó.
+
 ### User tắt đèn
 
 `POST /led/off` lưu tùy chọn solid đen [0, 0, 0], nên ambient và restore sau

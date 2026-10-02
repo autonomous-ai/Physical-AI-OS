@@ -363,6 +363,9 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `voice.remove` | Xoá toàn bộ hồ sơ giọng của một người qua HAL `POST /speaker/remove`; dữ liệu khuôn mặt giữ nguyên (bất đồng bộ; ack `starting`) | `label` |
 | `voice.file.get` | Trả về một file mẫu giọng dạng base64 để phát lại (đồng bộ) | `label`, `file` |
 | `voice.file.remove` | Xoá một mẫu giọng và file `.npy` đi kèm, giống `POST /api/voice/file/remove` (đồng bộ) | `label`, `file` |
+| `led.resting.get` | Đọc lựa chọn đèn nghỉ của chủ máy, mặc định của device và màu đang áp qua HAL `GET /led/resting` (đồng bộ) | _(không có)_ |
+| `led.resting.set` | Lưu đèn nghỉ (`default`, `off` hoặc màu `custom`) qua HAL `PUT /led/resting`; giữ qua reboot (đồng bộ) | `mode`, `color` khi `custom` |
+| `led.resting.preview` | Hiện thử một màu mà không lưu qua HAL `POST /led/resting/preview`; tự quay về sau 10 giây kể từ lần preview cuối; chỉ ack khi lỗi | `color` |
 | `environment.status` | Đọc snapshot môi trường HAL theo capability, không phụ thuộc model cảm biến | _(không)_ |
 | `system.info` | Snapshot tổng hợp: versions + network + host | _(không)_ |
 | `system.version` | Chỉ versions các thành phần (rẻ hơn `system.info`) | _(không)_ |
@@ -1140,6 +1143,46 @@ trả lỗi `POST /speaker/remove returned 404: voice profile not found: <label>
 }
 ```
 
+#### `led.resting.*` — Đèn nghỉ qua MQTT
+
+Các kind `led.resting.*` cho điện thoại đúng phần **Resting light** của web
+(`LedSection.tsx`). HAL quản resting look và lưu lựa chọn ở
+`/var/lib/hal/resting_led.json`; os-server chỉ kiểm tra input và chuyển tiếp.
+
+| Thao tác trên app | Gọi HAL | MQTT kind |
+|-------------------|---------|-----------|
+| Mở màn hình | `GET /led/resting` | `led.resting.get` |
+| Kéo màu (đèn đổi theo ngay) | `POST /led/resting/preview` | `led.resting.preview` |
+| Save / tắt / về mặc định | `PUT /led/resting` | `led.resting.set` |
+
+```json
+{"cmd": "data", "kind": "led.resting.set", "data": {"mode": "custom", "color": [8, 4, 1]}}
+{"cmd": "data", "kind": "led.resting.preview", "data": {"color": [20, 0, 10]}}
+```
+
+`mode` là `default` (preset của device), `off`, hoặc `custom`; `custom` cần
+`color` `[r, g, b]` với mỗi kênh 0-255, màu đen được lưu thành `off`. Các mode
+khác bỏ qua `color`. `get` và `set` trả `success` kèm snapshot của HAL:
+
+```json
+{"mode": "custom", "color": [8, 4, 1],
+ "default": {"effect": "solid", "color": [5, 4, 3]},
+ "effective": {"effect": "solid", "color": [8, 4, 1]}}
+```
+
+**Xem trực tiếp.** Khi chủ máy kéo màu, gửi `led.resting.preview`, giới hạn
+khoảng 5 lần mỗi giây (~200 ms một lần) cộng vị trí cuối cùng. Mỗi preview vẽ
+ngay mà không đụng lựa chọn đã lưu hay ghi thẻ nhớ, và không trả lời khi thành
+công để một lần kéo không làm ngập fd_channel. HAL bỏ qua việc vẽ khi device
+đang ngủ, đang nói, phát nhạc hoặc đang hiện đèn tắt mic. Nếu không có `set` theo sau, đèn quay về màu
+đã lưu 10 giây sau lần preview cuối, nên thoát màn hình giữa chừng cũng không để
+lại màu thử. Gửi `led.resting.set` khi chủ máy bấm Save; nó hủy preview đang chờ,
+lưu lựa chọn, xoá lệnh tắt/màu đặt tay trước đó và vẽ lại. Đi qua broker sẽ trễ
+thêm vài trăm mili giây.
+
+Device không có capability `light` trả `failure` với `this device has no light`.
+Input sai bị từ chối trước khi gọi HAL.
+
 #### `chat.send` + `chat.event`
 
 Sentinel nội bộ `NO_REPLY` dùng khi chuyển tiếp sẽ được loại khỏi `chat.event`; client sẽ nhận tiến trình Harness và phản hồi cuối cùng.
@@ -1470,6 +1513,7 @@ Router MQTT của os-server không có case `ota`: message bị log là `unknown
 | `system/server/device/delivery/mqtt/skills_upload_handler.go` | Handle `skills.upload` (SKILL.md inline → `AgentGateway.InstallSkillMarkdown`) |
 | `system/server/device/delivery/mqtt/face_enroll_handler.go` | Handle `face.enroll` (kiểm tra payload, rồi gọi bất đồng bộ `hal.FaceEnroll` → HAL `POST /face/enroll`) |
 | `system/server/device/delivery/mqtt/face_owners_handler.go` | Handle `face.owners` (→ HAL `GET /face/owners`, bỏ bucket `unknown`) và `face.remove` (bất đồng bộ → HAL `POST /face/remove`) |
+| `system/server/device/delivery/mqtt/led_resting_handler.go` | Handle `led.resting.get`, `led.resting.set` và `led.resting.preview` (HAL `/led/resting`, capability `light`) |
 | `system/server/device/delivery/mqtt/voice_enroll_handler.go` | Handle `voice.enroll` (bất đồng bộ → HAL `POST /speaker/record-enroll`, mic của đèn, 15 giây), `voice.owners`, `voice.file.get`, `voice.file.remove` (qua `system/lib/voicefile`) và `voice.remove` (bất đồng bộ → HAL `POST /speaker/remove`) |
 | `system/lib/voicefile/voicefile.go` | Liệt kê, đọc và xoá mẫu giọng trong `users/<label>/voice/`; dùng chung cho `POST /api/voice/file/remove` và các kind `voice.*` |
 | `system/server/device/delivery/mqtt/skills_files_handler.go` | Handle `skills.files` (đọc file của một skill đã cài: danh sách, hoặc nội dung một file) |
