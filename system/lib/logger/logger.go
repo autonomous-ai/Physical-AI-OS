@@ -326,14 +326,35 @@ func (s *gelfSender) run() {
 				return
 			}
 			if s.send(body) == sendRetry && s.spool != nil {
-				s.spool.append(body)
-				s.backlog.Store(true)
+				s.spoolFailed(body)
 			}
 		case <-s.wake:
 		case <-check.C:
 			if s.spool != nil && s.spool.pending() {
 				s.backlog.Store(true)
 			}
+		}
+	}
+}
+
+// spoolFailed moves a record that could not be sent to the spool, followed by
+// every record queued behind it. The write lock keeps enqueue out meanwhile:
+// otherwise a record logged after the failure reaches the spool first and is
+// replayed ahead of the older ones still in the queue.
+func (s *gelfSender) spoolFailed(body []byte) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.spool.append(body)
+	s.backlog.Store(true)
+	for {
+		select {
+		case queued, ok := <-s.queue:
+			if !ok {
+				return
+			}
+			s.spool.append(queued)
+		default:
+			return
 		}
 	}
 }

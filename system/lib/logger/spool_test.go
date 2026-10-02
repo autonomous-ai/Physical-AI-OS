@@ -44,16 +44,21 @@ type flakyCollector struct {
 	*httptest.Server
 	ok       atomic.Bool
 	attempts atomic.Int32
-	mu       sync.Mutex
-	bodies   []string
+	// hold, when set, runs before the collector answers its first request.
+	hold   atomic.Pointer[func()]
+	mu     sync.Mutex
+	bodies []string
 }
 
 func newFlakyCollector(t *testing.T) *flakyCollector {
 	t.Helper()
 	c := &flakyCollector{}
 	c.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		c.attempts.Add(1)
+		first := c.attempts.Add(1) == 1
 		body, _ := io.ReadAll(r.Body)
+		if hold := c.hold.Load(); first && hold != nil {
+			(*hold)()
+		}
 		if !c.ok.Load() {
 			w.WriteHeader(http.StatusServiceUnavailable)
 			return
@@ -71,6 +76,20 @@ func (c *flakyCollector) accepted() []string {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return append([]string(nil), c.bodies...)
+}
+
+// wantRecordsInOrder checks the collector accepted record-0..record-(n-1)
+// exactly once each, in that order.
+func wantRecordsInOrder(t *testing.T, got []string, n int) {
+	t.Helper()
+	if len(got) != n {
+		t.Fatalf("accepted = %d, want exactly %d (no duplicates)", len(got), n)
+	}
+	for i, b := range got {
+		if !strings.Contains(b, fmt.Sprintf(`"record-%d"`, i)) {
+			t.Fatalf("record %d = %s, want record-%d: replay must keep order", i, b, i)
+		}
+	}
 }
 
 func TestGELFSpoolKeepsSetupLogsUntilTheRelayArms(t *testing.T) {
@@ -118,15 +137,34 @@ func TestGELFSpoolReplaysInOrderAfterTheCollectorRecovers(t *testing.T) {
 	waitFor(t, func() bool { return len(collector.accepted()) >= 5 })
 	done()
 
-	got := collector.accepted()
-	if len(got) != 5 {
-		t.Fatalf("accepted = %d, want exactly 5 (no duplicates)", len(got))
+	wantRecordsInOrder(t, collector.accepted(), 5)
+}
+
+// A record still queued when a send fails is older than anything logged after
+// the failure, so it must be replayed first.
+func TestGELFSpoolReplaysQueuedRecordsBeforeLaterOnes(t *testing.T) {
+	shortReplayTiming(t)
+	collector := newFlakyCollector(t)
+	sending, fail := make(chan struct{}), make(chan struct{})
+	hold := func() { close(sending); <-fail }
+	collector.hold.Store(&hold)
+	done := initTestLogger(t, "")
+	EnableGELFSpool(t.TempDir(), "os-server")
+	EnableGELFRelay(collector.URL, "lobster-key")
+
+	slog.Info("record-0")
+	<-sending
+	slog.Info("record-1") // queued behind the send in flight
+	close(fail)
+	waitFor(t, func() bool { return collector.attempts.Load() >= 2 }) // replay has started
+	for i := 2; i < 5; i++ {
+		slog.Info(fmt.Sprintf("record-%d", i)) // logged after the failure
 	}
-	for i, b := range got {
-		if !strings.Contains(b, fmt.Sprintf(`"record-%d"`, i)) {
-			t.Fatalf("record %d = %s, want record-%d: replay must keep order", i, b, i)
-		}
-	}
+	collector.ok.Store(true)
+	waitFor(t, func() bool { return len(collector.accepted()) >= 5 })
+	done()
+
+	wantRecordsInOrder(t, collector.accepted(), 5)
 }
 
 func TestGELFSpoolIsBoundedAndDropsTheOldest(t *testing.T) {

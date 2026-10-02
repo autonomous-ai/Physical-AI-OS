@@ -9,6 +9,7 @@ import (
 	"net/http/httputil"
 	"strings"
 	"testing"
+	"testing/iotest"
 
 	"github.com/gin-gonic/gin"
 
@@ -56,6 +57,37 @@ type credentialTestTransport func(*http.Request) (*http.Response, error)
 
 func (f credentialTestTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return f(req)
+}
+
+// A proxied stream that breaks mid-body is a disconnect, not a crash: the
+// request is still logged, but without a panic stack trace.
+func TestProxiedStreamAbortIsNotLoggedAsPanic(t *testing.T) {
+	var logs bytes.Buffer
+	proxy := *hardwareProxy.(*httputil.ReverseProxy)
+	proxy.Transport = credentialTestTransport(func(*http.Request) (*http.Response, error) {
+		body := io.MultiReader(strings.NewReader("data: 1\n\n"), iotest.ErrReader(io.ErrUnexpectedEOF))
+		return &http.Response{StatusCode: http.StatusOK, Header: make(http.Header), Body: io.NopCloser(body)}, nil
+	})
+	router := gin.New()
+	router.Use(credentialSafeLogger(&logs), credentialSafeRecovery(&logs))
+	router.GET("/api/hardware/*path", gin.WrapH(&proxy))
+
+	response := httptest.NewRecorder()
+	// The proxy only panics on a broken body when it sees it runs under an
+	// http.Server, which is what happens on the device.
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), http.ServerContextKey, &http.Server{}))
+	defer cancel()
+	router.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/api/hardware/voice/mic-level", nil).WithContext(ctx))
+
+	if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), "data: 1") {
+		t.Errorf("response = %d %q, want the bytes streamed before the abort", response.Code, response.Body.String())
+	}
+	if !strings.Contains(logs.String(), `| 200 |`) || !strings.Contains(logs.String(), `GET "/api/hardware/voice/mic-level"`) {
+		t.Errorf("aborted stream missing from access log: %q", logs.String())
+	}
+	if strings.Contains(logs.String(), "panic recovered") {
+		t.Errorf("aborted stream logged as a panic:\n%s", logs.String())
+	}
 }
 
 func TestHALProxiesStripCredentialAfterAuthentication(t *testing.T) {
