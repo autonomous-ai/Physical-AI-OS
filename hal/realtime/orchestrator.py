@@ -34,6 +34,7 @@ from hal.realtime.context_manager import (
 )
 from hal.realtime.enums import AgentGateway
 from hal.realtime.find_intent import is_find_request
+from hal.realtime.emotion_markers import EmotionMarkerStream, marker_instructions
 from hal.realtime.models import (
     FunctionCallOutput,
     FunctionCallResultInput,
@@ -510,12 +511,17 @@ class RealtimeOrchestrator:
         if provider == "gemini":
             from hal.realtime.voice_agent.gemini_live import GeminiLiveAgent
 
-            return GeminiLiveAgent(
+            markers = self._use_emotion_markers()
+            agent = GeminiLiveAgent(
                 config=GeminiConfig(
-                    instructions=instructions, voice=GeminiVoice(self._gemini_voice()),
+                    instructions=marker_instructions(instructions) if markers else instructions,
+                    voice=GeminiVoice(self._gemini_voice()),
                 ),
-                tools=self._tools,
+                tools=[tool for tool in self._tools
+                       if not markers or tool.get("name") != EMOTION_TOOL_NAME],
             )
+            agent._emotion_markers_enabled = markers
+            return agent
         if provider == "openai":
             from hal.realtime.voice_agent.openai_realtime import (
                 OpenAIRealtimeAgent,
@@ -539,6 +545,21 @@ class RealtimeOrchestrator:
                 stt_provider=self._stt_provider,
             )
         return None
+
+    def _use_emotion_markers(self) -> bool:
+        """Only the tested Gemini 3.8 external-TTS path can strip control text."""
+        override = getattr(self, "_voice_override", None)
+        return bool(
+            getattr(self, "_expression_enabled", False)
+            and config.REALTIME_GEMINI_MODEL.startswith("gemini-3.8-live")
+            and not config.REALTIME_NATIVE_AUDIO
+            and not (override and override())
+        )
+
+    def _fire_marker_emotion(self, emotion: str, intensity: float) -> None:
+        logger.info("[realtime] Emotion marker → express (emotion=%s intensity=%.2f)",
+                    emotion, intensity)
+        threading.Thread(target=self._fire_emotion, args=(emotion, intensity), daemon=True).start()
 
     def _gemini_voice(self) -> str:
         """Voice for the next Gemini Live session: the override, else config."""
@@ -756,6 +777,11 @@ class RealtimeOrchestrator:
             return
         # The voice is fixed at connect; a voice change needs a fresh session.
         if provider == "gemini" and agent is not None:
+            marker_mode = getattr(agent, "_emotion_markers_enabled", None)
+            if isinstance(marker_mode, bool) and marker_mode != self._use_emotion_markers():
+                if self._rebuild_now("gemini-expression-mode-change", discard_old_on_failure=True):
+                    self._skip_post_idle_recycle = True
+                return
             current = getattr(getattr(agent, "_config", None), "voice", None)
             wanted = self._gemini_voice()
             if current is not None and current != wanted:
@@ -1086,6 +1112,10 @@ class RealtimeOrchestrator:
         if self._agent is None:
             return
         execution_agent = self._agent
+        marker_stream = (EmotionMarkerStream(EMOTION_TOOL_EMOTIONS, self._fire_marker_emotion)
+                         if getattr(execution_agent, "_emotion_markers_enabled", False) is True
+                         else None)
+        marker_turn_id = ""
 
         self._looked_this_turn = False  # reset the per-turn `look` image-send guard
         produced = False  # did this turn yield any real output (vs stay silent)?
@@ -1106,6 +1136,17 @@ class RealtimeOrchestrator:
             self._last_activity_monotonic = time.monotonic()
             if turn is not None:
                 self._validate_audio_turn(turn)
+            if marker_stream is not None:
+                if isinstance(output, InterruptedOutput):
+                    marker_stream.reset()
+                if output.user_turn_id and output.user_turn_id != marker_turn_id:
+                    marker_stream.reset()
+                    marker_turn_id = output.user_turn_id
+                if isinstance(output, TextOutput):
+                    clean = marker_stream.feed(output.text)
+                    if not clean:
+                        continue
+                    output = output.model_copy(update={"text": clean})
             if isinstance(output, (FunctionCallOutput, MainAgentFallbackOutput, InterruptedOutput)):
                 had_tool_or_interruption = True
             if isinstance(output, TextOutput):

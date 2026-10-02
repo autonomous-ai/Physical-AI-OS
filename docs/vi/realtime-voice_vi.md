@@ -1209,7 +1209,26 @@ luồng thu live chỉ đo thời gian đưa vào hàng đợi, chưa chứng mi
 Model được dặn (`resources/system_prompt*.md`, mục "Expression Exception") không
 chờ, không thông báo, không đọc tên cảm xúc thành tiếng. Lưu ý điều này khác
 path không-realtime: ở đó agent phát marker text `[HW:/emotion:…]` rồi lớp Go
-parse và cắt bỏ — path realtime không bao giờ dùng marker text.
+parse và cắt bỏ.
+
+Với Gemini 3.8 dùng TTS ngoài và thiết bị có capability `expression`, HAL thay
+`express_emotion` bằng protocol inline trong
+`hal/realtime/resources/emotion_markers.md`. Model đặt
+`[HW:/emotion:{"emotion":"happy","intensity":0.8}]` trước lời nói tương ứng.
+Orchestrator bắt marker ngay trong stream, khởi động biểu cảm nội bộ không chờ
+hết câu trả lời, rồi loại marker trước khi yield text tới TTS, lịch sử turn và UI.
+Không gửi tool response emotion về Gemini. Parser giữ bracket bị chia chunk,
+bỏ marker dở dang/quá dài, kiểm tra emotion và intensity hữu hạn (0–1), không
+thực thi lệnh phần cứng khác, và chống lặp cùng cặp emotion/intensity trong một
+turn. Các delivery tag đầy đủ khác vẫn được giữ cho ElevenLabs. Biểu cảm là tùy
+chọn; độ tuân thủ prompt và timing vật lý vẫn cần xác minh trên device.
+
+Audio Gemini phát trực tiếp (kể cả chọn giọng Gemini TTS), provider realtime khác
+và model Gemini ngoài 3.8 vẫn dùng tool emotion. Khi đổi giữa native audio và
+TTS ngoài, session Gemini được dựng lại trước turn tiếp theo kể cả khi tên giọng
+không đổi, tránh áp dụng protocol text lên audio native chưa lọc. Thử nghiệm
+marker đã chạy trên Mac; chưa chứng minh audio Gemini native không bao giờ đọc
+marker thành tiếng.
 
 ## Google Search grounding (chỉ Gemini)
 
