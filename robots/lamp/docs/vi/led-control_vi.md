@@ -391,6 +391,11 @@ OS ambient pause khi tương tác, resume sau 60 giây yên lặng (tick hai gi�
 `restingLEDLoop` gọi `POST /led/restore` một lần khi resume, không tự chọn màu
 hay bật breathing. HAL là nơi duy nhất quyết định resting look và màu/effect đã lưu.
 
+Speaking wave giữ RGB nền của preset solid lúc nghỉ hoặc emotion solid khi
+chưa lưu màu của user. Với Lamp nghỉ ở [5, 4, 3], wave biến thiên trên màu mờ
+này, không chuyển sang trắng ấm sáng mạnh. Màu user đã lưu vẫn được ưu tiên;
+tắt đèn rõ ràng vẫn giữ tối.
+
 ### User tắt đèn
 
 `POST /led/off` lưu tùy chọn solid đen [0, 0, 0], nên ambient và restore sau

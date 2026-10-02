@@ -797,8 +797,8 @@ def _get_current_led_color() -> tuple:
                 return tuple(int(c * preset["brightness"]) for c in preset["color"])
     if _is_nonblack(_effect_base_color):
         return _effect_base_color
-    # Last-resort warm white (only when the resting look is lit).
-    return (255, 180, 100)
+    # Preserve the device's resting brightness even before its first restore.
+    return tuple(AMBIENT_RESTING_LED["color"])
 
 
 def _get_user_base_color() -> tuple:
@@ -839,6 +839,7 @@ def _start_preset_effect(preset: dict, thread_name: str):
     color = tuple(preset["color"])
     if preset["effect"] == LST_SOLID:
         rgb_service.dispatch(RGB_CMD_SOLID, color)
+        _effect_base_color = color
         return
     _effect_stop.clear()
     _effect_name = preset["effect"]
@@ -1340,6 +1341,7 @@ def _apply_emotion_led_display(
                 _effect_thread.start()
             else:
                 rgb_service.dispatch(RGB_CMD_SOLID, tuple(scaled))
+                _effect_base_color = tuple(scaled)
             led_color = scaled
             if sensing_service:
                 sensing_service.presence.set_last_color(tuple(scaled))

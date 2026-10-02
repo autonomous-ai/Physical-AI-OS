@@ -405,6 +405,11 @@ on a two-second tick). Its `restingLEDLoop` requests `POST /led/restore` once on
 resume instead of choosing a color or starting breathing. HAL remains the single
 source of the resting look and the user's saved color/effect.
 
+Speaking waves preserve the base RGB of a solid resting preset or solid emotion
+when no user color is saved. With Lamp resting at [5, 4, 3], the wave modulates
+that dim color; it does not fall back to bright warm white. A saved user color
+still takes priority, and explicit off stays dark.
+
 ### Explicit off
 
 `POST /led/off` saves a solid black preference [0, 0, 0]. Ambient and post-effect

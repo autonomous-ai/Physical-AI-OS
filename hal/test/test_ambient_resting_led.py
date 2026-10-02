@@ -20,6 +20,10 @@ def lamp(monkeypatch, tmp_path):
     for flag in ("_sleeping", "_tts_speaking", "_music_playing", "_thinking_cue_active"):
         monkeypatch.setattr(state, flag, False)
     monkeypatch.setattr(state, "_restore_timer", None)
+    monkeypatch.setattr(state, "_effect_thread", None)
+    monkeypatch.setattr(state, "_effect_name", None)
+    monkeypatch.setattr(state, "_effect_base_color", None)
+    monkeypatch.setattr(state, "_effect_stop", Mock())
     monkeypatch.setattr(state, "_stop_current_effect", Mock())
     monkeypatch.setattr(state, "_mic_muted_led_owns_strip", lambda: False)
     monkeypatch.setattr(state, "_dismiss_mic_muted_led", Mock())
@@ -63,3 +67,31 @@ def test_explicit_color_survives_ambient_restore(lamp, monkeypatch):
     monkeypatch.setattr(state, "_user_led_state", {"type": "solid", "color": [12, 20, 30]})
     led.restore_led()
     lamp.dispatch.assert_called_once_with("solid", (12, 20, 30))
+
+
+@pytest.mark.parametrize("emotion", [None, "thinking", "acknowledge"])
+def test_speaking_wave_preserves_dim_display_color(lamp, monkeypatch, emotion):
+    monkeypatch.setattr(state, "_effect_base_color", None)
+    monkeypatch.setattr(state, "display_service", None)
+    led.restore_led()
+    expected = (5, 4, 3)
+    if emotion:
+        expected = (2, 0, 3) if emotion == "thinking" else (0, 3, 0)
+        monkeypatch.setitem(state.EMOTION_PRESETS, emotion, {"color": list(expected)})
+        state._apply_emotion_led_display(emotion)
+    worker = Mock()
+    monkeypatch.setattr(state.threading, "Thread", worker)
+    state._on_tts_speak_start()
+    assert worker.call_args.kwargs["args"][1] == expected
+    worker.return_value.start.assert_called_once()
+
+
+def test_speaking_color_before_first_restore_uses_dim_default(lamp, monkeypatch):
+    monkeypatch.setattr(state, "_effect_base_color", None)
+    assert state._get_current_led_color() == (5, 4, 3)
+
+
+def test_explicit_off_blocks_stale_emotion_wave_color(lamp, monkeypatch):
+    monkeypatch.setattr(state, "_effect_base_color", (2, 0, 3))
+    monkeypatch.setattr(state, "_user_led_state", {"type": "solid", "color": [0, 0, 0]})
+    assert state._get_current_led_color() == (0, 0, 0)
