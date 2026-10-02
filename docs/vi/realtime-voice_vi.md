@@ -2833,8 +2833,11 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
    turn mới ở local rồi gửi đúng một lần, đúng thứ tự khi session thay thế sẵn
    sàng. Nếu reconnect chậm/lỗi thì fallback về main agent với transcript STT;
    không làm rớt audio đầu câu hoặc commit nó vào activity cũ.
-3. **Bơm turn context + prepass speaker-ID.** `[TURN CONTEXT]` (thời gian, nhắc
-   ngôn ngữ trả lời, user hiện tại) được gửi dạng text không tạo response. **User
+3. **Bơm turn context + prepass speaker-ID.** `[TURN CONTEXT]` (thời gian, vị trí
+   thiết bị — tên thành phố lấy từ `/etc/timezone` qua `hal.clock.device_city()`,
+   bỏ qua với múi giờ `UTC`/`Etc/*` — nhắc ngôn ngữ trả lời, user hiện tại) được
+   gửi dạng text không tạo response. Vị trí chỉ là mặc định cho thời tiết và tìm
+   kiếm tại chỗ; nơi user tự nêu sẽ được ưu tiên. **User
    hiện tại chính là người nói (VOICE speaker)** được nhận dạng trong lượt này — nó
    **ghi đè** `current_user` suy ra từ khuôn mặt, và rơi về định danh khuôn mặt khi
    không có voice ID (unknown / gate-reject / không có transcript).
