@@ -346,6 +346,8 @@ SPEAKER_RECOGNITION_ENABLED: bool = (
     os.environ.get("HAL_SPEAKER_RECOGNITION_ENABLED", "true").lower() == "true"
 )
 SPEAKER_MIN_AUDIO_S: float = float(os.environ.get("HAL_SPEAKER_MIN_AUDIO_S", "0.8")) # seconds
+# Speaker-ID clips are capped to this much cleaned speech before embed; enroll clips are <= 15 s (#555).
+SPEAKER_MAX_EMBED_AUDIO_S: float = float(os.environ.get("HAL_SPEAKER_MAX_EMBED_AUDIO_S", "20")) # seconds
 # RAW cosine in [-1, 1] (renamed from the old scaled [0, 1] names; raw = 2 * scaled - 1).
 SPEAKER_MATCH_COS: float = float(os.environ.get("SPEAKER_MATCH_COS", "0.5"))
 # Extended-set admission band is (SPEAKER_MATCH_COS, SPEAKER_DIVERSITY_COS]; must stay above match.
