@@ -1125,7 +1125,9 @@ def _status(value):
 
 @pytest.mark.parametrize("live", [False, True])
 @pytest.mark.parametrize("completed", [True, False])
-def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, live, completed):
+@pytest.mark.parametrize("legacy_completion", [False, True])
+def test_server_status_keeps_filler_and_answer_in_one_interaction(
+        monkeypatch, live, completed, legacy_completion):
     from hal.realtime import response_outcome
     monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
     checked = []
@@ -1135,11 +1137,16 @@ def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, l
         return completed
 
     monkeypatch.setattr(response_outcome, "spoken_response_complete", check)
-    agent = _agent([
+    messages = [
         _speech("Let me look."), _terminal(generation=True), _status("IN_PROGRESS"),
-        _tool("complete_response"), _speech("Your shirt says DO IT ANYWAY."),
+    ]
+    if legacy_completion:
+        messages.append(_tool("complete_response"))
+    messages.extend([
+        _speech("Your shirt says DO IT ANYWAY."),
         _terminal(generation=True), _status("IDLE"),
     ])
+    agent = _agent(messages)
     events = _receive(agent)
     texts = [e.output.text for e in events
              if isinstance(e, OutputEvent) and isinstance(e.output, TextOutput)]
@@ -1147,6 +1154,8 @@ def test_server_status_keeps_filler_and_answer_in_one_interaction(monkeypatch, l
     assert all(answer == "Let me look." for answer in checked)
     assert not events[-1].fallback_to_main
     assert events[-1].execution_completed
+    assert [response.name for response in agent._session.tool_responses] == (
+        ["complete_response"] if legacy_completion else [])
 
 
 def test_routing_finishes_in_progress_without_waiting_for_idle():
@@ -1158,7 +1167,9 @@ def test_routing_finishes_in_progress_without_waiting_for_idle():
 
 @pytest.mark.parametrize("live", [False, True])
 @pytest.mark.parametrize("same_frame", [False, True])
-def test_idle_answer_finishes_without_waiting_for_unavailable_checker(monkeypatch, live, same_frame):
+@pytest.mark.parametrize("legacy_completion", [False, True])
+def test_idle_answer_finishes_without_waiting_for_unavailable_checker(
+        monkeypatch, live, same_frame, legacy_completion):
     from hal.realtime import response_outcome
     monkeypatch.setattr(gemini_live.app_config, "LIVE_MODE", live)
     checked = []
@@ -1172,8 +1183,10 @@ def test_idle_answer_finishes_without_waiting_for_unavailable_checker(monkeypatc
     if same_frame:
         answer.server_content.interaction_status = "IDLE"
         answer.server_content.turn_complete = True
-    messages = [_status("IN_PROGRESS"), _speech("Let me look."),
-                _tool("complete_response"), answer]
+    messages = [_status("IN_PROGRESS"), _speech("Let me look.")]
+    if legacy_completion:
+        messages.append(_tool("complete_response"))
+    messages.append(answer)
     if not same_frame:
         messages.append(_status("IDLE"))
     agent = _agent(messages)
@@ -1183,6 +1196,8 @@ def test_idle_answer_finishes_without_waiting_for_unavailable_checker(monkeypatc
     assert not checked
     assert not events[-1].fallback_to_main
     assert events[-1].execution_completed
+    assert [response.name for response in agent._session.tool_responses] == (
+        ["complete_response"] if legacy_completion else [])
     assert [e.output.text for e in events if isinstance(e, OutputEvent)
             and isinstance(e.output, TextOutput)] == [
                 "Let me look.", "You are wearing a yellow shirt."]
