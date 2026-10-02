@@ -1,7 +1,5 @@
 # Realtime Voice Agent
 
-Current web lookup, reading, summarizing and explaining are handed to main without selecting Harness. Main uses its available tools for ordinary information requests; connected Harness remains preferred for computer work or requested deliverables, while explicit remote targets and task continuations retain ownership.
-
 Low-latency, speech-to-speech voice layer that runs **in parallel** with the
 normal STT → agent pipeline. The realtime model handles casual conversation
 directly (sub-second audio replies) and **delegates** anything that needs the
@@ -366,12 +364,18 @@ status keep the bounded tool grace and independent outcome check below.
 
 For Gemini `extended-thinking` models, tools are `NON_BLOCKING`: a spoken filler
 such as “I can help with that.” must not consume the user's task (#453).
-The provider adds `complete_response`, which confirms that a direct spoken
-answer fulfilled the request. Conversation, knowledge, or a completed public
-lookup can use this confirmation; actions, promises, errors, and unresolved work
-must delegate. A direct answer needs a confirmed outcome and a successful
-provider terminal before it counts as handled/completed. Text/audio alone is
-not completion evidence.
+New sessions no longer advertise the synthetic `complete_response` tool
+(2026-10-02). Its acknowledgement could trigger further inference after an
+answer had already been spoken; `interactionStatus=IDLE` already supplies the
+provider terminal. Real tools, including `look` and `express_emotion`, still
+receive their normal responses. HAL retains the legacy completion handler for
+older resumed sessions, and the prompt's completion instructions apply only
+when that tool is available. This removes an unnecessary tool round trip; it
+does not guarantee that the model itself never repeats speech. No answer is
+cut off at `generationComplete`, so filler can still precede vision/search
+results. Sessions without status still require the independent outcome check
+below and conservatively fall back when it is unavailable and no other
+confirmation exists.
 
 For a session without interaction status and a spoken response with no routing decision, HAL starts an independent text
 check during the existing grace, using the configured realtime summarizer model,
@@ -2170,7 +2174,7 @@ transcript) and the device run above.
 
 ## Pricing & usage logs
 
-Every turn writes one token/cost line to a per-provider log under
+Providers write usage events to a per-provider log under
 `/var/log/hal/` (rotating, 5 MB × 3, configured in
 `server_support/log_setup.py`): `gemini_usage.log` (logger
 `hal.realtime.usage`), `openai_usage.log` (logger
@@ -2182,6 +2186,35 @@ latency + token counts, no cost — see *Pipecat v1*). None reaches
 `server.log`. The Gemini and OpenAI lines carry
 per-modality token counts **and** an estimated USD cost, so a wrong rate can
 always be re-derived later from the logged counts.
+
+Gemini writes one line per `usage_metadata` event, including rejected-turn
+follow-ups; one user utterance can produce several lines, including after a tool
+ACK. A line is not proof of another spoken response. `session` matches the wire
+output trace ID; `usage_event_seq` increases within that connection and resets
+on reconnect. `gen` and `user_turn_id` identify the receive generation and known
+user turn. `prompt_count`, `response_count`, `total_count`, and `thought_count`
+retain raw provider values (`None` means absent, distinct from `0`); `thought_count`
+is `thoughts_token_count`, not the untagged output estimate. `interaction_status`,
+`generation_complete`, and `turn_complete` come from the same message, without
+carrying forward previous status. `last_tool_ack_name`, `last_tool_ack_id`,
+`last_tool_ack_monotonic`, and `last_tool_ack_elapsed_ms` correlate the last
+successful tool-response send on this connection. Tool ACK diagnostics in
+`server.log` include standard, image, internal `complete_response`, and rejected-turn
+barrier responses; withheld ACKs log identity without result payloads. These
+fields do not change token pricing, speech routing, or ACK behavior.
+Session-open logs also include the instruction character count (not a token count).
+Successful client text sends log their character count and context/announce kind,
+without content, to distinguish additional HAL input from provider-side usage growth.
+
+`tool_use_prompt_token_count` records the separate tool-use prompt count.
+`usage_raw` contains only selected provider counts plus `cache_tokens_details`
+and `tool_use_prompt_tokens_details` (modality and token count only), retaining
+JSON `null` for absent values rather than converting them to zero. These fields
+help inspect input and cache accounting without logging prompt or tool payloads.
+The legacy cost estimate excludes separately reported thinking tokens;
+`est_cached` assumes all cached tokens are text at a 90% discount, regardless of
+cached modality. This assumption is not evidence of the provider's actual bill;
+the printed `>=` values should not be treated as verified billing bounds.
 
 The OpenAI line (`_log_usage`, from the `response.usage` of every
 `response.done`) is

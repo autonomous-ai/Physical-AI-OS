@@ -127,6 +127,8 @@ class GeminiLiveAgent(VoiceAgentBase):
         self._pending_image = None
         self._requires_fresh_session: bool = False
         self._reject_followup_barrier: bool = False
+        self._usage_event_seq: int = 0
+        self._last_tool_ack: tuple[str | None, str | None, float] | None = None
         self._user_transcript: str = ""
         self._gated_audio_frames: int = 0
         self._reconnect_delay_s: float = config.reconnect_delay_s
@@ -279,22 +281,10 @@ class GeminiLiveAgent(VoiceAgentBase):
                 )
                 for tool in self._tools
             ]
-            if behavior == types.Behavior.NON_BLOCKING:
-                declarations.append(types.FunctionDeclaration(
-                    name="complete_response",
-                    description=(
-                        "Confirm a finished direct answer ONLY for a greeting, general knowledge, "
-                        "a completed public lookup, a visual question answered from look, or recall "
-                        "of this conversation (question number, score, what was just asked or said). "
-                        "Never use for an action, music playback, stored memory or earlier sessions, "
-                        "account access, Harness/code work, a promise/filler, an error or unresolved work. "
-                        "Those require delegate_to_main, even if you already said you would help. "
-                        "Call only AFTER delivering the actual answer; a receipt such as "
-                        "'Let me check our conversation history' is NOT an answer."
-                    ),
-                    parameters={"type": "object", "properties": {}},
-                    behavior=types.Behavior.NON_BLOCKING,
-                ))
+            # Completion is reported by interactionStatus=IDLE, not a synthetic tool.
+            # A completion receipt requires another tool response and can start more
+            # inference after the answer. Keep the legacy receive handler for sessions
+            # resumed with an older tool declaration, but do not advertise it anew.
             live_tools.append(types.Tool(function_declarations=declarations))
 
         if self._config.google_search_enabled:
@@ -339,7 +329,12 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
         )
         install_interaction_status(self._session)
-        logger.info("[realtime] Gemini Live session open (voice=%s)", self._config.voice)
+        self._usage_event_seq = 0
+        self._last_tool_ack = None
+        logger.info(
+            "[realtime] Gemini Live session open (voice=%s session=%s instruction_chars=%d)",
+            self._config.voice, self._wire_trace_id(), len(self._config.instructions or ""),
+        )
 
     async def _async_disconnect(self) -> None:
         exit_stack = self._exit_stack
@@ -467,22 +462,32 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self.validate_audio_session(session)
             self._last_audio_sent_at = time.monotonic()
         elif isinstance(_input, TextInput):
-            await self._session.send_client_content(
+            target_session = self._session
+            await target_session.send_client_content(
                 turns=types.Content(
                     parts=[types.Part(text=_input.text)],
                     role="user",
                 ),
                 turn_complete=False,
             )
+            logger.info(
+                "[realtime] Client text sent: session=%s kind=context chars=%d turn_complete=False",
+                self._wire_trace_id(target_session), len(_input.text),
+            )
         elif isinstance(_input, AnnounceInput):
             # The next commit waits on _turn_done, so this response cannot interleave with it.
             self._turn_done.clear()
-            await self._session.send_client_content(
+            target_session = self._session
+            await target_session.send_client_content(
                 turns=types.Content(
                     parts=[types.Part(text=_input.text)],
                     role="user",
                 ),
                 turn_complete=True,
+            )
+            logger.info(
+                "[realtime] Client text sent: session=%s kind=announce chars=%d turn_complete=True",
+                self._wire_trace_id(target_session), len(_input.text),
             )
         elif isinstance(_input, ImageInput):
             _: bool
@@ -493,7 +498,13 @@ class GeminiLiveAgent(VoiceAgentBase):
             )
         elif isinstance(_input, FunctionCallResultInput):
             if not _input.trigger_response:
-                logger.info('[DEBUG] Function call result: %s', _input)
+                logger.info(
+                    "[realtime] Tool ACK withheld: session=%s gen=%s user_turn_id=%s "
+                    "name=%s call_id=%s",
+                    self._wire_trace_id(), getattr(self, "_turn_gen", 0),
+                    getattr(self, "_live_user_turn_id", "") or None,
+                    getattr(self, "_pending_tool_names", {}).get(_input.call_id), _input.call_id,
+                )
                 if _input.call_id in self._pending_tool_calls:
                     self._requires_fresh_session = True
                     logger.info(
@@ -538,21 +549,115 @@ class GeminiLiveAgent(VoiceAgentBase):
                 await target_session._ws.send(json.dumps({
                     "toolResponse": {"functionResponses": [response]},
                 }))
+                self._record_tool_ack("look", _input.call_id, target_session)
                 logger.info("[realtime] Sent look image in tool response (call_id=%s bytes=%d)",
                             _input.call_id, len(encoded))
                 if self._session is target_session:
                     await self._finish_tool_ack(_input.call_id)
                 return
             # 3.8 extended-thinking closes with 1007 when a FunctionResponse includes scheduling.
-            await self._session.send_tool_response(
+            target_session = self._session
+            tool_name = getattr(self, "_pending_tool_names", {}).get(_input.call_id)
+            await target_session.send_tool_response(
                 function_responses=[types.FunctionResponse(
                     id=_input.call_id,
                     name=getattr(self, "_pending_tool_names", {}).get(_input.call_id),
                     response=parsed,
                 )]
             )
+            self._record_tool_ack(tool_name, _input.call_id, target_session)
             # Keep the gate until after the await so client input can't race the tool response.
             await self._finish_tool_ack(_input.call_id)
+
+    def _wire_trace_id(self, session: Any = None) -> str | None:
+        target = session if session is not None else getattr(self, "_session", None)
+        return getattr(getattr(target, "_ws", None), "_trace_id", None)
+
+    def _record_tool_ack(self, name: str | None, call_id: str | None, session: Any) -> None:
+        """Record only a successful send, without logging the tool result payload."""
+        sent_at = time.monotonic()
+        if session is self._session:
+            self._last_tool_ack = (name, call_id, sent_at)
+        logger.info(
+            "[realtime] Tool ACK sent: session=%s gen=%s user_turn_id=%s "
+            "name=%s call_id=%s sent_monotonic=%.6f",
+            self._wire_trace_id(session), getattr(self, "_turn_gen", 0),
+            getattr(self, "_live_user_turn_id", "") or None, name, call_id, sent_at,
+        )
+
+    @staticmethod
+    def _usage_raw_counts(usage: Any) -> str:
+        """Serialize selected counts only; absent fields remain null, never zero."""
+        count_fields = (
+            "prompt_token_count", "response_token_count", "total_token_count",
+            "thoughts_token_count", "cached_content_token_count", "tool_use_prompt_token_count",
+        )
+        detail_fields = ("cache_tokens_details", "tool_use_prompt_tokens_details")
+        dump = getattr(usage, "model_dump", None)
+        raw = (dump(mode="json", include=set(count_fields + detail_fields), exclude_none=False)
+               if callable(dump) else {})
+        selected = {field: raw.get(field, getattr(usage, field, None)) for field in count_fields}
+        for field in detail_fields:
+            details = raw.get(field, getattr(usage, field, None))
+            selected[field] = None if details is None else [
+                {
+                    "modality": (detail.get("modality") if isinstance(detail, dict)
+                                 else getattr(detail, "modality", None)),
+                    "token_count": (detail.get("token_count") if isinstance(detail, dict)
+                                    else getattr(detail, "token_count", None)),
+                }
+                for detail in details
+            ]
+        return json.dumps(selected, separators=(",", ":"))
+
+    def _log_usage(self, message: Any, user_turn_id: str | None = None) -> None:
+        """Log each usage event, including events behind the rejected-turn barrier."""
+        um = getattr(message, "usage_metadata", None)
+        if um is None:
+            return
+        self._usage_event_seq = getattr(self, "_usage_event_seq", 0) + 1
+        content = getattr(message, "server_content", None)
+        ack = getattr(self, "_last_tool_ack", None)
+        rates = _gemini_rates_for(self._config.model)
+        parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
+        for direction, details in (
+            ("in", um.prompt_tokens_details),
+            ("out", um.response_tokens_details),
+        ):
+            for d in details or []:
+                mod = getattr(d.modality, "name", str(d.modality))
+                tok = d.token_count or 0
+                attributed[direction] += tok
+                c = tok * rates.get((direction, mod), 0.0) / 1_000_000
+                cost += c
+                parts.append("%s_%s=%d($%.5f)" % (direction, mod.lower(), tok, c))
+        # Untagged tokens and separately reported thinking tokens are not priced here.
+        unattr_in = (um.prompt_token_count or 0) - attributed["in"]
+        unattr_out = (um.response_token_count or 0) - attributed["out"]
+        # Legacy estimate assumes cached tokens are text at 90% discount; not billing evidence.
+        cached = getattr(um, "cached_content_token_count", 0) or 0
+        cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
+        usage_logger.info(
+            "[realtime] Gemini usage: model=%s %s +unattr(%din/%dout) | "
+            "cached=%dtok total=%dtok est_full>=$%.5f est_cached>=$%.5f | "
+            "session=%s usage_event_seq=%d gen=%s user_turn_id=%s "
+            "prompt_count=%s response_count=%s total_count=%s thought_count=%s "
+            "interaction_status=%s generation_complete=%s turn_complete=%s "
+            "last_tool_ack_name=%s last_tool_ack_id=%s last_tool_ack_monotonic=%s "
+            "last_tool_ack_elapsed_ms=%s tool_use_prompt_token_count=%s usage_raw=%s",
+            self._config.model,
+            " ".join(parts) or "-", unattr_in, unattr_out, cached,
+            um.total_token_count or 0, cost, cost_cached,
+            self._wire_trace_id(), self._usage_event_seq, getattr(self, "_turn_gen", 0),
+            user_turn_id or getattr(self, "_live_user_turn_id", "") or None,
+            getattr(um, "prompt_token_count", None), getattr(um, "response_token_count", None),
+            getattr(um, "total_token_count", None), getattr(um, "thoughts_token_count", None),
+            getattr(content, "interaction_status", None),
+            getattr(content, "generation_complete", None), getattr(content, "turn_complete", None),
+            ack[0] if ack else None, ack[1] if ack else None, ack[2] if ack else None,
+            round((time.monotonic() - ack[2]) * 1000, 3) if ack else None,
+            getattr(um, "tool_use_prompt_token_count", None), self._usage_raw_counts(um),
+        )
 
     async def _finish_tool_ack(self, call_id: str) -> None:
         self._pending_tool_calls.discard(call_id)
@@ -1053,6 +1158,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                 raise
             # Liveness for the silent-turn watchdog (see note_server_activity).
             self.note_server_activity()
+            self._log_usage(message, response_user_turn_id)
             if app_config.LIVE_MODE and getattr(self, "_reject_followup_barrier", False):
                 content = message.server_content
                 incoming = getattr(content, "input_transcription", None)
@@ -1087,10 +1193,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                         raise ConnectionClosed(None, None)
                     tool_call = getattr(message, "tool_call", None)
                     for call in (getattr(tool_call, "function_calls", None) or ()):
-                        await self._session.send_tool_response(function_responses=[
+                        target_session = self._session
+                        await target_session.send_tool_response(function_responses=[
                             types.FunctionResponse(id=call.id, name=call.name,
                                                    response={"result": "ignored: rejected turn"})
                         ])
+                        self._record_tool_ack(call.name, call.id, target_session)
                     if content is not None and (
                         getattr(content, "turn_complete", False)
                         or getattr(content, "generation_complete", False)
@@ -1109,35 +1217,6 @@ class GeminiLiveAgent(VoiceAgentBase):
                 self._live_speech_emitted = False
             elif activity_type == "ACTIVITY_END":
                 self._observe_user_speech(endpoint_at=time.monotonic())
-            if message.usage_metadata:
-                # Checked FIRST: usage_metadata ships on the same message as turn_complete.
-                um = message.usage_metadata
-                rates = _gemini_rates_for(self._config.model)
-                parts, cost, attributed = [], 0.0, {"in": 0, "out": 0}
-                for direction, details in (
-                    ("in", um.prompt_tokens_details),
-                    ("out", um.response_tokens_details),
-                ):
-                    for d in details or []:
-                        mod = getattr(d.modality, "name", str(d.modality))
-                        tok = d.token_count or 0
-                        attributed[direction] += tok
-                        c = tok * rates.get((direction, mod), 0.0) / 1_000_000
-                        cost += c
-                        parts.append("%s_%s=%d($%.5f)" % (direction, mod.lower(), tok, c))
-                # Untagged tokens (system/thinking) are unpriced, so est is a floor.
-                unattr_in = (um.prompt_token_count or 0) - attributed["in"]
-                unattr_out = (um.response_token_count or 0) - attributed["out"]
-                # Implicit caching bills the cached prefix at a 90% discount; cached=0 every turn means churn.
-                cached = getattr(um, "cached_content_token_count", 0) or 0
-                cost_cached = max(0.0, cost - cached * rates[("in", "TEXT")] * 0.90 / 1_000_000)
-                usage_logger.info(
-                    "[realtime] Gemini usage: model=%s %s +unattr(%din/%dout) | "
-                    "cached=%dtok total=%dtok est_full>=$%.5f est_cached>=$%.5f",
-                    self._config.model,
-                    " ".join(parts) or "-", unattr_in, unattr_out, cached,
-                    um.total_token_count or 0, cost, cost_cached,
-                )
 
             reject_in_message = app_config.LIVE_MODE and any(
                 call.name == "reject_turn"
@@ -1580,10 +1659,12 @@ class GeminiLiveAgent(VoiceAgentBase):
                         _continuation_active_until = 0.0
                         await _check_continuation()
                         # This backend does not support scheduling=SILENT.
-                        await self._session.send_tool_response(function_responses=[
+                        target_session = self._session
+                        await target_session.send_tool_response(function_responses=[
                             types.FunctionResponse(id=fc.id, name=fc.name,
                                                    response={"result": "recorded"})
                         ])
+                        self._record_tool_ack(fc.name, fc.id, target_session)
                         await self._finish_tool_ack(fc.id or "")
                         if interaction_status is not None:
                             logger.info("[realtime] complete_response is advisory; awaiting server IDLE")

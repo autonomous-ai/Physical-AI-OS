@@ -33,13 +33,8 @@ def _tool_behavior(cfg: types.LiveConnectConfig):
 def test_extended_thinking_declares_non_blocking() -> None:
     cfg = _build("gemini-3.8-live-extended-thinking")
     declarations = cfg.tools[0].function_declarations
-    assert {tool.name for tool in declarations} == {"delegate_to_main", "complete_response"}
+    assert [tool.name for tool in declarations] == ["delegate_to_main"]
     assert all(tool.behavior == types.Behavior.NON_BLOCKING for tool in declarations)
-    completion, = [tool for tool in declarations if tool.name == "complete_response"]
-    assert completion.parameters.required in (None, [])
-    assert "Never use for an action" in completion.description
-    assert "recall of this conversation" in completion.description
-    assert "past conversations" not in completion.description
 
 
 def test_plain_live_leaves_tool_blocking() -> None:

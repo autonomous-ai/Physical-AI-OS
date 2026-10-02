@@ -1,7 +1,5 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
-Tra cứu, đọc, tóm tắt và giải thích nội dung web hiện tại được chuyển sang main nhưng không tự chọn Harness. Main dùng tool sẵn có cho câu hỏi thông tin; Harness connected vẫn được ưu tiên cho công việc máy tính hoặc sản phẩm được yêu cầu. Đích từ xa chỉ định rõ và việc tiếp tục task giữ nguyên quyền xử lý.
-
 Lớp giọng nói speech-to-speech độ trễ thấp, chạy **song song** với pipeline STT
 → agent thông thường. Model realtime xử lý hội thoại tán gẫu trực tiếp (trả lời
 âm thanh dưới 1 giây) và **delegate** (chuyển giao) những gì cần đến agent chính
@@ -364,11 +362,16 @@ giới hạn và bộ kiểm tra outcome bên dưới.
 
 Với Gemini `extended-thinking`, tool dùng `NON_BLOCKING`: câu filler như
 “I can help with that.” không được làm mất tác vụ người dùng (#453).
-Provider thêm `complete_response` để xác nhận câu trả lời trực tiếp đã đáp ứng
-yêu cầu. Hội thoại, kiến thức hoặc tra cứu công khai đã xong có thể dùng xác nhận
-này; hành động, lời hứa, lỗi và việc chưa giải quyết phải delegate. Câu trả lời
-trực tiếp cần outcome được xác nhận cùng terminal thành công của provider mới
-được tính handled/completed. Text/audio đơn thuần không chứng minh hoàn tất.
+Session mới không còn khai báo tool tổng hợp `complete_response` (2026-10-02).
+ACK của nó có thể kích hoạt xử lý tiếp sau khi đã nói đáp án;
+`interactionStatus=IDLE` đã cung cấp terminal của provider. Tool thật, gồm
+`look` và `express_emotion`, vẫn nhận response như trước. HAL giữ handler
+completion cũ cho session cũ được resume; chỉ dẫn completion trong prompt chỉ
+áp dụng khi tool đó có sẵn. Thay đổi loại bỏ một vòng gọi tool không cần thiết,
+không bảo đảm model không bao giờ tự nói lặp. Không cắt đáp án tại
+`generationComplete`, nên filler vẫn có thể đi trước kết quả vision/search.
+Session thiếu status vẫn cần bộ kiểm tra outcome bên dưới và fallback thận
+trọng khi bộ kiểm tra không dùng được và không có xác nhận nào khác.
 
 Với session thiếu interaction status và lời đã phát nhưng thiếu quyết định routing, HAL chạy kiểm tra độc lập bằng
 text model trong cửa sổ grace hiện có, dùng model, endpoint và credential của
@@ -2132,7 +2135,8 @@ thiết bị ở trên.
 
 ## Pricing & log usage
 
-Gemini và OpenAI Realtime ghi một dòng token/cost mỗi turn; GPT-Live ghi một dòng
+Gemini ghi một dòng token/cost mỗi sự kiện `usage_metadata`; OpenAI Realtime ghi
+mỗi `response.done` có usage; GPT-Live ghi một dòng
 giây/cost mỗi `session.usage.updated` và một dòng `final` ở `session.closed`. Mỗi
 provider có log riêng dưới `/var/log/hal/` (rotating, 5 MB × 3):
 `gemini_usage.log` (logger `hal.realtime.usage`), `openai_usage.log` (logger
@@ -2144,6 +2148,35 @@ dòng của chúng không lọt vào `gemini_usage.log` lẫn `server.log`; cấ
 `server_support/log_setup.py`, một file mỗi provider, so được từng dòng. Dòng log theo token mang đủ số token theo từng modality **và**
 cost USD ước tính, nên rate có sai thì sau này vẫn tính lại được từ số token đã
 ghi.
+
+Gemini ghi cả usage của phản hồi sau lượt bị từ chối; một lượt nói của người
+dùng có thể sinh nhiều dòng, kể cả sau ACK tool. Một dòng không chứng minh model
+đã nói thêm một câu. `session` trùng trace ID của log wire output;
+`usage_event_seq` tăng trong mỗi kết nối và đặt lại khi kết nối lại. `gen` và
+`user_turn_id` nhận diện thế hệ receive và lượt người dùng đã biết.
+`prompt_count`, `response_count`, `total_count`, `thought_count` giữ nguyên giá trị
+provider (`None` là thiếu, khác `0`); `thought_count` lấy từ
+`thoughts_token_count`, không phải ước tính output chưa gắn modality.
+`interaction_status`, `generation_complete`, `turn_complete` lấy từ cùng message,
+không kế thừa trạng thái trước đó. `last_tool_ack_name`, `last_tool_ack_id`,
+`last_tool_ack_monotonic`, `last_tool_ack_elapsed_ms` liên kết lần gửi tool response
+thành công gần nhất trên kết nối. Log ACK tool trong `server.log` gồm response
+thường, ảnh, `complete_response` nội bộ và response tại hàng rào từ chối lượt;
+ACK bị giữ lại chỉ ghi định danh, không ghi payload kết quả. Các trường này không
+đổi cách tính giá token, điều phối lời nói hoặc hành vi ACK.
+Log mở session còn ghi số ký tự instruction (không phải số token).
+Mỗi lần gửi client text thành công ghi số ký tự và loại context/announce, không
+ghi nội dung, để phân biệt HAL gửi thêm input với usage tăng ở phía provider.
+
+`tool_use_prompt_token_count` ghi số token prompt riêng cho việc dùng tool.
+`usage_raw` chỉ chứa các số đếm provider được chọn cùng `cache_tokens_details`
+và `tool_use_prompt_tokens_details` (chỉ modality và số token), giữ JSON `null`
+khi thiếu giá trị thay vì đổi thành 0. Các trường này giúp kiểm tra cách đếm
+input và cache mà không ghi nội dung prompt hoặc payload tool.
+Ước tính chi phí hiện có không cộng thinking token được báo riêng;
+`est_cached` giả định toàn bộ cached token là text được giảm 90%, bất kể modality
+cache. Giả định này không chứng minh hóa đơn thực tế của provider; không nên xem
+các giá trị in kèm `>=` là cận chi phí đã được xác minh.
 
 Dòng OpenAI (grep `[realtime] OpenAI usage` trong `openai_usage.log`):
 
