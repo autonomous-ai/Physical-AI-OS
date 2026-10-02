@@ -281,6 +281,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
       "esi_ms": 1
@@ -291,12 +292,30 @@ trước khi dùng; HAL không tự sửa boot overlay:
 
 `bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
 `mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
-`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis` và `ffi` là mặc định;
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi` và `tap_min_electrodes` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
 debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắp và nhiễu
 motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
+
+Lamp đặt `tap_min_electrodes: 3`: cần ít nhất ba điện cực được chọn chạm đồng
+thời, sau lọc từng điện cực, liên tục đủ `debounce_ms` (30 ms) mới công nhận tap.
+Khi đã đủ điều kiện thì giữ tới lúc nhả hết, nên nhấc ngón tay lần lượt vẫn chỉ
+ra một tap. Chạm 1–2 điện cực hoặc điện cực thứ ba nhảy rất ngắn không tạo action
+single, cue hay tăng đếm multi-tap. Đếm các điện cực đang active được chọn, không
+đếm delta `touched` trong log hay cộng dồn các điện cực đã đi qua. Vuốt vẫn theo
+luật di chuyển cũ, kể cả chỉ chạm một điện cực ở mỗi thời điểm. Nhận diện giữ,
+gồm giữ hai giây để thoát Harness, không đổi. Bộ lọc cũng áp dụng cho tap capture
+của Harness và cấu hình không có swipe axis.
+
+Mặc định chung là 1 (hành vi cũ); chỉ nhận số nguyên từ 1 tới số điện cực được
+chọn. Tap thật bằng đầu ngón tay chỉ phủ 1–2 điện cực cũng bị bỏ qua. Đây là lọc
+gesture, chưa sửa nguyên nhân nhiễu cảm biến. Log startup ghi ngưỡng; contact
+ngắn không đủ điều kiện ghi `event=tap_discarded reason=insufficient_electrodes`.
+
+Cập nhật HAL hỗ trợ field này **trước** device declaration mới; HAL cũ sẽ từ chối
+key mới vì cấu hình không hợp lệ. Restart HAL để nhận cấu hình.
 
 Driver đặt bộ lọc baseline chiều xuống (`0x2F`–`0x32`) thành
 `MHDF=1, NHDF=1, NCLF=255, FDLF=2`, theo
