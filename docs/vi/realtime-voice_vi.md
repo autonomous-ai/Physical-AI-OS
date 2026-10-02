@@ -2833,8 +2833,11 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
    turn mới ở local rồi gửi đúng một lần, đúng thứ tự khi session thay thế sẵn
    sàng. Nếu reconnect chậm/lỗi thì fallback về main agent với transcript STT;
    không làm rớt audio đầu câu hoặc commit nó vào activity cũ.
-3. **Bơm turn context + prepass speaker-ID.** `[TURN CONTEXT]` (thời gian, nhắc
-   ngôn ngữ trả lời, user hiện tại) được gửi dạng text không tạo response. **User
+3. **Bơm turn context + prepass speaker-ID.** `[TURN CONTEXT]` (thời gian, vị trí
+   thiết bị — tên thành phố lấy từ `/etc/timezone` qua `hal.clock.device_city()`,
+   bỏ qua với múi giờ `UTC`/`Etc/*` — nhắc ngôn ngữ trả lời, user hiện tại) được
+   gửi dạng text không tạo response. Vị trí chỉ là mặc định cho thời tiết và tìm
+   kiếm tại chỗ; nơi user tự nêu sẽ được ưu tiên. **User
    hiện tại chính là người nói (VOICE speaker)** được nhận dạng trong lượt này — nó
    **ghi đè** `current_user` suy ra từ khuôn mặt, và rơi về định danh khuôn mặt khi
    không có voice ID (unknown / gate-reject / không có transcript).
@@ -3449,3 +3452,17 @@ Không fallback main và không ghi task execution thành công. Cờ hiện h�
 `rejected_non_user`. Output rỗng, timeout, marker dở dang, marker kèm câu trả
 lời, câu báo lỗi hệ thống và `NO_REPLY` của main không đủ điều kiện. Native
 audio và output pump LIVE liên tục không đổi.
+
+
+### Reject LIVE OFF không sinh thêm lượt sau ACK
+
+Khi chấp nhận `reject_turn` trong **LIVE OFF**, HAL không gửi tool response nếu
+session Gemini không bật resumption, không có live capture sở hữu session và
+tool còn chờ đã yêu cầu thay session. Vẫn phát cùng `RejectSignal`: lời nói ngoài
+vẫn bị bỏ qua, không phát tiếng và giữ nguyên quy tắc loại khỏi KPI.
+`prepare_turn()` dựng kết nối mới trước capture tiếp theo; nếu dựng thất bại thì
+loại session cũ, không dùng lại tool còn treo. Cách này không yêu cầu inference tiếp sau reject
+nhưng thêm thời gian reconnect trước turn sau; inference provider đã chạy vẫn có
+thể phát sinh thêm usage. LIVE ON, session bật resumption,
+provider khác và reject đến muộn sau khi output đã bắt đầu vẫn giữ ACK như cũ.
+Không thay tiêu chí nhận diện turn cần reject.

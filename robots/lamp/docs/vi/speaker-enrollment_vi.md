@@ -198,6 +198,7 @@ Mọi giọng lạ được gom cụm local để server biết "đây là cùng
 | Độ đa dạng | 0.7 | `SPEAKER_DIVERSITY_COS` | Trên mức này lượt nói trùng với mẫu đã lưu → không giữ. Đo độ dư thừa, không phải danh tính — phải nằm trên ngưỡng khớp |
 | Số mẫu extended tối đa | 3 | `SPEAKER_MAX_EXTENDED_SAMPLES` | Mẫu tự thu cho mỗi user. Cap an toàn: truy hồi là max-over-rows nên thêm hàng sẽ nâng điểm của mọi speaker |
 | Số mẫu cụm tối đa | 3 | `SPEAKER_MAX_CLUSTER_SAMPLES` | Số hàng giữ cho mỗi cụm giọng lạ |
+| Thời lượng embed tối đa | 20s | `HAL_SPEAKER_MAX_EMBED_AUDIO_S` | Clip speaker-ID đã làm sạch bị cắt còn 20 giây đầu trước khi gọi `/audio-recognizer/embed`. Clip enroll (≤ 15 giây) không bị ảnh hưởng; server cũng cắt ở 30 giây nên clip dài không thể làm TensorRT build lại engine (#555) |
 | Thời lượng tối thiểu để mở rộng | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | Lượt nói cần chừng này **giọng nói sau VAD** mới được một suất extended. Đo trên waveform đã làm sạch, nên im lặng trong một phiên mic dài không được tính |
 | Biên tối thiểu để mở rộng | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...và phải dẫn trước người **không thắng** mạnh nhất ít nhất bằng này. Là `inf` khi không có ai khác đã đăng ký — lúc đó thật sự không có á quân, và đó là lý do cổng 3 tồn tại |
 | Bắt buộc đồng thuận khi mở rộng | bật | `HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS` | Mọi chunk phải bầu cho người thắng. Không tác dụng khi dưới ~10 giây giọng nói (chỉ một chunk) |

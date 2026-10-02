@@ -1250,12 +1250,26 @@ class RealtimeOrchestrator:
                     break
                 rejected = True
                 logger.info("[realtime] Model explicitly rejected this turn")
-                # Ack like delegation so no pending tool call poisons the next manual-VAD activity.
+                # The rejection is final. An ACK can ask Gemini to generate another
+                # (unused) answer. Only abandon a non-resumable manual session whose
+                # pending tool already forces replacement before the next capture.
+                abandon_rejection = (
+                    config.REALTIME_PROVIDER.strip().lower() == "gemini"
+                    and not config.LIVE_MODE
+                    and not getattr(self, "_live_active", False)
+                    and not config.REALTIME_GEMINI_SESSION_RESUMPTION
+                    and getattr(
+                        getattr(execution_agent, "_config", None),
+                        "session_resumption_enabled", True,
+                    ) is False
+                    and getattr(execution_agent, "requires_fresh_session", False) is True
+                )
                 self._agent.send(
                     [
                         FunctionCallResultInput(
                             call_id=output.call_id,
                             output='{"result": "turn dropped"}',
+                            trigger_response=not abandon_rejection,
                         )
                     ]
                 )

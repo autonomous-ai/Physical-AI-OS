@@ -195,6 +195,7 @@ Every unknown voice is locally clustered so the server can say "this is the same
 | Diversity | 0.7 | `SPEAKER_DIVERSITY_COS` | Above this a turn duplicates a stored sample → not kept. Redundancy, not identity — must stay above the match threshold |
 | Max extended samples | 3 | `SPEAKER_MAX_EXTENDED_SAMPLES` | Auto-collected samples per user. Safety cap: retrieval is max-over-rows, so extra rows lift every speaker's score |
 | Max cluster samples | 3 | `SPEAKER_MAX_CLUSTER_SAMPLES` | Rows kept per unknown-voice cluster |
+| Max embed audio | 20s | `HAL_SPEAKER_MAX_EMBED_AUDIO_S` | Cleaned speaker-ID clips are cut to their first 20 s before `/audio-recognizer/embed`. Enroll clips (≤ 15 s) are unaffected; the server also crops at 30 s so a long clip can't force a TensorRT rebuild (#555) |
 | Extend min duration | 2.0s | `SPEAKER_EXTEND_MIN_DURATION_SEC` | A turn needs this much **post-VAD speech** to earn an extended slot. Measured on the cleaned waveform, so silence in a long mic session does not count |
 | Extend min margin | 0.05 | `SPEAKER_EXTEND_MIN_MARGIN_COS` | ...and must beat the best **non-winning** speaker by this much. `inf` when nobody else is enrolled — there is genuinely no runner-up, which is why gate 3 exists |
 | Extend unanimity | on | `HAL_SPEAKER_EXTEND_REQUIRE_UNANIMOUS_CHUNKS` | Every chunk must have voted for the winner. Off below ~10 s of speech (one chunk) |

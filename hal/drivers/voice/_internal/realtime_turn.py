@@ -11,7 +11,7 @@ import requests
 from hal import app_state as hal_app_state
 from hal import config as hal_config
 from hal import presets
-from hal.clock import device_now
+from hal.clock import device_city, device_now
 from hal.realtime.config import gemini_needs_idle_workaround
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged
 from hal.realtime.models import AudioOutput as RTAudioOutput
@@ -275,6 +275,14 @@ def build_turn_context(speaker: Optional[str] = None) -> str:
     turn_ctx: list[str] = [
         f"Time: {device_now().strftime('%Y-%m-%d %H:%M:%S %A')}",
     ]
+    # Default place for weather/"near me" searches; without it the model asks for a
+    # city or delegates (#558). The zone city is approximate, so the user's word wins.
+    city: str = device_city()
+    if city:
+        turn_ctx.append(
+            f"Location: {city} (from device timezone; use for weather/local "
+            "searches unless the user names another place)"
+        )
     # Per-turn language reminder. The system prompt already locks the language, but
     # Google Search grounding pulls English source text into context and can drag the
     # spoken reply into English.
