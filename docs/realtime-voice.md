@@ -1,7 +1,5 @@
 # Realtime Voice Agent
 
-Current web lookup, reading, summarizing and explaining are handed to main without selecting Harness. Main uses its available tools for ordinary information requests; connected Harness remains preferred for computer work or requested deliverables, while explicit remote targets and task continuations retain ownership.
-
 Low-latency, speech-to-speech voice layer that runs **in parallel** with the
 normal STT → agent pipeline. The realtime model handles casual conversation
 directly (sub-second audio replies) and **delegates** anything that needs the
