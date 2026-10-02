@@ -195,7 +195,7 @@ def set_led_paint(req: LEDPaintRequest):
 
 @router.post("/led/off", response_model=StatusResponse)
 def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
-    """Turn off all LEDs: clear the user colour and return to the (dark) resting state."""
+    """Turn off all LEDs and preserve explicit off across ambient restores."""
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     transient = req.transient if req else False
@@ -209,7 +209,7 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
         state._cancel_pending_restore()
     else:
         state._dismiss_mic_muted_led("led/off")
-        state._save_user_led_state(None)
+        state._save_user_led_state({"type": LST_SOLID, "color": [0, 0, 0]})
     return {"status": "ok"}
 
 
@@ -318,33 +318,9 @@ def restore_led():
         return {"status": "ok"}
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
-    if state._tts_speaking:
-        state.logger.info("LED restore skipped -- TTS speaking_wave active")
-        return {"status": "ok"}
-    if state._mic_muted_led_owns_strip():
-        # Releasing the strip while muted settles on the privacy indicator.
-        state._start_mic_muted_effect()
-        state.logger.info("LED restore: mic muted -- settling on privacy indicator")
-        return {"status": "ok"}
-    from hal.drivers.harness import led as harness_led
-    if harness_led.enabled():
-        state._restore_user_led()
-        return {"status": "ok"}
-    user_state = state._user_led_state
-    if user_state is None:
-        # No saved preference: settle on the ambient resting look (dark = clear).
-        from hal.presets import AMBIENT_RESTING_LED, ambient_resting_is_dark
-
-        if ambient_resting_is_dark():
-            state._stop_current_effect()
-            state.rgb_service.dispatch(RGB_CMD_SOLID, (0, 0, 0))
-            state.logger.info("LED restore: no user state -- resting dark, cleared")
-            return {"status": "ok"}
-        state._start_preset_effect(AMBIENT_RESTING_LED, "led-ambient-fallback")
-        state.logger.info("LED restore: no user state -- settling on ambient resting")
-        return {"status": "ok"}
     state._restore_user_led()
     return {"status": "ok"}
+
 
 
 @router.post("/led/effect/stop", response_model=StatusResponse)

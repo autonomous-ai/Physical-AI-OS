@@ -1,5 +1,6 @@
 {
   "_comment": "Intern-v2 emotion and status LED presets, initially copied from hal/presets.py for device-specific tuning. See robots/contract/ROBOT-SPEC.md § Per-device presets.",
+  "ambient_led": {"resting": {"effect": "solid", "color": [0, 0, 0]}},
   "led_count": 16,
   "emotion": {
     "curious": { "servo": "curious", "color": [125, 81, 0], "effect": "candle", "speed": 0.3, "camera": "on" },

@@ -840,7 +840,7 @@ Khi không có gì diễn ra, `system/ambient/` (Go, thuộc os-server) làm thi
 - **Sleep mode**: khi event `hw_emotion` mang emotion `sleepy`, toàn bộ hành vi ambient bị suppress cho tới khi có tương tác thật tiếp theo (chat, wake word, sensing) đánh thức thiết bị.
 - Chuyển trạng thái pause/resume được log vào Flow Monitor dưới dạng `ambient_pause` / `ambient_resume`.
 
-**Hai đồng hồ, hai tầng** — 60 giây resume là *điều kiện đủ tư cách* ("ambient được phép hoạt động lại"), còn mỗi loop bên dưới có đồng hồ *nhịp riêng* chạy độc lập, không bị reset khi có tương tác; nếu đồng hồ của loop điểm giờ đúng lúc ambient đang paused thì lượt đó bị bỏ qua, không xếp hàng chờ. Ví dụ timeline: user ngừng nói chuyện → 60 giây sau ambient resume, LED bắt đầu thở gần như ngay (tick 2 giây) — còn câu tự lẩm bẩm kế tiếp rơi vào lúc đồng hồ 5–15 phút của mumble loop điểm giờ, có thể ngay sau đó hoặc nhiều phút sau.
+**Hai đồng hồ, hai tầng** — 60 giây resume là *điều kiện đủ tư cách* ("ambient được phép hoạt động lại"), còn mỗi loop bên dưới có đồng hồ *nhịp riêng* chạy độc lập, không bị reset khi có tương tác; nếu đồng hồ của loop điểm giờ đúng lúc ambient đang paused thì lượt đó bị bỏ qua, không xếp hàng chờ. Ví dụ timeline: user ngừng nói chuyện → 60 giây sau ambient resume, HAL khôi phục LED lúc nghỉ gần như ngay (tick 2 giây) — còn câu tự lẩm bẩm kế tiếp rơi vào lúc đồng hồ 5–15 phút của mumble loop điểm giờ, có thể ngay sau đó hoặc nhiều phút sau.
 
 ### Các behavior loop (gate theo capability)
 
@@ -848,7 +848,7 @@ Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` 
 
 | Loop | Capability | Nhịp | Hoạt động |
 |------|-----------|------|-----------|
-| Breathing LED | `light` | liên tục (tick 2 giây) | Bật effect `breathing` có sẵn của HAL qua `/led/effect` (speed 0.3) với màu LED hiện tại đọc từ HAL; fallback về resting look (`ambientRestingColor`, hiện là `(0, 0, 0)`) khi LED đang tắt (đen) — resting look tối nghĩa là skip tick và strip ở yên không sáng. Xem [led-control_vi.md § Resting look](led-control_vi.md#resting-look-mặc-định-tắt). Dừng effect khi paused hoặc LED đang bị lock. |
+| LED lúc nghỉ | `light` | tick 2 giây; một lần khi resume | Gọi `/led/restore`; HAL khôi phục tùy chọn user hoặc `ambient_led.resting` riêng device. Lamp mặc định sáng đều [5,4,3]; user tắt thì giữ tắt. |
 | Micro-movements | `motion` | ngẫu nhiên 45–120 giây | Phát một servo recording an toàn trong bộ `idle`, `curious`, `nod`. Chỉ servo — không đụng vào LED. |
 | Mumble (tự lẩm bẩm) | `audio` | ngẫu nhiên 5–15 phút | Chọn trong sáu mục `PhraseMumble` dùng chung mỗi ngôn ngữ (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): xen âm ngắn với lời tự nói có chút tinh nghịch, như “Cứ thong thả thôi.” và “Mình thích những lúc thế này.” Một mục dùng `[chuckle]`; không có tag thở dài hay thì thầm. Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
 

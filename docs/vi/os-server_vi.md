@@ -1,5 +1,7 @@
 # OS Server API — Tài Liệu
 
+Ambient LED gọi HAL `/led/restore` sau khoảng yên lặng. OS không chọn màu fallback hay hiệu ứng thở; mỗi device khai báo `ambient_led.resting` trong `presets.json`. HAL giữ trạng thái user tắt/đặt màu và quyền sở hữu của overlay đang hoạt động.
+
 > OS Server (Go, Gin framework) chạy trên port 5000.
 
 ## OS Server Endpoints (Go, :5000)

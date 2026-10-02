@@ -744,11 +744,14 @@ def _avg_paint_color(colors) -> Optional[tuple]:
 
 
 def led_should_stay_dark() -> bool:
-    """True when nothing may light the strip of its own accord (no user colour + dark resting look).
+    """True for an explicitly black solid preference or a dark default resting look.
 
     Self-initiated painting must check this; explicit commands and information cues must not.
     """
-    return _user_led_state is None and ambient_resting_is_dark()
+    if _user_led_state is None:
+        return ambient_resting_is_dark()
+    return (_user_led_state.get("type") == LST_SOLID
+            and not any(_user_led_state.get("color", [0, 0, 0])))
 
 
 def note_user_activity(source: str):
@@ -834,6 +837,9 @@ def _start_preset_effect(preset: dict, thread_name: str):
         _restore_timer = None
     _stop_current_effect()
     color = tuple(preset["color"])
+    if preset["effect"] == LST_SOLID:
+        rgb_service.dispatch(RGB_CMD_SOLID, color)
+        return
     _effect_stop.clear()
     _effect_name = preset["effect"]
     _effect_base_color = color
@@ -1016,7 +1022,8 @@ def _restore_user_led():
             rgb_service.clear()
             logger.info("LED restore: no user state -- resting dark, cleared")
             return
-        logger.info("LED restore: no active user state -- keeping emotion color")
+        _start_preset_effect(AMBIENT_RESTING_LED, "led-ambient-fallback")
+        logger.info("LED restore: no user state -- settling on ambient resting")
         return
 
     stype = state.get("type")

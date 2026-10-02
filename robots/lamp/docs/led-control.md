@@ -356,11 +356,8 @@ nothing is blocked:
 - While the indicator owns the strip, transient overlay writes are skipped (`POST /led/effect`
   with `transient:true`) and so is **every** `POST /led/effect/stop`: no transient overlay can
   be running (its start was skipped), so any stop arriving while muted is a stale caller.
-  Ambient's Go breathingLoop tracks its "running" flag locally and still fires StopEffect on
-  pause/lock even though its start was skipped — before this guard covered all threads, that
-  stop passed while an emotion effect held the strip (e.g. thinking's purple pulse) and killed
-  it after ~one cycle, freezing the strip on the last ripple frame. Emotion effects settle
-  back onto the red via their scheduled restore.
+  Ambient now requests restore instead of starting/stopping effects. Emotion effects
+  settle back onto the red indicator via their scheduled restore.
 ### Sleep owns the strip (HTTP routes)
 
 While `_sleeping` is set, the LED **write** routes are gated at the HTTP layer too, not
@@ -380,81 +377,47 @@ the strip toward dark, which is what sleep already wants.
 
 ### Setup-needed solid (lamp)
 
-When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `system/server/server.go` spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`, only on devices with the `light` capability) that sends `POST /led/status` with state `setup` and retries with backoff (1 s, doubling, capped at 10 s) until HAL acknowledges it, setup completes, or the server shuts down — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. It does not wait on `/health` (LED routes can acknowledge before unrelated drivers are healthy); retrying handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (currently dark/off). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
+When lamp starts and `config.SetUpCompleted == false` (device in AP/provisioning mode), `system/server/server.go` spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`, only on devices with the `light` capability) that sends `POST /led/status` with state `setup` and retries with backoff (1 s, doubling, capped at 10 s) until HAL acknowledges it, setup completes, or the server shuts down — HAL paints the strip solid white as a "device ready, connect to my hotspot" cue. It does not wait on `/health` (LED routes can acknowledge before unrelated drivers are healthy); retrying handles the cold-boot race where os-server's :5000 is up before HAL's :5001. This does not use the `statusled` state machine. The white is temporary: a successful `POST /api/device/setup` clears this saved setup state instead of retaining it as a user LED preference, then restore settles on the ambient resting look (dim steady warm white). Booting blue-breathing still shows during init. See [setup-flow.md](../../../docs/setup-flow.md#ap-mode).
 
 ## Ambient Idle Behaviors
 
-When Lamp is idle (no interaction):
-- **Breathing LED** — sine-wave brightness. Breathes the current LED color; when none is set (e.g. just after boot), it falls back to the **resting look**, which is `(0, 0, 0)` — dark. A user/agent-set color is respected (breathing uses it; ambient never overrides a locked color).
+When Lamp is idle, its default is steady warm white RGB **[5, 4, 3]**, approximately
+2% of the RGB channel range. There is no breathing effect or animation thread.
+Actual perceived brightness depends on the LEDs, not just the channel percentage.
 
-Auto-pauses on interaction, resumes after 60s of silence.
+### The resting look (default: dim warm white)
 
-### The resting look (default: off)
+The device owns this setting in `robots/<type>/presets.json`:
 
-When no user LED state exists, the strip settles on the *resting look*, defined in **two
-places that must be flipped together**:
+```json
+"ambient_led": {"resting": {"effect": "solid", "color": [5, 4, 3]}}
+```
 
-| Side | Knob | Consumers |
-|---|---|---|
-| HAL | `AMBIENT_RESTING_LED` (`hal/presets.py`) | `POST /led/restore` with no user state; the settle after mic-unmute |
-| os-server | `ambientRestingColor` (`system/ambient/service.go`) | `breathingLoop` fallback when `/led/color` reads black |
+Lamp uses the value above; intern-v2 explicitly keeps [0, 0, 0] (off). Missing
+configuration retains the dark platform fallback. HAL merges this into
+`AMBIENT_RESTING_LED` at startup. A solid preset paints once; it does not start
+an effect worker. Emotion/TTS/music release and mic-unmute restore the same look
+when no user LED state exists. Existing status, sleep and mic-privacy ownership
+still takes priority.
 
-Both are currently **`(0, 0, 0)` — the resting state is dark**. A black resting color is
-treated specially: the settle paths *clear* the strip instead of starting an effect (an
-effect thread breathing black would burn 25 fps of SPI writes and make `GET /led/color`
-report `on: true` over a dark strip), and the Go loop skips its tick entirely rather than
-painting. Light is therefore opt-in — it comes on for an *action* (emotion, status cue,
-explicit user/agent color, scene) and goes back to black when that action releases the
-strip.
+OS ambient pauses on interaction and resumes after 60 seconds of quiet (checked
+on a two-second tick). Its `restingLEDLoop` requests `POST /led/restore` once on
+resume instead of choosing a color or starting breathing. HAL remains the single
+source of the resting look and the user's saved color/effect.
 
-Two consequences worth knowing:
+### Explicit off
 
-- An idle device looks **off**, not "resting". That is intended — status cues (`booting`,
-  `connectivity`, …) are what tell the user something is happening.
-- After a reboot the strip stays dark until something asks for light: the LED sidecar is
-  boot-scoped, so every boot starts with no user state and lands on the resting look.
+`POST /led/off` saves a solid black preference [0, 0, 0]. Ambient and post-effect
+restores therefore keep an explicitly switched-off lamp dark. Transient off only
+clears the current display; it does not change that preference. Explicit colors,
+scenes and effects replace the saved preference normally. State survives a HAL
+restart within the same boot; reboot clears the boot-scoped state and returns to
+the device default. Legacy `{"type":"off"}` sidecars still normalize to no state.
 
-Every release path has to *ask* for the resting look — a path that paints its own "back to
-normal" color silently opts out of the default. Two used to: scene-off dispatched the `idle`
-preset color, and music-stop started idle breathing, both leftovers from when resting was a
-warm white. With resting black, that left the strip glowing dim orange after a scene or a
-song until some unrelated restore happened to clear it. Both now go through the shared
-settle (`led.restore_led` / `ambient_resting_is_dark`), so turning a scene off turns the
-light off.
-
-Setting both knobs back to `(255, 200, 140)` (warm white ~2700K @ speed 0.3) restores the
-previous behavior, where an idle lamp read as a cozy lamp turned on rather than a cold
-"device booting" blue, and the warm tone stayed clear of every status color. That look is
-what re-lit the strip ~60s after the user turned the light off, and what made every fresh
-boot come up lit.
-
-### "Off" is not a mode
-
-`POST /led/off` **clears the user LED state** (`_save_user_led_state(None)`) rather than
-saving an off flag. Since the resting look is already dark, no state IS off. There are only
-two states:
-
-| State | `_user_led_state` | At rest | On an action |
-|---|---|---|---|
-| **Default** | `None` | dark | lights up (emotion, status cue, mic-muted indicator) |
-| **User colour** | solid / paint / effect / scene | that colour | effect runs over it, then settles back |
-
-`led_should_stay_dark()` (`hal/app_state.py`) is the single predicate for "leave the lamp
-alone", and everything that paints without the user asking checks it: the TTS/music waves,
-the post-effect settle, `POST /led/restore`, `POST /led/effect/stop` (it clears the stopped
-effect's last frame instead of leaving it frozen), presence restore/dim, and — on the
-os-server side — ambient's breathing loop.
-
-What is deliberately NOT gated: an explicit user/agent command (that IS the user asking, and
-it overwrites the state), and cues that carry information the user needs — status overlays
-(`POST /led/status`: connectivity orange, error red, OTA green) and the mic-muted indicator.
-Those earn their light even on a resting strip.
-
-Off used to be its own sticky state, and it was worse: it looked identical to the default
-(both dark) but behaved differently, nothing could return the device to the default — an
-explicit colour was the only way out — and a reboot silently dropped it, because the sidecar
-is boot-scoped. A legacy sidecar holding `{"type": "off"}` is normalised to "no state" on
-load.
+`led_should_stay_dark()` covers explicit solid black and a dark default, so
+TTS/music waves and presence restoration respect off. Information/status and
+mic-privacy cues retain their existing priority. The `light on` intent remains
+warm white [255, 220, 180]; it does not use the dim ambient preset.
 
 ## LED in Emotion
 

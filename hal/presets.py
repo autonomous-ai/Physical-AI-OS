@@ -231,8 +231,9 @@ BUTTON_LED_PRESETS = {
 # Amber-yellow: distinct from the statusled "hardware" cue.
 LED_BACKEND_ERROR_FLASH = (12, 9, 0)
 
-# Must mirror Go ambientRestingColor (system/ambient/service.go). Black = strip dark at rest.
-AMBIENT_RESTING_LED = {"effect": FX_BREATHING, "color": [0, 0, 0], "speed": 0.3}
+# Platform fallback stays dark; each device can override ambient_led.resting.
+# OS ambient requests restore; HAL owns this look and the saved user preference.
+AMBIENT_RESTING_LED = {"effect": LST_SOLID, "color": [0, 0, 0]}
 
 
 def ambient_resting_is_dark() -> bool:

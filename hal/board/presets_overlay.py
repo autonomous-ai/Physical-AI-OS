@@ -9,6 +9,7 @@ from typing import Any, Dict
 
 from hal.presets import (
     AIM_PRESETS,
+    AMBIENT_RESTING_LED,
     BUTTON_LED_PRESETS,
     EMOTION_PRESETS,
     SCENE_PRESETS,
@@ -27,6 +28,7 @@ _TABLES: Dict[str, Dict[str, Dict[str, Any]]] = {
     "aim": AIM_PRESETS,
     "status_led": STATUS_LED_PRESETS,
     "button_led": BUTTON_LED_PRESETS,
+    "ambient_led": {"resting": AMBIENT_RESTING_LED},
 }
 
 

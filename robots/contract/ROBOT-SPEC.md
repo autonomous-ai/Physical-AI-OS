@@ -144,8 +144,12 @@ them; a device with no file keeps the defaults verbatim. This is the same
 }
 ```
 
-- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`, `button_led`) is optional.
-  `status_led` restyles the os-server system-status feedback (booting/error/ota/
+- Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`, `button_led`, `ambient_led`) is optional.
+- `ambient_led.resting` overrides the idle LED preset (`effect`, `color`, optional `speed`).
+  `solid` paints once without animation. Missing overrides keep the dark platform default;
+  Lamp declares solid `[5,4,3]`, intern-v2 declares solid `[0,0,0]`. OS asks HAL to
+  restore this preset rather than maintaining a second ambient color.
+- `status_led` restyles the os-server system-status feedback (booting/error/ota/
   connectivity/hal_down/agent_down/hardware/ready_flash + bootstrap OTA
   ota_progress/ota_error/ota_success + setup) — the OS owns the state machine,
   HAL owns the color/effect/speed. `setup` is a persistent solid; the rest are

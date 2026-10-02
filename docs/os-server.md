@@ -1,5 +1,7 @@
 # OS Server API — Documentation
 
+Ambient LED restoration delegates to HAL `/led/restore` after the quiet window. OS does not choose a fallback color or breathing effect; each device declares `ambient_led.resting` in `presets.json`. HAL preserves explicit user off/color and active overlay ownership.
+
 > OS Server (Go, Gin framework) runs on port 5000.
 
 ## OS Server Endpoints (Go, :5000)

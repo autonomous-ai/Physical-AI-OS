@@ -46,8 +46,11 @@ class TestApplyDevicePresets(unittest.TestCase):
         self._scene = copy.deepcopy(presets.SCENE_PRESETS)
         self._aim = copy.deepcopy(presets.AIM_PRESETS)
         self._status = copy.deepcopy(presets.STATUS_LED_PRESETS)
+        self._ambient = copy.deepcopy(presets.AMBIENT_RESTING_LED)
 
     def tearDown(self):
+        presets.AMBIENT_RESTING_LED.clear()
+        presets.AMBIENT_RESTING_LED.update(self._ambient)
         presets.EMOTION_PRESETS.clear()
         presets.EMOTION_PRESETS.update(self._emotion)
         presets.SCENE_PRESETS.clear()
@@ -62,6 +65,18 @@ class TestApplyDevicePresets(unittest.TestCase):
         os.makedirs(d, exist_ok=True)
         with open(os.path.join(d, "presets.json"), "w", encoding="utf-8") as f:
             json.dump(payload, f)
+
+    def test_device_resting_presets_update_existing_reference(self):
+        reference = presets.AMBIENT_RESTING_LED
+        root = os.path.join(os.path.dirname(__file__), "..", "..", "robots")
+        apply_device_presets("lamp", root)
+        self.assertIs(reference, presets.AMBIENT_RESTING_LED)
+        self.assertEqual(reference["effect"], "solid")
+        self.assertEqual(reference["color"], [5, 4, 3])
+        self.assertFalse(presets.ambient_resting_is_dark())
+        apply_device_presets("intern-v2", root)
+        self.assertEqual(reference["color"], [0, 0, 0])
+        self.assertTrue(presets.ambient_resting_is_dark())
 
     def test_no_file_keeps_base_and_default_count(self):
         with tempfile.TemporaryDirectory() as tmp:

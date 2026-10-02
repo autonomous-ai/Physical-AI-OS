@@ -1,4 +1,4 @@
-// Package ambient drives idle "living creature" behaviors (breathing LED, servo
+// Package ambient drives idle "living creature" behaviors (resting LED, servo
 // micro-movements, self-talk), opt-in via the `lifelike` capability.
 package ambient
 
@@ -22,9 +22,12 @@ import (
 // resumeDelay is the quiet time before ambient resumes.
 const resumeDelay = 60 * time.Second
 
+// Retained for reference; resting colors now come from device presets in HAL.
+/*
 // ambientRestingColor is the breathing fallback for a dark strip; must mirror HAL's
 // AMBIENT_RESTING_LED. Black means ambient never lights an unlit strip.
 var ambientRestingColor = [3]int{0, 0, 0}
+*/
 
 // Service orchestrates ambient idle behaviors.
 type Service struct {
@@ -77,7 +80,8 @@ func (s *Service) Start(ctx context.Context) {
 		go func() { defer wg.Done(); loop(ctx) }()
 	}
 	if device.Has(devType, device.CapLight) {
-		start(s.breathingLoop)
+		// start(s.breathingLoop) // Disabled: HAL owns the device resting preset.
+		start(s.restingLEDLoop)
 	}
 	if device.Has(devType, device.CapMotion) {
 		start(s.microMovementLoop)
@@ -131,7 +135,7 @@ func (s *Service) isPausedWithSleep(getSleeping func() (bool, error)) bool {
 	return err != nil || sleeping
 }
 
-// LockLED stops breathing from overriding a web-UI LED write (like "led_set").
+// LockLED stops ambient restore from overriding a web-UI LED write (like "led_set").
 func (s *Service) LockLED() {
 	s.mu.Lock()
 	s.ledLocked = true
@@ -139,7 +143,7 @@ func (s *Service) LockLED() {
 	slog.Debug("LED locked by hardware proxy", "component", "ambient")
 }
 
-// UnlockLED clears the lock so breathing can resume (like "led_off").
+// UnlockLED clears the lock so ambient restore can resume (like "led_off").
 func (s *Service) UnlockLED() {
 	s.mu.Lock()
 	s.ledLocked = false
@@ -198,6 +202,9 @@ func (s *Service) watchInteractions(ctx context.Context, eventCh <-chan domain.M
 	}
 }
 
+// Disabled: the old breathing loop could override the device resting look.
+// Keep it here for reference; Start now runs restingLEDLoop instead.
+/*
 // breathingLoop uses HAL's /led/effect so agent colors are never trampled.
 func (s *Service) breathingLoop(ctx context.Context) {
 	running := false
@@ -241,6 +248,37 @@ func (s *Service) breathingLoop(ctx context.Context) {
 				}
 				hal.SetEffect("breathing", color[0], color[1], color[2], 0.3)
 				running = true
+			}
+		}
+	}
+}
+*/
+
+// restingLEDLoop asks HAL to restore its resting look or saved user preference.
+// Never paint a fallback here: HAL owns explicit off, overlays and the default.
+func (s *Service) restingLEDLoop(ctx context.Context) {
+	applied := false
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			if s.isPaused() {
+				applied = false
+				continue
+			}
+			s.mu.Lock()
+			locked := s.ledLocked
+			s.mu.Unlock()
+			if locked {
+				applied = false
+				continue
+			}
+			if !applied {
+				hal.RestoreLED()
+				applied = true
 			}
 		}
 	}
