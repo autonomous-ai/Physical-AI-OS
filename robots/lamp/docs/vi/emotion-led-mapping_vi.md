@@ -87,7 +87,7 @@ Ghi chú kỹ thuật:
 
   `speaking_wave_rainbow` cũng tự sinh hue nên lấy đúng `brightness` của `music_strong`, envelope VU chạy dưới mức đó. Route nhạc không tự phát emotion `music_strong` — agent phát.
 - **Bảng này nằm trong `robots/lamp/presets.json`**, overlay riêng cho device, merge từng field lúc boot qua `hal/board/presets_overlay.py` — `hal/presets.py` *không* bị sửa. Nên các robot khác (reachy, intern) vẫn giữ palette gốc, và muốn trả lamp về palette gốc thì chỉ cần xoá section `emotion` trong file JSON đó.
-- **Đừng nhầm `EMO_IDLE` với `AMBIENT_RESTING_LED`.** Cái sau lấy từ `presets.json` → `ambient_led.resting` (Lamp: sáng đều `[5, 4, 3]`); `EMO_IDLE` là một emotion agent chủ động phát ra và vẫn có màu.
+- **Đừng nhầm `EMO_IDLE` với `AMBIENT_RESTING_LED`.** Cái sau lấy từ `presets.json` → `ambient_led.resting` (Lamp: sáng đều `[1, 1, 1]`); `EMO_IDLE` là một emotion agent chủ động phát ra và vẫn có màu.
 
 ### `listening` mở màn ở đỉnh nhịp thở
 

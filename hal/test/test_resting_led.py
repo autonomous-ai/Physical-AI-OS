@@ -12,12 +12,12 @@ from hal.routes import led
 
 
 @pytest.fixture
-def device(monkeypatch, tmp_path):
-    """A device whose presets.json declares a dim warm resting look."""
+def device(monkeypatch, tmp_path, lamp_presets):
+    """A device using the Lamp resting preset."""
     monkeypatch.setattr(resting_led.config, "RESTING_LED_PATH", str(tmp_path / "resting_led.json"))
     saved = dict(presets.AMBIENT_RESTING_LED)
     presets.AMBIENT_RESTING_LED.clear()
-    presets.AMBIENT_RESTING_LED.update({"effect": "solid", "color": [5, 4, 3]})
+    presets.AMBIENT_RESTING_LED.update(lamp_presets["ambient_led"]["resting"])
     monkeypatch.setattr(resting_led, "_device_default", None)
     monkeypatch.setattr(resting_led, "_choice", {"mode": "default"})
     yield tmp_path / "resting_led.json"
@@ -40,20 +40,20 @@ def strip(device, monkeypatch, tmp_path):
     return state.rgb_service
 
 
-def test_custom_choice_rewrites_resting_look_in_place_and_persists(device):
+def test_custom_choice_rewrites_resting_look_in_place_and_persists(device, lamp_presets):
     reference = presets.AMBIENT_RESTING_LED
     snap = resting_led.set_choice("custom", [8, 4, 1])
     assert reference is presets.AMBIENT_RESTING_LED
     assert reference == {"effect": "solid", "color": [8, 4, 1]}
-    assert snap["default"] == {"effect": "solid", "color": [5, 4, 3]}
+    assert snap["default"] == lamp_presets["ambient_led"]["resting"]
     assert json.loads(device.read_text()) == {"mode": "custom", "color": [8, 4, 1]}
 
 
-def test_saved_choice_reapplies_after_restart(device):
+def test_saved_choice_reapplies_after_restart(device, lamp_presets):
     device.write_text(json.dumps({"mode": "custom", "color": [12, 9, 6]}))
     resting_led.init()
     assert presets.AMBIENT_RESTING_LED["color"] == [12, 9, 6]
-    assert resting_led.snapshot()["default"]["color"] == [5, 4, 3]
+    assert resting_led.snapshot()["default"]["color"] == lamp_presets["ambient_led"]["resting"]["color"]
 
 
 def test_off_and_black_custom_keep_strip_dark(device):
@@ -62,18 +62,18 @@ def test_off_and_black_custom_keep_strip_dark(device):
     assert resting_led.set_choice("custom", [0, 0, 0])["mode"] == "off"
 
 
-def test_default_returns_to_device_preset(device):
+def test_default_returns_to_device_preset(device, lamp_presets):
     resting_led.init()
     resting_led.set_choice("custom", [8, 4, 1])
     resting_led.set_choice("default")
-    assert presets.AMBIENT_RESTING_LED == {"effect": "solid", "color": [5, 4, 3]}
+    assert presets.AMBIENT_RESTING_LED == lamp_presets["ambient_led"]["resting"]
 
 
-def test_unreadable_file_falls_back_to_default(device):
+def test_unreadable_file_falls_back_to_default(device, lamp_presets):
     device.write_text("{not json")
     resting_led.init()
     assert resting_led.snapshot()["mode"] == "default"
-    assert presets.AMBIENT_RESTING_LED["color"] == [5, 4, 3]
+    assert presets.AMBIENT_RESTING_LED["color"] == lamp_presets["ambient_led"]["resting"]["color"]
 
 
 @pytest.mark.parametrize("color", [None, [1, 2], [1, 2, 256], [1, 2, -1], [1.5, 2, 3], [True, 2, 3]])

@@ -147,7 +147,7 @@ them; a device with no file keeps the defaults verbatim. This is the same
 - Every section (`led_count`, `emotion`, `scene`, `aim`, `status_led`, `button_led`, `ambient_led`) is optional.
 - `ambient_led.resting` overrides the idle LED preset (`effect`, `color`, optional `speed`).
   `solid` paints once without animation. Missing overrides keep the dark platform default;
-  Lamp and intern-v2 declare solid `[5,4,3]`. OS asks HAL to
+  Lamp declares solid `[1,1,1]`; intern-v2 keeps solid `[5,4,3]`. OS asks HAL to
   restore this preset rather than maintaining a second ambient color. The owner can
   replace it from the web UI (`PUT /led/resting`: default, off, or a custom solid);
   HAL saves that choice in `/var/lib/hal/resting_led.json` and re-applies it on boot.

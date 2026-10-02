@@ -369,19 +369,19 @@ Khi lamp start và `config.SetUpCompleted == false` (device đang ở AP/provisi
 
 ## Ambient Idle Behaviors
 
-Khi Lamp nghỉ, mặc định là trắng ấm **[5, 4, 3]**, khoảng 2% dải giá trị RGB,
+Khi Lamp nghỉ, mặc định là trắng **[1, 1, 1]**, khoảng 0,4% dải giá trị RGB,
 sáng đều, không thở và không chạy thread animation. Độ sáng cảm nhận còn phụ
 thuộc phần cứng LED.
 
-### Resting look (mặc định: trắng ấm mờ)
+### Resting look (mặc định: trắng mờ)
 
 Cấu hình riêng theo device tại `robots/<type>/presets.json`:
 
 ```json
-"ambient_led": {"resting": {"effect": "solid", "color": [5, 4, 3]}}
+"ambient_led": {"resting": {"effect": "solid", "color": [1, 1, 1]}}
 ```
 
-Lamp và intern-v2 dùng giá trị trên. Nếu không khai báo thì
+Lamp dùng giá trị trên; intern-v2 giữ [5, 4, 3]. Nếu không khai báo thì
 fallback platform vẫn tắt. HAL merge vào `AMBIENT_RESTING_LED` khi khởi động.
 Preset solid chỉ ghi màu một lần, không tạo effect worker. Khi emotion/TTS/music
 kết thúc hoặc bỏ mic-mute, cùng resting look được khôi phục nếu chưa có tùy chọn
@@ -392,7 +392,7 @@ OS ambient pause khi tương tác, resume sau 60 giây yên lặng (tick hai gi�
 hay bật breathing. HAL là nơi duy nhất quyết định resting look và màu/effect đã lưu.
 
 Speaking wave giữ RGB nền của preset solid lúc nghỉ hoặc emotion solid khi
-chưa lưu màu của user. Với Lamp nghỉ ở [5, 4, 3], wave biến thiên trên màu mờ
+chưa lưu màu của user. Với Lamp nghỉ ở [1, 1, 1], wave biến thiên trên màu mờ
 này, không chuyển sang trắng ấm sáng mạnh. Màu user đã lưu vẫn được ưu tiên;
 tắt đèn rõ ràng vẫn giữ tối.
 
