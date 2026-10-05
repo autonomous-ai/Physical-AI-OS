@@ -2254,6 +2254,123 @@ def test_a_body_fully_in_frame_does_not_start_a_climb(monkeypatch):
     assert calls == [False]
 
 
+def _pending_repoint(t):
+    gaze._repoint_pending_t = gaze._repoint_started_t = t - config.GAZE_REPOINT_VERIFY_S - 1
+    gaze._repoint_subject_t_before = t - 100.0
+
+
+def test_a_near_body_without_a_face_is_not_scored(monkeypatch):
+    """lamp-4ace 2026-10-05: Chloe side-on at the desk, body 26-62% of the frame, no face -> sweep."""
+    calls = _repoint_scored(monkeypatch)
+    sweeps = []
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: sweeps.append(now))
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._last_subject_t = gaze._last_near_body_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [], "a near body is not evidence either way"
+    assert sweeps == [], "nothing was missed, so nothing to look around for"
+    assert gaze._repoint_pending_t == 0.0, "the repoint must still be closed"
+
+
+def test_a_near_body_never_confirms_the_bearing(monkeypatch):
+    """#545: a co-worker's back once confirmed the bearing. A body can only withhold a miss."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._last_near_body_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert True not in calls
+
+
+def test_a_near_body_outweighs_a_far_face(monkeypatch):
+    """The far face is a co-worker; the near body is the user whose face the detector dropped."""
+    calls = _repoint_scored(monkeypatch)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._last_far_face_t = gaze._last_near_body_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == []
+
+
+def test_a_far_body_without_a_face_is_still_a_miss(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._last_subject_t = t - 1.0  # a person box, but not near
+    gaze._verify_repoint(t)
+    assert calls == [False]
+
+
+def test_a_near_body_seen_before_the_turn_is_not_evidence(monkeypatch):
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._last_near_body_t = t - 50.0  # before _repoint_started_t
+    gaze._verify_repoint(t)
+    assert calls == [False]
+
+
+def test_a_climb_that_ends_on_a_near_body_and_a_far_face_is_not_scored(monkeypatch):
+    """lamp-52e6 2026-10-05 13:41: Momo's clipped torso in front, a co-worker's face behind."""
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: None)
+    t = gaze.time.monotonic()
+    gaze._repoint_started_t = gaze._repoint_subject_t_before = t - 100.0
+    gaze._repoint_climb_t = t - config.GAZE_REPOINT_CLIMB_TIMEOUT_S - 1
+    gaze._last_far_face_t = gaze._last_near_body_t = t - 1.0
+    gaze._verify_repoint(t)
+    assert calls == []
+    assert gaze._repoint_climb_t == 0.0
+
+
+@pytest.mark.parametrize("area, near", [(0.19, False), (0.20, True), (0.45, True)])
+def test_a_body_at_exactly_the_threshold_is_near(monkeypatch, area, near):
+    monkeypatch.setattr(config, "GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC", 0.20)
+    t = gaze.time.monotonic()
+    gaze._note_body_size(gaze.PersonSighting(None, True, area), t)
+    assert (gaze._last_near_body_t == t) is near
+
+
+def test_no_person_stamps_nothing():
+    gaze._note_body_size(gaze.PersonSighting(None, False, 0.9), gaze.time.monotonic())
+    assert gaze._last_near_body_t == 0.0
+
+
+def test_a_miss_reports_the_largest_body_it_saw(monkeypatch, caplog):
+    """The verdict line carries the size, so the threshold can be tuned from device logs."""
+    _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._note_body_size(gaze.PersonSighting(None, True, 0.12), t - 1.0)
+    gaze._last_subject_t = t - 1.0
+    with caplog.at_level(logging.INFO):
+        gaze._verify_repoint(t)
+    assert "largest body 12% of frame" in caplog.text
+
+
+def test_the_watcher_stamps_a_near_body_when_no_face_is_found(monkeypatch):
+    import hal.app_state as state
+
+    from hal.drivers.tracking import aim, detection as det, frame_utils
+
+    frame = np.zeros((360, 640, 3), dtype=np.uint8)
+    person = _PersonDetector((150, 60, 320, 300))  # 42% of the frame, head inside
+    monkeypatch.setattr(state, "camera_capture", object(), raising=False)
+    monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
+    monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
+    monkeypatch.setattr(aim, "_grab_frame", lambda cap, svc: frame)
+    monkeypatch.setattr(aim, "get_detector", lambda: person)
+    monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
+    monkeypatch.setattr(det, "detect_face_with_landmarks", lambda f: None)
+    t = gaze.time.monotonic()
+    assert gaze._sample_once() is None
+    assert gaze._last_near_body_t >= t
+
+
 @pytest.mark.parametrize("box_top, headless", [(0, True), (60, False)])
 def test_only_a_top_clipped_person_stamps_the_headless_clock(monkeypatch, box_top, headless):
     import hal.app_state as state

@@ -929,10 +929,18 @@ Three further behaviours are worth stating because each was a bug first:
 - **Only a body with its head above the frame waits for the climb.** A person box cut off by the frame
   top (the `_headroom_from_person` test) stamps `_last_headless_body_t`, and only that starts a climb.
   A body fully in frame already shows whatever face it has, so it is judged on the faces: near = hit,
-  only far = miss, none = miss (`found a body but no face`). Device-observed 2026-09-30: the user's
+  otherwise its **size** decides (#567). A nearest person box
+  at least `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) of the frame is someone at the desk whose
+  face the detector dropped — side-on, looking down — and the repoint is **not scored** (no strike, no
+  sweep), even if a far face is also in view. A smaller body = miss (`found a body but no face`), as
+  does only a far face. Height cannot make this call: on 2026-10-05 a non-user reached 73% of the frame
+  height. Area does: seated users measured 26–73% of the frame on three lamps, co-workers and passers-by
+  at most 13%. A near body **never confirms** the bearing. The same rule closes a climb: a climb that
+  ends with a near body and only a far face is not scored. Every repoint verdict logs the largest body
+  it saw (`largest body N% of frame`) so the threshold can be tuned from device logs. Device-observed 2026-09-30: the user's
   whole body in frame started a "climb" that never moved the head. A headless body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
-  conversation open. A near face = hit, only a far face = miss, no face at all = **not scored**.
+  conversation open. A near face = hit, a near body = **not scored**, only a far face = miss, no face at all = **not scored**.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
   the lamp.
 - **A far face does not hide a body while a repoint is judged.** The watcher normally looks for a body

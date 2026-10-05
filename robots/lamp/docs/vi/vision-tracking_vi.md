@@ -926,11 +926,20 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 - **Chỉ thân người có đầu nằm trên khung mới chờ phần leo tìm.** Một box người bị mép trên khung cắt
   (phép kiểm tra của `_headroom_from_person`) đóng dấu `_last_headless_body_t`, và chỉ nó mới bắt đầu leo
   tìm. Một thân người nằm trọn trong khung thì đã cho thấy khuôn mặt nếu có, nên được chấm theo các mặt:
-  mặt gần = trúng, chỉ mặt xa = trượt, không có mặt = trượt (`found a body but no face`). Đo trên thiết
+  mặt gần = trúng, còn lại thì **kích thước** quyết định (#567). Một box
+  người gần nhất chiếm ít nhất `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) khung hình là một người
+  đang ngồi ở bàn mà detector bỏ sót mặt — ngồi nghiêng, cúi xuống — và lần repoint **không được chấm**
+  (không bị trừ, không quay quanh tìm), kể cả khi trong khung cũng có một mặt xa. Thân nhỏ hơn = trượt
+  (`found a body but no face`), chỉ có mặt xa cũng vậy. Chiều cao không phân biệt được: ngày 05/10/2026
+  một người không phải user đạt 73% chiều cao khung. Diện tích thì được: user ngồi đo được 26–73% khung
+  hình trên ba đèn, đồng nghiệp và người đi ngang tối đa 13%. Thân gần **không bao giờ xác nhận**
+  bearing. Cùng quy tắc đó áp dụng khi kết thúc leo tìm: leo tìm kết thúc với một thân gần và chỉ có mặt
+  xa thì không được chấm. Mỗi kết luận repoint đều log box người lớn nhất đã thấy
+  (`largest body N% of frame`) để chỉnh ngưỡng từ log thiết bị. Đo trên thiết
   bị 30/09/2026: cả người user nằm trong khung đã kích hoạt một lần "leo tìm" mà đầu không hề di chuyển.
   Thân người mất đầu sẽ kích hoạt phần leo tìm ở trên và giữ
   kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
-  cuộc hội thoại nào đang mở. Mặt gần = trúng, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
+  cuộc hội thoại nào đang mở. Mặt gần = trúng, thân gần = **không chấm**, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
   Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
   ngồi ngay trước đèn.
 - **Một mặt xa không che mất thân người trong lúc đang chấm repoint.** Bình thường watcher chỉ tìm thân

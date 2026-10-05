@@ -39,6 +39,11 @@ _repoint_climb_t: float = 0.0
 # Last time a person box was cut off by the frame top: a head above the frame, the only
 # body worth climbing for. A body fully in frame already shows whatever face it has.
 _last_headless_body_t: float = 0.0
+# Last time the nearest person box was big enough to be someone at the desk (#567).
+# Withholds a repoint miss; never confirms a bearing (#545).
+_last_near_body_t: float = 0.0
+# Largest person box (fraction of frame) seen while the current repoint is judged.
+_repoint_body_area_max: float = 0.0
 # When the last repoint turned. A face seen before this was seen from the OLD pose.
 _repoint_started_t: float = 0.0
 _blind_pitch_steps: int = 0
@@ -601,6 +606,25 @@ def _note_headless_body(body_dy: Optional[float]) -> None:
         _last_headless_body_t = time.monotonic()
 
 
+def _note_body_size(sighting: PersonSighting, now: float) -> None:
+    """Stamp the near-body clock for a person box big enough to be at the desk."""
+    global _last_near_body_t, _repoint_body_area_max
+
+    if not sighting.seen:
+        return
+    if _judging_repoint():
+        _repoint_body_area_max = max(_repoint_body_area_max, sighting.area_frac)
+    if sighting.area_frac >= config.GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC:
+        _last_near_body_t = now
+
+
+def _body_size_note() -> str:
+    """Verdict suffix naming the largest body this repoint saw, for tuning from logs."""
+    if _repoint_body_area_max <= 0.0:
+        return ""
+    return f" (largest body {_repoint_body_area_max * 100:.0f}% of frame)"
+
+
 def _note_face_size(face_h: float, frame_h: float, now: float) -> None:
     """Stamp the near- or far-face clock for one detected face (size alone decides)."""
     global _last_near_face_t, _last_far_face_t
@@ -660,6 +684,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
         # No face — but that is exactly the state where the camera is most likely
         # pointing too low, and correcting it needs SOME vertical reference.
         sighting = _headroom_from_person(frame_or_small, detector)
+        _note_body_size(sighting, time.monotonic())
         _last_dy_frac, saw_person = sighting.dy, sighting.seen
         _last_dy_from_face = False
         if saw_person:
@@ -680,6 +705,7 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
     body = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h)
+    _note_body_size(body, time.monotonic())
     body_dy, body_seen = body.dy, body.seen
     if body_seen:
         # Climb toward the body's head, not toward a far face across the room.
@@ -1234,8 +1260,10 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
         # detect would need the detector lock and a settle, inside a watcher whose whole
         # design is never to make a live look wait.
         global _repoint_pending_t, _repoint_subject_t_before, _repoint_started_t
+        global _repoint_body_area_max
         _repoint_pending_t = _repoint_started_t = now
         _repoint_subject_t_before = _last_subject_t
+        _repoint_body_area_max = 0.0
         if force:
             logger.info(
                 "[gaze] speech-start reacquire: turning %+.1f deg to remembered "
@@ -1304,11 +1332,18 @@ def _verify_repoint(now: float) -> None:
         _repoint_climb_t = now
         _maybe_pitch(now, prompt=True)
         return
+    if _last_near_body_t > since:
+        # Someone is at the desk but their face was not found (side-on, looking down).
+        # Not a hit: a near body is not a face (#545). Not a miss either: lamp-4ace
+        # 2026-10-05 swept 18 looks while the user sat side-on in front of it (#567).
+        logger.info("[gaze] repoint found a near body but no near face%s — not scored",
+                    _body_size_note())
+        return
     _score_repoint(
         False,
-        "found only a far face" if _last_far_face_t > since
-        else "found a body but no face" if _last_subject_t > _repoint_subject_t_before
-        else "found nobody",
+        ("found only a far face" if _last_far_face_t > since
+         else "found a body but no face" if _last_subject_t > _repoint_subject_t_before
+         else "found nobody") + _body_size_note(),
         now,
     )
 
@@ -1327,8 +1362,12 @@ def _finish_repoint_climb(now: float) -> None:
         _maybe_pitch(now, prompt=True)
         return
     _repoint_climb_t = 0.0
-    if _last_far_face_t > since:
-        _score_repoint(False, "climb found only a far face", now)
+    if _last_near_body_t > since:
+        # The clipped torso that started the climb is the user's; the far face is not.
+        logger.info("[gaze] repoint climb found a near body but no near face in %.0fs%s "
+                    "— not scored", config.GAZE_REPOINT_CLIMB_TIMEOUT_S, _body_size_note())
+    elif _last_far_face_t > since:
+        _score_repoint(False, "climb found only a far face" + _body_size_note(), now)
     else:
         # No face at all proves nothing either way. A torso-only miss once deleted
         # correct bearings while the user sat in front of the lamp.
@@ -1520,6 +1559,8 @@ def reset_for_test() -> None:
     globals()["_repoint_climb_t"] = 0.0
     globals()["_repoint_started_t"] = 0.0
     globals()["_last_headless_body_t"] = 0.0
+    globals()["_last_near_body_t"] = 0.0
+    globals()["_repoint_body_area_max"] = 0.0
     _last_dy_frac = None
     globals()["_last_frame"] = None
     globals()["_last_box"] = None
