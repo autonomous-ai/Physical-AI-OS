@@ -1199,6 +1199,15 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
             f"seen {now - _last_face_t:.1f}s ago",
         )
         return False
+    if (now - _last_near_body_t) < config.GAZE_REPOINT_SKIP_IF_FACE_S:
+        # "blind" counts only measured faces. A side-on user's face drops out while their
+        # body fills the frame: the lamp is already on them, and turning can only end in
+        # a wrong verdict (lamp-4ace 2026-10-05, #567).
+        _repoint_quiet(
+            "someone is already in front of the lamp", now,
+            f"near body seen {now - _last_near_body_t:.1f}s ago",
+        )
+        return False
     # Voice may bypass the long *absence* delay, but never the movement cooldown.
     if not force and (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
         _repoint_quiet(

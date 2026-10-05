@@ -960,6 +960,12 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
   ai.
+- **Cũng không quay đi khỏi một người đang ngồi trước nó (#567).** `blind` lúc bắt đầu nói nghĩa là có
+  ít hơn `HAL_GAZE_MIN_SAMPLES` mặt đo được trong `HAL_GAZE_WINDOW_S` vừa qua: không tìm thấy mặt, hoặc
+  bộ lấy mẫu không có mẫu mới. Nó không nói gì về thân người. Nếu box người gần nhất là thân gần (xem ở
+  trên) trong `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, lần reacquire sẽ từ chối (`no repoint: someone is
+  already in front of the lamp`): đèn đã hướng về user rồi, và quay đi chỉ có thể dẫn tới một kết luận
+  sai. User được đo là *đang nhìn đi chỗ khác* là một kết luận khác (`skip`) và không bao giờ repoint.
 - **Hold kết thúc cùng câu nói.** Reacquire do speech kích hoạt ngắm đèn bằng `move_and_hold`,
   hàm này bỏ recording đang phát và set `_idle_settled` — đúng cho lúc đang nói, sai sau khi nói
   xong, vì không ai bật lại idle nữa. Đèn đứng im luôn cho tới khi restart HAL (đo trên lamp-0c89

@@ -2029,6 +2029,31 @@ def test_it_still_reacquires_once_the_face_is_actually_gone(body):
     assert body.moves
 
 
+def test_speech_does_not_turn_away_from_a_near_body(body):
+    """lamp-4ace 2026-10-05 13:48:46: face=0px -> blind -> reacquire, with Chloe's body filling the frame."""
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._last_near_body_t = gaze.time.monotonic() - 0.5
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is False
+    assert body.moves == []
+
+
+def test_a_stale_near_body_does_not_block_the_reacquire(body):
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._last_near_body_t = gaze.time.monotonic() - config.GAZE_REPOINT_SKIP_IF_FACE_S - 1.0
+    assert gaze._maybe_repoint(gaze.time.monotonic(), force=True) is True
+    assert body.moves
+
+
+def test_the_near_body_decline_says_why(body, caplog, monkeypatch):
+    # Declines log once a minute per reason; an earlier test may already have spent it.
+    monkeypatch.setattr(gaze, "_repoint_quiet_logged", {})
+    _absent_for(config.GAZE_REPOINT_SKIP_IF_FACE_S + 1.0)
+    gaze._last_near_body_t = gaze.time.monotonic() - 0.5
+    with caplog.at_level(logging.INFO):
+        gaze._maybe_repoint(gaze.time.monotonic(), force=True)
+    assert "no repoint: someone is already in front of the lamp" in caplog.text
+
+
 def test_pan_measures_but_does_not_move_with_no_conversation_open(neck, monkeypatch):
     monkeypatch.setattr(gaze, "_conversation_open", lambda: False)
     _fill_dx(0.20)

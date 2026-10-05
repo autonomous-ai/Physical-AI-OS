@@ -958,6 +958,12 @@ Three further behaviours are worth stating because each was a bug first:
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.
+- **Nor from someone sitting in front of it (#567).** `blind` at speech start means fewer than
+  `HAL_GAZE_MIN_SAMPLES` measured faces in the last `HAL_GAZE_WINDOW_S`: the face was not found, or the
+  sampler had nothing fresh. It says nothing about bodies. If the nearest person box was near (see
+  above) within `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, the reacquire declines (`no repoint: someone is
+  already in front of the lamp`): the lamp is already on the user, and the turn could only end in a
+  wrong verdict. A user measured *facing away* is a different verdict (`skip`) and never repoints.
 - **The hold ends with the utterance.** A speech-triggered reacquire points the lamp with
   `move_and_hold`, which drops whatever recording was playing and sets `_idle_settled` — correct
   for the utterance, wrong afterwards, because nothing else re-arms idle. The lamp simply stopped
