@@ -19,7 +19,13 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       trong giây lát (xem "Tự Động Chuyển Hướng AP→STA")
    b. Chờ internet (tối đa 60s tính theo đồng hồ; ICMP tới 8.8.8.8, nếu không
       được thì bắt tay TLS với host cloud API — cho mạng chặn ICMP)
-   c. Lưu config
+   c. Lưu config, rồi đồng bộ lại đồng hồ (không có RTC: thiết bị khởi động
+      với giờ cũ và mọi lệnh TLS lỗi "certificate is not yet valid"): chrony
+      `online` + `refresh` (resolve lại tên NTP pool bị lỗi lúc ở AP mode) +
+      `burst`, hoặc restart systemd-timesyncd; chờ tối đa 15s tới khi
+      `NTPSynchronized`, nếu chưa thì tiếp tục đồng bộ ở background
+      (`system/lib/clocksync`). Ping backend về sau mà lỗi hiệu lực certificate
+      cũng khởi động đồng bộ lại ở background, tối đa mỗi phút một lần
    d. Ping backend sớm (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publish IP LAN mới (local_ip) lên backend mà KHÔNG chờ
       bước setup agent bên dưới, để trang đã mở popup Setup có thể tra IP và
