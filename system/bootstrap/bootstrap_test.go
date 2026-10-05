@@ -150,7 +150,10 @@ func TestReconcileSkipsUninstalledComponent(t *testing.T) {
 	t.Setenv("DEVICES_DIR", devicesDir)
 	t.Setenv("DEVICE_TYPE", "reachy-mini")
 
-	b := &Bootstrap{state: &state.State{Components: map[string]string{}}}
+	b := &Bootstrap{
+		state:              &state.State{Components: map[string]string{}},
+		rollbackConfigPath: filepath.Join(t.TempDir(), "bootstrap.json"),
+	}
 
 	// A nil error proves the skip (applyUpdate would fail here).
 	updated, err := b.reconcile(context.Background(), domain.OTAKeyDevice,
@@ -168,8 +171,9 @@ func TestReconcileSkipsUninstalledComponent(t *testing.T) {
 
 func TestReconcileSkipsVersionBlockedByRollback(t *testing.T) {
 	b := &Bootstrap{
-		cfg:   &config.Config{RollbackVersions: map[string]string{domain.OTAKeyOSServer: "1.2.3"}},
-		state: &state.State{Components: map[string]string{}},
+		cfg:                &config.Config{RollbackVersions: map[string]string{domain.OTAKeyOSServer: "1.2.3"}},
+		state:              &state.State{Components: map[string]string{}},
+		rollbackConfigPath: filepath.Join(t.TempDir(), "bootstrap.json"),
 	}
 	updated, err := b.reconcile(context.Background(), domain.OTAKeyOSServer, domain.OTAComponent{
 		Version:    "1.2.3",

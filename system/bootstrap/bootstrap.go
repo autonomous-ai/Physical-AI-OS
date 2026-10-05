@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -96,6 +97,9 @@ type Bootstrap struct {
 	announcedThisCycle bool
 	// security records the last metadata fetch outcome for GET /security.
 	security securityTracker
+	// rollbackConfigPath overrides the on-device config location in isolated tests.
+	rollbackConfigPath string
+	pendingUpdatePath  string
 }
 
 // configRetryInterval is how often Serve reloads bootstrap.json while unprovisioned.
@@ -246,6 +250,9 @@ func (b *Bootstrap) checkLoop(ctx context.Context, pollInterval time.Duration) {
 
 // checkComponent fetches metadata and reconciles a single named component.
 func (b *Bootstrap) checkComponent(ctx context.Context, key string) error {
+	if err := b.recoverPendingUpdate(ctx); err != nil {
+		return err
+	}
 	meta, err := b.fetchMetadata(ctx)
 	if err != nil {
 		return err
@@ -268,6 +275,9 @@ func (b *Bootstrap) checkComponent(ctx context.Context, key string) error {
 
 // checkOnce fetches metadata and reconciles all components.
 func (b *Bootstrap) checkOnce(ctx context.Context) error {
+	if err := b.recoverPendingUpdate(ctx); err != nil {
+		return err
+	}
 	meta, err := b.fetchMetadata(ctx)
 	if err != nil {
 		return err
@@ -283,6 +293,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 	b.announcedThisCycle = false
 
 	changed := false
+	var devicePrerequisiteErr error
 	// Agent-runtime CLIs are gated by componentInstalled; hermes also needs a commit pin.
 	for _, key := range []string{
 		domain.OTAKeyOSServer, domain.OTAKeyBootstrap, domain.OTAKeyWeb, domain.OTAKeyHal, domain.OTAKeyBuddy,
@@ -296,6 +307,9 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		updated, err := b.reconcile(ctx, key, component)
 		if err != nil {
 			slog.Error("reconcile error", "component", "bootstrap", "key", key, "error", err)
+			if key == domain.OTAKeyHal || key == domain.OTAKeyOSServer {
+				devicePrerequisiteErr = errors.Join(devicePrerequisiteErr, fmt.Errorf("%s update failed: %w", key, err))
+			}
 			continue
 		}
 		if updated {
@@ -303,8 +317,11 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 		}
 	}
 
-	// Device profile is nested in metadata, so it is reconciled separately.
-	if updated, err := b.reconcileDevice(ctx); err != nil {
+	// A newer profile may require the HAL or OS schema from this release.
+	// Preserve the current profile when either prerequisite failed to update.
+	if devicePrerequisiteErr != nil {
+		slog.Warn("device profile update skipped after prerequisite failure", "component", "bootstrap", "error", devicePrerequisiteErr)
+	} else if updated, err := b.reconcileDevice(ctx); err != nil {
 		slog.Error("device reconcile error", "component", "bootstrap", "error", err)
 	} else if updated {
 		changed = true
@@ -315,7 +332,7 @@ func (b *Bootstrap) checkOnce(ctx context.Context) error {
 			return fmt.Errorf("save state: %w", err)
 		}
 	}
-	return nil
+	return devicePrerequisiteErr
 }
 
 // resolveSTTLanguage returns the configured stt_language code, or "".
@@ -448,7 +465,11 @@ func (b *Bootstrap) reconcile(ctx context.Context, key string, target domain.OTA
 	if minVersion == "" {
 		minVersion = targetVersion
 	}
-	if b.cfg != nil && strings.TrimSpace(b.cfg.RollbackVersions[key]) == targetVersion {
+	blockedVersions, err := b.rollbackVersions()
+	if err != nil {
+		return false, err
+	}
+	if strings.TrimSpace(blockedVersions[key]) == targetVersion {
 		slog.Warn("update blocked after local rollback", "component", "bootstrap", "key", key, "version", targetVersion)
 		return false, nil
 	}

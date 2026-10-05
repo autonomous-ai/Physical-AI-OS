@@ -193,9 +193,10 @@ wait_for_web() {
 check_web() {
   [ -f "$WEB_ROOT/index.html" ] || return 1
   nginx -t >/dev/null || return 1
-  # Probe what nginx is doing now, not what the snapshot predicted.
-  systemctl is-active --quiet nginx || return 0
-  wait_for_web
+  web_was_active || return 0
+  systemctl is-active --quiet nginx || return 1
+  wait_for_web || return 1
+  systemctl is-active --quiet nginx
 }
 
 restore_web_backup() {
@@ -238,8 +239,8 @@ device_was_active() {
 }
 
 restore_device_service_state() {
-  if device_was_active os-server; then systemctl restart os-server; else systemctl stop os-server 2>/dev/null || true; fi
-  if device_was_active hal; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
+  if device_was_active os-server; then systemctl restart os-server || return 1; else systemctl stop os-server 2>/dev/null || true; fi
+  if device_was_active hal; then systemctl restart hal || return 1; else systemctl stop hal 2>/dev/null || true; fi
 }
 
 wait_for_url() {
@@ -324,13 +325,21 @@ PY
 
 check_device_profile() {
   [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
-  ! device_was_active hal || { systemctl is-active --quiet hal && wait_for_url http://127.0.0.1:5001/health 120; }
-  ! device_was_active os-server || { systemctl is-active --quiet os-server && wait_for_url http://127.0.0.1:5000/api/health/live 60; }
+  local unit url attempts
+  for unit in hal os-server; do
+    device_was_active "$unit" || continue
+    if [ "$unit" = hal ]; then url=http://127.0.0.1:5001/health; attempts=120
+    else url=http://127.0.0.1:5000/api/health/live; attempts=60; fi
+    systemctl is-active --quiet "$unit" || return 1
+    wait_for_url "$url" "$attempts" || return 1
+    systemctl is-active --quiet "$unit" || return 1
+  done
+  return 0
 }
 
 snapshot_device_rootfs() {
   # Record absent files too, so rollback removes files added by the failed OTA.
-  local old_rootfs="$1" new_rootfs="$2" archive="$ROLLBACK_DIR/device.previous.rootfs"
+  local old_rootfs="$1" new_rootfs="$2" archive="${3:-$ROLLBACK_DIR/device.previous.rootfs}"
   local list rel target state
   list=$(mktemp)
   rm -rf "$archive"
@@ -352,15 +361,15 @@ snapshot_device_rootfs() {
 }
 
 restore_device_rootfs() {
-  local archive="$ROLLBACK_DIR/device.previous.rootfs" rel state target
+  local archive="${1:-$ROLLBACK_DIR/device.previous.rootfs}" rel state target
   [ -f "$archive/manifest" ] || return 0
   while IFS=$'\t' read -r rel state; do
     target="/${rel#./}"
     if [ "$state" = present ]; then
-      mkdir -p "$(dirname "$target")"
-      cp -a "$archive/files/${rel#./}" "$target"
+      mkdir -p "$(dirname "$target")" || return 1
+      cp -a "$archive/files/${rel#./}" "$target" || return 1
     else
-      rm -f "$target"
+      rm -f "$target" || return 1
     fi
   done <"$archive/manifest"
 }
@@ -419,14 +428,10 @@ relocate_venv_scripts() {
   [ ! -f "$venv/pyvenv.cfg" ] || sed -i "s|$from|$to|g" "$venv/pyvenv.cfg"
 }
 
-# Crash safety: record the pending move and restore the live tree if we exit before publishing.
-# SIGKILL/power loss can't be trapped; the reinstall path covers those.
+# The journal survives process death. It remains pending until health succeeds.
 PENDING_MOVED_FROM=""
 PENDING_MOVED_TO=""
 PENDING_RESTORE_SERVICES=""
-
-# Restart services this run stopped on any exit path (signal, set -e, exit 1).
-# Arm right before a branch's first `systemctl stop`; disarm once services are back.
 STOPPED_SERVICES_RESTORE=""
 
 arm_service_restore() {
@@ -438,33 +443,158 @@ disarm_service_restore() {
 }
 
 mark_publish_pending() {
-  PENDING_MOVED_FROM="$1"   # where the live tree used to be
-  PENDING_MOVED_TO="$2"     # where it was moved to
-  PENDING_RESTORE_SERVICES="${3:-}"  # optional function that brings services back
-  [ -z "${3:-}" ] || arm_service_restore "$3"
+  local journal="$ROLLBACK_DIR/pending-update.json" temporary had_live=false
+  [ ! -e "$journal" ] || { echo "Unrecovered update journal: $journal" >&2; return 1; }
+  mkdir -p "$ROLLBACK_DIR" || return 1
+  temporary=$(mktemp "$ROLLBACK_DIR/.pending-update.XXXXXX") || return 1
+  [ ! -e "$1" ] && [ ! -e "$2" ] || had_live=true
+  jq -n --arg live "$1" --arg backup "$2" --arg restore "$3" --argjson had_live "$had_live" \
+    --arg staged "${4:-${DIR_TMP:-}}" --arg rootfs "${DEVICE_ROOTFS_SNAPSHOT:-}" \
+    '{live:$live, backup:$backup, restore:$restore, staged:$staged, had_live:$had_live, rootfs:$rootfs}' >"$temporary" || return 1
+  # Flush staged files and journal before removing the last live tree.
+  sync || return 1
+  mv "$temporary" "$journal" || return 1
+  sync || return 1
+  PENDING_MOVED_FROM="$1"
+  PENDING_MOVED_TO="$2"
+  PENDING_RESTORE_SERVICES="$3"
+  arm_service_restore "$3"
 }
 
 clear_publish_pending() {
+  # Persist the restored/healthy tree before marking this transaction complete.
+  sync || return 1
+  rm -f "$ROLLBACK_DIR/pending-update.json" || return 1
+  sync || return 1
   PENDING_MOVED_FROM=""
   PENDING_MOVED_TO=""
   PENDING_RESTORE_SERVICES=""
 }
 
+recover_pending_update() {
+  local journal="$ROLLBACK_DIR/pending-update.json" live backup restore staged failed check had_live rootfs
+  if [ ! -f "$journal" ]; then
+    if [ ! -d "$HAL_DIR" ] && [ -d "$ROLLBACK_DIR/hal.previous" ]; then
+      mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state || return 1
+    else
+      return 0
+    fi
+  fi
+  live=$(jq -er '.live | strings | select(length > 0)' "$journal") || return 1
+  backup=$(jq -er '.backup | strings | select(length > 0)' "$journal") || return 1
+  restore=$(jq -er '.restore | strings' "$journal") || return 1
+  rootfs=$(jq -r '.rootfs // empty' "$journal") || return 1
+  case "$rootfs" in ""|"$ROLLBACK_DIR"/.device.rootfs.new.*) ;; *) return 1 ;; esac
+  had_live=$(jq -r 'if has("had_live") then .had_live else true end' "$journal") || return 1
+  staged=$(jq -r '.staged // empty' "$journal") || return 1
+  case "$restore" in
+    restore_hal_service_state)
+      [ "$live" = "$HAL_DIR" ] && [ "$backup" = "$ROLLBACK_DIR/hal.previous" ] || return 1
+      systemctl stop hal || return 1; check=check_hal ;;
+    restore_web_service_state)
+      [ "$live" = "$WEB_ROOT" ] && [ "$backup" = "$ROLLBACK_DIR/web.previous" ] || return 1
+      systemctl stop nginx || return 1; check=check_web ;;
+    restore_device_service_state)
+      [ "$backup" = "$ROLLBACK_DIR/device.previous" ] && [[ "$live" = /* ]] && [ "$live" != / ] || return 1
+      DEVICE_DEST="$live"
+      systemctl stop os-server || return 1
+      systemctl stop hal || return 1; check=check_device_profile ;;
+    restore_os_server_service)
+      [ "$live" = /usr/local/bin/os-server ] && [ "$backup" = "$ROLLBACK_DIR/os-server.previous" ] || return 1
+      systemctl stop os-server || return 1; check=check_os_server ;;
+    restore_bootstrap_service)
+      [ "$live" = /usr/local/bin/bootstrap-server ] && [ "$backup" = "$ROLLBACK_DIR/bootstrap.previous" ] || return 1
+      systemctl stop bootstrap || return 1; check=check_bootstrap ;;
+    *) echo "Unknown OTA recovery action: $restore" >&2; return 1 ;;
+  esac
+  echo "[software-update] recovering unfinished update: $live"
+  failed="${backup%.previous}.failed"
+  if [ -e "$backup" ]; then
+    rm -rf "$failed" || return 1
+    [ ! -e "$live" ] || mv "$live" "$failed" || return 1
+    mv "$backup" "$live" || return 1
+  elif [ "$had_live" = false ]; then
+    # A first install has no previous runtime. Remove the failed candidate so
+    # its version file cannot make the next poll mistake it for an installation.
+    rm -rf "$failed" || return 1
+    [ ! -e "$live" ] || mv "$live" "$failed" || return 1
+    clear_publish_pending || return 1
+    disarm_service_restore
+    echo "[software-update] failed first install removed; no prior runtime to restore"
+    return 0
+  elif [ ! -e "$live" ]; then
+    echo "Neither live runtime nor rollback backup exists: $live" >&2
+    return 1
+  fi
+  if [ "$restore" = restore_device_service_state ]; then
+    [ -z "$rootfs" ] || [ -f "$rootfs/manifest" ] || return 1
+    restore_device_rootfs "$rootfs" || return 1
+    systemctl daemon-reload || return 1
+  fi
+  "$restore" || return 1
+  "$check" || { echo "Recovered service is not healthy; keeping recovery journal" >&2; return 1; }
+  clear_publish_pending || return 1
+  disarm_service_restore
+  [ -z "$rootfs" ] || rm -rf "$rootfs"
+  # Stage paths originate in mktemp; never remove an arbitrary journal path.
+  case "$staged" in
+    "$(dirname "$live")"/.*.new.*) [ ! -e "$staged" ] || rm -rf "$staged" ;;
+  esac
+}
+
 on_exit() {
   local code=$?
-  if [ -n "$PENDING_MOVED_FROM" ] && [ ! -e "$PENDING_MOVED_FROM" ] && [ -d "$PENDING_MOVED_TO" ]; then
-    echo "[software-update] interrupted mid-publish — putting $PENDING_MOVED_FROM back" >&2
-    mv "$PENDING_MOVED_TO" "$PENDING_MOVED_FROM" 2>/dev/null || true
-  fi
-  # Only after the tree is restored, so services don't start against the staging path.
-  if [ -n "$STOPPED_SERVICES_RESTORE" ]; then
-    echo "[software-update] exiting with services stopped — bringing them back" >&2
+  trap - EXIT
+  if [ -f "$ROLLBACK_DIR/pending-update.json" ]; then
+    # A pending journal at exit is never a successful update.
+    [ "$code" -ne 0 ] || code=1
+    recover_pending_update || echo "[software-update] recovery incomplete; journal retained for retry" >&2
+  elif [ -n "$STOPPED_SERVICES_RESTORE" ]; then
     "$STOPPED_SERVICES_RESTORE" || true
     disarm_service_restore
   fi
-  rm -f "$METADATA_TMP" "$METADATA_PAYLOAD" "$ZIP_TMP" 2>/dev/null || true
-  [ -z "$DIR_TMP" ] || rm -rf "$DIR_TMP"
+  rm -f "${METADATA_TMP:-}" "${METADATA_PAYLOAD:-}" "${ZIP_TMP:-}" 2>/dev/null || true
+  [ -z "${DIR_TMP:-}" ] || rm -rf "$DIR_TMP"
   exit "$code"
+}
+
+restore_os_server_service() {
+  systemctl restart os-server
+}
+
+restore_bootstrap_service() {
+  systemctl restart bootstrap
+}
+
+check_os_server() {
+  systemctl is-active --quiet os-server || return 1
+  wait_for_url http://127.0.0.1:5000/api/health/live 60 || return 1
+  systemctl is-active --quiet os-server
+}
+
+check_bootstrap() {
+  local port
+  port=$(jq -r '.httpPort // 8080' "$BOOTSTRAP_JSON") || return 1
+  [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
+  systemctl is-active --quiet bootstrap || return 1
+  wait_for_url "http://127.0.0.1:$port/health" 60 || return 1
+  systemctl is-active --quiet bootstrap
+}
+
+update_core_binary() {
+  local unit="$1" destination="$2" candidate="$3" restore="$4" check="$5" staged
+  staged=$(mktemp "$(dirname "$destination")/.${unit}.new.XXXXXX") || return 1
+  install -m 0755 "$candidate" "$staged" || return 1
+  # Validate executable format before disturbing the current service.
+  timeout 15 "$staged" --version >/dev/null || { rm -f "$staged"; return 1; }
+  install -D -m 0755 "$destination" "$ROLLBACK_DIR/$unit.previous" || return 1
+  mark_publish_pending "$destination" "$ROLLBACK_DIR/$unit.previous" "$restore" "$staged" || return 1
+  # Atomic rename avoids a partially copied live executable.
+  mv -f "$staged" "$destination" || return 1
+  "$restore" || return 1
+  "$check" || return 1
+  clear_publish_pending || return 1
+  disarm_service_restore
 }
 
 restore_hal_backup() {
@@ -505,6 +635,8 @@ fi
 echo $$ >/var/lock/software-update.pid
 [ $# -lt 1 ] && { echo "Usage: software-update <component>|rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
 APP="$1"
+recover_pending_update || { echo "Pending OTA recovery failed; refusing another update" >&2; exit 1; }
+[ "$APP" != recover ] || { echo "OTA recovery complete"; exit 0; }
 if [ "$APP" = "rollback" ]; then
   [ $# -eq 2 ] || { echo "Usage: software-update rollback <os-server|bootstrap|web|device|hal|codex|opencode|picoclaw>"; exit 1; }
   ROLLBACK_TARGET="$2"
@@ -682,10 +814,7 @@ if [ "$APP" = "os-server" ]; then
   BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
   [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
   [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in os-server zip"; exit 1; }
-  install -D -m 0755 /usr/local/bin/os-server /root/bootstrap/rollback/os-server.previous
-  cp -f "$BIN" /usr/local/bin/os-server
-  chmod +x /usr/local/bin/os-server
-  systemctl restart os-server
+  update_core_binary os-server /usr/local/bin/os-server "$BIN" restore_os_server_service check_os_server
   echo "os-server updated to $VERSION"
 elif [ "$APP" = "bootstrap" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for bootstrap"; exit 1; }
@@ -696,10 +825,7 @@ elif [ "$APP" = "bootstrap" ]; then
   BIN=$(find "$DIR_TMP" -type f -executable 2>/dev/null | head -1)
   [ -z "$BIN" ] && BIN=$(find "$DIR_TMP" -type f 2>/dev/null | head -1)
   [ -z "$BIN" ] || [ ! -f "$BIN" ] && { echo "No binary in bootstrap zip"; exit 1; }
-  install -D -m 0755 /usr/local/bin/bootstrap-server /root/bootstrap/rollback/bootstrap.previous
-  cp -f "$BIN" /usr/local/bin/bootstrap-server
-  chmod +x /usr/local/bin/bootstrap-server
-  systemctl restart bootstrap
+  update_core_binary bootstrap /usr/local/bin/bootstrap-server "$BIN" restore_bootstrap_service check_bootstrap
   echo "bootstrap updated to $VERSION"
 elif [ "$APP" = "openclaw" ]; then
   update_openclaw "$VERSION"
@@ -836,22 +962,18 @@ elif [ "$APP" = "web" ]; then
   [ -f "$DIR_TMP/index.html" ] || { echo "No index.html in web zip"; exit 1; }
   save_web_service_state
   arm_service_restore restore_web_service_state
-  systemctl stop nginx 2>/dev/null || true
+  systemctl stop nginx
   rm -rf "$ROLLBACK_DIR/web.previous"
-  mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
   mark_publish_pending "$WEB_ROOT" "$ROLLBACK_DIR/web.previous" restore_web_service_state
+  mv "$WEB_ROOT" "$ROLLBACK_DIR/web.previous"
   publish_mode "$DIR_TMP" "$ROLLBACK_DIR/web.previous"
   mv "$DIR_TMP" "$WEB_ROOT"
-  clear_publish_pending
   DIR_TMP=""
   if ! restore_web_service_state || ! check_web; then
     echo "web health check failed; restoring the known-good bundle" >&2
-    systemctl stop nginx 2>/dev/null || true
-    restore_web_backup
-    restore_web_service_state || true
-    check_web || true
     exit 1
   fi
+  clear_publish_pending
   disarm_service_restore
   echo "web updated to $VERSION"
 elif [ "$APP" = "hal" ]; then
@@ -866,20 +988,24 @@ elif [ "$APP" = "hal" ]; then
   fi
   save_hal_service_state
   arm_service_restore restore_hal_service_state
-  systemctl stop hal 2>/dev/null || true
-  # A missing $HAL_DIR is a reinstall (no rollback point), not an error.
+  systemctl stop hal
+  # Recover older interrupted updaters that did not leave a journal.
+  if [ ! -d "$HAL_DIR" ] && [ -d "$ROLLBACK_DIR/hal.previous" ]; then
+    mv "$ROLLBACK_DIR/hal.previous" "$HAL_DIR"
+    sync
+  fi
+  DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
   if [ -d "$HAL_DIR" ]; then
     rm -rf "$ROLLBACK_DIR/hal.previous"
+    mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state
     if ! mv "$HAL_DIR" "$ROLLBACK_DIR/hal.previous"; then
       restore_hal_service_state || true
       exit 1
     fi
-    mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state
   else
     echo "[software-update] $HAL_DIR is absent — reinstalling from scratch (no rollback point for this run)"
-    rm -rf "$ROLLBACK_DIR/hal.previous"
+    mark_publish_pending "$HAL_DIR" "$ROLLBACK_DIR/hal.previous" restore_hal_service_state
   fi
-  DIR_TMP=$(mktemp -d "$(dirname "$HAL_DIR")/.hal.new.XXXXXX")
   # uv cache lives outside the runtime tree (same filesystem for hardlinks) so updates don't copy it.
   HAL_UV_CACHE="${HAL_UV_CACHE:-$(dirname "$HAL_DIR")/.uv-cache-hal}"
   if [ ! -d "$HAL_UV_CACHE" ] && [ -d "$ROLLBACK_DIR/hal.previous/.uv-cache" ]; then
@@ -899,8 +1025,6 @@ elif [ "$APP" = "hal" ]; then
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /
-    restore_hal_backup
-    restore_hal_service_state || true
     exit 1
   fi
   cd /
@@ -908,25 +1032,15 @@ elif [ "$APP" = "hal" ]; then
   HAL_STAGED="$DIR_TMP"
   if ! mv "$DIR_TMP" "$HAL_DIR"; then
     echo "HAL activation failed; restoring known-good runtime" >&2
-    restore_hal_backup
-    restore_hal_service_state || true
     exit 1
   fi
   DIR_TMP=""
-  clear_publish_pending
   relocate_venv_scripts "$HAL_DIR/.venv" "$HAL_STAGED" "$HAL_DIR"
   if ! restore_hal_service_state || ! check_hal; then
     echo "HAL health check failed; restoring the known-good runtime" >&2
-    systemctl stop hal 2>/dev/null || true
-    restore_hal_backup
-    if restore_hal_service_state; then
-      # Recovery already restored the service. The EXIT trap must not restart
-      # it again after the health probe succeeds and interrupt the recovered HAL.
-      disarm_service_restore
-      check_hal || true
-    fi
     exit 1
   fi
+  clear_publish_pending
   disarm_service_restore
   echo "hal updated to $VERSION"
 elif [ "$APP" = "claude-desktop-buddy" ]; then
@@ -964,29 +1078,32 @@ elif [ "$APP" = "device" ]; then
   fi
   save_device_service_state
   arm_service_restore restore_device_service_state
-  systemctl stop os-server 2>/dev/null || true
-  systemctl stop hal 2>/dev/null || true
-  snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs"
+  systemctl stop os-server
+  systemctl stop hal
+  DEVICE_ROOTFS_SNAPSHOT=$(mktemp -d "$ROLLBACK_DIR/.device.rootfs.new.XXXXXX")
+  snapshot_device_rootfs "$DEST/rootfs" "$DIR_TMP/rootfs" "$DEVICE_ROOTFS_SNAPSHOT"
   rm -rf "$ROLLBACK_DIR/device.previous"
-  mv "$DEST" "$ROLLBACK_DIR/device.previous"
   mark_publish_pending "$DEST" "$ROLLBACK_DIR/device.previous" restore_device_service_state
+  mv "$DEST" "$ROLLBACK_DIR/device.previous"
   publish_mode "$DIR_TMP" "$ROLLBACK_DIR/device.previous"
   mv "$DIR_TMP" "$DEST"
   DIR_TMP=""
-  clear_publish_pending
   # Apply the profile rootfs overlay including /opt/hal/.env; the repo is the source of truth,
   # so on-device .env edits are intentionally overwritten. Do not re-add a backup.
   if ! { [ ! -d "$DEST/rootfs" ] || cp -a "$DEST/rootfs/." /; } \
       || ! systemctl daemon-reload \
       || ! restore_device_service_state || ! check_device_profile; then
     echo "device profile apply or health check failed; restoring the known-good profile" >&2
-    systemctl stop os-server 2>/dev/null || true
-    systemctl stop hal 2>/dev/null || true
-    restore_device_backup
-    restore_device_service_state || true
-    check_device_profile || true
     exit 1
   fi
+  # Keep the journal's snapshot intact until commit, even while replacing the
+  # separate snapshot used by a later manual rollback.
+  ROOTFS_PUBLISH=$(mktemp -d "$ROLLBACK_DIR/.device.rootfs.publish.XXXXXX")
+  cp -a "$DEVICE_ROOTFS_SNAPSHOT/." "$ROOTFS_PUBLISH/"
+  rm -rf "$ROLLBACK_DIR/device.previous.rootfs"
+  mv "$ROOTFS_PUBLISH" "$ROLLBACK_DIR/device.previous.rootfs"
+  clear_publish_pending
   disarm_service_restore
+  rm -rf "$DEVICE_ROOTFS_SNAPSHOT"
   echo "device profile ($DEVICE_TYPE) updated to $VERSION"
 fi

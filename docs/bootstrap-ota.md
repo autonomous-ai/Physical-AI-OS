@@ -334,7 +334,11 @@ to restore it. The updater records the version it removed in
 `rollback_versions`; bootstrap then skips only that exact target, so the failed
 release is not reinstalled on the next poll. Publishing a different version
 automatically resumes OTA for that component. Rollback itself does not need the
-metadata URL or network access.
+metadata URL or network access. Bootstrap rereads `rollback_versions` before
+reconciling each component, so manual HAL/web/device rollback takes effect without
+a bootstrap restart. Unreadable or malformed rules stop that reconciliation.
+If HAL or os-server reconciliation fails, the automatic cycle skips the device
+profile to avoid applying declarations that require the failed core update.
 
 Before `os-server`, `web`, or `device` updates, the updater ensures the nginx
 Harness WebSocket route exists. It searches both `/etc/nginx/conf.d/*.conf` and
@@ -354,19 +358,22 @@ Directory installs have the same recovery contract. Before a web update, the
 updater stops nginx, swaps the fully unpacked staged bundle into place, and
 retains the previous bundle at `/root/bootstrap/rollback/web.previous` together
 with nginx's prior active/inactive state. It then requires `index.html`, a valid
-`nginx -t`, and—when nginx had been running—a successful loopback `GET /`.
+`nginx -t`, and—when nginx was active or is enabled—an active service before
+and after a successful loopback `GET /`. A required service that stopped or
+failed is an update failure, not a reason to skip health checks.
 Failure automatically restores the saved bundle and service state. An operator
 can also run `software-update rollback web`; the rejected version is recorded in
 `rollback_versions` just like a binary rollback.
 
-For a device profile, the updater stages the ZIP, stops only the `os-server` and
-`hal` services that were active, and retains the old profile at
+For a device profile, the updater stages the ZIP, stops `os-server` and
+`hal`, and retains the old profile at
 `/root/bootstrap/rollback/device.previous`. It also snapshots the exact files
 covered by the old or new `rootfs/` overlay in `device.previous.rootfs`; rollback
 therefore restores overwritten files and removes files introduced only by the
 rejected profile. Successful OTA replaces the generated `/opt/hal/.env`. The profile
-must contain `ROBOT.md`; each service that was active must recover and answer
-its loopback health endpoint. A failed check restores the known-good profile and
+must contain `ROBOT.md`; each service that was active or is enabled must be active
+before and after its loopback health probe. Failure of either HAL or os-server
+fails the profile update. A failed check restores the previous profile and
 its prior service state automatically. Use `software-update rollback device` for
 an operator rollback; the rejected device-profile version is then blocked.
 
@@ -870,9 +877,46 @@ npm-installed per device rather than baked, and older provisioning may leave
 Bash script installed by setup.sh (and baked into the image by the imager).
 Called by bootstrap worker to apply updates.
 
-It reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.json`
+For installation, it reads the OTA metadata URL from `metadata_url` in `/root/config/bootstrap.json`
 (an explicit `OTA_METADATA_URL` env var overrides it for manual/debug runs), and
 aborts with an error if neither is set — no compiled-in URL.
+
+### Interrupted updates and core binaries
+
+For HAL, web, device profiles, os-server and bootstrap, the updater writes and
+flushes `/root/bootstrap/rollback/pending-update.json` before publishing a
+replacement. The journal remains until the new installation passes its required
+health checks. A normal error or trapped signal restores the saved installation;
+failed recovery retains the journal for another attempt.
+
+Device profile updates keep a separate rootfs snapshot for the pending
+transaction. The snapshot for a later manual rollback is replaced only after
+the new profile passes health checks; recovery uses the journal's snapshot.
+
+`software-update recover` needs no OTA metadata or download. Every updater run
+recovers a pending transaction before starting another update. Bootstrap also
+runs recovery before metadata/version checks in automatic polls, component
+checks and force updates. It additionally detects the legacy case where
+`/opt/hal` is missing but `hal.previous` survives without a journal. This prevents
+the stored version from hiding a missing runtime. SIGKILL or power loss is
+recovered on the next updater invocation or running bootstrap poll; this does
+not guarantee recovery from arbitrary SD-card corruption or a machine that
+cannot boot far enough to run those services.
+
+If a first HAL installation had no prior runtime or backup, recovery removes the
+failed candidate from the live path and leaves HAL stopped. It does not claim to
+restore a nonexistent prior installation.
+
+Core binary updates stage the executable beside its destination, require a
+successful `--version` probe within 15 seconds, save the previous binary, and
+publish with an atomic rename. Restart alone is insufficient: os-server must
+answer `/api/health/live` on port 5000; bootstrap must answer `/health` on its
+configured `httpPort` (default 8080). Both checks require the service to remain
+active. Failure restores the saved binary and checks the restored service.
+
+Release these changes with **both** `make upload-setup` (the updater script) and
+`make upload-bootstrap` (Go recovery detection, refreshed rollback rules and
+core-failure gating). Uploading HAL alone does not distribute these changes.
 
 ### HAL Case
 
@@ -891,36 +935,12 @@ to retain the Pollen SDK; every other device uses `hardware + aec + pipecat`.
 > Measured on a lamp: **5-6 min → 41 s**, and `/opt/hal` shrank from ~4.8 GB to
 > 98 MB (the venv hardlinks into the shared cache).
 
-> **The publish window is crash-safe.** Between "move the live tree aside" and
-> "rename the staged tree into place" the component does not exist on disk. A
-> `trap` records that pending move and puts the tree back if the process exits
-> first — an interrupted SSH (HUP), a `systemctl restart bootstrap` killing the
-> cgroup (TERM), or any failure path. SIGKILL and power loss cannot be trapped;
-> those land on the reinstall path instead (a missing tree is installed fresh).
-
-```bash
-"hal")
-    # Preserve the complete runtime and prior service state.
-    systemctl stop hal
-    mv /opt/hal /root/bootstrap/rollback/hal.previous
-
-    # UV_BIN and HAL_EXTRA are resolved before stopping HAL.
-    # Build a fresh venv; preserve .env and use the external shared cache.
-    unzip -q "$ZIP" -d /opt/.hal.new
-    cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
-    if [ "$HAL_EXTRA" != "reachy" ]; then
-        HAL_EXTRA_ARGS+=(--extra pipecat)
-    fi
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
-    mv /opt/.hal.new /opt/hal
-
-    systemctl restart hal
-    curl -fsS http://127.0.0.1:5001/health
-    # Any staging or health failure restores hal.previous and its old state.
-    # Operators can also run: software-update rollback hal
-    ;;
-```
+HAL publication follows the journal contract above: preserve the complete
+previous runtime, create a fresh staging venv using the shared cache, preserve
+`.env`, rename the staged directory into `/opt/hal`, then restore the desired
+service state and check health. The journal is cleared only after success;
+staging, publication or health failures enter recovery. An operator can also
+run `software-update rollback hal`.
 
 HAL runtime validation is required when HAL was active before the update or its
 service is enabled. An inactive/failed service then fails the update instead of

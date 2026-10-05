@@ -406,7 +406,7 @@ def sleep_action(source: str = "button"):
         return
     from hal.routes.emotion import harness_blocks_sleep
     if harness_blocks_sleep():
-        logger.info("%s sleep hold -- ignored, Harness is on", source)
+        logger.info("%s sleep hold -- ignored, Harness is on or unavailable", source)
         return
 
     logger.info("%s sleep hold -- announcing sleepy emotion", source)

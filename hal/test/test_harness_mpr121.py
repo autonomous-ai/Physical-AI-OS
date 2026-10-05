@@ -8,6 +8,51 @@ from hal.board.mpr121 import MPR121Config
 
 
 class HarnessGestureTests(unittest.TestCase):
+    def setUp(self):
+        sleeping = patch('hal.drivers.harness.gestures.state._sleeping', False)
+        sleeping.start()
+        self.addCleanup(sleeping.stop)
+
+    def test_sleeping_tap_only_wakes_then_next_tap_records(self):
+        from hal.drivers.harness import gestures as module
+        gestures = HarnessGestures()
+        gestures.snapshot = {'enabled': True, 'generation': 1, 'focusAvailable': True}
+        voice = Mock(harness_capture_active=False)
+        with patch.object(module.state, '_sleeping', True), \
+                patch.object(module.state, '_hw_mic_switch_muted', False), \
+                patch.object(module.state, 'voice_service', voice), \
+                patch.object(module.state, 'tts_service', None), \
+                patch('hal.drivers.button_actions._wake_if_sleepy',
+                      side_effect=lambda source: setattr(module.state, '_sleeping', False)) as wake:
+            gestures.execute(_GestureEvent('single', 1))
+            wake.assert_called_once_with('MPR121 Harness')
+            voice.start_harness_capture.assert_not_called()
+            voice.finish_harness_capture.assert_not_called()
+            gestures.execute(_GestureEvent('single', 2))
+            voice.start_harness_capture.assert_called_once_with(gestures.snapshot)
+
+    def test_failed_wake_never_starts_capture(self):
+        from hal.drivers.harness import gestures as module
+        gestures = HarnessGestures()
+        voice = Mock()
+        with patch.object(module.state, '_sleeping', True), \
+                patch.object(module.state, '_hw_mic_switch_muted', False), \
+                patch.object(module.state, 'voice_service', voice), \
+                patch('hal.drivers.button_actions._wake_if_sleepy') as wake:
+            gestures.execute(_GestureEvent('single', 1))
+            gestures.execute(_GestureEvent('single', 2))
+            self.assertEqual(wake.call_count, 2)
+            voice.start_harness_capture.assert_not_called()
+
+    def test_privacy_prevents_harness_tap_wake(self):
+        from hal.drivers.harness import gestures as module
+        gestures = HarnessGestures()
+        with patch.object(module.state, '_sleeping', True), \
+                patch.object(module.state, '_hw_mic_switch_muted', True), \
+                patch('hal.drivers.button_actions._wake_if_sleepy') as wake:
+            gestures.execute(_GestureEvent('single', 1))
+            wake.assert_not_called()
+
     def test_each_tap_is_immediate_without_triple_or_cue(self):
         detector = harness_button_recognizer(0)
         detector.update(False, 0)

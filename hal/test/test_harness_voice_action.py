@@ -73,6 +73,24 @@ class HarnessClientTests(unittest.TestCase):
 
 
 class HarnessActionTests(unittest.TestCase):
+    def setUp(self):
+        sleeping = patch.object(action.state, "_sleeping", False)
+        sleeping.start()
+        self.addCleanup(sleeping.stop)
+
+    def test_sleeping_swipe_cannot_toggle_harness_or_wake(self):
+        with patch.object(action.state, "_sleeping", True), \
+                patch.object(action.state, "_hw_mic_switch_muted", False), \
+                patch.object(action, "request_voice_toggle") as request, \
+                patch.object(action, "_show_feedback") as feedback, \
+                patch("hal.drivers.button_actions._speak_gesture_ack") as speak, \
+                patch("hal.drivers.button_actions._wake_if_sleepy") as wake:
+            action.toggle_harness_voice()
+            request.assert_not_called()
+            feedback.assert_not_called()
+            speak.assert_not_called()
+            wake.assert_not_called()
+
     def test_feedback_uses_device_overlay_and_restores_after_duration(self):
         from hal.board.presets_overlay import _TABLES, apply_device_presets
         from hal.presets import BUTTON_LED_PRESETS

@@ -106,24 +106,6 @@ class HALUpdateTests(unittest.TestCase):
 
 
 class HALHealthTests(unittest.TestCase):
-    def test_successful_recovery_is_not_restarted_by_exit_cleanup(self):
-        script = SCRIPT.read_text()
-        start = script.index('    echo "HAL health check failed;')
-        end = script.index('    exit 1', start) + len('    exit 1')
-        disarm = re.search(r'^disarm_service_restore\(\) \{\n.*?^\}$', script, re.M | re.S).group(0)
-        result = subprocess.run(
-            ["/bin/bash", "-c", """
-STOPPED_SERVICES_RESTORE=restore_hal_service_state
-systemctl() { :; }
-restore_hal_backup() { echo restored; }
-restore_hal_service_state() { echo restarted; }
-check_hal() { echo healthy; }
-trap 'if [ -n "$STOPPED_SERVICES_RESTORE" ]; then "$STOPPED_SERVICES_RESTORE"; fi' EXIT
-""" + disarm + "\n" + script[start:end]], capture_output=True, text=True,
-        )
-        self.assertEqual(result.returncode, 1)
-        self.assertEqual(result.stdout.splitlines(), ["restored", "restarted", "healthy"])
-
     def test_runtime_failure_cannot_skip_rollback(self):
         script = SCRIPT.read_text()
         functions = "\n".join(

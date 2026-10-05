@@ -60,9 +60,10 @@ def list_emotion_presets():
 
 
 def harness_blocks_sleep() -> bool:
-    """Sleep is refused while Harness voice mode is ON; unavailable means off."""
+    """Allow sleep only when OS confirms Harness voice mode is OFF."""
     from hal.drivers.voice._internal.harness_voice import read_voice_mode
-    return bool(read_voice_mode().get("enabled"))
+    snapshot = read_voice_mode()
+    return bool(snapshot.get("enabled") or snapshot.get("unavailable"))
 
 
 @router.post("/emotion", response_model=EmotionResponse)
@@ -98,7 +99,7 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
 
     # Harness ON: nothing may put the device to sleep under the user.
     if req.emotion == EMO_SLEEPY and harness_blocks_sleep():
-        state.logger.info("POST /emotion: ignored sleepy while Harness is on (source=%s)", source)
+        state.logger.info("POST /emotion: ignored sleepy while Harness is on or unavailable (source=%s)", source)
         return {"status": "ignored", "emotion": req.emotion, "servo": None, "led": None}
 
     # No restore between the two effects, or the user sees a black LED flash.

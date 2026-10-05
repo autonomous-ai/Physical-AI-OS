@@ -130,6 +130,37 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
+**Remote MCP Tools** (`/setting#mcp`). Hoàn tất onboarding runtime đã chọn,
+sau đó đăng nhập giao diện admin của thiết bị. Nhập **Name** duy nhất, **URL**
+của MCP server từ xa và **Headers** cần thiết, rồi bấm **Add Tool**. Ví dụ,
+người vận hành có tài khoản [Pushary](https://pushary.com) và điện thoại đã kết
+nối có thể nhập:
+
+| Trường | Giá trị |
+|---|---|
+| Name | `pushary` |
+| URL | `https://pushary.com/api/mcp/mcp` |
+| Header name | `Authorization` |
+| Header value | `Bearer YOUR_OPERATOR_API_KEY` — thay placeholder bằng key Pushary của bạn |
+
+Pushary là dịch vụ hosted riêng, có tài khoản, trial/subscription và chính sách
+delivery riêng. Đăng nhập admin của thiết bị khác với key của server này.
+OS lưu entry trong `mcp_tools` và đồng bộ vào runtime đang dùng với tên
+`tool_pushary`. OpenCode nhận `mcp.tool_pushary` với `type: remote`; Hermes nhận
+`mcp_servers.tool_pushary`. Cả hai giữ URL, headers và bật entry.
+
+Add có thể báo lỗi sau khi OS đã lưu entry, nếu config runtime thiếu hoặc không
+hợp lệ. Tải lại danh sách trước khi thử lại: tên trùng sẽ bị từ chối. Sửa setup
+runtime rồi kiểm tra log của lần startup sync tiếp theo. Entry trong danh sách
+chưa chứng minh xác thực server, khám phá tool hay gateway restart thành công.
+Để kiểm tra delivery, yêu cầu runtime khám phá các tool của Pushary và gửi một
+notification vô hại; xác nhận điện thoại dự kiến đã nhận được.
+
+Thêm MCP server không cài native approval hook. Cụ thể, presync của Hermes do
+OS quản lý đặt `approvals.mode: "off"`; model gọi `ask_user` là câu hỏi hợp tác,
+không phải cơ chế bắt buộc duyệt trước mọi tool. Dùng **Remove** để xóa server
+đã cấu hình, rồi kiểm tra log runtime nếu server vẫn còn khả dụng.
+
 **Speech speed** trong Voice (`/setting#tts`) tải `tts_speed` hiệu lực,
 hiển thị khoảng có thể chọn (`0.5–2.0×` cho mọi provider), bước `0.05`. **Save Changes** lưu tốc độ qua
 `PUT /api/device/config`. **Test Voice** gửi ngay tốc độ trên slider mà không cần

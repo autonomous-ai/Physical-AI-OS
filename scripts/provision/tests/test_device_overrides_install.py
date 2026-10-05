@@ -82,10 +82,13 @@ systemctl() {
 snapshot_device_rootfs() {
   event "snapshot $(cat "$2/env")"
 }
-mark_publish_pending() { :; }
+mark_publish_pending() { pending=1; }
 publish_mode() { :; }
-clear_publish_pending() { :; }
-cp() { event apply-rootfs; [ "$FAIL" != copy ]; }
+clear_publish_pending() { pending=0; }
+cp() {
+  if [ "$3" = / ]; then event apply-rootfs; [ "$FAIL" != copy ];
+  else command cp "$@"; fi
+}
 restore_device_service_state() { event restore-services; }
 check_device_profile() { event check-health; [ "$FAIL" != health ]; }
 restore_device_backup() {
@@ -95,6 +98,11 @@ restore_device_backup() {
 }
 disarm_service_restore() { :; }
 cleanup() {
+  local code=$?
+  if [ "${pending:-0}" = 1 ] && [ "$code" -ne 0 ]; then
+    restore_device_backup
+    restore_device_service_state
+  fi
   [ -z "${DIR_TMP:-}" ] || command rm -rf "$DIR_TMP"
   [ -z "${ZIP_TMP:-}" ] || command rm -f "$ZIP_TMP"
 }

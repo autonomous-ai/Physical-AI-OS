@@ -49,6 +49,9 @@ def toggle_harness_voice():
     """Run on the input action worker, never the hardware polling thread."""
     if state._hw_mic_switch_muted is True:
         return
+    if state._sleeping:
+        logger.info("MPR121 Harness swipe ignored -- wake the device first")
+        return
     from hal.drivers.button_actions import _speak_gesture_ack
     try:
         result = request_voice_toggle(str(uuid.uuid4()))

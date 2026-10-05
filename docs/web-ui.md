@@ -131,6 +131,37 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
+**Remote MCP Tools** (`/setting#mcp`). Finish onboarding the selected runtime,
+then sign in to the device's admin UI. Enter a unique **Name**, the remote MCP
+server's **URL**, and any required **Headers**, then click **Add Tool**. For
+example, an operator with a [Pushary](https://pushary.com) account and connected
+phone can enter:
+
+| Field | Value |
+|---|---|
+| Name | `pushary` |
+| URL | `https://pushary.com/api/mcp/mcp` |
+| Header name | `Authorization` |
+| Header value | `Bearer YOUR_OPERATOR_API_KEY` — replace the placeholder with your Pushary key |
+
+Pushary is a separate hosted service with its own account, trial/subscription,
+and delivery policy. The device's admin login is separate from this server key.
+The OS saves the entry in `mcp_tools` and syncs it as `tool_pushary` to the active
+runtime. OpenCode receives `mcp.tool_pushary` with `type: remote`; Hermes receives
+`mcp_servers.tool_pushary`. Both keep the URL and headers and enable the entry.
+
+An Add error can occur after the OS saved the entry, if the runtime config is
+missing or invalid. Reload the list before retrying: duplicate names are rejected.
+Fix the runtime setup and check the logs on the next startup sync. A listed entry
+does not prove server authentication, tool discovery, or a successful gateway
+restart. To verify delivery, ask the runtime to discover Pushary's tools and send
+one harmless notification; confirm receipt on the intended phone.
+
+Adding an MCP server does not install a native approval hook. In particular,
+OS-managed Hermes presync sets `approvals.mode: "off"`; a model calling `ask_user`
+is a cooperative question, not enforcement before every tool. Use **Remove** to
+remove the configured server, then check runtime logs if it remains available.
+
 **Speech speed** in Voice (`/setting#tts`) loads effective `tts_speed` and
 shows the selectable range (`0.5–2.0×` for every provider) in `0.05` steps. **Save Changes** persists speed through
 `PUT /api/device/config`. **Test Voice** sends the current slider speed immediately
