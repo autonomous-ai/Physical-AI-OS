@@ -1900,7 +1900,7 @@ def _torso_repoint(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_face_t = gaze._last_near_face_t = gaze._last_far_face_t = t - 100.0
+    gaze._last_face_t = gaze._last_near_face_t = t - 100.0
     gaze._last_headless_body_t = t - 1.0
     gaze._verify_repoint(t)
     return t, calls, climbs, sweeps
@@ -1923,15 +1923,6 @@ def test_a_pending_climb_keeps_climbing(monkeypatch):
     assert climbs.count(True) >= 3
 
 
-def test_a_climb_that_finds_only_a_far_face_is_a_miss(monkeypatch):
-    """The #545 office case: a body, then a 12-25 px side-on face."""
-    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
-    gaze._last_far_face_t = t + 3.0
-    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
-    assert calls == [False]
-    assert sweeps == [True]
-
-
 def test_a_climb_that_finds_no_face_is_not_scored(monkeypatch):
     """No face at all says nothing: scoring it a miss once deleted correct bearings."""
     t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
@@ -1939,18 +1930,6 @@ def test_a_climb_that_finds_no_face_is_not_scored(monkeypatch):
     assert calls == []
     assert sweeps == []
     assert gaze._repoint_climb_t == 0.0
-
-
-def test_a_far_face_with_no_body_is_a_miss(monkeypatch):
-    calls = _repoint_scored(monkeypatch)
-    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
-    t = gaze.time.monotonic()
-    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
-    gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_face_t = gaze._last_near_face_t = gaze._last_subject_t = t - 100.0
-    gaze._last_far_face_t = t - 1.0
-    gaze._verify_repoint(t)
-    assert calls == [False]
 
 
 def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
@@ -1970,15 +1949,14 @@ def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
 @pytest.mark.parametrize("face_h, dx, near", [
     (0.16, 0.0, True), (0.136, 0.0, False), (0.19, -0.41, True), (0.35, 0.34, True),
 ])
-def test_face_size_and_offset_feed_the_near_or_far_clock(face_h, dx, near):
+def test_face_size_and_offset_feed_the_near_face_clock(face_h, dx, near):
     """Near = size alone: an off-side face is still near (green-lamp 16:55, the user at dx +34%).
 
     The clock takes no offset at all; `dx` documents where each measured face sat.
     """
-    gaze._last_near_face_t = gaze._last_far_face_t = 0.0
+    gaze._last_near_face_t = 0.0
     gaze._note_face_size(face_h * 480.0, 480.0, now=123.0)
     assert (gaze._last_near_face_t == 123.0) is near
-    assert (gaze._last_far_face_t == 123.0) is (not near)
 
 
 def test_the_wake_gate_still_wants_a_real_face():
@@ -2212,14 +2190,16 @@ class _PersonDetector:
         return None
 
 
-def _sample_far_face_with_body(monkeypatch, face_h, pending=True, x=40.0):
-    """One watcher sample: a face `face_h` px tall in a 360 px frame + a torso clipped at the top."""
+def _sample_far_face_with_body(monkeypatch, face_h, pending=True, x=40.0,
+                               body=(200, 0, 260, 360)):
+    """One watcher sample through the real face picker: a face `face_h` px tall in a
+    360 px frame, plus `body` (default: a torso clipped at the top; None for nobody)."""
     import hal.app_state as state
 
     from hal.drivers.tracking import aim, detection as det, frame_utils
 
     frame = np.zeros((360, 640, 3), dtype=np.uint8)
-    person = _PersonDetector((200, 0, 260, 360))
+    person = _PersonDetector(body)
     monkeypatch.setattr(state, "camera_capture", object(), raising=False)
     monkeypatch.setattr(state, "animation_service", _Svc(), raising=False)
     monkeypatch.setattr(state, "_camera_disabled", False, raising=False)
@@ -2227,13 +2207,10 @@ def _sample_far_face_with_body(monkeypatch, face_h, pending=True, x=40.0):
     monkeypatch.setattr(aim, "get_detector", lambda: person)
     monkeypatch.setattr(frame_utils, "downscale", lambda f: (f, 1.0))
     y = 60.0
-    monkeypatch.setattr(
-        det, "detect_face_with_landmarks",
-        lambda f: ((int(x), int(y), int(face_h), int(face_h)),
-                   _landmarks((x + face_h * 0.3, y + face_h * 0.4),
-                              (x + face_h * 0.7, y + face_h * 0.4),
-                              (x + face_h * 0.5, y + face_h * 0.6))),
-    )
+    row = [x, y, float(face_h), float(face_h),
+           x + face_h * 0.3, y + face_h * 0.4, x + face_h * 0.7, y + face_h * 0.4,
+           x + face_h * 0.5, y + face_h * 0.6, 0.0, 0.0, 0.0, 0.0, 0.9]
+    monkeypatch.setattr(det, "_get_yunet", lambda: _FakeYuNet([row]))
     gaze.reset_for_test()
     t = gaze.time.monotonic()
     if pending:
@@ -2248,7 +2225,7 @@ def test_a_far_face_does_not_hide_a_standing_user_during_a_repoint(monkeypatch):
     person, t = _sample_far_face_with_body(monkeypatch, face_h=30)  # 8% of 360
     assert person.calls == 1, "the body was never looked for"
     assert gaze._last_headless_body_t >= t, "the cut-off torso did not count as a body"
-    assert gaze._last_far_face_t >= t, "the far face must still count for a miss"
+    assert gaze._last_near_face_t == 0.0, "a far face is no face at all"
     assert gaze._last_dy_from_face is False, "the climb would aim at the far face"
     assert gaze._last_dy_frac == pytest.approx(-0.5)
 
@@ -2265,11 +2242,25 @@ def test_a_far_face_plus_a_body_starts_the_climb_not_a_miss(monkeypatch):
     assert gaze._repoint_climb_t == t and climbs == [True]
 
 
-def test_a_far_face_outside_a_repoint_skips_the_body_check(monkeypatch):
-    """Offices always have a far face: running person detection all day costs CPU."""
-    person, _t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
-    assert person.calls == 0
-    assert gaze._last_dy_from_face is True
+def test_a_far_face_never_hides_the_user_even_outside_a_repoint(monkeypatch):
+    """green-lamp 2026-10-05 16:33:42: the back of the user's head at 30% of the frame, a
+    co-worker's 8% face behind. The face hid the body, so the near-body guard never fired."""
+    person, t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
+    assert person.calls == 1, "the user's body was never looked for"
+    assert gaze._last_near_body_t >= t
+    assert len(gaze._dx_samples) == 0, "the pan would centre the co-worker"
+    assert gaze._last_face_t == 0.0
+
+
+def test_a_far_face_alone_is_nobody(monkeypatch):
+    """No body and only a co-worker's face: a repoint finds nobody and is a miss."""
+    calls = _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
+    _person, t = _sample_far_face_with_body(monkeypatch, face_h=30, body=None)
+    gaze._repoint_subject_t_before = 0.0
+    gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1.0
+    gaze._verify_repoint(t)
+    assert calls == [False]
 
 
 def test_a_near_face_never_runs_the_body_check(monkeypatch):
@@ -2279,14 +2270,6 @@ def test_a_near_face_never_runs_the_body_check(monkeypatch):
     assert gaze._last_dy_from_face is True
 
 
-def test_a_pending_climb_also_looks_for_the_body(monkeypatch):
-    person, t = _sample_far_face_with_body(monkeypatch, face_h=30, pending=False)
-    assert person.calls == 0
-    gaze._repoint_climb_t = t
-    assert gaze._sample_once() is None
-    assert person.calls == 1
-
-
 def test_a_body_fully_in_frame_does_not_start_a_climb(monkeypatch):
     """green-lamp 16:55: the whole body was in frame, so there was no head above to climb to."""
     calls = _repoint_scored(monkeypatch)
@@ -2294,7 +2277,7 @@ def test_a_body_fully_in_frame_does_not_start_a_climb(monkeypatch):
     t = gaze.time.monotonic()
     gaze._repoint_pending_t = t - config.GAZE_REPOINT_VERIFY_S - 1
     gaze._repoint_subject_t_before = t - 100.0
-    gaze._last_near_face_t = gaze._last_far_face_t = gaze._last_headless_body_t = t - 100.0
+    gaze._last_near_face_t = gaze._last_headless_body_t = t - 100.0
     gaze._last_subject_t = t - 1.0  # a person box, head inside the frame
     gaze._verify_repoint(t)
     assert gaze._repoint_climb_t == 0.0
@@ -2330,16 +2313,6 @@ def test_a_near_body_never_confirms_the_bearing(monkeypatch):
     assert True not in calls
 
 
-def test_a_near_body_outweighs_a_far_face(monkeypatch):
-    """The far face is a co-worker; the near body is the user whose face the detector dropped."""
-    calls = _repoint_scored(monkeypatch)
-    t = gaze.time.monotonic()
-    _pending_repoint(t)
-    gaze._last_far_face_t = gaze._last_near_body_t = t - 1.0
-    gaze._verify_repoint(t)
-    assert calls == []
-
-
 def test_a_far_body_without_a_face_is_still_a_miss(monkeypatch):
     calls = _repoint_scored(monkeypatch)
     monkeypatch.setattr(gaze, "_maybe_sweep", lambda now, confirmed_miss=False: None)
@@ -2360,14 +2333,14 @@ def test_a_near_body_seen_before_the_turn_is_not_evidence(monkeypatch):
     assert calls == [False]
 
 
-def test_a_climb_that_ends_on_a_near_body_and_a_far_face_is_not_scored(monkeypatch):
+def test_a_climb_that_ends_on_a_near_body_is_not_scored(monkeypatch):
     """lamp-52e6 2026-10-05 13:41: Momo's clipped torso in front, a co-worker's face behind."""
     calls = _repoint_scored(monkeypatch)
     monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: None)
     t = gaze.time.monotonic()
     gaze._repoint_started_t = gaze._repoint_subject_t_before = t - 100.0
     gaze._repoint_climb_t = t - config.GAZE_REPOINT_CLIMB_TIMEOUT_S - 1
-    gaze._last_far_face_t = gaze._last_near_body_t = t - 1.0
+    gaze._last_near_body_t = t - 1.0
     gaze._verify_repoint(t)
     assert calls == []
     assert gaze._repoint_climb_t == 0.0
