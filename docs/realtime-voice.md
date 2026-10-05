@@ -699,6 +699,39 @@ same silent-device symptom one comparison away. Ids without a stamp
 (`tg-<messageID>`) keep the plain sequence rule: with nothing to compare, a
 genuinely stale POST must not be able to take the speaker back.
 
+### Answers to a main-agent question stay with main
+
+Multi-turn tasks such as face or voice enrollment belong to the main agent. Its
+spoken questions reach realtime only as `[TTS HISTORY]` lines, which proved too
+weak: on 2026-10-02 (#564) Hermes asked "What name should I save you under?",
+realtime answered the reply itself (and later claimed "All done!"), and the
+enrollment only happened because Hermes acted on a history-only `[HANDLED]`
+turn. Realtime heard the name correctly ("Momo") where STT logged "No more.",
+so the fix keeps realtime in the loop and makes the routing explicit
+(`hal/drivers/voice/_internal/main_followup.py`):
+
+- **Window.** `feed_realtime_history` calls `note_main_reply` for every
+  main-agent reply. A reply that played (spoken, or interrupted) and ends in
+  `?` / `？` opens a window of `HAL_REALTIME_MAIN_FOLLOWUP_S` (default 60 s,
+  `0` disables) and remembers the question. Any other main reply closes it,
+  so main's own read-back ("saving you as Momo — hold still.") ends it. The
+  last TTS fragment decides when a reply is chunked. An unspoken reply never
+  opens it.
+- **Per-turn note.** While it is open, `build_turn_context` adds `Main agent is
+  waiting for this answer to its question "…"` and tells realtime to call
+  `delegate_to_main` with the user's words as it understood them. The main
+  agent then receives `[voice-instruction] <realtime's words>`.
+- **Backstop.** `run_realtime_turn` consumes the window on the first actionable
+  turn (a noise turn does not consume it). If realtime spoke instead of
+  delegating, the result becomes `delegated` with
+  `handoff_context = "Realtime already said to the user: …"`, so dispatch sends
+  a live turn with `[realtime-handoff]` and `[realtime-context]` instead of
+  `[HANDLED]` history. Main continues the task with the name realtime used.
+
+The window steers routing only; it never grants wake authorization. Live mode
+is not covered. Known limit: if realtime ignores the note and speaks a false
+claim, that audio has already played; the backstop still routes the turn.
+
 ### Two silence clocks and provisional end of turn
 
 The silence clocks produce an **endpoint candidate**, not proof that the whole
@@ -3394,6 +3427,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
+| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `60` | After a heard main-agent reply ending in `?` / `？`, the user's next actionable answer within this many seconds belongs to main: the turn context tells realtime to delegate it, and a turn realtime answers itself is forwarded as a live `[realtime-handoff]` instead of `[HANDLED]` history (#564). Any non-question main reply closes the window. `0` disables. |
 
 ## Code map
 

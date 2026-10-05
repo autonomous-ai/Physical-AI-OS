@@ -675,6 +675,39 @@ hoặc restart sớm trong phiên) thì hai sequence đụng nhau chứ không t
 thức bị vứt — đúng triệu chứng câm tiếng đó, chỉ cách một phép so sánh.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
+### Câu trả lời cho câu hỏi của main agent luôn quay về main
+
+Các tác vụ nhiều lượt như enroll khuôn mặt hoặc giọng nói thuộc về main agent.
+Câu hỏi mà main nói ra chỉ đến realtime dưới dạng dòng `[TTS HISTORY]`, và như
+vậy là quá yếu: ngày 2026-10-02 (#564) Hermes hỏi "What name should I save you
+under?", realtime tự trả lời câu đáp của người dùng (rồi còn nói "All done!"),
+và việc enroll chỉ xảy ra vì Hermes đã hành động trên một lượt `[HANDLED]` vốn
+chỉ là lịch sử. Realtime nghe đúng tên ("Momo") trong khi STT ghi "No more.",
+nên bản sửa giữ realtime trong vòng xử lý và làm cho việc định tuyến trở nên
+tường minh (`hal/drivers/voice/_internal/main_followup.py`):
+
+- **Cửa sổ.** `feed_realtime_history` gọi `note_main_reply` cho mọi câu trả
+  lời của main agent. Câu trả lời đã phát (nói hết hoặc bị ngắt) và kết thúc
+  bằng `?` / `？` sẽ mở một cửa sổ `HAL_REALTIME_MAIN_FOLLOWUP_S` (mặc định
+  60 s, `0` là tắt) và ghi nhớ câu hỏi. Mọi câu trả lời khác của main đều đóng
+  nó, nên chính câu đọc lại của main ("saving you as Momo — hold still.") kết
+  thúc cửa sổ. Khi câu trả lời bị chia đoạn, đoạn TTS cuối cùng quyết định.
+  Câu trả lời không được phát thì không bao giờ mở cửa sổ.
+- **Ghi chú theo lượt.** Khi cửa sổ đang mở, `build_turn_context` thêm `Main
+  agent is waiting for this answer to its question "…"` và yêu cầu realtime gọi
+  `delegate_to_main` với lời người dùng đúng như nó hiểu. Main agent khi đó
+  nhận `[voice-instruction] <lời realtime hiểu>`.
+- **Chốt chặn.** `run_realtime_turn` tiêu thụ cửa sổ ở lượt có nội dung đầu tiên
+  (lượt nhiễu không tiêu thụ). Nếu realtime nói thay vì delegate, kết quả được
+  đổi thành `delegated` với `handoff_context = "Realtime already said to the
+  user: …"`, nên dispatch gửi một lượt live có `[realtime-handoff]` và
+  `[realtime-context]` thay vì lịch sử `[HANDLED]`. Main tiếp tục tác vụ với cái
+  tên realtime đã dùng.
+
+Cửa sổ chỉ điều hướng; nó không bao giờ cấp quyền đánh thức (wake). Live mode
+không được bao phủ. Giới hạn đã biết: nếu realtime bỏ qua ghi chú và nói một
+khẳng định sai, âm thanh đó đã phát rồi; chốt chặn vẫn định tuyến lượt đó đúng.
+
 ### Hai đồng hồ im lặng và điểm kết thúc lượt tạm thời
 
 Các đồng hồ im lặng tạo **ứng viên kết thúc lượt**, không chứng minh toàn bộ yêu
@@ -3321,6 +3354,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
+| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `60` | Sau một câu trả lời đã phát của main agent kết thúc bằng `?` / `？`, câu đáp có nội dung tiếp theo của người dùng trong số giây này thuộc về main: turn context yêu cầu realtime delegate nó, và lượt realtime tự trả lời được chuyển thành `[realtime-handoff]` live thay vì lịch sử `[HANDLED]` (#564). Mọi câu trả lời không phải câu hỏi của main đều đóng cửa sổ. `0` là tắt. |
 
 ## Bản đồ code
 

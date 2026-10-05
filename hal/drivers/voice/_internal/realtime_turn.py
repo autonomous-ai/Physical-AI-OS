@@ -22,7 +22,7 @@ from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectS
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
-from hal.drivers.voice._internal.main_followup import pending_main_question
+from hal.drivers.voice._internal.main_followup import pending_main_question, take_main_followup
 
 logger = logging.getLogger("hal.voice")
 
@@ -513,6 +513,9 @@ def run_realtime_turn(
     # Noise/false-trigger guard: a session with no STT transcript is not worth a model
     # turn. "No transcript" → don't speak.
     noise_turn = is_noise_turn(combined, buf_duration, audio_is_speech)
+    # Consumed per actionable turn so only the first answer after main's question
+    # is owed to main; noise keeps the window for the real answer (#564).
+    owed_to_main: bool = bool(combined) and not noise_turn and take_main_followup()
     if (
         hal_config.REALTIME_ENABLED
         and realtime.available
@@ -912,6 +915,14 @@ def run_realtime_turn(
         logger.warning(
             "[realtime] Enabled but agent not available — falling back to OS server"
         )
+
+    if owed_to_main and handled:
+        # Realtime spoke instead of delegating. Its speech already played, so do not
+        # file the turn as [HANDLED] history: forward it live with what realtime said,
+        # which carries realtime's hearing of the answer (e.g. a name STT missed).
+        logger.info("[realtime] Answer to a main-agent question was self-handled — forwarding as live handoff")
+        handled, delegated, route, execution_completed = False, True, ROUTE_DELEGATED, False
+        handoff_context = f"Realtime already said to the user: {transcript}"
 
     return RealtimeTurnResult(
         delegated=delegated,
