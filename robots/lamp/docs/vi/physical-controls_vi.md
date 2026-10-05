@@ -469,7 +469,7 @@ Pad FastMode không đo được giữ ngón tay tin cậy. Cross-talk cũng khi
 chạm sinh nhiều edge, nên giữ phần gom và phân loại hiện có:
 
 1. Mỗi edge đặt lại timer tiếp xúc **200 ms**.
-2. Tiếp xúc đầu phát chime xác nhận, không dừng lời đang nói.
+2. Phản hồi tiếp xúc đầu của TTP223 dùng âm lướt xuống nhẹ 180 ms (520 → 360 Hz), thay tiếng ping xác nhận lệnh. Âm phát một lần đầu chuỗi chạm, tuân theo mute và âm lượng loa, không dừng lời đang nói. Âm GPIO, MPR121 và Harness giữ nguyên.
 3. PET rõ ràng có thể phân giải sớm; các tiếp xúc khác đợi cửa sổ quyết định
    **1,2 s**. Mỗi gesture hợp lệ được phân giải gọi cùng action PET một lần.
 4. Mỗi lần thử phản hồi đặt cooldown **1,5 s**. Tiếp xúc trong khoảng này kéo

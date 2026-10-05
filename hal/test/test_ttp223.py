@@ -726,7 +726,7 @@ class TestPetOnlyActions(_Base):
             return mock.Mock(start=target)
         with mock.patch.object(app_state, "tts_service", tts), \
              mock.patch.object(voice, "stop_tts") as stop, \
-             mock.patch.object(self.mod, "play_ack_chime") as chime, \
+             mock.patch.object(self.mod, "play_pet_chime") as chime, \
              mock.patch.object(self.mod.threading, "Thread", side_effect=inline_thread):
             self.mod.TTP223Handler._ack_first_session(self.hz.h)
         chime.assert_called_once_with(source="TTP223")

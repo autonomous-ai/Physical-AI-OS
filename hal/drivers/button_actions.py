@@ -198,6 +198,17 @@ def play_ack_chime(source: str = "button"):
         logger.debug("%s ack chime failed: %s", source, e)
 
 
+def play_pet_chime(source: str = "TTP223"):
+    """A soft tactile cue for head petting, without interrupting speech."""
+    tts = state.tts_service
+    if tts is None:
+        return
+    try:
+        tts.play_pet_chime()
+    except Exception as e:
+        logger.debug("%s pet chime failed: %s", source, e)
+
+
 def announce_listening_cue(source: str = "button"):
     """Fire the listening-cue TTS off-thread."""
     # Same HW kill-switch guard as single_click_action. Guarding only

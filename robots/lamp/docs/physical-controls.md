@@ -489,7 +489,7 @@ The FastMode pads cannot reliably measure a held finger. Cross-talk also lets
 one touch produce several edges, so the existing grouping/classification stays:
 
 1. Any edge restarts the **200 ms** contact timer.
-2. The first contact plays the acknowledgement chime without stopping speech.
+2. TTP223 first-contact feedback uses a soft 180 ms descending chirp (520 → 360 Hz), instead of the command acknowledgment ping. It plays once at the start of a touch burst, respects speaker mute and volume, and does not stop speech. GPIO, MPR121 and Harness cues are unchanged.
 3. A clear pet can resolve early; other contacts wait for the **1.2 s** decision
    window. Every non-empty resolved gesture calls the same PET action once.
 4. Every response attempt arms a **1.5 s** cooldown. Contacts inside it extend
