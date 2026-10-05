@@ -393,8 +393,8 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Đúng 3 tap ngắn, rồi yên 0.4 s | Reboot bị vô hiệu hóa tại wrapper MPR121; không có action bổ sung hoặc cue nghe. Action single-click ở tap đầu vẫn chạy. |
 | Giữ 2–<5 s rồi nhả | Đã tắt; không sleep. |
 | Giữ ≥5 s rồi nhả | Đã tắt; không shutdown hay factory reset. |
-| Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
-| Vuốt phải sang trái rồi nhả | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt phải sang trái rồi nhả (user ngồi đối diện lamp) | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt trái sang phải rồi nhả (user ngồi đối diện lamp) | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
@@ -402,13 +402,19 @@ Action destructive không chạy khi còn giữ.
 
 ### Vuốt MPR121 theo hướng
 
-`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
-theo thứ tự **trái sang phải** vật lý. `robots/lamp/mpr121.json` của Lamp khai
-báo E11…E0 (E11 nằm bên trái). Kiểm tra chiều lắp bar: nếu E0 nằm bên trái, đảo
-trục thành E0…E11. Tăng vị trí
-trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
-`button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
-bật Harness voice. Các action này áp dụng khi Harness OFF; khi ON cùng hai hướng chọn agent trước/kế tiếp. Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
+Mọi hướng mô tả cho người dùng ở đây đều theo góc nhìn người ngồi **đối diện
+lamp**, không phải trái/phải của bản thân lamp.
+
+`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`.
+`robots/lamp/mpr121.json` của Lamp khai báo E11…E0: trên cụm đã lắp, E11 nằm
+bên phải của user, E0 nằm bên trái. Tăng vị trí trên trục (`+1`, user vuốt
+phải sang trái) gọi `swipe_action(source="MPR121")` trong `button_actions.py`
+để sleep. Giảm vị trí (`-1`, user vuốt trái sang phải) bật Harness voice-only
+mode. Các action này áp dụng khi Harness OFF; khi ON, phải sang trái chọn
+agent trước, trái sang phải chọn agent kế tiếp. Cần kiểm tra vị trí electrode
+khi lắp lamp; thứ tự mảng xác định dấu hướng của detector, không phải chiều
+trái sang phải theo góc nhìn user.
+Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
@@ -657,7 +663,7 @@ Các handler đầu vào được khởi động trong startup lifespan `hal/ser
 
 ### Gesture MPR121 theo Harness mode
 
-Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON dùng mapping riêng thay cho click, vuốt sleep và listening cue (giữ sleep/shutdown và triple tap reboot thường đã tắt): tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (`mpr121.json` của Lamp khai báo E11…E0; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
+Trên đèn MPR121, hướng vuốt theo góc nhìn user ngồi **đối diện lamp**. Khi Harness OFF, vuốt **trái sang phải** để bật Harness voice-only mode, **phải sang trái** để sleep. Harness ON dùng mapping riêng thay cho click, vuốt sleep và listening cue (giữ sleep/shutdown và triple tap reboot thường đã tắt): tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **trái sang phải** chọn agent kế tiếp, **phải sang trái** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. `swipe_axis` E11…E0 của Lamp chạy từ phải sang trái theo góc nhìn user (`+1`); chiều ngược lại là `-1`. Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Khi Harness voice mode ON, yêu cầu sleep bị chặn. Nếu không đọc được mode từ OS, sleep cũng bị chặn tới khi xác nhận OFF; bước chuyển emotion kiểm tra lại sau lời thông báo sleep. Swipe khi đang ngủ không được bật Harness hoặc đánh thức lamp; cần tap wake trước khi swipe. Nếu Harness được bật từ bên ngoài (ví dụ UI/API) khi lamp đã ngủ, lamp không tự wake. Khi privacy microphone đang mở, tap hợp lệ đầu tiên chỉ wake và phục hồi thiết bị ngoại vi do sleep quản lý; không bắt đầu ghi âm, kể cả khi wake thất bại. Phải tap thêm lần nữa mới bắt đầu thu Harness. Khóa privacy microphone phần cứng vẫn được ưu tiên.
 

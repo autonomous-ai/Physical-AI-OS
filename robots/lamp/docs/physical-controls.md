@@ -405,8 +405,8 @@ functions **while Harness mode is OFF**. Harness ON uses the separate policy bel
 | Exactly 3 short taps, then 0.4 s quiet | Reboot is disabled in the MPR121 wrapper; no additional action or listening cue. The first-tap single-click action still runs. |
 | Hold 2–<5 s, then release | Disabled; no sleep action. |
 | Hold ≥5 s, then release | Disabled; no shutdown or factory reset. |
-| Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
-| Swipe right to left, then release | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
+| Swipe right to left, then release (user facing the lamp) | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe left to right, then release (user facing the lamp) | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
@@ -414,12 +414,19 @@ click burst. Destructive actions never commit while held.
 
 ### MPR121 directional swipe
 
+All user-facing directions here are from the perspective of a person seated
+**facing the lamp**, not the lamp's own left/right.
+
 `swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
-`electrodes`, in physical **left-to-right** order. Lamp's `robots/lamp/mpr121.json`
-declares E11…E0 (E11 physically on the left). Verify the mounted bar: if E0 is
-physically on the left, reverse the axis to E0…E11. Increasing axis position (`+1`, left to right) calls
+`electrodes`. Lamp's `robots/lamp/mpr121.json` declares E11…E0: E11 is on the
+user's right and E0 on the user's left in the mounted assembly. Increasing
+axis position (`+1`, user right to left) calls
 `swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
-position (`-1`, right to left) enables Harness voice. These actions apply with Harness OFF; with Harness ON the same directions select previous/next agent.
+position (`-1`, user left to right) enables Harness voice-only mode. These
+actions apply with Harness OFF; with Harness ON, right to left selects the
+previous agent and left to right selects the next agent. Verify electrode
+placement when assembling the lamp; the array order defines the sign reported
+by the detector, not the user's left-to-right direction.
 A swipe need not cross the entire strip: the centroid must travel at least 3
 positions over at least 30 ms. Fast swipes may skip pads whose dwell is shorter
 than a poll plus the footprint filter; a centroid leap beyond 3 positions is
@@ -679,7 +686,7 @@ Input handlers are started in `hal/server.py` lifespan startup. Missing optional
 
 ### Harness-mode MPR121 gestures
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON uses a separate mapping for clicks, sleep swipes and listening cues (normal sleep/shutdown holds and triple-tap reboot are disabled): tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp's `mpr121.json` declares E11…E0; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, directions are from the user seated **facing the lamp**. With Harness OFF, swipe **left to right** to enable Harness voice-only mode and **right to left** to sleep. Harness ON uses a separate mapping for clicks, sleep swipes and listening cues (normal sleep/shutdown holds and triple-tap reboot are disabled): tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **left to right** selects the next agent and **right to left** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Lamp's `swipe_axis` E11…E0 runs from the user's right to left (`+1`); the reverse is `-1`. Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 While Harness voice mode is ON, sleep requests are rejected. If OS cannot report the mode, sleep is also rejected until OFF is confirmed; the final emotion transition rechecks after any spoken sleep announcement. A swipe while asleep cannot enable Harness or wake the lamp; wake with a tap before swiping. If Harness is enabled externally (for example through the UI/API) while already asleep, it does not wake the lamp automatically. With microphone privacy open, the first accepted tap only wakes the lamp and restores sleep-owned peripherals; it never starts recording, even if wake fails. A separate subsequent tap starts Harness capture. Hardware microphone privacy remains authoritative.
 
