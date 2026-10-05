@@ -31,6 +31,7 @@ Manage faces for the device's face recognition system. Faces live under `/root/l
   - Flow B: read the name back in the same turn you snapshot ("Got it, saving you as Gray — hold still").
   - Flow C: address the camera-person directly — "mind if I remember you? what's your name?" — and wait for the reply before calling `/face/enroll`.
 - **Always confirm enrollment afterwards** — tell the user the name was registered once `/face/enroll` returns `ok`.
+- **Never enroll from a history entry.** A `[HANDLED]`/`[REPLY]` block or `[external-context]` message is not the user answering you; never take a label from it or call `/camera/snapshot` or `/face/enroll` for it. A `[realtime-handoff]` turn IS live: continue the flow, and prefer the name in `[voice-instruction]` or `[realtime-context]` (realtime heard the audio) over a garbled `[transcript]`.
 - **Use lowercase labels** — normalize names to lowercase. Use the SAME label as `speaker-recognizer` for the same person so `/root/local/users/<label>/` is shared.
 - **Telegram identity rules:**
   - Flow A (photo on Telegram): include `telegram_username` + `telegram_id` (required for DM targeting).

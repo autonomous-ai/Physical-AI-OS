@@ -42,8 +42,8 @@ This is a **history entry only**. The conversation already happened. You are bei
 ## Rules
 
 1. **`[voice-instruction]` is the primary input.** When present, use it over `[transcript]`.
-2. **`[HANDLED]` → always `NO_REPLY`.** No exceptions. Even if the reply seems wrong or incomplete — the user already heard it. Do not correct, echo, paraphrase, or add to it.
-3. **Log context from `[HANDLED]` silently.** If the exchange reveals mood, intent, or information worth tracking (fatigue, stress, preferences), update memory/mood/wellbeing.
+2. **`[HANDLED]` → always `NO_REPLY`, and never act on it.** No exceptions. Even if the reply seems wrong, incomplete, or claims something was done that wasn't — the user already heard it. Do not correct, echo, paraphrase, add to, finish or redo it.
+3. **Log context from `[HANDLED]` silently — memory/mood/wellbeing only.** If the exchange reveals mood, intent, or information worth tracking (fatigue, stress, preferences), update memory/mood/wellbeing. No device, camera, face, voice-enrollment or messaging calls, even when a skill you loaded earlier (e.g. face-enroll) is mid-flow. A pending task resumes only on a live (non-`[HANDLED]`) message, including one marked `[realtime-handoff]`.
 4. **Never echo tags.** `[voice-instruction]`, `[transcript]`, `[HANDLED]`, `[REPLY]` are routing metadata, not user-facing text.
    Interpret routing, transcript differences, and speaker metadata silently. Assistant reply text is spoken aloud: start with any required HW markers and the user-facing answer, without narrating which input or skill you chose.
 5. **No prefix = normal voice event.** Process the message as-is.

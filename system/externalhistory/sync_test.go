@@ -129,3 +129,16 @@ func TestSyncAckBeforeSendReturnIsNotOverwrittenByError(t *testing.T) {
 		t.Fatal(got.State)
 	}
 }
+
+func TestMessageForbidsActionsFromHistory(t *testing.T) {
+	m := Message(Record{Source: "realtime", Input: "Look at my camera", Output: "All done!"})
+	for _, want := range []string{
+		"Do not call device, camera, face, voice or messaging tools",
+		"Do not enroll anyone or take names from this entry",
+		"Return NO_REPLY.",
+	} {
+		if !strings.Contains(m, want) {
+			t.Fatalf("message missing %q:\n%s", want, m)
+		}
+	}
+}
