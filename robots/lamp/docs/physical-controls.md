@@ -17,7 +17,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 | Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
 | Reset GPIO button | not wired | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
 | Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
-| TTP223 | not wired | Two pads, gpiochip0 lines **37 and 96** as configured in `robots/lamp/ttp223.json` (doc previously said 96/98 — S1 pin 29 / PD0 / line 96, S3 pin 33 / PD2 / line 98; confirm on hardware). **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
+| TTP223 | not wired | Four candidate header pins on gpiochip0 — pin 27 / PB5 / line 37 (T1), pin 29 / PD0 / line 96 (T2), pin 31 / PD1 / line 97 (T3), pin 33 / PD2 / line 98 (T4) — of which only two carry pads, varying per unit. `robots/lamp/ttp223.json` lists all four with `"detect": true`; HAL finds the wired pair at startup. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
@@ -50,8 +50,8 @@ driver.
 
 TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
 `boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
-`chip`, `lines` and optional `axis` (the same lines in physical left-to-right
-order). `hal/board/ttp223.py` selects the detected board and passes its
+`chip`, `lines`, optional `axis` (the same lines in physical left-to-right
+order) and optional `detect` (boolean, default `false`). `hal/board/ttp223.py` selects the detected board and passes its
 `TouchConfig` to the shared driver. Missing file or board entry falls back to
 that board's legacy `touch` in `hal/board/boards.json` (OrangePi: chip 0,
 lines 96/100); `"enabled": false` explicitly disables TTP223. Malformed
@@ -59,11 +59,35 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-The Lamp JSON currently configures `orangepi_sun60` as chip 0, lines `[37, 96]`
-(no `axis`). This doc previously stated S1 on pin 29 (line 96) and S3 on pin 33
-(line 98); the two disagree, so **confirm the second pad's line on hardware**
-(`hal/test_ttp223_probe_orangepi.py watch`). Either way pin 35 (line 99) stays
-with the mechanical button. The legacy fallback still uses lines 96/100, which
+The Lamp JSON configures `orangepi_sun60` as chip 0, lines `[37, 96, 97, 98]`
+(header pins 27/29/31/33, T1–T4), no `axis`, `"detect": true`. Only two pads are
+wired and which two differs between units, so `lines` lists candidates rather
+than pads. With `detect` on, the driver:
+
+1. **Probes at startup.** Each candidate line is claimed as input with pull-down
+   for 10 ms (`PROBE_SETTLE_S`) and read. A wired TTP223 drives its idle output
+   HIGH and reads 1; a bare header pin falls to 0. The line is then freed and
+   the log reports `TTP223 detect: wired pads [...] of candidates [...]`.
+2. **Claims every candidate** with pull-up / both edges as usual. Bare pins
+   stay HIGH and produce no edges.
+3. **Learns from a confirmed touch.** Edges on a line the probe missed stay out
+   of the gesture state until the line has been LOW for at least 20 ms
+   (`LEARN_MIN_LOW_MS`; device traces show a touch holding LOW for 73–135 ms).
+   The LOW is timed between the two edges' kernel timestamps (the lgpio
+   callback `tick`, nanoseconds), not when each callback runs, so a delayed or
+   batched callback cannot turn a transient into a touch or the reverse.
+   The release that ends such a LOW adds the line to the wired set, logs
+   `TTP223 pad on line N learned from a Xms touch`, and delivers that touch as a
+   normal gesture, timed at its release. A shorter LOW — a transient on a bare
+   pulled-up pin — is dropped: it learns nothing, starts no contact timer and
+   plays no chime (logged at DEBUG only). This covers a pad held during the
+   probe, or an output that reads LOW under pull-down. A learned line stays
+   wired until HAL restarts.
+
+The swipe rule ("every wired pad") and the TAP reason compare against the wired
+set; if nothing has been detected or learned yet it falls back to all of
+`lines`. Without `detect`, every listed line counts as wired (previous
+behaviour). Pin 35 (line 99) stays with the mechanical button. The legacy fallback still uses lines 96/100, which
 overlaps the reset button; keep the Lamp JSON installed to avoid that.
 
 Board detection reads `/proc/device-tree/model`:
@@ -482,8 +506,8 @@ control-action branches left in this driver.
 | `HAL_TOUCH_SWIPE_MAX_GAP_MS` | 150 | Upper boundary separating travel from a new tap |
 | `HAL_TOUCH_PRESS_MIN_EMPTY_MS` | 15 | Minimum empty-surface gap for a new press |
 
-`ttp223.json` supplies chip, lines and optional spatial `axis`; absent axis uses
-line order. Geometry only affects classification/timing, not the PET action.
+`ttp223.json` supplies chip, lines, optional spatial `axis` and optional
+`detect`; absent axis uses line order (a detected subset keeps that order). Geometry only affects classification/timing, not the PET action.
 Tests in `hal/test/test_ttp223.py` cover both classifier settings, two/three-pad
 layouts, all gesture shapes, cooldown and first-contact non-interruption.
 
