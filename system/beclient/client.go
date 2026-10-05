@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/clocksync"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -245,6 +246,10 @@ func (c *Client) postWithAuth(reqURL, bearerToken string, body any) (*PingRespon
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// A stale clock rejects every certificate; resync instead of retrying blind.
+		if clocksync.IsClockError(err) {
+			clocksync.Kick("ping_tls")
+		}
 		return nil, fmt.Errorf("request %s: %w", reqURL, err)
 	}
 	defer resp.Body.Close()

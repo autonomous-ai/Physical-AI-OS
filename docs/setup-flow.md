@@ -19,7 +19,13 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       AP is still briefly alive (see "AP→STA Auto-Redirect")
    b. Wait for internet (up to 60s wall clock; ICMP to 8.8.8.8, falling back
       to a TLS handshake with the cloud API host for networks that drop ICMP)
-   c. Save config
+   c. Save config, then resync the clock (no RTC: the device boots with a
+      stale time and every TLS call fails "certificate is not yet valid"):
+      chrony `online` + `refresh` (re-resolves NTP pool names that failed in
+      AP mode) + `burst`, or a systemd-timesyncd restart; wait up to 15s for
+      `NTPSynchronized`, else keep syncing in the background
+      (`system/lib/clocksync`). A later backend ping that fails on certificate
+      validity also starts a background resync, at most once a minute
    d. Early backend ping (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publishes the device's fresh LAN IP (local_ip) to the
       backend WITHOUT waiting for the agent setup below, so a page that
