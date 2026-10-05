@@ -345,12 +345,15 @@ the highest positive idle delta fell from 4 counts at the defaults to 0, with
 the same 10 ms update; `lamp-8e2c` had shown idle peaks of 8 against touch
 threshold 6 at the defaults, causing phantom taps. Filtering does not change the
 touch delta itself. Chip debounce (`0x5B`) comes from `chip_debounce` (0–7,
-default 0), written to both DR (release) and DT (touch): a status bit flips only
-after the change persists for that many samples. Lamp sets `chip_debounce: 2`
+default 0), written to both DR (release) and DT (touch). The encoded value N
+requires N+1 consecutive touch or release detections before the status changes:
+0 requires one detection; 2 requires three. Lamp sets `chip_debounce: 2`
 (`0x5B = 0x22`) with thresholds `6 / 4`, the values validated on hardware with
 `mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Software contact
-(30 ms) and swipe footprint (5 ms) debounce still apply on top, so every
-footprint is delayed by the two chip samples. HAL validates the filter values at boot.
+(30 ms) and swipe footprint (5 ms) debounce still apply on top, and each
+touch/release transition requires two additional consecutive detections compared
+with `chip_debounce: 0`. See [NXP AN3892, page 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
+HAL validates the filter values at boot.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
 thresholds (the standalone `mpr121_opi_test.py` probe this section used to
 reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver

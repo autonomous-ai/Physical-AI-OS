@@ -21,7 +21,8 @@ class MPR121Config:
     autoconfig: bool = True
     poll_ms: int = 10
     debounce_ms: int = 30
-    # Chip debounce (reg 0x5B): samples a touch/release must persist, 0..7, both directions.
+    # Chip debounce encoding (reg 0x5B), 0..7: N requires N+1 consecutive
+    # touch/release detections, independently for both directions.
     chip_debounce: int = 0
     ffi: int = 6
     sfi: int = 10

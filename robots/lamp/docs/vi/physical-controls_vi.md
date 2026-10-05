@@ -333,13 +333,15 @@ gian nạp giữ 0,5 µs. Lamp đặt `ffi: 34, sfi: 10, esi_ms: 1`: trên `lamp
 không chạm giảm từ 4 count (mặc định) xuống 0, vẫn cập nhật mỗi 10 ms;
 `lamp-8e2c` từng có đỉnh nhiễu 8 so với ngưỡng chạm 6 ở mặc định, gây tự chạm.
 Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) lấy từ
-`chip_debounce` (0–7, mặc định 0), ghi cho cả DR (nhả) và DT (chạm): bit trạng
-thái chỉ đổi khi thay đổi kéo dài đủ số mẫu đó. Lamp đặt `chip_debounce: 2`
+`chip_debounce` (0–7, mặc định 0), ghi cho cả DR (nhả) và DT (chạm). Giá trị mã hóa N
+yêu cầu N+1 lần phát hiện chạm hoặc nhả liên tiếp trước khi đổi trạng thái:
+0 cần một lần; 2 cần ba lần. Lamp đặt `chip_debounce: 2`
 (`0x5B = 0x22`) cùng ngưỡng `6 / 4`, là giá trị đã kiểm chứng trên phần cứng với
 `mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Debounce contact
-(30 ms) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm, nên mọi footprint
-trễ thêm hai mẫu của chip. HAL kiểm tra giá trị bộ lọc lúc khởi
-động.
+(30 ms) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm; mỗi chuyển trạng thái
+chạm/nhả cần thêm hai lần phát hiện liên tiếp so với `chip_debounce: 0`.
+Xem [NXP AN3892, trang 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
+HAL kiểm tra giá trị bộ lọc lúc khởi động.
 Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
 các pad đã lắp (script probe độc lập `mpr121_opi_test.py` mà phần này từng nhắc
 tới không có trong repo; `hal/test/test_mpr121*.py` chỉ kiểm tra logic driver).
