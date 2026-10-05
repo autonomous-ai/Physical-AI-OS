@@ -931,6 +931,55 @@ def test_a_person_filling_the_frame_still_means_look_up():
     assert gaze._headroom_from_person(_Frame(), det)[0] == pytest.approx(-0.5)
 
 
+class _Candidates:
+    """Detector stand-in exposing every person box, like ObjectDetector.detect_candidates."""
+
+    def __init__(self, boxes):
+        self.boxes = boxes  # [((x, y, w, h), conf), ...]
+
+    def detect_candidates(self, frame, target, strict=False, min_conf=None):
+        return list(self.boxes) if target == "person" else []
+
+    def detect(self, frame, target, strict=False, min_conf=None):
+        raise AssertionError("gaze must not use the single most-confident box")
+
+
+def test_gaze_sizes_the_nearest_person_not_the_most_confident():
+    """lamp-4ace 2026-10-05 13:48:51: user 30% area conf 0.78 lost to a 4% co-worker at 0.83."""
+    user = ((150, 0, 320, 360), 0.78)        # clipped at the top: head above the frame
+    coworker = ((520, 150, 60, 150), 0.83)   # whole body in frame, small
+    seen = gaze._headroom_from_person(_Frame(), _Candidates([coworker, user]))
+    assert seen.seen is True
+    assert seen.dy == pytest.approx(-0.5), "the climb must follow the user's clipped torso"
+    assert seen.area_frac == pytest.approx(320 * 360 / (640 * 360))
+
+
+def test_the_nearest_person_is_the_tallest_box():
+    tall = ((100, 40, 200, 300), 0.55)
+    short = ((400, 100, 220, 200), 0.95)
+    seen = gaze._headroom_from_person(_Frame(), _Candidates([short, tall]))
+    assert seen.area_frac == pytest.approx(200 * 300 / (640 * 360))
+
+
+def test_only_people_too_small_to_matter_read_as_nobody():
+    tiny = ((10, 10, 10, 20), 0.9)  # under LOOK_AIM_MIN_PERSON_HEIGHT_FRAC
+    seen = gaze._headroom_from_person(_Frame(), _Candidates([tiny]))
+    assert seen == gaze.PersonSighting(None, False, 0.0)
+
+
+def test_a_detector_without_candidates_still_works():
+    seen = gaze._headroom_from_person(_Frame(), _Box((100, 40, 200, 250)))
+    assert seen.seen is True and seen.dy is None
+    assert seen.area_frac == pytest.approx(200 * 250 / (640 * 360))
+
+
+def test_aim_and_gaze_pick_the_same_person():
+    from hal.drivers.tracking import aim
+
+    boxes = [((520, 150, 60, 150), 0.83), ((150, 0, 320, 360), 0.78)]
+    assert aim._pick_nearest(boxes, _Frame()) == boxes[1]
+
+
 @pytest.fixture
 def height_store(tmp_path, monkeypatch):
     """Point the height memory at a temp file — never the real /var/lib path."""

@@ -7,7 +7,7 @@ import math
 import threading
 import time
 from collections import deque
-from typing import Any, Deque, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Deque, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import hal.config as config
 
@@ -310,29 +310,58 @@ def _ratio_between(samples: List[Tuple[float, float, float, float]],
     return facing / float(len(measured)), len(measured)
 
 
-def _headroom_from_person(frame: Any, detector: Any) -> Tuple[Optional[float], bool]:
-    """``(vertical offset to correct by, whether a person was seen at all)``."""
-    if frame is None or detector is None:
-        return None, False
+class PersonSighting(NamedTuple):
+    """The nearest person box: climb offset (top-clipped only), seen at all, area / frame."""
+
+    dy: Optional[float]
+    seen: bool
+    area_frac: float
+
+
+_NO_PERSON = PersonSighting(None, False, 0.0)
+
+
+def _nearest_person_box(frame: Any, detector: Any) -> Optional[Tuple[int, int, int, int]]:
+    """The person gaze reasons about: the nearest, as look-aim picks it (#567).
+
+    detect() returns the MOST CONFIDENT box. lamp-4ace 2026-10-05: a 4% co-worker at
+    0.83 beat the user's 30% box at 0.78, so the user's clipped torso never climbed.
+    """
+    from hal.drivers.tracking import aim
+
+    getter = getattr(detector, "detect_candidates", None)
+    if callable(getter):
+        candidates = getter(frame, "person", strict=False,
+                            min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
+        if not isinstance(candidates, (list, tuple)):
+            return None
+        picked = aim._pick_nearest(candidates, frame)
+        return None if picked is None else picked[0]
+    # A detector without candidates has only its single best box to offer.
     try:
-        box = detector.detect(frame, "person", strict=False,
-                              min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
+        return detector.detect(frame, "person", strict=False,
+                               min_conf=config.LOOK_AIM_MIN_CONFIDENCE)
     except TypeError:
-        try:
-            box = detector.detect(frame, "person", strict=False)
-        except Exception:
-            return None, False
+        return detector.detect(frame, "person", strict=False)
+
+
+def _headroom_from_person(frame: Any, detector: Any) -> PersonSighting:
+    """What the nearest person box says about where the user's head is, and how near."""
+    if frame is None or detector is None:
+        return _NO_PERSON
+    try:
+        box = _nearest_person_box(frame, detector)
     except Exception:
-        return None, False
+        return _NO_PERSON
     if box is None:
-        return None, False
-    _, y, _, h = box
+        return _NO_PERSON
+    _, y, w, h = box
     frame_h = float(frame.shape[0]) or 1.0
+    frame_w = float(frame.shape[1]) or 1.0
     if float(h) / frame_h < config.LOOK_AIM_MIN_PERSON_HEIGHT_FRAC:
-        return None, False
-    if float(y) > 2.0:
-        return None, True
-    return -0.5, True
+        return _NO_PERSON
+    area = (float(w) * float(h)) / (frame_w * frame_h)
+    return PersonSighting(-0.5 if float(y) <= 2.0 else None, True, area)
 
 
 # Every joint the pitch loop steers. All three are vertical, so all three are
@@ -550,8 +579,8 @@ def _confirms_repoint(face_h: float, frame_h: float) -> bool:
 
 
 def _body_behind_a_far_face(frame: Any, detector: Any, face_h: float,
-                            frame_h: float) -> Tuple[Optional[float], bool]:
-    """``(dy, seen)`` for a body the far face in frame would otherwise hide.
+                            frame_h: float) -> PersonSighting:
+    """The body a far face in frame would otherwise hide.
 
     Only while a repoint is judged: the watcher looks for a body only when it finds no
     face, so a co-worker's small face hid a user standing in front of the lamp with
@@ -559,7 +588,7 @@ def _body_behind_a_far_face(frame: Any, detector: Any, face_h: float,
     2026-09-30). Always-on would run person detection on most office samples.
     """
     if not _judging_repoint() or _confirms_repoint(face_h, frame_h):
-        return None, False
+        return _NO_PERSON
     return _headroom_from_person(frame, detector)
 
 
@@ -630,7 +659,8 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     if face is None:
         # No face — but that is exactly the state where the camera is most likely
         # pointing too low, and correcting it needs SOME vertical reference.
-        _last_dy_frac, saw_person = _headroom_from_person(frame_or_small, detector)
+        sighting = _headroom_from_person(frame_or_small, detector)
+        _last_dy_frac, saw_person = sighting.dy, sighting.seen
         _last_dy_from_face = False
         if saw_person:
             _last_subject_t = time.monotonic()
@@ -649,7 +679,8 @@ def _sample_once() -> Optional[str]:  # noqa: C901
     (fx, fy, fw, fh), landmarks = face
     frame_w = float(small.shape[1]) or 1.0
     frame_h = float(small.shape[0]) or 1.0
-    body_dy, body_seen = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h)
+    body = _body_behind_a_far_face(frame_or_small, detector, fh, frame_h)
+    body_dy, body_seen = body.dy, body.seen
     if body_seen:
         # Climb toward the body's head, not toward a far face across the room.
         _last_subject_t = time.monotonic()

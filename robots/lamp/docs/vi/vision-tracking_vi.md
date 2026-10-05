@@ -942,6 +942,11 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   đó được tính là thân, và `dy` của phần leo tìm lấy từ mép trên của thân chứ không từ mặt xa. Ngoài
   khoảng thời gian đó thì không chạy: văn phòng gần như lúc nào cũng có một mặt xa, và chạy phát hiện
   người trên hầu hết các mẫu sẽ tốn CPU.
+  Thân người mà gaze xét là box người **gần nhất** — box cao nhất trong số các box đủ gần để là người
+  đang nói, cùng quy tắc `_pick_nearest` mà look-aim và search dùng — chứ không phải box có độ tin cậy
+  cao nhất của `detect()`. Trên lamp-4ace (05/10/2026 13:48:51), box 30% của user với độ tin cậy 0.78
+  đã thua box 4% của một đồng nghiệp với 0.83, nên phần thân bị cắt của user không bao giờ kích hoạt
+  leo tìm.
 - **Nó sẽ không quay đi khỏi một cái mặt đang có trong khung.** Nếu vừa thấy mặt trong
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, một lần reacquire do speech kích hoạt sẽ từ chối: sau khi leo tìm
   đã thấy mặt user *cao hơn* bearing, nghe theo bearing nghĩa là quay ngược xuống nhìn vào chỗ không có
