@@ -136,10 +136,15 @@ def _detect(monkeypatch, rows, frame_w=640):
     return detection.detect_face_with_landmarks(frame)
 
 
+def _near_px(frame_h=480):
+    """The smallest face height gaze will look at in a `frame_h` frame (#567)."""
+    return int(config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC * frame_h) + 2
+
+
 def test_the_face_nearest_the_frame_centre_wins_over_the_larger_one(monkeypatch):
     """A colleague leaning in must not take the gate from the seated user."""
-    big = config.GAZE_MIN_FACE_PX * 2
-    small = config.GAZE_MIN_FACE_PX + 2
+    big = _near_px() * 2
+    small = _near_px()
     colleague = _face_row(x=500, w=big, h=big, nose_x=1.0)
     user = _face_row(x=300, w=small, h=small, nose_x=2.0)
     (fx, _, fw, fh), landmarks = _detect(monkeypatch, [colleague, user])
@@ -163,11 +168,28 @@ def test_faces_too_small_to_measure_do_not_win_by_sitting_in_the_centre(monkeypa
     assert (fx, fh) == (40, user_h)
 
 
-def test_with_nobody_measurable_the_largest_face_still_comes_back(monkeypatch):
-    """When every face is too small, the largest bbox is still returned for re-aiming."""
-    (fx, _, _, fh), _ = _detect(monkeypatch, [_face_row(x=10, w=8, h=8),
-                                              _face_row(x=600, w=18, h=18)])
-    assert (fx, fh) == (600, 18)
+def test_with_nobody_near_enough_there_is_no_face(monkeypatch):
+    """green-lamp 2026-10-05 16:33: a co-worker's 8% face was the only one, so gaze
+    panned toward it and never looked for the user's body in front of the lamp (#567)."""
+    assert _detect(monkeypatch, [_face_row(x=10, w=8, h=8),
+                                 _face_row(x=600, w=18, h=18)]) is None
+
+
+def test_a_face_too_small_to_be_at_the_desk_is_not_a_face(monkeypatch):
+    """Above the 48 px measuring floor, still below the size a desk user ever reached."""
+    h = _near_px() - 4
+    assert h >= config.GAZE_MIN_FACE_PX
+    assert _detect(monkeypatch, [_face_row(x=300, w=h, h=h)]) is None
+
+
+def test_a_centred_neighbour_does_not_beat_the_off_centre_user(monkeypatch):
+    """2026-09-30: a neighbour one desk over reached 13.6%; centre-most must not hand them the gate."""
+    neighbour_h = int(0.136 * 480)  # 65 px: measurable, but not near
+    user_h = int(0.20 * 480)
+    neighbour = _face_row(x=300, w=neighbour_h, h=neighbour_h)
+    user = _face_row(x=40, w=user_h, h=user_h)
+    (fx, _, _, fh), _ = _detect(monkeypatch, [neighbour, user])
+    assert (fx, fh) == (40, user_h)
 
 
 def test_no_detections_is_still_none(monkeypatch):

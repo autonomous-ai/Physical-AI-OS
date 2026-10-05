@@ -260,15 +260,16 @@ def detect_face_with_landmarks(
     except Exception as e:
         logger.debug("YuNet landmark detect failed: %s", e)
         return None
-    faces = _measurable_faces(faces)
-    if len(faces) == 0:
+    # Only a face big enough to be someone at the desk counts at all (#567). A smaller
+    # one is a co-worker across the room: returning it anyway steered the pan toward
+    # them and hid the user's own body from the watcher (green-lamp 2026-10-05).
+    floor = max(float(config.GAZE_MIN_FACE_PX),
+                config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC * float(h))
+    near = [f for f in _measurable_faces(faces) if float(f[3]) >= floor]
+    if not near:
         return None
     cx = float(w) / 2.0
-    measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]
-    if measurable:
-        best = min(measurable, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
-    else:
-        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
+    best = min(near, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
     x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
     x = max(0, x); y = max(0, y)
     fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
