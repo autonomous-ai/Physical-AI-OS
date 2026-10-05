@@ -73,6 +73,9 @@ than pads. With `detect` on, the driver:
 3. **Learns from a confirmed touch.** Edges on a line the probe missed stay out
    of the gesture state until the line has been LOW for at least 20 ms
    (`LEARN_MIN_LOW_MS`; device traces show a touch holding LOW for 73–135 ms).
+   The LOW is timed between the two edges' kernel timestamps (the lgpio
+   callback `tick`, nanoseconds), not when each callback runs, so a delayed or
+   batched callback cannot turn a transient into a touch or the reverse.
    The release that ends such a LOW adds the line to the wired set, logs
    `TTP223 pad on line N learned from a Xms touch`, and delivers that touch as a
    normal gesture, timed at its release. A shorter LOW — a transient on a bare

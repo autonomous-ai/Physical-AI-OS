@@ -71,6 +71,9 @@ viên chứ không phải danh sách pad. Khi bật `detect`, driver:
 3. **Học từ lần chạm đã xác nhận.** Edge trên line mà probe bỏ sót không được
    đưa vào trạng thái gesture cho tới khi line ở mức LOW ít nhất 20 ms
    (`LEARN_MIN_LOW_MS`; trace trên máy cho thấy một lần chạm giữ LOW 73–135 ms).
+   Khoảng LOW được đo giữa timestamp kernel của hai edge (`tick` của callback
+   lgpio, đơn vị nano giây), không phải thời điểm callback chạy, nên callback bị
+   trễ hoặc dồn lại không thể biến nhiễu thành lần chạm hay ngược lại.
    Edge nhả kết thúc khoảng LOW đó sẽ thêm line vào tập pad đã nối, log
    `TTP223 pad on line N learned from a Xms touch`, và chuyển lần chạm đó thành
    gesture bình thường, tính thời điểm tại lúc nhả. Khoảng LOW ngắn hơn — nhiễu

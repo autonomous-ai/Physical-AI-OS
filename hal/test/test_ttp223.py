@@ -29,21 +29,27 @@ class _Harness:
         self.fired = []
         self._now_ms = 0.0
 
-    def touch(self, line, at_ms=None):
-        """One touch edge, optionally at a controlled monotonic time."""
-        self._edge(line, 0, at_ms)
+    def touch(self, line, at_ms=None, edge_ms=None):
+        """One touch edge, optionally at a controlled monotonic time.
 
-    def release(self, line, at_ms=None):
+        at_ms is when the callback runs; edge_ms is the edge's own kernel timestamp,
+        for callbacks delivered late or in a batch. They coincide unless edge_ms is given.
+        """
+        self._edge(line, 0, at_ms, edge_ms)
+
+    def release(self, line, at_ms=None, edge_ms=None):
         """One release edge."""
-        self._edge(line, 1, at_ms)
+        self._edge(line, 1, at_ms, edge_ms)
 
-    def _edge(self, line, level, at_ms):
+    def _edge(self, line, level, at_ms, edge_ms=None):
         # Untimed edges land at the same instant, so there are no gaps.
         if at_ms is None:
             at_ms = self._now_ms
         self._now_ms = at_ms
+        # lgpio passes the edge timestamp in nanoseconds.
+        tick = int((at_ms if edge_ms is None else edge_ms) * 1_000_000)
         with mock.patch.object(self.mod.time, "monotonic", return_value=at_ms / 1000.0):
-            self.h._on_edge(0, line, level, 0)
+            self.h._on_edge(0, line, level, tick)
 
     def end_session(self):
         """Fire the session-end timer by hand."""
@@ -635,6 +641,23 @@ class TestDetectedPads(_Base):
         self.hz.touch(37, at_ms=1000)
         self.hz.release(37, at_ms=1000 + self.mod.LEARN_MIN_LOW_MS - 1)
         self.assertEqual(self.hz.h._active, {97, 98})
+
+    def test_a_glitch_whose_callbacks_run_far_apart_is_still_a_glitch(self):
+        """A 1 ms pulse stays a transient even when its release callback runs 50 ms late."""
+        self.hz.touch(37, at_ms=1000, edge_ms=1000)
+        self.hz.release(37, at_ms=1050, edge_ms=1001)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self.assertIsNone(self.hz.h._session_end_timer)
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, [])
+
+    def test_a_real_touch_whose_callbacks_run_back_to_back_is_still_learned(self):
+        """An 80 ms touch stays a touch even when both callbacks are delivered 1 ms apart."""
+        self.hz.touch(37, at_ms=2000, edge_ms=1000)
+        self.hz.release(37, at_ms=2001, edge_ms=1080)
+        self.assertEqual(self.hz.h._active, {37, 97, 98})
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
 
     def test_a_glitch_does_not_stop_a_later_real_touch_being_learned(self):
         self.hz.touch(37, at_ms=1000)

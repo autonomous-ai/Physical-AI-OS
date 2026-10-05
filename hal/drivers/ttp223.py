@@ -54,8 +54,8 @@ PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
 PROBE_SETTLE_S = 0.01
 
 # How long an undetected candidate line must stay LOW before its release admits it as a
-# pad. Device traces show a touch holding the output LOW for 73-135 ms; a transient on a
-# bare pulled-up pin lasts far less.
+# pad, measured between the two edges' kernel timestamps. Device traces show a touch
+# holding the output LOW for 73-135 ms; a transient on a bare pulled-up pin lasts far less.
 LEARN_MIN_LOW_MS = 20.0
 
 
@@ -70,7 +70,7 @@ class TTP223Handler:
         self._axis = None
         # Lines with a pad actually wired. None = every configured line (no detect).
         self._active = None
-        # Undetected candidate lines currently LOW: line -> monotonic time it fell.
+        # Undetected candidate lines currently LOW: line -> lgpio tick (ns) of the fall.
         self._candidate_low = {}
         # Per-contact first-touch order for the current gesture cycle: [[(line, ts),
         # ...], ...], one inner list per contact. NOT flattened — device-measured
@@ -171,22 +171,25 @@ class TTP223Handler:
         with self._lock:
             return set(self._active) if self._active else set(self._lines)
 
-    def _confirm_candidate(self, gpio, level):
+    def _confirm_candidate(self, gpio, level, tick):
         """Decide whether an edge on an undetected line proves a pad is wired there.
 
         True exactly once per line: on the release that ends a LOW of at least
         LEARN_MIN_LOW_MS. Anything shorter is a transient and is dropped without
         reaching the gesture state.
+
+        The LOW is timed from the edges' own timestamps (lgpio tick, ns), not from when
+        each callback runs: a delayed or batched callback must neither stretch a
+        transient into a touch nor shrink a touch into a transient.
         """
-        now = time.monotonic()
         with self._lock:
             if level == 0:
-                self._candidate_low[gpio] = now
+                self._candidate_low[gpio] = tick
                 return False
             fell_at = self._candidate_low.pop(gpio, None)
             if fell_at is None:
                 return False
-            low_ms = (now - fell_at) * 1000.0
+            low_ms = (tick - fell_at) / 1e6
             if low_ms < LEARN_MIN_LOW_MS:
                 logger.debug(
                     "TTP223 line %d: %.1fms LOW ignored (undetected pad, needs %.0fms)",
@@ -207,7 +210,7 @@ class TTP223Handler:
             touch_debug.note_edge(gpio, level, suppressed=True)
             return
         if self._active is not None and gpio not in self._active:
-            if not self._confirm_candidate(gpio, level):
+            if not self._confirm_candidate(gpio, level, tick):
                 return
             # Deliver the touch that proved the pad; its release follows below.
             self._handle_edge(gpio, 0)
