@@ -124,15 +124,15 @@ def no_timer(monkeypatch):
     return timers
 
 
-def test_preview_paints_without_saving(strip, no_timer, device):
+def test_preview_paints_without_saving(strip, no_timer, device, lamp_presets):
     reply = led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))
     assert reply == {"status": "ok", "painted": True}
     strip.dispatch.assert_called_once_with("solid", (20, 0, 10))
-    assert presets.AMBIENT_RESTING_LED["color"] == [5, 4, 3]
+    assert presets.AMBIENT_RESTING_LED["color"] == lamp_presets["ambient_led"]["resting"]["color"]
     assert not device.exists()
 
 
-def test_preview_expiry_restores_saved_look(strip, no_timer, monkeypatch):
+def test_preview_expiry_restores_saved_look(strip, no_timer, monkeypatch, lamp_presets):
     monkeypatch.setattr(state, "_user_led_state", None)
     led.preview_led_resting(LEDRestingPreviewRequest(color=[20, 0, 10]))
     led.preview_led_resting(LEDRestingPreviewRequest(color=[30, 0, 10]))
@@ -141,7 +141,7 @@ def test_preview_expiry_restores_saved_look(strip, no_timer, monkeypatch):
     first.fn()  # a superseded timer must not repaint
     assert strip.dispatch.call_count == 2
     latest.fn()
-    strip.dispatch.assert_called_with("solid", (5, 4, 3))
+    strip.dispatch.assert_called_with("solid", tuple(lamp_presets["ambient_led"]["resting"]["color"]))
 
 
 def test_save_cancels_pending_preview(strip, no_timer):

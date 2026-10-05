@@ -323,6 +323,18 @@ owns the state machine (WHEN a state shows) and sends the state *name* to HAL
 ready_flash/ota_progress/ota_error/ota_success/setup); HAL resolves the color/effect/speed
 from `STATUS_LED_PRESETS`, overridable per device via `presets.json`'s `status_led` section
 (see [ROBOT-SPEC.md § Per-device presets](../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
+Solid `/led/status` states carry `source: "status:<name>"` in the saved LED
+sidecar. When non-transient `/led/off` finds `source: "status:setup"`, it treats
+the call as setup teardown: clear that saved cue and restore the configured
+resting look, respecting sleep and privacy ownership. This preserves the existing
+os-server setup sequence without changing its API. Ordinary user colors carry
+no status source, even if their RGB matches the setup cue; their `/led/off` still
+saves explicit black. Transient off leaves the setup source intact.
+
+This does not guess ownership for old, untagged sidecars. On an already affected
+device, reapply the intended resting-light choice in Settings to clear the old
+black override; automatically deleting all saved black would erase real user OFF choices.
+
 `setup` is a persistent solid when sent through `POST /led/status`; the rest are transient
 overlays. It supplies the AP/pre-setup white cue described below, and successful setup clears
 that saved state rather than retaining it as a user LED preference.
