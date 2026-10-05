@@ -82,8 +82,17 @@ class HarnessGestures:
             self._focus(event.direction)
 
     def _tap(self):
-        from hal.drivers.button_actions import _cancel_agent_speech, play_ack_chime
+        from hal.drivers.button_actions import _cancel_agent_speech, _wake_if_sleepy, play_ack_chime
         from hal.routes.voice import stop_tts
+        if state._sleeping:
+            if state._hw_mic_switch_muted is True:
+                return
+            # Enabling Harness does not wake the body. Consume this tap only
+            # for wake; recording requires a separate, subsequent tap.
+            self.cancel_capture()
+            logger.info("MPR121 Harness tap -- waking only; tap again to record")
+            _wake_if_sleepy("MPR121 Harness")
+            return
         voice = state.voice_service
         if state.tts_service and state.tts_service.speaking:
             self.cancel_capture()
