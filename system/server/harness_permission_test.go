@@ -2,6 +2,7 @@ package server
 
 import (
 	"testing"
+	"time"
 
 	"go.autonomous.ai/os/system/harness"
 )
@@ -38,5 +39,26 @@ func TestHarnessPermissionNoticeOncePerOpenDialog(t *testing.T) {
 	}
 	if got := harnessPermissionNoticeText(""); got != "A Harness agent needs permission. Open OpenHarness to review and approve or deny." {
 		t.Fatalf("notice = %q", got)
+	}
+}
+
+func TestHarnessPermissionFallsBackToNewestAgentRoute(t *testing.T) {
+	now := time.Now()
+	s := &Server{harnessReplies: map[string]harnessReply{
+		"old-voice": {agentID: "a", runID: "old-voice", idempotencyKey: "k-old", created: now.Add(-20 * time.Minute)},
+		"chat":      {agentID: "a", runID: "chat", idempotencyKey: "k-new", webChat: true, created: now.Add(-time.Minute)},
+		"other":     {agentID: "b", runID: "other", created: now},
+	}}
+	// Harness attached the key of an older, still-open turn.
+	frame := harness.Frame{"agentId": "a", "payload": map[string]any{"idempotencyKey": "k-stale"}}
+	if _, ok := s.harnessReplyForFrameLocked("a", frame); ok {
+		t.Fatal("stale key unexpectedly matched")
+	}
+	reply, ok := s.newestHarnessRouteLocked("a")
+	if !ok || reply.runID != "chat" || !reply.webChat {
+		t.Fatalf("fallback route = %+v, %v", reply, ok)
+	}
+	if _, ok := s.newestHarnessRouteLocked("none"); ok {
+		t.Fatal("agent without routes must use the device notice")
 	}
 }

@@ -21,6 +21,26 @@ type harnessReplyState struct {
 	toolName    string
 	toolArgs    string
 	questionIDs map[string]bool
+	lastLine    string
+}
+
+// pushHarnessLine shows one Harness line in chat as its own line. With dedupe, a status
+// line equal to the run's previous one is dropped so repeated receipt updates don't pile up.
+func (h *AgentHandler) pushHarnessLine(runID, text string, dedupe bool, detail map[string]string) {
+	if h.monitorBus == nil {
+		return
+	}
+	h.harnessRepliesMu.Lock()
+	if state, ok := h.harnessReplies[runID]; ok {
+		if dedupe && state.lastLine == text {
+			h.harnessRepliesMu.Unlock()
+			return
+		}
+		state.lastLine = text
+		h.harnessReplies[runID] = state
+	}
+	h.harnessRepliesMu.Unlock()
+	h.monitorBus.Push(domain.MonitorEvent{Type: "assistant_delta", Summary: text + "\n", RunID: runID, Detail: detail})
 }
 
 // MarkHarnessResponseRun holds a user turn open for the final recap from its
@@ -89,12 +109,7 @@ func (h *AgentHandler) DeliverHarnessProgress(runID, text string) bool {
 	if !pending || state.delivered {
 		return false
 	}
-	if h.monitorBus != nil {
-		h.monitorBus.Push(domain.MonitorEvent{
-			Type: "assistant_delta", Summary: text, RunID: runID,
-			Detail: map[string]string{"role": "assistant", "source": "harness"},
-		})
-	}
+	h.pushHarnessLine(runID, text, true, map[string]string{"role": "assistant", "source": "harness"})
 	return true
 }
 
@@ -118,12 +133,7 @@ func (h *AgentHandler) DeliverHarnessTool(runID, toolName, toolArgs string) bool
 	if !state.webChat {
 		sensinghttp.DefaultFillerManager.OnToolStart(runID, toolArgs, toolName)
 	}
-	if h.monitorBus != nil {
-		h.monitorBus.Push(domain.MonitorEvent{
-			Type: "assistant_delta", Summary: "Harness is " + toolName + ".", RunID: runID,
-			Detail: map[string]string{"role": "assistant", "source": "harness"},
-		})
-	}
+	h.pushHarnessLine(runID, "Harness is "+toolName+".", true, map[string]string{"role": "assistant", "source": "harness"})
 	return true
 }
 

@@ -620,11 +620,15 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 		if delta != "" {
 			// Suspend fillers during text; only a new tool.start resumes. End/error still hard-cancel.
 			sensinghttp.DefaultFillerManager.OnAssistantText(flowRunID)
-			h.monitorBus.Push(domain.MonitorEvent{
-				Type:    "assistant_delta",
-				Summary: delta,
-				RunID:   flowRunID,
-			})
+			// Once the turn is handed to Harness its own reply (usually NO_REPLY) is deferred,
+			// so its text must not stream into chat either.
+			if !h.suppressHarnessAgentReply(flowRunID) {
+				h.monitorBus.Push(domain.MonitorEvent{
+					Type:    "assistant_delta",
+					Summary: delta,
+					RunID:   flowRunID,
+				})
+			}
 			if h.recordAssistantDelta(flowRunID, delta) {
 				flow.Log("agent_first_token", map[string]any{
 					"run_id": flowRunID,

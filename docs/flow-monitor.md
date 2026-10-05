@@ -562,7 +562,7 @@ Turns show every turn derivable from the streamed events. Comparing server to UI
 
 Vietnamese version: [`docs/vi/flow-monitor_vi.md`](vi/flow-monitor_vi.md).
 
-Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`. Harness questions and permission notices delivered to a device run also record `harness_question` (`run_id`, `question_id`, `text`); Web Chat appends any missing one to the pending bubble without closing the turn, so a hidden tab whose SSE was closed still shows it.
 
 Realtime handled voice and main-agent history sync use separate IDs: `device-realtime-…` for the original exchange, `device-chat-context-…` for synchronization. The persisted `realtime_response` closes the original card and supplies its question/answer; the History sync card follows its own lifecycle. `history_run_id` links the records without merging them. Previously stored shared-ID events retain their existing combined display.
 

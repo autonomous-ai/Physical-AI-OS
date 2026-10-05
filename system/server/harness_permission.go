@@ -97,23 +97,44 @@ func (s *Server) announceHarnessPermission(frame harness.Frame, machineID, agent
 		return
 	}
 	text := harnessPermissionNoticeText(s.harnessAgentName(ctx, machineID, agentID))
-	slog.Info("Harness permission notice", "component", "harness", "agent_id", agentID, "question_id", questionID)
 	s.harnessRepliesMu.Lock()
 	reply, ok := s.harnessReplyForFrameLocked(agentID, frame)
+	if !ok {
+		// The dialog belongs to the agent, and Harness omits or mismatches the turn key when
+		// an older turn is still open; fall back to the agent's newest live device route.
+		reply, ok = s.newestHarnessRouteLocked(agentID)
+	}
 	s.harnessRepliesMu.Unlock()
-	live := ok && time.Since(reply.created) <= 15*time.Minute
-	// Web/MQTT chat tasks show the notice in their chat only; the device never speaks it.
-	if ok && reply.webChat {
-		if live {
-			s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text)
+	route := "device"
+	switch {
+	case ok && reply.webChat:
+		// Web/MQTT chat tasks show the notice in their chat only; the device never speaks it.
+		route = "chat"
+		if !s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text) {
+			route = "chat_refused"
 		}
-		return
+	case ok && s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text):
+		route = "voice"
+	default:
+		s.agentHandler.AnnounceHarnessNotice(text)
 	}
-	// A voice task speaks on its own run; any other dialog becomes a device notice.
-	if live && s.agentHandler.DeliverHarnessQuestion(reply.runID, questionID, text) {
-		return
+	slog.Info("Harness permission notice", "component", "harness", "agent_id", agentID, "question_id", questionID, "route", route, "run_id", reply.runID)
+}
+
+// newestHarnessRouteLocked returns the agent's most recent live (15-minute) task route.
+// ponytail: newest-wins heuristic; overlapping tasks on one agent cannot be told apart here.
+func (s *Server) newestHarnessRouteLocked(agentID string) (harnessReply, bool) {
+	var newest harnessReply
+	found := false
+	for _, reply := range s.harnessReplies {
+		if reply.answer || reply.localOnly || reply.completedResult || reply.agentID != agentID || time.Since(reply.created) > 15*time.Minute {
+			continue
+		}
+		if !found || reply.created.After(newest.created) {
+			newest, found = reply, true
+		}
 	}
-	s.agentHandler.AnnounceHarnessNotice(text)
+	return newest, found
 }
 
 // harnessAgentName resolves a display name from agents.list; empty when unavailable.

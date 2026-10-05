@@ -557,7 +557,7 @@ Turns hiện mọi turn dựng được từ các event đã stream. So sánh se
 
 Bản tiếng Anh: [`docs/flow-monitor.md`](../flow-monitor.md).
 
-Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`.
+Kết quả cuối Harness được ghi vào flow JSONL bằng `harness_response`, giữ run ID thiết bị gốc và `text` đầy đủ. Web Chat dùng sự kiện này khôi phục kết quả đang chờ sau khi SSE ngắt hoặc tải lại trang. Luồng trực tiếp vẫn phát `chat_response` với state `final`. Câu hỏi Harness và thông báo xin quyền gửi tới một run thiết bị cũng ghi `harness_question` (`run_id`, `question_id`, `text`); Web Chat bổ sung dòng còn thiếu vào bubble đang chờ mà không đóng lượt, nên tab bị ẩn (SSE đã đóng) vẫn thấy.
 
 Lượt voice do realtime xử lý và lượt history sync dùng ID riêng: `device-realtime-…` cho hội thoại gốc, `device-chat-context-…` cho đồng bộ. Event `realtime_response` lưu câu hỏi/câu trả lời và đóng card gốc; card History sync theo lifecycle riêng. `history_run_id` liên kết mà không gộp hai lượt. Event cũ đã lưu cùng ID vẫn giữ cách hiển thị gộp trước đây.
 
