@@ -728,12 +728,21 @@ so the fix keeps realtime in the loop and makes the routing explicit
   waiting for this answer to its question "…"` and tells realtime to call
   `delegate_to_main` with the user's words as it understood them. The main
   agent then receives `[voice-instruction] <realtime's words>`.
-- **Backstop.** `run_realtime_turn` consumes the window on the first actionable
-  turn (a noise turn does not consume it). If realtime spoke instead of
-  delegating, the result becomes `delegated` with
-  `handoff_context = "Realtime already said to the user: …"`, so dispatch sends
-  a live turn with `[realtime-handoff]` and `[realtime-context]` instead of
-  `[HANDLED]` history. Main continues the task with the name realtime used.
+- **Backstop.** `run_realtime_turn` checks the window when the turn starts and
+  consumes it when the first actionable turn ends (a noise turn does not consume
+  it; a session recovery mid-turn still resends the note). If realtime spoke
+  instead of delegating, the result becomes `delegated` with
+  `answered_for_main=True` and
+  `handoff_context = "Realtime already said to the user: …"`. Dispatch sends a
+  live turn with its own `[realtime-handoff] Realtime answered this aloud while
+  you were waiting…` line (continue the task, or `NO_REPLY` when the turn was
+  unrelated, e.g. after a trailing "Anything else?") and `[realtime-context]`,
+  instead of `[HANDLED]` history. os-server plays no opening filler for a
+  `[realtime-handoff]` turn (`realtimeAlreadySpoke`), because the user already
+  heard realtime. If realtime rejected the answer (`reject_turn`) or its reply
+  was dropped as foreign script, the turn is forwarded to main as a plain
+  delegated turn instead of being dropped: a bare name is a typical
+  `reject_turn` candidate, and main asked the question.
 
 The window steers routing only; it never grants wake authorization. Live mode
 is not covered. Known limit: if realtime ignores the note and speaks a false
@@ -3474,7 +3483,7 @@ The current request or follow-up is forwarded in the language the user just spok
 
 A subsequent isolated Gemini 3.1 Live synthetic-audio comparison reused identical PCM clips across the baseline and final prompt/tool definitions. The final delegate messages were “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.”, and the follow-up “cuối tuần này hai người”. The baseline had changed the Notes request into “Remember to water the plants tomorrow morning.”, losing the named app and changing language. The Airbnb follow-up used the same provider session after a controlled `[TTS HISTORY]` clarification; the previous server completion boundary and new audio commit were confirmed. This establishes the observed delegation behavior for those synthetic clips, not microphone/wake-word performance, an actual main-agent clarification, or main-agent/desktop end-to-end completion. The isolated final result was recorded at `/tmp/buddy-rt-final/result.json` on the test device; no production prompt or service was changed by that evaluation.
 
-Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. The sync message is history only: the main agent returns `NO_REPLY` and may note mood or memory, but must not call device, camera, face, voice-enrollment or messaging tools, and must not take names from the entry (`externalhistory.Message`, `input-branching` rules 2–3, `face-enroll`). This is a prompt contract, not enforced by code; #564 saw Hermes enroll a face from such a turn. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
+Realtime and Harness-only voice now share the `system/externalhistory` journal and silent delivery worker. HAL still sends `voice_agent_handled` with `[HANDLED]` / `[REPLY]`; OS atomically persists the completed realtime exchange before acknowledging it and resumes never-sent pending history after restart. The existing speaker-supersession hook runs before persistence, and silent/TTS suppression is unchanged. Busy runtimes with active-turn steering retain that capability for realtime history; others wait durably for idle. Ambiguous sends are retained as `uncertain`, not automatically replayed. The sync message is history only: the main agent returns `NO_REPLY` and may note mood or memory, but must not call device, camera, face, voice-enrollment or messaging tools, and must not take or record names or identities from the entry (`externalhistory.Message`, `input-branching` rules 2–3, `face-enroll`). This is a prompt contract, not enforced by code; #564 saw Hermes enroll a face from such a turn. Flow Monitor displays the sync as **History sync · Realtime → Main**, with the original question/answer as Context. See [external conversation history](os-server.md#external-conversation-history).
 
 LIVE input classification is also sent as observational `voice_turn_type` metadata. It uses the regular wake-phrase classifier and the focus that authorized the input, sampled before that input holds its own focus window. The first accepted input cannot label itself as a follow-up; later input can use the window it opened. Direct realtime answers retain the `voice_agent_handled` routing event, while the monitor can display command/follow-up independently.
 

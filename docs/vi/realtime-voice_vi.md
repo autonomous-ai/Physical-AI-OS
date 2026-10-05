@@ -704,12 +704,20 @@ tường minh (`hal/drivers/voice/_internal/main_followup.py`):
   agent is waiting for this answer to its question "…"` và yêu cầu realtime gọi
   `delegate_to_main` với lời người dùng đúng như nó hiểu. Main agent khi đó
   nhận `[voice-instruction] <lời realtime hiểu>`.
-- **Chốt chặn.** `run_realtime_turn` tiêu thụ cửa sổ ở lượt có nội dung đầu tiên
-  (lượt nhiễu không tiêu thụ). Nếu realtime nói thay vì delegate, kết quả được
-  đổi thành `delegated` với `handoff_context = "Realtime already said to the
-  user: …"`, nên dispatch gửi một lượt live có `[realtime-handoff]` và
-  `[realtime-context]` thay vì lịch sử `[HANDLED]`. Main tiếp tục tác vụ với cái
-  tên realtime đã dùng.
+- **Chốt chặn.** `run_realtime_turn` kiểm tra cửa sổ khi lượt bắt đầu và tiêu
+  thụ nó khi lượt có nội dung đầu tiên kết thúc (lượt nhiễu không tiêu thụ; nếu
+  session được khôi phục giữa lượt thì ghi chú vẫn được gửi lại). Nếu realtime
+  nói thay vì delegate, kết quả được đổi thành `delegated` với
+  `answered_for_main=True` và `handoff_context = "Realtime already said to the
+  user: …"`. Dispatch gửi một lượt live có dòng riêng `[realtime-handoff]
+  Realtime answered this aloud while you were waiting…` (tiếp tục tác vụ, hoặc
+  `NO_REPLY` nếu lượt đó không liên quan, ví dụ sau câu "Anything else?" ở cuối)
+  cùng `[realtime-context]`, thay vì lịch sử `[HANDLED]`. os-server không phát
+  opening filler cho lượt `[realtime-handoff]` (`realtimeAlreadySpoke`), vì người
+  dùng đã nghe realtime nói. Nếu realtime từ chối câu trả lời (`reject_turn`)
+  hoặc câu trả lời bị loại vì sai bảng chữ, lượt đó được chuyển cho main như một
+  lượt delegate thường thay vì bị bỏ: một cái tên đơn lẻ là ứng viên điển hình
+  của `reject_turn`, và chính main đã hỏi.
 
 Cửa sổ chỉ điều hướng; nó không bao giờ cấp quyền đánh thức (wake). Live mode
 không được bao phủ. Giới hạn đã biết: nếu realtime bỏ qua ghi chú và nói một
@@ -3401,7 +3409,7 @@ Yêu cầu hoặc câu bổ sung hiện tại được chuyển tiếp bằng ng
 
 Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó dùng cùng PCM cho prompt/tool baseline và bản cuối. Message chuyển tiếp của bản cuối là “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.” và câu tiếp nối “cuối tuần này hai người”. Baseline đã đổi yêu cầu Notes thành “Remember to water the plants tomorrow morning.”, làm mất tên app và đổi ngôn ngữ. Câu tiếp nối Airbnb chạy trong cùng phiên provider sau câu hỏi bổ sung `[TTS HISTORY]` có kiểm soát; đã xác nhận ranh giới hoàn tất lượt trước từ server và commit audio mới. Kết quả này chứng minh hành vi chuyển tiếp quan sát được cho các clip tổng hợp đó, không chứng minh microphone/wake-word, câu hỏi thật từ main agent hoặc hoàn thành toàn luồng main-agent/desktop. Kết quả cuối riêng được lưu tại `/tmp/buddy-rt-final/result.json` trên thiết bị kiểm thử; lượt đánh giá không thay prompt production hoặc dịch vụ đang chạy.
 
-Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Message sync chỉ là lịch sử: main agent trả `NO_REPLY` và có thể ghi nhận mood hoặc memory, nhưng không được gọi tool thiết bị, camera, face, enroll giọng nói hay nhắn tin, và không được lấy tên từ entry đó (`externalhistory.Message`, rule 2–3 của `input-branching`, `face-enroll`). Đây là ràng buộc bằng prompt, code không cưỡng chế; #564 ghi nhận Hermes đã enroll khuôn mặt từ một lượt như vậy. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
+Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Message sync chỉ là lịch sử: main agent trả `NO_REPLY` và có thể ghi nhận mood hoặc memory, nhưng không được gọi tool thiết bị, camera, face, enroll giọng nói hay nhắn tin, và không được lấy hay ghi lại tên hoặc danh tính từ entry đó (`externalhistory.Message`, rule 2–3 của `input-branching`, `face-enroll`). Đây là ràng buộc bằng prompt, code không cưỡng chế; #564 ghi nhận Hermes đã enroll khuôn mặt từ một lượt như vậy. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
 
 Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input, lấy trạng thái trước khi input giữ cửa sổ focus của chính nó. Input đầu tiên không tự gắn nhãn follow-up; input tiếp theo có thể dùng cửa sổ vừa mở. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
 
