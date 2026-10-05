@@ -17,7 +17,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 | Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
 | Nút GPIO reset | không wire | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
 | Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
-| TTP223 | không wire | Hai pad, gpiochip0 line **37 và 96** theo cấu hình trong `robots/lamp/ttp223.json` (tài liệu trước đây ghi 96/98 — S1 pin 29 / PD0 / line 96, S3 pin 33 / PD2 / line 98; cần xác nhận trên phần cứng). **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
+| TTP223 | không wire | Bốn pin header ứng viên trên gpiochip0 — pin 27 / PB5 / line 37 (T1), pin 29 / PD0 / line 96 (T2), pin 31 / PD1 / line 97 (T3), pin 33 / PD2 / line 98 (T4) — chỉ hai pin có pad, khác nhau theo từng máy. `robots/lamp/ttp223.json` liệt kê cả bốn với `"detect": true`; HAL tự tìm cặp đang nối khi khởi động. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
@@ -48,7 +48,8 @@ dùng chung.
 
 Wiring TTP223 cũng do device quản lý: `robots/lamp/ttp223.json` khai báo
 map `boards`. Intern v2 không có phần cứng TTP223 nên không kèm file này. Mỗi entry bật có `chip`,
-`lines` và `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải).
+`lines`, `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải)
+và `detect` tùy chọn (boolean, mặc định `false`).
 `hal/board/ttp223.py` chọn board đã detect và truyền `TouchConfig` cho driver
 dùng chung. Thiếu file hoặc entry board thì fallback về `touch` cũ của board
 trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
@@ -56,11 +57,35 @@ trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
 GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
 và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
 
-JSON của Lamp hiện cấu hình `orangepi_sun60` là chip 0, line `[37, 96]`
-(không có `axis`). Tài liệu này trước đây ghi S1 ở pin 29 (line 96), S3 ở pin 33
-(line 98); hai nguồn không khớp nên **cần xác nhận line của pad thứ hai trên phần
-cứng** (`hal/test_ttp223_probe_orangepi.py watch`). Dù thế nào, pin 35 (line 99)
-vẫn dành cho nút cơ. Fallback cũ vẫn dùng line 96/100, trùng với nút reset; cần
+JSON của Lamp cấu hình `orangepi_sun60` là chip 0, line `[37, 96, 97, 98]`
+(pin header 27/29/31/33, T1–T4), không có `axis`, `"detect": true`. Chỉ hai pad
+được nối và hai pad nào thì khác nhau giữa các máy, nên `lines` là danh sách ứng
+viên chứ không phải danh sách pad. Khi bật `detect`, driver:
+
+1. **Probe khi khởi động.** Mỗi line ứng viên được claim làm input với pull-down
+   trong 10 ms (`PROBE_SETTLE_S`) rồi đọc. TTP223 đã nối kéo output nghỉ lên HIGH
+   nên đọc được 1; pin header trống tụt về 0. Sau đó line được giải phóng và log
+   in `TTP223 detect: wired pads [...] of candidates [...]`.
+2. **Claim mọi line ứng viên** với pull-up / cả hai edge như cũ. Pin trống luôn
+   HIGH và không sinh edge.
+3. **Học từ lần chạm đã xác nhận.** Edge trên line mà probe bỏ sót không được
+   đưa vào trạng thái gesture cho tới khi line ở mức LOW ít nhất 20 ms
+   (`LEARN_MIN_LOW_MS`; trace trên máy cho thấy một lần chạm giữ LOW 73–135 ms).
+   Khoảng LOW được đo giữa timestamp kernel của hai edge (`tick` của callback
+   lgpio, đơn vị nano giây), không phải thời điểm callback chạy, nên callback bị
+   trễ hoặc dồn lại không thể biến nhiễu thành lần chạm hay ngược lại.
+   Edge nhả kết thúc khoảng LOW đó sẽ thêm line vào tập pad đã nối, log
+   `TTP223 pad on line N learned from a Xms touch`, và chuyển lần chạm đó thành
+   gesture bình thường, tính thời điểm tại lúc nhả. Khoảng LOW ngắn hơn — nhiễu
+   thoáng qua trên pin trống đang pull-up — bị bỏ: không học pad, không khởi động
+   timer contact và không phát chime (chỉ log ở mức DEBUG). Trường hợp cần học
+   xảy ra khi pad đang bị chạm lúc probe, hoặc output đọc LOW dưới pull-down.
+   Line đã học được giữ là đã nối cho tới khi HAL restart.
+
+Luật swipe ("mọi pad đã nối") và lý do TAP so sánh với tập pad đã nối; nếu chưa
+detect hay học được pad nào thì fallback về toàn bộ `lines`. Không có `detect`
+thì mọi line liệt kê đều được coi là đã nối (hành vi cũ). Pin 35 (line 99) vẫn
+dành cho nút cơ. Fallback cũ vẫn dùng line 96/100, trùng với nút reset; cần
 giữ JSON của Lamp trên device để tránh điều đó.
 
 Board được detect qua `/proc/device-tree/model`:
@@ -461,8 +486,8 @@ nhánh action điều khiển bị parked.
 | `HAL_TOUCH_SWIPE_MAX_GAP_MS` | 150 | Cận trên phân biệt vuốt với lần chạm mới |
 | `HAL_TOUCH_PRESS_MIN_EMPTY_MS` | 15 | Khoảng mặt pad trống để tính lần chạm mới |
 
-`ttp223.json` cung cấp chip, lines và `axis` không gian tùy chọn; thiếu axis thì
-dùng thứ tự lines. Hình học chỉ ảnh hưởng phân loại/thời điểm, không đổi action
+`ttp223.json` cung cấp chip, lines, `axis` không gian tùy chọn và `detect` tùy
+chọn; thiếu axis thì dùng thứ tự lines (tập con đã detect giữ nguyên thứ tự đó). Hình học chỉ ảnh hưởng phân loại/thời điểm, không đổi action
 PET. Test `hal/test/test_ttp223.py` phủ hai trạng thái classifier, layout hai/ba
 pad, các kiểu gesture, cooldown và không ngắt lời ở tiếp xúc đầu.
 
