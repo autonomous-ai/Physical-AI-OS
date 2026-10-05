@@ -1,5 +1,6 @@
 """Realtime agent turn handling — extracted from VoiceService._stream_session."""
 
+import json
 import logging
 import re
 import threading
@@ -21,6 +22,7 @@ from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectS
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
+from hal.drivers.voice._internal.main_followup import pending_main_question
 
 logger = logging.getLogger("hal.voice")
 
@@ -308,6 +310,17 @@ def build_turn_context(speaker: Optional[str] = None) -> str:
                     turn_ctx.append(f"Current user: {cu}")
         except Exception:
             pass
+    # The main agent owns the task this answer continues (#564). Realtime keeps
+    # hearing the audio so the delegated words are its understanding, not STT's.
+    question: str = pending_main_question()
+    if question:
+        quoted: str = json.dumps(question[:300], ensure_ascii=False)
+        turn_ctx.append(
+            f"Main agent is waiting for this answer to its question {quoted}: call "
+            "delegate_to_main with the user's words exactly as you understood them "
+            "(names spelled as you heard them). Do not answer, confirm or claim "
+            "the task is done yourself"
+        )
     return "[TURN CONTEXT] " + " | ".join(turn_ctx)
 
 
