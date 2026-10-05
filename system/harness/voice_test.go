@@ -600,3 +600,19 @@ func TestVoiceUnknownDeliveriesRemainIndividuallyReconcilable(t *testing.T) {
 		t.Fatal("reconciliation resent or retained input")
 	}
 }
+func TestVoicePermissionDialogIsNeverAnswered(t *testing.T) {
+	ctx := context.Background()
+	f := newVoiceFake()
+	v := enableVoice(t, f, VoiceCallbacks{})
+	f.question = map[string]any{"requestId": "q-perm", "questions": []any{map[string]any{"key": "Run printf hi?", "q": "Run printf hi?", "options": []any{"Yes", "No"}, "multi": false}},
+		"permission": map[string]any{"dialog": "Run printf hi?", "resolution": "desktop"}}
+	if e := v.Submit(ctx, "yes", "perm-run", v.State().Generation); !errors.Is(e, ErrPermissionInDesktop) {
+		t.Fatalf("submit error = %v", e)
+	}
+	if e := v.Answer(ctx, "q-perm", map[string]string{"Run printf hi?": "Yes"}, "perm-answer", v.State().FocusRevision); !errors.Is(e, ErrPermissionInDesktop) {
+		t.Fatalf("answer error = %v", e)
+	}
+	if mutationCount(f) != 0 {
+		t.Fatal("permission dialog answered")
+	}
+}

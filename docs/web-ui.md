@@ -744,6 +744,7 @@ Neither path restarts the runtime: backends with a skills dir pick new files up 
 **Real-time Streaming**
 - **Thinking indicator**: collapsible purple block showing LLM reasoning tokens as they stream in (`thinking` events). Click to expand full text (max-height 200px scrollable). Auto-hides on response completion.
 - **Assistant delta streaming**: response text appears token-by-token via `assistant_delta` events, instead of waiting for final response. Fallback to `chat_response` partial events for non-agent paths.
+- **Harness lines in chat**: once a turn is handed to Harness, the device agent's own deferred text (usually `NO_REPLY`) is no longer streamed. Harness progress, tool, question and permission-notice deltas each end with a newline (`pushHarnessLine`, `system/server/agent/delivery/http/handler_harness.go`); a progress/tool line equal to the run's previous line is dropped. Progress/tool lines are live-only (not in JSONL), so a hidden tab misses them; questions and permission notices are replayed from `harness_question` flow events.
 - **Tool call chips**: teal badges showing tools the agent invoked during the response (emotion, LED, servo, audio, etc.). Displayed above the message bubble during streaming and persisted on completed messages. A single tool renders as one chip; **two or more collapse into a summary pill** ("N steps" with stacked tool icons + a live/`DONE` marker) that expands on click to reveal the individual chips.
 
 **Response Handling**

@@ -2,6 +2,7 @@ package mqtthandler
 
 import (
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -349,4 +350,36 @@ func TestChatStreamLiveCannotOvertakeCaptureReplay(t *testing.T) {
 	if len(got) != 2 || got[0].Event.Summary != "early" || got[1].Event.Summary != "late" {
 		t.Fatalf("live event overtook replay: %+v", got)
 	}
+}
+
+// A permission notice arrives after the device agent deferred to Harness; the run is still
+// open, so the buffered line must reach the mobile client.
+func TestHarnessPermissionNoticeReachesMQTT(t *testing.T) {
+	t.Chdir(t.TempDir())
+	bus := monitor.ProvideBus()
+	events, unsubscribe := bus.Subscribe()
+	defer unsubscribe()
+	h := agenthttp.ProvideAgentHandler(nil, bus, nil, &config.Config{})
+	s, sent := newTestStream()
+	s.Track("device-chat-mqtt-perm", "mobile-session")
+	h.MarkHarnessResponseRun("device-chat-mqtt-perm", true, false)
+	const notice = "Agent test needs permission. Open OpenHarness to review and approve or deny."
+	if !h.DeliverHarnessQuestion("device-chat-mqtt-perm", "q1", notice) {
+		t.Fatal("notice rejected")
+	}
+	for drained := false; !drained; {
+		select {
+		case event := <-events:
+			s.handle(event)
+		default:
+			drained = true
+		}
+	}
+	s.flushAll()
+	for _, event := range sent() {
+		if event.Event.RunID == "device-chat-mqtt-perm" && strings.Contains(event.Event.Summary, notice) {
+			return
+		}
+	}
+	t.Fatalf("MQTT did not receive the permission notice: %+v", sent())
 }

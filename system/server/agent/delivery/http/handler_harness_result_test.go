@@ -127,7 +127,7 @@ func TestHarnessQuestionKeepsResultPendingAndDeduplicatesReplay(t *testing.T) {
 			t.Fatal("question missing")
 		}
 		event := <-events
-		if event.Type != "assistant_delta" || event.Summary != "Choose a color" {
+		if event.Type != "assistant_delta" || event.Summary != "Choose a color\n" {
 			t.Fatalf("wrong event %+v", event)
 		}
 	}

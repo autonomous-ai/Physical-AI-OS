@@ -69,8 +69,12 @@ type Server struct {
 	harnessResultMu      sync.RWMutex
 	harnessResult        string
 	harnessResultAt      time.Time
-	engine               *gin.Engine
-	config               *config.Config
+	// harnessPermissionNotified holds announced permission dialogs (machine/agent/question);
+	// only the matching question.close clears one.
+	harnessPermissionMu       sync.Mutex
+	harnessPermissionNotified map[string]bool
+	engine                    *gin.Engine
+	config                    *config.Config
 
 	environmentStartup *environment.StartupCoordinator
 

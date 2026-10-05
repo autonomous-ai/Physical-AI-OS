@@ -368,6 +368,9 @@ func (s *Server) forwardHarnessEvent(frame harness.Frame) {
 		}
 		return
 	}
+	if s.handleHarnessPermission(frame) {
+		return
+	}
 	agentID, _ := frame["agentId"].(string)
 	if agentID == "" {
 		runID, _ := frame["runId"].(string)

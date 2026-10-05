@@ -727,6 +727,7 @@ Cả hai đường đều KHÔNG restart runtime: backend nào có thư mục sk
 **Streaming real-time**
 - **Thinking indicator**: khối tím thu gọn được, hiển thị reasoning tokens của LLM khi stream (`thinking` events). Click mở rộng toàn bộ (max-height 200px, scroll). Tự ẩn khi response hoàn tất.
 - **Assistant delta streaming**: text response hiện từng token qua `assistant_delta` events, thay vì đợi response cuối cùng. Fallback sang `chat_response` partial cho đường non-agent.
+- **Dòng Harness trong chat**: khi turn đã giao cho Harness, chữ trả lời bị hoãn của agent trên đèn (thường là `NO_REPLY`) không còn được stream. Delta tiến độ, tool, câu hỏi và thông báo xin quyền của Harness mỗi cái kết thúc bằng xuống dòng (`pushHarnessLine`, `system/server/agent/delivery/http/handler_harness.go`); dòng tiến độ/tool trùng với dòng ngay trước của run thì bỏ. Dòng tiến độ/tool chỉ có realtime (không ghi JSONL), tab bị ẩn sẽ lỡ mất; câu hỏi và thông báo xin quyền được phát lại từ flow event `harness_question`.
 - **Tool call chips**: badge màu teal hiển thị các tool agent gọi trong response (emotion, LED, servo, audio, v.v.). Hiển thị phía trên bubble tin nhắn khi đang stream, lưu lại trên tin nhắn đã hoàn tất. Một tool hiển thị thành một chip; **từ hai tool trở lên sẽ gom thành một pill tóm tắt** ("N steps" với các icon tool xếp chồng + marker đang chạy/`DONE`), bấm vào để mở ra các chip riêng lẻ.
 
 **Xử lý response**

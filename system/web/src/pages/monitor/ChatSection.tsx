@@ -1086,6 +1086,27 @@ export function ChatSection({ events, isActive }: Props) {
       }
     }
 
+    // Harness questions and permission notices are also in JSONL, so a tab that missed the
+    // live delta (closed SSE while hidden) still shows them in the pending bubble.
+    let streamed = deltaBufRef.current.get(pending) ?? "";
+    let replayedQuestion = false;
+    for (const ev of observedEvents) {
+      const d = ev.detail as JsonObject | undefined;
+      if (ev.type !== "flow_event" || d?.node !== "harness_question") continue;
+      const runId = ev.runId ?? d?.run_id ?? d?.data?.run_id;
+      const text = String(d?.data?.text ?? "");
+      if (runId !== pending || !text || streamed.includes(text)) continue;
+      streamed += text + "\n";
+      replayedQuestion = true;
+    }
+    if (replayedQuestion) {
+      deltaBufRef.current.set(pending, streamed);
+      const cleaned = stripHWMarkers(streamed);
+      updateMessages((prev) =>
+        prev.map((m) => (m.runId === pending && m.role === "agent" && m.pending ? { ...m, text: cleaned } : m)),
+      );
+    }
+
     for (const ev of [...observedEvents].reverse()) {
       const evRunId: string | undefined =
         ev.runId ??
