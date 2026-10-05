@@ -1030,6 +1030,10 @@ REALTIME_SUMMARY_KEEP_RECENT_TURNS: int = int(
 )
 # Drop stale `## Open requests` before re-feeding the summary (#419, #421). 0 disables.
 REALTIME_SUMMARY_OPEN_REQUEST_TTL_S: int = int(os.environ.get("HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S", "3600"))
+# After a heard main-agent reply that ends in a question, the user's next answer
+# within this many seconds belongs to main: realtime is told to delegate it and a
+# self-answered turn is forwarded as a live handoff (#564). 0 disables.
+REALTIME_MAIN_FOLLOWUP_S: float = float(os.environ.get("HAL_REALTIME_MAIN_FOLLOWUP_S", "60"))
 # Cap on the agent-writable identity section of the floor.
 REALTIME_IDENTITY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_IDENTITY_MAX_CHARS", "12000"))
 # Cap on the [REPLY] transcript replayed to the main agent.
