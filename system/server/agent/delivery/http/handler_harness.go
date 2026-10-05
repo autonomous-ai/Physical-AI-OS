@@ -208,6 +208,18 @@ func (h *AgentHandler) AnnounceHarnessProgress(runID, text string) {
 	}()
 }
 
+// AnnounceHarnessNotice speaks a device-level Harness notice that belongs to no local run.
+func (h *AgentHandler) AnnounceHarnessNotice(text string) {
+	if text == "" {
+		return
+	}
+	go func() {
+		if err := hal.AnnounceHarnessUpdate(hal.HarnessUpdateResult, text, "", ""); err != nil && !errors.Is(err, hal.ErrSpeakerMuted) {
+			slog.Warn("Harness notice announcement not queued", "component", "agent", "error", err)
+		}
+	}()
+}
+
 // MarkHarnessRestoredRun restores a display address without reviving its speaker.
 func (h *AgentHandler) MarkHarnessRestoredRun(runID string) {
 	h.harnessRepliesMu.Lock()
