@@ -917,40 +917,42 @@ Three further behaviours are worth stating because each was a bug first:
 
 - **The verdict is judged on a face, never on a body (#545).** A face at least
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall confirms the bearing. Facing and identity
-  are not required, because the user often talks while looking at their own monitor. Only a smaller
-  face is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
+  are not required, because the user often talks while looking at their own monitor. A smaller face
+  is no face at all (see "A far face is no face" below), so a repoint that sees only one is a miss: in an open office a co-worker's back confirmed the bearing, and a 12–25 px side-on
   face across the room became "the user". **Size alone decides near or far.** Position does not: a
   bearing a few degrees off the user's seat puts them at the frame side, and a ±15% centre gate tried
   on 2026-09-30 ruled the user's own 35% face (dx +34%) "far". Size separates the two instead: in the
   2026-09-30 frames a neighbour one desk over reached at most 13.6% and the user was never under
   19.2%, so the floor sits at 15%. The watcher stamps a
-  near-face and a far-face clock (`_note_face_size`) for every face it detects, and the verdict reads
-  those.
+  near-face clock (`_note_face_size`) for every face it is handed, and the verdict reads it.
 - **Only a body with its head above the frame waits for the climb.** A person box cut off by the frame
   top (the `_headroom_from_person` test) stamps `_last_headless_body_t`, and only that starts a climb.
   A body fully in frame already shows whatever face it has, so it is judged on the faces: near = hit,
   otherwise its **size** decides (#567). A nearest person box
   at least `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) of the frame is someone at the desk whose
   face the detector dropped — side-on, looking down — and the repoint is **not scored** (no strike, no
-  sweep), even if a far face is also in view. A smaller body = miss (`found a body but no face`), as
-  does only a far face. Height cannot make this call: on 2026-10-05 a non-user reached 73% of the frame
+  sweep), even with a co-worker's face in view. A smaller body = miss (`found a body but no face`), and
+  so is nobody at all. Height cannot make this call: on 2026-10-05 a non-user reached 73% of the frame
   height. Area does: seated users measured 26–73% of the frame on three lamps, co-workers and passers-by
   at most 13%. A near body **never confirms** the bearing. The same rule closes a climb: a climb that
-  ends with a near body and only a far face is not scored. Every repoint verdict logs the largest body
+  ends with a near body is not scored. Every repoint verdict logs the largest body
   it saw (`largest body N% of frame`) so the threshold can be tuned from device logs. Device-observed 2026-09-30: the user's
   whole body in frame started a "climb" that never moved the head. A headless body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
-  conversation open. A near face = hit, a near body = **not scored**, only a far face = miss, no face at all = **not scored**.
+  conversation open. A near face = hit; anything else = **not scored**: the climb only starts on a body at the bearing,
+  and a far face is no face.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
   the lamp.
-- **A far face does not hide a body while a repoint is judged.** The watcher normally looks for a body
-  only when it finds no face, so a co-worker's small face across the room (below
-  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) hid a user standing in front of the lamp with their head
-  above the frame: no body, no climb, "found only a far face", a miss (device-observed 2026-09-30 on
-  green-lamp). While a repoint verdict or its climb is pending (`_judging_repoint`), a far face also
-  runs person detection (`_body_behind_a_far_face`). A body found that way counts as the body and
-  drives the climb's `dy` from its top edge instead of the far face. Outside that window it does not
-  run: an office almost always has a far face, and person detection on most samples costs CPU.
+- **A far face is no face (#567).** The face picker (`detect_face_with_landmarks`) returns only faces at
+  least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, and never less than
+  `HAL_GAZE_MIN_FACE_PX`; the one nearest the centre among those wins. A smaller face is dropped, with
+  no largest-face fallback. It used to come back as "the face" whenever the user's own was not found,
+  and the watcher looks for a body only when it finds no face. So a co-worker's small face hid a user
+  standing in front of the lamp (green-lamp 2026-09-30: no body, no climb, a miss), pulled the pan
+  toward the co-worker, and on 2026-10-05 16:33:42 (green-lamp) hid the back of the user's head at 30%
+  of the frame, so the near-body guard below never fired. Now such a sample takes the no-face path:
+  person detection runs, the user's body drives the climb's `dy` and the near-body clock, and nothing
+  pans. The cost is a YOLO person pass on those samples, as for any sample with no face.
   The body gaze reasons about is the **nearest** person box — the tallest one near enough to be the
   asker, the same `_pick_nearest` rule look-aim and the search use — not `detect()`'s most confident
   box. On lamp-4ace (2026-10-05 13:48:51) the user's 30% box at confidence 0.78 lost to a co-worker's
@@ -981,7 +983,7 @@ prints once a minute rather than once a pass.
 
 ### Looking around on its own
 
-If a repoint is scored a miss (nobody, or only a far face), `_verify_repoint` calls the same `/servo/search` sweep documented above
+If a repoint is scored a miss (nobody, or only a body too small to be at the desk), `_verify_repoint` calls the same `/servo/search` sweep documented above
 with `confirmed_miss=True`. Since the repoint above is speech-driven, so is the sweep: the lamp
 searches because somebody spoke and it could not find them, never because a room merely looks empty.
 An absence trigger (`HAL_GAZE_SWEEP_AFTER_S`) still exists in `_maybe_sweep` but nothing reaches it —

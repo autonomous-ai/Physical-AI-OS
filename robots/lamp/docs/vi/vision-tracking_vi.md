@@ -914,43 +914,46 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
 
 - **Kết luận dựa trên một cái mặt, không bao giờ dựa trên thân người (#545).** Một cái mặt cao ít nhất
   `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình là xác nhận bearing. Không cần nhìn về đèn, không
-  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Chỉ mặt nhỏ hơn mới là trượt:
+  cần nhận ra danh tính, vì user hay vừa nói vừa nhìn màn hình của mình. Mặt nhỏ hơn không được tính là
+  mặt (xem "Mặt xa không phải là mặt" ở dưới), nên repoint chỉ thấy mặt như vậy là trượt:
   trong văn phòng mở, lưng của một đồng nghiệp đã xác nhận bearing, và một khuôn mặt nghiêng 12–25 px ở
   phía bên kia phòng đã trở thành "user". **Chỉ kích thước quyết định gần hay xa.** Vị trí thì không:
   một bearing lệch vài độ so với chỗ ngồi của user sẽ đẩy họ ra mép khung, và một cổng ±15% quanh tâm
   khung thử ngày 30/09/2026 đã xếp chính khuôn mặt 35% của user (dx +34%) vào loại "xa". Thay vào đó kích thước
   tách hai người ra: trong các frame ngày 30/09/2026, người ngồi bàn bên cạnh chỉ đạt tối đa 13.6% còn
   user không bao giờ dưới 19.2%, nên ngưỡng đặt ở 15%. Watcher
-  đóng dấu đồng hồ mặt-gần và mặt-xa (`_note_face_size`) cho mỗi mặt phát hiện được, và phần kết luận đọc
-  hai đồng hồ đó.
+  đóng dấu đồng hồ mặt-gần (`_note_face_size`) cho mỗi mặt nó nhận được, và phần kết luận đọc đồng hồ đó.
 - **Chỉ thân người có đầu nằm trên khung mới chờ phần leo tìm.** Một box người bị mép trên khung cắt
   (phép kiểm tra của `_headroom_from_person`) đóng dấu `_last_headless_body_t`, và chỉ nó mới bắt đầu leo
   tìm. Một thân người nằm trọn trong khung thì đã cho thấy khuôn mặt nếu có, nên được chấm theo các mặt:
   mặt gần = trúng, còn lại thì **kích thước** quyết định (#567). Một box
   người gần nhất chiếm ít nhất `HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC` (20%) khung hình là một người
   đang ngồi ở bàn mà detector bỏ sót mặt — ngồi nghiêng, cúi xuống — và lần repoint **không được chấm**
-  (không bị trừ, không quay quanh tìm), kể cả khi trong khung cũng có một mặt xa. Thân nhỏ hơn = trượt
-  (`found a body but no face`), chỉ có mặt xa cũng vậy. Chiều cao không phân biệt được: ngày 05/10/2026
+  (không bị trừ, không quay quanh tìm), kể cả khi trong khung có mặt của một đồng nghiệp. Thân nhỏ hơn =
+  trượt (`found a body but no face`), không có ai cũng vậy. Chiều cao không phân biệt được: ngày 05/10/2026
   một người không phải user đạt 73% chiều cao khung. Diện tích thì được: user ngồi đo được 26–73% khung
   hình trên ba đèn, đồng nghiệp và người đi ngang tối đa 13%. Thân gần **không bao giờ xác nhận**
-  bearing. Cùng quy tắc đó áp dụng khi kết thúc leo tìm: leo tìm kết thúc với một thân gần và chỉ có mặt
-  xa thì không được chấm. Mỗi kết luận repoint đều log box người lớn nhất đã thấy
+  bearing. Cùng quy tắc đó áp dụng khi kết thúc leo tìm: leo tìm kết thúc với một thân gần thì không được
+  chấm. Mỗi kết luận repoint đều log box người lớn nhất đã thấy
   (`largest body N% of frame`) để chỉnh ngưỡng từ log thiết bị. Đo trên thiết
   bị 30/09/2026: cả người user nằm trong khung đã kích hoạt một lần "leo tìm" mà đầu không hề di chuyển.
   Thân người mất đầu sẽ kích hoạt phần leo tìm ở trên và giữ
   kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
-  cuộc hội thoại nào đang mở. Mặt gần = trúng, thân gần = **không chấm**, chỉ có mặt xa = trượt, không có mặt nào = **không chấm**.
+  cuộc hội thoại nào đang mở. Mặt gần = trúng; mọi trường hợp khác = **không chấm**: leo tìm chỉ bắt đầu từ một thân người ở
+  bearing, và mặt xa không phải là mặt.
   Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
   ngồi ngay trước đèn.
-- **Một mặt xa không che mất thân người trong lúc đang chấm repoint.** Bình thường watcher chỉ tìm thân
-  người khi không thấy mặt nào, nên khuôn mặt nhỏ của một đồng nghiệp bên kia phòng (dưới
-  `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`) đã che mất một user đang đứng ngay trước đèn với đầu nằm trên
-  khung hình: không có thân, không leo tìm, "found only a far face", thành trượt (đo trên green-lamp
-  30/09/2026). Trong lúc kết luận repoint hoặc phần leo tìm của nó còn đang chờ (`_judging_repoint`),
-  một mặt xa cũng kích hoạt phát hiện người (`_body_behind_a_far_face`). Thân người tìm được theo cách
-  đó được tính là thân, và `dy` của phần leo tìm lấy từ mép trên của thân chứ không từ mặt xa. Ngoài
-  khoảng thời gian đó thì không chạy: văn phòng gần như lúc nào cũng có một mặt xa, và chạy phát hiện
-  người trên hầu hết các mẫu sẽ tốn CPU.
+- **Mặt xa không phải là mặt (#567).** Bộ chọn mặt (`detect_face_with_landmarks`) chỉ trả về những mặt
+  cao ít nhất `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) khung hình, và không bao giờ nhỏ hơn
+  `HAL_GAZE_MIN_FACE_PX`; trong số đó mặt gần tâm nhất được chọn. Mặt nhỏ hơn bị bỏ, không có phương án
+  dự phòng lấy mặt to nhất. Trước đây nó vẫn được trả về làm "cái mặt" mỗi khi không tìm thấy mặt của
+  user, mà watcher chỉ tìm thân người khi không thấy mặt nào. Vì vậy khuôn mặt nhỏ của một đồng nghiệp
+  đã che mất một user đang đứng ngay trước đèn (green-lamp 30/09/2026: không có thân, không leo tìm,
+  thành trượt), kéo phần pan về phía đồng nghiệp, và lúc 16:33:42 ngày 05/10/2026 (green-lamp) đã che
+  mất gáy của user chiếm 30% khung hình, nên guard thân gần ở dưới không bao giờ kích hoạt. Giờ mẫu như
+  vậy đi theo đường không có mặt: phát hiện người chạy, thân user quyết định `dy` của phần leo tìm và
+  đồng hồ thân gần, và không có pan nào. Cái giá là một lượt YOLO tìm người trên các mẫu đó, giống như
+  mọi mẫu không có mặt.
   Thân người mà gaze xét là box người **gần nhất** — box cao nhất trong số các box đủ gần để là người
   đang nói, cùng quy tắc `_pick_nearest` mà look-aim và search dùng — chứ không phải box có độ tin cậy
   cao nhất của `detect()`. Trên lamp-4ace (05/10/2026 13:48:51), box 30% của user với độ tin cậy 0.78
@@ -981,7 +984,7 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có mặt xa), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
+Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có thân người quá nhỏ để đang ngồi ở bàn), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
 `confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
