@@ -21,6 +21,8 @@ class MPR121Config:
     autoconfig: bool = True
     poll_ms: int = 10
     debounce_ms: int = 30
+    # Chip debounce (reg 0x5B): samples a touch/release must persist, 0..7, both directions.
+    chip_debounce: int = 0
     ffi: int = 6
     sfi: int = 10
     esi_ms: int = 1
@@ -28,7 +30,8 @@ class MPR121Config:
     tap_min_electrodes: int = 1
 
     def __post_init__(self):
-        for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms"):
+        for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms",
+                     "chip_debounce"):
             if type(getattr(self, name)) is not int:
                 raise ValueError(f"{name} must be an integer")
         if self.bus < 0:
@@ -41,6 +44,8 @@ class MPR121Config:
             raise ValueError("autoconfig must be a boolean")
         if not 1 <= self.poll_ms <= 1000 or not 0 <= self.debounce_ms <= 1000:
             raise ValueError("poll_ms must be 1..1000; debounce_ms must be 0..1000")
+        if not 0 <= self.chip_debounce <= 7:
+            raise ValueError("chip_debounce must be 0..7")
         for name, codes in (("ffi", FFI_CODES), ("sfi", SFI_CODES), ("esi_ms", ESI_CODES)):
             if type(getattr(self, name)) is not int or getattr(self, name) not in codes:
                 raise ValueError(f"{name} must be one of {sorted(codes)}")

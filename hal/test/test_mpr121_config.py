@@ -33,6 +33,7 @@ class TestMPR121Config(unittest.TestCase):
         self.assertEqual(config.tap_min_electrodes, 1)
         self.assertEqual((config.touch_threshold, config.release_threshold), (2, 1))
         self.assertEqual(config.electrodes, tuple(range(12)))
+        self.assertEqual(config.chip_debounce, 0)
 
     def test_device_selection_and_absence(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -54,6 +55,7 @@ class TestMPR121Config(unittest.TestCase):
             {"electrodes": [True]}, {"touch_threshold": 256},
             {"release_threshold": 2}, {"autoconfig": "true"},
             {"poll_ms": 0}, {"debounce_ms": -1},
+            {"chip_debounce": -1}, {"chip_debounce": 8}, {"chip_debounce": True},
             {"tap_min_electrodes": 0}, {"tap_min_electrodes": True},
             {"tap_min_electrodes": 13}, {"tap_min_electrodes": 1.5},
             {"electrodes": [0, 1], "tap_min_electrodes": 3},

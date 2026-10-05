@@ -286,10 +286,11 @@ does not modify boot overlays automatically:
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
       "touch_threshold": 6,
-      "release_threshold": 3,
+      "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
@@ -300,8 +301,8 @@ does not modify boot overlays automatically:
 ```
 
 `bus` is required for an enabled entry. Lamp explicitly sets touch/release
-thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
-`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi` and `tap_min_electrodes` are defaults;
+thresholds to `6 / 4` in `mpr121.json`; omitted thresholds retain the generic
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi`, `chip_debounce` and `tap_min_electrodes` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -343,9 +344,13 @@ esi_ms: 1`: on `lamp-a0ae` (2026-10-01, HAL stopped, 7 s per setting, no touch)
 the highest positive idle delta fell from 4 counts at the defaults to 0, with
 the same 10 ms update; `lamp-8e2c` had shown idle peaks of 8 against touch
 threshold 6 at the defaults, causing phantom taps. Filtering does not change the
-touch delta itself. Chip debounce (`0x5B`) stays 0: contact (30 ms) and swipe
-footprint (5 ms) debounce happen in software, and a chip-side debounce would
-delay every footprint by two samples. HAL validates the filter values at boot.
+touch delta itself. Chip debounce (`0x5B`) comes from `chip_debounce` (0–7,
+default 0), written to both DR (release) and DT (touch): a status bit flips only
+after the change persists for that many samples. Lamp sets `chip_debounce: 2`
+(`0x5B = 0x22`) with thresholds `6 / 4`, the values validated on hardware with
+`mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Software contact
+(30 ms) and swipe footprint (5 ms) debounce still apply on top, so every
+footprint is delayed by the two chip samples. HAL validates the filter values at boot.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
 thresholds (the standalone `mpr121_opi_test.py` probe this section used to
 reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver

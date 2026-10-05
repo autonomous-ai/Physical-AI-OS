@@ -277,10 +277,11 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
       "touch_threshold": 6,
-      "release_threshold": 3,
+      "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
@@ -290,9 +291,9 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
+`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 4` trong
 `mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
-`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi` và `tap_min_electrodes` là mặc định;
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi`, `chip_debounce` và `tap_min_electrodes` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -331,9 +332,13 @@ gian nạp giữ 0,5 µs. Lamp đặt `ffi: 34, sfi: 10, esi_ms: 1`: trên `lamp
 (01/10/2026, dừng HAL, 7 s mỗi cấu hình, không chạm) delta dương cao nhất lúc
 không chạm giảm từ 4 count (mặc định) xuống 0, vẫn cập nhật mỗi 10 ms;
 `lamp-8e2c` từng có đỉnh nhiễu 8 so với ngưỡng chạm 6 ở mặc định, gây tự chạm.
-Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) giữ 0:
-debounce contact (30 ms) và footprint vuốt (5 ms) làm ở phần mềm, còn debounce
-trên chip sẽ làm mọi footprint trễ hai mẫu. HAL kiểm tra giá trị bộ lọc lúc khởi
+Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) lấy từ
+`chip_debounce` (0–7, mặc định 0), ghi cho cả DR (nhả) và DT (chạm): bit trạng
+thái chỉ đổi khi thay đổi kéo dài đủ số mẫu đó. Lamp đặt `chip_debounce: 2`
+(`0x5B = 0x22`) cùng ngưỡng `6 / 4`, là giá trị đã kiểm chứng trên phần cứng với
+`mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Debounce contact
+(30 ms) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm, nên mọi footprint
+trễ thêm hai mẫu của chip. HAL kiểm tra giá trị bộ lọc lúc khởi
 động.
 Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
 các pad đã lắp (script probe độc lập `mpr121_opi_test.py` mà phần này từng nhắc
