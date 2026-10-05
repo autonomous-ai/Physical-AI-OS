@@ -114,11 +114,17 @@ func TestCheckOnceGatesDeviceAfterCoreUpdateFailure(t *testing.T) {
 				}
 			}))
 			defer server.Close()
-			b := &Bootstrap{cfg: &config.Config{MetadataURL: server.URL, StateFile: filepath.Join(dir, "state.json")}, client: server.Client(), state: &state.State{Components: map[string]string{failed: "1.0.0"}}, rollbackConfigPath: filepath.Join(dir, "missing-config.json")}
+			b := &Bootstrap{
+				cfg:                &config.Config{MetadataURL: server.URL, StateFile: filepath.Join(dir, "state.json")},
+				client:             server.Client(),
+				state:              &state.State{Components: map[string]string{failed: "1.0.0"}},
+				rollbackConfigPath: filepath.Join(dir, "missing-config.json"),
+				pendingUpdatePath:  filepath.Join(dir, "pending-update.json"),
+			}
 			err := b.checkOnce(context.Background())
 			data, readErr := os.ReadFile(calls)
 			if readErr != nil {
-				t.Fatal(readErr)
+				t.Fatalf("read updater calls: %v (checkOnce error: %v)", readErr, err)
 			}
 			if failed == domain.OTAKeyWeb {
 				if err != nil {
