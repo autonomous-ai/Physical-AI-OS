@@ -52,6 +52,13 @@ STT pipeline. At end-of-turn the model either:
   This is deliberately different from a silent completion: silence, timeout,
   and transport failure still use the normal main-agent fallback.
 
+**Only main reports main's results.** Realtime must never say a task the main
+agent is handling is done, saved or remembered — face or voice enrollment,
+reminders, messages, memory — and delegates questions about such a task
+(`DELEGATE_TOOL_DESCRIPTION`). On 2026-10-02 (#564) realtime said "All done!
+I've got you remembered" before anything was enrolled. See
+[Answers to a main-agent question stay with main](#answers-to-a-main-agent-question-stay-with-main).
+
 **Finding things is an action.** "Find my keys", "where is my cup", "can you help
 me find my pen", "do you see my pen anywhere" — any request to locate a physical
 object or person is a camera-and-servo search the main agent runs

@@ -53,6 +53,13 @@ lượt, model sẽ:
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
   sang agent chính.
 
+**Chỉ main báo kết quả của main.** Realtime không bao giờ được nói một tác vụ
+main agent đang xử lý đã xong, đã lưu hay đã nhớ — enroll khuôn mặt hoặc giọng
+nói, nhắc việc, tin nhắn, memory — và phải delegate các câu hỏi về tác vụ đó
+(`DELEGATE_TOOL_DESCRIPTION`). Ngày 2026-10-02 (#564) realtime đã nói "All
+done! I've got you remembered" trước khi có gì được enroll. Xem
+[Câu trả lời cho câu hỏi của main agent luôn quay về main](#câu-trả-lời-cho-câu-hỏi-của-main-agent-luôn-quay-về-main).
+
 **Tìm đồ là một hành động.** "Tìm chìa khóa của tôi", "cái cốc của tôi đâu",
 "giúp tôi tìm cây bút được không", "bạn có thấy cây bút của tôi đâu không" — mọi
 yêu cầu định vị một vật hoặc một người là một lượt quét bằng camera và servo do
