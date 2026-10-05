@@ -49,6 +49,10 @@ SWIPE_MAX_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MAX_GAP_MS", "150"))
 # again rather than sliding between pads.
 PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
 
+# Pull-down hold before reading a candidate line in the detect probe. A wired TTP223
+# drives its idle-HIGH output through the weak pull-down; a bare header pin falls to 0.
+PROBE_SETTLE_S = 0.01
+
 
 class TTP223Handler:
     def __init__(self, config: TouchConfig | None):
@@ -59,6 +63,8 @@ class TTP223Handler:
         self._chip = 0
         self._lines = []
         self._axis = None
+        # Lines with a pad actually wired. None = every configured line (no detect).
+        self._active = None
         # Per-contact first-touch order for the current gesture cycle: [[(line, ts),
         # ...], ...], one inner list per contact. NOT flattened — device-measured
         # 2026-08-27.
@@ -96,6 +102,15 @@ class TTP223Handler:
             logger.warning("TTP223 gpiochip_open(%d) failed: %s", self._chip, e)
             return
 
+        if config.detect:
+            self._active = self._probe_wired()
+            logger.info(
+                "TTP223 detect: wired pads %s of candidates %s (others learned on first touch)",
+                sorted(self._active), self._lines,
+            )
+            # The probe flips bias on every line; restart the settle window after it.
+            self._ignore_edges_until = time.monotonic() + SETTLE_S
+
         for line in self._lines:
             try:
                 lgpio.gpio_claim_alert(
@@ -121,6 +136,33 @@ class TTP223Handler:
             PET_SESSION_THRESHOLD,
         )
 
+    def _probe_wired(self):
+        """Return the candidate lines with a TTP223 driving them.
+
+        A pad touched during the probe reads LOW and is missed; the first real touch
+        adds it back (see _on_edge), so a miss only delays that pad.
+        """
+        lgpio = self._lgpio
+        wired = set()
+        for line in self._lines:
+            try:
+                lgpio.gpio_claim_input(self._handle, line, lgpio.SET_PULL_DOWN)
+                time.sleep(PROBE_SETTLE_S)
+                if lgpio.gpio_read(self._handle, line) == 1:
+                    wired.add(line)
+            except Exception as e:
+                logger.warning("TTP223 probe line %d failed: %s", line, e)
+            finally:
+                try:
+                    lgpio.gpio_free(self._handle, line)
+                except Exception:
+                    pass
+        return wired
+
+    def _wired(self):
+        """Pads a swipe must cover: the detected set, or every configured line."""
+        return set(self._active) if self._active else set(self._lines)
+
     def _on_edge(self, chip, gpio, level, tick):
         if time.monotonic() < self._ignore_edges_until:
             # Traced anyway, flagged: a suppressed edge and a pad that never
@@ -131,6 +173,10 @@ class TTP223Handler:
         touch_debug.start_cycle(self._chip, self._lines, self._axis)
         touch_debug.note_edge(gpio, level)
         with self._lock:
+            if level == 0 and self._active is not None and gpio not in self._active:
+                self._active.add(gpio)
+                logger.info("TTP223 pad on line %d learned from touch; wired %s",
+                            gpio, sorted(self._active))
             if level == 0:
                 # A PRESS is the surface going from nothing-held to held: the hand
                 # arriving. During a swipe the finger reaches the far pad before the
@@ -206,9 +252,9 @@ class TTP223Handler:
                 moved_within = True
             positions = [pos_of[l] for l, _ in c if l in pos_of]
             pads = {l for l, _ in c}
-            # EVERY wired pad, not a fixed count. Compared against the board's own line
-            # list so the rule follows the hardware instead of a constant.
-            if len(pads) < SWIPE_MIN_PADS or pads != set(self._lines):
+            # EVERY wired pad, not a fixed count. Compared against the detected pads
+            # (or the board's own line list) so the rule follows the hardware.
+            if len(pads) < SWIPE_MIN_PADS or pads != self._wired():
                 continue
             if len(positions) < SWIPE_MIN_PADS:
                 continue
@@ -424,7 +470,7 @@ class TTP223Handler:
                 return f"{base}; {len(live)} contacts"
             c = live[0]
             pads = {l for l, _ in c}
-            wired = set(self._lines)
+            wired = self._wired()
             if len(pads) < len(wired):
                 return (
                     f"{base}; touched {len(pads)} of {len(wired)} pads -- "

@@ -570,6 +570,50 @@ class TestGeometryIndependent(_Base):
         self.assertNotIn("swipe_action", self.hz.fired)
 
 
+class TestDetectedPads(_Base):
+    """Four candidate lines, two wired: rules follow the detected pads."""
+
+    swipe = True
+
+    def setUp(self):
+        super().setUp()
+        self.hz = _Harness(self.mod, lines=(37, 96, 97, 98))
+        self.hz.h._active = {97, 98}
+        for p in self._p:
+            p.stop()
+        self._p = _record(self.mod, self.hz)
+        for p in self._p:
+            p.start()
+
+    def _is_swipe(self):
+        self.hz.h._close_contact()
+        return self.hz.h._classify()[0]
+
+    def test_a_pass_over_the_two_wired_pads_is_a_swipe(self):
+        for i, line in enumerate((97, 98)):
+            self.hz.touch(line, at_ms=i * 100)
+        self.assertTrue(self._is_swipe())
+
+    def test_one_wired_pad_is_not_a_swipe(self):
+        self.hz.touch(97, at_ms=0)
+        self.assertFalse(self._is_swipe())
+
+    def test_a_touch_on_an_undetected_line_is_learned(self):
+        self.hz.touch(37, at_ms=0)
+        self.assertEqual(self.hz.h._active, {37, 97, 98})
+
+    def test_nothing_detected_learns_from_the_first_touches(self):
+        self.hz.h._active = set()
+        for i, line in enumerate((96, 37)):
+            self.hz.touch(line, at_ms=i * 100)
+        self.assertEqual(self.hz.h._active, {37, 96})
+        self.assertTrue(self._is_swipe())
+
+    def test_release_never_marks_a_line_wired(self):
+        self.hz.release(37, at_ms=0)
+        self.assertEqual(self.hz.h._active, {97, 98})
+
+
 class TestPetOnlyActions(_Base):
     swipe = True
 
