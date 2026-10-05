@@ -53,6 +53,11 @@ PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
 # drives its idle-HIGH output through the weak pull-down; a bare header pin falls to 0.
 PROBE_SETTLE_S = 0.01
 
+# How long an undetected candidate line must stay LOW before its release admits it as a
+# pad. Device traces show a touch holding the output LOW for 73-135 ms; a transient on a
+# bare pulled-up pin lasts far less.
+LEARN_MIN_LOW_MS = 20.0
+
 
 class TTP223Handler:
     def __init__(self, config: TouchConfig | None):
@@ -65,6 +70,8 @@ class TTP223Handler:
         self._axis = None
         # Lines with a pad actually wired. None = every configured line (no detect).
         self._active = None
+        # Undetected candidate lines currently LOW: line -> monotonic time it fell.
+        self._candidate_low = {}
         # Per-contact first-touch order for the current gesture cycle: [[(line, ts),
         # ...], ...], one inner list per contact. NOT flattened — device-measured
         # 2026-08-27.
@@ -139,8 +146,8 @@ class TTP223Handler:
     def _probe_wired(self):
         """Return the candidate lines with a TTP223 driving them.
 
-        A pad touched during the probe reads LOW and is missed; the first real touch
-        adds it back (see _on_edge), so a miss only delays that pad.
+        A pad touched during the probe reads LOW and is missed; its first sustained
+        touch adds it back (see _confirm_candidate), so a miss only delays that pad.
         """
         lgpio = self._lgpio
         wired = set()
@@ -161,7 +168,36 @@ class TTP223Handler:
 
     def _wired(self):
         """Pads a swipe must cover: the detected set, or every configured line."""
-        return set(self._active) if self._active else set(self._lines)
+        with self._lock:
+            return set(self._active) if self._active else set(self._lines)
+
+    def _confirm_candidate(self, gpio, level):
+        """Decide whether an edge on an undetected line proves a pad is wired there.
+
+        True exactly once per line: on the release that ends a LOW of at least
+        LEARN_MIN_LOW_MS. Anything shorter is a transient and is dropped without
+        reaching the gesture state.
+        """
+        now = time.monotonic()
+        with self._lock:
+            if level == 0:
+                self._candidate_low[gpio] = now
+                return False
+            fell_at = self._candidate_low.pop(gpio, None)
+            if fell_at is None:
+                return False
+            low_ms = (now - fell_at) * 1000.0
+            if low_ms < LEARN_MIN_LOW_MS:
+                logger.debug(
+                    "TTP223 line %d: %.1fms LOW ignored (undetected pad, needs %.0fms)",
+                    gpio, low_ms, LEARN_MIN_LOW_MS,
+                )
+                return False
+            self._active.add(gpio)
+            wired = sorted(self._active)
+        logger.info("TTP223 pad on line %d learned from a %.0fms touch; wired %s",
+                    gpio, low_ms, wired)
+        return True
 
     def _on_edge(self, chip, gpio, level, tick):
         if time.monotonic() < self._ignore_edges_until:
@@ -170,13 +206,17 @@ class TTP223Handler:
             touch_debug.start_cycle(self._chip, self._lines)
             touch_debug.note_edge(gpio, level, suppressed=True)
             return
+        if self._active is not None and gpio not in self._active:
+            if not self._confirm_candidate(gpio, level):
+                return
+            # Deliver the touch that proved the pad; its release follows below.
+            self._handle_edge(gpio, 0)
+        self._handle_edge(gpio, level)
+
+    def _handle_edge(self, gpio, level):
         touch_debug.start_cycle(self._chip, self._lines, self._axis)
         touch_debug.note_edge(gpio, level)
         with self._lock:
-            if level == 0 and self._active is not None and gpio not in self._active:
-                self._active.add(gpio)
-                logger.info("TTP223 pad on line %d learned from touch; wired %s",
-                            gpio, sorted(self._active))
             if level == 0:
                 # A PRESS is the surface going from nothing-held to held: the hand
                 # arriving. During a swipe the finger reaches the far pad before the

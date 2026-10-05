@@ -68,10 +68,16 @@ viên chứ không phải danh sách pad. Khi bật `detect`, driver:
    in `TTP223 detect: wired pads [...] of candidates [...]`.
 2. **Claim mọi line ứng viên** với pull-up / cả hai edge như cũ. Pin trống luôn
    HIGH và không sinh edge.
-3. **Học từ lần chạm.** Một lần chạm (edge xuống, ngoài cửa sổ settle) trên line
-   mà probe bỏ sót sẽ được thêm vào tập pad đã nối và log
-   `TTP223 pad on line N learned from touch`. Trường hợp này xảy ra khi pad đang
-   bị chạm lúc probe, hoặc output đọc LOW dưới pull-down.
+3. **Học từ lần chạm đã xác nhận.** Edge trên line mà probe bỏ sót không được
+   đưa vào trạng thái gesture cho tới khi line ở mức LOW ít nhất 20 ms
+   (`LEARN_MIN_LOW_MS`; trace trên máy cho thấy một lần chạm giữ LOW 73–135 ms).
+   Edge nhả kết thúc khoảng LOW đó sẽ thêm line vào tập pad đã nối, log
+   `TTP223 pad on line N learned from a Xms touch`, và chuyển lần chạm đó thành
+   gesture bình thường, tính thời điểm tại lúc nhả. Khoảng LOW ngắn hơn — nhiễu
+   thoáng qua trên pin trống đang pull-up — bị bỏ: không học pad, không khởi động
+   timer contact và không phát chime (chỉ log ở mức DEBUG). Trường hợp cần học
+   xảy ra khi pad đang bị chạm lúc probe, hoặc output đọc LOW dưới pull-down.
+   Line đã học được giữ là đã nối cho tới khi HAL restart.
 
 Luật swipe ("mọi pad đã nối") và lý do TAP so sánh với tập pad đã nối; nếu chưa
 detect hay học được pad nào thì fallback về toàn bộ `lines`. Không có `detect`

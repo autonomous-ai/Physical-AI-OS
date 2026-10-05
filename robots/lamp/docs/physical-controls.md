@@ -70,10 +70,16 @@ than pads. With `detect` on, the driver:
    the log reports `TTP223 detect: wired pads [...] of candidates [...]`.
 2. **Claims every candidate** with pull-up / both edges as usual. Bare pins
    stay HIGH and produce no edges.
-3. **Learns from touch.** A touch (falling edge, outside the settle window) on a
-   line the probe missed adds it to the wired set and logs
-   `TTP223 pad on line N learned from touch`. This covers a pad held during the
-   probe, or an output that reads LOW under pull-down.
+3. **Learns from a confirmed touch.** Edges on a line the probe missed stay out
+   of the gesture state until the line has been LOW for at least 20 ms
+   (`LEARN_MIN_LOW_MS`; device traces show a touch holding LOW for 73–135 ms).
+   The release that ends such a LOW adds the line to the wired set, logs
+   `TTP223 pad on line N learned from a Xms touch`, and delivers that touch as a
+   normal gesture, timed at its release. A shorter LOW — a transient on a bare
+   pulled-up pin — is dropped: it learns nothing, starts no contact timer and
+   plays no chime (logged at DEBUG only). This covers a pad held during the
+   probe, or an output that reads LOW under pull-down. A learned line stays
+   wired until HAL restarts.
 
 The swipe rule ("every wired pad") and the TAP reason compare against the wired
 set; if nothing has been detected or learned yet it falls back to all of
