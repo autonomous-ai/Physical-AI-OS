@@ -329,7 +329,11 @@ Với hai binary tự chứa, mỗi lần update giữ
 để khôi phục. Updater ghi version vừa gỡ vào `rollback_versions`; bootstrap chỉ
 bỏ qua đúng target đó nên release lỗi không bị cài lại ở lần poll sau. Khi feed
 có version khác, OTA của component đó tự tiếp tục. Bản thân rollback không cần
-metadata URL hoặc mạng.
+metadata URL hoặc mạng. Bootstrap đọc lại `rollback_versions` trước mỗi lần
+reconcile component, nên rollback HAL/web/device thủ công có hiệu lực mà không
+cần restart bootstrap. Rules không đọc hoặc parse được sẽ dừng lần reconcile đó.
+Nếu reconcile HAL hoặc os-server thất bại, chu kỳ tự động bỏ qua device profile
+để tránh áp khai báo cần phiên bản core chưa cập nhật thành công.
 
 Trước khi update `os-server`, `web` hoặc `device`, updater bảo đảm nginx có route
 WebSocket Harness. Nó tìm trong `/etc/nginx/conf.d/*.conf` và mọi entry của
@@ -349,18 +353,19 @@ Các component cài theo thư mục cũng có cùng hợp đồng recovery. Trư
 web, updater dừng nginx, swap bundle đã giải nén hoàn chỉnh từ thư mục staging,
 và giữ bundle trước đó tại `/root/bootstrap/rollback/web.previous` cùng trạng
 thái active/inactive trước đó của nginx. Sau đó nó đòi hỏi có `index.html`,
-`nginx -t` hợp lệ và—khi nginx vốn đang chạy—`GET /` loopback thành công. Nếu
-thất bại, updater tự khôi phục bundle và trạng thái service đã lưu. Operator cũng
+`nginx -t` hợp lệ và—khi nginx vốn active hoặc đang enabled—service active trước
+và sau khi `GET /` loopback thành công. Service bắt buộc chạy nhưng đã dừng hoặc
+failed sẽ làm update thất bại, không được bỏ qua health check. Nếu thất bại, updater tự khôi phục bundle và trạng thái service đã lưu. Operator cũng
 có thể chạy `software-update rollback web`; version bị loại được ghi vào
 `rollback_versions` giống rollback binary.
 
-Với device profile, updater stage ZIP, chỉ dừng `os-server` và `hal` vốn đang
-active, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
+Với device profile, updater stage ZIP, dừng `os-server` và `hal`, rồi giữ profile cũ tại `/root/bootstrap/rollback/device.previous`. Nó
 cũng snapshot chính xác các file thuộc `rootfs/` của profile cũ hoặc mới trong
 `device.previous.rootfs`; rollback vì vậy khôi phục file bị ghi đè và xoá file
 chỉ được profile lỗi thêm vào. OTA thành công thay thế `.env` HAL được sinh.
-Profile bắt buộc có `ROBOT.md`; mỗi service vốn active phải khởi động lại và trả
-về health endpoint loopback. Check lỗi sẽ tự phục hồi profile known-good và trạng
+Profile bắt buộc có `ROBOT.md`; mỗi service vốn active hoặc đang enabled phải
+active trước và sau probe health loopback. HAL hoặc os-server lỗi đều làm update
+profile thất bại. Check lỗi sẽ tự phục hồi profile trước đó và trạng
 thái service cũ. Dùng `software-update rollback device` khi operator rollback;
 version profile bị loại sau đó sẽ bị chặn.
 
@@ -842,9 +847,45 @@ cũ có thể chưa set `agent_runtime`.
 Bash script được cài bởi setup.sh (và được imager bake sẵn vào image). Bootstrap
 worker gọi script này để thực hiện cập nhật.
 
-Script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap.json`
+Khi cài đặt, script đọc URL metadata OTA từ `metadata_url` trong `/root/config/bootstrap.json`
 (biến môi trường `OTA_METADATA_URL` nếu set sẽ override, dùng cho chạy thủ công/debug),
 và exit lỗi nếu cả hai đều rỗng — không có URL hardcode.
+
+### Update bị gián đoạn và binary core
+
+Với HAL, web, device profile, os-server và bootstrap, updater ghi và flush
+`/root/bootstrap/rollback/pending-update.json` trước khi publish bản thay thế.
+Journal được giữ tới khi bản mới vượt qua các health check bắt buộc. Lỗi thông
+thường hoặc signal có trap sẽ khôi phục bản đã lưu; recovery lỗi giữ journal để
+thử tiếp.
+
+Update device profile giữ một snapshot rootfs riêng cho transaction đang chạy.
+Snapshot dành cho rollback thủ công chỉ được thay sau khi profile mới vượt qua
+health check; recovery sử dụng snapshot được ghi trong journal.
+
+`software-update recover` không cần metadata OTA hay tải mạng. Mỗi lượt updater
+phục hồi transaction còn dang dở trước khi cập nhật tiếp. Bootstrap cũng chạy
+recovery trước khi kiểm tra metadata/version ở poll tự động, component check và
+force update. Nó còn nhận ra trường hợp legacy: `/opt/hal` mất nhưng còn
+`hal.previous` mà chưa có journal, tránh version đã lưu che mất runtime bị thiếu.
+SIGKILL hoặc mất điện được phục hồi ở lần chạy updater hoặc poll bootstrap tiếp
+theo; cơ chế này không bảo đảm khôi phục mọi lỗi dữ liệu thẻ SD hoặc máy không
+boot được tới bước chạy các service đó.
+
+Nếu cài HAL lần đầu mà không có runtime hay backup trước đó, recovery đưa
+candidate lỗi ra khỏi đường dẫn live và giữ HAL dừng. Nó không báo đã phục hồi
+một bản cũ vốn không tồn tại.
+
+Update binary core stage executable cạnh đường dẫn đích, yêu cầu probe
+`--version` thành công trong 15 giây, lưu binary cũ rồi publish bằng atomic
+rename. Restart đơn thuần chưa đủ: os-server phải trả `/api/health/live` ở port
+5000; bootstrap phải trả `/health` trên `httpPort` cấu hình (mặc định 8080).
+Cả hai check đều yêu cầu service còn active. Thất bại sẽ khôi phục binary đã lưu
+và kiểm tra service vừa phục hồi.
+
+Phát hành thay đổi bằng **cả** `make upload-setup` (script updater) và
+`make upload-bootstrap` (Go phát hiện recovery, đọc lại rollback rules và chặn
+profile khi core lỗi). Chỉ upload HAL sẽ không phân phối các thay đổi này.
 
 ### Xử lý HAL
 
@@ -862,36 +903,11 @@ script chọn Python extras theo `DEVICE_TYPE` trong `/opt/hal/.env`, fallback s
 > một lần. Đo trên lamp: **5-6 phút → 41 giây**, và `/opt/hal` từ ~4.8 GB còn
 > 98 MB (venv hardlink vào cache dùng chung).
 
-> **Cửa sổ publish an toàn trước gián đoạn.** Giữa lúc "dời cây đang chạy đi" và
-> "đổi tên cây staging vào chỗ", component không tồn tại trên đĩa. Một `trap` ghi
-> lại lần dời đang treo và trả cây về nếu tiến trình thoát trước — SSH đứt (HUP),
-> `systemctl restart bootstrap` giết cả cgroup (TERM), hay bất kỳ nhánh lỗi nào.
-> SIGKILL và mất điện thì không trap được; những ca đó rơi vào đường cài lại
-> (cây bị thiếu sẽ được cài mới).
-
-```bash
-"hal")
-    # Giữ nguyên toàn bộ runtime và trạng thái service trước đó.
-    systemctl stop hal
-    mv /opt/hal /root/bootstrap/rollback/hal.previous
-
-    # UV_BIN and HAL_EXTRA are resolved before stopping HAL.
-    # Build a fresh venv; preserve .env and use the external shared cache.
-    unzip -q "$ZIP" -d /opt/.hal.new
-    cp -a /root/bootstrap/rollback/hal.previous/.env /opt/.hal.new/
-    HAL_EXTRA_ARGS=(--extra "$HAL_EXTRA")
-    if [ "$HAL_EXTRA" != "reachy" ]; then
-        HAL_EXTRA_ARGS+=(--extra pipecat)
-    fi
-    (cd /opt/.hal.new && UV_CACHE_DIR=/opt/.uv-cache-hal "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}")
-    mv /opt/.hal.new /opt/hal
-
-    systemctl restart hal
-    curl -fsS http://127.0.0.1:5001/health
-    # Lỗi staging hoặc health sẽ khôi phục hal.previous và trạng thái cũ.
-    # Operator cũng có thể chạy: software-update rollback hal
-    ;;
-```
+Publish HAL theo cơ chế journal ở trên: giữ nguyên runtime cũ, tạo venv mới
+trong staging với cache dùng chung, giữ `.env`, rename thư mục staging vào
+`/opt/hal`, rồi khôi phục trạng thái service cần chạy và kiểm tra health. Chỉ
+xoá journal khi thành công; lỗi staging, publish hoặc health đều đi qua recovery.
+Operator cũng có thể chạy `software-update rollback hal`.
 
 Bắt buộc kiểm tra runtime nếu HAL chạy trước update hoặc service đang enabled.
 Khi đó service inactive/failed làm update thất bại, không được bỏ qua health check.

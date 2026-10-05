@@ -30,6 +30,9 @@ func UpdatesInFlight() []string {
 // forceUpdate installs the component's published version now, like `software-update <key>`.
 // Bypasses the min_version floor but is still gated by componentInstalled.
 func (b *Bootstrap) forceUpdate(ctx context.Context, key string) error {
+	if err := b.recoverPendingUpdate(ctx); err != nil {
+		return err
+	}
 	if !b.componentInstalled(key) {
 		return fmt.Errorf("%s is not installed on this device", key)
 	}
