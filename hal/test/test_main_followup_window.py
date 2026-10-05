@@ -7,6 +7,8 @@ from hal.drivers.voice._internal import main_followup as mf
 from hal.drivers.voice.voice_service import VoiceService
 
 QUESTION = "What name should I save you under?"
+# Read before the autouse fixture shortens it for the timing tests.
+DEFAULT_TTL = hal_config.REALTIME_MAIN_FOLLOWUP_S
 
 
 class _RecordingRealtime:
@@ -31,6 +33,7 @@ def _enabled(monkeypatch):
 
 def test_question_detection():
     assert mf.ends_with_question(QUESTION)
+    assert mf.ends_with_question("What name? Just say it.")
     assert mf.ends_with_question(QUESTION + '"  ')
     assert mf.ends_with_question("Bạn tên là gì？")
     assert not mf.ends_with_question("Done — I'll remember you as Momo.")
@@ -49,11 +52,38 @@ def test_take_consumes_once():
     assert mf.pending_main_question() == ""
 
 
-def test_statement_closes_open_window():
+def test_later_statement_keeps_the_question_pending():
+    # A spoken reply to a sensing event (emotion, activity) must not cancel the
+    # question the user has not answered yet.
     service = _service()
     service.feed_realtime_history(QUESTION)
-    service.feed_realtime_history("Got it, saving you as Momo — hold still.")
-    assert mf.pending_main_question() == ""
+    service.feed_realtime_history("Take a short breath.")
+    assert mf.pending_main_question() == QUESTION
+
+
+def test_unheard_reply_does_not_close_the_window():
+    # Muted TTS, or os-server cancelling a reply that lost the speaker.
+    service = _service()
+    service.feed_realtime_history(QUESTION)
+    service.feed_realtime_history("Take a short breath.", spoken=False)
+    assert mf.pending_main_question() == QUESTION
+
+
+def test_newer_question_replaces_the_pending_one():
+    service = _service()
+    service.feed_realtime_history(QUESTION)
+    service.feed_realtime_history("Want to take a break?")
+    assert mf.pending_main_question() == "Want to take a break?"
+
+
+def test_question_followed_by_a_statement_still_opens():
+    _service().feed_realtime_history("What name should I save you under? Just say it.")
+    assert mf.pending_main_question() == "What name should I save you under? Just say it."
+
+
+def test_default_window_outlasts_a_slow_answer():
+    # 2026-10-05 green-lamp: the name came 64 s after the question.
+    assert DEFAULT_TTL >= 300
 
 
 def test_last_fragment_decides():

@@ -57,7 +57,11 @@ lượt, model sẽ:
 main agent đang xử lý đã xong, đã lưu hay đã nhớ — enroll khuôn mặt hoặc giọng
 nói, nhắc việc, tin nhắn, memory — và phải delegate các câu hỏi về tác vụ đó
 (`DELEGATE_TOOL_DESCRIPTION`). Ngày 2026-10-02 (#564) realtime đã nói "All
-done! I've got you remembered" trước khi có gì được enroll. Xem
+done! I've got you remembered" trước khi có gì được enroll. Yêu cầu enroll ("remember my face", "this is me",
+"learn my voice", "forget my face") luôn được delegate, kể cả khi người dùng có vẻ
+đã được nhận ra: ngày 2026-10-05 trên green-lamp, realtime tự trả lời "Please
+remember my face." bằng "I already have your face remembered", nên face-enroll
+không hề chạy. Xem
 [Câu trả lời cho câu hỏi của main agent luôn quay về main](#câu-trả-lời-cho-câu-hỏi-của-main-agent-luôn-quay-về-main).
 
 **Tìm đồ là một hành động.** "Tìm chìa khóa của tôi", "cái cốc của tôi đâu",
@@ -694,12 +698,18 @@ nên bản sửa giữ realtime trong vòng xử lý và làm cho việc định
 tường minh (`hal/drivers/voice/_internal/main_followup.py`):
 
 - **Cửa sổ.** `feed_realtime_history` gọi `note_main_reply` cho mọi câu trả
-  lời của main agent. Câu trả lời đã phát (nói hết hoặc bị ngắt) và kết thúc
-  bằng `?` / `？` sẽ mở một cửa sổ `HAL_REALTIME_MAIN_FOLLOWUP_S` (mặc định
-  60 s, `0` là tắt) và ghi nhớ câu hỏi. Mọi câu trả lời khác của main đều đóng
-  nó, nên chính câu đọc lại của main ("saving you as Momo — hold still.") kết
-  thúc cửa sổ. Khi câu trả lời bị chia đoạn, đoạn TTS cuối cùng quyết định.
-  Câu trả lời không được phát thì không bao giờ mở cửa sổ.
+  lời của main agent. Câu trả lời đã phát (nói hết hoặc bị ngắt) có `?` / `？`
+  ở một trong hai câu cuối ("What name? Just say it.") sẽ mở cửa sổ và ghi nhớ
+  câu hỏi; một câu hỏi mới hơn đã phát sẽ thay thế nó. Chỉ câu đáp có nội dung
+  tiếp theo của người dùng mới đóng cửa sổ, hoặc giới hạn an toàn
+  `HAL_REALTIME_MAIN_FOLLOWUP_S` (mặc định 300 s, `0` là tắt). Mọi câu trả lời
+  khác của main đều giữ cửa sổ mở: câu trả lời bằng lời cho một sự kiện sensing
+  (emotion, activity, presence), câu đọc lại của main, hay một câu trả lời bị
+  tắt tiếng hoặc bị hủy (kể cả feed `/voice/realtime/history` của os-server)
+  đều không trả lời câu hỏi đang chờ. Lần chạy đầu trên green-lamp (2026-10-05)
+  dùng cửa sổ 60 s và cái tên đến sau câu hỏi 64 s, nên realtime tự trả lời và
+  nói khuôn mặt đã được ghi nhớ. Câu hỏi không được phát thì không bao giờ mở
+  cửa sổ.
 - **Ghi chú theo lượt.** Khi cửa sổ đang mở, `build_turn_context` thêm `Main
   agent is waiting for this answer to its question "…"` và yêu cầu realtime gọi
   `delegate_to_main` với lời người dùng đúng như nó hiểu. Main agent khi đó
@@ -3369,7 +3379,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
-| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `60` | Sau một câu trả lời đã phát của main agent kết thúc bằng `?` / `？`, câu đáp có nội dung tiếp theo của người dùng trong số giây này thuộc về main: turn context yêu cầu realtime delegate nó, và lượt realtime tự trả lời được chuyển thành `[realtime-handoff]` live thay vì lịch sử `[HANDLED]` (#564). Mọi câu trả lời không phải câu hỏi của main đều đóng cửa sổ. `0` là tắt. |
+| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `300` | Sau một câu hỏi đã phát của main agent (`?` / `？` ở một trong hai câu cuối), câu đáp có nội dung tiếp theo của người dùng trong số giây này thuộc về main: turn context yêu cầu realtime delegate nó, và lượt realtime tự trả lời được chuyển thành `[realtime-handoff]` live thay vì lịch sử `[HANDLED]` (#564). Chỉ câu đáp đó, một câu hỏi mới hơn hoặc giới hạn này kết thúc việc chờ; các câu trả lời khác của main (phản ứng sensing, câu đọc lại, câu bị tắt tiếng hoặc bị hủy) giữ cửa sổ mở. `0` là tắt. |
 
 ## Bản đồ code
 

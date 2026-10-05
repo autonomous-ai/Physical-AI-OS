@@ -56,7 +56,11 @@ STT pipeline. At end-of-turn the model either:
 agent is handling is done, saved or remembered — face or voice enrollment,
 reminders, messages, memory — and delegates questions about such a task
 (`DELEGATE_TOOL_DESCRIPTION`). On 2026-10-02 (#564) realtime said "All done!
-I've got you remembered" before anything was enrolled. See
+I've got you remembered" before anything was enrolled. Enrollment requests
+("remember my face", "this is me", "learn my voice", "forget my face") always
+delegate, even when the user seems already known: on 2026-10-05 green-lamp
+realtime answered "Please remember my face." itself with "I already have your
+face remembered", so face-enroll never ran. See
 [Answers to a main-agent question stay with main](#answers-to-a-main-agent-question-stay-with-main).
 
 **Finding things is an action.** "Find my keys", "where is my cup", "can you help
@@ -718,12 +722,17 @@ so the fix keeps realtime in the loop and makes the routing explicit
 (`hal/drivers/voice/_internal/main_followup.py`):
 
 - **Window.** `feed_realtime_history` calls `note_main_reply` for every
-  main-agent reply. A reply that played (spoken, or interrupted) and ends in
-  `?` / `？` opens a window of `HAL_REALTIME_MAIN_FOLLOWUP_S` (default 60 s,
-  `0` disables) and remembers the question. Any other main reply closes it,
-  so main's own read-back ("saving you as Momo — hold still.") ends it. The
-  last TTS fragment decides when a reply is chunked. An unspoken reply never
-  opens it.
+  main-agent reply. A reply that played (spoken, or interrupted) with a `?` /
+  `？` in one of its last two sentences ("What name? Just say it.") opens the
+  window and remembers the question; a newer heard question replaces it. Only
+  the user's next actionable answer closes it, or the safety cap
+  `HAL_REALTIME_MAIN_FOLLOWUP_S` (default 300 s, `0` disables). Any other main
+  reply leaves it open: a spoken reply to a sensing event (emotion, activity,
+  presence), main's read-back, or a muted or cancelled reply (including
+  os-server's `/voice/realtime/history` feed) does not answer the pending
+  question. The first green-lamp run (2026-10-05) used a 60 s window and the
+  name arrived 64 s after the question, so realtime answered it and claimed
+  the face was remembered. An unspoken question never opens the window.
 - **Per-turn note.** While it is open, `build_turn_context` adds `Main agent is
   waiting for this answer to its question "…"` and tells realtime to call
   `delegate_to_main` with the user's words as it understood them. The main
@@ -3443,7 +3452,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Extra attempts per summarize; `0` disables |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Wait before the first retry, doubled each time |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | The summariser puts unanswered requests under a final `## Open requests` section (timestamped bullets). HAL drops each bullet from `summary.md` once its `[<ISO-8601>]` stamp is this many seconds old (a bullet without a parseable stamp falls back to the file's age; the heading goes when no bullet is left), both when re-feeding it as `[Previous summary]` and when loading it into session context — a stale pending task in context is what let a content-free nudge make Gemini "answer" it from memory (#419, #421). `0` disables. |
-| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `60` | After a heard main-agent reply ending in `?` / `？`, the user's next actionable answer within this many seconds belongs to main: the turn context tells realtime to delegate it, and a turn realtime answers itself is forwarded as a live `[realtime-handoff]` instead of `[HANDLED]` history (#564). Any non-question main reply closes the window. `0` disables. |
+| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `300` | After a heard main-agent question (`?` / `？` in its last two sentences), the user's next actionable answer within this many seconds belongs to main: the turn context tells realtime to delegate it, and a turn realtime answers itself is forwarded as a live `[realtime-handoff]` instead of `[HANDLED]` history (#564). Only that answer, a newer question or this cap ends the wait; other main replies (sensing reactions, read-backs, muted or cancelled replies) leave it open. `0` disables. |
 
 ## Code map
 
