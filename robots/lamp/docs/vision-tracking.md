@@ -954,7 +954,10 @@ Three further behaviours are worth stating because each was a bug first:
   The body gaze reasons about is the **nearest** person box — the tallest one near enough to be the
   asker, the same `_pick_nearest` rule look-aim and the search use — not `detect()`'s most confident
   box. On lamp-4ace (2026-10-05 13:48:51) the user's 30% box at confidence 0.78 lost to a co-worker's
-  4% box at 0.83, so the user's clipped torso never started the climb.
+  4% box at 0.83, so the user's clipped torso never started the climb. The candidates come from the
+  local YOLO only (`detect_candidates`), never the remote YOLO-World fallback `detect()` has: with
+  `HAL_TRACKING_DETECT_LOCAL=false` or no local weights, gaze sees no body at all — no climb and no
+  near-body evidence.
 - **It will not turn away from a face already in frame.** If a face was seen within
   `HAL_GAZE_REPOINT_SKIP_IF_FACE_S`, a speech-triggered reacquire declines: after a climb has found
   the user's face *above* the bearing, obeying the bearing means turning back down to look at nobody.

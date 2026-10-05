@@ -2377,6 +2377,24 @@ def test_a_miss_reports_the_largest_body_it_saw(monkeypatch, caplog):
     assert "largest body 12% of frame" in caplog.text
 
 
+@pytest.mark.parametrize("climb, near_face", [(False, True), (True, True), (True, False)])
+def test_every_verdict_reports_the_largest_body_it_saw(monkeypatch, caplog, climb, near_face):
+    """Hits and the no-face climb too: the docs promise the size on every verdict line."""
+    _repoint_scored(monkeypatch)
+    monkeypatch.setattr(gaze, "_maybe_pitch", lambda now, prompt=False: None)
+    t = gaze.time.monotonic()
+    _pending_repoint(t)
+    gaze._note_body_size(gaze.PersonSighting(None, True, 0.12), t - 1.0)
+    if climb:
+        gaze._repoint_pending_t = 0.0
+        gaze._repoint_climb_t = t - config.GAZE_REPOINT_CLIMB_TIMEOUT_S - 1
+    if near_face:
+        gaze._last_near_face_t = t - 1.0
+    with caplog.at_level(logging.INFO):
+        gaze._verify_repoint(t)
+    assert "largest body 12% of frame" in caplog.text
+
+
 def test_the_watcher_stamps_a_near_body_when_no_face_is_found(monkeypatch):
     import hal.app_state as state
 

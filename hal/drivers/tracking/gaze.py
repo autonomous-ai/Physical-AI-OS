@@ -1333,7 +1333,7 @@ def _verify_repoint(now: float) -> None:
     _repoint_pending_t = 0.0
     since = _face_evidence_since()
     if _last_near_face_t > since:
-        _score_repoint(True, "found a face near enough to be them", now)
+        _score_repoint(True, "found a face near enough to be them" + _body_size_note(), now)
         return
     if _last_headless_body_t > since:
         logger.info("[gaze] repoint found a body with its head above the frame — climbing "
@@ -1364,7 +1364,7 @@ def _finish_repoint_climb(now: float) -> None:
     since = _face_evidence_since()
     if _last_near_face_t > since:
         _repoint_climb_t = 0.0
-        _score_repoint(True, "climb found a face near enough to be them", now)
+        _score_repoint(True, "climb found a face near enough to be them" + _body_size_note(), now)
         return
     if (now - _repoint_climb_t) < config.GAZE_REPOINT_CLIMB_TIMEOUT_S:
         # Prompted: the ordinary climb only runs inside a conversation.
@@ -1380,8 +1380,8 @@ def _finish_repoint_climb(now: float) -> None:
     else:
         # No face at all proves nothing either way. A torso-only miss once deleted
         # correct bearings while the user sat in front of the lamp.
-        logger.info("[gaze] repoint climb found no face in %.0fs — not scored",
-                    config.GAZE_REPOINT_CLIMB_TIMEOUT_S)
+        logger.info("[gaze] repoint climb found no face in %.0fs%s — not scored",
+                    config.GAZE_REPOINT_CLIMB_TIMEOUT_S, _body_size_note())
 
 
 def _maybe_sweep(now: float, *, confirmed_miss: bool = False) -> None:
