@@ -26,11 +26,12 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       opened the Setup popup can look the IP up and rescue the redirect
    e. Setup agent gateway
    f. Wait for agent ready (poll 120s)
-   g. SetUpCompleted = true; clear the temporary setup-white LED state so it
-      is not retained as a user LED preference and the strip returns to the
-      ambient resting look (currently dark/off)
+   g. Save SetUpCompleted = true; wait for runtime preparation (up to 5min):
+      stable agent, HAL restart if needed, HAL health, configured voice start.
+      Only then clear the temporary setup LED and restore the resting choice.
    h. Backend ping (status "working", setup_completed=true)
-7. On failure → return to AP mode
+7. On network/agent setup failure → return to AP mode; runtime preparation
+   failure keeps LAN connected and reports a setup error
 8. Web UI auto-redirects the browser to http://<lan_ip>/setup once the
    operator is back on home Wi-Fi (IP-first; mDNS .local is a last-resort
    discovery fallback when the AP died before lan_ip could be read)
@@ -196,7 +197,7 @@ saved SSID (fresh, or previously set up wired) reach the wired path that way.
   avahi advertises on every interface, the setup page is reachable from the wired LAN at
   `http://<device_type>-<suffix>.local/` as well as at the AP's `192.168.100.1`.
   That wired address is also what makes the ethernet-only setup below possible.
-- **LED indicator:** once HTTP server is listening, if `SetUpCompleted == false` the OS server spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`) for devices with a light capability. It calls HAL `POST /led/status` with state `setup` immediately, then retries after 1, 2, 4, 8 and at most 10 seconds between attempts, without a 30-second cutoff. The LED endpoint is available before full HAL health; HAL resolves state `setup` to a solid white strip. HTTP errors or missing `status: "ok"` acknowledgements are retried. The worker exits after acknowledgement, when setup completion is observed, or on server shutdown (which also cancels in-flight HTTP requests). Setup completion is checked before each LED request and after failed requests. The poll exists because os-server typically binds :5000 before HAL's FastAPI is up on :5001 (Python and the LED driver still need to initialize) — a fire-and-forget paint would silently drop on `connection refused`. This white is a **temporary AP/pre-setup cue**, not a user preference: after a successful `POST /api/device/setup`, its saved LED state is cleared and the strip settles on the ambient resting look (currently dark/off). The booting blue-breathing still shows during init.
+- **LED indicator:** once HTTP server is listening, if `SetUpCompleted == false` the OS server spawns a background goroutine (`waitAndPaintSetupReady` in `system/server/config_watch.go`) for devices with a light capability. It calls HAL `POST /led/status` with state `setup` immediately, then retries after 1, 2, 4, 8 and at most 10 seconds between attempts, without a 30-second cutoff. The LED endpoint is available before full HAL health; HAL resolves state `setup` to a solid white strip. HTTP errors or missing `status: "ok"` acknowledgements are retried. The worker exits after acknowledgement, when setup completion is observed, or on server shutdown (which also cancels in-flight HTTP requests). Setup completion is checked before each LED request and after failed requests. The poll exists because os-server typically binds :5000 before HAL's FastAPI is up on :5001 (Python and the LED driver still need to initialize) — a fire-and-forget paint would silently drop on `connection refused`. This white is a **temporary AP/pre-setup cue**, not a user preference: after a successful `POST /api/device/setup`, HAL clears its saved `source: "status:setup"` LED cue on the existing `/led/off` call and restores the owner’s resting-light choice (or the device preset), instead of saving an explicit user OFF. The booting blue-breathing still shows during init.
 - **AP-mode LED suppression:** the openclaw WS reconnect loop (`runtimes/openclaw/service_ws.go`) skips `StateAgentDown` Set/Clear while `config.SetUpCompleted == false`, so the cyan disconnect overlay doesn't fight the setup-needed white during provisioning. WS still runs (`device.Setup` needs it ready to satisfy `WaitForAgentReady` before flipping `SetUpCompleted=true`), only the LED side-effect is gated.
 - **Wi-Fi association LED cue (`StateWifiConnecting`):** the moment the setup handler enters `device.Setup()`, it activates `statusled.StateWifiConnecting` (HAL preset `wifi_connecting` = blue `[0,135,255]` blink at speed 0.5) so the ring visibly switches from the setup-white to a blue blink while `wlan0` associates. A `defer` in `Setup()` clears it on every return path, so a failure that falls through to `SwitchToAPMode()` doesn't leave the strip blinking. Priority sits above `Booting` and below `OTA`/`Error`/`Connectivity` — the cue outranks residual boot state but never masks a real fault. Devices without the `light` capability short-circuit inside statusled (no-op).
 
@@ -656,7 +657,24 @@ The continue-mode auto-scroll — which otherwise jumps the operator to the firs
 
 ## Post-Setup
 
-After `SetUpCompleted = true`:
+Onboarding saves `SetUpCompleted = true` when configuration is complete, which
+triggers the existing startup worker. The onboarding request then waits up to
+**5 minutes** for that worker to finish its HAL restart (when the configuration
+changed), HAL health check, and configured voice start. The public
+`/api/device/setup/status` reports `runtime_phase: "preparing"` and
+`set_up_completed: false` during this interval. Network `phase: "connected"`
+still means Wi-Fi is connected, not that voice is ready.
+
+The setup web page shows “Preparing your robot’s voice…” and preserves this
+screen across the AP-to-LAN redirect or reload. It allows the completed wizard
+only after `runtime_phase: "ready"`; a runtime failure reports
+`runtime_phase: "failed"` with an error and a return-to-setup action. A runtime
+failure retains the working LAN connection instead of switching back to the
+hotspot. Backend pings remain `setting_up` until readiness; only then does setup
+clear its temporary LED cue and report completion. Normal startup, OTA, and
+configuration-change restarts outside onboarding retain their existing behavior.
+
+The startup worker triggered by the saved flag performs:
 1. Connect OpenClaw WebSocket
 2. Connect MQTT (subscribe fa_channel)
 3. Start voice pipeline (if Deepgram key present)
@@ -669,7 +687,7 @@ Config stored at `config/config.json`. Managed by `system/server/config/config.g
 
 | Field | Description |
 |-------|-------------|
-| `SetUpCompleted` | `true` when setup is done |
+| `SetUpCompleted` | Persisted configuration-complete flag; public onboarding completion also waits for runtime readiness |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
 | `LLMAPIKey` | LLM API key |

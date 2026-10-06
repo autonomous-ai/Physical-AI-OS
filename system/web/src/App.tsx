@@ -3,6 +3,8 @@ import { BrowserRouter, Routes, Route, Navigate, useLocation } from "react-route
 import { Toaster } from "@/components/ui/sonner";
 import { SourceFooter } from "@/components/SourceFooter";
 import Setup from "@/pages/setup";
+import { SetupRuntimeProgress } from "@/pages/setup/SetupRuntimeProgress";
+import type { SetupStatus } from "@/lib/api";
 import { SetupSkeleton } from "@/pages/setup/SetupSkeleton";
 import WifiProvision from "@/pages/wifi-provision/WifiProvision";
 import Login from "@/pages/Login";
@@ -23,6 +25,7 @@ function isTailscaleHost(host: string): boolean {
 // Setup gate: provisioned -> continue mode, else initial mode; bounces the AP IP to the LAN IP.
 function SetupGate() {
   const force = typeof window !== "undefined" && window.location.hash === "#force";
+  const [runtimeSetup, setRuntimeSetup] = useState<SetupStatus | null>(null);
   const [provisioned, setProvisioned] = useState<boolean | null>(force ? false : null);
   useEffect(() => {
     if (force) return;
@@ -30,6 +33,10 @@ function SetupGate() {
     (async () => {
       const status = await getSetupStatus().catch(() => null);
       if (cancelled) return;
+      if (status?.runtime_phase === "preparing" || status?.runtime_phase === "failed") {
+        setRuntimeSetup(status);
+        return;
+      }
       if (status?.set_up_completed === false) { setProvisioned(false); return; }
       const ok = await checkInternet().catch(() => false);
       if (cancelled) return;
@@ -51,6 +58,7 @@ function SetupGate() {
     return () => { cancelled = true; };
   }, [force]);
   // Skeleton, not null: the deep-link hash can only be honored once `mode` resolves.
+  if (runtimeSetup) return <SetupRuntimeProgress initial={runtimeSetup} />;
   if (provisioned === null) return <SetupSkeleton />;
   return <Setup mode={provisioned ? "continue" : "initial"} />;
 }

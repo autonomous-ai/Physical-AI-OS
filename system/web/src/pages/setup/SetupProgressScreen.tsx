@@ -2,6 +2,8 @@ import { Wifi, Cable, XCircle, CheckCircle2 } from "lucide-react";
 import { C } from "@/components/setup/shared";
 import { getInitialSearch } from "@/hooks/setup/useSetupUrlParams";
 import { setupBridge } from "@/lib/setupBridge";
+import type { SetupPhase } from "@/hooks/setup/useSetupStatusPolling";
+import { SetupRuntimeMessage } from "./SetupRuntimeProgress";
 import { CopyAddress } from "./CopyAddress";
 
 // Post-submit screen: join progress, then the LAN address to continue setup.
@@ -10,7 +12,7 @@ export function SetupProgressScreen({
   deviceMdnsHost, deviceTypePrefix, wired = false,
   onRetry,
 }: {
-  setupPhase: "connecting" | "connected" | "failed";
+  setupPhase: SetupPhase;
   setupLanIP: string;
   setupErrorMsg: string;
   elapsed: number;
@@ -24,6 +26,9 @@ export function SetupProgressScreen({
     <div className="lm-card lm-fade-in" style={{
       padding: "32px 24px", textAlign: "center",
     }}>
+      {(setupPhase === "preparing" || setupPhase === "runtime_failed") && (
+        <SetupRuntimeMessage failed={setupPhase === "runtime_failed"} error={setupErrorMsg} />
+      )}
       {setupPhase === "connecting" && (
         <>
           <div style={{ display: "flex", justifyContent: "center", marginBottom: 14 }}>
@@ -58,14 +63,14 @@ export function SetupProgressScreen({
             <CheckCircle2 size={34} color={C.green} strokeWidth={1.75} aria-hidden />
           </div>
           <div style={{ fontSize: 14.5, fontWeight: 600, color: C.amber, marginBottom: 16 }}>
-            Your robot is online!
+            Network connected
           </div>
 
           {setupLanIP ? (
             <>
               <div style={{ fontSize: 13, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
                 Reconnect your computer to your home Wi-Fi, then click
-                Continue.
+                Continue to check setup progress. Your robot may still be getting ready.
               </div>
               <a
                 // Force reload when already on the device IP (a same-URL click is a no-op).

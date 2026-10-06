@@ -162,7 +162,12 @@ func waitHALReady(timeout time.Duration) bool {
 // handleSetUpCompleteChange starts or stops the network monitor and status
 // reporter based on SetUpCompleted.
 func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
-	if s.lastSetupCompleted != nil && *s.lastSetupCompleted == setupCompleted {
+	var finishSetup func(error) bool
+	var setupCtx context.Context
+	if setupCompleted {
+		finishSetup, setupCtx = s.deviceService.ClaimSetupRuntime()
+	}
+	if s.lastSetupCompleted != nil && *s.lastSetupCompleted == setupCompleted && finishSetup == nil {
 		return
 	}
 	if setupCompleted {
@@ -193,6 +198,17 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 		s.restartMQTT()
 
 		safego.Go("startup-sequence", func() {
+			// Strict readiness applies only to an explicit setup run. Ordinary
+			// boots retain their best-effort startup behavior.
+			var setupErr error
+			if finishSetup != nil {
+				defer func() {
+					if setupErr == nil {
+						setupErr = fmt.Errorf("device preparation did not complete")
+					}
+					finishSetup(setupErr)
+				}()
+			}
 			s.personaMigration.Reconcile()
 
 			s.configMigration.Reconcile()
@@ -226,17 +242,34 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 			gatewayStable := s.deviceService.WaitForAgentReadyStable(120*time.Second, startupAgentReadyStability)
 			if gatewayStable {
 				slog.Info("agent gateway ready and stable", "component", "server", "stable_for", startupAgentReadyStability)
-				s.statusLED.FlashReady()
+				if finishSetup == nil {
+					s.statusLED.FlashReady()
+				}
 			} else {
 				slog.Warn("agent gateway stable readiness timeout", "component", "server", "stable_for", startupAgentReadyStability)
+			}
+			if finishSetup != nil && !gatewayStable {
+				setupErr = fmt.Errorf("agent did not become ready during setup")
+				return
+			}
+			if setupCtx != nil && setupCtx.Err() != nil {
+				return
 			}
 			// A plain os-server restart with unchanged config leaves the
 			// already-running HAL untouched, so we don't needlessly drop the
 			// voice pipeline.
 			if config.HALConfigChanged() {
 				slog.Info("config changed since HAL last started, restarting hal", "component", "server")
-				if out, err := exec.Command("systemctl", "restart", "hal").CombinedOutput(); err != nil {
+				restartCtx := context.Background()
+				if setupCtx != nil {
+					restartCtx = setupCtx
+				}
+				if out, err := exec.CommandContext(restartCtx, "systemctl", "restart", "hal").CombinedOutput(); err != nil {
 					slog.Warn("hal restart failed", "component", "server", "error", err, "output", string(out))
+					if finishSetup != nil {
+						setupErr = fmt.Errorf("restart HAL: %w", err)
+						return
+					}
 				} else if err := config.SnapshotHALConfig(); err != nil {
 					slog.Warn("hal config snapshot failed", "component", "server", "error", err)
 				}
@@ -244,19 +277,34 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				slog.Info("config unchanged since HAL last started, skipping hal restart", "component", "server")
 			}
 
-			waitHALReady(halStartupTimeout)
+			if ready := waitHALReady(halStartupTimeout); !ready && finishSetup != nil {
+				setupErr = fmt.Errorf("HAL did not become ready during setup")
+				return
+			}
 
 			if s.config.DeepgramAPIKey != "" {
+				var voiceErr error
 				for attempt := 1; attempt <= 10; attempt++ {
+					if setupCtx != nil && setupCtx.Err() != nil {
+						return
+					}
 					err := s.agentGateway.StartHALVoice(s.config.DeepgramAPIKey, s.config.LLMAPIKey, s.config.GetSTTAPIKey(), s.config.GetTTSAPIKey(), s.config.LLMBaseURL, s.config.GetSTTBaseURL(), s.config.GetTTSBaseURL(), s.config.TTSVoice, s.config.TTSInstructions, s.config.TTSProvider)
+					voiceErr = err
 					if err == nil {
 						break
 					}
 					slog.Warn("start HAL voice failed", "component", "server", "attempt", attempt, "maxAttempts", 10, "error", err)
 					time.Sleep(5 * time.Second)
 				}
+				if finishSetup != nil && voiceErr != nil {
+					setupErr = fmt.Errorf("start voice: %w", voiceErr)
+					return
+				}
 			}
 
+			if setupCtx != nil && setupCtx.Err() != nil {
+				return
+			}
 			if device.Has(s.config.DeviceTypeOrDefault(), device.CapAudio) {
 				startupVol := device.StartupVolume(s.config.DeviceTypeOrDefault())
 				volSrc := "device profile"
@@ -268,6 +316,11 @@ func (s *Server) handleSetUpCompleteChange(setupCompleted bool) {
 				} else {
 					slog.Info("init volume", "component", "server", "volume", startupVol, "source", volSrc)
 				}
+			}
+
+			if finishSetup != nil && !finishSetup(nil) {
+				// A timed-out or superseded setup must not greet as successful.
+				return
 			}
 
 			if startupGreetingAllowed(gatewayStable, device.Has(s.config.DeviceTypeOrDefault(), device.CapExpression), hal.GetSleeping) {

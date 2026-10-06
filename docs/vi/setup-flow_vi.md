@@ -26,11 +26,12 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       cứu cú redirect
    e. Setup agent gateway
    f. Chờ agent ready (poll 120s)
-   g. SetUpCompleted = true; xoá LED trắng setup tạm thời để nó không bị giữ
-      thành user LED preference và strip quay về ambient resting look (hiện
-      đang tối/tắt)
+   g. Lưu SetUpCompleted = true; chờ chuẩn bị runtime (tối đa 5 phút): agent
+      ổn định, restart HAL nếu cần, health HAL, khởi động voice đã cấu hình.
+      Sau đó mới xóa LED setup tạm và khôi phục lựa chọn đèn nghỉ.
    h. Ping backend (status "working", setup_completed=true)
-7. Nếu thất bại → quay lại AP mode
+7. Lỗi network/agent setup → quay lại AP mode; lỗi chuẩn bị runtime giữ
+   kết nối LAN và báo lỗi setup
 8. Web UI tự chuyển hướng browser sang http://<lan_ip>/setup ngay khi
    operator đã về Wi-Fi nhà (IP-first; mDNS .local là fallback discovery
    cuối cùng khi AP chết trước lúc đọc được lan_ip)
@@ -189,7 +190,7 @@ setup bằng dây) mới vào được nhánh dây theo cách đó.
   vào được từ LAN dây qua `http://<device_type>-<suffix>.local/` chứ không chỉ
   `192.168.100.1` của AP. Chính địa chỉ dây đó là thứ khiến luồng setup-bằng-dây bên
   dưới khả thi.
-- **Tín hiệu LED:** ngay khi HTTP server bắt đầu listen, nếu `SetUpCompleted == false` thì OS server spawn goroutine background (`waitAndPaintSetupReady` trong `system/server/config_watch.go`) cho thiết bị có capability light. Worker gọi HAL `POST /led/status` với state `setup` ngay lần đầu, rồi retry sau 1, 2, 4, 8 và tối đa 10 giây giữa các lần thử, không bỏ cuộc ở mốc 30 giây. LED API có thể nhận lệnh trước khi HAL health đầy đủ; HAL resolve state `setup` thành strip trắng solid. Lỗi HTTP hoặc thiếu xác nhận `status: "ok"` sẽ được retry. Worker dừng sau xác nhận, khi thấy setup hoàn tất, hoặc server shutdown (đồng thời hủy HTTP đang chờ). Trạng thái setup được kiểm tra trước mỗi lần gửi lệnh LED và sau request lỗi. Poll vì os-server bind :5000 thường nhanh hơn HAL FastAPI bind :5001 trên cold boot (Python và driver LED vẫn cần thời gian khởi tạo) — fire-and-forget paint sẽ rớt im lặng với `connection refused`. Trắng này chỉ là **cue tạm thời cho AP/pre-setup**, không phải user preference: sau `POST /api/device/setup` thành công, saved LED state của nó bị xoá và strip settle về ambient resting look (hiện đang tối/tắt). Blue-breathing booting vẫn show trong lúc init.
+- **Tín hiệu LED:** ngay khi HTTP server bắt đầu listen, nếu `SetUpCompleted == false` thì OS server spawn goroutine background (`waitAndPaintSetupReady` trong `system/server/config_watch.go`) cho thiết bị có capability light. Worker gọi HAL `POST /led/status` với state `setup` ngay lần đầu, rồi retry sau 1, 2, 4, 8 và tối đa 10 giây giữa các lần thử, không bỏ cuộc ở mốc 30 giây. LED API có thể nhận lệnh trước khi HAL health đầy đủ; HAL resolve state `setup` thành strip trắng solid. Lỗi HTTP hoặc thiếu xác nhận `status: "ok"` sẽ được retry. Worker dừng sau xác nhận, khi thấy setup hoàn tất, hoặc server shutdown (đồng thời hủy HTTP đang chờ). Trạng thái setup được kiểm tra trước mỗi lần gửi lệnh LED và sau request lỗi. Poll vì os-server bind :5000 thường nhanh hơn HAL FastAPI bind :5001 trên cold boot (Python và driver LED vẫn cần thời gian khởi tạo) — fire-and-forget paint sẽ rớt im lặng với `connection refused`. Trắng này chỉ là **cue tạm thời cho AP/pre-setup**, không phải user preference: sau `POST /api/device/setup` thành công, HAL xoá cue LED có `source: "status:setup"` khi nhận lệnh `/led/off` hiện có và restore lựa chọn đèn nghỉ của user (hoặc preset của device), thay vì lưu thành lệnh OFF của user. Blue-breathing booting vẫn show trong lúc init.
 - **Khử nhiễu LED trong AP mode:** openclaw WS reconnect loop (`runtimes/openclaw/service_ws.go`) skip Set/Clear `StateAgentDown` khi `config.SetUpCompleted == false`, để overlay cyan disconnect không đè lên trắng setup-needed lúc provisioning. WS vẫn chạy (`device.Setup` cần nó ready để `WaitForAgentReady` pass trước khi flip `SetUpCompleted=true`), chỉ gate side-effect LED thôi.
 - **Tín hiệu LED khi join Wi-Fi (`StateWifiConnecting`):** ngay khi setup handler vào `device.Setup()`, kích hoạt `statusled.StateWifiConnecting` (HAL preset `wifi_connecting` = blink màu xanh dương `[0,135,255]` speed 0.5) để ring chuyển từ trắng setup sang blink xanh trong lúc `wlan0` associate. `defer` trong `Setup()` clear state ở mọi return path, nên fail rồi rớt xuống `SwitchToAPMode()` cũng không để strip kẹt blink. Priority nằm trên `Booting` và dưới `OTA`/`Error`/`Connectivity` — tín hiệu này thắng state boot còn sót lại nhưng không che khuất fault thật. Device không có capability `light` sẽ short-circuit trong statusled (no-op).
 
@@ -632,7 +633,22 @@ tiên — bị chặn khi một deep-link hash hợp lệ đã được honor (`
 
 ## Post-Setup
 
-Sau khi `SetUpCompleted = true`:
+Onboarding lưu `SetUpCompleted = true` khi cấu hình xong để kích hoạt startup
+worker hiện có. Request onboarding sau đó đợi tối đa **5 phút** để worker hoàn
+tất restart HAL (nếu cấu hình thay đổi), kiểm tra health HAL và khởi động voice
+đã cấu hình. Trong thời gian này `/api/device/setup/status` trả
+`runtime_phase: "preparing"`, `set_up_completed: false`. Network
+`phase: "connected"` chỉ có nghĩa Wi-Fi đã kết nối, chưa có nghĩa voice sẵn sàng.
+
+Web setup hiển thị “Preparing your robot’s voice…” và giữ màn hình này khi
+chuyển từ AP sang LAN hoặc reload. Chỉ khi `runtime_phase: "ready"` mới cho
+hoàn tất wizard; lỗi runtime trả `runtime_phase: "failed"` kèm lỗi và nút quay
+lại setup. Lỗi runtime giữ kết nối LAN đang hoạt động, không chuyển lại hotspot.
+Backend ping vẫn là `setting_up` cho tới khi sẵn sàng; sau đó setup mới xóa LED
+tạm và báo hoàn tất. Luồng boot bình thường, OTA và restart khi đổi cấu hình
+ngoài onboarding giữ nguyên hành vi.
+
+Startup worker được kích hoạt bởi cờ đã lưu thực hiện:
 1. Kết nối OpenClaw WebSocket
 2. Kết nối MQTT (subscribe fa_channel)
 3. Start voice pipeline (nếu có Deepgram key)
@@ -645,7 +661,7 @@ Config lưu tại `config/config.json`. Managed bởi `system/server/config/conf
 
 | Field | Mô tả |
 |-------|-------|
-| `SetUpCompleted` | `true` khi setup xong |
+| `SetUpCompleted` | Cờ cấu hình đã hoàn tất trên đĩa; trạng thái onboarding công khai còn đợi runtime sẵn sàng |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
 | `LLMAPIKey` | API key cho LLM |

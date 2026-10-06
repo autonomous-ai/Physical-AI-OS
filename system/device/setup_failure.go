@@ -11,6 +11,8 @@ import (
 // `setup_failure_reason` log field so every failed setup can be grouped by
 // cause in Graylog.
 const (
+	// FailureSetupRuntime leaves the working LAN available for retry/diagnostics.
+	FailureSetupRuntime = "runtime_startup_failed"
 	failureAgentSetup   = "agent_setup_failed" // the agent runtime could not be installed/configured
 	failureAgentTimeout = "agent_timeout"      // the agent gateway never became ready
 )

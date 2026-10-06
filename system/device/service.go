@@ -28,6 +28,7 @@ type Service struct {
 	beClient        *beclient.Client
 	statusLED       *statusled.Service
 	setupState      setupState
+	setupRuntime    setupRuntime
 	runtimeSwitchMu sync.Mutex
 }
 

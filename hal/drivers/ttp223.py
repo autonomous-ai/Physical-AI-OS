@@ -13,7 +13,7 @@ from hal.board.board import TouchConfig
 from hal.drivers import touch_debug
 from hal.drivers.button_actions import (
     head_pat_action,
-    play_ack_chime,
+    play_pet_chime,
 )
 
 logger = logging.getLogger(__name__)
@@ -433,7 +433,7 @@ class TTP223Handler:
 
         def _run():
             try:
-                play_ack_chime(source="TTP223")
+                play_pet_chime(source="TTP223")
             except Exception as e:
                 logger.warning("TTP223 first-session ack failed: %s", e)
 

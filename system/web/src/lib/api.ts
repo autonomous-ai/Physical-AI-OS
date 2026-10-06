@@ -236,6 +236,8 @@ export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
 }
 
 export interface SetupStatus {
+  // Present during onboarding runtime preparation; absent on older servers.
+  runtime_phase?: "preparing" | "ready" | "failed" | "";
   phase: "idle" | "connecting" | "connected" | "failed";
   lan_ip: string;
   error: string;

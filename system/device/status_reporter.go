@@ -18,10 +18,13 @@ import (
 // buildPingPayload assembles the backend ping body (same fields as the MQTT
 // `info` uplink). LocalIP is setup-critical: it rescues the AP→STA redirect.
 func (s *Service) buildPingPayload(status string) beclient.PingPayload {
+	if phase, _ := s.SetupRuntimeStatus(); phase == "preparing" || phase == "failed" {
+		status = "setting_up"
+	}
 	runtime := CurrentAgentRuntimeFromConfig(s.config)
 	p := beclient.PingPayload{
 		Status:              status,
-		SetupCompleted:      s.config.SetUpCompleted,
+		SetupCompleted:      s.SetupCompleted(),
 		Mac:                 GetDeviceMac(),
 		Version:             config.OSVersion,
 		Device:              s.config.DeviceTypeOrDefault(),
