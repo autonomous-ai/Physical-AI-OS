@@ -1,5 +1,7 @@
 # LED Control — Tài Liệu
 
+Khi presence trở lại từ idle/away, đèn khôi phục theo trạng thái người dùng/đèn nghỉ dùng chung, gồm lựa chọn đèn nghỉ hiện tại và các điều kiện bảo vệ hiệu ứng đang chạy. Presence không giữ cache màu riêng hay khôi phục màu emotion. Khi idle, độ sáng giảm dựa trên màu nền người dùng đã lưu hoặc preset đèn nghỉ hiện tại; lệnh tắt đèn vẫn được giữ nguyên.
+
 Trong lúc thu giọng Harness thủ công, khi recorder/STT sẵn sàng, LED chuyển sang preset listening hiện có (Lamp: xanh dương nhẹ `[0, 0, 3]`, tốc độ `0.3`), kể cả chưa có transcript đầu tiên. Kết thúc, hủy, timeout hoặc lỗi đều xóa trạng thái LED thu và khôi phục theo thứ tự ưu tiên bình thường; thinking/TTS sau đó giữ hành vi hiện có. Cue này chỉ đổi LED, không di chuyển servo hay đổi cài đặt đã lưu.
 
 ## Phần Cứng

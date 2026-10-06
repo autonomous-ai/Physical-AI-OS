@@ -134,8 +134,6 @@ def _set_led_solid(req: LEDSolidRequest, *, source: str | None = None):
     # Transient overlays must not exit the active scene.
     if not req.transient:
         _end_scene()
-    if state.sensing_service and isinstance(color, tuple):
-        state.sensing_service.presence.set_last_color(color)
     if req.transient:
         state._cancel_pending_restore()
     else:
@@ -187,10 +185,6 @@ def set_led_paint(req: LEDPaintRequest):
     state.rgb_service.dispatch(RGB_CMD_PAINT, colors)
     if not req.transient:
         _end_scene()
-    if state.sensing_service:
-        avg = state._avg_paint_color(colors)
-        if avg:
-            state.sensing_service.presence.set_last_color(avg)
     if req.transient:
         state._cancel_pending_restore()
     else:
@@ -221,8 +215,6 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
     state.rgb_service.clear()
     if not transient:
         _end_scene()
-    if state.sensing_service:
-        state.sensing_service.presence.set_last_color((0, 0, 0))
     if transient:
         state._cancel_pending_restore()
     elif ending_setup:

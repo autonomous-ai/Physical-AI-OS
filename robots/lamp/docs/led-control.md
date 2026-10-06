@@ -1,5 +1,7 @@
 # LED Control — Documentation
 
+Presence returning from idle/away restores the shared user/resting LED state, including the current resting-light preference and active overlay guards. It does not keep a separate color cache or restore an emotion color. Idle dimming uses the saved user base color or the current resting preset; explicit light-off remains off.
+
 During manual Harness capture, recorder/STT readiness switches the indicator to the existing listening preset (Lamp: dim blue `[0, 0, 3]`, speed `0.3`). It stays active even before the first transcript. Finish, cancellation, timeout or failure clears this capture indicator and restores the normal priority policy; subsequent thinking/TTS cues keep their existing behavior. This LED-only cue does not move the servos or change saved preferences.
 
 ## Hardware
