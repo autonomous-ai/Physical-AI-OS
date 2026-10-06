@@ -1300,6 +1300,8 @@ func IsValidTTSProvider(p string) bool {
 // Names must stay in sync with HAL's elevenlabs.py VOICE_IDS_BY_LANG.
 func DefaultElevenLabsVoiceForLang(lang string) string {
 	switch {
+	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(lang)), "ja"):
+		return "Shizuka"
 	case strings.HasPrefix(lang, "vi"):
 		return "Ngan"
 	case strings.HasPrefix(lang, "zh"):
@@ -1316,7 +1318,7 @@ var TTSVoicesByProvider = map[string][]string{
 	TTSProviderPiper: {},
 	// Mirrors HAL's GeminiTTSBackend.VOICES.
 	TTSProviderGemini:     {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"},
-	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
+	TTSProviderElevenLabs: {"Shizuka", "Konoha", "Rin", "Asahi", "Hinata", "Hiroki", "Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
 }
 
 // TTSVoices is the default (OpenAI) voice list for backward compatibility.

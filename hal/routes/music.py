@@ -17,6 +17,7 @@ from hal.i18n import MUSIC_BACKCHANNEL_POOLS, PHRASE_QUIET_HOURS, localized_phra
 from hal.drivers.voice.tts import PROVIDER_ELEVENLABS
 from hal.presets import (
     DEFAULT_LANG,
+    normalize_language,
     EMO_CURIOUS,
     EMO_EXCITED,
     EMO_HAPPY,
@@ -85,7 +86,7 @@ def _active_stt_language() -> str:
     """Read stt_language from the OS server's config.json. Empty/missing → ""."""
     try:
         from hal.config import _os_cfg_get
-        return (_os_cfg_get("stt_language") or "").strip()
+        return normalize_language(_os_cfg_get("stt_language"))
     except Exception:
         return ""
 

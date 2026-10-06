@@ -180,6 +180,8 @@ func TestLanguageCodeMapping(t *testing.T) {
 		"vi":    {true, true},
 		"zh-CN": {true, true},
 		"ja":    {true, true},
+		"ja-JP": {true, true},
+		"ja_JP": {true, true},
 		"fr":    {true, false},
 		"id":    {true, false},
 	} {

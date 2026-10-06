@@ -213,7 +213,7 @@ class GeminiLiveAgent(VoiceAgentBase):
     def _build_config(self) -> types.LiveConnectConfig:
         lang: str | None = self._config.language
         lang_codes: list[str] | None = (
-            ["vi-VN" if lang == "vi" else lang]
+            [{"vi": "vi-VN", "ja": "ja-JP"}.get(lang, lang)]
             if lang and self._config.use_language_codes else None
         )
 

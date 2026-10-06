@@ -252,6 +252,7 @@ def test_every_mic_phrase_states_which_way_the_toggle_went():
     cues = {
         "en": ("listen", "hear", "ear"),
         "vi": ("nghe", "tai"),
+        "ja": ("聞", "耳"),
         "zh-CN": ("听", "耳"),
         "zh-TW": ("聽", "耳"),
     }

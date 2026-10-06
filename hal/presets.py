@@ -3,10 +3,19 @@
 # DEFAULT_LANG is the fallback when stt_language is empty or unknown.
 LANG_EN = "en"
 LANG_VI = "vi"
+LANG_JA = "ja"
 LANG_ZH_CN = "zh-CN"
 LANG_ZH_TW = "zh-TW"
-SUPPORTED_LANGS = [LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW]
+SUPPORTED_LANGS = [LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW, LANG_JA]
 DEFAULT_LANG = LANG_EN
+
+def normalize_language(language: str | None) -> str:
+    """Canonicalize Japanese locale aliases without changing other provider codes."""
+    value = (language or "").strip()
+    if value.lower().replace("_", "-") in ("ja", "ja-jp"):
+        return LANG_JA
+    return value
+
 
 # LED state types (tracked in _user_led_state["type"])
 LST_SOLID = "solid"

@@ -9,7 +9,7 @@ import time
 from typing import Optional
 
 from hal.i18n import DEFAULT_FILLERS_BY_LANG
-from hal.presets import DEFAULT_LANG
+from hal.presets import DEFAULT_LANG, normalize_language
 
 logger = logging.getLogger("hal.voice.backchannel")
 
@@ -18,7 +18,7 @@ def _default_fillers_for_active_lang() -> str:
     """Pick the default filler list based on the OS server's stt_language."""
     try:
         from hal.config import _os_cfg_get
-        lang = (_os_cfg_get("stt_language") or "").strip()
+        lang = normalize_language(_os_cfg_get("stt_language"))
     except Exception:
         lang = ""
     return DEFAULT_FILLERS_BY_LANG.get(lang, DEFAULT_FILLERS_BY_LANG[DEFAULT_LANG])

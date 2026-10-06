@@ -1,5 +1,14 @@
 # OS Server API — Documentation
 
+## Japanese language support
+
+`stt_language: "ja"` selects Japanese. Japanese regional aliases such as `ja-JP`
+and `ja_JP` resolve to the same localized phrase pools. OS-server includes Japanese
+system notices, greetings, device-name prompts, chitchat and filler phrases; the
+agent receives Japanese language context. The ElevenLabs default for Japanese is
+`Shizuka`, with six native Japanese voices available in the shared voice catalog.
+See [Japanese voice selection](realtime-voice.md#japanese-language-and-elevenlabs-voices).
+
 Ambient LED restoration delegates to HAL `/led/restore` after the quiet window. OS does not choose a fallback color or breathing effect; each device declares `ambient_led.resting` in `presets.json`. HAL preserves explicit user off/color and active overlay ownership.
 
 > OS Server (Go, Gin framework) runs on port 5000.

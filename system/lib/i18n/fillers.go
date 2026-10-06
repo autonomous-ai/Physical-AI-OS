@@ -8,6 +8,7 @@ import (
 // Dead-air fillers: short TTS cues spoken while the agent is busy, with per-tool overrides.
 
 var fillerOpening = map[string][]string{
+	LangJA: {"うーん、考えてみるね", "わかった", "ちょっと待ってね", "うん", "見てみるね"},
 	LangEN: {
 		"Hmm, let me think", "Ok, got it", "Sure, one moment", "Right",
 		"Got it", "Alright", "Ok", "Sure", "One sec",
@@ -28,6 +29,7 @@ var fillerOpening = map[string][]string{
 
 // fillerRealtime holds quiet thinking sounds, not acknowledgements or promises.
 var fillerRealtime = map[string][]string{
+	LangJA:   {"うーん…", "ええと…"},
 	LangEN:   {"Hmm...", "Mm..."},
 	LangVI:   {"Ừm...", "Hừm..."},
 	LangZhCN: {"嗯...", "呃..."},
@@ -35,6 +37,7 @@ var fillerRealtime = map[string][]string{
 }
 
 var fillerContinuation = map[string][]string{
+	LangJA: {"うーん、見てみよう。", "ちょっと待ってね。", "試してみるね。", "確認してみるね。"},
 	LangEN: {
 		"Hmm, let's see.", "Yeah, one sec.", "Let me try.",
 		"Hang on a bit.", "Alright, let's look.",
@@ -53,6 +56,45 @@ var fillerContinuation = map[string][]string{
 
 // toolFillers maps lang -> FillerToolKey -> override pool.
 var toolFillers = map[string]map[string][]string{
+	LangJA: {
+		"search_files":         {"探してみるね。", "調べてみるね。"},
+		"memory_store":         {"覚えておくね。", "メモしておくね。"},
+		"audio_generate":       {"音声を準備するね。", "ちょっと待ってね。"},
+		"look_searching":       {"探してるよ。", "どこにいるかな？"},
+		"look_still_searching": {"まだ探してるよ。", "うーん…"},
+		"look_found":           {"そこにいたね。", "見つけた。"},
+		"look_lost":            {"見えなくなった。", "見失っちゃった。"},
+		"look_capturing":       {"見てみるね。", "うーん…"},
+		"demo_intro":           {"こんなことができるよ。", "見ててね。"},
+		"demo_left":            {"左の端まで。", "左いっぱいに。"},
+		"demo_right":           {"右の端まで。", "右いっぱいに。"},
+		"demo_up":              {"上も向けるよ。", "こんなふうに上へ。"},
+		"demo_down":            {"下にも。", "こんなふうに下へ。"},
+		"demo_done":            {"動ける範囲はここまで。", "これで全部だよ。"},
+		"demo_centre":          {"真ん中に戻るね。", "正面に戻るね。"},
+		"demo_head":            {"頭だけでも回せるよ。", "今度は頭だけ。"},
+		"demo_neck":            {"首も伸ばせるよ。", "首を上げて、下げる。"},
+		"demo_lean":            {"体も傾けられるよ。", "ちょっと傾けるね。"},
+		"web_search":           {"調べてみるね。", "うーん…"},
+		"x_search":             {"Xで調べるね。", "確認するね。"},
+		"web_fetch":            {"見てみるね。", "読んでみるね。"},
+		"read":                 {"読んでみるね。", "見てみるね。"},
+		"memory_search":        {"思い出してみるね。", "うーん…"},
+		"memory_get":           {"思い出してみるね。", "うーん…"},
+		"exec":                 {"試してみるね。", "ちょっと待ってね。"},
+		"process":              {"進めてるよ。", "ちょっと待ってね。"},
+		"image_generate":       {"描いてみるね。", "作ってるよ。"},
+		"video_generate":       {"動画を作るね。", "作ってるよ。"},
+		"music_generate":       {"曲を作るね。", "作ってるよ。"},
+		"update_plan":          {"整理してみるね。", "考えてみるね。"},
+		"session_status":       {"確認するね。", "見てみるね。"},
+		"apply_patch":          {"直してみるね。", "試してみるね。"},
+		"pdf":                  {"読んでみるね。", "見てみるね。"},
+		"canvas":               {"描いてみるね。", "試してみるね。"},
+		"nodes":                {"試してみるね。", "うーん…"},
+		"subagents":            {"手伝ってもらうね。", "確認するね。"},
+		"image":                {"見てみるね。", "確認するね。"},
+	},
 	LangEN: {
 		"search_files":   {"Looking it up.", "Let me check."},
 		"memory_store":   {"Making a note.", "One sec."},
@@ -216,7 +258,7 @@ var toolFillers = map[string]map[string][]string{
 
 // FillerOpening returns the first-of-turn filler pool for lang (English fallback).
 func FillerOpening(lang string) []string {
-	if p, ok := fillerOpening[lang]; ok && len(p) > 0 {
+	if p, ok := fillerOpening[NormalizeLang(lang)]; ok && len(p) > 0 {
 		return applyNameAll(p)
 	}
 	return applyNameAll(fillerOpening[fallbackLang])
@@ -224,7 +266,7 @@ func FillerOpening(lang string) []string {
 
 // FillerRealtime returns the realtime-wait filler pool for lang (English fallback).
 func FillerRealtime(lang string) []string {
-	if p, ok := fillerRealtime[lang]; ok && len(p) > 0 {
+	if p, ok := fillerRealtime[NormalizeLang(lang)]; ok && len(p) > 0 {
 		return applyNameAll(p)
 	}
 	return applyNameAll(fillerRealtime[fallbackLang])
@@ -232,7 +274,7 @@ func FillerRealtime(lang string) []string {
 
 // FillerContinuation returns the between-tools filler pool for lang (English fallback).
 func FillerContinuation(lang string) []string {
-	if p, ok := fillerContinuation[lang]; ok && len(p) > 0 {
+	if p, ok := fillerContinuation[NormalizeLang(lang)]; ok && len(p) > 0 {
 		return applyNameAll(p)
 	}
 	return applyNameAll(fillerContinuation[fallbackLang])
@@ -335,7 +377,7 @@ func FillerForTool(lang, tool string) []string {
 	if tool = FillerToolKey(tool); tool == "" {
 		return nil
 	}
-	pools, ok := toolFillers[lang]
+	pools, ok := toolFillers[NormalizeLang(lang)]
 	if !ok {
 		pools = toolFillers[fallbackLang]
 	}

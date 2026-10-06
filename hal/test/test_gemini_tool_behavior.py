@@ -63,7 +63,8 @@ def test_input_language_hint_serializes_for_developer_api():
 def test_input_language_hint_opt_in_and_preserves_locale():
     for language, enabled, expected in [
         ("vi", False, None), (None, True, None), ("", True, None),
-        ("fr-FR", True, ["fr-FR"]), ("vi-VN", True, ["vi-VN"]),
+        ("ja", True, ["ja-JP"]), ("ja-JP", True, ["ja-JP"]),
+        ("ja", False, None), ("fr-FR", True, ["fr-FR"]), ("vi-VN", True, ["vi-VN"]),
     ]:
         cfg = _build("gemini-3.8-live-extended-thinking", language, enabled)
         hints = cfg.input_audio_transcription.language_hints

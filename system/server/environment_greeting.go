@@ -28,6 +28,8 @@ func sendWakeGreetingWithEnvironment(prompt string, startup *environment.Startup
 
 func environmentGreetingGuidance() string {
 	switch i18n.Lang() {
+	case i18n.LangJA:
+		return "添付の環境データは準備状況の確認を通過しています。environmentスキルに従い、必要に応じて有用な測定値を1〜2個、短い一文で挨拶に添えてください。1回の測定から傾向や安全性を推測したり、全項目を読み上げたり、センサーを待つためにツールを呼び出したりしないでください。"
 	case i18n.LangVI:
 		return "Dữ liệu môi trường kèm theo đã đủ điều kiện sử dụng. Theo skill environment, có thể thêm tối đa một câu ngắn về 1–2 số đo hữu ích vào lời chào. Không suy ra xu hướng hay mức an toàn từ một mẫu, không đọc toàn bộ bảng và không gọi thêm công cụ để chờ sensor."
 	case i18n.LangZhCN:

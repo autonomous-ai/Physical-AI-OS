@@ -6,6 +6,8 @@ func TestDefaultElevenLabsVoiceForLang(t *testing.T) {
 	cases := map[string]string{
 		"vi":    "Ngan",
 		"vi-VN": "Ngan",
+		"ja":    "Shizuka",
+		"ja-JP": "Shizuka",
 		"zh-CN": "Amy",
 		"zh-TW": "Amy",
 		"zh":    "Amy",
