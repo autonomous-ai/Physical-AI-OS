@@ -21,6 +21,8 @@ var openclawStatePaths = []string{
 	"/root/.openclaw/agents",
 	"/root/.openclaw/workspace",
 	"/root/.openclaw/workspace-attestations",
+	// 2026.9.x state DB records the workspace as attested; left behind, onboard refuses to reseed the wiped workspace.
+	"/root/.openclaw/state",
 	"/root/.openclaw/devices",
 	"/root/.openclaw/tasks",
 	"/root/.openclaw/logs",
