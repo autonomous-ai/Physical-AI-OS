@@ -1,5 +1,7 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
+Yêu cầu sleep/wake hướng tới thiết bị (kể cả “Can you sleep?”) được chuyển im lặng sang main, không trả lời như câu hỏi về bản thân. Main vẫn kiểm tra khả năng và điều kiện chặn sleep khi bật Harness voice, chỉ xác nhận kết quả thực tế. “Do robots need sleep?” là kiến thức chung; “I can’t sleep” nói về sức khỏe người dùng, không phải lệnh cho máy ngủ. Quy tắc áp dụng cho mọi prompt realtime, kể cả GPT Live backend.
+
 ## Tiếng Nhật và giọng ElevenLabs
 
 Dùng `stt_language: "ja"` cho tiếng Nhật. HAL có phrase tiếng Nhật cho thông báo

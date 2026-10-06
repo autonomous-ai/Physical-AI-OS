@@ -1,5 +1,7 @@
 # Realtime Voice Agent
 
+Sleep/wake requests addressed to the device (including “Can you sleep?”) delegate silently to main rather than receiving an identity/chat reply. Main retains capability checks and Harness voice sleep restrictions, and confirms only the actual outcome. “Do robots need sleep?” remains general knowledge; “I can’t sleep” is user wellbeing, not a device sleep command. This rule applies to all realtime provider prompts, including the GPT Live backend.
+
 ## Japanese language and ElevenLabs voices
 
 Use `stt_language: "ja"` for Japanese. HAL includes Japanese spoken status,
