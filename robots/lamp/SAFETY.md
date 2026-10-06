@@ -26,7 +26,7 @@ motion:
 thermal:
   max_temp_c: 95             # SoC °C → health event (/health) + stop tracking. PROVISIONAL: this SoC idles hot (~80–90°C normal); verify the board's critical trip in /sys/class/thermal/.../trip_point_*_temp and tune
   # resume_temp_c: 85        # (optional) clears the over-state on cool-down; defaults to max_temp_c - 10
-  # (over-current is a separate, reserved fail-safe — no servo current sensor wired; see the table below)
+  # (servo overload is a separate driver-level fail-safe, set in servo_overload.json next to this file rather than here; see the table below)
 ---
 
 # SAFETY.md — Autonomous Lamp
@@ -95,7 +95,7 @@ spirit of "what isn't enforced isn't claimed as enforced").
 | Board / driver fault | Disable the faulting capability, keep the rest, report health | **yes** — per-capability `503` isolation in HAL routes + `/health` |
 | Setup incomplete | Setup / identity reflexes only | reserved — not gated in the runtime yet |
 | Thermal (SoC over-temp) | At SoC temp ≥ `thermal.max_temp_c`: health event on `/health` + stop discretionary tracking; clears on cool-down to `resume_temp_c` (hysteresis). Idle stays alive | **yes** (when `thermal` declared) — background monitor reads `/sys/class/thermal` |
-| Over-current (servo) | Halt motion, surface a health event | reserved — **no servo current sensor wired** |
+| Servo overload (stall) | A joint at ≥ 80 % drive load for 1 s: halt motion, cut torque on all servos (arm goes limp, no park move), stop tracking, play the ack chime; no motion for 120 s, then resume into idle. Surfaced on `/health` | **yes** — feetech driver reads each servo's own `Present_Load` over the bus (no current sensor); thresholds in `robots/lamp/servo_overload.json`. Provisional, not yet measured on hardware |
 
 Idle animation is local and self-contained, so the device stays "alive" (breathing,
 emoting) when the cloud is gone rather than freezing — only *agent-driven* tracking and

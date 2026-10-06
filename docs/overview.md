@@ -170,6 +170,14 @@ the new runtime and swipe configuration were deployed to Lamp `lamp-0c4e` on
 See [physical controls](../robots/lamp/docs/physical-controls.md) for configuration
 and gesture details.
 
+Servo overload thresholds are device-owned too, in `robots/lamp/servo_overload.json`
+(`boards` map: `load`, `hold_s`, `retry_s`, optional `enabled`), read by
+`hal/board/servo_overload.py`. A joint at or above `load` for `hold_s` makes the
+feetech driver cut torque on every servo, chime and refuse motion for `retry_s`
+before resuming; no file, no board entry or `enabled: false` means no cut-off, and
+a malformed file rejects startup. Lamp ships 80 % / 1 s / 120 s (provisional). See
+the fail-safe section of [safety](safety.md).
+
 ## Principles
 
 - **Hardware is a plugin** — plug in and it works, unplug and it's skipped

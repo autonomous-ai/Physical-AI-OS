@@ -75,7 +75,7 @@ mới là pass-through.
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (theo giờ) + `audio_quiet_now` | gate LED + route music | **đã thực thi (v1)** |
 | 3 | `motion.max_speed` (theo sự hiện diện) | `min_move_duration` | route servo | **đã thực thi (v1)** (`max_accel` dự trữ) |
 | 3b | `motion.stop_always` | — | — | **được khai báo / đảm bảo theo cấu trúc** — chưa có route-level gate nào dùng field này (xem bên dưới) |
-| 4 | trạng thái fail-safe (mất mạng/gateway → dừng tracking; lỗi board → cô lập `503`; `thermal.max_temp_c` → health event quá nhiệt SoC + dừng tracking; setup + quá dòng servo dự trữ) | hook WS-disconnect + `503` theo từng capability + monitor nhiệt (`thermal_over`/`read_soc_temp_c`) | `services` khi gateway WS disconnect + route HAL/`/health` + `server.py` `_thermal_monitor` | **thực thi một phần (v1)** (setup + quá dòng dự trữ) |
+| 4 | trạng thái fail-safe (mất mạng/gateway → dừng tracking; lỗi board → cô lập `503`; `thermal.max_temp_c` → health event quá nhiệt SoC + dừng tracking; quá tải servo → cắt torque + chime + thử lại theo giờ; setup dự trữ) | hook WS-disconnect + `503` theo từng capability + monitor nhiệt (`thermal_over`/`read_soc_temp_c`) + overload guard (`OverloadGuard`) | `services` khi gateway WS disconnect + route HAL/`/health` + `server.py` `_thermal_monitor` + `animation_service.py` `_overload_tick` | **thực thi một phần (v1)** (setup dự trữ) |
 | 5 | trần `audio.max_volume` | `clamp_volume` | route `/audio/volume`, phía trên chỗ rẽ nhánh loa/sink BT | **thực thi (v1)** |
 | 6 | `motion.max_cog_offset_mm` (theo sự hiện diện) | chấm trọng tâm toàn thân theo từng frame (`recording_stability.py`) | lúc load recording (`resample_recording`), cả driver thật lẫn mock | **thực thi (v1)** |
 
@@ -357,8 +357,8 @@ rồi mới giữ nguyên body.
 ### Slice 4 — trạng thái fail-safe (checklist)
 
 Fail-safe **theo trạng thái** chứ không clamp từng request: khi thiết bị mất một phụ
-thuộc tới hạn, nó rơi về tư thế an toàn một cách tất định, *dưới* tầng agent. Ba điều
-kiện đã thực thi; setup-incomplete và over-current servo còn dự trữ.
+thuộc tới hạn, nó rơi về tư thế an toàn một cách tất định, *dưới* tầng agent. Bốn điều
+kiện đã thực thi; setup-incomplete còn dự trữ.
 
 - [x] **Mất mạng / gateway → dừng tracking do agent điều khiển.** Khi gateway
       WebSocket disconnect, `runtimes/openclaw/service_ws.go` gọi
@@ -380,8 +380,31 @@ kiện đã thực thi; setup-incomplete và over-current servo còn dự trữ.
       critical trip riêng của board, không đoán chung chung.
 - [ ] **Setup chưa xong → dự trữ.** Chưa gate trong runtime (chỉ reflex setup/identity
       là ý định đã khai, chưa thực thi).
-- [ ] **Quá dòng (servo) → dự trữ.** Không có cảm biến dòng servo trên phần cứng; dự trữ
-      cho phần cứng/telemetry lộ ra được nó.
+- [x] **Quá tải servo (kẹt) → cắt torque, chime, thử lại theo giờ.** Bảo vệ bánh răng
+      khi tay đèn bị chặn hoặc bị ép. Ở tầng driver, chỉ cho feetech
+      (`AnimationService`), do device quản lý: ngưỡng lấy từ
+      `robots/<device>/servo_overload.json` (map `boards` với `load`, `hold_s`,
+      `retry_s`, `enabled` tùy chọn), đọc bởi `hal/board/servo_overload.py`; không có
+      file, không có entry board hoặc `enabled: false` nghĩa là không có cut-off, còn
+      file sai định dạng làm boot thất bại. Đây không phải field của `SAFETY.md`. Không
+      cần cảm biến dòng: một thread monitor đọc `Present_Load` của mọi khớp (register 60
+      của STS3215, duty điều khiển theo đơn vị 0,1 %) mỗi 100 ms. Khớp nào ở mức `load`
+      trở lên (Lamp: `800` = 80 %) trong `hold_s` (Lamp: `1.0` s) sẽ trip
+      `OverloadGuard` thuần (`hal/drivers/motors/overload.py`). Khi trip, driver dừng chuyển động đang
+      chạy và ghi `Torque_Enable=0` cho mọi servo, **không có bước park** (tay đang bị
+      chặn nên thả lỏng tại chỗ); runtime sau đó phát ack chime và dừng vision tracker.
+      Trong `retry_s` (Lamp: `120` s) không goal nào tới được bus, vì ghi
+      goal sẽ bật lại torque trên loại servo này: frame của playback và tracker bị bỏ,
+      `/servo/move`, `/servo/aim` và `/servo/nudge` lỗi với "Servo overload cut-off
+      active", còn các bước startup / zero / park và bật torque bị bỏ qua. Hết thời gian
+      chờ, thân máy trở lại qua đường `resume()` bình thường (bật torque, đọc lại trạng
+      thái từ phần cứng, ramp vào idle; hold trước đó bị bỏ). Nếu trong lúc đó nó đã được
+      release (ngủ) hoặc zero-pose thì vẫn thả lỏng tới lần resume kế tiếp. Vẫn bị chặn
+      → trip lại. Đọc load lỗi không bao giờ trip. Lộ ra ở `GET /health.servo_overload`
+      (`active`, `retry_in_s`, `trips`, `last_trip`, cùng `load` / `peak` theo từng khớp
+      để tinh chỉnh). **Giá trị 80 % / 1 s của Lamp là tạm thời — chưa đo trên phần
+      cứng**; so `peak` khi chạy animation bình thường với ngưỡng trước khi tin dùng.
+      Chỉ Lamp kèm file này.
 - [x] **Unit:** `thermal_over` trip tại/trên `max_temp_c`, giữ qua hysteresis khi còn
       trên `resume_temp_c`, clear tại/dưới nó, và là False khi không có policy / không có
       section thermal / nhiệt không đọc được; `read_soc_temp_c` parse millidegrees → °C và

@@ -50,6 +50,7 @@ from hal.config import (
 )
 from hal.models import HealthResponse, StatusResponse
 from hal.presets import SERVO_CMD_PLAY
+from hal.drivers.motors.overload import OverloadGuard
 from hal.server_support.openapi_meta import API_DESCRIPTION, OPENAPI_TAGS
 
 from hal.server_support.log_setup import setup_logging
@@ -326,6 +327,12 @@ async def lifespan(app: FastAPI):
                     port=SERVO_PORT, lamp_id=DEVICE_ID, fps=SERVO_FPS,
                     duration=SERVO_PLAY_RAMP_S, hold_s=SERVO_HOLD_S,
                     safety_policy=_safety, geometry=_geometry,
+                    overload_guard=(
+                        OverloadGuard(_servo_overload_config.load, _servo_overload_config.hold_s,
+                                      _servo_overload_config.retry_s)
+                        if _servo_overload_config else None
+                    ),
+                    on_overload=_on_servo_overload,
                 )
             else:
                 # SDK backends carry the safety policy themselves.
@@ -1054,6 +1061,27 @@ def _thermal_monitor(policy, interval: float = 10.0):
         _thermal_stop.wait(interval)
 
 
+def _on_servo_overload(joint: str, load: int) -> None:
+    """Servo overload cut-off fired: sound the ack chime and stop the tracker."""
+    # Chime first: stopping the tracker joins its thread and can take a moment.
+    try:
+        if state.tts_service is not None:
+            state.tts_service.play_ack_chime()
+    except Exception as e:
+        logger.warning("[overload] chime failed: %s", e)
+    try:
+        if state.tracker_service and state.tracker_service.is_tracking:
+            state.tracker_service.stop()
+    except Exception as e:
+        logger.warning("[overload] stop tracking failed: %s", e)
+
+
+def _servo_overload_view():
+    """Servo overload cut-off status for GET /health — null when the driver has none."""
+    status = getattr(state.animation_service, "overload_status", None)
+    return status() if status else None
+
+
 def _thermal_view():
     """Thermal status for GET /health — null when no `thermal` bound is declared."""
     if not (_safety and _safety.thermal):
@@ -1087,6 +1115,13 @@ from hal.board.mpr121 import load_mpr121_config
 
 _mpr121_config = (
     None if _board_id in {"sim", "host"} else load_mpr121_config(_device_dir, _board_id)
+)
+
+from hal.board.servo_overload import load_servo_overload_config
+
+# Servo overload cut-off thresholds (feetech driver only); no file or entry = off.
+_servo_overload_config = (
+    None if _board_id in {"sim", "host"} else load_servo_overload_config(_device_dir, _board_id)
 )
 
 _environment_group = None
@@ -1309,6 +1344,7 @@ def health():
         else False,
         "display": state.display_service is not None,
         "thermal": _thermal_view(),
+        "servo_overload": _servo_overload_view(),
     }
 
 

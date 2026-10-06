@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
+from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
 logger = logging.getLogger(__name__)
@@ -43,6 +44,9 @@ REST_RAW = {
 
 STARTUP_MOVE_DURATION = 5.0
 
+# How often the overload cut-off samples Present_Load.
+OVERLOAD_POLL_S = 0.1
+
 from hal.drivers.motors.recording_timing import (  # noqa: E402
     RECORDING_TIME_COLUMN,
     SERVO_MAX_DPS,
@@ -68,7 +72,9 @@ def _motor_positions_from_bus(robot: LeLampFollower) -> Dict[str, float]:
 
 
 class AnimationService:
-    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None, geometry=None):
+    def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None, geometry=None,
+                 overload_guard: Optional[OverloadGuard] = None,
+                 on_overload: Optional[Callable[[str, int], None]] = None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
@@ -143,6 +149,15 @@ class AnimationService:
 
         self._idle_settled = False
 
+        # Overload cut-off (gear protection); None leaves it off. on_overload(joint,
+        # load) runs after the torque is cut, for what this service cannot reach
+        # (tracker, chime).
+        self._overload = overload_guard
+        self._on_overload = on_overload
+        self._overload_stop = threading.Event()
+        self._overload_thread: Optional[threading.Thread] = None
+        self._overload_read_ok = True
+
     @property
     def _tracking_active(self) -> bool:
         """True while anything owns the body — a flag holder or a live writer."""
@@ -202,6 +217,9 @@ class AnimationService:
 
     def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot."""
+        locked_out = energize and self.overload_active
+        if locked_out:
+            energize = False
         with self.bus_lock:
             ph = self.robot.bus.port_handler
             pk = self.robot.bus.packet_handler
@@ -228,7 +246,7 @@ class AnimationService:
                 logger.info(
                     f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
                     + (f", speed={rest_speed}" if rest_speed is not None else "")
-                    + f", torque {'ON' if energize else 'OFF (asleep)'}"
+                    + f", torque {'ON' if energize else 'OFF (overload cut-off)' if locked_out else 'OFF (asleep)'}"
                 )
 
     def start(self, skip_wake: bool = False):
@@ -251,6 +269,16 @@ class AnimationService:
         self._running.set()
         self._event_thread = threading.Thread(target=self._event_loop, daemon=True)
         self._event_thread.start()
+        if self._overload is not None and self._overload.enabled:
+            self._overload_stop.clear()
+            self._overload_thread = threading.Thread(
+                target=self._overload_loop, daemon=True, name="servo-overload",
+            )
+            self._overload_thread.start()
+            logger.info(
+                "Overload cut-off armed: load >= %.1f%% for %.1fs cuts torque, retry after %.0fs",
+                self._overload.threshold / 10.0, self._overload.hold_s, self._overload.retry_s,
+            )
         if skip_wake:
             logger.info("Servo startup move + idle skipped -- device was asleep")
             return
@@ -259,6 +287,9 @@ class AnimationService:
         self.dispatch(SERVO_CMD_PLAY, self.idle_recording)
 
     def stop(self, timeout: float = 5.0):
+        self._overload_stop.set()
+        if self._overload_thread and self._overload_thread.is_alive():
+            self._overload_thread.join(timeout=timeout)
         self._running.clear()
         if self._event_thread and self._event_thread.is_alive():
             self._event_thread.join(timeout=timeout)
@@ -652,6 +683,7 @@ class AnimationService:
         """Smoothly move servos to target positions using software interpolation."""
         if not self.robot:
             raise RuntimeError("Robot not connected")
+        self._refuse_if_overloaded()
         self._begin_motion()
 
         try:
@@ -713,6 +745,7 @@ class AnimationService:
 
     def move_and_hold(self, target_positions: Dict[str, float], duration: float = DEFAULT_MOVE_DURATION):
         """Take over the servo for an explicit /servo/move or /servo/nudge."""
+        self._refuse_if_overloaded()
         # Preempt: drop any recording the event loop is playing so it stops sending its
         # frames.
         if self._current_recording is not None:
@@ -751,6 +784,10 @@ class AnimationService:
         """
         if not self.robot:
             raise RuntimeError("Robot not connected")
+        if self.overload_active:
+            # Startup, zero and park moves are skipped, not failed: the arm is already limp.
+            logger.info("move_to_raw skipped — overload cut-off active")
+            return
 
         GOAL_POSITION_REG = 42
         PRESENT_POSITION_REG = 56
@@ -824,6 +861,7 @@ class AnimationService:
         """Write joint positions directly (one-shot, no interpolation)."""
         if not self.robot:
             raise RuntimeError("Robot not connected")
+        self._refuse_if_overloaded()
         with self.bus_lock:
             self.robot.send_action(positions)
 
@@ -935,6 +973,108 @@ class AnimationService:
         )
         self._event_thread.start()
         logger.info("Servo resumed from zero-hold mode")
+
+    # --- Overload cut-off (gear protection) --------------------------------------
+
+    @property
+    def overload_active(self) -> bool:
+        """True while the overload cut-off holds the servos limp."""
+        return self._overload is not None and self._overload.locked
+
+    def _refuse_if_overloaded(self) -> None:
+        if self.overload_active:
+            raise RuntimeError(
+                "Servo overload cut-off active; retrying in %.0fs" % self._overload.retry_in_s()
+            )
+
+    def overload_status(self) -> Optional[Dict[str, Any]]:
+        """Cut-off state for GET /health; None when the feature is off."""
+        guard = self._overload
+        if guard is None or not guard.enabled:
+            return None
+        last = guard.last_trip
+        return {
+            "active": guard.locked,
+            "retry_in_s": round(guard.retry_in_s(), 1),
+            "threshold": guard.threshold,
+            "hold_s": guard.hold_s,
+            "retry_s": guard.retry_s,
+            "trips": guard.trips,
+            "last_trip": {"joint": last[0], "load": last[1]} if last else None,
+            "load": dict(guard.load),
+            "peak": dict(guard.peak),
+        }
+
+    def _overload_loop(self):
+        while not self._overload_stop.wait(OVERLOAD_POLL_S):
+            try:
+                self._overload_tick()
+            except Exception as e:
+                logger.warning("[overload] monitor tick failed: %s", e)
+
+    def _overload_tick(self) -> None:
+        """One pass: end a finished lockout, otherwise sample load and cut if it stalled."""
+        guard = self._overload
+        if guard.locked:
+            if guard.retry_due():
+                self._overload_recover()
+            return
+        tripped = guard.observe(self._read_loads())
+        if tripped:
+            self._overload_cut(*tripped)
+
+    def _read_loads(self) -> Optional[Dict[str, int]]:
+        """Per-joint Present_Load magnitude (0..1000), or None when the bus read fails."""
+        try:
+            with self.bus_lock:
+                raw = self.robot.bus.sync_read("Present_Load", normalize=False)
+        except Exception as e:
+            if self._overload_read_ok:
+                logger.warning("[overload] Present_Load read failed — cut-off blind until it recovers: %s", e)
+            self._overload_read_ok = False
+            return None
+        if not self._overload_read_ok:
+            logger.info("[overload] Present_Load read recovered")
+        self._overload_read_ok = True
+        return {motor: load_magnitude(val) for motor, val in raw.items()}
+
+    def _overload_cut(self, joint: str, load: int) -> None:
+        """Stop motion and cut torque on every servo. No park move: the arm is blocked."""
+        guard = self._overload
+        logger.warning(
+            "[overload] %s load %.1f%% >= %.1f%% for %.1fs — cutting torque, retry in %.0fs",
+            joint, load / 10.0, guard.threshold / 10.0, guard.hold_s, guard.retry_s,
+        )
+        self._halt.set()
+        errors: Dict[str, str] = {}
+        # Block and cut under one lock hold, so no goal write can land in between and
+        # re-engage torque.
+        with self.bus_lock:
+            self.robot.goal_writes_blocked = True
+            for motor_name in self.robot.bus.motors:
+                try:
+                    self.robot.bus.write("Torque_Enable", motor_name, 0)
+                except Exception as e:
+                    errors[motor_name] = str(e)
+        if errors:
+            logger.warning("[overload] torque-off errors (offline?): %s", errors)
+        if self._on_overload is not None:
+            try:
+                self._on_overload(joint, load)
+            except Exception as e:
+                logger.warning("[overload] on_overload handler failed: %s", e)
+
+    def _overload_recover(self) -> None:
+        """Lockout over: allow goal writes again and bring the body back like a resume."""
+        with self.bus_lock:
+            if self.robot:
+                self.robot.goal_writes_blocked = False
+        if not self._running.is_set():
+            # Released (asleep) or zero-posed meanwhile: torque stays off for the next resume.
+            logger.info("[overload] lockout over — body is parked, torque stays off until resume")
+            return
+        logger.info("[overload] lockout over — re-enabling servos")
+        self.resume()
 
     def joint_status(self) -> Dict[str, dict]:
         """Per-joint online/offline status with angle and servo ID."""

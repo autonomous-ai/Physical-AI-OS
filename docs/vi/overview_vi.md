@@ -171,6 +171,14 @@ ngày 2026-09-11, xác minh startup thành công. Chờ live test cử chỉ.
 Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.md) để
 biết cấu hình và chi tiết cử chỉ.
 
+Ngưỡng quá tải servo cũng do device quản lý, trong `robots/lamp/servo_overload.json`
+(map `boards`: `load`, `hold_s`, `retry_s`, `enabled` tùy chọn), đọc bởi
+`hal/board/servo_overload.py`. Khớp nào ở mức `load` trở lên trong `hold_s` sẽ làm
+driver feetech cắt torque mọi servo, phát chime và từ chối chuyển động trong `retry_s`
+rồi mới resume; không có file, không có entry board hoặc `enabled: false` nghĩa là
+không có cut-off, còn file sai định dạng bị từ chối khi startup. Lamp kèm 80 % / 1 s /
+120 s (tạm thời). Xem phần fail-safe của [an toàn](safety_vi.md).
+
 ## Nguyên Tắc
 
 - **Hardware là plugin** — cắm vào thì play, không cắm thì skip

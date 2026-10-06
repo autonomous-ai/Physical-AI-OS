@@ -77,7 +77,7 @@ pass-through.
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (time-aware) + `audio_quiet_now` | LED gate + music route | **enforced (v1)** |
 | 3 | `motion.max_speed` (presence-driven) | `min_move_duration` | servo route | **enforced (v1)** (`max_accel` reserved) |
 | 3b | `motion.stop_always` | — | — | **declared / structurally guaranteed** — no route-level gate consumes this field (see below) |
-| 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; setup + servo over-current reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` | **partially enforced (v1)** (setup + over-current reserved) |
+| 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; servo overload → torque cut-off + chime + timed retry; setup reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) + overload guard (`OverloadGuard`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` + `animation_service.py` `_overload_tick` | **partially enforced (v1)** (setup reserved) |
 | 5 | `audio.max_volume` ceiling | `clamp_volume` | `/audio/volume` route, above the speaker/BT-sink split | **enforced (v1)** |
 | 6 | `motion.max_cog_offset_mm` (presence-driven) | whole-body centre-of-gravity score per frame (`recording_stability.py`) | recording load (`resample_recording`), physical + mock drivers | **enforced (v1)** |
 
@@ -376,7 +376,7 @@ the body.
 
 Fail-safe is **state-driven** rather than per-request clamping: when the device loses a
 critical dependency it falls into a safe posture deterministically, below the agent.
-Three conditions are enforced today; setup-incomplete and servo over-current are reserved.
+Four conditions are enforced today; setup-incomplete is reserved.
 
 - [x] **Network / gateway loss → stop agent-driven tracking.** On gateway WebSocket
       disconnect, `runtimes/openclaw/service_ws.go` calls
@@ -398,8 +398,31 @@ Three conditions are enforced today; setup-incomplete and servo over-current are
       Threshold is SoC-specific — read the board's own critical trip, not a generic guess.
 - [ ] **Setup incomplete → reserved.** Not gated in the runtime yet (setup/identity
       reflexes only is declared intent, not enforced).
-- [ ] **Over-current (servo) → reserved.** No servo current sensor wired; reserved for
-      hardware/telemetry that exposes it.
+- [x] **Servo overload (stall) → cut torque, chime, timed retry.** Gear protection for
+      a blocked or forced arm. Driver-level and feetech-only (`AnimationService`),
+      device-owned: thresholds come from `robots/<device>/servo_overload.json` (a
+      `boards` map with `load`, `hold_s`, `retry_s`, optional `enabled`), read by
+      `hal/board/servo_overload.py`; no file, no board entry or `enabled: false` means
+      no cut-off, and a malformed file fails boot. It is not a `SAFETY.md` field. No
+      current sensor is needed: a monitor thread reads every joint's `Present_Load`
+      (STS3215 register 60, the drive duty in 0.1 % units) every 100 ms. A joint at or
+      above `load` (Lamp: `800` = 80 %) for `hold_s` (Lamp: `1.0` s) trips the pure
+      `OverloadGuard` (`hal/drivers/motors/overload.py`). On
+      trip the driver halts motion in flight and writes `Torque_Enable=0` to all servos
+      with **no park move** (the arm is blocked, so it goes limp where it is); the
+      runtime then plays the ack chime and stops the vision tracker. For `retry_s`
+      (Lamp: `120` s) no goal reaches the bus, because a goal
+      write re-engages torque on these servos: playback and tracker frames are dropped,
+      `/servo/move`, `/servo/aim` and `/servo/nudge` fail with "Servo overload cut-off
+      active", and startup / zero / park moves and torque-on are skipped. After the
+      delay the body comes back through the normal `resume()` path (torque on, state
+      re-read from hardware, ramp into idle; an earlier hold is dropped). If it was
+      released (asleep) or zero-posed meanwhile it stays limp until the next resume.
+      Still blocked → it trips again. A failed load read never trips. Surfaced at
+      `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `last_trip`, and
+      per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
+      yet measured on hardware**; compare `peak` during normal animation with the
+      threshold before relying on it. Only Lamp ships the file.
 - [x] **Unit:** `thermal_over` trips at/above `max_temp_c`, holds through hysteresis
       above `resume_temp_c`, clears at/below it, and is False with no policy / no thermal
       section / unreadable temp; `read_soc_temp_c` parses millidegrees → °C and returns

@@ -1,0 +1,10 @@
+{
+  "boards": {
+    "orangepi_sun60": {
+      "enabled": true,
+      "load": 800,
+      "hold_s": 1.0,
+      "retry_s": 120
+    }
+  }
+}

@@ -95,6 +95,17 @@ clip thì không. Phải tính lại hằng số này nếu phân bố khối l�
 
 [#271]: https://github.com/autonomous-ai/autonomous-os/issues/271
 
+## Cắt torque khi quá tải
+
+Playback cũng là nơi lộ ra việc tay đèn bị chặn: quỹ đạo vẫn tiến trong khi một khớp
+không theo kịp, và servo đẩy hết mức. Vì vậy `AnimationService` lấy mẫu `Present_Load`
+của mọi khớp ở 10 Hz (`hal/drivers/motors/overload.py`). Khớp nào ở mức 80 % trở lên
+trong 1 s sẽ làm cắt torque mọi servo, phát ack chime và chặn mọi lệnh ghi goal trong
+120 s; frame recording gửi trong khoảng đó bị bỏ, không xếp hàng lại. Sau đó thân máy
+resume vào idle từ vị trí tay đang nằm. Ngưỡng (`load`, `hold_s`, `retry_s`) do
+device quản lý trong `robots/lamp/servo_overload.json`; hành vi đầy đủ nằm ở phần
+fail-safe của [`docs/vi/safety_vi.md`](../../../../docs/vi/safety_vi.md).
+
 ## Demo tầm chuyển động — tính ra, không thu sẵn
 
 `POST /servo/demo` (`hal/drivers/motors/range_demo.py`) trình diễn một vòng dạo
