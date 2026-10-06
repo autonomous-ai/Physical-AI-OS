@@ -1,14 +1,14 @@
 # Physical AI Operating System
 
-## The "Android" for physical AI agents.
+We're building the the "Android" for physical AI agents.
 
 Give Hermes, Claude Code, Codex, and other AI agents eyes, ears, a voice, and a body they can control.
 
 **Bring your AI agents into the physical world.**
 
-https://github.com/user-attachments/assets/c80f1255-4355-4f59-9114-6d3b8d4007a2
-
 **[Start with Lamp](#autonomous-lamp)** · [Bring your own robot](docs/bring-your-own-robot.md) · [Build a physical skill](#physical-skills)
+
+https://github.com/user-attachments/assets/c80f1255-4355-4f59-9114-6d3b8d4007a2
 
 ## Choose your agent
 
