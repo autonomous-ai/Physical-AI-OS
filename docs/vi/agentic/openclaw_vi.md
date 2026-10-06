@@ -56,3 +56,22 @@ Contract native được đối chiếu với OpenClaw 2026.2.23 đã cài và
 Các kiểm tra local không đồng nghĩa đã gọi Jev thật, deploy thiết bị hay test tích
 hợp đầy đủ gateway/kênh. Hook bản cũ không cung cấp metadata attachment có cấu trúc;
 chỉ nhận diện được field attachment được truyền vào và marker trong văn bản.
+
+## Dấu xác nhận workspace (OpenClaw >= 2026.9)
+
+Khi tạo workspace, OpenClaw ghi một dấu xác nhận (attestation) vào
+`/root/.openclaw/state/openclaw.sqlite` (bảng `workspace_setup_state` và các bảng
+liên quan). Trong 24 giờ sau đó, `openclaw onboard` từ chối tạo lại một workspace
+trông như đã bị xoá (`WorkspaceVanishedError: … Refusing to reseed BOOTSTRAP.md
+over a recently attested workspace`), làm setup thất bại với `agent_setup_failed`.
+
+- **Factory reset** (`runtimes/openclaw/reset.go`) xoá `/root/.openclaw/state`
+  cùng với workspace, nên setup ngay sau reset vẫn onboard lại được.
+- **Build ảnh** (`scripts/imager/build*.sh`) chạy `openclaw onboard` trong chroot
+  (tối đa 180 giây), rồi xoá các dòng workspace trong database state và các file
+  dấu xác nhận kiểu cũ. Vì vậy ảnh build vài giờ trước lần setup đầu tiên không
+  mang theo dấu xác nhận mới, kể cả khi onboard trong chroot bị timeout và để lại
+  workspace trống.
+
+Máy đã bị kẹt lỗi này: chạy `sudo rm -rf /root/.openclaw/state
+/root/.openclaw/workspace-attestations` rồi setup lại.
