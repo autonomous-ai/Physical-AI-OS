@@ -1,6 +1,7 @@
 package device
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"log/slog"
@@ -377,9 +378,16 @@ func (s *Service) Setup(data domain.SetupRequest) error {
 		return &stageError{reason: failureAgentTimeout, err: fmt.Errorf("agent gateway ready timeout, something went wrong")}
 	}
 
+	ready := s.setupRuntime.begin()
 	s.config.SetUpCompleted = true
 	if err := s.config.Save(); err != nil {
-		slog.Error("save config failed", "component", "device", "error", err)
+		s.finishSetupRuntime(ready, err)
+		return &stageError{reason: FailureSetupRuntime, err: err}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), setupRuntimeTimeout)
+	defer cancel()
+	if err := s.waitSetupRuntime(ctx, ready); err != nil {
+		return &stageError{reason: FailureSetupRuntime, err: err}
 	}
 	// Discard the white AP cue before the deferred clear calls /led/restore.
 	hal.ResetLEDToResting()

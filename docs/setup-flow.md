@@ -26,11 +26,12 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       opened the Setup popup can look the IP up and rescue the redirect
    e. Setup agent gateway
    f. Wait for agent ready (poll 120s)
-   g. SetUpCompleted = true; clear the temporary setup-white LED state so it
-      is not retained as a user LED preference and the strip returns to the
-      ambient resting look (currently dark/off)
+   g. Save SetUpCompleted = true; wait for runtime preparation (up to 5min):
+      stable agent, HAL restart if needed, HAL health, configured voice start.
+      Only then clear the temporary setup LED and restore the resting choice.
    h. Backend ping (status "working", setup_completed=true)
-7. On failure → return to AP mode
+7. On network/agent setup failure → return to AP mode; runtime preparation
+   failure keeps LAN connected and reports a setup error
 8. Web UI auto-redirects the browser to http://<lan_ip>/setup once the
    operator is back on home Wi-Fi (IP-first; mDNS .local is a last-resort
    discovery fallback when the AP died before lan_ip could be read)
@@ -656,7 +657,24 @@ The continue-mode auto-scroll — which otherwise jumps the operator to the firs
 
 ## Post-Setup
 
-After `SetUpCompleted = true`:
+Onboarding saves `SetUpCompleted = true` when configuration is complete, which
+triggers the existing startup worker. The onboarding request then waits up to
+**5 minutes** for that worker to finish its HAL restart (when the configuration
+changed), HAL health check, and configured voice start. The public
+`/api/device/setup/status` reports `runtime_phase: "preparing"` and
+`set_up_completed: false` during this interval. Network `phase: "connected"`
+still means Wi-Fi is connected, not that voice is ready.
+
+The setup web page shows “Preparing your robot’s voice…” and preserves this
+screen across the AP-to-LAN redirect or reload. It allows the completed wizard
+only after `runtime_phase: "ready"`; a runtime failure reports
+`runtime_phase: "failed"` with an error and a return-to-setup action. A runtime
+failure retains the working LAN connection instead of switching back to the
+hotspot. Backend pings remain `setting_up` until readiness; only then does setup
+clear its temporary LED cue and report completion. Normal startup, OTA, and
+configuration-change restarts outside onboarding retain their existing behavior.
+
+The startup worker triggered by the saved flag performs:
 1. Connect OpenClaw WebSocket
 2. Connect MQTT (subscribe fa_channel)
 3. Start voice pipeline (if Deepgram key present)
@@ -669,7 +687,7 @@ Config stored at `config/config.json`. Managed by `system/server/config/config.g
 
 | Field | Description |
 |-------|-------------|
-| `SetUpCompleted` | `true` when setup is done |
+| `SetUpCompleted` | Persisted configuration-complete flag; public onboarding completion also waits for runtime readiness |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
 | `LLMAPIKey` | LLM API key |

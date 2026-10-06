@@ -6,7 +6,7 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useSetupUrlParams, clearStoredSetupParams } from "@/hooks/setup/useSetupUrlParams";
 import { useTTSCatalog } from "@/hooks/setup/useTTSCatalog";
 import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
-import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
+import { useSetupStatusPolling, type SetupPhase } from "@/hooks/setup/useSetupStatusPolling";
 import { useFaceEnroll } from "@/hooks/setup/useFaceEnroll";
 import { useWifiConnected } from "@/hooks/setup/useWifiConnected";
 import { useCapabilities } from "@/hooks/useCapabilities";
@@ -55,7 +55,7 @@ export function useSetupController(mode: SetupMode) {
   const [wiredRun, setWiredRun] = useState(false);
   // Adopted a previous attempt's failure; separate from setupWorking, which drives the live pollers.
   const [adoptedFailure, setAdoptedFailure] = useState(false);
-  const [setupPhase, setSetupPhase] = useState<"connecting" | "connected" | "failed">("connecting");
+  const [setupPhase, setSetupPhase] = useState<SetupPhase>("connecting");
   const [setupLanIP, setSetupLanIP] = useState<string>("");
   const [setupErrorMsg, setSetupErrorMsg] = useState<string>("");
   const [elapsed, setElapsed] = useState(0);

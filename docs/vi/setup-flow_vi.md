@@ -26,11 +26,12 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       cứu cú redirect
    e. Setup agent gateway
    f. Chờ agent ready (poll 120s)
-   g. SetUpCompleted = true; xoá LED trắng setup tạm thời để nó không bị giữ
-      thành user LED preference và strip quay về ambient resting look (hiện
-      đang tối/tắt)
+   g. Lưu SetUpCompleted = true; chờ chuẩn bị runtime (tối đa 5 phút): agent
+      ổn định, restart HAL nếu cần, health HAL, khởi động voice đã cấu hình.
+      Sau đó mới xóa LED setup tạm và khôi phục lựa chọn đèn nghỉ.
    h. Ping backend (status "working", setup_completed=true)
-7. Nếu thất bại → quay lại AP mode
+7. Lỗi network/agent setup → quay lại AP mode; lỗi chuẩn bị runtime giữ
+   kết nối LAN và báo lỗi setup
 8. Web UI tự chuyển hướng browser sang http://<lan_ip>/setup ngay khi
    operator đã về Wi-Fi nhà (IP-first; mDNS .local là fallback discovery
    cuối cùng khi AP chết trước lúc đọc được lan_ip)
@@ -632,7 +633,22 @@ tiên — bị chặn khi một deep-link hash hợp lệ đã được honor (`
 
 ## Post-Setup
 
-Sau khi `SetUpCompleted = true`:
+Onboarding lưu `SetUpCompleted = true` khi cấu hình xong để kích hoạt startup
+worker hiện có. Request onboarding sau đó đợi tối đa **5 phút** để worker hoàn
+tất restart HAL (nếu cấu hình thay đổi), kiểm tra health HAL và khởi động voice
+đã cấu hình. Trong thời gian này `/api/device/setup/status` trả
+`runtime_phase: "preparing"`, `set_up_completed: false`. Network
+`phase: "connected"` chỉ có nghĩa Wi-Fi đã kết nối, chưa có nghĩa voice sẵn sàng.
+
+Web setup hiển thị “Preparing your robot’s voice…” và giữ màn hình này khi
+chuyển từ AP sang LAN hoặc reload. Chỉ khi `runtime_phase: "ready"` mới cho
+hoàn tất wizard; lỗi runtime trả `runtime_phase: "failed"` kèm lỗi và nút quay
+lại setup. Lỗi runtime giữ kết nối LAN đang hoạt động, không chuyển lại hotspot.
+Backend ping vẫn là `setting_up` cho tới khi sẵn sàng; sau đó setup mới xóa LED
+tạm và báo hoàn tất. Luồng boot bình thường, OTA và restart khi đổi cấu hình
+ngoài onboarding giữ nguyên hành vi.
+
+Startup worker được kích hoạt bởi cờ đã lưu thực hiện:
 1. Kết nối OpenClaw WebSocket
 2. Kết nối MQTT (subscribe fa_channel)
 3. Start voice pipeline (nếu có Deepgram key)
@@ -645,7 +661,7 @@ Config lưu tại `config/config.json`. Managed bởi `system/server/config/conf
 
 | Field | Mô tả |
 |-------|-------|
-| `SetUpCompleted` | `true` khi setup xong |
+| `SetUpCompleted` | Cờ cấu hình đã hoàn tất trên đĩa; trạng thái onboarding công khai còn đợi runtime sẵn sàng |
 | `NetworkSSID` | WiFi SSID |
 | `NetworkPassword` | WiFi password |
 | `LLMAPIKey` | API key cho LLM |
