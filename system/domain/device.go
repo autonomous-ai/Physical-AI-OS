@@ -1296,19 +1296,40 @@ func IsValidTTSProvider(p string) bool {
 	return false
 }
 
-// DefaultElevenLabsVoiceForLang returns the default ElevenLabs voice for lang (prefix match).
-// Names must stay in sync with HAL's elevenlabs.py VOICE_IDS_BY_LANG.
-func DefaultElevenLabsVoiceForLang(lang string) string {
-	switch {
-	case strings.HasPrefix(strings.ToLower(strings.TrimSpace(lang)), "ja"):
-		return "Shizuka"
-	case strings.HasPrefix(lang, "vi"):
-		return "Ngan"
-	case strings.HasPrefix(lang, "zh"):
-		return "Amy"
-	default:
-		return "Rachel"
+// elevenLabsVoicesByLang mirrors HAL's elevenlabs.py VOICE_IDS_BY_LANG, including order.
+var elevenLabsVoicesByLang = map[string][]string{
+	"en": {"Rachel", "Sarah", "Nicole", "Terra", "Maria", "Sophie", "Piper", "Mia", "Kimmy", "Brianna", "Ally", "Tori", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Charlie", "Sam", "Sean", "Kael", "Brooks", "Erion"},
+	"vi": {"Ngan", "Linh", "Huyen", "Freya", "Nathan", "Quan"},
+	"ja": {"Shizuka", "Konoha", "Rin", "Asahi", "Hinata", "Hiroki"},
+	"zh": {"Amy", "Sage", "Xiaoxi", "Yun", "Evan Zhao", "Jin"},
+}
+
+func elevenLabsLanguageBucket(lang string) string {
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	for _, bucket := range []string{"vi", "ja", "zh"} {
+		if strings.HasPrefix(lang, bucket) {
+			return bucket
+		}
 	}
+	return "en"
+}
+
+// ElevenLabsVoicesForLang returns the curated fallback list, matching HAL's language filter.
+// An empty language lists all voices; unsupported languages use the English pool.
+func ElevenLabsVoicesForLang(lang string) []string {
+	if strings.TrimSpace(lang) != "" {
+		return append([]string(nil), elevenLabsVoicesByLang[elevenLabsLanguageBucket(lang)]...)
+	}
+	var voices []string
+	for _, bucket := range []string{"en", "vi", "ja", "zh"} {
+		voices = append(voices, elevenLabsVoicesByLang[bucket]...)
+	}
+	return voices
+}
+
+// DefaultElevenLabsVoiceForLang returns the first curated voice for the language.
+func DefaultElevenLabsVoiceForLang(lang string) string {
+	return elevenLabsVoicesByLang[elevenLabsLanguageBucket(lang)][0]
 }
 
 // TTSVoicesByProvider maps provider name to its available voices.
@@ -1318,7 +1339,7 @@ var TTSVoicesByProvider = map[string][]string{
 	TTSProviderPiper: {},
 	// Mirrors HAL's GeminiTTSBackend.VOICES.
 	TTSProviderGemini:     {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"},
-	TTSProviderElevenLabs: {"Shizuka", "Konoha", "Rin", "Asahi", "Hinata", "Hiroki", "Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
+	TTSProviderElevenLabs: ElevenLabsVoicesForLang(""),
 }
 
 // TTSVoices is the default (OpenAI) voice list for backward compatibility.

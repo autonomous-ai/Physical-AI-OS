@@ -311,7 +311,9 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 		return
 	}
 	staticVoices, ok := domain.TTSVoicesByProvider[provider]
-	if !ok {
+	if provider == domain.TTSProviderElevenLabs {
+		staticVoices = domain.ElevenLabsVoicesForLang(lang)
+	} else if !ok {
 		staticVoices = domain.TTSVoices
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(staticVoices))

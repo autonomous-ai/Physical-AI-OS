@@ -170,8 +170,9 @@ class HarnessGestureTests(unittest.TestCase):
 
     def test_focus_phrases_support_all_languages(self):
         from hal.i18n import PHRASES_BY_LANG, PHRASE_HARNESS_FOCUS, PHRASE_HARNESS_FOCUS_FAILED
+        from hal.presets import SUPPORTED_LANGS
         for phrase in (PHRASE_HARNESS_FOCUS, PHRASE_HARNESS_FOCUS_FAILED):
-            self.assertEqual(len(PHRASES_BY_LANG[phrase]), 4)
+            self.assertEqual(set(PHRASES_BY_LANG[phrase]), set(SUPPORTED_LANGS))
             for text in PHRASES_BY_LANG[phrase].values():
                 self.assertTrue(text.format(agent='Test Agent'))
 

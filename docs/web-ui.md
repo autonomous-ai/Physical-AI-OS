@@ -36,7 +36,10 @@ Japanese sample. Static settings labels follow the existing English UI conventio
 
 The ElevenLabs language filter has a Japanese bucket containing Shizuka, Konoha,
 Rin, Asahi, Hinata and Hiroki; Shizuka is the Japanese default. OpenAI and Gemini
-continue to use their multilingual voice pools.
+continue to use their multilingual voice pools. Setup validates the initial
+voice against the language-specific catalog, so a Japanese browser selects
+Shizuka instead of retaining Rachel. A valid saved/URL choice is preserved;
+late catalog responses are ignored after a provider, language or voice change.
 
 ### 1.1 Browser Tab Title
 

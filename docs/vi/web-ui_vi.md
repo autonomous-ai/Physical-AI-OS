@@ -36,7 +36,10 @@ trong Settings tiếp tục theo quy ước giao diện tiếng Anh hiện có.
 
 Bộ lọc ngôn ngữ ElevenLabs có nhóm tiếng Nhật gồm Shizuka, Konoha, Rin, Asahi,
 Hinata và Hiroki; Shizuka là mặc định. OpenAI và Gemini tiếp tục dùng bộ voice
-đa ngôn ngữ của từng nhà cung cấp.
+đa ngôn ngữ của từng nhà cung cấp. Setup kiểm tra voice ban đầu với danh mục
+theo ngôn ngữ, nên trình duyệt Nhật chọn Shizuka thay vì giữ Rachel. Voice hợp lệ
+đã lưu hoặc lấy từ URL được giữ; phản hồi catalog cũ bị bỏ qua sau khi đổi
+provider, ngôn ngữ hoặc voice.
 
 ### 1.1 Tiêu đề tab trình duyệt
 

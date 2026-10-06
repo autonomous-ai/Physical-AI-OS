@@ -7,6 +7,11 @@ and `ja_JP` resolve to the same localized phrase pools. OS-server includes Japan
 system notices, greetings, device-name prompts, chitchat and filler phrases; the
 agent receives Japanese language context. The ElevenLabs default for Japanese is
 `Shizuka`, with six native Japanese voices available in the shared voice catalog.
+Local Japanese chitchat requires a complete phrase after punctuation and wake-word
+normalization; questions such as `何している？` continue to the agent. If HAL cannot
+list voices, the ElevenLabs fallback still filters by the requested language,
+using Rachel for English and Shizuka for Japanese. An empty language returns all
+42 curated voices; unknown languages use the English pool.
 See [Japanese voice selection](realtime-voice.md#japanese-language-and-elevenlabs-voices).
 
 Ambient LED restoration delegates to HAL `/led/restore` after the quiet window. OS does not choose a fallback color or breathing effect; each device declares `ambient_led.resting` in `presets.json`. HAL preserves explicit user off/color and active overlay ownership.
