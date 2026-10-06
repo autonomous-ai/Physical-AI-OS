@@ -58,3 +58,22 @@ The native contract was inspected in installed OpenClaw 2026.2.23 and the
 No live Jev, device deployment or full gateway/channel integration test is implied
 by these local checks. Older hook versions do not expose structured attachment
 metadata; only supplied attachment fields and textual markers can be recognized.
+
+## Workspace attestation (OpenClaw >= 2026.9)
+
+OpenClaw records an attestation in `/root/.openclaw/state/openclaw.sqlite`
+(`workspace_setup_state` and related tables) when it seeds the workspace. For
+24 hours afterwards, `openclaw onboard` refuses to reseed a workspace that looks
+wiped (`WorkspaceVanishedError: … Refusing to reseed BOOTSTRAP.md over a recently
+attested workspace`), which fails setup with `agent_setup_failed`.
+
+- **Factory reset** (`runtimes/openclaw/reset.go`) wipes `/root/.openclaw/state`
+  together with the workspace, so setup right after a reset can onboard again.
+- **Image builds** (`scripts/imager/build*.sh`) run `openclaw onboard` in the
+  chroot (180 s cap), then delete the workspace rows from the state database and
+  the legacy attestation files. An image built hours before first setup therefore
+  never carries a recent attestation, even when the chroot onboard timed out
+  and left the workspace empty.
+
+Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
+/root/.openclaw/workspace-attestations`, then run setup again.

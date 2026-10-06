@@ -79,7 +79,8 @@ Phase 2  chroot qemu-arm64:
            chromium, xvfb, …)
          - Node.js 26 latest package (at least 26.8.2) + OpenClaw 2026.9.3 + Discord/Slack plugins
          - Hermes 0.21.5 pinned to release v2026.9.24; verify CLI version before continuing
-         - openclaw onboard --skip-health
+         - openclaw onboard --skip-health (180 s cap), then clear the workspace attestation
+           in state/openclaw.sqlite so first setup can reseed the workspace (OpenClaw >= 2026.9)
          - uv (Python pkg mgr for HAL)
          - systemd units: os-server, bootstrap, hal, openclaw
          - helper scripts: device-ap-mode, device-sta-mode, connect-wifi, software-update
