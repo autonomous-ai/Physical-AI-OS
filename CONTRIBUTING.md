@@ -10,7 +10,7 @@ vibe-coded ones too. 🤖
 | Teach every robot something new | `skills/<name>/SKILL.md` | [`skills/guard/`](skills/guard/) · [`skill-creator`](skills/skill-creator/) |
 | Run the OS on your robot | `robots/<id>/ROBOT.md` + `SAFETY.md` + `SOUL.md` | [`robots/reachy-mini/`](robots/reachy-mini/) — a third-party port, end to end |
 | Support new hardware (open SDK) | a class in `hal/drivers/<subsystem>/` + one factory line | [`motors/reachy_service.py`](hal/drivers/motors/reachy_service.py) · [`camera/rpicam_capture_device.py`](hal/drivers/camera/rpicam_capture_device.py) |
-| Support new hardware (closed SDK) | a small HTTP service speaking `MotionService` — [#204](https://github.com/autonomous-ai/Physical-AI-OS/issues/204), not in-tree yet | [`base.py`](hal/drivers/motors/base.py) |
+| Support new hardware (closed SDK) | a small HTTP service speaking `MotionService` — [#204](https://github.com/autonomous-ai/Physical-AI-Operating-System/issues/204), not in-tree yet | [`base.py`](hal/drivers/motors/base.py) |
 | Support a new board | one entry in `hal/board/boards.json` | [`boards.json`](hal/board/boards.json) |
 | Add a brain | an `AgentGateway` implementation (76 methods, Go) in `runtimes/<name>/` + one factory case — the heaviest path | [`docs/agentic/adding-agent-runtime.md`](docs/agentic/adding-agent-runtime.md) · [`runtimes/opencode/`](runtimes/opencode/) |
 | Ship an app people install with one click | a Python plugin against the plugin API | [`integrations/community-apps/plugin-template/`](integrations/community-apps/plugin-template/) · [plugin system](docs/plugin-system.md) |
@@ -30,4 +30,4 @@ open an issue and let's fix it.
 - Two licenses: everything outside `hal/` is Apache-2.0; `hal/` is GPL-3.0 (see the [License](README.md#license) section). A driver under `hal/` ships GPL-3.0.
 - Be kind.
 
-Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/Physical-AI-OS/discussions); bugs and claims in [Issues](https://github.com/autonomous-ai/Physical-AI-OS/issues). Open gaps are labelled [`claim-me`](https://github.com/autonomous-ai/Physical-AI-OS/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
+Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/Physical-AI-Operating-System/discussions); bugs and claims in [Issues](https://github.com/autonomous-ai/Physical-AI-Operating-System/issues). Open gaps are labelled [`claim-me`](https://github.com/autonomous-ai/Physical-AI-Operating-System/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
