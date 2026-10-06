@@ -60,9 +60,16 @@ Follow the instructions in whichever file you read.
 
 ---`
 
+	// bootstrapMaxChars caps each workspace file (SOUL.md, AGENTS.md, …) in the
+	// prompt. OpenClaw keeps the first 75% and last 25% of a longer file and
+	// silently drops the middle, so a device SOUL must stay well under it.
+	bootstrapMaxChars = 12000
+	// bootstrapTotalMaxChars caps all workspace files together.
+	bootstrapTotalMaxChars = 30000
+
 	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the gateway's periodic heartbeat poll (~every 30 min while the device is on).
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
-**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip silently. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
+**Knowledge synthesis (catch-up — do NOT wait for a fixed hour):** Compare the days that have a ` + "`memory/YYYY-MM-DD.md`" + ` against the ` + "`## YYYY-MM-DD`" + ` headers already in ` + "`KNOWLEDGE.md`" + `. For every day BEFORE today that has a memory file but no header, distil that day now — oldest first, each under its own ` + "`## YYYY-MM-DD`" + ` header. Also do today, but only once it is >= 21:00. Only write new learnings — never repeat what is already there. Nothing missing → skip this step. This device is often switched off in the evening, so a fixed hour may simply never arrive; clearing the backlog on whatever heartbeat comes next is what keeps a day from being lost.
 
 **Keep ` + "`KNOWLEDGE.md`" + ` from growing without bound (same pass).** A dated ` + "`## YYYY-MM-DD`" + ` block is raw material, not the archive — the distilled sections at the top are. Keep at most the **14 most recent** dated blocks. For anything older: fold what is still true into the matching top section (Hardware / Users / Skills & APIs / Mistakes Made), then DELETE the dated block. Nothing of value is lost — it was already distilled, and the raw day survives in ` + "`memory/YYYY-MM-DD.md`" + `. Without this the file grows by a section every active day and eventually costs more to read than it is worth.
 
@@ -75,6 +82,8 @@ Follow the instructions in whichever file you read.
 - **Keep each entry under ~400 characters.** Segments are dense, so that is plenty. This file is loaded into your prompt on EVERY turn, so bloat is billed on all of them; and when it overflows the cap it is cut from the END, which is where ` + "`## Users`" + ` lives. Rewrite an entry to stay short rather than appending to it.
 - **Strangers get NO entry — and remove any you find.** ` + "`## Users`" + ` is for people the device knows by enrollment. A passing face has no label to key on and nothing durable to remember; note desk traffic in ` + "`KNOWLEDGE.md`" + ` instead. An entry like ` + "`**stranger_4**`" + ` or a lumped ` + "`**stranger_2/3/4/…**`" + ` is not a person: delete it. The OS cannot clean these up for you — its pruner only recognises a proper ` + "`**<label> (role)**`" + ` entry.
 - Do NOT fill ` + "`**Name:**`" + ` or the other single-value fields at the top. This device can have several people; who is present right now always comes from ` + "`[context: current_user=…]`" + ` on the turn, never from that field.
+
+**Ending the heartbeat:** this pass is housekeeping, not a conversation. When it is done — including when there was nothing to do — reply with exactly ` + "`NO_REPLY`" + ` and nothing else. Never end with an empty reply: OpenClaw treats an empty heartbeat as a failure and posts "Agent couldn't generate a response" to the owner's chat.
 
 ---`
 )
@@ -242,7 +251,8 @@ func (s *OpenclawService) EnsureOnboarding() error {
 		needRestart = true
 	}
 
-	// Pin messages.queue.mode=steer so concurrent producers batch into the active turn.
+	// Pin messages.queue.mode=steer so concurrent producers batch into the active turn,
+	// and drop the "auto" reply prefix.
 	if queueAdded, err := s.ensureMessagesQueueConfig(); err != nil {
 		slog.Error("ensure messages.queue config failed", "component", "onboarding", "error", err)
 	} else if queueAdded {
@@ -660,7 +670,8 @@ func (s *OpenclawService) ensureControlUIConfig() (bool, error) {
 	return true, nil
 }
 
-// ensureMessagesQueueConfig pins messages.queue.mode to "steer".
+// ensureMessagesQueueConfig pins messages.queue.mode to "steer" and drops the
+// "auto" reply prefix older setups wrote (it prints "[main]" before replies).
 func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -682,10 +693,14 @@ func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 		queue = map[string]interface{}{}
 		messages["queue"] = queue
 	}
-	if v, _ := queue["mode"].(string); v == "steer" {
+	changed := dropAutoResponsePrefix(configData)
+	if v, _ := queue["mode"].(string); v != "steer" {
+		queue["mode"] = "steer"
+		changed = true
+	}
+	if !changed {
 		return false, nil
 	}
-	queue["mode"] = "steer"
 
 	outBytes, err := json.MarshalIndent(configData, "", "  ")
 	if err != nil {
@@ -694,8 +709,39 @@ func (s *OpenclawService) ensureMessagesQueueConfig() (bool, error) {
 	if err := os.WriteFile(configPath, outBytes, 0600); err != nil {
 		return false, fmt.Errorf("write openclaw.json: %w", err)
 	}
-	slog.Info("pinned messages.queue.mode=steer in openclaw.json", "component", "onboarding")
+	slog.Info("updated messages config in openclaw.json", "component", "onboarding")
 	return true, nil
+}
+
+// dropAutoResponsePrefix removes responsePrefix "auto" from messages and from
+// every channel and channel account (OpenClaw doctor copies the global value
+// down). Custom prefixes are left alone. Reports whether anything changed.
+func dropAutoResponsePrefix(configData map[string]interface{}) bool {
+	changed := false
+	drop := func(m map[string]interface{}) {
+		if v, _ := m["responsePrefix"].(string); v == "auto" {
+			delete(m, "responsePrefix")
+			changed = true
+		}
+	}
+	if messages, ok := configData["messages"].(map[string]interface{}); ok {
+		drop(messages)
+	}
+	channels, _ := configData["channels"].(map[string]interface{})
+	for _, ch := range channels {
+		chMap, ok := ch.(map[string]interface{})
+		if !ok {
+			continue
+		}
+		drop(chMap)
+		accounts, _ := chMap["accounts"].(map[string]interface{})
+		for _, acc := range accounts {
+			if accMap, ok := acc.(map[string]interface{}); ok {
+				drop(accMap)
+			}
+		}
+	}
+	return changed
 }
 
 // downloadFile fetches url and writes it to dst.
@@ -892,12 +938,12 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 		changed = true
 	}
 
-	if v, _ := defaultsMap["bootstrapMaxChars"].(float64); v != 12000 {
-		defaultsMap["bootstrapMaxChars"] = 12000
+	if v, _ := defaultsMap["bootstrapMaxChars"].(float64); v != bootstrapMaxChars {
+		defaultsMap["bootstrapMaxChars"] = bootstrapMaxChars
 		changed = true
 	}
-	if v, _ := defaultsMap["bootstrapTotalMaxChars"].(float64); v != 30000 {
-		defaultsMap["bootstrapTotalMaxChars"] = 30000
+	if v, _ := defaultsMap["bootstrapTotalMaxChars"].(float64); v != bootstrapTotalMaxChars {
+		defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
 		changed = true
 	}
 

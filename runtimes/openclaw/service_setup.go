@@ -249,7 +249,10 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 
 	slog.Debug("ensuring messages defaults", "component", "openclaw")
 	messagesMap := ensureMap(configData, "messages")
-	messagesMap["responsePrefix"] = "auto"
+	// No reply prefix: "auto" prints the agent id ("[main]") before every reply.
+	if v, _ := messagesMap["responsePrefix"].(string); v == "auto" {
+		delete(messagesMap, "responsePrefix")
+	}
 	messagesMap["ackReactionScope"] = "all"
 	messagesMap["removeAckAfterReply"] = true
 	configData["messages"] = messagesMap

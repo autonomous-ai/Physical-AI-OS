@@ -77,3 +77,31 @@ attested workspace`), which fails setup with `agent_setup_failed`.
 
 Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
 /root/.openclaw/workspace-attestations`, then run setup again.
+
+## Reply prefix and heartbeat replies
+
+- **No reply prefix.** Setup used to write `messages.responsePrefix: "auto"`,
+  which OpenClaw resolves to the agent identity name; with no named agent that
+  is the id, so every chat reply started with `[main]`. OpenClaw `doctor` also
+  copies the global value into `channels.<channel>.responsePrefix`. Setup no
+  longer writes it, and onboarding (`ensureMessagesQueueConfig`) removes `"auto"`
+  from `messages`, every channel and every channel account on existing devices,
+  then restarts the gateway. Custom prefixes are kept.
+- **Heartbeat ends with `NO_REPLY`.** The OS block in `workspace/HEARTBEAT.md`
+  used to say "skip silently", and the model sometimes answered with an empty
+  message. OpenClaw treats an empty heartbeat as `agent-runner-failure` and posts
+  `[main] ⚠️ Agent couldn't generate a response. Please try again.` to the last
+  chat. The block now tells the agent to reply exactly `NO_REPLY` when the pass
+  is done, OpenClaw's silent-heartbeat token. Onboarding rewrites the block on
+  existing devices because its text changed.
+- **Device SOUL must fit the bootstrap cap.** Onboarding sets
+  `agents.defaults.bootstrapMaxChars` to 12,000 (`bootstrapMaxChars` in
+  `runtimes/openclaw/onboarding.go`). OpenClaw keeps only the first 75% and last
+  25% of a longer workspace file and silently drops the middle. The intern-v2
+  SOUL was 13.2k characters, so the model never saw its audio-tag palette, the
+  reply-language rule or the chat no-tag rule, and chat replies started with
+  tags like `[warm]`. It is now about 10.5k, and audio tags are limited to
+  spoken replies (voice turns); Telegram, iMessage, WhatsApp, Discord, Slack and
+  web chat replies carry none. `TestDeviceSoulsFitTheBootstrapCap` keeps every
+  device SOUL under 11,000 characters, leaving room for the owner's
+  `## Personal` section. Lamp (18.6k) is a known exception still to be trimmed.
