@@ -25,7 +25,9 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
       AP mode) + `burst`, or a systemd-timesyncd restart; wait up to 15s for
       `NTPSynchronized`, else keep syncing in the background
       (`system/lib/clocksync`). A later backend ping that fails on certificate
-      validity also starts a background resync, at most once a minute
+      validity also starts a background resync, at most once a minute. The
+      OrangePi image seeds `/etc/fake-hwclock.data` with its build time, so a
+      fresh device boots no earlier than the image was built
    d. Early backend ping (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publishes the device's fresh LAN IP (local_ip) to the
       backend WITHOUT waiting for the agent setup below, so a page that

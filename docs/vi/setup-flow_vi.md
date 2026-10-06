@@ -25,7 +25,9 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
       `burst`, hoặc restart systemd-timesyncd; chờ tối đa 15s tới khi
       `NTPSynchronized`, nếu chưa thì tiếp tục đồng bộ ở background
       (`system/lib/clocksync`). Ping backend về sau mà lỗi hiệu lực certificate
-      cũng khởi động đồng bộ lại ở background, tối đa mỗi phút một lần
+      cũng khởi động đồng bộ lại ở background, tối đa mỗi phút một lần. Ảnh
+      OrangePi ghi giờ lúc build vào `/etc/fake-hwclock.data`, nên thiết bị mới
+      không bao giờ khởi động với giờ sớm hơn lúc build ảnh
    d. Ping backend sớm (fire-and-forget HTTP POST {llm_base}/ping, status
       "setting_up") — publish IP LAN mới (local_ip) lên backend mà KHÔNG chờ
       bước setup agent bên dưới, để trang đã mở popup Setup có thể tra IP và
