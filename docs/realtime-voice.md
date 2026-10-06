@@ -1,5 +1,31 @@
 # Realtime Voice Agent
 
+## Japanese language and ElevenLabs voices
+
+Use `stt_language: "ja"` for Japanese. HAL includes Japanese spoken status,
+head-pat, music-wait, mute/unmute and factory-reset phrases. The Gemini Live
+language hint maps `ja` to `ja-JP`; the shared realtime context identifies Japanese.
+ElevenLabs HTTP and WebSocket share the same name-to-ID catalog and Japanese filter.
+
+The following six voices were selected from the
+[official ElevenLabs Japanese catalog](https://elevenlabs.io/text-to-speech/japanese)
+on 2026-10-06, prioritizing native Japanese, clarity and calm conversational delivery.
+This is a curated selection based on published metadata, not a measured quality ranking.
+
+| Voice | Gender | Character | ElevenLabs voice ID |
+|---|---|---|---|
+| Shizuka (default) | Female | Gentle, clear | `WQz3clzUdMqvBf0jswZQ` |
+| Konoha | Female | Clear explanations | `T7yYq3WpB94yAuOXraRi` |
+| Rin | Female | Balanced, neutral | `NxfO5zydfqwpYnWQJ7jJ` |
+| Asahi | Male | Calm conversation | `GKDaBI8TKSBJVhsCLD6n` |
+| Hinata | Male | Calm narration | `j210dv0vWm7fCknyQpbA` |
+| Hiroki | Male | Polite, composed | `vzIXwvf41vKosKu00hYj` |
+
+Voice IDs are configured in the application; this does not add voices to an
+ElevenLabs account's My Voices. Availability still depends on the configured
+provider/account. Public catalog verification does not replace a live synthesis
+check with that account or device playback.
+
 Low-latency, speech-to-speech voice layer that runs **in parallel** with the
 normal STT → agent pipeline. The realtime model handles casual conversation
 directly (sub-second audio replies) and **delegates** anything that needs the

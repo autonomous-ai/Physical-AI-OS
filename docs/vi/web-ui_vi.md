@@ -26,6 +26,21 @@ Trong lần setup đầu, **Channels** là tuỳ chọn và mặc định là **
 Chọn Telegram, Slack hoặc Discord sẽ hiện các field credential, nhưng user có
 thể để trống hoặc cấu hình channel sau trong Settings.
 
+### Chọn tiếng Nhật
+
+Setup và Settings có **Japanese (日本語)** với mã `ja`. Setup nhận diện locale
+Nhật của trình duyệt và `?stt_language=ja`; biến thể vùng tiếng Nhật được chuẩn hóa về
+`ja`. Các chuỗi chat i18n, thời gian tương đối, hướng dẫn đăng ký giọng và cả ba
+câu đăng ký đều có bản tiếng Nhật. Test Voice gửi câu mẫu tiếng Nhật. Nhãn tĩnh
+trong Settings tiếp tục theo quy ước giao diện tiếng Anh hiện có.
+
+Bộ lọc ngôn ngữ ElevenLabs có nhóm tiếng Nhật gồm Shizuka, Konoha, Rin, Asahi,
+Hinata và Hiroki; Shizuka là mặc định. OpenAI và Gemini tiếp tục dùng bộ voice
+đa ngôn ngữ của từng nhà cung cấp. Setup kiểm tra voice ban đầu với danh mục
+theo ngôn ngữ, nên trình duyệt Nhật chọn Shizuka thay vì giữ Rachel. Voice hợp lệ
+đã lưu hoặc lấy từ URL được giữ; phản hồi catalog cũ bị bỏ qua sau khi đổi
+provider, ngôn ngữ hoặc voice.
+
 ### 1.1 Tiêu đề tab trình duyệt
 
 Tiêu đề tab trình duyệt (`document.title`) hiển thị đúng theo page/tab đang focus, để mở nhiều tab thiết bị vẫn phân biệt được. Dùng hook chung `useDocumentTitle` (`system/web/src/hooks/useDocumentTitle.ts`); format: `Lamp · <segment>[· <sub-segment>]`.

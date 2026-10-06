@@ -1,5 +1,31 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
+## Tiếng Nhật và giọng ElevenLabs
+
+Dùng `stt_language: "ja"` cho tiếng Nhật. HAL có phrase tiếng Nhật cho thông báo
+trạng thái, xoa đầu, chờ nhạc, mute/unmute và factory reset. Gợi ý ngôn ngữ Gemini
+Live ánh xạ `ja` thành `ja-JP`; context realtime chung nhận diện tiếng Nhật.
+ElevenLabs HTTP và WebSocket dùng chung bảng tên–ID và bộ lọc tiếng Nhật.
+
+Sáu giọng sau được chọn từ
+[danh mục tiếng Nhật chính thức của ElevenLabs](https://elevenlabs.io/text-to-speech/japanese)
+ngày 2026-10-06, ưu tiên bản ngữ, rõ ràng và hội thoại điềm tĩnh. Đây là danh sách
+chọn lọc theo metadata công khai, không phải bảng xếp hạng chất lượng đã đo.
+
+| Giọng | Giới tính | Đặc điểm | ElevenLabs voice ID |
+|---|---|---|---|
+| Shizuka (mặc định) | Nữ | Nhẹ nhàng, rõ ràng | `WQz3clzUdMqvBf0jswZQ` |
+| Konoha | Nữ | Giải thích rõ ràng | `T7yYq3WpB94yAuOXraRi` |
+| Rin | Nữ | Cân bằng, trung tính | `NxfO5zydfqwpYnWQJ7jJ` |
+| Asahi | Nam | Hội thoại điềm tĩnh | `GKDaBI8TKSBJVhsCLD6n` |
+| Hinata | Nam | Kể chuyện điềm tĩnh | `j210dv0vWm7fCknyQpbA` |
+| Hiroki | Nam | Lịch sự, chững chạc | `vzIXwvf41vKosKu00hYj` |
+
+Voice ID được thêm vào ứng dụng; thao tác này không thêm giọng vào My Voices của
+tài khoản ElevenLabs. Khả năng sử dụng còn phụ thuộc provider/tài khoản đang cấu
+hình. Xác minh danh mục công khai không thay thế việc tổng hợp âm thanh thực tế
+bằng tài khoản đó hoặc nghe trên thiết bị.
+
 Lớp giọng nói speech-to-speech độ trễ thấp, chạy **song song** với pipeline STT
 → agent thông thường. Model realtime xử lý hội thoại tán gẫu trực tiếp (trả lời
 âm thanh dưới 1 giây) và **delegate** (chuyển giao) những gì cần đến agent chính

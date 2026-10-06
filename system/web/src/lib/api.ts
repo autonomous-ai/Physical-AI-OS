@@ -1,4 +1,5 @@
 import camelcaseKeys from "camelcase-keys";
+import { normalizeLang } from "@/lib/i18n";
 import type { NetworkItem, SetupRequest } from "@/types";
 
 const API_BASE =
@@ -413,6 +414,7 @@ export interface TestTTSOptions {
 
 const TTS_DEMO_PHRASES: Record<string, string> = {
   en: "[laugh] Hey! How are you doing today?",
+  ja: "[laugh] こんにちは！今日はどんな一日ですか？",
   vi: "[laugh] Chào bạn, hôm nay bạn thế nào?",
   "zh-CN": "[laugh] 嗨，你今天怎么样？",
   "zh-TW": "[laugh] 嗨，你今天怎麼樣？",
@@ -420,7 +422,7 @@ const TTS_DEMO_PHRASES: Record<string, string> = {
 
 function demoPhraseFor(lang?: string): string {
   if (!lang) return TTS_DEMO_PHRASES.en;
-  return TTS_DEMO_PHRASES[lang] || TTS_DEMO_PHRASES.en;
+  return TTS_DEMO_PHRASES[normalizeLang(lang)] || TTS_DEMO_PHRASES.en;
 }
 
 /** POST /api/voice/preview — optional baseUrl/apiKey override the saved config. */

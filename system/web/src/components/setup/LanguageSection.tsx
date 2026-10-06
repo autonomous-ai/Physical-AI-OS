@@ -24,6 +24,7 @@ export function LanguageSection({
           <option value="">Auto (default)</option>
           <option value="en">English</option>
           <option value="vi">Vietnamese</option>
+          <option value="ja">Japanese (日本語)</option>
           <option value="zh-CN">Chinese (Simplified)</option>
           <option value="zh-TW">Chinese (Traditional)</option>
         </select>

@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { normalizeLang, type Lang as RobotLang } from "@/lib/i18n";
 import { getPiperStatus, installPiperEngine, installPiperVoice, removePiperVoice, type PiperJobStart, type PiperStatus } from "@/lib/api";
 import { Loader2, Volume2, Check, AlertCircle } from "lucide-react";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
@@ -52,20 +53,22 @@ const CHOICES: Record<ProviderChoice, ChoiceMeta> = {
 
 
 // Mirrors hal/presets.py SUPPORTED_LANGS.
-type Lang = "" | "en" | "vi" | "zh-CN" | "zh-TW";
+type Lang = "" | RobotLang;
 const LANG_LABEL: Record<Lang, string> = {
   "":      "Auto (follow robot language)",
   "en":    "English",
   "vi":    "Vietnamese",
+  "ja":    "Japanese (日本語)",
   "zh-CN": "Chinese (Simplified)",
   "zh-TW": "Chinese (Traditional)",
 };
-const LANG_OPTIONS: Lang[] = ["", "en", "vi", "zh-CN", "zh-TW"];
+const LANG_OPTIONS: Lang[] = ["", "en", "vi", "ja", "zh-CN", "zh-TW"];
 
 // Keep ElevenLabs names a strict subset of HAL's VOICE_IDS_BY_LANG, or they 404.
-type LangBucket = "en" | "vi" | "zh";
+type LangBucket = "en" | "vi" | "ja" | "zh";
 function langBucket(lang: Lang): LangBucket {
   if (lang === "vi") return "vi";
+  if (lang === "ja") return "ja";
   if (lang === "zh-CN" || lang === "zh-TW") return "zh";
   return "en";
 }
@@ -87,14 +90,15 @@ const VOICES: Record<Vendor, Record<LangBucket, string[]>> = {
       "Charlie", "Sam", "Sean", "Kael", "Brooks", "Erion",
     ],
     vi: ["Ngan", "Linh", "Huyen", "Freya", "Nathan"],
+    ja: ["Shizuka", "Konoha", "Rin", "Asahi", "Hinata", "Hiroki"],
     zh: ["Amy", "Sage", "Xiaoxi", "Yun", "Evan Zhao"],
   },
-  openai: { en: OPENAI_VOICES, vi: OPENAI_VOICES, zh: OPENAI_VOICES },
-  gemini: { en: GEMINI_VOICES, vi: GEMINI_VOICES, zh: GEMINI_VOICES },
+  openai: { en: OPENAI_VOICES, vi: OPENAI_VOICES, ja: OPENAI_VOICES, zh: OPENAI_VOICES },
+  gemini: { en: GEMINI_VOICES, vi: GEMINI_VOICES, ja: GEMINI_VOICES, zh: GEMINI_VOICES },
 };
 
 function voicesFor(vendor: Vendor, lang: Lang, sttLang: string): string[] {
-  const effective = lang || (sttLang as Lang) || "en";
+  const effective = normalizeLang(lang || sttLang);
   return VOICES[vendor][langBucket(effective)];
 }
 

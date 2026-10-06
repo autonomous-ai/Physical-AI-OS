@@ -1,5 +1,17 @@
 # OS Server API — Tài Liệu
 
+## Hỗ trợ tiếng Nhật
+
+`stt_language: "ja"` chọn tiếng Nhật. Các biến thể vùng như `ja-JP` và `ja_JP`
+dùng chung bộ phrase tiếng Nhật. OS-server có thông báo hệ thống, lời chào,
+câu hỏi tên thiết bị, chitchat và câu đệm tiếng Nhật; agent nhận context ngôn ngữ
+Nhật. Giọng ElevenLabs mặc định là `Shizuka`, với sáu giọng Nhật bản ngữ trong
+danh mục voice chung. Chitchat tiếng Nhật chỉ khớp toàn câu sau khi chuẩn hóa
+dấu câu và wake word; câu hỏi như `何している？` tiếp tục được gửi cho agent. Khi HAL
+không trả được danh sách voice, fallback ElevenLabs vẫn lọc theo ngôn ngữ:
+English dùng Rachel, Japanese dùng Shizuka. Ngôn ngữ trống trả đủ 42 voice;
+ngôn ngữ không hỗ trợ dùng nhóm English. Xem [chọn giọng tiếng Nhật](realtime-voice_vi.md#tiếng-nhật-và-giọng-elevenlabs).
+
 Ambient LED gọi HAL `/led/restore` sau khoảng yên lặng. OS không chọn màu fallback hay hiệu ứng thở; mỗi device khai báo `ambient_led.resting` trong `presets.json`. HAL giữ trạng thái user tắt/đặt màu và quyền sở hữu của overlay đang hoạt động.
 
 > OS Server (Go, Gin framework) chạy trên port 5000.

@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field, model_validator
 
 import hal.config as app_config
+from hal.presets import normalize_language
 from hal.realtime.enums import (
     GeminiThinkingLevel,
     GeminiVoice,
@@ -18,7 +19,7 @@ def _load_language() -> str | None:
     """Load language from the device's config.json (stt_language field)."""
     from hal.config import _os_cfg_get
 
-    lang: str = _os_cfg_get("stt_language", "").strip()
+    lang: str = normalize_language(_os_cfg_get("stt_language", ""))
     return lang if lang else None
 
 

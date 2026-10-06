@@ -12,7 +12,7 @@ from hal.i18n import (
     PHRASE_SHUTDOWN,
     PHRASES_BY_LANG,
 )
-from hal.presets import DEFAULT_LANG
+from hal.presets import DEFAULT_LANG, normalize_language
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +42,7 @@ def _is_reboot_pending() -> bool:
 def _phrase(key: str) -> str:
     try:
         from hal.config import _os_cfg_get
-        lang = (_os_cfg_get("stt_language") or "").strip()
+        lang = normalize_language(_os_cfg_get("stt_language"))
     except Exception:
         lang = ""
     pool = PHRASES_BY_LANG.get(key, {})

@@ -73,6 +73,8 @@ When the OS server is not yet configured (`SetUpCompleted = false`), the device 
 
 Fields come from `SetupRequest` in `system/domain/device.go`. `device_id`, `llm_api_key` and `llm_base_url` carry `validate:"required"`; everything else is optional. `ssid` may be empty (wired/ethernet path, see below). `channel` is `telegram` (default when empty), `slack`, `discord` or `imessage`; the matching credential fields are `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, or `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Optional voice overrides: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
 
+Japanese uses `stt_language: "ja"`. Setup offers Japanese (日本語), Japanese voice enrollment phrases and six curated ElevenLabs voices; the default is Shizuka. See [Japanese voice catalog](realtime-voice.md#japanese-language-and-elevenlabs-voices).
+
 **Response:** Returns immediately `{"status": 1}`. Setup runs async in a goroutine after 2s delay.
 
 **Messaging channel:** The entire Telegram, Slack, Discord, or iMessage configuration is optional during initial setup. Omitting it does not block setup; configure a channel later with `POST /api/device/channel`. Credentials supplied to `POST /api/device/setup` keep the existing setup path but are not channel-validated there; `POST /api/device/channel` validates the credentials required by its selected channel.

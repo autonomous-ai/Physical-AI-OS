@@ -73,6 +73,8 @@ Khi OS server chưa được cấu hình (`SetUpCompleted = false`), thiết b�
 
 Các field lấy từ `SetupRequest` trong `system/domain/device.go`. `device_id`, `llm_api_key` và `llm_base_url` có tag `validate:"required"`; mọi field khác là tuỳ chọn. `ssid` có thể để trống (đường wired/ethernet, xem bên dưới). `channel` là `telegram` (mặc định khi để trống), `slack`, `discord` hoặc `imessage`; các field credential tương ứng là `telegram_bot_token`/`telegram_user_id`, `slack_bot_token`/`slack_app_token`/`slack_user_id`, `discord_bot_token`/`discord_guild_id`/`discord_user_id`, hoặc `bluebubbles_server_url`/`bluebubbles_password`/`bluebubbles_user_address`. Override voice tuỳ chọn: `stt_api_key`, `tts_api_key`, `stt_base_url`, `tts_base_url`, `stt_language`, `tts_provider`, `tts_voice`.
 
+Tiếng Nhật dùng `stt_language: "ja"`. Setup có Japanese (日本語), các câu đăng ký giọng tiếng Nhật và sáu voice ElevenLabs chọn lọc; mặc định là Shizuka. Xem [danh mục giọng Nhật](realtime-voice_vi.md#tiếng-nhật-và-giọng-elevenlabs).
+
 **Response:** Trả về ngay `{"status": 1}`. Setup chạy async trong goroutine sau 2s delay.
 
 **Messaging channel:** Toàn bộ cấu hình Telegram, Slack, Discord hoặc iMessage là tuỳ chọn ở lần setup đầu. Không gửi chúng không chặn setup; có thể cấu hình channel sau qua `POST /api/device/channel`. Credential gửi cùng `POST /api/device/setup` vẫn đi theo luồng setup hiện tại nhưng không được validate theo channel tại đây; `POST /api/device/channel` sẽ validate credential bắt buộc của channel được chọn.

@@ -26,6 +26,21 @@ During initial setup, **Channels** is optional and defaults to **Not now**.
 Selecting Telegram, Slack, or Discord reveals its credential fields, but the
 operator may leave them blank or configure a channel later in Settings.
 
+### Japanese language selection
+
+Setup and Settings offer **Japanese (日本語)** with code `ja`. Setup recognizes
+Japanese browser locales and `?stt_language=ja`; Japanese regional aliases normalize to
+`ja`. Existing chat i18n strings, relative times, voice enrollment instructions
+and all three enrollment phrases have Japanese translations. Test Voice sends a
+Japanese sample. Static settings labels follow the existing English UI convention.
+
+The ElevenLabs language filter has a Japanese bucket containing Shizuka, Konoha,
+Rin, Asahi, Hinata and Hiroki; Shizuka is the Japanese default. OpenAI and Gemini
+continue to use their multilingual voice pools. Setup validates the initial
+voice against the language-specific catalog, so a Japanese browser selects
+Shizuka instead of retaining Rachel. A valid saved/URL choice is preserved;
+late catalog responses are ignored after a provider, language or voice change.
+
 ### 1.1 Browser Tab Title
 
 The browser tab title (`document.title`) reflects the focused page/tab so multiple device tabs are distinguishable. Driven by the shared `useDocumentTitle` hook (`system/web/src/hooks/useDocumentTitle.ts`); format is `Lamp · <segment>[· <sub-segment>]`.

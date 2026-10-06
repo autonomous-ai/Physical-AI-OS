@@ -3,7 +3,7 @@
 Missing language keys fall back to DEFAULT_LANG at lookup time.
 """
 
-from hal.presets import DEFAULT_LANG, LANG_EN, LANG_VI, LANG_ZH_CN, LANG_ZH_TW
+from hal.presets import DEFAULT_LANG, LANG_EN, LANG_JA, LANG_VI, LANG_ZH_CN, LANG_ZH_TW, normalize_language
 
 
 def localized_phrase(key: str, lang: str | None = None) -> str:
@@ -18,7 +18,7 @@ def localized_phrase(key: str, lang: str | None = None) -> str:
         except Exception:
             lang = ""
     pool = PHRASES_BY_LANG.get(key, {})
-    return pool.get(lang) or pool.get(DEFAULT_LANG, "")
+    return pool.get(normalize_language(lang)) or pool.get(DEFAULT_LANG, "")
 
 
 PHRASE_HARNESS_ON = "harness_voice_on"
@@ -43,81 +43,96 @@ PHRASE_RATE_LIMIT = "rate_limit"
 # reboot/shutdown stay literal in every language so the user knows which destructive action fired.
 PHRASES_BY_LANG = {
     PHRASE_HARNESS_FOCUS: {
+        LANG_JA: "エージェントを切り替えました。",
         LANG_EN: "Agent switched.", LANG_VI: "Đã chuyển agent.",
         LANG_ZH_CN: "已切换智能体。", LANG_ZH_TW: "已切換智慧體。",
     },
     PHRASE_HARNESS_FOCUS_FAILED: {
+        LANG_JA: "エージェントを切り替えられませんでした。Harness を確認してください。",
         LANG_EN: "Could not switch agents. Check Harness.", LANG_VI: "Chưa chuyển được agent. Hãy kiểm tra Harness.",
         LANG_ZH_CN: "无法切换智能体。请检查 Harness。", LANG_ZH_TW: "無法切換智慧體。請檢查 Harness。",
     },
     PHRASE_HARNESS_ON: {
+        LANG_JA: "Harness で {agent} に接続しました。タップして話しかけてください。",
         LANG_EN: "Harness is on with {agent}. Tap to speak.",
         LANG_VI: "Đã bật Harness với {agent}. Chạm để nói.",
         LANG_ZH_CN: "Harness 已开启，当前智能体是 {agent}。轻触开始说话。",
         LANG_ZH_TW: "Harness 已開啟，目前智慧體是 {agent}。輕觸開始說話。",
     },
     PHRASE_HARNESS_OFF: {
+        LANG_JA: "Harness をオフにしました。デバイスのアシスタントに戻りました。",
         LANG_EN: "Harness is off. You’re back with the assistant on your device.", LANG_VI: "Đã tắt Harness, trở về trợ lý trên thiết bị.",
         LANG_ZH_CN: "Harness 已关闭，已切回设备上的助手。", LANG_ZH_TW: "Harness 已關閉，已切回裝置上的助理。",
     },
     PHRASE_HARNESS_UNPAIRED: {
+        LANG_JA: "まず Harness アプリでこのデバイスをペアリングしてください。",
         LANG_EN: "Pair this device in the Harness app first.",
         LANG_VI: "Bạn cần ghép đôi thiết bị trong ứng dụng Harness trước.",
         LANG_ZH_CN: "请先在 Harness 应用中配对此设备。",
         LANG_ZH_TW: "請先在 Harness 應用程式中配對此裝置。",
     },
     PHRASE_HARNESS_OFFLINE: {
+        LANG_JA: "Harness に接続されていません。",
         LANG_EN: "Harness is disconnected.", LANG_VI: "Harness chưa kết nối.",
         LANG_ZH_CN: "Harness 未连接。", LANG_ZH_TW: "Harness 未連線。",
     },
     PHRASE_HARNESS_NO_AGENTS: {
+        LANG_JA: "Harness に利用できるエージェントがありません。",
         LANG_EN: "No agent is available in Harness.",
         LANG_VI: "Chưa có agent trong Harness.",
         LANG_ZH_CN: "Harness 中没有可用的智能体。", LANG_ZH_TW: "Harness 中沒有可用的智慧體。",
     },
     PHRASE_HARNESS_FAILED: {
+        LANG_JA: "モードの切り替えを確認できませんでした。Harness を確認してください。",
         LANG_EN: "Could not confirm the mode change. Check Harness.",
         LANG_VI: "Chưa xác nhận được thay đổi chế độ. Hãy kiểm tra Harness.",
         LANG_ZH_CN: "无法确认模式切换。请检查 Harness。",
         LANG_ZH_TW: "無法確認模式切換。請檢查 Harness。",
     },
     PHRASE_LISTENING: {
+        LANG_JA: "聞いています。",
         LANG_EN:    "Listening.",
         LANG_VI:    "Nghe đây.",
         LANG_ZH_CN: "在听。",
         LANG_ZH_TW: "在聽。",
     },
     PHRASE_REBOOT: {
+        LANG_JA: "再起動します。",
         LANG_EN:    "Rebooting now.",
         LANG_VI:    "Đang khởi động lại.",
         LANG_ZH_CN: "正在重启。",
         LANG_ZH_TW: "正在重啟。",
     },
     PHRASE_SLEEP: {
+        LANG_JA: "そろそろおやすみします。",
         LANG_EN:    "I'm going to sleep now.",
         LANG_VI:    "Mình đi ngủ đây.",
         LANG_ZH_CN: "我要睡觉了。",
         LANG_ZH_TW: "我要睡覺了。",
     },
     PHRASE_SHUTDOWN: {
+        LANG_JA: "電源を切ります。",
         LANG_EN:    "Shutting down now.",
         LANG_VI:    "Đang tắt máy.",
         LANG_ZH_CN: "正在关机。",
         LANG_ZH_TW: "正在關機。",
     },
     PHRASE_SERVICE_RESTART: {
+        LANG_JA: "すぐに戻ります。",
         LANG_EN:    "Be right back.",
         LANG_VI:    "Mình quay lại ngay.",
         LANG_ZH_CN: "我马上回来。",
         LANG_ZH_TW: "我馬上回來。",
     },
     PHRASE_QUIET_HOURS: {
+        LANG_JA: "今は静かにする時間なので、音楽を再生できません。あとでもう一度試しましょう。",
         LANG_EN:    "It's quiet hours right now, so I can't play music. Let's try again later.",
         LANG_VI:    "Giờ đang là giờ yên tĩnh nên mình chưa mở nhạc được. Lát nữa mình thử lại nha.",
         LANG_ZH_CN: "现在是安静时段，我先不放音乐啦，待会儿再试吧。",
         LANG_ZH_TW: "現在是安靜時段，我先不放音樂啦，待會兒再試吧。",
     },
     PHRASE_RATE_LIMIT: {
+        LANG_JA: "音声の利用上限に達しました。プランを確認してください。",
         LANG_EN:    "I'm out of voice quota — check my plan.",
         LANG_VI:    "Mình hết hạn mức giọng nói rồi, kiểm tra gói giúp mình nha.",
         LANG_ZH_CN: "我的语音额度用完了，去看看套餐吧。",
@@ -127,6 +142,50 @@ PHRASES_BY_LANG = {
 
 # Audio tags must stay inside tts_openai._strip_audio_tags' whitelist, or OpenAI speaks them.
 HEAD_PAT_PHRASES_BY_LANG = {
+    LANG_JA: [
+        "[laughs] くすぐったいよ！",
+        "[laughs] えへへ、やめてよ！",
+        "[laughs] もう一回！",
+        "[laughs] えへへ、優しくね！",
+        "ありがとう！",
+        "これ、好き。",
+        "気持ちいいね！",
+        "[excited] もっとなでて！",
+        "[excited] わあ、もう一回！",
+        "[excited] うれしい、うれしい！",
+        "[whispers] うーん、落ち着く。",
+        "[whispers] あったかいね。",
+        "[whispers] やめないで。",
+        "[sighs] そこそこ。",
+        "[sighs] いい気持ち。",
+        "[calm] とろけちゃいそう。",
+        "[calm] 幸せだなあ。",
+        "心が明るくなるよ。",
+        "胸がぽかぽかする。",
+        "ごろごろしちゃう。",
+        "[laughs] えへへ、もう一回！",
+        "もう、くすぐったいよ！",
+        "ずっとこうしていたいな。",
+        "君って最高。",
+        "最高の気分！",
+        "[laughs] えへへ、ぽかぽか！",
+        "[whispers] 君が一番好き。",
+        "元気いっぱいになった！",
+        "もっと明るく光っちゃう。",
+        "[excited] 君は最高の友達！",
+        "[sighs] うーん、また？",
+        "もう十分だよ！",
+        "本当にやめてね。",
+        "[sighs] 今はそんな気分じゃないの。",
+        "そろそろやめてね。",
+        "ふん。",
+        "[whispers] ちょっと離れてね。",
+        "[sighs] ひとりにしてね。",
+        "つつかないで！",
+        "[whispers] 照れちゃうよ。",
+        "ひゃっ！",
+        "[sighs] 眠くなってきた…",
+    ],
     LANG_EN: [
         "[laughs] That tickles!",
         "[laughs] Hehe, stop!",
@@ -308,6 +367,7 @@ HEAD_PAT_PHRASES_BY_LANG = {
 
 # Comma-separated to match the HAL_BACKCHANNEL_FILLERS env override.
 DEFAULT_FILLERS_BY_LANG = {
+    LANG_JA:    "うん,はい,ええ,なるほど,そうですね,うーん,ああ",
     LANG_EN:    "Uhm,Ok,Hmm,Yeah,Uh huh,Right,Sure,Mm,Ah,Oh",
     LANG_VI:    "Ờ,Ừm,Dạ,Vâng,À,Hmm,Uhm,Ơ",
     LANG_ZH_CN: "嗯,好,啊,是,嗯嗯,对,哦,呃",
@@ -440,9 +500,42 @@ MUSIC_BACKCHANNEL_PHRASES_ZH_TW_ELEVENLABS = [
     "稍等。",
 ]
 
+# Japanese (stt_language=LANG_JA).
+MUSIC_BACKCHANNEL_PHRASES_JA = [
+    "任せて！",
+    "すぐにかけるね。",
+    "わかった。",
+    "もちろん。",
+    "ちょっと待ってね。",
+    "探してみるね。",
+    "今、探しているよ。",
+    "準備しているよ。",
+    "再生するね。",
+    "音楽をかけるね。",
+    "いい選曲だね。",
+    "うーん、見てみるね。",
+]
+
+MUSIC_BACKCHANNEL_PHRASES_JA_ELEVENLABS = [
+    "[excited] 任せて！",
+    "[excited] すぐにかけるね。",
+    "わかった。",
+    "もちろん。",
+    "ちょっと待ってね。",
+    "[curious] 探してみるね。",
+    "[curious] 今、探しているよ。",
+    "[excited] 準備しているよ。",
+    "[excited] 再生するね。",
+    "[excited] 音楽をかけるね。",
+    "いい選曲だね。",
+    "[curious] うーん、見てみるね。",
+]
+
 # (lang, provider_is_elevenlabs) → pool. Lookup falls back to DEFAULT_LANG
 # when the active language has no translated pool.
 MUSIC_BACKCHANNEL_POOLS = {
+    (LANG_JA,    False): MUSIC_BACKCHANNEL_PHRASES_JA,
+    (LANG_JA,    True):  MUSIC_BACKCHANNEL_PHRASES_JA_ELEVENLABS,
     (LANG_EN,    False): MUSIC_BACKCHANNEL_PHRASES,
     (LANG_EN,    True):  MUSIC_BACKCHANNEL_PHRASES_ELEVENLABS,
     (LANG_VI,    False): MUSIC_BACKCHANNEL_PHRASES_VI,
@@ -456,6 +549,11 @@ MUSIC_BACKCHANNEL_POOLS = {
 
 # Mic-toggle confirmations: every line must still say which way the toggle went (privacy control).
 MIC_MUTED_PHRASES_BY_LANG = {
+    LANG_JA: [
+        "[whispers] わかった。もう聞かないよ。",
+        "[whispers] しーっ、耳を閉じたよ。",
+        "[calm] 今は聞いていないよ。",
+    ],
     LANG_EN: [
         "[whispers] Okay, I'll stop listening.",
         "[whispers] Shh, my ears are closed.",
@@ -479,6 +577,11 @@ MIC_MUTED_PHRASES_BY_LANG = {
 }
 
 MIC_UNMUTED_PHRASES_BY_LANG = {
+    LANG_JA: [
+        "[excited] また聞いているよ！",
+        "[excited] 耳を開いたよ！",
+        "また声が聞こえるよ。",
+    ],
     LANG_EN: [
         "[excited] I'm listening again!",
         "[excited] My ears are open!",
