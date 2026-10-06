@@ -1132,7 +1132,7 @@ openclaw --version || true
 # Onboard as root to create default config/state files before first service start.
 # --skip-health: gateway cannot run inside chroot (no systemd, no network).
 # Timeout: chroot has no systemd/network/udev — command may hang despite --skip-health.
-timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || {
+timeout 180 openclaw onboard --non-interactive --accept-risk --skip-health || {
   echo "WARNING: openclaw onboard timed out or failed (non-fatal in chroot)"
   echo "Gateway will complete onboarding on first boot with network access."
 }
@@ -1140,6 +1140,26 @@ timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || {
 # Install external plugins baked into the golden image.
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
+
+# OpenClaw >= 2026.9 attests the workspace it seeds and, for 24 h, refuses to
+# reseed one that looks wiped (WorkspaceVanishedError). The image is built hours
+# before first setup, so never ship that attestation: an onboard that timed out
+# above leaves an empty workspace, and setup must be able to reseed it.
+[ -f /root/.openclaw/openclaw.json ] || echo "WARN: openclaw onboard did not finish (no openclaw.json); setup will onboard on the device"
+rm -rf /root/.openclaw/workspace-attestations /root/.openclaw/workspace/openclaw-workspace-state.json /root/.openclaw/workspace/.openclaw/workspace-state.json
+python3 - <<'OCSTATE' || echo "WARN: could not clear the OpenClaw workspace attestation"
+import os, sqlite3
+db = "/root/.openclaw/state/openclaw.sqlite"
+if os.path.exists(db):
+    con = sqlite3.connect(db)
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for t in ("workspace_generated_bootstrap_hashes", "workspace_path_aliases", "workspace_setup_state"):
+        if t in tables:
+            con.execute("DELETE FROM " + t)
+    con.commit()
+    con.close()
+print("[stage] OpenClaw workspace attestation cleared")
+OCSTATE
 
 # Resolve chromium path for headless browser support
 CHROME_PATH=\$(command -v chromium 2>/dev/null || command -v chromium-browser 2>/dev/null || echo /usr/bin/chromium)

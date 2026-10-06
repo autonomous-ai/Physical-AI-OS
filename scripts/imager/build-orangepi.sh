@@ -308,12 +308,32 @@ OPENCLAW_STATE_DIR=/root/.openclaw \\
 XDG_CACHE_HOME=/root/.openclaw/.cache \\
 XDG_CONFIG_HOME=/root/.openclaw/.config \\
 XDG_DATA_HOME=/root/.openclaw/.local/share \\
-timeout 60 openclaw onboard --non-interactive --accept-risk --skip-health || \\
+timeout 180 openclaw onboard --non-interactive --accept-risk --skip-health || \\
   echo "WARN: openclaw onboard timed out (will retry on device first boot)"
 
 # Install external plugins baked into the golden image.
 openclaw plugins install @openclaw/discord@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: discord plugin install failed (non-fatal)"
 openclaw plugins install @openclaw/slack@${OPENCLAW_VERSION} --force 2>&1 || echo "WARN: slack plugin install failed (non-fatal)"
+
+# OpenClaw >= 2026.9 attests the workspace it seeds and, for 24 h, refuses to
+# reseed one that looks wiped (WorkspaceVanishedError). The image is built hours
+# before first setup, so never ship that attestation: an onboard that timed out
+# above leaves an empty workspace, and setup must be able to reseed it.
+[ -f /root/.openclaw/openclaw.json ] || echo "WARN: openclaw onboard did not finish (no openclaw.json); setup will onboard on the device"
+rm -rf /root/.openclaw/workspace-attestations /root/.openclaw/workspace/openclaw-workspace-state.json /root/.openclaw/workspace/.openclaw/workspace-state.json
+python3 - <<'OCSTATE' || echo "WARN: could not clear the OpenClaw workspace attestation"
+import os, sqlite3
+db = "/root/.openclaw/state/openclaw.sqlite"
+if os.path.exists(db):
+    con = sqlite3.connect(db)
+    tables = {r[0] for r in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+    for t in ("workspace_generated_bootstrap_hashes", "workspace_path_aliases", "workspace_setup_state"):
+        if t in tables:
+            con.execute("DELETE FROM " + t)
+    con.commit()
+    con.close()
+print("[stage] OpenClaw workspace attestation cleared")
+OCSTATE
 
 curl -fsSL "https://github.com/mikefarah/yq/releases/download/v4.46.1/yq_linux_arm64" -o /usr/local/bin/yq
 chmod +x /usr/local/bin/yq
