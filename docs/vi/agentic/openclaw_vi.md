@@ -75,3 +75,30 @@ over a recently attested workspace`), làm setup thất bại với `agent_setup
 
 Máy đã bị kẹt lỗi này: chạy `sudo rm -rf /root/.openclaw/state
 /root/.openclaw/workspace-attestations` rồi setup lại.
+
+## Tiền tố câu trả lời và trả lời heartbeat
+
+- **Không gắn tiền tố.** Trước đây setup ghi `messages.responsePrefix: "auto"`,
+  OpenClaw hiểu là tên định danh của agent; agent không đặt tên thì dùng id, nên
+  mọi câu trả lời trong chat bắt đầu bằng `[main]`. Lệnh `doctor` của OpenClaw
+  còn chép giá trị này xuống `channels.<channel>.responsePrefix`. Giờ setup không
+  ghi nữa, và onboarding (`ensureMessagesQueueConfig`) xoá `"auto"` khỏi
+  `messages`, mọi channel và mọi account của channel trên máy đã setup, rồi
+  restart gateway. Tiền tố người dùng tự đặt được giữ nguyên.
+- **Heartbeat kết thúc bằng `NO_REPLY`.** Khối OS trong `workspace/HEARTBEAT.md`
+  trước đây ghi "skip silently", và model đôi khi trả về tin rỗng. OpenClaw coi
+  heartbeat rỗng là `agent-runner-failure` và gửi `[main] ⚠️ Agent couldn't
+  generate a response. Please try again.` lên chat gần nhất. Giờ khối này dặn
+  agent trả lời đúng `NO_REPLY` khi xong, là token heartbeat im lặng của OpenClaw.
+  Onboarding ghi lại khối này trên máy đã setup vì nội dung đã đổi.
+- **SOUL của thiết bị phải nằm trong giới hạn bootstrap.** Onboarding đặt
+  `agents.defaults.bootstrapMaxChars` là 12.000 (`bootstrapMaxChars` trong
+  `runtimes/openclaw/onboarding.go`). File workspace dài hơn thì OpenClaw chỉ
+  giữ 75% đầu và 25% cuối, âm thầm bỏ phần giữa. SOUL của intern-v2 dài 13,2k ký
+  tự nên model chưa bao giờ thấy bảng thẻ âm thanh, quy tắc ngôn ngữ trả lời và
+  quy tắc không gắn thẻ trong chat, khiến câu trả lời chat mở đầu bằng thẻ như
+  `[warm]`. Giờ SOUL còn khoảng 10,5k, và thẻ âm thanh chỉ dùng cho câu trả lời
+  được đọc lên (lượt nói); trả lời Telegram, iMessage, WhatsApp, Discord, Slack
+  và web chat không có thẻ. `TestDeviceSoulsFitTheBootstrapCap` giữ mọi SOUL
+  của thiết bị dưới 11.000 ký tự, chừa chỗ cho mục `## Personal` của chủ máy.
+  Lamp (18,6k) là ngoại lệ đã biết, còn chờ rút gọn.
