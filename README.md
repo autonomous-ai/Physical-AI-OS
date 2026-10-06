@@ -1,6 +1,6 @@
 # Physical AI Operating System
 
-We're building the the "Android" for physical AI agents.
+We're building the "Android" for physical AI agents.
 
 Give Hermes, Claude Code, Codex, and other AI agents eyes, ears, a voice, and a body they can control.
 
