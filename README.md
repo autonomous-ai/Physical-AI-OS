@@ -1,22 +1,34 @@
 # Physical AI Operating System
 
-## The "Android" for robots.
+## The "Android" for physical AI agents.
 
-The open-source operating system for physical AI.
+Give Hermes, Claude Code, Codex, and other AI agents eyes, ears, a voice, and a body they can control.
 
-**Choose your agent. Give it a body. Build what it does.**
-
-Give your robot a voice, vision, memory, and skills — then connect it to agents and apps on your computer.
+**Bring your AI agents into the physical world.**
 
 https://github.com/user-attachments/assets/c80f1255-4355-4f59-9114-6d3b8d4007a2
 
-[Set up a robot](#quick-start) · [Bring your own robot](docs/bring-your-own-robot.md) · [Build a skill](#contribute) · [Architecture](#platform-architecture)
+**[Start with Lamp](#autonomous-lamp)** · [Bring your own robot](docs/bring-your-own-robot.md) · [Build a physical skill](#physical-skills)
 
-- **Understand and act.** Control lights, volume, and tracking through voice or chat. Local rules handle familiar commands; Jev can recognize natural phrasing before the request reaches the main agent.
-- **Work beyond the robot.** [Harness](skills/harness-use/) delegates digital tasks to agents on your computer. [Autonomous Buddy](skills/computer-use/) lets the device agent operate Mac apps. [Connectors](skills/connectors/) give it access to linked services.
-- **Make it yours.** Swap the [agent runtime](runtimes/), [model](docs/hosted.md), [voice](hal/drivers/voice/), [skills](skills/), or [board](hal/board/boards.json). Define its personality in `SOUL.md` and its hardware in `ROBOT.md`.
+## Choose your agent
+
+Run Hermes, Claude Code, Codex, OpenClaw, OpenCode, or PicoClaw. Choose a compatible [model](docs/hosted.md) and configure its [voice](hal/drivers/voice/), [personality](robots/lamp/SOUL.md), and tools.
 
 The OS runs on the robot and coordinates hardware and agent tasks. Model inference may use remote services, depending on your configuration.
+
+## Give it a body
+
+Start with [Lamp](#autonomous-lamp), [Intern](#autonomous-intern), or [Reachy Mini](#reachy-mini)—or [add support for your own robot](docs/bring-your-own-robot.md). Physical AI Operating System connects the agent to the hardware that body provides: cameras, microphones, speakers, motors, lights, and sensors.
+
+## Physical skills
+
+Give your agent new ways to sense and interact with its surroundings.
+
+- Follow an object with its camera and movement.
+- Respond to touch with a gesture.
+- Turn a sensor reading into light, movement, or speech.
+
+Start with an existing [physical skill](skills/servo-tracking/), change its instructions, or connect your own tools. Use the [skill creator](skills/skill-creator/) to write a new skill, and see the [contribution guide](#contribute) to share it.
 
 ## Try saying
 
