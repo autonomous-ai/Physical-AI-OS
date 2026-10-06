@@ -1,5 +1,7 @@
 # Physical AI Operating System
 
+## The "Android" for robots.
+
 The open-source operating system for physical AI.
 
 **Choose your agent. Give it a body. Build what it does.**
@@ -62,7 +64,7 @@ https://github.com/user-attachments/assets/2f0aaafb-287c-488e-a3b1-a82f0ad9e776
 1. **SSH in** — `ssh pollen@reachy-mini.local`.
 2. **Run one command.** Nothing is flashed; the Reachy daemon keeps the motors.
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/autonomous-ai/Physical-AI-OS/main/robots/reachy-mini/install.sh | sudo bash
+   curl -fsSL https://raw.githubusercontent.com/autonomous-ai/Physical-AI-Operating-System/main/robots/reachy-mini/install.sh | sudo bash
    ```
 3. **Add it.** In the app, tap **Add robot → Reachy Mini** and give it `reachy-mini.local`.
 4. **Interact with it.** Say something — the head tilts, the antennas lift, and it answers.
@@ -164,7 +166,7 @@ Long form: [architecture](docs/architecture/overview.md) · [HAL](docs/architect
 
 ## Contribute
 
-The easiest way in is a skill: one markdown file, no Go, no hardware, and it lands on every robot that has the parts. PRs welcome, vibe-coded ones included. Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/Physical-AI-OS/discussions); gaps we would love help with are labelled [`claim-me`](https://github.com/autonomous-ai/Physical-AI-OS/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
+The easiest way in is a skill: one markdown file, no Go, no hardware, and it lands on every robot that has the parts. PRs welcome, vibe-coded ones included. Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/Physical-AI-Operating-System/discussions); gaps we would love help with are labelled [`claim-me`](https://github.com/autonomous-ai/Physical-AI-Operating-System/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
 
 | You want to… | You write… | Start from |
 |---|---|---|

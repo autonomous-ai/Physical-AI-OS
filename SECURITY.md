@@ -1,6 +1,6 @@
 # Security
 
-Found a vulnerability? Please **report it privately** — open a [security advisory](https://github.com/autonomous-ai/Physical-AI-OS/security/advisories/new)
+Found a vulnerability? Please **report it privately** — open a [security advisory](https://github.com/autonomous-ai/Physical-AI-Operating-System/security/advisories/new)
 or email the maintainer instead of filing a public issue, and give us a chance to ship a fix
 first. Thank you. 🙏
 
