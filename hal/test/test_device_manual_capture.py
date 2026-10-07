@@ -14,6 +14,7 @@ from hal.drivers.voice._internal.harness_capture import HarnessCapture
 from hal.drivers.voice._internal.input_policy import (
     device_manual_mode, device_snapshot, same_capture_target,
 )
+from hal.drivers.voice._internal.realtime_turn import RealtimeTurnResult
 
 
 LOCAL = {"enabled": False, "generation": 4}
@@ -80,9 +81,13 @@ def test_device_idle_does_not_open_microphone(live, monkeypatch):
 
 
 @pytest.mark.parametrize("live", [False, True])
+@pytest.mark.parametrize("realtime", [
+    "disabled", "handled", "delegated", "unavailable", "rejected", "error", "no_output",
+])
 @pytest.mark.parametrize("reason", ["finish", "cancel", "route_change", "offline",
-                                   "provider_close", "stt_error", "timeout"])
-def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
+                                   "provider_close", "stt_error", "timeout",
+                                   "prepare_route_change", "commit_route_change", "upload_error"])
+def test_manual_stream_only_finish_dispatches_once(reason, live, realtime, monkeypatch):
     from hal.drivers.voice import voice_service as module
 
     control = HarnessCapture(target_matches=same_capture_target)
@@ -95,6 +100,9 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     service._music_is_playing.return_value = False
     service._wakeword_focus.is_active.return_value = False
     service._np = np
+    service._realtime.sample_rate = 16000
+    service._realtime.rebuilding = False
+    service._realtime.available = realtime != "unavailable"
     service._decorator.starts_with_wake_word.return_value = False
     service._decorator.classify_wake_word.return_value = ("please fix the tests", "voice")
     service._decorator.identify_and_decorate.return_value = ("please fix the tests", None, None)
@@ -104,14 +112,50 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     current_mode = dict(LOCAL)
     reads = []
 
+    def prepare():
+        if reason == "prepare_route_change":
+            current_mode["generation"] += 1
+
+    service._realtime.prepare_turn.side_effect = prepare
+
+    def append_audio(*args, **kwargs):
+        assert capture.finished.is_set(), "audio reached realtime before finish tap"
+        assert not capture.cancelled.is_set()
+        if reason == "commit_route_change":
+            current_mode["generation"] += 1
+        if reason == "upload_error":
+            raise RuntimeError("provider disconnected during upload")
+
+    service._realtime.append_audio.side_effect = append_audio
+
+    result = {
+        "disabled": RealtimeTurnResult(),
+        "handled": RealtimeTurnResult(handled=True, transcript="Done", route="realtime_handled"),
+        "delegated": RealtimeTurnResult(delegated=True, delegate_msg="fix the tests", route="delegated"),
+        "unavailable": RealtimeTurnResult(route="realtime_unavailable"),
+        "rejected": RealtimeTurnResult(rejected=True, route="ai_rejected"),
+        "error": RealtimeTurnResult(delegated=True, route="realtime_error"),
+        "no_output": RealtimeTurnResult(route="realtime_no_output"),
+    }[realtime]
+
+    def run_turn(*args, **kwargs):
+        assert capture.finished.is_set()
+        assert current_mode == LOCAL
+        assert kwargs["stop_event"] is capture.cancelled
+        if realtime != "disabled":
+            assert args[4], "captured audio was not forwarded to realtime"
+        return result
+
     def read(_):
+        service._realtime.append_audio.assert_not_called()
+        service._realtime.bind_audio_turn.assert_not_called()
         reads.append(1)
         assert len(reads) <= 4, "manual session did not terminate"
         if len(reads) == 2:
             stt._on_transcript_cb("please fix the tests", False)
             stt._on_transcript_cb("please fix the tests", True)
         if len(reads) == 3:
-            if reason == "finish":
+            if reason in ("finish", "prepare_route_change", "commit_route_change", "upload_error"):
                 control.finish()
                 control.finish()
             elif reason == "cancel":
@@ -131,13 +175,16 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     mic.read.side_effect = read
     # Explicit capture must work even if a stale wake setting is still true.
     monkeypatch.setattr(module.hal_config, "WAKEWORD_ENABLED", True)
-    monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", True)
+    monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", realtime != "disabled")
+    monkeypatch.setattr(module.hal_config, "REALTIME_AI_REJECT_FILTER", True)
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", live)
     monkeypatch.setattr(module.voice_cfg, "SILENCE_VAD_ENABLED", False, raising=False)
     with patch.object(module, "read_voice_mode", side_effect=lambda: dict(current_mode)), \
          patch.object(module, "turn_should_close", return_value=True) as silence, \
          patch.object(module, "finalize_session", return_value=("please fix the tests", [], 2.0)), \
          patch.object(module, "dispatch_turn", wraps=module.dispatch_turn) as dispatch, \
+         patch.object(module, "run_realtime_turn", side_effect=run_turn) as run_realtime, \
+         patch.object(module, "_WaitFiller"), \
          patch.object(module, "voice_metrics"), \
          patch.object(module.requests, "post"), \
          patch("hal.drivers.harness.led.set_capturing") as harness_led:
@@ -149,21 +196,46 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     silence.assert_not_called()
     harness_led.assert_not_called()
     service._set_emotion_local.assert_any_call(module.presets.EMO_LISTENING)
-    assert dispatch.call_count == (1 if reason == "finish" else 0)
-    if reason == "finish":
+    upload_failed = reason == "upload_error" and realtime not in ("disabled", "unavailable")
+    accepted = reason in ("finish", "upload_error") or (
+        reason == "prepare_route_change" and realtime == "disabled"
+    ) or (reason == "commit_route_change" and realtime in ("disabled", "unavailable"))
+    assert dispatch.call_count == int(accepted)
+    assert run_realtime.call_count == int(accepted and not upload_failed)
+    if accepted:
         assert dispatch.call_args.args[2] == "please fix the tests"
         assert dispatch.call_args.kwargs["event_type_override"] == "voice_command"
-        service._sensing_sender.send.assert_called_once()
-        sent = service._sensing_sender.send.call_args
-        assert sent.kwargs["event_type"] == "voice_command"
-        assert sent.kwargs["voice_turn_type"] == "voice_command"
+        if realtime == "rejected" and not upload_failed:
+            service._sensing_sender.send.assert_not_called()
+        else:
+            service._sensing_sender.send.assert_called_once()
+            sent = service._sensing_sender.send.call_args
+            assert sent.kwargs["event_type"] == (
+                "voice_agent_handled" if realtime == "handled" and not upload_failed else "voice_command"
+            )
+            assert sent.kwargs["voice_turn_type"] == "voice_command"
+            if realtime == "delegated" and not upload_failed:
+                assert "[voice-instruction] fix the tests" in sent.args[0]
         assert dispatch.call_args.kwargs["harness_voice"] == device_snapshot(LOCAL)
-    expected_chimes = [call(), call(finished=True)] if reason == "finish" else [call()]
+    finished = reason in ("finish", "prepare_route_change", "commit_route_change", "upload_error")
+    expected_chimes = [call(), call(finished=True)] if finished else [call()]
     assert service._tts.play_harness_capture_chime.call_args_list == expected_chimes
     service._backchannel.on_partial.assert_not_called()
-    service._realtime.append_audio.assert_not_called()
-    service._realtime.send_text.assert_not_called()
-    service._realtime.bind_audio_turn.assert_not_called()
+    if realtime in ("disabled", "unavailable") or not finished or reason == "prepare_route_change":
+        service._realtime.append_audio.assert_not_called()
+        service._realtime.send_text.assert_not_called()
+        service._realtime.bind_audio_turn.assert_not_called()
+    else:
+        assert service._realtime.append_audio.call_count == (1 if upload_failed else 2)
+        service._realtime.bind_audio_turn.assert_called_once()
+    if reason == "commit_route_change" and realtime not in ("disabled", "unavailable"):
+        service._realtime.recover_session.assert_called_once_with(
+            "manual-capture-cancelled", discard_old_on_failure=True,
+        )
+    if upload_failed:
+        service._realtime.recover_session.assert_called_once_with(
+            "manual-upload-failed", discard_old_on_failure=True,
+        )
     service._realtime.reserve_audio_capture.assert_not_called()
     service._try_live_opener.assert_not_called()
 

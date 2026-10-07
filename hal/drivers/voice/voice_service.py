@@ -2317,7 +2317,15 @@ class VoiceService:
             if not realtime_allowed or realtime_turn_started or realtime_start_failed:
                 return False
 
-            if hal_config.WAKEWORD_ENABLED:
+            if input_policy.device_capture:
+                # Keep audio local until an owned finish tap. Some providers
+                # endpoint audio themselves even outside Live mode.
+                if not capture_complete.is_set():
+                    return False
+                if not manual_capture_valid():
+                    return False
+
+            if hal_config.WAKEWORD_ENABLED and not input_policy.device_capture:
                 wakeword_followup_active = (
                     wakeword_followup_active or self._wakeword_focus.is_active()
                 )
@@ -2366,6 +2374,8 @@ class VoiceService:
 
             if not prepare_capture_session():
                 return False
+            if not manual_capture_valid():
+                return False
             realtime_turn_started = True
             realtime_deferred = self._realtime.rebuilding
             if not realtime_deferred and self._realtime.available:
@@ -2386,9 +2396,36 @@ class VoiceService:
                     logger.info("[realtime] Upload session changed; retaining full turn for replay")
                 except Exception as e:
                     logger.warning("[realtime] start turn failed: %s", e)
+                    if input_policy.device_capture and audio_turn is not None:
+                        self._realtime.recover_session(
+                            "manual-upload-failed", discard_old_on_failure=True,
+                        )
                     realtime_start_failed = True
                     realtime_turn_started = False
             return True
+
+        def manual_capture_valid() -> bool:
+            return manual_capture is None or (
+                self._running
+                and endpoint_method == "manual_tap"
+                and not manual_capture.cancelled.is_set()
+                and same_capture_target(harness_voice, read_voice_mode())
+            )
+
+        def discard_invalid_manual_capture() -> bool:
+            if manual_capture_valid():
+                return False
+            if audio_turn is not None and hal_config.REALTIME_ENABLED:
+                # OpenAI/GPT Live/Pipecat do not expose Gemini's open-activity
+                # marker. Replace the session to drop every provider's buffer.
+                self._realtime.recover_session(
+                    "manual-capture-cancelled", discard_old_on_failure=True,
+                )
+            if post_capture_wait_filler is not None:
+                post_capture_wait_filler.cancel()
+            logger.info("Manual capture discarded without a valid owned finish tap")
+            return True
+
         try:
             if preconnected_session:
                 stt_session._on_transcript_cb = on_transcript
@@ -2787,16 +2824,9 @@ class VoiceService:
                 if realtime_turn_started and hal_config.REALTIME_ENABLED:
                     self._realtime.discard_open_activity("max-duration")
                 return
-            if manual_capture is not None and (
-                not self._running
-                or endpoint_method != "manual_tap"
-                or manual_capture.cancelled.is_set()
-                or not same_capture_target(harness_voice, read_voice_mode())
-            ):
-                logger.info("Harness manual capture discarded without a valid finish tap")
-                combined = ""
-                harness_listening = False
-            elif manual_capture is not None and self._tts:
+            if discard_invalid_manual_capture():
+                return
+            if manual_capture is not None and self._tts:
                 self._tts.play_harness_capture_chime(finished=True)
             if interaction_id is None:
                 interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
@@ -2972,6 +3002,9 @@ class VoiceService:
                 else voice_cfg.SPEAKER_PREPASS_JOIN_S
             )
 
+            if discard_invalid_manual_capture():
+                return
+
             if (
                 realtime_turn_started
                 and realtime_deferred
@@ -2981,6 +3014,8 @@ class VoiceService:
                 and early_realtime_result is None
             ):
                 if self._realtime.wait_until_available():
+                    if discard_invalid_manual_capture():
+                        return
                     try:
                         audio_turn = self._realtime.bind_audio_turn()
                         self._realtime.send_text(build_turn_context(turn_speaker_display))
@@ -3059,6 +3094,10 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
+            # Preparing a provider or resolving identity can race a route/mic
+            # change. Recheck before committing buffered manual audio.
+            if discard_invalid_manual_capture():
+                return
             if early_realtime_result is not None:
                 rt = early_realtime_result
                 if rt.handled and (combined or rt.transcript):
@@ -3077,6 +3116,7 @@ class VoiceService:
                     interaction_id=interaction_id,
                     wait_filler=post_capture_wait_filler,
                     audio_turn=audio_turn,
+                    **({"stop_event": manual_capture.cancelled} if input_policy.device_capture else {}),
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two
@@ -3111,12 +3151,7 @@ class VoiceService:
                     and not live_opener_consumed):
                 resolve_turn_speaker_identity(after_realtime_decision=True)
 
-            if manual_capture is not None and (
-                not self._running
-                or endpoint_method != "manual_tap"
-                or manual_capture.cancelled.is_set()
-                or not same_capture_target(harness_voice, read_voice_mode())
-            ):
+            if not manual_capture_valid():
                 dispatch_to_main = False
             if dispatch_to_main and not live_opener_consumed:
                 if combined and not downstream_dropped:
