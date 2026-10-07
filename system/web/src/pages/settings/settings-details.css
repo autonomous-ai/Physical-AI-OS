@@ -1,0 +1,58 @@
+.lm-runtime-help {
+  margin: auto;
+  width: min(680px, calc(100% - 24px));
+  max-width: none;
+  max-height: calc(100dvh - 24px);
+  padding: 0;
+  border: none;
+  border-radius: 10px;
+  background: transparent;
+}
+
+.lm-runtime-help::backdrop {
+  background: rgb(0 0 0 / 70%);
+}
+
+.lm-voice-file {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--lm-border);
+  color: var(--lm-text-dim);
+  font-size: 12px;
+}
+
+.lm-voice-filename {
+  flex: 1;
+  min-width: 0;
+  font-family: monospace;
+  overflow-wrap: anywhere;
+}
+
+.lm-voice-file-controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.lm-voice-file-controls audio {
+  width: 220px;
+  max-width: 100%;
+  min-width: 0;
+  height: 40px;
+}
+
+@media (max-width: 640px) {
+  .lm-voice-file {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .lm-voice-file-controls audio {
+    flex: 1;
+    width: 0;
+  }
+}

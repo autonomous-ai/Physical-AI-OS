@@ -109,7 +109,7 @@ export function FacebookSection({ active }: { active: boolean }) {
       }}
     >
       {loading ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Loading…</div>
+        <div style={{ fontSize: 12, color: C.textDim }}>Loading…</div>
       ) : (
         <div
           onKeyDown={(e) => {
@@ -138,7 +138,7 @@ export function FacebookSection({ active }: { active: boolean }) {
             spellCheck={false}
             style={{ ...inputStyle, marginBottom: 6, fontFamily: "monospace" }}
           />
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
             Don't know your Page ID?{" "}
             <button
               type="button"
@@ -162,13 +162,13 @@ export function FacebookSection({ active }: { active: boolean }) {
 
           <div style={{ display: "flex", alignItems: "flex-end", justifyContent: "space-between", marginBottom: 5 }}>
             <FieldLabel htmlFor="fb_page_token">Page Access Token</FieldLabel>
-            <div style={{ fontSize: 11, color: C.textMuted, display: "flex", alignItems: "center", gap: 8 }}>
+            <div style={{ fontSize: 12, color: C.textDim, display: "flex", alignItems: "center", gap: 8 }}>
               <TokenCounter length={pageAccessToken.length} />
               <button
                 type="button"
                 onClick={() => setShowToken((v) => !v)}
                 aria-label={showToken ? "Hide" : "Show"}
-                style={{ background: "none", border: "none", padding: 0, color: C.textMuted, cursor: "pointer", display: "flex", alignItems: "center" }}
+                style={{ background: "none", border: "none", padding: 0, color: C.textDim, cursor: "pointer", display: "flex", alignItems: "center" }}
               >
                 {showToken ? <EyeOff size={14} /> : <Eye size={14} />}
               </button>
@@ -187,7 +187,7 @@ export function FacebookSection({ active }: { active: boolean }) {
 
           <div style={{
             display: "flex", alignItems: "center", gap: 6,
-            fontSize: 11, color: C.amber, marginBottom: 16,
+            fontSize: 12, color: C.amber, marginBottom: 16,
           }}>
             <Lock size={11} /> Stored on your robot only. Never uploaded to our servers.
           </div>
@@ -196,14 +196,14 @@ export function FacebookSection({ active }: { active: boolean }) {
             background: C.bg, border: `1px solid ${C.border}`, borderRadius: 10,
             padding: "10px 14px", marginBottom: 12,
           }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8 }}>
               <button
                 type="button"
                 onClick={() => setGuideOpen((v) => !v)}
                 style={{
                   background: "none", border: "none", padding: 0, cursor: "pointer",
-                  display: "inline-flex", alignItems: "center", gap: 6,
-                  color: C.textDim, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em",
+                  display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 6,
+                  color: C.textDim, fontSize: 12, fontWeight: 700, letterSpacing: "0.05em",
                 }}
                 aria-expanded={guideOpen}
               >
@@ -214,13 +214,13 @@ export function FacebookSection({ active }: { active: boolean }) {
                 href="https://developers.facebook.com/tools/explorer/"
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: C.amber, fontSize: 11.5, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
+                style={{ color: C.amber, fontSize: 12.5, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
               >
                 Open Graph Explorer <ExternalLink size={11} />
               </a>
             </div>
             {guideOpen && (
-              <div style={{ marginTop: 12, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+              <div style={{ marginTop: 12, fontSize: 12.5, color: C.textDim, lineHeight: 1.6 }}>
                 <Step n={1}>
                   Open the <b>Graph API Explorer</b> and sign in with the Facebook
                   account that manages the Page.
@@ -234,13 +234,13 @@ export function FacebookSection({ active }: { active: boolean }) {
                   <b>Generate Access Token</b>:
                   <div style={{
                     background: C.surface, border: `1px solid ${C.border}`, borderRadius: 6,
-                    padding: "6px 8px", marginTop: 5, fontFamily: "monospace", fontSize: 10.5,
+                    padding: "6px 8px", marginTop: 5, fontFamily: "monospace", fontSize: 12,
                     color: C.text, lineHeight: 1.55, wordBreak: "break-word",
                   }}>
                     pages_show_list, pages_manage_posts, pages_read_engagement,<br />
                     pages_read_user_content, pages_manage_engagement, read_insights
                   </div>
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     First 3 = post to Page. Last 3 = read + reply to comments +
                     analytics. Fewer is fine if the skill's auto-comment / insights
                     features are disabled.
@@ -248,7 +248,7 @@ export function FacebookSection({ active }: { active: boolean }) {
                 </Step>
                 <Step n={4}>
                   <b style={{ color: C.amber }}>Extend the token to ~60 days</b>{" "}
-                  <span style={{ color: C.textMuted }}>(strongly recommended for
+                  <span style={{ color: C.textDim }}>(strongly recommended for
                   schedules / cron — the raw token from step 3 expires in ~1 hour)</span>.
                   Open the{" "}
                   <a
@@ -263,7 +263,7 @@ export function FacebookSection({ active }: { active: boolean }) {
                   and click <b>Extend Access Token</b> (Facebook reauth prompt may
                   appear). Copy the <b>new</b> token that shows below "Your new
                   extended access token".
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     Paste this extended token <b>back</b> into the "Access Token"
                     box in Graph API Explorer, replacing the short-lived one, before
                     continuing to step 5. The Page Access Token derived from this
@@ -284,7 +284,7 @@ export function FacebookSection({ active }: { active: boolean }) {
                   dropdown still says "User Token" is a <b>User Access Token</b>
                   {" "}and Meta refuses it on Page posts (error #200) — same
                   scopes, wrong owner.
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     <b style={{ color: C.text }}>Verify before pasting:</b>{" "}
                     drop the token into the{" "}
                     <a
@@ -299,7 +299,7 @@ export function FacebookSection({ active }: { active: boolean }) {
                     <b style={{ color: C.amber }}>PAGE</b> (not USER). If it says
                     USER, redo this step.
                   </div>
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     Only Pages you've authorized this app for appear in the
                     dropdown. Missing a Page? Go to{" "}
                     <a
@@ -338,13 +338,13 @@ export function FacebookSection({ active }: { active: boolean }) {
           {error && (
             <div style={{
               background: "var(--lm-red-dim)", border: "1px solid var(--lm-red-glow)",
-              borderRadius: 8, padding: "8px 12px", fontSize: 11.5, color: C.red, marginBottom: 14,
+              borderRadius: 8, padding: "8px 12px", fontSize: 12.5, color: C.red, marginBottom: 14,
             }}>
               {error}
             </div>
           )}
 
-          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
             {connected ? (
               <button
                 type="button"
@@ -363,7 +363,7 @@ export function FacebookSection({ active }: { active: boolean }) {
               </button>
             ) : <span />}
 
-            <div style={{ display: "flex", gap: 10 }}>
+            <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
               <button
                 type="button"
                 onClick={reset}
@@ -430,11 +430,11 @@ function ModalHeader({
           Add a Page Access Token so the robot can post to your Facebook Page.
         </div>
         {connected && (
-          <div style={{ marginTop: 8, fontSize: 11, color: C.green, display: "inline-flex", alignItems: "center", gap: 6 }}>
+          <div style={{ marginTop: 8, fontSize: 12, color: C.green, display: "inline-flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
             ✓ connected
-            {connectedPageId && <span style={{ color: C.textMuted }}>· Page {connectedPageId}</span>}
+            {connectedPageId && <span style={{ color: C.textDim }}>· Page {connectedPageId}</span>}
             {connectedAt > 0 && (
-              <span style={{ color: C.textMuted }}>
+              <span style={{ color: C.textDim }}>
                 · {new Date(connectedAt * 1000).toLocaleDateString()}
               </span>
             )}
@@ -464,13 +464,13 @@ function InfoCard({
   return (
     <div style={{
       background: bg, border: `1px solid ${border}`, borderRadius: 10,
-      padding: "12px 14px", marginBottom: 14, fontSize: 11.5, color: C.textDim, lineHeight: 1.6,
+      padding: "12px 14px", marginBottom: 14, fontSize: 12.5, color: C.textDim, lineHeight: 1.6,
     }}>
       {(title || titleRight || icon) && (
-        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: title ? 8 : 0 }}>
+        <div style={{ display: "flex", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: title ? 8 : 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {icon}
-            {title && <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", color: titleColor }}>{title}</div>}
+            {title && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em", color: titleColor }}>{title}</div>}
           </div>
           {titleRight}
         </div>
@@ -488,9 +488,9 @@ function Step({ n, last, children }: { n: number; last?: boolean; children: Reac
         width: 18, height: 18, borderRadius: 9,
         background: C.amberDim, color: C.amber,
         display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 10.5, fontWeight: 700,
+        fontSize: 12, fontWeight: 700,
       }}>{n}</div>
-      <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6, minWidth: 0 }}>{children}</div>
+      <div style={{ fontSize: 12.5, color: C.textDim, lineHeight: 1.6, minWidth: 0 }}>{children}</div>
     </div>
   );
 }
@@ -509,7 +509,7 @@ function TokenCounter({ length }: { length: number }) {
 
 function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) {
   return (
-    <label htmlFor={htmlFor} style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: C.text, marginBottom: 5 }}>
+    <label htmlFor={htmlFor} style={{ display: "block", fontSize: 12.5, fontWeight: 600, color: C.text, marginBottom: 5 }}>
       {children}
     </label>
   );
