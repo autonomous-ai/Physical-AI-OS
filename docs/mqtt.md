@@ -571,16 +571,22 @@ An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind:
 #### `wakeword.gate`
 
 Turns the top-level `wakeword` flag on or off. It uses the same asynchronous
-acknowledgement pattern as `realtime.set`: the device acknowledges receipt,
-persists the flag to `config.json`, restarts HAL when the value changes, then
-publishes the outcome.
+acknowledgement pattern as `realtime.set`: the device immediately acknowledges
+receipt with `starting`, then saves the flag and applies it in a background worker.
+Wake updates from MQTT and HTTP Settings are serialized.
 
 **Receive:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
 
 The terminal success acknowledgement echoes `{"enabled":true}`. Omitting
 `enabled` or supplying invalid JSON returns `status:"failure"`. `success`
-means the flag was saved and HAL is restarting; it does not wait for HAL to be
-ready.
+means the flag was saved and any required `systemctl restart` of HAL completed
+successfully (the restart command has a 30-second timeout); it does not verify
+voice pipeline readiness.
+Save errors, restart errors, and restart timeouts return `failure`. The config may
+already be saved when a restart fails. Within the current os-server process, a
+pending wake apply is retained after a save or restart failure, so retrying the
+same desired value retries the apply. Once applied successfully, an unchanged
+wake value does not trigger another restart.
 
 #### `timezone.set`
 
