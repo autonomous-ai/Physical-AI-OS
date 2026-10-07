@@ -414,6 +414,8 @@ Web UI không bao giờ gọi nginx `/hw/*`: mọi request tới HAL đi qua rev
 
 ### 5.1 Overview Section
 
+Monitor dùng nhất quán các thuộc tính overflow theo từng trục để khôi phục cuộn nội dung khi quay lại từ Chat, Settings hoặc trang nhúng.
+
 Khi quay lại Overview, dữ liệu được refresh ngay thay vì chờ nhịp poll 5 giây; dữ liệu card đã có vẫn hiển thị trong lúc tải. Monitor giữ snapshot phiên bản OTA và emotion preset tải thành công qua các lần đổi tab, hiển thị ngay khi quay lại rồi cập nhật nền. Cache chỉ nằm trong bộ nhớ và mất khi monitor unmount. Đổi section sẽ hủy poll của section cũ; không giữ stream của section đang ẩn.
 
 Gồm các card:
@@ -461,9 +463,7 @@ Gồm các card:
   Stream vẫn mở khi mic nói bị mute (mic sensing độc lập với nút mute), và
   đóng khi tab trình duyệt bị ẩn.
 
-Ở độ rộng điện thoại **từ 480px trở xuống**, bốn card trạng thái của Overview
-xếp một cột. Cách này giữ đủ chỗ cho control và VU meter của Audio, đồng thời
-không kéo giãn card Presence ngắn theo card Audio cao hơn.
+Overview chia thành ba vùng luôn hiển thị: **System health** (Agent, Network, Presence, Hardware), **Live controls** (Audio và Scene cạnh Emotion và Servo), và **Services** (bảng phiên bản, uptime toàn chiều ngang, sau đó là Power). Card trạng thái dùng bốn cột trên 1200px, hai cột đến 1200px và một cột dưới 768px; phần điều khiển cũng xếp một cột dưới 768px. Từ 1500px, Audio/Scene, Emotion và Servo chia ba cột thẳng hàng với nền và viền thống nhất. Nhãn preset thay dấu gạch dưới bằng khoảng trắng; ID lệnh giữ nguyên. Meter âm thanh và toàn bộ preset luôn hiện. Preset dùng lưới nút tự xuống hàng; restart Agent có hàng riêng. Thao tác thiết bị và xác nhận hiện có giữ nguyên. Nút bảo trì dùng icon và nhãn rõ: Update màu amber, Restart trung tính; các trạng thái Sending, Queued và Updating vẫn phân biệt riêng.
 
 **Hardware** (card ngang)
 - 8 badge: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
