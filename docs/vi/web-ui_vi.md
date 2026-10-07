@@ -15,6 +15,9 @@ kết quả im lặng rỗng.
 
 ## 1. Tổng Quan
 
+Light mode dùng nền trang xám ấm, card trắng ngà, chữ phụ đậm hơn và màu trạng thái rõ hơn trên các màn hình monitor và cấu hình. Flow có nền canvas riêng, đường nối không hoạt động và mô tả node tương phản hơn; nội dung chẩn đoán dùng màu chữ trung tính. Biểu đồ lịch sử System lấy màu từ theme monitor hiện tại và dùng nhãn trục 11px.
+
+
 Web UI của thiết bị là một React SPA (Single Page Application) được build bằng **React 19 + TypeScript + Vite + Tailwind CSS 4**, phục vụ hai mục đích:
 
 1. **Setup flow** — Onboarding WiFi, LLM provider, messaging channel (các trang `/setup/*`)
