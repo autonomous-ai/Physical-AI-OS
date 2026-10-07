@@ -1,5 +1,24 @@
 # OS Server API — Tài Liệu
 
+Opening chỉ là một âm xác nhận ngắn: tiếng Anh "Uhm.", tiếng Việt "Ừm.",
+tiếng Nhật "うん。", tiếng Trung giản thể/phồn thể "嗯。". Lượt voice thông thường
+của agent chính gọi phát ngay trước khi chuyển lời người dùng; lượt delegate bỏ
+qua opening. Continuation chỉ dùng một âm ngắn (tiếng Anh "Hmm...", tiếng Việt
+"Ừm..."), chờ 3,5 giây từ lúc
+agent bắt đầu lượt (từ tool đầu tiên với lượt delegate). Khi tool kết thúc,
+lịch phát lại cộng thêm phần cooldown 2,5 giây còn lại. Timer này không làm
+trễ opening.
+Mỗi lượt có tối đa một continuation tự động; các tool sau đó không phát thêm.
+Đã xoá bộ câu opening và continuation cũ. Filler chờ tự động không chọn câu theo tool. Cue realtime/tool được gọi riêng không đổi.
+
+Pool tool nội bộ chỉ giữ một câu ngắn cho mỗi ngôn ngữ. Câu tìm/đọc/tạo nội dung
+chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom nhiều thao tác
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) dùng âm suy nghĩ trung tính, không đoán hành
+động hay khẳng định thành công. Video dùng "Đang xử lý video" vì pool còn nhận
+thao tác chỉnh sửa. Giữ nguyên câu camera `look_*` và demo chuyển động `demo_*`.
+Sửa nội dung này không bật lại việc tự chọn câu theo tool và không đổi lịch filler.
+
 `GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật). Progress có thể chứa `activity_at` tùy chọn (giây Unix) cho hoạt động cài dependency HAL nhận diện được; snapshot cũ không có trường này vẫn hợp lệ.
 
 ## Hỗ trợ tiếng Nhật
