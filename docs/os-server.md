@@ -1,5 +1,7 @@
 # OS Server API — Documentation
 
+`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).
+
 ## Japanese language support
 
 `stt_language: "ja"` selects Japanese. Japanese regional aliases such as `ja-JP`

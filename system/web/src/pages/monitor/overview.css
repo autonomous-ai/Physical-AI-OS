@@ -81,3 +81,13 @@
 @media (max-width: 767px) {
   .lm-overview .lm-service-action, .lm-overview-update button, .lm-overview-restart button { min-height: 42px; }
 }
+
+.lm-ota-progress { grid-column: 1 / -1; min-width: 0; display: flex; flex-direction: column; gap: 6px; padding: 10px 12px; border: 1px solid var(--lm-border); border-radius: 8px; background: var(--lm-surface); color: var(--lm-text-dim); font-size: 12px; overflow-wrap: anywhere; }
+.lm-ota-progress-heading { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.lm-ota-progress-heading strong { color: var(--lm-text); font-weight: 600; }
+.lm-ota-progress progress { width: 100%; height: 8px; accent-color: var(--lm-amber); }
+.lm-ota-progress[data-phase="failed"], .lm-ota-progress[data-phase="interrupted"] { border-color: var(--lm-red); }
+.lm-ota-progress progress { appearance: none; border: 0; border-radius: 999px; overflow: hidden; background: var(--lm-border); }
+.lm-ota-progress progress::-webkit-progress-bar { background: var(--lm-border); border-radius: 999px; }
+.lm-ota-progress progress::-webkit-progress-value { background: var(--lm-amber); border-radius: 999px; }
+.lm-ota-progress progress::-moz-progress-bar { background: var(--lm-amber); border-radius: 999px; }

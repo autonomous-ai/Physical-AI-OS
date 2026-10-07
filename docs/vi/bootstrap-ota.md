@@ -1,5 +1,16 @@
 # Bootstrap & OTA
 
+## Snapshot tiến độ cập nhật
+
+`software-update` ghi nguyên tử `/root/bootstrap/progress/<component>.json` cho mỗi lượt cài đặt được nhận (không bao gồm lệnh rollback/recovery thủ công). Lượt gần nhất được giữ khi refresh frontend hoặc restart service. Các trường gồm `target`, `run_id`, `phase`, `pid`, `boot_id`, `updated_at` (giây Unix), `downloaded_bytes`, `total_bytes` và `message` ngắn. Ghi tiến độ là best effort, không làm thay đổi kết quả cài đặt hoặc rollback.
+
+Các bước gồm preparing, downloading, verifying, installing, restarting, checking, completed, failed và rolling_back. Chỉ ghi `completed` khi updater hiện có thoát thành công sau kiểm tra riêng của component; không phải runtime installer nào cũng kiểm tra health gateway. Journal rollback còn pending luôn khiến lượt update được tính là thất bại dù khôi phục thành công. Snapshot cũ hơn 30 giây mà PID updater đã mất (hoặc boot ID thay đổi) được trả về là `interrupted`, không phải thành công.
+
+Tải qua `download_verified` lấy số byte đã ghi mỗi giây và Content-Length của HTTP 200 cuối cùng. Kích thước redirect, thiếu độ dài, chunked transfer hoặc tổng byte không khớp không tạo phần trăm. Kiểm tra checksum trước cài đặt. Package manager/upstream installer chỉ báo bước thực tế, không dựng phần trăm tổng. Không theo dõi lượt rollback/recovery thủ công hoặc lượt tải bên trong installer bên thứ ba.
+
+`GET /api/system/ota-updating` giữ `data.updating`, thêm `data.progress` (map component, có alias `agent` đang dùng) và `data.bootstrap_available`. OS Server đọc snapshot local kể cả khi bootstrap không truy cập được; khi chính OS Server restart thì API vẫn tạm ngắt. Cần cập nhật cả updater, OS Server và frontend để có giao diện chi tiết. Worker cũ vẫn được hỗ trợ qua danh sách updating.
+
+
 Rootfs device lamp có service tắt LED sau HAL dành riêng Orange Pi (chờ 5 giây).
 Device OTA reload systemd sau khi áp overlay và sau khi khôi phục rollback,
 trước khi restart service; setup cũng reload sau khi áp hardware override.

@@ -1,5 +1,7 @@
 # OS Server API — Tài Liệu
 
+`GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật).
+
 ## Hỗ trợ tiếng Nhật
 
 `stt_language: "ja"` chọn tiếng Nhật. Các biến thể vùng như `ja-JP` và `ja_JP`
