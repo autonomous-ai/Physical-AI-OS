@@ -134,8 +134,8 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	compactionMap["mode"] = "safeguard"
 	compactionMap["reserveTokensFloor"] = 80000
 	defaultsMap["compaction"] = compactionMap
-	defaultsMap["bootstrapMaxChars"] = 5000
-	defaultsMap["bootstrapTotalMaxChars"] = 30000
+	defaultsMap["bootstrapMaxChars"] = bootstrapMaxChars
+	defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
 	agentModelsMap := ensureMap(defaultsMap, "models")
 	for _, m := range modelsResp.Models {
 		agentModelsMap[agentModelKey(m)] = map[string]any{

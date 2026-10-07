@@ -1404,7 +1404,7 @@ Chúng tốn token theo cách khác nhau, nên cũng bị chặn theo cách khá
 
 | | Nằm trong system prompt? | Bị tính token | Trần |
 |---|---|---|---|
-| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 12000 ký tự (`bootstrapMaxChars`), vượt thì cắt từ đuôi |
+| `USER.md` | **có** — là bootstrap file | **mỗi lượt** | 24000 ký tự mỗi file (`bootstrapMaxChars`), đồng thời chịu ngân sách bootstrap tổng 48000 ký tự |
 | `KNOWLEDGE.md` | **không** — OpenClaw không biết file này | một lần mỗi session, khi agent đọc | không có |
 
 `KNOWLEDGE.md` vốn không có trần nào: synthesis hằng ngày append thêm một block
@@ -1448,7 +1448,7 @@ không được phép âm thầm làm mất nó.
 | Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)** — call: …; notes: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
 | Các đoạn `key: value` ngắn, không phải văn xuôi; `call:` đứng đầu | Các field của template là đơn nhất (một `**Name:**`, một `**Timezone:**`) nên không mô tả nổi hai người, nhưng lồng chúng theo từng người thì không sống sót qua file: `parseEntries` → `serialize` làm phẳng mọi bullet thành `- …`, nên field con thụt lề bị tách khỏi người của nó. Các đoạn giữ được *ý* của biểu mẫu — dữ kiện tách bạch, có nhãn — trong một entry prune được. Lần đầu để văn xuôi tự do đã cho ra một đoạn ~600 ký tự với cách xưng hô nằm lẫn ở câu thứ tư. |
 | Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. |
-| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` (12000) thì OpenClaw cắt bằng `text.slice(0, cutPoint)` — giữ đầu, **cắt đuôi** — mà `## Users` chính là phần đuôi. Profile phình to sẽ âm thầm mất đúng phần dữ liệu về người. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
+| Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` mỗi file (24000) hoặc ngân sách bootstrap tổng (48000), OpenClaw có thể cắt nội dung đưa vào prompt. Profile phình to có thể mất dữ liệu về người trong prompt. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
 | Người lạ không có entry | `## Users` khoá theo enrollment label; một khuôn mặt đi ngang không có label nào. Lưu lượng người qua bàn thì ghi ở `KNOWLEDGE.md`. |
 | Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |
 | Chỉ thêm và cập nhật — **không bao giờ xoá** | Vắng mặt không phải là rời đi. Retire một người là việc của OS (`ReconcileUserProfiles`, khoá theo enrollment), không phải của agent. |
