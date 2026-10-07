@@ -44,8 +44,9 @@ const (
 	// same turn — covers both filler-spoken and hardware-reaction events.
 	FillerCooldown = 2500 * time.Millisecond
 
-	// MaxFillersPerTurn caps actual spoken fillers in a single turn.
-	MaxFillersPerTurn = 6
+	// MaxFillersPerTurn includes the reserved opening slot (also for delegates),
+	// leaving at most one automatic continuation in each turn.
+	MaxFillersPerTurn = 2
 )
 
 // fillerCancelToolMarkers are URL fragments for tool calls that themselves
@@ -90,13 +91,9 @@ func fillersDisabled() bool {
 // pickFiller returns a phrase appropriate for the current turn position in
 // the active language (read from i18n.Lang()), avoiding lastSpoken when an
 // alternative exists.
-func pickFiller(fired int, lastSpoken, lastToolName string) string {
+func pickFiller(fired int, lastSpoken string) string {
 	lang := i18n.Lang()
-	if pool := toolPoolForLang(lang, lastToolName); len(pool) > 0 {
-		if pick := pickFrom(pool, lastSpoken); pick != "" {
-			return pick
-		}
-	}
+	// Automatic waiting feedback must not claim a tool-specific action.
 	opening, continuation := poolsForLang(lang)
 	primary, fallback := opening, continuation
 	if fired > 0 {
@@ -113,9 +110,6 @@ func pickFiller(fired int, lastSpoken, lastToolName string) string {
 func classifyFillerPool(filler, toolName string, fired int, lang string) string {
 	if filler == "" {
 		return "none"
-	}
-	if pool := toolPoolForLang(lang, toolName); poolContains(pool, filler) {
-		return "tool:" + toolName
 	}
 	opening, continuation := poolsForLang(lang)
 	if poolContains(opening, filler) {
@@ -387,7 +381,7 @@ func (fm *FillerManager) OnTurnStart(runID string) {
 	fm.armLocked(runID, run, FillerDelay)
 }
 
-// OnToolStart records the tool name for tool-aware phrasing and soft-cancels
+// OnToolStart records the tool name for diagnostics and soft-cancels
 // the pending filler when the tool is itself a hardware reaction.
 func (fm *FillerManager) OnToolStart(runID, toolArgs, toolName string) {
 	if runID == "" {
@@ -580,7 +574,7 @@ func (fm *FillerManager) fire(runID string, expectedRun *fillerRun, generation u
 		fm.mu.Unlock()
 		return
 	}
-	filler := pickFiller(run.fired, run.lastSpoken, run.lastToolName)
+	filler := pickFiller(run.fired, run.lastSpoken)
 	if filler == "" {
 		run.timer = nil
 		fm.mu.Unlock()

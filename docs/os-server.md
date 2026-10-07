@@ -3,11 +3,12 @@
 Opening feedback is one short acknowledgment sound: English "Uhm.", Vietnamese
 "Ừm.", Japanese "うん。", and Simplified/Traditional Chinese "嗯。". Ordinary
 main-agent voice turns request it immediately before forwarding; delegated turns
-skip it. Continuation fillers remain enabled with their existing phrases and
-wait 3.5 seconds after turn start (after the first tool starts for delegated
+skip it. Continuation fillers use one short thinking sound (English "Hmm...",
+Vietnamese "Ừm...") and wait 3.5 seconds after turn start (after the first tool starts for delegated
 turns). Tool-end rearming adds any remaining 2.5-second cooldown to that delay.
-This timer does not delay opening feedback.
-The previous opening phrase pool has been removed. Explicit realtime/tool cues
+This timer does not delay opening feedback. Each turn permits at most one automatic continuation; later tool calls do not trigger more.
+The previous opening and continuation phrase pools have been removed. Automatic
+waiting fillers do not select tool-specific phrases. Explicit realtime/tool cues
 are unchanged.
 
 `GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).

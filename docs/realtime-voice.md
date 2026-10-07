@@ -71,10 +71,12 @@ STT pipeline. At end-of-turn the model either:
   spoken language, to the OS server (→ the selected main runtime) for the work.
   OS-server skips the short opening acknowledgment ("Uhm." in English) for
   delegated turns; ordinary main-agent voice turns retain it. Continuation
-  fillers wait 3.5 seconds from ordinary turn start, or from the first tool
+  fillers use a short thinking sound ("Hmm..." in English), without tool-specific
+  phrases, and wait 3.5 seconds from ordinary turn start, or from the first tool
   start for delegated turns (`FillerManager.MarkDelegatedVoiceRun`). Tool-end
   rearming adds any remaining 2.5-second cooldown to the 3.5-second delay.
   A delegated turn that ends with NO_REPLY without starting a tool stays silent.
+  Each turn permits at most one automatic continuation, regardless of later tools.
 - **Explicitly rejects** a high-confidence non-user turn by calling
   `reject_turn`, which drops the turn before the main agent sees its STT text.
   This is deliberately different from a silent completion: silence, timeout,

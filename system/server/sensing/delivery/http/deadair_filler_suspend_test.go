@@ -25,7 +25,7 @@ func TestAssistantTextSuspendsUntilNextToolStart(t *testing.T) {
 	}
 	fm.OnToolStart(id, "", "terminal")
 	if run.suspended || run.timer == nil || run.lastToolName != "terminal" {
-		t.Fatal("the next tool must resume fillers using its own pool")
+		t.Fatal("the next tool must resume fillers and record its name")
 	}
 	if run.fired != 1 {
 		t.Fatalf("suspension changed the existing filler count: %d", run.fired)
@@ -98,5 +98,17 @@ func TestAssistantAndToolEventsDoNotCreateUnmarkedVoiceRuns(t *testing.T) {
 	fm.OnToolEnd("web-chat")
 	if fm.HasActiveRun("web-chat") {
 		t.Fatal("web chat must remain ineligible for spoken fillers")
+	}
+}
+
+func TestOneContinuationPreventsLaterToolFillers(t *testing.T) {
+	fm, id, run := startFillerTestRun(t)
+	fm.OnAssistantText(id)
+	// One continuation has consumed the slot after the reserved opening.
+	run.fired++
+	fm.OnToolStart(id, "", "terminal")
+	fm.OnToolEnd(id)
+	if run.timer != nil || run.rearmPending {
+		t.Fatal("later tool events must not schedule a second continuation")
 	}
 }

@@ -71,11 +71,13 @@ lượt, model sẽ:
   chuyển đúng lời người dùng ở lượt hiện tại, giữ nguyên ngôn ngữ, tới OS server
   (→ runtime chính đang được chọn) để xử lý.
   OS-server bỏ qua âm opening ngắn ("Ừm." ở tiếng Việt) cho lượt delegate;
-  lượt voice thông thường của agent chính vẫn giữ opening. Continuation chờ
+  lượt voice thông thường của agent chính vẫn giữ opening. Continuation chỉ dùng
+  âm ngắn ("Ừm..."), không chọn câu theo tool, và chờ
   3,5 giây từ lúc bắt đầu lượt thông thường, hoặc từ tool đầu tiên với lượt
   delegate (`FillerManager.MarkDelegatedVoiceRun`). Khi tool kết thúc, lịch phát
   lại cộng phần cooldown 2,5 giây còn lại vào mốc 3,5 giây. Lượt delegate kết
   thúc bằng NO_REPLY mà không bắt đầu tool sẽ im lặng.
+  Mỗi lượt có tối đa một continuation tự động, không phụ thuộc các tool tiếp theo.
 - **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
   tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường

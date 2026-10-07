@@ -25,22 +25,13 @@ var fillerRealtime = map[string][]string{
 	LangZhTW: {"嗯...", "呃..."},
 }
 
+// Continuation uses a short thinking sound without claiming a specific action.
 var fillerContinuation = map[string][]string{
-	LangJA: {"うーん、見てみよう。", "ちょっと待ってね。", "試してみるね。", "確認してみるね。"},
-	LangEN: {
-		"Hmm, let's see.", "Yeah, one sec.", "Let me try.",
-		"Hang on a bit.", "Alright, let's look.",
-	},
-	LangVI: {
-		"Ừm, để coi.", "Ờ, chờ tí.", "Hừm, để thử xem.",
-		"À, để mình ngó.", "Ừ, để xem nào.",
-	},
-	LangZhCN: {
-		"嗯，看看。", "等一下。", "让我试试。", "我看看。",
-	},
-	LangZhTW: {
-		"嗯，看看。", "等一下。", "讓我試試。", "我看看。",
-	},
+	LangJA:   {"うーん…"},
+	LangEN:   {"Hmm..."},
+	LangVI:   {"Ừm..."},
+	LangZhCN: {"嗯..."},
+	LangZhTW: {"嗯..."},
 }
 
 // toolFillers maps lang -> FillerToolKey -> override pool.
