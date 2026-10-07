@@ -65,6 +65,7 @@ from hal.drivers.voice._internal.input_policy import (
     requires_manual_capture, same_capture_target,
 )
 from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
+from hal.drivers.voice._internal.main_followup import note_main_reply
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.speaker_decorate import (
@@ -303,6 +304,7 @@ class VoiceService:
         """Give the realtime agent a main-agent reply it must stay aware of."""
         if not hal_config.REALTIME_ENABLED or not text:
             return False
+        note_main_reply(text, heard=spoken or interrupted)
         self._realtime.save_main_agent_reply_fragment(text)
         max_hist = hal_config.REALTIME_TTS_HISTORY_MAX_CHARS
         if len(text) > max_hist:
