@@ -42,18 +42,36 @@ TIMEOUT_SECONDS = 60
 MAX_RESPONSE_BYTES = 8 * 1024 * 1024
 
 # Official API hosts per connector. A credential is only ever sent to one of
-# these (exact host or a subdomain of it). Connectors not listed here may call
-# any HTTPS host; the skill tells the agent which host is official.
+# these (exact host or a subdomain of it). A connector that is not listed is
+# refused: the helper never sends a credential to a host it cannot vouch for.
 OFFICIAL_HOSTS = {
     "gmail": ("googleapis.com",),
     "google_calendar": ("googleapis.com",),
     "google_drive": ("googleapis.com",),
     "facebook": ("graph.facebook.com",),
     "figma": ("api.figma.com",),
+    "figma-api": ("api.figma.com",),
     "github": ("api.github.com",),
     "ahrefs": ("api.ahrefs.com",),
+    "notion": ("api.notion.com",),
+    "linear": ("api.linear.app",),
+    "asana": ("app.asana.com",),
 }
 GOOGLE_CODES = ("gmail", "google_calendar", "google_drive")
+
+# Connectors whose API only accepts the credential as a query parameter on
+# some endpoints (Facebook feed-post DELETE, debug_token).
+TOKEN_PARAM_CODES = ("facebook",)
+
+# Files that may be uploaded with `--form K=@path`: media and documents only,
+# never from a directory that holds credentials or device configuration.
+UPLOAD_SUFFIXES = (
+    ".jpg", ".jpeg", ".png", ".gif", ".webp", ".heic",
+    ".mp4", ".mov", ".webm", ".mp3", ".m4a", ".wav", ".ogg",
+    ".pdf", ".txt", ".md", ".csv",
+)
+UPLOAD_FORBIDDEN_DIRS = ("/root/.openclaw", "/root/config", "/root/.ssh", "/etc", "/proc", "/sys")
+UPLOAD_ALLOWED_DIRS = ("/root/.openclaw/workspace/media", "/root/.openclaw/media")
 
 
 class Failure(Exception):
@@ -162,8 +180,37 @@ def cmd_info(code):
 def host_allowed(code, host):
     allowed = OFFICIAL_HOSTS.get(code)
     if not allowed:
-        return True
+        return False
     return any(host == h or host.endswith("." + h) for h in allowed)
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Never follow a redirect: urllib would re-send the Authorization header
+    (and a credential in the query) to wherever the Location points."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirect)
+
+
+def upload_path(raw):
+    """Resolve an `@path` upload and refuse anything that is not plain media or
+    a document outside the device's credential and configuration folders."""
+    path = Path(raw).expanduser()
+    try:
+        real = path.resolve(strict=True)
+    except (OSError, RuntimeError):
+        raise Failure(2, f"cannot read upload {raw}")
+    text = str(real)
+    allowed_dir = any(text == d or text.startswith(d + "/") for d in UPLOAD_ALLOWED_DIRS)
+    forbidden_dir = any(text == d or text.startswith(d + "/") for d in UPLOAD_FORBIDDEN_DIRS)
+    if (forbidden_dir and not allowed_dir) or not real.is_file():
+        raise Failure(2, f"refusing to upload {raw}: not a media file the helper may send")
+    if real.suffix.lower() not in UPLOAD_SUFFIXES or path.suffix.lower() not in UPLOAD_SUFFIXES:
+        raise Failure(2, f"refusing to upload {raw}: only {', '.join(UPLOAD_SUFFIXES)} files")
+    return real
 
 
 def pair(value, sep, flag):
@@ -179,7 +226,7 @@ def multipart(fields):
     for key, value in fields:
         head = f'--{boundary}\r\nContent-Disposition: form-data; name="{key}"'
         if value.startswith("@"):
-            path = Path(value[1:])
+            path = upload_path(value[1:])
             try:
                 content = path.read_bytes()
             except OSError as e:
@@ -228,9 +275,15 @@ def cmd_call(code, method, url, args):
     parsed = urllib.parse.urlsplit(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise Failure(4, f"refusing {url!r}: only https:// URLs are allowed")
+    if parsed.username is not None or parsed.password is not None or parsed.port not in (None, 443):
+        raise Failure(4, f"refusing {url!r}: no user info or custom port in the URL")
+    if code not in OFFICIAL_HOSTS:
+        raise Failure(4, f"{code}: the helper has no official API host for this connector — use its MCP tools if it has them")
     if not host_allowed(code, parsed.hostname):
         allowed = ", ".join(OFFICIAL_HOSTS[code])
         raise Failure(4, f"refusing to send the {code} credential to {parsed.hostname}; allowed: {allowed}")
+    if opts["token_param"] and code not in TOKEN_PARAM_CODES:
+        raise Failure(2, f"--token-param is only for {', '.join(TOKEN_PARAM_CODES)}")
 
     entry = load_entry(code)
     if not entry:
@@ -250,8 +303,8 @@ def cmd_call(code, method, url, args):
 
     headers = {"Accept": "application/json"}
     for k, v in opts["header"]:
-        if k.lower() == "authorization":
-            raise Failure(2, "do not pass Authorization; the helper adds the credential itself")
+        if k.lower() in ("authorization", "host", "proxy-authorization", "cookie"):
+            raise Failure(2, f"do not pass {k}; the helper sets it (or it is not allowed)")
         headers[k] = v
     if not opts["token_param"]:
         headers["Authorization"] = " ".join(("Bearer", token))
@@ -268,13 +321,15 @@ def cmd_call(code, method, url, args):
 
     req = urllib.request.Request(full_url, data=body, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(req, timeout=TIMEOUT_SECONDS) as resp:
+        with _OPENER.open(req, timeout=TIMEOUT_SECONDS) as resp:
             out = resp.read(MAX_RESPONSE_BYTES)
             status = resp.status
     except urllib.error.HTTPError as e:
         detail = e.read(MAX_RESPONSE_BYTES).decode("utf-8", "replace")
         print(f"HTTP {e.code} from {parsed.hostname}", file=sys.stderr)
-        if detail.strip():
+        if 300 <= e.code < 400:
+            print("redirect not followed: the credential is only sent to the official host", file=sys.stderr)
+        elif detail.strip():
             print(scrub(detail, token), file=sys.stderr)
         if e.code == 401:
             expires = int(entry.get("expires_at") or 0)
@@ -300,7 +355,11 @@ def cmd_call(code, method, url, args):
 
 
 def scrub(text, token):
-    return text.replace(token, "[credential]") if token else text
+    if not token:
+        return text
+    for form in {token, urllib.parse.quote(token, safe=""), urllib.parse.quote_plus(token)}:
+        text = text.replace(form, "[credential]")
+    return text
 
 
 def main(argv):

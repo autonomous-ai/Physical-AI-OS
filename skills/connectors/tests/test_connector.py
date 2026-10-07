@@ -87,7 +87,7 @@ class ConnectorHelperTests(unittest.TestCase):
             seen['auth'] = req.get_header('Authorization')
             return FakeResponse('{"items": []}')
 
-        with patch.object(self.mod.urllib.request, 'urlopen', fake_urlopen):
+        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
             code, out, _ = self.run_main(
                 'call', 'google_calendar', 'GET',
                 'https://www.googleapis.com/calendar/v3/calendars/primary/events',
@@ -101,7 +101,7 @@ class ConnectorHelperTests(unittest.TestCase):
         def fake_urlopen(req, timeout):
             raise urllib.error.HTTPError(req.full_url, 401, 'Unauthorized', {}, io.BytesIO(b'{"error":{"code":401}}'))
 
-        with patch.object(self.mod.urllib.request, 'urlopen', fake_urlopen):
+        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
             code, out, err = self.run_main('call', 'google_calendar', 'GET', 'https://www.googleapis.com/x')
         self.assertEqual(code, 1)
         self.assertEqual(out, '')
@@ -109,7 +109,7 @@ class ConnectorHelperTests(unittest.TestCase):
         self.assertIn('auto_refresh=yes', err)
 
     def test_refuses_foreign_host_for_known_connector(self):
-        with patch.object(self.mod.urllib.request, 'urlopen') as urlopen:
+        with patch.object(self.mod._OPENER, 'open') as urlopen:
             code, _, err = self.run_main('call', 'google_calendar', 'GET', 'https://evil.example.com/collect')
         self.assertEqual(code, 4)
         self.assertIn('refusing', err)
@@ -149,7 +149,7 @@ class ConnectorHelperTests(unittest.TestCase):
             seen['auth'] = req.get_header('Authorization')
             return FakeResponse('{"success": true}')
 
-        with patch.object(self.mod.urllib.request, 'urlopen', fake_urlopen):
+        with patch.object(self.mod._OPENER, 'open', fake_urlopen):
             code, out, _ = self.run_main('call', 'facebook', 'DELETE', 'https://graph.facebook.com/v19.0/1_2',
                                          '--token-param', 'access_token')
         self.assertEqual(code, 0)
@@ -158,10 +158,51 @@ class ConnectorHelperTests(unittest.TestCase):
         self.assertNotIn(TOKEN, out)
 
     def test_response_echoing_token_is_scrubbed(self):
-        with patch.object(self.mod.urllib.request, 'urlopen', lambda req, timeout: FakeResponse(TOKEN)):
+        with patch.object(self.mod._OPENER, 'open', lambda req, timeout: FakeResponse(TOKEN)):
             code, out, _ = self.run_main('call', 'google_calendar', 'GET', 'https://www.googleapis.com/x')
         self.assertEqual(code, 0)
         self.assertNotIn(TOKEN, out)
+
+    def test_unlisted_connector_is_refused(self):
+        self.write('mystery', {'access_token': TOKEN})
+        with patch.object(self.mod._OPENER, 'open') as opener:
+            code, _, err = self.run_main('call', 'mystery', 'GET', 'https://attacker.example/collect')
+        self.assertEqual(code, 4)
+        self.assertIn('no official API host', err)
+        opener.assert_not_called()
+
+    def test_userinfo_and_custom_port_are_refused(self):
+        for url in ('https://evil.example@www.googleapis.com/x', 'https://www.googleapis.com:8443/x'):
+            code, _, _ = self.run_main('call', 'google_calendar', 'GET', url)
+            self.assertEqual(code, 4, url)
+
+    def test_token_param_only_for_facebook(self):
+        code, _, err = self.run_main('call', 'google_calendar', 'GET', 'https://www.googleapis.com/x',
+                                     '--token-param', 'access_token')
+        self.assertEqual(code, 2)
+        self.assertIn('--token-param', err)
+
+    def test_redirect_is_not_followed(self):
+        handler = self.mod._NoRedirect()
+        req = self.mod.urllib.request.Request('https://www.googleapis.com/x', headers={'Authorization': 'Bearer ' + TOKEN})
+        self.assertIsNone(handler.redirect_request(req, None, 302, 'Found', {}, 'https://attacker.example/'))
+
+    def test_upload_refuses_credentials_and_non_media(self):
+        token_file = self.dir / 'google_calendar_access_tokens.json'
+        alias = self.dir / 'innocent.jpg'
+        alias.symlink_to(token_file)
+        for raw in (str(token_file), str(alias), '/root/config/config.json'):
+            with self.assertRaises(self.mod.Failure, msg=raw):
+                self.mod.upload_path(raw)
+        image = self.dir / 'pic.png'
+        image.write_bytes(b'png')
+        self.assertEqual(self.mod.upload_path(str(image)), image.resolve())
+
+    def test_scrub_covers_url_encoded_token(self):
+        token = 'a/b+c=='
+        text = 'x ' + token + ' y a%2Fb%2Bc%3D%3D z'
+        self.assertNotIn('a%2Fb', self.mod.scrub(text, token))
+        self.assertNotIn(token, self.mod.scrub(text, token))
 
     def test_multipart_upload(self):
         image = self.dir / 'pic.jpg'
