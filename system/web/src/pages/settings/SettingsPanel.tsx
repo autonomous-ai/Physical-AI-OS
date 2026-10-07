@@ -1,3 +1,4 @@
+import "./settings-polish.css";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { getDeviceConfig, getCurrentNetwork, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
@@ -571,10 +572,10 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     realtimeWebSearch,
   ]);
 
-  const showSave = activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook";
+  const showSave = activeSection !== "mcp" && activeSection !== "plugins" && activeSection !== "face" && activeSection !== "voice" && activeSection !== "runtime" && activeSection !== "timezone" && activeSection !== "led" && activeSection !== "scheduled" && activeSection !== "facebook";
 
   return (
-    <div className="lm-fade-in lm-settings-panel" style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
+    <div className={`lm-fade-in lm-settings-panel${activeSection !== "device" ? " lm-settings-polished" : ""}`} style={{ flex: 1, minHeight: 0, overflowY: "auto" }}>
       <div style={{ maxWidth: 560, margin: "0 auto" }}>
 
         <div style={{

@@ -1,11 +1,12 @@
 import { EnvironmentCard } from "./sensing/EnvironmentCard";
 import { VisionSensing } from "./sensing/VisionSensing";
+import "./sensing/sensing.css";
 
 export function SensingSection({ hasVision, hasEnvironment }: { hasVision: boolean; hasEnvironment: boolean }) {
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-      <EnvironmentCard available={hasEnvironment} />
+    <div className="lm-sensing">
       {hasVision && <VisionSensing />}
+      <EnvironmentCard available={hasEnvironment} />
     </div>
   );
 }

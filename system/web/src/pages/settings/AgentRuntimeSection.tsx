@@ -1,4 +1,6 @@
-import { useEffect, useState } from "react";
+import { SettingsSelect } from "@/components/SettingsSelect";
+import { useEffect, useRef, useState } from "react";
+import "./settings-details.css";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import { getAgentRuntime, setAgentRuntime, type LLMConfigMode } from "@/lib/api";
@@ -36,7 +38,7 @@ const selectStyle = {
   borderRadius: 7, padding: "8px 11px",
   fontSize: 12.5, color: C.text, outline: "none", cursor: "pointer",
 };
-const labelStyle = { display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 };
+const labelStyle = { display: "block", fontSize: 12, color: C.textDim, marginBottom: 5 };
 
 export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode, llmModeApplyPending, onLlmConfigModeChange, saving }: {
   active: boolean;
@@ -154,10 +156,10 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
   return (
     <SectionCard id="runtime" title="Agent Runtime" active={active}>
       {loading ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Loading…</div>
+        <div style={{ fontSize: 12, color: C.textDim }}>Loading…</div>
       ) : (
         <>
-          <div style={{ fontSize: 11.5, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
+          <div style={{ fontSize: 12.5, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
             The swappable agentic backend that runs the robot's brain. Switching
             stops the other backend and restarts os-server.
           </div>
@@ -165,21 +167,21 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
           <div style={{ marginBottom: 6 }}>
             <label htmlFor="agent_runtime" style={labelStyle}>
               Backend (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>
-              {current && !ready && <span style={{ color: C.textMuted }}> — starting…</span>})
+              {current && !ready && <span style={{ color: C.textDim }}> — starting…</span>})
             </label>
-            <select
+            <SettingsSelect
               id="agent_runtime"
               value={selected}
-              onChange={(e) => setSelected(e.target.value)}
+              onValueChange={(value) => setSelected(value)}
               disabled={switching}
               style={selectStyle}
             >
               {options.map((o) => <option key={o} value={o}>{displayRuntime(o)}</option>)}
-            </select>
+            </SettingsSelect>
           </div>
 
           {RUNTIME_BLURB[selected] && (
-            <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14 }}>
+            <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>
               {RUNTIME_BLURB[selected]}
             </div>
           )}
@@ -187,16 +189,16 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
           {current !== REMOTE && selected !== REMOTE && (
             <div style={{ marginBottom: 18 }}>
               <label htmlFor="llm_config_mode" style={labelStyle}>LLM configuration</label>
-              <select
+              <SettingsSelect
                 id="llm_config_mode"
                 value={llmConfigMode || "os"}
-                onChange={(e) => onLlmConfigModeChange(e.target.value as LLMConfigMode)}
+                onValueChange={(value) => onLlmConfigModeChange(value as LLMConfigMode)}
                 disabled={switching || saving}
                 style={selectStyle}
               >
                 <option value="os">Use OS AI Brain</option>
                 <option value="runtime">Configure directly in runtime</option>
-              </select>
+              </SettingsSelect>
               <p style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
                 {llmConfigMode === "runtime"
                   ? "Save Changes, then use the runtime CLI to sign in, select a model, and restart the runtime. OS will preserve its LLM configuration. This choice does not sign you in."
@@ -217,7 +219,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
                   onClick={() => setShowRemoteHelp(true)}
                   style={{
                     background: "none", border: "none", padding: 0, marginBottom: 10,
-                    color: C.amber, fontSize: 11.5, cursor: "pointer",
+                    color: C.amber, fontSize: 12.5, cursor: "pointer",
                     textDecoration: "underline", textUnderlineOffset: 3,
                   }}
                 >
@@ -226,7 +228,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               </div>
               <div style={{ marginBottom: 10 }}>
                 <label htmlFor="agent_remote_url" style={labelStyle}>
-                  Hermes URL <span style={{ color: C.textMuted }}>(http:// or https://, on the Mac's LAN address, e.g. http://192.168.1.42:8642)</span>
+                  Hermes URL <span style={{ color: C.textDim }}>(http:// or https://, on the Mac's LAN address, e.g. http://192.168.1.42:8642)</span>
                 </label>
                 <input
                   id="agent_remote_url"
@@ -242,7 +244,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               </div>
               <div>
                 <label htmlFor="agent_remote_token" style={labelStyle}>
-                  API Key <span style={{ color: C.textMuted }}>(optional; sent as Bearer — leave blank if Hermes is open)</span>
+                  API Key <span style={{ color: C.textDim }}>(optional; sent as Bearer — leave blank if Hermes is open)</span>
                 </label>
                 <input
                   id="agent_remote_token"
@@ -303,20 +305,30 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
   const setupCmd =
     'curl -fsSL https://cdn.autonomous.ai/os/tools/setup-remote-hermes.sh | bash';
   const [copied, setCopied] = useState(false);
+  const dialogRef = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    dialog?.showModal();
+    return () => dialog?.close();
+  }, []);
   // navigator.clipboard requires a secure context (https or localhost)
   const copyCmd = () => {
     let ok = false;
+    const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const ta = document.createElement("textarea");
     try {
-      const ta = document.createElement("textarea");
       ta.value = setupCmd;
       ta.style.position = "fixed";
       ta.style.opacity = "0";
-      document.body.appendChild(ta);
+      // Keep the temporary selection inside the modal's active focus scope.
+      (dialogRef.current ?? document.body).appendChild(ta);
       ta.focus(); ta.select();
       ok = document.execCommand("copy");
-      document.body.removeChild(ta);
     } catch {
       ok = false;
+    } finally {
+      ta.remove();
+      previousFocus?.focus();
     }
     if (!ok) {
       navigator.clipboard?.writeText(setupCmd).then(() => {
@@ -329,13 +341,12 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
     setTimeout(() => setCopied(false), 1500);
   };
   return (
-    <div
-      onClick={onClose}
-      style={{
-        position: "fixed", inset: 0, background: "rgba(0,0,0,0.7)",
-        display: "flex", alignItems: "center", justifyContent: "center",
-        zIndex: 1000, padding: 20,
-      }}
+    <dialog
+      ref={dialogRef}
+      className="lm-runtime-help"
+      aria-labelledby="runtime-help-title"
+      onCancel={(event) => { event.preventDefault(); onClose(); }}
+      onClick={(event) => { if (event.target === event.currentTarget) onClose(); }}
     >
       <div
         onClick={(e) => e.stopPropagation()}
@@ -347,33 +358,34 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
         }}
       >
         <button
+          type="button"
           onClick={onClose}
           aria-label="Close"
           style={{
             position: "absolute", top: 10, right: 12,
-            background: "none", border: "none", color: C.textMuted,
+            background: "none", border: "none", color: C.textDim,
             fontSize: 22, lineHeight: 1, cursor: "pointer", padding: 4,
           }}
         >
           ×
         </button>
-        <div style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, color: C.amber }}>
+        <div id="runtime-help-title" style={{ fontSize: 16, fontWeight: 600, marginBottom: 6, paddingRight: 26, color: C.amber }}>
           Get the Hermes URL + API Key
         </div>
-        <div style={{ fontSize: 11.5, color: C.textMuted, marginBottom: 16 }}>
+        <div style={{ fontSize: 12.5, color: C.textDim, marginBottom: 16 }}>
           Runs on your Mac. Enables Hermes's built-in API server on the LAN so the robot can reach it, and prints the two fields to paste back here.
         </div>
 
-        <div style={{ marginBottom: 6, fontSize: 11.5, color: C.textDim }}>
+        <div style={{ marginBottom: 6, fontSize: 12.5, color: C.textDim }}>
           1. Open <b>Terminal</b> on your Mac (same Wi-Fi as this robot).
         </div>
-        <div style={{ marginBottom: 6, fontSize: 11.5, color: C.textDim }}>
+        <div style={{ marginBottom: 6, fontSize: 12.5, color: C.textDim }}>
           2. Paste this command and press Enter:
         </div>
         <pre
           style={{
             background: "#0C0B09", border: `1px solid ${C.border}`, borderRadius: 6,
-            padding: "10px 12px", fontSize: 11, fontFamily: "monospace",
+            padding: "10px 12px", fontSize: 12, fontFamily: "monospace",
             whiteSpace: "pre-wrap", wordBreak: "break-all", margin: "0 0 10px",
             color: C.text,
           }}
@@ -381,12 +393,13 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
           {setupCmd}
         </pre>
         <button
+          type="button"
           onClick={copyCmd}
           style={{
             background: copied ? C.amber : C.surface,
             border: `1px solid ${copied ? C.amber : C.border}`,
             borderRadius: 6,
-            padding: "4px 10px", fontSize: 11,
+            padding: "4px 10px", fontSize: 12,
             color: copied ? "#0C0B09" : C.textDim,
             cursor: "pointer", marginBottom: 16,
             transition: "all 0.15s",
@@ -395,24 +408,24 @@ function RemoteHelpModal({ onClose }: { onClose: () => void }) {
           {copied ? "✓ Copied" : "Copy command"}
         </button>
 
-        <div style={{ marginBottom: 6, fontSize: 11.5, color: C.textDim }}>
-          3. The script installs a small dependency, starts the Hermes API server on <code style={{ fontSize: 10.5 }}>0.0.0.0:8642</code>, and prints something like:
+        <div style={{ marginBottom: 6, fontSize: 12.5, color: C.textDim }}>
+          3. The script installs a small dependency, starts the Hermes API server on <code style={{ fontSize: 12 }}>0.0.0.0:8642</code>, and prints something like:
         </div>
         <pre
           style={{
             background: "#0C0B09", border: `1px solid ${C.border}`, borderRadius: 6,
-            padding: "10px 12px", fontSize: 10.5, fontFamily: "monospace",
+            padding: "10px 12px", fontSize: 12, fontFamily: "monospace",
             whiteSpace: "pre-wrap", margin: "0 0 10px", color: C.textDim,
           }}
         >
 {`Hermes URL : http://192.168.1.42:8642
 API Key    : intern2-hermes-a1b2c3d4e5f6a7b8`}
         </pre>
-        <div style={{ marginBottom: 16, fontSize: 11.5, color: C.textDim }}>
+        <div style={{ marginBottom: 16, fontSize: 12.5, color: C.textDim }}>
           4. Copy those two values into the <b>Hermes URL</b> + <b>API Key</b> fields on this page, then click <b>Switch to Remote (external)</b>.
         </div>
 
-        <div style={{ fontSize: 11, color: C.textMuted, borderTop: `1px solid ${C.border}`, paddingTop: 12, marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: C.textDim, borderTop: `1px solid ${C.border}`, paddingTop: 12, marginTop: 8 }}>
           Auto-detect fails? Firewall blocks the port? Chat works then stops on sleep? The full guide covers all of it — including how to override the Hermes install path if the script can't find it.
           <br />
           <span style={{ color: C.textDim }}>
@@ -427,6 +440,6 @@ API Key    : intern2-hermes-a1b2c3d4e5f6a7b8`}
           </span>
         </div>
       </div>
-    </div>
+    </dialog>
   );
 }

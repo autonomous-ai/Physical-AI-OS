@@ -1,0 +1,22 @@
+.lm-log-source-picker { display: none; }
+.lm-logs-panel .lm-log-search { min-height: 36px; flex: 1 1 150px; min-width: 0; }
+.lm-cli-tab { display: flex; border: 1px solid var(--lm-border); border-radius: 8px; overflow: hidden; background: var(--lm-surface); }
+.lm-cli-tab[data-active="true"] { border-color: var(--lm-amber); background: var(--lm-amber-dim); }
+.lm-cli-tab button { min-height: 40px; padding: 8px 12px; border: 0; background: transparent; color: var(--lm-text-dim); font: inherit; font-size: 13px; cursor: pointer; }
+.lm-cli-tab[data-active="true"] button { color: var(--lm-amber); }
+.lm-cli-tab button:last-child { min-width: 40px; font-size: 18px; }
+.lm-cli-mobile-keys { display: none; }
+.lm-cli-key { min-height: 40px; padding: 8px 12px; border: 1px solid var(--lm-border); border-radius: 6px; background: var(--lm-surface); color: var(--lm-text); cursor: pointer; font-size: 13px; }
+.lm-cli-key:disabled { opacity: .5; cursor: not-allowed; }
+.lm-cli-tab button:focus-visible, .lm-cli-key:focus-visible, .lm-logs-panel button:focus-visible, .lm-logs-panel select:focus-visible, .lm-logs-panel input:focus-visible { outline: 2px solid var(--lm-amber); outline-offset: -2px; }
+#FLOW_SECTION .lm-flow-turns-header input:focus-visible { outline: 2px solid var(--lm-amber) !important; outline-offset: 2px; }
+@media (max-width: 640px) {
+  .lm-logs-panel .lm-log-source-tabs { display: none !important; }
+  .lm-log-source-picker { display: flex; align-items: center; gap: 12px; padding-bottom: 12px; flex-shrink: 0; font-size: 13px; color: var(--lm-text-dim); }
+  .lm-log-source-picker select { flex: 1; min-width: 0; min-height: 42px; padding: 8px; border: 1px solid var(--lm-border); border-radius: 8px; background: var(--lm-surface); color: var(--lm-text); font-size: 16px; }
+  .lm-logs-panel .lm-log-sep { display: none; }
+  .lm-logs-panel .lm-log-search { flex-basis: 100%; font-size: 16px !important; }
+  .lm-cli-mobile-keys { display: flex; flex-wrap: wrap; gap: 4px; flex-shrink: 0; }
+  .lm-cli-key { flex: 1; padding-inline: 8px; }
+  #FLOW_SECTION .lm-flow-turns-header input { font-size: 16px !important; }
+}

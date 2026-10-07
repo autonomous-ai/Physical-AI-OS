@@ -351,12 +351,12 @@ export default function WifiProvision() {
               background: "transparent", border: "none", padding: "12px 0 8px",
               color: C.textDim, fontSize: 12, cursor: "pointer",
             }}>
-            {showAdvanced ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-            <span style={{ fontWeight: 600 }}>Advanced — voice / admin</span>
-            <span style={{ color: C.textMuted, fontWeight: 400 }}>
-              &nbsp;(optional — configure later on the admin page after setup)
-            </span>
+            {showAdvanced ? <ChevronDown size={14} style={{ flexShrink: 0 }} /> : <ChevronRight size={14} style={{ flexShrink: 0 }} />}
+            <span style={{ fontWeight: 600, whiteSpace: "nowrap" }}>Advanced — voice / admin</span>
           </button>
+          <p style={{ color: C.textMuted, fontSize: 12, margin: "0 0 12px 20px" }}>
+            Optional — configure later on the admin page after setup.
+          </p>
 
           {showAdvanced && (
             <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
