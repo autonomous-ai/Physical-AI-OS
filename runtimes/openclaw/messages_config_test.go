@@ -102,3 +102,22 @@ func TestHeartbeatEndsWithNoReplyNotSilence(t *testing.T) {
 		t.Fatal("the OS block must still end at its --- separator")
 	}
 }
+
+// The recurring heartbeat is off; an event-driven wake stays silent and history-free.
+func TestPinSilentHeartbeat(t *testing.T) {
+	defaults := map[string]any{"heartbeat": map[string]any{"every": "30m", "target": "owner"}}
+	if !pinSilentHeartbeat(defaults) {
+		t.Fatal("first pass must change the heartbeat")
+	}
+	want := map[string]any{"every": "0m", "target": "none", "isolatedSession": true}
+	if got := defaults["heartbeat"]; !reflect.DeepEqual(got, want) {
+		t.Fatalf("heartbeat = %v, want %v", got, want)
+	}
+	if pinSilentHeartbeat(defaults) {
+		t.Fatal("second pass must be a no-op")
+	}
+	empty := map[string]any{}
+	if !pinSilentHeartbeat(empty) || !reflect.DeepEqual(empty["heartbeat"], map[string]any{"every": "0m", "target": "none", "isolatedSession": true}) {
+		t.Fatalf("missing heartbeat block not created: %v", empty)
+	}
+}
