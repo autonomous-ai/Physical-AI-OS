@@ -160,20 +160,19 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
       ) : (
         <>
           <div style={{ fontSize: 12.5, color: C.textDim, marginBottom: 12, lineHeight: 1.6 }}>
-            The swappable agentic backend that runs the robot's brain. Switching
-            stops the other backend and restarts os-server.
+            Choose a runtime first, then choose how it connects to an AI provider.
           </div>
 
           <div style={{ marginBottom: 6 }}>
             <label htmlFor="agent_runtime" style={labelStyle}>
-              Backend (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>
+              1. Choose runtime (active: <span style={{ color: C.amber }}>{current ? displayRuntime(current) : "?"}</span>
               {current && !ready && <span style={{ color: C.textDim }}> — starting…</span>})
             </label>
             <SettingsSelect
               id="agent_runtime"
               value={selected}
               onValueChange={(value) => setSelected(value)}
-              disabled={switching}
+              disabled={switching || saving || modeNeedsSave}
               style={selectStyle}
             >
               {options.map((o) => <option key={o} value={o}>{displayRuntime(o)}</option>)}
@@ -183,31 +182,6 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
           {RUNTIME_BLURB[selected] && (
             <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14 }}>
               {RUNTIME_BLURB[selected]}
-            </div>
-          )}
-
-          {current !== REMOTE && selected !== REMOTE && (
-            <div style={{ marginBottom: 18 }}>
-              <label htmlFor="llm_config_mode" style={labelStyle}>LLM configuration</label>
-              <SettingsSelect
-                id="llm_config_mode"
-                value={llmConfigMode || "os"}
-                onValueChange={(value) => onLlmConfigModeChange(value as LLMConfigMode)}
-                disabled={switching || saving}
-                style={selectStyle}
-              >
-                <option value="os">Use OS AI Brain</option>
-                <option value="runtime">Configure directly in runtime</option>
-              </SettingsSelect>
-              <p style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
-                {llmConfigMode === "runtime"
-                  ? "Save Changes, then use the runtime CLI to sign in, select a model, and restart the runtime. OS will preserve its LLM configuration. This choice does not sign you in."
-                  : "Use the provider and model saved in AI Brain. Save Changes to apply your choice."}
-                {" This choice applies across runtime switches. Each runtime needs its own login and configuration."}
-              </p>
-              {llmConfigMode === "runtime" && savedLlmConfigMode === "runtime" && !llmModeApplyPending && (
-                <a href={`/monitor${window.location.search}#cli`} style={{ color: C.amber, fontSize: 12 }}>Open Terminal</a>
-              )}
             </div>
           )}
 
@@ -263,7 +237,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
 
           {modeNeedsSave && (
             <p style={{ fontSize: 11.5, color: C.amber, lineHeight: 1.6 }}>
-              Save Changes to apply the LLM configuration choice before switching runtimes.
+              Save your AI configuration in step 2 before switching runtimes.
             </p>
           )}
           {(() => {
@@ -293,6 +267,92 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               </button>
             );
           })()}
+
+          {current !== REMOTE && selected !== REMOTE && (
+            <div style={{ marginTop: 22, paddingTop: 18, borderTop: `1px solid ${C.border}` }}>
+              <div id="llm-config-label" style={labelStyle}>
+                2. Configure AI for {displayRuntime(current)}
+              </div>
+              {switching || selected !== current ? (
+                <p role="status" style={{ fontSize: 12, color: C.amber, lineHeight: 1.6 }}>
+                  {switching
+                    ? `Switching to ${displayRuntime(selected)}. AI configuration will be available when the switch finishes.`
+                    : `Click “Switch to ${displayRuntime(selected)}” above to configure its AI connection.`}
+                </p>
+              ) : null}
+              <fieldset
+                aria-labelledby="llm-config-label"
+                disabled={switching || saving || selected !== current}
+                style={{ border: 0, padding: 0, margin: "10px 0 0", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}
+              >
+                {([
+                  ["os", "Use OS AI Brain"],
+                  ["runtime", "Use my own account / configure in runtime"],
+                ] as const).map(([mode, label]) => (
+                  <label key={mode} style={{
+                    display: "flex", alignItems: "center", gap: 10,
+                    padding: "12px", borderRadius: 7, fontSize: 12.5,
+                    border: `1px solid ${(llmConfigMode || "os") === mode ? C.amber : C.border}`,
+                    background: C.surface, color: C.text,
+                    opacity: switching || saving || selected !== current ? 0.5 : 1,
+                    cursor: switching || saving || selected !== current ? "not-allowed" : "pointer",
+                  }}>
+                    <input
+                      type="radio"
+                      name="llm_config_mode"
+                      value={mode}
+                      checked={(llmConfigMode || "os") === mode}
+                      onChange={() => onLlmConfigModeChange(mode)}
+                      style={{ margin: 0, accentColor: C.amber, flexShrink: 0 }}
+                    />
+                    {label}
+                  </label>
+                ))}
+              </fieldset>
+              {!switching && selected === current && (
+                <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, marginTop: 12 }}>
+                  <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+                    {llmConfigMode === "runtime"
+                      ? `Sign in and choose a model using the ${displayRuntime(current)} terminal. Selecting this option does not sign you in.`
+                      : "Use the provider and model saved in Settings → AI Brain."}
+                  </p>
+                  <button
+                    type="submit"
+                    form="edit-form"
+                    disabled={saving || !modeNeedsSave}
+                    style={{
+                      padding: "7px 18px", borderRadius: 7, fontSize: 12, fontWeight: 600,
+                      border: "none",
+                      cursor: saving || !modeNeedsSave ? "not-allowed" : "pointer",
+                      background: saving || !modeNeedsSave ? C.surface : C.amber,
+                      color: saving || !modeNeedsSave ? C.textMuted : "var(--lm-on-amber)",
+                    }}
+                  >
+                    {saving ? "Saving…" : modeNeedsSave ? "Save Changes" : "Saved"}
+                  </button>
+                  {modeNeedsSave ? (
+                    <p role="status" style={{ margin: 0, fontSize: 12, color: C.amber, lineHeight: 1.6 }}>
+                      {llmConfigMode === "runtime"
+                        ? "Click Save Changes, then open Terminal to sign in."
+                        : "Click Save Changes to apply your choice."}
+                    </p>
+                  ) : llmConfigMode === "runtime" && savedLlmConfigMode === "runtime" ? (
+                    <>
+                      <a href={`/monitor${window.location.search}#cli`} style={{ color: C.amber, fontSize: 12 }}>
+                        Open Terminal to sign in
+                      </a>
+                      <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+                        After signing in and choosing a model, restart {displayRuntime(current)}, then return to Chat.
+                      </p>
+                    </>
+                  ) : null}
+                  <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+                    This choice also applies when you switch runtimes. Sign in separately for each runtime.
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
         </>
       )}
       {showRemoteHelp && <RemoteHelpModal onClose={() => setShowRemoteHelp(false)} />}
