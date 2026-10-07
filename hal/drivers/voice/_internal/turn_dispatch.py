@@ -249,7 +249,14 @@ def dispatch_turn(
                     sensing_msg = f"{sensing_msg}\n[transcript] {final_msg}"
             else:
                 sensing_msg = final_msg
-            if sensing_msg and rt.transcript.strip():
+            if sensing_msg and rt.transcript.strip() and getattr(rt, "answered_for_main", False):
+                sensing_msg += (
+                    "\n[realtime-handoff] Realtime answered this aloud while you were "
+                    "waiting for the user's reply to your question. If it answers your "
+                    "question, continue your task without repeating what was said; if "
+                    "it is unrelated and realtime's reply was enough, reply NO_REPLY."
+                )
+            elif sensing_msg and rt.transcript.strip():
                 sensing_msg += (
                     "\n[realtime-handoff] Realtime spoke before handing off, but "
                     "did not confirm a completed answer for this turn. This is "
