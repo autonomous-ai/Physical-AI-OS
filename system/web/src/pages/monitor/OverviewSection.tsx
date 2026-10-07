@@ -1,6 +1,9 @@
+import { UpdateProgress } from "./UpdateProgress";
+import { isNewUpdate, isTerminalProgress } from "./otaProgress";
+import type { OtaProgress } from "./otaProgress";
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power, Download, LoaderCircle } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power, Download } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
@@ -148,25 +151,71 @@ export function OverviewSection({
   const canUpdate = (target: string) => isDebug && !!otaVersions[target]?.update_available;
 
   const [otaUpdating, setOtaUpdating] = useState<string[]>([]);
+  const [otaProgress, setOtaProgress] = useState<Record<string, OtaProgress>>({});
+  const [otaReconnecting, setOtaReconnecting] = useState(false);
+  const [otaWorkerUnavailable, setOtaWorkerUnavailable] = useState(false);
   const otaUpdatingRef = useRef<string[]>([]);
-  const [justTriggered, setJustTriggered] = useState<Record<string, number>>({});
+  const progressRef = useRef<Record<string, OtaProgress>>({});
+  const unobservedRef = useRef<Record<string, { progress: OtaProgress; previousRun?: string; at: number }>>({});
+  const pendingRef = useRef<Record<string, { at: number; previousRun?: string; acknowledged: boolean }>>({});
+  const [justTriggered, setJustTriggered] = useState<string[]>([]);
   const pokePollRef = useRef<() => void>(() => {});
   useEffect(() => {
     let cancelled = false;
+    let inFlight = false;
     let timer: ReturnType<typeof setTimeout> | undefined;
     const poll = async () => {
+      if (inFlight) return;
+      inFlight = true;
       try {
-        const r = await fetch(`${API}/system/ota-updating`);
-        const j = r.ok ? await r.json() : null;
-        const list: string[] = j?.data?.updating ?? [];
+        const r = await fetch(`${API}/system/ota-updating`, { signal: AbortSignal.timeout(8000) });
+        if (!r.ok) throw new Error("Update status unavailable");
+        const j = await r.json();
+        if (j.status !== 1 || !Array.isArray(j.data?.updating)) throw new Error("Invalid update status");
+        const list: string[] = j.data.updating;
+        const progress: Record<string, OtaProgress> = j.data.progress ?? {};
+        const workerUnavailable = j.data.bootstrap_available === false;
         if (!cancelled) {
+          if (workerUnavailable) {
+            // A persisted record remains authoritative while the worker restarts.
+            // Missing records in the fallback response cannot prove completion.
+            for (const target of otaUpdatingRef.current) {
+              if (!progress[target] && progressRef.current[target]) progress[target] = progressRef.current[target];
+            }
+          }
+          for (const [target, pending] of Object.entries(pendingRef.current)) {
+            if (list.includes(target)) pending.acknowledged = true;
+            if ((progress[target] && isNewUpdate(progress[target], pending.previousRun))
+              || (!workerUnavailable && pending.acknowledged && !list.includes(target))) delete pendingRef.current[target];
+            else if (!workerUnavailable && !list.includes(target) && Date.now() - pending.at > 30000) {
+              progress[target] = { target, run_id: `unobserved-${pending.at}`, updated_at: Math.floor(Date.now() / 1000), phase: "status_unavailable", message: "The update request was not observed. Check updater logs before retrying." };
+              unobservedRef.current[target] = { progress: progress[target], previousRun: pending.previousRun, at: pending.at };
+              delete pendingRef.current[target];
+            }
+          }
+          for (const [target, unobserved] of Object.entries(unobservedRef.current)) {
+            if (list.includes(target) || (progress[target] && progress[target].run_id !== unobserved.progress.run_id && isNewUpdate(progress[target], unobserved.previousRun))) delete unobservedRef.current[target];
+            else progress[target] = unobserved.progress;
+          }
+          const retainedActive = workerUnavailable ? otaUpdatingRef.current.filter((target) => !progress[target] || !isTerminalProgress(progress[target])) : [];
+          const active = [...new Set([...list, ...retainedActive, ...Object.keys(progress).filter((target) => !isTerminalProgress(progress[target]))])];
           const wasBusy = otaUpdatingRef.current.length > 0;
-          otaUpdatingRef.current = list;
-          setOtaUpdating(list);
-          if (wasBusy && list.length === 0) void refreshOtaVersions();
+          otaUpdatingRef.current = active;
+          progressRef.current = progress;
+          setOtaUpdating(active);
+          setOtaProgress(progress);
+          setJustTriggered(Object.keys(pendingRef.current));
+          setOtaReconnecting(false);
+          setOtaWorkerUnavailable(workerUnavailable);
+          if (wasBusy && active.length === 0) void refreshOtaVersions();
         }
-      } catch { /* bootstrap down → treat as "nothing running" */ }
-      if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 ? 2000 : 10000);
+      } catch {
+        // Preserve active state across service restarts and network failures.
+        if (!cancelled) setOtaReconnecting(true);
+      } finally {
+        inFlight = false;
+      }
+      if (!cancelled) timer = setTimeout(poll, otaUpdatingRef.current.length > 0 || Object.keys(pendingRef.current).length > 0 ? 2000 : 10000);
     };
     pokePollRef.current = () => { if (timer) clearTimeout(timer); void poll(); };
     void poll();
@@ -174,19 +223,17 @@ export function OverviewSection({
   }, [refreshOtaVersions]);
 
   const onUpdateTriggered = useCallback((target: string) => {
-    setJustTriggered((prev) => ({ ...prev, [target]: Date.now() }));
+    delete unobservedRef.current[target];
+    pendingRef.current[target] = { at: Date.now(), previousRun: progressRef.current[target]?.run_id, acknowledged: false };
+    setJustTriggered(Object.keys(pendingRef.current));
     pokePollRef.current();
-    setTimeout(() => {
-      setJustTriggered((prev) => {
-        const next = { ...prev };
-        delete next[target];
-        return next;
-      });
-      void refreshOtaVersions();
-    }, 6000);
-  }, [refreshOtaVersions]);
+  }, []);
 
-  const isUpdating = (target: string) => otaUpdating.includes(target) || target in justTriggered;
+  const updateStatus = (target: string) => ({
+    updating: otaUpdating.includes(target) || justTriggered.includes(target),
+    progress: justTriggered.includes(target) || (otaUpdating.includes(target) && otaProgress[target] && isTerminalProgress(otaProgress[target])) ? undefined : otaProgress[target],
+    reconnecting: otaReconnecting || (otaWorkerUnavailable && (!otaProgress[target] || isTerminalProgress(otaProgress[target]) || Date.now() / 1000 - otaProgress[target].updated_at > 15)),
+  });
 
   const [localVolume, setLocalVolume] = useState<number | null>(null);
   const draggingVolume = useRef(false);
@@ -194,7 +241,7 @@ export function OverviewSection({
 
   useEffect(() => {
     if (!draggingVolume.current && audio?.volume != null) {
-      // eslint-disable-next-line react-hooks/set-state-in-effect -- the slider is an uncontrolled-while-dragging input: server volume may only overwrite it BETWEEN drags. Deriving it during render would yank the handle out from under the operator's finger mid-drag.
+      // The slider is an uncontrolled-while-dragging input: server volume may only overwrite it BETWEEN drags. Deriving it during render would yank the handle out from under the operator's finger mid-drag.
       setLocalVolume(audio.volume);
     }
   }, [audio?.volume]);
@@ -287,7 +334,7 @@ export function OverviewSection({
               {oc.emotion && <StatRow label="Emotion" value={oc.emotion} color="var(--lm-amber)" />}
             </div>
           ) : <SkeletonRows lines={3} />}
-          <div className="lm-overview-restart"><span>Restart agent</span><RestartAgentButton agentName={oc?.name} showLabel /></div>
+          <div className="lm-overview-restart"><span>Restart agent</span>{updateStatus("agent").updating ? <span role="status">Update in progress</span> : <RestartAgentButton agentName={oc?.name} showLabel />}</div>
         </div>
 
         <div className="lm-mon-card" style={monCard}>
@@ -606,12 +653,12 @@ export function OverviewSection({
               <span />
             </div>
             <VersionRow name="Host"   color="var(--lm-text)"   version={null}                    uptime={sys?.uptime ?? null}                                   updateTarget={null} />
-            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} updating={isUpdating("web")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} updating={isUpdating("os-server")} onTriggered={onUpdateTriggered} />
-            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} updating={isUpdating("hal")} onTriggered={onUpdateTriggered} />
-            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} updating={isUpdating("agent")} onTriggered={onUpdateTriggered} />
-            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} updating={isUpdating("bootstrap")} onTriggered={onUpdateTriggered} />}
-            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
+            <VersionRow name="Web" latestVersion={otaVersions["web"]?.target}    color="var(--lm-teal)"   version={webVersion}              uptime={null}                                                  updateTarget={canUpdate("web") ? "web" : null} {...updateStatus("web")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="os-server" name="OS" latestVersion={otaVersions["os-server"]?.target}     color="var(--lm-amber)"  version={sys?.version ?? null}    uptime={sys?.serviceUptime ?? null}                            updateTarget={canUpdate("os-server") ? "os-server" : null} {...updateStatus("os-server")} onTriggered={onUpdateTriggered} />
+            <VersionRow restartTarget="hal" name="HAL" latestVersion={otaVersions["hal"]?.target}    color="var(--lm-blue)"   version={halVersion}              uptime={sys?.halUptime ?? null}                                updateTarget={canUpdate("hal") ? "hal" : null} {...updateStatus("hal")} onTriggered={onUpdateTriggered} />
+            <VersionRow name="Agent" latestVersion={otaVersions["agent"]?.target}  color="var(--lm-purple)" version={oc?.version ?? null}     uptime={oc?.connected ? (oc?.agentUptime ?? null) : null}      updateTarget={canUpdate("agent") ? "agent" : null} {...updateStatus("agent")} onTriggered={onUpdateTriggered} />
+            {isDebug && <VersionRow name="Bootstrap" latestVersion={otaVersions["bootstrap"]?.target} color="var(--lm-text-dim)" version={otaVersions.bootstrap?.current ?? null} uptime={null} updateTarget={canUpdate("bootstrap") ? "bootstrap" : null} {...updateStatus("bootstrap")} onTriggered={onUpdateTriggered} />}
+            {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} {...updateStatus("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
         <div className="lm-mon-card" style={monCard}>
@@ -899,7 +946,7 @@ const versionRowLayout = {
   gap: 8,
 };
 
-function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget }: {
+function VersionRow({ name, color, version, latestVersion, uptime, updateTarget, updating = false, onTriggered, restartTarget, progress, reconnecting = false }: {
   name: string;
   color: string;
   version: string | null;
@@ -909,6 +956,8 @@ function VersionRow({ name, color, version, latestVersion, uptime, updateTarget,
   restartTarget?: "os-server" | "hal";
   // Show a label during install; without it operators press again, which can break the runtime.
   updating?: boolean;
+  progress?: OtaProgress;
+  reconnecting?: boolean;
   onTriggered?: (target: string) => void;
 }) {
   return (
@@ -920,13 +969,12 @@ function VersionRow({ name, color, version, latestVersion, uptime, updateTarget,
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
       <span className="lm-overview-update" style={{ display: "flex", justifyContent: "flex-end" }}>
-        {updating
-          ? <span className="lm-service-progress" role="status" title="Installing — the component restarts when it finishes"><LoaderCircle size={14} className="lm-spin-ico" aria-hidden />Updating…</span>
-          : updateTarget && <SoftwareUpdateButton target={updateTarget} label={<><Download size={14} aria-hidden />Update</>} onTriggered={onTriggered} />}
+        {!updating && updateTarget && <SoftwareUpdateButton target={updateTarget} label={<><Download size={14} aria-hidden />Update</>} onTriggered={onTriggered} />}
       </span>
       <span style={{ display: "flex", justifyContent: "flex-end" }}>
         {restartTarget && <RestartServiceButton target={restartTarget} disabled={updating} />}
       </span>
+      <UpdateProgress progress={progress} updating={updating} reconnecting={reconnecting} />
     </div>
   );
 }

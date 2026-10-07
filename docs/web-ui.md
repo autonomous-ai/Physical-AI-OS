@@ -436,6 +436,10 @@ The web UI never calls nginx `/hw/*`: every HAL request goes through the admin-g
 
 ### 5.1 Overview Section
 
+Overview Services shows persisted update progress beneath each component. Only measurable artifact downloads show a byte-based percentage and progress bar; preparing, verification, installation, restart and health checks show named stages. Unknown download size shows bytes only. The previous run's completed/failed/interrupted outcome remains labeled “Last update”. Reconnection preserves the last known status rather than treating a network failure as completion. Active updates disable their update/restart controls. The API remains backward compatible with older updating-only workers; detailed progress requires the updated on-device updater and OS Server.
+
+
+
 The monitor uses consistent overflow longhands so returning from Chat, Settings or embedded pages restores the outer content scrollbar.
 
 Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.

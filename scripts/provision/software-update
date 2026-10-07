@@ -6,6 +6,50 @@ ROLLBACK_DIR="/root/bootstrap/rollback"
 WEB_ROOT="/usr/share/nginx/html/setup"
 HAL_DIR="/opt/hal"
 
+# Progress is best-effort telemetry; a full disk must not change update/rollback behavior.
+PROGRESS_DIR="/root/bootstrap/progress"
+PROGRESS_RUN_ID=""
+PROGRESS_PHASE="preparing"
+DOWNLOAD_PID=""
+DOWNLOAD_HEADERS=""
+
+progress_report() {
+  [ -n "${PROGRESS_RUN_ID:-}" ] || return 0
+  local phase="$1" downloaded="${2:-0}" total="${3:-0}" message="${4:-}" temporary
+  if [ "${PROGRESS_ROLLBACK:-0}" = 1 ] && [ "$phase" != failed ]; then phase=rolling_back; fi
+  PROGRESS_PHASE="$phase"
+  mkdir -p "$PROGRESS_DIR" 2>/dev/null || return 0
+  chmod 700 "$PROGRESS_DIR" 2>/dev/null || return 0
+  temporary=$(mktemp "$PROGRESS_DIR/.progress.XXXXXX") || return 0
+  if jq -n --arg target "$APP" --arg run_id "$PROGRESS_RUN_ID" --arg phase "$phase" \
+    --arg message "$message" --arg boot_id "${PROGRESS_BOOT_ID:-}" --argjson pid "$$" --argjson updated_at "$(date +%s)" \
+    --argjson downloaded_bytes "$downloaded" --argjson total_bytes "$total" \
+    '{target:$target,run_id:$run_id,phase:$phase,pid:$pid,boot_id:$boot_id,updated_at:$updated_at,
+      downloaded_bytes:$downloaded_bytes,total_bytes:$total_bytes,message:$message}' >"$temporary"; then
+    mv -f "$temporary" "$PROGRESS_DIR/$APP.json" || { rm -f "$temporary" 2>/dev/null || true; }
+  else
+    rm -f "$temporary" 2>/dev/null || true
+  fi
+  return 0
+}
+
+# Use only the final successful response, never a redirect's Content-Length.
+# Chunked responses have no reliable denominator, even with a Content-Length header.
+progress_download_sample() {
+  local destination="$1" headers="$2" downloaded total
+  downloaded=$(wc -c < "$destination" 2>/dev/null | tr -d '[:space:]')
+  total=$(awk '
+    /^HTTP\// { length_value=0; chunked=0; status=$2 }
+    tolower($1)=="content-length:" { gsub("\r", "", $2); if ($2 ~ /^[0-9]+$/) length_value=$2 }
+    tolower($1)=="transfer-encoding:" { if (tolower($0) ~ /chunked/) chunked=1 }
+    END { if (status==200 && !chunked) print length_value+0; else print 0 }
+  ' "$headers" 2>/dev/null)
+  downloaded=${downloaded:-0}; total=${total:-0}
+  # Never display a misleading percentage for inconsistent server headers.
+  [ "$downloaded" -le "$total" ] || total=0
+  progress_report downloading "$downloaded" "$total"
+}
+
 find_hal_uv() {
   local candidate
   candidate="$(command -v uv || true)"
@@ -133,7 +177,9 @@ update_openclaw() {
     echo "[software-update] OpenClaw migration failed; gateway left stopped. Resolve doctor errors before starting openclaw.service." >&2
     return 1
   fi
+  progress_report restarting
   systemctl restart openclaw || return 1
+  progress_report checking
   for attempt in {1..12}; do
     if HOME=/root OPENCLAW_HOME=/root/.openclaw OPENCLAW_STATE_DIR=/root/.openclaw \
       openclaw gateway status --require-rpc --timeout 5000; then
@@ -173,6 +219,7 @@ web_was_active() {
 }
 
 restore_web_service_state() {
+  progress_report restarting
   if web_was_active; then
     systemctl restart nginx
   else
@@ -191,6 +238,7 @@ wait_for_web() {
 }
 
 check_web() {
+  progress_report checking
   [ -f "$WEB_ROOT/index.html" ] || return 1
   nginx -t >/dev/null || return 1
   web_was_active || return 0
@@ -239,6 +287,7 @@ device_was_active() {
 }
 
 restore_device_service_state() {
+  progress_report restarting
   if device_was_active os-server; then systemctl restart os-server || return 1; else systemctl stop os-server 2>/dev/null || true; fi
   if device_was_active hal; then systemctl restart hal || return 1; else systemctl stop hal 2>/dev/null || true; fi
 }
@@ -324,6 +373,7 @@ PY
 }
 
 check_device_profile() {
+  progress_report checking
   [ -f "$DEVICE_DEST/ROBOT.md" ] || return 1
   local unit url attempts
   for unit in hal os-server; do
@@ -394,10 +444,12 @@ hal_was_active() {
 }
 
 restore_hal_service_state() {
+  progress_report restarting
   if hal_was_active; then systemctl restart hal; else systemctl stop hal 2>/dev/null || true; fi
 }
 
 check_hal() {
+  progress_report checking
   [ -f "$HAL_DIR/VERSION_HAL" ] || return 1
   # Only an intentionally stopped, disabled HAL may skip runtime validation.
   # A failed start must not turn the new runtime into an accepted update.
@@ -543,11 +595,18 @@ recover_pending_update() {
 }
 
 on_exit() {
-  local code=$?
+  local code=$? failed_phase="${PROGRESS_PHASE:-preparing}"
   trap - EXIT
+  if [ -n "${DOWNLOAD_PID:-}" ]; then
+    kill "$DOWNLOAD_PID" 2>/dev/null || true
+    wait "$DOWNLOAD_PID" 2>/dev/null || true
+  fi
+  rm -f "${DOWNLOAD_HEADERS:-}" 2>/dev/null || true
   if [ -f "$ROLLBACK_DIR/pending-update.json" ]; then
     # A pending journal at exit is never a successful update.
     [ "$code" -ne 0 ] || code=1
+    PROGRESS_ROLLBACK=1
+    progress_report rolling_back 0 0 "Restoring the previous installation"
     recover_pending_update || echo "[software-update] recovery incomplete; journal retained for retry" >&2
   elif [ -n "$STOPPED_SERVICES_RESTORE" ]; then
     "$STOPPED_SERVICES_RESTORE" || true
@@ -555,24 +614,33 @@ on_exit() {
   fi
   rm -f "${METADATA_TMP:-}" "${METADATA_PAYLOAD:-}" "${ZIP_TMP:-}" 2>/dev/null || true
   [ -z "${DIR_TMP:-}" ] || rm -rf "$DIR_TMP"
+  if [ "$code" -eq 0 ]; then
+    progress_report completed 0 0 "Updater finished successfully"
+  else
+    progress_report failed 0 0 "Update failed during $failed_phase; check the updater journal for details"
+  fi
   exit "$code"
 }
 
 restore_os_server_service() {
+  progress_report restarting
   systemctl restart os-server
 }
 
 restore_bootstrap_service() {
+  progress_report restarting
   systemctl restart bootstrap
 }
 
 check_os_server() {
+  progress_report checking
   systemctl is-active --quiet os-server || return 1
   wait_for_url http://127.0.0.1:5000/api/health/live 60 || return 1
   systemctl is-active --quiet os-server
 }
 
 check_bootstrap() {
+  progress_report checking
   local port
   port=$(jq -r '.httpPort // 8080' "$BOOTSTRAP_JSON") || return 1
   [[ "$port" =~ ^[0-9]+$ ]] && [ "$port" -ge 1 ] && [ "$port" -le 65535 ] || return 1
@@ -744,6 +812,13 @@ case "$APP" in
   *) echo "Unknown app: $APP. Use os-server, openclaw, codex, claudecode, opencode, hermes, picoclaw, bootstrap, web, hal, claude-desktop-buddy, or device."; exit 1 ;;
 esac
 
+PROGRESS_RUN_ID="$(date +%s)-$$"
+PROGRESS_BOOT_ID="$(cat /proc/sys/kernel/random/boot_id 2>/dev/null || true)"
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM HUP
+progress_report preparing
+
 if [ -z "${OTA_METADATA_URL:-}" ]; then
   OTA_METADATA_URL="$(jq -r '.metadata_url // empty' "$BOOTSTRAP_JSON" 2>/dev/null || true)"
 fi
@@ -801,9 +876,30 @@ fi
 
 download_verified() {
   local url="$1" destination="$2" digest="$3"
-  curl -fsSL -H "Cache-Control: no-cache" -o "$destination" "$url" || return 1
-  [ -z "$digest" ] || echo "$digest  $destination" | sha256sum -c - >/dev/null
+  local result=0
+  DOWNLOAD_HEADERS=$(mktemp) || return 1
+  : > "$destination" || return 1
+  progress_report downloading
+  curl -fsSL --connect-timeout 30 --max-time 600 -D "$DOWNLOAD_HEADERS" -H "Cache-Control: no-cache" -o "$destination" "$url" &
+  DOWNLOAD_PID=$!
+  while kill -0 "$DOWNLOAD_PID" 2>/dev/null; do
+    progress_download_sample "$destination" "$DOWNLOAD_HEADERS"
+    sleep 1
+  done
+  wait "$DOWNLOAD_PID" || result=$?
+  DOWNLOAD_PID=""
+  progress_download_sample "$destination" "$DOWNLOAD_HEADERS"
+  rm -f "$DOWNLOAD_HEADERS"
+  DOWNLOAD_HEADERS=""
+  [ "$result" -eq 0 ] || return "$result"
+  progress_report verifying
+  if [ -n "$digest" ]; then
+    echo "$digest  $destination" | sha256sum -c - >/dev/null || return 1
+  fi
+  progress_report installing
 }
+
+progress_report installing
 
 if [ "$APP" = "os-server" ]; then
   [ -z "$URL" ] && { echo "Metadata has no url for os-server"; exit 1; }
@@ -851,6 +947,7 @@ elif [ "$APP" = "codex" ]; then
   /usr/local/bin/codex --version || { echo "codex binary not runnable after update"; exit 1; }
   # The unit exists only after switching to the codex runtime.
   if [ -f /etc/systemd/system/codex.service ]; then
+    progress_report restarting
     systemctl restart codex
   else
     echo "[software-update] codex.service absent (runtime not active) — binary updated, no restart"
@@ -887,6 +984,7 @@ elif [ "$APP" = "opencode" ]; then
   /usr/local/bin/opencode --version || { echo "opencode not runnable after update"; exit 1; }
   # The unit exists only after switching to the opencode runtime.
   if [ -f /etc/systemd/system/opencode.service ]; then
+    progress_report restarting
     systemctl restart opencode
   else
     echo "[software-update] opencode.service absent (runtime not active) — CLI updated, no restart"
@@ -915,6 +1013,7 @@ elif [ "$APP" = "hermes" ]; then
     echo "[software-update] WARN: hermes landed on $HERMES_NOW, metadata expected $VERSION (unpinned: upstream HEAD moved)"
   fi
   if [ -f /etc/systemd/system/hermes-gateway.service ]; then
+    progress_report restarting
     systemctl restart hermes-gateway
   else
     echo "[software-update] hermes-gateway.service absent (runtime not active) — CLI updated, no restart"
@@ -947,6 +1046,7 @@ elif [ "$APP" = "picoclaw" ]; then
   echo "$VERSION" > /usr/local/lib/os-runtimes/picoclaw/installed-version
   # The unit exists only after switching to the picoclaw runtime.
   if [ -f /etc/systemd/system/picoclaw.service ]; then
+    progress_report restarting
     systemctl restart picoclaw
   else
     echo "[software-update] picoclaw.service absent (runtime not active) — binary updated, no restart"
@@ -1054,6 +1154,7 @@ elif [ "$APP" = "claude-desktop-buddy" ]; then
   [ -f "$DIR_TMP/buddy-plugin" ] && cp -f "$DIR_TMP/buddy-plugin" "$BUDDY_DIR/buddy-plugin" && chmod +x "$BUDDY_DIR/buddy-plugin"
   [ ! -f "/root/config/buddy.json" ] && [ -f "$DIR_TMP/config/buddy.json" ] && mkdir -p /root/config && cp -f "$DIR_TMP/config/buddy.json" /root/config/buddy.json
   echo "$VERSION" > "$BUDDY_DIR/VERSION_BUDDY"
+  progress_report restarting
   systemctl restart claude-desktop-buddy
   echo "claude-desktop-buddy updated to $VERSION"
 elif [ "$APP" = "device" ]; then

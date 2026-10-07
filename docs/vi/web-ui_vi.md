@@ -425,6 +425,10 @@ Web UI không bao giờ gọi nginx `/hw/*`: mọi request tới HAL đi qua rev
 
 ### 5.1 Overview Section
 
+Services trên Overview hiển thị tiến độ được lưu dưới từng component. Chỉ lượt tải artifact biết dung lượng mới có phần trăm theo byte và thanh tiến độ; chuẩn bị, kiểm tra, cài đặt, restart và health check hiển thị tên bước. Nếu không biết tổng dung lượng thì chỉ hiện số byte đã tải. Kết quả completed/failed/interrupted của lượt trước giữ nhãn “Last update”. Khi kết nối lại, UI giữ trạng thái gần nhất thay vì coi mất mạng là đã xong. Component đang cập nhật khóa nút update/restart. API tương thích worker cũ chỉ có danh sách updating; tiến độ chi tiết cần updater và OS Server mới trên thiết bị.
+
+
+
 Monitor dùng nhất quán các thuộc tính overflow theo từng trục để khôi phục cuộn nội dung khi quay lại từ Chat, Settings hoặc trang nhúng.
 
 Khi quay lại Overview, dữ liệu được refresh ngay thay vì chờ nhịp poll 5 giây; dữ liệu card đã có vẫn hiển thị trong lúc tải. Monitor giữ snapshot phiên bản OTA và emotion preset tải thành công qua các lần đổi tab, hiển thị ngay khi quay lại rồi cập nhật nền. Cache chỉ nằm trong bộ nhớ và mất khi monitor unmount. Đổi section sẽ hủy poll của section cũ; không giữ stream của section đang ẩn.
