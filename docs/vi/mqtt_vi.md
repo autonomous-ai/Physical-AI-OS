@@ -766,6 +766,12 @@ khớp chính xác với listing, không bao giờ join đường dẫn trên fi
 Khi có `path`, device chỉ đọc file đó; skill có nhiều reference/asset sẽ không
 làm chậm phản hồi vì phải nạp mọi file còn lại trước.
 
+Chỉ liệt kê nội dung của skill. Dotfile và file rác do build hoặc editor sinh ra
+bị bỏ qua, và cũng không đọc được qua `path`: thư mục `__pycache__/` và
+`node_modules/`, `Thumbs.db`, và file có đuôi `.pyc`, `.pyo`, `.swp`, `.swo`,
+`.tmp` hoặc `.log` (cùng danh sách mà `scripts/release/upload-skills.sh` loại khỏi
+zip của skill). `GET /api/agent/skills/files` áp dụng cùng quy tắc.
+
 **Đồng bộ** — đọc thư mục skill là đọc đĩa local, nên không có ack `starting`.
 
 Chế độ danh sách:
