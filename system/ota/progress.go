@@ -30,6 +30,7 @@ type Progress struct {
 	PID             int    `json:"pid"`
 	BootID          string `json:"boot_id,omitempty"`
 	Message         string `json:"message,omitempty"`
+	ActivityAt      int64  `json:"activity_at,omitempty"`
 }
 
 func (p Progress) active() bool {

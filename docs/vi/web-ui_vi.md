@@ -427,6 +427,8 @@ Web UI không bao giờ gọi nginx `/hw/*`: mọi request tới HAL đi qua rev
 
 Services trên Overview hiển thị tiến độ được lưu dưới từng component. Chỉ lượt tải artifact biết dung lượng mới có phần trăm theo byte và thanh tiến độ; chuẩn bị, kiểm tra, cài đặt, restart và health check hiển thị tên bước. Nếu không biết tổng dung lượng thì chỉ hiện số byte đã tải. Kết quả completed/failed/interrupted của lượt trước giữ nhãn “Last update”. Khi kết nối lại, UI giữ trạng thái gần nhất thay vì coi mất mạng là đã xong. Component đang cập nhật khóa nút update/restart. API tương thích worker cũ chỉ có danh sách updating; tiến độ chi tiết cần updater và OS Server mới trên thiết bị.
 
+Trong lúc cài dependency HAL, dòng trạng thái hiển thị hoạt động package hoặc tổng số package nhận diện từ `uv`, kèm “Last activity … ago” dựa trên `activity_at` tùy chọn và cập nhật mỗi năm giây. Khi log im lặng hoặc không nhận diện được, UI giữ bước cài đặt cùng hoạt động gần nhất; không tạo phần trăm cài đặt. Snapshot cũ không có timestamp vẫn được hỗ trợ.
+
 
 
 Monitor dùng nhất quán các thuộc tính overflow theo từng trục để khôi phục cuộn nội dung khi quay lại từ Chat, Settings hoặc trang nhúng.

@@ -102,7 +102,7 @@ class HALUpdateTests(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
                 self.assertEqual(result.stdout.splitlines(), expected)
-        self.assertIn('sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}"', script)
+        self.assertIn('run_uv_with_activity "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}"', script)
 
 
 class HALHealthTests(unittest.TestCase):

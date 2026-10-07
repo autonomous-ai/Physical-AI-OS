@@ -8,6 +8,8 @@ Các bước gồm preparing, downloading, verifying, installing, restarting, ch
 
 Tải qua `download_verified` lấy số byte đã ghi mỗi giây và Content-Length của HTTP 200 cuối cùng. Kích thước redirect, thiếu độ dài, chunked transfer hoặc tổng byte không khớp không tạo phần trăm. Kiểm tra checksum trước cài đặt. Package manager/upstream installer chỉ báo bước thực tế, không dựng phần trăm tổng. Không theo dõi lượt rollback/recovery thủ công hoặc lượt tải bên trong installer bên thứ ba.
 
+Khi cài HAL, updater còn báo giải nén, kích hoạt và hoạt động `uv` nhận diện được: tên package đang tải/build/cài và số package resolved/prepared/installed/audited. Trường tùy chọn `activity_at` là thời điểm Unix của hoạt động nhận diện gần nhất (bằng 0 hoặc vắng mặt nếu không có). UI chỉ nhận tên/số lượng đã nhận diện; log thô vẫn nằm trong log installer. Ghi hoạt động tối đa mỗi giây một lần và thêm lần cuối. Log không nhận diện được vẫn giữ bước cài đặt; theo dõi không thay đổi exit code của `uv`. Hoạt động dependency không phải phần trăm theo byte hoặc phần trăm tổng cài đặt.
+
 `GET /api/system/ota-updating` giữ `data.updating`, thêm `data.progress` (map component, có alias `agent` đang dùng) và `data.bootstrap_available`. OS Server đọc snapshot local kể cả khi bootstrap không truy cập được; khi chính OS Server restart thì API vẫn tạm ngắt. Cần cập nhật cả updater, OS Server và frontend để có giao diện chi tiết. Worker cũ vẫn được hỗ trợ qua danh sách updating.
 
 

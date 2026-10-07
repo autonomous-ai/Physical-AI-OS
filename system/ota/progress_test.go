@@ -103,3 +103,22 @@ func TestReadProgressDetectsRebootWithReusedPID(t *testing.T) {
 		t.Fatalf("progress = %#v", got)
 	}
 }
+
+func TestReadProgressOptionalInstallationActivity(t *testing.T) {
+	for _, activityAt := range []int64{0, 1700000010} {
+		dir := t.TempDir()
+		want := Progress{Target: "hal", RunID: "run", Phase: "installing", UpdatedAt: 1700000020, PID: 123, Message: "Building example-package", ActivityAt: activityAt}
+		writeProgress(t, dir, "hal", want)
+		got := readProgress(dir, hermesCfg(), time.Unix(1700000020, 0), func(int) bool { return true }, "")
+		if got["hal"] != want {
+			t.Fatalf("activity %d: progress = %#v", activityAt, got)
+		}
+		raw, err := json.Marshal(got["hal"])
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(string(raw), `"activity_at"`) != (activityAt > 0) {
+			t.Fatalf("optional activity field: %s", raw)
+		}
+	}
+}
