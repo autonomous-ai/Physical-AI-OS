@@ -1746,6 +1746,8 @@ minh subscription còn hợp lệ hay model gọi thành công. Mở terminal m�
 
 ### Đăng nhập tài khoản runtime qua HTTP
 
+Package `system/runtimeauth/` thuộc OS, chạy lệnh login native và chuẩn bị file tài khoản; `system/device/runtime_login.go` quản lý phiên đăng nhập và áp dụng cấu hình. `runtimes/` giữ vai trò chứa các agent backend.
+
 Settings → Runtime dùng các endpoint yêu cầu xác thực admin dưới đây. Phản hồi
 dùng envelope chuẩn của OS và `Cache-Control: no-store`:
 

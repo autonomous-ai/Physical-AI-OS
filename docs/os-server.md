@@ -1784,6 +1784,8 @@ already-open shell retains its old environment.
 
 ### Runtime account sign-in over HTTP
 
+The OS-owned `system/runtimeauth/` package runs native login commands and stages account files; `system/device/runtime_login.go` owns session lifecycle and activation. `runtimes/` remains the home of agent backends.
+
 Settings → Runtime uses these admin-authenticated endpoints. Responses use the
 standard OS envelope and `Cache-Control: no-store`:
 

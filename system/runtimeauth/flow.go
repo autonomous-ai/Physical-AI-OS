@@ -1,6 +1,6 @@
-// Package accountlogin runs native account login in isolated homes. Live runtime
+// Package runtimeauth runs native account login in isolated homes. Live runtime
 // files are touched only after the CLI has verified a newly acquired credential.
-package accountlogin
+package runtimeauth
 
 import (
 	"context"

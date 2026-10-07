@@ -11,7 +11,7 @@ import (
 	"time"
 	"unicode"
 
-	"go.autonomous.ai/os/runtimes/accountlogin"
+	"go.autonomous.ai/os/system/runtimeauth"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -28,9 +28,9 @@ type RuntimeLoginSession struct {
 	Error         string `json:"error,omitempty"`
 }
 type RuntimeLoginStatus struct {
-	Runtime   string                  `json:"runtime"`
-	Providers []accountlogin.Provider `json:"providers"`
-	Session   *RuntimeLoginSession    `json:"session,omitempty"`
+	Runtime   string                 `json:"runtime"`
+	Providers []runtimeauth.Provider `json:"providers"`
+	Session   *RuntimeLoginSession   `json:"session,omitempty"`
 }
 type runtimeLoginState struct {
 	mu      sync.Mutex
@@ -38,7 +38,7 @@ type runtimeLoginState struct {
 	cancel  context.CancelFunc
 	input   chan string
 	// Injection seam for isolated native-process tests; production uses Prepare.
-	prepare func(string, string, string) (*accountlogin.Flow, error)
+	prepare func(string, string, string) (*runtimeauth.Flow, error)
 }
 
 func loginOngoing(status string) bool {
@@ -47,7 +47,7 @@ func loginOngoing(status string) bool {
 
 func (s *Service) GetRuntimeLogin() RuntimeLoginStatus {
 	current := s.CurrentAgentRuntime()
-	status := RuntimeLoginStatus{Runtime: current, Providers: accountlogin.Providers(current)}
+	status := RuntimeLoginStatus{Runtime: current, Providers: runtimeauth.Providers(current)}
 	s.runtimeLogin.mu.Lock()
 	defer s.runtimeLogin.mu.Unlock()
 	if session := s.runtimeLogin.session; session != nil && session.Runtime == current && !(session.Status == "success" && !s.config.LLMRuntimeManaged()) {
@@ -71,7 +71,7 @@ func (s *Service) StartRuntimeLogin(runtime, provider string) (RuntimeLoginSessi
 		return RuntimeLoginSession{}, fmt.Errorf("select and switch to the runtime before connecting an account")
 	}
 	allowed := false
-	for _, p := range accountlogin.Providers(runtime) {
+	for _, p := range runtimeauth.Providers(runtime) {
 		if p.ID == provider {
 			allowed = true
 		}
@@ -99,7 +99,7 @@ func (s *Service) StartRuntimeLogin(runtime, provider string) (RuntimeLoginSessi
 	input := s.runtimeLogin.input
 	prepare := s.runtimeLogin.prepare
 	if prepare == nil {
-		prepare = accountlogin.Prepare
+		prepare = runtimeauth.Prepare
 	}
 	release = false
 	go s.runRuntimeLogin(ctx, session, input, prepare)
@@ -145,7 +145,7 @@ func (s *Service) loginUpdate(id string, update func(*RuntimeLoginSession)) {
 	}
 }
 
-func (s *Service) runRuntimeLogin(ctx context.Context, session RuntimeLoginSession, input <-chan string, prepare func(string, string, string) (*accountlogin.Flow, error)) {
+func (s *Service) runRuntimeLogin(ctx context.Context, session RuntimeLoginSession, input <-chan string, prepare func(string, string, string) (*runtimeauth.Flow, error)) {
 	// Unlock before publishing terminal status, so a retry can start immediately.
 	status, message := "error", "Could not prepare native sign-in. Check that the runtime is installed and try again."
 	defer func() {
@@ -166,7 +166,7 @@ func (s *Service) runRuntimeLogin(ctx context.Context, session RuntimeLoginSessi
 		return
 	}
 	defer flow.Close()
-	err = flow.Run(ctx, func(prompt accountlogin.Prompt) {
+	err = flow.Run(ctx, func(prompt runtimeauth.Prompt) {
 		s.loginUpdate(session.ID, func(current *RuntimeLoginSession) {
 			current.Status = "waiting"
 			current.LoginURL = prompt.URL
@@ -212,7 +212,7 @@ func (s *Service) runRuntimeLogin(ctx context.Context, session RuntimeLoginSessi
 	status, message = "success", ""
 }
 
-func (s *Service) activateRuntimeLogin(flow *accountlogin.Flow) error {
+func (s *Service) activateRuntimeLogin(flow *runtimeauth.Flow) error {
 	previous := s.config.LLMMode()
 	// Stop OS reconciliation from overwriting newly installed native fields.
 	if err := s.config.WithLockSave(func(c *config.Config) { c.LLMConfigMode = "runtime" }); err != nil {

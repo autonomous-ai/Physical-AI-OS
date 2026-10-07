@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"go.autonomous.ai/os/runtimes/accountlogin"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/runtimeauth"
 )
 
 type loginGateway struct{ llmModeGateway }
@@ -38,8 +38,8 @@ func TestAccountLoginCancellationKeepsOSAndSerializes(t *testing.T) {
 	cfg.AgentRuntime = "claudecode"
 	cfg.LLMConfigMode = "os"
 	svc := &Service{config: cfg, agentGateway: &loginGateway{}}
-	svc.runtimeLogin.prepare = func(_, _, _ string) (*accountlogin.Flow, error) {
-		return &accountlogin.Flow{
+	svc.runtimeLogin.prepare = func(_, _, _ string) (*runtimeauth.Flow, error) {
+		return &runtimeauth.Flow{
 			Command: exec.Command("sh", "-c", `printf 'https://claude.ai/oauth/authorize\n'; read code`), Hosts: []string{"claude.ai"}, InputRequired: true,
 			Verify: func(context.Context) error { t.Error("cancelled login verified"); return nil }, Install: func() (func() error, error) { t.Error("cancelled login installed"); return nil, nil }, Close: func() {},
 		}, nil
@@ -82,8 +82,8 @@ func TestAccountLoginFailureDoesNotAdoptOldCredentials(t *testing.T) {
 	cfg.AgentRuntime = "codex"
 	cfg.LLMConfigMode = "os"
 	svc := &Service{config: cfg, agentGateway: &loginGateway{}}
-	svc.runtimeLogin.prepare = func(_, _, _ string) (*accountlogin.Flow, error) {
-		return &accountlogin.Flow{Command: exec.Command("sh", "-c", "exit 0"), Verify: func(context.Context) error { return errors.New("missing fresh auth secret-must-not-leak") }, Install: func() (func() error, error) { t.Error("unverified install"); return nil, nil }, Close: func() {}}, nil
+	svc.runtimeLogin.prepare = func(_, _, _ string) (*runtimeauth.Flow, error) {
+		return &runtimeauth.Flow{Command: exec.Command("sh", "-c", "exit 0"), Verify: func(context.Context) error { return errors.New("missing fresh auth secret-must-not-leak") }, Install: func() (func() error, error) { t.Error("unverified install"); return nil, nil }, Close: func() {}}, nil
 	}
 	if _, err := svc.StartRuntimeLogin("codex", "openai"); err != nil {
 		t.Fatal(err)
@@ -100,7 +100,7 @@ func TestAccountActivationRollback(t *testing.T) {
 	gw := &loginGateway{llmModeGateway: llmModeGateway{onboardErr: errors.New("apply failed")}}
 	svc := &Service{config: cfg, agentGateway: gw}
 	restored := false
-	err := svc.activateRuntimeLogin(&accountlogin.Flow{Install: func() (func() error, error) { return func() error { restored = true; return nil }, nil }})
+	err := svc.activateRuntimeLogin(&runtimeauth.Flow{Install: func() (func() error, error) { return func() error { restored = true; return nil }, nil }})
 	if err == nil || !restored || cfg.LLMMode() != "os" || gw.refreshes != 1 {
 		t.Fatalf("rollback failed: %v mode=%s restored=%v", err, cfg.LLMMode(), restored)
 	}
@@ -118,8 +118,8 @@ func TestAccountLoginVerifiedApplyAndSuccess(t *testing.T) {
 	cfg.LLMConfigMode = "os"
 	svc := &Service{config: cfg, agentGateway: &loginGateway{}}
 	verified, installed := false, false
-	svc.runtimeLogin.prepare = func(_, _, _ string) (*accountlogin.Flow, error) {
-		return &accountlogin.Flow{
+	svc.runtimeLogin.prepare = func(_, _, _ string) (*runtimeauth.Flow, error) {
+		return &runtimeauth.Flow{
 			Command: exec.Command("sh", "-c", `printf 'https://claude.com/cai/oauth/authorize\n'; read code; test "$code" = 'code#state'`), Hosts: []string{"claude.com"}, InputRequired: true,
 			Verify: func(context.Context) error { verified = true; return nil }, Install: func() (func() error, error) {
 				if !verified {

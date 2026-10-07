@@ -1,4 +1,4 @@
-package accountlogin
+package runtimeauth
 
 import (
 	"context"
