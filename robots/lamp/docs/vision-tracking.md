@@ -939,8 +939,9 @@ Three further behaviours are worth stating because each was a bug first:
   it saw (`largest body N% of frame`) so the threshold can be tuned from device logs. Device-observed 2026-09-30: the user's
   whole body in frame started a "climb" that never moved the head. A headless body prompts the climb above and holds the verdict
   for up to `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), re-prompting the climb even with no
-  conversation open. A near face = hit; anything else = **not scored**: the climb only starts on a body at the bearing,
-  and a far face is no face.
+  conversation open. A near face = hit; a near body = **not scored**; only a body too small to be at the desk =
+  **miss** (a co-worker standing across the room, clipped at the top, whose small face is no face);
+  nobody at all = **not scored**. A user's own clipped torso is always near.
   Scoring a torso-only repoint as a miss once deleted correct bearings while the user sat in front of
   the lamp.
 - **A far face is no face (#567).** The face picker (`detect_face_with_landmarks`) returns only faces at

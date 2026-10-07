@@ -1347,6 +1347,11 @@ def _finish_repoint_climb(now: float) -> None:
     if _last_near_body_t > since:
         logger.info("[gaze] repoint climb found a near body but no near face in %.0fs%s "
                     "— not scored", config.GAZE_REPOINT_CLIMB_TIMEOUT_S, _body_size_note())
+    elif _last_subject_t > since:
+        # A clipped torso too small to be at the desk: a co-worker standing across the
+        # room, whose face is no face to gaze (#567). A user's own clipped torso is near.
+        _score_repoint(False, "climb found only a body too small to be at the desk"
+                       + _body_size_note(), now)
     else:
         # No face at all proves nothing either way. A torso-only miss once deleted
         # correct bearings while the user sat in front of the lamp.

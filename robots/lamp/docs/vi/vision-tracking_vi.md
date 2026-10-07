@@ -939,8 +939,9 @@ Ba hành vi nữa đáng nói ra vì cái nào cũng từng là một con bug:
   bị 30/09/2026: cả người user nằm trong khung đã kích hoạt một lần "leo tìm" mà đầu không hề di chuyển.
   Thân người mất đầu sẽ kích hoạt phần leo tìm ở trên và giữ
   kết luận tối đa `HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S` (20 s), tiếp tục kích hoạt leo tìm kể cả khi không có
-  cuộc hội thoại nào đang mở. Mặt gần = trúng; mọi trường hợp khác = **không chấm**: leo tìm chỉ bắt đầu từ một thân người ở
-  bearing, và mặt xa không phải là mặt.
+  cuộc hội thoại nào đang mở. Mặt gần = trúng; thân gần = **không chấm**; chỉ có thân người quá nhỏ để đang ngồi ở bàn =
+  **trượt** (một đồng nghiệp đứng bên kia phòng, bị mép trên khung cắt, mặt nhỏ của họ không được tính
+  là mặt); không có ai = **không chấm**. Phần thân bị cắt của chính user luôn là thân gần.
   Chấm một lần repoint chỉ thấy thân là trượt đã từng xoá mất những bearing đúng trong khi user đang
   ngồi ngay trước đèn.
 - **Mặt xa không phải là mặt (#567).** Bộ chọn mặt (`detect_face_with_landmarks`) chỉ trả về những mặt

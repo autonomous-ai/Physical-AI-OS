@@ -1932,6 +1932,20 @@ def test_a_climb_that_finds_no_face_is_not_scored(monkeypatch):
     assert gaze._repoint_climb_t == 0.0
 
 
+def test_a_climb_that_ends_on_only_a_far_body_is_a_miss(monkeypatch):
+    """The #545 office case: a standing co-worker's clipped torso, then their small face.
+
+    The face is no face to gaze (#567), so the body's size decides: too small to be at
+    the desk, so a wrong bearing pointing at them must still be worn down.
+    """
+    t, calls, _climbs, sweeps = _torso_repoint(monkeypatch)
+    gaze._last_subject_t = t + 3.0  # a person box, but under the near-body area
+    gaze._verify_repoint(t + config.GAZE_REPOINT_CLIMB_TIMEOUT_S + 1.0)
+    assert calls == [False]
+    assert sweeps == [True]
+    assert gaze._repoint_climb_t == 0.0
+
+
 def test_a_near_face_confirms_even_when_not_facing(monkeypatch):
     """The user at their desk, looking at their own monitor."""
     calls = _repoint_scored(monkeypatch)
