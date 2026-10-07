@@ -31,6 +31,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 	agentName := i18n.DeviceName()
 	deviceType := s.config.DeviceTypeOrDefault()
 	return domain.ConfigPublicResponse{
+		LLMConfigMode:            s.config.LLMMode(),
 		Environment:              s.config.EnvironmentSettings(),
 		Channel:                  s.config.Channel,
 		TelegramUserID:           s.config.TelegramUserID,
@@ -110,8 +111,9 @@ func (s *Service) VerifyAdminPassword(password string) error {
 // updateChanges records which field clusters a save changed plus post-save
 // values; computed inside WithLockSave so it never sees a torn snapshot.
 type updateChanges struct {
+	llmMode  bool // explicit ownership apply, including retries of the same choice
 	model    bool // llm_model changed → sync primary into the gateway
-	thinking bool // llm_disable_thinking sent → RefreshModelsConfig
+	thinking bool // llm_disable_thinking changed → RefreshModelsConfig
 	baseURL  bool // llm_base_url changed → RefreshModelsConfig
 	apiKey   bool // llm_api_key rotated → RefreshModelsConfig (openclaw.json holds its OWN apiKey copy)
 	wifi     bool // ssid changed → reconnect WiFi
@@ -229,7 +231,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 	ch.prevLang = c.STTLanguage
 
 	// Must run before any field is overwritten.
-	if requestChangesCredentials(data) {
+	if data.LLMConfigMode != nil || requestChangesCredentials(data) {
 		captureAutonomousDefaults(c)
 	}
 	applyLLMFields(c, data, &ch)
@@ -295,6 +297,16 @@ func captureAutonomousDefaults(c *config.Config) {
 }
 
 func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updateChanges) {
+	if data.LLMConfigMode != nil {
+		c.LLMConfigMode = *data.LLMConfigMode
+		ch.llmMode = true
+	}
+	// Preserve the OS credentials used by voice/backend services and by a later
+	// switch back to OS management. Stale Settings payloads must not replace them.
+	if c.LLMConfigMode == "runtime" {
+		return
+	}
+
 	prevModel := c.LLMModel
 	prevBaseURL := c.LLMBaseURL
 	prevAPIKey := c.LLMAPIKey
@@ -313,8 +325,8 @@ func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updat
 	ch.apiKey = data.LLMAPIKey != "" && c.LLMAPIKey != prevAPIKey
 	ch.newModel = c.LLMModel
 
-	ch.thinking = data.LLMDisableThinking != nil
-	if ch.thinking {
+	ch.thinking = data.LLMDisableThinking != nil && *data.LLMDisableThinking != c.LLMThinkingDisabled()
+	if data.LLMDisableThinking != nil {
 		c.LLMDisableThinking = data.LLMDisableThinking
 	}
 }
@@ -462,6 +474,18 @@ func applyMQTTFields(c *config.Config, data domain.UpdateConfigRequest) {
 // UpdateConfig saves non-empty fields (PATCH) and fires per-cluster side effects
 // (wifi, gateway, channel, HAL).
 func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
+	if data.LLMConfigMode != nil && *data.LLMConfigMode != "os" && *data.LLMConfigMode != "runtime" {
+		return fmt.Errorf("invalid llm_config_mode %q (want os or runtime)", *data.LLMConfigMode)
+	}
+	// Only LLM writes contend with runtime switching. Voice-only requests use
+	// wakeApply below, which queues opposing HTTP/MQTT updates rather than rejecting them.
+	if data.LLMConfigMode != nil || data.LLMAPIKey != "" || data.LLMBaseURL != "" || data.LLMModel != "" || data.LLMDisableThinking != nil {
+		if !s.runtimeSwitchMu.TryLock() {
+			return ErrAgentRuntimeSwitchInProgress
+		}
+		defer s.runtimeSwitchMu.Unlock()
+	}
+
 	if data.VoiceInputMode != nil {
 		if err := config.ValidateVoiceInputMode(*data.VoiceInputMode); err != nil {
 			return err
@@ -516,8 +540,12 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	// A wake/input-mode restart covers the whole saved HAL config. Do not enqueue a second
 	// restart/live TTS update, including after failure: the wake retry owns it.
 	// Other saved fields still need their side effects even if HAL apply failed.
+	var modeErr error
+	if ch.llmMode {
+		modeErr = s.applyLLMMode()
+	}
 	s.fireConfigSideEffects(ch, wakeApply)
-	return wakeErr
+	return errors.Join(wakeErr, modeErr)
 }
 
 // fireConfigSideEffects runs per-cluster follow-ups after a save. config.mu must
@@ -582,7 +610,7 @@ func scheduleConfigWiFiReconnect(ch updateChanges, reconnect func(string, string
 // syncLLMToGateway pushes model/thinking/baseURL changes into the gateway's
 // config; RefreshModelsConfig covers the model too, avoiding a second restart.
 func (s *Service) syncLLMToGateway(ch updateChanges) {
-	if s.agentGateway == nil {
+	if ch.llmMode || s.config.LLMRuntimeManaged() || s.agentGateway == nil {
 		return
 	}
 	if ch.model && !ch.thinking && !ch.baseURL && !ch.apiKey {
@@ -615,6 +643,31 @@ func (s *Service) syncLLMToGateway(ch updateChanges) {
 			}
 		}
 	}
+}
+
+// applyLLMMode reapplies even unchanged OS values and refreshes process env.
+// Persistence happens first; an apply failure is returned so the same selection
+// can be retried without claiming that the runtime switched successfully.
+func (s *Service) applyLLMMode() error {
+	if s.agentGateway == nil {
+		return nil
+	}
+	if !s.config.LLMRuntimeManaged() {
+		err := s.agentGateway.RefreshModelsConfig()
+		if err == nil {
+			return nil
+		}
+		if !errors.Is(err, domain.ErrNotSupportedByRuntime) {
+			return fmt.Errorf("LLM mode saved; apply runtime config: %w", err)
+		}
+	}
+	if err := s.agentGateway.EnsureOnboarding(); err != nil {
+		return fmt.Errorf("LLM mode saved; apply runtime config: %w", err)
+	}
+	if err := s.agentGateway.RestartAgent(); err != nil {
+		return fmt.Errorf("LLM mode saved; restart runtime: %w", err)
+	}
+	return nil
 }
 
 // UpdateVoiceConfig updates only TTS provider/voice/speed and STT language.
@@ -683,6 +736,8 @@ func (s *Service) RestoreAutonomousDefaults(section string) error {
 	var req domain.UpdateConfigRequest
 	switch strings.ToLower(strings.TrimSpace(section)) {
 	case "llm":
+		mode := "os"
+		req.LLMConfigMode = &mode
 		req.LLMAPIKey, req.LLMBaseURL, req.LLMModel = d.APIKey, d.BaseURL, d.Model
 	case "voice":
 		req.TTSAPIKey, req.TTSBaseURL = d.APIKey, d.BaseURL

@@ -58,6 +58,18 @@ wire the switch, install, migration, skills, hooks, and reset.
 
 ---
 
+### LLM configuration ownership
+
+`llm_config_mode` is one device-wide choice, independent of `agent_runtime`:
+
+- Missing/empty: legacy behavior, including Codex/Claude Code subscription detection.
+- `os`: explicitly apply the saved OS provider, model and credentials, even when native auth exists.
+- `runtime`: preserve native provider/model/auth configuration. Onboarding still maintains gateway, workspace, skills and channels; presync, periodic sync and config migration must not overwrite native LLM settings.
+
+Settings → Runtime selects this mode through `PUT /api/device/config`. Native mode does not select a new model or log in: existing configuration, including an earlier OS model, remains until the operator explicitly selects the provider/model with the runtime's own CLI/config. Use the daemon's user/home, restart the runtime after native changes, and open a new terminal to discard old proxy environment variables. Switching runtimes does not migrate subscription credentials; configure each runtime separately.
+
+Keep the OS key/base URL stored for voice/backend services. Restoring AI Brain defaults explicitly selects `os` and reapplies configuration even when those saved values are unchanged. A mode-apply failure is returned to the caller, but the mode is already saved; retry applying it after resolving the error. Successful apply does not verify subscription/account validity. This flow has not yet been tested on a device with real subscription accounts.
+
 ## 1. The contract — implement `domain.AgentGateway`
 
 Your backend lives in `runtimes/<name>/` and its `*Service` must satisfy the

@@ -1154,7 +1154,8 @@ type RealtimePublic struct {
 
 // ConfigPublicResponse is returned by GET /api/device/config; secrets appear only as Has* presence flags.
 type ConfigPublicResponse struct {
-	Environment EnvironmentConfig `json:"environment"`
+	LLMConfigMode string            `json:"llm_config_mode"`
+	Environment   EnvironmentConfig `json:"environment"`
 
 	Channel                  string   `json:"channel"`
 	TelegramUserID           string   `json:"telegram_user_id"`
@@ -1214,7 +1215,8 @@ type ConfigPublicResponse struct {
 
 // UpdateConfigRequest is used by PUT /api/device/config; only non-empty values are applied.
 type UpdateConfigRequest struct {
-	Environment *EnvironmentConfig `json:"environment,omitempty"`
+	LLMConfigMode *string            `json:"llm_config_mode,omitempty" binding:"omitempty,oneof=os runtime"`
+	Environment   *EnvironmentConfig `json:"environment,omitempty"`
 
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
