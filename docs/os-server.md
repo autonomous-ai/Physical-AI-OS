@@ -1,6 +1,6 @@
 # OS Server API — Documentation
 
-`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).
+`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots). Progress may include optional `activity_at` (Unix seconds) for recognized HAL dependency installation activity; older snapshots without it remain valid.
 
 ## Japanese language support
 
