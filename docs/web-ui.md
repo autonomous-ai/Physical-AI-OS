@@ -15,6 +15,9 @@ labels merged runs explicitly instead of presenting an empty silent result.
 
 ## 1. Overview
 
+Light mode uses warm gray page surfaces, off-white cards, darker secondary text and stronger semantic colors across monitor and configuration screens. Flow uses a separate canvas surface, higher-contrast inactive connections and node descriptions, and neutral text for diagnostic payloads. System history charts resolve colors from the active monitor theme and use 11px axis labels.
+
+
 The device's Web UI is a React SPA (Single Page Application) built with **React 19 + TypeScript + Vite + Tailwind CSS 4**, serving two purposes:
 
 1. **Setup flow** — WiFi, LLM provider, messaging channel onboarding (`/setup/*` pages)
