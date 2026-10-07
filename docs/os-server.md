@@ -11,6 +11,15 @@ The previous opening and continuation phrase pools have been removed. Automatic
 waiting fillers do not select tool-specific phrases. Explicit realtime/tool cues
 are unchanged.
 
+Named internal-tool pools use a single short cue per language. Search/read/media
+cues describe an action shared by their aliases; broad or mixed-action pools
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) use a neutral thinking sound rather than
+claiming a specific action or success. Video cues say "Processing video" because
+the pool also covers editing. Camera `look_*` and movement-demo `demo_*` phrases
+are unchanged. These content changes do not re-enable automatic tool overrides
+or change filler scheduling.
+
 `GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).
 
 ## Japanese language support

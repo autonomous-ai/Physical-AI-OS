@@ -11,6 +11,14 @@ trễ opening.
 Mỗi lượt có tối đa một continuation tự động; các tool sau đó không phát thêm.
 Đã xoá bộ câu opening và continuation cũ. Filler chờ tự động không chọn câu theo tool. Cue realtime/tool được gọi riêng không đổi.
 
+Pool tool nội bộ chỉ giữ một câu ngắn cho mỗi ngôn ngữ. Câu tìm/đọc/tạo nội dung
+chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom nhiều thao tác
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) dùng âm suy nghĩ trung tính, không đoán hành
+động hay khẳng định thành công. Video dùng "Đang xử lý video" vì pool còn nhận
+thao tác chỉnh sửa. Giữ nguyên câu camera `look_*` và demo chuyển động `demo_*`.
+Sửa nội dung này không bật lại việc tự chọn câu theo tool và không đổi lịch filler.
+
 `GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật).
 
 ## Hỗ trợ tiếng Nhật
