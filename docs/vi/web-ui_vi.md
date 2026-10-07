@@ -500,6 +500,10 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 
 ### Khả năng đọc của Monitor
 
+Overview hiển thị trạng thái đang tải trung tính trước khi nhận trạng thái agent; các hàng phiên bản xếp lại kèm nhãn trên điện thoại. System xếp đồng hồ đo phía trên biểu đồ lịch sử tại 768px. Camera đặt snapshot dưới stream trên điện thoại, thêm nhãn cho ô tracking, thu gọn bounding box tùy chọn vào Advanced tracking, hiển thị lỗi thao tác và khóa nút khi đang gửi yêu cầu.
+
+Logs dùng dropdown chọn nguồn tại 640px, chữ log lớn hơn và timestamp rõ hơn. Flow tăng kích thước ô tìm kiếm và nút toolbar. CLI có tab phiên dùng được bằng bàn phím, phím terminal trên mobile và nút Reconnect khi mất kết nối; kết nối lại mở shell mới và xóa lịch sử cuộn của terminal trước đó. API Docs có trạng thái đang tải/lỗi cùng Reload và Open in new tab. Monitor và Settings dành hàng riêng cho footer để liên kết mã nguồn không che nội dung.
+
 Servo dùng tiêu đề lớn hơn, số đo tương phản rõ và nút thoáng trong overview hai cột, chuyển một cột tại 900px. Tại 600px, mỗi joint xếp tên, góc hiện tại, ô target và slider toàn chiều ngang; live drag và giới hạn góc giữ nguyên. Users có metadata lớn hơn, nút thao tác luôn hiện, card người dùng gọn trong lưới tự xếp cột (cột tối thiểu 280px, card tối đa 340px) và lưới quan sát hai cột; cả hai chuyển một cột toàn chiều ngang tại 640px, profile files thu gọn và panel cooldown nhận diện thu gọn riêng. Pairing dùng tiêu đề kết nối lớn hơn, badge trạng thái, khối thao tác/lỗi rõ và hàng metadata responsive; ID kết nối Buddy nằm trong Connection details thu gọn.
 
 ### 5.2 Section Pairing

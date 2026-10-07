@@ -4,6 +4,8 @@ import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wif
 import { S } from "./styles";
 import { API, HW } from "./types";
 
+import "./robot-status.css";
+
 const EMOTION_EMOJI: Record<string, string> = {
   happy: "😊", curious: "🤔", thinking: "💭", sad: "😢", excited: "🤩",
   shy: "😳", shock: "😱", idle: "😐", listening: "👂", laugh: "😄",
@@ -247,8 +249,8 @@ export function OverviewSection({
             <HeroChip
               icon={<Bot size={14} />}
               label="Agent"
-              value={oc?.connected ? "Online" : "Offline"}
-              tone={oc?.connected ? "ok" : "error"}
+              value={oc ? (oc.connected ? "Online" : "Offline") : "Loading"}
+              tone={oc ? (oc.connected ? "ok" : "error") : "neutral"}
             />
             <HeroChip icon={<Wifi size={14} />} label="IP" value={net?.ip ?? "—"} tone="neutral" />
             <HeroChip
@@ -265,7 +267,7 @@ export function OverviewSection({
         <div className="lm-mon-card" style={{ ...monCard, position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <CardLabel icon={<Satellite size={13} />} text="Agent Gateway" />
-            <StatusBadge text={oc?.connected ? "ONLINE" : "OFFLINE"} ok={!!oc?.connected} pulse={!!oc?.connected} />
+            <StatusBadge text={oc ? (oc.connected ? "ONLINE" : "OFFLINE") : "LOADING"} tone={!oc ? "idle" : undefined} ok={!!oc?.connected} pulse={!!oc?.connected} />
           </div>
           {oc ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -513,7 +515,7 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
-            <div style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
+            <div className="lm-version-header" style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
               <span>Service</span>
               <span>Current</span>
               <span title="Latest published version in this device's OTA feed">Latest</span>
@@ -912,11 +914,11 @@ function VersionRow({ name, color, version, latestVersion, uptime, updateTarget,
   onTriggered?: (target: string) => void;
 }) {
   return (
-    <div style={versionRowLayout}>
+    <div className="lm-version-row" style={versionRowLayout}>
       <span style={{ fontSize: 12.5, color: "var(--lm-text-dim)" }}>{name}</span>
-      <span title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
-      <span title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
-      <span style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
+      <span data-label="Current" title={version ?? undefined} style={{ fontSize: 12.5, fontWeight: 600, color, fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{version ?? "—"}</span>
+      <span data-label="Latest" title={latestVersion || undefined} style={{ fontSize: 12.5, color: "var(--lm-text-dim)", fontFamily: "monospace", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{latestVersion || "—"}</span>
+      <span data-label="Uptime" style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
       <span style={{ display: "flex", justifyContent: "flex-end" }}>

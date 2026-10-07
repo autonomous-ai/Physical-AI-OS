@@ -30,6 +30,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { S } from "./styles";
+import { SourceFooter } from "@/components/SourceFooter";
+import { ApiDocsSection } from "./ApiDocsSection";
 import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, isNavSubgroup, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
 import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry, NavChild } from "./types";
 import { OverviewSection, type OverviewCache } from "./OverviewSection";
@@ -922,14 +924,7 @@ export default function Monitor() {
           {section === "analytics" && <AnalyticsSection />}
           {section === "logs"      && <LogsSection />}
           {section === "cli" && <CliSection />}
-          {section === "api-docs" && (
-            <iframe
-              title="API Docs"
-              // Via the admin-gated /api/hardware proxy; nginx /hw/ is loopback-only.
-              src="/api/hardware/docs"
-              style={iframeStyle}
-            />
-          )}
+          {section === "api-docs" && <ApiDocsSection />}
           {section === "agent-config" && (
             <iframe
               title="Agent Config"
@@ -945,6 +940,7 @@ export default function Monitor() {
             <ChatSection events={events} isActive={section === "chat"} />
           </div>
         </div>
+        <SourceFooter inline />
       </main>
 
       {showLogoutConfirm && (

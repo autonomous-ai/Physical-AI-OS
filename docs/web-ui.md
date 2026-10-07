@@ -515,6 +515,10 @@ the shorter Presence card from being stretched by the taller Audio card.
 
 ### Monitor readability
 
+Overview shows a neutral loading state until agent status arrives; version rows stack with field labels on phones. System stacks gauges above history charts at 768px. Camera puts snapshots below the stream on phones, labels tracking inputs, collapses optional bounding-box controls under Advanced tracking, and reports failed actions with pending controls disabled.
+
+Logs uses a source dropdown at 640px, larger log text and clearer timestamps. Flow has larger search and toolbar controls. CLI has keyboard-accessible session tabs, mobile terminal keys and a Reconnect button after disconnection; reconnect starts a fresh shell and clears the previous terminal scrollback. API Docs shows loading/failure states with Reload and Open in new tab actions. Monitor and Settings reserve a footer row so the source link does not cover content.
+
 Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, compact person cards in an auto-filling grid (280px minimum tracks, cards capped at 340px) and two-column observation grids; both use one full-width column at 640px, collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
 
 ### 5.2 Pairing Section
