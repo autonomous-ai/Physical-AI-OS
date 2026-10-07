@@ -1,3 +1,4 @@
+import "../technical-panels.css";
 import { useCallback, useMemo, useState } from "react";
 import {
   Search, SlidersHorizontal, X, Hexagon, ClipboardList, LayoutDashboard,
@@ -79,7 +80,7 @@ export function FlowSection({
   const [filtersOpen, setFiltersOpen] = useState(false);
 
   const flowGhostBtn = {
-    fontSize: 11, padding: "4px 10px", borderRadius: 6,
+    fontSize: 12, minHeight: 36, padding: "7px 10px", borderRadius: 6,
     background: "transparent", border: "1px solid var(--lm-border)",
     color: "var(--lm-text-dim)", fontWeight: 600,
     whiteSpace: "nowrap" as const,
@@ -714,7 +715,7 @@ export function FlowSection({
                 onClick={() => setFiltersOpen(true)}
                 className="lm-u-btn"
                 style={{
-                  marginLeft: "auto", padding: "3px 9px", borderRadius: 6, fontSize: 11,
+                  marginLeft: "auto", padding: "7px 10px", minHeight: 36, borderRadius: 6, fontSize: 12,
                   fontWeight: 600,
                   border: `1px solid ${activeFilters > 0 ? "var(--lm-amber)" : "var(--lm-border)"}`,
                   background: activeFilters > 0 ? "var(--lm-amber-dim)" : "transparent",
@@ -741,11 +742,12 @@ export function FlowSection({
                 type="text"
                 value={searchText}
                 onChange={(e) => setSearchText(e.target.value)}
+                aria-label="Search turn input or output"
                 placeholder="Search input / output…"
                 className="lm-u-input"
                 style={{
                   width: "100%", boxSizing: "border-box" as const,
-                  padding: "6px 28px 6px 28px", borderRadius: 6, fontSize: 11,
+                  padding: "9px 40px 9px 28px", borderRadius: 6, fontSize: 13,
                   outline: "none",
                 }}
               />
@@ -756,7 +758,7 @@ export function FlowSection({
                   className="lm-u-btn"
                   style={{
                     position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)",
-                    width: 20, height: 20, padding: 0, borderRadius: 5, border: "none",
+                    width: 32, height: 32, padding: 0, borderRadius: 5, border: "none",
                     background: "transparent", color: "var(--lm-text-muted)",
                     display: "inline-flex", alignItems: "center", justifyContent: "center",
                   }}
@@ -776,7 +778,7 @@ export function FlowSection({
                   {turns.length === 0 ? "No turns captured yet" : "No turns match filter"}
                 </span>
                 {turns.length > 0 && (
-                  <span style={{ fontSize: 9, opacity: 0.7 }}>Try widening the filters above</span>
+                  <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>Try widening the filters above</span>
                 )}
               </div>
             ) : (
@@ -788,7 +790,7 @@ export function FlowSection({
                     }}>
                       <div className="lm-flow-session-rule" />
                       <span style={{
-                        fontSize: 8, fontWeight: 700, letterSpacing: "0.1em",
+                        fontSize: 11, fontWeight: 700, letterSpacing: "0.04em",
                         textTransform: "uppercase" as const,
                         color: "var(--lm-text-muted)", whiteSpace: "nowrap",
                         padding: "1px 7px", borderRadius: 999,

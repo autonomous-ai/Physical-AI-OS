@@ -243,7 +243,7 @@ export function TTSSection({
 
       {choice === "autonomous" && (
         <div style={{ marginBottom: 12 }}>
-          <label htmlFor="tts_vendor" style={labelStyle}>Vendor (voices come from here)</label>
+          <label htmlFor="tts_vendor" style={labelStyle}>Voice vendor</label>
           <select
             id="tts_vendor"
             value={ttsProvider === "openai" || ttsProvider === "gemini" ? ttsProvider : "elevenlabs"}
@@ -268,19 +268,20 @@ export function TTSSection({
         />
       ) : (
         <div style={{ marginBottom: 12 }}>
-          <label style={labelStyle}>Base URL (locked — set by provider)</label>
+          <label style={labelStyle}>Base URL (locked)</label>
           <div style={{
             ...selectStyle,
             cursor: "default", fontFamily: "ui-monospace, monospace",
             color: C.textDim,
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}>{meta.baseUrl}</div>
+          <div style={{ fontSize: 11, color: C.textDim, marginTop: 4 }}>Set by the selected provider.</div>
         </div>
       )}
 
       {choice === "custom" && (
         <div style={{ marginBottom: 12 }}>
-          <label htmlFor="tts_custom_vendor" style={labelStyle}>Vendor protocol (which API your URL speaks)</label>
+          <label htmlFor="tts_custom_vendor" style={labelStyle}>API protocol</label>
           <select
             id="tts_custom_vendor"
             value={vendor}
@@ -294,19 +295,19 @@ export function TTSSection({
       )}
 
       {choice !== "piper" && (<>
-      <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
         <label htmlFor="tts_api_key" style={labelStyle}>
           {keyRequired
-            ? "API Key (required — this provider does not accept the AI brain key)"
-            : "API Key (optional — leave blank to reuse AI brain key)"}
+            ? "API Key (required)"
+            : "API Key (optional)"}
         </label>
         {storedKeyIsForThisChoice && (
-          <span style={{ fontSize: 10, color: "var(--lm-green, #34d399)", fontWeight: 600 }}>
+          <span style={{ fontSize: 10, color: "var(--lm-green, #34d399)", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
             ✓ configured
           </span>
         )}
         {keyRequired && !storedKeyIsForThisChoice && !ttsApiKey && (
-          <span style={{ fontSize: 10, color: "var(--lm-amber, #fbbf24)", fontWeight: 600 }}>
+          <span style={{ fontSize: 10, color: "var(--lm-amber, #fbbf24)", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
             key required
           </span>
         )}
@@ -319,11 +320,14 @@ export function TTSSection({
         onChange={setTtsApiKey}
         placeholder={storedKeyIsForThisChoice ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
+      <p style={{ fontSize: 11, color: C.textDim, marginTop: -8, marginBottom: 12 }}>
+        {keyRequired ? "This provider requires its own API key; the AI brain key cannot be reused." : "Leave blank to reuse the AI brain key."}
+      </p>
       </>)}
 
       {choice !== "piper" && (
       <div style={{ marginBottom: 12 }}>
-        <label htmlFor="tts_lang" style={labelStyle}>Language (voice list filter)</label>
+        <label htmlFor="tts_lang" style={labelStyle}>Voice language</label>
         <select
           id="tts_lang"
           value={lang}

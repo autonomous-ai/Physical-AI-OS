@@ -85,8 +85,10 @@ export function STTSection({
           <LockedPasswordField lockedInitially={sttLoaded.deepgram} label="Deepgram API Key" id="deepgram_api_key" value={deepgramApiKey} onChange={setDeepgramApiKey} placeholder="Deepgram key" />
         ) : (
           <>
-            <LockedPasswordField lockedInitially={sttLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="stt_api_key" value={sttApiKey} onChange={setSttApiKey} placeholder="sk-..." />
-            <LockedField lockedInitially={sttLoaded.baseUrl || llmLoaded.baseUrl} label="Base URL (optional — leave blank to reuse AI brain base URL)" id="stt_base_url" value={sttBaseUrl} onChange={setSttBaseUrl} placeholder="https://api.openai.com/v1" />
+            <LockedPasswordField lockedInitially={sttLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional)" id="stt_api_key" value={sttApiKey} onChange={setSttApiKey} placeholder="sk-..." />
+            <p style={{ fontSize: 11, color: C.textDim, marginTop: -8, marginBottom: 12 }}>Leave blank to reuse the AI brain key.</p>
+            <LockedField lockedInitially={sttLoaded.baseUrl || llmLoaded.baseUrl} label="Base URL (optional)" id="stt_base_url" value={sttBaseUrl} onChange={setSttBaseUrl} placeholder="https://api.openai.com/v1" />
+            <p style={{ fontSize: 11, color: C.textDim, marginTop: -8, marginBottom: 12 }}>Leave blank to reuse the AI brain base URL.</p>
           </>
         )}
       </div>

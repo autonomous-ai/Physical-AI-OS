@@ -266,11 +266,11 @@ export function DeviceSection({
       {setWakeWord && voiceInputMode === "automatic" && (
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.text }}>
-            <input type="checkbox" checked={wakeWord ?? false} onChange={(e) => setWakeWord(e.target.checked)} />
-            Require an attention trigger before handling speech
+            <input type="checkbox" checked={wakeWord ?? false} onChange={(e) => setWakeWord(e.target.checked)} style={{ flexShrink: 0 }} />
+            <span style={{ whiteSpace: "nowrap" }}>Require attention trigger</span>
           </label>
           <div style={{ marginTop: 5, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
-            When off, your device keeps its existing always-listening behavior.
+            Require an attention trigger before handling speech. When off, your device keeps its existing always-listening behavior.
           </div>
           {!!wakePhrases?.length && (
             <div style={{ marginTop: 10, marginLeft: 23, fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
