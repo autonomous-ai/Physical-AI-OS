@@ -7,7 +7,7 @@ qua opening. Continuation vẫn bật với các câu hiện có, chờ 3,5 giâ
 agent bắt đầu lượt (từ tool đầu tiên với lượt delegate). Khi tool kết thúc,
 lịch phát lại cộng thêm phần cooldown 2,5 giây còn lại. Timer này không làm
 trễ opening.
-Giữ các bộ câu cũ để khôi phục. Cue realtime/tool được gọi riêng không đổi.
+Đã xoá bộ câu opening cũ. Cue realtime/tool được gọi riêng không đổi.
 
 `GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật).
 

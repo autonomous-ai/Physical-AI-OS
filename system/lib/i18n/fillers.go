@@ -16,27 +16,6 @@ var fillerOpening = map[string][]string{
 	LangZhTW: {"嗯。"},
 }
 
-// Original opening phrases retained for rollback.
-// var fillerOpening = map[string][]string{
-// 	LangJA: {"うーん、考えてみるね", "わかった", "ちょっと待ってね", "うん", "見てみるね"},
-// 	LangEN: {
-// 		"Hmm, let me think", "Ok, got it", "Sure, one moment", "Right",
-// 		"Got it", "Alright", "Ok", "Sure", "One sec",
-// 	},
-// 	LangVI: {
-// 		"Hmm để xem", "Ờ rồi", "Vâng một chút", "Vâng", "Hiểu rồi",
-// 		"Dạ", "Ờ", "Để xem", "Chờ chút",
-// 	},
-// 	LangZhCN: {
-// 		"嗯，让我想想", "好的", "稍等一下", "好", "明白了",
-// 		"嗯", "等一下", "稍等", "好的好的",
-// 	},
-// 	LangZhTW: {
-// 		"嗯，讓我想想", "好的", "稍等一下", "好", "明白了",
-// 		"嗯", "等一下", "稍等", "好的好的",
-// 	},
-// }
-
 // fillerRealtime holds quiet thinking sounds, not acknowledgements or promises.
 var fillerRealtime = map[string][]string{
 	LangJA:   {"うーん…", "ええと…"},
