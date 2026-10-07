@@ -1,10 +1,13 @@
-import { useEffect, useRef, useState, useCallback, type ReactNode } from "react";
+import { useEffect, useRef, useState, useCallback, useSyncExternalStore, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import {
-  Paperclip, X, Copy, Check, RotateCcw, Download, ArrowDown, ArrowUp,
-  Pin, ChevronRight, Sparkles, Plus, Trash2, History,
+  Paperclip, X, Copy, Check, RotateCcw, ArrowDown, ArrowUp,
+  Pin, Pencil, ChevronRight, Sparkles, Plus, Trash2, History,
   Wrench, Lightbulb, Cog, Music, Palette, Search, Smile, ChevronDown, Square,
 } from "lucide-react";
+import "./chat/chat-layout.css";
+import { ChatActionsMenu } from "./chat/ChatActionsMenu";
+import { shouldSendOnEnter } from "./chat/composerKeys";
 import { API } from "./types";
 import { getDeviceConfig } from "@/lib/api";
 import {
@@ -19,6 +22,14 @@ import { BrowseSkillsModal } from "./chat/BrowseSkillsModal";
 import { ManageSkillsModal } from "./chat/ManageSkillsModal";
 import { AgentFiles } from "./chat/AgentFiles";
 import { pendingReplyKey, replayedReply } from "./chat/pendingReplies";
+
+const mobileChatQuery = "(max-width: 767px)";
+const subscribeMobileChat = (notify: () => void) => {
+  const media = window.matchMedia(mobileChatQuery);
+  media.addEventListener("change", notify);
+  return () => media.removeEventListener("change", notify);
+};
+const isMobileChat = () => window.matchMedia(mobileChatQuery).matches;
 
 const CREATE_SKILL_WITH_AGENT_PROMPT =
   "Let's create a skill together using your skill-creator skill. First ask me what the skill should do.";
@@ -620,7 +631,7 @@ export function ChatSection({ events, isActive }: Props) {
   // Shared compact icon-button style for the per-row pin/delete actions.
   const hoverIconBtnStyle = (color: string): React.CSSProperties => ({
     display: "inline-flex", alignItems: "center", justifyContent: "center",
-    width: 22, height: 22, padding: 0, borderRadius: 4,
+    width: 36, height: 36, padding: 0, borderRadius: 4,
     background: "transparent", border: "none", cursor: "pointer",
     color,
   });
@@ -633,13 +644,39 @@ export function ChatSection({ events, isActive }: Props) {
     color: "var(--lm-text-dim)",
     padding: "4px 10px",
     display: "inline-flex", alignItems: "center", gap: 5,
-    fontSize: 11, fontWeight: 600,
+    fontSize: 12, fontWeight: 600, minHeight: 40,
   };
   const [attachments, setAttachments] = useState<Attachment[]>([]);
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [sidebarOpen, setSidebarOpen] = useState<boolean>(
     () => typeof window !== "undefined" && window.innerWidth >= 768,
   );
+  const mobile = useSyncExternalStore(subscribeMobileChat, isMobileChat, () => false);
+  const historyRef = useRef<HTMLDivElement>(null);
+  const historyToggleRef = useRef<HTMLButtonElement>(null);
+  useEffect(() => {
+    if (!sidebarOpen || !mobile || !isActive) return;
+    const history = historyRef.current;
+    const toggle = historyToggleRef.current;
+    history?.querySelector<HTMLButtonElement>("button")?.focus();
+    const dismiss = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setSidebarOpen(false);
+      }
+      if (event.key === "Tab" && history) {
+        const controls = [...history.querySelectorAll<HTMLElement>('button:not(:disabled), input, [tabindex="0"]')];
+        const first = controls[0], last = controls.at(-1);
+        if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+        else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+      }
+    };
+    document.addEventListener("keydown", dismiss);
+    return () => {
+      document.removeEventListener("keydown", dismiss);
+      toggle?.focus();
+    };
+  }, [sidebarOpen, mobile, isActive]);
   const [dragging, setDragging] = useState(false);
   const [skillsView, setSkillsView] = useState<SkillsAction | null>(null);
 
@@ -1086,6 +1123,27 @@ export function ChatSection({ events, isActive }: Props) {
       }
     }
 
+    // Harness questions and permission notices are also in JSONL, so a tab that missed the
+    // live delta (closed SSE while hidden) still shows them in the pending bubble.
+    let streamed = deltaBufRef.current.get(pending) ?? "";
+    let replayedQuestion = false;
+    for (const ev of observedEvents) {
+      const d = ev.detail as JsonObject | undefined;
+      if (ev.type !== "flow_event" || d?.node !== "harness_question") continue;
+      const runId = ev.runId ?? d?.run_id ?? d?.data?.run_id;
+      const text = String(d?.data?.text ?? "");
+      if (runId !== pending || !text || streamed.includes(text)) continue;
+      streamed += text + "\n";
+      replayedQuestion = true;
+    }
+    if (replayedQuestion) {
+      deltaBufRef.current.set(pending, streamed);
+      const cleaned = stripHWMarkers(streamed);
+      updateMessages((prev) =>
+        prev.map((m) => (m.runId === pending && m.role === "agent" && m.pending ? { ...m, text: cleaned } : m)),
+      );
+    }
+
     for (const ev of [...observedEvents].reverse()) {
       const evRunId: string | undefined =
         ev.runId ??
@@ -1208,6 +1266,7 @@ export function ChatSection({ events, isActive }: Props) {
   }, [messages, scrollToBottom]);
 
   const newChat = useCallback(() => {
+    if (isMobileChat()) setSidebarOpen(false);
     if (active && active.messages.length === 0) return;
     const id = `c-${Date.now()}`;
     const convo: Conversation = { id, title: "New chat", createdAt: Date.now(), messages: [] };
@@ -1219,6 +1278,7 @@ export function ChatSection({ events, isActive }: Props) {
   }, [active]);
 
   const switchTo = (id: string) => {
+    if (isMobileChat()) setSidebarOpen(false);
     if (id === activeId) return;
     setActiveId(id);
     setSending(false);
@@ -1547,7 +1607,7 @@ export function ChatSection({ events, isActive }: Props) {
   };
 
   const onKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); }
+    if (shouldSendOnEnter(e.nativeEvent)) { e.preventDefault(); send(); }
   };
 
   const filtered = search.trim()
@@ -1561,9 +1621,9 @@ export function ChatSection({ events, isActive }: Props) {
   const nowTs = Date.now();
 
   return (
-    <div style={{ display: "flex", height: "100%", gap: 0, position: "relative" }}>
+    <div className={`lm-chat-layout${sidebarOpen ? " lm-chat-history-open" : ""}`} style={{ display: "flex", height: "100%", gap: 0, position: "relative" }}>
       {sidebarOpen && (
-      <div style={{
+      <div ref={historyRef} className="lm-chat-history" role="region" aria-label="Chat history" style={{
         width: 280, flexShrink: 0, order: 2,
         borderLeft: "1px solid var(--lm-border)",
         display: "flex", flexDirection: "column",
@@ -1575,9 +1635,9 @@ export function ChatSection({ events, isActive }: Props) {
           display: "flex", flexDirection: "column", gap: 10,
         }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-            <History size={14} style={{ color: "var(--lm-text-muted)" }} />
+            <History size={14} style={{ color: "var(--lm-text-dim)" }} />
             <span style={{
-              fontSize: 10, fontWeight: 700, color: "var(--lm-text-muted)",
+              fontSize: 12, fontWeight: 700, color: "var(--lm-text-dim)",
               textTransform: "uppercase", letterSpacing: "0.08em",
             }}>History</span>
             <span style={{ flex: 1 }} />
@@ -1586,7 +1646,7 @@ export function ChatSection({ events, isActive }: Props) {
               style={{
                 width: 24, height: 24, padding: 0, borderRadius: 5,
                 background: "transparent", border: "none",
-                color: "var(--lm-text-muted)",
+                color: "var(--lm-text-dim)",
                 cursor: "pointer", flexShrink: 0,
                 display: "flex", alignItems: "center", justifyContent: "center",
               }}
@@ -1617,7 +1677,7 @@ export function ChatSection({ events, isActive }: Props) {
               style={{
                 width: "100%", padding: search ? "7px 30px 7px 10px" : "7px 10px", borderRadius: 6,
                 background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-                color: "var(--lm-text)", fontSize: 11.5, outline: "none",
+                color: "var(--lm-text)", fontSize: 12, outline: "none",
                 boxSizing: "border-box",
               }}
             />
@@ -1630,7 +1690,7 @@ export function ChatSection({ events, isActive }: Props) {
                 style={{
                   position: "absolute", right: 5, top: "50%", transform: "translateY(-50%)",
                   width: 21, height: 21, padding: 0, border: "none", borderRadius: 4,
-                  background: "transparent", color: "var(--lm-text-muted)", cursor: "pointer",
+                  background: "transparent", color: "var(--lm-text-dim)", cursor: "pointer",
                   display: "inline-flex", alignItems: "center", justifyContent: "center",
                 }}
               ><X size={12} /></button>
@@ -1639,12 +1699,12 @@ export function ChatSection({ events, isActive }: Props) {
         </div>
         <div style={{ flex: 1, overflowY: "auto", padding: "6px 10px 12px" }}>
           {filtered.length === 0 && (
-            <div style={{ padding: 16, textAlign: "center", color: "var(--lm-text-muted)", fontSize: 11 }}>
+            <div style={{ padding: 16, textAlign: "center", color: "var(--lm-text-dim)", fontSize: 12 }}>
               {search ? "No matches" : "No conversations yet"}
             </div>
           )}
           {search && filtered.length > 0 && (
-            <div style={{ padding: "7px 6px 3px", color: "var(--lm-text-muted)", fontSize: 10.5 }}>
+            <div style={{ padding: "7px 6px 3px", color: "var(--lm-text-dim)", fontSize: 12 }}>
               {filtered.length} {filtered.length === 1 ? "conversation" : "conversations"}
             </div>
           )}
@@ -1655,7 +1715,7 @@ export function ChatSection({ events, isActive }: Props) {
                 padding: "10px 6px 6px",
               }}>
                 <span style={{
-                  fontSize: 9.5, fontWeight: 700, color: "var(--lm-text-muted)",
+                  fontSize: 12, fontWeight: 700, color: "var(--lm-text-dim)",
                   textTransform: "uppercase", letterSpacing: "0.06em",
                 }}>
                   {label === "Pinned" ? (
@@ -1666,7 +1726,7 @@ export function ChatSection({ events, isActive }: Props) {
                 </span>
                 <span style={{ flex: 1, height: 1, background: "var(--lm-border)", opacity: 0.6 }} />
                 <span style={{
-                  fontSize: 9, fontWeight: 600, color: "var(--lm-text-muted)",
+                  fontSize: 12, fontWeight: 600, color: "var(--lm-text-dim)",
                   opacity: 0.7,
                 }}>{items.length}</span>
               </div>
@@ -1676,6 +1736,8 @@ export function ChatSection({ events, isActive }: Props) {
                 return (
                 <div
                   key={c.id}
+                  role="group"
+                  aria-label={`Conversation: ${c.title}`}
                   onClick={() => switchTo(c.id)}
                   onMouseEnter={() => setHoveredConvoId(c.id)}
                   onMouseLeave={() => setHoveredConvoId((cur) => (cur === c.id ? null : cur))}
@@ -1729,10 +1791,13 @@ export function ChatSection({ events, isActive }: Props) {
                         />
                       ) : (
                         <div style={{ display: "flex", alignItems: "baseline", gap: 6 }}>
-                          <div
+                          <button type="button"
+                            onClick={(e) => { e.stopPropagation(); switchTo(c.id); }}
+                            aria-current={isActive ? "true" : undefined}
                             onDoubleClick={(e) => { e.stopPropagation(); startRename(c); }}
                             title="Double-click to rename"
                             style={{
+                              background: "transparent", border: "none", textAlign: "left", padding: 0, cursor: "pointer",
                               flex: 1, minWidth: 0,
                               fontSize: 12.5,
                               color: isActive ? "var(--lm-amber)" : "var(--lm-text)",
@@ -1742,11 +1807,11 @@ export function ChatSection({ events, isActive }: Props) {
                             }}
                           >
                             {c.title}
-                          </div>
+                          </button>
                           {!isHovered && (
                             <span style={{
-                              flexShrink: 0, fontSize: 9.5, fontWeight: 500,
-                              color: "var(--lm-text-muted)",
+                              flexShrink: 0, fontSize: 12, fontWeight: 500,
+                              color: "var(--lm-text-dim)",
                               paddingRight: c.pinned ? 12 : 0,
                             }}>{relativeTime(conversationActivityAt(c), nowTs, t)}</span>
                           )}
@@ -1754,7 +1819,7 @@ export function ChatSection({ events, isActive }: Props) {
                       )}
                       {c.messages.length > 0 && (
                         <div style={{
-                          fontSize: 10.5, color: "var(--lm-text-muted)", marginTop: 3,
+                          fontSize: 12, color: "var(--lm-text-dim)", marginTop: 3,
                           whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
                         }}>
                           {(() => {
@@ -1765,22 +1830,26 @@ export function ChatSection({ events, isActive }: Props) {
                         </div>
                       )}
                     </div>
-                    <div style={{
+                    <div className="lm-convo-actions" style={{
                       display: "flex", gap: 2, flexShrink: 0,
                       opacity: isHovered ? 1 : 0,
                       pointerEvents: isHovered ? "auto" : "none",
                       transition: "opacity 0.15s",
                     }}>
+                      <button type="button" aria-label="Rename conversation" title="Rename"
+                        onClick={(e) => { e.stopPropagation(); startRename(c); }}
+                        style={hoverIconBtnStyle("var(--lm-text-dim)")}
+                      ><Pencil size={14} /></button>
                       <button
                         onClick={(e) => { e.stopPropagation(); togglePin(c.id); }}
-                        style={hoverIconBtnStyle(c.pinned ? "var(--lm-amber)" : "var(--lm-text-muted)")}
+                        style={hoverIconBtnStyle(c.pinned ? "var(--lm-amber)" : "var(--lm-text-dim)")}
                         title={c.pinned ? "Unpin" : "Pin to top"}
                         aria-label={c.pinned ? "Unpin" : "Pin"}
                       >{c.pinned ? <Pin size={12} fill="currentColor" /> : <Pin size={12} />}</button>
                       <button
                         onClick={(e) => { e.stopPropagation(); deleteConvo(c.id); }}
                         style={{
-                          ...hoverIconBtnStyle(confirmDeleteId === c.id ? "var(--lm-red)" : "var(--lm-text-muted)"),
+                          ...hoverIconBtnStyle(confirmDeleteId === c.id ? "var(--lm-red)" : "var(--lm-text-dim)"),
                           background: confirmDeleteId === c.id ? "color-mix(in srgb, var(--lm-red) 20%, transparent)" : "transparent",
                         }}
                         title={confirmDeleteId === c.id ? "Click again to confirm" : "Delete"}
@@ -1812,12 +1881,12 @@ export function ChatSection({ events, isActive }: Props) {
               style={{
                 width: "100%", padding: "7px 0", borderRadius: 7,
                 background: "transparent", border: "1px solid transparent",
-                color: "var(--lm-text-muted)", fontSize: 10.5, fontWeight: 500, cursor: "pointer",
+                color: "var(--lm-text-dim)", fontSize: 12, fontWeight: 500, cursor: "pointer",
                 display: "inline-flex", alignItems: "center", justifyContent: "center", gap: 5,
                 transition: "color 0.15s, background 0.15s, border-color 0.15s",
               }}
               onMouseEnter={(e) => { e.currentTarget.style.color = "var(--lm-red)"; e.currentTarget.style.background = "color-mix(in srgb, var(--lm-red) 10%, transparent)"; e.currentTarget.style.borderColor = "color-mix(in srgb, var(--lm-red) 25%, transparent)"; }}
-              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--lm-text-muted)"; e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
+              onMouseLeave={(e) => { e.currentTarget.style.color = "var(--lm-text-dim)"; e.currentTarget.style.background = "transparent"; e.currentTarget.style.borderColor = "transparent"; }}
             ><Trash2 size={11} /> Clear all unpinned</button>
           </div>
         )}
@@ -1845,7 +1914,7 @@ export function ChatSection({ events, isActive }: Props) {
             </span>
           </div>
         )}
-        <div style={{
+        <div className="lm-chat-header" style={{
           padding: "10px 16px", borderBottom: "1px solid var(--lm-border)",
           display: "flex", alignItems: "center", justifyContent: "space-between",
           background: "var(--lm-sidebar)", minHeight: 44, gap: 12,
@@ -1866,7 +1935,7 @@ export function ChatSection({ events, isActive }: Props) {
             <div style={{ display: "flex", flexDirection: "column", minWidth: 0 }}>
               <span style={{
                 fontSize: 14,
-                color: active ? "var(--lm-text)" : "var(--lm-text-muted)",
+                color: active ? "var(--lm-text)" : "var(--lm-text-dim)",
                 fontWeight: 700,
                 letterSpacing: "-0.01em",
                 lineHeight: 1.2,
@@ -1875,7 +1944,7 @@ export function ChatSection({ events, isActive }: Props) {
                 {active ? active.title : "Select or start a chat"}
               </span>
               <span style={{
-                fontSize: 10, fontWeight: 600, lineHeight: 1.2,
+                fontSize: 12, fontWeight: 600, lineHeight: 1.2,
                 color: sending ? "var(--lm-amber)" : "var(--lm-text-dim)",
                 whiteSpace: "nowrap",
               }}>
@@ -1884,37 +1953,23 @@ export function ChatSection({ events, isActive }: Props) {
             </div>
           </div>
           <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
-            {active && active.messages.length > 0 && (
+            <ChatActionsMenu canExport={!!active?.messages.length} canClear={convos.length > 0}
+              onExport={exportConversation}
+              onClear={() => {
+                if (!window.confirm("Clear all local chat history? This wipes the browser cache only — server-side flow logs are untouched.")) return;
+                clearLocalChatHistory(); setConvos([]); setActiveId(null);
+              }} />
               <button
-                onClick={exportConversation}
+                ref={historyToggleRef}
+                aria-expanded={sidebarOpen}
+                onClick={() => setSidebarOpen((open) => !open)}
                 style={headerPillBtnStyle}
-                title="Export as text"
-                aria-label="Export conversation"
-              ><Download size={12} /> Export</button>
-            )}
-            {convos.length > 0 && (
-              <button
-                onClick={() => {
-                  if (!window.confirm("Clear all local chat history? This wipes the browser cache only — server-side flow logs are untouched.")) return;
-                  clearLocalChatHistory();
-                  setConvos([]);
-                  setActiveId(null);
-                }}
-                style={headerPillBtnStyle}
-                title={`Clear local chat history (auto-purges after ${Math.round(HISTORY_TTL_MS / (24 * 60 * 60 * 1000))}d)`}
-                aria-label="Clear local chat history"
-              ><Trash2 size={12} /> Clear</button>
-            )}
-            {!sidebarOpen && (
-              <button
-                onClick={() => setSidebarOpen(true)}
-                style={headerPillBtnStyle}
-                title="Show history"
-                aria-label="Show history"
-              ><History size={13} /> History</button>
-            )}
+                title={sidebarOpen ? "Hide history" : "Show history"}
+                aria-label={sidebarOpen ? "Hide history" : "Show history"}
+              ><History size={16} /><span className="lm-chat-history-label"> History</span></button>
           </div>
         </div>
+        <div className="lm-chat-message-area">
         <div
           ref={scrollContainerRef}
           onScroll={onScroll}
@@ -1969,7 +2024,7 @@ export function ChatSection({ events, isActive }: Props) {
             <div key={msg.id}>
               {showDate && (
                 <div style={{
-                  textAlign: "center", fontSize: 10, color: "var(--lm-text-muted)",
+                  textAlign: "center", fontSize: 12, color: "var(--lm-text-dim)",
                   padding: "8px 0 4px", fontWeight: 500,
                 }}>
                   {formatDateLabel(msg.date!)}
@@ -1995,7 +2050,7 @@ export function ChatSection({ events, isActive }: Props) {
               })()}
               <div style={{ maxWidth: msg.role === "user" ? "72%" : "85%", display: "flex", flexDirection: "column", alignItems: msg.role === "user" ? "flex-end" : "flex-start", gap: 3 }}>
                 {msg.role === "agent" && (i === 0 || messages[i - 1]?.role === "user") && (
-                  <span style={{ fontSize: 11, color: "var(--lm-amber)", fontWeight: 600, letterSpacing: "0.01em", paddingLeft: 4 }}>Assistant</span>
+                  <span style={{ fontSize: 12, color: "var(--lm-amber)", fontWeight: 600, letterSpacing: "0.01em", paddingLeft: 4 }}>Assistant</span>
                 )}
                 {msg.pending && msg.role === "agent" && msg.runId === pendingRunIdRef.current && thinkingText && (
                   <ThinkingBlock text={thinkingText} />
@@ -2044,28 +2099,28 @@ export function ChatSection({ events, isActive }: Props) {
                       display: "flex", alignItems: "center", gap: 6,
                       padding: "4px 8px", borderRadius: 6,
                       background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-                      marginBottom: msg.text ? 6 : 0, fontSize: 11.5,
+                      marginBottom: msg.text ? 6 : 0, fontSize: 12,
                     }}>
                       <span>📎</span>
                       <span style={{ color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", maxWidth: 160 }}>
                         {msg.fileName}
                       </span>
                       {msg.fileSize != null && (
-                        <span style={{ color: "var(--lm-text-muted)", fontSize: 10, flexShrink: 0 }}>
+                        <span style={{ color: "var(--lm-text-dim)", fontSize: 12, flexShrink: 0 }}>
                           {msg.fileSize < 1024 ? `${msg.fileSize} B`
                             : msg.fileSize < 1024 * 1024 ? `${(msg.fileSize / 1024).toFixed(0)} KB`
                             : `${(msg.fileSize / 1024 / 1024).toFixed(1)} MB`}
                         </span>
                       )}
                       {msg.attachmentCount != null && msg.attachmentCount > 1 && (
-                        <span style={{ color: "var(--lm-text-muted)", fontSize: 10, flexShrink: 0 }}>
+                        <span style={{ color: "var(--lm-text-dim)", fontSize: 12, flexShrink: 0 }}>
                           +{msg.attachmentCount - 1} more
                         </span>
                       )}
                     </div>
                   )}
                   {msg.pending && !msg.text ? (
-                    <span style={{ color: "var(--lm-text-muted)" }}>
+                    <span style={{ color: "var(--lm-text-dim)" }}>
                       <span className="lm-blink">●</span>
                       <span style={{ marginLeft: 4 }}>●</span>
                       <span style={{ marginLeft: 4 }}>●</span>
@@ -2082,20 +2137,20 @@ export function ChatSection({ events, isActive }: Props) {
                   ) : msg.role === "agent" ? renderMarkdown(msg.text) : linkifyPlain(msg.text, msg.id)}
                   {msg.role === "agent" && !msg.pending && <AgentFiles text={msg.text} tools={msg.tools} />}
                 </div>
-                <div style={{ display: "flex", alignItems: "center", gap: 6, paddingInline: 4 }}>
-                  <span style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>{msg.time}</span>
+                <div className="lm-chat-metadata" style={{ display: "flex", alignItems: "center", gap: 6, paddingInline: 4 }}>
+                  <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>{msg.time}</span>
                   {!msg.pending && msg.text && msg.text !== "…" && (
                     <button
                       onClick={() => copyMessage(msg)}
                       className={copiedId === msg.id ? undefined : "lm-msg-action"}
                       style={{
                         background: "none", border: "none", cursor: "pointer",
-                        color: copiedId === msg.id ? "var(--lm-green)" : "var(--lm-text-muted)",
+                        color: copiedId === msg.id ? "var(--lm-green)" : "var(--lm-text-dim)",
                         padding: 0, transition: "opacity 0.15s, color 0.15s",
                         display: "inline-flex", alignItems: "center",
                       }}
                       onMouseEnter={(e) => { e.currentTarget.style.color = "var(--lm-text)"; }}
-                      onMouseLeave={(e) => { if (copiedId !== msg.id) e.currentTarget.style.color = "var(--lm-text-muted)"; }}
+                      onMouseLeave={(e) => { if (copiedId !== msg.id) e.currentTarget.style.color = "var(--lm-text-dim)"; }}
                       title="Copy"
                       aria-label="Copy message"
                     >{copiedId === msg.id ? <Check size={12} /> : <Copy size={12} />}</button>
@@ -2105,7 +2160,7 @@ export function ChatSection({ events, isActive }: Props) {
                       onClick={() => retryMessage(msg)}
                       style={{
                         background: "none", border: "none", cursor: "pointer",
-                        fontSize: 10, color: "var(--lm-amber)", padding: 0,
+                        fontSize: 12, color: "var(--lm-amber)", padding: 0,
                         opacity: 0.7, transition: "opacity 0.15s",
                         display: "inline-flex", alignItems: "center", gap: 3,
                       }}
@@ -2129,10 +2184,10 @@ export function ChatSection({ events, isActive }: Props) {
           <button
             onClick={scrollToBottom}
             style={{
-              position: "absolute", bottom: 80, right: 20,
+              position: "absolute", bottom: 12, right: 20,
               width: 32, height: 32, borderRadius: "50%",
               background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
-              color: "var(--lm-text-muted)",
+              color: "var(--lm-text-dim)",
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center",
               boxShadow: "0 2px 8px rgba(0,0,0,0.3)", transition: "opacity 0.2s",
             }}
@@ -2141,6 +2196,7 @@ export function ChatSection({ events, isActive }: Props) {
           ><ArrowDown size={16} /></button>
         )}
 
+        </div>
         <div  id="CHAT_BOX" style={{
           flexShrink: 0,
           padding: "10px 16px 12px",
@@ -2188,8 +2244,8 @@ export function ChatSection({ events, isActive }: Props) {
                         }}><Paperclip size={16} /></div>
                       )}
                       <div style={{ flex: 1, minWidth: 0 }}>
-                        <div style={{ fontSize: 11.5, color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.name}</div>
-                        <div style={{ fontSize: 10, color: "var(--lm-text-muted)" }}>
+                        <div style={{ fontSize: 12, color: "var(--lm-text)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{att.name}</div>
+                        <div style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
                           {att.size < 1024 ? `${att.size} B` : att.size < 1024 * 1024 ? `${(att.size / 1024).toFixed(0)} KB` : `${(att.size / 1024 / 1024).toFixed(1)} MB`}
                         </div>
                       </div>
@@ -2197,7 +2253,7 @@ export function ChatSection({ events, isActive }: Props) {
                         onClick={() => removeAttachment(att.id)}
                         style={{
                           background: "transparent", border: "none", cursor: "pointer",
-                          color: "var(--lm-text-muted)", padding: 4, borderRadius: 4,
+                          color: "var(--lm-text-dim)", padding: 4, borderRadius: 4,
                           display: "flex", alignItems: "center",
                         }}
                         title={`Remove ${att.name}`}
@@ -2225,6 +2281,7 @@ export function ChatSection({ events, isActive }: Props) {
               />
               <textarea
                 id="CHAT_TEXTAREA"
+                aria-label="Message Assistant"
                 ref={textareaRef}
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
@@ -2254,7 +2311,7 @@ export function ChatSection({ events, isActive }: Props) {
                     ? "var(--lm-amber)"
                     : "color-mix(in srgb, var(--lm-text) 15%, transparent)",
                   border: "none",
-                  color: sending || input.trim() ? "var(--lm-on-amber)" : "var(--lm-text-muted)",
+                  color: sending || input.trim() ? "var(--lm-on-amber)" : "var(--lm-text-dim)",
                   cursor: sending || input.trim() ? "pointer" : "default",
                   boxShadow: sending || input.trim() ? "0 2px 10px -2px var(--lm-amber-glow)" : "none",
                   transition: "background 0.15s, color 0.15s, box-shadow 0.15s, transform 0.12s",
@@ -2266,7 +2323,7 @@ export function ChatSection({ events, isActive }: Props) {
               </div>
             </div>
             <div style={{
-              fontSize: 10, color: "var(--lm-text-muted)",
+              fontSize: 12, color: "var(--lm-text-dim)",
               textAlign: "center", marginTop: 6, opacity: 0.7,
             }}>
               Press Enter to send · Shift+Enter for new line
@@ -2321,12 +2378,12 @@ function formatTokens(n: number): string {
 function UsageBadge({ usage, model }: { usage: NonNullable<ChatMessage["tokenUsage"]>; model?: string }) {
   const ctxPct = usage.total > 0 ? Math.min(100, (usage.total / CONTEXT_WINDOW) * 100) : 0;
   return (
-    <span
+    <span className="lm-chat-usage"
       style={{
-        fontSize: 9.5, color: "var(--lm-text-muted)",
-        fontFamily: "monospace", opacity: 0.75,
-        display: "inline-flex", gap: 10, alignItems: "center",
-        whiteSpace: "nowrap",
+        fontSize: 12, color: "var(--lm-text-dim)",
+        fontFamily: "monospace",
+        display: "inline-flex", flexWrap: "wrap", gap: "4px 10px", alignItems: "center",
+        minWidth: 0, overflowWrap: "anywhere",
       }}
       title={
         `Input: ${usage.input.toLocaleString()}\n` +

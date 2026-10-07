@@ -29,21 +29,27 @@ class _Harness:
         self.fired = []
         self._now_ms = 0.0
 
-    def touch(self, line, at_ms=None):
-        """One touch edge, optionally at a controlled monotonic time."""
-        self._edge(line, 0, at_ms)
+    def touch(self, line, at_ms=None, edge_ms=None):
+        """One touch edge, optionally at a controlled monotonic time.
 
-    def release(self, line, at_ms=None):
+        at_ms is when the callback runs; edge_ms is the edge's own kernel timestamp,
+        for callbacks delivered late or in a batch. They coincide unless edge_ms is given.
+        """
+        self._edge(line, 0, at_ms, edge_ms)
+
+    def release(self, line, at_ms=None, edge_ms=None):
         """One release edge."""
-        self._edge(line, 1, at_ms)
+        self._edge(line, 1, at_ms, edge_ms)
 
-    def _edge(self, line, level, at_ms):
+    def _edge(self, line, level, at_ms, edge_ms=None):
         # Untimed edges land at the same instant, so there are no gaps.
         if at_ms is None:
             at_ms = self._now_ms
         self._now_ms = at_ms
+        # lgpio passes the edge timestamp in nanoseconds.
+        tick = int((at_ms if edge_ms is None else edge_ms) * 1_000_000)
         with mock.patch.object(self.mod.time, "monotonic", return_value=at_ms / 1000.0):
-            self.h._on_edge(0, line, level, 0)
+            self.h._on_edge(0, line, level, tick)
 
     def end_session(self):
         """Fire the session-end timer by hand."""
@@ -570,6 +576,123 @@ class TestGeometryIndependent(_Base):
         self.assertNotIn("swipe_action", self.hz.fired)
 
 
+class TestDetectedPads(_Base):
+    """Four candidate lines, two wired: rules follow the detected pads."""
+
+    swipe = True
+
+    def setUp(self):
+        super().setUp()
+        self.hz = _Harness(self.mod, lines=(37, 96, 97, 98))
+        self.hz.h._active = {97, 98}
+        for p in self._p:
+            p.stop()
+        self._p = _record(self.mod, self.hz)
+        for p in self._p:
+            p.start()
+
+    def _is_swipe(self):
+        self.hz.h._close_contact()
+        return self.hz.h._classify()[0]
+
+    def test_a_pass_over_the_two_wired_pads_is_a_swipe(self):
+        for i, line in enumerate((97, 98)):
+            self.hz.touch(line, at_ms=i * 100)
+        self.assertTrue(self._is_swipe())
+
+    def test_one_wired_pad_is_not_a_swipe(self):
+        self.hz.touch(97, at_ms=0)
+        self.assertFalse(self._is_swipe())
+
+    def _run_armed_timers(self):
+        """Fire only the timers the edges armed, as the real driver would."""
+        if self.hz.h._session_end_timer is not None:
+            self.hz.end_session()
+        if self.hz.h._decision_timer is not None:
+            self.hz.decide()
+
+    def test_a_glitch_on_an_undetected_line_is_not_learned_and_fires_nothing(self):
+        """A 1 ms transient on a bare candidate pin is not a pad and not a gesture."""
+        self.hz.touch(37, at_ms=1000)
+        self.hz.release(37, at_ms=1001)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self.assertIsNone(self.hz.h._session_end_timer)
+        self.assertEqual((self.hz.h._contact, self.hz.h._presses), ([], 0))
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, [])
+        self.assertEqual(self.hz.h._wired(), {97, 98})
+
+    def test_a_fall_with_no_release_is_not_learned_and_fires_nothing(self):
+        self.hz.touch(37, at_ms=1000)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, [])
+
+    def test_a_sustained_touch_on_an_undetected_line_is_learned_and_delivered(self):
+        """A pad the startup probe missed is admitted by its first real touch."""
+        self.hz.touch(37, at_ms=1000)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self.hz.release(37, at_ms=1060)
+        self.assertEqual(self.hz.h._active, {37, 97, 98})
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+
+    def test_a_low_just_under_the_floor_is_not_learned(self):
+        self.hz.touch(37, at_ms=1000)
+        self.hz.release(37, at_ms=1000 + self.mod.LEARN_MIN_LOW_MS - 1)
+        self.assertEqual(self.hz.h._active, {97, 98})
+
+    def test_a_glitch_whose_callbacks_run_far_apart_is_still_a_glitch(self):
+        """A 1 ms pulse stays a transient even when its release callback runs 50 ms late."""
+        self.hz.touch(37, at_ms=1000, edge_ms=1000)
+        self.hz.release(37, at_ms=1050, edge_ms=1001)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self.assertIsNone(self.hz.h._session_end_timer)
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, [])
+
+    def test_a_real_touch_whose_callbacks_run_back_to_back_is_still_learned(self):
+        """An 80 ms touch stays a touch even when both callbacks are delivered 1 ms apart."""
+        self.hz.touch(37, at_ms=2000, edge_ms=1000)
+        self.hz.release(37, at_ms=2001, edge_ms=1080)
+        self.assertEqual(self.hz.h._active, {37, 97, 98})
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+
+    def test_a_glitch_does_not_stop_a_later_real_touch_being_learned(self):
+        self.hz.touch(37, at_ms=1000)
+        self.hz.release(37, at_ms=1001)
+        self.hz.touch(37, at_ms=2000)
+        self.hz.release(37, at_ms=2080)
+        self.assertEqual(self.hz.h._active, {37, 97, 98})
+
+    def test_a_learned_pad_is_handled_at_once_from_then_on(self):
+        self.hz.touch(37, at_ms=1000)
+        self.hz.release(37, at_ms=1060)
+        self._run_armed_timers()
+        self.hz.h._pet_cooldown_until = 0.0
+        self.hz.touch(37, at_ms=5000)
+        self.assertEqual(self.hz.h._contact, [(37, 5.0)])
+
+    def test_nothing_detected_learns_each_pad_from_its_first_touch(self):
+        self.hz.h._active = set()
+        for line, down, up in ((96, 0, 60), (37, 100, 160)):
+            self.hz.touch(line, at_ms=down)
+            self.hz.release(line, at_ms=up)
+        self.assertEqual(self.hz.h._active, {37, 96})
+        self._run_armed_timers()
+        self.assertEqual(self.hz.fired, ["head_pat_action"])
+        self.hz.h._pet_cooldown_until = 0.0
+        for i, line in enumerate((96, 37)):
+            self.hz.touch(line, at_ms=5000 + i * 100)
+        self.assertTrue(self._is_swipe())
+
+    def test_release_never_marks_a_line_wired(self):
+        self.hz.release(37, at_ms=0)
+        self.assertEqual(self.hz.h._active, {97, 98})
+        self.assertIsNone(self.hz.h._session_end_timer)
+
+
 class TestPetOnlyActions(_Base):
     swipe = True
 
@@ -603,7 +726,7 @@ class TestPetOnlyActions(_Base):
             return mock.Mock(start=target)
         with mock.patch.object(app_state, "tts_service", tts), \
              mock.patch.object(voice, "stop_tts") as stop, \
-             mock.patch.object(self.mod, "play_ack_chime") as chime, \
+             mock.patch.object(self.mod, "play_pet_chime") as chime, \
              mock.patch.object(self.mod.threading, "Thread", side_effect=inline_thread):
             self.mod.TTP223Handler._ack_first_session(self.hz.h)
         chime.assert_called_once_with(source="TTP223")

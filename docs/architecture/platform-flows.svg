@@ -1,5 +1,5 @@
 <svg xmlns="http://www.w3.org/2000/svg" width="1200" height="1000" viewBox="0 0 1200 1000" role="img" aria-labelledby="title desc">
-<title id="title">Autonomous OS — one voice, three ways to act</title>
+<title id="title">Physical AI Operating System — one voice, three ways to act</title>
 <desc id="desc">Voice enters HAL realtime. Conversation returns directly as speech. Delegated music requests use music and audio skills for playback and volume, with HAL LED feedback on supported bodies. Delegated computer tasks use harness-use and a paired computer agent; the final result returns through OS to HAL for a short announcement. All routes remain readable without animation.</desc>
 <defs>
  <linearGradient id="canvas" x2="1" y2="1"><stop stop-color="#152130"/><stop offset="1" stop-color="#090f19"/></linearGradient>
@@ -39,7 +39,7 @@
  </style>
 </defs>
 <rect width="1200" height="1000" rx="20" fill="url(#canvas)"/><rect width="1200" height="1000" rx="20" fill="url(#grid)" opacity=".3"/>
-<text x="32" y="35" font-size="12" font-weight="700" style="fill:#77e2cf">AUTONOMOUS OS</text>
+<text x="32" y="35" font-size="12" font-weight="700" style="fill:#77e2cf">PHYSICAL AI OPERATING SYSTEM</text>
 <text x="32" y="76" font-size="32" font-weight="700">One voice. A conversation, an action, a finished task.</text>
 <text x="32" y="105" font-size="14" class="muted">Realtime handles the moment. Skills connect the brain to a body — and to your computer.</text>
 <text x="1168" y="116" text-anchor="end" font-size="10" letter-spacing="1.5" class="muted">YOU SAY</text>

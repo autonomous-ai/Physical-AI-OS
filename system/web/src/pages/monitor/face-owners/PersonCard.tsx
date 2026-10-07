@@ -7,8 +7,8 @@ import type { FaceOwnerDetail } from "../types";
 export function PersonCard({
   person, idx, currentUser,
   expandedPerson, setExpandedPerson,
-  hoveredPerson, setHoveredPerson,
-  hoveredPhoto, setHoveredPhoto,
+  setHoveredPerson,
+  setHoveredPhoto,
   expanded, toggleDir,
   deleting, deletingPhoto,
   preview, previewLoading, setPreview,
@@ -53,17 +53,15 @@ export function PersonCard({
     : monCard;
   return (
     <div
-      className="lm-mon-card lm-card-in"
+      className="lm-mon-card lm-card-in lm-user-card"
       style={{ ...cardStyle, ["--lm-stagger" as string]: `${Math.min(idx, 8) * 45}ms` }}
       onMouseEnter={() => setHoveredPerson(person.label)}
       onMouseLeave={() => setHoveredPerson((cur) => (cur === person.label ? null : cur))}
     >
 
       <div
-        onClick={() => setExpandedPerson((p) => ({ ...p, [person.label]: !isExpanded }))}
         style={{
           display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
-          cursor: "pointer",
           margin: "-16px -16px 12px -16px",
           padding: "11px 14px",
           background: "color-mix(in srgb, var(--lm-text) 5%, transparent)",
@@ -97,25 +95,24 @@ export function PersonCard({
           );
         })()}
         <div style={{
-          fontSize: 13, fontWeight: 700,
-          color: "var(--lm-amber)",
+          fontSize: 17, fontWeight: 700, minWidth: 0, overflowWrap: "anywhere",
+          color: "var(--lm-text)",
           textTransform: "capitalize",
         }}>
           {person.label}
         </div>
         {isCurrent && (
           <span className="lm-pulse" style={{
-            fontSize: 10, padding: "2px 6px", borderRadius: 4,
+            fontSize: 12, padding: "2px 6px", borderRadius: 4,
             background: "var(--lm-teal)", color: "var(--lm-on-amber)",
             fontWeight: 700, letterSpacing: 0.5,
           }}>● HERE NOW</span>
         )}
         <span style={{ flex: 1 }} />
         {(() => {
-          const isHovered = hoveredPerson === person.label;
           const hoverStyle: React.CSSProperties = {
-            opacity: isHovered ? 1 : 0,
-            pointerEvents: isHovered ? "auto" : "none",
+            opacity: 1,
+            pointerEvents: "auto",
             transition: "opacity 0.15s ease",
           };
           return (
@@ -152,24 +149,27 @@ export function PersonCard({
                   color: "var(--lm-red)",
                   border: "1px solid color-mix(in srgb, var(--lm-red) 35%, transparent)",
                   cursor: deleting === person.label ? "not-allowed" : "pointer",
-                  opacity: deleting === person.label ? 0.5 : (isHovered ? 1 : 0),
-                  pointerEvents: isHovered ? "auto" : "none",
+                  opacity: deleting === person.label ? 0.5 : 1,
+                  pointerEvents: "auto",
                   transition: "opacity 0.15s ease",
                 }}
               >{deleting === person.label ? "…" : <Trash2 size={14} />}</button>
-              <span style={{
-                display: "inline-flex", alignItems: "center", justifyContent: "center",
-                width: 18, height: 18, color: "var(--lm-text-muted)",
-              }}>
-                {isExpanded ? <ChevronDown size={14} /> : <ChevronRight size={14} />}
-              </span>
+              <button
+                className="lm-u-btn"
+                aria-label={`${isExpanded ? "Collapse" : "Expand"} ${person.label}`}
+                aria-expanded={isExpanded}
+                onClick={() => setExpandedPerson((p) => ({ ...p, [person.label]: !isExpanded }))}
+                style={iconBtnStyle}
+              >
+                {isExpanded ? <ChevronDown size={16} /> : <ChevronRight size={16} />}
+              </button>
             </>
           );
         })()}
       </div>
 
       {(person.telegram_username || person.telegram_id) && (
-        <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginBottom: 12 }}>
+        <div style={{ fontSize: 12, color: "var(--lm-text-muted)", marginBottom: 12 }}>
           {person.telegram_username && <span>@{person.telegram_username}</span>}
           {person.telegram_username && person.telegram_id && <span> · </span>}
           {person.telegram_id && <span>ID: {person.telegram_id}</span>}
@@ -182,7 +182,7 @@ export function PersonCard({
             { n: person.photo_count, label: "photos", full: `${person.photo_count} face photos`, color: "var(--lm-amber)" },
           ];
           if (person.mood_days?.length)              tags.push({ n: person.mood_days.length,             label: "mood",     full: `${person.mood_days.length} mood days`,             color: "var(--lm-green)"  });
-          if (person.wellbeing_days?.length)         tags.push({ n: person.wellbeing_days.length,        label: "wb",       full: `${person.wellbeing_days.length} wellbeing days`,    color: "var(--lm-blue)"   });
+          if (person.wellbeing_days?.length)         tags.push({ n: person.wellbeing_days.length,        label: "wellbeing",       full: `${person.wellbeing_days.length} wellbeing days`,    color: "var(--lm-blue)"   });
           if (person.music_suggestion_days?.length)  tags.push({ n: person.music_suggestion_days.length, label: "music",    full: `${person.music_suggestion_days.length} music suggestion days`, color: "var(--lm-purple)" });
           if (person.posture_days?.length)           tags.push({ n: person.posture_days.length,          label: "posture",  full: `${person.posture_days.length} posture days`,        color: "var(--lm-cyan, #06b6d4)" });
           if (person.audio_history_days?.length)     tags.push({ n: person.audio_history_days.length,    label: "audio",    full: `${person.audio_history_days.length} audio history days`, color: "var(--lm-blue)" });
@@ -202,8 +202,8 @@ export function PersonCard({
                     border: `1px solid color-mix(in srgb, ${t.color} 22%, transparent)`,
                   }}
                 >
-                  <span style={{ fontSize: 11, fontWeight: 700, color: t.color, lineHeight: 1 }}>{t.n}</span>
-                  <span style={{ fontSize: 9.5, fontWeight: 500, color: t.color, opacity: 0.72, textTransform: "uppercase", letterSpacing: "0.04em", lineHeight: 1 }}>{t.label}</span>
+                  <span style={{ fontSize: 12, fontWeight: 700, color: t.color, lineHeight: 1.4 }}>{t.n}</span>
+                  <span style={{ fontSize: 12, fontWeight: 500, color: "var(--lm-text)", lineHeight: 1.4 }}>{t.label}</span>
                 </span>
               ))}
             </div>
@@ -213,7 +213,7 @@ export function PersonCard({
       {isExpanded && (<>
       <div style={{
         fontFamily: "monospace",
-        fontSize: 11,
+        fontSize: 12,
         lineHeight: 1.7,
         color: "var(--lm-text-muted)",
       }}>
@@ -222,16 +222,16 @@ export function PersonCard({
             {person.photos.map((photo) => {
               const delKey = `${person.label}/${photo}`;
               const isDeleting = deletingPhoto === delKey;
-              const isHovered = hoveredPhoto === delKey;
               return (
                 <div
                   key={photo}
                   title={photo}
                   onMouseEnter={() => setHoveredPhoto(delKey)}
                   onMouseLeave={() => setHoveredPhoto((cur) => (cur === delKey ? null : cur))}
-                  style={{ position: "relative", width: 56, height: 56 }}
+                  style={{ position: "relative", width: 80, height: 80 }}
                 >
                   <img
+                    alt={`Photo of ${person.label}`}
                     src={hwUrl(`/face/photo/${encodeURIComponent(person.label)}/${encodeURIComponent(photo)}`)}
                     style={{
                       width: "100%", height: "100%",
@@ -250,7 +250,7 @@ export function PersonCard({
                     title={`Remove ${photo}`}
                     style={{
                       position: "absolute", top: 3, right: 3,
-                      width: 20, height: 20,
+                      width: 28, height: 28,
                       borderRadius: 5,
                       background: "rgba(0,0,0,0.55)",
                       color: "#fff",
@@ -258,8 +258,8 @@ export function PersonCard({
                       cursor: isDeleting ? "wait" : "pointer",
                       padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
-                      opacity: isDeleting ? 0.5 : (isHovered ? 1 : 0),
-                      pointerEvents: isHovered ? "auto" : "none",
+                      opacity: isDeleting ? 0.5 : 1,
+                      pointerEvents: "auto",
                       transition: "opacity 0.15s ease",
                       backdropFilter: "blur(2px)",
                     }}
@@ -272,6 +272,8 @@ export function PersonCard({
           </div>
         )}
 
+        <details className="lm-user-files">
+          <summary>Profile files &amp; voice samples</summary>
         {(() => {
           const items: { name: string; isDir?: boolean; dirKey?: string; children?: string[]; filePath?: string }[] = [];
           person.files?.filter((f) => !person.photos.includes(f)).forEach((f) => items.push({ name: f, filePath: f }));
@@ -307,7 +309,7 @@ export function PersonCard({
                     style={{ cursor: "pointer" }}
                     onClick={() => toggleDir(item.dirKey!)}
                   >
-                    <span style={{ color: "var(--lm-text-dim)" }}>{prefix}</span>
+                    <span style={{ color: "var(--lm-text-muted)" }}>{prefix}</span>
                     <span style={{ color: "var(--lm-green)" }}>{isOpen ? "▾" : "▸"}</span>
                     <span style={{ color: "var(--lm-green)", fontWeight: 600 }}> {item.name}/</span>
                   </span>
@@ -329,7 +331,7 @@ export function PersonCard({
                           style={{ cursor: "pointer" }}
                           onClick={() => onOpenFile(person.label, childPath)}
                         >
-                          <span style={{ color: "var(--lm-text-dim)" }}>{childPrefix}{childBranch}</span>
+                          <span style={{ color: "var(--lm-text-muted)" }}>{childPrefix}{childBranch}</span>
                           {isChildAudio && (
                             <span style={{ color: isPlaying ? "var(--lm-amber)" : "var(--lm-purple)", marginRight: 4 }}>
                               {isPlaying ? "⏸" : "▶"}
@@ -348,7 +350,7 @@ export function PersonCard({
                             title={`Remove ${child}`}
                             style={{
                               cursor: isDeleting ? "wait" : "pointer",
-                              fontSize: 10,
+                              fontSize: 12,
                               color: "var(--lm-red)",
                               opacity: isDeleting ? 0.5 : 0.6,
                               fontWeight: 600,
@@ -368,7 +370,7 @@ export function PersonCard({
                   style={{ cursor: "pointer" }}
                   onClick={() => onOpenFile(person.label, item.filePath!)}
                 >
-                  <span style={{ color: "var(--lm-text-dim)" }}>{prefix}</span>
+                  <span style={{ color: "var(--lm-text-muted)" }}>{prefix}</span>
                   <span style={{
                     color: isActive ? "var(--lm-amber)" : "inherit",
                     textDecoration: "underline",
@@ -380,6 +382,7 @@ export function PersonCard({
             );
           });
         })()}
+        </details>
       </div>
 
       {preview && preview.label === person.label && (
@@ -389,7 +392,7 @@ export function PersonCard({
           borderRadius: 6,
           background: "var(--lm-surface)",
           border: "1px solid var(--lm-border)",
-          fontSize: 10,
+          fontSize: 12,
           fontFamily: "monospace",
           whiteSpace: "pre-wrap",
           wordBreak: "break-all",

@@ -15,6 +15,9 @@ labels merged runs explicitly instead of presenting an empty silent result.
 
 ## 1. Overview
 
+Light mode uses warm gray page surfaces, off-white cards, darker secondary text and stronger semantic colors across monitor and configuration screens. Flow uses a separate canvas surface, higher-contrast inactive connections and node descriptions, and neutral text for diagnostic payloads. System history charts resolve colors from the active monitor theme and use 11px axis labels.
+
+
 The device's Web UI is a React SPA (Single Page Application) built with **React 19 + TypeScript + Vite + Tailwind CSS 4**, serving two purposes:
 
 1. **Setup flow** — WiFi, LLM provider, messaging channel onboarding (`/setup/*` pages)
@@ -25,6 +28,21 @@ Build output (`dist/`) is served by nginx at root `/` on the device.
 During initial setup, **Channels** is optional and defaults to **Not now**.
 Selecting Telegram, Slack, or Discord reveals its credential fields, but the
 operator may leave them blank or configure a channel later in Settings.
+
+### Japanese language selection
+
+Setup and Settings offer **Japanese (日本語)** with code `ja`. Setup recognizes
+Japanese browser locales and `?stt_language=ja`; Japanese regional aliases normalize to
+`ja`. Existing chat i18n strings, relative times, voice enrollment instructions
+and all three enrollment phrases have Japanese translations. Test Voice sends a
+Japanese sample. Static settings labels follow the existing English UI convention.
+
+The ElevenLabs language filter has a Japanese bucket containing Shizuka, Konoha,
+Rin, Asahi, Hinata and Hiroki; Shizuka is the Japanese default. OpenAI and Gemini
+continue to use their multilingual voice pools. Setup validates the initial
+voice against the language-specific catalog, so a Japanese browser selects
+Shizuka instead of retaining Rachel. A valid saved/URL choice is preserved;
+late catalog responses are ignored after a provider, language or voice change.
 
 ### 1.1 Browser Tab Title
 
@@ -130,6 +148,12 @@ Defined at `.lm-root` in `index.css`:
 ```
 
 ### 3.4 Settings (`/setting`) — shared shell
+
+**LLM ownership (Settings → Runtime).** `llm_config_mode` is device-wide: missing/empty retains legacy behavior (including Codex/Claude Code subscription detection), `os` explicitly uses saved OS LLM settings, and `runtime` preserves native settings. AI Brain becomes read-only in runtime mode; its saved key/base URL remain available to voice/backend services. Native mode preserves existing model/provider selection, so use the runtime's own CLI/config to log in **and select the provider/model**, then restart the service and open a new terminal. Each runtime needs its own native configuration; credentials do not migrate when switching runtimes.
+
+The Runtime section presents two ordered steps: choose a runtime and use its Switch button, then configure AI for the active runtime. AI configuration is disabled while another runtime is selected or a switch is in progress. Unsaved or pending LLM changes lock the runtime selector until Save Changes succeeds. Step 2 shows both LLM choices as radio options and includes its own Save Changes button, using the existing settings form; the Runtime page has no header Save button. Native mode shows the terminal link only after saving, with instructions to sign in, choose a model, restart the runtime, and return to Chat.
+
+Restoring AI Brain defaults explicitly selects `os` and forces apply even if the saved values are unchanged. An apply error is shown after the mode has been saved; resolve the cause and retry applying. Success confirms application of configuration, not account validity. Real subscription login/device testing is still pending.
 
 **Remote MCP Tools** (`/setting#mcp`). Finish onboarding the selected runtime,
 then sign in to the device's admin UI. Enter a unique **Name**, the remote MCP
@@ -250,7 +274,17 @@ The Overview **Versions** card has a restart action column with `restart` for OS
 
 The Versions card shows **Current** and **Latest** side by side. Latest comes from each component's `target` in `/api/system/ota-versions`, including the active runtime via `agent`; it is the version published in the device's OTA feed, not an upstream release lookup. Metadata loads in normal and debug mode and refreshes after updates. Missing or empty targets, including Host, display `—`; an already-current component still shows its published target. Bootstrap and Device rows and update buttons remain debug-only.
 
-**Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
+**Voice input mode** lives in public **General** settings as two equal choices under **How to talk**: **Automatic** (default, also for older configs without `voice_input_mode`) and **Tap to talk**. The selector saves `voice_input_mode: "automatic" | "tap_to_talk"` through the existing Settings save flow. Automatic preserves the current speech flow and shows the wake checkbox and phrases. Tap to talk hides those controls while retaining the stored `wakeword` preference: tap once to start recording, tap again to stop and send; silence does not send. During TTS, a tap only stops playback; the next tap starts recording. Wake phrases and gaze do not open recording in this mode; the physical mic switch still applies. Returning to Automatic restores the previous wake preference. This setting controls on-device voice input when Harness-only mode is off; Harness-only mode keeps its existing tap behavior. Mode participates in loading, dirty detection, saving, and reload.
+
+The monitor/settings sidebar uses a single-open-group accordion: expanding one top-level group collapses the previous one, clicking the open group collapses it, and navigation opens the group containing the destination. It has an independently scrolling navigation list with contained overscroll and a non-shrinking logout footer. On phones, the drawer follows the dynamic viewport height (`100dvh`) so all debug entries remain reachable.
+
+**Realtime form** (`/setting?debug=true#realtime`) uses short checkbox labels; provider names live in the Provider dropdown. Optional API Key and Base URL guidance appears below the inputs, keeping field labels compact on narrow screens.
+
+The same compact-label layout applies to General’s attention trigger, STT credentials, TTS provider/key fields, and Resting light. TTS key status stays intact when the row wraps. Wi-Fi provisioning places its Advanced explanation below the button, and Manual Move separates its description from the Live drag checkbox.
+
+**Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving a changed or pending wake value restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
+
+Wake updates from HTTP Settings and MQTT are serialized. Saving waits for the required HAL `systemctl restart` to complete (the restart command has a 30-second timeout), without verifying voice pipeline readiness. Save or wake-apply failures use the existing Settings error response; config may already be saved if restart fails. Pending wake apply is retained in the current os-server process, so saving the same value again retries it. After success, an unchanged wake value does not cause another restart. Config updates without a pending wake apply retain the existing asynchronous HAL apply behavior. Updates combining wake and other settings use one HAL restart; other saved fields still receive their normal side effects.
 
 **Timezone** (`/setting#timezone`, internal `settings:timezone`, `TimezoneSection.tsx`) — an admin-gated section that, like Agent Runtime, is **not** part of the form's "Save Changes" flow: it has its own **Apply** button. It loads the current zone and the selectable IANA zone list via `GET /api/device/timezone`, lets the operator pick a zone from a single dropdown (`<select>` grouped by region via `<optgroup>`, each option labelled `(GMT+7) Ho Chi Minh` and ordered by UTC offset, the way common web timezone pickers work), and shows a live preview of the local time in the selected zone. On **Apply** it calls `POST /api/device/timezone {timezone}`; the change applies immediately (no device restart needed).
 
@@ -402,6 +436,12 @@ The web UI never calls nginx `/hw/*`: every HAL request goes through the admin-g
 
 ### 5.1 Overview Section
 
+Overview Services shows persisted update progress beneath each component. Only measurable artifact downloads show a byte-based percentage and progress bar; preparing, verification, installation, restart and health checks show named stages. Unknown download size shows bytes only. The previous run's completed/failed/interrupted outcome remains labeled “Last update”. Reconnection preserves the last known status rather than treating a network failure as completion. Active updates disable their update/restart controls. The API remains backward compatible with older updating-only workers; detailed progress requires the updated on-device updater and OS Server.
+
+
+
+The monitor uses consistent overflow longhands so returning from Chat, Settings or embedded pages restores the outer content scrollbar.
+
 Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.
 
 Cards included:
@@ -451,9 +491,7 @@ Cards included:
   independent of the mute switch) and closes while the browser tab is
   hidden.
 
-On phone widths of **480px or less**, the four Overview status cards use one
-column. This preserves room for the Audio controls and VU meters, and prevents
-the shorter Presence card from being stretched by the taller Audio card.
+Overview is organized into three always-visible zones: **System health** (Agent, Network, Presence, Hardware), **Live controls** (Audio and Scene beside Emotion and Servo), and **Services** (full-width versions and uptime table, followed by Power). Health cards use four columns above 1200px, two up to 1200px, and one below 768px; controls also stack below 768px. At 1500px and above, Audio/Scene, Emotion and Servo form three aligned columns with consistent bordered surfaces. Preset labels display spaces instead of underscores; command IDs are unchanged. Audio meters and all presets stay visible. Presets use a wrapping button grid, and Agent restart has a separate footer row. Existing device actions and confirmations are unchanged. Maintenance buttons use icons and readable labels, with amber Update and neutral Restart styling; Sending, Queued and Updating remain distinct states.
 
 **Hardware** (horizontal card)
 - 8 badges: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
@@ -491,6 +529,24 @@ the shorter Presence card from being stretched by the taller Audio card.
 > `sleepy` readable in dark mode. The summary reserves room for the emoji and
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
+
+### Settings readability
+
+Settings dropdowns use themed Radix menus with an amber selection, viewport-aware placement, scrolling, keyboard navigation and Escape dismissal. Empty-value Auto/default choices remain selectable. General retains its existing controls.
+
+Settings sections other than General use visible keyboard focus, consistent control heights, and 16px mobile text inputs/selects. Language, Voice, Realtime and Channels use larger helper text. MCP Tools and Plugins apply their own actions and no longer show the shared Save Changes button.
+
+On phones, MCP header key/value fields stack with explicit labels; Plugin and Scheduled action groups move below names and status. My Voice handles long names and places recordings below filenames; Face photo removal has a larger hit target. Facebook connection actions wrap. Schedule editor labels are associated with controls and weekday toggles expose their pressed state. Runtime help buttons never submit the Settings form; the help dialog supports keyboard focus and dismissal.
+
+### Monitor readability
+
+Chat history covers the chat panel on phones instead of shrinking the conversation; Escape closes it, keyboard focus stays in the open mobile history, and selecting or creating a conversation returns to chat. Export and Clear are grouped in an accessible actions menu. History selection and rename/pin/delete actions work with keyboard and touch. Message actions have larger visible targets, metadata wraps, and the scroll-to-bottom button stays above the composer even with multiline drafts or attachments. Enter sends only outside IME composition; Shift+Enter still inserts a newline.
+
+Overview shows a neutral loading state until agent status arrives; version rows stack with field labels on phones. System stacks gauges above history charts at 768px. Camera puts snapshots below the stream on phones, labels tracking inputs, collapses optional bounding-box controls under Advanced tracking, and reports failed actions with pending controls disabled.
+
+Logs uses a source dropdown at 640px, larger log text and clearer timestamps. Flow has larger search and toolbar controls. CLI has keyboard-accessible session tabs, mobile terminal keys and a Reconnect button after disconnection; reconnect starts a fresh shell and clears the previous terminal scrollback. API Docs shows loading/failure states with Reload and Open in new tab actions. Monitor and Settings reserve a footer row so the source link does not cover content.
+
+Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, compact person cards in an auto-filling grid (280px minimum tracks, cards capped at 340px) and two-column observation grids; both use one full-width column at 640px, collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
 
 ### 5.2 Pairing Section
 
@@ -744,6 +800,7 @@ Neither path restarts the runtime: backends with a skills dir pick new files up 
 **Real-time Streaming**
 - **Thinking indicator**: collapsible purple block showing LLM reasoning tokens as they stream in (`thinking` events). Click to expand full text (max-height 200px scrollable). Auto-hides on response completion.
 - **Assistant delta streaming**: response text appears token-by-token via `assistant_delta` events, instead of waiting for final response. Fallback to `chat_response` partial events for non-agent paths.
+- **Harness lines in chat**: once a turn is handed to Harness, the device agent's own deferred text (usually `NO_REPLY`) is no longer streamed. Harness progress, tool, question and permission-notice deltas each end with a newline (`pushHarnessLine`, `system/server/agent/delivery/http/handler_harness.go`); a progress/tool line equal to the run's previous line is dropped. Progress/tool lines are live-only (not in JSONL), so a hidden tab misses them; questions and permission notices are replayed from `harness_question` flow events.
 - **Tool call chips**: teal badges showing tools the agent invoked during the response (emotion, LED, servo, audio, etc.). Displayed above the message bubble during streaming and persisted on completed messages. A single tool renders as one chip; **two or more collapse into a summary pill** ("N steps" with stacked tool icons + a live/`DONE` marker) that expands on click to reveal the individual chips.
 
 **Response Handling**
@@ -775,11 +832,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
+The page leads with a presence summary and readable cards for people, movement, light and sound events. Expression and posture estimates follow when available. Backend status, buffers, timeouts, raw events and posture samples remain accessible in collapsed **Technical details**. A paused service is identified explicitly; failed reads show an error rather than old observations. Cards use one column at widths up to 600px. Environment follows with temperature, humidity, CO₂ and PM2.5; **More measurements** reveals the other five metrics. No air-quality thresholds or derived health scores are introduced.
+
 The Sensing navigation entry and read-only **Environment** card are always
 visible without debug mode, including when no sensing capability is declared.
 Camera sensing cards still require `vision`. While capabilities are loading or
-`environment` is absent, the Environment card shows `N/A` measurements and does
-not send sensor requests. Declared but disabled sensors also show `N/A` values.
+`environment` is absent, the Environment card shows a compact unavailable message and does
+not send sensor requests. Disabled sensors and missing samples also use a compact empty state.
 
 When `environment` is declared, the card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
@@ -799,7 +858,8 @@ Source labels identify the component; each metric has its own timestamp.
 Unavailable components do not hide healthy readings from another component. Unavailable values appear as `N/A`, never
 zero. Stale measurements are also replaced with `N/A`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
-quality labels, thresholds, or alerts are assigned. A collapsed technical
+quality labels, thresholds, or alerts are assigned. Sensor details use separate high-contrast panels with aligned label/value rows and state badges. Active sensors appear first; disabled sensors without errors are grouped in a nested collapsed list.
+A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
 polling/retry/staleness/recovery timings under `status.components`. Legacy
 single-sensor snapshots with top-level `status.timing` remain supported and use a

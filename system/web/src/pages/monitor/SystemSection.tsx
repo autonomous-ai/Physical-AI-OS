@@ -7,12 +7,14 @@ import type { SystemInfo, NetworkInfo } from "./types";
 import { GaugeRing, StatPill, CardLabel } from "./components";
 import { formatUptime, formatSize } from "./utils";
 
+import "./robot-status.css";
+
 const POLL_MS = 5000;
 
 // Resolves a CSS custom property so chart.js (canvas) tracks the theme.
 function cssVar(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const v = getComputedStyle(document.querySelector(".lm-root") ?? document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 }
 
@@ -63,7 +65,7 @@ function historyChart(data: number[], colorVar: string, label: string) {
           grid: { color: gridColor },
           ticks: {
             color: tickColor,
-            font: { size: 9 },
+            font: { size: 11 },
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 6,
@@ -75,7 +77,7 @@ function historyChart(data: number[], colorVar: string, label: string) {
           grid: { color: gridColor },
           ticks: {
             color: tickColor,
-            font: { size: 9 },
+            font: { size: 11 },
             stepSize: 25,
             callback: (v: string | number) => `${v}%`,
           },
@@ -129,7 +131,7 @@ export function SystemSection({
           updated {lastUpdate.toLocaleTimeString()}
         </span>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
+      <div className="lm-system-history-row">
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <CardLabel icon={<Cpu size={13} />} text="CPU" />
@@ -157,7 +159,7 @@ export function SystemSection({
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 3fr", gap: 14 }}>
+      <div className="lm-system-history-row">
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <CardLabel icon={<MemoryStick size={13} />} text="Memory" />
@@ -202,7 +204,7 @@ export function SystemSection({
         </div>
       </div>
 
-      <div className="lm-grid-4">
+      <div className="lm-grid-4 lm-system-detail-grid">
         <div className="lm-mon-card" style={monCard12}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
             <CardLabel icon={<HardDrive size={13} />} text="Disk" />

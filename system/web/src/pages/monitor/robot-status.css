@@ -1,0 +1,23 @@
+.lm-system-history-row { display: grid; grid-template-columns: minmax(240px, 1fr) minmax(0, 3fr); gap: 14px; }
+.lm-system-history-row > *, .lm-system-detail-grid > * { min-width: 0; }
+.lm-camera-page button, .lm-camera-page a[download] { min-height: 40px; font-size: 12px !important; }
+.lm-camera-page input:not([type="range"]) { min-height: 42px; }
+.lm-camera-label { font-size: 13px; font-weight: 600; color: var(--lm-text); }
+.lm-camera-advanced { border: 1px solid var(--lm-border); border-radius: 8px; padding: 10px; }
+.lm-camera-advanced summary { cursor: pointer; font-size: 13px; color: var(--lm-text-dim); }
+.lm-camera-advanced label { display: block; margin: 12px 0 6px; }
+.lm-camera-advanced p { font-size: 12px; color: var(--lm-text-dim); margin: 8px 0 0; }
+.lm-camera-error { padding: 12px 14px; border: 1px solid var(--lm-red); border-radius: 8px; color: var(--lm-red); font-size: 13px; }
+@media (max-width: 768px) {
+  .lm-system-history-row { grid-template-columns: minmax(0, 1fr); }
+  .lm-system-detail-grid > :nth-child(n + 3) { grid-column: 1 / -1; }
+  .lm-camera-snapshot { position: static !important; width: min(100%, 280px) !important; margin-top: 12px; padding: 10px !important; }
+  .lm-camera-page button, .lm-camera-page a[download] { min-height: 44px; }
+  .lm-version-header { display: none !important; }
+  .lm-version-row { min-width: 0 !important; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) !important; padding: 12px 0; border-bottom: 1px solid var(--lm-border); }
+  .lm-version-row > :first-child { grid-column: 1 / -1; font-weight: 700; color: var(--lm-text) !important; }
+  .lm-version-row > [data-label] { text-align: left !important; white-space: normal !important; overflow-wrap: anywhere; }
+  .lm-version-row > [data-label]::before { content: attr(data-label); display: block; margin-bottom: 4px; color: var(--lm-text-dim); font-size: 11px; font-weight: 400; }
+  .lm-version-row > span:empty { display: none !important; }
+  .lm-version-row > :nth-child(n + 5) { justify-content: flex-start !important; }
+}

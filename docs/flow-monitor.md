@@ -1,5 +1,7 @@
 # Flow Monitor
 
+Lifecycle terminal events use the same status rules for live monitor events and persisted JSONL history. `lifecycle_error` closes its own run as **ERROR**, records the end time, and shows `data.error` in Response details (for example, `Hermes cancelled`). It does not remain ACTIVE after reload or close another interleaved run. A successful `lifecycle_end` remains DONE; a terminal event carrying an error remains ERROR. Checks: `node --test system/web/tests/flow-lifecycle.test.cjs`.
+
 External history runs with a valid `device-chat-context-` ID and attributed `[external-context]` / `[HANDLED]` / `[REPLY]` envelope display as **History sync**, with **Harness → Main** or **Realtime → Main** (or another external source). Cards show the original question and reported answer as **Context**, not a new TTS response. Agent name is available on the route tooltip; raw metadata remains in event details. Parsing uses complete chat-send data when chat-input previews are truncated, and does not change lifecycle status.
 
 Harness-only voice cards use `sensing_input.data.route: "harness_only"` to display **Harness** instead of **Agent**. After merging events by run ID, a nonempty `harness_response` closes that same turn and supplies its output and Response pipeline details, including history loaded from JSONL. A successful input dispatch alone stays active. Harness replies are not stitched onto nearby inputs with different run IDs; existing error states remain errors. DONE means the final response arrived, not that audio playback or the requested real-world action was verified.
@@ -562,7 +564,7 @@ Turns show every turn derivable from the streamed events. Comparing server to UI
 
 Vietnamese version: [`docs/vi/flow-monitor_vi.md`](vi/flow-monitor_vi.md).
 
-Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`.
+Harness final delivery records `harness_response` in flow JSONL with the original device run ID and complete `text`. Web Chat uses this event to recover pending results after SSE disconnects or page reloads. Live delivery still emits `chat_response` with state `final`. Harness questions and permission notices delivered to a device run also record `harness_question` (`run_id`, `question_id`, `text`); Web Chat appends any missing one to the pending bubble without closing the turn, so a hidden tab whose SSE was closed still shows it.
 
 Realtime handled voice and main-agent history sync use separate IDs: `device-realtime-…` for the original exchange, `device-chat-context-…` for synchronization. The persisted `realtime_response` closes the original card and supplies its question/answer; the History sync card follows its own lifecycle. `history_run_id` links the records without merging them. Previously stored shared-ID events retain their existing combined display.
 

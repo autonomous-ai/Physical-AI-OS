@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/clocksync"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -187,7 +188,8 @@ type PingPayload struct {
 	TTSVoice    string `json:"tts_voice,omitempty"`
 	STTLanguage string `json:"stt_language,omitempty"`
 	// WakeWordEnabled is never omitted so the state is always explicit.
-	WakeWordEnabled bool `json:"wakeword_enabled"`
+	WakeWordEnabled bool   `json:"wakeword_enabled"`
+	VoiceInputMode  string `json:"voice_input_mode"`
 	// UnsupportedChannels lists configured channels the active runtime cannot
 	// run (populated by ChannelReconcile after a runtime switch).
 	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`
@@ -245,6 +247,10 @@ func (c *Client) postWithAuth(reqURL, bearerToken string, body any) (*PingRespon
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
+		// A stale clock rejects every certificate; resync instead of retrying blind.
+		if clocksync.IsClockError(err) {
+			clocksync.Kick("ping_tls")
+		}
 		return nil, fmt.Errorf("request %s: %w", reqURL, err)
 	}
 	defer resp.Body.Close()

@@ -65,7 +65,7 @@ func TestHermesDocumentedToolsHaveLocalisedFillers(t *testing.T) {
 	`)
 	for _, tool := range tools {
 		t.Run(tool, func(t *testing.T) {
-			for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW} {
+			for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW, LangJA} {
 				pool := FillerForTool(lang, tool)
 				if len(pool) < 2 {
 					t.Errorf("%s: missing varied filler pool: %v", lang, pool)
@@ -126,7 +126,7 @@ func TestFillerContinuationUsesNaturalVietnameseThoughtSounds(t *testing.T) {
 
 // Range demo pools must be non-empty; an empty pool plays silently without error.
 func TestDemoPoolsExistInEveryLanguage(t *testing.T) {
-	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW} {
+	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW, LangJA} {
 		for _, pool := range []string{
 			"demo_intro", "demo_left", "demo_right", "demo_centre",
 			"demo_head", "demo_up", "demo_down", "demo_neck", "demo_lean", "demo_done",
@@ -144,7 +144,7 @@ func TestAMissingKeyFallsBackToEnglishRatherThanSilence(t *testing.T) {
 	toolFillers[LangEN][injected] = []string{"English only"}
 	t.Cleanup(func() { delete(toolFillers[LangEN], injected) })
 
-	for _, lang := range []string{LangVI, LangZhCN, LangZhTW} {
+	for _, lang := range []string{LangVI, LangZhCN, LangZhTW, LangJA} {
 		got := FillerForTool(lang, injected)
 		if len(got) == 0 {
 			t.Errorf("%s: a known language with a missing key went silent instead of falling back", lang)
@@ -158,7 +158,7 @@ func TestAMissingKeyFallsBackToEnglishRatherThanSilence(t *testing.T) {
 
 // Every pool must exist in every language so the English fallback never hides a gap.
 func TestEveryPoolIsTranslatedInEveryLanguage(t *testing.T) {
-	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW} {
+	for _, lang := range []string{LangEN, LangVI, LangZhCN, LangZhTW, LangJA} {
 		for _, k := range AllPoolKeys() {
 			if len(toolFillers[lang][k]) == 0 {
 				t.Errorf("pool %q has no %s translation — it will speak English there", k, lang)

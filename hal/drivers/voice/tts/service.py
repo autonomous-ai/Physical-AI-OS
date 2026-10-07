@@ -2070,6 +2070,21 @@ class TTSService:
         """
         return self._play_gesture_chime(self._ack_chime_samples)
 
+    def _pet_chime_samples(self, rate: int):
+        """Warm 180 ms descending chirp with smooth, silent endpoints."""
+        np = self._np
+        t = np.arange(int(rate * 0.18)) / rate
+        envelope = np.sin(np.linspace(0.0, np.pi, len(t))) ** 2
+        # Integrate a gentle 520 -> 360 Hz glide; a quiet second harmonic
+        # keeps the cue audible on the small speaker without a sharp ping.
+        phase = 2 * np.pi * (520.0 * t - 0.5 * (160.0 / 0.18) * t ** 2)
+        tone = 0.18 * envelope * (np.sin(phase) + 0.15 * np.sin(2 * phase))
+        return tone.astype(np.float32).reshape(-1, 1)
+
+    def play_pet_chime(self) -> bool:
+        """Head-pet feedback through the shared mute, gain and AEC path."""
+        return self._play_gesture_chime(self._pet_chime_samples)
+
     def play_harness_capture_chime(self, *, finished: bool = False) -> bool:
         """Dedicated rising/falling pair for Harness capture, not delivery receipt."""
         return self._play_gesture_chime(

@@ -17,7 +17,7 @@ Lamp supports mechanical buttons, TTP223 touchpads and an optional MPR121 capaci
 | Primary GPIO button | gpiochip0 BCM 17 (pull-up, active-LOW) | Physical pin 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
 | Reset GPIO button | not wired | Physical pin 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); hold ≥5 s then release to factory-reset |
 | Mic slide switch | not wired | Physical pin 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
-| TTP223 | not wired | Two pads, gpiochip0 lines **37 and 96** as configured in `robots/lamp/ttp223.json` (doc previously said 96/98 — S1 pin 29 / PD0 / line 96, S3 pin 33 / PD2 / line 98; confirm on hardware). **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
+| TTP223 | not wired | Four candidate header pins on gpiochip0 — pin 27 / PB5 / line 37 (T1), pin 29 / PD0 / line 96 (T2), pin 31 / PD1 / line 97 (T3), pin 33 / PD2 / line 98 (T4) — of which only two carry pads, varying per unit. `robots/lamp/ttp223.json` lists all four with `"detect": true`; HAL finds the wired pair at startup. **Pull-up, active-LOW** (pads rest HIGH; a touch is the falling edge). |
 
 Mechanical button wiring belongs to the device: `robots/lamp/gpio_button.json`
 and `robots/intern-v2/gpio_button.json` each declare a `boards` map keyed by
@@ -50,8 +50,8 @@ driver.
 
 TTP223 wiring is also device-owned: `robots/lamp/ttp223.json` declares a
 `boards` map. Intern v2 has no TTP223 hardware and does not ship this file. Each enabled entry has
-`chip`, `lines` and optional `axis` (the same lines in physical left-to-right
-order). `hal/board/ttp223.py` selects the detected board and passes its
+`chip`, `lines`, optional `axis` (the same lines in physical left-to-right
+order) and optional `detect` (boolean, default `false`). `hal/board/ttp223.py` selects the detected board and passes its
 `TouchConfig` to the shared driver. Missing file or board entry falls back to
 that board's legacy `touch` in `hal/board/boards.json` (OrangePi: chip 0,
 lines 96/100); `"enabled": false` explicitly disables TTP223. Malformed
@@ -59,11 +59,35 @@ configuration is rejected before GPIO is claimed. Restart HAL after editing
 the selected device's JSON. Pull-up, active-LOW behavior and gesture detection
 remain in the shared driver; simulation skips the hardware.
 
-The Lamp JSON currently configures `orangepi_sun60` as chip 0, lines `[37, 96]`
-(no `axis`). This doc previously stated S1 on pin 29 (line 96) and S3 on pin 33
-(line 98); the two disagree, so **confirm the second pad's line on hardware**
-(`hal/test_ttp223_probe_orangepi.py watch`). Either way pin 35 (line 99) stays
-with the mechanical button. The legacy fallback still uses lines 96/100, which
+The Lamp JSON configures `orangepi_sun60` as chip 0, lines `[37, 96, 97, 98]`
+(header pins 27/29/31/33, T1–T4), no `axis`, `"detect": true`. Only two pads are
+wired and which two differs between units, so `lines` lists candidates rather
+than pads. With `detect` on, the driver:
+
+1. **Probes at startup.** Each candidate line is claimed as input with pull-down
+   for 10 ms (`PROBE_SETTLE_S`) and read. A wired TTP223 drives its idle output
+   HIGH and reads 1; a bare header pin falls to 0. The line is then freed and
+   the log reports `TTP223 detect: wired pads [...] of candidates [...]`.
+2. **Claims every candidate** with pull-up / both edges as usual. Bare pins
+   stay HIGH and produce no edges.
+3. **Learns from a confirmed touch.** Edges on a line the probe missed stay out
+   of the gesture state until the line has been LOW for at least 20 ms
+   (`LEARN_MIN_LOW_MS`; device traces show a touch holding LOW for 73–135 ms).
+   The LOW is timed between the two edges' kernel timestamps (the lgpio
+   callback `tick`, nanoseconds), not when each callback runs, so a delayed or
+   batched callback cannot turn a transient into a touch or the reverse.
+   The release that ends such a LOW adds the line to the wired set, logs
+   `TTP223 pad on line N learned from a Xms touch`, and delivers that touch as a
+   normal gesture, timed at its release. A shorter LOW — a transient on a bare
+   pulled-up pin — is dropped: it learns nothing, starts no contact timer and
+   plays no chime (logged at DEBUG only). This covers a pad held during the
+   probe, or an output that reads LOW under pull-down. A learned line stays
+   wired until HAL restarts.
+
+The swipe rule ("every wired pad") and the TAP reason compare against the wired
+set; if nothing has been detected or learned yet it falls back to all of
+`lines`. Without `detect`, every listed line counts as wired (previous
+behaviour). Pin 35 (line 99) stays with the mechanical button. The legacy fallback still uses lines 96/100, which
 overlaps the reset button; keep the Lamp JSON installed to avoid that.
 
 Board detection reads `/proc/device-tree/model`:
@@ -141,6 +165,14 @@ wake focus normally.
 The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
 
 When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
+
+### Tap-to-talk for the device runtime
+
+The normal attention/wake behavior above applies to `voice_input_mode: "automatic"`, the default. Select **Tap to talk** in General settings (or MQTT `voice.input_mode`) to use explicit start/finish taps while Harness OFF. This mode preserves the saved wake checkbox but ignores the wake gate and all focus openers until automatic input is restored.
+
+GPIO and MPR121 short taps use `physical_short_tap`: first tap starts recording, next tap stops and sends the finalized transcript to the device runtime. Each separate short release counts, including two taps inside the usual multi-click window; there is no deferred spoken Listening cue. A ready beep and listening visual appear only when STT is ready, and the finish beep confirms the send tap. Silence does not send. Timeout (default 30 seconds), provider failure, privacy/stop, or a Harness routing change discards capture. A tap before readiness cancels without sending.
+
+A tap during TTS only interrupts; the next tap starts recording. A sleeping lamp first wakes without recording. A software-muted mic can be unmuted for capture; hardware privacy blocks it. GPIO holds/factory reset, MPR121 swipes/holds and TTP223 pet gestures retain their existing roles. Startup and privacy-switch actions still use the original wake action and never simulate a recording tap. Harness ON retains its separate gesture policy below.
 
 ### Presence enter and turning toward the lamp as wake triggers
 
@@ -286,10 +318,11 @@ does not modify boot overlays automatically:
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
       "touch_threshold": 6,
-      "release_threshold": 3,
+      "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
@@ -300,8 +333,8 @@ does not modify boot overlays automatically:
 ```
 
 `bus` is required for an enabled entry. Lamp explicitly sets touch/release
-thresholds to `6 / 3` in `mpr121.json`; omitted thresholds retain the generic
-`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi` and `tap_min_electrodes` are defaults;
+thresholds to `6 / 4` in `mpr121.json`; omitted thresholds retain the generic
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi`, `chip_debounce` and `tap_min_electrodes` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -343,9 +376,16 @@ esi_ms: 1`: on `lamp-a0ae` (2026-10-01, HAL stopped, 7 s per setting, no touch)
 the highest positive idle delta fell from 4 counts at the defaults to 0, with
 the same 10 ms update; `lamp-8e2c` had shown idle peaks of 8 against touch
 threshold 6 at the defaults, causing phantom taps. Filtering does not change the
-touch delta itself. Chip debounce (`0x5B`) stays 0: contact (30 ms) and swipe
-footprint (5 ms) debounce happen in software, and a chip-side debounce would
-delay every footprint by two samples. HAL validates the filter values at boot.
+touch delta itself. Chip debounce (`0x5B`) comes from `chip_debounce` (0–7,
+default 0), written to both DR (release) and DT (touch). The encoded value N
+requires N+1 consecutive touch or release detections before the status changes:
+0 requires one detection; 2 requires three. Lamp sets `chip_debounce: 2`
+(`0x5B = 0x22`) with thresholds `6 / 4`, the values validated on hardware with
+`mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Software contact
+(30 ms) and swipe footprint (5 ms) debounce still apply on top, and each
+touch/release transition requires two additional consecutive detections compared
+with `chip_debounce: 0`. See [NXP AN3892, page 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
+HAL validates the filter values at boot.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
 thresholds (the standalone `mpr121_opi_test.py` probe this section used to
 reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver
@@ -373,8 +413,8 @@ functions **while Harness mode is OFF**. Harness ON uses the separate policy bel
 | Exactly 3 short taps, then 0.4 s quiet | Reboot is disabled in the MPR121 wrapper; no additional action or listening cue. The first-tap single-click action still runs. |
 | Hold 2–<5 s, then release | Disabled; no sleep action. |
 | Hold ≥5 s, then release | Disabled; no shutdown or factory reset. |
-| Swipe left to right, then release | `swipe_action` sleeps; no click or destructive action for this moving contact. |
-| Swipe right to left, then release | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
+| Swipe right to left, then release (user facing the lamp) | `swipe_action` sleeps; no click or destructive action for this moving contact. |
+| Swipe left to right, then release (user facing the lamp) | Enable Harness voice through the Go API; no click or destructive action for this moving contact. |
 
 A short contact lasts less than 2 s. The click window does not resolve while
 any selected electrode remains touched. Releasing a hold clears the pending
@@ -382,12 +422,19 @@ click burst. Destructive actions never commit while held.
 
 ### MPR121 directional swipe
 
+All user-facing directions here are from the perspective of a person seated
+**facing the lamp**, not the lamp's own left/right.
+
 `swipe_axis` is an optional ordered list of 2–12 distinct electrodes from
-`electrodes`, in physical **left-to-right** order. Lamp's `robots/lamp/mpr121.json`
-declares E11…E0 (E11 physically on the left). Verify the mounted bar: if E0 is
-physically on the left, reverse the axis to E0…E11. Increasing axis position (`+1`, left to right) calls
+`electrodes`. Lamp's `robots/lamp/mpr121.json` declares E11…E0: E11 is on the
+user's right and E0 on the user's left in the mounted assembly. Increasing
+axis position (`+1`, user right to left) calls
 `swipe_action(source="MPR121")` from `button_actions.py` to sleep. Decreasing
-position (`-1`, right to left) enables Harness voice. These actions apply with Harness OFF; with Harness ON the same directions select previous/next agent.
+position (`-1`, user left to right) enables Harness voice-only mode. These
+actions apply with Harness OFF; with Harness ON, right to left selects the
+previous agent and left to right selects the next agent. Verify electrode
+placement when assembling the lamp; the array order defines the sign reported
+by the detector, not the user's left-to-right direction.
 A swipe need not cross the entire strip: the centroid must travel at least 3
 positions over at least 30 ms. Fast swipes may skip pads whose dwell is shorter
 than a poll plus the footprint filter; a centroid leap beyond 3 positions is
@@ -450,7 +497,7 @@ The FastMode pads cannot reliably measure a held finger. Cross-talk also lets
 one touch produce several edges, so the existing grouping/classification stays:
 
 1. Any edge restarts the **200 ms** contact timer.
-2. The first contact plays the acknowledgement chime without stopping speech.
+2. TTP223 first-contact feedback uses a soft 180 ms descending chirp (520 → 360 Hz), instead of the command acknowledgment ping. It plays once at the start of a touch burst, respects speaker mute and volume, and does not stop speech. GPIO, MPR121 and Harness cues are unchanged.
 3. A clear pet can resolve early; other contacts wait for the **1.2 s** decision
    window. Every non-empty resolved gesture calls the same PET action once.
 4. Every response attempt arms a **1.5 s** cooldown. Contacts inside it extend
@@ -474,8 +521,8 @@ control-action branches left in this driver.
 | `HAL_TOUCH_SWIPE_MAX_GAP_MS` | 150 | Upper boundary separating travel from a new tap |
 | `HAL_TOUCH_PRESS_MIN_EMPTY_MS` | 15 | Minimum empty-surface gap for a new press |
 
-`ttp223.json` supplies chip, lines and optional spatial `axis`; absent axis uses
-line order. Geometry only affects classification/timing, not the PET action.
+`ttp223.json` supplies chip, lines, optional spatial `axis` and optional
+`detect`; absent axis uses line order (a detected subset keeps that order). Geometry only affects classification/timing, not the PET action.
 Tests in `hal/test/test_ttp223.py` cover both classifier settings, two/three-pad
 layouts, all gesture shapes, cooldown and first-contact non-interruption.
 
@@ -647,7 +694,7 @@ Input handlers are started in `hal/server.py` lifespan startup. Missing optional
 
 ### Harness-mode MPR121 gestures
 
-On MPR121-equipped lamps, Harness OFF retains the existing gestures: swipe **right to left** to enable Harness and **left to right** to sleep. Harness ON uses a separate mapping for clicks, sleep swipes and listening cues (normal sleep/shutdown holds and triple-tap reboot are disabled): tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **right to left** selects the next agent and **left to right** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Direction follows the physical left-to-right `swipe_axis` (Lamp's `mpr121.json` declares E11…E0; verify mounting). Python calls Go APIs; Go owns mode/focus and the existing voice route.
+On MPR121-equipped lamps, directions are from the user seated **facing the lamp**. With Harness OFF, swipe **left to right** to enable Harness voice-only mode and **right to left** to sleep. Harness ON uses a separate mapping for clicks, sleep swipes and listening cues (normal sleep/shutdown holds and triple-tap reboot are disabled): tap controls capture or interrupts TTS, holding **for 2 seconds** immediately disables Harness and announces the result (including while offline); the remaining contact is ignored until release, swipe **left to right** selects the next agent and **right to left** the previous agent. `hal/drivers/harness/gestures.py` owns this separate gesture policy; `hal/drivers/voice/_internal/harness_capture.py` tracks manual capture ownership. GPIO/TTP223 behavior is unchanged. Lamp's `swipe_axis` E11…E0 runs from the user's right to left (`+1`); the reverse is `-1`. Python calls Go APIs; Go owns mode/focus and the existing voice route.
 
 While Harness voice mode is ON, sleep requests are rejected. If OS cannot report the mode, sleep is also rejected until OFF is confirmed; the final emotion transition rechecks after any spoken sleep announcement. A swipe while asleep cannot enable Harness or wake the lamp; wake with a tap before swiping. If Harness is enabled externally (for example through the UI/API) while already asleep, it does not wake the lamp automatically. With microphone privacy open, the first accepted tap only wakes the lamp and restores sleep-owned peripherals; it never starts recording, even if wake fails. A separate subsequent tap starts Harness capture. Hardware microphone privacy remains authoritative.
 

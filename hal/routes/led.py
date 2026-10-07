@@ -119,6 +119,11 @@ def get_led_color():
 @router.post("/led/solid", response_model=StatusResponse)
 def set_led_solid(req: LEDSolidRequest):
     """Fill entire LED strip with a single color."""
+    return _set_led_solid(req)
+
+
+def _set_led_solid(req: LEDSolidRequest, *, source: str | None = None):
+    """Keep system status provenance separate from explicit user colors."""
     if _sleep_led_locked("led/solid"):
         return {"status": "ok"}
     if not state.rgb_service:
@@ -129,14 +134,15 @@ def set_led_solid(req: LEDSolidRequest):
     # Transient overlays must not exit the active scene.
     if not req.transient:
         _end_scene()
-    if state.sensing_service and isinstance(color, tuple):
-        state.sensing_service.presence.set_last_color(color)
     if req.transient:
         state._cancel_pending_restore()
     else:
         # Explicit user look — wins over the mic-muted resting indicator.
         state._dismiss_mic_muted_led("led/solid")
-        state._save_user_led_state({"type": LST_SOLID, "color": list(color)})
+        saved = {"type": LST_SOLID, "color": list(color)}
+        if source is not None:
+            saved["source"] = source
+        state._save_user_led_state(saved)
     return {"status": "ok"}
 
 
@@ -179,10 +185,6 @@ def set_led_paint(req: LEDPaintRequest):
     state.rgb_service.dispatch(RGB_CMD_PAINT, colors)
     if not req.transient:
         _end_scene()
-    if state.sensing_service:
-        avg = state._avg_paint_color(colors)
-        if avg:
-            state.sensing_service.presence.set_last_color(avg)
     if req.transient:
         state._cancel_pending_restore()
     else:
@@ -203,14 +205,21 @@ def turn_off_leds(req: Optional[LEDOffRequest] = Body(default=None)):
     if not state.rgb_service:
         raise HTTPException(503, "LED not available")
     transient = req.transient if req else False
+    # Legacy os-server ends provisioning with /led/off followed by /led/restore.
+    # Only the tagged setup cue is discarded; never infer ownership from its color.
+    ending_setup = bool(
+        not transient and state._user_led_state
+        and state._user_led_state.get("source") == "status:setup"
+    )
     state._stop_current_effect()
     state.rgb_service.clear()
     if not transient:
         _end_scene()
-    if state.sensing_service:
-        state.sensing_service.presence.set_last_color((0, 0, 0))
     if transient:
         state._cancel_pending_restore()
+    elif ending_setup:
+        state._save_user_led_state(None)
+        state._restore_user_led()
     else:
         state._dismiss_mic_muted_led("led/off")
         state._save_user_led_state({"type": LST_SOLID, "color": [0, 0, 0]})
@@ -307,9 +316,9 @@ def set_led_status(req: LEDStatusRequest):
             f"Unknown status state '{req.state}'. Available: {sorted(STATUS_LED_PRESETS)}",
         )
     effect, color, speed = preset["effect"], preset["color"], preset.get("speed", 1.0)
-    # "solid" is a persistent fill and saves user LED state; other statuses are transient.
+    # Solid statuses survive transient overlays, but retain their system provenance.
     if effect == "solid":
-        set_led_solid(LEDSolidRequest(color=color))
+        _set_led_solid(LEDSolidRequest(color=color), source=f"status:{req.state}")
     else:
         start_led_effect(LEDEffectRequest(effect=effect, color=color, speed=speed, transient=True))
     return {"status": "ok", "effect": effect, "speed": speed}

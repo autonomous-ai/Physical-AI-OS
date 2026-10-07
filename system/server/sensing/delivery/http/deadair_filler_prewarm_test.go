@@ -30,7 +30,7 @@ func TestEveryPrewarmedPoolResolvesInEveryLanguage(t *testing.T) {
 	if len(keys) == 0 {
 		t.Fatal("no pool keys to prewarm")
 	}
-	for _, lang := range []string{i18n.LangEN, i18n.LangVI, i18n.LangZhCN, i18n.LangZhTW} {
+	for _, lang := range []string{i18n.LangEN, i18n.LangVI, i18n.LangZhCN, i18n.LangZhTW, i18n.LangJA} {
 		for _, k := range keys {
 			if len(i18n.FillerForTool(lang, k)) == 0 {
 				t.Errorf("pool %q resolves to nothing in %q — it would be prewarmed as silence", k, lang)

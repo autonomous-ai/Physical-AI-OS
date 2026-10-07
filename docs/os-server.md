@@ -1,5 +1,21 @@
 # OS Server API — Documentation
 
+`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).
+
+## Japanese language support
+
+`stt_language: "ja"` selects Japanese. Japanese regional aliases such as `ja-JP`
+and `ja_JP` resolve to the same localized phrase pools. OS-server includes Japanese
+system notices, greetings, device-name prompts, chitchat and filler phrases; the
+agent receives Japanese language context. The ElevenLabs default for Japanese is
+`Shizuka`, with six native Japanese voices available in the shared voice catalog.
+Local Japanese chitchat requires a complete phrase after punctuation and wake-word
+normalization; questions such as `何している？` continue to the agent. If HAL cannot
+list voices, the ElevenLabs fallback still filters by the requested language,
+using Rachel for English and Shizuka for Japanese. An empty language returns all
+42 curated voices; unknown languages use the English pool.
+See [Japanese voice selection](realtime-voice.md#japanese-language-and-elevenlabs-voices).
+
 Ambient LED restoration delegates to HAL `/led/restore` after the quiet window. OS does not choose a fallback color or breathing effect; each device declares `ambient_led.resting` in `presets.json`. HAL preserves explicit user off/color and active overlay ownership.
 
 > OS Server (Go, Gin framework) runs on port 5000.
@@ -716,7 +732,8 @@ they were sold with.
 `autonomous_defaults` is a top-level object in `config.json` holding
 `base_url` / `api_key` / `model`. It is written **once**, by
 `captureAutonomousDefaults`, immediately before the first save that carries any
-credential — LLM, TTS, STT, or realtime key/URL — and never written again.
+credential — LLM, TTS, STT, or realtime key/URL — or an explicit LLM ownership
+choice, and never written again.
 Capturing twice would store the operator's own key under the Autonomous name
 and lose the real one for good, which is the exact failure it exists to prevent.
 A save touching nothing credential-shaped (wifi, rename, channels) does not
@@ -1413,7 +1430,7 @@ They cost differently, so they are bounded differently.
 
 | | In the system prompt? | Billed | Cap |
 |---|---|---|---|
-| `USER.md` | **yes** — a bootstrap file | **every turn** | 12000 chars (`bootstrapMaxChars`), then truncated tail-first |
+| `USER.md` | **yes** — a bootstrap file | **every turn** | 24000 chars per file (`bootstrapMaxChars`), also subject to the shared 48000-character bootstrap budget |
 | `KNOWLEDGE.md` | **no** — OpenClaw does not know the file | once per session, when the agent reads it | none by construction |
 
 `KNOWLEDGE.md` had no cap at all: the daily synthesis appends a `## YYYY-MM-DD`
@@ -1457,7 +1474,7 @@ Rules the agent is given, and why each one is load-bearing:
 | One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
 | Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
 | Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
-| Each entry under ~400 chars | `USER.md` is billed on every turn, and past `bootstrapMaxChars` (12000) OpenClaw truncates with `text.slice(0, cutPoint)` — head kept, **tail cut** — and `## Users` is the tail. An oversized profile silently loses exactly the person data. `ReconcileUserProfiles` warns at 9000. |
+| Each entry under ~400 chars | `USER.md` is billed on every turn, and past the per-file `bootstrapMaxChars` (24000) or total bootstrap budget (48000), OpenClaw can truncate injected content. An oversized profile can lose person data from the prompt. `ReconcileUserProfiles` warns at 9000. |
 | Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
 | Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
 | Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |
@@ -1743,3 +1760,30 @@ All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, 
 ### Voice mutation authentication
 
 `POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.
+
+### LLM configuration ownership
+
+`PUT /api/device/config` accepts `llm_config_mode: "os" | "runtime"`;
+`GET /api/device/config` returns the saved value. An absent/empty value retains
+legacy behavior, including Codex/Claude Code auth detection. An explicit `os`
+selection reapplies the OS provider even if key, URL and model have not changed;
+`POST /api/device/restore-defaults` with `section: "llm"` also selects `os`.
+
+`runtime` leaves native LLM provider/model/auth configuration to the operator for
+all six local runtimes. Gateway, workspace, skills and channel reconciliation
+continue. Saved OS credentials remain available to voice/backend services.
+Incoming LLM fields are ignored while runtime management is selected. Unchanged
+thinking settings no longer trigger runtime reconciliation on unrelated saves.
+
+Ownership applies across runtime switches; the target needs its own native
+login and provider/model selection. Credential migration is skipped in runtime
+mode and its baseline advances, preventing a deferred migration after returning
+to OS management. Mode changes synchronously apply config and refresh the
+runtime environment; an apply failure is returned after saving the mode, so the
+same selection can be retried. This does not verify subscription validity or
+successful model inference. Open a new terminal after changing ownership; an
+already-open shell retains its old environment.
+
+### Voice input mode
+
+`GET /api/device/config` returns `voice_input_mode`: `automatic` (default when absent) or `tap_to_talk`. `PUT /api/device/config` accepts the optional field; empty or unknown strings are rejected before mutation. Omission preserves the setting. `automatic` uses the existing `wakeword` flag; `tap_to_talk` bypasses wake and preserves that flag for switching back. MQTT `voice.input_mode` shares the persistence/apply path. Mode changes synchronously restart HAL with a 30-second timeout; save/restart failures allow same-value retries, and combined mode/wake/voice saves restart once. Config responses and BE ping report the configured mode; failed application still returns an error rather than success.

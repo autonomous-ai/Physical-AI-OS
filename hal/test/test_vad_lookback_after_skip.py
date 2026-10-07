@@ -41,8 +41,7 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     monkeypatch.setattr(module.voice_cfg, "SPEECH_HOLDOFF_S", 0.0)
     monkeypatch.setattr(module.voice_cfg, "SESSION_COOLDOWN_S", 0.0)
     monkeypatch.setattr(module.voice_cfg, "PRE_ROLL_FRAMES", 12)
-    with patch.object(module, "read_voice_mode", return_value={}), \
-         patch.object(module, "bypass_realtime", return_value=False), \
+    with patch.object(module, "read_voice_mode", return_value={"enabled": False, "generation": 0}), \
          patch.object(module, "resample_to_stt", side_effect=lambda f, *a: f):
         module.VoiceService._vad_loop(service, mic, 320, 16000)
 

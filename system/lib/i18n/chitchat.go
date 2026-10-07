@@ -8,42 +8,49 @@ import (
 // chitchatInputs holds per-language exact-match inputs for chitchat intents; replies live in phrases.
 var chitchatInputs = map[Phrase]map[string][]string{
 	PhraseChitchatGreeting: {
+		LangJA:   {"こんにちは", "おはよう", "おはようございます", "こんばんは", "やあ", "こんにちは{name}"},
 		LangVI:   {"chào", "chào {name}", "{name} ơi"},
 		LangEN:   {"hi", "hello", "hey", "hi {name}", "hello {name}", "hey {name}"},
 		LangZhCN: {"你好", "你好啊", "嗨", "嘿"},
 		LangZhTW: {"你好", "嗨"},
 	},
 	PhraseChitchatFarewell: {
+		LangJA:   {"さようなら", "またね", "バイバイ"},
 		LangVI:   {"tạm biệt", "tạm biệt {name}"},
 		LangEN:   {"bye", "bye {name}", "goodbye", "see you", "see ya", "later"},
 		LangZhCN: {"再见", "拜拜"},
 		LangZhTW: {"再見", "拜拜"},
 	},
 	PhraseChitchatThanks: {
+		LangJA:   {"ありがとう", "ありがとうございます", "ありがとう{name}"},
 		LangVI:   {"cảm ơn", "cảm ơn {name}"},
 		LangEN:   {"thanks", "thank you", "thanks {name}", "thx"},
 		LangZhCN: {"谢谢", "谢谢你"},
 		LangZhTW: {"謝謝", "謝謝你"},
 	},
 	PhraseChitchatApology: {
+		LangJA:   {"ごめん", "ごめんなさい", "すみません"},
 		LangVI:   {"xin lỗi", "tớ xin lỗi", "mình xin lỗi", "lỗi của mình"},
 		LangEN:   {"sorry", "i'm sorry", "im sorry", "my bad", "apologies"},
 		LangZhCN: {"对不起", "抱歉"},
 		LangZhTW: {"對不起", "抱歉"},
 	},
 	PhraseChitchatCompliment: {
+		LangJA:   {"すごい", "かわいい", "よくできたね", "えらいね"},
 		LangVI:   {"giỏi quá", "giỏi ghê", "xinh quá", "xinh ghê", "dễ thương quá", "đáng yêu quá", "tuyệt vời"},
 		LangEN:   {"good job", "good {name}", "good girl", "good boy", "well done", "nice job", "great job", "you're cute", "you're awesome"},
 		LangZhCN: {"真棒", "棒棒哒", "好可爱"},
 		LangZhTW: {"真棒", "好可愛"},
 	},
 	PhraseChitchatNevermind: {
+		LangJA:   {"なんでもない", "気にしないで", "やっぱりいい"},
 		LangVI:   {"thôi", "thôi quên đi", "thôi bỏ đi", "bỏ đi", "không sao"},
 		LangEN:   {"never mind", "nevermind", "forget it", "drop it", "no matter"},
 		LangZhCN: {"算了"},
 		LangZhTW: {"算了"},
 	},
 	PhraseChitchatPresenceCheck: {
+		LangJA:   {"いる？", "いる", "そこにいる", "聞こえる", "まだいる"},
 		LangVI:   {"còn đó không", "còn đó hông", "vẫn còn đó chứ", "có nghe không"},
 		LangEN:   {"are you there", "are you still there", "you still there", "you there"},
 		LangZhCN: {"在吗", "你在吗", "还在吗"},
@@ -80,6 +87,7 @@ func ChitchatPhrases() []Phrase {
 
 // chitchatCommandWords are per-language action words that disqualify a chitchat match.
 var chitchatCommandWords = map[string][]string{
+	LangJA: {"つけて", "消して", "再生", "止めて", "変えて", "開いて", "閉じて", "教えて", "読んで", "歌って", "探して", "見せて", "撮って", "音楽", "ライト"},
 	LangVI: {
 		"bật", "tắt", "mở", "đóng", "phát", "dừng", "đổi", "chuyển",
 		"chụp", "kể", "đọc", "hát", "hỏi", "tìm", "xem", "nói",

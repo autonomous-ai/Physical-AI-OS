@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/clocksync"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -29,6 +30,8 @@ const (
 	networkMonitorPingTimeout   = 3 * time.Second
 	// setupInternetWait bounds the internet check after connect-wifi.
 	setupInternetWait = 60 * time.Second
+	// wifiClockSyncWait bounds the NTP wait after connect; the customer is still waiting.
+	wifiClockSyncWait = 15 * time.Second
 )
 
 // Service provides WiFi scan, current network, setup and connectivity monitoring.
@@ -537,24 +540,13 @@ func (s *Service) SetupNetwork(ssid string, password string) (bool, error) {
 		slog.Error("save config failed", "component", "network", "error", err)
 	}
 	slog.Info("network setup success", "component", "network")
-	// Devices without an RTC boot with a stale clock; force NTP so TLS doesn't fail.
-	// Images ship chrony or systemd-timesyncd; try both, non-fatal.
-	if out, err := exec.Command("chronyc", "makestep").CombinedOutput(); err != nil {
-		slog.Warn("chronyc makestep failed, trying systemd-timesyncd", "component", "network", "error", err, "output", strings.TrimSpace(string(out)))
-		if out2, err2 := exec.Command("systemctl", "restart", "systemd-timesyncd").CombinedOutput(); err2 != nil {
-			slog.Warn("systemd-timesyncd restart failed", "component", "network", "error", err2, "output", strings.TrimSpace(string(out2)))
-		}
-	}
-	for i := range 10 {
-		time.Sleep(time.Second)
-		out, err := exec.Command("timedatectl", "show", "-p", "NTPSynchronized", "--value").Output()
-		if err == nil && strings.TrimSpace(string(out)) == "yes" {
-			slog.Info("NTP synchronized after WiFi connect", "component", "network", "attempts", i+1)
-			break
-		}
-		if i == 9 {
-			slog.Warn("NTP not yet synchronized after WiFi connect", "component", "network")
-		}
+	// Devices without an RTC boot with a stale clock; resync before setup's first
+	// TLS calls, and keep trying in the background if NTP is slower than that.
+	if clocksync.Sync(context.Background(), wifiClockSyncWait) {
+		slog.Info("NTP synchronized after WiFi connect", "component", "network")
+	} else {
+		slog.Warn("NTP not yet synchronized after WiFi connect", "component", "network", "wait", wifiClockSyncWait)
+		clocksync.Kick("wifi_connected")
 	}
 	return true, nil
 }

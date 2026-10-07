@@ -1,5 +1,33 @@
 # Realtime Voice Agent (Trợ lý giọng nói thời gian thực)
 
+Yêu cầu sleep/wake hướng tới thiết bị (kể cả “Can you sleep?”) được chuyển im lặng sang main, không trả lời như câu hỏi về bản thân. Main vẫn kiểm tra khả năng và điều kiện chặn sleep khi bật Harness voice, chỉ xác nhận kết quả thực tế. “Do robots need sleep?” là kiến thức chung; “I can’t sleep” nói về sức khỏe người dùng, không phải lệnh cho máy ngủ. Quy tắc áp dụng cho mọi prompt realtime, kể cả GPT Live backend.
+
+## Tiếng Nhật và giọng ElevenLabs
+
+Dùng `stt_language: "ja"` cho tiếng Nhật. HAL có phrase tiếng Nhật cho thông báo
+trạng thái, xoa đầu, chờ nhạc, mute/unmute và factory reset. Gợi ý ngôn ngữ Gemini
+Live ánh xạ `ja` thành `ja-JP`; context realtime chung nhận diện tiếng Nhật.
+ElevenLabs HTTP và WebSocket dùng chung bảng tên–ID và bộ lọc tiếng Nhật.
+
+Sáu giọng sau được chọn từ
+[danh mục tiếng Nhật chính thức của ElevenLabs](https://elevenlabs.io/text-to-speech/japanese)
+ngày 2026-10-06, ưu tiên bản ngữ, rõ ràng và hội thoại điềm tĩnh. Đây là danh sách
+chọn lọc theo metadata công khai, không phải bảng xếp hạng chất lượng đã đo.
+
+| Giọng | Giới tính | Đặc điểm | ElevenLabs voice ID |
+|---|---|---|---|
+| Shizuka (mặc định) | Nữ | Nhẹ nhàng, rõ ràng | `WQz3clzUdMqvBf0jswZQ` |
+| Konoha | Nữ | Giải thích rõ ràng | `T7yYq3WpB94yAuOXraRi` |
+| Rin | Nữ | Cân bằng, trung tính | `NxfO5zydfqwpYnWQJ7jJ` |
+| Asahi | Nam | Hội thoại điềm tĩnh | `GKDaBI8TKSBJVhsCLD6n` |
+| Hinata | Nam | Kể chuyện điềm tĩnh | `j210dv0vWm7fCknyQpbA` |
+| Hiroki | Nam | Lịch sự, chững chạc | `vzIXwvf41vKosKu00hYj` |
+
+Voice ID được thêm vào ứng dụng; thao tác này không thêm giọng vào My Voices của
+tài khoản ElevenLabs. Khả năng sử dụng còn phụ thuộc provider/tài khoản đang cấu
+hình. Xác minh danh mục công khai không thay thế việc tổng hợp âm thanh thực tế
+bằng tài khoản đó hoặc nghe trên thiết bị.
+
 Lớp giọng nói speech-to-speech độ trễ thấp, chạy **song song** với pipeline STT
 → agent thông thường. Model realtime xử lý hội thoại tán gẫu trực tiếp (trả lời
 âm thanh dưới 1 giây) và **delegate** (chuyển giao) những gì cần đến agent chính
@@ -169,6 +197,16 @@ tool cũng dặn model giữ lại từ khoá của chính người dùng thay v
 thành một nhãn phân loại — đây là một chỉ dẫn prompt, không phải bảo đảm ở mức
 code. `test_turn_routing_log.py` ghim cách ghép message; không gì ghim được việc
 model có tuân thủ hay không.
+
+### Chế độ nhập giọng nói trên thiết bị
+
+Cấu hình top-level `voice_input_mode` chọn `automatic` (mặc định, kể cả config cũ thiếu trường) hoặc `tap_to_talk` khi Harness voice-only OFF. Automatic giữ nguyên VAD, realtime và wake enable/disable hiện tại. Tap-to-talk chỉ mở recorder khi có thao tác chạm; chạm lần nữa chốt STT và gửi một transcript qua route OS hiện có đến runtime trên thiết bị dưới dạng `voice_command` (lời nói trực tiếp của user, không phải `voice` ambient). Trong lúc thu, đường này bỏ qua audio realtime, chuyển vào live, tự kết thúc câu và lời backchannel.
+
+**Ranh giới code:** `hal/drivers/device_tap_actions.py` quản lý quyết định từ tap vật lý; `_internal/device_input.py` cung cấp controller thu trên device; `_internal/input_policy.py` quản lý chọn mode, quyền sở hữu route, quy tắc realtime/dispatch theo lượt và phản hồi đèn khi thu. `voice_service.py` nối các phần này qua những điểm gọi nhỏ và giữ pipeline recorder/STT dùng chung. `HarnessCapture` nhận callback kiểm tra route, mặc định vẫn dùng matcher Harness cũ; không chứa quy tắc riêng của mode trên device.
+
+Cờ `wakeword` đã lưu được giữ nguyên. `WAKEWORD_ENABLED` hiệu dụng của HAL là false trong tap-to-talk, nên gaze, presence, focus từ boot greeting và wake phrase không mở bản ghi hay cửa sổ follow-up. Chuyển về automatic khôi phục lựa chọn wake đã lưu. Harness ON giữ chính sách thu thủ công hiện tại, độc lập với cấu hình này.
+
+Bản ghi trên thiết bị dùng lại bộ điều khiển thu thủ công với nhãn owner device và generation định tuyến Harness có thẩm quyền. Bật Harness, mất snapshot định tuyến, đổi generation, stop/mute voice service hoặc restart HAL sẽ hủy input đang dở; bản ghi không được chuyển sang owner khác. Dispatch cuối kiểm tra lại owner. Im lặng không tự gửi; lỗi provider hoặc chạm giới hạn `HAL_MAX_SESSION_DURATION_S` (mặc định 30 giây) làm hủy bản ghi. Chạm kết thúc trước khi STT sẵn sàng cũng hủy. Beep sẵn sàng và hiệu ứng listening báo recorder đã mở; beep kết thúc xác nhận tap gửi hợp lệ. Khi TTS đang phát, tap chỉ ngắt; khi đang ngủ, tap chỉ đánh thức. Tap tiếp theo mới thu. Khóa mic vật lý luôn có quyền ưu tiên.
 
 ### Điều khiển agent qua Harness bằng giọng nói
 
@@ -3228,7 +3266,8 @@ trong `config.json`:
 | Biến | Mặc định | Ghi chú |
 |------|----------|---------|
 | `HAL_REALTIME_ENABLED` | `true` | Cổng tổng cho pipeline realtime |
-| `wakeword` | `voice.wakeword` trong ROBOT.md khi config còn mới, ngược lại `false` | Cổng wake word top-level trong config file. Khi bật, partial khớp chỉ là tín hiệu tạm: HAL chỉ commit audio buffer sang realtime hoặc forward command sau khi STT **final** xác nhận wake phrase. Transcript được tách thành câu (`.` `!` `?`) và phrase được chấp nhận ở đầu **hoặc cuối** bất kỳ câu nào; xuất hiện giữa câu bị từ chối. Bước xác nhận kiểm lại trên transcript đã ghép mà vẫn còn dấu câu, để bước merge chỉ giữ `\w+` không rút lại cái gate mà một partial đã mở. Nếu bước kiểm khớp tuyệt đối đó trượt nhưng trước đó đã có một partial khớp chính xác, thì riêng chữ TÊN được phép lệch 1 ký tự và gate vẫn được xác nhận: STT tự viết lại giả thuyết của nó ở final, và trên lamp-0c89 (04/09/2026) partial `hello lamp` quay lại thành `Hello, lamb.` làm rơi cả lượt — không mở lượt realtime, không có cue thinking, câu hỏi rơi xuống main agent chậm hơn nhiều. Tiền tố (`hello`, `hey`, …) vẫn phải khớp tuyệt đối, và luật lỏng này KHÔNG BAO GIỜ mở được gate mà chỉ xác nhận lại gate do một partial khớp chính xác đã mở, nên một từ gần giống trong lời nói xung quanh vẫn không đánh thức được gì. Nó được log riêng thành `Wake-word confirmed with a one-letter STT slip` để còn đếm được — nhiều dòng này nghĩa là keyterm boost đang không làm tròn việc. Các prefix hỗ trợ là `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, `wake up`, áp dụng cho alias chung cố định (`hey autonomous`), device type (`hey lamp`) và tên agent hiện tại (`hey Luna`). Runtime rename chỉ cập nhật alias theo tên agent. Bare name và các prefix khác không mở gate. Một câu bị từ chối sẽ bị bỏ và LED `listening` tạm thời được restore về trạng thái nghỉ bình thường; không bao giờ để hiệu ứng `idle` cố định tiếp tục chạy. Một lượt đã xác nhận mở cửa sổ focus follow-up; lượt trong cửa sổ đó được forward dưới type `voice_followup` mà không cần wake phrase khác. Mọi lượt được phép đều dispatch sang os-server: câu realtime đã nói thành event đồng bộ im lặng `voice_agent_handled`; realtime unavailable, im lặng, lỗi hoặc delegate đi theo đường thường. Nếu realtime tắt hoặc không khả dụng, final transcript đã xác nhận đi theo đường os-server/main agent thường. Với Live ON và realtime khả dụng, lần thu đã xác nhận chuyển sang live song công mà không commit audio thủ công. Thiếu/`false` giữ nguyên luồng luôn lắng nghe trước gate. Với `config.json` do os-server tạo ra, giá trị khởi tạo lấy từ `voice.wakeword` của body (xem phần Cổng wake word ở trên); config nạp lên mà không có key thì vẫn là `false`. HAL restart sau khi lưu ở local Settings hoặc MQTT `wakeword.gate`. |
+| `voice_input_mode` | `automatic` | `automatic` giữ VAD/realtime và wake hiện tại; `tap_to_talk` chỉ thu giữa hai tap vật lý khi Harness OFF và gửi transcript đã chốt đến runtime trên thiết bị. Cờ wake đã lưu bị bỏ qua, không bị xóa. Harness ON giữ nguyên. |
+| `wakeword` | `voice.wakeword` trong ROBOT.md khi config còn mới, ngược lại `false` | Chỉ có tác dụng khi `voice_input_mode: automatic`. Cổng wake word top-level trong config file. Khi bật, partial khớp chỉ là tín hiệu tạm: HAL chỉ commit audio buffer sang realtime hoặc forward command sau khi STT **final** xác nhận wake phrase. Transcript được tách thành câu (`.` `!` `?`) và phrase được chấp nhận ở đầu **hoặc cuối** bất kỳ câu nào; xuất hiện giữa câu bị từ chối. Bước xác nhận kiểm lại trên transcript đã ghép mà vẫn còn dấu câu, để bước merge chỉ giữ `\w+` không rút lại cái gate mà một partial đã mở. Nếu bước kiểm khớp tuyệt đối đó trượt nhưng trước đó đã có một partial khớp chính xác, thì riêng chữ TÊN được phép lệch 1 ký tự và gate vẫn được xác nhận: STT tự viết lại giả thuyết của nó ở final, và trên lamp-0c89 (04/09/2026) partial `hello lamp` quay lại thành `Hello, lamb.` làm rơi cả lượt — không mở lượt realtime, không có cue thinking, câu hỏi rơi xuống main agent chậm hơn nhiều. Tiền tố (`hello`, `hey`, …) vẫn phải khớp tuyệt đối, và luật lỏng này KHÔNG BAO GIỜ mở được gate mà chỉ xác nhận lại gate do một partial khớp chính xác đã mở, nên một từ gần giống trong lời nói xung quanh vẫn không đánh thức được gì. Nó được log riêng thành `Wake-word confirmed with a one-letter STT slip` để còn đếm được — nhiều dòng này nghĩa là keyterm boost đang không làm tròn việc. Các prefix hỗ trợ là `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, `wake up`, áp dụng cho alias chung cố định (`hey autonomous`), device type (`hey lamp`) và tên agent hiện tại (`hey Luna`). Runtime rename chỉ cập nhật alias theo tên agent. Bare name và các prefix khác không mở gate. Một câu bị từ chối sẽ bị bỏ và LED `listening` tạm thời được restore về trạng thái nghỉ bình thường; không bao giờ để hiệu ứng `idle` cố định tiếp tục chạy. Một lượt đã xác nhận mở cửa sổ focus follow-up; lượt trong cửa sổ đó được forward dưới type `voice_followup` mà không cần wake phrase khác. Mọi lượt được phép đều dispatch sang os-server: câu realtime đã nói thành event đồng bộ im lặng `voice_agent_handled`; realtime unavailable, im lặng, lỗi hoặc delegate đi theo đường thường. Nếu realtime tắt hoặc không khả dụng, final transcript đã xác nhận đi theo đường os-server/main agent thường. Với Live ON và realtime khả dụng, lần thu đã xác nhận chuyển sang live song công mà không commit audio thủ công. Thiếu/`false` giữ nguyên luồng luôn lắng nghe trước gate. Với `config.json` do os-server tạo ra, giá trị khởi tạo lấy từ `voice.wakeword` của body (xem phần Cổng wake word ở trên); config nạp lên mà không có key thì vẫn là `false`. HAL restart sau khi lưu ở local Settings hoặc MQTT `wakeword.gate`. |
 | `HAL_HARNESS_PROGRESS_SPEAK_P` | `0.15` | Xác suất một snapshot Harness chỉ có progress được đọc; `0` tắt đọc progress. Xem [Thông báo cập nhật Harness](#thông-báo-cập-nhật-harness). |
 | `HAL_HARNESS_PROGRESS_MIN_GAP_S` | `60` | Tối đa một dòng progress được đọc cho mỗi run Harness trong khoảng này. |
 | `HAL_HARNESS_PROGRESS_QUIET_START_S` | `15` | Không đọc progress quá sớm như vậy sau request. |

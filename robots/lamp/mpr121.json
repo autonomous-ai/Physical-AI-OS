@@ -19,10 +19,11 @@
         11
       ],
       "touch_threshold": 6,
-      "release_threshold": 3,
+      "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,

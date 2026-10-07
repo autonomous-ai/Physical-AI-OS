@@ -1,3 +1,4 @@
+import { SettingsSelect } from "@/components/SettingsSelect";
 import { Brain } from "lucide-react";
 import { Field, LockedField, SectionCard } from "./shared";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
@@ -32,10 +33,10 @@ export function LLMSection({
           <label htmlFor="llm_mode" style={{ display: "block", fontSize: 11.5, color: "var(--lm-text-muted, #8a8a8a)", marginBottom: 5 }}>
             Provider
           </label>
-          <select
+          <SettingsSelect
             id="llm_mode"
             value={mode}
-            onChange={(e) => onModeChange(e.target.value as LlmMode)}
+            onValueChange={(value) => onModeChange(value as LlmMode)}
             style={{
               width: "100%", padding: "9px 10px", borderRadius: 7, fontSize: 12.5,
               background: "var(--lm-surface, #1a1a1a)", color: "var(--lm-text, #eee)",
@@ -43,7 +44,7 @@ export function LLMSection({
             }}>
             <option value="autonomous">Autonomous (included)</option>
             <option value="custom">Custom — bring your own</option>
-          </select>
+          </SettingsSelect>
         </div>
       )}
 

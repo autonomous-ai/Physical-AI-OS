@@ -3,7 +3,7 @@ import type { Dispatch, SetStateAction } from "react";
 import { getSetupStatus } from "@/lib/api";
 import { getInitialSearch } from "./useSetupUrlParams";
 
-export type SetupPhase = "connecting" | "connected" | "failed";
+export type SetupPhase = "connecting" | "connected" | "preparing" | "runtime_failed" | "failed";
 
 // AP-mode static address; never redirect onto it.
 const AP_SETUP_IP = "192.168.100.1";
@@ -59,7 +59,13 @@ export function useSetupStatusPolling({
           if (s.lan_ip) setSetupLanIP(s.lan_ip);
           return;
         }
-        if (!runStarted) return;
+        if (s.runtime_phase === "preparing" || s.runtime_phase === "failed") {
+          setSetupPhase(s.runtime_phase === "preparing" ? "preparing" : "runtime_failed");
+          if (s.lan_ip) setSetupLanIP(s.lan_ip);
+          setSetupErrorMsg(s.error || "");
+          return;
+        }
+        if (!runStarted && s.runtime_phase !== "ready") return;
         if (s.phase === "connected") {
           setSetupPhase("connected");
           if (s.lan_ip) setSetupLanIP(s.lan_ip);

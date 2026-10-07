@@ -32,6 +32,7 @@ class RecoveryTests(unittest.TestCase):
         for original, replacement in (
             ("/root/config/bootstrap.json", self.root / "bootstrap.json"),
             ("/root/bootstrap/rollback", self.backup),
+            ("/root/bootstrap/progress", self.root / "progress"),
             ("/usr/share/nginx/html/setup", self.web),
             ("/usr/local/bin", self.root / "bin"),
             ("/opt/hal", self.hal),
@@ -113,6 +114,8 @@ elif name == "curl":
                     capture_output=True, text=True, timeout=30,
                 )
                 self.assertEqual(result.returncode, 0 if failure == "none" else 1, result.stdout+result.stderr)
+                progress = json.loads((self.root / "progress/hal.json").read_text())
+                self.assertEqual(progress["phase"], "completed" if failure == "none" else "failed")
                 if failure == "startup":
                     self.assertIn("HAL health check failed", result.stderr)
                 elif failure == "sync":

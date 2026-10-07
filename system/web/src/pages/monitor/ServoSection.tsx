@@ -4,6 +4,9 @@ import { HW } from "./types";
 import type { ServoState } from "./types";
 import { StatusDot } from "./components";
 import { usePolling } from "../../hooks/usePolling";
+import "./servo.css";
+
+const cardTitle = { ...S.cardLabel, fontSize: 15, letterSpacing: "normal", textTransform: "none" as const, marginBottom: 10 };
 
 // Minimum gap between live-drag writes (shared 6.4 Mbit servo bus).
 const LIVE_THROTTLE_MS = 80;
@@ -237,25 +240,25 @@ export function ServoSection() {
     : "var(--lm-amber)";
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="servo-section">
 
-      <div className="lm-grid-4">
+      <div className="servo-overview">
 
         <div style={S.card}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 6 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0 }}>
-              <div style={S.cardLabel}>Servos</div>
+              <div style={cardTitle}>Servos</div>
               <span style={{
-                fontSize: 10, padding: "2px 7px", borderRadius: 4,
-                background: `${headerColor}22`, color: headerColor,
-                border: `1px solid ${headerColor}55`,
+                fontSize: 13, padding: "2px 7px", borderRadius: 4,
+                background: `color-mix(in srgb, ${headerColor} 12%, transparent)`, color: headerColor,
+                border: `1px solid color-mix(in srgb, ${headerColor} 35%, transparent)`,
                 fontWeight: 700, letterSpacing: "0.05em",
                 flexShrink: 0,
               }}>
-                {onlineCount}/{totalCount}
+                {onlineCount}/{totalCount} online
               </span>
             </div>
-            <div style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-amber)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+            <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)", textAlign: "right", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
               {servo?.current || "idle"}
             </div>
           </div>
@@ -266,14 +269,14 @@ export function ServoSection() {
               ))}
             </div>
           ) : (
-            <div style={{ fontSize: 12, color: "var(--lm-text-muted)" }}>Loading…</div>
+            <div style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>Loading…</div>
           )}
         </div>
 
         <div style={{ ...S.card, alignSelf: "start" }}>
-          <div style={S.cardLabel}>Aim Direction</div>
-          <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginBottom: 10 }}>
-            Move head to a preset (2s).
+          <div style={cardTitle}>Aim Direction</div>
+          <div style={{ fontSize: 13, color: "var(--lm-text-dim)", marginBottom: 10 }}>
+            Choose a direction. Movement takes 2 seconds.
           </div>
           {aims.length > 0 ? (
             <div style={{ display: "flex", flexWrap: "wrap", gap: 6 }}>
@@ -281,13 +284,13 @@ export function ServoSection() {
                 <ChipButton key={dir} onClick={() => aimTo(dir)}>{dir}</ChipButton>
               ))}
             </div>
-          ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>No directions configured</span>}
+          ) : <span style={{ fontSize: 13, color: "var(--lm-text-dim)" }}>No directions configured</span>}
         </div>
 
         <div style={{ ...S.card, alignSelf: "start" }}>
-          <div style={S.cardLabel}>Motor Control</div>
-          <div style={{ fontSize: 11, color: "var(--lm-text-muted)", marginBottom: 10 }}>
-            Emergency overrides.
+          <div style={cardTitle}>Motor Control</div>
+          <div style={{ fontSize: 13, color: "var(--lm-text-dim)", marginBottom: 10 }}>
+            Control motor position and torque.
           </div>
           <div style={{
             display: "grid",
@@ -304,7 +307,7 @@ export function ServoSection() {
 
         <div style={{ ...S.card, alignSelf: "start" }}>
           <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 6 }}>
-            <div style={S.cardLabel}>Animations</div>
+            <div style={cardTitle}>Animations</div>
             <input
               type="file"
               accept=".csv,text/csv"
@@ -317,14 +320,14 @@ export function ServoSection() {
               disabled={uploading}
               title="Upload CSV — file name becomes recording name"
               style={{
-                fontSize: 10, padding: "3px 8px", borderRadius: 5, fontWeight: 600,
+                fontSize: 13, minHeight: 36, padding: "6px 10px", borderRadius: 5, fontWeight: 600,
                 background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
                 color: uploading ? "var(--lm-text-muted)" : "var(--lm-amber)",
                 cursor: uploading ? "not-allowed" : "pointer",
                 flexShrink: 0,
               }}
             >
-              {uploading ? "…" : "↑ CSV"}
+              {uploading ? "…" : "Upload CSV"}
             </button>
           </div>
           {(servo?.available_recordings ?? []).length > 0 ? (
@@ -335,45 +338,47 @@ export function ServoSection() {
                 </ChipButton>
               ))}
             </div>
-          ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>No recordings available</span>}
+          ) : <span style={{ fontSize: 13, color: "var(--lm-text-dim)" }}>No recordings available</span>}
         </div>
       </div>
 
       <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={S.cardLabel}>Manual Move</div>
-            <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
-              direct /servo/move — clamped to ±90°
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={cardTitle}>Manual Move</div>
+              <div style={{ fontSize: 13, color: "var(--lm-text-dim)" }}>
+                Set each joint target between −90° and +90°.
+              </div>
+            </div>
             <label
               title="Send each slider change straight to the servo (duration 0), instead of waiting for the Move button."
               style={{
-                fontSize: 11, display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
-                color: liveDrag ? "var(--lm-green)" : "var(--lm-text-muted)", fontWeight: 600,
+                fontSize: 13, display: "flex", alignItems: "center", gap: 5, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
+                color: liveDrag ? "var(--lm-green)" : "var(--lm-text-dim)", fontWeight: 600,
               }}
             >
               <input
                 type="checkbox"
                 checked={liveDrag}
                 onChange={(e) => setLiveDrag(e.target.checked)}
-                style={{ accentColor: "var(--lm-green)", cursor: "pointer" }}
+                style={{ accentColor: "var(--lm-green)", cursor: "pointer", flexShrink: 0 }}
               />
               Live drag
             </label>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <div className="servo-move-actions">
             <button
               onClick={syncMoveFromCurrent}
               disabled={!servos}
               style={{
-                fontSize: 11, padding: "5px 14px", borderRadius: 6, fontWeight: 600,
+                fontSize: 13, padding: "10px 14px", borderRadius: 8, minHeight: 40, maxWidth: "100%", overflowWrap: "anywhere", fontWeight: 600,
                 background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
                 color: "var(--lm-text-dim)", cursor: servos ? "pointer" : "not-allowed",
               }}
             >Sync from current</button>
-            <label style={{ fontSize: 11, color: "var(--lm-text-muted)", display: "flex", alignItems: "center", gap: 4 }}>
-              duration
+            <label style={{ fontSize: 13, color: "var(--lm-text-dim)", display: "flex", alignItems: "center", gap: 4 }}>
+              Duration
               <input
                 type="number"
                 min={0}
@@ -382,7 +387,7 @@ export function ServoSection() {
                 value={moveDuration}
                 onChange={(e) => setMoveDuration(Math.max(0, Math.min(10, Number(e.target.value))))}
                 style={{
-                  width: 60, padding: "4px 6px", borderRadius: 4, fontSize: 11,
+                  width: 60, padding: "4px 6px", borderRadius: 4, fontSize: 13,
                   background: "var(--lm-surface)", border: "1px solid var(--lm-border)",
                   color: "var(--lm-text)", fontFamily: "monospace",
                 }}
@@ -393,7 +398,7 @@ export function ServoSection() {
               onClick={moveServo}
               disabled={moving || !servos}
               style={{
-                fontSize: 12, padding: "6px 16px", borderRadius: 6, fontWeight: 600,
+                fontSize: 13, minHeight: 40, padding: "8px 16px", borderRadius: 6, fontWeight: 600,
                 background: "rgba(52,211,153,0.1)", border: "1px solid rgba(52,211,153,0.3)",
                 color: "var(--lm-green)",
                 cursor: moving ? "wait" : (servos ? "pointer" : "not-allowed"),
@@ -414,7 +419,7 @@ export function ServoSection() {
               />
             ))}
           </div>
-        ) : <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>Loading joints…</span>}
+        ) : <span style={{ fontSize: 13, color: "var(--lm-text-dim)" }}>Loading joints…</span>}
       </div>
 
       {actionMsg && (
@@ -431,7 +436,7 @@ export function ServoSection() {
           fontSize: 12,
           fontWeight: 600,
           boxShadow: "0 4px 16px rgba(0,0,0,0.3)",
-          maxWidth: 360,
+          maxWidth: "min(360px, calc(100vw - 40px))",
         }}>{actionMsg}</div>
       )}
     </div>
@@ -441,26 +446,25 @@ export function ServoSection() {
 // Per-servo row on a flat grid so columns align across servos.
 function ServoCard({ joint, info }: { joint: string; info: ServoDetail }) {
   return (
-    <div style={{
+    <div className="servo-readout" style={{
       display: "grid",
-      gridTemplateColumns: "10px minmax(72px, max-content) 28px 1fr 50px",
       alignItems: "center",
       gap: 8,
-      padding: "6px 10px",
+      padding: "10px 12px",
       borderRadius: 6,
       background: "var(--lm-surface)",
       border: `1px solid ${info.online ? "var(--lm-border)" : "rgba(239,68,68,0.4)"}`,
     }}>
       <StatusDot ok={info.online} />
-      <span style={{ fontSize: 11, fontWeight: 600, color: "var(--lm-text-dim)", fontFamily: "monospace" }}>
+      <span style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-text)", fontFamily: "monospace", overflowWrap: "anywhere" }}>
         {joint.replace(".pos", "")}
       </span>
-      <span style={{ fontSize: 10, color: "var(--lm-text-muted)", textAlign: "right" }}>
+      <span style={{ fontSize: 13, color: "var(--lm-text-dim)", textAlign: "right" }}>
         #{info.id}
       </span>
       {info.online && info.angle != null ? (
         <>
-          <div style={{ height: 6, borderRadius: 3, background: "var(--lm-border)", overflow: "hidden" }}>
+          <div className="servo-angle-bar" aria-hidden="true" style={{ height: 6, borderRadius: 3, background: "var(--lm-border)", overflow: "hidden" }}>
             <div style={{
               width: `${Math.min(100, Math.max(0, ((info.angle + 180) / 360) * 100))}%`,
               height: "100%", borderRadius: 3,
@@ -468,16 +472,16 @@ function ServoCard({ joint, info }: { joint: string; info: ServoDetail }) {
             }} />
           </div>
           <span style={{
-            fontSize: 11, fontWeight: 600, color: "var(--lm-teal)",
+            fontSize: 13, fontWeight: 600, color: "var(--lm-teal)",
             textAlign: "right", fontFamily: "monospace",
           }}>
             {info.angle.toFixed(1)}°
           </span>
         </>
       ) : (
-        <span style={{
-          gridColumn: "span 2",
-          fontSize: 10.5, fontWeight: 500,
+        <span className="servo-readout-error" style={{
+          gridColumn: "4 / -1",
+          fontSize: 13, fontWeight: 500,
           color: "var(--lm-red)",
           fontFamily: "monospace",
           lineHeight: 1.35,
@@ -500,20 +504,13 @@ function JointSlider({ joint, value, actual, onChange }: {
 }) {
   const delta = actual != null ? value - actual : null;
   return (
-    <div style={{
-      display: "grid",
-      gridTemplateColumns: "140px 1fr 70px 80px",
-      alignItems: "center",
-      gap: 10,
-      padding: "5px 10px",
-      background: "var(--lm-surface)",
-      borderRadius: 6,
-      border: "1px solid var(--lm-border)",
-    }}>
-      <span style={{ fontSize: 11, color: "var(--lm-text-dim)", fontWeight: 600, fontFamily: "monospace" }}>
+    <div className="servo-joint">
+      <span className="servo-joint-name" style={{ fontSize: 13, color: "var(--lm-text)", fontWeight: 600, fontFamily: "monospace" }}>
         {joint.replace(".pos", "")}
       </span>
       <input
+        className="servo-joint-range"
+        aria-label={`${joint.replace(".pos", "")} target angle`}
         type="range"
         min={-90}
         max={90}
@@ -523,6 +520,8 @@ function JointSlider({ joint, value, actual, onChange }: {
         style={{ width: "100%", accentColor: "var(--lm-teal)" }}
       />
       <input
+        className="servo-joint-input"
+        aria-label={`${joint.replace(".pos", "")} target angle in degrees`}
         type="number"
         min={-90}
         max={90}
@@ -533,18 +532,17 @@ function JointSlider({ joint, value, actual, onChange }: {
           if (!isNaN(n)) onChange(Math.max(-90, Math.min(90, n)));
         }}
         style={{
-          width: "100%", padding: "3px 6px", borderRadius: 4, fontSize: 11,
+          width: "100%", padding: "3px 6px", borderRadius: 4, fontSize: 13,
           background: "var(--lm-bg)", border: "1px solid var(--lm-border)",
           color: "var(--lm-text)", fontFamily: "monospace", textAlign: "right",
         }}
       />
-      <span style={{
-        fontSize: 10,
-        color: delta == null ? "var(--lm-text-muted)" : Math.abs(delta) < 1 ? "var(--lm-green)" : "var(--lm-amber)",
+      <span className="servo-joint-current" style={{
+        fontSize: 13,
+        color: delta == null ? "var(--lm-text-dim)" : Math.abs(delta) < 1 ? "var(--lm-green)" : "var(--lm-amber)",
         fontFamily: "monospace",
-        textAlign: "right",
       }}>
-        {actual != null ? `cur ${actual.toFixed(0)}°` : "—"}
+        {actual != null ? `Current ${actual.toFixed(0)}°` : "—"}
       </span>
     </div>
   );
@@ -558,10 +556,10 @@ function ChipButton({ children, onClick, active }: {
 }) {
   return (
     <button onClick={onClick} style={{
-      fontSize: 11, padding: "5px 14px", borderRadius: 6,
+      fontSize: 13, padding: "10px 14px", borderRadius: 8, minHeight: 40, maxWidth: "100%", overflowWrap: "anywhere",
       background: active ? "rgba(245,158,11,0.12)" : "var(--lm-surface)",
       border: `1px solid ${active ? "var(--lm-amber)" : "var(--lm-border)"}`,
-      color: active ? "var(--lm-amber)" : "var(--lm-text-dim)",
+      color: active ? "var(--lm-amber)" : "var(--lm-text)",
       cursor: "pointer",
       fontWeight: active ? 600 : 500,
       transition: "all 0.15s",
@@ -581,7 +579,7 @@ function ControlButton({ onClick, color, title, hint }: {
       <button
         onClick={onClick}
         style={{
-          fontSize: 12, padding: "8px 14px", borderRadius: 6, width: "100%",
+          fontSize: 13, minHeight: 40, padding: "8px 14px", borderRadius: 6, width: "100%",
           background: `color-mix(in srgb, ${color} 18%, transparent)`,
           border: `1.5px solid color-mix(in srgb, ${color} 70%, transparent)`,
           color,
@@ -599,7 +597,7 @@ function ControlButton({ onClick, color, title, hint }: {
         onMouseDown={(e) => { e.currentTarget.style.transform = "translateY(1px)"; }}
         onMouseUp={(e) => { e.currentTarget.style.transform = "translateY(0)"; }}
       >{title}</button>
-      <span style={{ fontSize: 10, color: "var(--lm-text-muted)", lineHeight: 1.35 }}>{hint}</span>
+      <span style={{ fontSize: 13, color: "var(--lm-text-dim)", lineHeight: 1.35 }}>{hint}</span>
     </>
   );
 }

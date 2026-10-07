@@ -72,54 +72,61 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 		slog.Debug("no existing config, starting fresh", "component", "openclaw")
 	}
 
-	slog.Debug("fetching models", "component", "openclaw")
-	modelsResp, byo, err := resolveModels(context.Background(), llmBaseURL, llmAPIKey)
+	runtimeManaged := s.config.LLMRuntimeManaged()
+	var modelsResp *domain.LLMModelsListResponse
+	var defaultModel domain.LLMModel
 	usedFallback := false
-	if err != nil {
-		slog.Warn("setup: model fetch failed, using hardcoded fallback",
-			"component", "openclaw", "byo", byo, "err", err)
-		modelsResp = &domain.LLMModelsListResponse{Count: len(defaultModels), Models: defaultModels}
-		usedFallback = true
-	}
-	if len(modelsResp.Models) == 0 {
-		return fmt.Errorf("no llm models found")
-	}
-	slog.Debug("got models", "component", "openclaw", "count", len(modelsResp.Models), "fallback", usedFallback)
-
-	// Precedence: upstream default_model, else persisted config.LLMModel (API down), else first in catalog.
-	wantKey := strings.TrimSpace(modelsResp.DefaultModel)
-	if usedFallback {
-		wantKey = strings.TrimSpace(s.config.LLMModel)
-	}
-	if wantKey == "" {
-		wantKey = modelsResp.Models[0].Key
-	}
-	defaultModel, err := findModelByLLMModel(modelsResp.Models, wantKey)
-	if err != nil {
-		// Requested key not in the catalog — fall back to the first model so setup never hard-fails on a stale/unknown selection.
-		slog.Warn("setup: requested model not in catalog, using first", "component", "openclaw", "want", wantKey)
-		defaultModel = modelsResp.Models[0]
-	}
-	slog.Debug("selected default model", "component", "openclaw", "key", defaultModel.Key)
-
-	slog.Debug("building models.providers.autonomous", "component", "openclaw")
-	modelsMap := ensureMap(configData, "models")
-	modelsMap["mode"] = "merge"
-	providersMap := ensureMap(modelsMap, "providers")
-	modelsEntries := make([]any, 0, len(modelsResp.Models))
-	for _, m := range modelsResp.Models {
-		if s.config.LLMThinkingDisabled() {
-			m.Reasoning = false
+	if !runtimeManaged {
+		slog.Debug("fetching models", "component", "openclaw")
+		var byo bool
+		var err error
+		modelsResp, byo, err = resolveModels(context.Background(), llmBaseURL, llmAPIKey)
+		if err != nil {
+			slog.Warn("setup: model fetch failed, using hardcoded fallback",
+				"component", "openclaw", "byo", byo, "err", err)
+			modelsResp = &domain.LLMModelsListResponse{Count: len(defaultModels), Models: defaultModels}
+			usedFallback = true
 		}
-		modelsEntries = append(modelsEntries, openclawModelToProviderEntry(m))
+		if len(modelsResp.Models) == 0 {
+			return fmt.Errorf("no llm models found")
+		}
+		slog.Debug("got models", "component", "openclaw", "count", len(modelsResp.Models), "fallback", usedFallback)
+
+		// Precedence: upstream default_model, else persisted config.LLMModel (API down), else first in catalog.
+		wantKey := strings.TrimSpace(modelsResp.DefaultModel)
+		if usedFallback {
+			wantKey = strings.TrimSpace(s.config.LLMModel)
+		}
+		if wantKey == "" {
+			wantKey = modelsResp.Models[0].Key
+		}
+		defaultModel, err = findModelByLLMModel(modelsResp.Models, wantKey)
+		if err != nil {
+			// Requested key not in the catalog — fall back to the first model so setup never hard-fails on a stale/unknown selection.
+			slog.Warn("setup: requested model not in catalog, using first", "component", "openclaw", "want", wantKey)
+			defaultModel = modelsResp.Models[0]
+		}
+		slog.Debug("selected default model", "component", "openclaw", "key", defaultModel.Key)
+
+		slog.Debug("building models.providers.autonomous", "component", "openclaw")
+		modelsMap := ensureMap(configData, "models")
+		modelsMap["mode"] = "merge"
+		providersMap := ensureMap(modelsMap, "providers")
+		modelsEntries := make([]any, 0, len(modelsResp.Models))
+		for _, m := range modelsResp.Models {
+			if s.config.LLMThinkingDisabled() {
+				m.Reasoning = false
+			}
+			modelsEntries = append(modelsEntries, openclawModelToProviderEntry(m))
+		}
+		providersMap[customProviderName] = map[string]any{
+			"baseUrl": llmBaseURL,
+			"api":     resolveAutonomousAPI(modelsResp.API),
+			"apiKey":  llmAPIKey,
+			"models":  modelsEntries,
+		}
+		configData["models"] = modelsMap
 	}
-	providersMap[customProviderName] = map[string]any{
-		"baseUrl": llmBaseURL,
-		"api":     resolveAutonomousAPI(modelsResp.API),
-		"apiKey":  llmAPIKey,
-		"models":  modelsEntries,
-	}
-	configData["models"] = modelsMap
 
 	slog.Debug("building agents.defaults", "component", "openclaw")
 	agentsMap := ensureMap(configData, "agents")
@@ -134,24 +141,26 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	compactionMap["mode"] = "safeguard"
 	compactionMap["reserveTokensFloor"] = 80000
 	defaultsMap["compaction"] = compactionMap
-	defaultsMap["bootstrapMaxChars"] = 5000
-	defaultsMap["bootstrapTotalMaxChars"] = 30000
-	agentModelsMap := ensureMap(defaultsMap, "models")
-	for _, m := range modelsResp.Models {
-		agentModelsMap[agentModelKey(m)] = map[string]any{
-			"params": map[string]any{
-				"cacheRetention": "short",
-			},
+	defaultsMap["bootstrapMaxChars"] = bootstrapMaxChars
+	defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
+	if !runtimeManaged {
+		agentModelsMap := ensureMap(defaultsMap, "models")
+		for _, m := range modelsResp.Models {
+			agentModelsMap[agentModelKey(m)] = map[string]any{
+				"params": map[string]any{
+					"cacheRetention": "short",
+				},
+			}
 		}
-	}
-	defaultsMap["model"] = map[string]any{
-		"primary": fmt.Sprintf("%s/%s", customProviderName, defaultModel.Key),
-	}
-	defaultsMap["models"] = agentModelsMap
-	// Seed the default image/vision model from upstream when published.
-	if img := strings.TrimSpace(modelsResp.DefaultImageModel); img != "" {
-		defaultsMap["imageModel"] = map[string]any{
-			"primary": fmt.Sprintf("%s/%s", customProviderName, img),
+		defaultsMap["model"] = map[string]any{
+			"primary": fmt.Sprintf("%s/%s", customProviderName, defaultModel.Key),
+		}
+		defaultsMap["models"] = agentModelsMap
+		// Seed the default image/vision model from upstream when published.
+		if img := strings.TrimSpace(modelsResp.DefaultImageModel); img != "" {
+			defaultsMap["imageModel"] = map[string]any{
+				"primary": fmt.Sprintf("%s/%s", customProviderName, img),
+			}
 		}
 	}
 	agentsMap["defaults"] = defaultsMap
@@ -249,7 +258,10 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 
 	slog.Debug("ensuring messages defaults", "component", "openclaw")
 	messagesMap := ensureMap(configData, "messages")
-	messagesMap["responsePrefix"] = "auto"
+	// No reply prefix: "auto" prints the agent id ("[main]") before every reply.
+	if v, _ := messagesMap["responsePrefix"].(string); v == "auto" {
+		delete(messagesMap, "responsePrefix")
+	}
 	messagesMap["ackReactionScope"] = "all"
 	messagesMap["removeAckAfterReply"] = true
 	configData["messages"] = messagesMap
@@ -295,7 +307,9 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	}
 	expectedPrimary := customProviderName + "/" + defaultModel.Key
 	s.primarySyncMu.Lock()
-	setOSWriteFlag(s.config.OpenclawConfigDir, expectedPrimary)
+	if !runtimeManaged {
+		setOSWriteFlag(s.config.OpenclawConfigDir, expectedPrimary)
+	}
 	writeErr := os.WriteFile(configPath, written, 0600)
 	s.primarySyncMu.Unlock()
 	if writeErr != nil {
@@ -307,7 +321,7 @@ func (s *OpenclawService) SetupAgent(data domain.SetupRequest) error {
 	slog.Info("wrote openclaw config", "component", "openclaw", "path", configPath)
 
 	// On a successful fetch, update config.LLMModel to the resolved upstream default_model and record the catalog version.
-	if !usedFallback {
+	if !runtimeManaged && !usedFallback {
 		s.config.LLMModel = defaultModel.Key
 		if modelsResp.Version > 0 {
 			s.config.DefaultModelVersion = modelsResp.Version
@@ -444,8 +458,19 @@ func (s *OpenclawService) AddChannel(ctx context.Context, data domain.AddChannel
 
 // RefreshModelsConfig patches the models reasoning fields in openclaw.json based on current config and restarts the agent.
 func (s *OpenclawService) RefreshModelsConfig() error {
+	if s.config.LLMRuntimeManaged() {
+		return nil
+	}
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
+	if s.config.LLMRuntimeManaged() {
+		return nil
+	}
+	if s.config.LLMMode() == "os" {
+		if _, err := s.ensureProviderConfig(); err != nil {
+			return err
+		}
+	}
 
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	data, err := os.ReadFile(configPath)
@@ -491,7 +516,7 @@ func (s *OpenclawService) RefreshModelsConfig() error {
 	currentPrimary := extractPrimaryModel(configData)
 	prov, _, _ := splitProviderModel(currentPrimary)
 	var flagPrimary string // value written into the os-server-write flag
-	if currentPrimary == "" || prov == customProviderName {
+	if s.config.LLMMode() == "os" || currentPrimary == "" || prov == customProviderName {
 		newPrimary := customProviderName + "/" + currentModel
 		agents := ensureMap(configData, "agents")
 		defaults := ensureMap(agents, "defaults")

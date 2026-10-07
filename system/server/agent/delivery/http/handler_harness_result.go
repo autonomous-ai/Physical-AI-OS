@@ -145,9 +145,10 @@ func (h *AgentHandler) DeliverHarnessQuestion(runID, questionID, text string) bo
 	h.harnessReplies[runID] = state
 	h.harnessRepliesMu.Unlock()
 	sensinghttp.DefaultFillerManager.Cancel(runID)
-	if h.monitorBus != nil {
-		h.monitorBus.Push(domain.MonitorEvent{Type: "assistant_delta", Summary: text, RunID: runID, Detail: map[string]string{"role": "assistant", "source": "harness", "question_id": questionID}})
-	}
+	// Questions are already deduplicated by ID; equal text from a new question still shows.
+	h.pushHarnessLine(runID, text, false, map[string]string{"role": "assistant", "source": "harness", "question_id": questionID})
+	// Also persisted: a chat tab that missed the live delta (hidden window) replays it from JSONL.
+	flow.Log("harness_question", map[string]any{"run_id": runID, "question_id": questionID, "text": text}, runID)
 	if !state.webChat && !state.restored {
 		h.deliverTTSUnless(h.isHarnessSpeechCancelled, func(text string) error {
 			return hal.AnnounceHarnessUpdate(hal.HarnessUpdateQuestion, text, runID, "")

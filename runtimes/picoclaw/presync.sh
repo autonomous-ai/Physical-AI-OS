@@ -3,8 +3,8 @@
 # of install.sh).
 set -euo pipefail
 
-CONFIG_JSON="/root/config/config.json"          # device/project config (secret source of truth)
-PICO_DIR="/root/.picoclaw"
+CONFIG_JSON="${CONFIG_JSON:-/root/config/config.json}"          # device/project config (secret source of truth)
+PICO_DIR="${PICO_DIR:-/root/.picoclaw}"
 PICO_CONFIG="$PICO_DIR/config.json"             # picoclaw's own config (structure)
 PICO_SECURITY="$PICO_DIR/.security.yml"         # picoclaw's secrets
 PICO_BIN="${PICO_BIN:-/usr/local/bin/picoclaw}"
@@ -72,6 +72,9 @@ if [ ! -f "$MIGRATE_MARKER" ]; then
   fi
 fi
 
+LLM_CONFIG_MODE="$(dev llm_config_mode)"
+jq_edit "$PICO_CONFIG" '.agents.defaults.restrict_to_workspace = false | .agents.defaults.allow_read_outside_workspace = true'
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 # Route the default agent at the autonomous (campaign-api) provider.
 log "ensure agents.defaults model wiring"
 jq_edit "$PICO_CONFIG" '
@@ -99,6 +102,8 @@ jq_edit "$PICO_CONFIG" --arg ab "$DEFAULT_API_BASE" '
       + [ { model_name: "autonomous_vision", provider: "anthropic-messages",
             model: "qwen/qwen3.6-plus", api_base: ($existing // $ab) } ]
 '
+
+fi
 
 log "ensure gateway server block"
 jq_edit "$PICO_CONFIG" '
@@ -153,6 +158,7 @@ sec_allow_from() {
     "$PICO_SECURITY"
 }
 
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 LLM_BASE_URL="$(dev llm_base_url)"
 if [ -n "$LLM_BASE_URL" ]; then
   base="${LLM_BASE_URL%/}"
@@ -179,11 +185,21 @@ if [ -n "$LLM_BASE_URL" ]; then
   esac
 fi
 
+# Explicit OS ownership restores the selected model on every provider endpoint.
+LLM_MODEL="$(dev llm_model)"
+if [ "$LLM_CONFIG_MODE" = os ] && [ -n "$LLM_MODEL" ]; then
+  jq_edit "$PICO_CONFIG" --arg m "$LLM_MODEL" '
+    .model_list |= map(if .model_name == "autonomous" then .model = $m else . end)
+  '
+fi
+
 # LLM api key → .security.yml model_list."autonomous:0".api_keys.
 LLM_API_KEY="$(dev llm_api_key)"
 if [ -n "$LLM_API_KEY" ]; then
   KEY="$LLM_API_KEY" yq -i '.model_list["autonomous:0"].api_keys = [strenv(KEY)] | .model_list["autonomous_vision:0"].api_keys = [strenv(KEY)]' "$PICO_SECURITY"
   log "security model_list autonomous:0 + autonomous_vision:0 api_keys synced"
+fi
+
 fi
 
 # pico bearer token (always) — must match constants.go Token.
