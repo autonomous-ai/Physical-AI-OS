@@ -2,10 +2,10 @@ import "./settings-polish.css";
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { getDeviceConfig, getCurrentNetwork, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
-import type { DeviceConfig, VoiceInputMode } from "@/lib/api";
+import type { DeviceConfig, LLMConfigMode, VoiceInputMode } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
-import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
+import { C, ADMIN_PASSWORD_MIN, SectionCard } from "@/components/setup/shared";
 import { DeviceSection } from "@/components/setup/DeviceSection";
 import { LLMSection, type LlmMode } from "@/components/setup/LLMSection";
 import { RestoreDefaultsButton } from "@/components/setup/shared";
@@ -157,6 +157,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [llmLoaded, setLlmLoaded] = useState({ apiKey: false, baseUrl: false, model: false });
   const [ttsLoaded, setTtsLoaded] = useState<TtsLoadedState>({ apiKey: false, baseUrl: false, choice: "autonomous" });
   const [hasDefaults, setHasDefaults] = useState(false);
+  const [llmConfigMode, setLlmConfigMode] = useState<LLMConfigMode>("");
+  const [llmModeApplyPending, setLlmModeApplyPending] = useState(false);
   const [llmMode, setLlmMode] = useState<LlmMode>("autonomous");
   const [realtimeLoaded, setRealtimeLoaded] = useState({ apiKey: false });
   const [sttLoaded, setSttLoaded] = useState({ deepgram: false, apiKey: false, baseUrl: false });
@@ -164,7 +166,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   // Baseline of non-secret fields, used to enable Save only when dirty.
   type InitialSnapshot = {
     ssid: string; deviceId: string;
-    llmUrl: string; llmModel: string; llmDisableThinking: boolean;
+    llmUrl: string; llmModel: string; llmDisableThinking: boolean; llmConfigMode: LLMConfigMode;
     sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string;
     ttsBaseUrl: string; ttsProvider: string; ttsVoice: string; ttsSpeed: number;
     wakeWord: boolean;
@@ -207,6 +209,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setSsid(cfg.network_ssid ?? "");
         setDeviceId(cfg.device_id ?? "");
         setMac(cfg.mac ?? "");
+        setLlmConfigMode(cfg.llm_config_mode ?? "");
         setLlmUrl(cfg.llm_base_url ?? "");
         setLlmModel(cfg.llm_model ?? "");
         setLlmDisableThinking(cfg.llm_disable_thinking ?? false);
@@ -298,6 +301,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setBaseline({
           ssid: cfg.network_ssid ?? "",
           deviceId: cfg.device_id ?? "",
+          llmConfigMode: cfg.llm_config_mode ?? "",
           llmUrl: llmUrlInit,
           llmModel: cfg.llm_model ?? "",
           llmDisableThinking: cfg.llm_disable_thinking ?? false,
@@ -385,6 +389,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const dirty = !loadingCfg && baseline != null && (
     ssid !== baseline.ssid ||
     deviceId !== baseline.deviceId ||
+    llmModeApplyPending || llmConfigMode !== baseline.llmConfigMode ||
     llmUrl !== baseline.llmUrl ||
     llmModel !== baseline.llmModel ||
     llmDisableThinking !== baseline.llmDisableThinking ||
@@ -443,14 +448,13 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     const controller = new AbortController();
     wifiCheck.current = controller;
     const wifiMayReconnect = !!ssid.trim() && (activeSection === "wifi" || ssid !== baseline?.ssid || !!password);
+    const applyingLlmMode = llmModeApplyPending || llmConfigMode !== baseline?.llmConfigMode;
     setSaving(true);
     try {
       // Secrets ship only when typed; blanks would clear the saved value.
       const body: Record<string, unknown> = {
         ssid: ssid.trim(),
         channel,
-        llm_base_url: llmUrl, llm_model: llmModel,
-        llm_disable_thinking: llmDisableThinking,
         stt_base_url: sttBaseUrl, stt_language: sttLanguage,
         tts_base_url: ttsBaseUrl, tts_provider: ttsProvider, tts_voice: ttsVoice, tts_speed: ttsSpeed,
         device_id: deviceId,
@@ -468,8 +472,15 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
       body.realtime = realtime;
       body.wakeword = wakeWord;
+      // Omitted fields preserve both legacy ownership and external runtime changes.
+      if (applyingLlmMode) body.llm_config_mode = llmConfigMode;
+      if (llmConfigMode !== "runtime") {
+        if (llmApiKey) body.llm_api_key = llmApiKey;
+        if (llmUrl !== baseline?.llmUrl) body.llm_base_url = llmUrl;
+        if (llmModel !== baseline?.llmModel) body.llm_model = llmModel;
+        if (llmDisableThinking !== baseline?.llmDisableThinking) body.llm_disable_thinking = llmDisableThinking;
+      }
       body.voice_input_mode = voiceInputMode;
-      if (llmApiKey) body.llm_api_key = llmApiKey;
       // Switching TTS provider invalidates the stored key, so delete it explicitly (#309).
       if (ttsApiKey) {
         body.tts_api_key = ttsApiKey;
@@ -502,15 +513,24 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         body.bluebubbles_caller_context = bluebubblesCallerContext;
       }
       await updateDeviceConfig(body);
+      setLlmModeApplyPending(false);
       setTtsLoaded({
         apiKey: body.clear_tts_api_key ? false : (ttsLoaded.apiKey || !!ttsApiKey),
         baseUrl: !!ttsBaseUrl,
         choice: ttsChoiceToSave,
       });
-      if (!wifiMayReconnect) toast.success("Config saved — restart your robot for changes to take effect.");
+      if (!wifiMayReconnect) toast.success(applyingLlmMode
+        ? "Config saved — LLM configuration mode applied."
+        : "Config saved — restart your robot for changes to take effect.");
+      const savedLlm = llmConfigMode === "runtime" && baseline
+        ? { llmUrl: baseline.llmUrl, llmModel: baseline.llmModel, llmDisableThinking: baseline.llmDisableThinking }
+        : { llmUrl, llmModel, llmDisableThinking };
+      setLlmUrl(savedLlm.llmUrl);
+      setLlmModel(savedLlm.llmModel);
+      setLlmDisableThinking(savedLlm.llmDisableThinking);
       setBaseline({
         ssid, deviceId,
-        llmUrl, llmModel, llmDisableThinking,
+        ...savedLlm, llmConfigMode,
         sttBaseUrl, sttProvider, sttLanguage,
         ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed,
         wakeWord, voiceInputMode,
@@ -533,6 +553,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       setRealtimeApiKey("");
       if (wifiMayReconnect) await checkWifi(ssid.trim(), true, controller.signal);
     } catch (err) {
+      // Mode may already be persisted even when applying it failed.
+      if (applyingLlmMode) setLlmModeApplyPending(true);
       if (isWifiHandoffError(err, wifiMayReconnect)) {
         // No acknowledgement: retain every dirty field, including other settings.
         await checkWifi(ssid.trim(), false, controller.signal);
@@ -548,7 +570,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     bluebubblesServerUrl, bluebubblesPassword, bluebubblesUserAddress,
     bluebubblesCallerContext,
     ssid, password, adminPassword, llmUrl,
-    llmApiKey, llmModel, llmDisableThinking, deepgramApiKey, sttApiKey, sttBaseUrl,
+    llmApiKey, llmModel, llmDisableThinking, llmConfigMode, llmModeApplyPending, deepgramApiKey, sttApiKey, sttBaseUrl,
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
@@ -628,7 +650,17 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               password={password} setPassword={setPassword}
             />
 
-            <LLMSection
+            {llmConfigMode === "runtime" ? (
+              <SectionCard id="llm" title="AI Brain" active={activeSection === "llm"}>
+                <p style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6 }}>
+                  LLM configuration is managed directly in the runtime. OS provider and model fields are disabled.
+                  {baseline?.llmConfigMode !== "runtime" && " Save Changes to apply this choice."}
+                </p>
+                <a href={`${window.location.pathname}${window.location.search}#runtime`} style={{ color: C.amber, fontSize: 12 }}>
+                  Manage in Runtime settings
+                </a>
+              </SectionCard>
+            ) : <LLMSection
               active={activeSection === "llm"}
               llmLoaded={llmLoaded}
               llmApiKey={llmApiKey} setLlmApiKey={setMirroredLlmApiKey}
@@ -642,9 +674,16 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
                   .then(() => { toast.success("Back on the Autonomous brain"); window.location.reload(); })
                   .catch((e: Error) => toast.error(e.message || "Could not switch back"));
               }}
-            />
+            />}
 
-            <AgentRuntimeSection active={activeSection === "runtime"} />
+            <AgentRuntimeSection
+              active={activeSection === "runtime"}
+              llmConfigMode={llmConfigMode}
+              savedLlmConfigMode={baseline?.llmConfigMode ?? ""}
+              llmModeApplyPending={llmModeApplyPending}
+              onLlmConfigModeChange={setLlmConfigMode}
+              saving={saving}
+            />
 
             <TimezoneSection active={activeSection === "timezone"} />
 

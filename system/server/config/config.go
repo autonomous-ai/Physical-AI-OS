@@ -234,6 +234,8 @@ type Config struct {
 	// LLMDisableThinking disables extended thinking/reasoning for all LLM models (default false).
 	// Enable this to reduce latency on fast models like Haiku that don't benefit from thinking.
 	LLMDisableThinking *bool `json:"llm_disable_thinking,omitempty" yaml:"llmDisableThinking"`
+	// Empty preserves legacy auth detection; explicit modes control LLM config ownership.
+	LLMConfigMode string `json:"llm_config_mode,omitempty" yaml:"llmConfigMode"`
 
 	// STTModel selects the speech-to-text model for hal.
 	STTModel string `json:"stt_model,omitempty" yaml:"sttModel"`
@@ -597,6 +599,18 @@ func (c *Config) LocalIntentEnabled() bool {
 		return true
 	}
 	return *c.LocalIntent
+}
+
+// LLMMode returns the persisted ownership choice under the config mutex.
+func (c *Config) LLMMode() string {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.LLMConfigMode
+}
+
+// LLMRuntimeManaged reports whether native config belongs to the operator.
+func (c *Config) LLMRuntimeManaged() bool {
+	return c.LLMMode() == "runtime"
 }
 
 // LLMThinkingDisabled returns whether extended thinking is disabled (default false).

@@ -118,6 +118,9 @@ var presyncStateFiles = []string{
 func (s *ClaudeCodeService) EnsureOnboarding() error {
 	before := hashFiles(presyncStateFiles)
 	if err := s.runPresync(); err != nil {
+		if s.config.LLMMode() != "" {
+			return fmt.Errorf("apply LLM configuration: %w", err)
+		}
 		// Best-effort: a presync failure must not block the bridge start below.
 		slog.Warn("claudecode presync failed, continuing", "component", "claudecode", "error", err)
 	}

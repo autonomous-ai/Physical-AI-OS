@@ -89,7 +89,7 @@ func TestApplyUpdateBaseURL(t *testing.T) {
 	}
 }
 
-func TestApplyUpdateThinkingFlagFollowsPresence(t *testing.T) {
+func TestApplyUpdateThinkingFlagFollowsValue(t *testing.T) {
 	c := baseConfig()
 	v := true
 	ch := applyUpdate(c, domain.UpdateConfigRequest{LLMDisableThinking: &v}, "")
