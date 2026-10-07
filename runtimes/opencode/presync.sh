@@ -63,6 +63,8 @@ if [ ! -f "$MIGRATE_MARKER" ] && [ -d "$OC_WS" ]; then
   fi
 fi
 
+LLM_CONFIG_MODE="$(dev llm_config_mode)"
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 LLM_BASE_URL="$(dev llm_base_url)"; [ -n "$LLM_BASE_URL" ] || LLM_BASE_URL="$DEFAULT_BASE_URL"
 LLM_BASE_URL="${LLM_BASE_URL%/}"   # strip trailing slash
 LLM_MODEL="$(dev llm_model)"; [ -n "$LLM_MODEL" ] || LLM_MODEL="$DEFAULT_MODEL"
@@ -90,6 +92,7 @@ jq -n \
 + (if ($mcp | length) > 0 then { "mcp": $mcp } else {} end)
 ' >"$OPENCODE_CONFIG.tmp"
 mv "$OPENCODE_CONFIG.tmp" "$OPENCODE_CONFIG"
+fi
 
 LLM_API_KEY="$(dev llm_api_key)"
 log "write $ENV_FILE (key=$( [ -n "$LLM_API_KEY" ] && echo set || echo EMPTY ))"
@@ -101,7 +104,9 @@ umask 077
   echo "OPENCODE_WS_TOKEN=autonomous_opencode_token"
   echo "OPENCODE_PORT=18793"
   echo "OPENCODE_WORKSPACE=$WS_DIR"
-  [ -n "$LLM_API_KEY" ] && echo "LLM_API_KEY=$LLM_API_KEY"
+  if [ "$LLM_CONFIG_MODE" != runtime ] && [ -n "$LLM_API_KEY" ]; then
+    echo "LLM_API_KEY=$LLM_API_KEY"
+  fi
 } >"$ENV_FILE.tmp"
 mv "$ENV_FILE.tmp" "$ENV_FILE"
 umask 022
@@ -110,7 +115,7 @@ log "channels: device-owned (telegram/slack/discord) — nothing to sync runtime
 
 # Guarded to interactive shells only (no leak into scripts/cron).
 write_cli_login_env() {
-  cat >/etc/profile.d/agent-cli-env.sh <<'PROFILE'
+  cat >"${CLI_PROFILE_PATH:-/etc/profile.d/agent-cli-env.sh}" <<'PROFILE'
 # Managed by os-server runtime presync — do not edit.
 case "$-" in *i*) ;; *) return 2>/dev/null || exit 0 ;; esac
 _rt="$(sed -n 's/.*"agent_runtime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /root/config/config.json 2>/dev/null | head -1)"
@@ -129,7 +134,7 @@ case "$_rt" in
 esac
 unset _rt
 PROFILE
-  chmod 0644 /etc/profile.d/agent-cli-env.sh
+  chmod 0644 "${CLI_PROFILE_PATH:-/etc/profile.d/agent-cli-env.sh}"
 }
 write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
 

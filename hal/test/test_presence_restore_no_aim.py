@@ -6,12 +6,10 @@ from unittest import mock
 import pytest
 
 from hal.drivers.sensing.presence_service import PresenseService
-from hal.presets import RGB_CMD_SOLID
 
 
 def _present_service(rgb):
     svc = PresenseService(rgb_service=rgb)
-    svc._last_color = (10, 20, 30)
     svc._light_is_off = lambda: False
     return svc
 
@@ -39,9 +37,10 @@ def test_the_light_still_comes_back():
     rgb = mock.Mock()
     svc = _present_service(rgb)
 
-    svc._restore_light()
+    with mock.patch("hal.app_state._restore_user_led") as restore:
+        svc._restore_light()
 
-    rgb.dispatch.assert_called_once_with(RGB_CMD_SOLID, (10, 20, 30))
+    restore.assert_called_once_with()
 
 
 def test_a_dark_strip_is_left_dark():

@@ -13,7 +13,7 @@ from hal.board.board import TouchConfig
 from hal.drivers import touch_debug
 from hal.drivers.button_actions import (
     head_pat_action,
-    play_ack_chime,
+    play_pet_chime,
 )
 
 logger = logging.getLogger(__name__)
@@ -49,6 +49,15 @@ SWIPE_MAX_GAP_MS = float(os.environ.get("HAL_TOUCH_SWIPE_MAX_GAP_MS", "150"))
 # again rather than sliding between pads.
 PRESS_MIN_EMPTY_MS = float(os.environ.get("HAL_TOUCH_PRESS_MIN_EMPTY_MS", "15"))
 
+# Pull-down hold before reading a candidate line in the detect probe. A wired TTP223
+# drives its idle-HIGH output through the weak pull-down; a bare header pin falls to 0.
+PROBE_SETTLE_S = 0.01
+
+# How long an undetected candidate line must stay LOW before its release admits it as a
+# pad, measured between the two edges' kernel timestamps. Device traces show a touch
+# holding the output LOW for 73-135 ms; a transient on a bare pulled-up pin lasts far less.
+LEARN_MIN_LOW_MS = 20.0
+
 
 class TTP223Handler:
     def __init__(self, config: TouchConfig | None):
@@ -59,6 +68,10 @@ class TTP223Handler:
         self._chip = 0
         self._lines = []
         self._axis = None
+        # Lines with a pad actually wired. None = every configured line (no detect).
+        self._active = None
+        # Undetected candidate lines currently LOW: line -> lgpio tick (ns) of the fall.
+        self._candidate_low = {}
         # Per-contact first-touch order for the current gesture cycle: [[(line, ts),
         # ...], ...], one inner list per contact. NOT flattened — device-measured
         # 2026-08-27.
@@ -96,6 +109,15 @@ class TTP223Handler:
             logger.warning("TTP223 gpiochip_open(%d) failed: %s", self._chip, e)
             return
 
+        if config.detect:
+            self._active = self._probe_wired()
+            logger.info(
+                "TTP223 detect: wired pads %s of candidates %s (others learned on first touch)",
+                sorted(self._active), self._lines,
+            )
+            # The probe flips bias on every line; restart the settle window after it.
+            self._ignore_edges_until = time.monotonic() + SETTLE_S
+
         for line in self._lines:
             try:
                 lgpio.gpio_claim_alert(
@@ -121,6 +143,65 @@ class TTP223Handler:
             PET_SESSION_THRESHOLD,
         )
 
+    def _probe_wired(self):
+        """Return the candidate lines with a TTP223 driving them.
+
+        A pad touched during the probe reads LOW and is missed; its first sustained
+        touch adds it back (see _confirm_candidate), so a miss only delays that pad.
+        """
+        lgpio = self._lgpio
+        wired = set()
+        for line in self._lines:
+            try:
+                lgpio.gpio_claim_input(self._handle, line, lgpio.SET_PULL_DOWN)
+                time.sleep(PROBE_SETTLE_S)
+                if lgpio.gpio_read(self._handle, line) == 1:
+                    wired.add(line)
+            except Exception as e:
+                logger.warning("TTP223 probe line %d failed: %s", line, e)
+            finally:
+                try:
+                    lgpio.gpio_free(self._handle, line)
+                except Exception:
+                    pass
+        return wired
+
+    def _wired(self):
+        """Pads a swipe must cover: the detected set, or every configured line."""
+        with self._lock:
+            return set(self._active) if self._active else set(self._lines)
+
+    def _confirm_candidate(self, gpio, level, tick):
+        """Decide whether an edge on an undetected line proves a pad is wired there.
+
+        True exactly once per line: on the release that ends a LOW of at least
+        LEARN_MIN_LOW_MS. Anything shorter is a transient and is dropped without
+        reaching the gesture state.
+
+        The LOW is timed from the edges' own timestamps (lgpio tick, ns), not from when
+        each callback runs: a delayed or batched callback must neither stretch a
+        transient into a touch nor shrink a touch into a transient.
+        """
+        with self._lock:
+            if level == 0:
+                self._candidate_low[gpio] = tick
+                return False
+            fell_at = self._candidate_low.pop(gpio, None)
+            if fell_at is None:
+                return False
+            low_ms = (tick - fell_at) / 1e6
+            if low_ms < LEARN_MIN_LOW_MS:
+                logger.debug(
+                    "TTP223 line %d: %.1fms LOW ignored (undetected pad, needs %.0fms)",
+                    gpio, low_ms, LEARN_MIN_LOW_MS,
+                )
+                return False
+            self._active.add(gpio)
+            wired = sorted(self._active)
+        logger.info("TTP223 pad on line %d learned from a %.0fms touch; wired %s",
+                    gpio, low_ms, wired)
+        return True
+
     def _on_edge(self, chip, gpio, level, tick):
         if time.monotonic() < self._ignore_edges_until:
             # Traced anyway, flagged: a suppressed edge and a pad that never
@@ -128,6 +209,14 @@ class TTP223Handler:
             touch_debug.start_cycle(self._chip, self._lines)
             touch_debug.note_edge(gpio, level, suppressed=True)
             return
+        if self._active is not None and gpio not in self._active:
+            if not self._confirm_candidate(gpio, level, tick):
+                return
+            # Deliver the touch that proved the pad; its release follows below.
+            self._handle_edge(gpio, 0)
+        self._handle_edge(gpio, level)
+
+    def _handle_edge(self, gpio, level):
         touch_debug.start_cycle(self._chip, self._lines, self._axis)
         touch_debug.note_edge(gpio, level)
         with self._lock:
@@ -206,9 +295,9 @@ class TTP223Handler:
                 moved_within = True
             positions = [pos_of[l] for l, _ in c if l in pos_of]
             pads = {l for l, _ in c}
-            # EVERY wired pad, not a fixed count. Compared against the board's own line
-            # list so the rule follows the hardware instead of a constant.
-            if len(pads) < SWIPE_MIN_PADS or pads != set(self._lines):
+            # EVERY wired pad, not a fixed count. Compared against the detected pads
+            # (or the board's own line list) so the rule follows the hardware.
+            if len(pads) < SWIPE_MIN_PADS or pads != self._wired():
                 continue
             if len(positions) < SWIPE_MIN_PADS:
                 continue
@@ -344,7 +433,7 @@ class TTP223Handler:
 
         def _run():
             try:
-                play_ack_chime(source="TTP223")
+                play_pet_chime(source="TTP223")
             except Exception as e:
                 logger.warning("TTP223 first-session ack failed: %s", e)
 
@@ -424,7 +513,7 @@ class TTP223Handler:
                 return f"{base}; {len(live)} contacts"
             c = live[0]
             pads = {l for l, _ in c}
-            wired = set(self._lines)
+            wired = self._wired()
             if len(pads) < len(wired):
                 return (
                     f"{base}; touched {len(pads)} of {len(wired)} pads -- "

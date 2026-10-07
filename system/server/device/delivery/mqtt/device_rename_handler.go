@@ -54,6 +54,8 @@ func renameGreetingPrompt(name string) string {
 
 func renameGreetingText(name string) string {
 	switch i18n.Lang() {
+	case i18n.LangJA:
+		return fmt.Sprintf("[system] ユーザーがあなたの名前を「%s」に変更しました。日本語で短く、温かく応えてください。", name)
 	case i18n.LangVI:
 		return fmt.Sprintf("[system] Chủ nhân vừa đổi tên cho bạn thành \"%s\". Chào lại ngắn gọn, ấm áp.", name)
 	case i18n.LangZhCN:

@@ -1,5 +1,33 @@
 # Realtime Voice Agent
 
+Sleep/wake requests addressed to the device (including “Can you sleep?”) delegate silently to main rather than receiving an identity/chat reply. Main retains capability checks and Harness voice sleep restrictions, and confirms only the actual outcome. “Do robots need sleep?” remains general knowledge; “I can’t sleep” is user wellbeing, not a device sleep command. This rule applies to all realtime provider prompts, including the GPT Live backend.
+
+## Japanese language and ElevenLabs voices
+
+Use `stt_language: "ja"` for Japanese. HAL includes Japanese spoken status,
+head-pat, music-wait, mute/unmute and factory-reset phrases. The Gemini Live
+language hint maps `ja` to `ja-JP`; the shared realtime context identifies Japanese.
+ElevenLabs HTTP and WebSocket share the same name-to-ID catalog and Japanese filter.
+
+The following six voices were selected from the
+[official ElevenLabs Japanese catalog](https://elevenlabs.io/text-to-speech/japanese)
+on 2026-10-06, prioritizing native Japanese, clarity and calm conversational delivery.
+This is a curated selection based on published metadata, not a measured quality ranking.
+
+| Voice | Gender | Character | ElevenLabs voice ID |
+|---|---|---|---|
+| Shizuka (default) | Female | Gentle, clear | `WQz3clzUdMqvBf0jswZQ` |
+| Konoha | Female | Clear explanations | `T7yYq3WpB94yAuOXraRi` |
+| Rin | Female | Balanced, neutral | `NxfO5zydfqwpYnWQJ7jJ` |
+| Asahi | Male | Calm conversation | `GKDaBI8TKSBJVhsCLD6n` |
+| Hinata | Male | Calm narration | `j210dv0vWm7fCknyQpbA` |
+| Hiroki | Male | Polite, composed | `vzIXwvf41vKosKu00hYj` |
+
+Voice IDs are configured in the application; this does not add voices to an
+ElevenLabs account's My Voices. Availability still depends on the configured
+provider/account. Public catalog verification does not replace a live synthesis
+check with that account or device playback.
+
 Low-latency, speech-to-speech voice layer that runs **in parallel** with the
 normal STT → agent pipeline. The realtime model handles casual conversation
 directly (sub-second audio replies) and **delegates** anything that needs the
@@ -176,6 +204,16 @@ garbage, so the tool description also tells the model to keep the user's key
 words rather than renaming the request into a category — a prompt instruction,
 not a code guarantee. `test_turn_routing_log.py` pins the composition; nothing
 can pin the model's compliance.
+
+### Device voice input mode
+
+The top-level `voice_input_mode` setting selects `automatic` (default, including legacy configs without the field) or `tap_to_talk` while Harness voice-only mode is OFF. Automatic retains the existing VAD, realtime and wake enable/disable behavior. Tap-to-talk opens the recorder only for an explicit physical tap; another tap finalizes STT and sends one transcript through the existing OS route to the device runtime as `voice_command` (direct user speech, never ambient `voice`). It bypasses realtime audio, live promotion, automatic endpointing and backchannel speech during capture.
+
+**Code boundaries:** `hal/drivers/device_tap_actions.py` owns physical tap decisions; `_internal/device_input.py` exposes the device capture controller; `_internal/input_policy.py` owns mode selection, routing ownership, per-turn realtime/dispatch rules and capture visuals. `voice_service.py` connects these through small hooks while retaining the shared recorder/STT pipeline. `HarnessCapture` accepts a route-matching callback and keeps its original Harness matcher as the default; it contains no device-mode rules.
+
+The saved `wakeword` flag is preserved. HAL's effective `WAKEWORD_ENABLED` is false in tap-to-talk, so gaze, presence, boot-greeting focus and spoken wake phrases cannot open a recording or follow-up window. Returning to automatic restores the saved wake choice. Harness ON keeps its existing manual capture policy regardless of the device setting.
+
+Device captures reuse the existing manual capture controller with a device owner tag and the authoritative Harness routing generation. Enabling Harness, losing the routing snapshot, changing generation, stopping/muting the voice service or restarting HAL cancels pending input; it cannot be rerouted to another owner. The final dispatch rechecks ownership. Silence never submits; provider failure or `HAL_MAX_SESSION_DURATION_S` (default 30 seconds) discards the capture. Finishing before STT is ready also discards it. A ready beep and listening visual mark recorder readiness, and a finish beep acknowledges an accepted finish tap. While TTS is playing, a tap only interrupts it; while asleep, a tap only wakes the device. Another tap starts capture. Hardware microphone privacy remains authoritative.
 
 ### Voice control through Harness
 
@@ -3359,7 +3397,8 @@ is a top-level `config.json` flag:
 | Variable | Default | Notes |
 |----------|---------|-------|
 | `HAL_REALTIME_ENABLED` | `true` | Master gate for the realtime pipeline |
-| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled or unavailable, the confirmed final transcript follows the normal os-server/main-agent path. With Live ON and realtime available, the confirmed capture enters full-duplex live without a manual audio commit. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
+| `voice_input_mode` | `automatic` | `automatic` preserves current VAD/realtime and wake behavior; `tap_to_talk` records only between physical taps with Harness OFF and sends the finalized transcript to the device runtime. The saved wake flag is ignored, not deleted. Harness ON remains unchanged. |
+| `wakeword` | ROBOT.md `voice.wakeword` on a fresh config, else `false` | Only active in `voice_input_mode: automatic`. Top-level config-file wake-word gate. When true, a matching interim transcript is provisional only: HAL commits buffered audio to realtime or forwards a command only after an STT **final** result confirms a configured wake phrase. The transcript is split into sentences (`.` `!` `?`) and the phrase is accepted at the start **or the end** of any sentence; mid-sentence occurrences are rejected. The confirmation re-checks the assembled, still-punctuated transcript so the `\w+`-only merge step cannot retract a gate a partial opened. If that exact re-check fails but a partial had already matched exactly, the name alone may differ by one letter and the gate still confirms: STT rewrites its own hypothesis in the final, and on lamp-0c89 (04/09/2026) the partial `hello lamp` came back as `Hello, lamb.`, which dropped the whole turn — no realtime turn, no thinking cue, and the question fell through to the much slower main agent. The prefix (`hello`, `hey`, …) must still match exactly and the loose rule can never OPEN a gate, only confirm one an exact partial opened, so a near-miss word in ambient speech still wakes nothing. It is logged as `Wake-word confirmed with a one-letter STT slip` so the rate stays countable — many of them means the STT boost terms are not doing their job. The supported prefixes are `hello`, `hey`, `hi`, `alo`, `okay`, `ok`, and `wake up`, applied to the permanent common alias (`hey autonomous`), device type (`hey lamp`), and current agent name (`hey Luna`). A runtime rename updates only the agent-name aliases. Bare names and other prefixes do not arm the gate. A rejected utterance is discarded and its transient listening LED restores to the normal resting state; it never leaves the persistent idle effect active. A confirmed turn opens the follow-up focus window; turns in that window are forwarded as `voice_followup` without another phrase. Every authorized turn dispatches to os-server: a spoken realtime reply becomes a silent `voice_agent_handled` sync event; unavailable, silent, failed, or delegated realtime follows the normal path. If realtime is disabled or unavailable, the confirmed final transcript follows the normal os-server/main-agent path. With Live ON and realtime available, the confirmed capture enters full-duplex live without a manual audio commit. Missing/false preserves the pre-gate always-listening flow unchanged. On a config.json os-server creates, the initial value comes from the body's `voice.wakeword` (see Wake-word gate above); a config loaded without the key stays `false`. HAL restarts after a local Settings save or MQTT `wakeword.gate`. |
 | `HAL_HARNESS_PROGRESS_SPEAK_P` | `0.15` | Chance a progress-only Harness snapshot is spoken; `0` disables spoken progress. See [Harness update announcements](#harness-update-announcements). |
 | `HAL_HARNESS_PROGRESS_MIN_GAP_S` | `60` | At most one spoken progress line per Harness run within this window. |
 | `HAL_HARNESS_PROGRESS_QUIET_START_S` | `15` | No spoken progress this soon after the request. |

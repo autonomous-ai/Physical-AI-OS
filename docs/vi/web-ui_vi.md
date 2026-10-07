@@ -15,6 +15,9 @@ kết quả im lặng rỗng.
 
 ## 1. Tổng Quan
 
+Light mode dùng nền trang xám ấm, card trắng ngà, chữ phụ đậm hơn và màu trạng thái rõ hơn trên các màn hình monitor và cấu hình. Flow có nền canvas riêng, đường nối không hoạt động và mô tả node tương phản hơn; nội dung chẩn đoán dùng màu chữ trung tính. Biểu đồ lịch sử System lấy màu từ theme monitor hiện tại và dùng nhãn trục 11px.
+
+
 Web UI của thiết bị là một React SPA (Single Page Application) được build bằng **React 19 + TypeScript + Vite + Tailwind CSS 4**, phục vụ hai mục đích:
 
 1. **Setup flow** — Onboarding WiFi, LLM provider, messaging channel (các trang `/setup/*`)
@@ -25,6 +28,21 @@ File build output (`dist/`) được nginx serve tại root `/` trên thiết b�
 Trong lần setup đầu, **Channels** là tuỳ chọn và mặc định là **Not now**.
 Chọn Telegram, Slack hoặc Discord sẽ hiện các field credential, nhưng user có
 thể để trống hoặc cấu hình channel sau trong Settings.
+
+### Chọn tiếng Nhật
+
+Setup và Settings có **Japanese (日本語)** với mã `ja`. Setup nhận diện locale
+Nhật của trình duyệt và `?stt_language=ja`; biến thể vùng tiếng Nhật được chuẩn hóa về
+`ja`. Các chuỗi chat i18n, thời gian tương đối, hướng dẫn đăng ký giọng và cả ba
+câu đăng ký đều có bản tiếng Nhật. Test Voice gửi câu mẫu tiếng Nhật. Nhãn tĩnh
+trong Settings tiếp tục theo quy ước giao diện tiếng Anh hiện có.
+
+Bộ lọc ngôn ngữ ElevenLabs có nhóm tiếng Nhật gồm Shizuka, Konoha, Rin, Asahi,
+Hinata và Hiroki; Shizuka là mặc định. OpenAI và Gemini tiếp tục dùng bộ voice
+đa ngôn ngữ của từng nhà cung cấp. Setup kiểm tra voice ban đầu với danh mục
+theo ngôn ngữ, nên trình duyệt Nhật chọn Shizuka thay vì giữ Rachel. Voice hợp lệ
+đã lưu hoặc lấy từ URL được giữ; phản hồi catalog cũ bị bỏ qua sau khi đổi
+provider, ngôn ngữ hoặc voice.
 
 ### 1.1 Tiêu đề tab trình duyệt
 
@@ -129,6 +147,12 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 ```
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
+
+**Quyền quản lý LLM (Settings → Runtime).** `llm_config_mode` áp dụng chung cho thiết bị: thiếu/rỗng giữ hành vi cũ (gồm nhận diện subscription Codex/Claude Code), `os` dùng rõ ràng cấu hình LLM đã lưu trong OS, `runtime` giữ cấu hình native. AI Brain chỉ đọc khi ở runtime mode; key/base URL đã lưu vẫn phục vụ voice/backend. Native mode giữ nguyên model/provider hiện có, vì vậy cần dùng CLI/config của runtime để đăng nhập **và chọn provider/model**, rồi restart service và mở terminal mới. Mỗi runtime cần cấu hình native riêng; credentials không migrate khi đổi runtime.
+
+Mục Runtime hiển thị hai bước theo thứ tự: chọn runtime và bấm Switch, sau đó cấu hình AI cho runtime đang hoạt động. Phần cấu hình AI bị khóa khi đang chọn runtime khác hoặc đang chuyển runtime. Thay đổi LLM chưa lưu hoặc chưa áp dụng xong sẽ khóa bộ chọn runtime đến khi Save Changes thành công. Bước 2 hiển thị sẵn hai lựa chọn LLM bằng radio và có nút Save Changes riêng, dùng lại form lưu settings hiện có; trang Runtime không có nút Save ở đầu trang. Chế độ tự cấu hình chỉ hiện liên kết terminal sau khi lưu, kèm hướng dẫn đăng nhập, chọn model, restart runtime và quay lại Chat.
+
+Khôi phục mặc định AI Brain chọn rõ `os` và buộc áp dụng kể cả khi giá trị đã lưu không đổi. Lỗi áp dụng được hiển thị sau khi mode đã lưu; sửa nguyên nhân rồi thử áp dụng lại. Thành công xác nhận áp dụng cấu hình, không xác nhận tài khoản hợp lệ. Test đăng nhập subscription thật/trên device vẫn chưa thực hiện.
 
 **Remote MCP Tools** (`/setting#mcp`). Hoàn tất onboarding runtime đã chọn,
 sau đó đăng nhập giao diện admin của thiết bị. Nhập **Name** duy nhất, **URL**
@@ -246,7 +270,17 @@ Card **Versions** ở Overview có cột thao tác với nút `restart` cho OS S
 
 Card Versions hiển thị **Current** và **Latest** cạnh nhau. Latest lấy từ `target` của từng component trong `/api/system/ota-versions`, gồm runtime đang dùng qua alias `agent`; đây là bản được publish trong OTA feed của thiết bị, không phải tra release upstream. Metadata được tải ở cả chế độ thường và debug, rồi làm mới sau cập nhật. Target thiếu hoặc rỗng, gồm Host, hiện `—`; component đã ở bản hiện tại vẫn hiển thị target đã publish. Hai hàng Bootstrap, Device và nút update vẫn chỉ hiện trong debug.
 
-**Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu Settings sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
+**Chế độ nhập giọng nói** nằm trong **General** công khai với hai lựa chọn ngang hàng dưới **How to talk**: **Automatic** (mặc định, kể cả config cũ thiếu `voice_input_mode`) và **Tap to talk**. Bộ chọn lưu `voice_input_mode: "automatic" | "tap_to_talk"` qua luồng lưu Settings hiện có. Automatic giữ nguyên luồng giọng nói hiện tại và hiển thị checkbox wake cùng các phrase. Tap to talk ẩn các điều khiển đó nhưng giữ lựa chọn `wakeword` đã lưu: chạm một lần để thu, chạm lần nữa để dừng và gửi; im lặng không tự gửi. Khi TTS đang phát, một lần chạm chỉ ngắt; lần chạm tiếp theo mới thu. Wake phrase và gaze không mở phiên thu trong chế độ này; công tắc mic vật lý vẫn có hiệu lực. Chuyển lại Automatic khôi phục lựa chọn wake trước đó. Cấu hình điều khiển giọng nói trên device khi Harness-only tắt; Harness-only giữ hành vi chạm hiện có. Giá trị được tích hợp vào tải Settings, nhận biết thay đổi, lưu và tải lại.
+
+Sidebar Monitor/Settings chỉ mở một nhóm cấp cao nhất: mở nhóm mới sẽ đóng nhóm trước, bấm nhóm đang mở sẽ thu lại, và điều hướng tự mở nhóm chứa trang đích. Sidebar có danh sách điều hướng cuộn độc lập, giữ thao tác cuộn trong danh sách và footer Logout không bị co. Trên điện thoại, menu dùng chiều cao viewport động (`100dvh`) để truy cập được mọi mục debug.
+
+**Form Realtime** (`/setting?debug=true#realtime`) dùng nhãn checkbox ngắn; tên provider nằm trong dropdown Provider. Hướng dẫn cho API Key và Base URL tùy chọn nằm dưới ô nhập để nhãn trường gọn trên màn hình hẹp.
+
+Cách bố trí nhãn ngắn cũng áp dụng cho attention trigger trong General, thông tin xác thực STT, trường provider/key của TTS và Resting light. Trạng thái key TTS giữ nguyên cụm khi hàng xuống dòng. Trang cấp Wi-Fi đặt giải thích Advanced dưới nút; Manual Move tách mô tả khỏi checkbox Live drag.
+
+**Speech attention gate** nằm trong card **General** công khai, không nằm ở mục Realtime chỉ-debug. Checkbox vẫn ghi cờ `wakeword` top-level; lưu giá trị wake đã đổi hoặc đang chờ áp dụng sẽ restart HAL để áp dụng. Khi bật, speech phải đi sau một attention trigger: wake phrase nói ra, single click, quay về phía lamp rồi nói, hoặc một người đã enrolled xuất hiện trong khung (`presence.enter`). Event chỉ có stranger không mở voice gate, trừ khi deployment đặt `HAL_PRESENCE_WAKE_STRANGERS=true`. Card liệt kê các phrase **nói ra** hiện được chấp nhận, gồm tên agent hiện tại chính xác cùng các alias cố định `autonomous` và device type; hệ thống quản lý danh sách này. Tải lại Settings sau khi đổi tên agent để thấy tên mới. Khi tắt, mọi câu nói được xử lý mà không cần trigger.
+
+Các cập nhật wake từ HTTP Settings và MQTT được xử lý tuần tự. Lưu Settings chờ lệnh `systemctl restart` HAL cần thiết hoàn tất (riêng lệnh restart có timeout 30 giây), chưa xác nhận voice pipeline sẵn sàng. Lỗi lưu hoặc áp dụng wake được trả qua phản hồi lỗi Settings hiện có; config có thể đã được lưu nếu restart thất bại. Trạng thái wake chờ áp dụng được giữ trong tiến trình os-server hiện tại, nên lưu lại cùng giá trị sẽ thử áp dụng lại. Sau khi thành công, giá trị wake không đổi không gây thêm lần restart. Cập nhật config không có wake chờ áp dụng giữ cách áp dụng HAL bất đồng bộ hiện có. Cập nhật đồng thời wake và cấu hình khác dùng một lần restart HAL; các trường khác đã lưu vẫn được thực hiện các tác vụ đi kèm như bình thường.
 
 **Timezone** (`/setting#timezone`, nội bộ `settings:timezone`, `TimezoneSection.tsx`) — một mục chỉ-admin mà, giống Agent Runtime, **không** nằm trong luồng "Save Changes" của form: nó có nút **Apply** riêng. Mục này tải zone hiện tại và danh sách zone IANA chọn được qua `GET /api/device/timezone`, cho người vận hành chọn một zone từ một dropdown duy nhất (`<select>` nhóm theo khu vực bằng `<optgroup>`, mỗi dòng ghi `(GMT+7) Ho Chi Minh` và sắp theo offset UTC, giống cách các trình chọn timezone phổ biến trên web làm), và hiển thị preview trực tiếp giờ địa phương theo zone đã chọn. Khi nhấn **Apply** nó gọi `POST /api/device/timezone {timezone}`; thay đổi áp dụng ngay lập tức (không cần khởi động lại thiết bị).
 
@@ -391,6 +425,12 @@ Web UI không bao giờ gọi nginx `/hw/*`: mọi request tới HAL đi qua rev
 
 ### 5.1 Overview Section
 
+Services trên Overview hiển thị tiến độ được lưu dưới từng component. Chỉ lượt tải artifact biết dung lượng mới có phần trăm theo byte và thanh tiến độ; chuẩn bị, kiểm tra, cài đặt, restart và health check hiển thị tên bước. Nếu không biết tổng dung lượng thì chỉ hiện số byte đã tải. Kết quả completed/failed/interrupted của lượt trước giữ nhãn “Last update”. Khi kết nối lại, UI giữ trạng thái gần nhất thay vì coi mất mạng là đã xong. Component đang cập nhật khóa nút update/restart. API tương thích worker cũ chỉ có danh sách updating; tiến độ chi tiết cần updater và OS Server mới trên thiết bị.
+
+
+
+Monitor dùng nhất quán các thuộc tính overflow theo từng trục để khôi phục cuộn nội dung khi quay lại từ Chat, Settings hoặc trang nhúng.
+
 Khi quay lại Overview, dữ liệu được refresh ngay thay vì chờ nhịp poll 5 giây; dữ liệu card đã có vẫn hiển thị trong lúc tải. Monitor giữ snapshot phiên bản OTA và emotion preset tải thành công qua các lần đổi tab, hiển thị ngay khi quay lại rồi cập nhật nền. Cache chỉ nằm trong bộ nhớ và mất khi monitor unmount. Đổi section sẽ hủy poll của section cũ; không giữ stream của section đang ẩn.
 
 Gồm các card:
@@ -438,9 +478,7 @@ Gồm các card:
   Stream vẫn mở khi mic nói bị mute (mic sensing độc lập với nút mute), và
   đóng khi tab trình duyệt bị ẩn.
 
-Ở độ rộng điện thoại **từ 480px trở xuống**, bốn card trạng thái của Overview
-xếp một cột. Cách này giữ đủ chỗ cho control và VU meter của Audio, đồng thời
-không kéo giãn card Presence ngắn theo card Audio cao hơn.
+Overview chia thành ba vùng luôn hiển thị: **System health** (Agent, Network, Presence, Hardware), **Live controls** (Audio và Scene cạnh Emotion và Servo), và **Services** (bảng phiên bản, uptime toàn chiều ngang, sau đó là Power). Card trạng thái dùng bốn cột trên 1200px, hai cột đến 1200px và một cột dưới 768px; phần điều khiển cũng xếp một cột dưới 768px. Từ 1500px, Audio/Scene, Emotion và Servo chia ba cột thẳng hàng với nền và viền thống nhất. Nhãn preset thay dấu gạch dưới bằng khoảng trắng; ID lệnh giữ nguyên. Meter âm thanh và toàn bộ preset luôn hiện. Preset dùng lưới nút tự xuống hàng; restart Agent có hàng riêng. Thao tác thiết bị và xác nhận hiện có giữ nguyên. Nút bảo trì dùng icon và nhãn rõ: Update màu amber, Restart trung tính; các trạng thái Sending, Queued và Updating vẫn phân biệt riêng.
 
 **Hardware** (card ngang)
 - 8 badge: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
@@ -476,6 +514,24 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > rõ ở dark mode. Phần tóm tắt chừa đủ chỗ cho emoji và tên dài như
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
+
+### Khả năng đọc của Settings
+
+Dropdown Settings dùng menu Radix cùng theme, mục chọn màu amber, tự đặt vị trí theo viewport, có cuộn, điều hướng bàn phím và đóng bằng Escape. Các lựa chọn Auto/default có giá trị rỗng vẫn chọn được. General giữ control hiện có.
+
+Các mục Settings ngoài General có focus bàn phím rõ, chiều cao control nhất quán và chữ 16px cho ô nhập/select trên mobile. Language, Voice, Realtime và Channels dùng chữ hướng dẫn lớn hơn. MCP Tools và Plugins áp dụng thao tác riêng nên không còn hiện nút Save Changes chung.
+
+Trên điện thoại, trường key/value của MCP header xếp dọc với nhãn rõ; nhóm thao tác Plugin và Scheduled nằm dưới tên và trạng thái. My Voice xử lý tên dài và đặt bản ghi bên dưới tên file; nút xóa ảnh Face có vùng bấm lớn hơn. Các thao tác kết nối Facebook có thể xuống hàng. Nhãn Schedule editor liên kết với control và nút chọn ngày công bố trạng thái nhấn. Nút trong hướng dẫn Runtime không submit form Settings; dialog hỗ trợ focus bàn phím và đóng bằng bàn phím.
+
+### Khả năng đọc của Monitor
+
+History của Chat phủ vùng chat trên điện thoại thay vì ép hẹp hội thoại; Escape đóng panel, focus bàn phím nằm trong history đang mở trên mobile, chọn hoặc tạo hội thoại sẽ trở lại chat. Export và Clear được gom vào menu thao tác hỗ trợ bàn phím. Chọn hội thoại và đổi tên/ghim/xóa dùng được bằng bàn phím và touch. Nút thao tác tin nhắn có vùng bấm lớn và luôn thấy, metadata xuống hàng, nút xuống cuối luôn nằm phía trên composer kể cả khi có bản nháp nhiều dòng hoặc tệp đính kèm. Enter chỉ gửi khi không đang xác nhận ký tự IME; Shift+Enter vẫn xuống dòng.
+
+Overview hiển thị trạng thái đang tải trung tính trước khi nhận trạng thái agent; các hàng phiên bản xếp lại kèm nhãn trên điện thoại. System xếp đồng hồ đo phía trên biểu đồ lịch sử tại 768px. Camera đặt snapshot dưới stream trên điện thoại, thêm nhãn cho ô tracking, thu gọn bounding box tùy chọn vào Advanced tracking, hiển thị lỗi thao tác và khóa nút khi đang gửi yêu cầu.
+
+Logs dùng dropdown chọn nguồn tại 640px, chữ log lớn hơn và timestamp rõ hơn. Flow tăng kích thước ô tìm kiếm và nút toolbar. CLI có tab phiên dùng được bằng bàn phím, phím terminal trên mobile và nút Reconnect khi mất kết nối; kết nối lại mở shell mới và xóa lịch sử cuộn của terminal trước đó. API Docs có trạng thái đang tải/lỗi cùng Reload và Open in new tab. Monitor và Settings dành hàng riêng cho footer để liên kết mã nguồn không che nội dung.
+
+Servo dùng tiêu đề lớn hơn, số đo tương phản rõ và nút thoáng trong overview hai cột, chuyển một cột tại 900px. Tại 600px, mỗi joint xếp tên, góc hiện tại, ô target và slider toàn chiều ngang; live drag và giới hạn góc giữ nguyên. Users có metadata lớn hơn, nút thao tác luôn hiện, card người dùng gọn trong lưới tự xếp cột (cột tối thiểu 280px, card tối đa 340px) và lưới quan sát hai cột; cả hai chuyển một cột toàn chiều ngang tại 640px, profile files thu gọn và panel cooldown nhận diện thu gọn riêng. Pairing dùng tiêu đề kết nối lớn hơn, badge trạng thái, khối thao tác/lỗi rõ và hàng metadata responsive; ID kết nối Buddy nằm trong Connection details thu gọn.
 
 ### 5.2 Section Pairing
 
@@ -727,6 +783,7 @@ Cả hai đường đều KHÔNG restart runtime: backend nào có thư mục sk
 **Streaming real-time**
 - **Thinking indicator**: khối tím thu gọn được, hiển thị reasoning tokens của LLM khi stream (`thinking` events). Click mở rộng toàn bộ (max-height 200px, scroll). Tự ẩn khi response hoàn tất.
 - **Assistant delta streaming**: text response hiện từng token qua `assistant_delta` events, thay vì đợi response cuối cùng. Fallback sang `chat_response` partial cho đường non-agent.
+- **Dòng Harness trong chat**: khi turn đã giao cho Harness, chữ trả lời bị hoãn của agent trên đèn (thường là `NO_REPLY`) không còn được stream. Delta tiến độ, tool, câu hỏi và thông báo xin quyền của Harness mỗi cái kết thúc bằng xuống dòng (`pushHarnessLine`, `system/server/agent/delivery/http/handler_harness.go`); dòng tiến độ/tool trùng với dòng ngay trước của run thì bỏ. Dòng tiến độ/tool chỉ có realtime (không ghi JSONL), tab bị ẩn sẽ lỡ mất; câu hỏi và thông báo xin quyền được phát lại từ flow event `harness_question`.
 - **Tool call chips**: badge màu teal hiển thị các tool agent gọi trong response (emotion, LED, servo, audio, v.v.). Hiển thị phía trên bubble tin nhắn khi đang stream, lưu lại trên tin nhắn đã hoàn tất. Một tool hiển thị thành một chip; **từ hai tool trở lên sẽ gom thành một pill tóm tắt** ("N steps" với các icon tool xếp chồng + marker đang chạy/`DONE`), bấm vào để mở ra các chip riêng lẻ.
 
 **Xử lý response**
@@ -758,11 +815,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
+Trang mở đầu bằng tóm tắt presence và các card dễ đọc về người, chuyển động, ánh sáng và sự kiện âm thanh. Ước lượng biểu cảm và tư thế xuất hiện tiếp theo khi có dữ liệu. Trạng thái backend, buffer, timeout, sự kiện thô và sample tư thế nằm trong **Technical details** thu gọn. Dịch vụ tạm dừng được ghi rõ; request lỗi hiển thị lỗi thay vì quan sát cũ. Card dùng một cột khi chiều rộng tối đa 600px. Environment phía dưới ưu tiên nhiệt độ, độ ẩm, CO₂ và PM2.5; **More measurements** mở năm chỉ số còn lại. Không thêm ngưỡng chất lượng không khí hay điểm sức khỏe suy ra.
+
 Menu Sensing và card chỉ đọc **Environment** luôn hiển thị, không cần debug,
 kể cả khi device không khai báo capability sensing. Card camera vẫn yêu cầu
 `vision`. Khi đang tải capabilities hoặc thiếu `environment`, card môi trường
-hiện các số đo `N/A` và không gửi request tới sensor. Sensor có khai báo nhưng
-đang tắt cũng hiển thị số đo `N/A`.
+hiện thông báo không khả dụng gọn và không gửi request tới sensor. Sensor đang tắt
+hoặc chưa có sample cũng dùng trạng thái trống gọn.
 
 Khi có capability `environment`, card đọc `GET /api/hardware/environment/status`
 mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL
@@ -782,7 +841,7 @@ Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Compo
 không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `N/A`, không hiện số 0.
 Số đo cũ cũng được thay bằng `N/A`; request thất bại được hiển thị là lỗi để
 không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
-tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+tốt/xấu, ngưỡng hay cảnh báo. Sensor details dùng từng khối có chữ tương phản rõ, hàng nhãn/giá trị thẳng cột và badge trạng thái. Sensor hoạt động xuất hiện trước; sensor tắt không có lỗi nằm trong danh sách con thu gọn. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
 thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
 component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
 với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample hoặc timestamp

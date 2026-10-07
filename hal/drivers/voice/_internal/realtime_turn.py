@@ -182,7 +182,7 @@ def _reply_language_name() -> str:
     from hal.config import _os_cfg_get
     from hal.realtime.context_manager.base import ContextManagerBase
 
-    code: str = (_os_cfg_get("stt_language", "") or "").strip()
+    code: str = presets.normalize_language(_os_cfg_get("stt_language", ""))
     if not code:
         return ""
     return ContextManagerBase.LANGUAGE_NAMES.get(code, code)

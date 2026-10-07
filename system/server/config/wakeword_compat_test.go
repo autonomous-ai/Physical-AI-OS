@@ -23,6 +23,7 @@ func TestProvideConfigMissingWakeWordDoesNotRewriteOrRestartCompatibleConfig(t *
 		t.Fatalf("unmarshal default config: %v", err)
 	}
 	delete(legacy, "wakeword")
+	delete(legacy, "voice_input_mode")
 	data, err = json.Marshal(legacy)
 	if err != nil {
 		t.Fatalf("marshal legacy config: %v", err)
@@ -32,6 +33,9 @@ func TestProvideConfigMissingWakeWordDoesNotRewriteOrRestartCompatibleConfig(t *
 	}
 
 	cfg := ProvideConfig()
+	if cfg.GetVoiceInputMode() != VoiceInputAutomatic {
+		t.Fatal("missing voice_input_mode must default to automatic")
+	}
 	if cfg.WakeWordEnabled() {
 		t.Fatal("missing wakeword must default to false")
 	}

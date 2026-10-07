@@ -35,6 +35,7 @@ const fallbackLang = LangEN
 var phrases = map[Phrase]map[string][]string{
 	// Idle self-talk: no sensor claims, listening acknowledgements or requests for a reply.
 	PhraseMumble: {
+		LangJA: {"うーん…", "急がなくても大丈夫。", "たまには、ちょっとふざけてもいいよね。", "[chuckle] なんだか楽しい気分。", "こういう時間、好きだな。", "ラララ…"},
 		LangEN: {
 			"Mm…",
 			"No need to rush.",
@@ -69,6 +70,7 @@ var phrases = map[Phrase]map[string][]string{
 		},
 	},
 	PhraseRecovery: {
+		LangJA: {"[sigh] ふう、戻った。", "うん、大丈夫。", "[chuckle] あ、よし。", "[whisper] 戻ったよ。", "よし。[sigh]"},
 		LangEN: {
 			"[sigh] Mm, back.",
 			"Hmm. Okay.",
@@ -99,6 +101,7 @@ var phrases = map[Phrase]map[string][]string{
 		},
 	},
 	PhraseReconnect: {
+		LangJA: {"[gasp] あ、また考えられる！", "[sigh] ちょっと頭が真っ白になってた。", "ふう、何を考えてたんだっけ。[chuckle]", "[gasp] どこまで話したっけ？", "[sigh] さっきはぼんやりしてたけど、もう大丈夫。"},
 		LangEN: {
 			"[gasp] Oh, I can think again!",
 			"[sigh] My mind went blank for a sec.",
@@ -129,66 +132,77 @@ var phrases = map[Phrase]map[string][]string{
 		},
 	},
 	PhraseBrainRestart: {
+		LangJA:   {"[sigh] ちょっと待ってね、頭を整理してるところ。"},
 		LangEN:   {"[sigh] Hold on, my head's clearing."},
 		LangVI:   {"[sigh] Đợi chút nhé, đầu mình đang tỉnh lại."},
 		LangZhCN: {"[sigh] 稍等一下，我脑子还在回过神。"},
 		LangZhTW: {"[sigh] 稍等一下，我腦子還在回過神。"},
 	},
 	PhraseCompactNotice: {
+		LangJA:   {"ちょっと待ってね、少し整理してるよ。"},
 		LangEN:   {"Hold on, tidying up a bit."},
 		LangVI:   {"Đợi xíu, mình đang dọn dẹp tí."},
 		LangZhCN: {"稍等一下，我在整理一下。"},
 		LangZhTW: {"稍等一下，我在整理一下。"},
 	},
 	PhraseLLMLimit: {
+		LangJA:   {"[sigh] 利用上限に達しちゃった。"},
 		LangEN:   {"[sigh] I've hit my usage limit."},
 		LangVI:   {"[sigh] Mình hết hạn mức rồi."},
 		LangZhCN: {"[sigh] 我的额度用完了。"},
 		LangZhTW: {"[sigh] 我的額度用完了。"},
 	},
 	PhraseTrackFailFmt: {
+		LangJA:   {"[sigh] %sがよく見えないな。そちらに向けてくれる？ 別の名前で呼んでみてもいいよ。"},
 		LangEN:   {"[sigh] I can't quite see %s — point me that way, or call it something else?"},
 		LangVI:   {"[sigh] Mình không rõ %s lắm — quay mình về phía đó được không, hay gọi tên khác xem?"},
 		LangZhCN: {"[sigh] 我看不太清%s — 让我朝那边看看，或者换个名字？"},
 		LangZhTW: {"[sigh] 我看不太清%s — 讓我朝那邊看看，或者換個名字？"},
 	},
 	PhraseChitchatGreeting: {
+		LangJA:   {"[chuckle] こんにちは！", "[laughs softly] やあ！", "[whisper] {Name}だよ。"},
 		LangEN:   {"[chuckle] Hi there!", "[laughs softly] Hey hey!", "[whisper] I'm here."},
 		LangVI:   {"[chuckle] Chào bạn!", "[laughs softly] Mình đây!", "[whisper] {Name} đây nè."},
 		LangZhCN: {"[chuckle] 你好呀!", "[laughs softly] 嗨, 我在这里."},
 		LangZhTW: {"[chuckle] 你好啊!", "[laughs softly] 嗨, 我在這裡."},
 	},
 	PhraseChitchatFarewell: {
+		LangJA:   {"[whisper] またね！", "[sigh] また会おうね。"},
 		LangEN:   {"[whisper] Bye!", "[sigh] See you later."},
 		LangVI:   {"[whisper] Bye nha!", "[sigh] Hẹn gặp lại."},
 		LangZhCN: {"[whisper] 再见!", "[sigh] 下次见."},
 		LangZhTW: {"[whisper] 再見!", "[sigh] 下次見."},
 	},
 	PhraseChitchatThanks: {
+		LangJA:   {"[chuckle] どういたしまして！", "[whisper] いつでもどうぞ。"},
 		LangEN:   {"[chuckle] No worries!", "[whisper] You're welcome.", "[laughs softly] Sure thing."},
 		LangVI:   {"[chuckle] Khỏi cần!", "[whisper] Không có gì.", "[laughs softly] Có gì đâu."},
 		LangZhCN: {"[chuckle] 不用谢!", "[whisper] 没事."},
 		LangZhTW: {"[chuckle] 不用謝!", "[whisper] 沒事."},
 	},
 	PhraseChitchatApology: {
+		LangJA:   {"[chuckle] 大丈夫だよ！", "[whisper] 気にしないで。"},
 		LangEN:   {"[chuckle] No worries!", "[whisper] It's all good.", "[laughs softly] Don't sweat it."},
 		LangVI:   {"[chuckle] Không sao mà!", "[whisper] Yên tâm đi.", "[laughs softly] Có gì đâu."},
 		LangZhCN: {"[chuckle] 没关系!", "[whisper] 别担心."},
 		LangZhTW: {"[chuckle] 沒關係!", "[whisper] 別擔心."},
 	},
 	PhraseChitchatCompliment: {
+		LangJA:   {"[chuckle] ありがとう！", "[laughs softly] うれしいな。"},
 		LangEN:   {"[chuckle] Aw, thanks!", "[laughs softly] You're sweet.", "[whisper] Hehe, thanks."},
 		LangVI:   {"[chuckle] Cảm ơn nha!", "[laughs softly] Bạn dễ thương quá.", "[whisper] Hihi, cảm ơn."},
 		LangZhCN: {"[chuckle] 谢谢夸奖!", "[laughs softly] 你真好."},
 		LangZhTW: {"[chuckle] 謝謝誇獎!", "[laughs softly] 你真好."},
 	},
 	PhraseChitchatNevermind: {
+		LangJA:   {"[whisper] わかった。", "うん。", "[chuckle] 大丈夫。"},
 		LangEN:   {"[whisper] Got it.", "Ok.", "[chuckle] No problem."},
 		LangVI:   {"[whisper] Ừ ok.", "Dạ.", "[chuckle] Không sao."},
 		LangZhCN: {"[whisper] 好的.", "嗯, 知道了."},
 		LangZhTW: {"[whisper] 好的.", "嗯, 知道了."},
 	},
 	PhraseChitchatPresenceCheck: {
+		LangJA:   {"[chuckle] ここにいるよ！", "[whisper] いるよ。", "{Name}はここだよ。"},
 		LangEN:   {"[chuckle] Still here!", "[whisper] Right here.", "I'm here."},
 		LangVI:   {"[chuckle] Vẫn đây nè!", "[whisper] Mình đây.", "Có {Name} đây."},
 		LangZhCN: {"[chuckle] 我还在!", "[whisper] 在呢."},
@@ -241,7 +255,7 @@ func poolFor(p Phrase, lang string) []string {
 	if !ok {
 		return nil
 	}
-	if pool, ok := byLang[lang]; ok && len(pool) > 0 {
+	if pool, ok := byLang[NormalizeLang(lang)]; ok && len(pool) > 0 {
 		return pool
 	}
 	return byLang[fallbackLang]

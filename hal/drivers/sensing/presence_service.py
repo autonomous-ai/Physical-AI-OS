@@ -32,7 +32,6 @@ class PresenseService:
         self._guard_mode: bool = False
         self._guard_last_check: float = 0.0
 
-        self._last_color: tuple = (255, 180, 100)
 
     @property
     def state(self) -> PresenceState:
@@ -52,10 +51,6 @@ class PresenseService:
         self._enabled = False
         self._state = PresenceState.DISABLED
         logger.info("Presence auto-control disabled")
-
-    def set_last_color(self, color: tuple):
-        """Called whenever LED color is set (from scene or manual), so we know what to restore."""
-        self._last_color = color
 
     def on_motion(self):
         """Called by SensingService when motion is detected."""
@@ -154,7 +149,7 @@ class PresenseService:
             return False
 
     def _restore_light(self):
-        """Restore last known color at full brightness."""
+        """Restore the authoritative user/resting look and respect active overlays."""
         if not self._rgb_service:
             logger.warning("Presence: cannot restore light — rgb_service not available")
             return
@@ -164,19 +159,25 @@ class PresenseService:
             logger.info("Presence: light restore skipped — strip is off/resting dark")
         else:
             try:
-                logger.info("Presence: restoring light color=%s", self._last_color)
-                self._rgb_service.dispatch(RGB_CMD_SOLID, self._last_color)
+                from hal.app_state import _restore_user_led
+
+                _restore_user_led()
             except Exception as e:
                 logger.warning("Presence: failed to restore light: %s", e)
 
     def _dim_light(self):
-        """Dim to config.IDLE_BRIGHTNESS of last color."""
+        """Dim the current user/resting base, never a cached emotion color."""
         if not self._rgb_service:
             return
         if self._light_is_off():
             return
         try:
-            dimmed = tuple(int(c * config.IDLE_BRIGHTNESS) for c in self._last_color)
+            from hal import app_state
+            from hal.presets import AMBIENT_RESTING_LED
+
+            color = (app_state._get_user_base_color() if app_state._user_led_state
+                     else tuple(AMBIENT_RESTING_LED["color"]))
+            dimmed = tuple(int(c * config.IDLE_BRIGHTNESS) for c in color)
             self._rgb_service.dispatch(RGB_CMD_SOLID, dimmed)
         except Exception as e:
             logger.warning("Presence: failed to dim light: %s", e)

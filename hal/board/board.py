@@ -44,6 +44,9 @@ class TouchConfig:
     lines: List[int]
     # Physical left-to-right line order; optional because line order is NOT spatial on this board.
     axis: Optional[List[int]] = None
+    # Candidate lines, not all wired: the driver probes which pads are present at
+    # startup and learns any it missed from their first touch.
+    detect: bool = False
 
 
 @dataclass(frozen=True)

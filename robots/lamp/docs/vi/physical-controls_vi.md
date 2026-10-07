@@ -17,7 +17,7 @@ Lamp hỗ trợ các nút cơ học, touchpad TTP223 và bộ điều khiển c�
 | Nút GPIO chính | gpiochip0 BCM 17 (pull-up, active-LOW) | Pin vật lý 35 / PD3 / gpiochip0 line 99 (pull-up, active-LOW) |
 | Nút GPIO reset | không wire | Pin vật lý 37 / PD4 / gpiochip0 line 100 (pull-up, active-LOW); giữ ≥5 s rồi nhả để factory-reset |
 | Công tắc gạt mic | không wire | Pin vật lý 11 / PL9 / gpiochip1 line 9; pull-up, LOW=mute, HIGH=unmute |
-| TTP223 | không wire | Hai pad, gpiochip0 line **37 và 96** theo cấu hình trong `robots/lamp/ttp223.json` (tài liệu trước đây ghi 96/98 — S1 pin 29 / PD0 / line 96, S3 pin 33 / PD2 / line 98; cần xác nhận trên phần cứng). **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
+| TTP223 | không wire | Bốn pin header ứng viên trên gpiochip0 — pin 27 / PB5 / line 37 (T1), pin 29 / PD0 / line 96 (T2), pin 31 / PD1 / line 97 (T3), pin 33 / PD2 / line 98 (T4) — chỉ hai pin có pad, khác nhau theo từng máy. `robots/lamp/ttp223.json` liệt kê cả bốn với `"detect": true`; HAL tự tìm cặp đang nối khi khởi động. **Pull-up, active-LOW** (pad nghỉ ở mức HIGH; chạm là edge xuống). |
 
 Wiring nút cơ thuộc về từng device: `robots/lamp/gpio_button.json` và
 `robots/intern-v2/gpio_button.json` đều khai báo map `boards` với các key
@@ -48,7 +48,8 @@ dùng chung.
 
 Wiring TTP223 cũng do device quản lý: `robots/lamp/ttp223.json` khai báo
 map `boards`. Intern v2 không có phần cứng TTP223 nên không kèm file này. Mỗi entry bật có `chip`,
-`lines` và `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải).
+`lines`, `axis` tùy chọn (cùng các line đó theo thứ tự vật lý trái sang phải)
+và `detect` tùy chọn (boolean, mặc định `false`).
 `hal/board/ttp223.py` chọn board đã detect và truyền `TouchConfig` cho driver
 dùng chung. Thiếu file hoặc entry board thì fallback về `touch` cũ của board
 trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
@@ -56,11 +57,35 @@ trong `hal/board/boards.json` (OrangePi: chip 0, line 96/100);
 GPIO. Restart HAL sau khi sửa JSON của device được chọn. Pull-up, active-LOW
 và nhận diện cử chỉ vẫn ở driver dùng chung; mô phỏng bỏ qua phần cứng.
 
-JSON của Lamp hiện cấu hình `orangepi_sun60` là chip 0, line `[37, 96]`
-(không có `axis`). Tài liệu này trước đây ghi S1 ở pin 29 (line 96), S3 ở pin 33
-(line 98); hai nguồn không khớp nên **cần xác nhận line của pad thứ hai trên phần
-cứng** (`hal/test_ttp223_probe_orangepi.py watch`). Dù thế nào, pin 35 (line 99)
-vẫn dành cho nút cơ. Fallback cũ vẫn dùng line 96/100, trùng với nút reset; cần
+JSON của Lamp cấu hình `orangepi_sun60` là chip 0, line `[37, 96, 97, 98]`
+(pin header 27/29/31/33, T1–T4), không có `axis`, `"detect": true`. Chỉ hai pad
+được nối và hai pad nào thì khác nhau giữa các máy, nên `lines` là danh sách ứng
+viên chứ không phải danh sách pad. Khi bật `detect`, driver:
+
+1. **Probe khi khởi động.** Mỗi line ứng viên được claim làm input với pull-down
+   trong 10 ms (`PROBE_SETTLE_S`) rồi đọc. TTP223 đã nối kéo output nghỉ lên HIGH
+   nên đọc được 1; pin header trống tụt về 0. Sau đó line được giải phóng và log
+   in `TTP223 detect: wired pads [...] of candidates [...]`.
+2. **Claim mọi line ứng viên** với pull-up / cả hai edge như cũ. Pin trống luôn
+   HIGH và không sinh edge.
+3. **Học từ lần chạm đã xác nhận.** Edge trên line mà probe bỏ sót không được
+   đưa vào trạng thái gesture cho tới khi line ở mức LOW ít nhất 20 ms
+   (`LEARN_MIN_LOW_MS`; trace trên máy cho thấy một lần chạm giữ LOW 73–135 ms).
+   Khoảng LOW được đo giữa timestamp kernel của hai edge (`tick` của callback
+   lgpio, đơn vị nano giây), không phải thời điểm callback chạy, nên callback bị
+   trễ hoặc dồn lại không thể biến nhiễu thành lần chạm hay ngược lại.
+   Edge nhả kết thúc khoảng LOW đó sẽ thêm line vào tập pad đã nối, log
+   `TTP223 pad on line N learned from a Xms touch`, và chuyển lần chạm đó thành
+   gesture bình thường, tính thời điểm tại lúc nhả. Khoảng LOW ngắn hơn — nhiễu
+   thoáng qua trên pin trống đang pull-up — bị bỏ: không học pad, không khởi động
+   timer contact và không phát chime (chỉ log ở mức DEBUG). Trường hợp cần học
+   xảy ra khi pad đang bị chạm lúc probe, hoặc output đọc LOW dưới pull-down.
+   Line đã học được giữ là đã nối cho tới khi HAL restart.
+
+Luật swipe ("mọi pad đã nối") và lý do TAP so sánh với tập pad đã nối; nếu chưa
+detect hay học được pad nào thì fallback về toàn bộ `lines`. Không có `detect`
+thì mọi line liệt kê đều được coi là đã nối (hành vi cũ). Pin 35 (line 99) vẫn
+dành cho nút cơ. Fallback cũ vẫn dùng line 96/100, trùng với nút reset; cần
 giữ JSON của Lamp trên device để tránh điều đó.
 
 Board được detect qua `/proc/device-tree/model`:
@@ -134,6 +159,14 @@ cú click vẫn dừng speech và cấp wake focus như trước.
 Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của Lamp: trước hết nó dừng mọi session object tracking đang chạy; sau đó chạm mặt điều khiển MPR121 hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để cue và câu trả lời nghe lại được. Dừng tracking vẫn hoạt động khi hardware mic kill switch đang tắt; nó không wake hoặc unmute mic. Cue "Nghe đây" (theo ngôn ngữ) chỉ phát khi switch cho phép action voice.
 
 Khi wake word đang bật, cú click cũng **được tính như một wake event**: `single_click_action` gọi `voice_service.grant_wakeword_focus(source)`, mở đúng cửa sổ follow-up focus (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, mặc định 20 s) mà câu wake phrase mở ra. Không có nó thì thiết bị nói "Nghe đây" rồi lại bỏ câu trả lời của user vì thiếu wake phrase. Cửa sổ được kiểm tra lại ở thời điểm dispatch, không chỉ latch lúc mở mic session, nên click giữa lúc session đang chạy vẫn authorize câu user đang nói. No-op khi wake word tắt (mọi câu đã dispatch sẵn) hoặc timeout follow-up = 0.
+
+### Chạm để nói với runtime trên thiết bị
+
+Hành vi attention/wake ở trên áp dụng cho `voice_input_mode: "automatic"`, là mặc định. Chọn **Tap to talk** trong General (hoặc MQTT `voice.input_mode`) để chủ động chạm bắt đầu/kết thúc khi Harness OFF. Chế độ này giữ lựa chọn wake đã lưu nhưng bỏ qua wake gate và mọi trigger focus cho tới khi trở về automatic.
+
+Tap ngắn GPIO và MPR121 đi qua `physical_short_tap`: tap đầu bắt đầu thu, tap tiếp theo dừng và gửi transcript đã chốt đến runtime trên thiết bị. Mỗi lần nhả ngắn riêng biệt đều được tính, kể cả hai tap trong cửa sổ multi-click thông thường; không phát lời Listening trì hoãn. Beep sẵn sàng và hiệu ứng listening chỉ xuất hiện khi STT sẵn sàng; beep kết thúc xác nhận tap gửi. Im lặng không gửi. Timeout (mặc định 30 giây), lỗi provider, privacy/stop hoặc đổi route Harness làm hủy bản ghi. Tap trước khi sẵn sàng hủy và không gửi.
+
+Tap khi TTS đang phát chỉ ngắt; tap sau mới thu. Đèn đang ngủ được đánh thức trước mà chưa thu. Mic mute phần mềm có thể được mở để thu; khóa mic vật lý vẫn chặn. Hold/factory reset GPIO, swipe/hold MPR121 và cử chỉ pet TTP223 giữ vai trò hiện có. Startup và privacy-switch vẫn dùng action wake gốc và không giả lập tap ghi âm. Harness ON giữ chính sách cử chỉ riêng bên dưới.
 
 ### Presence enter và quay về phía đèn — trigger wake
 
@@ -277,10 +310,11 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "electrodes": [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11],
       "swipe_axis": [11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0],
       "touch_threshold": 6,
-      "release_threshold": 3,
+      "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
       "debounce_ms": 30,
+      "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
       "sfi": 10,
@@ -290,9 +324,9 @@ trước khi dùng; HAL không tự sửa boot overlay:
 }
 ```
 
-`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 3` trong
+`bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 4` trong
 `mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
-`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi` và `tap_min_electrodes` là mặc định;
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi`, `chip_debounce` và `tap_min_electrodes` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -331,10 +365,16 @@ gian nạp giữ 0,5 µs. Lamp đặt `ffi: 34, sfi: 10, esi_ms: 1`: trên `lamp
 (01/10/2026, dừng HAL, 7 s mỗi cấu hình, không chạm) delta dương cao nhất lúc
 không chạm giảm từ 4 count (mặc định) xuống 0, vẫn cập nhật mỗi 10 ms;
 `lamp-8e2c` từng có đỉnh nhiễu 8 so với ngưỡng chạm 6 ở mặc định, gây tự chạm.
-Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) giữ 0:
-debounce contact (30 ms) và footprint vuốt (5 ms) làm ở phần mềm, còn debounce
-trên chip sẽ làm mọi footprint trễ hai mẫu. HAL kiểm tra giá trị bộ lọc lúc khởi
-động.
+Bộ lọc không làm đổi độ lớn delta khi chạm. Debounce trên chip (`0x5B`) lấy từ
+`chip_debounce` (0–7, mặc định 0), ghi cho cả DR (nhả) và DT (chạm). Giá trị mã hóa N
+yêu cầu N+1 lần phát hiện chạm hoặc nhả liên tiếp trước khi đổi trạng thái:
+0 cần một lần; 2 cần ba lần. Lamp đặt `chip_debounce: 2`
+(`0x5B = 0x22`) cùng ngưỡng `6 / 4`, là giá trị đã kiểm chứng trên phần cứng với
+`mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Debounce contact
+(30 ms) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm; mỗi chuyển trạng thái
+chạm/nhả cần thêm hai lần phát hiện liên tiếp so với `chip_debounce: 0`.
+Xem [NXP AN3892, trang 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
+HAL kiểm tra giá trị bộ lọc lúc khởi động.
 Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
 các pad đã lắp (script probe độc lập `mpr121_opi_test.py` mà phần này từng nhắc
 tới không có trong repo; `hal/test/test_mpr121*.py` chỉ kiểm tra logic driver).
@@ -361,8 +401,8 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Đúng 3 tap ngắn, rồi yên 0.4 s | Reboot bị vô hiệu hóa tại wrapper MPR121; không có action bổ sung hoặc cue nghe. Action single-click ở tap đầu vẫn chạy. |
 | Giữ 2–<5 s rồi nhả | Đã tắt; không sleep. |
 | Giữ ≥5 s rồi nhả | Đã tắt; không shutdown hay factory reset. |
-| Vuốt trái sang phải rồi nhả | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
-| Vuốt phải sang trái rồi nhả | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt phải sang trái rồi nhả (user ngồi đối diện lamp) | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
+| Vuốt trái sang phải rồi nhả (user ngồi đối diện lamp) | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
@@ -370,13 +410,19 @@ Action destructive không chạy khi còn giữ.
 
 ### Vuốt MPR121 theo hướng
 
-`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`,
-theo thứ tự **trái sang phải** vật lý. `robots/lamp/mpr121.json` của Lamp khai
-báo E11…E0 (E11 nằm bên trái). Kiểm tra chiều lắp bar: nếu E0 nằm bên trái, đảo
-trục thành E0…E11. Tăng vị trí
-trên trục (`+1`, trái sang phải) gọi `swipe_action(source="MPR121")` trong
-`button_actions.py` để sleep. Giảm vị trí (`-1`, phải sang trái) gọi action
-bật Harness voice. Các action này áp dụng khi Harness OFF; khi ON cùng hai hướng chọn agent trước/kế tiếp. Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
+Mọi hướng mô tả cho người dùng ở đây đều theo góc nhìn người ngồi **đối diện
+lamp**, không phải trái/phải của bản thân lamp.
+
+`swipe_axis` là list tùy chọn gồm 2–12 electrode khác nhau, thuộc `electrodes`.
+`robots/lamp/mpr121.json` của Lamp khai báo E11…E0: trên cụm đã lắp, E11 nằm
+bên phải của user, E0 nằm bên trái. Tăng vị trí trên trục (`+1`, user vuốt
+phải sang trái) gọi `swipe_action(source="MPR121")` trong `button_actions.py`
+để sleep. Giảm vị trí (`-1`, user vuốt trái sang phải) bật Harness voice-only
+mode. Các action này áp dụng khi Harness OFF; khi ON, phải sang trái chọn
+agent trước, trái sang phải chọn agent kế tiếp. Cần kiểm tra vị trí electrode
+khi lắp lamp; thứ tự mảng xác định dấu hướng của detector, không phải chiều
+trái sang phải theo góc nhìn user.
+Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
@@ -431,7 +477,7 @@ Pad FastMode không đo được giữ ngón tay tin cậy. Cross-talk cũng khi
 chạm sinh nhiều edge, nên giữ phần gom và phân loại hiện có:
 
 1. Mỗi edge đặt lại timer tiếp xúc **200 ms**.
-2. Tiếp xúc đầu phát chime xác nhận, không dừng lời đang nói.
+2. Phản hồi tiếp xúc đầu của TTP223 dùng âm lướt xuống nhẹ 180 ms (520 → 360 Hz), thay tiếng ping xác nhận lệnh. Âm phát một lần đầu chuỗi chạm, tuân theo mute và âm lượng loa, không dừng lời đang nói. Âm GPIO, MPR121 và Harness giữ nguyên.
 3. PET rõ ràng có thể phân giải sớm; các tiếp xúc khác đợi cửa sổ quyết định
    **1,2 s**. Mỗi gesture hợp lệ được phân giải gọi cùng action PET một lần.
 4. Mỗi lần thử phản hồi đặt cooldown **1,5 s**. Tiếp xúc trong khoảng này kéo
@@ -454,8 +500,8 @@ nhánh action điều khiển bị parked.
 | `HAL_TOUCH_SWIPE_MAX_GAP_MS` | 150 | Cận trên phân biệt vuốt với lần chạm mới |
 | `HAL_TOUCH_PRESS_MIN_EMPTY_MS` | 15 | Khoảng mặt pad trống để tính lần chạm mới |
 
-`ttp223.json` cung cấp chip, lines và `axis` không gian tùy chọn; thiếu axis thì
-dùng thứ tự lines. Hình học chỉ ảnh hưởng phân loại/thời điểm, không đổi action
+`ttp223.json` cung cấp chip, lines, `axis` không gian tùy chọn và `detect` tùy
+chọn; thiếu axis thì dùng thứ tự lines (tập con đã detect giữ nguyên thứ tự đó). Hình học chỉ ảnh hưởng phân loại/thời điểm, không đổi action
 PET. Test `hal/test/test_ttp223.py` phủ hai trạng thái classifier, layout hai/ba
 pad, các kiểu gesture, cooldown và không ngắt lời ở tiếp xúc đầu.
 
@@ -625,7 +671,7 @@ Các handler đầu vào được khởi động trong startup lifespan `hal/ser
 
 ### Gesture MPR121 theo Harness mode
 
-Trên đèn MPR121, Harness OFF giữ gesture cũ: vuốt **phải sang trái** để bật Harness, **trái sang phải** để sleep. Harness ON dùng mapping riêng thay cho click, vuốt sleep và listening cue (giữ sleep/shutdown và triple tap reboot thường đã tắt): tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **phải sang trái** chọn agent kế tiếp, **trái sang phải** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. Hướng theo `swipe_axis` trái sang phải vật lý (`mpr121.json` của Lamp khai báo E11…E0; kiểm tra chiều lắp). Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
+Trên đèn MPR121, hướng vuốt theo góc nhìn user ngồi **đối diện lamp**. Khi Harness OFF, vuốt **trái sang phải** để bật Harness voice-only mode, **phải sang trái** để sleep. Harness ON dùng mapping riêng thay cho click, vuốt sleep và listening cue (giữ sleep/shutdown và triple tap reboot thường đã tắt): tap điều khiển capture hoặc ngắt TTS; giữ **đủ 2 giây** tắt Harness và thông báo ngay (kể cả offline), không cần nhả; phần chạm còn lại bị bỏ qua tới khi buông tay; vuốt **trái sang phải** chọn agent kế tiếp, **phải sang trái** chọn agent trước. `hal/drivers/harness/gestures.py` quản lý gesture riêng này; `hal/drivers/voice/_internal/harness_capture.py` quản lý quyền sở hữu capture thủ công. GPIO/TTP223 không đổi. `swipe_axis` E11…E0 của Lamp chạy từ phải sang trái theo góc nhìn user (`+1`); chiều ngược lại là `-1`. Python gọi API Go; Go quản lý mode/focus và route voice hiện có.
 
 Khi Harness voice mode ON, yêu cầu sleep bị chặn. Nếu không đọc được mode từ OS, sleep cũng bị chặn tới khi xác nhận OFF; bước chuyển emotion kiểm tra lại sau lời thông báo sleep. Swipe khi đang ngủ không được bật Harness hoặc đánh thức lamp; cần tap wake trước khi swipe. Nếu Harness được bật từ bên ngoài (ví dụ UI/API) khi lamp đã ngủ, lamp không tự wake. Khi privacy microphone đang mở, tap hợp lệ đầu tiên chỉ wake và phục hồi thiết bị ngoại vi do sleep quản lý; không bắt đầu ghi âm, kể cả khi wake thất bại. Phải tap thêm lần nữa mới bắt đầu thu Harness. Khóa privacy microphone phần cứng vẫn được ưu tiên.
 

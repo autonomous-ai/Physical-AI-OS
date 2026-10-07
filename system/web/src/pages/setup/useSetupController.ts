@@ -6,7 +6,7 @@ import { useDocumentTitle } from "@/hooks/useDocumentTitle";
 import { useSetupUrlParams, clearStoredSetupParams } from "@/hooks/setup/useSetupUrlParams";
 import { useTTSCatalog } from "@/hooks/setup/useTTSCatalog";
 import { useConfigPrefill } from "@/hooks/setup/useConfigPrefill";
-import { useSetupStatusPolling } from "@/hooks/setup/useSetupStatusPolling";
+import { useSetupStatusPolling, type SetupPhase } from "@/hooks/setup/useSetupStatusPolling";
 import { useFaceEnroll } from "@/hooks/setup/useFaceEnroll";
 import { useWifiConnected } from "@/hooks/setup/useWifiConnected";
 import { useCapabilities } from "@/hooks/useCapabilities";
@@ -55,7 +55,7 @@ export function useSetupController(mode: SetupMode) {
   const [wiredRun, setWiredRun] = useState(false);
   // Adopted a previous attempt's failure; separate from setupWorking, which drives the live pollers.
   const [adoptedFailure, setAdoptedFailure] = useState(false);
-  const [setupPhase, setSetupPhase] = useState<"connecting" | "connected" | "failed">("connecting");
+  const [setupPhase, setSetupPhase] = useState<SetupPhase>("connecting");
   const [setupLanIP, setSetupLanIP] = useState<string>("");
   const [setupErrorMsg, setSetupErrorMsg] = useState<string>("");
   const [elapsed, setElapsed] = useState(0);
@@ -101,12 +101,13 @@ export function useSetupController(mode: SetupMode) {
   const [sttApiKey, setSttApiKey] = useState("");
   const [sttBaseUrl, setSttBaseUrl] = useState("");
   const [sttLanguage, setSttLanguage] = useState<string>(() => {
-    const VALID = ["en", "vi", "zh-CN", "zh-TW"];
+    const VALID = ["en", "vi", "ja", "zh-CN", "zh-TW"];
     if (urlParams.sttLanguage) {
       if (VALID.includes(urlParams.sttLanguage)) return urlParams.sttLanguage;
       console.warn(`[setup] URL stt_language="${urlParams.sttLanguage}" not in ${VALID.join(",")}, ignoring`);
     }
     const loc = (navigator.language || "").toLowerCase();
+    if (loc === "ja" || loc.startsWith("ja-")) return "ja";
     if (loc.startsWith("vi")) return "vi";
     if (loc.startsWith("zh-tw") || loc.startsWith("zh-hant") || loc.startsWith("zh-hk")) return "zh-TW";
     if (loc.startsWith("zh")) return "zh-CN";

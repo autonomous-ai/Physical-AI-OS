@@ -1,4 +1,5 @@
 import camelcaseKeys from "camelcase-keys";
+import { normalizeLang } from "@/lib/i18n";
 import type { NetworkItem, SetupRequest } from "@/types";
 
 const API_BASE =
@@ -236,6 +237,8 @@ export async function wifiProvision(body: WifiProvisionBody): Promise<boolean> {
 }
 
 export interface SetupStatus {
+  // Present during onboarding runtime preparation; absent on older servers.
+  runtime_phase?: "preparing" | "ready" | "failed" | "";
   phase: "idle" | "connecting" | "connected" | "failed";
   lan_ip: string;
   error: string;
@@ -260,8 +263,13 @@ export async function getSetup(): Promise<boolean> {
   return apiRequest<boolean>(`${API_BASE}/api/setup`);
 }
 
+export type LLMConfigMode = "" | "os" | "runtime";
+
+export type VoiceInputMode = "automatic" | "tap_to_talk";
+
 /** Sanitized device config — Has* booleans replace raw secrets so they never reach the DOM / sessionStorage / HAR captures. */
 export interface DeviceConfig {
+  llm_config_mode?: LLMConfigMode;
   channel: string;
   telegram_user_id: string;
   slack_user_id: string;
@@ -281,6 +289,7 @@ export interface DeviceConfig {
   tts_voice: string;
   tts_speed?: number;
   wakeword: boolean;
+  voice_input_mode?: VoiceInputMode;
   agent_name: string;
   wake_phrases: string[];
   realtime?: {
@@ -411,6 +420,7 @@ export interface TestTTSOptions {
 
 const TTS_DEMO_PHRASES: Record<string, string> = {
   en: "[laugh] Hey! How are you doing today?",
+  ja: "[laugh] こんにちは！今日はどんな一日ですか？",
   vi: "[laugh] Chào bạn, hôm nay bạn thế nào?",
   "zh-CN": "[laugh] 嗨，你今天怎么样？",
   "zh-TW": "[laugh] 嗨，你今天怎麼樣？",
@@ -418,7 +428,7 @@ const TTS_DEMO_PHRASES: Record<string, string> = {
 
 function demoPhraseFor(lang?: string): string {
   if (!lang) return TTS_DEMO_PHRASES.en;
-  return TTS_DEMO_PHRASES[lang] || TTS_DEMO_PHRASES.en;
+  return TTS_DEMO_PHRASES[normalizeLang(lang)] || TTS_DEMO_PHRASES.en;
 }
 
 /** POST /api/voice/preview — optional baseUrl/apiKey override the saved config. */

@@ -338,9 +338,10 @@ const (
 	KindOAuthRemove  = "oauth.remove"
 	KindRealtimeSet  = "realtime.set"
 	// KindRealtimeGet reads the realtime settings and the valid provider/voice/reasoning options.
-	KindRealtimeGet  = "realtime.get"
-	KindWakeWordGate = "wakeword.gate"
-	KindTimezoneSet  = "timezone.set"
+	KindRealtimeGet    = "realtime.get"
+	KindWakeWordGate   = "wakeword.gate"
+	KindVoiceInputMode = "voice.input_mode"
+	KindTimezoneSet    = "timezone.set"
 	// KindDeviceSoftReset wipes config.json and restarts os-server into AP setup mode (no reboot).
 	KindDeviceSoftReset = "device.soft_reset"
 
@@ -613,7 +614,8 @@ type MQTTInfoResponse struct {
 	TTSSpeed    float64 `json:"tts_speed"`
 	STTLanguage string  `json:"stt_language,omitempty"`
 	// WakeWordEnabled is never omitted so disabled differs from an older device not reporting it.
-	WakeWordEnabled bool `json:"wakeword_enabled"`
+	WakeWordEnabled bool   `json:"wakeword_enabled"`
+	VoiceInputMode  string `json:"voice_input_mode"`
 	// Timezone is the active IANA zone (e.g. "Asia/Ho_Chi_Minh").
 	Timezone          string `json:"timezone,omitempty"`
 	HalVersion        string `json:"hal_version,omitempty"`
@@ -648,6 +650,7 @@ func NewMQTTInfoResponse(cfg *config.Config, msgType string, mac string) MQTTInf
 		TTSSpeed:        cfg.GetTTSSpeed(),
 		STTLanguage:     cfg.STTLanguage,
 		WakeWordEnabled: cfg.WakeWordEnabled(),
+		VoiceInputMode:  cfg.GetVoiceInputMode(),
 		Timezone:        cfg.Timezone,
 	}
 }
@@ -1151,7 +1154,8 @@ type RealtimePublic struct {
 
 // ConfigPublicResponse is returned by GET /api/device/config; secrets appear only as Has* presence flags.
 type ConfigPublicResponse struct {
-	Environment EnvironmentConfig `json:"environment"`
+	LLMConfigMode string            `json:"llm_config_mode"`
+	Environment   EnvironmentConfig `json:"environment"`
 
 	Channel                  string   `json:"channel"`
 	TelegramUserID           string   `json:"telegram_user_id"`
@@ -1173,6 +1177,7 @@ type ConfigPublicResponse struct {
 	TTSVoice                 string   `json:"tts_voice"`
 	TTSSpeed                 float64  `json:"tts_speed"`
 	WakeWord                 bool     `json:"wakeword"`
+	VoiceInputMode           string   `json:"voice_input_mode"`
 	AgentName                string   `json:"agent_name"`
 	WakePhrases              []string `json:"wake_phrases"`
 	DeviceID                 string   `json:"device_id"`
@@ -1210,7 +1215,8 @@ type ConfigPublicResponse struct {
 
 // UpdateConfigRequest is used by PUT /api/device/config; only non-empty values are applied.
 type UpdateConfigRequest struct {
-	Environment *EnvironmentConfig `json:"environment,omitempty"`
+	LLMConfigMode *string            `json:"llm_config_mode,omitempty" binding:"omitempty,oneof=os runtime"`
+	Environment   *EnvironmentConfig `json:"environment,omitempty"`
 
 	SSID     string `json:"ssid"`
 	Password string `json:"password"`
@@ -1258,10 +1264,11 @@ type UpdateConfigRequest struct {
 	FAChannel    string `json:"fa_channel"`
 	FDChannel    string `json:"fd_channel"`
 
-	TTSProvider string   `json:"tts_provider"`
-	TTSVoice    string   `json:"tts_voice"`
-	TTSSpeed    *float64 `json:"tts_speed,omitempty" binding:"omitempty,gte=0.25,lte=4"`
-	WakeWord    *bool    `json:"wakeword,omitempty"`
+	TTSProvider    string   `json:"tts_provider"`
+	TTSVoice       string   `json:"tts_voice"`
+	TTSSpeed       *float64 `json:"tts_speed,omitempty" binding:"omitempty,gte=0.25,lte=4"`
+	WakeWord       *bool    `json:"wakeword,omitempty"`
+	VoiceInputMode *string  `json:"voice_input_mode,omitempty" binding:"omitempty,oneof=automatic tap_to_talk"`
 
 	// Realtime is the same payload as MQTT realtime.set; omit to leave it unchanged.
 	Realtime *RealtimeSetData `json:"realtime,omitempty"`
@@ -1296,17 +1303,40 @@ func IsValidTTSProvider(p string) bool {
 	return false
 }
 
-// DefaultElevenLabsVoiceForLang returns the default ElevenLabs voice for lang (prefix match).
-// Names must stay in sync with HAL's elevenlabs.py VOICE_IDS_BY_LANG.
-func DefaultElevenLabsVoiceForLang(lang string) string {
-	switch {
-	case strings.HasPrefix(lang, "vi"):
-		return "Ngan"
-	case strings.HasPrefix(lang, "zh"):
-		return "Amy"
-	default:
-		return "Rachel"
+// elevenLabsVoicesByLang mirrors HAL's elevenlabs.py VOICE_IDS_BY_LANG, including order.
+var elevenLabsVoicesByLang = map[string][]string{
+	"en": {"Rachel", "Sarah", "Nicole", "Terra", "Maria", "Sophie", "Piper", "Mia", "Kimmy", "Brianna", "Ally", "Tori", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Charlie", "Sam", "Sean", "Kael", "Brooks", "Erion"},
+	"vi": {"Ngan", "Linh", "Huyen", "Freya", "Nathan", "Quan"},
+	"ja": {"Shizuka", "Konoha", "Rin", "Asahi", "Hinata", "Hiroki"},
+	"zh": {"Amy", "Sage", "Xiaoxi", "Yun", "Evan Zhao", "Jin"},
+}
+
+func elevenLabsLanguageBucket(lang string) string {
+	lang = strings.ToLower(strings.TrimSpace(lang))
+	for _, bucket := range []string{"vi", "ja", "zh"} {
+		if strings.HasPrefix(lang, bucket) {
+			return bucket
+		}
 	}
+	return "en"
+}
+
+// ElevenLabsVoicesForLang returns the curated fallback list, matching HAL's language filter.
+// An empty language lists all voices; unsupported languages use the English pool.
+func ElevenLabsVoicesForLang(lang string) []string {
+	if strings.TrimSpace(lang) != "" {
+		return append([]string(nil), elevenLabsVoicesByLang[elevenLabsLanguageBucket(lang)]...)
+	}
+	var voices []string
+	for _, bucket := range []string{"en", "vi", "ja", "zh"} {
+		voices = append(voices, elevenLabsVoicesByLang[bucket]...)
+	}
+	return voices
+}
+
+// DefaultElevenLabsVoiceForLang returns the first curated voice for the language.
+func DefaultElevenLabsVoiceForLang(lang string) string {
+	return elevenLabsVoicesByLang[elevenLabsLanguageBucket(lang)][0]
 }
 
 // TTSVoicesByProvider maps provider name to its available voices.
@@ -1316,7 +1346,7 @@ var TTSVoicesByProvider = map[string][]string{
 	TTSProviderPiper: {},
 	// Mirrors HAL's GeminiTTSBackend.VOICES.
 	TTSProviderGemini:     {"Zephyr", "Puck", "Charon", "Kore", "Fenrir", "Leda", "Orus", "Aoede", "Callirrhoe", "Autonoe", "Enceladus", "Iapetus", "Umbriel", "Algieba", "Despina", "Erinome", "Algenib", "Rasalgethi", "Laomedeia", "Achernar", "Alnilam", "Schedar", "Gacrux", "Pulcherrima", "Achird", "Zubenelgenubi", "Vindemiatrix", "Sadachbia", "Sadaltager", "Sulafat"},
-	TTSProviderElevenLabs: {"Rachel", "Sarah", "Grace", "Freya", "Matilda", "Emily", "Alice", "Lily", "Charlotte", "Nicole", "Glinda", "Serena", "Jessie", "Brian", "Adam", "Daniel", "George", "James", "Liam", "Callum", "Harry", "Charlie", "Chris", "Sam"},
+	TTSProviderElevenLabs: ElevenLabsVoicesForLang(""),
 }
 
 // TTSVoices is the default (OpenAI) voice list for backward compatibility.
@@ -1324,3 +1354,17 @@ var TTSVoices = TTSVoicesByProvider[TTSProviderOpenAI]
 
 // DefaultTTSVoice is the default voice when none is configured.
 const DefaultTTSVoice = "alloy"
+
+// VoiceInputModeData selects automatic endpointing or explicit tap-to-talk.
+type VoiceInputModeData struct {
+	Mode string `json:"mode"`
+}
+
+// MQTTVoiceInputModeAck reports persistence and HAL application progress.
+type MQTTVoiceInputModeAck struct {
+	MQTTInfoResponse
+	Kind   string              `json:"kind"`
+	Status string              `json:"status"`
+	Error  string              `json:"error,omitempty"`
+	Data   *VoiceInputModeData `json:"data,omitempty"`
+}

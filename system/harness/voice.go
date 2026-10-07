@@ -54,7 +54,15 @@ type VoiceQuestion struct {
 type voiceQuestionSet struct {
 	RequestID string          `json:"requestId"`
 	Questions []VoiceQuestion `json:"questions"`
+	// Permission marks a terminal approval dialog; it is resolved only in OpenHarness.
+	Permission *struct {
+		Dialog     string `json:"dialog"`
+		Resolution string `json:"resolution"`
+	} `json:"permission,omitempty"`
 }
+
+// ErrPermissionInDesktop refuses voice input while the agent waits on a permission dialog.
+var ErrPermissionInDesktop = errors.New("The Harness agent is waiting for permission; open OpenHarness to approve or deny it")
 
 // voiceOperationLock serializes wire operations, not remote engine turns.
 type voiceOperationLock struct {
@@ -371,6 +379,9 @@ func (v *VoiceController) liveQuestion(ctx context.Context, s VoiceModeState) (*
 	var q voiceQuestionSet
 	if e = json.Unmarshal(raw, &q); e != nil {
 		return nil, fmt.Errorf("decode Harness question: %w", e)
+	}
+	if q.Permission != nil {
+		return nil, ErrPermissionInDesktop
 	}
 	if q.RequestID == "" || len(q.Questions) == 0 {
 		return nil, errors.New("Harness question is malformed")

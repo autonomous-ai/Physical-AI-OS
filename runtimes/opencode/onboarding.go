@@ -133,6 +133,9 @@ func (s *OpenCodeService) EnsureOnboarding() error {
 	// Best-effort: a presync failure must not block gateway startup.
 	configBefore := fileHash(opencodeConfigJSON) + fileHash(opencodeEnvFile)
 	if err := s.runPresync(); err != nil {
+		if s.config.LLMMode() != "" {
+			return fmt.Errorf("apply LLM configuration: %w", err)
+		}
 		slog.Warn("opencode presync failed, continuing with workspace reconcile", "component", "opencode", "error", err)
 	}
 	presyncChanged := fileHash(opencodeConfigJSON)+fileHash(opencodeEnvFile) != configBefore

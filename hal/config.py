@@ -544,8 +544,13 @@ def _rt_enabled() -> bool:
 
 REALTIME_ENABLED: bool = _rt_enabled()
 REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive | pipecat_v1
-# Gate realtime turns on an STT interim starting with a wake phrase.
-WAKEWORD_ENABLED: bool = _os_cfg_get("wakeword", False) is True
+# Manual device input is independent of the saved automatic-mode wake setting.
+VOICE_INPUT_MODE: str = (
+    "tap_to_talk" if _os_cfg_get("voice_input_mode", "automatic") == "tap_to_talk"
+    else "automatic"
+)
+# No wake opener or follow-up window can arm manual device input.
+WAKEWORD_ENABLED: bool = VOICE_INPUT_MODE == "automatic" and _os_cfg_get("wakeword", False) is True
 # 0 requires the wake phrase for every mic session.
 WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
     0.0, float(os.environ.get("HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S", "20"))

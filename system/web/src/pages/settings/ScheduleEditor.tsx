@@ -1,4 +1,5 @@
-import { useState } from "react";
+import { SettingsSelect } from "@/components/SettingsSelect";
+import { useId, useState } from "react";
 import { C } from "@/components/setup/shared";
 import { validateDraft } from "./scheduleDraft";
 import type { ScheduleDraft, ScheduleRepeat } from "./scheduleDraft";
@@ -32,7 +33,7 @@ const smallBtnStyle: React.CSSProperties = {
 };
 
 const labelStyle: React.CSSProperties = {
-  fontSize: 11, fontWeight: 600, color: C.textDim, marginBottom: 4, display: "block",
+  fontSize: 12, fontWeight: 600, color: C.textDim, marginBottom: 4, display: "block",
 };
 
 export function ScheduleEditor({
@@ -43,6 +44,7 @@ export function ScheduleEditor({
   onSave: (draft: ScheduleDraft) => void;
   onCancel: () => void;
 }) {
+  const id = useId();
   const [draft, setDraft] = useState<ScheduleDraft>(initial);
   const [touched, setTouched] = useState(false);
   const problem = validateDraft(draft);
@@ -91,9 +93,10 @@ export function ScheduleEditor({
       background: C.surface, border: `1px solid ${C.border}`,
     }}>
       <div style={{ marginBottom: 10 }}>
-        <label style={labelStyle}>Name</label>
+        <label htmlFor={`${id}-name`} style={labelStyle}>Name</label>
         <input
           style={inputStyle}
+          id={`${id}-name`}
           value={draft.name}
           placeholder="Daily briefing"
           onChange={(e) => set("name", e.target.value)}
@@ -101,28 +104,32 @@ export function ScheduleEditor({
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <label style={labelStyle}>When it runs, the robot will</label>
-        <select
+        <label htmlFor={`${id}-kind`} style={labelStyle}>When it runs, the robot will</label>
+        <SettingsSelect
           style={inputStyle}
+          id={`${id}-kind`}
           value={draft.kind}
-          onChange={(e) => set("kind", e.target.value as ScheduleKind)}
+          onValueChange={(value) => set("kind", value as ScheduleKind)}
         >
           <option value="agent">Ask the agent</option>
           <option value="speak">Speak this text (less cost)</option>
-        </select>
+        </SettingsSelect>
       </div>
 
       <div style={{ marginBottom: 10 }}>
-        <label style={labelStyle}>{speaking ? "What to say" : "Instructions"}</label>
+        <label htmlFor={`${id}-instructions`} style={labelStyle}>{speaking ? "What to say" : "Instructions"}</label>
         <textarea
           style={{ ...inputStyle, minHeight: 64, resize: "vertical", fontFamily: "inherit" }}
+          id={`${id}-instructions`}
+          aria-describedby={`${id}-instructions-help`}
+          aria-invalid={overSpeakLimit || undefined}
           value={draft.instructions}
           placeholder={speaking
             ? "Time to drink some water."
             : "Summarize my calendar, unread email, and messages for today."}
           onChange={(e) => set("instructions", e.target.value)}
         />
-        <div style={{ fontSize: 11, color: overSpeakLimit ? C.red : C.textDim, marginTop: 4 }}>
+        <div id={`${id}-instructions-help`} style={{ fontSize: 12, color: overSpeakLimit ? C.red : C.textDim, marginTop: 4 }}>
           {speaking
             ? <>Spoken out loud word for word. No agent turn, so it costs less than an agent task. <span style={{ fontVariantNumeric: "tabular-nums" }}>{spokenLength}/{MAX_SPEAK_CHARS}</span></>
             : "The agent reads this as a prompt and decides what to say or do."}
@@ -131,33 +138,35 @@ export function ScheduleEditor({
 
       <div style={{ display: "flex", gap: 10, flexWrap: "wrap", marginBottom: 10 }}>
         <div style={{ flex: "1 1 150px" }}>
-          <label style={labelStyle}>Frequency</label>
-          <select
+          <label htmlFor={`${id}-repeat`} style={labelStyle}>Frequency</label>
+          <SettingsSelect
             style={inputStyle}
+            id={`${id}-repeat`}
             value={draft.repeat}
-            onChange={(e) => set("repeat", e.target.value as ScheduleRepeat)}
+            onValueChange={(value) => set("repeat", value as ScheduleRepeat)}
           >
             <option value="daily">Daily</option>
             <option value="weekly">Weekly</option>
             <option value="monthly">Monthly</option>
             <option value="interval">Every…</option>
             <option value="manual">Manual only</option>
-          </select>
+          </SettingsSelect>
         </div>
 
         {["daily", "weekly", "monthly"].includes(draft.repeat) && (
-          <div style={{ flex: "1 1 200px" }}>
-            <label style={labelStyle}>{draft.times.length === 1 ? "Time" : "Times"}</label>
+          <div role="group" aria-labelledby={`${id}-times-label`} style={{ flex: "1 1 200px" }}>
+            <div id={`${id}-times-label`} style={labelStyle}>{draft.times.length === 1 ? "Time" : "Times"}</div>
             {draft.times.map((t, i) => (
               <div key={i} style={{ display: "flex", gap: 6, marginBottom: 6 }}>
                 <input
                   type="time"
+                  aria-label={`Time ${i + 1}`}
                   style={{ ...inputStyle, flex: "0 0 120px" }}
                   value={t}
                   onChange={(e) => setTimeAt(i, e.target.value)}
                 />
                 {draft.times.length > 1 && (
-                  <button type="button" style={smallBtnStyle} onClick={() => removeTimeAt(i)}>
+                  <button type="button" aria-label={`Remove time ${i + 1}`} style={smallBtnStyle} onClick={() => removeTimeAt(i)}>
                     Remove
                   </button>
                 )}
@@ -173,10 +182,11 @@ export function ScheduleEditor({
 
         {draft.repeat === "monthly" && (
           <div style={{ flex: "0 0 110px" }}>
-            <label style={labelStyle}>Day of month</label>
+            <label htmlFor={`${id}-dayOfMonth`} style={labelStyle}>Day of month</label>
             <input
               type="number" min={1} max={31}
               style={inputStyle}
+              id={`${id}-dayOfMonth`}
               value={draft.dayOfMonth}
               onChange={(e) => set("dayOfMonth", Number(e.target.value))}
             />
@@ -185,23 +195,24 @@ export function ScheduleEditor({
 
         {draft.repeat === "interval" && (
           <div style={{ flex: "1 1 150px" }}>
-            <label style={labelStyle}>Every</label>
-            <select
+            <label htmlFor={`${id}-everyMs`} style={labelStyle}>Every</label>
+            <SettingsSelect
               style={inputStyle}
+              id={`${id}-everyMs`}
               value={draft.everyMs}
-              onChange={(e) => set("everyMs", Number(e.target.value))}
+              onValueChange={(value) => set("everyMs", Number(value))}
             >
               {INTERVAL_CHOICES.map((c) => (
                 <option key={c.ms} value={c.ms}>{c.label}</option>
               ))}
-            </select>
+            </SettingsSelect>
           </div>
         )}
       </div>
 
       {draft.repeat === "weekly" && (
-        <div style={{ marginBottom: 10 }}>
-          <label style={labelStyle}>Days</label>
+        <div role="group" aria-labelledby={`${id}-days-label`} style={{ marginBottom: 10 }}>
+          <div id={`${id}-days-label`} style={labelStyle}>Days</div>
           <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
             {WEEKDAYS.map((d) => {
               const on = draft.days.includes(d.value);
@@ -209,6 +220,7 @@ export function ScheduleEditor({
                 <button
                   key={d.value}
                   type="button"
+                  aria-pressed={on}
                   onClick={() => toggleDay(d.value)}
                   style={{
                     padding: "5px 11px", borderRadius: 999, fontSize: 12, cursor: "pointer",
@@ -235,7 +247,7 @@ export function ScheduleEditor({
       </label>
 
       {touched && problem && (
-        <div style={{ fontSize: 12, color: C.red, marginBottom: 10 }}>{problem}</div>
+        <div role="alert" style={{ fontSize: 12, color: C.red, marginBottom: 10 }}>{problem}</div>
       )}
 
       <div style={{ display: "flex", gap: 8 }}>

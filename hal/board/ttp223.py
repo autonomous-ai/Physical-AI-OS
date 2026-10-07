@@ -29,7 +29,7 @@ def load_touch_config(device_dir: str, board_id: str) -> Optional[TouchConfig]:
             raise ValueError("expected an object containing a 'boards' map")
         configs = {}
         for board, entry in data["boards"].items():
-            if not isinstance(entry, dict) or set(entry) - {"enabled", "chip", "lines", "axis"}:
+            if not isinstance(entry, dict) or set(entry) - {"enabled", "chip", "lines", "axis", "detect"}:
                 raise ValueError(f"{board}: invalid TTP223 fields")
             enabled = entry.get("enabled", True)
             if type(enabled) is not bool:
@@ -44,7 +44,10 @@ def load_touch_config(device_dir: str, board_id: str) -> Optional[TouchConfig]:
             axis = entry.get("axis")
             if axis is not None and set(_lines(axis, "axis")) != set(lines):
                 raise ValueError(f"{board}: axis must be a permutation of lines")
-            configs[board] = TouchConfig(chip=chip, lines=lines, axis=axis)
+            detect = entry.get("detect", False)
+            if type(detect) is not bool:
+                raise ValueError(f"{board}: detect must be a boolean")
+            configs[board] = TouchConfig(chip=chip, lines=lines, axis=axis, detect=detect)
         return configs.get(board_id, fallback)
     except (ValueError, TypeError) as exc:
         raise ValueError(f"Invalid TTP223 wiring at {path}: {exc}") from exc

@@ -19,7 +19,7 @@ from hal.i18n import (
     PHRASE_SHUTDOWN,
     PHRASES_BY_LANG,
 )
-from hal.presets import DEFAULT_LANG
+from hal.presets import DEFAULT_LANG, normalize_language
 from hal.drivers.button_gestures import (
     DOUBLE_CLICK_WINDOW,
     FACTORY_RESET_DURATION,
@@ -92,7 +92,7 @@ def _cancel_agent_speech(source: str):
 def _current_lang() -> str:
     try:
         from hal.config import _os_cfg_get
-        return (_os_cfg_get("stt_language") or "").strip()
+        return normalize_language(_os_cfg_get("stt_language"))
     except Exception:
         return ""
 
@@ -196,6 +196,17 @@ def play_ack_chime(source: str = "button"):
         tts.play_ack_chime()
     except Exception as e:
         logger.debug("%s ack chime failed: %s", source, e)
+
+
+def play_pet_chime(source: str = "TTP223"):
+    """A soft tactile cue for head petting, without interrupting speech."""
+    tts = state.tts_service
+    if tts is None:
+        return
+    try:
+        tts.play_pet_chime()
+    except Exception as e:
+        logger.debug("%s pet chime failed: %s", source, e)
 
 
 def announce_listening_cue(source: str = "button"):
@@ -496,6 +507,8 @@ def button_hold_release_action(held_s, feedback, *, behavior="standard", hold_s=
 def _factory_reset_phrase() -> str:
     """Inline i18n until PHRASE_FACTORY_RESET lands in i18n.py."""
     lang = _current_lang()
+    if lang.startswith("ja"):
+        return "工場出荷時の設定に戻します。再起動します。"
     if lang.startswith("vi"):
         return "Đang khôi phục cài đặt gốc. Đang khởi động lại."
     if lang.startswith("zh"):

@@ -169,10 +169,11 @@ func (s *ClaudeCodeService) runLoginProcess(ctx context.Context, ch chan<- domai
 // restarts into it.
 // An empty token is valid — credentials.json carries the auth and presync detects it on disk.
 func (s *ClaudeCodeService) adoptOAuthToken(token string) error {
-	if token != "" {
-		if err := s.config.WithLockSave(func(c *config.Config) { c.ClaudeCodeOAuthToken = token }); err != nil {
-			return fmt.Errorf("save config: %w", err)
-		}
+	if err := s.config.WithLockSave(func(c *config.Config) {
+		c.ClaudeCodeOAuthToken = token
+		c.LLMConfigMode = "runtime"
+	}); err != nil {
+		return fmt.Errorf("save config: %w", err)
 	}
 	slog.Info("claude login: adopting subscription auth", "component", "claudecode-login", "token_captured", token != "")
 	if err := s.EnsureOnboarding(); err != nil {

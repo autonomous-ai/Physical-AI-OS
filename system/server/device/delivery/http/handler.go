@@ -115,7 +115,9 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 		if err := h.service.Setup(req); err != nil {
 			slog.Error("setup failed", "component", "device", "error", err,
 				"setup_failure_reason", device.SetupFailureReason(err))
-			h.networkService.SwitchToAPMode()
+			if device.SetupFailureReason(err) != device.FailureSetupRuntime {
+				h.networkService.SwitchToAPMode()
+			}
 			return
 		}
 
@@ -242,6 +244,10 @@ func (h *DeviceHandler) GetConfig(c *gin.Context) {
 //	@Router			/device/setup/status [get]
 func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 	phase, lanIP, errMsg, run := h.service.SetupStatus()
+	runtimePhase, runtimeError := h.service.SetupRuntimeStatus()
+	if runtimeError != "" {
+		errMsg = runtimeError
+	}
 	// The web client uses it to auto-redirect 192.168.100.1 →
 	// <device_type>-xxxx.local even before the operator is authed, since
 	// /api/device/config requires admin auth and fresh devices have none.
@@ -254,7 +260,8 @@ func (h *DeviceHandler) SetupStatus(c *gin.Context) {
 		"run": run,
 		// Not a secret; the endpoint stays open because an unset-up device has
 		// no admin password.
-		"set_up_completed": h.config.SetUpCompleted,
+		"set_up_completed": h.service.SetupCompleted(),
+		"runtime_phase":    runtimePhase,
 	}))
 }
 
@@ -304,7 +311,9 @@ func (h *DeviceHandler) GetVoices(c *gin.Context) {
 		return
 	}
 	staticVoices, ok := domain.TTSVoicesByProvider[provider]
-	if !ok {
+	if provider == domain.TTSProviderElevenLabs {
+		staticVoices = domain.ElevenLabsVoicesForLang(lang)
+	} else if !ok {
 		staticVoices = domain.TTSVoices
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(staticVoices))

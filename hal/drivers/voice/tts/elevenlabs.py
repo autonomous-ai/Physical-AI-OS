@@ -8,7 +8,7 @@ import uuid
 from typing import Iterator, Optional
 from urllib.parse import urlparse
 
-from hal.presets import LANG_EN, LANG_VI
+from hal.presets import LANG_EN, LANG_JA, LANG_VI, normalize_language
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     STREAM_CHUNK_SIZE,
@@ -32,7 +32,7 @@ class ElevenLabsTTSBackend(TTSBackend):
     ELEVENLABS_PATH = "/elevenlabs"
 
     # Voice name -> voice_id mapping, grouped by trained language. The web UI filters
-    # this by stt_language so VN/CN owners don't have to scroll past 22 American voices
+    # this by stt_language so owners can find a voice trained in their language
     # to find one that fits.
     # "zh" is an internal bucket (not a stt_language code) shared by zh-CN and zh-TW.
     _LANG_BUCKET_ZH = "zh"
@@ -72,6 +72,16 @@ class ElevenLabsTTSBackend(TTSBackend):
             "Nathan": "u8EWWYyBDfXFxHak7WM3",
             "Quan": "puBBfOSRT9Dbk3FUJQGd",
         },
+        # Curated native Japanese voices from elevenlabs.io/text-to-speech/japanese.
+        # Keep order/default aligned with system/domain/device.go and the web picker.
+        LANG_JA: {
+            "Shizuka": "WQz3clzUdMqvBf0jswZQ",
+            "Konoha": "T7yYq3WpB94yAuOXraRi",
+            "Rin": "NxfO5zydfqwpYnWQJ7jJ",
+            "Asahi": "GKDaBI8TKSBJVhsCLD6n",
+            "Hinata": "j210dv0vWm7fCknyQpbA",
+            "Hiroki": "vzIXwvf41vKosKu00hYj",
+        },
         _LANG_BUCKET_ZH: {
             "Amy": "bhJUNIXWQQ94l8eI2VUf",
             "Sage": "APSIkVZudNbPAwyPoeVO",
@@ -91,11 +101,14 @@ class ElevenLabsTTSBackend(TTSBackend):
     @classmethod
     def voices_for_language(cls, lang: str) -> list:
         """Return curated voice names for a given stt_language code."""
+        lang = normalize_language(lang)
         if not lang:
             return list(cls.VOICE_IDS.keys())
         bucket = LANG_EN
         if lang.startswith(LANG_VI):
             bucket = LANG_VI
+        elif lang.lower().startswith(LANG_JA):
+            bucket = LANG_JA
         elif lang.startswith(cls._LANG_BUCKET_ZH):
             bucket = cls._LANG_BUCKET_ZH
         elif lang.startswith(LANG_EN):

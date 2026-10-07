@@ -76,6 +76,9 @@ func (s *HermesService) EnsureOnboarding() error {
 
 	// Presync is best-effort: a failure must not block gateway startup.
 	if err := s.runPresync(); err != nil {
+		if s.config.LLMMode() != "" {
+			return fmt.Errorf("apply LLM configuration: %w", err)
+		}
 		slog.Warn("hermes presync failed, continuing with gateway start", "component", "hermes", "error", err)
 	}
 

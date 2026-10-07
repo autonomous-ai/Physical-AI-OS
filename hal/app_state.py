@@ -1343,8 +1343,6 @@ def _apply_emotion_led_display(
                 rgb_service.dispatch(RGB_CMD_SOLID, tuple(scaled))
                 _effect_base_color = tuple(scaled)
             led_color = scaled
-            if sensing_service:
-                sensing_service.presence.set_last_color(tuple(scaled))
         except Exception as e:
             logger.warning("Emotion LED failed: %s", e)
     if display_service:

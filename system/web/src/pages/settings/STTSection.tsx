@@ -1,3 +1,4 @@
+import { SettingsSelect } from "@/components/SettingsSelect";
 import { C, LockedField, LockedPasswordField, SectionCard } from "@/components/setup/shared";
 import type { LlmLoadedState } from "@/hooks/setup/types";
 
@@ -31,13 +32,13 @@ export function STTSection({
     <SectionCard id="stt" title="Language" active={active}
       description="The language your robot listens in — and the one it speaks its own notices in, like “Be right back”. It does not change the language the agent replies in; that follows whoever is talking to it.">
       <div style={{ marginBottom: 12 }}>
-        <label htmlFor="stt_language" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+        <label htmlFor="stt_language" style={{ display: "block", fontSize: 12, color: C.textDim, marginBottom: 5 }}>
           Language
         </label>
-        <select
+        <SettingsSelect
           id="stt_language"
           value={sttLanguage}
-          onChange={(e) => setSttLanguage(e.target.value)}
+          onValueChange={(value) => setSttLanguage(value)}
           style={{
             width: "100%", boxSizing: "border-box",
             background: C.surface, border: `1px solid ${C.border}`,
@@ -48,27 +49,28 @@ export function STTSection({
           <option value="">Auto (default)</option>
           <option value="en">English</option>
           <option value="vi">Vietnamese</option>
+          <option value="ja">Japanese (日本語)</option>
           <option value="zh-CN">Chinese (Simplified)</option>
           <option value="zh-TW">Chinese (Traditional)</option>
-        </select>
+        </SettingsSelect>
       </div>
 
       <div style={{ marginTop: 18, paddingTop: 12, borderTop: `1px solid ${C.border}` }}>
-        <div style={{ fontSize: 11, color: C.textMuted, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
+        <div style={{ fontSize: 12, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.06em", marginBottom: 8 }}>
           Speech recognition (STT)
         </div>
-        <div style={{ fontSize: 11, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>
+        <div style={{ fontSize: 12, color: C.textDim, marginBottom: 10, lineHeight: 1.55 }}>
           Which service turns speech into text. The default reuses your AI Brain
           credentials, so there is nothing to fill in unless you want a different one.
         </div>
         <div style={{ marginBottom: 12 }}>
-          <label htmlFor="stt_provider" style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>
+          <label htmlFor="stt_provider" style={{ display: "block", fontSize: 12, color: C.textDim, marginBottom: 5 }}>
             Provider
           </label>
-          <select
+          <SettingsSelect
             id="stt_provider"
             value={sttProvider}
-            onChange={(e) => setSttProvider(e.target.value as SttProvider)}
+            onValueChange={(value) => setSttProvider(value as SttProvider)}
             style={{
               width: "100%", boxSizing: "border-box",
               background: C.surface, border: `1px solid ${C.border}`,
@@ -78,14 +80,16 @@ export function STTSection({
           >
             <option value="autonomous">Autonomous (reuse AI brain)</option>
             <option value="deepgram">Deepgram</option>
-          </select>
+          </SettingsSelect>
         </div>
         {sttProvider === "deepgram" ? (
           <LockedPasswordField lockedInitially={sttLoaded.deepgram} label="Deepgram API Key" id="deepgram_api_key" value={deepgramApiKey} onChange={setDeepgramApiKey} placeholder="Deepgram key" />
         ) : (
           <>
-            <LockedPasswordField lockedInitially={sttLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="stt_api_key" value={sttApiKey} onChange={setSttApiKey} placeholder="sk-..." />
-            <LockedField lockedInitially={sttLoaded.baseUrl || llmLoaded.baseUrl} label="Base URL (optional — leave blank to reuse AI brain base URL)" id="stt_base_url" value={sttBaseUrl} onChange={setSttBaseUrl} placeholder="https://api.openai.com/v1" />
+            <LockedPasswordField lockedInitially={sttLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional)" id="stt_api_key" value={sttApiKey} onChange={setSttApiKey} placeholder="sk-..." />
+            <p style={{ fontSize: 12, color: C.textDim, marginTop: -8, marginBottom: 12 }}>Leave blank to reuse the AI brain key.</p>
+            <LockedField lockedInitially={sttLoaded.baseUrl || llmLoaded.baseUrl} label="Base URL (optional)" id="stt_base_url" value={sttBaseUrl} onChange={setSttBaseUrl} placeholder="https://api.openai.com/v1" />
+            <p style={{ fontSize: 12, color: C.textDim, marginTop: -8, marginBottom: 12 }}>Leave blank to reuse the AI brain base URL.</p>
           </>
         )}
       </div>

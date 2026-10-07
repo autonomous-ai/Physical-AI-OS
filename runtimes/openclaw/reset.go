@@ -21,6 +21,9 @@ var openclawStatePaths = []string{
 	"/root/.openclaw/agents",
 	"/root/.openclaw/workspace",
 	"/root/.openclaw/workspace-attestations",
+	// OpenClaw >= 2026.9 keeps the workspace attestation in state/openclaw.sqlite;
+	// left behind, it blocks reseeding the wiped workspace for 24 h.
+	"/root/.openclaw/state",
 	"/root/.openclaw/devices",
 	"/root/.openclaw/tasks",
 	"/root/.openclaw/logs",

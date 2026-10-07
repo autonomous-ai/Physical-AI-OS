@@ -141,3 +141,26 @@ func TestHarnessUpdatesIgnoreRealtimeSupersedeButHonorClick(t *testing.T) {
 		t.Fatalf("click must still silence the result, got %v", err)
 	}
 }
+
+func TestHarnessPermissionNoticeSpeaksOnVoiceRunAndStaysSilentInChat(t *testing.T) {
+	got := captureHALUpdates(t)
+	h := &AgentHandler{}
+	const notice = "Agent test needs permission. Open OpenHarness to review and approve or deny."
+	h.MarkHarnessResponseRun("chat-run", true, false)
+	if !h.DeliverHarnessQuestion("chat-run", "q1", notice) {
+		t.Fatal("chat notice not delivered")
+	}
+	h.MarkHarnessResponseRun("voice-run", false, false)
+	if !h.DeliverHarnessQuestion("voice-run", "q2", notice) {
+		t.Fatal("voice notice not delivered")
+	}
+	// Only the voice run reaches the speaker; a chat notice would arrive first otherwise.
+	payload := nextHALUpdate(t, got)
+	if payload["kind"] != "question" || payload["text"] != notice || payload["turn_id"] != "voice-run" {
+		t.Fatalf("wrong update %v", payload)
+	}
+	h.AnnounceHarnessNotice(notice)
+	if payload := nextHALUpdate(t, got); payload["kind"] != "result" || payload["turn_id"] != "" {
+		t.Fatalf("device notice %v", payload)
+	}
+}

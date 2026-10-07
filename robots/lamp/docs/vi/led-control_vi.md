@@ -1,5 +1,7 @@
 # LED Control — Tài Liệu
 
+Khi presence trở lại từ idle/away, đèn khôi phục theo trạng thái người dùng/đèn nghỉ dùng chung, gồm lựa chọn đèn nghỉ hiện tại và các điều kiện bảo vệ hiệu ứng đang chạy. Presence không giữ cache màu riêng hay khôi phục màu emotion. Khi idle, độ sáng giảm dựa trên màu nền người dùng đã lưu hoặc preset đèn nghỉ hiện tại; lệnh tắt đèn vẫn được giữ nguyên.
+
 Trong lúc thu giọng Harness thủ công, khi recorder/STT sẵn sàng, LED chuyển sang preset listening hiện có (Lamp: xanh dương nhẹ `[0, 0, 3]`, tốc độ `0.3`), kể cả chưa có transcript đầu tiên. Kết thúc, hủy, timeout hoặc lỗi đều xóa trạng thái LED thu và khôi phục theo thứ tự ưu tiên bình thường; thinking/TTS sau đó giữ hành vi hiện có. Cue này chỉ đổi LED, không di chuyển servo hay đổi cài đặt đã lưu.
 
 ## Phần Cứng
@@ -314,6 +316,17 @@ và gửi *tên trạng thái* xuống HAL (`POST /led/status`: booting/error/ot
 wifi_connecting/hal_down/agent_down/hardware/ready_flash/ota_progress/ota_error/ota_success/setup); HAL tra
 màu/effect/speed từ `STATUS_LED_PRESETS`, override per-device qua section `status_led` trong
 `presets.json` (xem [ROBOT-SPEC.md § Per-device presets](../../../contract/ROBOT-SPEC.md#per-device-presets-presetsjson)).
+Trạng thái solid từ `/led/status` lưu thêm `source: "status:<name>"` trong
+sidecar LED. Khi `/led/off` không transient gặp `source: "status:setup"`, HAL
+hiểu đây là dọn cue setup: xoá cue đã lưu rồi restore đèn nghỉ đã cấu hình,
+vẫn tôn trọng sleep và quyền giữ LED của privacy. API và chuỗi gọi setup của
+os-server không đổi. Màu user chọn không mang source hệ thống, kể cả RGB trùng
+cue setup; `/led/off` của user vẫn lưu solid đen. Off transient giữ nguyên source setup.
+
+Không suy đoán nguồn của sidecar cũ chưa có tag. Với máy đã dính lỗi, chọn lại
+resting light mong muốn trong Settings để xoá override đen cũ; tự xoá mọi solid
+đen sẽ làm mất cả lựa chọn OFF thật của user.
+
 `setup` là solid bền khi được gửi qua `POST /led/status`; các trạng thái còn lại là overlay
 transient. Nó tạo cue trắng AP/pre-setup mô tả bên dưới, và setup thành công sẽ xoá saved state
 này thay vì giữ thành user LED preference.

@@ -1,3 +1,4 @@
+import "./settings-details.css";
 import { useRef, useState } from "react";
 import { MicVocal, Mic, Loader2 } from "lucide-react";
 import { C, Field, SectionCard, LABEL_STYLE } from "@/components/setup/shared";
@@ -128,7 +129,7 @@ export function VoiceSection({
             <span style={{
               flexShrink: 0, width: 20, height: 20, borderRadius: 999,
               background: C.amberDim, color: C.amber,
-              fontSize: 11, fontWeight: 700,
+              fontSize: 12, fontWeight: 700,
               display: "flex", alignItems: "center", justifyContent: "center",
               marginTop: 1,
             }}>{i + 1}</span>
@@ -138,7 +139,7 @@ export function VoiceSection({
       </div>
       {voiceMsg && (
         <div style={{
-          fontSize: 11, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
+          fontSize: 12, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
           background: voiceMsg.startsWith("Error") ? "var(--lm-red-dim)" : "var(--lm-green-dim)",
           color: voiceMsg.startsWith("Error") ? C.red : C.green,
         }}>{voiceMsg}</div>
@@ -180,7 +181,7 @@ export function VoiceSection({
       </button>
       {withVoice.length > 0 && (
         <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 10 }}>
             Voice Files
           </div>
           {withVoice.map((p) => {
@@ -191,15 +192,16 @@ export function VoiceSection({
                   <button
                     type="button"
                     onClick={() => toggleVoiceExpanded(p.label)}
+                    aria-expanded={expanded}
                     style={{
-                      flex: 1, display: "flex", alignItems: "center", gap: 8,
+                      flex: 1, minWidth: 0, flexWrap: "wrap", display: "flex", alignItems: "center", gap: 8,
                       background: "none", border: "none", cursor: "pointer", padding: 0,
                       textAlign: "left", color: C.text,
                     }}
                   >
-                    <span style={{ fontSize: 11, color: C.textMuted, transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>▶</span>
-                    <span style={{ fontSize: 13, fontWeight: 600 }}>{p.label}</span>
-                    <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>({p.voice_samples!.length} file{p.voice_samples!.length !== 1 ? "s" : ""})</span>
+                    <span style={{ fontSize: 12, color: C.textDim, transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>▶</span>
+                    <span style={{ fontSize: 13, fontWeight: 600, overflowWrap: "anywhere", minWidth: 0 }}>{p.label}</span>
+                    <span style={{ fontSize: 12, color: C.textDim, fontWeight: 400 }}>({p.voice_samples!.length} file{p.voice_samples!.length !== 1 ? "s" : ""})</span>
                   </button>
                   <button
                     type="button"
@@ -215,8 +217,8 @@ export function VoiceSection({
                       } catch { /* ignore */ }
                     }}
                     style={{
-                      background: "none", border: `1px solid ${C.border}`, borderRadius: 5,
-                      cursor: "pointer", fontSize: 10, color: C.red, padding: "3px 8px",
+                      flexShrink: 0, background: "none", border: `1px solid ${C.border}`, borderRadius: 5,
+                      cursor: "pointer", fontSize: 12, color: C.red, padding: "3px 8px",
                     }}
                   >
                     Remove all
@@ -228,27 +230,25 @@ export function VoiceSection({
                   const isAudio = ["wav", "ogg", "mp3", "webm", "m4a"].includes(ext);
                   const viewLabel = ["json", "jsonl", "txt"].includes(ext) ? "view" : "open";
                   return (
-                    <div key={file} title={file} style={{
-                      display: "flex", alignItems: "center", gap: 6, padding: "3px 0",
-                      fontSize: 11, color: C.textDim,
-                    }}>
-                      <span style={{ flex: 1, minWidth: 0, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", fontFamily: "monospace" }}>
-                        {file}
-                      </span>
-                      {isAudio ? (
-                        <>
-                          <audio controls src={url} style={{ width: 180, height: 24 }} />
-                          <button type="button" onClick={() => removeVoiceFile(p.label, file)}
-                            style={{ background: "none", border: "none", cursor: "pointer", color: C.red, fontSize: 14, lineHeight: 1, padding: "0 4px" }} title="Delete">
-                            ×
-                          </button>
-                        </>
-                      ) : (
-                        <a href={url} target="_blank" rel="noopener noreferrer"
-                          style={{ fontSize: 10, color: C.amber, textDecoration: "none", padding: "2px 6px", border: `1px solid ${C.border}`, borderRadius: 4 }}>
-                          {viewLabel}
-                        </a>
-                      )}
+                    <div key={file} className="lm-voice-file">
+                      <span className="lm-voice-filename">{file}</span>
+                      <div className="lm-voice-file-controls">
+                        {isAudio ? (
+                          <>
+                            <audio controls src={url} aria-label={`Voice sample ${file}`} />
+                            <button type="button" onClick={() => removeVoiceFile(p.label, file)}
+                              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6, cursor: "pointer", color: C.red, fontSize: 12, padding: "6px 10px" }}
+                              aria-label={`Delete voice sample ${file}`}>
+                              Delete
+                            </button>
+                          </>
+                        ) : (
+                          <a href={url} target="_blank" rel="noopener noreferrer"
+                            style={{ fontSize: 12, color: C.amber, textDecoration: "none", padding: "8px 10px", border: `1px solid ${C.border}`, borderRadius: 6 }}>
+                            {viewLabel}
+                          </a>
+                        )}
+                      </div>
                     </div>
                   );
                 })}

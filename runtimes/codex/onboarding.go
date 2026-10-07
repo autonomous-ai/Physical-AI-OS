@@ -142,6 +142,9 @@ func (s *CodexService) EnsureOnboarding() error {
 	// Best-effort: a presync failure must not block gateway startup.
 	configBefore := fileHash(codexConfigTOML) + fileHash(codexEnvFile)
 	if err := s.runPresync(); err != nil {
+		if s.config.LLMMode() != "" {
+			return fmt.Errorf("apply LLM configuration: %w", err)
+		}
 		slog.Warn("codex presync failed, continuing with workspace reconcile", "component", "codex", "error", err)
 	}
 	presyncChanged := fileHash(codexConfigTOML)+fileHash(codexEnvFile) != configBefore
