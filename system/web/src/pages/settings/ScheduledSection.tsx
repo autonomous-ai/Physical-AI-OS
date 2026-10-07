@@ -12,6 +12,8 @@ import type { ScheduleDraft } from "./scheduleDraft";
 import { describeLastRun, skippedRunMessage } from "./scheduleRunStatus";
 import type { LastRunTone } from "./scheduleRunStatus";
 
+import "./settings-lists.css";
+
 const LAST_RUN_TONE_COLOR: Record<LastRunTone, string> = {
   success: C.green,
   failure: C.red,
@@ -302,12 +304,12 @@ export function ScheduledSection({ active }: { active: boolean }) {
       )}
 
       {loading ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Loading…</div>
+        <div style={{ fontSize: 12, color: C.textDim }}>Loading…</div>
       ) : error ? (
         <div style={{ fontSize: 12, color: C.red }}>{error}</div>
       ) : schedules.length === 0 ? (
         editing !== "new" && (
-          <div style={{ fontSize: 12, color: C.textMuted }}>
+          <div style={{ fontSize: 12, color: C.textDim }}>
             No scheduled tasks yet. Create one here, or in the Autonomous app.
           </div>
         )
@@ -343,12 +345,12 @@ export function ScheduledSection({ active }: { active: boolean }) {
                 background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
               }}
             >
-              <div style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
-                <div style={{ overflow: "hidden", minWidth: 0, flex: 1 }}>
+              <div className="lm-settings-list-row" style={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 8 }}>
+                <div style={{ minWidth: 0, flex: 1 }}>
                   <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 6, flexWrap: "wrap" }}>
-                    {sch.name}
+                    <span className="lm-settings-list-name">{sch.name}</span>
                     <span style={{
-                      fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
+                      fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
                       border: `1px solid ${C.border}`,
                       color: sch.enabled ? C.green : C.textMuted,
                       background: sch.enabled ? "var(--lm-green-dim)" : "transparent",
@@ -359,7 +361,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
                       <span
                         title="Spoken out loud, word for word — no agent turn"
                         style={{
-                          fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
+                          fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
                           border: `1px solid ${C.border}`, color: C.amber,
                         }}
                       >
@@ -368,7 +370,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
                     )}
                     {sch.pending && (
                       <span style={{
-                        fontSize: 10, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
+                        fontSize: 12, fontWeight: 600, padding: "1px 7px", borderRadius: 999,
                         border: `1px solid ${C.border}`, color: C.textDim,
                       }}>
                         {sch.pending === "delete" ? "Removing…" : "Syncing…"}
@@ -377,16 +379,17 @@ export function ScheduledSection({ active }: { active: boolean }) {
                   </div>
                   {sch.instructions && (
                     <div style={{
-                      fontSize: 11, color: C.textMuted, marginTop: 2,
-                      overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                      fontSize: 12, color: C.textDim, marginTop: 2,
+                      overflowWrap: "anywhere", display: "-webkit-box", WebkitBoxOrient: "vertical", WebkitLineClamp: 3, overflow: "hidden",
                     }}>
                       {sch.instructions}
                     </div>
                   )}
                 </div>
-                <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                <div className="lm-settings-list-actions">
                   <button
                     type="button"
+                    aria-label={`Run ${sch.name} now`}
                     onClick={() => handleRunNow(sch)}
                     disabled={isRunning || sch.pending === "create"}
                     style={{
@@ -409,6 +412,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
                   <button
                     type="button"
                     title="Edit"
+                    aria-label={`Edit ${sch.name}`}
                     onClick={() => setEditing(sch.id)}
                     disabled={isPending}
                     style={{ ...BTN, padding: "6px 9px", opacity: isPending ? 0.4 : 1 }}
@@ -418,6 +422,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
                   <button
                     type="button"
                     title="Delete"
+                    aria-label={`Delete ${sch.name}`}
                     onClick={() => handleDelete(sch)}
                     disabled={isPending}
                     style={{ ...BTN, padding: "6px 9px", color: C.red, opacity: isPending ? 0.4 : 1 }}
@@ -431,7 +436,7 @@ export function ScheduledSection({ active }: { active: boolean }) {
                 {cadenceSummary(sch.schedule, timezone)}
               </div>
 
-              <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 11, color: C.textMuted, marginTop: 6 }}>
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 14, fontSize: 12, color: C.textDim, marginTop: 6 }}>
                 <span>Next run: <span style={{ color: C.text }}>{nextRun}</span></span>
                 <span>
                   Last run: <span style={{ color: C.text }}>{lastRun}</span>

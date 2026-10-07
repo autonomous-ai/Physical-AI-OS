@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import { UserCheck, UserX } from "lucide-react";
-import { CardLabel } from "../components";
 import { EmptyState } from "./EmptyState";
 import { fmtCountdown } from "./format";
 import type { CooldownEntry } from "./types";
@@ -18,16 +17,22 @@ export function CooldownsCard({
   cardHeader: CSSProperties;
 }) {
   return (
-    <div className="lm-mon-card" style={monCard}>
+    <details className="lm-mon-card lm-users-cooldowns" style={monCard}>
+      <summary>
+        <span>Face recognition cooldowns</span>
+        <span style={{ color: cdError ? "var(--lm-red)" : "var(--lm-text-muted)", fontSize: 13, fontWeight: 400 }}>
+          {cdError ? "Status unavailable" : `${allCooldownEntries.filter((entry) => entry.cooldown_remaining > 0).length} active`}
+        </span>
+      </summary>
       <div style={cardHeader}>
-        <CardLabel icon={<UserCheck size={13} />} text="Face Recognition" />
+        <h2 className="lm-users-card-title"><UserCheck size={17} aria-hidden />Event timing</h2>
         <button
           onClick={onReset}
           disabled={resetting || !hasActiveCooldowns}
           className="lm-u-btn"
           style={{
-            fontSize: 10,
-            padding: "4px 12px",
+            fontSize: 12,
+            padding: "7px 12px",
             borderRadius: 6,
             fontWeight: 600,
             ...(hasActiveCooldowns
@@ -49,7 +54,7 @@ export function CooldownsCard({
       )}
 
       {!cdError && allCooldownEntries.length > 0 && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }} className="lm-hide-scroll lm-scroll-fade">
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 320, overflowY: "auto" }} className="lm-users-list">
           {allCooldownEntries.map((entry) => {
             const pct = entry.cooldown_total > 0
               ? (entry.cooldown_remaining / entry.cooldown_total) * 100
@@ -64,10 +69,10 @@ export function CooldownsCard({
                 background: "var(--lm-surface)",
                 cursor: "default",
               }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", flexWrap: "wrap", gap: 8, marginBottom: 6 }}>
+                  <div style={{ display: "flex", alignItems: "center", flexWrap: "wrap", gap: 8 }}>
                     <span style={{
-                      fontSize: 12,
+                      fontSize: 13, overflowWrap: "anywhere",
                       fontWeight: 600,
                       color: kindColor,
                       textTransform: "capitalize",
@@ -75,7 +80,7 @@ export function CooldownsCard({
                       {entry.person_id}
                     </span>
                     <span style={{
-                      fontSize: 10,
+                      fontSize: 12,
                       padding: "1px 6px",
                       borderRadius: 4,
                       background: `color-mix(in srgb, ${kindColor} 14%, transparent)`,
@@ -86,7 +91,7 @@ export function CooldownsCard({
                     </span>
                   </div>
                   <span style={{
-                    fontSize: 11,
+                    fontSize: 12,
                     fontWeight: 600,
                     fontFamily: "monospace",
                     color: entry.cooldown_remaining > 0 ? "var(--lm-text)" : "var(--lm-green)",
@@ -111,7 +116,7 @@ export function CooldownsCard({
                     }}
                   />
                 </div>
-                <div style={{ fontSize: 10, color: "var(--lm-text-muted)", marginTop: 4 }}>
+                <div style={{ fontSize: 12, color: "var(--lm-text-muted)", marginTop: 4 }}>
                   seen {Math.round(entry.last_seen_ago)}s ago · next event in {fmtCountdown(entry.cooldown_remaining)}
                 </div>
               </div>
@@ -119,6 +124,6 @@ export function CooldownsCard({
           })}
         </div>
       )}
-    </div>
+    </details>
   );
 }

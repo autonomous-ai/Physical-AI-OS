@@ -1,3 +1,4 @@
+import { SettingsSelect } from "@/components/SettingsSelect";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Wifi, Pencil, X, RefreshCw } from "lucide-react";
 import { C, FIELD_GAP, LABEL_STYLE, INPUT_STYLE, LockedPasswordField, SectionCard } from "@/components/setup/shared";
@@ -103,16 +104,16 @@ export function WifiSection({
             <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
               <div style={{ flex: 1, minWidth: 0 }}>
                 {uniqueNetworks.length > 0 ? (
-                  <select
+                  <SettingsSelect
                     id="ssid" value={ssid}
-                    onChange={(e) => setSsid(e.target.value)}
+                    onValueChange={(value) => setSsid(value)}
                     style={{ ...INPUT_STYLE, cursor: "pointer" }}
                   >
                     <option value="">Choose your Wi-Fi</option>
                     {uniqueNetworks.map((n) => (
                       <option key={n.bssid} value={n.ssid}>{n.ssid}</option>
                     ))}
-                  </select>
+                  </SettingsSelect>
                 ) : (
                   <input
                     id="ssid" type="text" value={ssid}
