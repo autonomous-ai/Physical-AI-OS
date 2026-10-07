@@ -265,6 +265,12 @@ The Overview **Versions** card has a restart action column with `restart` for OS
 
 The Versions card shows **Current** and **Latest** side by side. Latest comes from each component's `target` in `/api/system/ota-versions`, including the active runtime via `agent`; it is the version published in the device's OTA feed, not an upstream release lookup. Metadata loads in normal and debug mode and refreshes after updates. Missing or empty targets, including Host, display `—`; an already-current component still shows its published target. Bootstrap and Device rows and update buttons remain debug-only.
 
+The monitor/settings sidebar uses a single-open-group accordion: expanding one top-level group collapses the previous one, clicking the open group collapses it, and navigation opens the group containing the destination. It has an independently scrolling navigation list with contained overscroll and a non-shrinking logout footer. On phones, the drawer follows the dynamic viewport height (`100dvh`) so all debug entries remain reachable.
+
+**Realtime form** (`/setting?debug=true#realtime`) uses short checkbox labels; provider names live in the Provider dropdown. Optional API Key and Base URL guidance appears below the inputs, keeping field labels compact on narrow screens.
+
+The same compact-label layout applies to General’s attention trigger, STT credentials, TTS provider/key fields, and Resting light. TTS key status stays intact when the row wraps. Wi-Fi provisioning places its Advanced explanation below the button, and Manual Move separates its description from the Live drag checkbox.
+
 **Speech attention gate** lives in the public **General** settings card, not the debug-only Realtime section. Its checkbox writes the top-level `wakeword` flag; saving a changed or pending wake value restarts HAL so the change applies. When enabled, speech must follow an attention trigger: a spoken phrase, single click, turning toward the lamp while speaking, or an enrolled person entering view (`presence.enter`). A stranger-only enter does not open the voice gate unless the deployment sets `HAL_PRESENCE_WAKE_STRANGERS=true`. The card lists the currently accepted **spoken** phrases, including the active agent's exact current name and the permanent `autonomous` and device-type aliases; the system manages that list. Reload Settings after an agent rename to see the new name. When disabled, every utterance is handled without a trigger.
 
 Wake updates from HTTP Settings and MQTT are serialized. Saving waits for the required HAL `systemctl restart` to complete (the restart command has a 30-second timeout), without verifying voice pipeline readiness. Save or wake-apply failures use the existing Settings error response; config may already be saved if restart fails. Pending wake apply is retained in the current os-server process, so saving the same value again retries it. After success, an unchanged wake value does not cause another restart. Config updates without a pending wake apply retain the existing asynchronous HAL apply behavior. Updates combining wake and other settings use one HAL restart; other saved fields still receive their normal side effects.
@@ -508,6 +514,14 @@ the shorter Presence card from being stretched by the taller Audio card.
 > `sleepy` readable in dark mode. The summary reserves room for the emoji and
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
+
+### Monitor readability
+
+Overview shows a neutral loading state until agent status arrives; version rows stack with field labels on phones. System stacks gauges above history charts at 768px. Camera puts snapshots below the stream on phones, labels tracking inputs, collapses optional bounding-box controls under Advanced tracking, and reports failed actions with pending controls disabled.
+
+Logs uses a source dropdown at 640px, larger log text and clearer timestamps. Flow has larger search and toolbar controls. CLI has keyboard-accessible session tabs, mobile terminal keys and a Reconnect button after disconnection; reconnect starts a fresh shell and clears the previous terminal scrollback. API Docs shows loading/failure states with Reload and Open in new tab actions. Monitor and Settings reserve a footer row so the source link does not cover content.
+
+Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, compact person cards in an auto-filling grid (280px minimum tracks, cards capped at 340px) and two-column observation grids; both use one full-width column at 640px, collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
 
 ### 5.2 Pairing Section
 
@@ -793,11 +807,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
+The page leads with a presence summary and readable cards for people, movement, light and sound events. Expression and posture estimates follow when available. Backend status, buffers, timeouts, raw events and posture samples remain accessible in collapsed **Technical details**. A paused service is identified explicitly; failed reads show an error rather than old observations. Cards use one column at widths up to 600px. Environment follows with temperature, humidity, CO₂ and PM2.5; **More measurements** reveals the other five metrics. No air-quality thresholds or derived health scores are introduced.
+
 The Sensing navigation entry and read-only **Environment** card are always
 visible without debug mode, including when no sensing capability is declared.
 Camera sensing cards still require `vision`. While capabilities are loading or
-`environment` is absent, the Environment card shows `N/A` measurements and does
-not send sensor requests. Declared but disabled sensors also show `N/A` values.
+`environment` is absent, the Environment card shows a compact unavailable message and does
+not send sensor requests. Disabled sensors and missing samples also use a compact empty state.
 
 When `environment` is declared, the card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
@@ -817,7 +833,8 @@ Source labels identify the component; each metric has its own timestamp.
 Unavailable components do not hide healthy readings from another component. Unavailable values appear as `N/A`, never
 zero. Stale measurements are also replaced with `N/A`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
-quality labels, thresholds, or alerts are assigned. A collapsed technical
+quality labels, thresholds, or alerts are assigned. Sensor details use separate high-contrast panels with aligned label/value rows and state badges. Active sensors appear first; disabled sensors without errors are grouped in a nested collapsed list.
+A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
 polling/retry/staleness/recovery timings under `status.components`. Legacy
 single-sensor snapshots with top-level `status.timing` remain supported and use a

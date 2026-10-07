@@ -1,6 +1,7 @@
 import { Link2 } from "lucide-react";
 import { BuddyCard } from "./BuddyCard";
 import { HarnessCard } from "./HarnessCard";
+import "./pairing.css";
 
 export function PairingSection() {
   return (
