@@ -212,7 +212,7 @@ export function FaceSection({
                 ? `${pending.length} photo${pending.length !== 1 ? "s" : ""} selected`
                 : "Choose photos or drag them here…"}
           </span>
-          <span style={{ flexShrink: 0, fontSize: 11, color: C.textMuted }}>
+          <span style={{ flexShrink: 0, fontSize: 12, color: C.textDim }}>
             {pending.length ? "Add more" : "Browse"}
           </span>
         </button>
@@ -235,7 +235,7 @@ export function FaceSection({
         {pending.length > 0 && (
           <div style={{ marginTop: 10 }}>
             <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
-              <span style={{ fontSize: 11, color: C.textMuted }}>
+              <span style={{ fontSize: 12, color: C.textDim }}>
                 {pending.length} ready to enroll
               </span>
               <button
@@ -243,7 +243,7 @@ export function FaceSection({
                 onClick={clearPending}
                 style={{
                   background: "none", border: "none", cursor: "pointer",
-                  fontSize: 11, color: C.textMuted, padding: 0,
+                  fontSize: 12, color: C.textDim, padding: 0,
                 }}
               >
                 Clear all
@@ -251,13 +251,13 @@ export function FaceSection({
             </div>
             <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
               {pending.map((p, idx) => (
-                <div key={p.url} style={{ position: "relative", width: 64, height: 64 }}>
+                <div key={p.url} style={{ position: "relative", width: 88, height: 88 }}>
                   <img
                     src={p.url}
                     alt={p.file.name}
                     title={p.file.name}
                     style={{
-                      width: 64, height: 64, borderRadius: 8, objectFit: "cover",
+                      width: 88, height: 88, borderRadius: 8, objectFit: "cover",
                       border: `1px solid ${C.border}`, display: "block",
                     }}
                   />
@@ -267,14 +267,14 @@ export function FaceSection({
                     title={`Remove ${p.file.name}`}
                     aria-label={`Remove ${p.file.name}`}
                     style={{
-                      position: "absolute", top: -6, right: -6,
-                      width: 20, height: 20, borderRadius: "50%",
+                      position: "absolute", top: 0, right: 0,
+                      width: 40, height: 40, borderRadius: 8,
                       background: C.bg, border: `1px solid ${C.border}`,
                       cursor: "pointer", color: C.red, padding: 0,
                       display: "flex", alignItems: "center", justifyContent: "center",
                     }}
                   >
-                    <X size={12} />
+                    <X size={16} />
                   </button>
                 </div>
               ))}
@@ -287,14 +287,14 @@ export function FaceSection({
           role="status"
           aria-live="polite"
           style={{
-            fontSize: 11, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
+            fontSize: 12, padding: "6px 10px", borderRadius: 8, marginBottom: 10,
             background: faceMsg.type === "error" ? "var(--lm-red-dim)" : "var(--lm-green-dim)",
             color: faceMsg.type === "error" ? C.red : C.green,
           }}
         >{faceMsg.text}</div>
       )}
       {pending.length > 0 && !faceName.trim() && !faceUploading && (
-        <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8, textAlign: "center" }}>
+        <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8, textAlign: "center" }}>
           Enter a name above to enroll these {pending.length} photo{pending.length !== 1 ? "s" : ""}.
         </div>
       )}
@@ -318,7 +318,7 @@ export function FaceSection({
       </button>
       {enrolled.length > 0 && (
         <div style={{ marginTop: 16, borderTop: `1px solid ${C.border}`, paddingTop: 14 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 10 }}>
+          <div style={{ fontSize: 12, fontWeight: 700, color: C.textDim, textTransform: "uppercase", letterSpacing: "0.09em", marginBottom: 10 }}>
             Face Photos
           </div>
           {enrolled.map((p) => {
@@ -337,9 +337,9 @@ export function FaceSection({
                       textAlign: "left", color: C.text,
                     }}
                   >
-                    <span style={{ flexShrink: 0, fontSize: 11, color: C.textMuted, transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>▶</span>
+                    <span style={{ flexShrink: 0, fontSize: 12, color: C.textDim, transition: "transform 0.15s", transform: expanded ? "rotate(90deg)" : "none" }}>▶</span>
                     <span style={{ fontSize: 13, fontWeight: 600, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{p.label}</span>
-                    <span style={{ flexShrink: 0, fontSize: 10, color: C.textMuted, fontWeight: 400 }}>({p.photo_count} photo{p.photo_count !== 1 ? "s" : ""})</span>
+                    <span style={{ flexShrink: 0, fontSize: 12, color: C.textDim, fontWeight: 400 }}>({p.photo_count} photo{p.photo_count !== 1 ? "s" : ""})</span>
                   </button>
                   {p.label !== "unknown" && (
                     <button
@@ -348,7 +348,7 @@ export function FaceSection({
                       style={{
                         flexShrink: 0,
                         background: "none", border: `1px solid ${C.border}`, borderRadius: 5,
-                        cursor: "pointer", fontSize: 10, color: C.red, padding: "3px 8px",
+                        cursor: "pointer", fontSize: 12, color: C.red, padding: "3px 8px",
                       }}
                     >
                       Remove all
@@ -358,13 +358,14 @@ export function FaceSection({
                 {expanded && p.photos.length > 0 && (
                   <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
                     {p.photos.map((photo) => (
-                      <div key={photo} style={{ position: "relative", width: 56, height: 56 }}>
+                      <div key={photo} style={{ position: "relative", width: 88, height: 88 }}>
                         <img
                           src={hwUrl(`/face/photo/${encodeURIComponent(p.label)}/${encodeURIComponent(photo)}`)}
                           title={photo}
+                          alt={`${p.label}: ${photo}`}
                           onClick={() => window.open(hwUrl(`/face/photo/${encodeURIComponent(p.label)}/${encodeURIComponent(photo)}`), "_blank", "noopener,noreferrer")}
                           style={{
-                            width: 56, height: 56, borderRadius: 8, objectFit: "cover",
+                            width: 88, height: 88, borderRadius: 8, objectFit: "cover",
                             border: `1px solid ${C.border}`, cursor: "pointer", display: "block",
                           }}
                         />
@@ -375,14 +376,14 @@ export function FaceSection({
                             title={`Delete ${photo}`}
                             aria-label={`Delete ${photo}`}
                             style={{
-                              position: "absolute", top: -6, right: -6,
-                              width: 18, height: 18, borderRadius: "50%",
+                              position: "absolute", top: 0, right: 0,
+                              width: 40, height: 40, borderRadius: 8,
                               background: C.bg, border: `1px solid ${C.border}`,
                               cursor: "pointer", color: C.red, padding: 0,
                               display: "flex", alignItems: "center", justifyContent: "center",
                             }}
                           >
-                            <X size={11} />
+                            <X size={16} />
                           </button>
                         )}
                       </div>

@@ -1,3 +1,4 @@
+import { SettingsSelect } from "@/components/SettingsSelect";
 import { useEffect, useState } from "react";
 import { ChevronDown, ChevronRight, ExternalLink, MessageSquare, AlertTriangle } from "lucide-react";
 import { C, LockedField, SectionCard } from "@/components/setup/shared";
@@ -56,10 +57,11 @@ export function ChannelSection({
   return (
     <SectionCard id="channel" title="Messaging Channels" active={active}>
       <div style={{ marginBottom: 12 }}>
-        <label style={{ display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 }}>Channel</label>
-        <select
+        <label htmlFor="settings-channel" style={{ display: "block", fontSize: 12, color: C.textDim, marginBottom: 5 }}>Channel</label>
+        <SettingsSelect
+          id="settings-channel"
           value={channel}
-          onChange={(e) => setChannel(e.target.value as ChannelType)}
+          onValueChange={(value) => setChannel(value as ChannelType)}
           style={{
             width: "100%", boxSizing: "border-box" as const,
             background: C.surface, border: `1px solid ${C.border}`,
@@ -71,7 +73,7 @@ export function ChannelSection({
           <option value="slack">Slack</option>
           <option value="discord">Discord</option>
           <option value="imessage">iMessage (BlueBubbles)</option>
-        </select>
+        </SettingsSelect>
       </div>
       {channel === "telegram" && (
         <>
@@ -107,7 +109,7 @@ export function ChannelSection({
                 <div style={{ fontSize: 12.5, fontWeight: 700, color: "#dc2626", marginBottom: 4 }}>
                   Wrong runtime for the BlueBubbles bridge
                 </div>
-                <div style={{ fontSize: 11.5, color: C.text, lineHeight: 1.55, marginBottom: 8 }}>
+                <div style={{ fontSize: 12, color: C.text, lineHeight: 1.55, marginBottom: 8 }}>
                   This device is running{" "}
                   <b style={{ textTransform: "capitalize" }}>{runtimeCurrent || "unknown"}</b>.
                   The BlueBubbles path below only works with the <b>Hermes</b>{" "}
@@ -129,7 +131,7 @@ export function ChannelSection({
                   style={{
                     background: "#dc2626", border: "none", color: "#fff",
                     padding: "6px 12px", borderRadius: 6,
-                    fontSize: 11.5, fontWeight: 600, cursor: "pointer",
+                    fontSize: 12, fontWeight: 600, cursor: "pointer",
                   }}
                 >
                   Switch to Hermes runtime →
@@ -151,7 +153,7 @@ export function ChannelSection({
               <div style={{ fontSize: 14, fontWeight: 700, color: C.text, marginBottom: 3 }}>
                 Connect iMessage (via BlueBubbles)
               </div>
-              <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.5 }}>
+              <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.5 }}>
                 Apple has no official third-party iMessage API. You bring your own
                 bridge: a Mac running BlueBubbles server, and this device talks to it.
               </div>
@@ -162,7 +164,7 @@ export function ChannelSection({
             background: "rgba(10, 132, 255, 0.08)",
             border: "1px solid rgba(10, 132, 255, 0.35)",
             borderRadius: 10, padding: "12px 14px", marginBottom: 16,
-            fontSize: 11.5, color: C.text, lineHeight: 1.6,
+            fontSize: 12, color: C.text, lineHeight: 1.6,
           }}>
             <div style={{ fontSize: 12.5, fontWeight: 700, color: "#0A84FF", marginBottom: 6 }}>
               Who is this channel for?
@@ -206,7 +208,7 @@ export function ChannelSection({
             spellCheck={false}
             style={{ ...inputStyle, marginBottom: 6, fontFamily: "monospace" }}
           />
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 14, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 14, lineHeight: 1.5 }}>
             LAN URL for same-Wi-Fi setup, or a public tunnel URL if the Mac is elsewhere.{" "}
             <button
               type="button"
@@ -246,7 +248,7 @@ export function ChannelSection({
             onChange={setBluebubblesUserAddress}
             placeholder="+84901234567 or you@example.com"
           />
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 12, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12, lineHeight: 1.5 }}>
             Your phone number or email for the operator's home conversation.
             Customer messages from other addresses are accepted by default.
           </div>
@@ -275,7 +277,7 @@ export function ChannelSection({
               marginBottom: 6,
             }}
           />
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 16, lineHeight: 1.5 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 16, lineHeight: 1.5 }}>
             Optional. Prepended to every incoming message as a system-context
             block so the LLM treats customers correctly. Great for shops /
             services / customer support setups. Leave empty for default
@@ -293,7 +295,7 @@ export function ChannelSection({
                 style={{
                   background: "none", border: "none", padding: 0, cursor: "pointer",
                   display: "inline-flex", alignItems: "center", gap: 6,
-                  color: C.textDim, fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em",
+                  color: C.textDim, fontSize: 12, fontWeight: 700, letterSpacing: "0.05em",
                 }}
                 aria-expanded={imessageGuideOpen}
               >
@@ -304,13 +306,13 @@ export function ChannelSection({
                 href="https://bluebubbles.app/install"
                 target="_blank"
                 rel="noreferrer"
-                style={{ color: C.amber, fontSize: 11.5, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
+                style={{ color: C.amber, fontSize: 12, display: "inline-flex", alignItems: "center", gap: 4, textDecoration: "none" }}
               >
                 Open BlueBubbles <ExternalLink size={11} />
               </a>
             </div>
             {imessageGuideOpen && (
-              <div style={{ marginTop: 12, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+              <div style={{ marginTop: 12, fontSize: 12, color: C.textDim, lineHeight: 1.6 }}>
                 <Step n={1}>
                   On the Mac you want to use as the bridge, open Messages.app
                   and confirm you are <b>signed in to your Apple ID</b> and can
@@ -331,7 +333,7 @@ export function ChannelSection({
                   {" "}(pick the macOS build). Open the downloaded <code
                     style={{
                       background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4,
-                      padding: "1px 5px", fontFamily: "monospace", fontSize: 10.5,
+                      padding: "1px 5px", fontFamily: "monospace", fontSize: 12,
                     }}
                   >.dmg</code>, drag <b>BlueBubbles</b> into <b>Applications</b>, then launch it.
                 </Step>
@@ -345,7 +347,7 @@ export function ChannelSection({
                     <li><b>Automation</b> → allow BlueBubbles to control Messages</li>
                     <li><b>Contacts</b> (optional, resolves names on incoming messages)</li>
                   </ul>
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     If you miss a prompt, open <b>System Settings → Privacy &amp; Security</b>{" "}
                     and toggle BlueBubbles on under each section listed above.
                   </div>
@@ -354,7 +356,7 @@ export function ChannelSection({
                   In the BlueBubbles Server window, open <b>Settings → Password</b>{" "}
                   and set a password. Paste the same password into the{" "}
                   <b>Server Password</b> field above.
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     Any string works — make it long / random. The device is the
                     only client that will use it.
                   </div>
@@ -368,7 +370,7 @@ export function ChannelSection({
                       window look for the LAN URL (e.g.{" "}
                       <code style={{
                         background: C.surface, border: `1px solid ${C.border}`, borderRadius: 4,
-                        padding: "1px 5px", fontFamily: "monospace", fontSize: 10.5,
+                        padding: "1px 5px", fontFamily: "monospace", fontSize: 12,
                       }}>http://192.168.1.10:1234</code>) — copy it.
                     </li>
                     <li>
@@ -380,7 +382,7 @@ export function ChannelSection({
                       hostname / IP + port).
                     </li>
                   </ul>
-                  <div style={{ marginTop: 4, color: C.textMuted, fontSize: 10.5 }}>
+                  <div style={{ marginTop: 4, color: C.textDim, fontSize: 12 }}>
                     Whichever URL you paste,{" "}
                     <b>keep the Mac powered on and BlueBubbles running</b> —
                     if it quits or the Mac sleeps, iMessage on this device
@@ -432,13 +434,13 @@ function InfoCard({
   return (
     <div style={{
       background: bg, border: `1px solid ${border}`, borderRadius: 10,
-      padding: "12px 14px", marginBottom: 14, fontSize: 11.5, color: C.textDim, lineHeight: 1.6,
+      padding: "12px 14px", marginBottom: 14, fontSize: 12, color: C.textDim, lineHeight: 1.6,
     }}>
       {(title || titleRight || icon) && (
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 8, marginBottom: title ? 8 : 0 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
             {icon}
-            {title && <div style={{ fontSize: 10.5, fontWeight: 700, letterSpacing: "0.05em", color: titleColor }}>{title}</div>}
+            {title && <div style={{ fontSize: 12, fontWeight: 700, letterSpacing: "0.05em", color: titleColor }}>{title}</div>}
           </div>
           {titleRight}
         </div>
@@ -456,16 +458,16 @@ function Step({ n, last, children }: { n: number; last?: boolean; children: Reac
         width: 18, height: 18, borderRadius: 9,
         background: C.amberDim, color: C.amber,
         display: "flex", alignItems: "center", justifyContent: "center",
-        fontSize: 10.5, fontWeight: 700,
+        fontSize: 12, fontWeight: 700,
       }}>{n}</div>
-      <div style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6, minWidth: 0 }}>{children}</div>
+      <div style={{ fontSize: 12, color: C.textDim, lineHeight: 1.6, minWidth: 0 }}>{children}</div>
     </div>
   );
 }
 
 function FieldLabel({ htmlFor, children }: { htmlFor: string; children: React.ReactNode }) {
   return (
-    <label htmlFor={htmlFor} style={{ display: "block", fontSize: 11.5, fontWeight: 600, color: C.text, marginBottom: 5 }}>
+    <label htmlFor={htmlFor} style={{ display: "block", fontSize: 12, fontWeight: 600, color: C.text, marginBottom: 5 }}>
       {children}
     </label>
   );
