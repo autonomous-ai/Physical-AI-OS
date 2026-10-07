@@ -556,14 +556,20 @@ hãy poll `system.ota_versions` để lấy trạng thái cuối.
 #### `wakeword.gate`
 
 Bật hoặc tắt cờ `wakeword` top-level. Lệnh dùng cùng kiểu ack bất đồng bộ như
-`realtime.set`: device ack đã nhận, lưu cờ vào `config.json`, restart HAL khi
-giá trị thay đổi, rồi publish kết quả.
+`realtime.set`: device ack `starting` ngay khi nhận, rồi lưu cờ và áp dụng trong
+worker chạy nền. Các cập nhật wake từ MQTT và HTTP Settings được xử lý tuần tự.
 
 **Nhận:** `{"cmd":"data","kind":"wakeword.gate","data":{"enabled":true}}`
 
 Ack `success` cuối cùng echo lại `{"enabled":true}`. Thiếu `enabled` hoặc JSON
-không hợp lệ trả `status:"failure"`. `success` nghĩa là cờ đã được lưu và HAL
-đang restart; không đợi HAL sẵn sàng.
+không hợp lệ trả `status:"failure"`. `success` nghĩa là cờ đã được lưu và lệnh
+`systemctl restart` HAL, nếu cần, đã hoàn tất thành công (riêng lệnh restart có
+timeout 30 giây); chưa
+xác nhận voice pipeline sẵn sàng. Lỗi lưu, lỗi restart và restart quá thời gian
+đều trả `failure`. Config có thể đã được lưu khi restart thất bại. Trong tiến
+trình os-server hiện tại, trạng thái wake chờ áp dụng được giữ lại sau lỗi lưu
+hoặc restart, nên gửi lại cùng giá trị mong muốn sẽ thử áp dụng lại. Khi đã áp
+dụng thành công, giá trị wake không đổi sẽ không gây thêm lần restart.
 
 #### `timezone.set`
 

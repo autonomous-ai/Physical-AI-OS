@@ -482,21 +482,36 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 	}
 
+	// Serialize with MQTT wake updates through persistence and HAL apply.
+	s.wakeApply.mu.Lock()
+
 	// Mutate inside WithLockSave so the model watcher cannot interleave.
 	var ch updateChanges
 	if err := s.config.WithLockSave(func(c *config.Config) {
+		previousWake := c.WakeWordEnabled()
 		ch = applyUpdate(c, data, adminHash)
+		s.wakeApply.pending = s.wakeApply.pending || c.WakeWordEnabled() != previousWake
 	}); err != nil {
+		s.wakeApply.mu.Unlock()
 		return fmt.Errorf("save config: %w", err)
 	}
 	slog.Info("config updated", "component", "device")
-	s.fireConfigSideEffects(ch)
-	return nil
+	wakeApply := s.wakeApply.pending
+	var wakeErr error
+	if wakeApply {
+		wakeErr = s.applyPendingWakeWord()
+	}
+	s.wakeApply.mu.Unlock()
+	// A wake restart covers the whole saved HAL config. Do not enqueue a second
+	// restart/live TTS update, including after failure: the wake retry owns it.
+	// Other saved fields still need their side effects even if HAL apply failed.
+	s.fireConfigSideEffects(ch, wakeApply)
+	return wakeErr
 }
 
 // fireConfigSideEffects runs per-cluster follow-ups after a save. config.mu must
 // already be released (gateway calls take their own locks).
-func (s *Service) fireConfigSideEffects(ch updateChanges) {
+func (s *Service) fireConfigSideEffects(ch updateChanges, halHandled bool) {
 	// The gateway keeps tokens in its own config, so re-run AddChannel.
 	// WhatsApp is excluded: it needs interactive QR pairing.
 	if ch.channel && ch.chanReq.Channel != domain.ChannelWhatsapp {
@@ -523,6 +538,8 @@ func (s *Service) fireConfigSideEffects(ch updateChanges) {
 	}
 	// Restart HAL only when a boot-read field changed; TTS is pushed live.
 	switch {
+	case halHandled:
+		// The wake path already attempted this saved HAL configuration.
 	case ch.halBoot || ch.lang || ch.realtime:
 		s.restartHAL("voice config change")
 	case ch.tts:

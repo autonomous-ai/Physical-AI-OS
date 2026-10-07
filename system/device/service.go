@@ -3,7 +3,9 @@
 package device
 
 import (
+	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"os/exec"
 	"sync"
@@ -30,6 +32,9 @@ type Service struct {
 	setupState      setupState
 	setupRuntime    setupRuntime
 	runtimeSwitchMu sync.Mutex
+	wakeApply       wakeWordApply
+	// Optional command override for isolated service tests.
+	halRestartCommand func(context.Context) error
 }
 
 func ProvideService(config *config.Config, ns *network.Service, gw domain.AgentGateway, be *beclient.Client, sled *statusled.Service) *Service {
@@ -48,17 +53,35 @@ func ProvideService(config *config.Config, ns *network.Service, gw domain.AgentG
 // refreshes the boot-time config baseline to avoid a redundant restart.
 func (s *Service) restartHAL(reason string) {
 	go func() {
-		slog.Info("restarting hal", "component", "device", "reason", reason)
-		out, err := exec.Command("systemctl", "restart", "hal").CombinedOutput()
-		if err != nil {
-			slog.Warn("hal restart failed", "component", "device", "reason", reason, "error", err, "output", string(out))
-			return
-		}
-		slog.Info("hal restarted", "component", "device", "reason", reason)
-		if err := config.SnapshotHALConfig(); err != nil {
-			slog.Warn("hal config snapshot failed", "component", "device", "error", err)
+		if err := s.restartHALAndWait(context.Background(), reason); err != nil {
+			slog.Warn("hal restart failed", "component", "device", "reason", reason, "error", err)
 		}
 	}()
+}
+
+// restartHALAndWait reports the command outcome, not voice-pipeline readiness.
+// Non-wake callers retain the asynchronous restartHAL wrapper.
+func (s *Service) restartHALAndWait(ctx context.Context, reason string) error {
+	slog.Info("restarting hal", "component", "device", "reason", reason)
+	if s.halRestartCommand != nil {
+		if err := s.halRestartCommand(ctx); err != nil {
+			return fmt.Errorf("restart HAL: %w", err)
+		}
+	} else {
+		cmd := exec.CommandContext(ctx, "systemctl", "restart", "hal")
+		cmd.WaitDelay = time.Second
+		if out, err := cmd.CombinedOutput(); err != nil {
+			if ctx.Err() != nil {
+				return fmt.Errorf("restart HAL: %w", ctx.Err())
+			}
+			return fmt.Errorf("restart HAL: %w (%s)", err, out)
+		}
+	}
+	slog.Info("hal restarted", "component", "device", "reason", reason)
+	if err := config.SnapshotHALConfig(); err != nil {
+		slog.Warn("hal config snapshot failed", "component", "device", "error", err)
+	}
+	return nil
 }
 
 // applyTTSConfig pushes a voice change into the running HAL, falling back to a
