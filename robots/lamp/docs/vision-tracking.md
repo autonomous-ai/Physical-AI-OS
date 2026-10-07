@@ -1013,7 +1013,7 @@ count as repoint evidence only if seen after the turn.
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Facing share needed to adopt a new bearing. Lower than the wake gate's 0.6: a still user measured 50%. Not 0.3: the window holds 2–3 samples, so that is one glance. |
 | `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Head yaw that counts as facing for a new bearing. Its own limit, never widened at the frame edge, so wake-gate tuning cannot loosen it. |
-| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Measured in frames: office co-workers 8.3–13.6%, user 19.2–46%. A lamp placed further from its user may need it lower in `.env`. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Face height (of frame height) that counts as near enough to be at the desk, for every user-check path. Gaze's face picker also drops any smaller face outright (#567), so it gates gaze wake's votes and pan samples too. Measured in frames: office co-workers 8.3–13.6%, user 19.2–46%. A lamp placed further from its user may need it lower in `.env`. |
 
 ### Remembered user bearing
 

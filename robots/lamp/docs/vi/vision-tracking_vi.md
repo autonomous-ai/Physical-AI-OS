@@ -1014,7 +1014,7 @@ nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoin
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |
 | `HAL_GAZE_BEARING_MAX_YAW_DEG` | 25 | Góc yaw của đầu được tính là nhìn về đèn khi nhận bearing mới. Giới hạn riêng, không bao giờ nới ở mép khung, nên việc chỉnh cổng wake không làm nó lỏng ra. |
-| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Đo trong các frame: đồng nghiệp trong văn phòng 8.3–13.6%, user 19.2–46%. Đèn đặt xa user hơn có thể cần hạ giá trị này trong `.env`. |
+| `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` | 0.15 | Chiều cao mặt (so với chiều cao khung) được tính là đủ gần để đang ngồi ở bàn, cho mọi đường kiểm tra user. Bộ chọn mặt của gaze cũng bỏ hẳn mọi mặt nhỏ hơn (#567), nên nó cũng chặn phiếu bầu của gaze wake và các mẫu pan. Đo trong các frame: đồng nghiệp trong văn phòng 8.3–13.6%, user 19.2–46%. Đèn đặt xa user hơn có thể cần hạ giá trị này trong `.env`. |
 
 ### Bearing người dùng đã ghi nhớ
 
