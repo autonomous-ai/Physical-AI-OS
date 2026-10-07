@@ -1757,3 +1757,7 @@ All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, 
 ### Voice mutation authentication
 
 `POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.
+
+### Voice input mode
+
+`GET /api/device/config` returns `voice_input_mode`: `automatic` (default when absent) or `tap_to_talk`. `PUT /api/device/config` accepts the optional field; empty or unknown strings are rejected before mutation. Omission preserves the setting. `automatic` uses the existing `wakeword` flag; `tap_to_talk` bypasses wake and preserves that flag for switching back. MQTT `voice.input_mode` shares the persistence/apply path. Mode changes synchronously restart HAL with a 30-second timeout; save/restart failures allow same-value retries, and combined mode/wake/voice saves restart once. Config responses and BE ping report the configured mode; failed application still returns an error rather than success.
