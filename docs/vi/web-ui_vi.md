@@ -780,11 +780,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
+Trang mở đầu bằng tóm tắt presence và các card dễ đọc về người, chuyển động, ánh sáng và sự kiện âm thanh. Ước lượng biểu cảm và tư thế xuất hiện tiếp theo khi có dữ liệu. Trạng thái backend, buffer, timeout, sự kiện thô và sample tư thế nằm trong **Technical details** thu gọn. Dịch vụ tạm dừng được ghi rõ; request lỗi hiển thị lỗi thay vì quan sát cũ. Card dùng một cột khi chiều rộng tối đa 600px. Environment phía dưới ưu tiên nhiệt độ, độ ẩm, CO₂ và PM2.5; **More measurements** mở năm chỉ số còn lại. Không thêm ngưỡng chất lượng không khí hay điểm sức khỏe suy ra.
+
 Menu Sensing và card chỉ đọc **Environment** luôn hiển thị, không cần debug,
 kể cả khi device không khai báo capability sensing. Card camera vẫn yêu cầu
 `vision`. Khi đang tải capabilities hoặc thiếu `environment`, card môi trường
-hiện các số đo `N/A` và không gửi request tới sensor. Sensor có khai báo nhưng
-đang tắt cũng hiển thị số đo `N/A`.
+hiện thông báo không khả dụng gọn và không gửi request tới sensor. Sensor đang tắt
+hoặc chưa có sample cũng dùng trạng thái trống gọn.
 
 Khi có capability `environment`, card đọc `GET /api/hardware/environment/status`
 mỗi 3 giây qua reverse proxy hardware của OS đã có xác thực, chuyển tới HAL

@@ -797,11 +797,13 @@ Chat UI → POST /api/sensing/event → SensingHandler
 
 ### 5.8 Device → Sensing
 
+The page leads with a presence summary and readable cards for people, movement, light and sound events. Expression and posture estimates follow when available. Backend status, buffers, timeouts, raw events and posture samples remain accessible in collapsed **Technical details**. A paused service is identified explicitly; failed reads show an error rather than old observations. Cards use one column at widths up to 600px. Environment follows with temperature, humidity, CO₂ and PM2.5; **More measurements** reveals the other five metrics. No air-quality thresholds or derived health scores are introduced.
+
 The Sensing navigation entry and read-only **Environment** card are always
 visible without debug mode, including when no sensing capability is declared.
 Camera sensing cards still require `vision`. While capabilities are loading or
-`environment` is absent, the Environment card shows `N/A` measurements and does
-not send sensor requests. Declared but disabled sensors also show `N/A` values.
+`environment` is absent, the Environment card shows a compact unavailable message and does
+not send sensor requests. Disabled sensors and missing samples also use a compact empty state.
 
 When `environment` is declared, the card reads `GET /api/hardware/environment/status`
 every 3 seconds through the existing authenticated OS hardware reverse proxy to
