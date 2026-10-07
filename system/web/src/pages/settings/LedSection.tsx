@@ -217,10 +217,11 @@ export function LedSection({ active }: { active: boolean }) {
         <input
           id="led-resting-on"
           type="checkbox"
+          style={{ flexShrink: 0 }}
           checked={isOn}
           onChange={(e) => toggle(e.target.checked)}
         />
-        Keep a light on while resting
+        <span style={{ whiteSpace: "nowrap" }}>Enable resting light</span>
       </label>
 
       {isOn && (

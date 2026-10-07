@@ -341,15 +341,17 @@ export function ServoSection() {
 
       <div style={S.card}>
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, gap: 10, flexWrap: "wrap" }}>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <div style={S.cardLabel}>Manual Move</div>
-            <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
-              direct /servo/move — clamped to ±90°
-            </span>
+          <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
+            <div>
+              <div style={S.cardLabel}>Manual Move</div>
+              <div style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
+                direct /servo/move — clamped to ±90°
+              </div>
+            </div>
             <label
               title="Send each slider change straight to the servo (duration 0), instead of waiting for the Move button."
               style={{
-                fontSize: 11, display: "flex", alignItems: "center", gap: 5, cursor: "pointer",
+                fontSize: 11, display: "flex", alignItems: "center", gap: 5, cursor: "pointer", whiteSpace: "nowrap", flexShrink: 0,
                 color: liveDrag ? "var(--lm-green)" : "var(--lm-text-muted)", fontWeight: 600,
               }}
             >
@@ -357,7 +359,7 @@ export function ServoSection() {
                 type="checkbox"
                 checked={liveDrag}
                 onChange={(e) => setLiveDrag(e.target.checked)}
-                style={{ accentColor: "var(--lm-green)", cursor: "pointer" }}
+                style={{ accentColor: "var(--lm-green)", cursor: "pointer", flexShrink: 0 }}
               />
               Live drag
             </label>

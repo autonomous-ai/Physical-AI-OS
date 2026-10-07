@@ -85,8 +85,8 @@ export function RealtimeSection({
   return (
     <SectionCard id="realtime" title="Realtime" active={active}>
       <label style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, cursor: "pointer", fontSize: 12.5, color: C.text }}>
-        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} />
-        Enabled (realtime brain — Gemini Live / OpenAI Realtime / GPT-Live / Pipecat v1 on-device)
+        <input type="checkbox" checked={enabled} onChange={(e) => setEnabled(e.target.checked)} style={{ flexShrink: 0 }} />
+        <span style={{ whiteSpace: "nowrap" }}>Enable realtime voice</span>
       </label>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="realtime_provider" style={labelStyle}>Provider</label>
@@ -113,7 +113,10 @@ export function RealtimeSection({
             </div>
           )}
 
-          <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional — leave blank to reuse AI brain key)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
+          <LockedPasswordField lockedInitially={realtimeLoaded.apiKey || llmLoaded.apiKey} label="API Key (optional)" id="realtime_api_key" value={apiKey} onChange={setApiKey} placeholder="sk-... / AIza..." />
+          <p style={{ fontSize: 11, color: C.textDim, marginTop: -8, marginBottom: 12 }}>
+            Leave blank to reuse the AI brain key.
+          </p>
           {provider === "pipecat_v1" ? (
             <>
               <div style={{ fontSize: 11, color: C.textDim, marginBottom: 12 }}>
@@ -121,9 +124,12 @@ export function RealtimeSection({
                 LLM endpoint: <code>realtime.pipecat_v1.base_url</code> in config.json — default is the low-latency Qwen relay.
               </div>
               <label style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12.5, color: C.text, cursor: "pointer", marginBottom: 12 }}>
-                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginTop: 3 }} />
-                <span>
-                  Web search — answer public live facts (weather, news, scores, prices) in-session through the Google-Search relay.
+                <input type="checkbox" checked={webSearch} onChange={(e) => setWebSearch(e.target.checked)} style={{ marginTop: 3, flexShrink: 0 }} />
+                <span style={{ minWidth: 0 }}>
+                  <span style={{ whiteSpace: "nowrap" }}>Web search</span>
+                  <span style={{ display: "block", fontSize: 11, color: C.textDim, marginTop: 3 }}>
+                    Answer public live facts (weather, news, scores, prices) in-session through the Google-Search relay.
+                  </span>
                   <span style={{ display: "block", fontSize: 11, color: C.textDim, marginTop: 3 }}>
                     Off: those questions are delegated to the main agent instead. One relay call (~4 s) per lookup.
                   </span>
@@ -131,7 +137,12 @@ export function RealtimeSection({
               </label>
             </>
           ) : (
-            <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional — leave blank to derive from AI brain base URL)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+            <>
+              <LockedField lockedInitially={llmLoaded.baseUrl} label="Base URL (optional)" id="realtime_base_url" value={baseUrl} onChange={setBaseUrl} placeholder="wss://… /ws/gemini" />
+              <p style={{ fontSize: 11, color: C.textDim, marginTop: -8, marginBottom: 12 }}>
+                Leave blank to derive from the AI brain base URL.
+              </p>
+            </>
           )}
         </>
       )}

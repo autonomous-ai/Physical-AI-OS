@@ -670,7 +670,7 @@ export default function Monitor() {
           leafHref={leafHref}
           onEnter={gotoFirstResult}
         />
-        <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
+        <nav style={{ padding: "10px 0", flex: 1, minHeight: 0, overflowY: "auto", overscrollBehaviorY: "contain", display: navQuery.trim() ? "none" : undefined }}>
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
@@ -722,6 +722,7 @@ export default function Monitor() {
         </nav>
         <div style={{
           padding: "12px 16px",
+          flexShrink: 0,
           borderTop: "1px solid var(--lm-border)",
           fontSize: 10,
           color: "var(--lm-text-muted)",
