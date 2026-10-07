@@ -182,6 +182,14 @@ def test_a_face_too_small_to_be_at_the_desk_is_not_a_face(monkeypatch):
     assert _detect(monkeypatch, [_face_row(x=300, w=h, h=h)]) is None
 
 
+def test_the_floor_is_judged_on_the_height_gaze_will_use(monkeypatch):
+    """A box running off the frame bottom is clamped before gaze sees it: judged on its
+    raw 80 px it panned and voted, but its clamped 50 px was never near."""
+    row = _face_row(x=300, w=80.0, h=80.0)
+    row[1] = 430.0
+    assert _detect(monkeypatch, [row]) is None
+
+
 def test_a_centred_neighbour_does_not_beat_the_off_centre_user(monkeypatch):
     """2026-09-30: a neighbour one desk over reached 13.6%; centre-most must not hand them the gate."""
     neighbour_h = int(0.136 * 480)  # 65 px: measurable, but not near
