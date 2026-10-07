@@ -32,6 +32,7 @@ type Service struct {
 	setupState      setupState
 	setupRuntime    setupRuntime
 	runtimeSwitchMu sync.Mutex
+	runtimeLogin    runtimeLoginState
 	wakeApply       wakeWordApply
 	// Optional command override for isolated service tests.
 	halRestartCommand func(context.Context) error

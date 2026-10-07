@@ -148,11 +148,25 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
-**Quyền quản lý LLM (Settings → Runtime).** `llm_config_mode` áp dụng chung cho thiết bị: thiếu/rỗng giữ hành vi cũ (gồm nhận diện subscription Codex/Claude Code), `os` dùng rõ ràng cấu hình LLM đã lưu trong OS, `runtime` giữ cấu hình native. AI Brain chỉ đọc khi ở runtime mode; key/base URL đã lưu vẫn phục vụ voice/backend. Native mode giữ nguyên model/provider hiện có, vì vậy cần dùng CLI/config của runtime để đăng nhập **và chọn provider/model**, rồi restart service và mở terminal mới. Mỗi runtime cần cấu hình native riêng; credentials không migrate khi đổi runtime.
+**Quyền quản lý LLM (Settings → Runtime).** `llm_config_mode` áp dụng chung cho thiết bị: thiếu/rỗng giữ hành vi cũ (gồm nhận diện subscription Codex/Claude Code), `os` dùng rõ ràng cấu hình LLM đã lưu trong OS, `runtime` giữ cấu hình native. AI Brain chỉ đọc khi ở runtime mode; key/base URL đã lưu vẫn phục vụ voice/backend. Mỗi runtime cần tài khoản/cấu hình riêng; credentials không migrate khi đổi runtime.
 
-Mục Runtime hiển thị hai bước theo thứ tự: chọn runtime và bấm Switch, sau đó cấu hình AI cho runtime đang hoạt động. Phần cấu hình AI bị khóa khi đang chọn runtime khác hoặc đang chuyển runtime. Thay đổi LLM chưa lưu hoặc chưa áp dụng xong sẽ khóa bộ chọn runtime đến khi Save Changes thành công. Bước 2 hiển thị sẵn hai lựa chọn LLM bằng radio và có nút Save Changes riêng, dùng lại form lưu settings hiện có; trang Runtime không có nút Save ở đầu trang. Chế độ tự cấu hình chỉ hiện liên kết terminal sau khi lưu, kèm hướng dẫn đăng nhập, chọn model, restart runtime và quay lại Chat.
+Mục Runtime có hai bước: chọn runtime và bấm Switch, rồi cấu hình AI cho runtime đang hoạt động. Phần cấu hình AI bị khóa khi đang chọn runtime khác hoặc đang chuyển runtime. Hai lựa chọn LLM hiển thị sẵn bằng radio. **Use OS AI Brain** dùng nút **Save Changes** ngay tại chỗ. **Use my own account** hiện **Connect account** cho runtime được hỗ trợ: chọn radio chưa lưu runtime mode và chưa ngắt provider OS hiện tại. Người dùng mở link HTTPS của provider, nhập device code nếu có hoặc dán code/callback URL trả về vào Settings. Mật khẩu nhập trên website provider, không nhập trong Settings.
 
-Khôi phục mặc định AI Brain chọn rõ `os` và buộc áp dụng kể cả khi giá trị đã lưu không đổi. Lỗi áp dụng được hiển thị sau khi mode đã lưu; sửa nguyên nhân rồi thử áp dụng lại. Thành công xác nhận áp dụng cấu hình, không xác nhận tài khoản hợp lệ. Test đăng nhập subscription thật/trên device vẫn chưa thực hiện.
+| Runtime | Đăng nhập tài khoản qua web |
+|---|---|
+| Claude Code | Tài khoản Claude |
+| Codex | Tài khoản ChatGPT |
+| Hermes | Tài khoản Claude hoặc ChatGPT |
+| OpenClaw | Tài khoản Claude hoặc ChatGPT |
+
+Backend chạy login native trong home tạm riêng biệt, xác minh credentials mới, rồi chọn runtime mode, cài cấu hình tài khoản/provider và restart runtime. Mode đã lưu không đổi trong lúc xác thực. Phiên login hết hạn sau **15 phút**; có thể hủy trước bước áp dụng. Lỗi xác thực không thay đổi cấu hình live trước đó. Nếu áp dụng thất bại, backend thử khôi phục credentials/cấu hình và mode cũ; lỗi khôi phục được báo rõ. Login native phụ thuộc phiên bản CLI đã cài, plugin provider và các lệnh xác thực; flow Claude của OpenClaw còn cần Claude Code. Provider có trong danh sách nghĩa là có tích hợp, không bảo đảm phiên bản đã cài hoặc subscription hỗ trợ nó.
+
+Hermes chọn `claude-sonnet-4-6` cho Claude hoặc `gpt-5.6-sol` cho ChatGPT; OpenClaw dùng model được lệnh login native đề xuất. Codex chuyển sang provider OpenAI tích hợp và bỏ model override của proxy OS, giữ các settings không liên quan.
+
+HTTP API có bảo vệ admin: `GET /api/device/runtime-login` (provider và phiên hiện tại), `POST /api/device/runtime-login` (`runtime`, `provider`), `POST /api/device/runtime-login/code` (`id`, `code`), và `DELETE /api/device/runtime-login/:id`. Trình duyệt poll phiên đang chạy mỗi hai giây, tiếp tục phiên đang chạy sau khi reload và dừng poll ở trạng thái kết thúc. Success lịch sử mô tả lượt login đã hoàn tất, không xác minh lại quyền truy cập tài khoản khi reload. Đổi runtime/mode và lưu Settings bị khóa trong lúc login. Khi thành công chỉ cập nhật baseline mode LLM, giữ các giá trị form khác chưa lưu. Thay đổi LLM chưa lưu hoặc chưa áp dụng xong vẫn khóa chuyển runtime.
+
+Các runtime được hỗ trợ cũng có mục mở rộng **Use existing runtime configuration** dành cho tài khoản/model đã cấu hình sẵn. Mục này chọn runtime mode qua luồng Save Changes hiện có, không bắt đăng nhập lại và không khẳng định quyền truy cập tài khoản. Runtime khác giữ flow Terminal thủ công: cấu hình tài khoản và model trước, xác nhận đã cấu hình trong Settings, rồi lưu runtime mode. Khôi phục mặc định AI Brain chọn rõ `os` và buộc áp dụng kể cả khi giá trị đã lưu không đổi. Lỗi áp dụng được hiển thị sau khi mode đã lưu; sửa nguyên nhân rồi thử lại. Cấu hình thành công và runtime sẵn sàng chưa chứng minh quyền subscription; cần kiểm tra một lượt chat thật riêng.
+
 
 **Remote MCP Tools** (`/setting#mcp`). Hoàn tất onboarding runtime đã chọn,
 sau đó đăng nhập giao diện admin của thiết bị. Nhập **Name** duy nhất, **URL**

@@ -1,6 +1,7 @@
 import { SettingsSelect } from "@/components/SettingsSelect";
 import { useEffect, useRef, useState } from "react";
 import "./settings-details.css";
+import { RuntimeAccountLogin } from "./RuntimeAccountLogin";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
 import { getAgentRuntime, setAgentRuntime, type LLMConfigMode } from "@/lib/api";
@@ -40,14 +41,23 @@ const selectStyle = {
 };
 const labelStyle = { display: "block", fontSize: 12, color: C.textDim, marginBottom: 5 };
 
-export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode, llmModeApplyPending, onLlmConfigModeChange, saving }: {
+export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode, llmModeApplyPending, onLlmConfigModeChange, onAccountConnected, onLoginBusyChange, saving }: {
   active: boolean;
   llmConfigMode: LLMConfigMode;
   savedLlmConfigMode: LLMConfigMode;
   llmModeApplyPending: boolean;
   onLlmConfigModeChange: (mode: LLMConfigMode) => void;
+  onAccountConnected: (historical: boolean) => void;
+  onLoginBusyChange: (busy: boolean) => void;
   saving: boolean;
 }) {
+  const [wantsAccount, setWantsAccount] = useState(false);
+  const [loginBusy, setLoginBusy] = useState(false);
+  useEffect(() => {
+    onLoginBusyChange(loginBusy);
+    return () => onLoginBusyChange(false);
+  }, [loginBusy, onLoginBusyChange]);
+  const chosenMode = wantsAccount ? "runtime" : llmConfigMode;
   const [current, setCurrent] = useState<string>("");
   const [options, setOptions] = useState<string[]>(FALLBACK);
   const [selected, setSelected] = useState<string>("");
@@ -86,7 +96,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
   const modeNeedsSave = llmModeApplyPending || llmConfigMode !== savedLlmConfigMode;
 
   async function onSwitch() {
-    if (switching || saving || modeNeedsSave) return;
+    if (switching || saving || modeNeedsSave || loginBusy) return;
     let remoteOpts: { url: string; token: string } | undefined;
     if (selected === REMOTE) {
       const url = remoteURL.trim();
@@ -153,6 +163,15 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
     setSwitching(false);
   }
 
+  const manualConfiguration = <>
+    <a href={`/monitor${window.location.search}#cli`} style={{ color: C.amber }}>Open Terminal</a>
+    {llmConfigMode !== "runtime" ? (
+      <button type="button" disabled={saving || loginBusy} onClick={(event) => { event.preventDefault(); onLlmConfigModeChange("runtime"); }} style={{ padding: "8px 16px", background: C.surface, color: C.text, border: `1px solid ${C.border}`, borderRadius: 7 }}>Use this configuration</button>
+    ) : modeNeedsSave ? (
+      <button type="submit" form="edit-form" disabled={saving || loginBusy} style={{ padding: "8px 16px", background: C.amber, color: "var(--lm-on-amber)", border: 0, borderRadius: 7 }}>Save Changes</button>
+    ) : <p style={{ margin: 0, color: C.textDim }}>Runtime configuration mode is saved. Check Chat to verify account access.</p>}
+  </>;
+
   return (
     <SectionCard id="runtime" title="Agent Runtime" active={active}>
       {loading ? (
@@ -172,7 +191,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               id="agent_runtime"
               value={selected}
               onValueChange={(value) => setSelected(value)}
-              disabled={switching || saving || modeNeedsSave}
+              disabled={switching || saving || modeNeedsSave || loginBusy}
               style={selectStyle}
             >
               {options.map((o) => <option key={o} value={o}>{displayRuntime(o)}</option>)}
@@ -242,7 +261,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
           )}
           {(() => {
             const isRemote = selected === REMOTE;
-            const disabled = switching || saving || modeNeedsSave || (selected === current && !isRemote);
+            const disabled = switching || saving || modeNeedsSave || loginBusy || (selected === current && !isRemote);
             let label: string;
             if (switching) label = "Switching…";
             else if (isRemote && selected === current) label = "Update Remote Config";
@@ -282,7 +301,7 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               ) : null}
               <fieldset
                 aria-labelledby="llm-config-label"
-                disabled={switching || saving || selected !== current}
+                disabled={switching || saving || loginBusy || selected !== current}
                 style={{ border: 0, padding: 0, margin: "10px 0 0", minWidth: 0, display: "flex", flexDirection: "column", gap: 10 }}
               >
                 {([
@@ -292,17 +311,20 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
                   <label key={mode} style={{
                     display: "flex", alignItems: "center", gap: 10,
                     padding: "12px", borderRadius: 7, fontSize: 12.5,
-                    border: `1px solid ${(llmConfigMode || "os") === mode ? C.amber : C.border}`,
+                    border: `1px solid ${(chosenMode || "os") === mode ? C.amber : C.border}`,
                     background: C.surface, color: C.text,
-                    opacity: switching || saving || selected !== current ? 0.5 : 1,
-                    cursor: switching || saving || selected !== current ? "not-allowed" : "pointer",
+                    opacity: switching || saving || loginBusy || selected !== current ? 0.5 : 1,
+                    cursor: switching || saving || loginBusy || selected !== current ? "not-allowed" : "pointer",
                   }}>
                     <input
                       type="radio"
                       name="llm_config_mode"
                       value={mode}
-                      checked={(llmConfigMode || "os") === mode}
-                      onChange={() => onLlmConfigModeChange(mode)}
+                      checked={(chosenMode || "os") === mode}
+                      onChange={() => {
+                        setWantsAccount(mode === "runtime");
+                        onLlmConfigModeChange(mode === "os" ? mode : savedLlmConfigMode);
+                      }}
                       style={{ margin: 0, accentColor: C.amber, flexShrink: 0 }}
                     />
                     {label}
@@ -311,41 +333,45 @@ export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode,
               </fieldset>
               {!switching && selected === current && (
                 <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, marginTop: 12 }}>
-                  <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
-                    {llmConfigMode === "runtime"
-                      ? `Sign in and choose a model using the ${displayRuntime(current)} terminal. Selecting this option does not sign you in.`
-                      : "Use the provider and model saved in Settings → AI Brain."}
-                  </p>
-                  <button
-                    type="submit"
-                    form="edit-form"
-                    disabled={saving || !modeNeedsSave}
-                    style={{
-                      padding: "7px 18px", borderRadius: 7, fontSize: 12, fontWeight: 600,
-                      border: "none",
-                      cursor: saving || !modeNeedsSave ? "not-allowed" : "pointer",
-                      background: saving || !modeNeedsSave ? C.surface : C.amber,
-                      color: saving || !modeNeedsSave ? C.textMuted : "var(--lm-on-amber)",
-                    }}
-                  >
-                    {saving ? "Saving…" : modeNeedsSave ? "Save Changes" : "Saved"}
-                  </button>
-                  {modeNeedsSave ? (
-                    <p role="status" style={{ margin: 0, fontSize: 12, color: C.amber, lineHeight: 1.6 }}>
-                      {llmConfigMode === "runtime"
-                        ? "Click Save Changes, then open Terminal to sign in."
-                        : "Click Save Changes to apply your choice."}
-                    </p>
-                  ) : llmConfigMode === "runtime" && savedLlmConfigMode === "runtime" ? (
-                    <>
-                      <a href={`/monitor${window.location.search}#cli`} style={{ color: C.amber, fontSize: 12 }}>
-                        Open Terminal to sign in
-                      </a>
-                      <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
-                        After signing in and choosing a model, restart {displayRuntime(current)}, then return to Chat.
-                      </p>
-                    </>
-                  ) : null}
+                  <RuntimeAccountLogin
+                      key={current}
+                      runtime={current}
+                      visible={chosenMode === "runtime"}
+                      onResume={() => setWantsAccount(true)}
+                      disabled={saving}
+                      onBusyChange={setLoginBusy}
+                      onConnected={onAccountConnected}
+                      fallback={<>
+                        <p style={{ margin: 0, color: C.textDim }}>Web sign-in is not available for {displayRuntime(current)}. Configure its account and model in Terminal, then apply the configuration here.</p>
+                        {manualConfiguration}
+                      </>}
+                      advanced={<details style={{ width: "100%" }}>
+                        <summary style={{ cursor: "pointer", color: C.textDim }}>Use existing runtime configuration</summary>
+                        <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-start", gap: 12, marginTop: 12 }}>
+                          <p style={{ margin: 0, color: C.textDim }}>For accounts and models already configured in this runtime. This changes configuration mode without signing in or checking account access.</p>
+                          {manualConfiguration}
+                        </div>
+                      </details>}
+
+                    />
+                  {chosenMode !== "runtime" && <>
+                    <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>Use the provider and model saved in Settings → AI Brain.</p>
+                    <button
+                      type="submit"
+                      form="edit-form"
+                      disabled={saving || !modeNeedsSave}
+                      style={{
+                        padding: "7px 18px", borderRadius: 7, fontSize: 12, fontWeight: 600,
+                        border: "none",
+                        cursor: saving || !modeNeedsSave ? "not-allowed" : "pointer",
+                        background: saving || !modeNeedsSave ? C.surface : C.amber,
+                        color: saving || !modeNeedsSave ? C.textMuted : "var(--lm-on-amber)",
+                      }}
+                    >
+                      {saving ? "Saving…" : modeNeedsSave ? "Save Changes" : "Saved"}
+                    </button>
+                    {modeNeedsSave && <p role="status" style={{ margin: 0, fontSize: 12, color: C.amber }}>Click Save Changes to apply your choice.</p>}
+                  </>}
                   <p style={{ margin: 0, fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
                     This choice also applies when you switch runtimes. Sign in separately for each runtime.
                   </p>

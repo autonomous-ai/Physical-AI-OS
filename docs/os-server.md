@@ -1782,6 +1782,46 @@ same selection can be retried. This does not verify subscription validity or
 successful model inference. Open a new terminal after changing ownership; an
 already-open shell retains its old environment.
 
+### Runtime account sign-in over HTTP
+
+Settings → Runtime uses these admin-authenticated endpoints. Responses use the
+standard OS envelope and `Cache-Control: no-store`:
+
+| Method | Endpoint | Request / result |
+|--------|----------|------------------|
+| GET | `/api/device/runtime-login` | Returns `{runtime, providers: [{id, label}], session?}` for the active runtime |
+| POST | `/api/device/runtime-login` | `{runtime, provider}` starts a native sign-in and returns its session |
+| POST | `/api/device/runtime-login/code` | `{id, code}` submits the complete authorization code or callback URL requested by that session |
+| DELETE | `/api/device/runtime-login/:id` | Cancels a pending sign-in; cancellation is unavailable once activation starts |
+
+A session contains `id`, `runtime`, `provider`, `status`, and optional
+`login_url`, `user_code`, `input_required`, `error`. Status progresses through
+`starting`, `waiting`, `applying`, then `success`, `error`, or `cancelled`.
+`login_url` opens the provider's own sign-in page. `user_code` is a device code
+to enter on that page; `input_required` instead asks for a code/callback to
+submit to the OS. These are different directions of input. Invalid requests
+return HTTP 400; a conflicting operation, expired session ID, or unavailable
+input/cancellation returns 409.
+
+Sign-in sessions live in memory, have a 15-minute login deadline, and do not
+survive an OS-server restart. One login holds the runtime-switch lock, preventing
+concurrent runtime changes or LLM configuration changes. The active AI
+configuration continues serving chat while the native CLI authenticates in an
+isolated temporary home. CLI authentication/provider environment variables are
+removed. HTTP exposes only allowlisted provider links, short device codes and
+sanitized status; raw CLI output and saved access/refresh tokens are never
+returned. Cancel/timeout terminates the login process group and removes staging.
+
+Only after native authentication is verified does the OS enter `applying`:
+save runtime-managed mode, install the staged native account/provider settings,
+restart the runtime and wait for stable gateway readiness. Native files and
+the previous mode are restored if activation fails; a failed restoration is
+reported explicitly instead of claiming success. No account password is
+collected by the OS web UI. `success` confirms login and gateway readiness,
+not a successful model response or available subscription quota. Completing
+the real provider login and a chat turn still require account/device validation;
+isolated process tests do not establish that those live checks passed.
+
 ### Voice input mode
 
 `GET /api/device/config` returns `voice_input_mode`: `automatic` (default when absent) or `tap_to_talk`. `PUT /api/device/config` accepts the optional field; empty or unknown strings are rejected before mutation. Omission preserves the setting. `automatic` uses the existing `wakeword` flag; `tap_to_talk` bypasses wake and preserves that flag for switching back. MQTT `voice.input_mode` shares the persistence/apply path. Mode changes synchronously restart HAL with a 30-second timeout; save/restart failures allow same-value retries, and combined mode/wake/voice saves restart once. Config responses and BE ping report the configured mode; failed application still returns an error rather than success.
