@@ -515,7 +515,7 @@ the shorter Presence card from being stretched by the taller Audio card.
 
 ### Monitor readability
 
-Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, two-column person/observation grids (one column at 640px), collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
+Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, compact person cards in an auto-filling grid (280px minimum tracks, cards capped at 340px) and two-column observation grids; both use one full-width column at 640px, collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
 
 ### 5.2 Pairing Section
 

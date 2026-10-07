@@ -500,7 +500,7 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 
 ### Khả năng đọc của Monitor
 
-Servo dùng tiêu đề lớn hơn, số đo tương phản rõ và nút thoáng trong overview hai cột, chuyển một cột tại 900px. Tại 600px, mỗi joint xếp tên, góc hiện tại, ô target và slider toàn chiều ngang; live drag và giới hạn góc giữ nguyên. Users có metadata lớn hơn, nút thao tác luôn hiện, lưới người dùng/quan sát hai cột (một cột tại 640px), profile files thu gọn và panel cooldown nhận diện thu gọn riêng. Pairing dùng tiêu đề kết nối lớn hơn, badge trạng thái, khối thao tác/lỗi rõ và hàng metadata responsive; ID kết nối Buddy nằm trong Connection details thu gọn.
+Servo dùng tiêu đề lớn hơn, số đo tương phản rõ và nút thoáng trong overview hai cột, chuyển một cột tại 900px. Tại 600px, mỗi joint xếp tên, góc hiện tại, ô target và slider toàn chiều ngang; live drag và giới hạn góc giữ nguyên. Users có metadata lớn hơn, nút thao tác luôn hiện, card người dùng gọn trong lưới tự xếp cột (cột tối thiểu 280px, card tối đa 340px) và lưới quan sát hai cột; cả hai chuyển một cột toàn chiều ngang tại 640px, profile files thu gọn và panel cooldown nhận diện thu gọn riêng. Pairing dùng tiêu đề kết nối lớn hơn, badge trạng thái, khối thao tác/lỗi rõ và hàng metadata responsive; ID kết nối Buddy nằm trong Connection details thu gọn.
 
 ### 5.2 Section Pairing
 

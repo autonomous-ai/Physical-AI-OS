@@ -22,6 +22,15 @@
   gap: 20px;
 }
 
+.lm-users-people {
+  grid-template-columns: repeat(auto-fill, minmax(min(280px, 100%), 1fr));
+}
+
+.lm-users-people > .lm-user-card {
+  width: 100%;
+  max-width: 340px;
+}
+
 .lm-users-card-title {
   display: flex;
   align-items: center;
@@ -119,6 +128,10 @@
   .lm-users-people,
   .lm-users-observations {
     grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lm-users-people > .lm-user-card {
+    max-width: none;
   }
 
   .lm-users-page {
