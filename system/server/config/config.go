@@ -191,7 +191,8 @@ type Config struct {
 
 	// WakeWord gates voice turns before either the realtime model or the main
 	// agent sees them.
-	WakeWord *bool `json:"wakeword,omitempty" yaml:"wakeword"`
+	WakeWord       *bool  `json:"wakeword,omitempty" yaml:"wakeword"`
+	VoiceInputMode string `json:"voice_input_mode,omitempty" yaml:"voice_input_mode"`
 
 	OpenclawConfigDir string `json:"openclaw_config_dir" yaml:"openclawConfigDir"`
 

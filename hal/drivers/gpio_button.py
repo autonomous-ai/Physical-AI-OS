@@ -11,6 +11,7 @@ from hal.drivers.button_actions import (
     button_hold_tier,
     button_hold_release_action,
     announce_listening_cue,
+    physical_short_tap,
     single_click_action,
     triple_click_action,
 )
@@ -80,7 +81,18 @@ class GPIOButtonHandler:
     def _run_single_click(self):
         with self._action_lock:
             if not self._stopped:
-                single_click_action(source=self._source, announce=False)
+                from hal import config
+                if getattr(config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk":
+                    physical_short_tap(source=self._source, announce=False)
+                else:
+                    single_click_action(source=self._source, announce=False)
+
+    @staticmethod
+    def _device_tap_mode():
+        from hal import config
+        import hal.app_state as state
+        return (getattr(config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk"
+                and bool(state.voice_service and state.voice_service.device_tap_to_talk_enabled))
 
     def start(self):
         import lgpio
@@ -202,6 +214,19 @@ class GPIOButtonHandler:
                         self._source, held, self._hold_s)
             return
 
+        if self._device_tap_mode():
+            # Every completed short tap is independent, even inside the normal
+            # multi-click window. Holds and dedicated reset buttons stay above.
+            self._click_count = 0
+            if self._click_timer:
+                self._click_timer.cancel()
+                self._click_timer = None
+            threading.Thread(
+                target=self._run_single_click, daemon=True,
+                name="gpio-button-device-tap",
+            ).start()
+            return
+
         self._click_count += 1
         if self._click_count == 1:
             # Off-thread: stop_tts/audio_stop/unmute do blocking I/O; the
@@ -229,6 +254,8 @@ class GPIOButtonHandler:
     def _resolve_clicks(self):
         count = self._click_count
         self._click_count = 0
+        if self._device_tap_mode():
+            return
         if count == 3:
             triple_click_action(source=self._source)
             return

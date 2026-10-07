@@ -58,7 +58,9 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
-from hal.drivers.voice._internal.harness_capture import HarnessCapture, same_target
+from hal.drivers.voice._internal.harness_capture import (
+    HarnessCapture, same_target, device_manual_mode, device_snapshot,
+)
 from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session
@@ -449,6 +451,28 @@ class VoiceService:
         return self._harness_capture.active
 
     @property
+    def device_tap_to_talk_enabled(self) -> bool:
+        """Cached route for hardware edge recognition; start rechecks the OS."""
+        return device_manual_mode(getattr(self, "_last_voice_mode", {}))
+
+    @property
+    def device_capture_active(self) -> bool:
+        return self._harness_capture.active
+
+    def start_device_capture(self) -> bool:
+        mode = read_voice_mode()
+        self._last_voice_mode = mode
+        if not device_manual_mode(mode):
+            return False
+        return self.start_harness_capture(device_snapshot(mode))
+
+    def finish_device_capture(self) -> bool:
+        return self._harness_capture.finish()
+
+    def cancel_device_capture(self) -> None:
+        self._harness_capture.cancel()
+
+    @property
     def realtime(self) -> RealtimeOrchestrator:
         """The realtime orchestrator, for device-initiated announcements."""
         return self._realtime
@@ -789,9 +813,10 @@ class VoiceService:
 
         while self._running:
             mode = read_voice_mode()
+            self._last_voice_mode = mode
             manual_capture = self._harness_capture.claim(mode)
-            if bypass_realtime(mode) and manual_capture is None:
-                # Harness owns input: no ambient VAD or recorder while idle.
+            if (bypass_realtime(mode) or device_manual_mode(mode)) and manual_capture is None:
+                # Manual input owns capture: no ambient VAD/recorder while idle.
                 time.sleep(0.1)
                 continue
             self._wait_for_tts()
@@ -891,7 +916,9 @@ class VoiceService:
         while self._running:
             if time.monotonic() - mode_checked_at >= 0.25:
                 mode_checked_at = time.monotonic()
-                if bypass_realtime(read_voice_mode()):
+                mode = read_voice_mode()
+                self._last_voice_mode = mode
+                if bypass_realtime(mode) or device_manual_mode(mode):
                     if keepalive_session:
                         keepalive_session.close()
                     return
@@ -2078,7 +2105,7 @@ class VoiceService:
     ):
         """Stream audio to STT provider until silence or TTS interrupts."""
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
-        if bypass_realtime(harness_voice) and manual_capture is None:
+        if (bypass_realtime(harness_voice) or device_manual_mode(harness_voice)) and manual_capture is None:
             # A mode toggle can race the last normal VAD frame. Harness input
             # must always have an explicit tap-owned capture.
             if preconnected_session is not None:
@@ -2087,7 +2114,10 @@ class VoiceService:
         # Live providers use automatic endpointing for the whole process. A gated
         # opener/fallback must not flush a buffered utterance through the manual commit
         # path (which can double-commit with server VAD).
-        realtime_allowed = not voice_cfg.LIVE_MODE and not bypass_realtime(harness_voice)
+        realtime_allowed = (manual_capture is None and not voice_cfg.LIVE_MODE
+                            and not bypass_realtime(harness_voice))
+        device_manual = (manual_capture is not None
+                         and harness_voice.get("deviceInputMode") == "tap_to_talk")
         # Harness explicitly owns voice input for this capture. Do not extend
         # the normal wake window; disabling the mode restores its usual gate.
         harness_listening = harness_voice["enabled"] and not harness_voice.get("unavailable", False)
@@ -2135,7 +2165,7 @@ class VoiceService:
         followup_ids = set() if followup_ids is None else followup_ids
 
         def hold_followup():
-            if (hal_config.WAKEWORD_ENABLED and not harness_listening
+            if (manual_capture is None and hal_config.WAKEWORD_ENABLED and not harness_listening
                     and (wake_word_confirmed.is_set() or wakeword_followup_active
                          or self._wakeword_focus.is_active())
                     and self._wakeword_focus.begin(interaction_id)):
@@ -2231,7 +2261,7 @@ class VoiceService:
                 # saying "go on, I'm listening", which is a claim to be the addressee —
                 # so it must not fire for a sentence the device has not been shown is
                 # meant for it.
-                if not capture_complete.is_set() and addressed_to_us():
+                if manual_capture is None and not capture_complete.is_set() and addressed_to_us():
                     self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
@@ -2428,9 +2458,12 @@ class VoiceService:
             if manual_capture is not None:
                 if manual_capture.cancelled.is_set() or manual_capture.finished.is_set():
                     return
-                from hal.drivers.harness.led import set_capturing
+                if device_manual:
+                    self._set_emotion_local(presets.EMO_LISTENING)
+                else:
+                    from hal.drivers.harness.led import set_capturing
 
-                set_capturing(True)
+                    set_capturing(True)
                 if self._tts:
                     cue_start = time.monotonic()
                     self._tts.play_harness_capture_chime()
@@ -2523,7 +2556,9 @@ class VoiceService:
                 if manual_capture is not None:
                     if time.monotonic() - mode_checked_at >= 0.25:
                         mode_checked_at = time.monotonic()
-                        if not same_target(harness_voice, read_voice_mode()):
+                        current_mode = read_voice_mode()
+                        self._last_voice_mode = current_mode
+                        if not same_target(harness_voice, current_mode):
                             manual_capture.cancelled.set()
                     if manual_capture.cancelled.is_set():
                         break
@@ -2655,9 +2690,14 @@ class VoiceService:
             self._listening = False
             release_input()
             if manual_capture is not None:
-                from hal.drivers.harness.led import set_capturing
+                if device_manual:
+                    from hal import app_state
 
-                set_capturing(False)
+                    app_state.clear_listening_cue()
+                else:
+                    from hal.drivers.harness.led import set_capturing
+
+                    set_capturing(False)
             # A confirmed transcript can arrive before CloseStream drains. For
             # already-authorized input, overlap that drain with the model reply.
             # Do not use a provisional partial to bypass the existing noise gate.
@@ -3006,7 +3046,7 @@ class VoiceService:
                 wake_word_confirmed.is_set() or wakeword_followup_active
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()),
             )
-            if (voice_cfg.LIVE_MODE and opener_authorized and combined
+            if (manual_capture is None and voice_cfg.LIVE_MODE and opener_authorized and combined
                     and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)):
                 try:
                     _, opener_type = self._decorator.classify_wake_word(combined)
@@ -3086,7 +3126,7 @@ class VoiceService:
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
             )
             wakeword_authorized = wake_word_confirmed.is_set() or wakeword_followup_active
-            dispatch_to_main = (voice_cfg.LIVE_MODE and opener_authorized) or harness_listening or should_dispatch_to_main(
+            dispatch_to_main = device_manual or (voice_cfg.LIVE_MODE and opener_authorized) or harness_listening or should_dispatch_to_main(
                 hal_config.WAKEWORD_ENABLED,
                 wakeword_authorized,
             )

@@ -65,3 +65,19 @@ func TestBackendFallsBackToLLM(t *testing.T) {
 		t.Fatalf("empty backend fields must reuse llm_base_url / llm_api_key")
 	}
 }
+
+func TestPingIncludesVoiceInputMode(t *testing.T) {
+	for _, mode := range []string{"automatic", "tap_to_talk"} {
+		data, err := json.Marshal(PingPayload{VoiceInputMode: mode})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var fields map[string]any
+		if err := json.Unmarshal(data, &fields); err != nil {
+			t.Fatal(err)
+		}
+		if fields["voice_input_mode"] != mode {
+			t.Fatalf("mode=%v", fields["voice_input_mode"])
+		}
+	}
+}

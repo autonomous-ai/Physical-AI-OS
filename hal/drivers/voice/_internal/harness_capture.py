@@ -3,9 +3,30 @@
 from dataclasses import dataclass, field
 import threading
 
+from hal import config
+
+
+def device_manual_mode(snapshot):
+    """Device taps never steal capture from Harness or an unknown route."""
+    return (
+        config.VOICE_INPUT_MODE == "tap_to_talk"
+        and snapshot.get("enabled") is False
+        and not snapshot.get("unavailable", False)
+        and type(snapshot.get("generation")) is int
+        and snapshot["generation"] >= 0
+    )
+
+
+def device_snapshot(snapshot):
+    """Tag an explicit local capture while preserving the OS routing generation."""
+    return dict(snapshot, deviceInputMode="tap_to_talk")
+
 
 def same_target(left, right):
     """Never move recorded speech across a mode, connection, or focus change."""
+    if left.get("deviceInputMode") == "tap_to_talk":
+        return (device_manual_mode(right)
+                and left.get("generation") == right.get("generation"))
     return (
         right.get("enabled") is True
         and right.get("focusAvailable") is True

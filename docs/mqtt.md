@@ -56,6 +56,7 @@ The OS server uses MQTT to communicate with the backend server (status reporting
   "mac": "{MAC address}",
   "time": "2026-03-26T17:00:00Z",
   "wakeword_enabled": false,
+  "voice_input_mode": "automatic",
   "agent_runtime": "openclaw"
 }
 ```
@@ -353,6 +354,7 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `tts.set` | Persist TTS voice/provider/language/speed config | `provider`, `voice`, `language`, optional `speed` |
 | `tts.preview` | One-shot TTS preview (no config write) | `text` (required), optional `provider`/`voice`/`language`/`speed` |
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
+| `voice.input_mode` | Select voice input behavior (async ack) | `mode`: `automatic` or `tap_to_talk` |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
 | `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
@@ -567,6 +569,14 @@ The completion report is best-effort: installing `os-server`, `device` or
 those — poll `system.ota_versions` for the final state.
 
 An unrecognized `kind` replies with `status:"failure"` and `error:"unknown kind: <kind>"`.
+
+#### `voice.input_mode`
+
+**Receive:** `{"cmd":"data","kind":"voice.input_mode","data":{"mode":"tap_to_talk"}}`
+
+`automatic` is the default, including older configs without the field; it preserves the current flow and saved `wakeword` flag. `tap_to_talk` applies to the device runtime with Harness-only OFF: tap once to record, again to stop and send; silence does not auto-submit. It bypasses the wake gate/window without deleting the saved wake flag. During TTS, a tap only interrupts playback; the next tap records. The physical mic lock always applies.
+
+`mode` is required and accepts only those two values; invalid payloads return `failure` before mutation. Valid commands acknowledge `starting`, then `success` or `failure`, echoing `data.mode` in the terminal ack. MQTT and HTTP share the wake persistence/apply lock: the mode is saved as `voice_input_mode` and HAL restarts with a 30-second timeout. Success means the restart command completed, not that pipeline readiness was verified. Save/restart failures leave apply pending so a same-value retry restarts; duplicates after success do not restart. A combined mode/wake/voice save restarts once. MQTT info/acks and BE ping always include the configured `voice_input_mode` (not evidence of successful application); consult the terminal ack for apply outcome. Harness-only ON retains its existing tap flow.
 
 #### `wakeword.gate`
 

@@ -7,6 +7,7 @@ import (
 	"sync"
 	"time"
 
+	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/server/config"
 )
 
@@ -45,7 +46,7 @@ func (s *Service) UpdateWakeWord(enabled bool) error {
 func (s *Service) applyPendingWakeWord() error {
 	ctx, cancel := context.WithTimeout(context.Background(), wakeWordApplyTimeout)
 	defer cancel()
-	if err := s.restartHALAndWait(ctx, "wakeword config change"); err != nil {
+	if err := s.restartHALAndWait(ctx, "wake/input-mode config change"); err != nil {
 		return err
 	}
 	s.wakeApply.pending = false
@@ -57,4 +58,9 @@ func applyWakeWord(c *config.Config, enabled bool) bool {
 	changed := c.WakeWordEnabled() != enabled
 	c.WakeWord = &enabled
 	return changed
+}
+
+// UpdateVoiceInputMode shares the HTTP persistence/apply path and its retry state.
+func (s *Service) UpdateVoiceInputMode(mode string) error {
+	return s.UpdateConfig(domain.UpdateConfigRequest{VoiceInputMode: &mode})
 }

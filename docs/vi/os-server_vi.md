@@ -1721,3 +1721,7 @@ Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music sug
 ### Xác thực thao tác thay đổi dữ liệu giọng nói
 
 `POST /api/sensing/filler` dùng gate admin hoặc loopback trực tiếp, giữ lời đệm realtime nội bộ của HAL và chặn gọi LAN chưa xác thực. `POST /api/voice/file/remove` yêu cầu admin kể cả loopback; cookie phiên đăng nhập hiện có của web vẫn hợp lệ. Thao tác xóa chặn traversal qua tên hồ sơ/file và symlink thoát thư mục bằng `os.Root`. Giữ hành vi xóa mẫu/embedding hợp lệ và dọn hồ sơ khi xóa WAV cuối.
+
+### Cách nhập giọng nói
+
+`GET /api/device/config` trả `voice_input_mode`: `automatic` (mặc định khi trường thiếu) hoặc `tap_to_talk`. `PUT /api/device/config` nhận trường tùy chọn cùng tên; chuỗi rỗng/giá trị khác bị từ chối trước khi thay đổi config. Bỏ qua trường nghĩa là giữ nguyên. `automatic` dùng cờ `wakeword` hiện có; `tap_to_talk` bỏ qua wake và giữ lại cờ đã lưu để chuyển về Tự động. MQTT `voice.input_mode` dùng chung logic lưu/apply. Thay đổi mode restart HAL đồng bộ với timeout 30 giây; lỗi lưu/restart cho phép retry cùng giá trị, còn lưu mode/wake/voice cùng lúc chỉ restart một lần. Phản hồi cấu hình và BE ping báo mode đã cấu hình; lỗi apply vẫn trả lỗi thay vì báo thành công.

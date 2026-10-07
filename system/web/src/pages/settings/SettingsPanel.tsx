@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback } from "react";
 import { toast } from "sonner";
 import { getDeviceConfig, getCurrentNetwork, updateDeviceConfig, getTTSVoices, getTTSProviders, hwUrl, restoreAutonomousDefaults } from "@/lib/api";
-import type { DeviceConfig } from "@/lib/api";
+import type { DeviceConfig, VoiceInputMode } from "@/lib/api";
 import type { ChannelType } from "@/types";
 import type { FaceOwner } from "@/hooks/setup/useFaceEnroll";
 import { C, ADMIN_PASSWORD_MIN } from "@/components/setup/shared";
@@ -112,6 +112,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
   const [ttsSpeed, setTtsSpeed] = useState(1.2);
   const [ttsVoices, setTtsVoices] = useState<string[]>([]);
   const [realtimeEnabled, setRealtimeEnabled] = useState(true);
+  const [voiceInputMode, setVoiceInputMode] = useState<VoiceInputMode>("automatic");
   const [wakeWord, setWakeWord] = useState(false);
   const [agentName, setAgentName] = useState("");
   const [wakePhrases, setWakePhrases] = useState<string[]>([]);
@@ -166,6 +167,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     sttBaseUrl: string; sttProvider: SttProvider; sttLanguage: string;
     ttsBaseUrl: string; ttsProvider: string; ttsVoice: string; ttsSpeed: number;
     wakeWord: boolean;
+    voiceInputMode: VoiceInputMode;
     channel: ChannelType;
     teleUserId: string; slackUserId: string;
     discordGuildId: string; discordUserId: string;
@@ -217,6 +219,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         setTtsVoice(cfg.tts_voice || "Rachel");
         setTtsSpeed(cfg.tts_speed ?? 1.2);
         setWakeWord(cfg.wakeword ?? false);
+        setVoiceInputMode(cfg.voice_input_mode ?? "automatic");
         setAgentName(cfg.agent_name ?? "");
         setWakePhrases(cfg.wake_phrases ?? []);
         if (cfg.realtime) {
@@ -305,6 +308,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
           ttsVoice: cfg.tts_voice || "Rachel",
           ttsSpeed: cfg.tts_speed ?? 1.2,
           wakeWord: cfg.wakeword ?? false,
+          voiceInputMode: cfg.voice_input_mode ?? "automatic",
           channel: (cfg.channel as ChannelType) || "telegram",
           teleUserId: cfg.telegram_user_id ?? "",
           slackUserId: cfg.slack_user_id ?? "",
@@ -391,6 +395,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     ttsVoice !== baseline.ttsVoice ||
     ttsSpeed !== baseline.ttsSpeed ||
     wakeWord !== baseline.wakeWord ||
+    voiceInputMode !== baseline.voiceInputMode ||
     channel !== baseline.channel ||
     teleUserId !== baseline.teleUserId ||
     slackUserId !== baseline.slackUserId ||
@@ -462,6 +467,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
       if (realtimeApiKey) realtime.api_key = realtimeApiKey;
       body.realtime = realtime;
       body.wakeword = wakeWord;
+      body.voice_input_mode = voiceInputMode;
       if (llmApiKey) body.llm_api_key = llmApiKey;
       // Switching TTS provider invalidates the stored key, so delete it explicitly (#309).
       if (ttsApiKey) {
@@ -506,7 +512,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
         llmUrl, llmModel, llmDisableThinking,
         sttBaseUrl, sttProvider, sttLanguage,
         ttsBaseUrl, ttsProvider, ttsVoice, ttsSpeed,
-        wakeWord,
+        wakeWord, voiceInputMode,
         channel,
         teleUserId, slackUserId,
         discordGuildId, discordUserId,
@@ -545,7 +551,7 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
     sttProvider, sttLanguage, sttLoaded,
     ttsApiKey, ttsBaseUrl, ttsLoaded, ttsProvider, ttsVoice, ttsSpeed, deviceId,
     mqttEndpoint, mqttUsername, mqttPassword, mqttPort, faChannel, fdChannel,
-    realtimeEnabled, wakeWord, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
+    realtimeEnabled, wakeWord, voiceInputMode, realtimeProvider, realtimeVoice, realtimeReasoning, realtimeApiKey, realtimeBaseUrl,
     realtimeWebSearch,
   ]);
 
@@ -606,6 +612,8 @@ export function SettingsPanel({ activeSection }: { activeSection: SettingsSectio
               mac={mac}
               rotateAdminPassword={adminPassword}
               setRotateAdminPassword={setAdminPassword}
+              voiceInputMode={voiceInputMode}
+              setVoiceInputMode={setVoiceInputMode}
               wakeWord={wakeWord}
               setWakeWord={setWakeWord}
               agentName={agentName}
