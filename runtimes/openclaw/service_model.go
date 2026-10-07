@@ -10,12 +10,15 @@ import (
 
 // UpdatePrimaryModel patches agents.defaults.model.primary in openclaw.json to "autonomous/{modelKey}" and restarts the gateway so the change takes effect immediately.
 func (s *OpenclawService) UpdatePrimaryModel(modelKey string) error {
-	if modelKey == "" {
+	if s.config.LLMRuntimeManaged() || modelKey == "" {
 		return nil
 	}
 
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
+	if s.config.LLMRuntimeManaged() {
+		return nil
+	}
 
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	raw, err := os.ReadFile(configPath)

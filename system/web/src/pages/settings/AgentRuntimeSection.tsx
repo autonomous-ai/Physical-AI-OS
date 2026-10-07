@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
 import { C, SectionCard } from "@/components/setup/shared";
-import { getAgentRuntime, setAgentRuntime } from "@/lib/api";
+import { getAgentRuntime, setAgentRuntime, type LLMConfigMode } from "@/lib/api";
 
 // Runtime switch sits outside the form Save flow: POST means accepted, then poll until the target is reported.
 const FALLBACK = ["openclaw", "hermes", "picoclaw", "codex", "claudecode", "opencode", "remote"];
@@ -38,7 +38,14 @@ const selectStyle = {
 };
 const labelStyle = { display: "block", fontSize: 11, color: C.textDim, marginBottom: 5 };
 
-export function AgentRuntimeSection({ active }: { active: boolean }) {
+export function AgentRuntimeSection({ active, llmConfigMode, savedLlmConfigMode, llmModeApplyPending, onLlmConfigModeChange, saving }: {
+  active: boolean;
+  llmConfigMode: LLMConfigMode;
+  savedLlmConfigMode: LLMConfigMode;
+  llmModeApplyPending: boolean;
+  onLlmConfigModeChange: (mode: LLMConfigMode) => void;
+  saving: boolean;
+}) {
   const [current, setCurrent] = useState<string>("");
   const [options, setOptions] = useState<string[]>(FALLBACK);
   const [selected, setSelected] = useState<string>("");
@@ -74,8 +81,10 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
     return () => { alive = false; if (timer) clearTimeout(timer); };
   }, []);
 
+  const modeNeedsSave = llmModeApplyPending || llmConfigMode !== savedLlmConfigMode;
+
   async function onSwitch() {
-    if (switching) return;
+    if (switching || saving || modeNeedsSave) return;
     let remoteOpts: { url: string; token: string } | undefined;
     if (selected === REMOTE) {
       const url = remoteURL.trim();
@@ -175,6 +184,31 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
             </div>
           )}
 
+          {current !== REMOTE && selected !== REMOTE && (
+            <div style={{ marginBottom: 18 }}>
+              <label htmlFor="llm_config_mode" style={labelStyle}>LLM configuration</label>
+              <select
+                id="llm_config_mode"
+                value={llmConfigMode || "os"}
+                onChange={(e) => onLlmConfigModeChange(e.target.value as LLMConfigMode)}
+                disabled={switching || saving}
+                style={selectStyle}
+              >
+                <option value="os">Use OS AI Brain</option>
+                <option value="runtime">Configure directly in runtime</option>
+              </select>
+              <p style={{ fontSize: 11.5, color: C.textDim, lineHeight: 1.6 }}>
+                {llmConfigMode === "runtime"
+                  ? "Save Changes, then use the runtime CLI to sign in, select a model, and restart the runtime. OS will preserve its LLM configuration. This choice does not sign you in."
+                  : "Use the provider and model saved in AI Brain. Save Changes to apply your choice."}
+                {" This choice applies across runtime switches. Each runtime needs its own login and configuration."}
+              </p>
+              {llmConfigMode === "runtime" && savedLlmConfigMode === "runtime" && !llmModeApplyPending && (
+                <a href={`/monitor${window.location.search}#cli`} style={{ color: C.amber, fontSize: 12 }}>Open Terminal</a>
+              )}
+            </div>
+          )}
+
           {selected === REMOTE && (
             <div style={{ marginBottom: 14 }}>
               <div style={{ marginBottom: 10 }}>
@@ -225,9 +259,14 @@ export function AgentRuntimeSection({ active }: { active: boolean }) {
             </div>
           )}
 
+          {modeNeedsSave && (
+            <p style={{ fontSize: 11.5, color: C.amber, lineHeight: 1.6 }}>
+              Save Changes to apply the LLM configuration choice before switching runtimes.
+            </p>
+          )}
           {(() => {
             const isRemote = selected === REMOTE;
-            const disabled = switching || (selected === current && !isRemote);
+            const disabled = switching || saving || modeNeedsSave || (selected === current && !isRemote);
             let label: string;
             if (switching) label = "Switching…";
             else if (isRemote && selected === current) label = "Update Remote Config";

@@ -61,9 +61,11 @@ if [ ! -f "$MIGRATE_MARKER" ] && [ -d "$OC_WS" ]; then
   fi
 fi
 
+LLM_CONFIG_MODE="$(dev llm_config_mode)"
+
 # auth.json present = ChatGPT subscription: use codex's built-in provider and omit OPENAI_API_KEY,
 # which would conflict with ChatGPT auth.
-if [ -f "$AUTH_JSON" ]; then
+if [ "$LLM_CONFIG_MODE" = runtime ] || { [ "$LLM_CONFIG_MODE" != os ] && [ -f "$AUTH_JSON" ]; }; then
   SUBSCRIPTION_MODE=1
   log "subscription mode (auth.json present) — omitting custom provider + OPENAI_API_KEY"
 else
@@ -71,6 +73,7 @@ else
   log "api-key mode"
 fi
 
+if [ "$LLM_CONFIG_MODE" != runtime ]; then
 # The head is regenerated each run; [mcp_servers.*] tables (owned by mcp.go) are preserved.
 LLM_BASE_URL="$(dev llm_base_url)"; [ -n "$LLM_BASE_URL" ] || LLM_BASE_URL="$DEFAULT_BASE_URL"
 LLM_BASE_URL="${LLM_BASE_URL%/}"
@@ -126,6 +129,7 @@ if [ -f "$CODEX_CONFIG" ]; then
   fi
 fi
 mv "$CODEX_CONFIG.tmp" "$CODEX_CONFIG"
+fi
 
 LLM_API_KEY="$(dev llm_api_key)"
 if [ "$SUBSCRIPTION_MODE" = 1 ]; then
@@ -154,7 +158,7 @@ log "channels: none supported under codex — nothing to sync"
 
 # Sources the active runtime's .env into interactive login shells only.
 write_cli_login_env() {
-  cat >/etc/profile.d/agent-cli-env.sh <<'PROFILE'
+  cat >"${CLI_PROFILE_PATH:-/etc/profile.d/agent-cli-env.sh}" <<'PROFILE'
 # Managed by os-server runtime presync — do not edit.
 case "$-" in *i*) ;; *) return 2>/dev/null || exit 0 ;; esac
 _rt="$(sed -n 's/.*"agent_runtime"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' /root/config/config.json 2>/dev/null | head -1)"
@@ -170,7 +174,7 @@ case "$_rt" in
 esac
 unset _rt
 PROFILE
-  chmod 0644 /etc/profile.d/agent-cli-env.sh
+  chmod 0644 "${CLI_PROFILE_PATH:-/etc/profile.d/agent-cli-env.sh}"
 }
 write_cli_login_env && log "wrote /etc/profile.d/agent-cli-env.sh (interactive CLI auto-login)"
 

@@ -41,8 +41,9 @@ func (c *ConfigMigration) Reconcile() {
 		return
 	}
 
-	// Unset marker: record a baseline without migrating (avoids spurious upgrade-boot migration).
-	if c.cfg.LLMConfigAppliedRuntime == "" {
+	// First boot or operator-managed LLM: record the target without copying credentials.
+	// Advancing the marker also prevents a delayed migration when OS mode is restored.
+	if c.cfg.LLMConfigAppliedRuntime == "" || c.cfg.LLMRuntimeManaged() {
 		if err := c.cfg.WithLockSave(func(cfg *config.Config) {
 			cfg.LLMConfigAppliedRuntime = current
 		}); err != nil {

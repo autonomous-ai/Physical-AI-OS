@@ -730,7 +730,8 @@ they were sold with.
 `autonomous_defaults` is a top-level object in `config.json` holding
 `base_url` / `api_key` / `model`. It is written **once**, by
 `captureAutonomousDefaults`, immediately before the first save that carries any
-credential — LLM, TTS, STT, or realtime key/URL — and never written again.
+credential — LLM, TTS, STT, or realtime key/URL — or an explicit LLM ownership
+choice, and never written again.
 Capturing twice would store the operator's own key under the Autonomous name
 and lose the real one for good, which is the exact failure it exists to prevent.
 A save touching nothing credential-shaped (wifi, rename, channels) does not
@@ -1757,3 +1758,26 @@ All ingestion endpoints (telemetry, mood, wellbeing, posture, music suggestion, 
 ### Voice mutation authentication
 
 `POST /api/sensing/filler` uses the admin-or-direct-loopback gate, preserving HAL's internal realtime wait cues while blocking unauthenticated LAN calls. `POST /api/voice/file/remove` requires admin authentication even on loopback; the web UI's existing session cookie remains valid. Removal rejects profile/sample traversal and symlink escapes using directory-scoped `os.Root` operations. Valid sample/embedding deletion and last-WAV profile cleanup keep their existing behavior.
+
+### LLM configuration ownership
+
+`PUT /api/device/config` accepts `llm_config_mode: "os" | "runtime"`;
+`GET /api/device/config` returns the saved value. An absent/empty value retains
+legacy behavior, including Codex/Claude Code auth detection. An explicit `os`
+selection reapplies the OS provider even if key, URL and model have not changed;
+`POST /api/device/restore-defaults` with `section: "llm"` also selects `os`.
+
+`runtime` leaves native LLM provider/model/auth configuration to the operator for
+all six local runtimes. Gateway, workspace, skills and channel reconciliation
+continue. Saved OS credentials remain available to voice/backend services.
+Incoming LLM fields are ignored while runtime management is selected. Unchanged
+thinking settings no longer trigger runtime reconciliation on unrelated saves.
+
+Ownership applies across runtime switches; the target needs its own native
+login and provider/model selection. Credential migration is skipped in runtime
+mode and its baseline advances, preventing a deferred migration after returning
+to OS management. Mode changes synchronously apply config and refresh the
+runtime environment; an apply failure is returned after saving the mode, so the
+same selection can be retried. This does not verify subscription validity or
+successful model inference. Open a new terminal after changing ownership; an
+already-open shell retains its old environment.

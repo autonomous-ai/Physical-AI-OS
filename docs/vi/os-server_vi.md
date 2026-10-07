@@ -719,8 +719,8 @@ không còn đường nào quay lại bộ credential nó được bán kèm.
 `autonomous_defaults` là một object ở **cấp ngoài cùng** của `config.json`, giữ
 `base_url` / `api_key` / `model`. Nó được ghi **đúng một lần**, bởi
 `captureAutonomousDefaults`, ngay trước lần lưu đầu tiên có mang theo bất kỳ
-credential nào — LLM, TTS, STT hay key/URL của realtime — và không bao giờ ghi
-lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
+credential nào — LLM, TTS, STT hay key/URL của realtime — hoặc có lựa chọn rõ
+bên quản lý cấu hình LLM, và không bao giờ ghi lại. Chụp lần hai là lưu chính key của người dùng dưới tên Autonomous và mất
 hẳn bộ thật, đúng cái hỏng mà nó sinh ra để chặn. Lần lưu không đụng credential
 nào (wifi, đổi tên, channel) thì không kích hoạt, và config không có gì để giữ
 thì bỏ qua, để một bộ rỗng không bị nhầm là mặc định hợp lệ. Chỉ factory reset
@@ -1721,3 +1721,25 @@ Các endpoint nhận sự kiện (telemetry, mood, wellbeing, posture, music sug
 ### Xác thực thao tác thay đổi dữ liệu giọng nói
 
 `POST /api/sensing/filler` dùng gate admin hoặc loopback trực tiếp, giữ lời đệm realtime nội bộ của HAL và chặn gọi LAN chưa xác thực. `POST /api/voice/file/remove` yêu cầu admin kể cả loopback; cookie phiên đăng nhập hiện có của web vẫn hợp lệ. Thao tác xóa chặn traversal qua tên hồ sơ/file và symlink thoát thư mục bằng `os.Root`. Giữ hành vi xóa mẫu/embedding hợp lệ và dọn hồ sơ khi xóa WAV cuối.
+
+### Quyền quản lý cấu hình LLM
+
+`PUT /api/device/config` nhận `llm_config_mode: "os" | "runtime"`;
+`GET /api/device/config` trả về giá trị đã lưu. Thiếu trường hoặc chuỗi rỗng giữ
+hành vi cũ, gồm tự nhận diện auth của Codex/Claude Code. Chọn rõ `os` sẽ áp dụng
+lại provider của OS dù key, URL và model không đổi; gọi
+`POST /api/device/restore-defaults` với `section: "llm"` cũng chọn `os`.
+
+`runtime` để người dùng quản lý provider/model/auth LLM trong cả sáu runtime
+local. Gateway, workspace, skills và channel vẫn được đồng bộ. Credential OS đã
+lưu vẫn phục vụ voice/backend. Các trường LLM gửi lên bị bỏ qua khi đang chọn
+runtime tự quản lý. Gửi lại giá trị thinking không đổi không còn kích hoạt
+reconcile runtime khi lưu mục khác.
+
+Lựa chọn áp dụng chung khi đổi runtime; runtime đích cần login và chọn
+provider/model riêng. Migration credential được bỏ qua trong chế độ runtime và
+cập nhật mốc runtime hiện tại, tránh migration trễ khi quay về OS. Đổi chế độ áp
+dụng config và làm mới môi trường runtime đồng bộ; lỗi áp dụng được trả về sau
+khi đã lưu chế độ, cho phép gửi lại cùng lựa chọn để thử lại. Điều này không xác
+minh subscription còn hợp lệ hay model gọi thành công. Mở terminal mới sau khi
+đổi chế độ; shell đang mở vẫn giữ biến môi trường cũ.

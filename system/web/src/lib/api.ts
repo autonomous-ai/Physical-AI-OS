@@ -263,8 +263,11 @@ export async function getSetup(): Promise<boolean> {
   return apiRequest<boolean>(`${API_BASE}/api/setup`);
 }
 
+export type LLMConfigMode = "" | "os" | "runtime";
+
 /** Sanitized device config — Has* booleans replace raw secrets so they never reach the DOM / sessionStorage / HAR captures. */
 export interface DeviceConfig {
+  llm_config_mode?: LLMConfigMode;
   channel: string;
   telegram_user_id: string;
   slack_user_id: string;

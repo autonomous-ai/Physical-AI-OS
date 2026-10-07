@@ -145,6 +145,10 @@ Góc dưới sidebar hiển thị trạng thái OpenClaw (online/offline) và th
 
 ### 3.4 Settings (`/setting`) — shell dùng chung
 
+**Quyền quản lý LLM (Settings → Runtime).** `llm_config_mode` áp dụng chung cho thiết bị: thiếu/rỗng giữ hành vi cũ (gồm nhận diện subscription Codex/Claude Code), `os` dùng rõ ràng cấu hình LLM đã lưu trong OS, `runtime` giữ cấu hình native. AI Brain chỉ đọc khi ở runtime mode; key/base URL đã lưu vẫn phục vụ voice/backend. Native mode giữ nguyên model/provider hiện có, vì vậy cần dùng CLI/config của runtime để đăng nhập **và chọn provider/model**, rồi restart service và mở terminal mới. Mỗi runtime cần cấu hình native riêng; credentials không migrate khi đổi runtime.
+
+Khôi phục mặc định AI Brain chọn rõ `os` và buộc áp dụng kể cả khi giá trị đã lưu không đổi. Lỗi áp dụng được hiển thị sau khi mode đã lưu; sửa nguyên nhân rồi thử áp dụng lại. Thành công xác nhận áp dụng cấu hình, không xác nhận tài khoản hợp lệ. Test đăng nhập subscription thật/trên device vẫn chưa thực hiện.
+
 **Remote MCP Tools** (`/setting#mcp`). Hoàn tất onboarding runtime đã chọn,
 sau đó đăng nhập giao diện admin của thiết bị. Nhập **Name** duy nhất, **URL**
 của MCP server từ xa và **Headers** cần thiết, rồi bấm **Add Tool**. Ví dụ,
