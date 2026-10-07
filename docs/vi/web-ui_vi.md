@@ -261,7 +261,7 @@ Card **Versions** ở Overview có cột thao tác với nút `restart` cho OS S
 
 Card Versions hiển thị **Current** và **Latest** cạnh nhau. Latest lấy từ `target` của từng component trong `/api/system/ota-versions`, gồm runtime đang dùng qua alias `agent`; đây là bản được publish trong OTA feed của thiết bị, không phải tra release upstream. Metadata được tải ở cả chế độ thường và debug, rồi làm mới sau cập nhật. Target thiếu hoặc rỗng, gồm Host, hiện `—`; component đã ở bản hiện tại vẫn hiển thị target đã publish. Hai hàng Bootstrap, Device và nút update vẫn chỉ hiện trong debug.
 
-Sidebar Monitor/Settings có danh sách điều hướng cuộn độc lập, giữ thao tác cuộn trong danh sách và footer Logout không bị co. Trên điện thoại, menu dùng chiều cao viewport động (`100dvh`) để truy cập được mọi mục debug.
+Sidebar Monitor/Settings chỉ mở một nhóm cấp cao nhất: mở nhóm mới sẽ đóng nhóm trước, bấm nhóm đang mở sẽ thu lại, và điều hướng tự mở nhóm chứa trang đích. Sidebar có danh sách điều hướng cuộn độc lập, giữ thao tác cuộn trong danh sách và footer Logout không bị co. Trên điện thoại, menu dùng chiều cao viewport động (`100dvh`) để truy cập được mọi mục debug.
 
 **Form Realtime** (`/setting?debug=true#realtime`) dùng nhãn checkbox ngắn; tên provider nằm trong dropdown Provider. Hướng dẫn cho API Key và Base URL tùy chọn nằm dưới ô nhập để nhãn trường gọn trên màn hình hẹp.
 

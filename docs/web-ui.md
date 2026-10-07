@@ -265,7 +265,7 @@ The Overview **Versions** card has a restart action column with `restart` for OS
 
 The Versions card shows **Current** and **Latest** side by side. Latest comes from each component's `target` in `/api/system/ota-versions`, including the active runtime via `agent`; it is the version published in the device's OTA feed, not an upstream release lookup. Metadata loads in normal and debug mode and refreshes after updates. Missing or empty targets, including Host, display `—`; an already-current component still shows its published target. Bootstrap and Device rows and update buttons remain debug-only.
 
-The monitor/settings sidebar has an independently scrolling navigation list with contained overscroll and a non-shrinking logout footer. On phones, the drawer follows the dynamic viewport height (`100dvh`) so all debug entries remain reachable.
+The monitor/settings sidebar uses a single-open-group accordion: expanding one top-level group collapses the previous one, clicking the open group collapses it, and navigation opens the group containing the destination. It has an independently scrolling navigation list with contained overscroll and a non-shrinking logout footer. On phones, the drawer follows the dynamic viewport height (`100dvh`) so all debug entries remain reachable.
 
 **Realtime form** (`/setting?debug=true#realtime`) uses short checkbox labels; provider names live in the Provider dropdown. Optional API Key and Base URL guidance appears below the inputs, keeping field labels compact on narrow screens.
 
