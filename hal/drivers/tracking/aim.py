@@ -183,6 +183,14 @@ def _is_near_enough(box: Tuple[int, int, int, int], frame: Any, target: str) -> 
         return True  # never let the filter itself lose a subject
 
 
+def _pick_nearest(candidates, frame):
+    """The tallest person box near enough to be the asker, ties broken by confidence."""
+    near = [(b, c) for b, c in candidates if _is_near_enough(b, frame, "person")]
+    if not near:
+        return None
+    return max(near, key=lambda bc: (bc[0][3], bc[1]))
+
+
 def _nearest_person(detector: Any, frame: Any):
     """The closest person big enough to be the asker, or None.
 
@@ -208,7 +216,7 @@ def _nearest_person(detector: Any, frame: Any):
             len(candidates),
         )
         return None
-    box, conf = max(near, key=lambda bc: (bc[0][3], bc[1]))
+    box, conf = _pick_nearest(near, frame)
     if len(near) > 1:
         logger.info(
             "[look-aim] %d people in frame — taking the nearest (h=%dpx conf=%.2f) "

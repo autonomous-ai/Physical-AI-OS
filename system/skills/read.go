@@ -28,6 +28,32 @@ const (
 // ErrSkillFileNotFound is returned when an entry path is not a readable file in a skill.
 var ErrSkillFileNotFound = errors.New("skill file not found")
 
+// Build and editor artifacts that are not part of a skill, e.g. the
+// __pycache__ Python leaves next to a skill's scripts. Dotfiles are skipped
+// separately. Mirrors the exclusions of scripts/release/upload-skills.sh.
+var (
+	artifactDirNames     = map[string]bool{"__pycache__": true, "node_modules": true}
+	artifactFileNames    = map[string]bool{"Thumbs.db": true}
+	artifactFileSuffixes = []string{".pyc", ".pyo", ".swp", ".swo", ".tmp", ".log"}
+)
+
+// isSkillArtifact reports whether a directory entry is a build or editor
+// artifact rather than skill content.
+func isSkillArtifact(name string, isDir bool) bool {
+	if isDir {
+		return artifactDirNames[name]
+	}
+	if artifactFileNames[name] {
+		return true
+	}
+	for _, suffix := range artifactFileSuffixes {
+		if strings.HasSuffix(name, suffix) {
+			return true
+		}
+	}
+	return false
+}
+
 // ReadSkillFiles returns every file in <skillsDir>/<name> as a flat, path-sorted list.
 func ReadSkillFiles(skillsDir, name string) ([]domain.SkillBundleFile, error) {
 	if err := ValidateSkillName(name); err != nil {
@@ -130,8 +156,8 @@ func skillFileRelativePath(name, filePath string) (string, error) {
 	if len(parts) > readMaxDepth || strings.HasPrefix(parts[len(parts)-1], ".") {
 		return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
 	}
-	for _, part := range parts {
-		if part == "" || strings.HasPrefix(part, ".") {
+	for i, part := range parts {
+		if part == "" || strings.HasPrefix(part, ".") || isSkillArtifact(part, i < len(parts)-1) {
 			return "", fmt.Errorf("%w: %s", ErrSkillFileNotFound, filePath)
 		}
 	}
@@ -154,7 +180,7 @@ func collectSkillFiles(dir, relBase string, depth int, out *[]domain.SkillBundle
 			return nil
 		}
 		name := e.Name()
-		if strings.HasPrefix(name, ".") {
+		if strings.HasPrefix(name, ".") || isSkillArtifact(name, e.IsDir()) {
 			continue
 		}
 		rel := path.Join(relBase, name)

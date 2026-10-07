@@ -341,7 +341,7 @@ the honest outcome, and it beats being absorbed into somebody else's.
 
 A real visitor is unaffected beyond one tick of delay: they are still there 2 s later and mint then. The window is deliberately ~3 sensing ticks rather than strictly back-to-back, so one dropped or blurred frame in the middle does not reset a genuine visitor's count.
 
-The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted.
+The stranger gaze check reuses gaze wake's `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` and `GAZE_MIN_FACE_PX`, so tuning those for gaze wake also changes when strangers are greeted. It measures face-ID boxes, not gaze's face picker, so the picker's 15% floor (`HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`, #567) does not apply to it.
 
 Each face-ID tick with an ungreeted stranger in frame logs one line, with the numbers behind each stranger's vote and their running count:
 

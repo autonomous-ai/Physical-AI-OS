@@ -1035,6 +1035,11 @@ REALTIME_SUMMARY_KEEP_RECENT_TURNS: int = int(
 )
 # Drop stale `## Open requests` before re-feeding the summary (#419, #421). 0 disables.
 REALTIME_SUMMARY_OPEN_REQUEST_TTL_S: int = int(os.environ.get("HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S", "3600"))
+# After a heard main-agent question, the user's next actionable answer belongs to
+# main: realtime is told to delegate it and a self-answered turn is forwarded as a
+# live handoff (#564). Safety cap in seconds; the answer itself closes it. 60 s was
+# too short on device (a name came 64 s later). 0 disables.
+REALTIME_MAIN_FOLLOWUP_S: float = float(os.environ.get("HAL_REALTIME_MAIN_FOLLOWUP_S", "300"))
 # Cap on the agent-writable identity section of the floor.
 REALTIME_IDENTITY_MAX_CHARS: int = int(os.environ.get("HAL_REALTIME_IDENTITY_MAX_CHARS", "12000"))
 # Cap on the [REPLY] transcript replayed to the main agent.
@@ -1119,6 +1124,12 @@ GAZE_REPOINT_VERIFY_S: float = float(
 # before giving its verdict (#545). The climb budget is 4 steps x 4 s cooldown.
 GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
+)
+# A person box at least this much of the frame is someone at the desk (#567). With no
+# face it withholds a repoint miss; it never confirms one. Device-measured 2026-10-05:
+# seated users 26-73% of the frame, co-workers and passers-by at most 13%.
+GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC", "0.20")
 )
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.

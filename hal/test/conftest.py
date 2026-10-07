@@ -33,3 +33,11 @@ def lamp_presets():
     """Read fresh device declarations so tests follow tuning without sharing mutations."""
     path = Path(__file__).resolve().parents[2] / "robots" / "lamp" / "presets.json"
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+@pytest.fixture(autouse=True)
+def _reset_main_followup():
+    from hal.drivers.voice._internal.main_followup import reset_main_followup
+    reset_main_followup()
+    yield
+    reset_main_followup()

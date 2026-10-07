@@ -47,6 +47,13 @@ import (
 // model hands a turn to the main agent.
 const realtimeDelegationPrefix = "[voice-instruction]"
 
+// realtimeAlreadySpoke reports a voice turn whose user already heard realtime:
+// an explicit delegation, or a reply realtime answered aloud and HAL forwarded
+// as [realtime-handoff] (#564). Neither gets an opening filler.
+func realtimeAlreadySpoke(msg string) bool {
+	return strings.HasPrefix(msg, realtimeDelegationPrefix) || strings.Contains(msg, "\n[realtime-handoff] ")
+}
+
 var harnessAgentRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|have|message|use|delegate(?:\s+to)?|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu|dùng|dung)\s+(?:(?:the|a|an|một|mot)\s+)?(?:(?:harness|agent)(?:\s|$)|[\p{L}\p{N}_-]+\s+agent(?:\s|$))`)
 var harnessPossibleNamedRequest = regexp.MustCompile(`(?i)(?:^|[^\p{L}\p{N}_])(?:ask|tell|message|check(?:ing)?\s+with|hỏi|bảo|nhờ|kêu|hoi|bao|nho|keu)\s+([\p{L}\p{N}_-]+)(?:\s|$)`)
 var buddyAgentRequest = regexp.MustCompile(`(?i)\b(?:autonomous\s+buddy|(?:ask|tell|use|with|via|nhờ|hỏi|bảo|nho|hoi|bao)\s+(?:the\s+)?buddy)\b`)
@@ -659,7 +666,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 	// mark. Delegated turns skip the opening filler (realtime already gave one).
 	if isVoice {
 		hal.StartVoiceFollowup(followupInteractionID, runID)
-		if strings.HasPrefix(req.Message, realtimeDelegationPrefix) {
+		if realtimeAlreadySpoke(req.Message) {
 			DefaultFillerManager.MarkDelegatedVoiceRun(runID, req.InteractionID)
 		} else {
 			DefaultFillerManager.MarkVoiceRun(runID, req.InteractionID)

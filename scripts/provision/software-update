@@ -15,7 +15,7 @@ DOWNLOAD_HEADERS=""
 
 progress_report() {
   [ -n "${PROGRESS_RUN_ID:-}" ] || return 0
-  local phase="$1" downloaded="${2:-0}" total="${3:-0}" message="${4:-}" temporary
+  local phase="$1" downloaded="${2:-0}" total="${3:-0}" message="${4:-}" activity_at="${5:-0}" temporary
   if [ "${PROGRESS_ROLLBACK:-0}" = 1 ] && [ "$phase" != failed ]; then phase=rolling_back; fi
   PROGRESS_PHASE="$phase"
   mkdir -p "$PROGRESS_DIR" 2>/dev/null || return 0
@@ -23,9 +23,9 @@ progress_report() {
   temporary=$(mktemp "$PROGRESS_DIR/.progress.XXXXXX") || return 0
   if jq -n --arg target "$APP" --arg run_id "$PROGRESS_RUN_ID" --arg phase "$phase" \
     --arg message "$message" --arg boot_id "${PROGRESS_BOOT_ID:-}" --argjson pid "$$" --argjson updated_at "$(date +%s)" \
-    --argjson downloaded_bytes "$downloaded" --argjson total_bytes "$total" \
+    --argjson downloaded_bytes "$downloaded" --argjson total_bytes "$total" --argjson activity_at "$activity_at" \
     '{target:$target,run_id:$run_id,phase:$phase,pid:$pid,boot_id:$boot_id,updated_at:$updated_at,
-      downloaded_bytes:$downloaded_bytes,total_bytes:$total_bytes,message:$message}' >"$temporary"; then
+      downloaded_bytes:$downloaded_bytes,total_bytes:$total_bytes,message:$message,activity_at:$activity_at}' >"$temporary"; then
     mv -f "$temporary" "$PROGRESS_DIR/$APP.json" || { rm -f "$temporary" 2>/dev/null || true; }
   else
     rm -f "$temporary" 2>/dev/null || true
@@ -48,6 +48,49 @@ progress_download_sample() {
   # Never display a misleading percentage for inconsistent server headers.
   [ "$downloaded" -le "$total" ] || total=0
   progress_report downloading "$downloaded" "$total"
+}
+
+# Only recognized package names/counts reach the UI, never arbitrary installer logs
+# (which can contain private indexes, credentials or build output).
+uv_activity_message() {
+  local line="$1"
+  UV_ACTIVITY=""
+  line=$(printf '%s' "$line" | sed -E $'s/\033\\[[0-9;]*[[:alpha:]]//g' | tr -d '\r') || return 0
+  if [[ "$line" =~ ^[[:space:]]*(Downloading|Downloaded|Building|Built)[[:space:]]+([[:alnum:]_.-]+)(==[^[:space:]]+)?([[:space:]]|$) ]]; then
+    UV_ACTIVITY="${BASH_REMATCH[1]} ${BASH_REMATCH[2]}"
+  elif [[ "$line" =~ ^(Resolved|Prepared|Installed|Audited)[[:space:]]+([0-9]+)[[:space:]]+(packages?)([[:space:]]|$) ]]; then
+    UV_ACTIVITY="${BASH_REMATCH[1]} ${BASH_REMATCH[2]} ${BASH_REMATCH[3]}"
+  elif [[ "$line" =~ ^[[:space:]]*\+[[:space:]]+([[:alnum:]_.-]+)== ]]; then
+    UV_ACTIVITY="Installed ${BASH_REMATCH[1]}"
+  fi
+  return 0
+}
+
+run_uv_with_activity() {
+  progress_report installing 0 0 "Installing HAL dependencies" || true
+  # Always drain and preserve command output, even for unrecognized lines or a
+  # failed telemetry write. Return uv's status, never the parser's exit status.
+  "$@" 2>&1 | (
+    local line last_message="" last_activity=0 last_report=0 now
+    while IFS= read -r line || [ -n "$line" ]; do
+      printf '%s\n' "$line" || true
+      uv_activity_message "$line" || true
+      if [ -n "${UV_ACTIVITY:-}" ]; then
+        last_message="$UV_ACTIVITY"
+        now=$(date +%s)
+        last_activity="$now"
+        # Bound disk writes while uv prints a burst of package installation lines.
+        if [ "$now" != "$last_report" ]; then
+          progress_report installing 0 0 "$last_message" "$last_activity" || true
+          last_report="$now"
+        fi
+      fi
+    done
+    [ -z "$last_message" ] || progress_report installing 0 0 "$last_message" "$last_activity" || true
+    exit 0
+  )
+  local result=${PIPESTATUS[0]}
+  return "$result"
 }
 
 find_hal_uv() {
@@ -1115,13 +1158,14 @@ elif [ "$APP" = "hal" ]; then
   mkdir -p "$HAL_UV_CACHE"
   export UV_CACHE_DIR="$HAL_UV_CACHE" UV_HTTP_TIMEOUT=180
   if ! (
+    progress_report installing 0 0 "Extracting HAL files"
     unzip -o -q "$ZIP_TMP" -d "$DIR_TMP" || exit 1
     if [ -f "$ROLLBACK_DIR/hal.previous/.env" ]; then cp -a "$ROLLBACK_DIR/hal.previous/.env" "$DIR_TMP/.env" || exit 1; fi
     find "$UV_CACHE_DIR" -name "lerobot.egg-info" -type d 2>/dev/null | xargs rm -rf
     cd "$DIR_TMP" || exit 1
     HAL_LOCK_ARGS=()
     [ ! -f uv.lock ] || HAL_LOCK_ARGS+=(--locked)
-    "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}" "${HAL_LOCK_ARGS[@]}" || exit 1
+    run_uv_with_activity "$UV_BIN" sync --python 3.12 --extra hardware "${HAL_EXTRA_ARGS[@]}" "${HAL_LOCK_ARGS[@]}" || exit 1
   ); then
     echo "HAL staging failed; restoring known-good runtime" >&2
     cd /
@@ -1129,6 +1173,7 @@ elif [ "$APP" = "hal" ]; then
   fi
   cd /
   publish_mode "$DIR_TMP" "$ROLLBACK_DIR/hal.previous"
+  progress_report installing 0 0 "Activating HAL files"
   HAL_STAGED="$DIR_TMP"
   if ! mv "$DIR_TMP" "$HAL_DIR"; then
     echo "HAL activation failed; restoring known-good runtime" >&2

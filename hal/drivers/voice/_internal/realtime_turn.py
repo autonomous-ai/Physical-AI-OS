@@ -1,5 +1,6 @@
 """Realtime agent turn handling — extracted from VoiceService._stream_session."""
 
+import json
 import logging
 import re
 import threading
@@ -21,6 +22,7 @@ from hal.realtime.models.signal import DelegateSignal, LookReplaySignal, RejectS
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
+from hal.drivers.voice._internal.main_followup import pending_main_question, take_main_followup
 
 logger = logging.getLogger("hal.voice")
 
@@ -308,6 +310,17 @@ def build_turn_context(speaker: Optional[str] = None) -> str:
                     turn_ctx.append(f"Current user: {cu}")
         except Exception:
             pass
+    # The main agent owns the task this answer continues (#564). Realtime keeps
+    # hearing the audio so the delegated words are its understanding, not STT's.
+    question: str = pending_main_question()
+    if question:
+        quoted: str = json.dumps(question[:300], ensure_ascii=False)
+        turn_ctx.append(
+            f"Main agent is waiting for this answer to its question {quoted}: call "
+            "delegate_to_main with the user's words exactly as you understood them "
+            "(names spelled as you heard them). Do not answer, confirm or claim "
+            "the task is done yourself"
+        )
     return "[TURN CONTEXT] " + " | ".join(turn_ctx)
 
 
@@ -333,6 +346,8 @@ class RealtimeTurnResult(NamedTuple):
     rejected: bool = False
     execution_completed: bool = False
     handoff_context: str = ""
+    # Realtime answered aloud a turn owed to a pending main-agent question (#564).
+    answered_for_main: bool = False
 
 
 def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
@@ -500,6 +515,10 @@ def run_realtime_turn(
     # Noise/false-trigger guard: a session with no STT transcript is not worth a model
     # turn. "No transcript" → don't speak.
     noise_turn = is_noise_turn(combined, buf_duration, audio_is_speech)
+    # Only the first actionable answer after main's question is owed to main;
+    # noise keeps the window for the real answer (#564). Checked here but consumed
+    # at the end, so a session recovery mid-turn still resends the delegate note.
+    owed_to_main: bool = bool(combined) and not noise_turn and bool(pending_main_question())
     if (
         hal_config.REALTIME_ENABLED
         and realtime.available
@@ -900,6 +919,24 @@ def run_realtime_turn(
             "[realtime] Enabled but agent not available — falling back to OS server"
         )
 
+    answered_for_main: bool = False
+    if owed_to_main:
+        take_main_followup()
+        if handled:
+            # Realtime spoke instead of delegating. Its speech already played, so do
+            # not file the turn as [HANDLED] history: forward it live with what realtime
+            # said, which carries realtime's hearing of the answer (e.g. a name STT
+            # missed). Main may still find the turn unrelated to its question.
+            logger.info("[realtime] Answer to a main-agent question was self-handled — forwarding as live handoff")
+            handled, delegated, route, execution_completed = False, True, ROUTE_DELEGATED, False
+            answered_for_main = True
+            handoff_context = f"Realtime already said to the user: {transcript}"
+        elif rejected or foreign_suppressed:
+            # A short answer such as a bare name is a typical reject_turn candidate.
+            # Main asked, so main decides whether it was addressed; nothing was spoken.
+            logger.info("[realtime] Answer to a main-agent question was dropped by realtime — forwarding to main")
+            rejected, delegated, route, execution_completed = False, True, ROUTE_DELEGATED, False
+
     return RealtimeTurnResult(
         delegated=delegated,
         handled=handled,
@@ -909,4 +946,5 @@ def run_realtime_turn(
         route=route,
         rejected=rejected,
         execution_completed=execution_completed,
+        answered_for_main=answered_for_main,
     )
