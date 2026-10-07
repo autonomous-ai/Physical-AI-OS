@@ -265,6 +265,8 @@ export async function getSetup(): Promise<boolean> {
 
 export type LLMConfigMode = "" | "os" | "runtime";
 
+export type VoiceInputMode = "automatic" | "tap_to_talk";
+
 /** Sanitized device config — Has* booleans replace raw secrets so they never reach the DOM / sessionStorage / HAR captures. */
 export interface DeviceConfig {
   llm_config_mode?: LLMConfigMode;
@@ -287,6 +289,7 @@ export interface DeviceConfig {
   tts_voice: string;
   tts_speed?: number;
   wakeword: boolean;
+  voice_input_mode?: VoiceInputMode;
   agent_name: string;
   wake_phrases: string[];
   realtime?: {

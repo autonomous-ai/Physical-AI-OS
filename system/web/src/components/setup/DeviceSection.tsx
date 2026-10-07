@@ -2,6 +2,7 @@ import { useState } from "react";
 import { toast } from "sonner";
 import { Eye, EyeOff, Copy, Check, Cpu, Fingerprint, Network } from "lucide-react";
 import { SecretUpdateField } from "@/components/SecretUpdateField";
+import type { VoiceInputMode } from "@/lib/api";
 import { copyText } from "@/lib/clipboard";
 import { C, Field, PasswordField, SectionCard, LABEL_STYLE, INPUT_STYLE, INPUT_READONLY_STYLE, INPUT_PAD_ONE_ICON, FIELD_GAP, ADMIN_PASSWORD_MIN } from "./shared";
 
@@ -167,6 +168,7 @@ export function DeviceSection({
   adminPassword, setAdminPassword,
   adminPasswordConfirm, setAdminPasswordConfirm,
   rotateAdminPassword, setRotateAdminPassword,
+  voiceInputMode = "automatic", setVoiceInputMode,
   wakeWord, setWakeWord,
   agentName, wakePhrases,
 }: {
@@ -181,6 +183,8 @@ export function DeviceSection({
   // Empty means keep the existing password.
   rotateAdminPassword?: string;
   setRotateAdminPassword?: (v: string) => void;
+  voiceInputMode?: VoiceInputMode;
+  setVoiceInputMode?: (v: VoiceInputMode) => void;
   wakeWord?: boolean;
   setWakeWord?: (v: boolean) => void;
   agentName?: string;
@@ -232,7 +236,34 @@ export function DeviceSection({
         </>
       )}
 
-      {setWakeWord && (
+      {setVoiceInputMode && (
+        <fieldset aria-describedby="voice-input-help" style={{ margin: "18px 0 0", padding: "14px 0 0", border: 0, borderTop: `1px solid ${C.border}` }}>
+          <legend style={{ ...LABEL_STYLE, padding: "0 8px 0 0" }}>How to talk</legend>
+          <div style={{ display: "flex", flexWrap: "wrap", gap: 10 }}>
+            {([
+              ["automatic", "Automatic"],
+              ["tap_to_talk", "Tap to talk"],
+            ] as const).map(([mode, label]) => (
+              <label key={mode} style={{ display: "flex", flex: "1 1 140px", alignItems: "center", gap: 8, padding: "10px 12px", borderRadius: 8, border: `1px solid ${voiceInputMode === mode ? C.amber : C.border}`, background: voiceInputMode === mode ? C.amberDim : C.surface, color: C.text, fontSize: 13, cursor: "pointer" }}>
+                <input type="radio" name="voice_input_mode" value={mode} checked={voiceInputMode === mode} onChange={() => setVoiceInputMode(mode)} />
+                {label}
+              </label>
+            ))}
+          </div>
+          <p id="voice-input-help" style={{ margin: "8px 0 0", fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
+            {voiceInputMode === "automatic"
+              ? "Your device detects speech and sends it when you finish speaking."
+              : "Tap once to start speaking, then tap again to send. Pauses won't send your message. While your device is speaking, tap to stop it, then tap again to start recording."}
+          </p>
+          {voiceInputMode === "tap_to_talk" && (
+            <p style={{ margin: "5px 0 0", fontSize: 11.5, lineHeight: 1.45, color: C.textMuted }}>
+              No wake phrase or gaze needed. Your automatic wake preference is kept. The physical mic switch still applies.
+            </p>
+          )}
+        </fieldset>
+      )}
+
+      {setWakeWord && voiceInputMode === "automatic" && (
         <div style={{ marginTop: 18, paddingTop: 14, borderTop: `1px solid ${C.border}` }}>
           <label style={{ display: "flex", alignItems: "center", gap: 8, cursor: "pointer", fontSize: 13, color: C.text }}>
             <input type="checkbox" checked={wakeWord ?? false} onChange={(e) => setWakeWord(e.target.checked)} style={{ flexShrink: 0 }} />

@@ -1743,3 +1743,7 @@ dụng config và làm mới môi trường runtime đồng bộ; lỗi áp dụ
 khi đã lưu chế độ, cho phép gửi lại cùng lựa chọn để thử lại. Điều này không xác
 minh subscription còn hợp lệ hay model gọi thành công. Mở terminal mới sau khi
 đổi chế độ; shell đang mở vẫn giữ biến môi trường cũ.
+
+### Cách nhập giọng nói
+
+`GET /api/device/config` trả `voice_input_mode`: `automatic` (mặc định khi trường thiếu) hoặc `tap_to_talk`. `PUT /api/device/config` nhận trường tùy chọn cùng tên; chuỗi rỗng/giá trị khác bị từ chối trước khi thay đổi config. Bỏ qua trường nghĩa là giữ nguyên. `automatic` dùng cờ `wakeword` hiện có; `tap_to_talk` bỏ qua wake và giữ lại cờ đã lưu để chuyển về Tự động. MQTT `voice.input_mode` dùng chung logic lưu/apply. Thay đổi mode restart HAL đồng bộ với timeout 30 giây; lỗi lưu/restart cho phép retry cùng giá trị, còn lưu mode/wake/voice cùng lúc chỉ restart một lần. Phản hồi cấu hình và BE ping báo mode đã cấu hình; lỗi apply vẫn trả lỗi thay vì báo thành công.

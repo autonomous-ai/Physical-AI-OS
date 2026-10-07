@@ -1781,3 +1781,7 @@ runtime environment; an apply failure is returned after saving the mode, so the
 same selection can be retried. This does not verify subscription validity or
 successful model inference. Open a new terminal after changing ownership; an
 already-open shell retains its old environment.
+
+### Voice input mode
+
+`GET /api/device/config` returns `voice_input_mode`: `automatic` (default when absent) or `tap_to_talk`. `PUT /api/device/config` accepts the optional field; empty or unknown strings are rejected before mutation. Omission preserves the setting. `automatic` uses the existing `wakeword` flag; `tap_to_talk` bypasses wake and preserves that flag for switching back. MQTT `voice.input_mode` shares the persistence/apply path. Mode changes synchronously restart HAL with a 30-second timeout; save/restart failures allow same-value retries, and combined mode/wake/voice saves restart once. Config responses and BE ping report the configured mode; failed application still returns an error rather than success.

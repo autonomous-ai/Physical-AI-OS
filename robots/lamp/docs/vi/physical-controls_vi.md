@@ -160,6 +160,14 @@ Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của 
 
 Khi wake word đang bật, cú click cũng **được tính như một wake event**: `single_click_action` gọi `voice_service.grant_wakeword_focus(source)`, mở đúng cửa sổ follow-up focus (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, mặc định 20 s) mà câu wake phrase mở ra. Không có nó thì thiết bị nói "Nghe đây" rồi lại bỏ câu trả lời của user vì thiếu wake phrase. Cửa sổ được kiểm tra lại ở thời điểm dispatch, không chỉ latch lúc mở mic session, nên click giữa lúc session đang chạy vẫn authorize câu user đang nói. No-op khi wake word tắt (mọi câu đã dispatch sẵn) hoặc timeout follow-up = 0.
 
+### Chạm để nói với runtime trên thiết bị
+
+Hành vi attention/wake ở trên áp dụng cho `voice_input_mode: "automatic"`, là mặc định. Chọn **Tap to talk** trong General (hoặc MQTT `voice.input_mode`) để chủ động chạm bắt đầu/kết thúc khi Harness OFF. Chế độ này giữ lựa chọn wake đã lưu nhưng bỏ qua wake gate và mọi trigger focus cho tới khi trở về automatic.
+
+Tap ngắn GPIO và MPR121 đi qua `physical_short_tap`: tap đầu bắt đầu thu, tap tiếp theo dừng và gửi transcript đã chốt đến runtime trên thiết bị. Mỗi lần nhả ngắn riêng biệt đều được tính, kể cả hai tap trong cửa sổ multi-click thông thường; không phát lời Listening trì hoãn. Beep sẵn sàng và hiệu ứng listening chỉ xuất hiện khi STT sẵn sàng; beep kết thúc xác nhận tap gửi. Im lặng không gửi. Timeout (mặc định 30 giây), lỗi provider, privacy/stop hoặc đổi route Harness làm hủy bản ghi. Tap trước khi sẵn sàng hủy và không gửi.
+
+Tap khi TTS đang phát chỉ ngắt; tap sau mới thu. Đèn đang ngủ được đánh thức trước mà chưa thu. Mic mute phần mềm có thể được mở để thu; khóa mic vật lý vẫn chặn. Hold/factory reset GPIO, swipe/hold MPR121 và cử chỉ pet TTP223 giữ vai trò hiện có. Startup và privacy-switch vẫn dùng action wake gốc và không giả lập tap ghi âm. Harness ON giữ chính sách cử chỉ riêng bên dưới.
+
 ### Presence enter và quay về phía đèn — trigger wake
 
 Wake gate có **năm** cửa vào: wake phrase nói ra, single click, một người mới đã nhận diện, quay về phía đèn trước khi nói, và boot greeting (os-server gọi `POST /voice/wake-focus?source=boot_greeting` ngay sau khi gửi greeting, nên user trả lời được mà không cần wake phrase). Một `presence.enter` có identity đã enrolled sẽ mở đúng cửa sổ follow-up focus qua `SensingService`, nên người đã nhận diện có thể nói “hello, Leo” mà không cần gọi wake phrase trước. Event chỉ có stranger vẫn được Agent nhìn thấy nhưng mặc định không mở voice focus; họ vẫn có thể dùng wake phrase, click hoặc gaze. Đặt `HAL_PRESENCE_WAKE_STRANGERS=true` cho deployment ưu tiên guest, nơi stranger xuất hiện trong khung có thể bắt đầu hội thoại. Focus chỉ được grant sau khi event presence đã qua cooldown bình thường; nó không tự unmute hoặc tự khởi động mic đang không sẵn sàng.

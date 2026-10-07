@@ -25,7 +25,8 @@ class Capture:
 
 
 class HarnessCapture:
-    def __init__(self):
+    def __init__(self, target_matches=same_target):
+        self._target_matches = target_matches
         self._lock = threading.Lock()
         self._capture = None
 
@@ -36,7 +37,7 @@ class HarnessCapture:
 
     def start(self, snapshot):
         with self._lock:
-            if self._capture is not None or not same_target(snapshot, snapshot):
+            if self._capture is not None or not self._target_matches(snapshot, snapshot):
                 return False
             self._capture = Capture(dict(snapshot))
             return True
@@ -59,7 +60,7 @@ class HarnessCapture:
             capture = self._capture
             if capture is None:
                 return None
-            if not same_target(capture.snapshot, snapshot):
+            if not self._target_matches(capture.snapshot, snapshot):
                 capture.cancelled.set()
                 self._capture = None
                 return None

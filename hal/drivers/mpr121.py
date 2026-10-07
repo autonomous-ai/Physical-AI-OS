@@ -374,7 +374,7 @@ class _SpatialGestureRecognizer:
 
 
 def single_click_action(*, source, announce):
-    from hal.drivers.button_actions import single_click_action as action
+    from hal.drivers.device_tap_actions import physical_short_tap as action
     action(source=source, announce=announce)
 
 
@@ -414,6 +414,7 @@ class MPR121Handler:
         self._detector = self._new_detector()
         self._last_raw_mask = None
         self._generation = 0
+        self._single_generation = 0
         self._action_busy = False
         self._gesture_lock = threading.Lock()
         self._hold_led = None
@@ -423,9 +424,15 @@ class MPR121Handler:
         if self._harness_gestures and self._harness_gestures.snapshot.get("enabled"):
             from hal.drivers.harness.gestures import harness_button_recognizer
             factory = harness_button_recognizer
+        elif self._device_tap_mode():
+            factory = lambda debounce_ms: _GestureRecognizer(debounce_ms, multi_click=False)
         if self._config.swipe_axis is not None or self._config.tap_min_electrodes > 1:
             return _SpatialGestureRecognizer(self._config, factory)
         return factory(self._config.debounce_ms)
+
+    def _device_tap_mode(self):
+        from hal.drivers.device_tap_actions import device_tap_mode
+        return device_tap_mode(self._harness_gestures.snapshot if self._harness_gestures else None)
 
     def _sample(self):
         touched = self._read_touched()
@@ -556,15 +563,23 @@ class MPR121Handler:
             except OSError:
                 logger.exception("MPR121 bus close failed")
 
-    def _invalidate_pending(self, reason):
+    def _invalidate_pending(self, reason, *, preserve_singles=False):
         with self._gesture_lock:
             self._generation += 1
+            if not preserve_singles:
+                self._single_generation = self._generation
+            retained = []
             while True:
                 try:
-                    _, event, _ = self._pending.get_nowait()
+                    _, event, queued_at = self._pending.get_nowait()
                 except queue.Empty:
                     break
-                logger.info("MPR121 event=action_discarded gesture_id=%d action=%s reason=%s", event.gesture_id, event.kind, reason)
+                if preserve_singles and event.kind == "single":
+                    retained.append((self._generation, event, queued_at))
+                else:
+                    logger.info("MPR121 event=action_discarded gesture_id=%d action=%s reason=%s", event.gesture_id, event.kind, reason)
+            for pending in retained:
+                self._pending.put_nowait(pending)
 
     def _process_touch(self, touched, now):
         if self._harness_gestures:
@@ -584,7 +599,7 @@ class MPR121Handler:
                 return
             logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
             if event.kind == "invalidate":
-                self._invalidate_pending("new_touch_or_hold")
+                self._invalidate_pending("new_touch_or_hold", preserve_singles=self._device_tap_mode())
             elif event.kind == "hold_tier":
                 # Sleep/shutdown holds are disabled; do not show arming LEDs.
                 # if not (self._harness_gestures and self._harness_gestures.snapshot.get("enabled")):
@@ -667,7 +682,10 @@ class MPR121Handler:
                 except queue.Empty:
                     continue
                 with self._gesture_lock:
-                    valid = not self._stop.is_set() and generation == self._generation
+                    current = generation == self._generation
+                    if event.kind == "single" and self._device_tap_mode():
+                        current = generation >= self._single_generation
+                    valid = not self._stop.is_set() and current
                     if event.kind in ("hold", "triple", "swipe") and time.monotonic() - queued_at > DOUBLE_CLICK_WINDOW:
                         valid = False
                     if valid:

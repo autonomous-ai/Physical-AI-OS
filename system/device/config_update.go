@@ -53,6 +53,7 @@ func (s *Service) GetPublicConfig() domain.ConfigPublicResponse {
 		TTSVoice:                 s.config.TTSVoice,
 		TTSSpeed:                 s.config.GetTTSSpeed(),
 		WakeWord:                 s.config.WakeWordEnabled(),
+		VoiceInputMode:           s.config.GetVoiceInputMode(),
 		AgentName:                agentName,
 		WakePhrases:              i18n.BuildSupportedVoiceWakeWords(agentName, deviceType),
 		DeviceID:                 deviceID,
@@ -225,6 +226,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 	prevBoot := bootFields(c)
 	prevTTS := ttsFields(c)
 	prevWakeWord := c.WakeWordEnabled()
+	prevInputMode := c.GetVoiceInputMode()
 	prevChannel := channelFields(c)
 	ch.prevLang = c.STTLanguage
 
@@ -250,7 +252,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		c.AdminPasswordHash = adminHash
 	}
 
-	ch.halBoot = bootFields(c) != prevBoot || c.WakeWordEnabled() != prevWakeWord
+	ch.halBoot = bootFields(c) != prevBoot || c.WakeWordEnabled() != prevWakeWord || c.GetVoiceInputMode() != prevInputMode
 	ch.tts = ttsFields(c) != prevTTS
 	ch.channel = channelFields(c) != prevChannel
 	// Use full post-save values, not just the delta.
@@ -331,6 +333,9 @@ func applyLLMFields(c *config.Config, data domain.UpdateConfigRequest, ch *updat
 
 // applyVoicePipelineFields applies the STT/TTS/realtime cluster (empty = keep).
 func applyVoicePipelineFields(c *config.Config, data domain.UpdateConfigRequest, ch *updateChanges) {
+	if data.VoiceInputMode != nil {
+		c.VoiceInputMode = *data.VoiceInputMode
+	}
 	if data.WakeWord != nil {
 		c.WakeWord = data.WakeWord
 	}
@@ -472,12 +477,20 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	if data.LLMConfigMode != nil && *data.LLMConfigMode != "os" && *data.LLMConfigMode != "runtime" {
 		return fmt.Errorf("invalid llm_config_mode %q (want os or runtime)", *data.LLMConfigMode)
 	}
-	// Config apply and runtime switching both write native configuration.
-	if !s.runtimeSwitchMu.TryLock() {
-		return ErrAgentRuntimeSwitchInProgress
+	// Only LLM writes contend with runtime switching. Voice-only requests use
+	// wakeApply below, which queues opposing HTTP/MQTT updates rather than rejecting them.
+	if data.LLMConfigMode != nil || data.LLMAPIKey != "" || data.LLMBaseURL != "" || data.LLMModel != "" || data.LLMDisableThinking != nil {
+		if !s.runtimeSwitchMu.TryLock() {
+			return ErrAgentRuntimeSwitchInProgress
+		}
+		defer s.runtimeSwitchMu.Unlock()
 	}
-	defer s.runtimeSwitchMu.Unlock()
 
+	if data.VoiceInputMode != nil {
+		if err := config.ValidateVoiceInputMode(*data.VoiceInputMode); err != nil {
+			return err
+		}
+	}
 	if data.Environment != nil {
 		if err := data.Environment.Validate(); err != nil {
 			return err
@@ -503,15 +516,16 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		}
 	}
 
-	// Serialize with MQTT wake updates through persistence and HAL apply.
+	// Serialize with MQTT wake and input-mode updates through persistence and HAL apply.
 	s.wakeApply.mu.Lock()
 
 	// Mutate inside WithLockSave so the model watcher cannot interleave.
 	var ch updateChanges
 	if err := s.config.WithLockSave(func(c *config.Config) {
 		previousWake := c.WakeWordEnabled()
+		previousMode := c.GetVoiceInputMode()
 		ch = applyUpdate(c, data, adminHash)
-		s.wakeApply.pending = s.wakeApply.pending || c.WakeWordEnabled() != previousWake
+		s.wakeApply.pending = s.wakeApply.pending || c.WakeWordEnabled() != previousWake || c.GetVoiceInputMode() != previousMode
 	}); err != nil {
 		s.wakeApply.mu.Unlock()
 		return fmt.Errorf("save config: %w", err)
@@ -523,7 +537,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		wakeErr = s.applyPendingWakeWord()
 	}
 	s.wakeApply.mu.Unlock()
-	// A wake restart covers the whole saved HAL config. Do not enqueue a second
+	// A wake/input-mode restart covers the whole saved HAL config. Do not enqueue a second
 	// restart/live TTS update, including after failure: the wake retry owns it.
 	// Other saved fields still need their side effects even if HAL apply failed.
 	var modeErr error
