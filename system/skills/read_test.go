@@ -54,6 +54,44 @@ func TestReadSkillFiles(t *testing.T) {
 	}
 }
 
+// Python caches and editor leftovers next to a skill's scripts are not skill content.
+func TestReadSkillFilesSkipsArtifacts(t *testing.T) {
+	dir := t.TempDir()
+	seedSkill(t, dir, "connectors", map[string]string{
+		"SKILL.md":             "skill",
+		"scripts/connector.py": "print('hi')",
+		"scripts/__pycache__/connector.cpython-311.pyc":    "\x00pyc",
+		"tests/__pycache__/test_connector.cpython-311.pyc": "\x00pyc",
+		"scripts/stale.pyc":         "\x00pyc",
+		"scripts/connector.py.swp":  "swap",
+		"node_modules/pkg/index.js": "js",
+		"Thumbs.db":                 "db",
+	})
+
+	files, err := ReadSkillFiles(dir, "connectors")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	paths := []string{}
+	for _, f := range files {
+		paths = append(paths, f.Path)
+	}
+	want := []string{"connectors/SKILL.md", "connectors/scripts/connector.py"}
+	if strings.Join(paths, ",") != strings.Join(want, ",") {
+		t.Fatalf("paths = %v, want %v", paths, want)
+	}
+
+	for _, bad := range []string{
+		"connectors/scripts/__pycache__/connector.cpython-311.pyc",
+		"connectors/scripts/stale.pyc",
+		"connectors/Thumbs.db",
+	} {
+		if _, err := ReadSkillFile(dir, "connectors", bad); !errors.Is(err, ErrSkillFileNotFound) {
+			t.Errorf("path %q: err = %v, want ErrSkillFileNotFound", bad, err)
+		}
+	}
+}
+
 func TestReadSkillFilesRejectsBadName(t *testing.T) {
 	dir := t.TempDir()
 	seedSkill(t, dir, "music", map[string]string{"SKILL.md": "x"})

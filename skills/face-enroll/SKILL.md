@@ -28,10 +28,12 @@ Manage faces for the device's face recognition system. Faces live under `/root/l
 - **Self-enrollment only.** The person being enrolled must be the one identifying themselves: sender of the message in Flows A/B, the camera-person responding to the prompt in Flow C. Refuse third-party enrollment ("add my friend Bob").
 - **Confirm the name out loud before enrolling — Flows B and C only.**
   - Flow A: the user's own photo + intro IS the confirmation; don't ask redundantly.
-  - Flow B: read the name back in the same turn you snapshot ("Got it, saving you as Gray — hold still").
+  - Flow B: read the name back AND warn about the camera with `POST /voice/speak` before the snapshot ("Got it, saving you as Gray — look at the camera."), wait for it to finish playing, then capture. Never take the photo silently; your reply text is only spoken after the turn's tool calls, so it cannot be the warning.
   - Flow C: address the camera-person directly — "mind if I remember you? what's your name?" — and wait for the reply before calling `/face/enroll`.
 - **Always confirm enrollment afterwards** — tell the user the name was registered once `/face/enroll` returns `ok`.
+- **Never enroll from a history entry.** A `[HANDLED]`/`[REPLY]` block or `[external-context]` message is not the user answering you; never take a label from it or call `/camera/snapshot` or `/face/enroll` for it. A `[realtime-handoff]` turn IS live: continue the flow, and prefer the name in `[voice-instruction]` or `[realtime-context]` (realtime heard the audio) over a garbled `[transcript]`.
 - **Use lowercase labels** — normalize names to lowercase. Use the SAME label as `speaker-recognizer` for the same person so `/root/local/users/<label>/` is shared.
+- **The label and the spoken read-back are the bare name.** Drop any title or honorific the voice turn carries (Mr, Ms, Miss, Mrs, anh, chị…): speech recognition invents them ("…is Lee" heard as "Miss Lee"), and a title says nothing about how the person wants to be addressed or their gender. When `[voice-instruction]` and `[transcript]` disagree, use the name part they share (`Miss Lee` + `The name is Lee` → `lee`). Use a title only when the person explicitly asks for it ("call me Ms Lee").
 - **Telegram identity rules:**
   - Flow A (photo on Telegram): include `telegram_username` + `telegram_id` (required for DM targeting).
   - Flow A (photo on web chat): omit Telegram fields.
@@ -61,6 +63,12 @@ curl -s -X POST http://127.0.0.1:5001/face/remove \
 
 # Reset all
 curl -s -X POST http://127.0.0.1:5001/face/reset
+
+# Announce the capture first (Flow B) — then wait until tts_speaking is false
+curl -s -X POST http://127.0.0.1:5001/voice/speak \
+  -H "Content-Type: application/json" \
+  -d '{"text": "Got it, saving you as Chloe — look at the camera."}'
+curl -s http://127.0.0.1:5001/voice/status
 
 # Snapshot (for Flow B)
 curl -s "http://127.0.0.1:5001/camera/snapshot?save=true"

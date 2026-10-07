@@ -1,5 +1,27 @@
 # OS Server API — Documentation
 
+Opening feedback is one short acknowledgment sound: English "Uhm.", Vietnamese
+"Ừm.", Japanese "うん。", and Simplified/Traditional Chinese "嗯。". Ordinary
+main-agent voice turns request it immediately before forwarding; delegated turns
+skip it. Continuation fillers use one short thinking sound (English "Hmm...",
+Vietnamese "Ừm...") and wait 3.5 seconds after turn start (after the first tool starts for delegated
+turns). Tool-end rearming adds any remaining 2.5-second cooldown to that delay.
+This timer does not delay opening feedback. Each turn permits at most one automatic continuation; later tool calls do not trigger more.
+The previous opening and continuation phrase pools have been removed. Automatic
+waiting fillers do not select tool-specific phrases. Explicit realtime/tool cues
+are unchanged.
+
+Named internal-tool pools use a single short cue per language. Search/read/media
+cues describe an action shared by their aliases; broad or mixed-action pools
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) use a neutral thinking sound rather than
+claiming a specific action or success. Video cues say "Processing video" because
+the pool also covers editing. Camera `look_*` and movement-demo `demo_*` phrases
+are unchanged. These content changes do not re-enable automatic tool overrides
+or change filler scheduling.
+
+`GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots). Progress may include optional `activity_at` (Unix seconds) for recognized HAL dependency installation activity; older snapshots without it remain valid.
+
 ## Japanese language support
 
 `stt_language: "ja"` selects Japanese. Japanese regional aliases such as `ja-JP`
@@ -1471,7 +1493,7 @@ Rules the agent is given, and why each one is load-bearing:
 |---|---|
 | One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
 | Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
-| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
+| Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. A title or honorific heard in a voice turn (Mr, Ms, Miss, Mrs, anh, chị…) does not count: speech recognition invents them (2026-10-05, green-lamp: "…is Lee" heard as "Miss Lee" became `call: Lee (Ms Lee)`). Write the bare name and never infer gender; keep a title only when the person explicitly asks for it. Same rule in `face-enroll` for labels and read-backs. |
 | Each entry under ~400 chars | `USER.md` is billed on every turn, and past the per-file `bootstrapMaxChars` (24000) or total bootstrap budget (48000), OpenClaw can truncate injected content. An oversized profile can lose person data from the prompt. `ReconcileUserProfiles` warns at 9000. |
 | Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
 | Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |

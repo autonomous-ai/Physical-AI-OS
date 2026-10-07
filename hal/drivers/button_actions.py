@@ -210,19 +210,23 @@ def play_pet_chime(source: str = "TTP223"):
 
 
 def announce_listening_cue(source: str = "button"):
-    """Fire the listening-cue TTS off-thread."""
+    """Keep gesture callers intact while the spoken listening cue is disabled."""
     # Same HW kill-switch guard as single_click_action. Guarding only
     # single_click_action leaves the GPIO-button path leaky.
     if state._hw_mic_switch_muted is True:
         logger.info("%s listening cue skipped -- HW mic switch is off", source)
         return
-    if _tts_available():
-        threading.Thread(
-            target=_announce_listening,
-            args=(getattr(state.tts_service, "input_capture_state", (False, 0)),),
-            daemon=True,
-            name=f"{source}-single-click-tts",
-        ).start()
+    # Tap/wake latency experiment: the spoken cue sets TTS.speaking, which makes
+    # VAD discard the user's first words. Keep the original call for rollback;
+    # the existing short ack chime does not set TTS.speaking.
+    # if _tts_available():
+    #     threading.Thread(
+    #         target=_announce_listening,
+    #         args=(getattr(state.tts_service, "input_capture_state", (False, 0)),),
+    #         daemon=True,
+    #         name=f"{source}-single-click-tts",
+    #     ).start()
+    logger.info("%s listening TTS disabled -- keeping the short tap chime", source)
 
 
 def _stop_active_tracking(source: str):

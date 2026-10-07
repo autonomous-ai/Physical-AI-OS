@@ -1,5 +1,26 @@
 # OS Server API — Tài Liệu
 
+Opening chỉ là một âm xác nhận ngắn: tiếng Anh "Uhm.", tiếng Việt "Ừm.",
+tiếng Nhật "うん。", tiếng Trung giản thể/phồn thể "嗯。". Lượt voice thông thường
+của agent chính gọi phát ngay trước khi chuyển lời người dùng; lượt delegate bỏ
+qua opening. Continuation chỉ dùng một âm ngắn (tiếng Anh "Hmm...", tiếng Việt
+"Ừm..."), chờ 3,5 giây từ lúc
+agent bắt đầu lượt (từ tool đầu tiên với lượt delegate). Khi tool kết thúc,
+lịch phát lại cộng thêm phần cooldown 2,5 giây còn lại. Timer này không làm
+trễ opening.
+Mỗi lượt có tối đa một continuation tự động; các tool sau đó không phát thêm.
+Đã xoá bộ câu opening và continuation cũ. Filler chờ tự động không chọn câu theo tool. Cue realtime/tool được gọi riêng không đổi.
+
+Pool tool nội bộ chỉ giữ một câu ngắn cho mỗi ngôn ngữ. Câu tìm/đọc/tạo nội dung
+chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom nhiều thao tác
+(`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,
+`pdf`, `canvas`, `nodes`, `subagents`) dùng âm suy nghĩ trung tính, không đoán hành
+động hay khẳng định thành công. Video dùng "Đang xử lý video" vì pool còn nhận
+thao tác chỉnh sửa. Giữ nguyên câu camera `look_*` và demo chuyển động `demo_*`.
+Sửa nội dung này không bật lại việc tự chọn câu theo tool và không đổi lịch filler.
+
+`GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật). Progress có thể chứa `activity_at` tùy chọn (giây Unix) cho hoạt động cài dependency HAL nhận diện được; snapshot cũ không có trường này vẫn hợp lệ.
+
 ## Hỗ trợ tiếng Nhật
 
 `stt_language: "ja"` chọn tiếng Nhật. Các biến thể vùng như `ja-JP` và `ja_JP`
@@ -1447,7 +1468,7 @@ không được phép âm thầm làm mất nó.
 |---|---|
 | Mỗi người một bullet dưới `## Users`, dạng `- **<label> (friend)** — call: …; notes: …` | `<label>` là enrollment label lấy từ `[context: current_user=…]`, đúng khoá mà reconcile của OS dùng. Phần `(friend)` là thứ phân biệt một con người với một field biểu mẫu — thiếu nó, `**Notes:** …` sẽ bị đọc thành người tên "Notes:" và bị xoá. |
 | Các đoạn `key: value` ngắn, không phải văn xuôi; `call:` đứng đầu | Các field của template là đơn nhất (một `**Name:**`, một `**Timezone:**`) nên không mô tả nổi hai người, nhưng lồng chúng theo từng người thì không sống sót qua file: `parseEntries` → `serialize` làm phẳng mọi bullet thành `- …`, nên field con thụt lề bị tách khỏi người của nó. Các đoạn giữ được *ý* của biểu mẫu — dữ kiện tách bạch, có nhãn — trong một entry prune được. Lần đầu để văn xuôi tự do đã cho ra một đoạn ~600 ký tự với cách xưng hô nằm lẫn ở câu thứ tư. |
-| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. |
+| Không bao giờ đoán `call:`, đại từ nhân xưng hay múi giờ | Agent chỉ thấy một face label và một voiceprint. Không thứ nào nói lên người ta muốn được gọi thế nào. Chỉ ghi khi họ đã tự nói; nếu chưa, bỏ hẳn đoạn đó. Danh xưng hay kính ngữ nghe được trong lượt nói (Mr, Ms, Miss, Mrs, anh, chị…) không được tính: nhận dạng giọng nói hay tự thêm vào (2026-10-05, green-lamp: "…is Lee" bị nghe thành "Miss Lee" và thành `call: Lee (Ms Lee)`). Ghi tên trần và không bao giờ suy ra giới tính; chỉ giữ danh xưng khi chính người đó yêu cầu rõ ràng. `face-enroll` áp dụng cùng quy tắc cho label và câu đọc lại. |
 | Mỗi entry dưới ~400 ký tự | `USER.md` bị tính token mỗi lượt, và vượt `bootstrapMaxChars` mỗi file (24000) hoặc ngân sách bootstrap tổng (48000), OpenClaw có thể cắt nội dung đưa vào prompt. Profile phình to có thể mất dữ liệu về người trong prompt. `ReconcileUserProfiles` cảnh báo từ mốc 9000. |
 | Người lạ không có entry | `## Users` khoá theo enrollment label; một khuôn mặt đi ngang không có label nào. Lưu lượng người qua bàn thì ghi ở `KNOWLEDGE.md`. |
 | Chỉ ghi điều quan sát được về **chính** người đó | Lỗi ban đầu là hai người bị gộp thành một profile (`Long/Leo`). Không bao giờ chuyển thói quen của người này sang người khác. |

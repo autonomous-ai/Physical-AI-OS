@@ -70,16 +70,29 @@ lượt, model sẽ:
 - **Delegate** bằng cách gọi tool `delegate_to_main` → dừng output realtime và
   chuyển đúng lời người dùng ở lượt hiện tại, giữ nguyên ngôn ngữ, tới OS server
   (→ runtime chính đang được chọn) để xử lý.
-  Lúc đó model realtime đã tự nói filler rồi, nên os-server không "ừ" thêm
-  lần nữa cho turn delegate (prefix `[voice-instruction]`): không có opening
-  filler, và dead-air filler đầu tiên chỉ arm khi tool đầu tiên của agent chính
-  bắt đầu (`FillerManager.MarkDelegatedVoiceRun`). Turn delegate mà agent chính
-  kết thúc bằng NO_REPLY vì thế im lặng luôn, thay vì hứa một câu trả lời
-  không bao giờ tới.
+  OS-server bỏ qua âm opening ngắn ("Ừm." ở tiếng Việt) cho lượt delegate;
+  lượt voice thông thường của agent chính vẫn giữ opening. Continuation chỉ dùng
+  âm ngắn ("Ừm..."), không chọn câu theo tool, và chờ
+  3,5 giây từ lúc bắt đầu lượt thông thường, hoặc từ tool đầu tiên với lượt
+  delegate (`FillerManager.MarkDelegatedVoiceRun`). Khi tool kết thúc, lịch phát
+  lại cộng phần cooldown 2,5 giây còn lại vào mốc 3,5 giây. Lượt delegate kết
+  thúc bằng NO_REPLY mà không bắt đầu tool sẽ im lặng.
+  Mỗi lượt có tối đa một continuation tự động, không phụ thuộc các tool tiếp theo.
 - **Từ chối rõ ràng** một turn chắc chắn không phải người nói với thiết bị bằng
   tool `reject_turn` → bỏ turn trước khi agent chính nhìn thấy STT text. Nó khác
   hẳn model im lặng: im lặng, timeout và lỗi transport vẫn fallback bình thường
   sang agent chính.
+
+**Chỉ main báo kết quả của main.** Realtime không bao giờ được nói một tác vụ
+main agent đang xử lý đã xong, đã lưu hay đã nhớ — enroll khuôn mặt hoặc giọng
+nói, nhắc việc, tin nhắn, memory — và phải delegate các câu hỏi về tác vụ đó
+(`DELEGATE_TOOL_DESCRIPTION`). Ngày 2026-10-02 (#564) realtime đã nói "All
+done! I've got you remembered" trước khi có gì được enroll. Yêu cầu enroll ("remember my face", "this is me",
+"learn my voice", "forget my face") luôn được delegate, kể cả khi người dùng có vẻ
+đã được nhận ra: ngày 2026-10-05 trên green-lamp, realtime tự trả lời "Please
+remember my face." bằng "I already have your face remembered", nên face-enroll
+không hề chạy. Xem
+[Câu trả lời cho câu hỏi của main agent luôn quay về main](#câu-trả-lời-cho-câu-hỏi-của-main-agent-luôn-quay-về-main).
 
 **Tìm đồ là một hành động.** "Tìm chìa khóa của tôi", "cái cốc của tôi đâu",
 "giúp tôi tìm cây bút được không", "bạn có thấy cây bút của tôi đâu không" — mọi
@@ -713,6 +726,53 @@ hoặc restart sớm trong phiên) thì hai sequence đụng nhau chứ không t
 thức bị vứt — đúng triệu chứng câm tiếng đó, chỉ cách một phép so sánh.
 Id không có dấu thời gian (`tg-<messageID>`) vẫn theo luật sequence thuần: không có
 gì để so thì một POST cũ thật sự không được phép giành lại loa.
+### Câu trả lời cho câu hỏi của main agent luôn quay về main
+
+Các tác vụ nhiều lượt như enroll khuôn mặt hoặc giọng nói thuộc về main agent.
+Câu hỏi mà main nói ra chỉ đến realtime dưới dạng dòng `[TTS HISTORY]`, và như
+vậy là quá yếu: ngày 2026-10-02 (#564) Hermes hỏi "What name should I save you
+under?", realtime tự trả lời câu đáp của người dùng (rồi còn nói "All done!"),
+và việc enroll chỉ xảy ra vì Hermes đã hành động trên một lượt `[HANDLED]` vốn
+chỉ là lịch sử. Realtime nghe đúng tên ("Momo") trong khi STT ghi "No more.",
+nên bản sửa giữ realtime trong vòng xử lý và làm cho việc định tuyến trở nên
+tường minh (`hal/drivers/voice/_internal/main_followup.py`):
+
+- **Cửa sổ.** `feed_realtime_history` gọi `note_main_reply` cho mọi câu trả
+  lời của main agent. Câu trả lời đã phát (nói hết hoặc bị ngắt) có `?` / `？`
+  ở một trong hai câu cuối ("What name? Just say it.") sẽ mở cửa sổ và ghi nhớ
+  câu hỏi; một câu hỏi mới hơn đã phát sẽ thay thế nó. Chỉ câu đáp có nội dung
+  tiếp theo của người dùng mới đóng cửa sổ, hoặc giới hạn an toàn
+  `HAL_REALTIME_MAIN_FOLLOWUP_S` (mặc định 300 s, `0` là tắt). Mọi câu trả lời
+  khác của main đều giữ cửa sổ mở: câu trả lời bằng lời cho một sự kiện sensing
+  (emotion, activity, presence), câu đọc lại của main, hay một câu trả lời bị
+  tắt tiếng hoặc bị hủy (kể cả feed `/voice/realtime/history` của os-server)
+  đều không trả lời câu hỏi đang chờ. Lần chạy đầu trên green-lamp (2026-10-05)
+  dùng cửa sổ 60 s và cái tên đến sau câu hỏi 64 s, nên realtime tự trả lời và
+  nói khuôn mặt đã được ghi nhớ. Câu hỏi không được phát thì không bao giờ mở
+  cửa sổ.
+- **Ghi chú theo lượt.** Khi cửa sổ đang mở, `build_turn_context` thêm `Main
+  agent is waiting for this answer to its question "…"` và yêu cầu realtime gọi
+  `delegate_to_main` với lời người dùng đúng như nó hiểu. Main agent khi đó
+  nhận `[voice-instruction] <lời realtime hiểu>`.
+- **Chốt chặn.** `run_realtime_turn` kiểm tra cửa sổ khi lượt bắt đầu và tiêu
+  thụ nó khi lượt có nội dung đầu tiên kết thúc (lượt nhiễu không tiêu thụ; nếu
+  session được khôi phục giữa lượt thì ghi chú vẫn được gửi lại). Nếu realtime
+  nói thay vì delegate, kết quả được đổi thành `delegated` với
+  `answered_for_main=True` và `handoff_context = "Realtime already said to the
+  user: …"`. Dispatch gửi một lượt live có dòng riêng `[realtime-handoff]
+  Realtime answered this aloud while you were waiting…` (tiếp tục tác vụ, hoặc
+  `NO_REPLY` nếu lượt đó không liên quan, ví dụ sau câu "Anything else?" ở cuối)
+  cùng `[realtime-context]`, thay vì lịch sử `[HANDLED]`. os-server không phát
+  opening filler cho lượt `[realtime-handoff]` (`realtimeAlreadySpoke`), vì người
+  dùng đã nghe realtime nói. Nếu realtime từ chối câu trả lời (`reject_turn`)
+  hoặc câu trả lời bị loại vì sai bảng chữ, lượt đó được chuyển cho main như một
+  lượt delegate thường thay vì bị bỏ: một cái tên đơn lẻ là ứng viên điển hình
+  của `reject_turn`, và chính main đã hỏi.
+
+Cửa sổ chỉ điều hướng; nó không bao giờ cấp quyền đánh thức (wake). Live mode
+không được bao phủ. Giới hạn đã biết: nếu realtime bỏ qua ghi chú và nói một
+khẳng định sai, âm thanh đó đã phát rồi; chốt chặn vẫn định tuyến lượt đó đúng.
+
 ### Hai đồng hồ im lặng và điểm kết thúc lượt tạm thời
 
 Các đồng hồ im lặng tạo **ứng viên kết thúc lượt**, không chứng minh toàn bộ yêu
@@ -3360,6 +3420,7 @@ trong `config.json`:
 | `HAL_REALTIME_SUMMARIZER_RETRIES` | `2` | Số lần thử lại mỗi lượt summarize; `0` là tắt |
 | `HAL_REALTIME_SUMMARIZER_RETRY_BACKOFF_S` | `1.5` | Chờ trước lần thử lại đầu, mỗi lần sau nhân đôi |
 | `HAL_REALTIME_SUMMARY_OPEN_REQUEST_TTL_S` | `3600` | Summarizer đặt các request chưa được trả lời vào một mục `## Open requests` ở cuối (bullet có timestamp). HAL xóa từng bullet khỏi `summary.md` khi timestamp `[<ISO-8601>]` của nó đã cũ bằng số giây này (bullet không có timestamp đọc được thì dùng tuổi file thay thế; heading bị xóa khi không còn bullet nào), cả khi refeed lại thành `[Previous summary]` lẫn khi nạp vào session context — một task đang chờ nằm lì trong context là thứ khiến một nudge rỗng nội dung làm Gemini "trả lời" nó từ ký ức cũ (#419, #421). `0` là tắt. |
+| `HAL_REALTIME_MAIN_FOLLOWUP_S` | `300` | Sau một câu hỏi đã phát của main agent (`?` / `？` ở một trong hai câu cuối), câu đáp có nội dung tiếp theo của người dùng trong số giây này thuộc về main: turn context yêu cầu realtime delegate nó, và lượt realtime tự trả lời được chuyển thành `[realtime-handoff]` live thay vì lịch sử `[HANDLED]` (#564). Chỉ câu đáp đó, một câu hỏi mới hơn hoặc giới hạn này kết thúc việc chờ; các câu trả lời khác của main (phản ứng sensing, câu đọc lại, câu bị tắt tiếng hoặc bị hủy) giữ cửa sổ mở. `0` là tắt. |
 
 ## Bản đồ code
 
@@ -3399,7 +3460,7 @@ Yêu cầu hoặc câu bổ sung hiện tại được chuyển tiếp bằng ng
 
 Một lượt so sánh audio tổng hợp riêng bằng Gemini 3.1 Live sau đó dùng cùng PCM cho prompt/tool baseline và bản cuối. Message chuyển tiếp của bản cuối là “Ghi vào Notes là sáng mai tưới cây.”, “Mở Airbnb tìm chỗ ở Đà Nẵng giúp mình.” và câu tiếp nối “cuối tuần này hai người”. Baseline đã đổi yêu cầu Notes thành “Remember to water the plants tomorrow morning.”, làm mất tên app và đổi ngôn ngữ. Câu tiếp nối Airbnb chạy trong cùng phiên provider sau câu hỏi bổ sung `[TTS HISTORY]` có kiểm soát; đã xác nhận ranh giới hoàn tất lượt trước từ server và commit audio mới. Kết quả này chứng minh hành vi chuyển tiếp quan sát được cho các clip tổng hợp đó, không chứng minh microphone/wake-word, câu hỏi thật từ main agent hoặc hoàn thành toàn luồng main-agent/desktop. Kết quả cuối riêng được lưu tại `/tmp/buddy-rt-final/result.json` trên thiết bị kiểm thử; lượt đánh giá không thay prompt production hoặc dịch vụ đang chạy.
 
-Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
+Realtime và Harness-only voice dùng chung journal `system/externalhistory` và worker gửi silent. HAL vẫn gửi `voice_agent_handled` với `[HANDLED]` / `[REPLY]`; OS ghi atomic lượt realtime hoàn tất trước khi xác nhận nhận và gửi tiếp history pending chưa từng gửi sau restart. Hook ngắt lời cũ chạy trước bước lưu; silent/chặn TTS giữ nguyên. Runtime hỗ trợ active-turn steering vẫn nhận history realtime khi bận; runtime khác chờ rảnh bằng queue trên disk. Lượt gửi chưa rõ kết quả giữ `uncertain`, không tự gửi lại. Message sync chỉ là lịch sử: main agent trả `NO_REPLY` và có thể ghi nhận mood hoặc memory, nhưng không được gọi tool thiết bị, camera, face, enroll giọng nói hay nhắn tin, và không được lấy hay ghi lại tên hoặc danh tính từ entry đó (`externalhistory.Message`, rule 2–3 của `input-branching`, `face-enroll`). Đây là ràng buộc bằng prompt, code không cưỡng chế; #564 ghi nhận Hermes đã enroll khuôn mặt từ một lượt như vậy. Flow Monitor hiện **History sync · Realtime → Main**, câu hỏi/câu trả lời gốc là Context. Xem [lịch sử hội thoại từ bên ngoài](os-server_vi.md#lịch-sử-hội-thoại-từ-bên-ngoài).
 
 Phân loại input LIVE còn được gửi trong metadata debug `voice_turn_type`, dùng bộ phân loại wake phrase thông thường và focus đã cho phép input, lấy trạng thái trước khi input giữ cửa sổ focus của chính nó. Input đầu tiên không tự gắn nhãn follow-up; input tiếp theo có thể dùng cửa sổ vừa mở. Reply realtime trực tiếp giữ event routing `voice_agent_handled`; monitor có thể hiển thị command/follow-up độc lập.
 

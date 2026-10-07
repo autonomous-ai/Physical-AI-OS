@@ -125,7 +125,7 @@ a failed initial read/claim keeps privacy locked.
 Unlock uses the existing microphone wake/listening flow and restores camera and
 speaker to their previous states. A camera or speaker already disabled before
 locking stays disabled; an explicit manual disable during the lock is also
-preserved. The listening cue only plays when the restored speaker is unmuted.
+preserved. The short acknowledgement chime respects the restored speaker mute; the spoken listening cue is disabled.
 A mute that a **scene** set is not a preference: when the switch that wakes the
 device from sleep (night scene: camera and speaker off) deactivates the scene
 while the lock is still held, `deactivate_scene()` retargets the privacy
@@ -142,7 +142,7 @@ Deploy the updated HAL before uploading JSON with these new fields.
 
 | Gesture | Primary GPIO button | TTP223 touchpad |
 |---|---|---|
-| **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the "Listening" cue plays once the 0.4 s click window resolves | PET response after the decision window; first contact keeps its ack chime and does not interrupt speech. |
+| **1 tap** | Stop active object tracking, then stop speaker / unmute mic + speaker + ack chime (~120 ms ping) — all fire immediately on release (no click-window wait); the 0.4 s click-window event remains, but its spoken "Listening" cue is disabled | PET response after the decision window; first contact keeps its ack chime and does not interrupt speech. |
 | **2 taps** (≤ 0.4 s apart, button) / (≤ 1.2 s apart, TTP223) | Nothing beyond the single-click already fired on tap 1 (panic-click guard) | PET response for both fast and slow double taps; no mic toggle. |
 | **3 taps** (≤ 0.4 s apart, button) | Reboot OS (TTS announce → `sudo reboot`) | No special triple-tap action; contacts join the pet burst or are absorbed by its cooldown. |
 | **Swipe** across the pads | n/a | PET response in either direction; no sleep action. |
@@ -156,15 +156,16 @@ With Harness OFF, MPR121 also supports release-to-commit holds and the same hold
 
 ## Interrupting Lamp while it speaks (barge-in)
 
-In hands-free LIVE OFF mode, a delayed listening cue is dropped if microphone
-capture has already started. Its retry also expires when a capture starts during
-backoff, even if that capture finishes before the next attempt. This keeps the
-cue from truncating the user's sentence; the click still stops speech and grants
-wake focus normally.
+In automatic input mode, the spoken "Listening" cue is temporarily disabled for
+a tap/wake latency experiment. Gesture callers remain, and the original TTS
+launch is commented out for rollback. The short acknowledgement chime remains;
+it confirms the gesture, not microphone or Gemini readiness. Normal reply TTS
+mic gating and the 0.5 s voice startup delay are unchanged. Manual tap-to-talk
+and Harness recording cues retain their existing behavior.
 
-The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the cue and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. A localized "Listening" cue plays after the cancel when the switch permits the voice action.
+The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the chime and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. The spoken "Listening" cue is disabled; the short chime remains when audio is permitted.
 
-When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would announce "Listening" and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
+When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would acknowledge the tap and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
 ### Tap-to-talk for the device runtime
 
@@ -195,7 +196,7 @@ A landmark outside the frame is not a measurement. `YuNet` reports the five poin
 
 Detector rows whose box is not a finite number are dropped before any of this. YuNet can return an infinite coordinate for a face leaving the frame — device-observed while tracking, at 1.9% bbox area and 0.29 confidence — and `int()` on it raised `OverflowError`, killing the tracker's detect thread mid-session. Infinity is not a very large face; it is the detector saying nothing usable, so the row goes and the existing "no face this frame" path takes over. The filter runs before the largest / nearest-centre choice, because an infinite width wins any largest-by-area contest and would otherwise hide a perfectly good face behind it.
 
-When several faces are in frame, the one whose head counts is the one **nearest the frame centre** among those at least `HAL_GAZE_MIN_FACE_PX` tall — not the largest. Largest-face would hand the gate to whoever leans in closest, which is the user only by convention; the lamp's own aim is the better prior for which face it is pointed at. With one qualifying face the two rules agree, so this only bites when a second person shares the desk. If nobody clears the size floor the largest face is returned anyway, so the sample still records that somebody is there. Note that the bbox-only tracking path (`_detect_face_yunet`, used by object follow) keeps its own largest-face policy — the two are independent.
+When several faces are in frame, the one whose head counts is the one **nearest the frame centre** among those at least `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame tall, and never under `HAL_GAZE_MIN_FACE_PX` — not the largest. Largest-face would hand the gate to whoever leans in closest, which is the user only by convention; the lamp's own aim is the better prior for which face it is pointed at. With one qualifying face the two rules agree, so this only bites when a second person shares the desk. If nobody clears the size floor there is no face (#567): a smaller face is a co-worker across the room, and returning it anyway pulled the pan toward them and hid the user's own body from the watcher. The sample then takes the no-face path, where person detection still records whoever is in front of the lamp. Note that the bbox-only tracking path (`_detect_face_yunet`, used by object follow) keeps its own largest-face policy — the two are independent.
 
 | Env var | Default | Tunes |
 |---|---|---|
@@ -204,7 +205,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_SHADOW` | `true` | Log the decision without opening the gate. Costs nothing — no turn opens, so no LLM or TTS is spent. |
 | `HAL_GAZE_MAX_YAW_DEG` | 25 | Acceptance cone at frame centre. |
 | `HAL_GAZE_EDGE_CONE_SCALE` | 1.8 | How much wider the cone grows at the frame edge, where barrel distortion inflates the angle. |
-| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels of the downscaled frame** — the watcher detects on `frame_utils.downscale(frame)`, which clamps width to `VISION_MAX_WIDTH` (640), so at 1280×720 this floor is 96 px in the original image and at 640 or narrower it is 48 px in both. Below it the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. Unlike `LOOK_AIM_MIN_FACE_HEIGHT_FRAC`, which is a fraction and immune, this value silently doubles or halves if the camera mode changes. |
+| `HAL_GAZE_MIN_FACE_PX` | 48 | Minimum face height **in pixels of the downscaled frame**. Not the only floor: the face picker also drops any face under `HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC` (15%) of the frame height (#567), so on the lamp's 640×360 the effective floor for votes, pan and "a face is in frame" is 54 px — the watcher detects on `frame_utils.downscale(frame)`, which clamps width to `VISION_MAX_WIDTH` (640), so at 1280×720 this floor is 96 px in the original image and at 640 or narrower it is 48 px in both. Below it the landmarks span a few pixels and the yaw is arithmetic on rounding error, so the sample does not vote at all. Unlike `LOOK_AIM_MIN_FACE_HEIGHT_FRAC`, which is a fraction and immune, this value silently doubles or halves if the camera mode changes. |
 | `HAL_GAZE_WINDOW_S` | 1.5 | Evidence window ending at the moment of speech. |
 | `HAL_GAZE_MIN_FACING_RATIO` | 0.6 | Fraction of that window that must have seen a facing head. A ratio, not an unbroken run — per-sample yaw is genuinely noisy. |
 | `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. The `[gaze] sampling at N/s` line counts samples actually RECORDED, and reports separately how many frames were blocked before they could be measured (settling from a servo write, or the detector held by a live look). Counting attempts instead once reported 5.7/s while the buffer held nothing newer than the 1.5 s window — under 1/s of real evidence. |
@@ -244,7 +245,7 @@ Degradation is by omission in both directions. On a device with **no camera** ne
 
 End-to-end chain:
 1. `gpio_button.py` / `mpr121.py` (Harness OFF) detect single click → call `single_click_action(source)` in `button_actions.py`. TTP223 is not part of this chain: every TTP223 gesture calls `head_pat_action` and never stops speech.
-2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + deferred `_announce_listening()` thread
+2. `single_click_action` → `_cancel_agent_speech()` (fire-and-forget thread) + active `tracker_service.stop()` + `stop_tts()` (routes/voice.py) + `audio_stop()` (routes/music.py) + short acknowledgement chime (spoken listening cue disabled)
 2a. `_cancel_agent_speech()` → `POST /api/agent/speech/cancel` on the OS server. Needed because `stop_tts()` only silences what HAL already holds: the sentence playing plus the pre-synthesised queue. The OS server streams a reply sentence by sentence, so without this call the device goes quiet for one sentence and then talks on. The OS server mutes every turn in flight (see `docs/os-server.md`) while letting turns started after the click speak — so the user can tap and immediately say something new even with a backlog of older turns still draining. The turns are not aborted, only unspoken — which is why the same call also drops those turns' pending dead-air fillers: they speak straight to HAL rather than through the muted reply path, so a still-running cancelled turn kept announcing "one moment" for an answer it would never give. Dispatched on its own thread and fired on both branches (mic-unmute and stop-speaker), since either way the tap means the user is taking the floor.
 2b. `state.note_music_cancel()` → stamps a HAL-side music cancel watermark, and `audio_stop()` runs on **both** branches (mic-unmute and stop-speaker), not just the stop-speaker one. Needed because the OS server's cancel is TTS-only: the cancelled turn keeps running and its pending music tool call still reaches `POST /audio/play` a moment later, where a fresh `music-play` thread clears its own `_stop_event` — so a point-in-time stop always loses that race and the user hears music they just cancelled once `yt-dlp` finishes resolving (1–5 s). While the watermark is fresh (`app_state.MUSIC_CANCEL_GUARD_S`, 3 s) `/audio/play` answers `{"status": "suppressed"}` instead of playing. The window is sized to cover the in-flight tool call but stay under the floor of a genuinely new request (speak → STT → LLM → tool is never under ~3 s), so "tap, then ask for a song" still works.
 3. `stop_tts()` → `tts_service.stop()` sets `_stop_event`; every blocking loop in TTS streaming (synth, render, playback) honors the event and aborts cleanly without leaving the speaker pegged
@@ -266,10 +267,10 @@ Edge-counting driver where **all destructive actions commit on the release edge 
    - `held >= 10 s` (`FACTORY_RESET_DURATION`) → `factory_reset_action`, unless the button sets `"factory_reset": false` (Lamp primary), which keeps it at `shutdown_action` and never shows the solid-red tier.
    - `held >= 5 s` (`LONG_PRESS_DURATION`) → `shutdown_action`.
    - `held >= 2 s` (`SLEEP_HOLD_DURATION`) → `sleep_action`, which invokes the standard `sleepy` emotion pipeline.
-   - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The audible cue is deferred so it never talks over a triple-click in progress.
+   - else (short tap) → increment `click_count` and (re)start a 0.4 s click-window timer. On the **first** tap of a burst, the silent part of `single_click_action` (`announce=False`) fires immediately off-thread — it's non-destructive ("give me the floor"), so it doesn't wait for the window. The deferred listening-cue event remains, but no longer launches spoken TTS.
 3. When the click window expires:
    - `count == 3` → `triple_click_action` (no listening cue — only the reboot announce)
-   - any other count → `announce_listening_cue` speaks the deferred "Listening" confirmation once per burst; `count == 2` / `>= 4` additionally log as ignored (panic-click guard — the floor-grab already happened on tap 1, nothing destructive fires)
+   - any other count → `announce_listening_cue` receives the deferred event once per burst without speaking; `count == 2` / `>= 4` additionally log as ignored (panic-click guard — the floor-grab already happened on tap 1, nothing destructive fires)
 
 A release edge with no matching press (the press was debounce-dropped) is ignored — `press_start` could be stale, so acting on it could fire a destructive action against a minutes-old timestamp. Destructive actions run on their own daemon threads because the `lgpio` callback must return promptly or subsequent edges queue up.
 
@@ -409,7 +410,7 @@ functions **while Harness mode is OFF**. Harness ON uses the separate policy bel
 | Gesture | MPR121 action (Harness OFF) |
 |---|---|
 | First short release in a click burst | `single_click_action(source="MPR121", announce=False)` stops tracking/audio after contact resolution, unmutes as permitted and plays the ack chime. |
-| 1, 2 or 4+ short taps, then 0.4 s quiet | Play the listening cue; repeated taps do not repeat the initial single-click action. |
+| 1, 2 or 4+ short taps, then 0.4 s quiet | Resolve the listening-cue event without speech; repeated taps do not repeat the initial single-click action. |
 | Exactly 3 short taps, then 0.4 s quiet | Reboot is disabled in the MPR121 wrapper; no additional action or listening cue. The first-tap single-click action still runs. |
 | Hold 2–<5 s, then release | Disabled; no sleep action. |
 | Hold ≥5 s, then release | Disabled; no shutdown or factory reset. |
@@ -550,7 +551,7 @@ The actions live in one place so the GPIO button, TTP223, MPR121, and any future
 
 | Function | What it does | Interrupts in-flight TTS? |
 |---|---|---|
-| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). Stamp the music-cancel watermark and stop music — on **both** branches, so a click always silences the loudest thing in the room. Then, if mic is muted: unmute; else stop TTS. Then open the wake-word follow-up window (no-op when wake word is off) and speak the localized "Listening" cue with retry-on-busy. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()` and the cue itself preempts. |
+| `single_click_action(source)` | Stop active object tracking. Then relax a user/scene speaker mute (skipped while `_enrolling`). Stamp the music-cancel watermark and stop music — on **both** branches, so a click always silences the loudest thing in the room. Then, if mic is muted: unmute; else stop TTS. Then open the wake-word follow-up window (no-op when wake word is off) and play the short acknowledgement chime; the spoken "Listening" cue is disabled. Tracking still stops when the hardware mic kill switch is on; the voice action remains suppressed. | Yes — calls `stop_tts()`. |
 | `triple_click_action(source)` | Gesture mapping only: calls `reboot_action(source)`. | Yes |
 | `reboot_action(source)` | Speak "Rebooting now" → wait 5 s for the cached clip → `reboot_os()` (`sudo reboot`). | Yes |
 | `sleep_action(source)` | Speak the localized sleep announcement, then invoke `sleepy`: LED off, camera/mic/speaker off, then servo release after 1 s. | Yes — the sleepy pipeline stops active TTS/music after the announcement. |
@@ -656,7 +657,7 @@ The action announcements are localized per `stt_language` from Lamp's `config.js
 
 The **mic-toggle** confirmations are pools in the persona voice, like the pet phrases — the same sentence every time is what reads as a machine. The constraint that keeps them safe is that every line still says *which way the toggle went*: warmth lives in the delivery, never in the meaning. "Shh, my ears are closed" qualifies; a bare "Shh!" would not, because a privacy control the user cannot decode is worse than a robotic one. A test enforces it.
 
-`reboot`, `shutdown`, `factory-reset`, and the `listening` cue use literal-meaning phrases ("Rebooting now", "Shutting down now", "Factory reset starting. Rebooting now") in every language because the user just performed a destructive gesture and needs unambiguous confirmation — this is a safety announcement, not a persona moment.
+`reboot`, `shutdown`, and `factory-reset` use literal-meaning phrases ("Rebooting now", "Shutting down now", "Factory reset starting. Rebooting now") in every language because the user just performed a destructive gesture and needs unambiguous confirmation — this is a safety announcement, not a persona moment.
 
 ### Pet responses (15 phrases per language, random pick)
 
@@ -702,7 +703,7 @@ Harness ON uses manual tap-to-record capture, not ambient listening. A tap while
 
 Mode/focus actions use the existing worker and loopback Go APIs; no automatic HTTP retry. Outcomes use localized phrases in `hal/i18n.py` and respect speaker mute and sleep/privacy/TTS LED ownership. Focus stepping requires the negotiated Harness `focus.step` capability; an older CLI fails explicitly without another transport. The CLI counterpart is pending; installed-device interoperability is not yet verified.
 
-At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains the existing wake/focus and acknowledgement behavior. Startup in the muted position still applies the hardware privacy lock synchronously.
+At HAL startup, the privacy switch position is reconciled without simulating a button press: an unmuted position restores mic/peripheral access without waking the device, granting conversation focus, playing the acknowledgement/listening phrase, or scheduling the listening LED cue. A real muted-to-unmuted switch transition retains wake/focus and the short acknowledgement chime, with no spoken listening cue. Startup in the muted position still applies the hardware privacy lock synchronously.
 
 When sleep is restored after a HAL restart (including a software update), an open privacy switch does not unmute the sleeping microphone or start its voice pipeline. Sleep-owned microphone and speaker mutes remain in effect until a real wake. If privacy captured the speaker's sleep mute, waking clears that temporary mute underneath the privacy lock; output stays blocked until privacy is released. The cleared speaker preference is persisted so a later HAL restart cannot restore the expired sleep mute. A speaker mute that the user set before sleep remains muted.
 

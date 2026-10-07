@@ -790,6 +790,12 @@ resolve — lookup is an exact match against the listing, never a filesystem joi
 When `path` is supplied, the device reads only that file; a reference-heavy skill
 does not delay the reply by loading all of its other files first.
 
+Only skill content is listed. Dotfiles and build or editor leftovers are skipped
+and cannot be read by `path` either: `__pycache__/` and `node_modules/`
+directories, `Thumbs.db`, and files ending in `.pyc`, `.pyo`, `.swp`, `.swo`,
+`.tmp` or `.log` (the same set `scripts/release/upload-skills.sh` leaves out of a
+skill zip). The same rule applies to `GET /api/agent/skills/files`.
+
 **Synchronous** — reading a skill dir is local disk, so there is no `starting` ack.
 
 List mode:

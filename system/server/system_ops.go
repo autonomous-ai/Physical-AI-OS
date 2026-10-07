@@ -93,16 +93,9 @@ func (s *Server) otaVersions(c *gin.Context) {
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(versions))
 }
 
-// otaUpdating lists the components the bootstrap worker is installing right
-// now, so the Versions card can label that row "updating…" while the work
-// runs.
+// otaUpdating includes persisted progress even while bootstrap is restarting.
 func (s *Server) otaUpdating(c *gin.Context) {
-	updating, err := ota.Updating(c.Request.Context(), s.config)
-	if err != nil {
-		c.JSON(otaHTTPStatus(err), serializers.ResponseError(err.Error()))
-		return
-	}
-	c.JSON(http.StatusOK, serializers.ResponseSuccess(map[string]any{"updating": updating}))
+	c.JSON(http.StatusOK, serializers.ResponseSuccess(ota.UpdateStatus(c.Request.Context(), s.config)))
 }
 
 // execCommand runs a shell command (sh -c) and returns stdout, stderr, and exit code.
