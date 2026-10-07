@@ -14,7 +14,7 @@ const POLL_MS = 5000;
 // Resolves a CSS custom property so chart.js (canvas) tracks the theme.
 function cssVar(name: string, fallback: string): string {
   if (typeof window === "undefined") return fallback;
-  const v = getComputedStyle(document.documentElement).getPropertyValue(name).trim();
+  const v = getComputedStyle(document.querySelector(".lm-root") ?? document.documentElement).getPropertyValue(name).trim();
   return v || fallback;
 }
 
@@ -65,7 +65,7 @@ function historyChart(data: number[], colorVar: string, label: string) {
           grid: { color: gridColor },
           ticks: {
             color: tickColor,
-            font: { size: 9 },
+            font: { size: 11 },
             maxRotation: 0,
             autoSkip: true,
             maxTicksLimit: 6,
@@ -77,7 +77,7 @@ function historyChart(data: number[], colorVar: string, label: string) {
           grid: { color: gridColor },
           ticks: {
             color: tickColor,
-            font: { size: 9 },
+            font: { size: 11 },
             stepSize: 25,
             callback: (v: string | number) => `${v}%`,
           },

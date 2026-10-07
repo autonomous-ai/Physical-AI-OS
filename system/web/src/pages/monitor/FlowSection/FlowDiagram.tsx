@@ -50,7 +50,8 @@ export function FlowDiagram({
   const [lightboxUrl, setLightboxUrl] = useState<string | null>(null);
   const [isPhoneLayout, setIsPhoneLayout] = useState(false);
   const [mobileDetailsOpen, setMobileDetailsOpen] = useState(false);
-  const [, , themeClass] = useTheme();
+  const [theme, , themeClass] = useTheme();
+  const isLight = theme === "light";
 
   const [zoom, setZoom] = useState(1);
   const [pan, setPan] = useState({ x: 0, y: 0 });
@@ -251,14 +252,14 @@ export function FlowDiagram({
     const toVisited = visitedStages.has(to) || to === activeStage;
     if (fromVisited && toVisited) return nodeColor(to);
     if (fromVisited || toVisited) return "var(--lm-border-hi)";
-    return "var(--lm-border)";
+    return isLight ? "var(--lm-text-muted)" : "var(--lm-border)";
   }
   function edgeOpacity(from: FlowStage, to: FlowStage) {
     const fromVisited = visitedStages.has(from) || from === activeStage;
     const toVisited = visitedStages.has(to) || to === activeStage;
     if (fromVisited && toVisited) return 0.98;
     if (fromVisited || toVisited) return 0.8;
-    return 0.45;
+    return isLight ? 0.7 : 0.45;
   }
 
   const glowId = compact ? "flow-glow-c" : "flow-glow";
@@ -291,6 +292,7 @@ export function FlowDiagram({
           display: "block", width: "100%", flex: 1, minHeight: 0,
           cursor: dragging ? "grabbing" : "grab", userSelect: "none",
           touchAction: "none",
+          background: "var(--lm-surface)", borderRadius: 8,
         }}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -794,7 +796,7 @@ export function FlowDiagram({
                 const shape = node.shape ?? "circle";
                 const r = shape === "square" ? gateR : nodeR;
                 const fOpacity = isActive ? 0.25 : isVisited ? 0.18 : 0.12;
-                const sOpacity = isActive ? 1 : isVisited ? 0.7 : 0.35;
+                const sOpacity = isActive ? 1 : isVisited ? 0.85 : isLight ? 0.7 : 0.35;
                 const sWidth = isActive ? 2.5 : 1.5;
                 const glow = isActive ? { filter: `url(#${glowId})` } : undefined;
                 const glowR = r + 6;
@@ -841,12 +843,12 @@ export function FlowDiagram({
                   : node.icon} {node.short}
               </text>
               <text x={pos.x} y={pos.y + 6} textAnchor="middle"
-                fill={color} fontSize={7} opacity={0.9}>
+                fill="var(--lm-text)" fontSize={8} opacity={1}>
                 {node.label}
               </text>
               {node.desc.split(" · ").map((part, i) => (
                 <text key={`d${i}`} x={pos.x} y={pos.y + nodeR + 14 + i * 10} textAnchor="middle"
-                  fill={color} fontSize={5.5} opacity={0.6}>
+                  fill="var(--lm-text-dim)" fontSize={8} opacity={1}>
                   {part}
                 </text>
               ))}
@@ -879,8 +881,8 @@ export function FlowDiagram({
                         fontFamily: "monospace",
                         fontSize: 5.5,
                         lineHeight: 1.7,
-                        color: color,
-                        opacity: 0.95,
+                        color: "var(--lm-text)",
+                        opacity: 1,
                         ...(boxAbove ? { transform: "translateY(-100%)" } : {}),
                         userSelect: "text",
                         WebkitUserSelect: "text",
@@ -892,7 +894,7 @@ export function FlowDiagram({
                     >
                       {textLines.map((line, i) => (
                         <div key={i} style={{
-                          color: line.startsWith("⏱") ? "var(--lm-amber)" : color,
+                          color: line.startsWith("⏱") ? "var(--lm-amber)" : "var(--lm-text)",
                           fontWeight: line.startsWith("⏱") ? 700 : 400,
                         }}>
                           {line}

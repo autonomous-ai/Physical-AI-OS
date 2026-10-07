@@ -78,6 +78,10 @@ func TestRuntimeManagedLLMPreservesSelection(t *testing.T) {
 	if ad["bootstrapMaxChars"] != float64(bootstrapMaxChars) {
 		t.Error("onboarding no longer maintains workspace bootstrap settings")
 	}
+	heartbeat, _ := ad["heartbeat"].(map[string]any)
+	if heartbeat["every"] != "0m" || heartbeat["target"] != "none" || heartbeat["isolatedSession"] != true {
+		t.Error("runtime-managed LLM bypassed the silent heartbeat policy")
+	}
 	if requests.Load() != 0 {
 		t.Fatalf("unexpected catalog requests: %d", requests.Load())
 	}

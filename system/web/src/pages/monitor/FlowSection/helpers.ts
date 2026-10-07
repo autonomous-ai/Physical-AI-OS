@@ -1,3 +1,4 @@
+import { lifecycleTerminal } from "./lifecycle";
 import type { DisplayEvent } from "../types";
 import type { ActiveFlowStage, Turn, NodeInfoMap } from "./types";
 import { FLOW_NODES, CHANNEL_FALLBACK_MESSAGE, isChatType } from "./types";
@@ -566,12 +567,10 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       continue;
     }
 
-    // Split turn when a new lifecycle_start arrives after the turn already saw a lifecycle_end.
+    // Split a new lifecycle from a run that already reached a terminal event.
     const isLifecycleStart = (ev.type === "lifecycle" && ev.phase === "start") ||
       (ev.type === "flow_event" && ev.detail?.node === "lifecycle_start");
-    const hasLifecycleEnd = current.events.some((e) =>
-      (e.type === "lifecycle" && e.phase === "end") ||
-      (e.type === "flow_event" && e.detail?.node === "lifecycle_end"));
+    const hasLifecycleEnd = current.events.some((e) => lifecycleTerminal(e));
     if (isLifecycleStart && hasLifecycleEnd) {
       turns.push(current);
       current = {
@@ -619,9 +618,9 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       }
     }
 
-    if ((ev.type === "lifecycle" && (ev.phase === "end" || ev.phase === "error")) ||
-        (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end")) {
-      current.status = (ev.phase === "error" || ev.error) ? "error" : "done";
+    const terminal = lifecycleTerminal(ev);
+    if (terminal) {
+      current.status = terminal.status;
       current.endTime = ev.time;
     }
     if (ev.type === "intent_match") {
@@ -700,6 +699,13 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
       turn.path = "realtime";
       turn.type = "voice_agent_handled";
     }
+    // A terminal can be the first event in an interleaved fragment, before grouping applies status.
+    const ownTerminal = [...ownEvents].reverse().find((event) => lifecycleTerminal(event));
+    const terminal = ownTerminal && lifecycleTerminal(ownTerminal);
+    if (ownTerminal && terminal && (turn.status === "active" || terminal.status === "error")) {
+      turn.status = terminal.status;
+      turn.endTime = ownTerminal.time;
+    }
     const response = [...ownEvents].reverse().find((event) => externalResponseText(event));
     if (response) {
       if (turn.status !== "error") turn.status = "done";
@@ -776,11 +782,9 @@ export function groupIntoTurns(events: DisplayEvent[]): Turn[] {
   const turnsByRunId = new Map(stitched.filter((turn) => turn.runId).map((turn) => [turn.runId, turn]));
   for (const turn of stitched) {
     if (!turn.mergedIntoRunId) continue;
-    const ownTerminal = [...turn.events].reverse().find((event) =>
-      (event.type === "lifecycle" && (event.phase === "end" || event.phase === "error")) ||
-      (event.type === "flow_event" && (event.detail?.node === "lifecycle_end" || event.detail?.node === "lifecycle_error")));
+    const ownTerminal = [...turn.events].reverse().find((event) => lifecycleTerminal(event));
     if (ownTerminal) {
-      turn.status = ownTerminal.phase === "error" || ownTerminal.error || ownTerminal.detail?.node === "lifecycle_error" ? "error" : "done";
+      turn.status = lifecycleTerminal(ownTerminal)!.status;
       turn.endTime = ownTerminal.time;
       continue;
     }
@@ -1086,10 +1090,10 @@ export function extractNodeInfo(events: DisplayEvent[]): NodeInfoMap {
       const billed = inTok + cacheWrite + cacheRead + outTok;
       if (billed) pushLLMTokens(`billed: ${fmtToken(billed)}`);
     }
-    if (ev.type === "flow_event" && ev.detail?.node === "lifecycle_end") {
-      const d = ev.detail as FlowEventDetail | undefined;
-      const err = d?.data?.error;
-      if (err) info.agent_response.push(`❌ ${err}`);
+    if (ev.type === "flow_event") {
+      const terminal = lifecycleTerminal(ev);
+      if (terminal?.error) pushAgentResponse(`❌ ${terminal.error}`);
+      else if (terminal?.status === "error") pushAgentResponse("❌ Agent error");
     }
     if (ev.type === "hw_call" || (ev.type === "flow_event" && ev.detail?.node === "hw_call")) {
       const d = ev.detail as FlowEventDetail | undefined;

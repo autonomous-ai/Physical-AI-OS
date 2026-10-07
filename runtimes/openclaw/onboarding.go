@@ -915,6 +915,30 @@ func (s *OpenclawService) ensureProviderConfig() (bool, error) {
 }
 
 // ensureAgentDefaults patches agents.defaults in openclaw.json with performance config.
+// pinSilentHeartbeat turns the recurring heartbeat off and keeps any
+// event-driven wake silent. On OpenClaw 2026.9 an empty heartbeat reply is
+// retried as a "visible-answer continuation"; the model then read the main chat
+// via sessions_history and messaged the owner on Telegram with the `message`
+// tool every 30 min, which neither target "none" nor an isolated session stops.
+// Reports whether anything changed.
+func pinSilentHeartbeat(defaultsMap map[string]any) bool {
+	changed := false
+	heartbeatMap := ensureMap(defaultsMap, "heartbeat")
+	if v, _ := heartbeatMap["every"].(string); v != "0m" {
+		heartbeatMap["every"] = "0m"
+		changed = true
+	}
+	if v, _ := heartbeatMap["target"].(string); v != "none" {
+		heartbeatMap["target"] = "none"
+		changed = true
+	}
+	if v, _ := heartbeatMap["isolatedSession"].(bool); !v {
+		heartbeatMap["isolatedSession"] = true
+		changed = true
+	}
+	return changed
+}
+
 func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -947,6 +971,10 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	}
 	if v, _ := defaultsMap["bootstrapTotalMaxChars"].(float64); v != bootstrapTotalMaxChars {
 		defaultsMap["bootstrapTotalMaxChars"] = bootstrapTotalMaxChars
+		changed = true
+	}
+
+	if pinSilentHeartbeat(defaultsMap) {
 		changed = true
 	}
 
