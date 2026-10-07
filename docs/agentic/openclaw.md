@@ -110,3 +110,18 @@ Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
   including lamp, against 23,000 characters, reserving 1,000 for OS markers and
   the owner's `## Personal` section. The intern-v2 SOUL remains about 10.5k;
   audio tags are limited to spoken replies, not channel or web chat replies.
+- **Recurring heartbeat is off.** Even with the `NO_REPLY` instruction the
+  model kept answering heartbeats with an empty message, and OpenClaw retried
+  with a "visible-answer continuation". OpenClaw 2026.9 also changed the default
+  heartbeat target from `none` to `owner` (the owner's DM, e.g. Telegram), so
+  results that older versions only surfaced in the main session — where
+  os-server spoke them aloud — now reached Telegram. Running it with
+  `target: "none"` and `isolatedSession: true` was not enough: in the retry the
+  model read the main chat through `sessions_history` and messaged the owner
+  with the `message` tool every 30 minutes. Onboarding (`pinSilentHeartbeat`)
+  now sets `agents.defaults.heartbeat.every: "0m"`, keeping `target: "none"`
+  and `isolatedSession: true` for event-driven wakes (for example a background
+  exec completion), which OpenClaw still runs. Chat, voice, skills and
+  scheduled automations are unaffected. What stops is the `HEARTBEAT.md`
+  housekeeping: daily synthesis into `KNOWLEDGE.md` and the people sync into
+  `USER.md`; daily `memory/` files are still written and searchable.

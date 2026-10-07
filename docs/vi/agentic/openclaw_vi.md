@@ -107,3 +107,17 @@ Máy đã bị kẹt lỗi này: chạy `sudo rm -rf /root/.openclaw/state
   kể cả lamp, với mức 23.000 ký tự, dành 1.000 cho marker OS và mục `## Personal`
   của chủ máy. SOUL intern-v2 vẫn khoảng 10,5k; thẻ âm thanh chỉ dùng cho câu trả
   lời được đọc lên, không dùng trong chat qua channel hoặc web.
+- **Tắt heartbeat định kỳ.** Dù đã dặn `NO_REPLY`, model vẫn trả heartbeat
+  bằng tin rỗng, và OpenClaw thử lại với "visible-answer continuation". OpenClaw
+  2026.9 còn đổi đích gửi mặc định của heartbeat từ `none` sang `owner` (DM của
+  chủ máy, ví dụ Telegram), nên kết quả mà bản cũ chỉ hiện trong phiên chính —
+  nơi os-server đọc ra loa — giờ lọt lên Telegram. Chạy với `target: "none"` và
+  `isolatedSession: true` vẫn chưa đủ: ở lần thử lại, model đọc chat chính qua
+  `sessions_history` rồi tự nhắn chủ máy bằng tool `message` mỗi 30 phút. Giờ
+  onboarding (`pinSilentHeartbeat`) đặt `agents.defaults.heartbeat.every:
+  "0m"`, vẫn giữ `target: "none"` và `isolatedSession: true` cho các lần đánh
+  thức theo sự kiện (ví dụ khi một tác vụ chạy nền xong) mà OpenClaw vẫn chạy.
+  Chat, giọng nói, skill và lịch hẹn không bị ảnh hưởng. Thứ dừng lại là phần
+  dọn dẹp trong `HEARTBEAT.md`: tổng hợp hằng ngày vào `KNOWLEDGE.md` và đồng bộ
+  thông tin người vào `USER.md`; file `memory/` hằng ngày vẫn được ghi và tìm lại
+  được.
