@@ -1,5 +1,6 @@
+import { useEffect, useState } from "react";
 import { LoaderCircle } from "lucide-react";
-import { downloadPercent, isTerminalProgress } from "./otaProgress";
+import { downloadPercent, installationActivityAge, isTerminalProgress } from "./otaProgress";
 import type { OtaProgress } from "./otaProgress";
 
 const phaseLabels: Record<string, string> = {
@@ -9,6 +10,15 @@ const phaseLabels: Record<string, string> = {
 };
 const bytes = (value: number) => value < 1024 * 1024
   ? `${(value / 1024).toFixed(1)} KB` : `${(value / (1024 * 1024)).toFixed(1)} MB`;
+
+function InstallationActivity({ progress }: { progress: OtaProgress }) {
+  const [now, setNow] = useState(() => Date.now() / 1000);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now() / 1000), 5000);
+    return () => window.clearInterval(timer);
+  }, []);
+  return <span>{installationActivityAge(progress, now)}</span>;
+}
 
 export function UpdateProgress({ progress, updating, reconnecting }: {
   progress?: OtaProgress; updating: boolean; reconnecting: boolean;
@@ -29,5 +39,7 @@ export function UpdateProgress({ progress, updating, reconnecting }: {
     </span>}
     {percent != null && <progress aria-label="Download progress" value={percent} max={100} />}
     {progress?.message && <span>{progress.message}</span>}
+    {progress?.phase === "installing" && Number.isFinite(progress.activity_at) && (progress.activity_at ?? 0) > 0
+      && <InstallationActivity progress={progress} />}
   </div>;
 }

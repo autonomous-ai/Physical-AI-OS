@@ -8,6 +8,8 @@ Phases are preparing, downloading, verifying, installing, restarting, checking, 
 
 Downloads through `download_verified` sample bytes written once per second and use Content-Length from the final HTTP 200 response. Redirect sizes, missing length, chunked transfers and inconsistent totals never produce a percentage. Checksum verification precedes installation. Package-manager/upstream installer steps expose phase only, without invented overall percentages. Progress tracking does not include manual rollback/recovery runs or downloads inside third-party installers.
 
+HAL installation additionally reports extraction, activation, and recognized `uv` activity: package download/build/install names and resolved/prepared/installed/audited counts. Optional `activity_at` is the Unix timestamp of the latest recognized activity (zero or absent otherwise). Only recognized names/counts reach the UI; raw output stays in installer logs. Activity writes are throttled to once per second plus the final observation. Unknown output falls back to the installation stage, and tracking preserves the `uv` exit code. Dependency activity is not a byte-based or overall installation percentage.
+
 `GET /api/system/ota-updating` retains `data.updating` and adds `data.progress` (component map, including the selected `agent` alias) and `data.bootstrap_available`. OS Server reads local snapshots even when bootstrap is unreachable; OS Server itself restarting still temporarily interrupts the API. The updater, OS Server and frontend must all be updated to expose the detailed view. Older workers remain supported via the updating list.
 
 

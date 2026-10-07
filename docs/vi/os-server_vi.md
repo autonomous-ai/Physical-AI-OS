@@ -1,6 +1,6 @@
 # OS Server API — Tài Liệu
 
-`GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật).
+`GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật). Progress có thể chứa `activity_at` tùy chọn (giây Unix) cho hoạt động cài dependency HAL nhận diện được; snapshot cũ không có trường này vẫn hợp lệ.
 
 ## Hỗ trợ tiếng Nhật
 
