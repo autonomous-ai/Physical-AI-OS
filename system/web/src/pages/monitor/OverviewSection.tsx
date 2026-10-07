@@ -1,10 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import type { ReactNode } from "react";
-import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power } from "lucide-react";
+import { Satellite, Globe, Eye, Volume2, Cpu, Drama, Clapperboard, Bot, Tag, Wifi, LayoutDashboard, Power, Download, LoaderCircle } from "lucide-react";
 import { S } from "./styles";
 import { API, HW } from "./types";
 
 import "./robot-status.css";
+import "./overview.css";
 
 const EMOTION_EMOJI: Record<string, string> = {
   happy: "😊", curious: "🤔", thinking: "💭", sad: "😢", excited: "🤩",
@@ -225,7 +226,7 @@ export function OverviewSection({
   const monCard = { ...S.card, boxShadow: undefined };
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+    <div className="lm-overview" style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 
       <div className="lm-mon-hero">
         <div style={{ position: "relative", zIndex: 1, display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -263,7 +264,8 @@ export function OverviewSection({
         </div>
       </div>
 
-      <div className="lm-grid-4 lm-overview-status-grid">
+      <div className="lm-overview-zone-heading"><h2>System health</h2><span>Agent, connectivity and hardware</span></div>
+      <div className="lm-overview-health">
         <div className="lm-mon-card" style={{ ...monCard, position: "relative" }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <CardLabel icon={<Satellite size={13} />} text="Agent Gateway" />
@@ -285,7 +287,7 @@ export function OverviewSection({
               {oc.emotion && <StatRow label="Emotion" value={oc.emotion} color="var(--lm-amber)" />}
             </div>
           ) : <SkeletonRows lines={3} />}
-          <RestartAgentButton agentName={oc?.name} />
+          <div className="lm-overview-restart"><span>Restart agent</span><RestartAgentButton agentName={oc?.name} showLabel /></div>
         </div>
 
         <div className="lm-mon-card" style={monCard}>
@@ -314,7 +316,7 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
             <CardLabel icon={<Eye size={13} />} text="Presence" />
-            <StatusBadge text={(presence?.state ?? "—").toUpperCase()} tone={presence?.state === "active" ? "active" : "idle"} pulse={presence?.state === "active"} />
+            <span className="lm-overview-presence">{presence?.state ?? "Loading"}</span>
           </div>
           {presence ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -324,6 +326,57 @@ export function OverviewSection({
           ) : <SkeletonRows lines={2} />}
         </div>
 
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
+            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
+            {ledColor && (
+              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+                <div style={{
+                  width: 14, height: 14, borderRadius: "50%",
+                  background: ledColor.on ? ledColor.hex : "transparent",
+                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
+                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
+                  flexShrink: 0,
+                }} title={`RGB(${ledColor.color.join(", ")})`} />
+                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
+                  {ledColor.on ? ledColor.hex : "off"}
+                </span>
+                {ledColor.on && (
+                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
+                    {Math.round(ledColor.brightness * 100)}%
+                  </span>
+                )}
+                {ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
+                    {ledColor.effect}
+                  </span>
+                )}
+                {ledColor.scene && !ledColor.effect && (
+                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
+                    {ledColor.scene}
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
+          {hw ? (
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
+              <HWBadge label="Servo" ok={hw.servo} />
+              <HWBadge label="LED" ok={hw.led} />
+              <HWBadge label="Camera" ok={hw.camera} />
+              <HWBadge label="Audio" ok={hw.audio} />
+              <HWBadge label="Sensing" ok={hw.sensing} />
+              <HWBadge label="Voice" ok={hw.voice} />
+              <HWBadge label="TTS" ok={hw.tts} />
+            </div>
+          ) : <SkeletonRows lines={2} />}
+        </div>
+
+      </div>
+
+      <div className="lm-overview-zone-heading"><h2>Live controls</h2><span>Audio, expression, movement and lighting</span></div>
+      <div className="lm-overview-controls">
+        <div className="lm-overview-control-stack">
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Volume2 size={13} />} text="Audio" /></div>
           {voice ? (
@@ -420,19 +473,44 @@ export function OverviewSection({
             </div>
           ) : <AudioSkeleton />}
         </div>
-      </div>
+        {/* Gated on data: the light capability cannot tell whether /scene exists. */}
+        {sceneInfo && (
+        <div className="lm-mon-card" style={monCard}>
+          <div style={{ marginBottom: 12 }}><CardLabel icon={<Clapperboard size={13} />} text="Scene" /></div>
+            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
+              {sceneInfo.scenes.map((s) => (
+                <button type="button" key={s} aria-pressed={s === sceneInfo.active} onClick={() => onSceneActivate(s)} style={{
+                  fontSize: 11,
+                  padding: "3px 9px",
+                  borderRadius: 6,
+                  background: s === sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
+                  border: `1px solid ${s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
+                  color: s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                  cursor: "pointer",
+                  fontWeight: s === sceneInfo.active ? 600 : 400,
+                  textTransform: "capitalize",
+                }}>{s}</button>
+              ))}
+              <button type="button" aria-pressed={!sceneInfo.active} onClick={() => onSceneActivate("off")} style={{
+                fontSize: 11,
+                padding: "3px 9px",
+                borderRadius: 6,
+                background: !sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
+                border: `1px solid ${!sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
+                color: !sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
+                cursor: "pointer",
+                fontWeight: !sceneInfo.active ? 600 : 400,
+              }}>Off</button>
+            </div>
+        </div>
+        )}
 
-      <div className="lm-cluster">
-        <div className="lm-cluster-col" style={{ order: 2 }}>
+        </div>
+        <div className="lm-overview-control-stack">
         {hasEmotion && (
-        <div style={{
-          ...S.card, padding: "14px 16px",
-          background: emotion ? `linear-gradient(135deg, var(--lm-bg) 60%, ${emotionColor}18)` : "var(--lm-bg)",
-          border: `1px solid ${emotion ? emotionColor + "55" : "var(--lm-border)"}`,
-          transition: "all 0.4s ease",
-        }}>
+        <div className="lm-mon-card lm-overview-emotion" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Drama size={13} />} text="Emotion" /></div>
-          <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+          <div className="lm-overview-presets" style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
             <div style={{ display: "flex", alignItems: "center", gap: 12, flex: "0 1 205px", minWidth: 180 }}>
               <div style={{
                 fontSize: 36, lineHeight: 1, flexShrink: 0,
@@ -469,7 +547,7 @@ export function OverviewSection({
               <PillCloud
                 items={ALL_EMOTIONS}
                 active={emotion}
-                label={(e) => <>{EMOTION_EMOJI[e]} {e}</>}
+                label={(e) => <><span aria-hidden>{EMOTION_EMOJI[e]}</span><span>{e.replaceAll("_", " ")}</span></>}
                 accent={(e) => EMOTION_COLOR[e] ?? "#fff"}
                 onPick={onEmotionPick}
                 title={(e) => `Test emotion: ${e}`}
@@ -483,10 +561,10 @@ export function OverviewSection({
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Bot size={13} />} text="Servo Pose" /></div>
           {servo ? (
-            <div style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
-              <div style={{ display: "flex", flexDirection: "column", gap: 8, flex: "0 0 140px", minWidth: 0 }}>
+            <div className="lm-overview-presets" style={{ display: "flex", flexWrap: "wrap" as const, alignItems: "flex-start", gap: 16 }}>
+              <div style={{ display: "flex", flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: 8, flex: "0 0 140px", minWidth: 0 }}>
                 <div style={{ fontSize: 13, fontWeight: 600, color: "var(--lm-amber)" }}>
-                  {servo.current || "idle"}
+                  {(servo.current || "idle").replaceAll("_", " ")}
                   {(servo.bus_connected === false || servo.robot_connected === false) && (
                     <span style={{ fontSize: 10, color: "var(--lm-danger, #c44)", marginLeft: 6 }}>
                       (bus {servo.bus_connected === false ? "down" : "ok"}{servo.robot_connected === false ? ", robot off" : ""})
@@ -502,7 +580,7 @@ export function OverviewSection({
                 <PillCloud
                   items={servo.available_recordings ?? []}
                   active={servo.current ?? ""}
-                  label={(p) => p}
+                  label={(p) => p.replaceAll("_", " ")}
                   accent={() => "var(--lm-amber)"}
                   onPick={onServoPlay}
                 />
@@ -512,8 +590,12 @@ export function OverviewSection({
         </div>
         )}
 
+        </div>
+      </div>
+
+      <div className="lm-overview-zone-heading"><h2>Services</h2><span>Versions, uptime and maintenance</span></div>
         <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Versions" /></div>
+          <div style={{ marginBottom: 10 }}><CardLabel icon={<Tag size={13} />} text="Service versions" /></div>
           <div style={{ display: "flex", flexDirection: "column", gap: 6, overflowX: "auto" }}>
             <div className="lm-version-header" style={{ ...versionRowLayout, fontSize: 10, color: "var(--lm-text-muted)" }}>
               <span>Service</span>
@@ -532,94 +614,10 @@ export function OverviewSection({
             {isDebug && <VersionRow name="Device" latestVersion={otaVersions["device"]?.target} color="var(--lm-text-dim)" version={otaVersions.device?.current ?? null} uptime={null} updateTarget={canUpdate("device") ? "device" : null} updating={isUpdating("device")} onTriggered={onUpdateTriggered} />}
           </div>
         </div>
-        </div>
-
-        <div className="lm-cluster-col" style={{ order: 1 }}>
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-            <CardLabel icon={<Cpu size={13} />} text="Hardware" />
-            {ledColor && (
-              <div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-                <div style={{
-                  width: 14, height: 14, borderRadius: "50%",
-                  background: ledColor.on ? ledColor.hex : "transparent",
-                  boxShadow: ledColor.on ? `0 0 8px ${ledColor.hex}cc` : "none",
-                  border: `2px solid ${ledColor.on ? ledColor.hex : "var(--lm-border)"}`,
-                  flexShrink: 0,
-                }} title={`RGB(${ledColor.color.join(", ")})`} />
-                <span style={{ fontSize: 10, fontFamily: "monospace", color: ledColor.on ? "var(--lm-text)" : "var(--lm-text-muted)" }}>
-                  {ledColor.on ? ledColor.hex : "off"}
-                </span>
-                {ledColor.on && (
-                  <span style={{ fontSize: 10, color: "var(--lm-text-dim)" }}>
-                    {Math.round(ledColor.brightness * 100)}%
-                  </span>
-                )}
-                {ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "rgba(167,139,250,0.15)", color: "var(--lm-purple)", fontWeight: 600 }}>
-                    {ledColor.effect}
-                  </span>
-                )}
-                {ledColor.scene && !ledColor.effect && (
-                  <span style={{ fontSize: 9, padding: "1px 5px", borderRadius: 4, background: "var(--lm-amber-dim)", color: "var(--lm-amber)", fontWeight: 600 }}>
-                    {ledColor.scene}
-                  </span>
-                )}
-              </div>
-            )}
-          </div>
-          {hw ? (
-            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 7 }}>
-              <HWBadge label="Servo" ok={hw.servo} />
-              <HWBadge label="LED" ok={hw.led} />
-              <HWBadge label="Camera" ok={hw.camera} />
-              <HWBadge label="Audio" ok={hw.audio} />
-              <HWBadge label="Sensing" ok={hw.sensing} />
-              <HWBadge label="Voice" ok={hw.voice} />
-              <HWBadge label="TTS" ok={hw.tts} />
-            </div>
-          ) : <SkeletonRows lines={2} />}
-        </div>
-
-        {/* Gated on data: the light capability cannot tell whether /scene exists. */}
-        {sceneInfo && (
-        <div className="lm-mon-card" style={monCard}>
-          <div style={{ marginBottom: 12 }}><CardLabel icon={<Clapperboard size={13} />} text="Scene" /></div>
-            <div style={{ display: "flex", flexWrap: "wrap" as const, gap: 5 }}>
-              {sceneInfo.scenes.map((s) => (
-                <span key={s} role="button" onClick={() => onSceneActivate(s)} style={{
-                  fontSize: 11,
-                  padding: "3px 9px",
-                  borderRadius: 6,
-                  background: s === sceneInfo.active ? "var(--lm-amber-dim)" : "var(--lm-surface)",
-                  border: `1px solid ${s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-border)"}`,
-                  color: s === sceneInfo.active ? "var(--lm-amber)" : "var(--lm-text-dim)",
-                  cursor: "pointer",
-                  fontWeight: s === sceneInfo.active ? 600 : 400,
-                  textTransform: "capitalize",
-                }}>{s}</span>
-              ))}
-              <span role="button" onClick={() => onSceneActivate("off")} style={{
-                fontSize: 11,
-                padding: "3px 9px",
-                borderRadius: 6,
-                background: !sceneInfo.active ? "var(--lm-red)" : "var(--lm-surface)",
-                border: `1px solid ${!sceneInfo.active ? "var(--lm-red)" : "var(--lm-border)"}`,
-                color: !sceneInfo.active ? "#fff" : "var(--lm-text-dim)",
-                cursor: "pointer",
-                fontWeight: !sceneInfo.active ? 600 : 400,
-              }}>Off</span>
-            </div>
-        </div>
-        )}
-
         <div className="lm-mon-card" style={monCard}>
           <div style={{ marginBottom: 12 }}><CardLabel icon={<Power size={13} />} text="Power" /></div>
           <DevicePowerButtons />
         </div>
-
-        </div>
-      </div>
 
       <div style={{ ...S.card, display: "none" }}>
         <div style={S.cardLabel}>Display Eyes</div>
@@ -665,16 +663,16 @@ function PillCloud<T extends string>({ items, active, label, accent, onPick, tit
         const isActive = item === active;
         const c = accent(item);
         return (
-          <span
+          <button type="button"
             key={item}
-            role="button"
+            aria-pressed={isActive}
             title={title?.(item)}
             onClick={() => onPick(item)}
             style={{
-              fontSize: 10, padding: "2px 8px", borderRadius: 999,
-              background: isActive ? `${c}22` : "var(--lm-surface)",
-              border: `1px solid ${isActive ? c + "88" : "var(--lm-border)"}`,
-              color: isActive ? c : "var(--lm-text-muted)",
+              fontSize: 12, padding: "6px 10px", borderRadius: 7,
+              background: isActive ? `color-mix(in srgb, ${c} 14%, var(--lm-surface))` : "var(--lm-surface)",
+              border: `1px solid ${isActive ? `color-mix(in srgb, ${c} 50%, var(--lm-border))` : "var(--lm-border)"}`,
+              color: "var(--lm-text)",
               fontWeight: isActive ? 700 : 400,
               textTransform: "capitalize",
               transition: "all 0.2s ease",
@@ -683,7 +681,7 @@ function PillCloud<T extends string>({ items, active, label, accent, onPick, tit
             }}
           >
             {label(item)}
-          </span>
+          </button>
         );
       })}
     </div>
@@ -895,7 +893,7 @@ function ToggleButton({ active, label, onClick, disabled = false }: {
 
 const versionRowLayout = {
   display: "grid",
-  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 70px 70px 65px",
+  gridTemplateColumns: "70px minmax(55px, 1fr) minmax(55px, 1fr) 90px 112px 112px",
   minWidth: 425,
   alignItems: "center",
   gap: 8,
@@ -921,10 +919,10 @@ function VersionRow({ name, color, version, latestVersion, uptime, updateTarget,
       <span data-label="Uptime" style={{ fontSize: 11, color: "var(--lm-text-muted)", textAlign: "right" }}>
         {uptime != null ? formatUptime(uptime) : "—"}
       </span>
-      <span style={{ display: "flex", justifyContent: "flex-end" }}>
+      <span className="lm-overview-update" style={{ display: "flex", justifyContent: "flex-end" }}>
         {updating
-          ? <span style={{ fontSize: 9.5, fontWeight: 600, color: "var(--lm-amber)" }} title="Installing — the component restarts when it finishes">updating…</span>
-          : updateTarget && <SoftwareUpdateButton target={updateTarget} label="update" onTriggered={onTriggered} />}
+          ? <span className="lm-service-progress" role="status" title="Installing — the component restarts when it finishes"><LoaderCircle size={14} className="lm-spin-ico" aria-hidden />Updating…</span>
+          : updateTarget && <SoftwareUpdateButton target={updateTarget} label={<><Download size={14} aria-hidden />Update</>} onTriggered={onTriggered} />}
       </span>
       <span style={{ display: "flex", justifyContent: "flex-end" }}>
         {restartTarget && <RestartServiceButton target={restartTarget} disabled={updating} />}

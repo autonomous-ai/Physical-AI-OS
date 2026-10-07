@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { getApiToken } from "@/lib/api";
+import { RotateCw, Clock, LoaderCircle } from "lucide-react";
 import { API } from "./types";
 
 export function RestartServiceButton({ target, disabled }: {
@@ -42,7 +43,7 @@ export function RestartServiceButton({ target, disabled }: {
   return (
     <span style={{ minWidth: 0, textAlign: "right" }}>
       <button
-        className="lm-u-btn"
+        className="lm-u-btn lm-service-action"
         onClick={() => void restart()}
         disabled={disabled || state !== "idle"}
         aria-label={`Restart ${target === "hal" ? "HAL" : "OS Server"} service`}
@@ -55,7 +56,8 @@ export function RestartServiceButton({ target, disabled }: {
           opacity: disabled || state !== "idle" ? 0.6 : 1,
         }}
       >
-        {state === "sending" ? "sending…" : state === "queued" ? "queued" : "restart"}
+        {state === "sending" ? <LoaderCircle size={14} className="lm-spin-ico" aria-hidden /> : state === "queued" ? <Clock size={14} aria-hidden /> : <RotateCw size={14} aria-hidden />}
+        {state === "sending" ? "Sending…" : state === "queued" ? "Queued" : "Restart"}
       </button>
       {error && <span role="alert" style={{ display: "block", fontSize: 9, color: "var(--lm-red)", overflowWrap: "anywhere" }}>{error}</span>}
     </span>

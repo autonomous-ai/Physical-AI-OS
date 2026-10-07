@@ -821,11 +821,12 @@ export default function Monitor() {
 
         <div style={{
           ...S.content,
-          ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
-          ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
+          // Keep overflow longhands consistent so route changes restore vertical scrolling.
+          ...(section === "chat" ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const } : {}),
+          ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const } : {}),
           // display:flex is load-bearing: SettingsPanel scrolls via flex:1/minHeight:0.
           ...(section.startsWith("settings:")
-            ? { padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const }
+            ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const, display: "flex", flexDirection: "column" as const }
             : {}),
         }} className="lm-content">
           {/* Chat stays outside this keyed wrapper so it is never remounted. */}

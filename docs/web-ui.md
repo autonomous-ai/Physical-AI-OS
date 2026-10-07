@@ -427,6 +427,8 @@ The web UI never calls nginx `/hw/*`: every HAL request goes through the admin-g
 
 ### 5.1 Overview Section
 
+The monitor uses consistent overflow longhands so returning from Chat, Settings or embedded pages restores the outer content scrollbar.
+
 Returning to Overview immediately refreshes section data instead of waiting for the next 5-second poll. Existing card data stays visible while refreshing. The monitor retains successful OTA-version and emotion-preset snapshots across section unmounts, displays them immediately on return, and revalidates in the background. These snapshots are memory-only and expire when the monitor unmounts. Section changes abort the previous section poll; hidden sections do not keep their streams mounted.
 
 Cards included:
@@ -476,9 +478,7 @@ Cards included:
   independent of the mute switch) and closes while the browser tab is
   hidden.
 
-On phone widths of **480px or less**, the four Overview status cards use one
-column. This preserves room for the Audio controls and VU meters, and prevents
-the shorter Presence card from being stretched by the taller Audio card.
+Overview is organized into three always-visible zones: **System health** (Agent, Network, Presence, Hardware), **Live controls** (Audio and Scene beside Emotion and Servo), and **Services** (full-width versions and uptime table, followed by Power). Health cards use four columns above 1200px, two up to 1200px, and one below 768px; controls also stack below 768px. At 1500px and above, Audio/Scene, Emotion and Servo form three aligned columns with consistent bordered surfaces. Preset labels display spaces instead of underscores; command IDs are unchanged. Audio meters and all presets stay visible. Presets use a wrapping button grid, and Agent restart has a separate footer row. Existing device actions and confirmations are unchanged. Maintenance buttons use icons and readable labels, with amber Update and neutral Restart styling; Sending, Queued and Updating remain distinct states.
 
 **Hardware** (horizontal card)
 - 8 badges: Servo / LED / Camera / Audio / Sensing / Voice / TTS / Display
