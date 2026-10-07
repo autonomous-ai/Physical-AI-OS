@@ -196,7 +196,7 @@ can pin the model's compliance.
 
 ### Device voice input mode
 
-The top-level `voice_input_mode` setting selects `automatic` (default, including legacy configs without the field) or `tap_to_talk` while Harness voice-only mode is OFF. Automatic retains the existing VAD, realtime and wake enable/disable behavior. Tap-to-talk opens the recorder only for an explicit physical tap; another tap finalizes STT and sends one transcript through the existing OS route to the device runtime. It bypasses realtime audio, live promotion, automatic endpointing and backchannel speech during capture.
+The top-level `voice_input_mode` setting selects `automatic` (default, including legacy configs without the field) or `tap_to_talk` while Harness voice-only mode is OFF. Automatic retains the existing VAD, realtime and wake enable/disable behavior. Tap-to-talk opens the recorder only for an explicit physical tap; another tap finalizes STT and sends one transcript through the existing OS route to the device runtime as `voice_command` (direct user speech, never ambient `voice`). It bypasses realtime audio, live promotion, automatic endpointing and backchannel speech during capture.
 
 **Code boundaries:** `hal/drivers/device_tap_actions.py` owns physical tap decisions; `_internal/device_input.py` exposes the device capture controller; `_internal/input_policy.py` owns mode selection, routing ownership, per-turn realtime/dispatch rules and capture visuals. `voice_service.py` connects these through small hooks while retaining the shared recorder/STT pipeline. `HarnessCapture` accepts a route-matching callback and keeps its original Harness matcher as the default; it contains no device-mode rules.
 

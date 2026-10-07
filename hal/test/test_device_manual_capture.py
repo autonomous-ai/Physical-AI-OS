@@ -137,7 +137,7 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     with patch.object(module, "read_voice_mode", side_effect=lambda: dict(current_mode)), \
          patch.object(module, "turn_should_close", return_value=True) as silence, \
          patch.object(module, "finalize_session", return_value=("please fix the tests", [], 2.0)), \
-         patch.object(module, "dispatch_turn") as dispatch, \
+         patch.object(module, "dispatch_turn", wraps=module.dispatch_turn) as dispatch, \
          patch.object(module, "voice_metrics"), \
          patch.object(module.requests, "post"), \
          patch("hal.drivers.harness.led.set_capturing") as harness_led:
@@ -152,6 +152,11 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     assert dispatch.call_count == (1 if reason == "finish" else 0)
     if reason == "finish":
         assert dispatch.call_args.args[2] == "please fix the tests"
+        assert dispatch.call_args.kwargs["event_type_override"] == "voice_command"
+        service._sensing_sender.send.assert_called_once()
+        sent = service._sensing_sender.send.call_args
+        assert sent.kwargs["event_type"] == "voice_command"
+        assert sent.kwargs["voice_turn_type"] == "voice_command"
         assert dispatch.call_args.kwargs["harness_voice"] == device_snapshot(LOCAL)
     expected_chimes = [call(), call(finished=True)] if reason == "finish" else [call()]
     assert service._tts.play_harness_capture_chime.call_args_list == expected_chimes

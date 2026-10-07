@@ -200,7 +200,7 @@ model có tuân thủ hay không.
 
 ### Chế độ nhập giọng nói trên thiết bị
 
-Cấu hình top-level `voice_input_mode` chọn `automatic` (mặc định, kể cả config cũ thiếu trường) hoặc `tap_to_talk` khi Harness voice-only OFF. Automatic giữ nguyên VAD, realtime và wake enable/disable hiện tại. Tap-to-talk chỉ mở recorder khi có thao tác chạm; chạm lần nữa chốt STT và gửi một transcript qua route OS hiện có đến runtime trên thiết bị. Trong lúc thu, đường này bỏ qua audio realtime, chuyển vào live, tự kết thúc câu và lời backchannel.
+Cấu hình top-level `voice_input_mode` chọn `automatic` (mặc định, kể cả config cũ thiếu trường) hoặc `tap_to_talk` khi Harness voice-only OFF. Automatic giữ nguyên VAD, realtime và wake enable/disable hiện tại. Tap-to-talk chỉ mở recorder khi có thao tác chạm; chạm lần nữa chốt STT và gửi một transcript qua route OS hiện có đến runtime trên thiết bị dưới dạng `voice_command` (lời nói trực tiếp của user, không phải `voice` ambient). Trong lúc thu, đường này bỏ qua audio realtime, chuyển vào live, tự kết thúc câu và lời backchannel.
 
 **Ranh giới code:** `hal/drivers/device_tap_actions.py` quản lý quyết định từ tap vật lý; `_internal/device_input.py` cung cấp controller thu trên device; `_internal/input_policy.py` quản lý chọn mode, quyền sở hữu route, quy tắc realtime/dispatch theo lượt và phản hồi đèn khi thu. `voice_service.py` nối các phần này qua những điểm gọi nhỏ và giữ pipeline recorder/STT dùng chung. `HarnessCapture` nhận callback kiểm tra route, mặc định vẫn dùng matcher Harness cũ; không chứa quy tắc riêng của mode trên device.
 

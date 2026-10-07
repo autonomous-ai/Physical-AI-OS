@@ -68,6 +68,16 @@ class InputPolicy:
     def dispatch_directly(self):
         return self.device_capture or self.harness_capture
 
+    def event_type_override(self, *, followup):
+        """A physical capture is addressed speech even without a wake phrase.
+
+        The OS treats plain ``voice`` as overheard ambient input. Reuse its
+        existing direct-command contract so an explicit tap cannot become ambient.
+        """
+        if self.device_capture:
+            return "voice_command"
+        return "voice_followup" if followup else None
+
     def set_capturing(self, active, set_emotion):
         """Keep device feedback separate from Harness-owned LED state."""
         if not self.explicit:

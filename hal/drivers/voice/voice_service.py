@@ -3132,10 +3132,8 @@ class VoiceService:
                     ser_audio_buffer,
                     rt,
                     interaction_id=interaction_id,
-                    event_type_override=(
-                        "voice_followup"
-                        if wakeword_followup_active and not wake_word_confirmed.is_set()
-                        else None
+                    event_type_override=input_policy.event_type_override(
+                        followup=wakeword_followup_active and not wake_word_confirmed.is_set(),
                     ),
                     identity=turn_identity,
                     harness_voice=harness_voice,
