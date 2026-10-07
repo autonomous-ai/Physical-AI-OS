@@ -510,6 +510,8 @@ Trên điện thoại, trường key/value của MCP header xếp dọc với nh
 
 ### Khả năng đọc của Monitor
 
+History của Chat phủ vùng chat trên điện thoại thay vì ép hẹp hội thoại; Escape đóng panel, focus bàn phím nằm trong history đang mở trên mobile, chọn hoặc tạo hội thoại sẽ trở lại chat. Export và Clear được gom vào menu thao tác hỗ trợ bàn phím. Chọn hội thoại và đổi tên/ghim/xóa dùng được bằng bàn phím và touch. Nút thao tác tin nhắn có vùng bấm lớn và luôn thấy, metadata xuống hàng, nút xuống cuối luôn nằm phía trên composer kể cả khi có bản nháp nhiều dòng hoặc tệp đính kèm. Enter chỉ gửi khi không đang xác nhận ký tự IME; Shift+Enter vẫn xuống dòng.
+
 Overview hiển thị trạng thái đang tải trung tính trước khi nhận trạng thái agent; các hàng phiên bản xếp lại kèm nhãn trên điện thoại. System xếp đồng hồ đo phía trên biểu đồ lịch sử tại 768px. Camera đặt snapshot dưới stream trên điện thoại, thêm nhãn cho ô tracking, thu gọn bounding box tùy chọn vào Advanced tracking, hiển thị lỗi thao tác và khóa nút khi đang gửi yêu cầu.
 
 Logs dùng dropdown chọn nguồn tại 640px, chữ log lớn hơn và timestamp rõ hơn. Flow tăng kích thước ô tìm kiếm và nút toolbar. CLI có tab phiên dùng được bằng bàn phím, phím terminal trên mobile và nút Reconnect khi mất kết nối; kết nối lại mở shell mới và xóa lịch sử cuộn của terminal trước đó. API Docs có trạng thái đang tải/lỗi cùng Reload và Open in new tab. Monitor và Settings dành hàng riêng cho footer để liên kết mã nguồn không che nội dung.
