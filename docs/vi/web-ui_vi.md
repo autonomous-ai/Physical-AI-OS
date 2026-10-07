@@ -500,6 +500,14 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
 
+### Khả năng đọc của Settings
+
+Dropdown Settings dùng menu Radix cùng theme, mục chọn màu amber, tự đặt vị trí theo viewport, có cuộn, điều hướng bàn phím và đóng bằng Escape. Các lựa chọn Auto/default có giá trị rỗng vẫn chọn được. General giữ control hiện có.
+
+Các mục Settings ngoài General có focus bàn phím rõ, chiều cao control nhất quán và chữ 16px cho ô nhập/select trên mobile. Language, Voice, Realtime và Channels dùng chữ hướng dẫn lớn hơn. MCP Tools và Plugins áp dụng thao tác riêng nên không còn hiện nút Save Changes chung.
+
+Trên điện thoại, trường key/value của MCP header xếp dọc với nhãn rõ; nhóm thao tác Plugin và Scheduled nằm dưới tên và trạng thái. My Voice xử lý tên dài và đặt bản ghi bên dưới tên file; nút xóa ảnh Face có vùng bấm lớn hơn. Các thao tác kết nối Facebook có thể xuống hàng. Nhãn Schedule editor liên kết với control và nút chọn ngày công bố trạng thái nhấn. Nút trong hướng dẫn Runtime không submit form Settings; dialog hỗ trợ focus bàn phím và đóng bằng bàn phím.
+
 ### Khả năng đọc của Monitor
 
 Overview hiển thị trạng thái đang tải trung tính trước khi nhận trạng thái agent; các hàng phiên bản xếp lại kèm nhãn trên điện thoại. System xếp đồng hồ đo phía trên biểu đồ lịch sử tại 768px. Camera đặt snapshot dưới stream trên điện thoại, thêm nhãn cho ô tracking, thu gọn bounding box tùy chọn vào Advanced tracking, hiển thị lỗi thao tác và khóa nút khi đang gửi yêu cầu.

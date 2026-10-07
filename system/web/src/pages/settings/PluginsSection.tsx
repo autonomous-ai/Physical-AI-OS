@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { C, SectionCard, LABEL_STYLE, INPUT_STYLE } from "@/components/setup/shared";
 import { listPlugins, installPlugin, startPlugin, stopPlugin, uninstallPlugin } from "@/lib/api";
 import type { Plugin } from "@/lib/api";
+import "./settings-lists.css";
 // Plugin discovery browse is parked (#213).
 
 export function PluginsSection({ active }: { active: boolean }) {
@@ -98,31 +99,32 @@ export function PluginsSection({ active }: { active: boolean }) {
       </div>
 
       {loading ? (
-        <div style={{ fontSize: 12, color: C.textMuted }}>Loading...</div>
+        <div style={{ fontSize: 12, color: C.textDim }}>Loading...</div>
       ) : (
         <>
           {plugins.length > 0 && (
             <div style={{ marginBottom: 16 }}>
-              <div style={{ fontSize: 11, fontWeight: 600, color: C.textMuted, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
+              <div style={{ fontSize: 12, fontWeight: 600, color: C.textDim, textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 8 }}>
                 Installed
               </div>
               {plugins.map((p) => (
                 <div
                   key={p.name}
+                  className="lm-settings-list-row"
                   style={{
                     display: "flex", alignItems: "center", justifyContent: "space-between",
                     gap: 8, padding: "10px 12px", marginBottom: 6,
                     background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
                   }}
                 >
-                  <div style={{ overflow: "hidden", minWidth: 0, flex: 1 }}>
-                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", alignItems: "center", gap: 6 }}>
-                      {p.name}
+                  <div style={{ minWidth: 0, flex: 1 }}>
+                    <div style={{ fontSize: 13, fontWeight: 600, color: C.text, display: "flex", flexWrap: "wrap", alignItems: "center", gap: 6 }}>
+                      <span className="lm-settings-list-name">{p.name}</span>
                       {p.version && (
-                        <span style={{ fontSize: 10, color: C.textMuted, fontWeight: 400 }}>v{p.version}</span>
+                        <span style={{ fontSize: 12, color: C.textDim, fontWeight: 400 }}>v{p.version}</span>
                       )}
                       <span style={{
-                        fontSize: 10, fontWeight: 500,
+                        fontSize: 12, fontWeight: 500,
                         color: STATUS_COLOR[p.status] || C.textMuted,
                       }}>
                         {p.status}
@@ -130,17 +132,18 @@ export function PluginsSection({ active }: { active: boolean }) {
                     </div>
                     {p.description && (
                       <div style={{
-                        fontSize: 11, color: C.textDim, marginTop: 2,
-                        overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
+                        fontSize: 12, color: C.textDim, marginTop: 2,
+                        overflowWrap: "anywhere",
                       }}>
                         {p.description}
                       </div>
                     )}
                   </div>
-                  <div style={{ display: "flex", gap: 6, flexShrink: 0 }}>
+                  <div className="lm-settings-list-actions">
                     {p.status === "running" ? (
                       <button
                         type="button"
+                        aria-label={`Stop plugin ${p.name}`}
                         onClick={() => handleStop(p.name)}
                         disabled={acting === p.name}
                         style={{ ...BTN, opacity: acting === p.name ? 0.5 : 1 }}
@@ -150,6 +153,7 @@ export function PluginsSection({ active }: { active: boolean }) {
                     ) : (
                       <button
                         type="button"
+                        aria-label={`Start plugin ${p.name}`}
                         onClick={() => handleStart(p.name)}
                         disabled={acting === p.name}
                         style={{ ...BTN, opacity: acting === p.name ? 0.5 : 1 }}
@@ -159,6 +163,7 @@ export function PluginsSection({ active }: { active: boolean }) {
                     )}
                     <button
                       type="button"
+                      aria-label={`Uninstall plugin ${p.name}`}
                       onClick={() => handleUninstall(p.name)}
                       disabled={acting === p.name}
                       style={{ ...BTN, color: C.red, opacity: acting === p.name ? 0.5 : 1 }}

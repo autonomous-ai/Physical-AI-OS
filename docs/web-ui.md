@@ -515,6 +515,14 @@ the shorter Presence card from being stretched by the taller Audio card.
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
 
+### Settings readability
+
+Settings dropdowns use themed Radix menus with an amber selection, viewport-aware placement, scrolling, keyboard navigation and Escape dismissal. Empty-value Auto/default choices remain selectable. General retains its existing controls.
+
+Settings sections other than General use visible keyboard focus, consistent control heights, and 16px mobile text inputs/selects. Language, Voice, Realtime and Channels use larger helper text. MCP Tools and Plugins apply their own actions and no longer show the shared Save Changes button.
+
+On phones, MCP header key/value fields stack with explicit labels; Plugin and Scheduled action groups move below names and status. My Voice handles long names and places recordings below filenames; Face photo removal has a larger hit target. Facebook connection actions wrap. Schedule editor labels are associated with controls and weekday toggles expose their pressed state. Runtime help buttons never submit the Settings form; the help dialog supports keyboard focus and dismissal.
+
 ### Monitor readability
 
 Overview shows a neutral loading state until agent status arrives; version rows stack with field labels on phones. System stacks gauges above history charts at 768px. Camera puts snapshots below the stream on phones, labels tracking inputs, collapses optional bounding-box controls under Advanced tracking, and reports failed actions with pending controls disabled.
