@@ -1,5 +1,14 @@
 # OS Server API — Tài Liệu
 
+Opening chỉ là một âm xác nhận ngắn: tiếng Anh "Uhm.", tiếng Việt "Ừm.",
+tiếng Nhật "うん。", tiếng Trung giản thể/phồn thể "嗯。". Lượt voice thông thường
+của agent chính gọi phát ngay trước khi chuyển lời người dùng; lượt delegate bỏ
+qua opening. Continuation vẫn bật với các câu hiện có, chờ 3,5 giây từ lúc
+agent bắt đầu lượt (từ tool đầu tiên với lượt delegate). Khi tool kết thúc,
+lịch phát lại cộng thêm phần cooldown 2,5 giây còn lại. Timer này không làm
+trễ opening.
+Giữ các bộ câu cũ để khôi phục. Cue realtime/tool được gọi riêng không đổi.
+
 `GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật).
 
 ## Hỗ trợ tiếng Nhật

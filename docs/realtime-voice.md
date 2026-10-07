@@ -69,12 +69,12 @@ STT pipeline. At end-of-turn the model either:
 - **Delegates** by calling the `delegate_to_main` tool, which stops realtime
   output and forwards the current user's faithfully understood words, in their
   spoken language, to the OS server (→ the selected main runtime) for the work.
-  The realtime model has already spoken its own filler by then, so os-server
-  does not acknowledge a delegated turn (`[voice-instruction]` prefix) again:
-  no opening filler, and the first dead-air filler only arms when the main
-  agent's first tool starts (`FillerManager.MarkDelegatedVoiceRun`). A
-  delegated turn the main agent ends with NO_REPLY therefore stays silent
-  instead of promising an answer nobody delivers.
+  OS-server skips the short opening acknowledgment ("Uhm." in English) for
+  delegated turns; ordinary main-agent voice turns retain it. Continuation
+  fillers wait 3.5 seconds from ordinary turn start, or from the first tool
+  start for delegated turns (`FillerManager.MarkDelegatedVoiceRun`). Tool-end
+  rearming adds any remaining 2.5-second cooldown to the 3.5-second delay.
+  A delegated turn that ends with NO_REPLY without starting a tool stays silent.
 - **Explicitly rejects** a high-confidence non-user turn by calling
   `reject_turn`, which drops the turn before the main agent sees its STT text.
   This is deliberately different from a silent completion: silence, timeout,

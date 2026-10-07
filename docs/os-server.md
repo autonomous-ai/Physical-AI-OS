@@ -1,5 +1,15 @@
 # OS Server API — Documentation
 
+Opening feedback is one short acknowledgment sound: English "Uhm.", Vietnamese
+"Ừm.", Japanese "うん。", and Simplified/Traditional Chinese "嗯。". Ordinary
+main-agent voice turns request it immediately before forwarding; delegated turns
+skip it. Continuation fillers remain enabled with their existing phrases and
+wait 3.5 seconds after turn start (after the first tool starts for delegated
+turns). Tool-end rearming adds any remaining 2.5-second cooldown to that delay.
+This timer does not delay opening feedback.
+Original phrase pools are retained for rollback. Explicit realtime/tool cues
+are unchanged.
+
 `GET /api/system/ota-updating` returns `updating`, persisted per-component `progress`, and `bootstrap_available`. It remains readable from local snapshots when bootstrap is unavailable; see [update progress](bootstrap-ota.md#update-progress-snapshots).
 
 ## Japanese language support

@@ -38,7 +38,7 @@ func toolPoolForLang(lang, toolName string) []string {
 const (
 	// FillerDelay is how long to wait after the agent starts (or finishes a
 	// non-reactive tool) before speaking a filler.
-	FillerDelay = 1500 * time.Millisecond
+	FillerDelay = 3500 * time.Millisecond
 
 	// FillerCooldown is the minimum gap between two filler reactions in the
 	// same turn — covers both filler-spoken and hardware-reaction events.
