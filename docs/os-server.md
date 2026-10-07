@@ -1427,7 +1427,7 @@ They cost differently, so they are bounded differently.
 
 | | In the system prompt? | Billed | Cap |
 |---|---|---|---|
-| `USER.md` | **yes** — a bootstrap file | **every turn** | 12000 chars (`bootstrapMaxChars`), then truncated tail-first |
+| `USER.md` | **yes** — a bootstrap file | **every turn** | 24000 chars per file (`bootstrapMaxChars`), also subject to the shared 48000-character bootstrap budget |
 | `KNOWLEDGE.md` | **no** — OpenClaw does not know the file | once per session, when the agent reads it | none by construction |
 
 `KNOWLEDGE.md` had no cap at all: the daily synthesis appends a `## YYYY-MM-DD`
@@ -1471,7 +1471,7 @@ Rules the agent is given, and why each one is load-bearing:
 | One bullet per person under `## Users`, as `- **<label> (friend)** — call: …; notes: …` | `<label>` is the enrollment label from `[context: current_user=…]`, which is what the OS reconcile keys on. The `(friend)` parenthetical is what distinguishes a person from a form field — without it, `**Notes:** …` would parse as a person named "Notes:" and get deleted. |
 | Short `key: value` segments, not prose; `call:` first | The template's own fields are singular (one `**Name:**`, one `**Timezone:**`) and cannot describe two people, but nesting them per person does not survive the file: `parseEntries` → `serialize` flattens every bullet to `- …`, so indented sub-fields detach from their person. Segments keep the form's *idea* — separated, labelled facts — in one prunable entry. The first attempt was flowing prose and produced a ~600-char paragraph with the address form buried in sentence four. |
 | Never guess `call:`, pronouns or timezone | The agent sees a face label and a voiceprint. Neither says anything about how someone wants to be addressed. Record them only when the person has said so; otherwise omit the segment. |
-| Each entry under ~400 chars | `USER.md` is billed on every turn, and past `bootstrapMaxChars` (12000) OpenClaw truncates with `text.slice(0, cutPoint)` — head kept, **tail cut** — and `## Users` is the tail. An oversized profile silently loses exactly the person data. `ReconcileUserProfiles` warns at 9000. |
+| Each entry under ~400 chars | `USER.md` is billed on every turn, and past the per-file `bootstrapMaxChars` (24000) or total bootstrap budget (48000), OpenClaw can truncate injected content. An oversized profile can lose person data from the prompt. `ReconcileUserProfiles` warns at 9000. |
 | Strangers get no entry | `## Users` is keyed by enrollment label; a passing face has none. Desk traffic belongs in `KNOWLEDGE.md`. |
 | Only write what was observed about **that** person | The original failure was two people fused into one profile (`Long/Leo`). Never move one person's habits onto another. |
 | Update and add only — **never delete** | Absence is not departure. Retiring a person is the OS's job (`ReconcileUserProfiles`, keyed on enrollment), not the agent's. |

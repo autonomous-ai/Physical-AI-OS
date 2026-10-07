@@ -63,9 +63,12 @@ Follow the instructions in whichever file you read.
 	// bootstrapMaxChars caps each workspace file (SOUL.md, AGENTS.md, …) in the
 	// prompt. OpenClaw keeps the first 75% and last 25% of a longer file and
 	// silently drops the middle, so a device SOUL must stay well under it.
-	bootstrapMaxChars = 12000
-	// bootstrapTotalMaxChars caps all workspace files together.
-	bootstrapTotalMaxChars = 30000
+	// 24k fits the 18.6k lamp soul with room for OS markers and owner edits.
+	bootstrapMaxChars = 24000
+	// bootstrapTotalMaxChars caps all workspace files together. The lamp soul
+	// plus managed AGENTS/HEARTBEAT blocks total about 28k; 48k leaves about
+	// 20k for other bootstrap files and owner content, not a latency guarantee.
+	bootstrapTotalMaxChars = 48000
 
 	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the gateway's periodic heartbeat poll (~every 30 min while the device is on).
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->

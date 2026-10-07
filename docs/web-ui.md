@@ -527,6 +527,8 @@ On phones, MCP header key/value fields stack with explicit labels; Plugin and Sc
 
 ### Monitor readability
 
+Chat history covers the chat panel on phones instead of shrinking the conversation; Escape closes it, keyboard focus stays in the open mobile history, and selecting or creating a conversation returns to chat. Export and Clear are grouped in an accessible actions menu. History selection and rename/pin/delete actions work with keyboard and touch. Message actions have larger visible targets, metadata wraps, and the scroll-to-bottom button stays above the composer even with multiline drafts or attachments. Enter sends only outside IME composition; Shift+Enter still inserts a newline.
+
 Overview shows a neutral loading state until agent status arrives; version rows stack with field labels on phones. System stacks gauges above history charts at 768px. Camera puts snapshots below the stream on phones, labels tracking inputs, collapses optional bounding-box controls under Advanced tracking, and reports failed actions with pending controls disabled.
 
 Logs uses a source dropdown at 640px, larger log text and clearer timestamps. Flow has larger search and toolbar controls. CLI has keyboard-accessible session tabs, mobile terminal keys and a Reconnect button after disconnection; reconnect starts a fresh shell and clears the previous terminal scrollback. API Docs shows loading/failure states with Reload and Open in new tab actions. Monitor and Settings reserve a footer row so the source link does not cover content.
