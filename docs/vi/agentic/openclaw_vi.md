@@ -91,14 +91,19 @@ Máy đã bị kẹt lỗi này: chạy `sudo rm -rf /root/.openclaw/state
   generate a response. Please try again.` lên chat gần nhất. Giờ khối này dặn
   agent trả lời đúng `NO_REPLY` khi xong, là token heartbeat im lặng của OpenClaw.
   Onboarding ghi lại khối này trên máy đã setup vì nội dung đã đổi.
-- **SOUL của thiết bị phải nằm trong giới hạn bootstrap.** Onboarding đặt
-  `agents.defaults.bootstrapMaxChars` là 12.000 (`bootstrapMaxChars` trong
-  `runtimes/openclaw/onboarding.go`). File workspace dài hơn thì OpenClaw chỉ
-  giữ 75% đầu và 25% cuối, âm thầm bỏ phần giữa. SOUL của intern-v2 dài 13,2k ký
-  tự nên model chưa bao giờ thấy bảng thẻ âm thanh, quy tắc ngôn ngữ trả lời và
-  quy tắc không gắn thẻ trong chat, khiến câu trả lời chat mở đầu bằng thẻ như
-  `[warm]`. Giờ SOUL còn khoảng 10,5k, và thẻ âm thanh chỉ dùng cho câu trả lời
-  được đọc lên (lượt nói); trả lời Telegram, iMessage, WhatsApp, Discord, Slack
-  và web chat không có thẻ. `TestDeviceSoulsFitTheBootstrapCap` giữ mọi SOUL
-  của thiết bị dưới 11.000 ký tự, chừa chỗ cho mục `## Personal` của chủ máy.
-  Lamp (18,6k) là ngoại lệ đã biết, còn chờ rút gọn.
+- **SOUL của thiết bị phải nằm trong giới hạn bootstrap.** Setup và onboarding
+  cùng dùng `agents.defaults.bootstrapMaxChars = 24000` và
+  `agents.defaults.bootstrapTotalMaxChars = 48000`, lấy từ các hằng số chung trong
+  `runtimes/openclaw/onboarding.go`. Đây là ngân sách ký tự, không phải giới hạn token.
+  Mức 24k mỗi file chứa đủ SOUL lamp (18.615 ký tự), có chỗ cho marker OS và chỉnh
+  sửa của chủ máy. SOUL lamp cộng các khối AGENTS và HEARTBEAT do OS quản lý có
+  tổng khoảng 27,9k ký tự; mức 48k dành thêm khoảng 20k cho các file bootstrap khác
+  và nội dung bổ sung. Đây là phần dự phòng theo kích thước, chưa phải mức tối ưu
+  độ trễ đã đo hay bảo đảm mọi workspace lớn đều vừa.
+  Giới hạn mỗi file và giới hạn tổng đều áp dụng; file dài vẫn có thể mất phần
+  giữa (OpenClaw giữ đầu và cuối). Thiết bị hiện có nhận giới hạn mới khi chạy
+  onboarding sau triển khai; onboarding yêu cầu restart gateway khi defaults
+  thay đổi. `TestDeviceSoulsFitTheBootstrapCap` kiểm tra SOUL của mọi thiết bị,
+  kể cả lamp, với mức 23.000 ký tự, dành 1.000 cho marker OS và mục `## Personal`
+  của chủ máy. SOUL intern-v2 vẫn khoảng 10,5k; thẻ âm thanh chỉ dùng cho câu trả
+  lời được đọc lên, không dùng trong chat qua channel hoặc web.

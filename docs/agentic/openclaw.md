@@ -94,14 +94,19 @@ Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
   chat. The block now tells the agent to reply exactly `NO_REPLY` when the pass
   is done, OpenClaw's silent-heartbeat token. Onboarding rewrites the block on
   existing devices because its text changed.
-- **Device SOUL must fit the bootstrap cap.** Onboarding sets
-  `agents.defaults.bootstrapMaxChars` to 12,000 (`bootstrapMaxChars` in
-  `runtimes/openclaw/onboarding.go`). OpenClaw keeps only the first 75% and last
-  25% of a longer workspace file and silently drops the middle. The intern-v2
-  SOUL was 13.2k characters, so the model never saw its audio-tag palette, the
-  reply-language rule or the chat no-tag rule, and chat replies started with
-  tags like `[warm]`. It is now about 10.5k, and audio tags are limited to
-  spoken replies (voice turns); Telegram, iMessage, WhatsApp, Discord, Slack and
-  web chat replies carry none. `TestDeviceSoulsFitTheBootstrapCap` keeps every
-  device SOUL under 11,000 characters, leaving room for the owner's
-  `## Personal` section. Lamp (18.6k) is a known exception still to be trimmed.
+- **Device SOUL must fit the bootstrap cap.** Setup and onboarding both use
+  `agents.defaults.bootstrapMaxChars = 24000` and
+  `agents.defaults.bootstrapTotalMaxChars = 48000`, from shared constants in
+  `runtimes/openclaw/onboarding.go`. These are character budgets, not token limits.
+  The 24k per-file cap fits the lamp SOUL (18,615 characters) with room for OS
+  markers and owner edits. The lamp SOUL plus the managed AGENTS and HEARTBEAT
+  blocks total about 27.9k characters; 48k leaves about 20k for other bootstrap
+  files and additional content. This is a sizing allowance, not a measured
+  latency optimum or a guarantee that an arbitrarily large workspace fits.
+  Both the per-file and total caps still apply; longer files can lose their
+  middle (OpenClaw keeps head and tail). Existing devices receive the updated
+  limits on onboarding after deployment, which requests a gateway restart when
+  defaults change. `TestDeviceSoulsFitTheBootstrapCap` checks every device SOUL,
+  including lamp, against 23,000 characters, reserving 1,000 for OS markers and
+  the owner's `## Personal` section. The intern-v2 SOUL remains about 10.5k;
+  audio tags are limited to spoken replies, not channel or web chat replies.
