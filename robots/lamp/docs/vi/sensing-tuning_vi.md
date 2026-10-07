@@ -282,7 +282,7 @@ Cái giá đã biết của cổng này: một người khách quay lại ở g�
 
 Một người khách thật không bị ảnh hưởng quá một nhịp: 2 giây sau họ vẫn ở đó và được cấp id ngay lúc ấy. Cửa sổ cố tình đặt ~3 nhịp sensing thay vì bắt buộc liền kề tuyệt đối, để một frame bị rớt hoặc bị nhoè ở giữa không reset số đếm của một người khách thật.
 
-Việc kiểm tra ánh nhìn của người lạ dùng lại `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` và `GAZE_MIN_FACE_PX` của gaze wake, nên chỉnh các giá trị đó cho gaze wake cũng làm thay đổi thời điểm người lạ được chào.
+Việc kiểm tra ánh nhìn của người lạ dùng lại `GAZE_MAX_YAW_DEG`, `GAZE_EDGE_CONE_SCALE` và `GAZE_MIN_FACE_PX` của gaze wake, nên chỉnh các giá trị đó cho gaze wake cũng làm thay đổi thời điểm người lạ được chào. Nó đo trên box của face-ID chứ không qua bộ chọn mặt của gaze, nên ngưỡng 15% của bộ chọn (`HAL_GAZE_BEARING_MIN_FACE_HEIGHT_FRAC`, #567) không áp dụng cho nó.
 
 Mỗi nhịp face-ID có người lạ chưa được chào trong frame sẽ ghi một dòng log, kèm các số liệu đằng sau lá phiếu của từng người lạ và số phiếu cộng dồn:
 

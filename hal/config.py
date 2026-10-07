@@ -1120,6 +1120,12 @@ GAZE_REPOINT_VERIFY_S: float = float(
 GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
 )
+# A person box at least this much of the frame is someone at the desk (#567). With no
+# face it withholds a repoint miss; it never confirms one. Device-measured 2026-10-05:
+# seated users 26-73% of the frame, co-workers and passers-by at most 13%.
+GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC", "0.20")
+)
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.
 # Open-loop against a coupled arm: the step cap and blind-step budget bound it.
