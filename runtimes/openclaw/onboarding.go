@@ -63,9 +63,12 @@ Follow the instructions in whichever file you read.
 	// bootstrapMaxChars caps each workspace file (SOUL.md, AGENTS.md, …) in the
 	// prompt. OpenClaw keeps the first 75% and last 25% of a longer file and
 	// silently drops the middle, so a device SOUL must stay well under it.
-	bootstrapMaxChars = 12000
-	// bootstrapTotalMaxChars caps all workspace files together.
-	bootstrapTotalMaxChars = 30000
+	// 24k fits the 18.6k lamp soul with room for OS markers and owner edits.
+	bootstrapMaxChars = 24000
+	// bootstrapTotalMaxChars caps all workspace files together. The lamp soul
+	// plus managed AGENTS/HEARTBEAT blocks total about 28k; 48k leaves about
+	// 20k for other bootstrap files and owner content, not a latency guarantee.
+	bootstrapTotalMaxChars = 48000
 
 	// heartbeatMDBlock is the OS-managed block in workspace/HEARTBEAT.md, run on the gateway's periodic heartbeat poll (~every 30 min while the device is on).
 	heartbeatMDBlock = `<!-- OS DO NOT REMOVE -->
@@ -852,7 +855,7 @@ func (s *OpenclawService) ensureGatewayToken() (bool, error) {
 
 // ensureProviderConfig syncs models.providers.autonomous.{apiKey,baseUrl} in openclaw.json with the current config.json values.
 func (s *OpenclawService) ensureProviderConfig() (bool, error) {
-	if s.config.LLMAPIKey == "" {
+	if s.config.LLMRuntimeManaged() || s.config.LLMAPIKey == "" {
 		return false, nil
 	}
 
@@ -912,6 +915,30 @@ func (s *OpenclawService) ensureProviderConfig() (bool, error) {
 }
 
 // ensureAgentDefaults patches agents.defaults in openclaw.json with performance config.
+// pinSilentHeartbeat turns the recurring heartbeat off and keeps any
+// event-driven wake silent. On OpenClaw 2026.9 an empty heartbeat reply is
+// retried as a "visible-answer continuation"; the model then read the main chat
+// via sessions_history and messaged the owner on Telegram with the `message`
+// tool every 30 min, which neither target "none" nor an isolated session stops.
+// Reports whether anything changed.
+func pinSilentHeartbeat(defaultsMap map[string]any) bool {
+	changed := false
+	heartbeatMap := ensureMap(defaultsMap, "heartbeat")
+	if v, _ := heartbeatMap["every"].(string); v != "0m" {
+		heartbeatMap["every"] = "0m"
+		changed = true
+	}
+	if v, _ := heartbeatMap["target"].(string); v != "none" {
+		heartbeatMap["target"] = "none"
+		changed = true
+	}
+	if v, _ := heartbeatMap["isolatedSession"].(bool); !v {
+		heartbeatMap["isolatedSession"] = true
+		changed = true
+	}
+	return changed
+}
+
 func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	configBytes, err := os.ReadFile(configPath)
@@ -947,57 +974,63 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 		changed = true
 	}
 
-	if v, _ := defaultsMap["thinkingDefault"].(string); v != "low" {
-		defaultsMap["thinkingDefault"] = "low"
+	if pinSilentHeartbeat(defaultsMap) {
 		changed = true
 	}
 
-	modelsMap := ensureMap(defaultsMap, "models")
-	// Autonomous entries come from the live API; non-autonomous ones (e.g. openai-codex) are appended here.
-	var knownModels []string
-	if resp, _, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey); err != nil {
-		slog.Warn("ensureAgentDefaults: fetch models failed, skipping",
-			"component", "onboarding", "err", err)
-	} else {
-		for _, m := range resp.Models {
-			knownModels = append(knownModels, agentModelKey(m))
-		}
-	}
-	knownModels = append(knownModels, "openai-codex/gpt-5.5")
-	for _, modelKey := range knownModels {
-		m, ok := modelsMap[modelKey].(map[string]interface{})
-		if !ok {
-			m = map[string]interface{}{}
-			modelsMap[modelKey] = m
+	if !s.config.LLMRuntimeManaged() {
+		if v, _ := defaultsMap["thinkingDefault"].(string); v != "low" {
+			defaultsMap["thinkingDefault"] = "low"
 			changed = true
 		}
-		params := ensureMap(m, "params")
-		if strings.Contains(modelKey, "claude-") {
-			if v, _ := params["cacheRetention"].(string); v != "short" {
-				params["cacheRetention"] = "short"
-				changed = true
+
+		modelsMap := ensureMap(defaultsMap, "models")
+		// Autonomous entries come from the live API; non-autonomous ones (e.g. openai-codex) are appended here.
+		var knownModels []string
+		if resp, _, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey); err != nil {
+			slog.Warn("ensureAgentDefaults: fetch models failed, skipping",
+				"component", "onboarding", "err", err)
+		} else {
+			for _, m := range resp.Models {
+				knownModels = append(knownModels, agentModelKey(m))
 			}
 		}
-		if v, _ := params["fastMode"].(bool); !v {
-			params["fastMode"] = true
-			changed = true
+		knownModels = append(knownModels, "openai-codex/gpt-5.5")
+		for _, modelKey := range knownModels {
+			m, ok := modelsMap[modelKey].(map[string]interface{})
+			if !ok {
+				m = map[string]interface{}{}
+				modelsMap[modelKey] = m
+				changed = true
+			}
+			params := ensureMap(m, "params")
+			if strings.Contains(modelKey, "claude-") {
+				if v, _ := params["cacheRetention"].(string); v != "short" {
+					params["cacheRetention"] = "short"
+					changed = true
+				}
+			}
+			if v, _ := params["fastMode"].(bool); !v {
+				params["fastMode"] = true
+				changed = true
+			}
+			m["params"] = params
+			modelsMap[modelKey] = m
 		}
-		m["params"] = params
-		modelsMap[modelKey] = m
-	}
 
-	disableThinking := s.config.LLMThinkingDisabled()
-	wantReasoning := !disableThinking
-	if topModels, ok := configData["models"].(map[string]interface{}); ok {
-		if providers, ok := topModels["providers"].(map[string]interface{}); ok {
-			for _, provider := range providers {
-				if p, ok := provider.(map[string]interface{}); ok {
-					if modelsList, ok := p["models"].([]interface{}); ok {
-						for _, entry := range modelsList {
-							if m, ok := entry.(map[string]interface{}); ok {
-								if curr, _ := m["reasoning"].(bool); curr != wantReasoning {
-									m["reasoning"] = wantReasoning
-									changed = true
+		disableThinking := s.config.LLMThinkingDisabled()
+		wantReasoning := !disableThinking
+		if topModels, ok := configData["models"].(map[string]interface{}); ok {
+			if providers, ok := topModels["providers"].(map[string]interface{}); ok {
+				for _, provider := range providers {
+					if p, ok := provider.(map[string]interface{}); ok {
+						if modelsList, ok := p["models"].([]interface{}); ok {
+							for _, entry := range modelsList {
+								if m, ok := entry.(map[string]interface{}); ok {
+									if curr, _ := m["reasoning"].(bool); curr != wantReasoning {
+										m["reasoning"] = wantReasoning
+										changed = true
+									}
 								}
 							}
 						}
@@ -1005,8 +1038,8 @@ func (s *OpenclawService) ensureAgentDefaults() (bool, error) {
 				}
 			}
 		}
-	}
 
+	}
 	if !changed {
 		return false, nil
 	}

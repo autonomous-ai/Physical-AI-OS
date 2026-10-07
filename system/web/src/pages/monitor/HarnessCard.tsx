@@ -1,9 +1,8 @@
 import { useEffect, useState } from "react";
-import type { CSSProperties, FormEvent } from "react";
+import type { FormEvent } from "react";
 import { Laptop } from "lucide-react";
 import { harnessRequest } from "./harness-api";
 import { HarnessVoiceMode } from "./HarnessVoiceMode";
-import { S } from "./styles";
 
 interface HarnessStatus {
   paired: boolean;
@@ -23,11 +22,6 @@ interface HarnessPairInfo {
   error?: string;
 }
 
-
-const buttonStyle: CSSProperties = {
-  padding: "8px 12px", borderRadius: 4, border: "1px solid var(--lm-border)",
-  background: "var(--lm-surface)", color: "var(--lm-text)", fontSize: 12,
-};
 
 export function HarnessCard() {
   const [status, setStatus] = useState<HarnessStatus | null>(null);
@@ -127,69 +121,67 @@ export function HarnessCard() {
       : status ? "NOT PAIRED" : "LOADING";
 
   return (
-    <div className="lm-mon-card" style={{ ...S.card, boxShadow: undefined }}>
-      <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 12 }}>
-        <div style={{ ...S.cardLabel, display: "flex", alignItems: "center", gap: 8, marginBottom: 0 }}>
-          <span className="lm-mon-chip" aria-hidden><Laptop size={13} /></span>
-          <span>Harness</span>
-        </div>
-        <span role="status" style={{ fontSize: 10, color: connected ? "var(--lm-green)" : "var(--lm-text-muted)" }}>
+    <div className="lm-mon-card lm-connection-card">
+      <div className="lm-connection-header">
+        <h2><span className="lm-mon-chip" aria-hidden><Laptop size={16} /></span>Harness</h2>
+        <span role="status" className={`lm-connection-status ${connected ? "is-connected" : status?.paired ? "is-offline" : ""}`}>
           {stateLabel}
         </span>
       </div>
+      <p className="lm-connection-description">Access agents running on your paired computer.</p>
       {status && hasTrust && !pairing && (
-        <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-          <strong style={{ fontSize: 13 }}>{status.machine_name || "Paired computer"}</strong>
+        <div className="lm-connection-stack">
+          <strong className="lm-connection-machine">{status.machine_name || "Paired computer"}</strong>
 
-          {status.paired && <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
+          {status.paired && <span className="lm-connection-note">
             Pairing saved · {connected ? "Connected to this computer." : "Pairing does not mean the computer is online."}
           </span>}
-          {!connected && <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
+          {!connected && <span className="lm-connection-note">
             {connectionError
               ? "Cannot check the connection right now. Refresh status to try again."
               : status.paired
               ? "Harness is offline. New requests cannot reach this computer until it reconnects. Keep Harness running on the same local network; you do not need to pair again just because it is offline."
               : "Pairing has not finished. Wait for the computer to reconnect, or unpair before trying again."}
           </span>}
-          <button type="button" disabled={busy} onClick={() => { void handleUnpair(); }} style={buttonStyle}>
+          <button type="button" disabled={busy} onClick={() => { void handleUnpair(); }} className="lm-connection-button">
             {busy ? "Disconnecting…" : "Unpair computer"}
           </button>
         </div>
       )}
       {status?.paired && <HarnessVoiceMode key={status.machine_id} connected={connected} />}
-      {pairing && <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-        <span style={{ fontSize: 12, color: "var(--lm-text-dim)" }}>
+      {pairing && <div className="lm-connection-stack">
+        <span className="lm-connection-note">
           Open Harness Desktop → Settings → Devices on your computer.
           Select this Autonomous robot and enter the code below.
         </span>
-        <strong aria-label="Pairing code" style={{ fontSize: 24, letterSpacing: "0.18em" }}>
+        <strong aria-label="Pairing code" className="lm-connection-code">
           {remaining > 0 && pairInfo?.code ? pairInfo.code : "Expired"}
         </strong>
-        <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
+        <span className="lm-connection-note">
           {remaining > 0 ? `Expires in ${remaining} seconds` : "Cancel and generate a new code to try again."}
         </span>
-        <button type="button" disabled={busy} onClick={() => { void handleCancel(); }} style={buttonStyle}>
+        <button type="button" disabled={busy} onClick={() => { void handleCancel(); }} className="lm-connection-button">
           Cancel pairing
         </button>
       </div>}
       {status && !hasTrust && !pairing && (
-        <form onSubmit={handlePair} style={{ display: "flex", flexDirection: "column", gap: 10 }}>
-          <p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--lm-text-dim)" }}>
+        <form onSubmit={handlePair} className="lm-connection-stack">
+          <p className="lm-connection-note">
             Generate a code here, then open Harness Desktop → Settings → Devices on your computer.
             Select this Autonomous robot and enter the code. Keep both on the same local network.
           </p>
           <button type="submit" disabled={busy}
-            style={{ ...buttonStyle, color: "var(--lm-green)" }}>{busy ? "Preparing…" : "Generate pairing code"}</button>
-          <span style={{ fontSize: 11, color: "var(--lm-text-muted)" }}>
+            className="lm-connection-button is-primary">{busy ? "Preparing…" : "Generate pairing code"}</button>
+          <span className="lm-connection-note">
             Codes expire after 60 seconds. Pairing gives access to this computer’s agents.
           </span>
         </form>
       )}
-      {(error || connectionError || status?.error || pairInfo?.error) && <p role="alert" style={{ fontSize: 12, color: "var(--lm-red)" }}>
+      {(error || connectionError || status?.error || pairInfo?.error) && <p role="alert" className="lm-connection-error">
         {error || connectionError || status?.error || pairInfo?.error}
       </p>}
       <button type="button" disabled={busy} onClick={() => { setError(null); setRefresh(value => value + 1); }}
-        style={{ ...buttonStyle, marginTop: 10 }}>Refresh status</button>
+        className="lm-connection-button lm-connection-refresh">Refresh status</button>
     </div>
   );
 }

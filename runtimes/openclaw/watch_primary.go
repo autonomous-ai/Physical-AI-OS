@@ -113,6 +113,9 @@ func (s *OpenclawService) syncPrimaryFromFile() {
 	// Serialize concurrent invocations (debounce timer fires in its own goroutine and may overlap with UpdatePrimaryModel or other config paths).
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
+	if s.config.LLMRuntimeManaged() {
+		return
+	}
 
 	configDir := s.config.OpenclawConfigDir
 	configPath := filepath.Join(configDir, "openclaw.json")

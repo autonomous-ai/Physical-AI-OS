@@ -18,6 +18,9 @@ import (
 
 // SyncModelsFromAPI fetches the live model list from ModelsAPIURL and reconciles it into openclaw.json under s.config.OpenclawConfigDir.
 func (s *OpenclawService) SyncModelsFromAPI() (bool, error) {
+	if s.config.LLMRuntimeManaged() {
+		return false, nil
+	}
 	// Same source-of-catalog decision as SetupAgent / ensureProviderConfig / ensureAgentDefaults (byo_models.go).
 	resp, byo, err := resolveModels(context.Background(), s.config.LLMBaseURL, s.config.LLMAPIKey)
 	if err != nil {
@@ -26,6 +29,9 @@ func (s *OpenclawService) SyncModelsFromAPI() (bool, error) {
 
 	s.primarySyncMu.Lock()
 	defer s.primarySyncMu.Unlock()
+	if s.config.LLMRuntimeManaged() {
+		return false, nil
+	}
 
 	configPath := filepath.Join(s.config.OpenclawConfigDir, "openclaw.json")
 	raw, err := os.ReadFile(configPath)

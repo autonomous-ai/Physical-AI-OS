@@ -30,6 +30,8 @@ import {
 import type { LucideIcon } from "lucide-react";
 
 import { S } from "./styles";
+import { SourceFooter } from "@/components/SourceFooter";
+import { ApiDocsSection } from "./ApiDocsSection";
 import { API, HW, HISTORY_LEN, FLOW_EVENTS_MAX, NAV, isNavGroup, isNavLink, isNavSubgroup, Cap, areaPath, sectionArea, sectionToHash, hashToSection } from "./types";
 import type { Section, Area, SystemInfo, NetworkInfo, HWHealth, OCStatus, PresenceInfo, VoiceStatus, ServoState, DisplayState, AudioVolume, LEDColor, SceneInfo, MonitorEvent, DisplayEvent, NavEntry, NavChild } from "./types";
 import { OverviewSection, type OverviewCache } from "./OverviewSection";
@@ -303,8 +305,10 @@ function NavSubgroupItem({ entry, section, setSection, closeSidebar, leafHref }:
   );
 }
 
-function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
+function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref, open, onToggle }: {
   entry: Extract<NavEntry, { group: string }>;
+  open: boolean;
+  onToggle: () => void;
   section: Section;
   setSection: (s: Section) => void;
   closeSidebar: () => void;
@@ -317,13 +321,11 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
     if (isNavSubgroup(c)) return c.children.some((leaf) => leaf.id === section);
     return c.id === section;
   });
-  const [open, setOpen] = useState(hasActiveChild);
-  // Sync expand state on navigation only; `open` must stay manually toggleable between navigations.
-  useEffect(() => { setOpen(hasActiveChild); }, [section]); // eslint-disable-line react-hooks/exhaustive-deps, react-hooks/set-state-in-effect
   return (
     <div>
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
+        aria-expanded={open}
         className={"lm-snav-group" + (hasActiveChild ? " lm-snav-group--active" : "")}
       >
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -384,19 +386,21 @@ function NavGroupItem({ entry, section, setSection, closeSidebar, leafHref }: {
   );
 }
 
-function AgentGWMenu({ section, setSection, closeSidebar }: {
+function AgentGWMenu({ section, setSection, closeSidebar, open, onToggle }: {
+  open: boolean;
+  onToggle: () => void;
   section: Section;
   setSection: (s: Section) => void;
   closeSidebar: () => void;
 }) {
   const hasActive = section === "agent-config";
-  const [open, setOpen] = useState(hasActive);
   // OpenClaw Control UI denies framing, so open it in a new tab.
   return (
     // Parked behind CSS (.lm-nav-agent in index.css).
     <div className="lm-nav-agent">
       <button
-        onClick={() => setOpen((v) => !v)}
+        onClick={onToggle}
+        aria-expanded={open}
         className={"lm-snav-group" + (hasActive ? " lm-snav-group--active" : "")}
       >
         <span style={{ display: "flex", alignItems: "center", gap: 10 }}>
@@ -436,6 +440,21 @@ function AgentGWMenu({ section, setSection, closeSidebar }: {
   );
 }
 
+// Resolve the accordion group for direct links, search and browser navigation.
+function navGroupForSection(section: Section): string | null {
+  if (section === "agent-config") return "agent";
+  for (const entry of NAV) {
+    if (!isNavGroup(entry)) continue;
+    if (entry.children.some((child) => {
+      if (isNavLink(child)) return false;
+      return isNavSubgroup(child)
+        ? child.children.some((leaf) => leaf.id === section)
+        : child.id === section;
+    })) return entry.group;
+  }
+  return null;
+}
+
 // Resolve the initial / location-derived section for an area.
 function resolveSection(area: Area, hash: string, isDebug: boolean): Section {
   const parsed = hashToSection(hash, area);
@@ -468,6 +487,21 @@ export default function Monitor() {
   const [section, setSectionRaw] = useState<Section>(() =>
     resolveSection(area, window.location.hash, isDebug),
   );
+
+  const [navExpansion, setNavExpansion] = useState(() => ({
+    section,
+    group: navGroupForSection(section),
+  }));
+  // Reset the shared accordion on navigation, while allowing manual collapse
+  // of the active group between navigations.
+  let expandedGroup = navExpansion.group;
+  if (navExpansion.section !== section) {
+    expandedGroup = navGroupForSection(section);
+    setNavExpansion({ section, group: expandedGroup });
+  }
+  const toggleNavGroup = (group: string) => {
+    setNavExpansion({ section, group: expandedGroup === group ? null : group });
+  };
 
   const setSection = useCallback((s: Section) => {
     const targetArea = sectionArea(s);
@@ -670,7 +704,7 @@ export default function Monitor() {
           leafHref={leafHref}
           onEnter={gotoFirstResult}
         />
-        <nav style={{ padding: "10px 0", flex: 1, display: navQuery.trim() ? "none" : undefined }}>
+        <nav style={{ padding: "10px 0", flex: 1, minHeight: 0, overflowY: "auto", overscrollBehaviorY: "contain", display: navQuery.trim() ? "none" : undefined }}>
           {NAV.filter((e) => !isNavGroup(e) && e.id === "chat").map((entry) => {
             const leaf = entry as Extract<NavEntry, { id: Section }>;
             return (
@@ -695,16 +729,16 @@ export default function Monitor() {
               const group = entry as Extract<NavEntry, { group: string }>;
               const filtered = { ...group, children: filterNavChildren(group.children, isDebug, sectionVisible) };
               if (filtered.children.length === 0) return null;
-              return <NavGroupItem key={group.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
+              return <NavGroupItem key={group.group} open={expandedGroup === group.group} onToggle={() => toggleNavGroup(group.group)} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
             })}
-          {isDebug && <AgentGWMenu section={section} setSection={setSection} closeSidebar={closeSidebar} />}
+          {isDebug && <AgentGWMenu open={expandedGroup === "agent"} onToggle={() => toggleNavGroup("agent")} section={section} setSection={setSection} closeSidebar={closeSidebar} />}
           {NAV
             .filter((e) => (isNavGroup(e) ? (e.group !== "settings" && e.group !== "device") : e.id !== "chat"))
             .map((entry) => {
               if (isNavGroup(entry)) {
                 const filtered = { ...entry, children: filterNavChildren(entry.children, isDebug, sectionVisible) };
                 if (filtered.children.length === 0) return null;
-                return <NavGroupItem key={entry.group} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
+                return <NavGroupItem key={entry.group} open={expandedGroup === entry.group} onToggle={() => toggleNavGroup(entry.group)} entry={filtered} section={section} setSection={setSection} closeSidebar={closeSidebar} leafHref={leafHref} />;
               }
               if (!isDebug && !PUBLIC_SECTIONS.has(entry.id)) return null;
               return (
@@ -722,6 +756,7 @@ export default function Monitor() {
         </nav>
         <div style={{
           padding: "12px 16px",
+          flexShrink: 0,
           borderTop: "1px solid var(--lm-border)",
           fontSize: 10,
           color: "var(--lm-text-muted)",
@@ -786,11 +821,12 @@ export default function Monitor() {
 
         <div style={{
           ...S.content,
-          ...(section === "chat" ? { padding: 0, overflow: "hidden" } : {}),
-          ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflow: "hidden" } : {}),
+          // Keep overflow longhands consistent so route changes restore vertical scrolling.
+          ...(section === "chat" ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const } : {}),
+          ...(EMBED_SECTIONS.has(section) ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const } : {}),
           // display:flex is load-bearing: SettingsPanel scrolls via flex:1/minHeight:0.
           ...(section.startsWith("settings:")
-            ? { padding: 0, overflow: "hidden", display: "flex", flexDirection: "column" as const }
+            ? { padding: 0, overflowY: "hidden" as const, overflowX: "hidden" as const, display: "flex", flexDirection: "column" as const }
             : {}),
         }} className="lm-content">
           {/* Chat stays outside this keyed wrapper so it is never remounted. */}
@@ -889,14 +925,7 @@ export default function Monitor() {
           {section === "analytics" && <AnalyticsSection />}
           {section === "logs"      && <LogsSection />}
           {section === "cli" && <CliSection />}
-          {section === "api-docs" && (
-            <iframe
-              title="API Docs"
-              // Via the admin-gated /api/hardware proxy; nginx /hw/ is loopback-only.
-              src="/api/hardware/docs"
-              style={iframeStyle}
-            />
-          )}
+          {section === "api-docs" && <ApiDocsSection />}
           {section === "agent-config" && (
             <iframe
               title="Agent Config"
@@ -912,6 +941,7 @@ export default function Monitor() {
             <ChatSection events={events} isActive={section === "chat"} />
           </div>
         </div>
+        <SourceFooter inline />
       </main>
 
       {showLogoutConfirm && (

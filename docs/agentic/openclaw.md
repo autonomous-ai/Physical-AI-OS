@@ -94,14 +94,34 @@ Device already stuck on this error: `sudo rm -rf /root/.openclaw/state
   chat. The block now tells the agent to reply exactly `NO_REPLY` when the pass
   is done, OpenClaw's silent-heartbeat token. Onboarding rewrites the block on
   existing devices because its text changed.
-- **Device SOUL must fit the bootstrap cap.** Onboarding sets
-  `agents.defaults.bootstrapMaxChars` to 12,000 (`bootstrapMaxChars` in
-  `runtimes/openclaw/onboarding.go`). OpenClaw keeps only the first 75% and last
-  25% of a longer workspace file and silently drops the middle. The intern-v2
-  SOUL was 13.2k characters, so the model never saw its audio-tag palette, the
-  reply-language rule or the chat no-tag rule, and chat replies started with
-  tags like `[warm]`. It is now about 10.5k, and audio tags are limited to
-  spoken replies (voice turns); Telegram, iMessage, WhatsApp, Discord, Slack and
-  web chat replies carry none. `TestDeviceSoulsFitTheBootstrapCap` keeps every
-  device SOUL under 11,000 characters, leaving room for the owner's
-  `## Personal` section. Lamp (18.6k) is a known exception still to be trimmed.
+- **Device SOUL must fit the bootstrap cap.** Setup and onboarding both use
+  `agents.defaults.bootstrapMaxChars = 24000` and
+  `agents.defaults.bootstrapTotalMaxChars = 48000`, from shared constants in
+  `runtimes/openclaw/onboarding.go`. These are character budgets, not token limits.
+  The 24k per-file cap fits the lamp SOUL (18,615 characters) with room for OS
+  markers and owner edits. The lamp SOUL plus the managed AGENTS and HEARTBEAT
+  blocks total about 27.9k characters; 48k leaves about 20k for other bootstrap
+  files and additional content. This is a sizing allowance, not a measured
+  latency optimum or a guarantee that an arbitrarily large workspace fits.
+  Both the per-file and total caps still apply; longer files can lose their
+  middle (OpenClaw keeps head and tail). Existing devices receive the updated
+  limits on onboarding after deployment, which requests a gateway restart when
+  defaults change. `TestDeviceSoulsFitTheBootstrapCap` checks every device SOUL,
+  including lamp, against 23,000 characters, reserving 1,000 for OS markers and
+  the owner's `## Personal` section. The intern-v2 SOUL remains about 10.5k;
+  audio tags are limited to spoken replies, not channel or web chat replies.
+- **Recurring heartbeat is off.** Even with the `NO_REPLY` instruction the
+  model kept answering heartbeats with an empty message, and OpenClaw retried
+  with a "visible-answer continuation". OpenClaw 2026.9 also changed the default
+  heartbeat target from `none` to `owner` (the owner's DM, e.g. Telegram), so
+  results that older versions only surfaced in the main session — where
+  os-server spoke them aloud — now reached Telegram. Running it with
+  `target: "none"` and `isolatedSession: true` was not enough: in the retry the
+  model read the main chat through `sessions_history` and messaged the owner
+  with the `message` tool every 30 minutes. Onboarding (`pinSilentHeartbeat`)
+  now sets `agents.defaults.heartbeat.every: "0m"`, keeping `target: "none"`
+  and `isolatedSession: true` for event-driven wakes (for example a background
+  exec completion), which OpenClaw still runs. Chat, voice, skills and
+  scheduled automations are unaffected. What stops is the `HEARTBEAT.md`
+  housekeeping: daily synthesis into `KNOWLEDGE.md` and the people sync into
+  `USER.md`; daily `memory/` files are still written and searchable.

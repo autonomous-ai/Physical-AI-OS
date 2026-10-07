@@ -36,6 +36,7 @@ func (s *Service) buildPingPayload(status string) beclient.PingPayload {
 		TTSVoice:            s.config.TTSVoice,
 		STTLanguage:         s.config.STTLanguage,
 		WakeWordEnabled:     s.config.WakeWordEnabled(),
+		VoiceInputMode:      s.config.GetVoiceInputMode(),
 		UnsupportedChannels: s.config.ChannelsUnsupported,
 	}
 	if ip, err := s.networkService.GetCurrentIP(); err == nil && ip != apSetupIP {

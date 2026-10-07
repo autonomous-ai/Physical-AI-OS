@@ -1,0 +1,175 @@
+.lm-root .lm-pairing {
+  --lm-text-dim: color-mix(in srgb, var(--lm-text) 78%, var(--lm-card));
+  --lm-text-muted: color-mix(in srgb, var(--lm-text) 70%, var(--lm-card));
+}
+
+.lm-root .lm-connection-card {
+  min-width: 0;
+  padding: 22px;
+  background: var(--lm-card);
+  border: 1px solid var(--lm-border);
+  border-radius: 14px;
+  color: var(--lm-text);
+  font-size: 14px;
+  line-height: 1.6;
+  overflow-wrap: anywhere;
+}
+
+.lm-root .lm-connection-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.lm-root .lm-connection-header h2 {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  line-height: 1.4;
+}
+
+.lm-root .lm-connection-header h2 small {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--lm-text-dim);
+}
+
+.lm-root .lm-connection-status {
+  display: inline-flex;
+  align-items: center;
+  flex-shrink: 0;
+  max-width: 100%;
+  padding: 4px 9px;
+  border: 1px solid var(--lm-border);
+  border-radius: 20px;
+  background: var(--lm-surface);
+  color: var(--lm-text-dim);
+  font-size: 11px;
+  font-weight: 650;
+  line-height: 1.5;
+}
+
+.lm-root .lm-connection-status.is-connected {
+  color: var(--lm-green);
+  background: color-mix(in srgb, var(--lm-green) 9%, var(--lm-card));
+  border-color: color-mix(in srgb, var(--lm-green) 30%, var(--lm-border));
+}
+
+.lm-root .lm-connection-status.is-offline {
+  color: var(--lm-amber);
+  background: var(--lm-amber-dim);
+  border-color: color-mix(in srgb, var(--lm-amber) 30%, var(--lm-border));
+}
+
+.lm-root .lm-connection-description {
+  margin: 10px 0 20px;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--lm-border);
+  color: var(--lm-text-dim);
+  font-size: 14px;
+}
+
+.lm-root .lm-connection-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.lm-root .lm-connection-note {
+  margin: 0;
+  color: var(--lm-text-dim);
+  font-size: 14px;
+  line-height: 1.65;
+}
+
+.lm-root .lm-connection-machine { font-size: 18px; }
+
+.lm-root .lm-connection-facts { margin: 0; }
+.lm-root .lm-connection-facts > div {
+  display: grid;
+  grid-template-columns: minmax(70px, 1fr) minmax(0, 2fr);
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px solid var(--lm-border);
+}
+.lm-root .lm-connection-facts dt { color: var(--lm-text-dim); }
+.lm-root .lm-connection-facts dd { margin: 0; text-align: right; font-weight: 600; }
+.lm-root .lm-connection-facts code { font-size: 12px; }
+
+.lm-root .lm-connection-details {
+  padding: 12px 14px;
+  border: 1px solid var(--lm-border);
+  border-radius: 10px;
+  background: var(--lm-surface);
+}
+.lm-root .lm-connection-details summary { cursor: pointer; font-weight: 600; }
+.lm-root .lm-connection-details[open] summary { margin-bottom: 8px; }
+
+.lm-root .lm-connection-button {
+  min-height: 42px;
+  padding: 10px 14px;
+  border: 1px solid var(--lm-border);
+  border-radius: 8px;
+  background: var(--lm-surface);
+  color: var(--lm-text);
+  font-size: 13px;
+  font-weight: 600;
+  line-height: 1.5;
+  cursor: pointer;
+}
+.lm-root .lm-connection-button.is-primary {
+  border-color: color-mix(in srgb, var(--lm-green) 45%, var(--lm-border));
+  background: color-mix(in srgb, var(--lm-green) 12%, var(--lm-card));
+  color: var(--lm-green);
+}
+.lm-root .lm-connection-button.is-danger {
+  align-self: flex-start;
+  color: var(--lm-red);
+  border-color: color-mix(in srgb, var(--lm-red) 30%, var(--lm-border));
+}
+.lm-root .lm-connection-button:disabled { opacity: 0.6; cursor: not-allowed; }
+.lm-root .lm-connection-button:not(:disabled):hover { filter: brightness(1.12); }
+.lm-root .lm-connection-button:focus-visible,
+.lm-root .lm-connection-code:focus-visible,
+.lm-root .lm-connection-details summary:focus-visible {
+  outline: 2px solid var(--lm-amber);
+  outline-offset: 3px;
+}
+.lm-root .lm-connection-refresh { margin-top: 18px; }
+
+.lm-root .lm-connection-code {
+  display: block;
+  padding: 20px 12px;
+  border: 1px dashed color-mix(in srgb, var(--lm-amber) 45%, var(--lm-border));
+  border-radius: 10px;
+  background: var(--lm-amber-dim);
+  color: var(--lm-text);
+  font-family: monospace;
+  font-size: 28px;
+  font-weight: 700;
+  letter-spacing: 0.18em;
+  text-align: center;
+}
+.lm-root button.lm-connection-code { cursor: pointer; }
+.lm-root .lm-connection-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 12px; }
+.lm-root .lm-connection-error {
+  padding: 12px 14px;
+  margin: 16px 0 0;
+  border: 1px solid color-mix(in srgb, var(--lm-red) 30%, var(--lm-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--lm-red) 7%, var(--lm-card));
+  color: var(--lm-red);
+  font-size: 13px;
+}
+
+@media (max-width: 480px) {
+  .lm-root .lm-connection-card { padding: 18px; }
+  .lm-root .lm-connection-facts > div { grid-template-columns: 1fr; gap: 3px; }
+  .lm-root .lm-connection-facts dd { text-align: left; }
+}

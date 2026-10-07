@@ -544,8 +544,13 @@ def _rt_enabled() -> bool:
 
 REALTIME_ENABLED: bool = _rt_enabled()
 REALTIME_PROVIDER: str = _rt_str("HAL_REALTIME_PROVIDER", _RT.get("provider"), "gemini")  # none | gemini | openai | gptlive | pipecat_v1
-# Gate realtime turns on an STT interim starting with a wake phrase.
-WAKEWORD_ENABLED: bool = _os_cfg_get("wakeword", False) is True
+# Manual device input is independent of the saved automatic-mode wake setting.
+VOICE_INPUT_MODE: str = (
+    "tap_to_talk" if _os_cfg_get("voice_input_mode", "automatic") == "tap_to_talk"
+    else "automatic"
+)
+# No wake opener or follow-up window can arm manual device input.
+WAKEWORD_ENABLED: bool = VOICE_INPUT_MODE == "automatic" and _os_cfg_get("wakeword", False) is True
 # 0 requires the wake phrase for every mic session.
 WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
     0.0, float(os.environ.get("HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S", "20"))
@@ -1114,6 +1119,12 @@ GAZE_REPOINT_VERIFY_S: float = float(
 # before giving its verdict (#545). The climb budget is 4 steps x 4 s cooldown.
 GAZE_REPOINT_CLIMB_TIMEOUT_S: float = float(
     os.environ.get("HAL_GAZE_REPOINT_CLIMB_TIMEOUT_S", "20")
+)
+# A person box at least this much of the frame is someone at the desk (#567). With no
+# face it withholds a repoint miss; it never confirms one. Device-measured 2026-10-05:
+# seated users 26-73% of the frame, co-workers and passers-by at most 13%.
+GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC: float = float(
+    os.environ.get("HAL_GAZE_REPOINT_NEAR_BODY_MIN_AREA_FRAC", "0.20")
 )
 
 # Vertical centring via wrist_pitch (the neck); decreasing the joint tilts the camera UP.

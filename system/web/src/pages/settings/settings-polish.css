@@ -1,0 +1,19 @@
+/* General deliberately retains its existing styling. Inline form styles need
+   explicit overrides for consistent keyboard focus and mobile controls. */
+.lm-settings-polished :is(input, select, textarea, button, a):focus-visible {
+  outline: 2px solid var(--lm-amber) !important;
+  outline-offset: 3px;
+}
+.lm-settings-polished :is(input, select, textarea) {
+  min-width: 0;
+  max-width: 100%;
+}
+.lm-settings-polished :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select) {
+  min-height: 42px;
+}
+.lm-settings-polished button { min-height: 36px; }
+@media (max-width: 640px) {
+  .lm-settings-polished :is(input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]), select, textarea) {
+    font-size: 16px !important;
+  }
+}

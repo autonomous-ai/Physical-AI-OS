@@ -246,6 +246,16 @@ def _detect_face_yunet(frame: npt.NDArray[np.uint8]) -> Optional[Tuple[int, int,
     return (x, y, fw, fh)
 
 
+def _clamped_face(f, w: int, h: int) -> Tuple[Tuple[int, int, int, int], Tuple[float, ...]]:
+    """One YuNet row as ``((x, y, w, h), landmarks)``, its box clamped to the frame."""
+    x, y, fw, fh = int(f[0]), int(f[1]), int(f[2]), int(f[3])
+    x = max(0, x)
+    y = max(0, y)
+    fw = max(1, min(fw, w - x))
+    fh = max(1, min(fh, h - y))
+    return (x, y, fw, fh), tuple(float(v) for v in f[4:14])
+
+
 def detect_face_with_landmarks(
     frame: npt.NDArray[np.uint8],
 ) -> Optional[Tuple[Tuple[int, int, int, int], Tuple[float, ...]]]:
@@ -260,19 +270,19 @@ def detect_face_with_landmarks(
     except Exception as e:
         logger.debug("YuNet landmark detect failed: %s", e)
         return None
-    faces = _measurable_faces(faces)
-    if len(faces) == 0:
+    # Only a face big enough to be someone at the desk counts at all (#567). A smaller
+    # one is a co-worker across the room: returning it anyway steered the pan toward
+    # them and hid the user's own body from the watcher (green-lamp 2026-10-05).
+    # Judged on the clamped box gaze receives, or a face cut off at the frame bottom
+    # would pan and vote on its raw height without ever counting as near.
+    floor = max(float(config.GAZE_MIN_FACE_PX),
+                config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC * float(h))
+    near = [c for c in (_clamped_face(f, w, h) for f in _measurable_faces(faces))
+            if float(c[0][3]) >= floor]
+    if not near:
         return None
     cx = float(w) / 2.0
-    measurable = [f for f in faces if float(f[3]) >= config.GAZE_MIN_FACE_PX]
-    if measurable:
-        best = min(measurable, key=lambda f: abs((float(f[0]) + float(f[2]) / 2.0) - cx))
-    else:
-        best = max(faces, key=lambda f: float(f[2]) * float(f[3]))
-    x, y, fw, fh = int(best[0]), int(best[1]), int(best[2]), int(best[3])
-    x = max(0, x); y = max(0, y)
-    fw = max(1, min(fw, w - x)); fh = max(1, min(fh, h - y))
-    return (x, y, fw, fh), tuple(float(v) for v in best[4:14])
+    return min(near, key=lambda c: abs((c[0][0] + c[0][2] / 2.0) - cx))
 
 
 def detect_faces_with_landmarks(
@@ -289,15 +299,8 @@ def detect_faces_with_landmarks(
     except Exception as e:
         logger.debug("YuNet landmark detect failed: %s", e)
         return []
-    out = []
-    for f in sorted(_measurable_faces(faces), key=lambda f: -float(f[2]) * float(f[3])):
-        x, y, fw, fh = int(f[0]), int(f[1]), int(f[2]), int(f[3])
-        x = max(0, x)
-        y = max(0, y)
-        fw = max(1, min(fw, w - x))
-        fh = max(1, min(fh, h - y))
-        out.append(((x, y, fw, fh), tuple(float(v) for v in f[4:14])))
-    return out
+    return [_clamped_face(f, w, h)
+            for f in sorted(_measurable_faces(faces), key=lambda f: -float(f[2]) * float(f[3]))]
 
 
 class ObjectDetector:

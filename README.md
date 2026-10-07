@@ -1,18 +1,34 @@
-## Autonomous OS: The "Android" for Robots
+# Physical AI Operating System
 
-Autonomous OS is an open-source operating system for physical AI agents. Give your robot a voice, vision, memory, and skills — then connect it to agents and apps on your computer.
+We're building the "Android" for physical AI agents.
 
-**Talk to your robot. Control its hardware. Delegate work to your computer.**
+Give Hermes, Claude Code, Codex, and other AI agents eyes, ears, a voice, and a body they can control.
+
+**Bring your AI agents into the physical world.**
+
+**[Start with Lamp](#autonomous-lamp)** · [Bring your own robot](docs/bring-your-own-robot.md) · [Build a physical skill](#physical-skills)
 
 https://github.com/user-attachments/assets/c80f1255-4355-4f59-9114-6d3b8d4007a2
 
-[Set up a robot](#quick-start) · [Bring your own robot](docs/bring-your-own-robot.md) · [Build a skill](#contribute) · [Architecture](#platform-architecture)
+## Choose your agent
 
-- **Understand and act.** Control lights, volume, and tracking through voice or chat. Local rules handle familiar commands; Jev can recognize natural phrasing before the request reaches the main agent.
-- **Work beyond the robot.** [Harness](skills/harness-use/) delegates digital tasks to agents on your computer. [Autonomous Buddy](skills/computer-use/) lets the device agent operate Mac apps. [Connectors](skills/connectors/) give it access to linked services.
-- **Make it yours.** Swap the [agent runtime](runtimes/), [model](docs/hosted.md), [voice](hal/drivers/voice/), [skills](skills/), or [board](hal/board/boards.json). Define its personality in `SOUL.md` and its hardware in `ROBOT.md`.
+Run Hermes, Claude Code, Codex, OpenClaw, OpenCode, or PicoClaw. Choose a compatible [model](docs/hosted.md) and configure its [voice](hal/drivers/voice/), [personality](robots/lamp/SOUL.md), and tools.
 
 The OS runs on the robot and coordinates hardware and agent tasks. Model inference may use remote services, depending on your configuration.
+
+## Give it a body
+
+Start with [Lamp](#autonomous-lamp), [Intern](#autonomous-intern), or [Reachy Mini](#reachy-mini)—or [add support for your own robot](docs/bring-your-own-robot.md). Physical AI Operating System connects the agent to the hardware that body provides: cameras, microphones, speakers, motors, lights, and sensors.
+
+## Physical skills
+
+Give your agent new ways to sense and interact with its surroundings.
+
+- Follow an object with its camera and movement.
+- Respond to touch with a gesture.
+- Turn a sensor reading into light, movement, or speech.
+
+Start with an existing [physical skill](skills/servo-tracking/), change its instructions, or connect your own tools. Use the [skill creator](skills/skill-creator/) to write a new skill, and see the [contribution guide](#contribute) to share it.
 
 ## Try saying
 
@@ -42,7 +58,7 @@ The simplest way in is a robot we have already tested it on. What each of them c
 
 ### Autonomous Lamp
 
-[Lamp](https://www.autonomous.ai/lamp) is the robot that shows the whole OS — it sees, hears, speaks, moves, and ships with Autonomous OS on it.
+[Lamp](https://www.autonomous.ai/lamp) is the robot that shows the whole OS — it sees, hears, speaks, moves, and ships with Physical AI Operating System on it.
 
 1. **Add it.** In the Autonomous app ([iOS](https://apps.apple.com/app/id6744885683) | [Android](https://play.google.com/store/apps/details?id=ai.autonomous.connect.wifi)), tap **Add robot → Lamp**.
 2. **Set up Wi-Fi.** Pick your network in the app; it joins the robot's hotspot and hands over the keys and pairing.
@@ -60,7 +76,7 @@ https://github.com/user-attachments/assets/2f0aaafb-287c-488e-a3b1-a82f0ad9e776
 1. **SSH in** — `ssh pollen@reachy-mini.local`.
 2. **Run one command.** Nothing is flashed; the Reachy daemon keeps the motors.
    ```bash
-   curl -fsSL https://raw.githubusercontent.com/autonomous-ai/autonomous-os/main/robots/reachy-mini/install.sh | sudo bash
+   curl -fsSL https://raw.githubusercontent.com/autonomous-ai/Physical-AI-Operating-System/main/robots/reachy-mini/install.sh | sudo bash
    ```
 3. **Add it.** In the app, tap **Add robot → Reachy Mini** and give it `reachy-mini.local`.
 4. **Interact with it.** Say something — the head tilts, the antennas lift, and it answers.
@@ -83,7 +99,7 @@ https://github.com/user-attachments/assets/2f0aaafb-287c-488e-a3b1-a82f0ad9e776
 
 ## Bring your own robot
 
-Autonomous OS runs on any robot you can describe in four markdown files.
+Physical AI Operating System runs on any robot you can describe in four markdown files.
 
 - **`ROBOT.md`** — the body: the board and the hardware it has.
 - **`SOUL.md`** — the self: who it is and how it talks.
@@ -98,15 +114,15 @@ Follow **[the full guide](docs/bring-your-own-robot.md)**.
 
 A conversation can stay with realtime. A music request can use music and audio skills to play a song at the requested volume, with LED feedback on supported bodies. A computer task can use Harness to reach a paired agent, then return a short spoken result.
 
-![One shared Autonomous OS diagram with three routes: realtime answers conversation directly; the main runtime uses music and audio skills to play jazz at 30% volume with HAL LED feedback; or it uses harness-use to update a Blender scene, whose final result returns through OS to HAL for speech.](docs/architecture/platform-flows.svg)
+![One shared Physical AI Operating System diagram with three routes: realtime answers conversation directly; the main runtime uses music and audio skills to play jazz at 30% volume with HAL LED feedback; or it uses harness-use to update a Blender scene, whose final result returns through OS to HAL for speech.](docs/architecture/platform-flows.svg)
 
 [Download the SVG](docs/architecture/platform-flows.svg) and open it in a browser to see the animation. GitHub shows the static diagram; timing is illustrative.
 
 ### The layers behind it
 
-Autonomous OS is a software stack. Each layer uses only the layer below it, so any layer can be replaced without touching the others. Every layer is a folder in this repo.
+Physical AI Operating System is a software stack. Each layer uses only the layer below it, so any layer can be replaced without touching the others. Every layer is a folder in this repo.
 
-![Autonomous OS stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack-dark.svg)
+![Physical AI Operating System stack, top down: apps, skills, the agentic runtime, the Go system services, the realtime voice agent, the capabilities a robot declares, the safety gate, drivers, boards, the vendor Linux kernel, and the bodies — one colour per layer, and the rows you can extend yourself drawn dashed](docs/architecture/autonomous-stack-dark.svg)
 
 [View the diagram](docs/architecture/autonomous-stack-dark.svg). Layers show the platform structure, not request execution order.
 
@@ -162,12 +178,12 @@ Long form: [architecture](docs/architecture/overview.md) · [HAL](docs/architect
 
 ## Contribute
 
-The easiest way in is a skill: one markdown file, no Go, no hardware, and it lands on every robot that has the parts. PRs welcome, vibe-coded ones included. Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/autonomous-os/discussions); gaps we would love help with are labelled [`claim-me`](https://github.com/autonomous-ai/autonomous-os/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
+The easiest way in is a skill: one markdown file, no Go, no hardware, and it lands on every robot that has the parts. PRs welcome, vibe-coded ones included. Questions, half-built ports and show-and-tell go in [Discussions](https://github.com/autonomous-ai/Physical-AI-Operating-System/discussions); gaps we would love help with are labelled [`claim-me`](https://github.com/autonomous-ai/Physical-AI-Operating-System/issues?q=is%3Aissue+is%3Aopen+label%3Aclaim-me) — comment to take one.
 
 | You want to… | You write… | Start from |
 |---|---|---|
 | Teach every robot something new | `skills/<name>/SKILL.md` (+ `skill.json` if it needs hardware) | [`skills/guard/`](skills/guard/) · [`skill-creator`](skills/skill-creator/) |
-| Run Autonomous on your robot | `robots/<id>/ROBOT.md` + `SAFETY.md` + `SOUL.md` | [`robots/reachy-mini/`](robots/reachy-mini/) — a third-party port, end to end |
+| Run the OS on your robot | `robots/<id>/ROBOT.md` + `SAFETY.md` + `SOUL.md` | [`robots/reachy-mini/`](robots/reachy-mini/) — a third-party port, end to end |
 | Support new hardware | a class in `hal/drivers/<subsystem>/` + one factory line | [`reachy_service.py`](hal/drivers/motors/reachy_service.py) |
 | Support a new board | one entry in `hal/board/boards.json` | [`boards.json`](hal/board/boards.json) |
 | Add a brain | an `AgentGateway` implementation in `runtimes/<name>/` | [`adding-agent-runtime.md`](docs/agentic/adding-agent-runtime.md) |

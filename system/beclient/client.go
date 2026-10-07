@@ -188,7 +188,8 @@ type PingPayload struct {
 	TTSVoice    string `json:"tts_voice,omitempty"`
 	STTLanguage string `json:"stt_language,omitempty"`
 	// WakeWordEnabled is never omitted so the state is always explicit.
-	WakeWordEnabled bool `json:"wakeword_enabled"`
+	WakeWordEnabled bool   `json:"wakeword_enabled"`
+	VoiceInputMode  string `json:"voice_input_mode"`
 	// UnsupportedChannels lists configured channels the active runtime cannot
 	// run (populated by ChannelReconcile after a runtime switch).
 	UnsupportedChannels []string `json:"unsupported_channels,omitempty"`

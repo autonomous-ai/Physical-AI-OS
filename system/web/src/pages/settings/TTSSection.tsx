@@ -1,3 +1,4 @@
+import { SettingsSelect } from "@/components/SettingsSelect";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { normalizeLang, type Lang as RobotLang } from "@/lib/i18n";
 import { getPiperStatus, installPiperEngine, installPiperVoice, removePiperVoice, type PiperJobStart, type PiperStatus } from "@/lib/api";
@@ -218,18 +219,18 @@ export function TTSSection({
     <SectionCard id="tts" title="Voice" active={active}>
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="tts_provider_choice" style={labelStyle}>Provider</label>
-        <select
+        <SettingsSelect
           id="tts_provider_choice"
           value={choice}
-          onChange={(e) => onChoice(e.target.value as ProviderChoice)}
+          onValueChange={(value) => onChoice(value as ProviderChoice)}
           style={selectStyle}
         >
           {(Object.keys(CHOICES) as ProviderChoice[]).map((k) => (
             <option key={k} value={k}>{CHOICES[k].label}</option>
           ))}
-        </select>
+        </SettingsSelect>
         {meta.hint && (
-          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>{meta.hint}</div>
+          <div style={{ fontSize: 12, color: C.textDim, marginTop: 4 }}>{meta.hint}</div>
         )}
       </div>
 
@@ -243,17 +244,17 @@ export function TTSSection({
 
       {choice === "autonomous" && (
         <div style={{ marginBottom: 12 }}>
-          <label htmlFor="tts_vendor" style={labelStyle}>Vendor (voices come from here)</label>
-          <select
+          <label htmlFor="tts_vendor" style={labelStyle}>Voice vendor</label>
+          <SettingsSelect
             id="tts_vendor"
             value={ttsProvider === "openai" || ttsProvider === "gemini" ? ttsProvider : "elevenlabs"}
-            onChange={(e) => onVendor(e.target.value as Vendor)}
+            onValueChange={(value) => onVendor(value as Vendor)}
             style={selectStyle}
           >
             <option value="openai">OpenAI</option>
             <option value="elevenlabs">ElevenLabs</option>
             <option value="gemini">Gemini</option>
-          </select>
+          </SettingsSelect>
         </div>
       )}
 
@@ -268,45 +269,46 @@ export function TTSSection({
         />
       ) : (
         <div style={{ marginBottom: 12 }}>
-          <label style={labelStyle}>Base URL (locked — set by provider)</label>
+          <label style={labelStyle}>Base URL (locked)</label>
           <div style={{
             ...selectStyle,
             cursor: "default", fontFamily: "ui-monospace, monospace",
             color: C.textDim,
             overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap",
           }}>{meta.baseUrl}</div>
+          <div style={{ fontSize: 12, color: C.textDim, marginTop: 4 }}>Set by the selected provider.</div>
         </div>
       )}
 
       {choice === "custom" && (
         <div style={{ marginBottom: 12 }}>
-          <label htmlFor="tts_custom_vendor" style={labelStyle}>Vendor protocol (which API your URL speaks)</label>
-          <select
+          <label htmlFor="tts_custom_vendor" style={labelStyle}>API protocol</label>
+          <SettingsSelect
             id="tts_custom_vendor"
             value={vendor}
-            onChange={(e) => onVendor(e.target.value as Vendor)}
+            onValueChange={(value) => onVendor(value as Vendor)}
             style={selectStyle}
           >
             <option value="openai">OpenAI-compatible</option>
             <option value="elevenlabs">ElevenLabs-compatible</option>
-          </select>
+          </SettingsSelect>
         </div>
       )}
 
       {choice !== "piper" && (<>
-      <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline" }}>
+      <div style={{ marginBottom: 5, display: "flex", justifyContent: "space-between", alignItems: "baseline", gap: 8, flexWrap: "wrap" }}>
         <label htmlFor="tts_api_key" style={labelStyle}>
           {keyRequired
-            ? "API Key (required — this provider does not accept the AI brain key)"
-            : "API Key (optional — leave blank to reuse AI brain key)"}
+            ? "API Key (required)"
+            : "API Key (optional)"}
         </label>
         {storedKeyIsForThisChoice && (
-          <span style={{ fontSize: 10, color: "var(--lm-green, #34d399)", fontWeight: 600 }}>
+          <span style={{ fontSize: 12, color: "var(--lm-green, #34d399)", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
             ✓ configured
           </span>
         )}
         {keyRequired && !storedKeyIsForThisChoice && !ttsApiKey && (
-          <span style={{ fontSize: 10, color: "var(--lm-amber, #fbbf24)", fontWeight: 600 }}>
+          <span style={{ fontSize: 12, color: "var(--lm-amber, #fbbf24)", fontWeight: 600, whiteSpace: "nowrap", flexShrink: 0 }}>
             key required
           </span>
         )}
@@ -319,23 +321,26 @@ export function TTSSection({
         onChange={setTtsApiKey}
         placeholder={storedKeyIsForThisChoice ? "•••••••• saved (click ✎ to rotate)" : "sk-..."}
       />
+      <p style={{ fontSize: 12, color: C.textDim, marginTop: -8, marginBottom: 12 }}>
+        {keyRequired ? "This provider requires its own API key; the AI brain key cannot be reused." : "Leave blank to reuse the AI brain key."}
+      </p>
       </>)}
 
       {choice !== "piper" && (
       <div style={{ marginBottom: 12 }}>
-        <label htmlFor="tts_lang" style={labelStyle}>Language (voice list filter)</label>
-        <select
+        <label htmlFor="tts_lang" style={labelStyle}>Voice language</label>
+        <SettingsSelect
           id="tts_lang"
           value={lang}
-          onChange={(e) => onLang(e.target.value as Lang)}
+          onValueChange={(value) => onLang(value as Lang)}
           style={selectStyle}
         >
           {LANG_OPTIONS.map((l) => (
             <option key={l || "auto"} value={l}>{LANG_LABEL[l]}</option>
           ))}
-        </select>
+        </SettingsSelect>
         {(vendor === "openai" || vendor === "gemini") && (
-          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginTop: 4 }}>
             {vendor === "openai" ? "OpenAI" : "Gemini"} voices are multilingual — the same voice handles any
             language. Filter is a no-op here.
           </div>
@@ -345,16 +350,16 @@ export function TTSSection({
 
       <div style={{ marginBottom: 12 }}>
         <label htmlFor="tts_voice" style={labelStyle}>Voice</label>
-        <select
+        <SettingsSelect
           id="tts_voice"
           value={voices.includes(ttsVoice) ? ttsVoice : (voices[0] ?? "")}
-          onChange={(e) => setTtsVoice(e.target.value)}
+          onValueChange={(value) => setTtsVoice(value)}
           style={selectStyle}
         >
           {(voices.length > 0 ? voices : ttsVoices).map((v) => (
             <option key={v} value={v}>{displayVoice(v)}</option>
           ))}
-        </select>
+        </SettingsSelect>
       </div>
 
       <div style={{ marginBottom: 12 }}>
@@ -370,7 +375,7 @@ export function TTSSection({
           aria-valuetext={`${effectiveSpeed.toFixed(2)} times normal speed`}
           style={{ width: "100%", accentColor: C.green }}
         />
-        <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 4 }}>
+        <div style={{ fontSize: 12, color: C.textDim, marginTop: 4 }}>
           {speedMin}×–{speedMax}× · 1.0× normal. Test Voice uses this speed immediately.
         </div>
         <TestVoiceButton
@@ -463,7 +468,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, speed, blocke
       </button>
       {phase === "error" && errorMsg && (
         <div style={{
-          marginTop: 6, fontSize: 11, color: "var(--lm-red, #ef4444)",
+          marginTop: 6, fontSize: 12, color: "var(--lm-red, #ef4444)",
           textAlign: "center",
         }}>{errorMsg}</div>
       )}
@@ -473,7 +478,7 @@ function TestVoiceButton({ voice, lang, provider, baseUrl, apiKey, speed, blocke
 
 const labelStyle = {
   display: "block" as const,
-  fontSize: 11, color: C.textDim, marginBottom: 5,
+  fontSize: 12, color: C.textDim, marginBottom: 5,
 };
 const selectStyle = {
   width: "100%", boxSizing: "border-box" as const,
@@ -553,7 +558,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
 
   if (!st) {
     return (
-      <div style={{ fontSize: 12, color: C.textMuted, marginBottom: 12 }}>
+      <div style={{ fontSize: 12, color: C.textDim, marginBottom: 12 }}>
         {unreachable ? "Robot is restarting — reconnecting…" : "Checking robot…"}
       </div>
     );
@@ -588,13 +593,13 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
             display: "flex", justifyContent: "space-between",
             alignItems: "baseline", gap: 8, marginBottom: 5,
           }}>
-            <span style={{ fontSize: 11.5, color: C.text }}>
+            <span style={{ fontSize: 12, color: C.text }}>
               {job.kind === "engine"
                 ? "Installing engine…"
                 : `Downloading ${voiceLabel(st, job.target)}…`}
             </span>
             <span style={{
-              fontSize: 11, color: C.textMuted,
+              fontSize: 12, color: C.textDim,
               fontVariantNumeric: "tabular-nums", whiteSpace: "nowrap",
             }}>
               {job.bytes_total > 0 && `${mb(job.bytes_done)} / ${mb(job.bytes_total)} MB · `}
@@ -610,7 +615,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
               background: C.green, transition: "width 0.4s ease",
             }} />
           </div>
-          <div style={{ fontSize: 10.5, color: C.textMuted, marginTop: 5 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginTop: 5 }}>
             Running on the robot — you can leave this page or reload, it keeps going.
           </div>
         </div>
@@ -618,7 +623,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
 
       {st.engine_installed && (
         <>
-          <div style={{ fontSize: 11, color: C.textMuted, marginBottom: 8 }}>
+          <div style={{ fontSize: 12, color: C.textDim, marginBottom: 8 }}>
             Voices are downloaded to the robot. Each is 63–79 MB and stays offline once installed.
           </div>
           {catalog.map((v) => {
@@ -630,7 +635,7 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
               }}>
                 <div style={{ flex: 1, minWidth: 0 }}>
                   <div style={{ fontSize: 12.5, color: C.text }}>{v.language}</div>
-                  <div style={{ fontSize: 10.5, color: C.textMuted }}>
+                  <div style={{ fontSize: 12, color: C.textDim }}>
                     {v.name} · {v.license}
                   </div>
                 </div>
@@ -669,15 +674,15 @@ function PiperPanel({ voice, onPickVoice, onInstalledChange }: {
       )}
 
       {unreachable && (
-        <div style={{ fontSize: 11.5, color: C.textMuted, marginTop: 8 }}>
+        <div style={{ fontSize: 12, color: C.textDim, marginTop: 8 }}>
           Robot is restarting — reconnecting…
         </div>
       )}
       {notice && (
-        <div style={{ fontSize: 11.5, color: C.red, marginTop: 8 }}>{notice}</div>
+        <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>{notice}</div>
       )}
       {job.error && (
-        <div style={{ fontSize: 11.5, color: C.red, marginTop: 8 }}>Last job failed: {job.error}</div>
+        <div style={{ fontSize: 12, color: C.red, marginTop: 8 }}>Last job failed: {job.error}</div>
       )}
     </div>
   );
@@ -694,7 +699,7 @@ function voiceLabel(st: PiperStatus, name: string): string {
 }
 
 const smallBtn: React.CSSProperties = {
-  fontSize: 11, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
+  fontSize: 12, padding: "4px 9px", borderRadius: 5, cursor: "pointer",
   background: "var(--lm-surface, #222)", color: "var(--lm-text, #eee)",
   border: "1px solid var(--lm-border, #333)", whiteSpace: "nowrap",
 };
