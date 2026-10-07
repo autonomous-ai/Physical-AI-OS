@@ -13,9 +13,8 @@ export function EmptyState({ icon, text }: { icon: ReactNode; text: string }) {
         background: "var(--lm-surface)",
         border: "1px solid var(--lm-border)",
         color: "var(--lm-text-muted)",
-        opacity: 0.7,
       }} aria-hidden>{icon}</span>
-      <span style={{ fontSize: 11.5, color: "var(--lm-text-muted)", maxWidth: 220, lineHeight: 1.5 }}>
+      <span style={{ fontSize: 13, color: "var(--lm-text-muted)", maxWidth: 320, lineHeight: 1.5 }}>
         {text}
       </span>
     </div>

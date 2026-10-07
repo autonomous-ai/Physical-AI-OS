@@ -1,0 +1,133 @@
+.lm-users-page {
+  --lm-text-dim: color-mix(in srgb, var(--lm-text) 78%, var(--lm-card));
+  --lm-text-muted: color-mix(in srgb, var(--lm-text) 70%, var(--lm-card));
+  display: flex;
+  flex-direction: column;
+  gap: 24px;
+  min-width: 0;
+  line-height: 1.5;
+}
+
+.lm-users-stats {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.lm-users-people,
+.lm-users-observations {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  align-items: start;
+  gap: 20px;
+}
+
+.lm-users-card-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0;
+  color: var(--lm-text);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.lm-users-page .lm-mon-card {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.lm-users-page .lm-users-list {
+  scrollbar-width: thin;
+  scrollbar-color: var(--lm-text-muted) transparent;
+  padding-right: 4px;
+}
+
+.lm-user-files {
+  border-top: 1px solid var(--lm-border);
+  padding-top: 14px;
+  margin-top: 16px;
+  overflow-wrap: anywhere;
+}
+
+.lm-user-files > summary {
+  cursor: pointer;
+  color: var(--lm-text);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 600;
+  margin-bottom: 12px;
+}
+
+.lm-users-cooldowns > summary {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px 16px;
+  cursor: pointer;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--lm-text);
+}
+
+.lm-users-cooldowns > summary::before {
+  content: "▸";
+  color: var(--lm-text-muted);
+}
+
+.lm-users-cooldowns[open] > summary::before {
+  content: "▾";
+}
+
+.lm-users-cooldowns[open] > summary {
+  padding-bottom: 18px;
+}
+
+.lm-users-cooldowns > summary::-webkit-details-marker {
+  display: none;
+}
+
+.lm-voice-cluster-toggle {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  flex: 1;
+  min-width: 0;
+  gap: 6px;
+  border: 0;
+  background: transparent;
+  color: var(--lm-text);
+  text-align: left;
+  padding: 4px 0;
+  cursor: pointer;
+}
+
+.lm-users-delete {
+  border: 0;
+  background: transparent;
+  min-width: 32px;
+  min-height: 32px;
+}
+
+@media (max-width: 900px) {
+  .lm-users-stats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 640px) {
+  .lm-users-people,
+  .lm-users-observations {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .lm-users-page {
+    gap: 18px;
+  }
+}
+
+@media (max-width: 360px) {
+  .lm-users-stats {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

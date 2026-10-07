@@ -33,3 +33,34 @@
   .lm-sensing-reading-value { margin-top: 12px; }
   .lm-sensing-details-hint { display: block; margin: 6px 0 0 22px; }
 }
+
+/* Keep diagnostic labels readable without dimming entire sensor panels. */
+.lm-sensor-details { border-top: 1px solid var(--lm-border); padding-top: 14px; color: var(--lm-text); font-size: 13px; }
+.lm-sensor-details > summary, .lm-sensor-disabled > summary { display: flex; align-items: center; gap: 8px; list-style: none; cursor: pointer; font-weight: 600; padding: 5px 0; }
+.lm-sensor-details summary::-webkit-details-marker { display: none; }
+.lm-sensor-details summary:focus-visible { outline: 2px solid var(--lm-amber); outline-offset: 4px; border-radius: 4px; }
+.lm-sensor-details > summary > svg, .lm-sensor-disabled > summary > svg { flex-shrink: 0; transition: transform .15s; }
+.lm-sensor-details[open] > summary > svg, .lm-sensor-disabled[open] > summary > svg { transform: rotate(90deg); }
+.lm-sensor-count { display: inline-flex; justify-content: center; align-items: center; min-width: 22px; padding: 1px 6px; border: 1px solid var(--lm-border); border-radius: 6px; font-size: 11px; color: var(--lm-text-dim); }
+.lm-sensor-intro { color: var(--lm-text-dim); font-size: 12px; line-height: 1.6; margin: 8px 0 16px; }
+.lm-sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(300px, 100%), 1fr)); gap: 14px; align-items: start; }
+.lm-sensor-component { background: var(--lm-surface); border: 1px solid var(--lm-border); border-radius: 12px; padding: 18px; min-width: 0; }
+.lm-sensor-component > header { display: flex; justify-content: space-between; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 16px; }
+.lm-sensor-component h3 { display: flex; align-items: center; gap: 8px; margin: 0; font-size: 14px; font-weight: 600; color: var(--lm-text); overflow-wrap: anywhere; }
+.lm-sensor-component h3 > svg { flex-shrink: 0; color: var(--lm-text-dim); }
+.lm-sensor-status { font-size: 11px; line-height: 1.4; font-weight: 500; padding: 4px 8px; border-radius: 6px; color: var(--lm-text-dim); background: var(--lm-card); }
+.lm-sensor-status--ready { color: var(--lm-green); background: var(--lm-green-dim); }
+.lm-sensor-status--warning { color: var(--lm-amber); background: var(--lm-amber-dim); }
+.lm-sensor-properties { margin: 0; }
+.lm-sensor-properties > div { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 16px; padding: 10px 0; border-bottom: 1px solid var(--lm-border); align-items: baseline; line-height: 1.5; }
+.lm-sensor-properties > div:last-child { border-bottom: 0; }
+.lm-sensor-properties dt { color: var(--lm-text-dim); font-size: 12px; }
+.lm-sensor-properties dd { margin: 0; text-align: right; font-size: 13px; font-weight: 500; color: var(--lm-text); font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
+.lm-sensor-properties code { font-size: 12px; }
+.lm-sensor-date { display: block; font-size: 11px; font-weight: 400; color: var(--lm-text-dim); margin-top: 2px; }
+.lm-sensor-unit { margin-left: 5px; font-size: 11px; font-weight: 400; color: var(--lm-text-dim); }
+.lm-sensor-timing-label { margin-top: 18px; font-size: 10px; font-weight: 600; letter-spacing: .09em; text-transform: uppercase; color: var(--lm-text-dim); }
+.lm-sensor-error { color: var(--lm-amber); background: var(--lm-amber-dim); padding: 10px 12px; border-radius: 8px; font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+.lm-sensor-disabled { margin-top: 18px; }
+.lm-sensor-disabled > summary { color: var(--lm-text-dim); font-size: 12px; }
+.lm-sensor-disabled .lm-sensor-grid { margin-top: 12px; }

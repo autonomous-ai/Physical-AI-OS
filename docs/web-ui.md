@@ -513,6 +513,10 @@ the shorter Presence card from being stretched by the taller Audio card.
 > long names such as `acknowledge`; when a card is narrow, the pill cloud wraps
 > below it rather than overlapping the current state.
 
+### Monitor readability
+
+Servo uses larger headings, high-contrast readouts and spacious controls in a two-column overview that becomes one column at 900px. At 600px, each joint stacks its name, current angle, target input and full-width slider; live drag and angle bounds are unchanged. Users has larger metadata and always-visible action buttons, two-column person/observation grids (one column at 640px), collapsed profile files and a separate collapsed recognition-cooldown panel. Pairing uses larger connection titles, status badges, clear action/error blocks and responsive metadata rows; Buddy connection IDs are under collapsed Connection details.
+
 ### 5.2 Pairing Section
 
 `/monitor#pairing` is the dedicated connection and pairing area. It renders both
@@ -823,7 +827,8 @@ Source labels identify the component; each metric has its own timestamp.
 Unavailable components do not hide healthy readings from another component. Unavailable values appear as `N/A`, never
 zero. Stale measurements are also replaced with `N/A`; a request failure is shown
 as an error so previous readings cannot be mistaken for live data. No good/bad air
-quality labels, thresholds, or alerts are assigned. A collapsed technical
+quality labels, thresholds, or alerts are assigned. Sensor details use separate high-contrast panels with aligned label/value rows and state badges. Active sensors appear first; disabled sensors without errors are grouped in a nested collapsed list.
+A collapsed technical
 section exposes each component's state, I2C bus, sensor status register, and HAL
 polling/retry/staleness/recovery timings under `status.components`. Legacy
 single-sensor snapshots with top-level `status.timing` remain supported and use a

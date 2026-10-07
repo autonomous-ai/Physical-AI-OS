@@ -498,6 +498,10 @@ không kéo giãn card Presence ngắn theo card Audio cao hơn.
 > `acknowledge`; khi card hẹp, pill cloud sẽ xuống hàng dưới thay vì đè lên
 > trạng thái hiện tại.
 
+### Khả năng đọc của Monitor
+
+Servo dùng tiêu đề lớn hơn, số đo tương phản rõ và nút thoáng trong overview hai cột, chuyển một cột tại 900px. Tại 600px, mỗi joint xếp tên, góc hiện tại, ô target và slider toàn chiều ngang; live drag và giới hạn góc giữ nguyên. Users có metadata lớn hơn, nút thao tác luôn hiện, lưới người dùng/quan sát hai cột (một cột tại 640px), profile files thu gọn và panel cooldown nhận diện thu gọn riêng. Pairing dùng tiêu đề kết nối lớn hơn, badge trạng thái, khối thao tác/lỗi rõ và hàng metadata responsive; ID kết nối Buddy nằm trong Connection details thu gọn.
+
 ### 5.2 Section Pairing
 
 `/monitor#pairing` là khu vực riêng cho kết nối và ghép đôi. Nó render cả
@@ -806,7 +810,7 @@ Nhãn nguồn chỉ rõ component; từng chỉ số có timestamp riêng. Compo
 không che số đo còn tốt từ component khác. Giá trị chưa khả dụng hiện `N/A`, không hiện số 0.
 Số đo cũ cũng được thay bằng `N/A`; request thất bại được hiển thị là lỗi để
 không nhầm số đo trước đó với dữ liệu hiện tại. Không gán nhãn chất lượng không khí
-tốt/xấu, ngưỡng hay cảnh báo. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
+tốt/xấu, ngưỡng hay cảnh báo. Sensor details dùng từng khối có chữ tương phản rõ, hàng nhãn/giá trị thẳng cột và badge trạng thái. Sensor hoạt động xuất hiện trước; sensor tắt không có lỗi nằm trong danh sách con thu gọn. Mục kỹ thuật thu gọn hiển thị trạng thái, bus I2C,
 thanh ghi trạng thái và timing đọc/thử lại/đánh dấu cũ/phục hồi của từng
 component trong `status.components`. Vẫn hỗ trợ snapshot một sensor kiểu cũ
 với `status.timing` cấp cao nhất và nhãn cảm biến chung. Sample hoặc timestamp

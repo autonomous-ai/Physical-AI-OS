@@ -1,4 +1,5 @@
 import { useState } from "react";
+import "./face-owners/face-owners.css";
 import { Users, Mic, ScanFace, UserCheck, UserPlus, RefreshCw } from "lucide-react";
 import { S } from "./styles";
 import { useTheme } from "@/lib/useTheme";
@@ -86,24 +87,24 @@ export function FaceOwnersSection() {
   };
 
   const fieldLabel: React.CSSProperties = {
-    display: "block", fontSize: 10, fontWeight: 700, letterSpacing: "0.06em",
+    display: "block", fontSize: 12, fontWeight: 600, letterSpacing: "0.02em",
     textTransform: "uppercase", color: "var(--lm-text-dim)", marginBottom: 5,
   };
 
   const btnStyle: React.CSSProperties = {
-    fontSize: 10,
-    padding: "4px 12px",
+    fontSize: 12,
+    padding: "7px 12px",
     borderRadius: 6,
     fontWeight: 600,
   };
 
   const cardHeader: React.CSSProperties = {
     display: "flex", justifyContent: "space-between", alignItems: "center",
-    marginBottom: 12,
+    marginBottom: 16, gap: 12, flexWrap: "wrap",
   };
 
   const iconBtnStyle: React.CSSProperties = {
-    width: 26, height: 26,
+    width: 36, height: 36,
     display: "inline-flex", alignItems: "center", justifyContent: "center",
     padding: 0, borderRadius: 5,
     color: "var(--lm-text-dim)",
@@ -123,7 +124,7 @@ export function FaceOwnersSection() {
     : null;
 
   return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+    <div className="lm-users-page">
       <div className="lm-mon-hero">
         <div style={{ position: "relative", zIndex: 1, display: "flex", flexDirection: "column", gap: 14 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
@@ -138,7 +139,7 @@ export function FaceOwnersSection() {
                 <div style={{ fontSize: 19, fontWeight: 700, color: "var(--lm-text)", letterSpacing: "-0.3px", lineHeight: 1.2 }}>
                   Users
                 </div>
-                <div style={{ fontSize: 12, color: "var(--lm-text-dim)", marginTop: 2 }}>
+                <div style={{ fontSize: 12, color: "var(--lm-text-muted)", marginTop: 2 }}>
                   {error
                     ? <span style={{ color: "var(--lm-red)" }}>User recognizer unavailable</span>
                     : "Enrolled people, unknown voices & faces seen by the robot"}
@@ -163,14 +164,14 @@ export function FaceOwnersSection() {
                 className="lm-u-btn"
                 title="Refresh"
                 aria-label="Refresh"
-                style={{ ...btnStyle, fontSize: 12, padding: "7px 11px", color: "var(--lm-text-dim)", display: "inline-flex", alignItems: "center" }}
+                style={{ ...btnStyle, fontSize: 12, padding: "7px 11px", color: "var(--lm-text-muted)", display: "inline-flex", alignItems: "center" }}
               >
                 <RefreshCw size={13} className={manualRefreshing ? "lm-spin" : undefined} />
               </button>
             </div>
           </div>
 
-          <div className="lm-grid-auto">
+          <div className="lm-users-stats">
             <HeroStat icon={<Users size={16} />} label="Enrolled" tone="amber"
               value={data ? data.enrolled_count : "—"} />
             <HeroStat
@@ -277,7 +278,7 @@ export function FaceOwnersSection() {
       )}
 
       {data && data.persons.length > 0 && (
-        <div className="lm-grid-4">
+        <section aria-label="Enrolled people" className="lm-users-people">
           {data.persons.map((person, idx) => (
             <PersonCard
               key={person.label}
@@ -308,7 +309,7 @@ export function FaceOwnersSection() {
               iconBtnStyle={iconBtnStyle}
             />
           ))}
-        </div>
+        </section>
       )}
 
       {data && data.persons.length === 0 && !showEnroll && (
@@ -317,7 +318,7 @@ export function FaceOwnersSection() {
         </div>
       )}
 
-      <div className="lm-grid-3">
+      <div className="lm-users-observations">
 
       <StrangerClustersCard
         strangers={strangers}
@@ -339,6 +340,8 @@ export function FaceOwnersSection() {
         cardHeader={cardHeader}
       />
 
+      </div>
+
       <CooldownsCard
         allCooldownEntries={allCooldownEntries}
         cdError={cdError}
@@ -348,8 +351,6 @@ export function FaceOwnersSection() {
         monCard={monCard}
         cardHeader={cardHeader}
       />
-
-      </div>{/* /lm-grid-3 bottom row */}
 
       {timelineUser && (
         <UserTimelineModal user={timelineUser} onClose={() => setTimelineUser(null)} />
