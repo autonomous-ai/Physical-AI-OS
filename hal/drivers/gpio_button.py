@@ -11,10 +11,11 @@ from hal.drivers.button_actions import (
     button_hold_tier,
     button_hold_release_action,
     announce_listening_cue,
-    physical_short_tap,
     single_click_action,
     triple_click_action,
 )
+
+from hal.drivers.device_tap_actions import physical_short_tap
 
 logger = logging.getLogger(__name__)
 
@@ -92,7 +93,7 @@ class GPIOButtonHandler:
         from hal import config
         import hal.app_state as state
         return (getattr(config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk"
-                and bool(state.voice_service and state.voice_service.device_tap_to_talk_enabled))
+                and bool(state.voice_service and state.voice_service.device_input.enabled))
 
     def start(self):
         import lgpio

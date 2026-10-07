@@ -8,7 +8,7 @@ import pytest
 import hal.app_state as state
 from hal import config
 from hal.board.mpr121 import MPR121Config
-from hal.drivers import button_actions, gpio_button
+from hal.drivers import button_actions, device_tap_actions, gpio_button
 from hal.drivers.mpr121 import MPR121Handler
 from hal.drivers.voice._internal import harness_voice
 
@@ -16,7 +16,9 @@ from hal.drivers.voice._internal import harness_voice
 @pytest.fixture
 def tap(monkeypatch):
     monkeypatch.setattr(config, "VOICE_INPUT_MODE", "tap_to_talk", raising=False)
-    voice = mock.Mock(device_capture_active=False, device_tap_to_talk_enabled=True)
+    voice = SimpleNamespace(device_input=mock.Mock(
+        spec=["active", "enabled", "start", "finish", "cancel"], active=False, enabled=True,
+    ))
     monkeypatch.setattr(state, "voice_service", voice)
     monkeypatch.setattr(state, "tts_service", SimpleNamespace(speaking=False))
     for name in ("_sleeping", "_mic_muted", "_speaker_muted", "_enrolling", "_hw_mic_switch_muted"):
@@ -35,11 +37,11 @@ def tap(monkeypatch):
 
 def test_taps_start_then_finish_without_spoken_cue_or_focus(tap):
     voice, _ = tap
-    button_actions.physical_short_tap()
-    voice.start_device_capture.assert_called_once_with()
-    voice.device_capture_active = True
-    button_actions.physical_short_tap()
-    voice.finish_device_capture.assert_called_once_with()
+    device_tap_actions.physical_short_tap()
+    voice.device_input.start.assert_called_once_with()
+    voice.device_input.active = True
+    device_tap_actions.physical_short_tap()
+    voice.device_input.finish.assert_called_once_with()
     button_actions.announce_listening_cue.assert_not_called()
     button_actions._grant_wakeword_focus.assert_not_called()
 
@@ -47,22 +49,22 @@ def test_taps_start_then_finish_without_spoken_cue_or_focus(tap):
 def test_speaking_tap_only_stops_then_next_records(tap):
     voice, routes = tap
     state.tts_service.speaking = True
-    button_actions.physical_short_tap()
-    voice.cancel_device_capture.assert_called_once_with()
+    device_tap_actions.physical_short_tap()
+    voice.device_input.cancel.assert_called_once_with()
     routes.stop_tts.assert_called_once_with()
-    voice.start_device_capture.assert_not_called()
+    voice.device_input.start.assert_not_called()
     state.tts_service.speaking = False
-    button_actions.physical_short_tap()
-    voice.start_device_capture.assert_called_once_with()
+    device_tap_actions.physical_short_tap()
+    voice.device_input.start.assert_called_once_with()
 
 
 @pytest.mark.parametrize("blocked", ["_hw_mic_switch_muted", "_enrolling", "_sleeping"])
 def test_privacy_enrollment_and_sleep_do_not_start_capture(tap, monkeypatch, blocked):
     voice, routes = tap
     monkeypatch.setattr(state, blocked, True)
-    button_actions.physical_short_tap()
-    voice.start_device_capture.assert_not_called()
-    voice.finish_device_capture.assert_not_called()
+    device_tap_actions.physical_short_tap()
+    voice.device_input.start.assert_not_called()
+    voice.device_input.finish.assert_not_called()
     routes.unmute_mic.assert_not_called()
     assert button_actions._wake_if_sleepy.call_count == int(blocked == "_sleeping")
 
@@ -70,22 +72,22 @@ def test_privacy_enrollment_and_sleep_do_not_start_capture(tap, monkeypatch, blo
 def test_software_muted_mic_can_start(tap, monkeypatch):
     voice, routes = tap
     monkeypatch.setattr(state, "_mic_muted", True)
-    button_actions.physical_short_tap()
+    device_tap_actions.physical_short_tap()
     routes.unmute_mic.assert_called_once_with()
-    voice.start_device_capture.assert_called_once_with()
+    voice.device_input.start.assert_called_once_with()
 
 
 def test_unknown_harness_mode_fails_closed(tap):
     voice, _ = tap
     harness_voice.read_voice_mode.return_value = {"enabled": False, "unavailable": True}
-    button_actions.physical_short_tap()
-    voice.start_device_capture.assert_not_called()
+    device_tap_actions.physical_short_tap()
+    voice.device_input.start.assert_not_called()
 
 
 def test_automatic_action_is_unchanged(tap, monkeypatch):
     monkeypatch.setattr(config, "VOICE_INPUT_MODE", "automatic")
     with mock.patch.object(button_actions, "single_click_action") as normal:
-        button_actions.physical_short_tap("test")
+        device_tap_actions.physical_short_tap("test")
     normal.assert_called_once_with(source="test", announce=False)
     harness_voice.read_voice_mode.assert_not_called()
 

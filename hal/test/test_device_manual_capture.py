@@ -9,8 +9,10 @@ from unittest.mock import Mock, call, patch
 import numpy as np
 import pytest
 
-from hal.drivers.voice._internal.harness_capture import (
-    HarnessCapture, device_manual_mode, device_snapshot,
+from hal.drivers.voice._internal.device_input import DeviceTapInput
+from hal.drivers.voice._internal.harness_capture import HarnessCapture
+from hal.drivers.voice._internal.input_policy import (
+    device_manual_mode, device_snapshot, same_capture_target,
 )
 
 
@@ -28,7 +30,7 @@ def manual_mode(monkeypatch):
     {"generation": None}, {"generation": True},
 ])
 def test_route_change_cancels_local_owner(change):
-    control = HarnessCapture()
+    control = HarnessCapture(target_matches=same_capture_target)
     assert control.start(device_snapshot(LOCAL))
     assert control.claim(dict(LOCAL, **change)) is None
     assert not control.active
@@ -37,7 +39,7 @@ def test_route_change_cancels_local_owner(change):
 
 def test_automatic_mode_rejects_local_owner(monkeypatch):
     from hal import config
-    control = HarnessCapture()
+    control = HarnessCapture(target_matches=same_capture_target)
     assert control.start(device_snapshot(LOCAL))
     monkeypatch.setattr(config, "VOICE_INPUT_MODE", "automatic")
     assert not device_manual_mode(LOCAL)
@@ -50,7 +52,7 @@ def test_automatic_mode_rejects_local_owner(monkeypatch):
                                         dict(LOCAL, enabled=True)])
 def test_start_requires_authoritative_harness_off(snapshot):
     assert not device_manual_mode(snapshot)
-    assert not HarnessCapture().start(device_snapshot(snapshot))
+    assert not HarnessCapture(target_matches=same_capture_target).start(device_snapshot(snapshot))
 
 
 @pytest.mark.parametrize("live", [False, True])
@@ -59,7 +61,7 @@ def test_device_idle_does_not_open_microphone(live, monkeypatch):
     service = Mock()
     service._running = True
     service._alsa_device = "test"
-    service._harness_capture = HarnessCapture()
+    service._harness_capture = HarnessCapture(target_matches=same_capture_target)
     monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", live)
 
@@ -83,7 +85,7 @@ def test_device_idle_does_not_open_microphone(live, monkeypatch):
 def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     from hal.drivers.voice import voice_service as module
 
-    control = HarnessCapture()
+    control = HarnessCapture(target_matches=same_capture_target)
     assert control.start(device_snapshot(LOCAL))
     capture = control.claim(LOCAL)
     service = Mock()
@@ -167,14 +169,17 @@ def test_device_start_respects_privacy_and_sleep(flag, monkeypatch):
     from hal.drivers.voice import voice_service as module
     service = Mock()
     service._running = True
-    service._harness_capture = HarnessCapture()
+    service._harness_capture = HarnessCapture(target_matches=same_capture_target)
     service._tts_is_speaking.return_value = False
     service._music_is_playing.return_value = False
     service.start_harness_capture.side_effect = lambda snapshot: module.VoiceService.start_harness_capture(service, snapshot)
+    service.device_input = DeviceTapInput(
+        service._harness_capture, service.start_harness_capture, read_mode=lambda: module.read_voice_mode(),
+    )
     for name in ("_mic_muted", "_sleeping", "_hw_mic_switch_muted"):
         monkeypatch.setattr(app_state, name, name == flag)
     with patch.object(module, "read_voice_mode", return_value=LOCAL):
-        assert not module.VoiceService.start_device_capture(service)
+        assert not service.device_input.start()
     assert not service._harness_capture.active
 
 
@@ -201,35 +206,41 @@ def test_device_start_finish_cancel_api(monkeypatch):
     from hal.drivers.voice import voice_service as module
     service = Mock()
     service._running = True
-    service._harness_capture = HarnessCapture()
+    service._harness_capture = HarnessCapture(target_matches=same_capture_target)
     service._tts_is_speaking.return_value = False
     service._music_is_playing.return_value = False
     service.start_harness_capture.side_effect = lambda snapshot: module.VoiceService.start_harness_capture(service, snapshot)
+    service.device_input = DeviceTapInput(
+        service._harness_capture, service.start_harness_capture, read_mode=lambda: module.read_voice_mode(),
+    )
     for flag in ("_mic_muted", "_sleeping", "_hw_mic_switch_muted"):
         monkeypatch.setattr(app_state, flag, False)
     with patch.object(module, "read_voice_mode", return_value=LOCAL):
-        assert module.VoiceService.start_device_capture(service)
-        assert module.VoiceService.device_tap_to_talk_enabled.fget(service)
-        assert module.VoiceService.device_capture_active.fget(service)
-        assert not module.VoiceService.start_device_capture(service)
+        assert service.device_input.start()
+        assert service.device_input.enabled
+        assert service.device_input.active
+        assert not service.device_input.start()
     capture = service._harness_capture.claim(LOCAL)
     assert capture.snapshot == device_snapshot(LOCAL)
-    assert module.VoiceService.finish_device_capture(service)
+    assert service.device_input.finish()
     assert capture.finished.is_set()
-    module.VoiceService.cancel_device_capture(service)
+    service.device_input.cancel()
     assert capture.cancelled.is_set()
-    assert not module.VoiceService.device_capture_active.fget(service)
+    assert not service.device_input.active
 
 
 @pytest.mark.parametrize("snapshot", [dict(LOCAL, enabled=True), dict(LOCAL, unavailable=True)])
 def test_start_rechecks_route_instead_of_trusting_cached_off(snapshot):
     from hal.drivers.voice import voice_service as module
     service = Mock()
-    service._last_voice_mode = LOCAL
+    service.device_input = DeviceTapInput(
+        service._harness_capture, service.start_harness_capture, read_mode=lambda: module.read_voice_mode(),
+    )
+    service.device_input.observe(LOCAL)
     with patch.object(module, "read_voice_mode", return_value=snapshot):
-        assert not module.VoiceService.start_device_capture(service)
+        assert not service.device_input.start()
     service.start_harness_capture.assert_not_called()
-    assert not module.VoiceService.device_tap_to_talk_enabled.fget(service)
+    assert not service.device_input.enabled
 
 
 def test_unowned_stream_is_rejected_before_stt_or_model():
@@ -249,7 +260,7 @@ def test_unowned_stream_is_rejected_before_stt_or_model():
 
 def test_finish_before_recorder_ready_discards_without_chime():
     from hal.drivers.voice import voice_service as module
-    control = HarnessCapture()
+    control = HarnessCapture(target_matches=same_capture_target)
     assert control.start(device_snapshot(LOCAL))
     assert control.finish()
     capture = control.claim(LOCAL)

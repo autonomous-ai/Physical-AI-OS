@@ -374,7 +374,7 @@ class _SpatialGestureRecognizer:
 
 
 def single_click_action(*, source, announce):
-    from hal.drivers.button_actions import physical_short_tap as action
+    from hal.drivers.device_tap_actions import physical_short_tap as action
     action(source=source, announce=announce)
 
 
@@ -431,7 +431,7 @@ class MPR121Handler:
         return factory(self._config.debounce_ms)
 
     def _device_tap_mode(self):
-        from hal.drivers.button_actions import device_tap_mode
+        from hal.drivers.device_tap_actions import device_tap_mode
         return device_tap_mode(self._harness_gestures.snapshot if self._harness_gestures else None)
 
     def _sample(self):
