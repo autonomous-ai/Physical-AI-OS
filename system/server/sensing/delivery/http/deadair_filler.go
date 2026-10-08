@@ -558,13 +558,16 @@ func (fm *FillerManager) Cancel(runID string) {
 }
 
 // CancelAllActive hard-cancels every run currently holding filler state, and
-// reports how many there were. Called by the physical cancel gesture.
+// reports how many filler runs there were. It also drops the cue-only suppressed
+// turns, which hold no filler and so are not counted. Called by the physical
+// cancel gesture.
 func (fm *FillerManager) CancelAllActive() int {
 	fm.mu.Lock()
 	runIDs := make([]string, 0, len(fm.runs))
 	for runID := range fm.runs {
 		runIDs = append(runIDs, runID)
 	}
+	clear(fm.cueRuns)
 	fm.mu.Unlock()
 	for _, runID := range runIDs {
 		fm.Cancel(runID)

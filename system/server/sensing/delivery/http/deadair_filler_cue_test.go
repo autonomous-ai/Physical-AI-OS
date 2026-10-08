@@ -130,3 +130,12 @@ func TestCancelEndsTheSuppressedFollowUpsCues(t *testing.T) {
 		t.Fatal("a finished turn has no cue to speak")
 	}
 }
+
+func TestCancelAllActiveSilencesSuppressedFollowUpCues(t *testing.T) {
+	stubCueSpeech(t)
+	fm, _ := startSuppressedTurn(t)
+	fm.CancelAllActive()
+	if fm.SayInVoiceRun("look_capturing_main") {
+		t.Fatal("the physical cancel must silence cues on a suppressed follow-up")
+	}
+}
