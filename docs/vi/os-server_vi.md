@@ -365,6 +365,8 @@ Cần admin auth. Tạo/sửa/xoá không ghi thẳng `schedules.json`: mỗi l�
 | PATCH | `/api/schedule/:id` | Đề xuất cập nhật |
 | DELETE | `/api/schedule/:id` | Đề xuất xoá |
 
+**Agent truy cập (skill `schedule`).** Agent không gọi các endpoint admin này. Skill dựng sẵn `schedule` (`skills/schedule/`) đọc trực tiếp `schedules.json` và `schedule-intents.json` (cùng thư mục với `config.json`), chỉ đọc và không cần credential: `schedule.py list` in timezone, số lượng, và cadence, connector, lần chạy gần nhất, lần chạy kế tiếp (đã gồm jitter) của từng task; `schedule.py show <id>` in một task. Khối onboarding của mọi runtime (**Scheduled tasks (MANDATORY)**) buộc agent chạy `list` ngay trong lượt đó trước khi nói số lượng, giờ hay trạng thái. Job do agent tự tạo bằng cron của runtime nằm ở kho khác: không có trong `schedules.json`, không hiện trong app và bị xoá khi factory reset, nên danh sách của skill không bao giờ được trình bày như tổng số.
+
 ### Plugins
 
 Cần admin auth. `GET /api/plugin/browse` đang tạm gác (bị comment trong `system/server/server.go`).
