@@ -24,6 +24,9 @@ class TestMPR121Config(unittest.TestCase):
         config = load_mpr121_config(root / "lamp", "orangepi_sun60")
         self.assertIsInstance(config, MPR121Config)
         self.assertEqual(config.tap_min_electrodes, 3)
+        self.assertEqual(config.debounce_ms, 10)
+        self.assertEqual(config.chip_debounce, 2)
+        self.assertEqual((config.touch_threshold, config.release_threshold), (6, 4))
         self.assertIsNone(load_mpr121_config(root / "intern-v2", "orangepi_sun60"))
         self.assertIsNone(load_mpr121_config(root / "lamp", "raspberry_pi_5"))
 

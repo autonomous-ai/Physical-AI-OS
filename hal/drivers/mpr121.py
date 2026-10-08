@@ -217,6 +217,7 @@ class _SpatialGestureRecognizer:
         self._seen = set()
         self._outside = set()
         self._previous_positions = set()
+        self._origin_positions = set()
         self._origin = None
         self._last_center = None
         self._last_move = None
@@ -317,6 +318,11 @@ class _SpatialGestureRecognizer:
             if now - self._tap_since >= self._contact_delay:
                 self._tap_qualified = True
         else:
+            # The falling edge closes the sampled interval. With irregular
+            # polling it may be the first sample past the qualification time;
+            # count that elapsed interval before dropping the candidate.
+            if self._tap_since is not None and now - self._tap_since >= self._contact_delay:
+                self._tap_qualified = True
             self._tap_since = None
         if stable:
             positions = {self._axis.index(i) for i in stable if i in self._axis}
@@ -329,6 +335,7 @@ class _SpatialGestureRecognizer:
                 self._outside = stable - set(self._axis)
                 self._seen = positions.copy()
                 self._previous_positions = positions.copy()
+                self._origin_positions = positions.copy()
                 self._origin = sum(positions) / len(positions) if positions else None
                 self._last_center = self._origin
             elif ((positions and self._origin is None)
@@ -353,7 +360,12 @@ class _SpatialGestureRecognizer:
                         self._invalid = True
                     self._last_move = now
                     self._seen.update(positions)
-                if new and abs(displacement) >= 1 and not self._moving:
+                # A stationary palm can recruit more pads as its signal crosses
+                # their thresholds. Centroid movement alone is not travel:
+                # require a new arrival after part of the original footprint
+                # has departed. Shrinking on release has no new arrival.
+                departed = self._origin_positions - positions
+                if new and departed and abs(displacement) >= 1 and not self._moving:
                     self._moving = True
                     self._direction = 1 if displacement > 0 else -1
                     self._button.cancel()
@@ -506,7 +518,7 @@ class MPR121Handler:
             previous = self._last_raw_mask or 0
             touched = [i for i in range(12) if raw_mask & ~previous & (1 << i)]
             released = [i for i in range(12) if previous & ~raw_mask & (1 << i)]
-            logger.info(
+            logger.debug(
                 "MPR121 event=electrodes initial=%s raw_mask=0x%03x selected_mask=0x%03x selected_active=0x%03x touched=%s released=%s",
                 self._last_raw_mask is None, raw_mask, self._mask,
                 raw_mask & self._mask, touched, released,
@@ -609,7 +621,7 @@ class MPR121Handler:
         for event in self._detector.update(touched, now):
             if self._stop.is_set():
                 return
-            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
+            logger.debug("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold", preserve_singles=self._device_tap_mode())
             elif event.kind == "hold_tier":
@@ -629,7 +641,7 @@ class MPR121Handler:
                         continue
                     try:
                         self._pending.put_nowait((self._generation, event, time.monotonic()))
-                        logger.info("MPR121 event=action_queued gesture_id=%d action=%s", event.gesture_id, event.kind)
+                        logger.debug("MPR121 event=action_queued gesture_id=%d action=%s", event.gesture_id, event.kind)
                     except queue.Full:
                         # Counts are resolved from every electrode edge above;
                         # dropping a semantic outcome never invents a triple.

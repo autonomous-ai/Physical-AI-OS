@@ -323,7 +323,7 @@ does not modify boot overlays automatically:
       "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
-      "debounce_ms": 30,
+      "debounce_ms": 10,
       "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
@@ -336,7 +336,7 @@ does not modify boot overlays automatically:
 
 `bus` is required for an enabled entry. Lamp explicitly sets touch/release
 thresholds to `6 / 4` in `mpr121.json`; omitted thresholds retain the generic
-`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi`, `chip_debounce` and `tap_min_electrodes` are defaults;
+`MPR121Config` defaults `2 / 1`. The other values above except `swipe_axis`, `ffi`, `chip_debounce`, `debounce_ms` and `tap_min_electrodes` are defaults;
 address 90 means `0x5A` (allowed addresses: 90–93). Selected electrodes must be
 unique numbers from 0–11, with at least one selected. Thresholds must satisfy
 `0 <= release_threshold < touch_threshold <= 255`. Polling accepts 1–1000 ms;
@@ -345,14 +345,25 @@ and motor noise. Configuration is loaded at boot; restart HAL after changes.
 
 Lamp sets `tap_min_electrodes: 3`: a contact must contain at least three selected
 pads active simultaneously, after the per-pad filter, continuously for
-`debounce_ms` (30 ms) to qualify as a tap. Qualification is retained until full
-release, so staggered finger lift still produces one tap. One/two-pad contacts
+`debounce_ms` (10 ms on Lamp) to qualify as a tap. Qualification is retained until full
+release, so staggered finger lift still produces one tap. On the sampled edge
+where the count falls below the minimum, evaluate the elapsed qualifying
+interval before clearing it; an irregular poll must not discard a contact
+that already met the duration. Separate sub-threshold intervals never add up. One/two-pad contacts
 and brief third-pad spikes produce no single-tap action or multi-tap cue/count.
 The count uses active selected pads, not the newly touched delta in the log and
 not the union of pads visited. Once resolved as a swipe, the existing travel
 rules still apply even when only one pad is active at a time. Hold detection,
 including Harness's two-second exit hold, is unchanged. This filter also applies
 to Harness capture taps and declarations without a swipe axis.
+
+Lamp uses `debounce_ms: 10` for quick palm taps that lift immediately, in
+both normal and Harness modes. The chip still requires three consecutive
+detections (`chip_debounce: 2`), thresholds stay `6 / 4`, and a tap still needs
+three pads. This removes excess software dwell on top of chip filtering;
+it does not require the user to hold a tap. It does not recover a pulse the
+chip never reports. Validate quick taps and untouched noise on the assembled
+base; sampled-mask unit tests do not establish a physical minimum tap duration.
 
 The generic default is 1 (legacy behavior); valid values are integers from 1 to
 the number of selected electrodes. Small real fingertip taps covering fewer
@@ -384,14 +395,49 @@ requires N+1 consecutive touch or release detections before the status changes:
 0 requires one detection; 2 requires three. Lamp sets `chip_debounce: 2`
 (`0x5B = 0x22`) with thresholds `6 / 4`, the values validated on hardware with
 `mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Software contact
-(30 ms) and swipe footprint (5 ms) debounce still apply on top, and each
+(10 ms on Lamp) and swipe footprint (5 ms) debounce still apply on top, and each
 touch/release transition requires two additional consecutive detections compared
 with `chip_debounce: 0`. See [NXP AN3892, page 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
 HAL validates the filter values at boot.
 Verify idle stability, tap, hold and swipe on the installed pads when tuning
-thresholds (the standalone `mpr121_opi_test.py` probe this section used to
-reference is not in the repository; `hal/test/test_mpr121*.py` cover the driver
-logic only). Stop HAL before probing the bus by hand; it owns the bus.
+thresholds. The older `mpr121_opi_test.py` is not in this repository.
+Use the read-only probe from the repository root on an authorized device:
+
+```bash
+sudo python3 -m hal.scripts.mpr121_probe --bus 0 --address 0x5a \
+  --seconds 30 --label idle --output /tmp/mpr121-idle.json
+```
+
+The probe reads live registers without resetting/configuring the chip or
+triggering actions. It can coexist with this driver's polling: each I²C read
+uses one adapter-serialized repeated-start transfer. HAL continues handling
+physical gestures during capture. Stop HAL before using other tools that write
+chip configuration; never run two configuration owners. The output includes
+per-electrode filtered data, baseline, signed delta, touch/release thresholds,
+fault flags, sample timing and mask transitions. Output files must not already
+exist. Baseline registers omit the lowest two bits, so displayed delta can be
+up to 3 counts below the internal delta; a bulk read also need not align with
+a chip update. Do not interpret a small mismatch with touch status as a fault.
+The probe adds I²C traffic; inspect `read_ms` and actual sample intervals and
+verify final interaction latency again without the probe.
+
+For an assembled base, record separate operator-labelled windows: untouched,
+normal light taps at several locations, and untouched with motor/LED/speaker
+activity. Compare idle noise and real touch deltas per electrode, including
+brief peaks and repeatability. `touch_threshold: 6` is a signal threshold, not
+a sensitivity level: lowering it increases sensitivity **and** false-touch
+risk. The three-pad rule filters gestures; it cannot improve the sensor's
+signal-to-noise ratio and can reject genuine narrow contacts. Do not lower both
+settings blindly or infer automatic thresholds from an unlabelled recording.
+
+Cover thickness, pad size and air gaps affect touch signal; see the
+[NXP design guide](https://community.nxp.com/pwmxy87654/attachments/pwmxy87654/sensors/6464/1/MPR121%20%20design%20guideline.pdf).
+Keep the sensing wall thickness consistent and the electrode against the inner
+surface without air gaps. If idle noise overlaps weak touch signals, improve
+mounting, pad geometry, wiring/grounding or power noise before weakening the
+threshold. Tune and validate each physical revision; one global threshold is
+not evidence that every printed base behaves identically. Changes must retain
+responsive tap/release timing as well as reject idle false actions.
 
 A missing file or board entry, or `"enabled": false`, skips MPR121 and retains
 the existing GPIO/TTP223 handlers. There is no legacy MPR121 bus fallback.
@@ -400,7 +446,8 @@ If the configured I²C bus is missing or the sensor does not acknowledge, initia
 
 After initialization, the driver allows 100 ms for sensing to settle before
 reading the initial touch state, then polls every 10 ms by default. Touch and
-release transitions use 30 ms debounce. Overlapping touches across selected
+release transitions use configured debounce (10 ms on Lamp, generic default 30 ms),
+with spatial release grace as described below. Overlapping touches across selected
 electrodes form one contact; release means **all selected electrodes** are
 released. A contact held at startup is ignored until release.
 
@@ -437,6 +484,14 @@ actions apply with Harness OFF; with Harness ON, right to left selects the
 previous agent and left to right selects the next agent. Verify electrode
 placement when assembling the lamp; the array order defines the sign reported
 by the detector, not the user's left-to-right direction.
+Entering swipe recognition requires both a new electrode arrival and departure
+of at least one electrode from the initial footprint, in addition to centroid
+movement. A stationary palm whose footprint expands as pads cross threshold
+stays a tap candidate; shrinking on release alone cannot make it a swipe.
+Keeping all initial pads held is treated as expansion, not travel. This adds
+no debounce or polling delay and preserves the existing 30 ms fast release
+for qualified device tap-to-talk contacts.
+
 A swipe need not cross the entire strip: the centroid must travel at least 3
 positions over at least 30 ms. Fast swipes may skip pads whose dwell is shorter
 than a poll plus the footprint filter; a centroid leap beyond 3 positions is
@@ -445,7 +500,7 @@ a second finger otherwise.
 Missing/null `swipe_axis` disables only swipe detection and preserves legacy
 click/hold recognition. Install HAL support before deploying JSON with this field.
 
-Contact debounce remains 30 ms by default; the spatial footprint uses up to 5 ms
+Contact debounce is 10 ms on Lamp (generic default 30 ms); the spatial footprint uses up to 5 ms
 stability (normally consecutive 10 ms polls) to retain fast electrode transitions.
 The detector follows the debounced contact footprint instead of counting every
 overlapping electrode as a separate tap. Stationary multi-electrode touches
@@ -484,14 +539,14 @@ Hold LED feedback is verified with mocked local tests; it has not been checked
 on the live device. These tests do not execute real reboot, shutdown or reset.
 
 Operation logs use logger `hal.drivers.mpr121` in the normal HAL log/journal;
-there is no separate raw trace file. INFO entries cover initialization and
-configuration (bus, address, electrodes, thresholds and timing), per-electrode
-raw touch/release changes, debounced transitions, suppressed startup touches,
-click counts, hold duration/tier, action queueing/discarding, action begin/end
-and lifecycle. `gesture_id` correlates a click burst or hold with queued,
-discarded or executed actions. Failures include
-error logs. Unchanged 10 ms polls produce no INFO entry, so idle operation does not
-flood the log. Follow the service log with `journalctl -u hal.service -f` and
+there is no continuous raw trace file. INFO covers initialization/configuration,
+suppressed startup touches, rejection/discard reasons, action begin/end and
+lifecycle; failures include error logs. Electrode transitions, per-gesture
+diagnostics (counts, hold duration/tier) and action queueing use DEBUG so normal
+polling avoids synchronous log-handler work on each edge. `gesture_id` still
+correlates executed/discarded actions at INFO. Enabling DEBUG can affect sample
+timing; prefer a bounded read-only probe for signal analysis. Unchanged polls
+produce no entry. Follow the service log with `journalctl -u hal.service -f` and
 filter for `hal.drivers.mpr121` when investigating a missed or duplicate tap.
 
 ## TTP223 detection (`hal/drivers/ttp223.py`)

@@ -315,7 +315,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
       "release_threshold": 4,
       "autoconfig": true,
       "poll_ms": 10,
-      "debounce_ms": 30,
+      "debounce_ms": 10,
       "chip_debounce": 2,
       "tap_min_electrodes": 3,
       "ffi": 34,
@@ -328,7 +328,7 @@ trước khi dùng; HAL không tự sửa boot overlay:
 
 `bus` bắt buộc với entry bật. Lamp đặt rõ ngưỡng chạm/nhả `6 / 4` trong
 `mpr121.json`; nếu bỏ qua ngưỡng thì vẫn dùng mặc định chung `2 / 1` của
-`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi`, `chip_debounce` và `tap_min_electrodes` là mặc định;
+`MPR121Config`. Các giá trị còn lại ở trên trừ `swipe_axis`, `ffi`, `chip_debounce`, `debounce_ms` và `tap_min_electrodes` là mặc định;
 địa chỉ 90 nghĩa là `0x5A` (cho phép 90–93). Electrode được chọn phải là
 các số không trùng từ 0–11, có ít nhất một electrode. Ngưỡng phải thỏa
 `0 <= release_threshold < touch_threshold <= 255`. Polling cho phép 1–1000 ms;
@@ -336,14 +336,24 @@ debounce cho phép 0–1000 ms. Cần chỉnh ngưỡng theo electrode đã lắ
 motor. Cấu hình được đọc lúc khởi động; sửa xong phải restart HAL.
 
 Lamp đặt `tap_min_electrodes: 3`: cần ít nhất ba điện cực được chọn chạm đồng
-thời, sau lọc từng điện cực, liên tục đủ `debounce_ms` (30 ms) mới công nhận tap.
+thời, sau lọc từng điện cực, liên tục đủ `debounce_ms` (10 ms trên Lamp) mới công nhận tap.
 Khi đã đủ điều kiện thì giữ tới lúc nhả hết, nên nhấc ngón tay lần lượt vẫn chỉ
-ra một tap. Chạm 1–2 điện cực hoặc điện cực thứ ba nhảy rất ngắn không tạo action
+ra một tap. Tại mẫu quan sát số pad giảm xuống dưới mức tối thiểu, xét khoảng
+thời gian đã đạt trước khi xoá bộ đếm; polling không đều không được làm mất
+contact đã đủ thời gian. Các khoảng dưới mức thời gian yêu cầu không cộng dồn. Chạm 1–2 điện cực hoặc điện cực thứ ba nhảy rất ngắn không tạo action
 single, cue hay tăng đếm multi-tap. Đếm các điện cực đang active được chọn, không
 đếm delta `touched` trong log hay cộng dồn các điện cực đã đi qua. Vuốt vẫn theo
 luật di chuyển cũ, kể cả chỉ chạm một điện cực ở mỗi thời điểm. Nhận diện giữ,
 gồm giữ hai giây để thoát Harness, không đổi. Bộ lọc cũng áp dụng cho tap capture
 của Harness và cấu hình không có swipe axis.
+
+Lamp dùng `debounce_ms: 10` cho thao tác vỗ nhanh rồi nhấc tay ngay, áp dụng
+cả chế độ thường và Harness. Chip vẫn yêu cầu ba lần phát hiện liên tiếp
+(`chip_debounce: 2`), ngưỡng vẫn `6 / 4` và tap vẫn cần ba pad. Cách này giảm
+thời gian giữ dư thừa ở phần mềm sau bộ lọc chip, không bắt user giữ tay khi
+tap. Không thể khôi phục xung mà chip không báo. Cần kiểm chứng vỗ nhanh và
+nhiễu khi không chạm trên chân đế đã lắp; unit test mask lấy mẫu không chứng
+minh độ dài tối thiểu của cú chạm vật lý.
 
 Mặc định chung là 1 (hành vi cũ); chỉ nhận số nguyên từ 1 tới số điện cực được
 chọn. Tap thật bằng đầu ngón tay chỉ phủ 1–2 điện cực cũng bị bỏ qua. Đây là lọc
@@ -373,14 +383,48 @@ yêu cầu N+1 lần phát hiện chạm hoặc nhả liên tiếp trước khi 
 0 cần một lần; 2 cần ba lần. Lamp đặt `chip_debounce: 2`
 (`0x5B = 0x22`) cùng ngưỡng `6 / 4`, là giá trị đã kiểm chứng trên phần cứng với
 `mpr121_opi_test.py test --touch 6 --release 4 --debounce 2`. Debounce contact
-(30 ms) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm; mỗi chuyển trạng thái
+(10 ms trên Lamp) và footprint vuốt (5 ms) ở phần mềm vẫn áp dụng thêm; mỗi chuyển trạng thái
 chạm/nhả cần thêm hai lần phát hiện liên tiếp so với `chip_debounce: 0`.
 Xem [NXP AN3892, trang 7](https://www.nxp.com/docs/en/application-note/AN3892.pdf#page=7).
 HAL kiểm tra giá trị bộ lọc lúc khởi động.
 Khi chỉnh ngưỡng, kiểm tra độ ổn định lúc không chạm, tap, giữ và vuốt trên
-các pad đã lắp (script probe độc lập `mpr121_opi_test.py` mà phần này từng nhắc
-tới không có trong repo; `hal/test/test_mpr121*.py` chỉ kiểm tra logic driver).
-Dừng HAL trước khi probe bus thủ công; HAL giữ bus.
+các pad đã lắp. Script cũ `mpr121_opi_test.py` không có trong repo.
+Dùng probe chỉ đọc từ thư mục gốc repo trên thiết bị đã được cho phép:
+
+```bash
+sudo python3 -m hal.scripts.mpr121_probe --bus 0 --address 0x5a \
+  --seconds 30 --label idle --output /tmp/mpr121-idle.json
+```
+
+Probe đọc thanh ghi đang chạy, không reset/cấu hình chip hay gọi action.
+Có thể chạy cùng polling của driver này: mỗi lần đọc I²C là một giao dịch
+repeated-start được adapter tuần tự hoá. HAL vẫn xử lý cử chỉ thật trong lúc
+đo. Phải dừng HAL trước khi dùng công cụ khác ghi cấu hình chip; không để hai
+bên cùng cấu hình. Kết quả có dữ liệu lọc, baseline, delta có dấu, ngưỡng
+chạm/nhả từng điện cực, cờ lỗi, thời gian lấy mẫu và chuyển trạng thái mask.
+File đầu ra phải chưa tồn tại. Thanh ghi baseline bỏ hai bit thấp nên delta
+hiển thị có thể thấp hơn delta nội bộ tối đa 3 đơn vị; một lần đọc cả khối
+cũng không nhất thiết trùng chu kỳ cập nhật chip. Chênh lệch nhỏ với trạng thái
+chạm chưa đủ để kết luận chip lỗi. Probe làm tăng lưu lượng I²C; cần xem
+`read_ms`, khoảng lấy mẫu thực tế và đo lại latency tương tác khi tắt probe.
+
+Với chân đế đã lắp, đo các khoảng có người xác nhận riêng: không chạm, chạm
+nhẹ bình thường tại nhiều vị trí, và không chạm khi motor/LED/loa hoạt động.
+So sánh nhiễu nền với delta chạm thật từng điện cực, cả đỉnh nhiễu ngắn và độ
+lặp lại. `touch_threshold: 6` là ngưỡng tín hiệu, không phải mức độ nhạy: hạ
+ngưỡng làm nhạy hơn **và** dễ nhận chạm giả hơn. Điều kiện ba pad chỉ lọc cử
+chỉ, không cải thiện tỷ lệ tín hiệu/nhiễu và có thể bỏ qua chạm thật phủ ít pad.
+Không hạ cả hai giá trị theo phỏng đoán hay tự suy ngưỡng từ bản ghi chưa có
+nhãn xác nhận.
+
+Độ dày vỏ, kích thước pad và khe hở không khí ảnh hưởng tín hiệu chạm; xem
+[hướng dẫn thiết kế NXP](https://community.nxp.com/pwmxy87654/attachments/pwmxy87654/sensors/6464/1/MPR121%20%20design%20guideline.pdf).
+Giữ độ dày vùng cảm ứng đồng đều, điện cực áp sát mặt trong và không có khe
+không khí. Nếu nhiễu nền chồng lấn tín hiệu chạm yếu, cần cải thiện cách lắp,
+kích thước pad, dây/ground hoặc nhiễu nguồn trước khi hạ ngưỡng. Chỉnh và kiểm
+chứng từng phiên bản phần cứng; một ngưỡng chung không chứng minh mọi chân đế
+in 3D phản ứng giống nhau. Thay đổi phải vừa loại chạm giả khi để yên vừa giữ
+thời gian phản hồi chạm/nhả nhanh.
 
 Thiếu file, thiếu entry board, hoặc `"enabled": false` thì bỏ qua MPR121 và
 giữ các handler GPIO/TTP223 hiện có. Không có bus MPR121 cũ để fallback.
@@ -389,7 +433,8 @@ Nếu bus I²C đã cấu hình không tồn tại hoặc sensor không phản h
 
 Sau khởi tạo, driver chờ cảm biến ổn định 100 ms trước khi đọc trạng thái
 chạm ban đầu, rồi poll mỗi 10 ms theo mặc định. Chuyển trạng thái chạm và
-nhả dùng debounce 30 ms. Chạm chồng nhau trên các electrode được chọn tính
+nhả dùng debounce theo cấu hình (10 ms trên Lamp, mặc định chung 30 ms),
+kèm khoảng chờ nhả của bộ nhận diện không gian mô tả bên dưới. Chạm chồng nhau trên các electrode được chọn tính
 là một contact; nhả nghĩa là **toàn bộ electrode được chọn** đã nhả.
 Contact đang bị giữ khi startup bị bỏ qua đến khi nhả.
 
@@ -424,11 +469,19 @@ mode. Các action này áp dụng khi Harness OFF; khi ON, phải sang trái ch�
 agent trước, trái sang phải chọn agent kế tiếp. Cần kiểm tra vị trí electrode
 khi lắp lamp; thứ tự mảng xác định dấu hướng của detector, không phải chiều
 trái sang phải theo góc nhìn user.
+Để bắt đầu nhận diện vuốt, ngoài tâm chạm dịch chuyển, cần có điện cực mới
+active và ít nhất một điện cực thuộc vùng chạm ban đầu đã nhả. Bàn tay đứng
+yên làm vùng chạm rộng dần khi các pad vượt ngưỡng vẫn là ứng viên tap;
+chỉ thu hẹp vùng chạm lúc nhấc tay không biến thành vuốt. Giữ toàn bộ pad
+ban đầu được coi là mở rộng vùng chạm, chưa phải di chuyển. Không thêm thời
+gian debounce/polling; giữ nhả nhanh 30 ms cho tap-to-talk trên device khi
+contact đủ điều kiện.
+
 Không cần vuốt hết toàn bộ dải: tâm chạm phải dịch ít nhất 3 vị trí trong ít nhất 30 ms. Vuốt nhanh có thể bỏ qua pad có thời gian chạm ngắn hơn một poll cộng bộ lọc vùng chạm; tâm chạm nhảy quá 3 vị trí được chấp nhận khi đang di chuyển tiếp cùng hướng, ngược lại bị coi là ngón thứ hai và huỷ. Thiếu/null
 `swipe_axis` chỉ tắt nhận diện vuốt, giữ nhận diện click/hold cũ.
 Cài HAL hỗ trợ trước khi deploy JSON có trường này.
 
-Debounce contact vẫn mặc định 30 ms; vùng chạm dùng tối đa 5 ms ổn định
+Debounce contact là 10 ms trên Lamp (mặc định chung 30 ms); vùng chạm dùng tối đa 5 ms ổn định
 (thường là hai poll liên tiếp cách 10 ms) để giữ các chuyển tiếp electrode nhanh.
 Detector theo dõi vùng chạm đã debounce thay vì đếm mỗi electrode chạm chồng
 thành một tap. Chạm nhiều electrode nhưng đứng yên vẫn giữ hành vi click/hold.
@@ -464,14 +517,14 @@ Phản hồi LED khi giữ được kiểm tra bằng test mock local, chưa ki�
 device thật. Các test này không thực thi reboot, shutdown hay reset thật.
 
 Log hoạt động dùng logger `hal.drivers.mpr121` trong log/journal HAL thông
-thường; không tạo file raw trace riêng. Log INFO gồm khởi tạo và cấu hình
-(bus, địa chỉ, electrode, ngưỡng và thời gian), thay đổi chạm/nhả thô trên từng
-electrode, chuyển trạng thái đã debounce, chạm lúc startup bị bỏ qua, xếp hàng
-hoặc bỏ action, số click, thời lượng/mức giữ, bắt đầu/kết thúc action và
-vòng đời driver. `gesture_id` liên kết chuỗi click hoặc giữ với action đã
-xếp hàng, bỏ hoặc thực thi. Khi lỗi có log lỗi.
-Các lần poll 10 ms không đổi trạng thái không tạo log INFO, tránh tràn log
-khi không chạm. Theo dõi bằng `journalctl -u hal.service -f` và lọc
+thường; không ghi raw trace liên tục. INFO gồm khởi tạo/cấu hình, chạm lúc
+startup bị bỏ qua, lý do từ chối/bỏ action, bắt đầu/kết thúc action và vòng đời;
+khi lỗi có log lỗi. Chuyển trạng thái electrode, chẩn đoán từng gesture
+(số click, thời lượng/mức giữ) và xếp hàng action dùng DEBUG để vòng polling
+bình thường không phải xử lý log đồng bộ trên từng cạnh. `gesture_id` vẫn
+liên kết action đã thực thi/bị bỏ tại INFO. Bật DEBUG có thể ảnh hưởng nhịp lấy
+mẫu; ưu tiên probe chỉ đọc có giới hạn thời gian để phân tích tín hiệu.
+Poll không đổi trạng thái không tạo log. Theo dõi bằng `journalctl -u hal.service -f` và lọc
 `hal.drivers.mpr121` khi cần tìm nguyên nhân mất hoặc lặp tap.
 
 ## Detect TTP223 (`hal/drivers/ttp223.py`)
