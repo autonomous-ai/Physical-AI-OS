@@ -875,7 +875,22 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
+For automatic capture, a completed loud window rejected by Silero also runs
+the existing silence clocks and provisional endpoint policy (including Smart
+Turn). Previously only below-RMS frames reached that check, so continuous
+non-speech noise could hold a recognized request until the 180s capture limit.
+Unclassified loud windows and confirmed speech cannot trigger this check.
+No extra inference or network request is introduced: continuous noise is checked
+once per existing Silero window (default 3 × 64ms of audio), plus its inference
+time, under the same endpoint deadlines as quiet audio. Manual stop and Live
+endpointing are unchanged. This does not distinguish another person's speech
+from speech addressed to the device.
+
 ### Opening-only automatic fillers on Standard and Pro lamps
+
+Main-agent opening filler playback is temporarily paused: `PlayOpeningFillerNow`
+returns before choosing or sending any audio. Its implementation is retained for
+re-enabling. This pause takes precedence over opening-turn eligibility below.
 
 Automatic realtime wait fillers are armed only after session preparation and
 turn admission succeed, including the early-STT drain path. Unavailable/quota

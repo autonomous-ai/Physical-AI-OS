@@ -222,6 +222,11 @@ func PrewarmFillers() {
 // PlayOpeningFillerNow fires a single Opening-pool filler immediately,
 // fire-and-forget, without going through FillerManager.
 func PlayOpeningFillerNow(owner string) {
+	// Temporarily pause opening acknowledgments; retain playback for re-enabling.
+	const openingFillerPaused = true
+	if openingFillerPaused {
+		return
+	}
 	lang := i18n.Lang()
 	opening, _ := poolsForLang(lang)
 	if len(opening) == 0 {

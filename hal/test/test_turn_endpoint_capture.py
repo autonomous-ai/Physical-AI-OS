@@ -12,7 +12,8 @@ import pytest
 def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20,
             tts=None, on_read=None, on_close=None, on_connect=None, on_realtime=None,
             wake_enabled=False, focus=None, transcripts_final=True, close_transcript=None,
-            on_prepare=None, on_drain=None, pending_cue=None, realtime_available=True):
+            on_prepare=None, on_drain=None, pending_cue=None, realtime_available=True,
+            silence_vad=False, speech_windows=None):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -32,6 +33,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         service._tts_is_speaking.side_effect = lambda: tts.speaking
     service._music_is_playing.return_value = False
     service._turn_detector = detector
+    service._silence_window_is_speech.side_effect = speech_windows
     service._realtime.available = realtime_available
     service._realtime.rebuilding = False
     service._realtime.sample_rate = 16000
@@ -98,12 +100,15 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", realtime)
     for name, value in {
         "LIVE_MODE": False, "TURN_END_ENABLED": enabled,
-        "SILENCE_VAD_ENABLED": False, "MAX_SESSION_DURATION_S": legacy_limit,
+        "SILENCE_VAD_ENABLED": silence_vad, "SILENCE_VAD_WINDOW_FRAMES": 3,
+        "MAX_SESSION_DURATION_S": legacy_limit,
         "TURN_END_MAX_DURATION_S": 180, "TURN_END_FALLBACK_S": 2.5,
         "TURN_END_MAX_PAUSE_S": 6.0,
+        "SILENCE_TIMEOUT_S": 2.5, "ENDPOINT_SILENCE_S": 0.8,
     }.items():
         monkeypatch.setattr(module.voice_cfg, name, value)
-    with patch.object(module, "turn_should_close", return_value=True), \
+    with patch.object(module, "turn_should_close", return_value=True,
+                      side_effect=module.turn_should_close if silence_vad else None), \
          patch.object(module, "dispatch_turn") as dispatch, \
          patch.object(module, "run_realtime_turn", side_effect=on_realtime,
                       return_value=module.RealtimeTurnResult()) as rt, \
@@ -199,3 +204,70 @@ def test_disabling_endpoint_preserves_legacy_duration_limit(monkeypatch):
         assert result.consumed == [1, 21]
         assert result.metrics.speech_end.call_args.args[0] == "max_duration"
         result.dispatch.assert_called_once()
+
+
+@pytest.mark.parametrize("enabled", [False, True])
+def test_loud_non_speech_reaches_endpoint_after_completed_silero_window(monkeypatch, enabled):
+    detector = Mock(failed=False)
+    detector.submit.return_value = True
+    detector.poll.return_value = True
+    frames = [(1, True, "Do you think it will rain today?"),
+              (1.064, True, None), (1.128, True, None),
+              (4, True, None), (4.064, True, None), (4.128, True, None)]
+
+    def before_classification(_):
+        # Even after the silence deadline, partial loud windows cannot submit
+        # a semantic endpoint until the classifier has rejected the full window.
+        detector.submit.assert_not_called()
+
+    with capture(monkeypatch, frames, enabled=enabled, detector=detector,
+                 silence_vad=True, speech_windows=[True, False],
+                 on_read=before_classification) as result:
+        assert result.consumed == [frame[0] for frame in frames]
+        assert result.service._silence_window_is_speech.call_count == 2
+        result.dispatch.assert_called_once()
+        assert result.dispatch.call_args.args[2] == frames[0][2]
+        assert result.metrics.speech_end.call_args.args[0] == (
+            "smart_turn" if enabled else "silence_clock"
+        )
+        assert detector.submit.call_count == int(enabled)
+
+
+def test_loud_continuing_speech_refreshes_clock_before_noise_can_endpoint(monkeypatch):
+    detector = Mock(failed=False)
+    detector.submit.return_value = True
+    detector.poll.return_value = True
+    frames = [(1, True, "Please plan a trip"),
+              (1.064, True, None), (1.128, True, None),
+              (4, True, "and reserve a hotel"),
+              (4.064, True, None), (4.128, True, None),
+              (7, True, None), (7.064, True, None), (7.128, True, None)]
+    with capture(monkeypatch, frames, detector=detector, silence_vad=True,
+                 speech_windows=[True, True, False],
+                 on_read=lambda _: detector.submit.assert_not_called()) as result:
+        assert result.consumed == [frame[0] for frame in frames]
+        assert result.service._silence_window_is_speech.call_count == 3
+        detector.submit.assert_called_once()
+        result.dispatch.assert_called_once()
+        assert result.dispatch.call_args.args[2] == "Please plan a trip and reserve a hotel"
+        assert result.metrics.speech_end.call_args.args[0] == "smart_turn"
+
+
+def test_noise_endpoint_latency_is_bounded_by_existing_classifier_window(monkeypatch):
+    endpoints = []
+    for noisy in (False, True):
+        detector = Mock(failed=False)
+        detector.submit.return_value = True
+        detector.poll.return_value = True
+        frames = [(i * 0.064, i <= 3 or noisy,
+                   "Do you think it will rain today?" if i == 1 else None)
+                  for i in range(1, 46)]
+        with capture(monkeypatch, frames, detector=detector, silence_vad=True,
+                     speech_windows=[True] + [False] * 14) as result:
+            result.dispatch.assert_called_once()
+            detector.submit.assert_called_once()
+            endpoints.append(result.consumed[-1])
+    # Deterministic capture-clock measurement, excluding model inference time:
+    # last speech = 192ms; quiet endpoints at 2752ms, noise at 2880ms.
+    assert endpoints == pytest.approx([2.752, 2.880])
+    assert 0 <= endpoints[1] - endpoints[0] <= 3 * 0.064

@@ -851,7 +851,22 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
+Với capture tự động, cửa sổ âm thanh lớn đã được Silero xác nhận không phải
+tiếng nói cũng chạy kiểm tra đồng hồ im lặng và chính sách chốt lượt hiện có
+(gồm Smart Turn). Trước đây chỉ frame dưới ngưỡng RMS mới đi qua kiểm tra này,
+nên tiếng ồn liên tục có thể giữ câu đã nhận diện tới giới hạn capture 180 giây.
+Cửa sổ âm thanh lớn chưa phân loại và tiếng nói đã xác nhận không kích hoạt
+kiểm tra này. Không thêm inference hay request mạng: tiếng ồn liên tục được
+kiểm tra theo cửa sổ Silero hiện có (mặc định 3 × 64ms audio), cộng thời gian
+inference, với cùng ngưỡng chốt lượt như nền yên. Dừng thủ công và endpoint
+của Live không thay đổi. Cách này không phân biệt tiếng người khác với lời nói
+hướng tới thiết bị.
+
 ### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
+
+Tạm tắt phát opening filler của main agent: `PlayOpeningFillerNow` return sớm
+trước khi chọn hoặc gửi audio. Giữ nguyên phần triển khai để có thể bật lại.
+Việc tạm tắt này ưu tiên hơn điều kiện cho phép filler ở lượt mở bên dưới.
 
 Wait filler realtime tự động chỉ được bật sau khi chuẩn bị session và mở lượt
 thành công, kể cả nhánh STT đang drain. Khi session không khả dụng/hết quota
