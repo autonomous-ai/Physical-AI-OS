@@ -25,6 +25,7 @@ def _orch(monkeypatch, *, idle_s: float, threshold: float = 45.0, agent=None):
         hal_config, "REALTIME_GEMINI_IDLE_PARK_S", threshold, raising=False
     )
     o = object.__new__(RealtimeOrchestrator)
+    o._lifecycle_lock = threading.Lock()
     o._started = threading.Event()
     o._started.set()
     o._rebuild_lock = threading.Lock()

@@ -146,7 +146,7 @@ Cập nhật HAL trước khi upload JSON có các trường mới này.
 
 Bảng trên mô tả nút GPIO chính và TTP223. Nút reset riêng ở pin 37 chỉ factory-reset khi nhả sau khi giữ ít nhất 5 s. Giữ ngắn hơn và single/triple tap đều không làm gì; nút này không gọi sleep hoặc shutdown. LED giữ nguyên dưới 5 s và dùng preset factory-reset đỏ đứng chung từ 5 s trở lên.
 
-Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện action và cùng phản hồi LED theo mức giữ, xem phần detect riêng. Mức sleep và các mức destructive **commit khi nhả, không phải khi timer fire lúc đang giữ**. MPR121 dừng ở shutdown: không có mức factory-reset, nên giữ 10 s+ trên touch vẫn chỉ shutdown (`hold_release_action(..., factory_reset=False)`). Chỉ nút GPIO mới factory-reset.
+Khi Harness OFF, Lamp mặc định giữ MPR121 ít nhất 2 giây rồi nhả để đổi voice input mode. Binding đổi được qua cấu hình; giữ để sleep/shutdown vẫn tắt. Giữ GPIO thực hiện action riêng như trước.
 
 ## Cắt Lamp giữa câu (barge-in)
 
@@ -448,14 +448,30 @@ MPR121 dùng chung ngưỡng cử chỉ từ `hal/drivers/button_gestures.py` v�
 | Lần nhả ngắn đầu tiên trong chuỗi click | `single_click_action(source="MPR121", announce=False)` dừng tracking/audio sau khi phân giải contact, unmute khi được phép và phát ack chime. |
 | 1, 2 hoặc 4+ tap ngắn, rồi yên 0.4 s | Xử lý sự kiện cue nghe nhưng không nói; các tap lặp không gọi lại action single-click ban đầu. |
 | Đúng 3 tap ngắn, rồi yên 0.4 s | Reboot bị vô hiệu hóa tại wrapper MPR121; không có action bổ sung hoặc cue nghe. Action single-click ở tap đầu vẫn chạy. |
-| Giữ 2–<5 s rồi nhả | Đã tắt; không sleep. |
-| Giữ ≥5 s rồi nhả | Đã tắt; không shutdown hay factory reset. |
+| Giữ ≥2 s rồi nhả | Lamp mặc định đổi `automatic` ↔ `tap_to_talk`. Không shutdown hay factory reset, kể cả giữ lâu hơn. |
 | Vuốt phải sang trái rồi nhả (user ngồi đối diện lamp) | `swipe_action` sleep; contact di chuyển này không gọi click hoặc action destructive. |
 | Vuốt trái sang phải rồi nhả (user ngồi đối diện lamp) | Bật Harness voice qua API Go; contact di chuyển này không gọi click hoặc action destructive. |
 
 Contact ngắn kéo dài dưới 2 s. Cửa sổ click không phân giải khi còn bất kỳ
 electrode được chọn nào đang chạm. Nhả sau giữ xóa chuỗi click đang chờ.
 Action destructive không chạy khi còn giữ.
+
+### Cấu hình gesture đổi voice mode
+
+`mpr121.json` của Lamp gắn feature độc lập với bộ nhận diện:
+
+```json
+"gesture_actions": {"hold": "toggle_voice_input_mode"},
+"hold_action_s": 2
+```
+
+Binding cho phép `hold`, `swipe_left`, `swipe_right`; action hỗ trợ là `toggle_voice_input_mode`. Tên swipe theo góc nhìn user đối diện lamp. Swipe đã gán thay action mặc định của hướng đó khi Harness OFF. Thiếu/để rỗng `gesture_actions` giữ action cũ và hold không làm gì. `hold_action_s` nhận 0.5–10 giây. Cấu hình gesture đọc lúc HAL khởi động; bản thân đổi voice mode áp dụng nóng.
+
+Hold mặc định cần đủ `tap_min_electrodes`, báo LED cyan khi đủ thời gian và thực hiện một lần khi nhả. Không phát thêm tap. Tap ngắn giữ timing hiện có; không thêm độ trễ chờ double-tap. Sleep, privacy, enrollment và trạng thái Harness chưa biết chặn feature này. Harness ON giữ chính sách giữ 2 giây để thoát riêng. TTP223 vẫn dùng pet.
+
+Worker riêng chỉ cho một lần đổi mode đang xử lý; gesture đổi mode lặp khi đang chờ bị bỏ qua. HTTP chậm không chặn worker xử lý chạm. Mục tiêu dispatch cục bộ dưới 20 ms, không tính nhận diện/khoảng chờ nhả và áp dụng mode. Đo giả lập trên macOS với action HTTP bị chặn: `ModeToggleWorker.submit()` mất 0.091 ms lần đầu, p95 0.059 ms qua 29 lần lặp; từ chối toggle khi đang chờ tối đa 0.002 ms. Đây là thời gian nhận việc vào worker, không phải latency từ chạm tới âm thanh trên device.
+
+Action tách riêng gọi OS `POST /api/device/voice-input-mode/toggle` một lần, không tự retry. OS tuần tự hóa đọc/đổi/lưu/apply chung với HTTP/MQTT; trả chuẩn `status: 1`, `data.mode` chỉ sau khi HAL áp dụng. Caller local dùng loopback; caller remote cần admin auth. HAL chỉ đọc tên mode mới khi thành công. Khi timeout/lỗi, kiểm tra mode đã cấu hình trước khi toggle tiếp vì gọi lại có thể đảo thay đổi đã áp dụng. Gửi mode tường minh có thể retry an toàn. Đổi mode dựng lại recognizer MPR và bỏ contact đang giữ tới khi nhả.
 
 ### Vuốt MPR121 theo hướng
 

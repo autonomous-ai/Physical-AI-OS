@@ -13,6 +13,10 @@ from hal.drivers.voice import voice_service as module
 
 
 def service(monkeypatch):
+    from hal import app_state
+
+    for name in ("_mic_muted", "_hw_mic_switch_muted", "_sleeping", "_enrolling"):
+        monkeypatch.setattr(app_state, name, False)
     s = object.__new__(module.VoiceService)
     s._automatic_reply_lock = threading.Lock()
     s._automatic_reply_stop = None
@@ -220,3 +224,14 @@ def test_constructor_failure_does_not_start_optional_workers(monkeypatch):
     with pytest.raises(RuntimeError, match='mock realtime init failure'):
         module.VoiceService(stt_provider=Mock())
     decorator.assert_not_called()
+
+
+@pytest.mark.parametrize('gate', ['_mic_muted', '_hw_mic_switch_muted', '_sleeping', '_enrolling'])
+def test_deferred_restart_respects_privacy_and_capture_ownership(monkeypatch, gate):
+    from hal import app_state
+
+    s = service(monkeypatch)
+    monkeypatch.setattr(app_state, gate, True)
+    s._start_locked = Mock()
+    s._resume_after_teardown(s._lifecycle_revision, None, None)
+    s._start_locked.assert_not_called()

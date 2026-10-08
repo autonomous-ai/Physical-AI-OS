@@ -155,6 +155,9 @@ def test_failed_cancel_recovery_cannot_reuse_old_provider(discard):
     orchestrator._agent = old
     orchestrator._context = Mock()
     orchestrator._make_agent = Mock(return_value=replacement)
+    orchestrator._lifecycle_lock = threading.Lock()
+    orchestrator._started = threading.Event()
+    orchestrator._started.set()
     orchestrator._rebuild_lock = threading.Lock()
     orchestrator._rebuild_done = threading.Event()
     # Keep the test deterministic while executing the real disconnect action.

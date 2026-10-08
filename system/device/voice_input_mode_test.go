@@ -40,24 +40,24 @@ func assertSavedInputMode(t *testing.T, mode string) {
 func TestInputModeApplyRetriesAcrossEntries(t *testing.T) {
 	for _, first := range []string{"mqtt", "http"} {
 		for _, retry := range []string{"mqtt", "http"} {
-			for _, failure := range []string{"save", "restart", "deadline"} {
+			for _, failure := range []string{"save", "apply", "deadline"} {
 				t.Run(first+"_"+failure+"_retry_"+retry, func(t *testing.T) {
 					t.Chdir(t.TempDir())
 					cfg := baseConfig()
 					disabled := false
 					cfg.WakeWord = &disabled
-					restartErr := errors.New("injected restart failure")
+					applyErr := errors.New("injected apply failure")
 					if failure == "deadline" {
-						restartErr = context.DeadlineExceeded
+						applyErr = context.DeadlineExceeded
 					}
-					failRestart := failure != "save"
-					restarts := 0
-					s := &Service{config: cfg, halRestartCommand: func(ctx context.Context) error {
-						restarts++
+					failApply := failure != "save"
+					applys := 0
+					s := &Service{config: cfg, halRestartCommand: func(context.Context) error { return errors.New("unexpected HAL apply for mode-only update") }, halInputModeApply: func(ctx context.Context, mode string, wake bool) error {
+						applys++
 						assertWakeDeadline(t, ctx)
 						assertSavedInputMode(t, "tap_to_talk")
-						if failRestart {
-							return restartErr
+						if failApply {
+							return applyErr
 						}
 						return nil
 					}}
@@ -68,26 +68,26 @@ func TestInputModeApplyRetriesAcrossEntries(t *testing.T) {
 					}
 					err := updateInputModeThrough(s, first, "tap_to_talk")
 					if err == nil {
-						t.Fatal("failed save/restart reported success")
+						t.Fatal("failed save/apply reported success")
 					}
-					if failure != "save" && !errors.Is(err, restartErr) {
-						t.Fatalf("restart error lost: %v", err)
+					if failure != "save" && !errors.Is(err, applyErr) {
+						t.Fatalf("apply error lost: %v", err)
 					}
 					if failure == "save" {
-						if !strings.Contains(err.Error(), "save config") || restarts != 0 {
-							t.Fatalf("save failure = %v, restart calls = %d", err, restarts)
+						if !strings.Contains(err.Error(), "save config") || applys != 0 {
+							t.Fatalf("save failure = %v, apply calls = %d", err, applys)
 						}
 						if err := os.Remove("config/config.json"); err != nil {
 							t.Fatal(err)
 						}
 					}
-					failRestart = false
-					beforeRetry := restarts
+					failApply = false
+					beforeRetry := applys
 					if err := updateInputModeThrough(s, retry, "tap_to_talk"); err != nil {
 						t.Fatalf("same-value retry: %v", err)
 					}
-					if restarts != beforeRetry+1 {
-						t.Fatalf("retry made %d restart calls, want 1", restarts-beforeRetry)
+					if applys != beforeRetry+1 {
+						t.Fatalf("retry made %d apply calls, want 1", applys-beforeRetry)
 					}
 					assertSavedInputMode(t, "tap_to_talk")
 					for _, duplicate := range []string{"mqtt", "http"} {
@@ -95,8 +95,8 @@ func TestInputModeApplyRetriesAcrossEntries(t *testing.T) {
 							t.Fatalf("successful duplicate: %v", err)
 						}
 					}
-					if restarts != beforeRetry+1 {
-						t.Fatalf("successful duplicates restarted HAL: %d calls", restarts)
+					if applys != beforeRetry+1 {
+						t.Fatalf("successful duplicates applyed HAL: %d calls", applys)
 					}
 				})
 			}
@@ -123,7 +123,8 @@ func TestInputModeMixedUpdatePreservesWakeAndRestartsOnce(t *testing.T) {
 	enabled := true
 	cfg.WakeWord = &enabled
 	restarts := 0
-	s := &Service{config: cfg, halRestartCommand: func(ctx context.Context) error { restarts++; return nil }}
+	applies := 0
+	s := &Service{config: cfg, halRestartCommand: func(ctx context.Context) error { restarts++; return nil }, halInputModeApply: func(ctx context.Context, mode string, wake bool) error { applies++; return nil }}
 	mode := "tap_to_talk"
 	if err := s.UpdateConfig(domain.UpdateConfigRequest{VoiceInputMode: &mode, WakeWord: &enabled, STTLanguage: "vi", TTSVoice: "nova"}); err != nil {
 		t.Fatal(err)
@@ -134,7 +135,7 @@ func TestInputModeMixedUpdatePreservesWakeAndRestartsOnce(t *testing.T) {
 	if err := s.UpdateVoiceInputMode("automatic"); err != nil {
 		t.Fatal(err)
 	}
-	if restarts != 2 || !cfg.WakeWordEnabled() {
+	if restarts != 1 || applies != 1 || !cfg.WakeWordEnabled() {
 		t.Fatal("switching back lost saved wake setting")
 	}
 }
@@ -159,7 +160,7 @@ func TestInputModeApplySerializesOpposingEntries(t *testing.T) {
 					t.Error("input mode update workers did not stop")
 				}
 			}()
-			s := &Service{config: cfg, halRestartCommand: func(ctx context.Context) error {
+			s := &Service{config: cfg, halRestartCommand: func(context.Context) error { return errors.New("unexpected HAL restart for mode-only update") }, halInputModeApply: func(ctx context.Context, mode string, wake bool) error {
 				assertWakeDeadline(t, ctx)
 				// Inspect the persisted snapshot that this restart will consume.
 				data, err := os.ReadFile("config/config.json")
@@ -235,4 +236,49 @@ func TestInputModeApplySerializesOpposingEntries(t *testing.T) {
 			assertSavedInputMode(t, "automatic")
 		})
 	}
+}
+
+func TestInputModeToggleSerializesWithExplicitUpdate(t *testing.T) {
+	t.Chdir(t.TempDir())
+	cfg := baseConfig()
+	started := make(chan string, 2)
+	release := make(chan struct{})
+	s := &Service{config: cfg, halRestartCommand: func(context.Context) error { return errors.New("unexpected HAL restart for mode-only update") }, halInputModeApply: func(ctx context.Context, mode string, wake bool) error {
+		started <- mode
+		select {
+		case <-release:
+			return nil
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}}
+	explicit := make(chan error, 1)
+	go func() { explicit <- s.UpdateVoiceInputMode("tap_to_talk") }()
+	if mode := <-started; mode != "tap_to_talk" {
+		t.Fatal(mode)
+	}
+	toggled := make(chan error, 1)
+	go func() {
+		mode, err := s.ToggleVoiceInputMode()
+		if err == nil && mode != "automatic" {
+			err = errors.New("toggle used stale mode")
+		}
+		toggled <- err
+	}()
+	select {
+	case mode := <-started:
+		t.Fatalf("overlapping apply: %s", mode)
+	case <-time.After(50 * time.Millisecond):
+	}
+	close(release)
+	if err := <-explicit; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-toggled; err != nil {
+		t.Fatal(err)
+	}
+	if mode := <-started; mode != "automatic" {
+		t.Fatal(mode)
+	}
+	assertSavedInputMode(t, "automatic")
 }
