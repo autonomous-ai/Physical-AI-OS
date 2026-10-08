@@ -498,11 +498,20 @@ def following_a_face(svc: Any) -> bool:
 
 
 def idle_breathing(svc: Any) -> bool:
-    """Whether the only thing writing the servos is the idle loop looping."""
-    if svc is None or not getattr(svc, "_idle_settled", False):
+    """Whether idle writes are past the transition and its settling interval."""
+    if svc is None:
         return False
     current = getattr(svc, "_current_recording", None)
-    return current is not None and current == getattr(svc, "idle_recording", None)
+    if current is None or current != getattr(svc, "idle_recording", None):
+        return False
+    if getattr(svc, "_interpolation_frames", 0) > 0:
+        return False
+    if getattr(svc, "_idle_settled", False):
+        return True
+    from hal.drivers.tracking import aim
+
+    started = getattr(svc, "_idle_playback_started_at", 0.0)
+    return started > 0.0 and time.monotonic() - started >= aim.FRAME_SETTLE_S
 
 
 _skips_logged: set = set()

@@ -461,8 +461,14 @@ restart within the same boot; reboot clears the boot-scoped state and returns to
 the device default. Legacy `{"type":"off"}` sidecars still normalize to no state.
 
 `led_should_stay_dark()` covers explicit solid black and a dark default, so
-TTS/music waves and presence restoration respect off. Information/status and
-mic-privacy cues retain their existing priority. The `light on` intent remains
+music waves and presence restoration respect off. Active voice status remains
+visible: listening and thinking use their device emotion presets even with a
+saved off preference; TTS uses the dim listening color when its base would be
+black. The existing cue/completion/cancellation restore paths restore the latest
+saved preference, including off. No preference is overwritten and no network
+request or additional delay is introduced. Sleep still blocks these cues; mic
+privacy retains its existing resting-indicator priority. There is no separate
+full-blackout preference. The `light on` intent remains
 warm white [255, 220, 180]; it does not use the dim ambient preset.
 
 ## LED in Emotion

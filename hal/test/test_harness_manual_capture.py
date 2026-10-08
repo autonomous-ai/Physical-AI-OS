@@ -1,4 +1,6 @@
 """Manual Harness recording never submits on silence or a cancelled owner."""
+import threading
+
 from unittest.mock import Mock, patch
 
 import numpy as np
@@ -42,6 +44,11 @@ def test_real_stream_silence_waits_for_tap_and_cancel_never_dispatches(reason, m
     assert control.start(SNAPSHOT)
     capture = control.claim(SNAPSHOT)
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = True
     service._tts = Mock(last_spoken_text="")
     service._tts.play_harness_capture_chime.return_value = True
@@ -106,6 +113,11 @@ def test_fast_finish_before_recorder_ready_does_not_send_or_beep(monkeypatch):
     assert control.finish()
     capture = control.claim(SNAPSHOT)
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = True
     stt = Mock()
     stt.is_closed.return_value = False

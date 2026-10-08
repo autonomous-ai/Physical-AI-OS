@@ -222,6 +222,11 @@ func PrewarmFillers() {
 // PlayOpeningFillerNow fires a single Opening-pool filler immediately,
 // fire-and-forget, without going through FillerManager.
 func PlayOpeningFillerNow(owner string) {
+	// Temporarily pause opening acknowledgments; retain playback for re-enabling.
+	const openingFillerPaused = true
+	if openingFillerPaused {
+		return
+	}
 	lang := i18n.Lang()
 	opening, _ := poolsForLang(lang)
 	if len(opening) == 0 {
@@ -288,6 +293,9 @@ func PlayPoolFillerNow(pool, owner string) {
 	}
 }
 
+// speakCue plays a SayInVoiceRun cue; a var so tests can capture it.
+var speakCue = hal.SpeakCachedInterruptibleForTurn
+
 // FillerManager schedules and cancels dead-air fillers driven by OpenClaw
 // agent events. Safe for concurrent use; all exported methods are idempotent.
 type FillerManager struct {
@@ -300,6 +308,10 @@ type FillerManager struct {
 	// interactions maps a run to HAL's voice-metrics interaction id, so a filler
 	// fired later in the turn is attributed the same way the opening one is.
 	interactions map[string]string
+	// Suppression survives Cancel because a delegated task can resume fillers
+	// after the device agent finishes. Keep only a bounded set of recent runs.
+	suppressed      map[string]bool
+	suppressedOrder []string
 }
 
 // NewFillerManager constructs an empty FillerManager. Language is read at
@@ -310,6 +322,7 @@ func NewFillerManager() *FillerManager {
 		voiceRuns:    make(map[string]bool),
 		delegated:    make(map[string]bool),
 		interactions: make(map[string]string),
+		suppressed:   make(map[string]bool),
 	}
 }
 
@@ -318,6 +331,27 @@ func NewFillerManager() *FillerManager {
 // (OnTurnStart/OnToolStart/OnToolEnd/Cancel).
 var DefaultFillerManager = NewFillerManager()
 
+const maxSuppressedFillerRuns = 4096
+
+// SuppressRun disables automatic fillers for a turn, including re-registration
+// after queued replay or a delegated task resumes. Call before dispatch.
+func (fm *FillerManager) SuppressRun(runID string) {
+	if runID == "" {
+		return
+	}
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if fm.suppressed[runID] {
+		return
+	}
+	if len(fm.suppressedOrder) >= maxSuppressedFillerRuns {
+		delete(fm.suppressed, fm.suppressedOrder[0])
+		fm.suppressedOrder = fm.suppressedOrder[1:]
+	}
+	fm.suppressed[runID] = true
+	fm.suppressedOrder = append(fm.suppressedOrder, runID)
+}
+
 // MarkVoiceRun marks runID as eligible for fillers. Other turn types
 // (Telegram, web chat, passive sensing, cron, guard) must NOT be marked.
 func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
@@ -325,6 +359,10 @@ func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
+	if fm.suppressed[runID] {
+		fm.mu.Unlock()
+		return
+	}
 	fm.voiceRuns[runID] = true
 	if interactionID != "" {
 		fm.interactions[runID] = interactionID
@@ -340,7 +378,9 @@ func (fm *FillerManager) MarkDelegatedVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
-	fm.delegated[runID] = true
+	if !fm.suppressed[runID] {
+		fm.delegated[runID] = true
+	}
 	fm.mu.Unlock()
 }
 
@@ -512,6 +552,47 @@ func (fm *FillerManager) CancelAllActive() int {
 	return len(runIDs)
 }
 
+// SayInVoiceRun speaks one phrase from pool for the voice turn in progress and
+// pushes that turn's dead-air filler back by its cooldown, so a generic "Hmm..."
+// does not land on top of the cue. It is silent and returns false when no voice
+// turn is running (Telegram, web chat, cron) or the reply is already streaming.
+// The cue does not count toward MaxFillersPerTurn.
+func (fm *FillerManager) SayInVoiceRun(pool string) bool {
+	phrases := toolPoolForLang(i18n.Lang(), pool)
+	if len(phrases) == 0 {
+		return false
+	}
+	fm.mu.Lock()
+	var runID string
+	var run *fillerRun
+	for id, r := range fm.runs {
+		if !r.ended && !r.suspended {
+			runID, run = id, r
+			break
+		}
+	}
+	if run == nil {
+		fm.mu.Unlock()
+		return false
+	}
+	if run.timer != nil {
+		run.timer.Stop()
+		run.timer = nil
+		run.generation++
+	}
+	run.lastActivityAt = time.Now()
+	fm.armLocked(runID, run, fillerRearmDelay(run))
+	owner := fillerOwner(fm.interactions[runID], runID)
+	fm.mu.Unlock()
+
+	filler := pickFrom(phrases, "")
+	slog.Info("voice cue firing", "component", "sensing", "run_id", runID, "pool", pool, "filler", filler, "owner", owner)
+	if err := speakCue(filler, owner); err != nil {
+		slog.Warn("voice cue failed", "component", "sensing", "pool", pool, "error", err)
+	}
+	return true
+}
+
 // HasActiveRun reports whether runID still holds filler state. Exported for
 // the agent handler's tests, which assert that a muted turn stops re-arming.
 func (fm *FillerManager) HasActiveRun(runID string) bool {
@@ -571,6 +652,13 @@ func (fm *FillerManager) fire(runID string, expectedRun *fillerRun, generation u
 	fm.mu.Lock()
 	run, ok := fm.runs[runID]
 	if !ok || run != expectedRun || run.generation != generation || run.ended || run.suspended || run.timer == nil {
+		fm.mu.Unlock()
+		return
+	}
+	// Temporarily pause continuation audio; retain the timer lifecycle and playback code.
+	const continuationFillerPaused = true
+	if continuationFillerPaused {
+		run.timer = nil
 		fm.mu.Unlock()
 		return
 	}

@@ -1,4 +1,6 @@
 """Wake idle time belongs to the user after an authorized reply drains."""
+import threading
+
 
 import pytest
 
@@ -129,6 +131,11 @@ def test_capture_gate_and_reply_drain(monkeypatch, wake_enabled, initial_focus, 
         focus.refresh()
     request = 'What am I wearing today?'
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = False
     service._tts = None
     service._wakeword_focus = focus

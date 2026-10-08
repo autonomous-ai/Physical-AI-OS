@@ -18,6 +18,11 @@ def service(monkeypatch):
     for name in ("_mic_muted", "_hw_mic_switch_muted", "_sleeping", "_enrolling"):
         monkeypatch.setattr(app_state, name, False)
     s = object.__new__(module.VoiceService)
+    s._automatic_reply_lock = threading.Lock()
+    s._automatic_reply_stop = None
+    s._automatic_reply_cancelled_at = None
+    s._stt_drain_worker = None
+    s._stt_drain_future = None
     s._lifecycle_lock = threading.Lock()
     s._lifecycle_revision = 0
     s._mic_lock = threading.Lock()

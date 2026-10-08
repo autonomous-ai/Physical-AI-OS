@@ -8,6 +8,11 @@ from hal.drivers.voice._internal.realtime_turn import RealtimeTurnResult, ROUTE_
 
 def test_slow_identity_overlaps_realtime_but_is_ready_for_dispatch(monkeypatch):
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = False
     service._tts = None
     service._wakeword_focus.is_active.return_value = False

@@ -449,7 +449,9 @@ def speak_queue_text(req: SpeakRequest):
 
 @router.post("/tts/stop", response_model=StatusResponse)
 def stop_tts():
-    """Interrupt active TTS playback immediately."""
+    """Interrupt playback and release a turn-based realtime reply wait."""
+    if state.voice_service:
+        state.voice_service.cancel_automatic_reply()
     if state.tts_service:
         state.tts_service.stop()
     return {"status": "ok"}

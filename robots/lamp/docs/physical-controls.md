@@ -164,7 +164,7 @@ mic gating and the Automatic/Harness 0.5 s voice startup delay are unchanged. De
 
 The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the chime and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. The spoken "Listening" cue is disabled; the short chime remains when audio is permitted.
 
-When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, default 20 s) a spoken wake phrase opens. Without it the device would acknowledge the tap and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
+When wake word is enabled, the click also **counts as a wake event**: `single_click_action` calls `voice_service.grant_wakeword_focus(source)`, which opens the same follow-up focus window (`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, 5 s in the lamp packaged `.env`; code fallback 20 s) a spoken wake phrase opens. Without it the device would acknowledge the tap and then drop the user's answer for missing the wake phrase. The window is re-checked at dispatch time, not only latched at mic-session start, so a click during an already-open session still authorizes the sentence being spoken. No-op when wake word is off (every utterance already dispatches) or when the follow-up timeout is 0.
 
 ### Tap-to-talk for the device runtime
 
@@ -212,7 +212,7 @@ When several faces are in frame, the one whose head counts is the one **nearest 
 | `HAL_GAZE_MIN_SAMPLES` | 2 | Below this there is not enough evidence to decide either way. The loop achieves ~2 samples/s whatever the rate asks for — it is paced by fetching a frame and running the detector — so 3 rejected users the rest of the pipeline agreed were facing the lamp. The `[gaze] sampling at N/s` line counts samples actually RECORDED, and reports separately how many frames were blocked before they could be measured (settling from a servo write, or the detector held by a live look). Counting attempts instead once reported 5.7/s while the buffer held nothing newer than the 1.5 s window — under 1/s of real evidence. |
 | `HAL_GAZE_SAMPLE_FPS` | 6 | Sampling rate. The gesture is slow, but the decision is a vote and only measured samples count — at 3 fps a window often held one usable sample, refusing a user facing the lamp dead-on. |
 | `HAL_GAZE_BUFFER_S` | 4.0 | Yaw history retained. Must exceed `WINDOW_S` so the lookback can see far enough back. It briefly had to be twice that, for a transition test that has since been removed; 4.0 is kept because the extra second costs nothing and `trail=` reads better with more history behind it. |
-| `HAL_GAZE_WAKE_FOCUS_S` | 10 | Follow-up window a *gaze* wake opens, shorter than the 20 s a spoken phrase or click opens. A glance claims less than a deliberate act. Capped by `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, never above it. |
+| `HAL_GAZE_WAKE_FOCUS_S` | 10 | Follow-up window a *gaze* wake requests. Capped by `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`, so the lamp packaged `.env` limits it to 5 s as well. |
 | `HAL_GAZE_COOLDOWN_S` | 5 | Minimum gap between gaze-opened gates, so one conversation cannot open one per sentence. |
 | `HAL_GAZE_REPOINT` | `true` | Turn toward the remembered bearing when nobody has been visible. |
 | `HAL_GAZE_REPOINT_AFTER_S` | 12 | How long nobody must be visible first. A voice-triggered empty-evidence recovery bypasses this delay, but not the movement cooldown. |
@@ -794,3 +794,9 @@ An explicit speaker-mute request during sleep takes ownership from sleep and is 
 Harness recording feedback uses a dedicated rising two-note cue to start and a falling two-note cue to finish; neither uses the normal gesture ping. The finish cue confirms recording has ended, not that the remote agent accepted or completed the task. The tap that interrupts TTS retains the normal acknowledgment ping and does not open capture.
 
 While Harness mode stays ON, the MPR121 mode watcher maintains a dim lime breathing indicator from `button_led.harness_on` in the device presets. OFF uses one brief dim blink from `harness_off`. The indicator yields to sleep, privacy and active voice/music feedback, returns on normal LED restore, and never changes saved user light settings. Devices without RGB skip LED feedback.
+
+With Live off, the stop/listen tap also cancels an active automatic realtime reply
+wait, not only TTS. Late reply output and main fallback are discarded; provider
+reconnection happens in the background so it does not hold the mic loop. See
+[automatic reply cancellation](../../../docs/realtime-voice.md#stop-playback-releases-automatic-reply-capture)
+for latency boundaries and diagnostic logs.

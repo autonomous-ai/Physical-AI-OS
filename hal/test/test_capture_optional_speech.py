@@ -161,6 +161,11 @@ def test_capture_reservation_is_released_when_setup_raises(monkeypatch, tts):
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", False)
     monkeypatch.setattr(module, "read_voice_mode", Mock(side_effect=RuntimeError("mode unavailable")))
     service = SimpleNamespace(_tts=tts)
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     with pytest.raises(RuntimeError, match="mode unavailable"):
         module.VoiceService._stream_session(service, None, 1024, 16000)
     assert not tts.input_capture_state[0]
@@ -178,7 +183,10 @@ def test_live_and_manual_capture_do_not_reserve_optional_speech(monkeypatch, tts
 
     monkeypatch.setattr(module, "read_voice_mode", setup)
     with pytest.raises(RuntimeError, match="stop at setup"):
-        module.VoiceService._stream_session(SimpleNamespace(_tts=tts), None, 1024, 16000,
+        module.VoiceService._stream_session(SimpleNamespace(
+            _tts=tts, _automatic_reply_lock=threading.Lock(), _automatic_reply_stop=None,
+            _automatic_reply_cancelled_at=None, _stt_drain_worker=None, _stt_drain_future=None,
+        ), None, 1024, 16000,
                                            manual_capture=manual)
     assert tts.input_capture_state == (False, 0)
 
