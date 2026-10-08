@@ -526,6 +526,8 @@ def run_realtime_turn(
     harness_followup: Optional[bool] = None,
     stop_event: Optional[threading.Event] = None,
     suppress_visual_feedback: bool = False,
+    explicit_capture: bool = False,
+    capture_finished_at: Optional[float] = None,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply."""
     delegated = False
@@ -584,7 +586,10 @@ def run_realtime_turn(
 
     # Noise/false-trigger guard: a session with no STT transcript is not worth a model
     # turn. "No transcript" → don't speak.
-    noise_turn = is_noise_turn(combined, buf_duration, audio_is_speech)
+    # An explicit finish tap authorizes voiced audio without waiting for STT.
+    # Automatic turns retain their transcript-based false-trigger policy.
+    noise_turn = ((buf_duration <= 0 or not audio_is_speech) if explicit_capture
+                  else is_noise_turn(combined, buf_duration, audio_is_speech))
     # Only the first actionable answer after main's question is owed to main;
     # noise keeps the window for the real answer (#564). Checked here but consumed
     # at the end, so a session recovery mid-turn still resends the delegate note.
@@ -658,6 +663,9 @@ def run_realtime_turn(
                     realtime, rt_audio_buffer, audio_turn,
                     **({"stop_event": stop_event} if stop_event is not None else {}),
                 )
+                if capture_finished_at is not None:
+                    logger.info("[tap-latency] event=realtime_commit after_finish_ms=%.2f interaction_id=%s",
+                                (time.monotonic() - capture_finished_at) * 1000, interaction_id)
                 if not thinking_started:
                     # Start provider work before synchronous hardware feedback.
                     thinking_started = True
@@ -667,6 +675,9 @@ def run_realtime_turn(
                 for output in _active_outputs(outputs, stop_event):
                     if not first_output_logged:
                         first_output_logged = True
+                        if capture_finished_at is not None:
+                            logger.info("[tap-latency] event=realtime_first_output after_finish_ms=%.2f interaction_id=%s",
+                                        (time.monotonic() - capture_finished_at) * 1000, interaction_id)
                         logger.info(
                             "[realtime] first output +%.2fs after commit (%s)",
                             time.monotonic() - t_commit,

@@ -1,4 +1,4 @@
-"""Realtime execution on the device FIFO finalizer, independent of mic capture."""
+"""Serialized device realtime execution, independent of mic and STT finalization."""
 
 import logging
 import time
@@ -91,12 +91,104 @@ class _DeviceOutput:
 
 
 class DeviceRealtimeTurn:
-    """One callable per finalized turn; the caller supplies FIFO serialization."""
+    """Execute one turn; the caller serializes access to the realtime session."""
 
     def __init__(self, *, realtime, tts, strip_markers):
         self._get_realtime = realtime
         self._get_tts = tts
         self._strip_markers = strip_markers
+
+    def stream(self, audio_source, *, snapshot, cancelled, valid):
+        """Upload arriving PCM; a valid source end is the explicit finish tap.
+
+        ``snapshot`` reads current metadata without waiting for STT or identity.
+        It supplies combined, duration, speech, interaction_id and optional speaker.
+        GPT Live has no manual endpoint API, so only that provider defers upload
+        until finish. The producer remains nonblocking in either case.
+        """
+        last_validated = 0.0
+
+        def active(*, force=True):
+            nonlocal last_validated
+            if cancelled.is_set():
+                return False
+            now = time.monotonic()
+            if force or now - last_validated >= 0.25:
+                last_validated = now
+                if not valid():
+                    cancelled.set()
+                    return False
+            return True
+
+        if not active():
+            return RealtimeTurnResult(route=ROUTE_CANCELLED)
+        if not config.REALTIME_ENABLED:
+            return RealtimeTurnResult()
+        realtime = self._get_realtime()
+        if realtime is None:
+            return RealtimeTurnResult(route=ROUTE_UNAVAILABLE)
+        binding = None
+        handed_off = False
+        try:
+            realtime.prepare_turn()
+            if not active():
+                return RealtimeTurnResult(route=ROUTE_CANCELLED)
+            if not realtime.wait_until_available():
+                return RealtimeTurnResult(route=ROUTE_UNAVAILABLE)
+            if not active():
+                return RealtimeTurnResult(route=ROUTE_CANCELLED)
+            binding = realtime.bind_audio_turn()
+            if not active():
+                return RealtimeTurnResult(route=ROUTE_CANCELLED)
+            realtime.send_text(build_turn_context())
+            resampler = StreamingResampler(voice_config.STT_RATE, realtime.sample_rate)
+            frames = []
+            buffer_until_finish = config.REALTIME_PROVIDER.strip().lower() == "gptlive"
+            for pcm in audio_source:
+                if not active(force=False):
+                    return RealtimeTurnResult(route=ROUTE_CANCELLED)
+                frame = resampler.process(pcm16_bytes_to_float32(pcm))
+                if not len(frame):
+                    continue
+                frames.append(frame)
+                if not buffer_until_finish:
+                    realtime.append_audio(frame, turn=binding)
+            if not active():
+                return RealtimeTurnResult(route=ROUTE_CANCELLED)
+            if not frames:
+                return RealtimeTurnResult(route=ROUTE_NOISE_DROPPED)
+            metadata = snapshot()
+            if buffer_until_finish:
+                for frame in frames:
+                    if not active(force=False):
+                        return RealtimeTurnResult(route=ROUTE_CANCELLED)
+                    realtime.append_audio(frame, turn=binding)
+            if not active():
+                return RealtimeTurnResult(route=ROUTE_CANCELLED)
+            output = (_DeviceOutput(self._get_tts, cancelled, active)
+                      if self._get_tts() is not None else None)
+            result = run_realtime_turn(
+                realtime, output, self._strip_markers,
+                metadata.get("combined", ""), frames, metadata["duration"],
+                metadata["speech"], interaction_id=metadata["interaction_id"],
+                audio_turn=binding, stop_event=cancelled, harness_followup=False,
+                suppress_visual_feedback=True, explicit_capture=True,
+                capture_finished_at=metadata.get("finished_at"),
+            )
+            # The generic noise path cannot clear every provider's buffered
+            # audio. Ensure rejected local input never contaminates a later turn.
+            handed_off = result.route != ROUTE_NOISE_DROPPED
+            return result if active() else RealtimeTurnResult(route=ROUTE_CANCELLED)
+        except Exception:
+            logger.exception("Device realtime stream failed; retaining STT fallback")
+            return RealtimeTurnResult(route=ROUTE_ERROR if active() else ROUTE_CANCELLED)
+        finally:
+            if binding is not None and not handed_off:
+                try:
+                    realtime.recover_session("device-turn-discarded", discard_old_on_failure=True)
+                except Exception:
+                    logger.exception("Device realtime stream cleanup failed")
+            realtime.finish_capture()
 
     def __call__(self, audio, combined, duration, speech, interaction_id,
                  speaker, cancelled, valid):

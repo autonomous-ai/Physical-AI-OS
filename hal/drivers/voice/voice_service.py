@@ -318,10 +318,11 @@ class VoiceService:
             noise_is_speech=lambda pcm: self._rt_noise_is_speech(
                 self._np.frombuffer(pcm, dtype=self._np.int16)),
             on_frame=self._device_mic_frame, on_transcript=self._device_transcript,
-            realtime_turn=DeviceRealtimeTurn(
+            stream_realtime=DeviceRealtimeTurn(
                 realtime=lambda: self._realtime, tts=lambda: self._tts,
                 strip_markers=self.strip_rt_markers,
-            ),
+            ).stream,
+            record_handoff=lambda text: self._realtime.save_main_handoff(text),
         )
         if getattr(hal_config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk":
             # The pipeline is constructed even while muted/sleeping. Warm only

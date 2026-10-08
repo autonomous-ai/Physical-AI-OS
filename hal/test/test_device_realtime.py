@@ -231,3 +231,107 @@ def test_valid_deferred_reply_keeps_normal_playback(tmp_path, method):
     assert not played.is_set()
     tts.end_device_input(token)
     assert played.wait(1)
+
+
+@pytest.mark.parametrize("provider", ["gemini", "openai", "pipecat_v1", "gptlive"])
+def test_stream_uploads_during_capture_and_commits_at_finish(executor, monkeypatch, provider):
+    invoke, args, realtime, runner, result = executor
+    monkeypatch.setattr(module.config, "REALTIME_PROVIDER", provider)
+    finished = threading.Event()
+    metadata = Mock(side_effect=lambda: {
+        "combined": "", "duration": 0.04, "speech": True,
+        "interaction_id": "finished-tap",
+    })
+
+    def audio_source():
+        yield args["audio"][0]
+        metadata.assert_not_called()
+        runner.assert_not_called()
+        assert realtime.append_audio.call_count == (0 if provider == "gptlive" else 1)
+        yield args["audio"][1]
+        assert realtime.append_audio.call_count == (0 if provider == "gptlive" else 2)
+        finished.set()
+
+    def commit(*positional, **kwargs):
+        assert finished.is_set()
+        assert positional[3] == "", "do not invent an STT transcript"
+        assert kwargs["explicit_capture"] is True
+        assert kwargs["interaction_id"] == "finished-tap"
+        assert kwargs["stop_event"] is args["cancelled"]
+        assert realtime.append_audio.call_count == 2
+        return result
+
+    runner.side_effect = commit
+    assert invoke.stream(audio_source(), snapshot=metadata, cancelled=args["cancelled"],
+                         valid=args["valid"]) is result
+    metadata.assert_called_once()
+    runner.assert_called_once()
+    realtime.finish_capture.assert_called_once()
+    realtime.save_main_handoff.assert_not_called()
+
+
+@pytest.mark.parametrize("stage", ["prepare", "upload", "finish", "route_change"])
+def test_stream_cancel_discards_without_commit(executor, stage):
+    invoke, args, realtime, runner, _ = executor
+    if stage == "prepare":
+        realtime.prepare_turn.side_effect = args["cancelled"].set
+
+    def audio_source():
+        yield args["audio"][0]
+        if stage == "upload":
+            args["cancelled"].set()
+        yield args["audio"][1]
+        if stage == "finish":
+            args["cancelled"].set()
+        elif stage == "route_change":
+            args["valid"].return_value = False
+
+    result = invoke.stream(audio_source(), snapshot=Mock(), cancelled=args["cancelled"],
+                           valid=args["valid"])
+    assert result.route == module.ROUTE_CANCELLED
+    runner.assert_not_called()
+    realtime.finish_capture.assert_called_once()
+    if stage != "prepare":
+        realtime.recover_session.assert_called_once_with(
+            "device-turn-discarded", discard_old_on_failure=True,
+        )
+
+
+def test_stream_checks_route_periodically_instead_of_each_frame(executor, monkeypatch):
+    invoke, args, realtime, runner, _ = executor
+    monkeypatch.setattr(module.time, "monotonic", lambda: 100.0)
+    metadata = lambda: dict(combined="", duration=2.0, speech=True, interaction_id="tap")
+    invoke.stream(iter(args["audio"] * 50), snapshot=metadata,
+                  cancelled=args["cancelled"], valid=args["valid"])
+    assert realtime.append_audio.call_count == 100
+    assert args["valid"].call_count < 10
+    runner.assert_called_once()
+
+
+@pytest.mark.parametrize("failure", ["prepare", "unavailable", "upload", "producer"])
+def test_stream_failures_preserve_fallback_without_stt_wait(executor, failure):
+    invoke, args, realtime, runner, _ = executor
+    if failure == "prepare":
+        realtime.prepare_turn.side_effect = RuntimeError("connect failed")
+    elif failure == "unavailable":
+        realtime.wait_until_available.return_value = False
+    elif failure == "upload":
+        realtime.append_audio.side_effect = RuntimeError("send failed")
+
+    def source():
+        yield args["audio"][0]
+        if failure == "producer":
+            raise RuntimeError("capture failed")
+
+    metadata = Mock()
+    result = invoke.stream(source(), snapshot=metadata, cancelled=args["cancelled"],
+                           valid=args["valid"])
+    assert result.route == (module.ROUTE_UNAVAILABLE if failure == "unavailable" else module.ROUTE_ERROR)
+    assert not result.handled
+    runner.assert_not_called()
+    metadata.assert_not_called()
+    realtime.finish_capture.assert_called_once()
+    if failure in ("upload", "producer"):
+        realtime.recover_session.assert_called_once_with(
+            "device-turn-discarded", discard_old_on_failure=True,
+        )

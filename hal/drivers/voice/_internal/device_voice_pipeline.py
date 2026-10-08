@@ -17,6 +17,7 @@ from hal.drivers.voice._internal.device_capture import DeviceCapture
 from hal.drivers.voice._internal.realtime_turn import (
     RealtimeTurnResult, ROUTE_NOISE_DROPPED, ROUTE_NOT_STARTED,
     is_noise_turn, needs_noise_guard,
+    should_drop_downstream_turn,
 )
 from hal.drivers.voice._internal.session_finalize import finalize_session
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
@@ -43,6 +44,8 @@ class _RecordedTurn:
         self.condition = threading.Condition()
         self.capture_done = threading.Event()
         self.upload_done = threading.Event()
+        self.realtime_done = threading.Event()
+        self.realtime_result = RealtimeTurnResult()
         self.audio = []
         self.byte_count = 0
         self.partial = [""]
@@ -80,7 +83,7 @@ class DeviceVoicePipeline:
     def __init__(self, queue, *, create_session, convert, valid, set_capturing,
                  tts, decorator, sensing_sender, noise_is_speech,
                  max_duration=None, on_frame=None, on_transcript=None, capture_valid=None,
-                 realtime_turn=None):
+                 realtime_turn=None, stream_realtime=None, record_handoff=None):
         self.queue = queue
         self.create_session = create_session
         self.convert = convert
@@ -92,6 +95,10 @@ class DeviceVoicePipeline:
         self.sensing_sender = sensing_sender
         self.noise_is_speech = noise_is_speech
         self.realtime_turn = realtime_turn
+        self.stream_realtime = stream_realtime
+        self.record_handoff = record_handoff
+        self._previous_realtime_done = threading.Event()
+        self._previous_realtime_done.set()
         self.on_frame = on_frame
         self.on_transcript = on_transcript
         self.max_duration = (voice_cfg.MAX_SESSION_DURATION_S
@@ -113,6 +120,8 @@ class DeviceVoicePipeline:
         if capture.cancelled is not ticket.cancelled:
             raise ValueError("capture and reservation must share cancellation")
         turn = _RecordedTurn(capture, self.on_transcript)
+        if self.stream_realtime is None:
+            turn.realtime_done.set()
         turn_tts = self.tts if tts is _DEFAULT_TTS else tts
         # Activate cleanup ownership before creating any producer resources.
         if not self.queue.submit(
@@ -124,11 +133,19 @@ class DeviceVoicePipeline:
             capture, turn_tts, self.set_capturing, lambda: self._capture_valid(capture),
         )
         uploader_started = False
+        realtime_started = False
         try:
             if not self._capture_valid(capture):
                 capture.cancelled.set()
                 return False
-            turn.session = self.create_session()
+            if self.stream_realtime is not None:
+                previous = self._previous_realtime_done
+                self._previous_realtime_done = turn.realtime_done
+                threading.Thread(
+                    target=self._stream_realtime, args=(turn, previous),
+                    daemon=True, name="device-realtime-stream",
+                ).start()
+                realtime_started = True
             uploader = threading.Thread(
                 target=self._upload, args=(turn,), daemon=True,
                 name="device-stt-upload",
@@ -173,10 +190,15 @@ class DeviceVoicePipeline:
                 if capture.finished.is_set():
                     if pending and not append_frame(_join_native(pending), pending_frames):
                         return False
-                    feedback.stop()
-                    turn.finished_at = feedback.finished_at
+                    turn.finished_at = time.monotonic()
                     turn.interaction_id = voice_metrics.speech_end("manual_tap", at=turn.finished_at)
                     turn.spoken_text = getattr(turn_tts, "last_spoken_text", "")
+                    # Publish the endpoint before the synchronous finish tone.
+                    # Realtime commits in parallel with local feedback/STT drain.
+                    turn.capture_done.set()
+                    with turn.condition:
+                        turn.condition.notify_all()
+                    feedback.stop()
                     return True
                 now = time.monotonic()
                 if now - checked_at >= 0.25:
@@ -227,13 +249,65 @@ class DeviceVoicePipeline:
                     # Session construction/thread startup may fail before the
                     # uploader takes ownership. Cleanup still runs on the worker.
                     turn.upload_done.set()
+                if not realtime_started:
+                    turn.realtime_done.set()
+
+    def _stream_realtime(self, turn, previous):
+        """Serialize provider ownership independently of STT/FIFO dispatch.
+
+        At most two reservations exist, so at most two streaming workers and
+        their bounded PCM buffers can exist. A newer turn can upload as soon as
+        the previous model reply finishes, even while its STT still drains.
+        """
+        capture = turn.capture
+
+        def frames():
+            sent = 0
+            while not capture.cancelled.is_set():
+                with turn.condition:
+                    turn.condition.wait_for(
+                        lambda: len(turn.audio) > sent or turn.capture_done.is_set()
+                        or capture.cancelled.is_set(), timeout=0.05,
+                    )
+                    batch = turn.audio[sent:]
+                    finished = turn.capture_done.is_set()
+                for frame in batch:
+                    if capture.cancelled.is_set():
+                        return
+                    yield frame
+                    sent += 1
+                if finished:
+                    return
+
+        def snapshot():
+            with turn.condition:
+                combined = " ".join([*turn.finals, turn.partial[0]]).strip()
+            return dict(combined=combined, duration=turn.byte_count / (voice_cfg.STT_RATE * 2),
+                        speech=turn.last_speech_idx >= 0, interaction_id=turn.interaction_id,
+                        speaker=None, finished_at=turn.finished_at)
+
+        try:
+            while not previous.wait(0.05):
+                if capture.cancelled.is_set():
+                    return
+            if self._valid(capture):
+                turn.realtime_result = self.stream_realtime(
+                    frames(), snapshot=snapshot, cancelled=capture.cancelled,
+                    valid=lambda: self._valid(capture),
+                )
+        except Exception:
+            logger.exception("Device realtime streaming failed; retaining STT fallback")
+        finally:
+            turn.realtime_done.set()
 
     def _upload(self, turn):
         """One session owner; late connection is always closed on cancellation."""
         capture = turn.capture
         try:
+            turn.session = self.create_session()
             if capture.cancelled.is_set() or not turn.session.start(turn.transcript):
-                capture.cancelled.set()
+                if self.stream_realtime is None:
+                    capture.cancelled.set()
                 return
             sent = 0
             while not capture.cancelled.is_set():
@@ -255,13 +329,16 @@ class DeviceVoicePipeline:
                     turn.upload_ok = not capture.cancelled.is_set()
                     return
         except Exception:
-            capture.cancelled.set()
+            if self.stream_realtime is None:
+                capture.cancelled.set()
             logger.exception("Device STT upload failed")
         finally:
             try:
-                turn.session.close()
+                if turn.session is not None:
+                    turn.session.close()
             except Exception:
-                capture.cancelled.set()
+                if self.stream_realtime is None:
+                    capture.cancelled.set()
                 logger.exception("Device STT close failed")
             finally:
                 turn.upload_done.set()
@@ -271,15 +348,18 @@ class DeviceVoicePipeline:
         # Provider start/send/close must retain their network timeout contracts.
         turn.capture_done.wait()
         turn.upload_done.wait()
+        turn.realtime_done.wait()
         if turn.session is not None and not turn.upload_started:
             turn.session.close()
         turn.audio.clear()
 
     def _finalize(self, turn):
         turn.capture_done.wait()
+        turn.realtime_done.wait()
         turn.upload_done.wait()
         capture = turn.capture
-        if not turn.upload_ok or turn.finished_at is None or not self._valid(capture):
+        if ((not turn.upload_ok and self.stream_realtime is None)
+                or turn.finished_at is None or not self._valid(capture)):
             return
         combined, ser_audio, duration = finalize_session(
             turn.audio, turn.partial, turn.finals, turn.last_speech_idx,
@@ -306,7 +386,12 @@ class DeviceVoicePipeline:
         if not self._valid(capture):
             return
         result = RealtimeTurnResult(route=ROUTE_NOISE_DROPPED if noise else ROUTE_NOT_STARTED)
-        if not noise and self.realtime_turn is not None:
+        if self.stream_realtime is not None:
+            result = turn.realtime_result
+            if (noise and not result.handled and not (result.delegated and result.delegate_msg)
+                    and not should_drop_downstream_turn(result)):
+                result = RealtimeTurnResult(route=ROUTE_NOISE_DROPPED)
+        elif not noise and self.realtime_turn is not None:
             result = self.realtime_turn(
                 audio=turn.audio, combined=combined, duration=duration, speech=speech,
                 interaction_id=interaction_id, speaker=identity[2] if identity else None,
@@ -316,6 +401,9 @@ class DeviceVoicePipeline:
         # recording owns the mic. Never hand off a cancelled or rerouted turn.
         if not self._valid(capture):
             return
+        if (self.stream_realtime is not None and self.record_handoff is not None
+                and combined and not result.handled and not should_drop_downstream_turn(result)):
+            self.record_handoff(combined)
         logger.info("Device session END — bytes=%d transcript=%r interaction_id=%s",
                     turn.byte_count, combined or "(empty)", interaction_id)
         dispatch_turn(
