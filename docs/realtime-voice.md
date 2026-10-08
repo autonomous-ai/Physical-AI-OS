@@ -605,8 +605,8 @@ lance" never arms the gate. Flux takes them as repeated `keyterm` parameters
 with no weights; nova-3 uses `keyterm` too; older nova models use `keywords`
 with the `:3` intensifier.
 
-Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
-follow-up focus window, so the next spoken turn can omit the wake phrase and
+Every STT-final-confirmed wake-word turn reaches dispatch. It opens a configured
+follow-up focus window (5 seconds in the lamp profile; HAL default 20 seconds), so the next spoken turn can omit the wake phrase and
 is sent as `voice_followup`. For an authorized turn, the idle countdown starts
 when processing and its owned TTS queue have both finished, not at dispatch or
 the first filler. Vision/grounding, main-agent work, synthesis and queued answer
@@ -639,8 +639,7 @@ latched if it expires mid-sentence; the noise guard still applies.
 
 That window is latched at session start and refreshed during capture and at
 speech end for **dispatch**, so a window that expires mid-sentence cannot cut
-off someone already speaking. The cues that
-claim to be the addressee — the listening LED, the backchannel — ask
+off someone already speaking. The listening LED and backchannel eligibility ask
 `is_addressed()` instead, which re-reads the window **live**. Gaze is why: it
 can open the window in the middle of the very sentence it acknowledges.
 Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
@@ -876,6 +875,32 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
+### Opening-only automatic fillers on Standard and Pro lamps
+
+Standard and Pro lamps enable `HAL_VOICE_OPENING_FILLERS_ONLY=true` because
+they share the microphone (HAL default `false`; the `pro-xvf3800` and
+`pro-respeaker-lite` overlays keep the option disabled).
+It applies only to Automatic, non-Live capture with the wake gate enabled.
+At VAD speech start, HAL snapshots whether the wake window was already open,
+**before** gaze can open or refresh it for that capture:
+
+- Window closed at capture start: existing cues remain eligible once wake phrase
+  or gaze authorizes the turn. This is the conversation-opening turn.
+- Window already open: suppress automatic backchannel, realtime wait filler
+  (including the early-STT path), and main-agent opening/continuation fillers.
+  A repeated wake phrase, gaze refresh or window expiry during capture does not
+  reclassify this follow-up as an opening turn.
+
+The snapshot is separate from the live focus check that authorizes capture and
+listening LEDs. Main dispatch carries optional `suppress_auto_fillers: true`
+sensing metadata, preserved through delegation/resume. Listening LEDs, actual
+model speech, explicit tool cues, tools and routing remain unchanged. Manual and
+Harness input, Live mode and profiles with the option disabled keep their
+existing behavior. No model call or network wait is added; genuine follow-ups
+may instead wait silently for the existing response latency. This prevents
+premature automatic cues, not incorrect model replies. Hardware latency and
+addressee accuracy still require device verification.
+
 ### The mic ignores our own backchannel cue
 
 Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
@@ -908,7 +933,7 @@ recognized words uses the separate 180s turn ceiling described above; speech
 can legitimately last longer than 20 seconds. The same file previously wrote
 `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` without the `HAL_` prefix, so it did nothing
 and the device ran the 20 s default; the key is now
-`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=5` in the lamp profile (HAL default remains 20 s).
 
 If the **initial** provider connection fails during HAL startup, the
 orchestrator creates fresh sessions in a background retry loop (an immediate
@@ -3414,6 +3439,7 @@ is a top-level `config.json` flag:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Quiet time after any speech or user transcript before the next snapshot. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Harness text handed to the renderer is cut to this length. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Fallback summarizer bound before sanitized text is spoken instead. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard and Pro enable it; pro-xvf3800 and pro-respeaker-lite disable it. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |

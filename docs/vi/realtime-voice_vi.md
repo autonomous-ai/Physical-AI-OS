@@ -593,7 +593,8 @@ Flux nhận chúng dưới dạng param `keyterm` lặp lại, không trọng s�
 dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`.
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
-cửa sổ focus follow-up 20 giây, nên câu tiếp theo có thể bỏ wake phrase và
+cửa sổ focus follow-up theo cấu hình (profile lamp 5 giây; HAL mặc định 20 giây),
+nên câu tiếp theo có thể bỏ wake phrase và
 được gửi với type `voice_followup`. Với turn đã được phép, thời gian chờ chỉ bắt
 đầu khi cả xử lý lẫn queue TTS của turn đã xong, không phải lúc dispatch hay filler
 đầu tiên. Vision/grounding, main agent, tổng hợp và các đoạn trả lời đang xếp hàng
@@ -624,8 +625,7 @@ main agent. Focus đã chốt vẫn được giữ nếu hết hạn giữa câu
 được áp dụng.
 
 Cửa sổ đó được chốt lúc mở phiên và cập nhật trong lúc thu cùng cuối câu cho
-**dispatch**, để cửa sổ hết hạn giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
-gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
+**dispatch**, để cửa sổ hết hạn giữa câu không cắt lời người đang nói. LED listening và điều kiện cho phép backchannel hỏi `is_addressed()`, và hàm này đọc lại
 cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
 chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
 nói, camera chưa có bằng chứng khuôn mặt nào (`of 0` mẫu) nên cờ chốt là False,
@@ -851,6 +851,31 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
+### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
+
+Lamp Standard và Pro cùng bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` vì dùng
+cùng mic (HAL mặc định `false`; overlay `pro-xvf3800` và `pro-respeaker-lite`
+vẫn tắt tùy chọn này).
+Chỉ áp dụng khi Automatic, Live tắt và wake gate bật. Khi VAD bắt đầu nhận lời
+nói, HAL chốt wake window đã mở hay chưa, **trước khi** gaze có thể mở hoặc gia
+hạn cửa sổ cho lần thu đó:
+
+- Window đóng lúc bắt đầu thu: giữ điều kiện cue hiện có sau khi wake phrase
+  hoặc gaze cho phép lượt đó. Đây là lượt mở hội thoại.
+- Window đã mở: chặn backchannel tự động, wait filler realtime (kể cả nhánh
+  early-STT), opening/continuation filler của main agent. Wake phrase lặp lại,
+  gaze gia hạn hoặc window hết hạn trong lúc thu không đổi follow-up thành lượt mở.
+
+Trạng thái chốt này tách biệt với kiểm tra focus trực tiếp để cho phép capture
+và LED listening. Dispatch sang main mang metadata sensing tùy chọn
+`suppress_auto_fillers: true`, được giữ qua delegate/resume. LED listening,
+lời nói thực của model, cue tool tường minh, tool và routing không đổi. Input
+manual/Harness, Live và profile tắt tùy chọn giữ hành vi hiện có. Không thêm
+lượt gọi model hoặc chờ mạng; follow-up thực sự dành cho lamp có thể phải chờ
+im lặng trong khoảng trễ phản hồi hiện hữu. Cơ chế này ngăn cue tự động phát
+sớm, không ngăn mọi câu trả lời nhầm của model. Độ trễ phần cứng và độ chính
+xác nhận biết người được nói tới vẫn cần kiểm chứng trên thiết bị.
+
 ### Mic bỏ qua chính cue backchannel của mình
 
 Cue lắng nghe của backchannel ("Ok", "Mm", "Oh") được phát mà **không** set cờ
@@ -881,7 +906,7 @@ người dùng vẫn có thể nói đè lên nó.
 nhận được chữ dùng trần lượt riêng 180s mô tả ở trên; lời nói thực tế có thể
 dài hơn 20 giây. Cũng file đó trước kia ghi `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` mà
 thiếu prefix `HAL_`, nên nó không có tác dụng gì và thiết bị chạy default 20 s;
-nay key đã là `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
+nay profile lamp dùng `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=5` (HAL vẫn mặc định 20 s).
 
 Nếu kết nối provider **ban đầu** lỗi ngay khi HAL khởi động, orchestrator tạo
 session mới bằng retry loop nền (thử lại một lần ngay, rồi backoff luỹ thừa từ 2s,
@@ -3341,6 +3366,7 @@ trong `config.json`:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Thời gian yên lặng sau bất kỳ lời nói hay transcript người dùng nào trước snapshot tiếp theo. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Văn bản Harness đưa cho bộ diễn đạt bị cắt tới độ dài này. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |

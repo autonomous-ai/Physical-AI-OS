@@ -11,6 +11,14 @@ The previous opening and continuation phrase pools have been removed. Automatic
 waiting fillers do not select tool-specific phrases. Explicit realtime/tool cues
 are unchanged.
 
+For Standard and Pro lamp Automatic follow-ups, HAL may send optional sensing metadata
+`suppress_auto_fillers: true`. OS skips opening feedback and scheduled automatic
+continuation fillers for that run, including delegated resumes; it retains this
+policy for a bounded 4096 runs. Actual replies, explicit tool cues and tool
+execution are unaffected. HAL sets the policy from wake-window state at capture
+start, not from whether the final transcript contains a wake phrase. See
+[opening-only automatic fillers](realtime-voice.md#opening-only-automatic-fillers-on-standard-and-pro-lamps).
+
 Named internal-tool pools use a single short cue per language. Search/read/media
 cues describe an action shared by their aliases; broad or mixed-action pools
 (`exec`, `process`, `memory_store`, `apply_patch`, `session_status`, `update_plan`,

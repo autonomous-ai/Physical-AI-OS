@@ -528,6 +528,7 @@ def run_realtime_turn(
     suppress_visual_feedback: bool = False,
     explicit_capture: bool = False,
     capture_finished_at: Optional[float] = None,
+    suppress_auto_fillers: bool = False,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply."""
     delegated = False
@@ -607,12 +608,12 @@ def run_realtime_turn(
         thinking_started = False
         if wait_filler is None:
             wait_filler = _WaitFiller(owner=interaction_id)
-        if should_arm_realtime_wait_filler(combined):
+        if not suppress_auto_fillers and should_arm_realtime_wait_filler(combined):
             wait_filler.arm()
         else:
+            wait_filler.cancel()
             logger.info(
-                "[realtime] Short transcript — suppressing dead-air filler while "
-                "the model decides whether to reject"
+                "[realtime] Follow-up policy or short transcript — suppressing dead-air filler"
             )
         try:
             # 1011 recovery (idle-death): the campaign-api proxy drops idle

@@ -122,6 +122,7 @@ def dispatch_turn(
     interaction_id: str = "",
     harness_voice: dict | None = None,
     voice_turn_type: str = "",
+    suppress_auto_fillers: bool = False,
 ):
     """Identify the speaker, send the turn to the OS server, and submit SER."""
     if harness_voice and (harness_voice.get("unavailable") or harness_voice["enabled"]):
@@ -151,6 +152,8 @@ def dispatch_turn(
         return
 
     routing_kwargs = {"harness_voice": harness_voice} if harness_voice is not None else {}
+    if suppress_auto_fillers:
+        routing_kwargs["suppress_auto_fillers"] = True
 
     vision_hint, vision_image = _take_vision_handoff()
     look_snap = _take_look_snapshot_marker()

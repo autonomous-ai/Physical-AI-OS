@@ -1154,6 +1154,11 @@ class VoiceService:
                         buffered,
                         " ".join("%.0f" % rms(f, self._np) for f in history),
                     )
+                    # Classify the turn before gaze can open/refresh the window.
+                    # A gaze opener must keep its cues; a refresh is still a follow-up.
+                    wake_focus_at_entry = (
+                        hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()
+                    )
                     gaze_focus_granted = False
                     try:
                         from hal.drivers.tracking import gaze
@@ -1200,6 +1205,7 @@ class VoiceService:
                             speech_pre_buffer=speech_pre_buffer,
                             pending_listening_cue_id=pending_listening_cue_id,
                             harness_voice=harness_voice,
+                            wake_focus_at_entry=wake_focus_at_entry,
                         ):
                             return
                     keepalive_session = None
@@ -2177,6 +2183,7 @@ class VoiceService:
         self, mic, frame_size: int, device_rate: int,
         preconnected_session=None, speech_pre_buffer=None,
         pending_listening_cue_id=None, harness_voice=None, manual_capture=None,
+        wake_focus_at_entry=None,
     ):
         tts = self._tts
         reserve = getattr(tts, "begin_input_capture", None)
@@ -2192,6 +2199,7 @@ class VoiceService:
                 self, mic, frame_size, device_rate, preconnected_session,
                 speech_pre_buffer, pending_listening_cue_id, harness_voice,
                 manual_capture, release_input, followup_ids,
+                wake_focus_at_entry,
             )
         finally:
             release_input()
@@ -2215,6 +2223,7 @@ class VoiceService:
         manual_capture=None,
         release_input=lambda: None,
         followup_ids=None,
+        wake_focus_at_entry=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts."""
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
@@ -2249,6 +2258,16 @@ class VoiceService:
         # use the wake phrase again.
         wakeword_followup_active = (
             hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active()
+        )
+        if wake_focus_at_entry is None:
+            wake_focus_at_entry = wakeword_followup_active
+        # Freeze at entry: later wake phrases/gaze refreshes or expiry cannot
+        # promote a follow-up into an audible opener. LEDs and routing stay separate.
+        suppress_auto_fillers = bool(
+            hal_config.VOICE_OPENING_FILLERS_ONLY
+            and input_policy.automatic and not harness_listening
+            and not voice_cfg.LIVE_MODE and hal_config.WAKEWORD_ENABLED
+            and wake_focus_at_entry
         )
         if wakeword_followup_active:
             logger.info("Wake-word follow-up focus accepted for this session")
@@ -2372,7 +2391,8 @@ class VoiceService:
                 # saying "go on, I'm listening", which is a claim to be the addressee —
                 # so it must not fire for a sentence the device has not been shown is
                 # meant for it.
-                if input_policy.automatic and not capture_complete.is_set() and addressed_to_us():
+                if (input_policy.automatic and not suppress_auto_fillers
+                        and not capture_complete.is_set() and addressed_to_us()):
                     self._backchannel.on_partial(text)
                 fire_listening_cue()
                 return
@@ -2867,7 +2887,7 @@ class VoiceService:
                                 interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
                                 hold_followup()
                                 post_capture_wait_filler = _WaitFiller(owner=interaction_id)
-                                if should_arm_realtime_wait_filler(early_words):
+                                if not suppress_auto_fillers and should_arm_realtime_wait_filler(early_words):
                                     post_capture_wait_filler.arm()
                                 start_realtime_turn()
                                 if realtime_turn_started and not realtime_deferred and self._running:
@@ -2877,6 +2897,7 @@ class VoiceService:
                                         early_words, rt_audio_buffer, early_duration, early_speech,
                                         interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
                                         harness_followup=False, wait_filler=post_capture_wait_filler,
+                                        suppress_auto_fillers=suppress_auto_fillers,
                                     )
                                 break
                             if drain_finished.is_set():
@@ -3088,7 +3109,7 @@ class VoiceService:
                 if (realtime_allowed and not voice_cfg.LIVE_MODE
                         and early_realtime_result is None and post_capture_wait_filler is None):
                     post_capture_wait_filler = _WaitFiller(owner=interaction_id)
-                    if should_arm_realtime_wait_filler(combined):
+                    if not suppress_auto_fillers and should_arm_realtime_wait_filler(combined):
                         post_capture_wait_filler.arm()
                 start_realtime_turn()
                 if not realtime_turn_started and post_capture_wait_filler is not None:
@@ -3206,6 +3227,7 @@ class VoiceService:
                     interaction_id=interaction_id,
                     wait_filler=post_capture_wait_filler,
                     audio_turn=audio_turn,
+                    suppress_auto_fillers=suppress_auto_fillers,
                 )
             else:
                 # No realtime turn was opened this capture. Distinguish the two
@@ -3268,6 +3290,7 @@ class VoiceService:
                     ),
                     identity=turn_identity,
                     harness_voice=harness_voice,
+                    suppress_auto_fillers=suppress_auto_fillers,
                 )
             elif not live_opener_consumed:
                 self._decorator.submit_speech_emotion_from_session(ser_audio_buffer)
