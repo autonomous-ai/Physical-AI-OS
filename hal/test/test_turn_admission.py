@@ -81,3 +81,21 @@ def test_speech_end_at_is_the_endpoint_instant():
         assert voice_metrics.speech_end_at("vi-missing") == 0.0
     finally:
         voice_metrics.reset_for_test()
+
+
+def test_device_names_strip_the_wake_prefixes():
+    assert turn_admission.device_names(["hey lamp", "wake up lamp", "hello autonomous", "hey dee"]) == {
+        "lamp", "autonomous", "dee",
+    }
+
+
+@pytest.mark.parametrize("text, heard", [
+    ("What time is it, Lamp?", True),
+    ("lamp can you hear me", True),
+    ("is big lamp awake", True),
+    ("turn on the desk light", False),
+    ("", False),
+])
+def test_name_anywhere_counts_as_addressed(text, heard):
+    phrases = ["hey lamp", "hey big lamp", "hey autonomous"]
+    assert turn_admission.name_mentioned(text, phrases) is heard

@@ -129,6 +129,28 @@ The three routes of the README collapse into one loop with tools of three
 latency classes. The main runtime stops being a second speaker; it is a worker
 whose result the voice agent speaks, in order, in one voice.
 
+### 4.0 The experience, end to end
+
+What the user sees and hears at each moment, the budget, and where it lives.
+Rows marked *device* are confirmed on a lamp; the rest are code-level.
+
+| Moment | What Lamp does | Budget | Where |
+|---|---|---|---|
+| Someone walks in / looks at it | STT socket pre-connects; a parked Gemini session resumes; presence greeting rules as before | before the first word | `stt_warm.py`, `prewarm.py`, `gaze.record_sample` |
+| User starts talking | ring dims to "listening" at once when facing the lamp (wake word off) or on the wake phrase; head reacquires the speaker | ≤ 200 ms | `_vad_loop`, `show_listening_pending_cue`, `gaze` |
+| User says its name mid-sentence | counts as addressed, even without the wake phrase | — | `turn_admission.name_mentioned` |
+| User stops talking | endpoint at 1.0 s silence / 0.6 s after an STT final; commit on a ≥ 4-word partial; thinking face + ring | ≤ 300 ms to the cue | `_stream_session_impl`, `run_realtime_turn` |
+| Quick answer (time, volume, lights) | local rule, cached phrase, no model | < 1 s | `system/intent` |
+| Conversation / knowledge / lookup | Gemini Live answers in its own voice (native audio); long replies stream | first word p50 ≤ 1.2 s target; 4 s today (*device*) | `realtime_turn.py`, `gemini_live.py` |
+| Bare "yeah" / "no" after Lamp asks | treated as the answer | — | `turn_admission.device_question_pending` |
+| Slow reply | ring + face hold "thinking"; one spoken bridge ("One sec.") only after 4 s | — | `_WaitFiller`, `fillers.go` |
+| Task (calendar, device, research) | handed to the main agent; optional "Let me check…" line; result spoken in the same Google voice when ready, never muted by later chit-chat; failure spoken | ack ≤ 1.5 s target; result 6–22 s today (*device*) | `delegate_to_main`, `IsTaskRun`, `speakVoiceTurnFailure` |
+| Follow-up right after a reply | mic is read again ≤ 1 s after playback ends; the conversation window (8 s) keeps the next sentence addressed without the name | — | grace cut, `CONVERSATION_WINDOW_S` |
+| TV / other people | no name, not facing, no window, no pending question → model is told "unknown — stay silent"; `strict` drops it before any model | — | `addressed_hint`, `HAL_ADDRESSED_GATE` |
+| Interruption | tap stops speech ≤ 250 ms (*device*); voice barge-in needs hardware AEC | — | `button_actions`, §4.5 |
+| Lamp cannot answer | says so ("Sorry, I couldn't finish that one.") instead of silence | — | `agent.voice_turn_failed` |
+| Idle room | STT socket released, Gemini session parked (or kept alive by ping when enabled) | — | `stt_warm`, `_maybe_keepalive` |
+
 ### 4.1 Turn controller
 
 One state machine per device, `IDLE → LISTENING → ENDPOINTING → THINKING →
@@ -337,6 +359,11 @@ reported them; "claimed" means a vendor figure, "measured" an independent one.
 | Thinking cue fired before the commit path's waits, not after them | **implemented** |
 | `[turn-timing]` lines and `scripts/bench/voice_turns.py` | **implemented** |
 | Offline replay of recorded audio through the entry gate, silence clock and noise guard | **implemented** (`scripts/bench/voice_replay.py`) |
+| STT socket kept warm while someone is around (`HAL_STT_KEEPALIVE=presence`): first partial no longer pays a cold connect, short utterances survive | **implemented** (`stt_warm.py`, Lamp `.env`) |
+| Gemini session keepalive ping as an experiment switch (`HAL_GEMINI_KEEPALIVE_S`, default off) | **implemented** |
+| Conversation window when the wake word is off (`HAL_CONVERSATION_WINDOW_S`, 8 s): the next sentence after a reply is addressed without the name | **implemented** |
+| The device's name anywhere in the sentence counts as addressed; a late name sends a `[TURN CONTEXT UPDATE]` | **implemented** |
+| Listening cue at speech onset when the user is facing the lamp (wake word off) | **implemented** |
 | A delegated task's answer survives realtime answering a newer utterance | **implemented** (os-server `IsTaskRun`) |
 | A failed spoken request is announced instead of silence | **implemented** (`agent.voice_turn_failed`, 20 s debounce) |
 | Non-verbal acknowledgement on Lamp: no spoken "uh-huh" while the user talks (`HAL_BACKCHANNEL_FILLERS=`), one spoken bridge only after 4 s (`HAL_REALTIME_FILLER_DELAY_S=4.0`), bridge phrases are words ("One sec.", "Still thinking.") not noises | **implemented** (`.env`, `fillers.go`) |
@@ -349,7 +376,7 @@ reported them; "claimed" means a vendor figure, "measured" an independent one.
 | Thinking level / plain model for direct answers | device-day experiment (`HAL_GEMINI_THINKING_LEVEL`, `HAL_GEMINI_LIVE_MODEL`) |
 | Google Search on vs off (latency vs direct lookups) | device-day A/B (`HAL_GEMINI_GOOGLE_SEARCH`) |
 | Post-reply deaf time: the trailing-tool grace ends once the reply has been played and the speaker idle for 1 s, instead of running its full 6 s | **implemented** (`HAL_REALTIME_GRACE_AFTER_PLAYBACK_S`) |
-| Keepalive and proxy idle timeout for an occupied room | planned (proxy change is cross-team) |
+| Proxy idle timeout for an occupied room | planned (cross-team); the client ping is in place to test against it |
 | Non-blocking delegation with result injection | blocked on the model: the extended-thinking model closes the session (1007) on a scheduled function response; the fallback is the announcement path, measured once native audio is on |
 | Live mode by default on hardware-AEC bodies; codec decision for the standard Lamp | product decision (§8) |
 

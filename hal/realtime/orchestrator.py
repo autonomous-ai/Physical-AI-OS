@@ -884,9 +884,36 @@ class RealtimeOrchestrator:
     def _idle_park_loop(self) -> None:
         while not self._idle_park_stop.wait(IDLE_PARK_POLL_S):
             try:
+                self._maybe_keepalive()
+            except Exception:
+                logger.exception("[realtime] Keepalive check failed")
+            try:
                 self._maybe_park_idle_session()
             except Exception:
                 logger.exception("[realtime] Idle park check failed")
+
+    def _maybe_keepalive(self) -> None:
+        """Ping a connected, idle session every REALTIME_GEMINI_KEEPALIVE_S (0 = off).
+
+        Activity and turn timestamps are left alone, so parking still follows its own
+        clock unless the operator turns parking off.
+        """
+        interval: float = config.REALTIME_GEMINI_KEEPALIVE_S
+        if interval <= 0 or not self._started.is_set() or self._idle_parked:
+            return
+        agent = self._agent
+        if agent is None or not agent.available or not hasattr(agent, "keepalive"):
+            return
+        if self._turn_in_flight or self._rebuild_lock.locked():
+            return
+        now: float = time.monotonic()
+        idle_since: float = max(self._last_activity_monotonic, self._last_turn_monotonic)
+        last_ping: float = getattr(self, "_last_keepalive_monotonic", 0.0)
+        if now - max(idle_since, last_ping) < interval:
+            return
+        self._last_keepalive_monotonic = now
+        if agent.keepalive():
+            logger.info("[realtime] keepalive ping sent (idle %.0fs)", now - idle_since)
 
     def _maybe_park_idle_session(self) -> None:
         """Close the transport before the server's own idle kill (WS 1008) pages the backend."""

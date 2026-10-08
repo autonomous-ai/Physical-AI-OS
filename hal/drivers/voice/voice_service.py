@@ -72,9 +72,10 @@ from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voic
 from hal.drivers.voice._internal.main_followup import note_main_reply
 from hal.drivers.voice._internal.sensing_sender import SensingSender
 from hal.drivers.voice._internal.session_finalize import finalize_session, recent_spoken_text
+from hal.drivers.voice._internal import stt_warm
 from hal.drivers.voice._internal.turn_admission import (
-    addressed_hint, confident_partial, facing_evidence, register_tts, short_answer_expected,
-    strict_addressed_gate,
+    addressed_hint, confident_partial, facing_evidence, name_mentioned, register_tts,
+    short_answer_expected, strict_addressed_gate,
 )
 from hal.drivers.voice._internal.speaker_decorate import (
     SpeakerDecorator,
@@ -279,8 +280,11 @@ class VoiceService:
         # Speaker decoration (wake-word + speaker recognizer + SER). Runtime rename
         # updates must never replace the permanent aliases.
         self._device_wake_words = list(voice_cfg.DEFAULT_WAKE_WORDS)
+        # With the wake word off the same window is the conversation window: after a
+        # reply, speech for a few seconds is addressed without the name.
         self._wakeword_focus = WakeWordFocus(
-            hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S,
+            hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S if hal_config.WAKEWORD_ENABLED
+            else hal_config.CONVERSATION_WINDOW_S,
             pending_speech=getattr(tts_service, "has_followup_speech", None),
         )
 
@@ -1051,13 +1055,17 @@ class VoiceService:
 
         keepalive_session = None
         last_keepalive_ping = time.time()
+        stt_keepalive_on = voice_cfg.STT_KEEPALIVE_MODE != "off"
 
-        if stt_keepalive_on := voice_cfg.STT_KEEPALIVE:
-            keepalive_session = self._stt.create_session()
-            if not keepalive_session.start(lambda text, is_final: None):
-                keepalive_session = None
-            else:
-                logger.info("STT keepalive: pre-connected, waiting for speech...")
+        def open_keepalive():
+            session = self._stt.create_session()
+            if not session.start(lambda text, is_final: None):
+                return None
+            logger.info("STT keepalive: pre-connected, waiting for speech...")
+            return session
+
+        if stt_keepalive_on and self._stt_keepalive_wanted():
+            keepalive_session = open_keepalive()
 
         mode_checked_at = 0.0
         while self._running:
@@ -1069,6 +1077,15 @@ class VoiceService:
                     if keepalive_session:
                         keepalive_session.close()
                     return
+                # Presence mode: the socket follows the room.
+                if stt_keepalive_on and speech_start is None and not draining:
+                    wanted = self._stt_keepalive_wanted()
+                    if wanted and keepalive_session is None:
+                        keepalive_session = open_keepalive()
+                    elif not wanted and keepalive_session is not None:
+                        logger.info("STT keepalive: nobody around — releasing the socket")
+                        keepalive_session.close()
+                        keepalive_session = None
             tts_or_music = self._tts_is_speaking() or self._music_is_playing()
 
             if tts_or_music:
@@ -1105,12 +1122,8 @@ class VoiceService:
                 lookback.clear()
                 self._silero_reset_state()
                 draining = False
-                if stt_keepalive_on and self._running and not self._tts_is_speaking():
-                    keepalive_session = self._stt.create_session()
-                    if not keepalive_session.start(lambda text, is_final: None):
-                        keepalive_session = None
-                    else:
-                        logger.info("STT keepalive: pre-connected, waiting for speech...")
+                if stt_keepalive_on and self._running and not self._tts_is_speaking() and self._stt_keepalive_wanted():
+                    keepalive_session = open_keepalive()
                 continue
 
             data, overflowed = mic.read(frame_size)
@@ -1201,7 +1214,11 @@ class VoiceService:
                     except Exception as e:
                         logger.debug("gaze wake check skipped: %s", e)
                     pending_listening_cue_id = None
-                    if gaze_focus_granted:
+                    facing_now = (
+                        not gaze_focus_granted and not hal_config.WAKEWORD_ENABLED
+                        and hal_config.ADDRESSED_GATE != "off" and facing_evidence() is True
+                    )
+                    if gaze_focus_granted or facing_now:
                         # Gaze + VAD has already proved intent, while STT normally needs
                         # another 1.5-2.5s for its first partial.
                         from hal import app_state
@@ -1257,14 +1274,8 @@ class VoiceService:
                     else:
                         logger.info("[automic-stop] receive released; VAD resumed after %.1fms",
                                     (time.monotonic() - cancelled_at) * 1000)
-                    if stt_keepalive_on and self._running and not self._tts_is_speaking():
-                        keepalive_session = self._stt.create_session()
-                        if not keepalive_session.start(lambda text, is_final: None):
-                            keepalive_session = None
-                        else:
-                            logger.info(
-                                "STT keepalive: pre-connected, waiting for speech..."
-                            )
+                    if stt_keepalive_on and self._running and not self._tts_is_speaking() and self._stt_keepalive_wanted():
+                        keepalive_session = open_keepalive()
             else:
                 speech_start = None
                 speech_pre_buffer = []
@@ -1273,6 +1284,17 @@ class VoiceService:
                         "VAD: RMS=%.0f above threshold but Silero rejected — not speech",
                         energy,
                     )
+
+    def _stt_keepalive_wanted(self) -> bool:
+        """Whether the STT socket should be pre-connected right now (see stt_warm)."""
+        mode = voice_cfg.STT_KEEPALIVE_MODE
+        if mode == "off":
+            return False
+        return stt_warm.keepalive_wanted(
+            mode, now=stt_warm.now(), last_speech_ts=float(self._last_transcript_ts or 0.0),
+            present=stt_warm.presence_present() if mode == "presence" else False,
+            warm_after_s=voice_cfg.STT_WARM_AFTER_SPEECH_S,
+        )
 
     def _hardware_aec_live_entry(self) -> bool:
         return (isinstance(getattr(self, "_live_gate", None), AdaptiveLiveGate)
@@ -2370,6 +2392,11 @@ class VoiceService:
                          or self._wakeword_focus.is_active())
                     and self._wakeword_focus.begin(interaction_id)):
                 followup_ids.add(interaction_id)
+            elif (input_policy.automatic and not hal_config.WAKEWORD_ENABLED and not harness_listening
+                    and hal_config.ADDRESSED_GATE != "off"
+                    and self._wakeword_focus.begin(interaction_id)):
+                # An admitted turn keeps the conversation open for the next one.
+                followup_ids.add(interaction_id)
         gaze_endpoint_checked = False
         pre_frames_from_vad = len(speech_pre_buffer or [])
         logger.info(
@@ -2412,29 +2439,63 @@ class VoiceService:
         # Gaze is read once, at speech start: the pre-speech window is the evidence.
         facing_at_start = facing_evidence()
 
+        def name_heard() -> bool:
+            """The wake gate, or the device's name anywhere in what was heard so far."""
+            if wake_word_detected.is_set():
+                return True
+            text = " ".join([*final_segments, last_partial[0]]).strip()
+            if not text:
+                return False
+            try:
+                return bool(
+                    self._decorator.starts_with_wake_word(text)
+                    or name_mentioned(text, self._decorator._normalized_wake_phrases())
+                )
+            except Exception:
+                return False
+
         def addressed_evidence() -> bool:
             """Whether anything beyond the audio says this speech was for the device."""
             return bool(
-                wake_word_detected.is_set()
+                name_heard()
                 or wakeword_followup_active or self._wakeword_focus.is_active()
                 or short_answer_expected()
                 or facing_at_start
                 or turn_speaker_display
             )
 
-        def turn_context() -> str:
-            """The per-turn context, with what the device knows about who is talking to it."""
-            hint = addressed_hint(
-                wake_word=wake_word_detected.is_set(),
+        def current_hint() -> str:
+            return addressed_hint(
+                wake_word=name_heard(),
                 window=bool(wakeword_followup_active or self._wakeword_focus.is_active()),
                 question=short_answer_expected(),
                 facing=facing_at_start,
                 known_voice=turn_speaker_display or "",
             )
+
+        sent_addressed_hint = ""
+
+        def turn_context() -> str:
+            """The per-turn context, with what the device knows about who is talking to it."""
+            nonlocal sent_addressed_hint
+            hint = current_hint()
             logger.info("[admission] evidence: %s", hint)
             if hal_config.ADDRESSED_GATE == "off":
                 return build_turn_context(turn_speaker_display)
+            sent_addressed_hint = hint
             return build_turn_context(turn_speaker_display, addressed=hint)
+
+        def addressed_update() -> str:
+            """A correction when the words that arrived after the context changed the verdict."""
+            if hal_config.ADDRESSED_GATE != "hint" or not sent_addressed_hint:
+                return ""
+            hint = current_hint()
+            was_doubtful = sent_addressed_hint.startswith(("Addressed: unknown", "Addressed: unlikely"))
+            now_sure = hint.startswith(("Addressed: yes", "Addressed: likely"))
+            if not (was_doubtful and now_sure):
+                return ""
+            logger.info("[admission] evidence update: %s", hint)
+            return "[TURN CONTEXT UPDATE] " + hint
 
         # Strict gate: hands-free speech with no evidence never reaches a model.
         # Only when the wake word is off (with it on, the wake gate already decides).
@@ -3007,6 +3068,14 @@ class VoiceService:
                             hold_followup()
                             start_realtime_turn()
                             if realtime_turn_started and not realtime_deferred and self._running:
+                                # The context went out before these words arrived.
+                                if turn_context_sent and self._realtime.available:
+                                    update = addressed_update()
+                                    if update:
+                                        try:
+                                            self._realtime.send_text(update)
+                                        except Exception as e:
+                                            logger.warning("[admission] evidence update send failed: %s", e)
                                 # Preparation may fail or outlast the filler timer.
                                 # Only acknowledge a turn admitted to realtime.
                                 if turn_context_sent and self._realtime.available:
@@ -3362,6 +3431,23 @@ class VoiceService:
                     )
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
+
+            # Words that arrived after the context went out may have named the device.
+            if (
+                realtime_turn_started
+                and turn_context_sent
+                and early_realtime_result is None
+                and not strict_rejected
+                and hal_config.REALTIME_ENABLED
+                and self._realtime.available
+                and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+            ):
+                update = addressed_update()
+                if update:
+                    try:
+                        self._realtime.send_text(update)
+                    except Exception as e:
+                        logger.warning("[admission] evidence update send failed: %s", e)
 
             if reply_stop is not None and reply_stop.is_set():
                 self._wakeword_focus.finish(interaction_id, cancelled=True)

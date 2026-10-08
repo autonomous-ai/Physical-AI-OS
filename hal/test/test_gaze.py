@@ -430,13 +430,33 @@ def test_a_missing_voice_service_degrades_quietly(armed, monkeypatch):
 
 
 def test_the_watcher_does_not_start_when_there_is_no_gate_to_open(monkeypatch, caplog):
-    """Wake word off means every utterance already dispatches."""
+    """Wake word off and no addressed-evidence gate: every utterance already dispatches."""
     monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
     monkeypatch.setattr(config, "WAKEWORD_ENABLED", False)
+    monkeypatch.setattr(config, "ADDRESSED_GATE", "off")
     with caplog.at_level("INFO"):
         gaze.start()
     assert gaze._thread is None or not gaze._thread.is_alive()
-    assert "nothing to gate" in caplog.text
+    assert "no addressed-evidence gate" in caplog.text
+
+
+def test_the_watcher_runs_for_the_addressed_evidence_gate(monkeypatch):
+    """Facing evidence, the onset cue and the gaze prewarm need samples without a wake word."""
+    monkeypatch.setattr(config, "GAZE_WAKE_ENABLED", True)
+    monkeypatch.setattr(config, "WAKEWORD_ENABLED", False)
+    monkeypatch.setattr(config, "ADDRESSED_GATE", "hint")
+    monkeypatch.setattr(gaze, "_loop", lambda: gaze._stop.wait(5))
+    gaze.stop()
+    gaze._thread = None
+    try:
+        gaze.start()
+        assert gaze._thread is not None and gaze._thread.is_alive()
+    finally:
+        gaze.stop()
+        if gaze._thread is not None:
+            gaze._thread.join(timeout=2)
+        gaze._thread = None
+        gaze._stop.clear()
 
 
 class _Svc(BodyOwnership):

@@ -7,10 +7,12 @@ before dropping a backchannel-only transcript.
 
 import logging
 import os
+import re
 import threading
 import time
 
 from hal import config as hal_config
+from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.main_followup import ends_with_question, pending_main_question
 from hal.drivers.voice._internal.session_finalize import last_spoken
 
@@ -114,3 +116,36 @@ def addressed_hint(*, wake_word: bool, window: bool, question: bool,
 def strict_addressed_gate() -> bool:
     """Whether hands-free speech without evidence is dropped before any model."""
     return hal_config.ADDRESSED_GATE == "strict"
+
+
+def _normalize_words(text: str) -> str:
+    """Lowercase alphanumeric words, single-spaced."""
+    return " ".join(re.sub(r"[^\w\s]", " ", (text or "").lower()).split())
+
+
+def device_names(wake_phrases) -> set[str]:
+    """The bare names behind the wake phrases ("hey lamp" → "lamp")."""
+    names: set[str] = set()
+    prefixes = sorted(voice_cfg.WAKE_WORD_PREFIXES, key=len, reverse=True)
+    for phrase in wake_phrases or ():
+        words = _normalize_words(str(phrase))
+        for prefix in prefixes:
+            if words.startswith(prefix + " "):
+                words = words[len(prefix) + 1:].strip()
+                break
+        if words:
+            names.add(words)
+    return names
+
+
+def name_mentioned(text: str, wake_phrases) -> bool:
+    """Whether the device's name is anywhere in the transcript, not only at the start.
+
+    A person says a name at the end ("what time is it, Lamp?") or in the middle as
+    often as at the front; the wake gate only looks at sentence edges.
+    """
+    words = _normalize_words(text)
+    if not words:
+        return False
+    padded = f" {words} "
+    return any(f" {name} " in padded for name in device_names(wake_phrases))

@@ -69,3 +69,34 @@ def test_strict_mode_defers_to_the_wake_gate_when_the_wake_word_is_on(monkeypatc
 
 def test_not_addressed_is_a_terminal_route():
     assert should_drop_downstream_turn(RealtimeTurnResult(route=ROUTE_NOT_ADDRESSED))
+
+
+def test_strict_mode_admits_the_devices_name_anywhere(monkeypatch):
+    import hal.drivers.voice.voice_service as module
+
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "strict")
+    monkeypatch.setattr(module, "name_mentioned", lambda text, phrases: "lamp" in text.lower())
+    with capture(monkeypatch, [(1, True, "What time is it lamp"), (4, False, None)], realtime=True) as result:
+        result.realtime.assert_called_once()
+        result.service._realtime.discard_open_activity.assert_not_called()
+
+
+def test_hint_mode_sends_an_update_when_the_name_arrives_after_the_context(monkeypatch):
+    import hal.drivers.voice.voice_service as module
+
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "hint")
+    monkeypatch.setattr(module, "name_mentioned", lambda text, phrases: "lamp" in text.lower())
+    with capture(monkeypatch, [(1, True, "What time is it lamp"), (4, False, None)], realtime=True) as result:
+        sent = [call.args[0] for call in result.service._realtime.send_text.call_args_list]
+        assert sent[0] == "test context"
+        assert any(text.startswith("[TURN CONTEXT UPDATE] Addressed: yes") for text in sent[1:])
+
+
+def test_an_admitted_turn_opens_the_conversation_window_without_a_wake_word(monkeypatch):
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "hint")
+    with capture(monkeypatch, FRAMES, realtime=True) as result:
+        # begin() is idempotent per interaction; the capture asks more than once.
+        assert result.service._wakeword_focus.begin.called
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "off")
+    with capture(monkeypatch, FRAMES, realtime=True) as result:
+        result.service._wakeword_focus.begin.assert_not_called()

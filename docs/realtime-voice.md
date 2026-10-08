@@ -215,6 +215,29 @@ main agent: audio already streamed is discarded
 `not_addressed`. With the wake word on, the wake gate decides as before. Only
 `strict` is a deterministic gate; the hint is prompt input.
 
+**Name anywhere, late evidence, conversation window, early cue.** The
+device's name counts wherever it lands in the sentence, not only at the
+sentence edges the wake gate checks: `turn_admission.name_mentioned()` matches
+the bare names behind the wake phrases (`device_names()` strips the
+`hello`/`hey`/`hi`/`alo`/`okay`/`ok`/`wake up` prefixes, so "hey lamp" →
+"lamp") as whole words in the finals plus the last partial, and such a turn
+carries the "wake phrase heard" evidence (verdict `yes`) — "what time is it,
+Lamp?" is admitted even in `strict` mode. Because the `[TURN CONTEXT]` can go
+out before the name arrives, in `hint` mode a verdict that was
+`unknown`/`unlikely` when the context was sent and is `yes`/`likely` once the
+words are in is corrected with one `[TURN CONTEXT UPDATE] Addressed: …` text
+before the commit (log `[admission] evidence update: …`); `off` and
+`strict` send no update. With the wake word off and the gate not `off`, an admitted
+automatic capture also opens the conversation window — the same
+`WakeWordFocus` as the wake-word follow-up window, sized
+`HAL_CONVERSATION_WINDOW_S` (8 s) instead of `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`
+(chosen once when `VoiceService` is built) — so the next utterance inside it
+carries the "open conversation window" evidence (verdict `yes`) without the
+name; `0` disables it. And at speech onset in that same configuration, when
+`facing_evidence()` is already `True`, the dim pending listening cue
+(`app_state.show_listening_pending_cue`) shows at once, as it does for a
+granted gaze opener in wake-word mode (`robots/lamp/docs/physical-controls.md`).
+
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).
 
@@ -1806,6 +1829,19 @@ per 2 s (`PREWARM_MIN_INTERVAL_S`) and are a no-op unless the session is
 parked; a resume that actually starts logs `[realtime] prewarm started on
 <reason>`.
 
+**Keepalive experiment (`HAL_GEMINI_KEEPALIVE_S`, default `0` = off).** The
+alternative to parking an occupied room's session is to keep it open: when
+set, the same `rt-idle-park` loop (every 5 s, `_maybe_keepalive()` before the
+park check) sends a WebSocket ping (`GeminiLiveAgent.keepalive()`, `ws.ping()`
+on the IO loop, 5 s wait) every N seconds to a connected, not-parked session
+with no turn in flight and no rebuild running, counted from the later of the
+last activity, the last turn and the last ping, and logs
+`[realtime] keepalive ping sent (idle Ns)`; a failed ping logs
+`[realtime] keepalive ping failed: …` and the next one waits a full interval. Activity and turn timestamps are not
+touched, so parking still follows `HAL_GEMINI_IDLE_PARK_S` — set that to `0`
+to test the ping alone against the proxy's idle timeout. Gemini only; no other
+provider implements `keepalive`.
+
 All providers treat teardown as terminal: once `disconnect()` sets the stop
 signal, send/receive workers neither reconnect nor emit transport-failure logs
 while their closed socket unwinds.
@@ -3124,7 +3160,19 @@ Read the counters in the session-END log line: `substituted` at ~100 % of
 2. **Stream.** While the STT session is open, each mic frame is also resampled to
    the provider rate and sent via `append_audio()` (parallel, non-blocking), and
    buffered in `rt_audio_buffer`.
-   When optional STT keepalive is enabled, a pre-connected STT socket that closes
+   STT keepalive (`HAL_STT_KEEPALIVE`: `off` | `always` | `presence`; legacy
+   `true`/`false` map to `always`/`off`; `_internal/stt_warm.py`) pre-connects
+   the next STT socket between utterances and pings it every
+   `HAL_STT_KEEPALIVE_PING_S` (3 s), so the first partial does not pay a cold
+   connect and short utterances ("Stop", "Hey") are not lost. `presence` holds
+   the socket only while the presence loop sees someone
+   (`sensing_service._presense_service.state == PRESENT`) or a transcript
+   arrived within `HAL_STT_WARM_AFTER_SPEECH_S` (300 s): the VAD loop re-checks
+   every 0.25 s between utterances and opens
+   (`STT keepalive: pre-connected, waiting for speech...`) or closes
+   (`STT keepalive: nobody around — releasing the socket`) it accordingly. The lamp profile ships `presence` (it was
+   `false`).
+   When STT keepalive is enabled, a pre-connected STT socket that closes
    normally (WS 1000) at speech start is replaced before streaming continues and
    the complete pre-roll is replayed once on the fresh socket. This preserves the
    opening words; a recovered normal close is a warning, not an error.
@@ -3593,6 +3641,9 @@ is a top-level `config.json` flag:
 | `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard and Pro enable it; pro-xvf3800 and pro-respeaker-lite disable it. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ADDRESSED_GATE` | `hint` | `off` \| `hint` \| `strict`. What the device does with its own addressed-speech evidence (wake phrase heard, open follow-up window, pending question, user facing the lamp, known voice — `turn_admission.py`). `hint` appends the `Addressed: …` line to `[TURN CONTEXT]`; `strict` also drops a wake-word-off automatic capture that has none of it before any model sees it (route `not_addressed`, metrics exclusion `not_addressed`); `off` sends no line. The `strict` drop never applies to the wake gate itself, Harness or tap-to-talk capture. |
+| `HAL_CONVERSATION_WINDOW_S` | `8` | With the wake word off and `HAL_ADDRESSED_GATE` not `off`, how long the conversation stays open after an admitted automatic capture: the `WakeWordFocus` window takes this value instead of `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` when `wakeword` is false (chosen at `VoiceService` construction), so speech inside it carries the "open conversation window" evidence (`Addressed: yes`) without the name. `0` disables. |
+| `HAL_STT_KEEPALIVE` | `off` | `off` \| `always` \| `presence` (legacy `true`/`false` = `always`/`off`; `_internal/stt_warm.py`). Pre-connect the next STT socket between utterances, pinged every `HAL_STT_KEEPALIVE_PING_S` (3 s), so the first partial skips the cold connect. `presence` holds it only while the presence loop sees someone or a transcript arrived within `HAL_STT_WARM_AFTER_SPEECH_S`, re-checked every 0.25 s by the VAD loop (logs `STT keepalive: pre-connected…` / `STT keepalive: nobody around — releasing the socket`). The lamp `.env` sets `presence`. |
+| `HAL_STT_WARM_AFTER_SPEECH_S` | `300` | `presence` mode only: seconds after the last transcript the STT socket stays warm once the presence loop no longer sees anyone. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. The lamp `.env` sets `0.6` (with `HAL_SILENCE_TIMEOUT=1.0`). |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
 | `HAL_TURN_END_FALLBACK_S` | `2.5` | Minimum silence for ordinary text when Smart Turn is unavailable/pending, and for a short greeting; the original silence candidate must also fire. |
@@ -3619,6 +3670,7 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence (measured from the later of the last turn and the current session's connect), recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
 | `HAL_GEMINI_IDLE_PARK_S` | `45` | Gemini idle parking: close the session's transport after this many seconds without turn activity, so the server never closes it with WS `1008` (which the backend logs as an error and alerts on). The orchestrator stays `available` while parked; the next turn's `prepare_turn()` reconnects synchronously before streaming audio. Must stay below the shortest observed idle death (86 s). `0` disables. |
+| `HAL_GEMINI_KEEPALIVE_S` | `0` | Experiment: ping the live Gemini WebSocket every this many seconds while the session is connected, not parked and has no turn in flight (`_maybe_keepalive()` on the `rt-idle-park` loop, `GeminiLiveAgent.keepalive()`), logging `[realtime] keepalive ping sent (idle Ns)`. Activity/turn timestamps are untouched, so parking still follows `HAL_GEMINI_IDLE_PARK_S` unless that is `0`. `0` (default) sends nothing. Gemini only. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Gemini transport guard: when a new spoken turn starts after this much session idle time (from the later of the last turn and the session's connect), rebuild the Gemini session **before** streaming pre-roll/audio so the turn does not hit a proxy/SDK idle-dead socket. `0` disables. A successful pre-turn recycle suppresses the generic post-turn idle recycle for that same turn, so one idle gap creates at most one cost/transport rebuild. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Selects the context manager (also from `agent_runtime` in config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Gemini key; falls back to `llm_api_key` |

@@ -606,6 +606,12 @@ REALTIME_GEMINI_PRE_TURN_RECYCLE_S: float = float(
 REALTIME_GEMINI_IDLE_PARK_S: float = float(
     os.environ.get("HAL_GEMINI_IDLE_PARK_S", "45")
 )
+# Experiment: ping the idle live socket every N seconds so the proxy and server
+# keep it open, instead of parking and paying a reconnect on the next question.
+# 0 (default) sends nothing. Pair with HAL_GEMINI_IDLE_PARK_S=0 to never park.
+REALTIME_GEMINI_KEEPALIVE_S: float = max(0.0, float(
+    os.environ.get("HAL_GEMINI_KEEPALIVE_S", "0")
+))
 # Fresh-session replays of a turn that produced no output (WS 1011). 0 disables.
 REALTIME_GEMINI_TURN_RETRIES: int = int(
     os.environ.get("HAL_GEMINI_TURN_RETRIES", "2")
@@ -794,7 +800,12 @@ REALTIME_DELEGATE_PREAMBLE: bool = os.environ.get(
 # also drops a hands-free turn that has none of it before any model sees it;
 # "off" sends no hint.
 ADDRESSED_GATE: str = os.environ.get("HAL_ADDRESSED_GATE", "hint").strip().lower()
-# Gaze wake: turning toward the lamp as a third wake-gate opener (inert without WAKEWORD_ENABLED).
+# With the wake word off, how long after the device finishes a reply the
+# conversation stays open: speech in that window is addressed without a name.
+CONVERSATION_WINDOW_S: float = max(0.0, float(os.environ.get("HAL_CONVERSATION_WINDOW_S", "8")))
+# Gaze wake: turning toward the lamp as a third wake-gate opener. With the wake
+# word off the watcher still runs for the addressed-evidence gate (ADDRESSED_GATE
+# != off): facing evidence, the onset listening cue and the gaze prewarm need it.
 GAZE_WAKE_ENABLED: bool = (
     os.environ.get("HAL_GAZE_WAKE", "false").lower() in ("1", "true", "yes")
 )

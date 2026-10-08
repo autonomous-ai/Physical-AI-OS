@@ -74,7 +74,14 @@ AEC_REF_MS = int(os.environ.get("HAL_AEC_REF_MS", "500"))
 AEC_DUMP_DIR = os.environ.get("HAL_AEC_DUMP_DIR", "")
 
 
-STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
+# off | always | presence — see stt_warm.py. Legacy true/false still work.
+from hal.drivers.voice._internal.stt_warm import normalize_mode as _stt_mode  # noqa: E402
+
+STT_KEEPALIVE_MODE = _stt_mode(os.environ.get("HAL_STT_KEEPALIVE", "false"))
+STT_KEEPALIVE = STT_KEEPALIVE_MODE == "always"
+# In presence mode, how long after the last utterance the socket stays warm when
+# the presence loop no longer sees anyone.
+STT_WARM_AFTER_SPEECH_S = float(os.environ.get("HAL_STT_WARM_AFTER_SPEECH_S", "300"))
 # Send a KeepAlive every N seconds while pre-connected and idle, so the server doesn't
 # idle-close the WS (~10s) and force a slow cold-reconnect at speech start (the cause of
 # empty transcripts on short/quiet utterances).

@@ -149,13 +149,16 @@ def test_capture_gate_and_reply_drain(monkeypatch, wake_enabled, initial_focus, 
     monkeypatch.setattr(module.hal_config, 'REALTIME_ENABLED', True)
     monkeypatch.setattr(module.hal_config, 'WAKEWORD_ENABLED', wake_enabled)
     monkeypatch.setattr(module.voice_cfg, 'LIVE_MODE', False)
+    monkeypatch.setattr(module.hal_config, 'ADDRESSED_GATE', 'hint')
     expected = not wake_enabled or initial_focus
 
     def answer(*args, **kwargs):
         if noise:
             return RealtimeTurnResult(rejected=True)
         now[0] = 25
-        assert focus.is_active() is (wake_enabled and initial_focus)
+        # Wake word on: only a focused turn holds the window. Wake word off: every
+        # admitted turn opens the conversation window (HAL_ADDRESSED_GATE != off).
+        assert focus.is_active() is ((wake_enabled and initial_focus) or not wake_enabled)
         pending.add('run:voice')
         return RealtimeTurnResult(handled=True, transcript='Your shirt is yellow.')
 
@@ -170,11 +173,12 @@ def test_capture_gate_and_reply_drain(monkeypatch, wake_enabled, initial_focus, 
         module.VoiceService._stream_session(service, Mock(), 320, 16000,
             preconnected_session=stt, harness_voice={'enabled': False, 'generation': 1})
     assert realtime.call_count == int(expected)
+    admitted = ((wake_enabled and initial_focus) or not wake_enabled) and not noise
     now[0] = 50
-    assert focus.is_active() is (wake_enabled and initial_focus and not noise)
+    assert focus.is_active() is admitted
     pending.clear()
     focus.playback_finished()
-    if wake_enabled and initial_focus and not noise:
+    if admitted:
         now[0] = 69.9
         assert focus.is_active()
     now[0] = 70

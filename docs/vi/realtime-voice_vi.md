@@ -215,6 +215,27 @@ sẽ không bao giờ được commit cho model realtime lẫn gửi tới main 
 interaction đó với lý do `not_addressed`. Khi wake word bật, wake gate quyết
 định như trước. Chỉ `strict` là gate xác định; hint chỉ là input cho prompt.
 
+**Tên ở bất kỳ đâu, bằng chứng đến muộn, cửa sổ hội thoại, cue sớm.** Tên
+thiết bị được tính dù nằm ở đâu trong câu, không chỉ ở đầu/cuối câu như wake
+gate kiểm tra: `turn_admission.name_mentioned()` so khớp tên trần đứng sau các
+wake phrase (`device_names()` bỏ tiền tố `hello`/`hey`/`hi`/`alo`/`okay`/`ok`/
+`wake up`, nên "hey lamp" → "lamp") theo nguyên từ trong các final cộng partial
+cuối, và lượt đó mang bằng chứng "wake phrase heard" (kết luận `yes`) — "what
+time is it, Lamp?" được nhận cả ở chế độ `strict`. Vì `[TURN CONTEXT]` có thể
+đã gửi trước khi tên tới, ở chế độ `hint` nếu kết luận lúc gửi context là
+`unknown`/`unlikely` mà khi đủ chữ lại thành `yes`/`likely`, HAL gửi đúng một
+text `[TURN CONTEXT UPDATE] Addressed: …` trước commit (log
+`[admission] evidence update: …`); `off` và `strict` không gửi update. Khi wake word tắt và
+gate không phải `off`, một capture tự động được nhận còn mở cửa sổ hội thoại —
+chính `WakeWordFocus` của cửa sổ follow-up wake-word, nhưng dài
+`HAL_CONVERSATION_WINDOW_S` (8 s) thay vì `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`
+(chọn một lần lúc dựng `VoiceService`) — nên câu kế tiếp trong cửa sổ mang
+bằng chứng "open conversation window" (kết luận `yes`) mà không cần tên; `0`
+tắt. Và ngay lúc bắt đầu nói trong cùng cấu hình đó, nếu `facing_evidence()`
+đã là `True`, cue listening chờ mờ (`app_state.show_listening_pending_cue`)
+hiện lập tức, như với gaze opener được grant ở chế độ wake-word
+(`robots/lamp/docs/vi/physical-controls_vi.md`).
+
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`). Trên GPT-Live không có tool ở tầng Live: adapter `gpt_live.py`
 dịch `session.delegation.created` của model thành đúng `FunctionCallOutput`
@@ -1730,6 +1751,18 @@ nói. Các lần thử bị giới hạn một lần mỗi 2 giây (`PREWARM_MIN
 không làm gì nếu session không ở trạng thái park; lần nối lại thực sự khởi
 động được log `[realtime] prewarm started on <reason>`.
 
+**Thử nghiệm keepalive (`HAL_GEMINI_KEEPALIVE_S`, mặc định `0` = tắt).** Thay
+vì park session của một phòng đang có người, giữ nó mở: khi đặt, chính vòng
+`rt-idle-park` (mỗi 5 s, `_maybe_keepalive()` chạy trước kiểm tra park) gửi
+một WebSocket ping (`GeminiLiveAgent.keepalive()`, `ws.ping()` trên IO loop,
+đợi 5 s) mỗi N giây tới session đang kết nối, chưa park, không có turn đang
+chạy và không có rebuild đang chạy, tính từ mốc muộn nhất giữa hoạt động cuối,
+turn cuối và ping cuối, rồi log `[realtime] keepalive ping sent (idle Ns)`;
+ping lỗi log `[realtime] keepalive ping failed: …` và lần sau đợi trọn một
+chu kỳ. Mốc hoạt động và mốc turn không bị đụng tới, nên park vẫn theo
+`HAL_GEMINI_IDLE_PARK_S` — đặt nó về `0` để thử riêng ping với idle timeout
+của proxy. Chỉ Gemini; provider khác không có `keepalive`.
+
 Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
 transport trong lúc socket đã đóng đang unwind.
@@ -3076,7 +3109,18 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
 2. **Stream.** Khi session STT đang mở, mỗi frame mic được resample về rate của
    provider và gửi qua `append_audio()` (song song, non-blocking), đồng thời buffer
    vào `rt_audio_buffer`.
-   Khi bật STT keepalive tùy chọn, nếu socket STT pre-connect đóng bình thường
+   STT keepalive (`HAL_STT_KEEPALIVE`: `off` | `always` | `presence`; giá trị cũ
+   `true`/`false` tương ứng `always`/`off`; `_internal/stt_warm.py`) pre-connect
+   socket STT kế tiếp giữa các câu nói và ping nó mỗi `HAL_STT_KEEPALIVE_PING_S`
+   (3 s), để partial đầu tiên không phải trả giá kết nối nguội và câu ngắn
+   ("Stop", "Hey") không bị mất. `presence` chỉ giữ socket khi vòng presence
+   đang thấy có người (`sensing_service._presense_service.state == PRESENT`)
+   hoặc có transcript trong vòng `HAL_STT_WARM_AFTER_SPEECH_S` (300 s): vòng VAD
+   kiểm tra lại mỗi 0.25 s giữa các câu nói rồi mở
+   (`STT keepalive: pre-connected, waiting for speech...`) hoặc đóng
+   (`STT keepalive: nobody around — releasing the socket`) socket tương ứng. Profile lamp ship
+   `presence` (trước là `false`).
+   Khi bật STT keepalive, nếu socket STT pre-connect đóng bình thường
    (WS 1000) đúng lúc bắt đầu nói, HAL thay socket trước khi stream tiếp và replay
    toàn bộ pre-roll đúng một lần vào socket mới. Nhờ vậy không mất từ mở đầu; close
    bình thường đã recovery là warning, không phải error.
@@ -3518,6 +3562,9 @@ trong `config.json`:
 | `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ADDRESSED_GATE` | `hint` | `off` \| `hint` \| `strict`. Thiết bị làm gì với bằng chứng lời nói hướng đến nó mà chính nó có (đã nghe wake phrase, cửa sổ follow-up đang mở, câu hỏi đang chờ, user đang nhìn về đèn, giọng đã biết — `turn_admission.py`). `hint` nối dòng `Addressed: …` vào `[TURN CONTEXT]`; `strict` còn bỏ capture tự động khi wake word tắt mà không có bằng chứng nào, trước khi bất kỳ model nào thấy nó (route `not_addressed`, exclusion metrics `not_addressed`); `off` không gửi dòng nào. Việc bỏ lượt của `strict` không bao giờ áp cho bản thân wake gate, Harness hay capture tap-to-talk. |
+| `HAL_CONVERSATION_WINDOW_S` | `8` | Khi wake word tắt và `HAL_ADDRESSED_GATE` không phải `off`, hội thoại còn mở bao lâu sau một capture tự động được nhận: cửa sổ `WakeWordFocus` lấy giá trị này thay cho `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` khi `wakeword` là false (chọn lúc dựng `VoiceService`), nên câu nói trong cửa sổ mang bằng chứng "open conversation window" (`Addressed: yes`) mà không cần tên. `0` = tắt. |
+| `HAL_STT_KEEPALIVE` | `off` | `off` \| `always` \| `presence` (giá trị cũ `true`/`false` = `always`/`off`; `_internal/stt_warm.py`). Pre-connect socket STT kế tiếp giữa các câu nói, ping mỗi `HAL_STT_KEEPALIVE_PING_S` (3 s), để partial đầu tiên bỏ qua kết nối nguội. `presence` chỉ giữ socket khi vòng presence thấy có người hoặc có transcript trong vòng `HAL_STT_WARM_AFTER_SPEECH_S`, vòng VAD kiểm tra lại mỗi 0.25 s (log `STT keepalive: pre-connected…` / `STT keepalive: nobody around — releasing the socket`). `.env` của lamp đặt `presence`. |
+| `HAL_STT_WARM_AFTER_SPEECH_S` | `300` | Chỉ ở chế độ `presence`: số giây sau transcript cuối mà socket STT vẫn được giữ ấm khi vòng presence không còn thấy ai. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. `.env` của lamp đặt `0.6` (cùng `HAL_SILENCE_TIMEOUT=1.0`). |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
 | `HAL_TURN_END_FALLBACK_S` | `2.5` | Im lặng tối thiểu cho transcript thông thường khi Smart Turn thiếu/đang chờ, và cho lời chào ngắn; ứng viên im lặng gốc cũng phải đủ điều kiện. |
@@ -3544,6 +3591,7 @@ trong `config.json`:
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng (tính từ mốc muộn hơn giữa turn trước và lúc session hiện tại kết nối), recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
 | `HAL_GEMINI_IDLE_PARK_S` | `45` | Park Gemini khi idle: đóng transport của session sau ngần này giây không có hoạt động turn, để server không phải đóng nó bằng WS `1008` (backend ghi thành lỗi và bắn cảnh báo). Orchestrator vẫn `available` trong lúc parked; `prepare_turn()` của turn kế tiếp nối lại đồng bộ trước khi stream audio. Phải nhỏ hơn thời gian idle chết ngắn nhất đo được (86 giây). `0` = tắt. |
+| `HAL_GEMINI_KEEPALIVE_S` | `0` | Thử nghiệm: ping WebSocket Gemini live mỗi ngần này giây khi session đang kết nối, chưa park và không có turn đang chạy (`_maybe_keepalive()` trên vòng `rt-idle-park`, `GeminiLiveAgent.keepalive()`), log `[realtime] keepalive ping sent (idle Ns)`. Mốc hoạt động/turn không bị đụng tới, nên park vẫn theo `HAL_GEMINI_IDLE_PARK_S` trừ khi đặt nó về `0`. `0` (mặc định) không gửi gì. Chỉ Gemini. |
 | `HAL_GEMINI_PRE_TURN_RECYCLE_S` | `60` | Guard transport cho Gemini: khi lượt nói mới bắt đầu sau ngần này giây session idle (tính từ mốc muộn hơn giữa turn trước và lúc session kết nối), rebuild session Gemini **trước khi** stream pre-roll/audio để turn không đụng socket chết vì idle ở proxy/SDK. `0` = tắt. Pre-turn recycle thành công sẽ chặn idle recycle generic sau chính turn đó, nên một idle gap chỉ tạo tối đa một rebuild phục vụ transport/chi phí. |
 | `HAL_AGENT_GATEWAY` | `openclaw` | Chọn context manager (cũng đọc từ `agent_runtime` trong config.json) |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | — | Key Gemini; fallback về `llm_api_key` |

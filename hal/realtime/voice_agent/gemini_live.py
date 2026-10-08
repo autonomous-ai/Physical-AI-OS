@@ -1877,6 +1877,23 @@ class GeminiLiveAgent(VoiceAgentBase):
             reason,
         )
 
+    def keepalive(self) -> bool:
+        """Ping the live socket so an idle session stays open; False when there is none."""
+        session = self._session
+        ws = getattr(session, "_ws", None)
+        if session is None or ws is None or getattr(self, "_loop", None) is None:
+            return False
+
+        async def _ping() -> None:
+            await ws.ping()
+
+        try:
+            self._submit_and_wait(_ping(), timeout=5.0)
+        except Exception as e:
+            logger.info("[realtime] keepalive ping failed: %s", e)
+            return False
+        return True
+
     def _submit_and_wait(self, coro: Any, timeout: float = 30.0) -> Any:
         """Submit a coroutine to the IO thread's loop and block until done."""
         if self._loop is None:

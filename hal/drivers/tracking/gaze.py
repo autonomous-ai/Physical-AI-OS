@@ -1514,8 +1514,8 @@ def start() -> None:
     global _thread
     if not config.GAZE_WAKE_ENABLED:
         return
-    if not config.WAKEWORD_ENABLED:
-        logger.info("[gaze] not starting: wake word disabled, nothing to gate")
+    if not config.WAKEWORD_ENABLED and config.ADDRESSED_GATE == "off":
+        logger.info("[gaze] not starting: wake word disabled and no addressed-evidence gate")
         return
     if _thread is not None and _thread.is_alive():
         return

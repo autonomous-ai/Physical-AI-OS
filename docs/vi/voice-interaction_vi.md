@@ -129,6 +129,29 @@ Ba route của README gộp thành một vòng lặp với tool thuộc ba lớp
 Runtime chính không còn là người nói thứ hai; nó là một worker mà kết quả được
 voice agent đọc lên, theo thứ tự, bằng một giọng.
 
+### 4.0 Trải nghiệm, từ đầu đến cuối
+
+Người dùng thấy và nghe gì ở mỗi khoảnh khắc, ngân sách, và nó nằm ở đâu.
+Các hàng đánh dấu *thiết bị* đã được xác nhận trên một lamp; phần còn lại ở
+mức code.
+
+| Khoảnh khắc | Lamp làm gì | Ngân sách | Ở đâu |
+|---|---|---|---|
+| Có người bước vào / nhìn vào nó | Socket STT kết nối trước; session Gemini đang bị park được nối lại; quy tắc chào theo presence như trước | trước từ đầu tiên | `stt_warm.py`, `prewarm.py`, `gaze.record_sample` |
+| Người dùng bắt đầu nói | vòng đèn mờ sang "đang nghe" ngay lập tức khi quay mặt về lamp (wake word tắt) hoặc khi có wake phrase; đầu bắt lại người nói | ≤ 200 ms | `_vad_loop`, `show_listening_pending_cue`, `gaze` |
+| Người dùng gọi tên nó giữa câu | được tính là nói với nó, kể cả không có wake phrase | — | `turn_admission.name_mentioned` |
+| Người dùng ngừng nói | endpoint sau 1.0 s im lặng / 0.6 s sau STT final; commit trên partial ≥ 4 từ; khuôn mặt thinking + vòng đèn | ≤ 300 ms tới cue | `_stream_session_impl`, `run_realtime_turn` |
+| Trả lời nhanh (giờ, âm lượng, đèn) | quy tắc cục bộ, câu nói cache sẵn, không cần model | < 1 s | `system/intent` |
+| Hội thoại / kiến thức / tra cứu | Gemini Live trả lời bằng chính giọng của nó (native audio); câu trả lời dài được stream | từ đầu tiên p50 ≤ 1.2 s mục tiêu; 4 s hiện nay (*thiết bị*) | `realtime_turn.py`, `gemini_live.py` |
+| "yeah" / "no" cụt sau khi Lamp hỏi | được coi là câu trả lời | — | `turn_admission.device_question_pending` |
+| Trả lời chậm | vòng đèn + khuôn mặt giữ "đang nghĩ"; một câu nối nói ra ("One sec.") chỉ sau 4 s | — | `_WaitFiller`, `fillers.go` |
+| Tác vụ (lịch, thiết bị, nghiên cứu) | giao cho main agent; câu "Let me check…" tuỳ chọn; kết quả được đọc bằng cùng giọng Google khi sẵn sàng, không bao giờ bị chit-chat đến sau làm câm; lỗi được nói ra | ack ≤ 1.5 s mục tiêu; kết quả 6–22 s hiện nay (*thiết bị*) | `delegate_to_main`, `IsTaskRun`, `speakVoiceTurnFailure` |
+| Nói tiếp ngay sau câu trả lời | mic được đọc lại ≤ 1 s sau khi playback kết thúc; cửa sổ hội thoại (8 s) giữ câu tiếp theo được tính là nói với nó mà không cần tên | — | grace cut, `CONVERSATION_WINDOW_S` |
+| TV / người khác | không tên, không quay mặt, không cửa sổ, không câu hỏi đang chờ → model được báo "unknown — stay silent"; `strict` loại bỏ trước khi tới bất kỳ model nào | — | `addressed_hint`, `HAL_ADDRESSED_GATE` |
+| Ngắt lời | tap dừng tiếng nói ≤ 250 ms (*thiết bị*); barge-in bằng giọng cần AEC phần cứng | — | `button_actions`, §4.5 |
+| Lamp không trả lời được | nói thẳng ra ("Sorry, I couldn't finish that one.") thay vì im lặng | — | `agent.voice_turn_failed` |
+| Phòng không có người | socket STT được giải phóng, session Gemini bị park (hoặc được giữ sống bằng ping khi bật) | — | `stt_warm`, `_maybe_keepalive` |
+
 ### 4.1 Bộ điều khiển lượt (turn controller)
 
 Một state machine cho mỗi thiết bị, `IDLE → LISTENING → ENDPOINTING → THINKING →
@@ -345,6 +368,11 @@ con số độc lập.
 | Cue thinking phát trước các khoảng chờ của đường commit, không phải sau chúng | **đã triển khai** |
 | Dòng `[turn-timing]` và `scripts/bench/voice_turns.py` | **đã triển khai** |
 | Phát lại offline audio đã ghi qua cổng vào, đồng hồ im lặng và bộ lọc nhiễu | **đã triển khai** (`scripts/bench/voice_replay.py`) |
+| Socket STT được giữ ấm khi có người quanh đó (`HAL_STT_KEEPALIVE=presence`): partial đầu tiên không còn phải trả giá cho một lần connect lạnh, câu nói ngắn sống sót | **đã triển khai** (`stt_warm.py`, `.env` của Lamp) |
+| Ping keepalive session Gemini dưới dạng công tắc thử nghiệm (`HAL_GEMINI_KEEPALIVE_S`, mặc định tắt) | **đã triển khai** |
+| Cửa sổ hội thoại khi wake word tắt (`HAL_CONVERSATION_WINDOW_S`, 8 s): câu tiếp theo sau một câu trả lời được tính là nói với nó mà không cần tên | **đã triển khai** |
+| Tên thiết bị ở bất kỳ đâu trong câu được tính là nói với nó; tên xuất hiện muộn gửi một `[TURN CONTEXT UPDATE]` | **đã triển khai** |
+| Cue listening ngay khi bắt đầu nói khi người dùng quay mặt về lamp (wake word tắt) | **đã triển khai** |
 | Câu trả lời của tác vụ đã delegate sống sót khi realtime trả lời một câu nói mới hơn | **đã triển khai** (os-server `IsTaskRun`) |
 | Yêu cầu nói bị lỗi được thông báo thay vì im lặng | **đã triển khai** (`agent.voice_turn_failed`, debounce 20 s) |
 | Ghi nhận phi ngôn ngữ trên Lamp: không nói "ừ hử" trong lúc người dùng nói (`HAL_BACKCHANNEL_FILLERS=`), chỉ một câu nối (bridge) nói ra sau 4 s (`HAL_REALTIME_FILLER_DELAY_S=4.0`), câu nối là từ ngữ ("One sec.", "Still thinking.") chứ không phải tiếng động | **đã triển khai** (`.env`, `fillers.go`) |
@@ -357,7 +385,7 @@ con số độc lập.
 | Thinking level / model thường cho câu trả lời trực tiếp | thử nghiệm ngày thiết bị (`HAL_GEMINI_THINKING_LEVEL`, `HAL_GEMINI_LIVE_MODEL`) |
 | Google Search bật so với tắt (độ trễ so với tra cứu trực tiếp) | A/B ngày thiết bị (`HAL_GEMINI_GOOGLE_SEARCH`) |
 | Khoảng điếc sau trả lời: grace chờ tool gọi muộn kết thúc ngay khi câu trả lời đã phát xong và loa im 1 s, thay vì chạy đủ 6 s | **đã triển khai** (`HAL_REALTIME_GRACE_AFTER_PLAYBACK_S`) |
-| Keepalive và timeout idle của proxy cho phòng có người | dự kiến (thay đổi proxy là việc liên nhóm) |
+| Timeout idle của proxy cho phòng có người | dự kiến (liên nhóm); ping phía client đã có sẵn để thử nghiệm đối chiếu với nó |
 | Delegate không chặn với inject kết quả | bị chặn bởi model: model extended-thinking đóng session (1007) khi nhận scheduled function response; phương án dự phòng là đường announcement, sẽ đo sau khi native audio đã bật |
 | Live mode mặc định trên các thân máy có AEC phần cứng; quyết định codec cho Lamp Standard | quyết định sản phẩm (§8) |
 
