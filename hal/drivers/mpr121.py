@@ -187,7 +187,8 @@ SWIPE_MIN_TRAVEL_S = 0.030
 class _SpatialGestureRecognizer:
     """Debounce electrode footprints before resolving travel versus a button."""
 
-    def __init__(self, config, button_factory=None):
+    def __init__(self, config, button_factory=None, *, fast_stationary_tap=False):
+        self._fast_stationary_tap = fast_stationary_tap
         self._button_factory = button_factory or _GestureRecognizer
         self._axis = config.swipe_axis or ()
         self._tap_min_electrodes = config.tap_min_electrodes
@@ -216,6 +217,7 @@ class _SpatialGestureRecognizer:
         self._seen = set()
         self._outside = set()
         self._previous_positions = set()
+        self._origin_positions = set()
         self._origin = None
         self._last_center = None
         self._last_move = None
@@ -230,6 +232,15 @@ class _SpatialGestureRecognizer:
         self._button.cancel()
         self._clear_cycle()
         self._armed = False
+
+    def _release_delay(self, active):
+        # A qualified stationary palm tap can commit after contact debounce.
+        # Unqualified contacts and moving swipes keep the full handoff window.
+        if (self._fast_stationary_tap and self._tap_min_electrodes >= 3
+                and self._tap_qualified and not self._moving and not self._invalid
+                and not active):
+            return min(SWIPE_RELEASE_S, max(0.030, self._contact_delay))
+        return SWIPE_RELEASE_S
 
     def _finish(self, now, active=False):
         events = []
@@ -288,7 +299,7 @@ class _SpatialGestureRecognizer:
         # Resolve an old contact before looking at the next one. Raw contact
         # blocks release only inside the handoff grace, never indefinitely.
         if self._cycle and self._release_at is not None:
-            if now - self._release_at >= SWIPE_RELEASE_S:
+            if now - self._release_at >= self._release_delay(active):
                 events.extend(self._finish(now, bool(active)))
             elif stable:
                 positions = {self._axis.index(i) for i in stable if i in self._axis}
@@ -307,6 +318,11 @@ class _SpatialGestureRecognizer:
             if now - self._tap_since >= self._contact_delay:
                 self._tap_qualified = True
         else:
+            # The falling edge closes the sampled interval. With irregular
+            # polling it may be the first sample past the qualification time;
+            # count that elapsed interval before dropping the candidate.
+            if self._tap_since is not None and now - self._tap_since >= self._contact_delay:
+                self._tap_qualified = True
             self._tap_since = None
         if stable:
             positions = {self._axis.index(i) for i in stable if i in self._axis}
@@ -319,6 +335,7 @@ class _SpatialGestureRecognizer:
                 self._outside = stable - set(self._axis)
                 self._seen = positions.copy()
                 self._previous_positions = positions.copy()
+                self._origin_positions = positions.copy()
                 self._origin = sum(positions) / len(positions) if positions else None
                 self._last_center = self._origin
             elif ((positions and self._origin is None)
@@ -343,7 +360,12 @@ class _SpatialGestureRecognizer:
                         self._invalid = True
                     self._last_move = now
                     self._seen.update(positions)
-                if new and abs(displacement) >= 1 and not self._moving:
+                # A stationary palm can recruit more pads as its signal crosses
+                # their thresholds. Centroid movement alone is not travel:
+                # require a new arrival after part of the original footprint
+                # has departed. Shrinking on release has no new arrival.
+                departed = self._origin_positions - positions
+                if new and departed and abs(displacement) >= 1 and not self._moving:
                     self._moving = True
                     self._direction = 1 if displacement > 0 else -1
                     self._button.cancel()
@@ -427,7 +449,9 @@ class MPR121Handler:
         elif self._device_tap_mode():
             factory = lambda debounce_ms: _GestureRecognizer(debounce_ms, multi_click=False)
         if self._config.swipe_axis is not None or self._config.tap_min_electrodes > 1:
-            return _SpatialGestureRecognizer(self._config, factory)
+            return _SpatialGestureRecognizer(
+                self._config, factory, fast_stationary_tap=self._device_tap_mode(),
+            )
         return factory(self._config.debounce_ms)
 
     def _device_tap_mode(self):
@@ -494,7 +518,7 @@ class MPR121Handler:
             previous = self._last_raw_mask or 0
             touched = [i for i in range(12) if raw_mask & ~previous & (1 << i)]
             released = [i for i in range(12) if previous & ~raw_mask & (1 << i)]
-            logger.info(
+            logger.debug(
                 "MPR121 event=electrodes initial=%s raw_mask=0x%03x selected_mask=0x%03x selected_active=0x%03x touched=%s released=%s",
                 self._last_raw_mask is None, raw_mask, self._mask,
                 raw_mask & self._mask, touched, released,
@@ -597,7 +621,7 @@ class MPR121Handler:
         for event in self._detector.update(touched, now):
             if self._stop.is_set():
                 return
-            logger.info("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
+            logger.debug("MPR121 event=gesture kind=%s gesture_id=%d count=%d held_s=%.3f direction=%d", event.kind, event.gesture_id, event.count, event.held_s, event.direction)
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold", preserve_singles=self._device_tap_mode())
             elif event.kind == "hold_tier":
@@ -617,7 +641,7 @@ class MPR121Handler:
                         continue
                     try:
                         self._pending.put_nowait((self._generation, event, time.monotonic()))
-                        logger.info("MPR121 event=action_queued gesture_id=%d action=%s", event.gesture_id, event.kind)
+                        logger.debug("MPR121 event=action_queued gesture_id=%d action=%s", event.gesture_id, event.kind)
                     except queue.Full:
                         # Counts are resolved from every electrode edge above;
                         # dropping a semantic outcome never invents a triple.

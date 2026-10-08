@@ -45,6 +45,8 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = _sensing_device_env
 # 1.0 = normal, max 4.0.
 TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.2"))
+# Physical sleep gesture: allow the announcement to play before sleepy mutes audio.
+SLEEP_ANNOUNCEMENT_DELAY_S = max(0.0, float(os.environ.get("HAL_SLEEP_ANNOUNCEMENT_DELAY_S", "2.0")))
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 TTS_INSTRUCTIONS: str = os.environ.get("HAL_TTS_INSTRUCTIONS", "Friendly")
 # ElevenLabs WebSocket stream-input instead of HTTP chunked streaming.
@@ -640,8 +642,9 @@ REALTIME_NONACTIONABLE_FILLERS: frozenset[str] = frozenset(
 REALTIME_FOREIGN_SCRIPT_GUARD: bool = os.environ.get(
     "HAL_REALTIME_FOREIGN_SCRIPT_GUARD", "true"
 ).lower() in ("1", "true", "yes")
-# Live (full-duplex) mode is a whole-process choice: it forces REALTIME_TURN_DETECTION.
-LIVE_MODE: bool = os.environ.get("HAL_LIVE_MODE", "false").lower() in (
+# Tap-to-talk owns the turn boundary. Keep the environment preference intact so
+# switching back to automatic input restores full-duplex mode on HAL restart.
+LIVE_MODE: bool = VOICE_INPUT_MODE == "automatic" and os.environ.get("HAL_LIVE_MODE", "false").lower() in (
     "1",
     "true",
     "yes",
@@ -662,7 +665,9 @@ LIVE_VAD_SILENCE_MS: int = int(os.environ.get("HAL_LIVE_VAD_SILENCE_MS", "0"))
 
 # "server_vad" | "semantic_vad" | "off"
 REALTIME_TURN_DETECTION: str = os.environ.get("HAL_REALTIME_TURN_DETECTION", "off")
-if LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
+if VOICE_INPUT_MODE == "tap_to_talk":
+    REALTIME_TURN_DETECTION = "off"
+elif LIVE_MODE and REALTIME_TURN_DETECTION.strip().lower() in ("off", "none", ""):
     REALTIME_TURN_DETECTION = "server_vad"
 
 # Play the model's own audio for realtime-handled turns instead of our TTS.

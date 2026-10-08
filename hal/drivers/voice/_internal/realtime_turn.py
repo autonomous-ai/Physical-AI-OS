@@ -171,6 +171,7 @@ ROUTE_UNAVAILABLE = "realtime_unavailable"
 ROUTE_NOISE_DROPPED = "noise_dropped"       # never committed — noise guard rejected it
 ROUTE_FOREIGN_DROPPED = "foreign_dropped"
 ROUTE_NOT_STARTED = "realtime_not_started"
+ROUTE_CANCELLED = "realtime_cancelled"
 
 
 def _reply_language_name() -> str:
@@ -358,7 +359,7 @@ def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
 def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
     """Return whether a terminal guard/model decision must stop OS dispatch."""
     return (
-        rt.route in (ROUTE_NOISE_DROPPED, ROUTE_FOREIGN_DROPPED)
+        rt.route in (ROUTE_NOISE_DROPPED, ROUTE_FOREIGN_DROPPED, ROUTE_CANCELLED)
         or should_drop_realtime_rejection(rt)
     )
 
@@ -455,29 +456,59 @@ def harness_followup_active() -> bool:
         return False
 
 
-def _commit_turn_output(realtime, audio_frames, audio_turn=None):
+class _TurnCancelled(Exception):
+    """Stop a manual turn without treating cancellation as provider failure."""
+
+
+def _check_turn_active(stop_event):
+    if stop_event is not None and stop_event.is_set():
+        raise _TurnCancelled()
+
+
+def _active_outputs(outputs, stop_event):
+    """Check before requesting another event, which may execute a tool."""
+    iterator = iter(outputs)
+    while True:
+        _check_turn_active(stop_event)
+        try:
+            output = next(iterator)
+        except StopIteration:
+            return
+        _check_turn_active(stop_event)
+        yield output
+
+
+def _commit_turn_output(realtime, audio_frames, audio_turn=None, *, stop_event=None):
     """Commit one session; replay a lost upload before any response is consumed."""
+    _check_turn_active(stop_event)
+    output_kwargs = {"stop_event": stop_event} if stop_event is not None else {}
     if audio_turn is None:
         realtime.flush_output()
+        _check_turn_active(stop_event)
         realtime.commit_audio()
         logger.info("[realtime] Audio committed — streaming output")
-        return None, realtime.stream_output()
+        return None, realtime.stream_output(**output_kwargs)
     try:
         realtime.flush_output(turn=audio_turn)
+        _check_turn_active(stop_event)
         realtime.commit_audio(turn=audio_turn)
     except AudioTurnSessionChanged:
+        _check_turn_active(stop_event)
         if not realtime.recover_session("audio-upload-session-changed"):
             raise
+        _check_turn_active(stop_event)
         audio_turn = realtime.bind_audio_turn()
         realtime.send_text(build_turn_context())
         for frame in audio_frames:
+            _check_turn_active(stop_event)
             realtime.append_audio(frame, turn=audio_turn)
         realtime.flush_output(turn=audio_turn)
+        _check_turn_active(stop_event)
         realtime.commit_audio(turn=audio_turn)
     # A change after commit may have executed tools even without spoken output.
     # Let the existing error/fallback path handle it; never blindly repeat tools.
     logger.info("[realtime] Audio committed — streaming output")
-    return audio_turn, realtime.stream_output(turn=audio_turn)
+    return audio_turn, realtime.stream_output(turn=audio_turn, **output_kwargs)
 
 
 def run_realtime_turn(
@@ -493,6 +524,10 @@ def run_realtime_turn(
     save_history: bool = True,
     audio_turn=None,
     harness_followup: Optional[bool] = None,
+    stop_event: Optional[threading.Event] = None,
+    suppress_visual_feedback: bool = False,
+    explicit_capture: bool = False,
+    capture_finished_at: Optional[float] = None,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply."""
     delegated = False
@@ -507,6 +542,43 @@ def run_realtime_turn(
     native = (hal_config.REALTIME_NATIVE_AUDIO or native_voice(tts) is not None) and tts is not None
     native_started = False
     native_played = False
+    outputs = None
+
+    def start_thinking_cue():
+        # A FIFO device finalizer may overlap a newer capture's listening cue.
+        if not suppress_visual_feedback:
+            _thinking_cue_start()
+
+    def clear_thinking_cue():
+        if not suppress_visual_feedback:
+            _thinking_cue_clear()
+
+    def cancelled_result():
+        nonlocal native_started
+        if outputs is not None and hasattr(outputs, "close"):
+            outputs.close()
+        if wait_filler is not None:
+            wait_filler.cancel()
+        if tts is not None:
+            tts.stop_realtime_reply(turn_id=interaction_id)
+            if native_started:
+                tts.native_play_end()
+                native_started = False
+        clear_thinking_cue()
+        # Some providers lack a discard primitive even before commit. Replace
+        # any session that may hold this capture's audio so it cannot leak into
+        # the next explicit capture. Never replay the cancelled request.
+        try:
+            if outputs is not None or audio_turn is not None or (
+                hal_config.REALTIME_ENABLED and rt_audio_buffer and realtime.available
+            ):
+                realtime.recover_session("manual-capture-cancelled", discard_old_on_failure=True)
+        except Exception:
+            logger.exception("[realtime] cancelled turn cleanup failed")
+        return RealtimeTurnResult(route=ROUTE_CANCELLED)
+
+    if stop_event is not None and stop_event.is_set():
+        return cancelled_result()
 
     if combined and (harness_followup if harness_followup is not None else harness_followup_active()):
         logger.info("[realtime] Harness follow-up active — delegating without realtime reply")
@@ -514,7 +586,10 @@ def run_realtime_turn(
 
     # Noise/false-trigger guard: a session with no STT transcript is not worth a model
     # turn. "No transcript" → don't speak.
-    noise_turn = is_noise_turn(combined, buf_duration, audio_is_speech)
+    # An explicit finish tap authorizes voiced audio without waiting for STT.
+    # Automatic turns retain their transcript-based false-trigger policy.
+    noise_turn = ((buf_duration <= 0 or not audio_is_speech) if explicit_capture
+                  else is_noise_turn(combined, buf_duration, audio_is_speech))
     # Only the first actionable answer after main's question is owed to main;
     # noise keeps the window for the real answer (#564). Checked here but consumed
     # at the end, so a session recovery mid-turn still resends the delegate note.
@@ -558,6 +633,7 @@ def run_realtime_turn(
             reply_lang: str = _reply_language_name()
             leak_filter = CoTLeakFilter(reply_lang)
             while True:
+                _check_turn_active(stop_event)
                 if attempt > 0:
                     logger.info(
                         "[realtime] No output (likely WS 1011) — fresh session + "
@@ -567,9 +643,11 @@ def run_realtime_turn(
                     )
                     if not realtime.recover_session("gemini-1011-replay"):
                         break
+                    _check_turn_active(stop_event)
                     if audio_turn is not None:
                         audio_turn = realtime.bind_audio_turn()
                     for _frame in rt_audio_buffer:
+                        _check_turn_active(stop_event)
                         realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
@@ -581,16 +659,25 @@ def run_realtime_turn(
 
                 execution_completed = False
                 look_replay: bool = False
-                audio_turn, outputs = _commit_turn_output(realtime, rt_audio_buffer, audio_turn)
+                audio_turn, outputs = _commit_turn_output(
+                    realtime, rt_audio_buffer, audio_turn,
+                    **({"stop_event": stop_event} if stop_event is not None else {}),
+                )
+                if capture_finished_at is not None:
+                    logger.info("[tap-latency] event=realtime_commit after_finish_ms=%.2f interaction_id=%s",
+                                (time.monotonic() - capture_finished_at) * 1000, interaction_id)
                 if not thinking_started:
                     # Start provider work before synchronous hardware feedback.
                     thinking_started = True
-                    _thinking_cue_start()
+                    start_thinking_cue()
                 native_pending = []
                 native_pending_samples = 0
-                for output in outputs:
+                for output in _active_outputs(outputs, stop_event):
                     if not first_output_logged:
                         first_output_logged = True
+                        if capture_finished_at is not None:
+                            logger.info("[tap-latency] event=realtime_first_output after_finish_ms=%.2f interaction_id=%s",
+                                        (time.monotonic() - capture_finished_at) * 1000, interaction_id)
                         logger.info(
                             "[realtime] first output +%.2fs after commit (%s)",
                             time.monotonic() - t_commit,
@@ -633,12 +720,15 @@ def run_realtime_turn(
                                         time.monotonic() - t_commit, speech[:80])
                             wait_filler.cancel()
                             if first_sentence_sent:
+                                _check_turn_active(stop_event)
                                 tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
                             else:
+                                _check_turn_active(stop_event)
                                 if not tts.speak(speech, turn_id=interaction_id, realtime_reply=True):
+                                    _check_turn_active(stop_event)
                                     tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                         continue
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:
@@ -658,16 +748,18 @@ def run_realtime_turn(
                                     "(+%.2fs after commit)",
                                     time.monotonic() - t_commit,
                                 )
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                                 wait_filler.cancel()
                         if native_started:
                             if native_pending:
                                 for frame in native_pending:
+                                    _check_turn_active(stop_event)
                                     if not tts.native_play_frame(frame):
                                         break
                                 native_pending.clear()
                                 native_pending_samples = 0
                             else:
+                                _check_turn_active(stop_event)
                                 tts.native_play_frame(output.audio)
                         if output.transcript:
                             text_parts.append(output.transcript)
@@ -692,7 +784,7 @@ def run_realtime_turn(
                                 reply_lang, "".join(text_parts)[:60],
                             )
                             wait_filler.cancel()
-                            _thinking_cue_clear()
+                            clear_thinking_cue()
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
@@ -707,10 +799,12 @@ def run_realtime_turn(
                                     head[:80],
                                 )
                                 wait_filler.cancel()
+                                _check_turn_active(stop_event)
                                 if not tts.speak(head, turn_id=interaction_id, realtime_reply=True):
+                                    _check_turn_active(stop_event)
                                     tts.speak_queue(head, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                                 sentence_buf = rest
                         sentence = realtime_visible_text(sentence_buf, tts, strip_markers)
                         complete = sentence.rstrip().endswith(SENTENCE_ENDS)
@@ -731,18 +825,22 @@ def run_realtime_turn(
                                         sentence[:80],
                                     )
                                     wait_filler.cancel()
+                                    _check_turn_active(stop_event)
                                     if not tts.speak(sentence, turn_id=interaction_id, realtime_reply=True):
+                                        _check_turn_active(stop_event)
                                         tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                                     first_sentence_sent = True
-                                    _thinking_cue_clear()
+                                    clear_thinking_cue()
                                 else:
                                     logger.info(
                                         "[realtime] Next sentence → speak_queue: %r",
                                         sentence[:80],
                                     )
+                                    _check_turn_active(stop_event)
                                     tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                             sentence_buf = tail if ready else ""
 
+                _check_turn_active(stop_event)
                 execution_completed = (
                     getattr(realtime, "execution_completed", False) is True
                     and not look_replay
@@ -755,6 +853,7 @@ def run_realtime_turn(
                         "frame joins the replayed turn"
                     )
                     for _frame in rt_audio_buffer:
+                        _check_turn_active(stop_event)
                         realtime.append_audio(_frame, **({"turn": audio_turn} if audio_turn is not None else {}))
                     text_parts = []
                     sentence_buf = ""
@@ -774,6 +873,7 @@ def run_realtime_turn(
                     break
                 attempt += 1
 
+            _check_turn_active(stop_event)
             transcript = clean_transcript(strip_markers("".join(text_parts)), reply_lang)
             if (not native and not first_sentence_sent and not delegated
                     and not look_replayed and not transcript and execution_completed
@@ -788,6 +888,7 @@ def run_realtime_turn(
             # Native playback owns the speaker for the whole turn — release it once all
             # frames are in (records transcript for STT echo cancel).
             if native_started:
+                _check_turn_active(stop_event)
                 tts.native_play_end(transcript)
                 native_started = False
                 native_played = True
@@ -795,11 +896,12 @@ def run_realtime_turn(
             if foreign_suppressed:
                 route = ROUTE_FOREIGN_DROPPED
                 transcript = ""
-                _thinking_cue_clear()
+                clear_thinking_cue()
                 try:
                     from hal.routes.led import restore_led
 
-                    restore_led()
+                    if not suppress_visual_feedback:
+                        restore_led()
                 except Exception:
                     pass
             elif rejected:
@@ -807,11 +909,12 @@ def run_realtime_turn(
                 logger.info(
                     "[realtime] Model explicitly rejected turn — no main-agent dispatch"
                 )
-                _thinking_cue_clear()
+                clear_thinking_cue()
                 try:
                     from hal.routes.led import restore_led
 
-                    restore_led()
+                    if not suppress_visual_feedback:
+                        restore_led()
                 except Exception:
                     pass
             elif delegated:
@@ -827,14 +930,17 @@ def run_realtime_turn(
                             "[realtime] Final fragment → speak: %r", remaining[:80]
                         )
                         wait_filler.cancel()
+                        _check_turn_active(stop_event)
                         if not tts.speak(remaining, turn_id=interaction_id, realtime_reply=True):
+                            _check_turn_active(stop_event)
                             tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                         first_sentence_sent = True
-                        _thinking_cue_clear()
+                        clear_thinking_cue()
                     else:
                         logger.info(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
                         )
+                        _check_turn_active(stop_event)
                         tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                 # Only claim the turn as HANDLED if the model actually SPOKE. An empty
                 # result (receive() timed out, or native mode produced no audio) must
@@ -851,6 +957,7 @@ def run_realtime_turn(
                         transcript[:200] if transcript else "(empty)",
                     )
                     if save_history and (combined or transcript):
+                        _check_turn_active(stop_event)
                         realtime.save_turn(
                             user_text=combined or "(audio only)",
                             agent_text=transcript or "(audio only)",
@@ -867,14 +974,17 @@ def run_realtime_turn(
                     # Dead turn — don't leave the thinking face hanging, and return the
                     # strip to the user's color (idle is a background emotion, so the
                     # clear alone leaves the forced purple pulse running).
-                    _thinking_cue_clear()
+                    clear_thinking_cue()
                     try:
                         from hal.routes.led import restore_led
 
-                        restore_led()
+                        if not suppress_visual_feedback:
+                            restore_led()
                     except Exception:
                         pass
         except Exception as e:
+            if isinstance(e, _TurnCancelled) or (stop_event is not None and stop_event.is_set()):
+                return cancelled_result()
             execution_completed = False
             logger.warning(
                 "[realtime] Processing failed: %s — will forward to OS server", e
@@ -887,7 +997,7 @@ def run_realtime_turn(
                 except Exception:
                     pass
                 native_started = False
-            _thinking_cue_clear()
+            clear_thinking_cue()
             delegated = True
             route = ROUTE_ERROR
         finally:
@@ -919,6 +1029,8 @@ def run_realtime_turn(
             "[realtime] Enabled but agent not available — falling back to OS server"
         )
 
+    if stop_event is not None and stop_event.is_set():
+        return cancelled_result()
     answered_for_main: bool = False
     if owed_to_main:
         take_main_followup()

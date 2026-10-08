@@ -36,6 +36,7 @@ def physical_short_tap(source: str = "button", announce: bool = False):
         if voice:
             voice.device_input.cancel()
         button_actions._wake_if_sleepy(source)
+        button_actions.play_ack_chime(source)
         return
     from hal.routes.voice import stop_tts, unmute_mic
     if state.tts_service and state.tts_service.speaking:
@@ -43,6 +44,7 @@ def physical_short_tap(source: str = "button", announce: bool = False):
             voice.device_input.cancel()
         button_actions._cancel_agent_speech(source)
         stop_tts()
+        button_actions.play_ack_chime(source)
         return
     if voice is None:
         return
@@ -50,9 +52,11 @@ def physical_short_tap(source: str = "button", announce: bool = False):
         voice.device_input.finish()
         return
     from hal.routes.music import audio_stop, unmute_speaker
-    button_actions._cancel_agent_speech(source)
+    # Starting another recording preserves submitted turns and their deferred
+    # replies. Only a tap interrupting actual playback cancels agent speech.
     state.note_music_cancel()
-    audio_stop()
+    if state._music_playing or (state.music_service and state.music_service.playing):
+        audio_stop()
     if state._speaker_muted:
         unmute_speaker()
     if state._mic_muted:

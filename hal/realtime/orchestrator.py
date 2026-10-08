@@ -713,8 +713,10 @@ class RealtimeOrchestrator:
             reason, "rt-noise-rebuild", discard_old_on_failure=True
         )
 
-    def recover_session(self, reason: str) -> bool:
-        """Reconnect a fresh session synchronously for a mid-turn 1011 replay; True if ready."""
+    def recover_session(self, reason: str, *, discard_old_on_failure: bool = False) -> bool:
+        """Reconnect for replay, or discard a cancelled session even if reconnect fails."""
+        if discard_old_on_failure:
+            return self._rebuild_now(reason, discard_old_on_failure=True)
         return self._rebuild_now(reason)
 
     def set_live_active(self, active: bool) -> None:

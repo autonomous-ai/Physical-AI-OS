@@ -225,11 +225,10 @@ def _schedule_emotion_idle(delay_s, generation):
 _thinking_cue_active: bool = False
 # Cancelled the moment the emotion changes away from sleepy.
 _sleepy_release_timer: Optional[threading.Timer] = None
-# Speaker drain so the going-to-sleep line isn't swallowed by the mute.
+# Scene confirmations may finish before muting; sleep mutes immediately.
 SLEEPY_SPEAKER_GRACE_S = 2.0       # wait this long for an announcement to START
 SLEEPY_SPEAKER_DRAIN_MAX_S = 15.0  # hard cap on the whole drain
 _SLEEPY_DRAIN_POLL_S = 0.1
-_sleepy_drain_cancel: Optional[threading.Event] = None
 # Same drain for scenes with speaker "off".
 _scene_drain_cancel: Optional[threading.Event] = None
 # Resume idle after a still emotion halted the loop.
@@ -497,6 +496,10 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
     if _current_emotion != EMO_SLEEPY:
         return
 
+    if mute_speaker:
+        _cancel_scene_speaker_drain()
+        _mute_speaker_for_sleep()
+
     _cancel_pending_restore()
     if rgb_service:
         _stop_current_effect()
@@ -509,16 +512,12 @@ def _finalize_sleepy_peripherals(mute_mic: bool, mute_speaker: bool):
             voice_service.stop(background=True)
 
     if mute_speaker:
-        # Music is never an announcement; the speaker goes to the drain.
+        # Music must stop as well as queued and active speech.
         if music_service and music_service.playing:
             music_service.stop()
-        if not _speaker_muted:
-            # A pending scene drain yields to sleep so wake can restore the mute.
-            _cancel_scene_speaker_drain()
-            _start_sleepy_speaker_drain()
 
     _persist_sleep_state()
-    logger.info("Sleepy finalized: LED off, mic muted, speaker draining")
+    logger.info("Sleepy finalized: LED off, mic muted, speaker muted")
 
 
 def _run_speaker_drain(cancel: threading.Event, commit, name: str) -> None:
@@ -540,28 +539,11 @@ def _run_speaker_drain(cancel: threading.Event, commit, name: str) -> None:
     threading.Thread(target=_drain, daemon=True, name=name).start()
 
 
-def _start_sleepy_speaker_drain():
-    """Mute the speaker once the going-to-sleep announcement has played (a wake cancels it)."""
-    global _sleepy_drain_cancel
-    _cancel_sleepy_speaker_drain()
-    cancel = threading.Event()
-    _sleepy_drain_cancel = cancel
-    _run_speaker_drain(cancel, _mute_speaker_for_sleep, "sleepy-speaker-drain")
-
-
-def _cancel_sleepy_speaker_drain():
-    """Stop a pending drain. Safe to call when none is running."""
-    global _sleepy_drain_cancel
-    if _sleepy_drain_cancel is not None:
-        _sleepy_drain_cancel.set()
-        _sleepy_drain_cancel = None
-
-
 def _start_scene_speaker_drain(scene: str):
     """Mute the speaker for `scene` once its confirmation line has played (skipped while sleep owns it)."""
     global _scene_drain_cancel
     _cancel_scene_speaker_drain()
-    if _sleeping or _sleepy_drain_cancel is not None:
+    if _sleeping:
         logger.info("Scene %s: speaker mute left to sleep", scene)
         return
     cancel = threading.Event()
@@ -599,31 +581,29 @@ def _mute_speaker_for_scene(scene: str):
 
 
 def _mute_speaker_for_sleep():
-    """Commit the deferred mute, re-reading sleep state under privacy.lock (same lock as wake)."""
+    """Mute immediately, preserving ownership so wake never undoes a manual mute."""
     global _speaker_muted, _sleepy_auto_muted_speaker
     with privacy.lock:
         if not _sleeping or _current_emotion != EMO_SLEEPY:
-            logger.info("Sleepy speaker drain: awake again -- speaker left live")
+            logger.info("Sleepy speaker mute: awake again -- speaker left live")
             return
-        if _speaker_muted:
-            return
-        _speaker_muted = True
-        _sleepy_auto_muted_speaker = True
-        _persist_sleep_state()
+        if not _speaker_muted:
+            _speaker_muted = True
+            _sleepy_auto_muted_speaker = True
+            _persist_sleep_state()
 
-    # The flag only gates playback not yet started; stop TTS so the cap is a real bound.
+    # Also invalidate synthesis and clear queued speech while playback is idle.
     # Outside the lock: stop() can block on the audio device.
-    if tts_service and tts_service.speaking:
+    if tts_service:
         tts_service.stop()
-    logger.info("Sleepy speaker drain done -- speaker muted")
+    logger.info("Sleepy speaker muted immediately")
 
 
 def _wake_sleepy_peripherals():
     """Restore only mic/speaker states that sleepy itself muted."""
     global _sleepy_auto_muted_mic, _sleepy_auto_muted_speaker, _mic_muted, _speaker_muted
-    # Cancel and restore under ONE lock, or a drain past its guard re-mutes an awake device.
+    # Restore under the same lock used by the sleep mute.
     with privacy.lock:
-        _cancel_sleepy_speaker_drain()
         if _sleepy_auto_muted_speaker:
             if privacy.speaker_muted:
                 # Wake removes sleep's temporary mute under the lock so privacy can't restore it.

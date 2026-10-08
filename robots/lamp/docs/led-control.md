@@ -237,7 +237,7 @@ When a scene activates, `POST /scene` applies in order:
 3. **Servo hold** — if `"servo": "hold"`, holds the servo **after** the aim completes (aim → hold in one thread), as the `scene` owner. Not claimed if the scene ended while the arm was moving. Released when switching to a scene without hold, on scene off, or on a non-transient LED override.
 4. **Camera** — auto on/off via `_auto_camera_on`/`_auto_camera_off`
 5. **Mic** — mute stops voice pipeline (STT), unmute restarts it
-6. **Speaker** — `off` stops music at once and mutes speech on a **drain** (`_start_scene_speaker_drain`, see `sensing-behavior.md`): the scene's own confirmation line, sent by os-server after the `/scene` marker, still plays before the speaker closes; `sleepy` chained in the same reply takes the drain over so wake can restore the speaker. `on` re-enables output. Scene off under a held privacy lock retargets the lock's snapshot so release reopens the speaker/camera (see `physical-controls.md`).
+6. **Speaker** — `off` stops music at once and mutes speech on a **drain** (`_start_scene_speaker_drain`, see `sensing-behavior.md`): the scene's own confirmation line, sent by os-server after the `/scene` marker, still plays before the speaker closes; `sleepy` chained in the same reply cancels the drain and mutes immediately, suppressing the late confirmation; wake restores the sleep-owned mute. `on` re-enables output. Scene off under a held privacy lock retargets the lock's snapshot so release reopens the speaker/camera (see `physical-controls.md`).
 
 **Scene activation is the only path that aims.** An LED restore — after an emotion, at TTS end, at
 music end, on mic unmute, on a listening cue clearing — repaints the strip and nothing else, and a
