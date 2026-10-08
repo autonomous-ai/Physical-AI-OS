@@ -66,7 +66,7 @@ def _notify_head_pat(spoken: str):
         pass
 
 
-def _cancel_agent_speech(source: str):
+def _cancel_agent_speech(source: str, *, before_ms=None):
     """Tell the OS server to stop speaking for every turn currently in flight.
 
     Fire-and-forget on its own thread: the click's felt latency is the whole point of
@@ -83,7 +83,9 @@ def _cancel_agent_speech(source: str):
 
     def _post():
         try:
-            requests.post(OS_SPEECH_CANCEL_URL, json={}, timeout=1.0)
+            requests.post(OS_SPEECH_CANCEL_URL,
+                          json={} if before_ms is None else {"before_ms": before_ms},
+                          timeout=1.0)
         except Exception as e:
             logger.warning("%s speech-cancel call failed: %s", source, e)
 
