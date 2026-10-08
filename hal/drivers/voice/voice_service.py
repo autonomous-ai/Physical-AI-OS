@@ -34,6 +34,7 @@ from hal.drivers.voice._internal.live_gate import AdaptiveLiveGate
 from hal.drivers.voice._internal.live_reply import LiveReplyGuard
 from hal.drivers.voice._internal.audio_dsp import resample_to_stt, rms
 from hal.drivers.voice._internal.audio_recorder import ArecordStream
+from hal.drivers.voice._internal.noise_guard import accepts_speech_metrics
 from hal.drivers.voice._internal.realtime_turn import (
     realtime_speech_text,
     realtime_visible_text,
@@ -735,14 +736,21 @@ class VoiceService:
                 pcm_int16, voice_cfg.STT_RATE
             )
             self._rt_noise_vad.reset_state()
-            # Judge by VOICED RATIO, not peak: a real speaking turn is voiced across
-            # most of its length; sustained noise only spikes sparsely.
-            is_speech = span_ratio >= hal_config.REALTIME_NOISE_SPEECH_RATIO
+            # Density alone can accept a single noisy 32 ms frame at ratio 1.0.
+            # Count voiced frames rather than the whole span or recording duration.
+            is_speech = accepts_speech_metrics(
+                (peak, mean, ratio, span_ratio, span_seconds),
+                min_ratio=hal_config.REALTIME_NOISE_SPEECH_RATIO,
+                min_voiced_ms=hal_config.VOICE_NOISE_MIN_VOICED_MS,
+            )
             logger.info(
                 "[realtime] noise-guard metrics: peak=%.3f mean=%.3f voiced_ratio=%.3f "
-                "span_ratio=%.3f span_seconds=%.2f (span >= %.2f? %s)",
+                "span_ratio=%.3f span_seconds=%.2f voiced_ms=%.1f "
+                "min_ratio=%.2f min_voiced_ms=%.1f accepted=%s",
                 peak, mean, ratio, span_ratio, span_seconds,
-                hal_config.REALTIME_NOISE_SPEECH_RATIO, is_speech,
+                span_ratio * span_seconds * 1000,
+                hal_config.REALTIME_NOISE_SPEECH_RATIO,
+                hal_config.VOICE_NOISE_MIN_VOICED_MS, is_speech,
             )
             return is_speech
         except Exception as e:

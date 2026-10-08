@@ -473,3 +473,11 @@ tail -f /var/log/hal/server.log
 ```
 
 No reboot needed — just restart the service.
+
+### Post-capture voice noise guard (lamp-52e6 trial)
+
+The measured trial uses `HAL_SILERO_THRESHOLD=0.15`, `HAL_REALTIME_NOISE_SPEECH_RATIO=0.45`, and `HAL_VOICE_NOISE_MIN_VOICED_MS=160` in `/opt/hal/.env`, followed by a HAL restart. The duration condition requires code supporting the new key; lowering the ratio alone does not reject isolated high-ratio noise spikes. These values are stored in `robots/lamp/rootfs/opt/hal/.env` as the lamp profile defaults. The shared code defaults remain ratio `0.55` and minimum duration `0`; microphone variants still need their own acoustic validation.
+
+On 2026-10-08, 12 captures through the device's existing post-AEC pipeline covered background (6), servo (3), and speaker echo (3). Two previously recorded human utterances plus 14 derived gain/padding variants were replayed on-device. The old ratio-only guard accepted 7/12 noise samples and 15/16 speech samples; the trial accepted 0/12 and 16/16 respectively. These are guard decisions, not end-to-end false dispatch rates. The variants are not independent human recordings, and tuning and evaluation used the same small corpus; broader speech, physical tap, and sleep/wake validation remain necessary.
+
+The guard also applies in automatic mode and before OS fallback when realtime is off/unavailable. Only empty/short transcripts selected by the existing policy are checked; other transcript filters remain unchanged. Logs expose `voiced_ms`, `min_ratio`, `min_voiced_ms`, and `accepted`. The duration is cumulative voiced audio, not a required delay: the extra decision is arithmetic on the existing Silero result.
