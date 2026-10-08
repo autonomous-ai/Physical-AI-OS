@@ -41,3 +41,14 @@ def _reset_main_followup():
     reset_main_followup()
     yield
     reset_main_followup()
+
+
+@pytest.fixture(autouse=True)
+def _reset_turn_supersession():
+    """Each test is a fresh HAL process; replacements within a test share cutoff."""
+    from hal.drivers.voice.tts import turn_supersession
+    with turn_supersession._lock:
+        turn_supersession._before_ms = 0
+    yield
+    with turn_supersession._lock:
+        turn_supersession._before_ms = 0

@@ -695,3 +695,15 @@ def test_auto_supersede_does_not_gate_admission(kpi):
     new = voice_metrics.speech_end("silence_clock")
     voice_metrics.boundary(voice_metrics.BOUNDARY_AUTO_SUPERSEDE, new)
     assert voice_metrics.is_suppressed("run:run-old") is False
+
+
+def test_explicit_tap_suppresses_delayed_filler_interaction_owner(kpi):
+    """Fillers use interaction IDs rather than timestamped OS run IDs."""
+    from hal.drivers.voice.tts.service import TTSService
+
+    old = voice_metrics.speech_end("manual_tap")
+    assert not TTSService._owner_suppressed("run:" + old)
+    voice_metrics.boundary(voice_metrics.BOUNDARY_EXPLICIT_STOP)
+    new = voice_metrics.speech_end("manual_tap")
+    assert TTSService._owner_suppressed("run:" + old)
+    assert not TTSService._owner_suppressed("run:" + new)
