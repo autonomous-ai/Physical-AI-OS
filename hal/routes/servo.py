@@ -5,6 +5,7 @@ import io
 import math
 import os
 import re
+import threading
 import time
 from pathlib import Path
 from typing import Optional
@@ -16,6 +17,7 @@ from hal.drivers.motors import hold
 from hal.safety.policy import min_move_duration
 from hal.models import (
     ServoAimRequest,
+    ServoHoldOwnerRequest,
     ServoDemoResponse,
     ServoSearchRequest,
     ServoSearchResponse,
@@ -220,6 +222,56 @@ def hold_servos():
     # Claim first: a claim on an unheld body drops owners left over from before a resume.
     hold.claim(svc, hold.EXPLICIT)
     svc.hold(explicit=True)
+    return {"status": "ok"}
+
+
+# A look hold os-server never releases (it died mid-look) must not freeze the arm.
+LOOK_HOLD_MAX_S = 30.0
+_look_hold_timer: Optional[threading.Timer] = None
+
+
+def _release_look(svc) -> bool:
+    """Drop the look owner's hold; replay a still emotion's parked idle resume. True if held."""
+    if not hold.release(svc, hold.LOOK):
+        return False
+    if not _sleep_servo_locked():
+        from hal.routes.emotion import resume_deferred_still_idle
+
+        resume_deferred_still_idle(svc)
+    return True
+
+
+def _expire_look_hold(svc) -> None:
+    if _release_look(svc):
+        state.logger.warning("servo hold: look hold expired after %.0fs without a release", LOOK_HOLD_MAX_S)
+
+
+@router.post("/servo/hold/claim", response_model=StatusResponse)
+def claim_hold(req: ServoHoldOwnerRequest):
+    """Hold the current pose for an internal owner (os-server's look). Agents use /servo/hold."""
+    global _look_hold_timer
+    svc = _svc()
+    hold.claim(svc, req.owner)
+    if _look_hold_timer is not None:
+        _look_hold_timer.cancel()
+    _look_hold_timer = threading.Timer(LOOK_HOLD_MAX_S, _expire_look_hold, args=(svc,))
+    _look_hold_timer.daemon = True
+    _look_hold_timer.start()
+    state.logger.info("servo hold claimed by %s", req.owner)
+    return {"status": "ok"}
+
+
+@router.post("/servo/hold/release", response_model=StatusResponse)
+def release_hold(req: ServoHoldOwnerRequest):
+    """Drop one internal owner's hold. Other owners (a user's explicit hold) keep the arm."""
+    global _look_hold_timer
+    if _look_hold_timer is not None:
+        _look_hold_timer.cancel()
+        _look_hold_timer = None
+    svc = _svc()
+    released = _release_look(svc)
+    state.logger.info("servo hold release by %s: released=%s, still held by %s",
+                      req.owner, released, hold.holder(svc))
     return {"status": "ok"}
 
 

@@ -241,7 +241,7 @@ khi animation kết thúc — nó nội suy về idle. Muốn khôi phục tư t
 
 ### Chủ sở hữu của hold (#544)
 
-Servo hold có chủ sở hữu: `scene`, `tracking` và `explicit` (`POST /servo/hold`), được quản lý
+Servo hold có chủ sở hữu: `scene`, `tracking`, `explicit` (`POST /servo/hold`) và `look`, được quản lý
 trong `hal/drivers/motors/hold.py`. `_hold_mode` là true khi còn ít nhất một chủ sở hữu, và mỗi
 đường chỉ nhả phần giữ của chính nó. Kết thúc scene không bao giờ nhả hold của tracking hay
 explicit, và một phiên tracking kết thúc giữa lúc scene reading đang bật vẫn để nguyên hold của
@@ -251,6 +251,8 @@ Log khi nhả cho biết tay đèn đã rảnh chưa: `Scene off: servo released
 `Scene off: scene hold released, servo still held by explicit` khi vẫn còn. Tương tự, gaze log
 `framing released (servo held by scene, idle waits)` thay cho `(idle has the arm)` khi kết thúc
 một cuộc hội thoại lúc servo đang bị giữ.
+
+`look` là nội bộ của `POST /api/vision/look` ở os-server: nó claim `POST /servo/hold/claim {"owner":"look"}` trước cue "taking a look" và nhả bằng `POST /servo/hold/release {"owner":"look"}` ngay khi chụp ảnh xong, để timer idle hoặc still-emotion không thể xoay đầu giữa lúc chụp. Nhả `look` không bao giờ nhả chủ sở hữu khác: sau "quay phải và giữ nguyên ở đó" thì hold explicit vẫn giữ tay đèn. Nếu os-server không nhả (nó chết giữa chừng), HAL tự nhả hold `look` sau 30 s (`LOOK_HOLD_MAX_S`). Khi nhả, idle resume của still emotion bị hoãn trong lúc body bị giữ sẽ chạy ngay, trừ khi còn chủ sở hữu khác giữ tay đèn hoặc thiết bị đang ngủ. Chỉ `look` được chấp nhận trên hai route này (422 nếu khác); agent vẫn dùng `POST /servo/hold`.
 
 **Lưới an toàn.** Một hold `scene` mà không có scene nào đang active là hold cũ (stale). Nó được
 nhả, kèm log `[hold] scene hold released -- no scene is active (stale)`, ở lần kế tiếp có chỗ đọc

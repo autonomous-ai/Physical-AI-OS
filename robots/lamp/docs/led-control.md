@@ -249,7 +249,7 @@ after an animation ends — it interpolates to idle. Restoring that pose belongs
 
 ### Hold ownership (#544)
 
-The servo hold has owners: `scene`, `tracking` and `explicit` (`POST /servo/hold`), kept in
+The servo hold has owners: `scene`, `tracking`, `explicit` (`POST /servo/hold`) and `look`, kept in
 `hal/drivers/motors/hold.py`. `_hold_mode` is true while at least one owner remains, and each
 path releases only its own claim. Ending a scene never drops a tracking or explicit hold, and a
 tracking session that ends during a reading scene leaves the scene's hold in place and does not
@@ -259,6 +259,8 @@ The release logs say whether the arm is free: `Scene off: servo released` when n
 `Scene off: scene hold released, servo still held by explicit` when one is. Likewise gaze logs
 `framing released (servo held by scene, idle waits)` instead of `(idle has the arm)` at the end of
 a conversation under a hold.
+
+`look` is internal to os-server's `POST /api/vision/look`: it claims `POST /servo/hold/claim {"owner":"look"}` before the "taking a look" cue and releases it with `POST /servo/hold/release {"owner":"look"}` once the photo is taken, so an idle or still-emotion timer cannot swing the head mid-shot. Releasing `look` never drops another owner: after "turn right and hold it there" the explicit hold keeps the arm. If os-server never releases (it died mid-look), HAL drops the `look` hold after 30 s (`LOOK_HOLD_MAX_S`). On release, a still emotion's idle resume that was parked while the body was held runs now, unless another owner still holds the arm or the device is sleeping. Only `look` is accepted on these two routes (422 otherwise); agents keep using `POST /servo/hold`.
 
 **Safety net.** A `scene` hold with no active scene is stale. It is released, with
 `[hold] scene hold released -- no scene is active (stale)`, the next time something reads the
