@@ -2,6 +2,8 @@
 
 Sleep/wake requests addressed to the device (including “Can you sleep?”) delegate silently to main rather than receiving an identity/chat reply. Main retains capability checks and Harness voice sleep restrictions, and confirms only the actual outcome. “Do robots need sleep?” remains general knowledge; “I can’t sleep” is user wellbeing, not a device sleep command. This rule applies to all realtime provider prompts, including the GPT Live backend.
 
+The sleep/wake rule also covers addressed joint requests and corrections such as “Can we sleep now?”, “I mean, can you sleep now?”, and “Ngủ đi”. It takes precedence over the direct-answer/persona default and delegation-latency preference. Realtime must hand off before speaking and must not substitute biological-sleep explanations, goodnight, promises to dim lights/stay quiet, or `complete_response` for execution. This remains a contextual prompt rule, not a sleep-keyword router; prompt-contract tests do not prove live-model compliance.
+
 ## Japanese language and ElevenLabs voices
 
 Use `stt_language: "ja"` for Japanese. HAL includes Japanese spoken status,
