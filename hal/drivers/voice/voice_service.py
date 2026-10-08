@@ -2807,6 +2807,7 @@ class VoiceService:
                 energy = rms(data, self._np)
                 self._mic_level = energy
                 self._mic_level_ts = time.time()
+                endpoint_candidate = energy < voice_cfg.RMS_THRESHOLD
                 if energy >= voice_cfg.RMS_THRESHOLD:
                     if not silence_vad_on:
                         last_speech_time = time.time()
@@ -2821,6 +2822,10 @@ class VoiceService:
                                 last_speech_time = time.time()
                                 last_speech_idx = len(audio_buffer) - 1
                             else:
+                                # Loud background noise must not suppress the
+                                # endpoint clock. Only admit a completed Silero
+                                # rejection, never an unclassified loud window.
+                                endpoint_candidate = True
                                 noise_windows += 1
                                 if noise_windows in (1, 10, 50):
                                     logger.info(
@@ -2828,7 +2833,7 @@ class VoiceService:
                                         "non-speech (%d frames each)",
                                         noise_windows, probe_frames,
                                     )
-                elif manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
+                if endpoint_candidate and manual_capture is None and turn_should_close(time.time(), last_speech_time, final_ts[0]):
                     if turn_endpoint is not None:
                         end = len(audio_buffer)
                         start = max(0, end - 125)
