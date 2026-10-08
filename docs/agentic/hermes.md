@@ -679,6 +679,12 @@ during install) and does three things, in order:
      ignores the field the cache silently stays at 5m, so the setting is harmless
      where unsupported. The 1h tier costs 2x input on the cache write (vs 1.25x
      for 5m); reads are 0.1x either way.
+   - `.custom_providers[0].models.Auto-AI.context_length = 256000` — same
+     proxy-only scope. campaign-api's `/models` carries no context window, so
+     without an explicit value Hermes probes `/models` and Ollama `/api/show`
+     (~0.4s each from the lamp) **before every turn**, logs `Could not detect
+     context length … (probe-down)` and falls back to 256K anyway. Pinning the
+     same 256K skips both round trips without changing compression thresholds.
    - `.auxiliary.vision` (the whole node is **overwritten**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — the image-understanding model, routed through the same autonomous provider.
