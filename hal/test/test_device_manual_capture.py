@@ -258,6 +258,11 @@ def test_start_rechecks_route_instead_of_trusting_cached_off(snapshot):
 def test_unowned_stream_is_rejected_before_stt_or_model():
     from hal.drivers.voice import voice_service as module
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     stt = Mock()
     with patch.object(module, "dispatch_turn") as dispatch:
         module.VoiceService._stream_session(
@@ -277,6 +282,11 @@ def test_finish_before_recorder_ready_discards_without_chime():
     assert control.finish()
     capture = control.claim(LOCAL)
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = True
     service._tts = Mock(last_spoken_text="")
     stt = Mock()

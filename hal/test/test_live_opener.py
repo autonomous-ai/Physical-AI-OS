@@ -1,4 +1,6 @@
 """Confirmed STT openers enter full-duplex LIVE without duplicate dispatch."""
+import threading
+
 
 from types import MethodType
 from unittest.mock import Mock
@@ -159,6 +161,11 @@ def test_final_wake_confirmation_controls_promotion_and_fallback(
     monkeypatch.setattr(config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", True)
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = False
     service._tts = None
     service._wakeword_focus = WakeWordFocus(20)

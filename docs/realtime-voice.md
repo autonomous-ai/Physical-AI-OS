@@ -3661,3 +3661,28 @@ It does not fall back to main or report successful task execution. The existing
 `rejected_non_user` KPI exclusion. Empty output, timeouts, incomplete markers,
 marker-prefixed answers, system-error sentences and main-agent `NO_REPLY` do
 not qualify. Native audio and the continuous LIVE output pump are unchanged.
+
+### Stop playback releases automatic reply capture
+
+With Live off, the physical stop/listen action also cancels the automatic
+realtime reply wait. Previously it stopped TTS alone: the mic loop could remain
+inside provider receive until turn completion (19.66 seconds in a Lamp trace).
+Both the normal reply and early STT-drain overlap paths carry a per-capture stop
+event. Provider receive polls it every 100 ms. Cancellation drops remaining
+text/native audio, fillers, history and main fallback for that capture. Late STT
+callbacks from the cancelled capture are ignored.
+
+The cancelled provider is retired immediately; reconnect runs in the background
+and the old session is never reused on connection failure. Mic capture does not
+wait for this reconnect or a pending STT final drain. Each voice service retains
+one STT-drain worker with at most one outstanding close; while it is busy, a later
+capture uses the normal close path rather than queueing more drains. The 300 ms
+session cooldown is skipped after explicit automatic reply cancellation. Live
+and manual-capture reply policies remain separate.
+
+`[automic-stop] reply cancellation requested` and
+`[automic-stop] receive released; VAD resumed after ...ms` measure request to
+return to the VAD loop. Target: under 500 ms with a silent provider and slow
+reconnect; this is not an acoustic readiness measurement. Capture device timing,
+post-playback echo suppression and optional STT keepalive can still affect actual
+next-speech acceptance. Hardware validation must measure that separately.

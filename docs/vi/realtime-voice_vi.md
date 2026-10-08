@@ -3599,3 +3599,26 @@ nhưng thêm thời gian reconnect trước turn sau; inference provider đã ch
 thể phát sinh thêm usage. LIVE ON, session bật resumption,
 provider khác và reject đến muộn sau khi output đã bắt đầu vẫn giữ ACK như cũ.
 Không thay tiêu chí nhận diện turn cần reject.
+
+### Dừng loa giải phóng lượt trả lời automatic
+
+Khi Live tắt, thao tác vật lý dừng/nghe cũng hủy phần chờ realtime của lượt
+automatic. Trước đây chỉ TTS dừng: vòng mic có thể vẫn chờ provider kết thúc lượt
+(log Lamp ghi nhận 19,66 giây). Cả đường trả lời thường và đường chạy song song
+với STT final drain đều mang stop event riêng cho capture. Provider receive kiểm
+tra event mỗi 100 ms. Hủy lượt sẽ bỏ text/audio native còn lại, filler, history
+và fallback main của lượt đó. Callback STT đến muộn của capture đã hủy bị bỏ qua.
+
+Provider đã hủy được loại ngay; reconnect chạy nền và không dùng lại session cũ
+khi kết nối lỗi. Capture mic không chờ reconnect hoặc STT final drain đang chạy.
+Mỗi voice service giữ một worker STT drain, tối đa một lệnh close chưa hoàn tất;
+khi worker bận, capture sau dùng đường close thường thay vì xếp thêm drain.
+Bỏ cooldown session 300 ms sau khi hủy trả lời automatic bằng thao tác dừng.
+Chính sách trả lời của Live và manual capture vẫn tách riêng.
+
+`[automic-stop] reply cancellation requested` và
+`[automic-stop] receive released; VAD resumed after ...ms` đo từ yêu cầu hủy tới
+lúc trở lại vòng VAD. Mục tiêu dưới 500 ms khi provider im lặng và reconnect chậm;
+đây chưa phải phép đo sẵn sàng nghe về âm học. Timing thiết bị thu, chống echo sau
+phát và STT keepalive tùy chọn vẫn có thể ảnh hưởng thời điểm nhận câu tiếp theo.
+Cần đo riêng phần đó trên phần cứng.

@@ -529,6 +529,7 @@ def run_realtime_turn(
     explicit_capture: bool = False,
     capture_finished_at: Optional[float] = None,
     suppress_auto_fillers: bool = False,
+    background_cancel_recovery: bool = False,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply."""
     delegated = False
@@ -556,15 +557,21 @@ def run_realtime_turn(
 
     def cancelled_result():
         nonlocal native_started
-        if outputs is not None and hasattr(outputs, "close"):
-            outputs.close()
+        try:
+            if outputs is not None and hasattr(outputs, "close"):
+                outputs.close()
+        except Exception:
+            logger.exception("[realtime] cancelled output close failed")
         if wait_filler is not None:
             wait_filler.cancel()
-        if tts is not None:
-            tts.stop_realtime_reply(turn_id=interaction_id)
-            if native_started:
-                tts.native_play_end()
-                native_started = False
+        try:
+            if tts is not None:
+                tts.stop_realtime_reply(turn_id=interaction_id)
+                if native_started:
+                    tts.native_play_end()
+                    native_started = False
+        except Exception:
+            logger.exception("[realtime] cancelled playback cleanup failed")
         clear_thinking_cue()
         # Some providers lack a discard primitive even before commit. Replace
         # any session that may hold this capture's audio so it cannot leak into
@@ -573,7 +580,10 @@ def run_realtime_turn(
             if outputs is not None or audio_turn is not None or (
                 hal_config.REALTIME_ENABLED and rt_audio_buffer and realtime.available
             ):
-                realtime.recover_session("manual-capture-cancelled", discard_old_on_failure=True)
+                if background_cancel_recovery:
+                    realtime.recover_cancelled_turn()
+                else:
+                    realtime.recover_session("manual-capture-cancelled", discard_old_on_failure=True)
         except Exception:
             logger.exception("[realtime] cancelled turn cleanup failed")
         return RealtimeTurnResult(route=ROUTE_CANCELLED)

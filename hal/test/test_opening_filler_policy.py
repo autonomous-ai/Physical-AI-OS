@@ -1,5 +1,6 @@
 """Opening feedback must not leak into already-open automatic conversations."""
 
+import threading
 from unittest.mock import Mock
 
 import pytest
@@ -36,6 +37,11 @@ def test_capture_keeps_listening_but_only_openers_get_audio_feedback(
         clock[0] = 6.0
     request = ('Hello Lamp, ' if wake else '') + 'can you tell me the weather tomorrow?'
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = False
     service._tts = None
     service._wakeword_focus = focus
@@ -148,7 +154,14 @@ def test_vad_latches_focus_before_gaze_opens_or_refreshes(monkeypatch, initial_f
     if initial_focus:
         focus.refresh()
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = True
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._np = np
     service._wakeword_focus = focus
     service._tts_is_speaking.return_value = False
@@ -192,6 +205,11 @@ def test_existing_explicit_and_live_routes_do_not_inherit_followup_suppression(m
     focus = WakeWordFocus(5)
     focus.refresh()
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = mode != 'live'
     service._tts = None
     service._wakeword_focus = focus
