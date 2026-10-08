@@ -88,7 +88,8 @@ class DeviceOverrideTests(unittest.TestCase):
         env = (SOURCE / "rootfs/opt/hal/.env").read_text()
         self.assertEqual(
             (self.profile / "rootfs/opt/hal/.env").read_text(),
-            overrides.merge_env(env, "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro"),
+            overrides.merge_env(env, "HAL_VOLUME_STATE_PATH=/root/config/.volume-pro\n"
+                                "HAL_VOICE_OPENING_FILLERS_ONLY=true"),
         )
         for name in ("rootfs/etc/asound.conf", "SAFETY.md"):
             self.assertEqual((self.profile / name).read_bytes(), (SOURCE / name).read_bytes())
@@ -124,6 +125,7 @@ class DeviceOverrideTests(unittest.TestCase):
                 env = (self.profile / "rootfs/opt/hal/.env").read_text()
                 self.assertNotIn("HAL_LITE_ADAPTIVE_GATE", env)
                 self.assertIn("HAL_AEC_ENABLED=" + ("true" if profile in ("standard", "pro") else "false") + "\n", env)
+                self.assertIn("HAL_VOICE_OPENING_FILLERS_ONLY=" + ("true" if profile in ("standard", "pro") else "false") + "\n", env)
 
     def test_arbitrary_profile_uses_package_data_without_product_logic(self):
         (self.profile / "overrides/pro").rename(self.profile / "overrides/studio")

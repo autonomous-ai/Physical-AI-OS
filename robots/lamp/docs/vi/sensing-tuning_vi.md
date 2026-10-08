@@ -415,3 +415,11 @@ tail -f /var/log/hal/server.log
 ```
 
 Không cần reboot — chỉ cần restart service.
+
+### Noise guard sau thu âm (thử nghiệm lamp-52e6)
+
+Bộ giá trị đã đo là `HAL_SILERO_THRESHOLD=0.15`, `HAL_REALTIME_NOISE_SPEECH_RATIO=0.45`, và `HAL_VOICE_NOISE_MIN_VOICED_MS=160` trong `/opt/hal/.env`, sau đó restart HAL. Điều kiện thời lượng cần code hỗ trợ key mới; chỉ hạ ratio không loại được xung nhiễu ngắn có ratio cao. Các giá trị này được lưu trong `robots/lamp/rootfs/opt/hal/.env` làm mặc định của profile lamp. Mặc định chung trong code vẫn là ratio `0.55` và thời lượng tối thiểu `0`; các biến thể mic vẫn cần kiểm chứng âm học riêng.
+
+Ngày 2026-10-08, 12 lượt thu qua pipeline sau AEC hiện có gồm nền (6), servo (3), và vọng loa (3). Replay trên device dùng hai câu người thật đã lưu cùng 14 biến thể giảm âm lượng/thêm im lặng. Guard cũ chỉ xét ratio nhận 7/12 mẫu nhiễu và 15/16 mẫu lời nói; bộ thử nhận tương ứng 0/12 và 16/16. Đây là quyết định của guard, không phải tỷ lệ dispatch nhầm đầu-cuối. Các biến thể không phải mẫu người nói độc lập; tuning và đánh giá dùng cùng bộ mẫu nhỏ, vẫn cần kiểm chứng thêm lời nói, tiếng tap vật lý và sleep/wake.
+
+Guard cũng áp dụng trong automatic và trước fallback OS khi realtime tắt/không khả dụng. Chỉ transcript rỗng/ngắn được chính sách hiện có chọn mới bị kiểm tra; các bộ lọc transcript khác giữ nguyên. Log có `voiced_ms`, `min_ratio`, `min_voiced_ms`, và `accepted`. Thời lượng là tổng audio voiced, không phải thời gian chờ bắt buộc: quyết định bổ sung chỉ tính toán trên kết quả Silero đã có.

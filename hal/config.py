@@ -557,6 +557,10 @@ WAKEWORD_ENABLED: bool = VOICE_INPUT_MODE == "automatic" and _os_cfg_get("wakewo
 WAKEWORD_FOLLOWUP_TIMEOUT_S: float = max(
     0.0, float(os.environ.get("HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S", "20"))
 )
+# Package opt-in: automatic follow-ups stay visually responsive without unsolicited audio.
+VOICE_OPENING_FILLERS_ONLY: bool = os.environ.get(
+    "HAL_VOICE_OPENING_FILLERS_ONLY", "false"
+).lower() in ("1", "true", "yes")
 # Max gap between output events before the turn falls back (keep just above first-token latency).
 REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
     os.environ.get("HAL_REALTIME_RECV_QUEUE_TIMEOUT_S", "8.0")
@@ -616,6 +620,11 @@ REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT: bool = os.environ.get(
 REALTIME_NOISE_SPEECH_RATIO: float = float(
     os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.55")
 )
+# Cumulative voiced time, not span length or elapsed recording time. Zero keeps
+# legacy ratio-only behavior until a device has been acoustically calibrated.
+VOICE_NOISE_MIN_VOICED_MS: float = max(0.0, float(
+    os.environ.get("HAL_VOICE_NOISE_MIN_VOICED_MS", "0")
+))
 # Never commit an empty-STT turn (Gemini invents a reply); false uses the Silero gate instead.
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"

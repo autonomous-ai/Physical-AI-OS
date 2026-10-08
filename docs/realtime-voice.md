@@ -2,6 +2,8 @@
 
 Sleep/wake requests addressed to the device (including “Can you sleep?”) delegate silently to main rather than receiving an identity/chat reply. Main retains capability checks and Harness voice sleep restrictions, and confirms only the actual outcome. “Do robots need sleep?” remains general knowledge; “I can’t sleep” is user wellbeing, not a device sleep command. This rule applies to all realtime provider prompts, including the GPT Live backend.
 
+The sleep/wake rule also covers addressed joint requests and corrections such as “Can we sleep now?”, “I mean, can you sleep now?”, and “Ngủ đi”. It takes precedence over the direct-answer/persona default and delegation-latency preference. Realtime must hand off before speaking and must not substitute biological-sleep explanations, goodnight, promises to dim lights/stay quiet, or `complete_response` for execution. This remains a contextual prompt rule, not a sleep-keyword router; prompt-contract tests do not prove live-model compliance.
+
 ## Japanese language and ElevenLabs voices
 
 Use `stt_language: "ja"` for Japanese. HAL includes Japanese spoken status,
@@ -603,8 +605,8 @@ lance" never arms the gate. Flux takes them as repeated `keyterm` parameters
 with no weights; nova-3 uses `keyterm` too; older nova models use `keywords`
 with the `:3` intensifier.
 
-Every STT-final-confirmed wake-word turn reaches dispatch. It opens a 20-second
-follow-up focus window, so the next spoken turn can omit the wake phrase and
+Every STT-final-confirmed wake-word turn reaches dispatch. It opens a configured
+follow-up focus window (5 seconds in the lamp profile; HAL default 20 seconds), so the next spoken turn can omit the wake phrase and
 is sent as `voice_followup`. For an authorized turn, the idle countdown starts
 when processing and its owned TTS queue have both finished, not at dispatch or
 the first filler. Vision/grounding, main-agent work, synthesis and queued answer
@@ -637,8 +639,7 @@ latched if it expires mid-sentence; the noise guard still applies.
 
 That window is latched at session start and refreshed during capture and at
 speech end for **dispatch**, so a window that expires mid-sentence cannot cut
-off someone already speaking. The cues that
-claim to be the addressee — the listening LED, the backchannel — ask
+off someone already speaking. The listening LED and backchannel eligibility ask
 `is_addressed()` instead, which re-reads the window **live**. Gaze is why: it
 can open the window in the middle of the very sentence it acknowledges.
 Device-observed 04/09/2026 on lamp-0c89 — at speech start the camera had no
@@ -874,6 +875,38 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
+### Opening-only automatic fillers on Standard and Pro lamps
+
+Automatic realtime wait fillers are armed only after session preparation and
+turn admission succeed, including the early-STT drain path. Unavailable/quota
+or failed-start fallback does not arm a realtime filler before main-agent
+dispatch. The existing filler delay starts after admission; no extra network
+wait is added. Deferred turns leave arming to the realtime flow once available.
+
+Standard and Pro lamps enable `HAL_VOICE_OPENING_FILLERS_ONLY=true` because
+they share the microphone (HAL default `false`; the `pro-xvf3800` and
+`pro-respeaker-lite` overlays keep the option disabled).
+It applies only to Automatic, non-Live capture with the wake gate enabled.
+At VAD speech start, HAL snapshots whether the wake window was already open,
+**before** gaze can open or refresh it for that capture:
+
+- Window closed at capture start: existing cues remain eligible once wake phrase
+  or gaze authorizes the turn. This is the conversation-opening turn.
+- Window already open: suppress automatic backchannel, realtime wait filler
+  (including the early-STT path), and main-agent opening/continuation fillers.
+  A repeated wake phrase, gaze refresh or window expiry during capture does not
+  reclassify this follow-up as an opening turn.
+
+The snapshot is separate from the live focus check that authorizes capture and
+listening LEDs. Main dispatch carries optional `suppress_auto_fillers: true`
+sensing metadata, preserved through delegation/resume. Listening LEDs, actual
+model speech, explicit tool cues, tools and routing remain unchanged. Manual and
+Harness input, Live mode and profiles with the option disabled keep their
+existing behavior. No model call or network wait is added; genuine follow-ups
+may instead wait silently for the existing response latency. This prevents
+premature automatic cues, not incorrect model replies. Hardware latency and
+addressee accuracy still require device verification.
+
 ### The mic ignores our own backchannel cue
 
 Backchannel listening cues ("Ok", "Mm", "Oh") are played on purpose **without**
@@ -906,7 +939,7 @@ recognized words uses the separate 180s turn ceiling described above; speech
 can legitimately last longer than 20 seconds. The same file previously wrote
 `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` without the `HAL_` prefix, so it did nothing
 and the device ran the 20 s default; the key is now
-`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=5` in the lamp profile (HAL default remains 20 s).
 
 If the **initial** provider connection fails during HAL startup, the
 orchestrator creates fresh sessions in a background retry loop (an immediate
@@ -3412,6 +3445,7 @@ is a top-level `config.json` flag:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Quiet time after any speech or user transcript before the next snapshot. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Harness text handed to the renderer is cut to this length. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Fallback summarizer bound before sanitized text is spoken instead. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard and Pro enable it; pro-xvf3800 and pro-respeaker-lite disable it. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
@@ -3432,6 +3466,8 @@ is a top-level `config.json` flag:
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Registers `reject_turn` and enables the isolated `should_drop_realtime_rejection()` policy gate. An explicit tool call drops a transcript before OS dispatch; a silent model completion, timeout, or error still falls back to the main agent. The separate deterministic noise guard is also terminal for audio it already classified as non-speech. Set `false` to disable this experimental AI filter without changing the rest of realtime routing. |
 | `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `0` | Default: speak the first complete sentence immediately and pre-synthesize later sentences in the queue, without waiting for the whole reply. Positive values opt into first-clause splitting, with a word-break fallback beyond this limit; complete sentences bypass the splitter. Keeps bracketed voice tags intact (also at whitespace fallback), skips numeric commas/colons and URL colons, and requires 8 visible characters outside tags. Early splitting may leave gaps between synthesis requests. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Sessions shorter than this with no STT transcript are treated as VAD noise and not committed to the model. Only consulted when `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
+| `HAL_REALTIME_NOISE_SPEECH_RATIO` | `0.55` | Minimum voiced density within the first-to-last voiced span. Used by automatic and device tap-to-talk capture, including fallback to OS when realtime is disabled or unavailable. |
+| `HAL_VOICE_NOISE_MIN_VOICED_MS` | `0` | Additional minimum cumulative voiced time: `span_ratio * span_seconds * 1000`. Both density and duration must pass; only frames classified as voiced count (32 ms at the default chunk size, including any zero-padded final frame). `0` preserves the legacy ratio-only policy. Missing/failed Silero inference still fails open. Evaluated over already captured audio: no extra recording wait or model inference. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Extends the Silero voiced-ratio guard to turns that DO have a transcript, up to this many words. STT invents a short filler out of room noise and reports full confidence for it, so such a turn used to bypass every guard (they all only ran on an empty transcript) and commit pure noise to the model. A transcript of at most this many words is re-checked against `HAL_REALTIME_NOISE_SPEECH_RATIO` and dropped when the audio was never voiced; a real short command is voiced and still commits. The ratio is measured over the voiced SPAN — first to last voiced chunk — not the whole buffer, because a capture carries VAD pre-roll at the front and a 200ms tail at the back, and that fixed padding dilutes a short utterance far more than a long one. Measuring the whole buffer dropped a real `Yes, that's right.` at 0.500 (`peak=1.000`), inverting the guard's purpose against the very turns it screens. Sustained noise still fails, since its voiced chunks are sparse within the span too. Longer transcripts are never re-checked, so the floor can't silence a real utterance. `0` disables. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Cost control: when a turn arrives after this many seconds of silence (measured from the later of the last turn and the current session's connect), recycle (rebuild) the session **after** that turn so the next turn drops the per-turn context the provider re-bills on a long-lived session. A post-pause turn is effectively a new conversation; long-term continuity survives via the reloaded `summary.md`. For native-audio Gemini, this is skipped when a successful pre-turn recycle already made the same idle gap fresh. `0` disables. Reuses the zombie-recovery rebuild path. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume the same Gemini session across reconnects. OFF by default — the `campaign-api` proxy doesn't forward the resumption handshake, so resuming through it yields a zombie session (cold reconnects work). Enable only against an endpoint that supports it. |
@@ -3631,3 +3667,28 @@ It does not fall back to main or report successful task execution. The existing
 `rejected_non_user` KPI exclusion. Empty output, timeouts, incomplete markers,
 marker-prefixed answers, system-error sentences and main-agent `NO_REPLY` do
 not qualify. Native audio and the continuous LIVE output pump are unchanged.
+
+### Stop playback releases automatic reply capture
+
+With Live off, the physical stop/listen action also cancels the automatic
+realtime reply wait. Previously it stopped TTS alone: the mic loop could remain
+inside provider receive until turn completion (19.66 seconds in a Lamp trace).
+Both the normal reply and early STT-drain overlap paths carry a per-capture stop
+event. Provider receive polls it every 100 ms. Cancellation drops remaining
+text/native audio, fillers, history and main fallback for that capture. Late STT
+callbacks from the cancelled capture are ignored.
+
+The cancelled provider is retired immediately; reconnect runs in the background
+and the old session is never reused on connection failure. Mic capture does not
+wait for this reconnect or a pending STT final drain. Each voice service retains
+one STT-drain worker with at most one outstanding close; while it is busy, a later
+capture uses the normal close path rather than queueing more drains. The 300 ms
+session cooldown is skipped after explicit automatic reply cancellation. Live
+and manual-capture reply policies remain separate.
+
+`[automic-stop] reply cancellation requested` and
+`[automic-stop] receive released; VAD resumed after ...ms` measure request to
+return to the VAD loop. Target: under 500 ms with a silent provider and slow
+reconnect; this is not an acoustic readiness measurement. Capture device timing,
+post-playback echo suppression and optional STT keepalive can still affect actual
+next-speech acceptance. Hardware validation must measure that separately.

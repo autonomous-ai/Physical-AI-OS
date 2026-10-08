@@ -300,6 +300,10 @@ type FillerManager struct {
 	// interactions maps a run to HAL's voice-metrics interaction id, so a filler
 	// fired later in the turn is attributed the same way the opening one is.
 	interactions map[string]string
+	// Suppression survives Cancel because a delegated task can resume fillers
+	// after the device agent finishes. Keep only a bounded set of recent runs.
+	suppressed      map[string]bool
+	suppressedOrder []string
 }
 
 // NewFillerManager constructs an empty FillerManager. Language is read at
@@ -310,6 +314,7 @@ func NewFillerManager() *FillerManager {
 		voiceRuns:    make(map[string]bool),
 		delegated:    make(map[string]bool),
 		interactions: make(map[string]string),
+		suppressed:   make(map[string]bool),
 	}
 }
 
@@ -318,6 +323,27 @@ func NewFillerManager() *FillerManager {
 // (OnTurnStart/OnToolStart/OnToolEnd/Cancel).
 var DefaultFillerManager = NewFillerManager()
 
+const maxSuppressedFillerRuns = 4096
+
+// SuppressRun disables automatic fillers for a turn, including re-registration
+// after queued replay or a delegated task resumes. Call before dispatch.
+func (fm *FillerManager) SuppressRun(runID string) {
+	if runID == "" {
+		return
+	}
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	if fm.suppressed[runID] {
+		return
+	}
+	if len(fm.suppressedOrder) >= maxSuppressedFillerRuns {
+		delete(fm.suppressed, fm.suppressedOrder[0])
+		fm.suppressedOrder = fm.suppressedOrder[1:]
+	}
+	fm.suppressed[runID] = true
+	fm.suppressedOrder = append(fm.suppressedOrder, runID)
+}
+
 // MarkVoiceRun marks runID as eligible for fillers. Other turn types
 // (Telegram, web chat, passive sensing, cron, guard) must NOT be marked.
 func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
@@ -325,6 +351,10 @@ func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
+	if fm.suppressed[runID] {
+		fm.mu.Unlock()
+		return
+	}
 	fm.voiceRuns[runID] = true
 	if interactionID != "" {
 		fm.interactions[runID] = interactionID
@@ -340,7 +370,9 @@ func (fm *FillerManager) MarkDelegatedVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
-	fm.delegated[runID] = true
+	if !fm.suppressed[runID] {
+		fm.delegated[runID] = true
+	}
 	fm.mu.Unlock()
 }
 

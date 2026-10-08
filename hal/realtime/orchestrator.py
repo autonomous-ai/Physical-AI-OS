@@ -116,6 +116,14 @@ DELEGATE_TOOL_DESCRIPTION: str = (
     "(including Harness voice mode), executes and confirms. General questions such "
     "as 'Do robots need sleep?' remain direct; 'I can't sleep' is user wellbeing, "
     "not a device sleep command. Addressed-speech rules still apply. "
+    "Addressed joint requests and corrections ('Can we sleep now?', "
+    "'I mean, can you sleep now?', 'I mean, can we sleep now?', 'Ngủ đi') "
+    "also require the handoff before ANY speech, overriding direct-answer defaults, "
+    "persona/identity chat and delegation-latency preferences. Do not reinterpret "
+    "them as biological sleep questions. Never substitute 'I don't go to sleep "
+    "like humans do', 'I'll lower my light', 'I'll stay quiet' or a goodnight "
+    "for execution; do not call complete_response. Preserve the user's words. "
+    "A sleep keyword alone does not establish a device-control request. "
     "Finding, locating or looking for a physical object or a person — in ANY "
     "phrasing: 'find my keys', 'where is my cup', 'can you help me find my pen', "
     "'do you see my pen anywhere', 'look around for X', 'where are you' — is a "
@@ -711,6 +719,17 @@ class RealtimeOrchestrator:
             return False
         return self._rebuild_in_background(
             reason, "rt-noise-rebuild", discard_old_on_failure=True
+        )
+
+    def recover_cancelled_turn(self) -> bool:
+        """Retire the cancelled provider before reconnecting off the mic thread."""
+        with self._lifecycle_lock:
+            old = self._agent
+            self._agent = None
+        if old is not None:
+            self._disconnect_in_background(old, "automatic-reply-cancelled")
+        return self._rebuild_in_background(
+            "automatic-reply-cancelled", "rt-cancel-rebuild", discard_old_on_failure=True,
         )
 
     def recover_session(self, reason: str, *, discard_old_on_failure: bool = False) -> bool:

@@ -2,6 +2,8 @@
 
 Yêu cầu sleep/wake hướng tới thiết bị (kể cả “Can you sleep?”) được chuyển im lặng sang main, không trả lời như câu hỏi về bản thân. Main vẫn kiểm tra khả năng và điều kiện chặn sleep khi bật Harness voice, chỉ xác nhận kết quả thực tế. “Do robots need sleep?” là kiến thức chung; “I can’t sleep” nói về sức khỏe người dùng, không phải lệnh cho máy ngủ. Quy tắc áp dụng cho mọi prompt realtime, kể cả GPT Live backend.
 
+Rule sleep/wake cũng bao gồm yêu cầu hướng tới máy dùng cách nói chung hoặc đính chính như “Can we sleep now?”, “I mean, can you sleep now?”, và “Ngủ đi”. Rule ưu tiên hơn mặc định trả lời trực tiếp/persona và ưu tiên tránh latency delegate. Realtime phải handoff trước khi nói, không thay thực thi bằng giải thích về giấc ngủ sinh học, chúc ngủ ngon, hứa hạ đèn/im lặng hoặc `complete_response`. Đây vẫn là rule prompt theo ngữ cảnh, không phải router bắt từ khóa sleep; test nội dung prompt không chứng minh model thực tế tuân thủ.
+
 ## Tiếng Nhật và giọng ElevenLabs
 
 Dùng `stt_language: "ja"` cho tiếng Nhật. HAL có phrase tiếng Nhật cho thông báo
@@ -591,7 +593,8 @@ Flux nhận chúng dưới dạng param `keyterm` lặp lại, không trọng s�
 dùng `keyterm`; các model nova cũ hơn dùng `keywords` kèm intensifier `:3`.
 
 Mọi lượt wake-word đã được STT final xác nhận đều đi qua dispatch. Nó mở một
-cửa sổ focus follow-up 20 giây, nên câu tiếp theo có thể bỏ wake phrase và
+cửa sổ focus follow-up theo cấu hình (profile lamp 5 giây; HAL mặc định 20 giây),
+nên câu tiếp theo có thể bỏ wake phrase và
 được gửi với type `voice_followup`. Với turn đã được phép, thời gian chờ chỉ bắt
 đầu khi cả xử lý lẫn queue TTS của turn đã xong, không phải lúc dispatch hay filler
 đầu tiên. Vision/grounding, main agent, tổng hợp và các đoạn trả lời đang xếp hàng
@@ -622,8 +625,7 @@ main agent. Focus đã chốt vẫn được giữ nếu hết hạn giữa câu
 được áp dụng.
 
 Cửa sổ đó được chốt lúc mở phiên và cập nhật trong lúc thu cùng cuối câu cho
-**dispatch**, để cửa sổ hết hạn giữa câu không cắt lời người đang nói. Còn những cue tự nhận mình là người được
-gọi — LED listening, backchannel — thì hỏi `is_addressed()`, và hàm này đọc lại
+**dispatch**, để cửa sổ hết hạn giữa câu không cắt lời người đang nói. LED listening và điều kiện cho phép backchannel hỏi `is_addressed()`, và hàm này đọc lại
 cửa sổ **theo thời gian thực**. Lý do là gaze: nó có thể mở cửa sổ ngay giữa
 chính câu nói mà nó đang xác nhận. Đo trên lamp-0c89 04/09/2026 — lúc bắt đầu
 nói, camera chưa có bằng chứng khuôn mặt nào (`of 0` mẫu) nên cờ chốt là False,
@@ -849,6 +851,37 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
+### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
+
+Wait filler realtime tự động chỉ được bật sau khi chuẩn bị session và mở lượt
+thành công, kể cả nhánh STT đang drain. Khi session không khả dụng/hết quota
+hoặc mở lượt thất bại, fallback không bật filler realtime trước khi dispatch
+sang main. Timer filler hiện có bắt đầu sau khi mở lượt; không thêm chờ mạng.
+Lượt bị hoãn để luồng realtime bật filler khi session đã sẵn sàng.
+
+Lamp Standard và Pro cùng bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` vì dùng
+cùng mic (HAL mặc định `false`; overlay `pro-xvf3800` và `pro-respeaker-lite`
+vẫn tắt tùy chọn này).
+Chỉ áp dụng khi Automatic, Live tắt và wake gate bật. Khi VAD bắt đầu nhận lời
+nói, HAL chốt wake window đã mở hay chưa, **trước khi** gaze có thể mở hoặc gia
+hạn cửa sổ cho lần thu đó:
+
+- Window đóng lúc bắt đầu thu: giữ điều kiện cue hiện có sau khi wake phrase
+  hoặc gaze cho phép lượt đó. Đây là lượt mở hội thoại.
+- Window đã mở: chặn backchannel tự động, wait filler realtime (kể cả nhánh
+  early-STT), opening/continuation filler của main agent. Wake phrase lặp lại,
+  gaze gia hạn hoặc window hết hạn trong lúc thu không đổi follow-up thành lượt mở.
+
+Trạng thái chốt này tách biệt với kiểm tra focus trực tiếp để cho phép capture
+và LED listening. Dispatch sang main mang metadata sensing tùy chọn
+`suppress_auto_fillers: true`, được giữ qua delegate/resume. LED listening,
+lời nói thực của model, cue tool tường minh, tool và routing không đổi. Input
+manual/Harness, Live và profile tắt tùy chọn giữ hành vi hiện có. Không thêm
+lượt gọi model hoặc chờ mạng; follow-up thực sự dành cho lamp có thể phải chờ
+im lặng trong khoảng trễ phản hồi hiện hữu. Cơ chế này ngăn cue tự động phát
+sớm, không ngăn mọi câu trả lời nhầm của model. Độ trễ phần cứng và độ chính
+xác nhận biết người được nói tới vẫn cần kiểm chứng trên thiết bị.
+
 ### Mic bỏ qua chính cue backchannel của mình
 
 Cue lắng nghe của backchannel ("Ok", "Mm", "Oh") được phát mà **không** set cờ
@@ -879,7 +912,7 @@ người dùng vẫn có thể nói đè lên nó.
 nhận được chữ dùng trần lượt riêng 180s mô tả ở trên; lời nói thực tế có thể
 dài hơn 20 giây. Cũng file đó trước kia ghi `WAKEWORD_FOLLOWUP_TIMEOUT_S=60` mà
 thiếu prefix `HAL_`, nên nó không có tác dụng gì và thiết bị chạy default 20 s;
-nay key đã là `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=60`.
+nay profile lamp dùng `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S=5` (HAL vẫn mặc định 20 s).
 
 Nếu kết nối provider **ban đầu** lỗi ngay khi HAL khởi động, orchestrator tạo
 session mới bằng retry loop nền (thử lại một lần ngay, rồi backoff luỹ thừa từ 2s,
@@ -3339,6 +3372,7 @@ trong `config.json`:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Thời gian yên lặng sau bất kỳ lời nói hay transcript người dùng nào trước snapshot tiếp theo. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Văn bản Harness đưa cho bộ diễn đạt bị cắt tới độ dài này. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
@@ -3359,6 +3393,8 @@ trong `config.json`:
 | `HAL_REALTIME_AI_REJECT_FILTER` | `true` | Đăng ký `reject_turn` và bật policy gate tách riêng `should_drop_realtime_rejection()`. Tool call rõ ràng sẽ bỏ transcript trước OS dispatch; model im lặng, timeout hay lỗi vẫn fallback sang main agent. Noise guard deterministic riêng cũng terminal cho audio mà nó đã phân loại là không phải tiếng nói. Đặt `false` để tắt filter AI thử nghiệm này mà không đổi phần routing realtime còn lại. |
 | `HAL_REALTIME_FIRST_CHUNK_MAX_CHARS` | `0` | Mặc định nói ngay câu hoàn chỉnh đầu tiên và tổng hợp trước các câu sau qua hàng đợi, không chờ toàn bộ câu trả lời. Giá trị dương bật cắt mệnh đề đầu, hoặc cắt theo khoảng trắng khi vượt giới hạn này; câu hoàn chỉnh bỏ qua bộ cắt. Giữ nguyên voice tag trong ngoặc vuông (kể cả khi cắt theo khoảng trắng), bỏ qua dấu phẩy/hai chấm trong số và dấu hai chấm của URL, yêu cầu 8 ký tự hiển thị ngoài tag. Cắt sớm vẫn có thể tạo khoảng ngắt giữa các yêu cầu tổng hợp. |
 | `HAL_REALTIME_MIN_COMMIT_DURATION_S` | `0.8` | Session ngắn hơn ngưỡng này mà không có STT transcript bị coi là nhiễu VAD, không commit lên model. Chỉ xét khi `HAL_REALTIME_REQUIRE_TRANSCRIPT=false`. |
+| `HAL_REALTIME_NOISE_SPEECH_RATIO` | `0.55` | Mật độ voiced tối thiểu trong span từ frame voiced đầu tới frame cuối. Áp dụng cho automatic và tap-to-talk trên device, cả fallback OS khi realtime tắt hoặc không khả dụng. |
+| `HAL_VOICE_NOISE_MIN_VOICED_MS` | `0` | Tổng thời lượng voiced tối thiểu bổ sung: `span_ratio * span_seconds * 1000`. Phải đạt cả mật độ lẫn thời lượng; chỉ frame được phân loại voiced mới được tính (32 ms với chunk mặc định, kể cả frame cuối có zero-padding). `0` giữ chính sách chỉ xét ratio cũ. Silero thiếu/lỗi vẫn fail-open. Tính trên audio đã thu, không thêm thời gian chờ thu hoặc lượt inference. |
 | `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` | `3` | Mở rộng guard voiced-ratio của Silero sang cả turn CÓ transcript, tối đa ngần này từ. STT bịa một từ đệm ngắn từ tiếng ồn phòng và báo confidence tối đa cho nó, nên turn kiểu đó trước đây lọt hết mọi guard (guard chỉ chạy khi transcript rỗng) và commit nhiễu thuần lên model. Transcript nhiều nhất ngần này từ sẽ bị kiểm lại theo `HAL_REALTIME_NOISE_SPEECH_RATIO` và bị bỏ nếu audio chưa từng voiced; lệnh ngắn nói thật vẫn là voiced nên vẫn commit. Tỉ lệ được đo trên **span voiced** — từ chunk voiced đầu tới chunk voiced cuối — chứ không phải toàn buffer, vì bản capture luôn kèm pre-roll của VAD ở đầu và 200ms đuôi giữ lại ở cuối; phần đệm cố định đó làm loãng câu ngắn nặng hơn câu dài rất nhiều. Đo toàn buffer từng vứt nhầm một câu `Yes, that's right.` nói thật ở mức 0.500 (`peak=1.000`) — tức là guard quay ra phạt đúng lớp câu nó sinh ra để soi. Tiếng ồn kéo dài vẫn rớt, vì các chunk voiced của nó thưa ngay bên trong span. Transcript dài hơn không bao giờ bị kiểm lại, nên ngưỡng này không thể làm câm một câu nói thật. `0` = tắt. |
 | `HAL_REALTIME_SESSION_IDLE_RESET_S` | `240` | Kiểm soát chi phí: khi một turn đến sau ngần này giây im lặng (tính từ mốc muộn hơn giữa turn trước và lúc session hiện tại kết nối), recycle (rebuild) session **sau** turn đó để turn kế tiếp bỏ phần context mỗi-turn mà provider re-bill trên session sống lâu. Turn sau khoảng nghỉ dài coi như cuộc hội thoại mới; trí nhớ dài hạn vẫn còn nhờ nạp lại `summary.md`. Với Gemini native-audio, bước này bị bỏ qua nếu pre-turn recycle thành công đã làm mới session cho chính idle gap đó. `0` = tắt. Dùng lại đường rebuild của zombie-recovery. |
 | `HAL_GEMINI_SESSION_RESUMPTION` | `false` | Resume cùng session Gemini qua reconnect. Mặc định OFF — proxy `campaign-api` không forward đúng resumption handshake nên resume qua nó tạo session zombie (cold reconnect thì chạy được). Chỉ bật khi endpoint hỗ trợ. |
@@ -3569,3 +3605,26 @@ nhưng thêm thời gian reconnect trước turn sau; inference provider đã ch
 thể phát sinh thêm usage. LIVE ON, session bật resumption,
 provider khác và reject đến muộn sau khi output đã bắt đầu vẫn giữ ACK như cũ.
 Không thay tiêu chí nhận diện turn cần reject.
+
+### Dừng loa giải phóng lượt trả lời automatic
+
+Khi Live tắt, thao tác vật lý dừng/nghe cũng hủy phần chờ realtime của lượt
+automatic. Trước đây chỉ TTS dừng: vòng mic có thể vẫn chờ provider kết thúc lượt
+(log Lamp ghi nhận 19,66 giây). Cả đường trả lời thường và đường chạy song song
+với STT final drain đều mang stop event riêng cho capture. Provider receive kiểm
+tra event mỗi 100 ms. Hủy lượt sẽ bỏ text/audio native còn lại, filler, history
+và fallback main của lượt đó. Callback STT đến muộn của capture đã hủy bị bỏ qua.
+
+Provider đã hủy được loại ngay; reconnect chạy nền và không dùng lại session cũ
+khi kết nối lỗi. Capture mic không chờ reconnect hoặc STT final drain đang chạy.
+Mỗi voice service giữ một worker STT drain, tối đa một lệnh close chưa hoàn tất;
+khi worker bận, capture sau dùng đường close thường thay vì xếp thêm drain.
+Bỏ cooldown session 300 ms sau khi hủy trả lời automatic bằng thao tác dừng.
+Chính sách trả lời của Live và manual capture vẫn tách riêng.
+
+`[automic-stop] reply cancellation requested` và
+`[automic-stop] receive released; VAD resumed after ...ms` đo từ yêu cầu hủy tới
+lúc trở lại vòng VAD. Mục tiêu dưới 500 ms khi provider im lặng và reconnect chậm;
+đây chưa phải phép đo sẵn sàng nghe về âm học. Timing thiết bị thu, chống echo sau
+phát và STT keepalive tùy chọn vẫn có thể ảnh hưởng thời điểm nhận câu tiếp theo.
+Cần đo riêng phần đó trên phần cứng.
