@@ -616,6 +616,11 @@ REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT: bool = os.environ.get(
 REALTIME_NOISE_SPEECH_RATIO: float = float(
     os.environ.get("HAL_REALTIME_NOISE_SPEECH_RATIO", "0.55")
 )
+# Cumulative voiced time, not span length or elapsed recording time. Zero keeps
+# legacy ratio-only behavior until a device has been acoustically calibrated.
+VOICE_NOISE_MIN_VOICED_MS: float = max(0.0, float(
+    os.environ.get("HAL_VOICE_NOISE_MIN_VOICED_MS", "0")
+))
 # Never commit an empty-STT turn (Gemini invents a reply); false uses the Silero gate instead.
 REALTIME_REQUIRE_TRANSCRIPT: bool = os.environ.get(
     "HAL_REALTIME_REQUIRE_TRANSCRIPT", "true"
