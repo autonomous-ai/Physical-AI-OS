@@ -231,13 +231,22 @@ _look_hold_timer: Optional[threading.Timer] = None
 
 
 def _release_look(svc) -> bool:
-    """Drop the look owner's hold; replay a still emotion's parked idle resume. True if held."""
+    """Drop the look owner's hold and hand the arm back to idle. True if held.
+
+    Replays a still emotion's parked resume; otherwise covers a search/tracking hand-back
+    that skipped idle while look held. A listening-halted body stays still.
+    """
     if not hold.release(svc, hold.LOOK):
         return False
     if not _sleep_servo_locked():
         from hal.routes.emotion import resume_deferred_still_idle
 
-        resume_deferred_still_idle(svc)
+        if not resume_deferred_still_idle(svc):
+            halt = getattr(svc, "_halt", None)
+            if halt is None or not halt.is_set():
+                from hal.drivers.tracking import body
+
+                body.release_to_idle("look hold released")
     return True
 
 

@@ -89,3 +89,43 @@ def test_an_unreleased_look_hold_expires(body):
 def test_only_the_look_owner_is_accepted():
     with pytest.raises(ValidationError):
         ServoHoldOwnerRequest(owner="explicit")
+
+
+def _arm_for_handback(body, halted=False):
+    import threading
+
+    body.idle_recording = SERVO_IDLE
+    body._current_recording = None
+    body._halt = threading.Event()
+    if halted:
+        body._halt.set()
+
+
+def test_release_hands_the_arm_back_when_another_path_deferred_idle(body):
+    _arm_for_handback(body)
+    servo.claim_hold(LOOK)
+    servo.release_hold(LOOK)
+    assert body.played == [(SERVO_CMD_PLAY, SERVO_IDLE)]
+
+
+def test_release_does_not_double_dispatch_with_a_parked_resume(body):
+    _arm_for_handback(body)
+    servo.claim_hold(LOOK)
+    state._still_idle_deferred = "thinking"
+    servo.release_hold(LOOK)
+    assert body.played == [(SERVO_CMD_PLAY, SERVO_IDLE)]
+
+
+def test_release_leaves_a_halted_body_still(body):
+    _arm_for_handback(body, halted=True)
+    servo.claim_hold(LOOK)
+    servo.release_hold(LOOK)
+    assert body.played == []
+
+
+def test_release_with_another_owner_dispatches_nothing(body):
+    _arm_for_handback(body)
+    hold.claim(body, hold.EXPLICIT)
+    servo.claim_hold(LOOK)
+    servo.release_hold(LOOK)
+    assert body.played == []
