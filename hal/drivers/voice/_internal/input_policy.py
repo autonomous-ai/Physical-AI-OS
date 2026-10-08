@@ -52,13 +52,11 @@ class InputPolicy:
     @classmethod
     def for_turn(cls, snapshot, capture, *, live_mode):
         explicit = capture is not None
-        device_capture = explicit and snapshot.get("deviceInputMode") == "tap_to_talk"
         return cls(
             explicit=explicit,
-            device_capture=device_capture,
+            device_capture=explicit and snapshot.get("deviceInputMode") == "tap_to_talk",
             harness_capture=snapshot["enabled"] and not snapshot.get("unavailable", False),
-            realtime_allowed=(device_capture or (not explicit and not live_mode))
-            and not bypass_realtime(snapshot),
+            realtime_allowed=not explicit and not live_mode and not bypass_realtime(snapshot),
         )
 
     @property

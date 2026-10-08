@@ -52,6 +52,20 @@ def assert_cancelled(result, realtime):
     module.take_main_followup.assert_not_called()
 
 
+@pytest.mark.parametrize("cancel", [False, True])
+def test_device_finalizer_does_not_overwrite_new_capture_visuals(turn, monkeypatch, cancel):
+    realtime, _, stop, _, run = turn
+    restore = Mock()
+    monkeypatch.setattr("hal.routes.led.restore_led", restore)
+    realtime.stream_output.return_value = iter([])
+    if cancel:
+        stop.set()
+    run(suppress_visual_feedback=True)
+    module._thinking_cue_start.assert_not_called()
+    module._thinking_cue_clear.assert_not_called()
+    restore.assert_not_called()
+
+
 @pytest.mark.parametrize("bound", [False, True])
 def test_stop_after_first_sentence_does_not_play_later_output(turn, bound):
     realtime, tts, stop, filler, run = turn

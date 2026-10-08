@@ -4,7 +4,8 @@ import os
 from pathlib import Path
 import subprocess
 import sys
-from unittest.mock import Mock, call, patch
+import threading
+from unittest.mock import Mock, patch
 
 import numpy as np
 import pytest
@@ -14,7 +15,6 @@ from hal.drivers.voice._internal.harness_capture import HarnessCapture
 from hal.drivers.voice._internal.input_policy import (
     device_manual_mode, device_snapshot, same_capture_target,
 )
-from hal.drivers.voice._internal.realtime_turn import RealtimeTurnResult
 
 
 LOCAL = {"enabled": False, "generation": 4}
@@ -63,6 +63,8 @@ def test_device_idle_does_not_open_microphone(live, monkeypatch):
     service._running = True
     service._alsa_device = "test"
     service._harness_capture = HarnessCapture(target_matches=same_capture_target)
+    service.device_input = DeviceTapInput(service._harness_capture, Mock())
+    service.device_input.wait_for_capture = lambda: setattr(service, "_running", False)
     monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", live)
 
@@ -70,174 +72,107 @@ def test_device_idle_does_not_open_microphone(live, monkeypatch):
         if delay == 0.1:
             service._running = False
 
+    def claim(_):
+        prepare_aec.assert_called_once_with(module.voice_cfg.STT_RATE)
+        return None
+
     with patch.object(module, "read_voice_mode", return_value=LOCAL), \
          patch.object(module.time, "sleep", side_effect=sleep), \
+         patch.object(module.aec, "configure") as prepare_aec, \
+         patch.object(service._harness_capture, "claim", side_effect=claim), \
          patch.object(module, "ArecordStream") as recorder:
         module.VoiceService._loop(service)
+    prepare_aec.assert_called_once_with(module.voice_cfg.STT_RATE)
     recorder.assert_not_called()
+    service._sd.InputStream.assert_not_called()
     service._vad_loop.assert_not_called()
     service._stream_session.assert_not_called()
     service._realtime.append_audio.assert_not_called()
 
 
 @pytest.mark.parametrize("live", [False, True])
-@pytest.mark.parametrize("realtime", [
-    "disabled", "handled", "delegated", "unavailable", "rejected", "error", "no_output",
-])
 @pytest.mark.parametrize("reason", ["finish", "cancel", "route_change", "offline",
-                                   "provider_close", "stt_error", "timeout",
-                                   "prepare_route_change", "commit_route_change", "upload_error"])
-def test_manual_stream_only_finish_dispatches_once(reason, live, realtime, monkeypatch):
-    from hal.drivers.voice import voice_service as module
+                                   "provider_close", "stt_error", "timeout"])
+def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
+    from hal.drivers.voice._internal import device_voice_pipeline as module
+    from hal.drivers.voice._internal.device_turn_queue import DeviceTurnQueue
 
+    queue = DeviceTurnQueue()
+    ticket = queue.reserve(device_snapshot(LOCAL))
     control = HarnessCapture(target_matches=same_capture_target)
-    assert control.start(device_snapshot(LOCAL))
+    assert control.start(device_snapshot(LOCAL), reservation=ticket)
     capture = control.claim(LOCAL)
-    service = Mock()
-    service._running = True
-    service._tts = Mock(last_spoken_text="")
-    service._tts_is_speaking.return_value = False
-    service._music_is_playing.return_value = False
-    service._wakeword_focus.is_active.return_value = False
-    service._np = np
-    service._realtime.sample_rate = 16000
-    service._realtime.rebuilding = False
-    service._realtime.available = realtime != "unavailable"
-    service._decorator.starts_with_wake_word.return_value = False
-    service._decorator.classify_wake_word.return_value = ("please fix the tests", "voice")
-    service._decorator.identify_and_decorate.return_value = ("please fix the tests", None, None)
+    tts = Mock(last_spoken_text="")
+    decorator = Mock()
+    decorator.classify_wake_word.return_value = ("please fix the tests", "voice")
+    decorator.identify_and_decorate.return_value = ("please fix the tests", None, None)
+    sender = Mock()
     stt = Mock()
     stt.is_closed.return_value = False
-    service._stt.create_session.return_value = stt
+    connected = threading.Event()
+
+    def start(callback):
+        stt.callback = callback
+        connected.set()
+        return True
+
+    stt.start.side_effect = start
     current_mode = dict(LOCAL)
     reads = []
-
-    def prepare():
-        if reason == "prepare_route_change":
-            current_mode["generation"] += 1
-
-    service._realtime.prepare_turn.side_effect = prepare
-
-    def append_audio(*args, **kwargs):
-        assert capture.finished.is_set(), "audio reached realtime before finish tap"
-        assert not capture.cancelled.is_set()
-        if reason == "commit_route_change":
-            current_mode["generation"] += 1
-        if reason == "upload_error":
-            raise RuntimeError("provider disconnected during upload")
-
-    service._realtime.append_audio.side_effect = append_audio
-
-    result = {
-        "disabled": RealtimeTurnResult(),
-        "handled": RealtimeTurnResult(handled=True, transcript="Done", route="realtime_handled"),
-        "delegated": RealtimeTurnResult(delegated=True, delegate_msg="fix the tests", route="delegated"),
-        "unavailable": RealtimeTurnResult(route="realtime_unavailable"),
-        "rejected": RealtimeTurnResult(rejected=True, route="ai_rejected"),
-        "error": RealtimeTurnResult(delegated=True, route="realtime_error"),
-        "no_output": RealtimeTurnResult(route="realtime_no_output"),
-    }[realtime]
-
-    def run_turn(*args, **kwargs):
-        assert capture.finished.is_set()
-        assert current_mode == LOCAL
-        assert kwargs["stop_event"] is capture.cancelled
-        if realtime != "disabled":
-            assert args[4], "captured audio was not forwarded to realtime"
-        return result
+    pipeline = module.DeviceVoicePipeline(
+        queue, create_session=lambda: stt, convert=lambda data, rate: data.tobytes(),
+        valid=lambda snapshot: same_capture_target(snapshot, current_mode),
+        set_capturing=Mock(), tts=tts, decorator=decorator,
+        sensing_sender=sender, noise_is_speech=lambda pcm: True,
+    )
 
     def read(_):
-        service._realtime.append_audio.assert_not_called()
-        service._realtime.bind_audio_turn.assert_not_called()
         reads.append(1)
-        assert len(reads) <= 4, "manual session did not terminate"
+        assert len(reads) <= 3, "manual session did not terminate"
+        assert connected.wait(1)
         if len(reads) == 2:
-            stt._on_transcript_cb("please fix the tests", False)
-            stt._on_transcript_cb("please fix the tests", True)
+            stt.callback("please fix the tests", False)
+            stt.callback("please fix the tests", True)
         if len(reads) == 3:
-            if reason in ("finish", "prepare_route_change", "commit_route_change", "upload_error"):
-                control.finish()
-                control.finish()
-            elif reason == "cancel":
+            if reason == "cancel":
                 control.cancel()
-            elif reason in ("route_change", "offline"):
-                current_mode.update({"generation": 5} if reason == "route_change" else {"unavailable": True})
-                control.finish()
-            elif reason == "provider_close":
-                stt.is_closed.return_value = True
-            elif reason == "stt_error":
-                stt.send_audio.side_effect = RuntimeError("STT disconnected")
+            elif reason == "timeout":
+                pipeline.max_duration = -1
             else:
-                monkeypatch.setattr(module.voice_cfg, "MAX_SESSION_DURATION_S", -1)
+                if reason in ("route_change", "offline"):
+                    current_mode.update({"generation": 5} if reason == "route_change"
+                                        else {"unavailable": True})
+                elif reason == "provider_close":
+                    stt.is_closed.return_value = True
+                elif reason == "stt_error":
+                    stt.send_audio.side_effect = RuntimeError("STT disconnected")
+                control.finish()
+                control.finish()
         return np.zeros((320, 1), dtype=np.int16), False
 
-    mic = Mock()
-    mic.read.side_effect = read
-    # Explicit capture must work even if a stale wake setting is still true.
+    # Explicit capture remains independent of stale wake/live configuration.
     monkeypatch.setattr(module.hal_config, "WAKEWORD_ENABLED", True)
-    monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", realtime != "disabled")
-    monkeypatch.setattr(module.hal_config, "REALTIME_AI_REJECT_FILTER", True)
+    monkeypatch.setattr(module.hal_config, "REALTIME_ENABLED", True)
     monkeypatch.setattr(module.voice_cfg, "LIVE_MODE", live)
-    monkeypatch.setattr(module.voice_cfg, "SILENCE_VAD_ENABLED", False, raising=False)
-    with patch.object(module, "read_voice_mode", side_effect=lambda: dict(current_mode)), \
-         patch.object(module, "turn_should_close", return_value=True) as silence, \
-         patch.object(module, "finalize_session", return_value=("please fix the tests", [], 2.0)), \
-         patch.object(module, "dispatch_turn", wraps=module.dispatch_turn) as dispatch, \
-         patch.object(module, "run_realtime_turn", side_effect=run_turn) as run_realtime, \
-         patch.object(module, "_WaitFiller"), \
-         patch.object(module, "voice_metrics"), \
-         patch.object(module.requests, "post"), \
-         patch("hal.drivers.harness.led.set_capturing") as harness_led:
-        module.VoiceService._stream_session(
-            service, mic, 320, 16000, preconnected_session=stt,
-            harness_voice=device_snapshot(LOCAL), manual_capture=capture,
-        )
-    assert len(reads) == 3
-    silence.assert_not_called()
-    harness_led.assert_not_called()
-    service._set_emotion_local.assert_any_call(module.presets.EMO_LISTENING)
-    upload_failed = reason == "upload_error" and realtime not in ("disabled", "unavailable")
-    accepted = reason in ("finish", "upload_error") or (
-        reason == "prepare_route_change" and realtime == "disabled"
-    ) or (reason == "commit_route_change" and realtime in ("disabled", "unavailable"))
-    assert dispatch.call_count == int(accepted)
-    assert run_realtime.call_count == int(accepted and not upload_failed)
-    if accepted:
-        assert dispatch.call_args.args[2] == "please fix the tests"
-        assert dispatch.call_args.kwargs["event_type_override"] == "voice_command"
-        if realtime == "rejected" and not upload_failed:
-            service._sensing_sender.send.assert_not_called()
-        else:
-            service._sensing_sender.send.assert_called_once()
-            sent = service._sensing_sender.send.call_args
-            assert sent.kwargs["event_type"] == (
-                "voice_agent_handled" if realtime == "handled" and not upload_failed else "voice_command"
-            )
-            assert sent.kwargs["voice_turn_type"] == "voice_command"
-            if realtime == "delegated" and not upload_failed:
-                assert "[voice-instruction] fix the tests" in sent.args[0]
-        assert dispatch.call_args.kwargs["harness_voice"] == device_snapshot(LOCAL)
-    finished = reason in ("finish", "prepare_route_change", "commit_route_change", "upload_error")
-    expected_chimes = [call(), call(finished=True)] if finished else [call()]
-    assert service._tts.play_harness_capture_chime.call_args_list == expected_chimes
-    service._backchannel.on_partial.assert_not_called()
-    if realtime in ("disabled", "unavailable") or not finished or reason == "prepare_route_change":
-        service._realtime.append_audio.assert_not_called()
-        service._realtime.send_text.assert_not_called()
-        service._realtime.bind_audio_turn.assert_not_called()
-    else:
-        assert service._realtime.append_audio.call_count == (1 if upload_failed else 2)
-        service._realtime.bind_audio_turn.assert_called_once()
-    if reason == "commit_route_change" and realtime not in ("disabled", "unavailable"):
-        service._realtime.recover_session.assert_called_once_with(
-            "manual-capture-cancelled", discard_old_on_failure=True,
-        )
-    if upload_failed:
-        service._realtime.recover_session.assert_called_once_with(
-            "manual-upload-failed", discard_old_on_failure=True,
-        )
-    service._realtime.reserve_audio_capture.assert_not_called()
-    service._try_live_opener.assert_not_called()
+    try:
+        with patch.object(module, "dispatch_turn", wraps=module.dispatch_turn) as dispatch, \
+             patch.object(module, "voice_metrics"), \
+             patch("hal.drivers.harness.led.set_capturing") as harness_led:
+            pipeline.run_capture(Mock(read=read), 320, 16000, capture, ticket)
+            assert ticket.done.wait(1)
+        assert len(reads) == 3
+        harness_led.assert_not_called()
+        assert dispatch.call_count == (1 if reason == "finish" else 0)
+        if reason == "finish":
+            assert dispatch.call_args.args[2] == "please fix the tests"
+            assert dispatch.call_args.kwargs["event_type_override"] == "voice_command"
+            sender.send.assert_called_once()
+            assert sender.send.call_args.kwargs["event_type"] == "voice_command"
+            assert sender.send.call_args.kwargs["voice_turn_type"] == "voice_command"
+            assert dispatch.call_args.kwargs["harness_voice"] == device_snapshot(LOCAL)
+        assert tts.play_device_capture_chime.call_args_list[0].kwargs == {"finished": False}
+    finally:
+        assert queue.shutdown(2)
 
 
 @pytest.mark.parametrize("flag", ["_mic_muted", "_sleeping", "_hw_mic_switch_muted"])
@@ -355,3 +290,39 @@ def test_finish_before_recorder_ready_discards_without_chime():
         )
     dispatch.assert_not_called()
     service._tts.play_harness_capture_chime.assert_not_called()
+
+
+@pytest.mark.parametrize("timing", ["before_wait", "during_wait"])
+def test_device_capture_start_wakes_idle_worker_without_losing_signal(timing):
+    import threading
+    control = HarnessCapture(target_matches=same_capture_target)
+    device = DeviceTapInput(control, control.start, read_mode=lambda: LOCAL)
+    reached_wait = threading.Event()
+    original_wait = device._wake.wait
+    def wait(timeout):
+        reached_wait.set()
+        return original_wait(timeout)
+    device._wake.wait = wait
+    results = []
+    if timing == "before_wait":
+        assert device.start()
+    worker = threading.Thread(target=lambda: results.append(device.wait_for_capture(timeout=1)))
+    worker.start()
+    try:
+        if timing == "during_wait":
+            assert reached_wait.wait(1)
+            assert device.start()
+        worker.join(1)
+        assert not worker.is_alive()
+        assert results == [True]
+        assert control.claim(LOCAL) is not None
+    finally:
+        device._wake.set()
+        worker.join(1)
+
+
+def test_rejected_device_capture_does_not_wake_idle_worker():
+    control = HarnessCapture(target_matches=same_capture_target)
+    device = DeviceTapInput(control, lambda _: False, read_mode=lambda: LOCAL)
+    assert not device.start()
+    assert not device.wait_for_capture(timeout=0)

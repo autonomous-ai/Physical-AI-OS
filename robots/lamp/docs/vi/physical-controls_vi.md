@@ -154,8 +154,7 @@ Khi Harness OFF, MPR121 cũng hỗ trợ giữ rồi nhả để thực hiện a
 tap/wake. Các nơi gọi gesture vẫn giữ nguyên; đoạn khởi chạy TTS cũ được comment
 để có thể khôi phục. Chime xác nhận ngắn vẫn còn; nó xác nhận cử chỉ, không bảo
 đảm mic hoặc Gemini đã sẵn sàng. Cơ chế chặn mic khi phát TTS trả lời và độ trễ
-khởi động voice 0.5 s không đổi. Cue ghi âm của tap-to-talk thủ công và Harness
-vẫn giữ hành vi hiện có.
+khởi động voice 0.5 s của Automatic/Harness không đổi. Device tap-to-talk bỏ bước chờ cố định này. Tap-to-talk dùng cue recorder cục bộ mô tả bên dưới; cue ghi âm Harness giữ nguyên.
 
 Cử chỉ 1 chạm là **cơ chế barge-in và huỷ attention chính** của Lamp: trước hết nó dừng mọi session object tracking đang chạy; sau đó chạm mặt điều khiển MPR121 hoặc nhấn nút GPIO một lần khi Lamp đang nói → cắt câu TTS đang phát giữa chừng, dừng nhạc, unmute mic để Lamp lắng nghe câu kế. Nếu loa đang bị mute bởi user/scene thì cũng được gỡ (trừ khi đang ghi âm enroll giọng) để chime và câu trả lời nghe lại được. Dừng tracking vẫn hoạt động khi hardware mic kill switch đang tắt; nó không wake hoặc unmute mic. Cue "Nghe đây" bằng lời đã tắt; chime ngắn vẫn phát khi âm thanh được phép.
 
@@ -165,9 +164,11 @@ Khi wake word đang bật, cú click cũng **được tính như một wake even
 
 Hành vi attention/wake ở trên áp dụng cho `voice_input_mode: "automatic"`, là mặc định. Chọn **Tap to talk** trong General (hoặc MQTT `voice.input_mode`) để chủ động chạm bắt đầu/kết thúc khi Harness OFF. Chế độ này giữ lựa chọn wake đã lưu nhưng bỏ qua wake gate và mọi trigger focus cho tới khi trở về automatic.
 
-Tap ngắn GPIO và MPR121 đi qua `physical_short_tap`: tap đầu bắt đầu thu, tap tiếp theo dừng và gửi audio đã giữ trong bộ đệm cục bộ qua realtime sau khi xác thực owner của capture. Realtime trả lời hoặc delegate đến main agent; realtime tắt/không khả dụng thì fallback sang transcript STT đã chốt dưới dạng `voice_command`. Mỗi lần nhả ngắn riêng biệt đều được tính, kể cả hai tap trong cửa sổ multi-click thông thường; không phát lời Listening trì hoãn. Beep sẵn sàng và hiệu ứng listening chỉ xuất hiện khi STT sẵn sàng; beep kết thúc xác nhận tap gửi. Im lặng không gửi. Timeout (mặc định 30 giây), lỗi provider thu âm/STT, privacy/stop hoặc đổi route Harness trước tap kết thúc hợp lệ làm hủy bản ghi và không gửi sang realtime. Tap trước khi sẵn sàng hủy và không gửi.
+Tap ngắn GPIO và MPR121 đi qua `physical_short_tap`: tap đầu bắt đầu thu, tap tiếp theo dừng thu cục bộ. Worker FIFO gửi audio đã chốt qua realtime sau khi xác thực owner của capture; realtime trả lời hoặc delegate đến main agent, fallback sang transcript STT đã chốt dưới dạng `voice_command` khi realtime tắt/không khả dụng. Mỗi lần nhả ngắn riêng biệt đều được tính, kể cả hai tap trong cửa sổ multi-click thông thường; không phát lời Listening trì hoãn. Tone sẵn sàng ngắn 40 ms và hiệu ứng listening xuất hiện sau frame mic đầu tiên, không chờ STT kết nối. Lời nói được giữ trong buffer lúc kết nối trong giới hạn thời lượng bản ghi (mặc định 30 giây). Tone kết thúc xác nhận input đã dừng trước khi STT chốt transcript; không phải xác nhận gửi thành công. Tap kết thúc trong lúc STT kết nối vẫn giữ lời nói đã thu để gửi khi kết nối thành công. Im lặng không gửi. Timeout (mặc định 30 giây), lỗi provider thu âm/STT, privacy/stop hoặc đổi route Harness làm hủy bản ghi; bản ghi bị loại trước tap kết thúc hợp lệ không gửi audio của nó sang realtime. Tap trước khi mic cục bộ sẵn sàng hủy và không gửi.
 
-Tap khi TTS đang phát chỉ ngắt; tap sau mới thu. Đèn đang ngủ được đánh thức trước mà chưa thu. Mic mute phần mềm có thể được mở để thu; khóa mic vật lý vẫn chặn. Hold/factory reset GPIO, swipe/hold MPR121 và cử chỉ pet TTP223 giữ vai trò hiện có. Startup và privacy-switch vẫn dùng action wake gốc và không giả lập tap ghi âm. Harness ON giữ chính sách cử chỉ riêng bên dưới.
+Sau tone dừng cục bộ, recorder được giải phóng độc lập với bước STT chốt kết quả. Tap mới có thể bắt đầu bản ghi tiếp theo khi lượt trước còn đang chốt. Tối đa hai lượt chưa hoàn tất được giữ chỗ; nếu cả hai đều bận, bản ghi mới bị từ chối trước tone sẵn sàng. Lời trả lời từ runtime đợi đến khi bản ghi đóng, tránh nói đè lên câu tiếp theo. Xử lý realtime và dispatch chạy trên worker FIFO theo thứ tự thu, độc lập với luồng thu.
+
+Tap khi TTS đang phát chỉ ngắt; nếu realtime đang trả lời thì tap cũng hủy stream phản hồi để các đoạn audio sau không phát tiếp. Tap sau mới thu. Đèn đang ngủ được đánh thức trước mà chưa thu. Mic mute phần mềm có thể được mở để thu; khóa mic vật lý vẫn chặn. Hold/factory reset GPIO, swipe/hold MPR121 và cử chỉ pet TTP223 giữ vai trò hiện có. Startup và privacy-switch vẫn dùng action wake gốc và không giả lập tap ghi âm. Harness ON giữ chính sách cử chỉ riêng bên dưới.
 
 ### Presence enter và quay về phía đèn — trigger wake
 
@@ -435,7 +436,13 @@ Khi phát hiện di chuyển, hủy kết quả tap/hold đang chờ và phản 
 contact đó; vuốt hợp lệ gọi action theo hướng một lần sau khi nhả. Di chuyển
 đổi hướng trong cùng contact hoặc không hợp lệ không gọi reboot/shutdown/reset. Chờ nhả 120 ms để nối các đoạn
 chuyển tiếp ngắn giữa electrode; khi bật swipe, tap/hold phân giải sau khoảng
-chờ này. Contact giữ từ lúc boot vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
+chờ này. Riêng device `tap_to_talk` khi Harness OFF, tap đứng yên đã đủ điều kiện
+ít nhất ba điện cực được chốt sau khi tất cả điện cực nhả liên tục 30 ms
+(hoặc debounce contact cấu hình nếu lớn hơn, tối đa 120 ms). Nhả rồi chạm lại
+trong khoảng ngắn hơn vẫn thuộc cùng contact; sau khi tap đã chốt, lần chạm
+mới bắt đầu cử chỉ mới. Contact chưa đủ điều kiện, vuốt đang di chuyển,
+Harness ON và Automatic vẫn giữ cửa sổ nối 120 ms. Contact giữ từ lúc boot
+vẫn bị bỏ qua. Log ghi hướng, độ dịch chuyển,
 kết quả swipe và thực thi action. Test phát lại chuỗi mask đã đo cùng các ca
 cử chỉ/vòng đời giả lập. Runtime và JSON swipe đã deploy lên Lamp `lamp-0c4e`
 ngày 2026-09-11; startup xác nhận MPR121 ready với trục cấu hình, GPIO và TTP223

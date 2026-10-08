@@ -160,8 +160,7 @@ In automatic input mode, the spoken "Listening" cue is temporarily disabled for
 a tap/wake latency experiment. Gesture callers remain, and the original TTS
 launch is commented out for rollback. The short acknowledgement chime remains;
 it confirms the gesture, not microphone or Gemini readiness. Normal reply TTS
-mic gating and the 0.5 s voice startup delay are unchanged. Manual tap-to-talk
-and Harness recording cues retain their existing behavior.
+mic gating and the Automatic/Harness 0.5 s voice startup delay are unchanged. Device tap-to-talk skips that fixed delay. Manual tap-to-talk uses the local recorder cues described below; Harness recording cues retain their existing behavior.
 
 The 1-tap gesture is Lamp's primary **barge-in and attention-cancel mechanism**: it first stops any active object-tracking session, then tap the MPR121 control surface or press the GPIO button once during an in-flight TTS to cancel the current utterance mid-word, stop any music, and unmute the mic so Lamp listens for the next thing the user says. A user/scene speaker mute is also relaxed (unless a voice enrollment is recording) so the chime and the reply are audible again. Stopping tracking also works while the hardware mic kill switch is off; it does not wake or unmute the mic. The spoken "Listening" cue is disabled; the short chime remains when audio is permitted.
 
@@ -171,9 +170,11 @@ When wake word is enabled, the click also **counts as a wake event**: `single_cl
 
 The normal attention/wake behavior above applies to `voice_input_mode: "automatic"`, the default. Select **Tap to talk** in General settings (or MQTT `voice.input_mode`) to use explicit start/finish taps while Harness OFF. This mode preserves the saved wake checkbox but ignores the wake gate and all focus openers until automatic input is restored.
 
-GPIO and MPR121 short taps use `physical_short_tap`: first tap starts recording, next tap stops and submits the locally buffered audio through realtime after validating capture ownership. Realtime can answer or delegate to the main agent; disabled/unavailable realtime falls back to the finalized STT transcript as `voice_command`. Each separate short release counts, including two taps inside the usual multi-click window; there is no deferred spoken Listening cue. A ready beep and listening visual appear only when STT is ready, and the finish beep confirms the send tap. Silence does not send. Timeout (default 30 seconds), capture-provider failure, privacy/stop, or a Harness routing change before a valid finish tap discards capture without realtime submission. A tap before readiness cancels without sending.
+GPIO and MPR121 short taps use `physical_short_tap`: first tap starts recording, next tap stops local capture. A FIFO worker submits finalized audio through realtime after validating capture ownership; realtime answers or delegates to the main agent, with the finalized STT transcript as `voice_command` fallback when realtime is disabled/unavailable. Each separate short release counts, including two taps inside the usual multi-click window; there is no deferred spoken Listening cue. A short 40 ms ready tone and listening visual appear after the first microphone frame, without waiting for STT to connect. Speech is buffered during connection within the recording limit (default 30 seconds). The finish tone acknowledges local input stopping before STT finalization; it is not a delivery receipt. Finishing while STT is connecting preserves already captured speech for submission once the connection succeeds. Silence does not send. Timeout (default 30 seconds), capture-provider failure, privacy/stop, or a Harness routing change discards capture; a capture discarded before a valid finish never submits its audio to realtime. A tap before local microphone readiness cancels without sending.
 
-A tap during TTS only interrupts; the next tap starts recording. A sleeping lamp first wakes without recording. A software-muted mic can be unmuted for capture; hardware privacy blocks it. GPIO holds/factory reset, MPR121 swipes/holds and TTP223 pet gestures retain their existing roles. Startup and privacy-switch actions still use the original wake action and never simulate a recording tap. Harness ON retains its separate gesture policy below.
+After the local stop cue, the recorder is released independently of STT finalization. A new tap can start the next recording while the previous turn is still finalizing. Up to two outstanding turns are reserved; if both are occupied, a new recording is rejected before its ready tone. Runtime speech waits until recording closes, so it cannot speak over the next utterance. Realtime processing and dispatch run on the FIFO worker in recording order, independently of the capture thread.
+
+A tap during TTS only interrupts; during a realtime reply it also cancels the response stream to prevent later audio segments from playing. The next tap starts recording. A sleeping lamp first wakes without recording. A software-muted mic can be unmuted for capture; hardware privacy blocks it. GPIO holds/factory reset, MPR121 swipes/holds and TTP223 pet gestures retain their existing roles. Startup and privacy-switch actions still use the original wake action and never simulate a recording tap. Harness ON retains its separate gesture policy below.
 
 ### Presence enter and turning toward the lamp as wake triggers
 
@@ -453,7 +454,13 @@ and hold LED feedback are canceled for that contact; a valid swipe invokes its
 directional action once after release. Travel that reverses within one contact
 or is otherwise invalid does not trigger reboot/shutdown/reset.
 A release grace of 120 ms joins brief electrode handoffs, so tap/hold actions
-with swipe enabled resolve after that grace. Boot-held contacts remain ignored.
+with swipe enabled normally resolve after that grace. Device `tap_to_talk`
+with Harness OFF commits a stationary, qualified three-or-more-electrode tap
+once all electrodes have remained released for 30 ms (or the configured contact
+debounce if higher, capped at 120 ms). A shorter release bounce remains the same
+contact; after that tap commits, a new touch starts a new gesture. Unqualified
+contacts, moving swipes, Harness ON and Automatic retain the 120 ms handoff
+window. Boot-held contacts remain ignored.
 Logs record swipe direction, displacement and verdict alongside action dispatch.
 Tests replay measured mask sequences plus synthetic gesture/lifecycle cases;
 the runtime and swipe JSON were deployed to Lamp `lamp-0c4e` on 2026-09-11.

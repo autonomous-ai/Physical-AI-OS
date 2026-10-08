@@ -525,6 +525,7 @@ def run_realtime_turn(
     audio_turn=None,
     harness_followup: Optional[bool] = None,
     stop_event: Optional[threading.Event] = None,
+    suppress_visual_feedback: bool = False,
 ) -> RealtimeTurnResult:
     """Commit the captured audio to the realtime agent and stream its reply."""
     delegated = False
@@ -541,6 +542,15 @@ def run_realtime_turn(
     native_played = False
     outputs = None
 
+    def start_thinking_cue():
+        # A FIFO device finalizer may overlap a newer capture's listening cue.
+        if not suppress_visual_feedback:
+            _thinking_cue_start()
+
+    def clear_thinking_cue():
+        if not suppress_visual_feedback:
+            _thinking_cue_clear()
+
     def cancelled_result():
         nonlocal native_started
         if outputs is not None and hasattr(outputs, "close"):
@@ -552,7 +562,7 @@ def run_realtime_turn(
             if native_started:
                 tts.native_play_end()
                 native_started = False
-        _thinking_cue_clear()
+        clear_thinking_cue()
         # Some providers lack a discard primitive even before commit. Replace
         # any session that may hold this capture's audio so it cannot leak into
         # the next explicit capture. Never replay the cancelled request.
@@ -651,7 +661,7 @@ def run_realtime_turn(
                 if not thinking_started:
                     # Start provider work before synchronous hardware feedback.
                     thinking_started = True
-                    _thinking_cue_start()
+                    start_thinking_cue()
                 native_pending = []
                 native_pending_samples = 0
                 for output in _active_outputs(outputs, stop_event):
@@ -707,7 +717,7 @@ def run_realtime_turn(
                                     _check_turn_active(stop_event)
                                     tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                         continue
                     if native and isinstance(output, RTAudioOutput):
                         if not native_started:
@@ -727,7 +737,7 @@ def run_realtime_turn(
                                     "(+%.2fs after commit)",
                                     time.monotonic() - t_commit,
                                 )
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                                 wait_filler.cancel()
                         if native_started:
                             if native_pending:
@@ -763,7 +773,7 @@ def run_realtime_turn(
                                 reply_lang, "".join(text_parts)[:60],
                             )
                             wait_filler.cancel()
-                            _thinking_cue_clear()
+                            clear_thinking_cue()
                         if foreign_suppressed:
                             sentence_buf = ""
                             continue
@@ -783,7 +793,7 @@ def run_realtime_turn(
                                     _check_turn_active(stop_event)
                                     tts.speak_queue(head, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
-                                _thinking_cue_clear()
+                                clear_thinking_cue()
                                 sentence_buf = rest
                         sentence = realtime_visible_text(sentence_buf, tts, strip_markers)
                         complete = sentence.rstrip().endswith(SENTENCE_ENDS)
@@ -809,7 +819,7 @@ def run_realtime_turn(
                                         _check_turn_active(stop_event)
                                         tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                                     first_sentence_sent = True
-                                    _thinking_cue_clear()
+                                    clear_thinking_cue()
                                 else:
                                     logger.info(
                                         "[realtime] Next sentence → speak_queue: %r",
@@ -875,11 +885,12 @@ def run_realtime_turn(
             if foreign_suppressed:
                 route = ROUTE_FOREIGN_DROPPED
                 transcript = ""
-                _thinking_cue_clear()
+                clear_thinking_cue()
                 try:
                     from hal.routes.led import restore_led
 
-                    restore_led()
+                    if not suppress_visual_feedback:
+                        restore_led()
                 except Exception:
                     pass
             elif rejected:
@@ -887,11 +898,12 @@ def run_realtime_turn(
                 logger.info(
                     "[realtime] Model explicitly rejected turn — no main-agent dispatch"
                 )
-                _thinking_cue_clear()
+                clear_thinking_cue()
                 try:
                     from hal.routes.led import restore_led
 
-                    restore_led()
+                    if not suppress_visual_feedback:
+                        restore_led()
                 except Exception:
                     pass
             elif delegated:
@@ -912,7 +924,7 @@ def run_realtime_turn(
                             _check_turn_active(stop_event)
                             tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                         first_sentence_sent = True
-                        _thinking_cue_clear()
+                        clear_thinking_cue()
                     else:
                         logger.info(
                             "[realtime] Final fragment → speak_queue: %r", remaining[:80]
@@ -951,11 +963,12 @@ def run_realtime_turn(
                     # Dead turn — don't leave the thinking face hanging, and return the
                     # strip to the user's color (idle is a background emotion, so the
                     # clear alone leaves the forced purple pulse running).
-                    _thinking_cue_clear()
+                    clear_thinking_cue()
                     try:
                         from hal.routes.led import restore_led
 
-                        restore_led()
+                        if not suppress_visual_feedback:
+                            restore_led()
                     except Exception:
                         pass
         except Exception as e:
@@ -973,7 +986,7 @@ def run_realtime_turn(
                 except Exception:
                     pass
                 native_started = False
-            _thinking_cue_clear()
+            clear_thinking_cue()
             delegated = True
             route = ROUTE_ERROR
         finally:

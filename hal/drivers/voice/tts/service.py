@@ -9,6 +9,7 @@ import re
 import threading
 import time
 import wave
+from contextlib import nullcontext
 from pathlib import Path
 from typing import Callable, Optional
 
@@ -19,6 +20,7 @@ from hal import cpu_affinity
 from hal.drivers.voice import aec
 from hal.drivers.voice._internal import live_playback
 from hal.drivers.voice.tts.resampler import PCMResampler
+from hal.drivers.voice.tts.device_input_gate import DeviceInputGate, device_speech
 from hal.drivers.voice.tts.backend import (
     TTSBackend,
     TTS_SAMPLE_RATE,
@@ -226,6 +228,9 @@ class TTSService:
         self._input_capture_lock = threading.RLock()
         self._input_captures: set[object] = set()
         self._input_capture_generation = 0
+        self._device_input_gate = DeviceInputGate(
+            lambda: self._speaking or self._lock.locked(),
+        )
         self._speaking = False
         self._interruptible = False
         self._drain_queues: list = []
@@ -642,6 +647,9 @@ class TTSService:
 
     def stop(self, preserve_main_queue: bool = False):
         """Interrupt active TTS playback. No-op if not speaking."""
+        gate = getattr(self, "_device_input_gate", None)
+        if gate is not None:
+            gate.cancel()
         self._synthesis_generation = getattr(self, "_synthesis_generation", 0) + 1
         if not hal_config.LIVE_MODE:
             if self._speaking:
@@ -822,6 +830,21 @@ class TTSService:
             logger.exception("suppression check failed")
             return False
 
+    def begin_device_input(self):
+        """Reserve exclusive device input; mandatory replies wait until release."""
+        with self._input_capture_lock:
+            token = self._device_input_gate.begin()
+            if token is not None:
+                self._input_captures.add(token)
+                self._input_capture_generation += 1
+            return token
+
+    def end_device_input(self, token):
+        """Release device capture ownership on every finish/cancel path."""
+        with self._input_capture_lock:
+            self._input_captures.discard(token)
+            self._device_input_gate.end(token)
+
     def begin_input_capture(self):
         """Reserve user input against optional speech, before STT connects."""
         token = object()
@@ -849,21 +872,27 @@ class TTSService:
             self.stop()
             return True
 
-    def _claim_speech(self, text, interruptible, realtime_feedback, turn_id, realtime_reply):
+    def _claim_speech(self, text, interruptible, realtime_feedback, turn_id, realtime_reply,
+                      *, check_optional=True):
         """Called with the TTS lock held; serialize admission with user capture."""
         from contextlib import nullcontext
 
         with getattr(self, "_input_capture_lock", None) or nullcontext():
-            if self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
-                self._lock.release()
-                return False
-            self._stop_event.clear()
-            self._speaking = True
-            self._interruptible = interruptible
-            self._last_spoken_text = text
-            self._realtime_feedback = realtime_feedback
-            self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
-            return True
+            gate = getattr(self, "_device_input_gate", None)
+            with gate.lock if gate is not None else nullcontext():
+                if gate is not None and not gate.current_valid():
+                    self._lock.release()
+                    return False
+                if check_optional and self._optional_speech_blocked(text, interruptible, realtime_feedback, realtime_reply):
+                    self._lock.release()
+                    return False
+                self._stop_event.clear()
+                self._speaking = True
+                self._interruptible = interruptible
+                self._last_spoken_text = text
+                self._realtime_feedback = realtime_feedback
+                self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+                return True
 
     def _optional_speech_blocked(self, text, interruptible, realtime_feedback, realtime_reply):
         if (interruptible and not realtime_feedback and not realtime_reply
@@ -872,6 +901,7 @@ class TTSService:
             return True
         return False
 
+    @device_speech()
     def speak(self, text: str, interruptible: bool = False, realtime_feedback: bool = False,
               turn_id: str = "", realtime_reply: bool = False,
               speed: Optional[float] = None, harness_result: bool = False,
@@ -954,6 +984,7 @@ class TTSService:
             return False
         return incoming > holding
 
+    @device_speech()
     def speak_queue(
         self,
         text: str,
@@ -1061,12 +1092,9 @@ class TTSService:
                 acquired = self._lock.acquire(blocking=False)
 
             if acquired:
-                self._stop_event.clear()
-                self._speaking = True
-                self._interruptible = interruptible
-                self._last_spoken_text = text
-                self._realtime_feedback = realtime_feedback
-                self._begin_playback(f"run:{turn_id}" if turn_id else "", realtime_reply)
+                if not self._claim_speech(text, interruptible, realtime_feedback, turn_id, realtime_reply,
+                                          check_optional=False):
+                    return False
                 thread = threading.Thread(
                     target=self._speak_sync,
                     args=(text,),
@@ -1087,7 +1115,10 @@ class TTSService:
                 realtime_feedback=realtime_feedback,
             )
             resume = False
-            with self._pending_queue_lock:
+            gate = getattr(self, "_device_input_gate", None)
+            with self._pending_queue_lock, gate.lock if gate is not None else nullcontext():
+                if gate is not None and not gate.current_valid():
+                    return False
                 self._pending_queue.append(item)
                 if hal_config.LIVE_MODE and self._stop_event.is_set():
                     self._resume_pending_after_stop = True
@@ -1215,6 +1246,7 @@ class TTSService:
                 total += len(frame)
         return total
 
+    @device_speech(defer=False)
     def native_play_begin(self, src_rate: int, owner: str = "") -> bool:
         """Begin streaming the realtime model's OWN float32 mono audio straight to the
         speaker, bypassing synthesis.
@@ -1244,24 +1276,29 @@ class TTSService:
         if self._speaker_muted() or self._owner_suppressed(owner):
             self._lock.release()
             return False
-        self._stop_event.clear()
-        self._native_src_rate = src_rate
-        self._native_rs_carry = None
-        self._native_rs_pos = 0.0
-        # Keep the device-rate stream shared with TTS/fillers warm. Switching
-        # to the model rate closes it and can spend seconds reopening ALSA.
-        # The streaming resampler below preserves continuity across chunks.
-        self._native_direct = False
-        self._native_mode = True
-        # Native playback is the realtime model's OWN voice — never feed it back
-        # (the native_mode check in the hook already skips it; clear the flag too
-        # so a stale True from a prior agent reply can't leak through).
-        self._realtime_feedback = False
-        self._speaking = True
-        self._interruptible = True
-        self._speak_start_fired = False
-        self._begin_playback(owner)
-        return True
+        gate = getattr(self, "_device_input_gate", None)
+        with gate.lock if gate is not None else nullcontext():
+            if gate is not None and not gate.current_valid():
+                self._lock.release()
+                return False
+            self._stop_event.clear()
+            self._native_src_rate = src_rate
+            self._native_rs_carry = None
+            self._native_rs_pos = 0.0
+            # Keep the device-rate stream shared with TTS/fillers warm. Switching
+            # to the model rate closes it and can spend seconds reopening ALSA.
+            # The streaming resampler below preserves continuity across chunks.
+            self._native_direct = False
+            self._native_mode = True
+            # Native playback is the realtime model's OWN voice — never feed it back
+            # (the native_mode check in the hook already skips it; clear the flag too
+            # so a stale True from a prior agent reply can't leak through).
+            self._realtime_feedback = False
+            self._speaking = True
+            self._interruptible = True
+            self._speak_start_fired = False
+            self._begin_playback(owner)
+            return True
 
     def native_play_frame(self, frame) -> bool:
         """Write one float32 mono frame (resampled to the device stream rate)."""
@@ -1914,6 +1951,7 @@ class TTSService:
         )
         return warmed
 
+    @device_speech()
     def speak_cached(self, text: str, interruptible: bool = False, prerender: bool = False,
                      realtime_feedback: bool = False, turn_id: str = "",
                      realtime_reply: bool = False) -> bool:
@@ -2090,6 +2128,22 @@ class TTSService:
         return self._play_gesture_chime(
             lambda rate: self._harness_capture_chime_samples(rate, finished=finished)
         )
+
+    def play_device_capture_chime(self, *, finished: bool = False) -> bool:
+        """Short local capture acknowledgment through the shared audio path."""
+        return self._play_gesture_chime(
+            lambda rate: self._device_capture_chime_samples(rate, finished=finished)
+        )
+
+    def _device_capture_chime_samples(self, rate: int, *, finished: bool):
+        """A 40 ms rising/falling tone keeps capture feedback brief and distinct."""
+        np = self._np
+        duration = 0.04
+        t = np.arange(int(rate * duration)) / rate
+        start, end = (880.0, 587.33) if finished else (587.33, 880.0)
+        phase = 2 * np.pi * (start * t + (end - start) * t * t / (2 * duration))
+        envelope = np.sin(np.pi * np.arange(len(t)) / max(1, len(t) - 1)) ** 2
+        return (0.28 * envelope * np.sin(phase)).astype(np.float32).reshape(-1, 1)
 
     def _harness_capture_chime_samples(self, rate: int, *, finished: bool):
         """Two soft notes distinct from the normal high acknowledgment ping."""

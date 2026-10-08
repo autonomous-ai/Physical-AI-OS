@@ -34,3 +34,20 @@ def test_muted_speaker_does_not_play_capture_cue(finished):
     service._ensure_stream = Mock()
     assert service.play_harness_capture_chime(finished=finished) is False
     service._ensure_stream.assert_not_called()
+
+
+@pytest.mark.parametrize('finished', [False, True])
+def test_device_capture_cue_is_short_and_respects_mute(finished):
+    service = TTSService.__new__(TTSService)
+    service._np = np
+    samples = service._device_capture_chime_samples(24000, finished=finished)
+    assert samples.shape == (960, 1)
+    assert samples.dtype == np.float32
+    assert np.isfinite(samples).all()
+    assert np.max(abs(samples)) <= .28
+    service._sd = Mock()
+    service._backend = Mock(available=True)
+    service._speaker_muted = lambda: True
+    service._ensure_stream = Mock()
+    assert service.play_device_capture_chime(finished=finished) is False
+    service._ensure_stream.assert_not_called()

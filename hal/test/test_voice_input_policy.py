@@ -33,7 +33,7 @@ def test_automatic_and_manual_turn_policy(mode, live, monkeypatch):
     for snapshot in (HARNESS, device_snapshot(LOCAL)):
         policy = InputPolicy.for_turn(snapshot, object(), live_mode=live)
         assert not policy.automatic
-        assert policy.realtime_allowed == (snapshot == device_snapshot(LOCAL))
+        assert not policy.realtime_allowed
         assert policy.dispatch_directly
 
 
