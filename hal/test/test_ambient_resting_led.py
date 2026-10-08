@@ -95,3 +95,50 @@ def test_explicit_off_blocks_stale_emotion_wave_color(lamp, monkeypatch):
     monkeypatch.setattr(state, "_effect_base_color", (2, 0, 3))
     monkeypatch.setattr(state, "_user_led_state", {"type": "solid", "color": [0, 0, 0]})
     assert state._get_current_led_color() == (0, 0, 0)
+
+
+@pytest.mark.parametrize("emotion", ["listening", "thinking"])
+def test_voice_status_visible_over_saved_off(lamp, monkeypatch, emotion):
+    saved = {"type": "solid", "color": [0, 0, 0]}
+    monkeypatch.setattr(state, "_user_led_state", saved)
+    monkeypatch.setattr(state, "display_service", None)
+    monkeypatch.setitem(state.EMOTION_PRESETS, emotion, {"color": [0, 0, 3]})
+    assert state._apply_emotion_led_display(emotion) == [0, 0, 3]
+    assert state._user_led_state == saved
+    state._restore_user_led()
+    assert lamp.dispatch.call_args.args == ("solid", (0, 0, 0))
+
+
+@pytest.mark.parametrize("latest", [[0, 0, 0], [12, 20, 30]])
+def test_speech_over_off_restores_latest_preference(lamp, monkeypatch, latest):
+    monkeypatch.setattr(state, "_user_led_state", {"type": "solid", "color": [0, 0, 0]})
+    monkeypatch.setattr(state, "_current_emotion", "idle")
+    monkeypatch.setitem(state.EMOTION_PRESETS, "listening", {"color": [0, 0, 3]})
+    worker = Mock()
+    monkeypatch.setattr(state.threading, "Thread", worker)
+    state._on_tts_speak_start()
+    assert worker.call_args.kwargs["args"][1] == (0, 0, 3)
+    assert state._user_led_state["color"] == [0, 0, 0]
+    state._save_user_led_state({"type": "solid", "color": latest})
+    state._on_tts_speak_end()
+    assert lamp.dispatch.call_args.args == ("solid", tuple(latest))
+    assert not state._tts_speaking
+
+
+def test_music_over_saved_off_stays_dark(lamp, monkeypatch):
+    monkeypatch.setattr(state, "_user_led_state", {"type": "solid", "color": [0, 0, 0]})
+    worker = Mock()
+    monkeypatch.setattr(state.threading, "Thread", worker)
+    state._on_music_play_start()
+    assert worker.call_args.kwargs["args"][1] == (0, 0, 0)
+
+
+def test_speech_end_restores_privacy_indicator(lamp, monkeypatch):
+    monkeypatch.setattr(state, "_tts_speaking", True)
+    monkeypatch.setattr(state, "_current_emotion", "idle")
+    monkeypatch.setattr(state, "_mic_muted_led_owns_strip", lambda: True)
+    privacy_restore = Mock()
+    monkeypatch.setattr(state, "_start_mic_muted_effect", privacy_restore)
+    state._on_tts_speak_end()
+    privacy_restore.assert_called_once()
+    lamp.dispatch.assert_not_called()
