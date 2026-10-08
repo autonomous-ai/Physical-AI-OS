@@ -2,6 +2,8 @@
 
 Yêu cầu sleep/wake hướng tới thiết bị (kể cả “Can you sleep?”) được chuyển im lặng sang main, không trả lời như câu hỏi về bản thân. Main vẫn kiểm tra khả năng và điều kiện chặn sleep khi bật Harness voice, chỉ xác nhận kết quả thực tế. “Do robots need sleep?” là kiến thức chung; “I can’t sleep” nói về sức khỏe người dùng, không phải lệnh cho máy ngủ. Quy tắc áp dụng cho mọi prompt realtime, kể cả GPT Live backend.
 
+Rule sleep/wake cũng bao gồm yêu cầu hướng tới máy dùng cách nói chung hoặc đính chính như “Can we sleep now?”, “I mean, can you sleep now?”, và “Ngủ đi”. Rule ưu tiên hơn mặc định trả lời trực tiếp/persona và ưu tiên tránh latency delegate. Realtime phải handoff trước khi nói, không thay thực thi bằng giải thích về giấc ngủ sinh học, chúc ngủ ngon, hứa hạ đèn/im lặng hoặc `complete_response`. Đây vẫn là rule prompt theo ngữ cảnh, không phải router bắt từ khóa sleep; test nội dung prompt không chứng minh model thực tế tuân thủ.
+
 ## Tiếng Nhật và giọng ElevenLabs
 
 Dùng `stt_language: "ja"` cho tiếng Nhật. HAL có phrase tiếng Nhật cho thông báo
