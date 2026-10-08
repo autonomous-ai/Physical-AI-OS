@@ -854,7 +854,7 @@ Toàn bộ suite là opt-in theo từng device: capability routeless `lifelike` 
 |------|-----------|------|-----------|
 | LED lúc nghỉ | `light` | tick 2 giây; một lần khi resume | Gọi `/led/restore`; HAL khôi phục tùy chọn user hoặc `ambient_led.resting` riêng device. Lamp mặc định sáng đều [1,1,1]; user tắt thì giữ tắt. |
 | Micro-movements | `motion` | ngẫu nhiên 45–120 giây | Phát một servo recording an toàn trong bộ `idle`, `curious`, `nod`. Chỉ servo — không đụng vào LED. |
-| Mumble (tự lẩm bẩm) | `audio` | ngẫu nhiên 5–15 phút | Chọn trong sáu mục `PhraseMumble` dùng chung mỗi ngôn ngữ (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): xen âm ngắn với lời tự nói có chút tinh nghịch, như “Cứ thong thả thôi.” và “Mình thích những lúc thế này.” Một mục dùng `[chuckle]`; không có tag thở dài hay thì thầm. Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
+| Mumble (tự lẩm bẩm) | `audio` | tạm tắt | `mumbleLoop` return ngay, không gọi TTS hoặc phát audio cache. Giữ nguyên vòng lặp 5–15 phút và pool câu để bật lại. Chọn trong sáu mục `PhraseMumble` dùng chung mỗi ngôn ngữ (`system/lib/i18n/phrases.go`, EN/VI/zh-CN/zh-TW): xen âm ngắn với lời tự nói có chút tinh nghịch, như “Cứ thong thả thôi.” và “Mình thích những lúc thế này.” Một mục dùng `[chuckle]`; không có tag thở dài hay thì thầm. Dùng `hal.SpeakCached` — lần render đầu của mỗi câu mới gọi TTS provider, các lần sau phát lại từ WAV cache của HAL, nên lẩm bẩm lúc idle không tốn API. |
 
 Câu từ dùng chung, không phụ thuộc loại robot hay cơ thể. Pool idle không có
 ngữ cảnh sensor hay hội thoại, nên không nhận xét ánh sáng,

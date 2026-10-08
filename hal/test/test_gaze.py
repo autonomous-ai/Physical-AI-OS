@@ -647,6 +647,57 @@ def test_interpolating_into_idle_is_still_a_real_move(monkeypatch):
     assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
 
 
+def test_first_idle_playback_cycle_can_sample_after_settling(monkeypatch):
+    """The actual playback loop must not starve gaze for one whole idle cycle."""
+    from hal.drivers.motors.animation_service import AnimationService
+    from hal.drivers.tracking import aim
+
+    clock = [100.0]
+    monkeypatch.setattr(gaze.time, "monotonic", lambda: clock[0])
+
+    class StationaryRobot:
+        last_write_monotonic = 0.0
+
+        def send_action(self, action):
+            self.last_write_monotonic = clock[0]
+
+    svc = AnimationService("/unused", "test")
+    svc.robot = StationaryRobot()
+    action = {"base_yaw.pos": 0.0}
+    svc._current_state = action.copy()
+    monkeypatch.setattr(svc, "_load_recording", lambda _: [action.copy() for _ in range(300)])
+    svc._handle_play(svc.idle_recording)
+
+    while svc._interpolation_frames:
+        svc._continue_playback()
+        assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+        clock[0] += 1.0 / svc.fps
+
+    svc._continue_playback()
+    started = clock[0]
+    assert not svc._idle_settled
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+    clock[0] = started + aim.FRAME_SETTLE_S - 0.001
+    svc._continue_playback()
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+    clock[0] = started + aim.FRAME_SETTLE_S + 0.001
+    svc._continue_playback()
+    assert not svc._idle_settled
+    assert _sample_reason(svc, monkeypatch) == "detector busy with a live look"
+
+    # A new transition must invalidate the earlier idle allowance.
+    svc._handle_play(svc.idle_recording)
+    assert svc._idle_playback_started_at == 0.0
+    svc._continue_playback()
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
+def test_interpolation_blocks_even_a_stale_settled_flag(monkeypatch):
+    svc = _BreathingSvc(ago=0.01, settled=True)
+    svc._interpolation_frames = 1
+    assert _sample_reason(svc, monkeypatch) == "head still settling from a move"
+
+
 def test_another_recording_playing_is_not_breathing(monkeypatch):
     from hal.drivers.tracking import aim
 

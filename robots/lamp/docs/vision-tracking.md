@@ -754,6 +754,18 @@ simply does not speak.
 
 ## Gaze framing — keeping the user in shot
 
+Gaze sampling pauses during the transition into idle and for 350 ms after the
+first idle playback frame. It then samples during the **first** idle cycle,
+without waiting for that entire recording to finish. Previously `_idle_settled`
+only became true at the end of the first cycle, so repeated idle servo writes
+could suppress gaze for the whole cycle even when the pose did not change.
+The separate playback timestamp does not change the motor-noise flag, gaze
+acceptance thresholds, or the guard against repointing when a face is already
+visible. At a configured 6 samples/s, sampling can resume on the next watcher
+iteration after the 350 ms interval; actual camera/processing time still applies.
+This boundary is covered by deterministic playback tests, not yet by a new
+on-device latency measurement.
+
 Everything above is asked for: a look, a track, a search. This section is the watcher in
 `hal/drivers/tracking/gaze.py` doing it unprompted, so that when the user does speak the camera is
 already pointed somewhere useful. All of it is downstream of `HAL_GAZE_WAKE` (see
