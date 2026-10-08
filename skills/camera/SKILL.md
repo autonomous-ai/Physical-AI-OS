@@ -50,9 +50,10 @@ Read the output:
 
 Keeping the check inside the same shell command costs no extra tool round: a
 separate `GET /camera` turn would add one more model call (~5s) for every look.
-The server handles servo freeze, frame wait, and image sizing. No preparatory
-aim or sleep is needed unless the user explicitly requested a movement (see Move
-first, then snapshot).
+The server keeps the body still from its "taking a look" cue through the photo,
+waits for a frame, and sizes the image. No preparatory aim, hold or sleep is
+needed unless the user explicitly requested a movement (see Move first, then
+snapshot).
 
 For raw-frame export rather than a visual answer, use
 `GET http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75`
@@ -70,11 +71,15 @@ take one; never invent.
 
 ## Move first, then snapshot
 
-When the request combines a movement and a visual question ("turn right, hold
-it there, and tell me what you see"), fire the servo calls **with curl during
-the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* call `/api/vision/look`. `[HW:...]`
-markers are executed only after your reply is composed, so a marker-based aim
-would move the device *after* the photo — you would describe the old view.
+When the request combines a movement and a visual question ("turn right and
+tell me what you see"), put the aim **inside the Capture Protocol command**,
+after the camera check and before `/api/vision/look`, as one bash call. The
+`servo-control` skill has the exact command. A camera that is off then means no
+movement. Add `POST /servo/hold` after the aim **only** when the user asked to
+hold the position; otherwise the head returns to idle by itself after the photo.
+`[HW:...]` markers are executed only after your reply is composed, so a
+marker-based aim would move the device *after* the photo — you would describe
+the old view.
 
 ## Workflow
 1. Run the Capture Protocol command (the `/camera` check and the `look` are one shell call). `CAMERA_OFF` / `CAMERA_UNAVAILABLE` → answer from that word and stop.
