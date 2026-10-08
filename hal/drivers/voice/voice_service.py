@@ -192,7 +192,6 @@ class VoiceService:
         self._mic_lock = threading.Lock()
         self._active_mic = None
         self._realtime_stop_thread = None
-        self._realtime_start_thread = None
         self._running = False
         self._thread: Optional[threading.Thread] = None
         self._listening = False
@@ -509,10 +508,7 @@ class VoiceService:
         if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE:
             self._turn_detector = SmartTurnDetector()
         if hal_config.REALTIME_ENABLED:
-            self._realtime_start_thread = threading.Thread(
-                target=self._realtime.start, daemon=True, name="realtime-start"
-            )
-            self._realtime_start_thread.start()
+            self._realtime.start()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="voice")
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
@@ -607,9 +603,6 @@ class VoiceService:
             rt_thread = self._realtime_stop_thread
             if rt_thread is None or not rt_thread.is_alive():
                 def stop_realtime():
-                    startup = getattr(self, "_realtime_start_thread", None)
-                    if startup is not None:
-                        startup.join()
                     if summarize:
                         self._realtime.stop()
                     else:

@@ -185,7 +185,7 @@ def test_same_mode_cannot_ack_deferred_resume_gap(monkeypatch):
         s.set_input_mode('automatic', True)
 
 
-def test_realtime_stop_waits_for_retired_retry_and_blocks_new_rebuild(monkeypatch):
+def test_realtime_stop_retires_blocked_retry_without_waiting(monkeypatch):
     from hal.test.test_realtime_initial_connect_retry import (
         _orchestrator_for_initial_retry, _BlockingAgent,
     )
@@ -209,10 +209,11 @@ def test_realtime_stop_waits_for_retired_retry_and_blocks_new_rebuild(monkeypatc
     stopper = threading.Thread(target=lambda: (rt.stop(summarize=False), stopped.set()))
     stopper.start()
     assert cleared.wait(1)
-    assert not stopped.wait(.02)
+    assert stopped.wait(.5)
     assert not rt._begin_rebuild()
     release.set()
     stopper.join(2)
+    rt._connect_retry_thread.join(2)
     assert stopped.is_set()
     assert not rt._connect_retry_thread.is_alive()
     assert replacement.disconnected
