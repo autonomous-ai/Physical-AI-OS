@@ -222,6 +222,11 @@ func PrewarmFillers() {
 // PlayOpeningFillerNow fires a single Opening-pool filler immediately,
 // fire-and-forget, without going through FillerManager.
 func PlayOpeningFillerNow(owner string) {
+	// Temporarily pause opening acknowledgments; retain playback for re-enabling.
+	const openingFillerPaused = true
+	if openingFillerPaused {
+		return
+	}
 	lang := i18n.Lang()
 	opening, _ := poolsForLang(lang)
 	if len(opening) == 0 {
@@ -603,6 +608,13 @@ func (fm *FillerManager) fire(runID string, expectedRun *fillerRun, generation u
 	fm.mu.Lock()
 	run, ok := fm.runs[runID]
 	if !ok || run != expectedRun || run.generation != generation || run.ended || run.suspended || run.timer == nil {
+		fm.mu.Unlock()
+		return
+	}
+	// Temporarily pause continuation audio; retain the timer lifecycle and playback code.
+	const continuationFillerPaused = true
+	if continuationFillerPaused {
+		run.timer = nil
 		fm.mu.Unlock()
 		return
 	}

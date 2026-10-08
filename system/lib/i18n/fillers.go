@@ -7,13 +7,13 @@ import (
 
 // Dead-air fillers: short TTS cues spoken while the agent is busy, with per-tool overrides.
 
-// Opening acknowledges receipt with one short sound, without implying a task.
+// Opening uses the same short thinking sounds as continuation.
 var fillerOpening = map[string][]string{
-	LangJA:   {"うん。"},
-	LangEN:   {"Uhm."},
-	LangVI:   {"Ừm."},
-	LangZhCN: {"嗯。"},
-	LangZhTW: {"嗯。"},
+	LangJA:   {"うーん…"},
+	LangEN:   {"Hmm..."},
+	LangVI:   {"Ừm..."},
+	LangZhCN: {"嗯..."},
+	LangZhTW: {"嗯..."},
 }
 
 // fillerRealtime holds quiet thinking sounds, not acknowledgements or promises.
