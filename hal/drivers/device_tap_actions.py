@@ -36,6 +36,7 @@ def physical_short_tap(source: str = "button", announce: bool = False):
         if voice:
             voice.device_input.cancel()
         button_actions._wake_if_sleepy(source)
+        button_actions.play_ack_chime(source)
         return
     from hal.routes.voice import stop_tts, unmute_mic
     if state.tts_service and state.tts_service.speaking:
@@ -43,6 +44,7 @@ def physical_short_tap(source: str = "button", announce: bool = False):
             voice.device_input.cancel()
         button_actions._cancel_agent_speech(source)
         stop_tts()
+        button_actions.play_ack_chime(source)
         return
     if voice is None:
         return
