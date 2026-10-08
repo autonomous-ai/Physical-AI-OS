@@ -61,6 +61,7 @@ from hal.drivers.voice._internal.realtime_turn import (
 from hal.drivers.voice._internal.device_input import DeviceInputLease, DeviceTapInput
 from hal.drivers.voice._internal.device_turn_queue import DeviceTurnQueue
 from hal.drivers.voice._internal.device_voice_pipeline import DeviceVoicePipeline
+from hal.drivers.voice._internal.device_realtime import DeviceRealtimeTurn
 from hal.drivers.voice._internal.harness_capture import HarnessCapture
 from hal.drivers.voice._internal.input_policy import (
     InputPolicy,
@@ -317,6 +318,11 @@ class VoiceService:
             noise_is_speech=lambda pcm: self._rt_noise_is_speech(
                 self._np.frombuffer(pcm, dtype=self._np.int16)),
             on_frame=self._device_mic_frame, on_transcript=self._device_transcript,
+            stream_realtime=DeviceRealtimeTurn(
+                realtime=lambda: self._realtime, tts=lambda: self._tts,
+                strip_markers=self.strip_rt_markers,
+            ).stream,
+            record_handoff=lambda text: self._realtime.save_main_handoff(text),
         )
         if getattr(hal_config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk":
             # The pipeline is constructed even while muted/sleeping. Warm only

@@ -17,9 +17,18 @@ def device_speech(*, defer=True):
 
         @wraps(method)
         def wrapped(self, *args, **kwargs):
+            turn_valid = kwargs.pop("_device_turn_valid", None)
+
+            def invoke():
+                if turn_valid is not None and not turn_valid():
+                    # This turn was accepted and later cancelled. Consume its
+                    # deferred item without speech or an unspoken-main fallback.
+                    return True
+                return method(self, *args, **kwargs)
+
             gate = getattr(self, "_device_input_gate", None)
             if gate is None:
-                return method(self, *args, **kwargs)
+                return invoke()
             arguments = signature.bind(self, *args, **kwargs).arguments
             if arguments.get("prerender", False):
                 return method(self, *args, **kwargs)
@@ -43,7 +52,7 @@ def device_speech(*, defer=True):
             report = lambda: self._report_unspoken_reply(
                 text, arguments.get("realtime_feedback", False),
             )
-            return gate.submit(lambda: method(self, *args, **kwargs), text,
+            return gate.submit(invoke, text,
                                can_defer=defer and not optional, report=report)
         return wrapped
     return decorate

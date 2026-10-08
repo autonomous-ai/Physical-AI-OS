@@ -1,7 +1,9 @@
 """Real producer/worker synchronization with controlled network and PCM sources."""
 
 from types import SimpleNamespace
+from unittest.mock import Mock
 import threading
+import time
 
 import pytest
 import numpy as np
@@ -157,6 +159,88 @@ def test_slow_upload_does_not_delay_local_stop(setup_pipeline):
         assert b"".join(session.sent) == b"onetwo"
     finally:
         send.set()
+
+
+def test_slow_realtime_preserves_ready_stop_latency_and_fifo(setup_pipeline):
+    setup = setup_pipeline
+    entered = threading.Event()
+    respond = threading.Event()
+    realtime_inputs = []
+
+    def realtime_turn(**kwargs):
+        realtime_inputs.append(kwargs["combined"])
+        assert kwargs["valid"]() and not kwargs["cancelled"].is_set()
+        entered.set()
+        assert respond.wait(2)
+        return module.RealtimeTurnResult(handled=True, route="realtime_handled")
+
+    setup.pipeline.realtime_turn = realtime_turn
+    first_session = Session("First complete request for realtime")
+    second_session = Session("Second complete request for realtime")
+    setup.sessions.extend([first_session, second_session])
+    first, _, accepted = capture_turn(setup, [b"first"])
+    try:
+        assert accepted and entered.wait(1)
+        started = time.perf_counter()
+        second, _, accepted = capture_turn(setup, [b"second"])
+        elapsed_ms = (time.perf_counter() - started) * 1000
+        print(f"Next local ready/stop while realtime blocked: {elapsed_ms:.2f} ms")
+        assert accepted and not respond.is_set()
+        assert setup.cues == [dict(finished=False), dict(finished=True)] * 2
+        assert setup.visuals == [True, False, True, False]
+        assert setup.dispatches == []
+        assert setup.queue.reserve({}) is None
+        respond.set()
+        assert first.done.wait(1) and second.done.wait(1)
+        assert realtime_inputs == [first_session.text, second_session.text]
+        assert [entry[0] for entry in setup.dispatches] == realtime_inputs
+    finally:
+        respond.set()
+
+
+@pytest.mark.parametrize("cancel", ["privacy", "route"])
+def test_cancel_while_realtime_pending_cannot_dispatch(setup_pipeline, cancel):
+    setup = setup_pipeline
+    setup.sessions.append(Session("Do not forward this cancelled request"))
+
+    def realtime_turn(**kwargs):
+        if cancel == "privacy":
+            kwargs["cancelled"].set()
+        else:
+            setup.route["generation"] += 1
+        return module.RealtimeTurnResult(delegated=True, delegate_msg="cancelled")
+
+    setup.pipeline.realtime_turn = realtime_turn
+    ticket, _, accepted = capture_turn(setup, [b"audio"])
+    assert accepted and ticket.done.wait(1)
+    assert setup.dispatches == []
+
+
+@pytest.mark.parametrize("outcome,event", [
+    (module.RealtimeTurnResult(handled=True, transcript="Answered", route="realtime_handled"), "voice_agent_handled"),
+    (module.RealtimeTurnResult(delegated=True, delegate_msg="Run the task", route="delegated"), "voice_command"),
+    (module.RealtimeTurnResult(route="realtime_unavailable"), "voice_command"),
+    (module.RealtimeTurnResult(route="realtime_cancelled"), None),
+])
+def test_finalizer_routes_realtime_result_without_duplicate_main_reply(
+        setup_pipeline, monkeypatch, outcome, event):
+    from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
+
+    setup = setup_pipeline
+    sender = Mock()
+    setup.pipeline.sensing_sender = sender
+    setup.pipeline.decorator.submit_speech_emotion_from_session = Mock()
+    setup.pipeline.realtime_turn = lambda **kwargs: outcome
+    monkeypatch.setattr(module, "dispatch_turn", dispatch_turn)
+    setup.sessions.append(Session("Please handle this complete request"))
+    ticket, _, accepted = capture_turn(setup, [b"audio"])
+    assert accepted and ticket.done.wait(1)
+    if event is None:
+        sender.send.assert_not_called()
+    else:
+        sender.send.assert_called_once()
+        assert sender.send.call_args.kwargs["event_type"] == event
+        assert sender.send.call_args.kwargs["voice_turn_type"] == "voice_command"
 
 
 @pytest.mark.parametrize("cancel_kind", ["privacy", "route", "shutdown"])
