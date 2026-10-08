@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/reconnect"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/statusled"
@@ -66,10 +67,11 @@ type HermesService struct {
 	httpClient *http.Client
 
 	// Connection-state shadow.
-	ready          atomic.Bool
-	connectedAt    atomic.Int64 // unix seconds when ready last flipped true
-	agentStartedAt atomic.Int64 // derived from /health/detailed.uptime_s if available
-	hasConnected   atomic.Bool  // skip "reconnect" TTS on first successful poll
+	ready           atomic.Bool
+	connectedAt     atomic.Int64     // unix seconds when ready last flipped true
+	agentStartedAt  atomic.Int64     // derived from /health/detailed.uptime_s if available
+	hasConnected    atomic.Bool      // skip "reconnect" TTS on first successful poll
+	reconnectNotice reconnect.Notice // announce a reconnect only after a real outage
 
 	// Turn lifecycle, mirrors openclaw.Service. activeTurn flips true on SendChat (write) and false on response.completed (read).
 	activeTurn atomic.Bool

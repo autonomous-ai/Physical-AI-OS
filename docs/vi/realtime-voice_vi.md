@@ -235,6 +235,12 @@ tắt. Và ngay lúc bắt đầu nói trong cùng cấu hình đó, nếu `faci
 đã là `True`, cue listening chờ mờ (`app_state.show_listening_pending_cue`)
 hiện lập tức, như với gaze opener được grant ở chế độ wake-word
 (`robots/lamp/docs/vi/physical-controls_vi.md`).
+Khi một câu trả lời phát xong mà cửa sổ đó vẫn còn mở
+(`WakeWordFocus.is_active()`), chính vòng sáng mờ đó hiện lại trong đúng độ dài
+cửa sổ (`VoiceService._show_conversation_window_cue`:
+`HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` khi wake word bật, `HAL_CONVERSATION_WINDOW_S`
+khi wake word tắt và gate không phải `off`; gate `off` thì không hiện gì), để
+user thấy thiết bị vẫn đang nghe mà không cần gọi tên.
 
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`). Trên GPT-Live không có tool ở tầng Live: adapter `gpt_live.py`

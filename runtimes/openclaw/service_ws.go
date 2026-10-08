@@ -62,9 +62,11 @@ func (s *OpenclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 
 func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentEventHandler, gatewayURL string) error {
 	s.wsConnected.Store(false)
+	s.reconnectNotice.Down()
 	s.wsConnectedAt.Store(0)
 	defer func() {
 		s.wsConnected.Store(false)
+		s.reconnectNotice.Down()
 		s.wsConnectedAt.Store(0)
 	}()
 	defer s.activeTurn.Store(false) // clear busy on disconnect — lifecycle_end may never arrive
@@ -263,7 +265,7 @@ func (s *OpenclawService) runWSConnAt(ctx context.Context, handler domain.AgentE
 	flow.Log("ws_ready", map[string]any{"session": s.GetSessionKey() != ""})
 
 	// On reconnect (not first boot), announce via TTS so user knows agent is back.
-	if s.wsHasConnected.Swap(true) {
+	if announce := s.reconnectNotice.Up(); s.wsHasConnected.Swap(true) && announce {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
 			if err := hal.SpeakCached(phrase); err != nil {

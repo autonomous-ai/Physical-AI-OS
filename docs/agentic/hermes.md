@@ -254,7 +254,13 @@ internal hardware markers.
 No socket means liveness is polled. `health.go` runs a `/health` poller that
 flips `ready` / `connectedAt`, derives `agentStartedAt` from
 `/health/detailed.uptime_s` when available, and uses `hasConnected` to skip the
-"reconnected" TTS chime on the first successful poll. `AgentUptime()` reports the
+"reconnected" TTS chime on the first successful poll. `transitionReady` also
+feeds `reconnectNotice` (`system/lib/reconnect.Notice`, shared by all six
+runtimes: `Down()` when the brain goes unreachable, `Up()` when it is back), so
+the chime (`i18n.PhraseReconnect`, "[gasp] Oh, I can think again!") plays only
+after an outage of at least `reconnect.MinOutage` (20 s); a reconnect within
+seconds — an MCP entry written, a connector token refreshed, a runtime restart —
+stays silent. `AgentUptime()` reports the
 Hermes process uptime, independent of os-server.
 
 ## 7. Busy state & pending sensing events

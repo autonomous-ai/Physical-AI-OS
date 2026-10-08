@@ -1072,8 +1072,12 @@ def clear_listening_cue() -> bool:
     return True
 
 
-def show_listening_pending_cue() -> Optional[int]:
-    """Show a dim, LED-only acknowledgement while gaze-authorized STT starts; returns a token."""
+def show_listening_pending_cue(timeout_s: Optional[float] = None) -> Optional[int]:
+    """Show a dim, LED-only acknowledgement while gaze-authorized STT starts; returns a token.
+
+    ``timeout_s`` overrides the default lifetime: the conversation window after a
+    reply keeps the same dim ring for as long as the device is still listening.
+    """
     global _listening_pending_cue_id, _listening_pending_cue_active_id
     if _sleeping or _tts_speaking or _current_emotion not in (None, EMO_IDLE):
         return None
@@ -1086,7 +1090,7 @@ def show_listening_pending_cue() -> Optional[int]:
     _apply_emotion_led_display(EMO_LISTENING, intensity=0.35, force_led=True)
 
     timer = threading.Timer(
-        _LISTENING_PENDING_CUE_TIMEOUT_S,
+        _LISTENING_PENDING_CUE_TIMEOUT_S if timeout_s is None else max(0.1, float(timeout_s)),
         clear_listening_pending_cue,
         kwargs={"cue_id": cue_id},
     )

@@ -78,9 +78,11 @@ func (s *OpenCodeService) runWSConn(ctx context.Context, handler domain.AgentEve
 
 func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentEventHandler, url string) error {
 	s.wsConnected.Store(false)
+	s.reconnectNotice.Down()
 	s.wsConnectedAt.Store(0)
 	defer func() {
 		s.wsConnected.Store(false)
+		s.reconnectNotice.Down()
 		s.wsConnectedAt.Store(0)
 	}()
 	// Clear busy on disconnect — the final frame may never arrive.
@@ -121,7 +123,7 @@ func (s *OpenCodeService) runWSConnAt(ctx context.Context, handler domain.AgentE
 	slog.Info("OpenCode connected", "component", "opencode", "url", WSURL)
 
 	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
-	if s.wsHasConnected.Swap(true) {
+	if announce := s.reconnectNotice.Up(); s.wsHasConnected.Swap(true) && announce {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
 			if err := hal.SpeakCached(phrase); err != nil {

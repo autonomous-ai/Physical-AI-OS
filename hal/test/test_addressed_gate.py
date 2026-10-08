@@ -100,3 +100,32 @@ def test_an_admitted_turn_opens_the_conversation_window_without_a_wake_word(monk
     monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "off")
     with capture(monkeypatch, FRAMES, realtime=True) as result:
         result.service._wakeword_focus.begin.assert_not_called()
+
+
+def test_conversation_window_shows_a_dim_ring_after_a_reply(monkeypatch):
+    from unittest.mock import Mock
+
+    import hal.app_state as state
+    from hal.drivers.voice.voice_service import VoiceService
+
+    shown = []
+    monkeypatch.setattr(state, "show_listening_pending_cue", lambda timeout_s=None: shown.append(timeout_s) or 1)
+    service = Mock()
+    service._wakeword_focus.is_active.return_value = True
+    monkeypatch.setattr(hal_config, "WAKEWORD_ENABLED", False)
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "hint")
+    monkeypatch.setattr(hal_config, "CONVERSATION_WINDOW_S", 8.0)
+    VoiceService._show_conversation_window_cue(service)
+    assert shown == [8.0]
+    # No open window, or no gate: nothing to show.
+    service._wakeword_focus.is_active.return_value = False
+    VoiceService._show_conversation_window_cue(service)
+    service._wakeword_focus.is_active.return_value = True
+    monkeypatch.setattr(hal_config, "ADDRESSED_GATE", "off")
+    VoiceService._show_conversation_window_cue(service)
+    assert shown == [8.0]
+    # Wake-word mode uses its own follow-up window length.
+    monkeypatch.setattr(hal_config, "WAKEWORD_ENABLED", True)
+    monkeypatch.setattr(hal_config, "WAKEWORD_FOLLOWUP_TIMEOUT_S", 5.0)
+    VoiceService._show_conversation_window_cue(service)
+    assert shown == [8.0, 5.0]

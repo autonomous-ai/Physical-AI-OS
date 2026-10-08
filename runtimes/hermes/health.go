@@ -104,7 +104,7 @@ func (s *HermesService) transitionReady(now bool) {
 		if s.statusLED != nil && s.config.SetUpCompleted {
 			s.statusLED.Clear(statusled.StateAgentDown)
 		}
-		if s.hasConnected.Swap(true) {
+		if announce := s.reconnectNotice.Up(); s.hasConnected.Swap(true) && announce {
 			go func() {
 				phrase := i18n.Pick(i18n.PhraseReconnect)
 				// SpeakCached: system filler must not enter realtime voice history.
@@ -115,6 +115,7 @@ func (s *HermesService) transitionReady(now bool) {
 		}
 	} else {
 		s.connectedAt.Store(0)
+		s.reconnectNotice.Down()
 		flow.Log("ws_down", map[string]any{"backend": "hermes"})
 		slog.Warn("Hermes unreachable", "component", "hermes", "base_url", BaseURL)
 		if s.statusLED != nil && s.config.SetUpCompleted {

@@ -11,6 +11,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/reconnect"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/statusled"
@@ -68,10 +69,11 @@ type OpenclawService struct {
 	wsConnected   atomic.Bool  // true when gateway WebSocket is connected and ready to receive messages
 	wsConnectedAt atomic.Int64 // unix seconds when wsConnected last flipped to true; 0 when disconnected
 	// agentStartedAt is the unix-seconds timestamp the OpenClaw gateway process started, derived from the server.uptimeMs field of the hello-ok response at handshake.
-	agentStartedAt atomic.Int64
-	activeTurn     atomic.Bool  // true while agent is processing a turn (lifecycle start → end)
-	busySince      atomic.Int64 // unix milli when activeTurn was last set to true; used to expire stuck busy state
-	wsHasConnected atomic.Bool  // true after first successful WS connect (skip reconnect TTS on boot)
+	agentStartedAt  atomic.Int64
+	activeTurn      atomic.Bool      // true while agent is processing a turn (lifecycle start → end)
+	busySince       atomic.Int64     // unix milli when activeTurn was last set to true; used to expire stuck busy state
+	wsHasConnected  atomic.Bool      // true after first successful WS connect (skip reconnect TTS on boot)
+	reconnectNotice reconnect.Notice // announce a reconnect only after a real outage
 
 	// wsConn is the active WebSocket connection; guarded by wsMu.
 	wsConn *websocket.Conn

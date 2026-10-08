@@ -373,6 +373,8 @@ con số độc lập.
 | Cửa sổ hội thoại khi wake word tắt (`HAL_CONVERSATION_WINDOW_S`, 8 s): câu tiếp theo sau một câu trả lời được tính là nói với nó mà không cần tên | **đã triển khai** |
 | Tên thiết bị ở bất kỳ đâu trong câu được tính là nói với nó; tên xuất hiện muộn gửi một `[TURN CONTEXT UPDATE]` | **đã triển khai** |
 | Cue listening ngay khi bắt đầu nói khi người dùng quay mặt về lamp (wake word tắt) | **đã triển khai** |
+| Vòng đèn mờ giữ sáng khi cửa sổ hội thoại còn mở sau câu trả lời ("vẫn đang nghe bạn") | **đã triển khai** (`_show_conversation_window_cue`) |
+| "Ồ, mình lại nghĩ được rồi!" chỉ sau khi não mất kết nối ≥ 20 s; khởi động lại có kế hoạch thì im lặng | **đã triển khai** (`system/lib/reconnect`, cả sáu runtime) |
 | Câu trả lời của tác vụ đã delegate sống sót khi realtime trả lời một câu nói mới hơn | **đã triển khai** (os-server `IsTaskRun`) |
 | Yêu cầu nói bị lỗi được thông báo thay vì im lặng | **đã triển khai** (`agent.voice_turn_failed`, debounce 20 s) |
 | Ghi nhận phi ngôn ngữ trên Lamp: không nói "ừ hử" trong lúc người dùng nói (`HAL_BACKCHANNEL_FILLERS=`), chỉ một câu nối (bridge) nói ra sau 4 s (`HAL_REALTIME_FILLER_DELAY_S=4.0`), câu nối là từ ngữ ("One sec.", "Still thinking.") chứ không phải tiếng động | **đã triển khai** (`.env`, `fillers.go`) |

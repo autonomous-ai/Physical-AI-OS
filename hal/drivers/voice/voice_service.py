@@ -306,6 +306,8 @@ class VoiceService:
                 self._wakeword_focus.playback_finished()
                 if original_on_speak_end:
                     original_on_speak_end()
+                # After the LED is restored: a dim ring says the conversation is still open.
+                self._show_conversation_window_cue()
                 if hal_config.REALTIME_ENABLED and completion is not None:
                     text, spoken, interrupted = completion
                     self.feed_realtime_history(text, spoken=spoken, interrupted=interrupted)
@@ -1284,6 +1286,27 @@ class VoiceService:
                         "VAD: RMS=%.0f above threshold but Silero rejected — not speech",
                         energy,
                     )
+
+    def _show_conversation_window_cue(self) -> None:
+        """A dim listening ring for as long as the conversation window stays open.
+
+        A person who just answered you is visibly still with you. The ring is
+        LED-only and never fights a running emotion or a sleeping device.
+        """
+        if hal_config.WAKEWORD_ENABLED:
+            window = float(hal_config.WAKEWORD_FOLLOWUP_TIMEOUT_S)
+        elif hal_config.ADDRESSED_GATE != "off":
+            window = float(hal_config.CONVERSATION_WINDOW_S)
+        else:
+            return
+        if window <= 0 or not self._wakeword_focus.is_active():
+            return
+        try:
+            from hal import app_state
+
+            app_state.show_listening_pending_cue(timeout_s=window)
+        except Exception as e:
+            logger.debug("conversation window cue skipped: %s", e)
 
     def _stt_keepalive_wanted(self) -> bool:
         """Whether the STT socket should be pre-connected right now (see stt_warm)."""

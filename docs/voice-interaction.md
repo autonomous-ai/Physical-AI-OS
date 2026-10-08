@@ -364,6 +364,8 @@ reported them; "claimed" means a vendor figure, "measured" an independent one.
 | Conversation window when the wake word is off (`HAL_CONVERSATION_WINDOW_S`, 8 s): the next sentence after a reply is addressed without the name | **implemented** |
 | The device's name anywhere in the sentence counts as addressed; a late name sends a `[TURN CONTEXT UPDATE]` | **implemented** |
 | Listening cue at speech onset when the user is facing the lamp (wake word off) | **implemented** |
+| A dim ring stays on while the conversation window is open after a reply ("still with you") | **implemented** (`_show_conversation_window_cue`) |
+| "Oh, I can think again!" only after a brain outage of ≥ 20 s; planned restarts stay silent | **implemented** (`system/lib/reconnect`, all six runtimes) |
 | A delegated task's answer survives realtime answering a newer utterance | **implemented** (os-server `IsTaskRun`) |
 | A failed spoken request is announced instead of silence | **implemented** (`agent.voice_turn_failed`, 20 s debounce) |
 | Non-verbal acknowledgement on Lamp: no spoken "uh-huh" while the user talks (`HAL_BACKCHANNEL_FILLERS=`), one spoken bridge only after 4 s (`HAL_REALTIME_FILLER_DELAY_S=4.0`), bridge phrases are words ("One sec.", "Still thinking.") not noises | **implemented** (`.env`, `fillers.go`) |

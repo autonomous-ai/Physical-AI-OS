@@ -195,7 +195,10 @@ handshake**, just a bearer token:
 
 1. `StartWS` dials `WSURL` with `Authorization: Bearer <Token>`.
 2. On connect, readiness flips true (`IsReady`/`ConnectedAt`), the `StateAgentDown`
-   LED clears, and a reconnect (not first-connect) plays the i18n reconnect TTS.
+   LED clears, and a reconnect (not first-connect) after an outage of at least
+   20 s (`system/lib/reconnect.MinOutage`; `reconnectNotice.Down()` on drop,
+   `Up()` on connect) plays the i18n reconnect TTS — a drop that reconnects
+   within seconds stays silent.
 3. A keepalive goroutine sends `{"type":"ping","id":…}` every 25s; PicoClaw replies
    `pong` (ignored) which refreshes the 90s read deadline.
 4. The read loop translates each inbound frame and dispatches into the registered

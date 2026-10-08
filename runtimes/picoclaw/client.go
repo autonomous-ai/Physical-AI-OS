@@ -74,10 +74,12 @@ func (s *PicoclawService) runWSConn(ctx context.Context, handler domain.AgentEve
 
 func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.AgentEventHandler, url string) error {
 	s.wsConnected.Store(false)
+	s.reconnectNotice.Down()
 	s.wsConnectedAt.Store(0)
 	defer func() {
 		s.sendMu.Lock()
 		s.wsConnected.Store(false)
+		s.reconnectNotice.Down()
 		s.wsConnectedAt.Store(0)
 		// Transmitted work is uncertain; never put it back in the unsent queue.
 		telemetry.ReportTaskObservationLost(s.getCurrentRunID(), s.peekPendingRunID())
@@ -122,7 +124,7 @@ func (s *PicoclawService) runWSConnURL(ctx context.Context, handler domain.Agent
 	slog.Info("PicoClaw connected", "component", "picoclaw", "url", url)
 
 	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
-	if s.wsHasConnected.Swap(true) {
+	if announce := s.reconnectNotice.Up(); s.wsHasConnected.Swap(true) && announce {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
 			if err := hal.SpeakCached(phrase); err != nil {
@@ -199,6 +201,7 @@ func (s *PicoclawService) sendFrame(v any) error {
 	s.wsMu.Unlock()
 	if err != nil {
 		s.wsConnected.Store(false)
+		s.reconnectNotice.Down()
 		_ = conn.Close()
 		return fmt.Errorf("write frame: %w", err)
 	}

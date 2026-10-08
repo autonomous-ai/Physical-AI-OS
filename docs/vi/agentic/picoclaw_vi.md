@@ -187,8 +187,10 @@ pairing**, chỉ là bearer token:
 
 1. `StartWS` dial `WSURL` với `Authorization: Bearer <Token>`.
 2. Khi connect, trạng thái sẵn sàng bật (`IsReady`/`ConnectedAt`), LED
-   `StateAgentDown` được xóa, và lần reconnect (không phải lần đầu) phát TTS
-   reconnect i18n.
+   `StateAgentDown` được xóa, và lần reconnect (không phải lần đầu) sau một đợt
+   mất kết nối ít nhất 20 s (`system/lib/reconnect.MinOutage`;
+   `reconnectNotice.Down()` khi rớt, `Up()` khi connect) phát TTS reconnect
+   i18n — rớt rồi nối lại trong vài giây thì im lặng.
 3. Một goroutine keepalive gửi `{"type":"ping","id":…}` mỗi 25s; PicoClaw đáp
    `pong` (bỏ qua) để làm tươi read deadline 90s.
 4. Vòng đọc dịch từng frame đến và đẩy vào `domain.AgentEventHandler` đã đăng ký

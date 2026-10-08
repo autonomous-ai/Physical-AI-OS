@@ -75,9 +75,11 @@ func (s *CodexService) StartWS(ctx context.Context, handler domain.AgentEventHan
 // translator until the socket errors or ctx is cancelled.
 func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventHandler) error {
 	s.wsConnected.Store(false)
+	s.reconnectNotice.Down()
 	s.wsConnectedAt.Store(0)
 	defer func() {
 		s.wsConnected.Store(false)
+		s.reconnectNotice.Down()
 		s.wsConnectedAt.Store(0)
 	}()
 	// Clear busy on disconnect — the final frame may never arrive.
@@ -118,7 +120,7 @@ func (s *CodexService) runWSConn(ctx context.Context, handler domain.AgentEventH
 	slog.Info("Codex connected", "component", "codex", "url", WSURL)
 
 	// SpeakCached, not SendToHALTTS: system filler must not enter realtime voice history.
-	if s.wsHasConnected.Swap(true) {
+	if announce := s.reconnectNotice.Up(); s.wsHasConnected.Swap(true) && announce {
 		go func() {
 			phrase := i18n.Pick(i18n.PhraseReconnect)
 			if err := hal.SpeakCached(phrase); err != nil {

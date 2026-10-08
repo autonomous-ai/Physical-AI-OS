@@ -237,6 +237,12 @@ name; `0` disables it. And at speech onset in that same configuration, when
 `facing_evidence()` is already `True`, the dim pending listening cue
 (`app_state.show_listening_pending_cue`) shows at once, as it does for a
 granted gaze opener in wake-word mode (`robots/lamp/docs/physical-controls.md`).
+When a reply finishes playing while that window is still open
+(`WakeWordFocus.is_active()`), the same dim ring returns for the window's length
+(`VoiceService._show_conversation_window_cue`: `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S`
+with the wake word on, `HAL_CONVERSATION_WINDOW_S` with it off and the gate not
+`off`; nothing with the gate `off`), so the user can see the device is still
+listening without the name.
 
 The `delegate_to_main` tool is registered automatically by the orchestrator
 (`orchestrator.py`, `DELEGATE_TOOL`).

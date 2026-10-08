@@ -14,6 +14,7 @@ import (
 	"github.com/gorilla/websocket"
 
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/lib/reconnect"
 	"go.autonomous.ai/os/system/monitor"
 	"go.autonomous.ai/os/system/server/config"
 	"go.autonomous.ai/os/system/statusled"
@@ -64,11 +65,12 @@ type CodexService struct {
 	statusLED  *statusled.Service
 
 	// Persistent WebSocket.
-	wsMu           sync.Mutex
-	wsConn         *websocket.Conn
-	wsConnected    atomic.Bool
-	wsConnectedAt  atomic.Int64 // unix seconds when the socket last became ready
-	wsHasConnected atomic.Bool  // skip "reconnect" TTS on first successful connect
+	wsMu            sync.Mutex
+	wsConn          *websocket.Conn
+	wsConnected     atomic.Bool
+	wsConnectedAt   atomic.Int64     // unix seconds when the socket last became ready
+	wsHasConnected  atomic.Bool      // skip "reconnect" TTS on first successful connect
+	reconnectNotice reconnect.Notice // announce a reconnect only after a real outage
 
 	// Turn lifecycle.
 	activeTurn        atomic.Bool

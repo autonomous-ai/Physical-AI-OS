@@ -246,7 +246,13 @@ thấy marker phần cứng nội bộ.
 Không socket nên liveness phải poll. `health.go` chạy poller `/health` lái
 `ready`/`connectedAt`, suy ra `agentStartedAt` từ `/health/detailed.uptime_s` nếu
 có, và dùng `hasConnected` để bỏ qua chime TTS "đã reconnect" ở lần poll thành
-công đầu tiên. `AgentUptime()` báo uptime tiến trình Hermes, độc lập os-server.
+công đầu tiên. `transitionReady` còn cấp dữ liệu cho `reconnectNotice`
+(`system/lib/reconnect.Notice`, dùng chung cho cả sáu runtime: `Down()` khi
+brain mất liên lạc, `Up()` khi nó quay lại), nên chime (`i18n.PhraseReconnect`,
+"[gasp] Oh, I can think again!") chỉ phát sau một đợt mất kết nối ít nhất
+`reconnect.MinOutage` (20 s); reconnect trong vài giây — ghi một entry MCP, làm
+mới token connector, restart runtime — thì im lặng. `AgentUptime()` báo uptime
+tiến trình Hermes, độc lập os-server.
 
 ## 7. Trạng thái busy & sensing event chờ
 
