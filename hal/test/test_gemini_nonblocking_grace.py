@@ -1555,3 +1555,55 @@ def test_generation_boundary_does_not_release_empty_or_cancelled_text(mode, monk
     events = _receive(_agent(messages))
     assert not any(isinstance(e, OutputEvent) and isinstance(e.output, TextSegmentEndOutput)
                    for e in events)
+
+
+def _spoken_terminal(text="Sure, it is three o'clock."):
+    response = _terminal(generation=True)
+    response.server_content.output_transcription = SimpleNamespace(text=text)
+    return response
+
+
+def test_grace_is_cut_once_the_reply_has_been_played(monkeypatch):
+    """The capture thread must not stay deaf after the room went quiet."""
+    import hal.app_state as state
+
+    # A grace far longer than the test budget: only the playback cut can end it.
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_NONBLOCKING_TOOL_GRACE_S", 5.0)
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_GRACE_AFTER_PLAYBACK_S", 0.5)
+    monkeypatch.setattr(gemini_live, "GRACE_POLL_S", 0.01)
+    clock = iter([1000.0] + [1010.0] * 1000)
+    monkeypatch.setattr(gemini_live, "_wall_clock", lambda: next(clock))
+    monkeypatch.setattr(state, "tts_service",
+                        SimpleNamespace(speaking=False, last_spoken_time=1005.0), raising=False)
+    agent = _agent([_spoken_terminal()])
+    events = _receive(agent)
+    _assert_done(agent, events)
+    assert events[-1].fallback_to_main
+
+
+def test_grace_holds_while_the_reply_is_still_playing(monkeypatch):
+    import hal.app_state as state
+
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_GRACE_AFTER_PLAYBACK_S", 0.5)
+    monkeypatch.setattr(gemini_live, "GRACE_POLL_S", 0.005)
+    monkeypatch.setattr(gemini_live, "_wall_clock", lambda: 1010.0)
+    monkeypatch.setattr(state, "tts_service",
+                        SimpleNamespace(speaking=True, last_spoken_time=1005.0), raising=False)
+    agent = _agent([_spoken_terminal(), _tool()])
+    events = _receive(agent)
+    # Still listening when the trailing delegate arrived: the short grace caught it.
+    assert [call.name for call in _calls(events)] == ["delegate_to_main"]
+    _assert_done(agent, events)
+
+
+def test_an_unspoken_turn_keeps_the_full_grace(monkeypatch):
+    import hal.app_state as state
+
+    monkeypatch.setattr(gemini_live.app_config, "REALTIME_GRACE_AFTER_PLAYBACK_S", 0.5)
+    monkeypatch.setattr(gemini_live, "_wall_clock", lambda: 1010.0)
+    monkeypatch.setattr(state, "tts_service",
+                        SimpleNamespace(speaking=False, last_spoken_time=1005.0), raising=False)
+    agent = _agent([_terminal(generation=True), _tool()])
+    events = _receive(agent)
+    assert [call.name for call in _calls(events)] == ["delegate_to_main"]
+    _assert_done(agent, events)

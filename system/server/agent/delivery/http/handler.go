@@ -31,6 +31,8 @@ type AgentHandler struct {
 
 	// lastLLMLimitTTS debounces the spoken LLM-usage-limit notice (unix ms).
 	lastLLMLimitTTS atomic.Int64
+	// lastVoiceFailureTTS debounces the spoken "couldn't finish that" notice (unix ms).
+	lastVoiceFailureTTS atomic.Int64
 
 	// speechWatermarkMs: unix-ms mark from the user cancel gesture. Speech of turns
 	// created at or before it is dropped (turns keep running). Monotone — never cleared.

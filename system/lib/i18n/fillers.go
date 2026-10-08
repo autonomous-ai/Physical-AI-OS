@@ -16,13 +16,14 @@ var fillerOpening = map[string][]string{
 	LangZhTW: {"嗯..."},
 }
 
-// fillerRealtime holds quiet thinking sounds, not acknowledgements or promises.
+// fillerRealtime holds the short bridge a person says when an answer is slow:
+// real words, not thinking noises, and never an acknowledgement or a promise.
 var fillerRealtime = map[string][]string{
-	LangJA:   {"うーん…", "ええと…"},
-	LangEN:   {"Hmm...", "Mm..."},
-	LangVI:   {"Ừm...", "Hừm..."},
-	LangZhCN: {"嗯...", "呃..."},
-	LangZhTW: {"嗯...", "呃..."},
+	LangJA:   {"ちょっと待ってね。", "考え中。"},
+	LangEN:   {"One sec.", "Still thinking."},
+	LangVI:   {"Chờ mình chút.", "Mình đang nghĩ."},
+	LangZhCN: {"稍等一下。", "我在想。"},
+	LangZhTW: {"稍等一下。", "我在想。"},
 }
 
 // Continuation uses a short thinking sound without claiming a specific action.

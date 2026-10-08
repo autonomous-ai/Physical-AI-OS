@@ -19,7 +19,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     is_noise_turn, needs_noise_guard,
     should_drop_downstream_turn,
 )
-from hal.drivers.voice._internal.session_finalize import finalize_session
+from hal.drivers.voice._internal.session_finalize import finalize_session, recent_spoken_text
 from hal.drivers.voice._internal.turn_dispatch import dispatch_turn
 from hal.telemetry import voice_metrics
 
@@ -192,7 +192,7 @@ class DeviceVoicePipeline:
                         return False
                     turn.finished_at = time.monotonic()
                     turn.interaction_id = voice_metrics.speech_end("manual_tap", at=turn.finished_at)
-                    turn.spoken_text = getattr(turn_tts, "last_spoken_text", "")
+                    turn.spoken_text = recent_spoken_text(turn_tts)
                     # Publish the endpoint before the synchronous finish tone.
                     # Realtime commits in parallel with local feedback/STT drain.
                     turn.capture_done.set()

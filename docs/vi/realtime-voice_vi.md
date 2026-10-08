@@ -194,6 +194,27 @@ model, không phải gate xác minh người nói bằng code; vẫn cần thử
 tế trong phòng. SOUL đang có trên thiết bị cần nhận chính sách mới trước khi
 main agent có thể áp dụng.
 
+**Bằng chứng lời nói hướng đến thiết bị và gate (`HAL_ADDRESSED_GATE`).** Mỗi
+lần thu rảnh tay, `_stream_session_impl` gom những gì chính thiết bị biết về
+việc câu nói có dành cho nó hay không (`_internal/turn_admission.py`): đã nghe
+wake phrase, cửa sổ follow-up đang mở, có câu hỏi đang chờ từ thiết bị hoặc
+main agent (`short_answer_expected()`), user đang nhìn về phía đèn trong cửa
+sổ gaze (`facing_evidence()`: `gaze.facing_ratio()` so với
+`HAL_GAZE_MIN_SAMPLES` / `HAL_GAZE_MIN_FACING_RATIO`, đọc một lần lúc bắt đầu
+nói, `None` khi không có phép đo khuôn mặt) và giọng đã biết. Nó được log dạng
+`[admission] evidence: Addressed: <yes|likely|unlikely|unknown> (…)`; kết luận
+`unlikely`/`unknown` kèm thêm "stay silent unless clearly spoken to". Ở chế độ
+`hint` (mặc định), `addressed_hint()` nối dòng đó vào text `[TURN CONTEXT]`
+(`build_turn_context(speaker, addressed=…)`), để model không phải tự suy từ
+đầu mỗi lượt xem căn phòng có đang nói với nó không; `off` không gửi dòng
+nào. Ở chế độ `strict`, khi wake word tắt và là capture tự động (không phải
+Harness, không phải tap-to-talk), transcript không có bằng chứng nào kể trên
+sẽ không bao giờ được commit cho model realtime lẫn gửi tới main agent: audio
+đã stream bị bỏ (`discard_open_activity("not-addressed")`), route là
+`not_addressed` (terminal như `noise_dropped`) và voice metrics loại
+interaction đó với lý do `not_addressed`. Khi wake word bật, wake gate quyết
+định như trước. Chỉ `strict` là gate xác định; hint chỉ là input cho prompt.
+
 Tool `delegate_to_main` được orchestrator đăng ký tự động (`orchestrator.py`,
 `DELEGATE_TOOL`). Trên GPT-Live không có tool ở tầng Live: adapter `gpt_live.py`
 dịch `session.delegation.created` của model thành đúng `FunctionCallOutput`
@@ -391,6 +412,7 @@ cuối một turn. Các giá trị (`ROUTE_*` trong `realtime_turn.py`):
 | `realtime_error` | Turn ném lỗi; forward xuống thay vì mất luôn. |
 | `realtime_unavailable` | Không có session sống để commit — agent chính trả lời. |
 | `noise_dropped` | Noise guard chặn; đây là terminal kể cả khi STT bịa transcript ngắn, nên turn không tới ai cả. |
+| `not_addressed` | `HAL_ADDRESSED_GATE=strict` không thấy bằng chứng nào cho thấy câu nói rảnh tay là dành cho thiết bị; terminal như `noise_dropped`, nên turn không tới ai cả (xem *Xác định lời nói hướng đến thiết bị trước persona hoặc hành động*). |
 | `realtime_not_started` | Realtime tắt, hoặc capture này không mở turn nào. |
 | `realtime_cancelled` | Lượt thu thủ công bị hủy; dừng output, không retry, đồng bộ history hay fallback sang agent chính. |
 
@@ -470,7 +492,11 @@ HAL thông thường chờ tool routing tối đa `HAL_REALTIME_NONBLOCKING_TOOL
 (mặc định **6 giây**, `0` tắt thời gian chờ, không tắt yêu cầu outcome).
 
 Cửa sổ bắt đầu ở `generation_complete` hoặc `turn_complete` đầu tiên; terminal
-sau đơn thuần không kéo dài thời hạn. Query/chunk Google Search hoặc tool thực
+sau đơn thuần không kéo dài thời hạn. Nó cũng kết thúc sớm khi câu trả lời của
+lượt này đã phát xong và loa im được `HAL_REALTIME_GRACE_AFTER_PLAYBACK_S`
+(mặc định **1 giây**, `0` giữ nguyên grace đầy đủ): tool gọi muộn đến trong lúc
+câu trả lời còn đang phát, sau đó thời gian chờ chỉ giữ luồng capture không đọc
+mic. Lượt không nói gì giữ nguyên grace đầy đủ. Query/chunk Google Search hoặc tool thực
 hiện công việc ngoài routing và biểu cảm có thể kéo dài thời gian chờ outcome
 chưa hoàn tất tới `HAL_REALTIME_PROGRESS_TIMEOUT_S` (mặc định **15 giây tính từ
 commit audio**). Tiến độ lặp lại không đặt lại ngân sách này; việc còn chờ
@@ -669,7 +695,13 @@ turn cũ, vì hành động user thật sự yêu cầu thì vẫn phải chạy
 treo thì **có** bị bỏ — ranh giới là tiếng-nói/phần-cứng, không phải
 click/auto. Filler là lời hứa sắp có câu trả lời chứ không phải thứ user yêu
 cầu, và để nó chạy tiếp là tái hiện đúng cái mà cú click đã phải sửa: thiết bị
-trả lời câu mới, rồi "một giây nhé" cho câu cũ, rồi im. Hành vi này là opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong
+trả lời câu mới, rồi "một giây nhé" cho câu cũ, rồi im. Ngoại lệ duy nhất là
+run mà chính model realtime đã delegate sang main agent
+(`FillerManager.MarkDelegatedVoiceRun` → `IsTaskRun`, một tập có giới hạn sống
+lâu hơn trạng thái filler): user đã yêu cầu việc đó và vẫn đang chờ kết quả,
+nên `isSpeechCancelled` bỏ qua mốc auto với run này và
+`CancelSpeechForNewerTurn` huỷ filler bằng `CancelAllExceptTasks()` — cả câu
+trả lời lẫn filler của nó đều được giữ. Cú click vật lý vẫn bịt được nó. Hành vi này là opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong
 `/opt/hal/.env` của body (os-server cũng nạp file này). Code mặc định TẮT, vì
 mặc định đó là thứ mà mọi body chưa từng biết tới switch này sẽ nhận — lamp,
 intern-v2, reachy-mini, và cả body không có `.env` nào.
@@ -775,6 +807,16 @@ tường minh (`hal/drivers/voice/_internal/main_followup.py`):
   hoặc câu trả lời bị loại vì sai bảng chữ, lượt đó được chuyển cho main như một
   lượt delegate thường thay vì bị bỏ: một cái tên đơn lẻ là ứng viên điển hình
   của `reject_turn`, và chính main đã hỏi.
+- **Câu đáp ngắn.** Transcript chỉ gồm từ đệm/backchannel
+  (`HAL_REALTIME_NONACTIONABLE_FILLERS`: "yeah", "okay", "right", "mm-hmm", …)
+  bình thường bị noise guard bỏ trước khi commit. Trước khi bỏ, `is_noise_turn`
+  hỏi `turn_admission.short_answer_expected()`: khi cửa sổ này đang mở, hoặc
+  khi câu trả lời cuối của chính thiết bị kết thúc bằng một câu hỏi được nói
+  trong vòng `HAL_DEVICE_QUESTION_WINDOW_S` (mặc định 12 s,
+  `device_question_pending`), thì tiếng "yeah" trống đó chính là câu đáp và
+  được nhận — log `[admission] short answer … admitted: a question is
+  pending`. Nó vẫn phải là tiếng nói thật: guard Silero cho transcript ngắn
+  vẫn áp dụng như cũ.
 
 Cửa sổ chỉ điều hướng; nó không bao giờ cấp quyền đánh thức (wake). Live mode
 không được bao phủ. Giới hạn đã biết: nếu realtime bỏ qua ghi chú và nói một
@@ -788,8 +830,12 @@ cầu đã hoàn tất. STT final còn hiệu lực khởi động đồng hồ 
 final về**, chỉ khi `final_ts >= last_confirmed_speech`. Tiếng nói được xác nhận
 sau đó vô hiệu hóa đồng hồ này cho tới khi có final mới. Ngoài trường hợp đó,
 vòng lặp dùng `SILENCE_TIMEOUT_S` (`HAL_SILENCE_TIMEOUT`, mặc định 2.5s) từ lần
-nói cuối. `HAL_ENDPOINT_SILENCE_S=0` tắt đồng hồ ngắn. Final có thể chỉ là quãng
-lấy hơi giữa yêu cầu hoặc “Hello.”; riêng nó không cho phép thực thi.
+nói cuối. `HAL_ENDPOINT_SILENCE_S=0` tắt đồng hồ ngắn. Profile lamp
+(`robots/lamp/rootfs/opt/hal/.env`) đặt `HAL_SILENCE_TIMEOUT=1.0` và
+`HAL_ENDPOINT_SILENCE_S=0.6`: kết thúc lượt sau 1.0 giây im lặng, hoặc 0.6 giây
+sau STT final — Smart Turn bên dưới vẫn có thể giữ lượt khi người nói ngập
+ngừng. Final có thể chỉ là quãng lấy hơi giữa yêu cầu hoặc “Hello.”; riêng nó
+không cho phép thực thi.
 
 Với `HAL_TURN_END_ENABLED=true` (mặc định), thu hands-free khi Live tắt đưa ứng
 viên qua `_internal/turn_endpoint.py` trước khi đóng STT và commit audio. Gate
@@ -879,6 +925,11 @@ hoặc mở lượt thất bại, fallback không bật filler realtime trước
 sang main. Timer filler hiện có bắt đầu sau khi mở lượt; không thêm chờ mạng.
 Lượt bị hoãn để luồng realtime bật filler khi session đã sẵn sàng.
 
+Trên Lamp, wait filler đó là cue nói tự động duy nhất, và phát muộn: `.env`
+của nó đặt `HAL_REALTIME_FILLER_DELAY_S=4.0` (một câu đệm nói ra chỉ sau 4
+giây chờ) và `HAL_BACKCHANNEL_FILLERS=` (không có tiếng "ừ hử" khi user đang
+nói — vòng LED và đầu đèn thể hiện đang lắng nghe).
+
 Lamp Standard và Pro cùng bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` vì dùng
 cùng mic (HAL mặc định `false`; overlay `pro-xvf3800` và `pro-respeaker-lite`
 vẫn tắt tùy chọn này).
@@ -911,6 +962,12 @@ giữ mic tắt khi thiết bị đang nói, nên cue lọt thẳng vào mic và
 session **mới** trên chính nó khoảng một giây sau. Quan sát trên thiết bị
 19/08/2026: `'Ok'` quay lại thành `transcript='Okay.'` và `'Oh'` thành
 `transcript='no'`, mỗi cái chạy thành một lượt thật mà không ai nói.
+
+Profile Lamp tắt hẳn cue nói này: `robots/lamp/rootfs/opt/hal/.env` đặt
+`HAL_BACKCHANNEL_FILLERS=` (danh sách rỗng khiến `FILLERS` rỗng, nên
+`Backchannel` không bao giờ phát), vì backchannel phát theo lịch nghe rất máy
+móc; thay vào đó vòng LED và đầu đèn thể hiện đang lắng nghe. Cơ chế bên dưới
+vẫn áp dụng cho body còn giữ cue.
 
 `Backchannel.self_audio_active` bịt lỗ này mà không đụng `speaking`. `_play()` cài
 một deadline (độ dài clip + `HAL_BACKCHANNEL_ECHO_TAIL_S`) *trước khi* sample đầu
@@ -1413,6 +1470,30 @@ thiết bị smart-home của họ, tin nhắn của họ) cho `delegate_to_main
 - **Chỉ đọc.** Grounding chỉ trả lời câu hỏi, không thực hiện hành động. Nhạc,
   phần cứng, ghi memory, và skill vẫn delegate.
 
+**Tắt search.** Khi `HAL_GEMINI_GOOGLE_SEARCH=false`
+(`REALTIME_GEMINI_GOOGLE_SEARCH`), `build_instructions()` nối thêm section
+cuối `# NO LIVE LOOKUPS IN THIS SESSION` (`NO_SEARCH_PROMPT` trong
+`context_manager/base.py`, ngay sau routing reminder của Gemini; chỉ có câu
+nói trước khi bàn giao bên dưới và override `answer_overheard_speech` đứng
+sau nó): thời tiết, tin tức, tỉ số, giá cả, giờ
+mặt trời lặn và mọi dữ kiện công khai mới khác không phải câu trả lời trực
+tiếp trong phiên đó — model phải gọi `delegate_to_main` với lời của user và
+không nói gì, không bao giờ trả lời từ trí nhớ hay đoán giá trị hiện tại.
+Thiếu section này, prompt phía trên vẫn bảo model tự tra những dữ kiện đó,
+việc nó không còn làm được.
+
+**Nói trước khi bàn giao (thử nghiệm).** `HAL_REALTIME_DELEGATE_PREAMBLE=true`
+(`REALTIME_DELEGATE_PREAMBLE`, mặc định `false`) nối thêm
+`# TASK ACKNOWLEDGEMENT (overrides the silent-handoff rule)`
+(`DELEGATE_PREAMBLE_PROMPT`) ngay sau section đó: khi yêu cầu cần
+`delegate_to_main`, model nói MỘT câu ngắn nêu việc nó sắp làm — bằng ngôn ngữ
+của user, dưới sáu từ, không hứa kết quả ("Let me check your calendar.") — rồi
+gọi `delegate_to_main` trong CÙNG lượt; không bao giờ được kết thúc lượt chỉ
+với câu đó hay nói việc đã xong, và `reject_turn` vẫn không được nói gì. Đây là
+công tắc thử nghiệm trên thiết bị cho vấn đề bàn giao im lặng; quy tắc bàn
+giao im lặng của prompt gốc vẫn là mặc định, vì các model trước dừng lại sau
+câu xác nhận mà không gọi tool.
+
 ## Thị giác trong phiên — tool `look` (chỉ Gemini)
 
 Khi người dùng hỏi về thứ thiết bị **nhìn thấy** ("cái này là gì?", "nhìn cái này
@@ -1502,6 +1583,16 @@ LLM vision, vài giây) bằng một round-trip ngay trong phiên.
   Gemini Live; OpenAI vẫn delegate câu hỏi thị giác; GPT-Live không có tool lẫn
   input ảnh — `gpt_live.py` bỏ frame lạc với một cảnh báo duy nhất). System prompt Gemini
   (`system_prompt_gemini.md`) mô tả khi nào gọi `look`.
+
+**Camera do người dùng tắt.** `_handle_look_call` kiểm `_camera_off_by_user()`
+trước tiên (hàm cấp module trong `orchestrator.py`; `_capture_frame` cũng kiểm y
+vậy): khi công tắc riêng tư phần cứng đang tắt camera (`privacy.camera_muted`) hoặc
+người dùng đã tự tắt camera (`_camera_disabled` và `_camera_manual_override` đều
+bật), `look` không ngắm, không chụp, và trả lời call bằng
+`{"error": "the camera is turned off by the user; say so and do not describe the scene"}`
+(log `look: camera is off by the user — not capturing`). Camera chỉ bị OS cho nghỉ
+(disabled mà không có manual override) thì vẫn có thể được đánh thức để look, như
+trước. Đây cũng là quy tắc `/camera/snapshot` đang áp dụng.
 
 Chi phí: một frame mỗi lần gọi (kích bằng tool, **không** stream video), nên token
 thêm vào là không đáng kể so với audio của turn. Frame 768px ≈ vài trăm token ảnh.
@@ -1630,6 +1721,14 @@ chuẩn bị capture sẽ đợi nó xong (tối đa `PREWARM_JOIN_TIMEOUT_S` = 
 tự — đo trên lamp-4ace 22/09/2026, nối tuần tự tốn ~2 giây mỗi turn sau khoảng
 nghỉ. Capture không được dispatch chỉ để lại một session idle mà watchdog park sẽ
 đóng lại.
+Việc nối lại còn bắt đầu trước khi có tiếng nói: `_internal/prewarm.py`
+`prewarm_realtime(reason)` được gọi khi có `presence.enter`
+(`sensing_service.py`, trước khi cấp wake-focus) và từ `gaze.record_sample`
+mỗi khi một mẫu được tính là đang nhìn về đèn, nên session đang park được nối
+lại ở nền ngay khi có người tới hoặc quay về phía đèn, không chỉ lúc bắt đầu
+nói. Các lần thử bị giới hạn một lần mỗi 2 giây (`PREWARM_MIN_INTERVAL_S`) và
+không làm gì nếu session không ở trạng thái park; lần nối lại thực sự khởi
+động được log `[realtime] prewarm started on <reason>`.
 
 Mọi provider coi teardown là trạng thái kết thúc: sau khi `disconnect()` đặt
 stop signal, worker send/receive không reconnect và cũng không ghi log lỗi
@@ -2989,7 +3088,9 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
    không làm rớt audio đầu câu hoặc commit nó vào activity cũ.
 3. **Bơm turn context + prepass speaker-ID.** `[TURN CONTEXT]` (thời gian, vị trí
    thiết bị — tên thành phố lấy từ `/etc/timezone` qua `hal.clock.device_city()`,
-   bỏ qua với múi giờ `UTC`/`Etc/*` — nhắc ngôn ngữ trả lời, user hiện tại) được
+   bỏ qua với múi giờ `UTC`/`Etc/*` — nhắc ngôn ngữ trả lời, user hiện tại và,
+   trừ khi `HAL_ADDRESSED_GATE=off`, dòng bằng chứng `Addressed: …` từ
+   `turn_admission.addressed_hint`) được
    gửi dạng text không tạo response. Vị trí chỉ là mặc định cho thời tiết và tìm
    kiếm tại chỗ; nơi user tự nêu sẽ được ưu tiên. **User
    hiện tại chính là người nói (VOICE speaker)** được nhận dạng trong lượt này — nó
@@ -3068,18 +3169,34 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
    chữ STT final vượt qua noise guard, kể cả final đến trong lúc
    `stt_session.close()` đang drain trên worker. Callback final đánh thức thread
    sở hữu capture; không commit hay dispatch trên thread STT. Chỉ có partial
-   thì không mở nhánh chạy chồng này; cửa sổ wake-word đang đóng vẫn cần final
+   thì vẫn mở được nhánh chạy chồng này, nhưng chỉ khi partial đủ dài để là lời
+   user chứ không phải STT bịa ra từ tiếng ồn: chưa có final mà partial có ít nhất
+   `HAL_EARLY_COMMIT_MIN_WORDS` từ (mặc định 4, `turn_admission.confident_partial`)
+   thì lượt được nhận và commit trong lúc final còn drain; partial ngắn hơn vẫn
+   chờ final, vì noise guard `HAL_REALTIME_NOISE_GUARD_MAX_WORDS` cần nó. Cửa sổ
+   wake-word đang đóng vẫn cần final
    xác nhận. Stop trong lúc drain sẽ chặn dispatch. Follow-up Harness đang chờ
    cũng giữ nhánh đợi transcript đầy đủ. STT close vẫn hoàn tất trước dispatch:
    transcript cuối đã ghép được dùng cho history và input main agent, phản hồi
    sớm chỉ được xử lý một lần. Metric giữ timestamp speech-end gốc và cùng
    interaction ID. LIVE ON và capture Harness thủ công giữ đường xử lý hiện có.
 
+   **Echo prefix.** `finalize_session` cắt đoạn mở đầu của transcript đã ghép
+   mà chính thiết bị vừa nói (`strip_echo_prefix`), để capture do vọng âm
+   trong phòng hay đuôi AEC mở ra không bắt đầu bằng lời của chính lamp.
+   `recent_spoken_text` chỉ đưa câu trả lời cuối đó cho nó khi capture bắt đầu
+   trong vòng `HAL_ECHO_PREFIX_WINDOW_S` (mặc định 4.0s) kể từ lúc phát xong —
+   mốc bắt đầu session với capture rảnh tay, tap kết thúc với tap-to-talk trên
+   thiết bị; capture muộn hơn giữ nguyên mọi từ, kể cả từ thiết bị đã nói
+   trước đó.
+
    Commit audio đã kiểm tra binding được đưa vào hàng đợi trước cue HW thinking
    đồng bộ, một lần mỗi turn (không lặp khi retry hay replay camera). Provider
    xử lý song song với HW; việc đọc output vẫn chờ cue này hoàn tất. Không tạo
-   worker emotion tách rời có thể ghi đè turn mới. Timing first-output vẫn tính
-   cả thời gian HW; commit lỗi thì không bật thinking.
+   worker emotion tách rời có thể ghi đè turn mới.
+   `[turn-timing] speech_end_to_commit_ms` kết thúc tại lúc commit;
+   `commit_to_first_output_ms` tính cả thời gian chờ HW, và commit lỗi thì
+   không bật thinking.
 
    Với TTS realtime không dùng native audio ở cả hai chế độ LIVE, nhận diện kết
    câu dùng text sau bước loại marker giọng/HW hiện có. Câu như
@@ -3160,17 +3277,23 @@ Khi đồng hồ idle yêu cầu transcript, tiếng nói vừa được hardwar
    nên chỉ bật khi chấp nhận đánh đổi này. Native audio vẫn stream từng frame.
    Sau `HAL_REALTIME_FILLER_DELAY_S` (mặc định 1.5s) mà vẫn
    chưa có output nào, HAL gọi `POST /api/sensing/filler` và os-server phát một
-   filler realtime riêng từ cache — tiếng đệm suy nghĩ không lời như "Ừm...",
-   khác với lời xác nhận mở đầu của main agent. Pool phrase, ngôn ngữ và WAV
+   filler realtime riêng từ cache — một câu thật ngắn trong pool chờ realtime
+   (`fillerRealtime`: tiếng Việt "Chờ mình chút." / "Mình đang nghĩ.", tiếng
+   Anh "One sec." / "Still thinking."), khác với lời xác nhận mở đầu của main
+   agent và âm suy nghĩ của pool continuation. Pool phrase, ngôn ngữ và WAV
    cache đều nằm ở os-server. Filler bắn ở mọi lượt hay chỉ ở lượt chậm là
    **tính chất của model**, và giá
    trị mặc định giả định model nhanh: câu chit-chat về trong ~1s thì không chạm
    timer, còn lượt dùng Google Search thì có. Phải ĐO trước khi tin điều đó trên
    một body cụ thể — trên `lamp-0c89` (26/08/2026, `gemini-3.1-flash-live-preview`
    qua proxy campaign-api) không lượt nào ra câu đầu dưới 3.0s (median 4.0s,
-   n=31), nên filler là thứ duy nhất người dùng nghe được lúc đầu, và lamp hạ
-   ngưỡng xuống 0.5s trong `.env` của nó. Đặt giá trị này theo thời gian
-   time-to-first-sentence đo được, đừng theo mặc định. Filler
+   n=31), nên filler từng là thứ duy nhất người dùng nghe được lúc đầu, và lamp
+   đã hạ ngưỡng xuống 0.5s. `.env` của thiết bị nay đặt
+   `HAL_REALTIME_FILLER_DELAY_S=4.0`: một câu đệm nói ra ("Chờ mình chút.")
+   chỉ sau 4 giây chờ, vì session đã ấm trả lời từ lâu trước khi timer nổ và
+   filler nói ra chỉ giúp cảm giác phản hồi từ khoảng 4 giây im lặng trở đi.
+   Đặt giá trị này
+   theo thời gian time-to-first-sentence đo được, đừng theo mặc định. Filler
    **không được arm cho transcript ngắn nằm trong vùng mơ hồ của noise guard**
    (tối đa `HAL_REALTIME_NOISE_GUARD_MAX_WORDS`, mặc định 3 từ): model có thể
    `reject_turn` rõ ràng cho `o`, `you.` hay `Yeah.` ngay sau commit, và filler
@@ -3394,7 +3517,8 @@ trong `config.json`:
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
 | `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
-| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
+| `HAL_ADDRESSED_GATE` | `hint` | `off` \| `hint` \| `strict`. Thiết bị làm gì với bằng chứng lời nói hướng đến nó mà chính nó có (đã nghe wake phrase, cửa sổ follow-up đang mở, câu hỏi đang chờ, user đang nhìn về đèn, giọng đã biết — `turn_admission.py`). `hint` nối dòng `Addressed: …` vào `[TURN CONTEXT]`; `strict` còn bỏ capture tự động khi wake word tắt mà không có bằng chứng nào, trước khi bất kỳ model nào thấy nó (route `not_addressed`, exclusion metrics `not_addressed`); `off` không gửi dòng nào. Việc bỏ lượt của `strict` không bao giờ áp cho bản thân wake gate, Harness hay capture tap-to-talk. |
+| `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. `.env` của lamp đặt `0.6` (cùng `HAL_SILENCE_TIMEOUT=1.0`). |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |
 | `HAL_TURN_END_FALLBACK_S` | `2.5` | Im lặng tối thiểu cho transcript thông thường khi Smart Turn thiếu/đang chờ, và cho lời chào ngắn; ứng viên im lặng gốc cũng phải đủ điều kiện. |
 | `HAL_TURN_END_MAX_PAUSE_S` | `6.0` | Im lặng tối đa trước khi đóng ứng viên có dấu hiệu ngập ngừng hoặc model báo chưa hoàn tất; được giới hạn dưới bằng fallback. |
@@ -3405,6 +3529,7 @@ trong `config.json`:
 | `HAL_REALTIME_TURN_DETECTION` | `off` | `server_vad` \| `semantic_vad` \| `off` (Gemini: off = activity detection thủ công; OpenAI: off = `turn_detection: null`, lượt do client commit + `response.create`; `server_vad` / `semantic_vad` nhận knob từ `HAL_LIVE_VAD_*` và `HAL_OPENAI_VAD_THRESHOLD`). `HAL_LIVE_MODE=true` ép `off` → `server_vad`. GPT-Live bỏ qua knob này: Live không có cấu hình VAD, adapter tổng hợp lượt từ transcript input và khoảng im lặng output |
 | `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` | `8.0` | Số giây tối đa `receive()` chờ output event kế tiếp trước khi kết thúc lượt im lặng (fallback sang main agent) |
 | `HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S` | `6.0` | Grace routing thông thường sau terminal Gemini extended-thinking đầu tiên; tiến độ đã xác minh hoặc đáp án đang sinh tiếp có thể kéo dài. `0` tắt grace thông thường, không tắt yêu cầu outcome. |
+| `HAL_REALTIME_GRACE_AFTER_PLAYBACK_S` | `1.0` | Kết thúc sớm grace thông thường khi câu trả lời của lượt đã phát xong và loa im được chừng này (log `NON_BLOCKING grace cut`). `0` giữ nguyên grace đầy đủ. |
 | `HAL_REALTIME_PROGRESS_TIMEOUT_S` | `15.0` | Hạn gia hạn khi Gemini extended-thinking có tiến độ search/tool, tính từ commit audio; tiến độ lặp lại không đặt lại hạn. `0` tắt gia hạn. Chunk đáp án thật vẫn có thể tiếp tục với giới hạn im lặng receive gap. |
 | `HAL_REALTIME_GROUNDING_DEBUG` | `false` | In toàn bộ field của `grounding_metadata` từ Gemini, mỗi lượt có grounding một lần (`grounding_chunks`, `grounding_supports`, `search_entry_point`, …). Chỉ để chẩn đoán và rất dài dòng; nó sinh ra để phân biệt lượt mà search thật sự không trả về gì với lượt bị cắt payload trên đường truyền. Đo trên lamp-0c89 04/09/2026 qua bốn lượt có grounding, payload luôn về đủ — nên `chunks=0` nghĩa là model không dùng nguồn nào cho câu trả lời đó. |
 | `HAL_REALTIME_TURN_MAX_SILENCE_S` | `20.0` | Trần liveness cũ cho provider/chế độ ngoài Gemini extended-thinking khi Live tắt (dùng tiến độ đã xác minh). `receive()` chỉ kéo dài quá `HAL_REALTIME_RECV_QUEUE_TIMEOUT_S` khi lưu lượng vào chứng minh model còn đang làm việc (search grounding không phát output tới khi xong); trần này chặn trường hợp server nói liên tục mà không bao giờ ra output. `0` tắt cơ chế giữ lượt, quay về watchdog gap thuần. |
@@ -3426,7 +3551,8 @@ trong `config.json`:
 | `HAL_GEMINI_LIVE_VOICE` | `Kore` | |
 | `HAL_GEMINI_LIVE_BASE_URL` | `<llm_base_url>/ws/gemini` | |
 | `HAL_GEMINI_THINKING_LEVEL` | `LOW` | `MINIMAL` \| `LOW` \| `MEDIUM` \| `HIGH`. `gemini-3.8-live-extended-thinking` không có MINIMAL (HAL tự kẹp về LOW); `gemini-3.8-live` thường từ chối thinkingLevel nên HAL bỏ hẳn field đó |
-| `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (chỉ Gemini). Cho model realtime tự trả lời câu dữ liệu công khai theo thời gian thực (thời tiết, tin tức, lookup) ngay trong phiên thay vì delegate. Tính phí theo mỗi grounded request (cộng token); chỉ phát sinh khi Gemini quyết định search. Cũng đặt được qua `realtime.gemini.google_search` trong config.json. |
+| `HAL_GEMINI_GOOGLE_SEARCH` | `true` | Google Search grounding (chỉ Gemini). Cho model realtime tự trả lời câu dữ liệu công khai theo thời gian thực (thời tiết, tin tức, lookup) ngay trong phiên thay vì delegate. Tính phí theo mỗi grounded request (cộng token); chỉ phát sinh khi Gemini quyết định search. Cũng đặt được qua `realtime.gemini.google_search` trong config.json. `false` nối thêm section prompt `# NO LIVE LOOKUPS IN THIS SESSION` để dữ kiện mới được delegate thay vì đoán. |
+| `HAL_REALTIME_DELEGATE_PREAMBLE` | `false` | Thử nghiệm (chỉ prompt Gemini): nối thêm `# TASK ACKNOWLEDGEMENT`, cho model nói một câu ngắn nêu việc sắp làm ("Let me check your calendar.", dưới sáu từ, không hứa kết quả) trước khi gọi `delegate_to_main` trong cùng lượt. Tắt thì giữ bàn giao im lặng; `reject_turn` không bao giờ nói dù bật hay tắt. |
 | `HAL_GEMINI_VISION` | `true` | Tool `look` trong phiên (chỉ Gemini). Cho model realtime chụp một frame camera và trả lời câu hỏi thị giác ("cái này là gì?") ngay trong phiên thay vì delegate. Mặc định bật; chỉ đăng ký khi thiết bị còn có capability `vision`. Cũng đặt được qua `realtime.gemini.vision` trong config.json. |
 | `HAL_GEMINI_VISION_MAX_WIDTH` | `768` | Bề rộng tối đa (px) frame được downscale trước khi gửi — giới hạn token ảnh. |
 | `HAL_GEMINI_VISION_MIN_INTERVAL_S` | `10` | Chặn chi phí: số giây tối thiểu giữa hai lần **gửi ảnh**. Gọi `look` lặp trong khoảng này (hoặc gọi lần hai trong cùng turn) sẽ xài lại ảnh đã có trong context thay vì gửi ảnh mới. `0` = luôn gửi ảnh mới. |

@@ -569,6 +569,12 @@ REALTIME_RECV_QUEUE_TIMEOUT_S: float = float(
 REALTIME_NONBLOCKING_TOOL_GRACE_S: float = float(
     os.environ.get("HAL_REALTIME_NONBLOCKING_TOOL_GRACE_S", "6.0")
 )
+# Once this turn's reply has been played and the speaker has been idle this long,
+# the trailing-tool grace ends early so the mic is read again; a trailing call
+# arrives while the reply is still playing. 0 keeps the full grace.
+REALTIME_GRACE_AFTER_PLAYBACK_S: float = max(0.0, float(
+    os.environ.get("HAL_REALTIME_GRACE_AFTER_PLAYBACK_S", "1.0")
+))
 # Bounded from audio commit, not per event.
 REALTIME_PROGRESS_TIMEOUT_S: float = max(0.0, float(
     os.environ.get("HAL_REALTIME_PROGRESS_TIMEOUT_S", "15.0")
@@ -775,6 +781,19 @@ BEARING_SNAPSHOT_ENABLED: bool = (
 BEARING_SNAPSHOT_KEEP: int = int(
     os.environ.get("HAL_BEARING_SNAPSHOT_KEEP", "30")
 )
+# Experiment: let the realtime model say one short line ("Let me check.") before
+# it hands a task to the main agent, instead of handing off in silence. Off by
+# default; the base prompt forbids the preamble because earlier models stopped
+# after the acknowledgment without calling the tool.
+REALTIME_DELEGATE_PREAMBLE: bool = os.environ.get(
+    "HAL_REALTIME_DELEGATE_PREAMBLE", "false"
+).lower() in ("1", "true", "yes")
+# What the device does with its own addressed-speech evidence (name heard, open
+# conversation window, pending question, user facing the lamp) when the wake word
+# is off: "hint" sends it to the realtime model with the turn context; "strict"
+# also drops a hands-free turn that has none of it before any model sees it;
+# "off" sends no hint.
+ADDRESSED_GATE: str = os.environ.get("HAL_ADDRESSED_GATE", "hint").strip().lower()
 # Gaze wake: turning toward the lamp as a third wake-gate opener (inert without WAKEWORD_ENABLED).
 GAZE_WAKE_ENABLED: bool = (
     os.environ.get("HAL_GAZE_WAKE", "false").lower() in ("1", "true", "yes")

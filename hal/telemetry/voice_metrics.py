@@ -226,6 +226,15 @@ def provider_interaction(provider_turn_id: str) -> str:
         return matches[0] if len(matches) == 1 else ""
 
 
+def speech_end_at(iid: str) -> float:
+    """Monotonic time the user stopped speaking for ``iid``, or 0.0 when unknown."""
+    with _lock:
+        it = _interactions.get(iid)
+        if it is None or not it.endpoint_known:
+            return 0.0
+        return float(it.speech_end)
+
+
 def current_interaction() -> str:
     """The utterance currently being served, or "" (only still-active interactions count)."""
     with _lock:

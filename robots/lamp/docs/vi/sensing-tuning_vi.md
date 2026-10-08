@@ -121,6 +121,8 @@ HAL_WEBRTCVAD_ENABLED = false   # secondary gate, recommended true for low-thres
 HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 ```
 
+Đây là mặc định trong code. Profile lamp đóng gói (`robots/lamp/rootfs/opt/hal/.env`) ghi đè hai đồng hồ im lặng thành `HAL_SILENCE_TIMEOUT=1.0` và `HAL_ENDPOINT_SILENCE_S=0.6` — kết thúc lượt sau 1.0 giây im lặng, hoặc 0.6 giây sau STT final; Smart Turn vẫn có thể giữ lượt khi người nói ngập ngừng (xem *Hai đồng hồ im lặng* trong `docs/vi/realtime-voice_vi.md`).
+
 **Pre-roll hoạt động thế nào:** Mọi frame mic đều được đẩy vào một `deque(maxlen=PRE_ROLL_FRAMES)` cuộn, bất kể trạng thái VAD. Khi VAD cuối cùng trigger, lịch sử trước trigger (các frame nằm dưới `RMS_THRESHOLD` — ví dụ phụ âm tắc nhỏ như "b", "k", "t", "p") được ghép vào đầu luồng audio gửi lên STT. Nhờ vậy user không cần nói "Ừm..." để khởi động trước câu thật.
 
 **Tuning:**

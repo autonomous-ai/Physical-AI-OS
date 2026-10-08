@@ -10,6 +10,7 @@ from collections import deque
 from typing import Any, Deque, Dict, List, NamedTuple, Optional, Sequence, Tuple
 
 import hal.config as config
+from hal.drivers.voice._internal.prewarm import prewarm_realtime
 
 logger = logging.getLogger(__name__)
 
@@ -266,6 +267,10 @@ def record_sample(yaw_deg: Optional[float], face_px: float,
             (t, float("inf") if yaw_deg is None else yaw_deg, face_px, edge_frac)
         )
         _prune(t)
+    if facing_lamp(yaw_deg, face_px, edge_frac):
+        # Someone turned toward the lamp: have the realtime session ready before
+        # they speak. Rate-limited and a no-op unless the session is parked.
+        prewarm_realtime("gaze")
 
 
 def discard_samples() -> None:

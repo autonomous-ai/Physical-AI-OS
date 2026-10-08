@@ -79,6 +79,13 @@ _GEMINI_RATES_FALLBACK: dict[tuple[str, str], float] = max(
 )
 
 
+# Wall clock for playback bookkeeping (TTS records playback end in time.time()).
+_wall_clock = time.time
+
+# How often the deferred-finalize wait re-checks the speaker while it holds.
+GRACE_POLL_S = 0.25
+
+
 def _gemini_rates_for(model: str) -> dict[tuple[str, str], float]:
     """Resolve the per-1M-token rate table for a model (substring match; unknown = ceiling)."""
     for key, table in _GEMINI_RATES.items():
@@ -770,7 +777,29 @@ class GeminiLiveAgent(VoiceAgentBase):
         _grace_model: str = getattr(getattr(self, "_config", None), "model", "") or ""
         _requires_outcome = "extended-thinking" in _grace_model
         _grace_on: bool = _grace_s > 0 and _requires_outcome
+        _turn_started_wall: float = _wall_clock()
+        _deferred_deadline: float = 0.0
         self._progress_watchdog_enabled = _requires_outcome and not app_config.LIVE_MODE
+
+        def _playback_settled() -> bool:
+            """This turn's reply was played and the speaker has been idle for the tail.
+
+            A trailing tool call lands while the reply is still playing; once the
+            room has been quiet for a moment the grace only keeps the mic deaf.
+            """
+            tail: float = app_config.REALTIME_GRACE_AFTER_PLAYBACK_S
+            if tail <= 0 or not _spoken_response.strip():
+                return False
+            try:
+                from hal import app_state as _state
+
+                tts = getattr(_state, "tts_service", None)
+                if tts is None or getattr(tts, "speaking", False):
+                    return False
+                ended = float(getattr(tts, "last_spoken_time", 0.0) or 0.0)
+            except Exception:
+                return False
+            return ended > _turn_started_wall and _wall_clock() - ended >= tail
         _outcome_received = False
         _routing_received = False
         _direct_answer_confirmed = False
@@ -1115,6 +1144,7 @@ class GeminiLiveAgent(VoiceAgentBase):
                             pass
                     deadline = max(routing_deadline, progress_deadline,
                                    _continuation_active_until)
+                    _deferred_deadline = deadline
                     _remaining = deadline - time.monotonic()
                     if _remaining <= 0:
                         logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
@@ -1122,7 +1152,15 @@ class GeminiLiveAgent(VoiceAgentBase):
                         _log_timing("deferred_wait_expired")
                         await _deferred_finalize()
                         return
-                    message = await read_message(_remaining, check)
+                    if _playback_settled():
+                        logger.info("[realtime] NON_BLOCKING grace cut: reply playback finished "
+                                    "(%.2fs left of %.2fs, pending_tools=%d)",
+                                    _remaining, _grace_s, len(self._pending_tool_calls))
+                        _log_timing("deferred_wait_playback_settled")
+                        await _deferred_finalize()
+                        return
+                    # Short waits so the speaker is re-checked while the grace holds.
+                    message = await read_message(min(_remaining, GRACE_POLL_S), check)
                 elif _progress_until:
                     remaining = max(_progress_until, _initial_active_until) - time.monotonic()
                     if remaining <= 0:
@@ -1147,6 +1185,8 @@ class GeminiLiveAgent(VoiceAgentBase):
                     await _finalize_generation_complete()
                     return
                 if _deferred_finalize is not None:
+                    if _deferred_deadline and time.monotonic() < _deferred_deadline:
+                        continue  # a poll ended, not the grace
                     logger.info("[realtime] NON_BLOCKING grace expired (%.2fs, pending_tools=%d)",
                                 _grace_s, len(self._pending_tool_calls))
                     _log_timing("deferred_wait_expired")

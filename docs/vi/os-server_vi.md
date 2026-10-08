@@ -27,6 +27,18 @@ chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom
 thao tác chỉnh sửa. Giữ nguyên câu camera `look_*` và demo chuyển động `demo_*`.
 Sửa nội dung này không bật lại việc tự chọn câu theo tool và không đổi lịch filler.
 
+Khi run agent đứng sau một lượt voice đã được nói ra kết thúc bằng event chat
+`state: "error"` và câu trả lời chưa được khôi phục, os-server phát một câu
+thông báo đã cache — `agent.voice_turn_failed`, tiếng Anh "Sorry, I couldn't
+finish that one.", tiếng Việt "Xin lỗi, mình chưa làm xong việc đó." (có cả
+tiếng Nhật, Trung giản thể và phồn thể; được prerender bởi `PrewarmFillers`) —
+để user không phải chờ trong im lặng (`speakVoiceTurnFailure`,
+`handler_voice_failure.go`). Chỉ run được HAL đánh dấu là lượt voice nói ra
+mới đủ điều kiện (`FillerManager.IsVoiceRun`); run chat, cron và sensing thụ
+động giữ im lặng, run đã mất loa vì watermark huỷ hoặc watermark
+realtime-supersede cũng vậy. Tối đa một thông báo mỗi 20 giây, để một brain
+đang lỗi không kể lể ở mỗi lần retry.
+
 `GET /api/system/ota-updating` trả `updating`, `progress` lưu theo component và `bootstrap_available`. Khi bootstrap không truy cập được, endpoint vẫn đọc snapshot local; xem [tiến độ cập nhật](bootstrap-ota.md#snapshot-tiến-độ-cập-nhật). Progress có thể chứa `activity_at` tùy chọn (giây Unix) cho hoạt động cài dependency HAL nhận diện được; snapshot cũ không có trường này vẫn hợp lệ.
 
 ## Hỗ trợ tiếng Nhật
@@ -93,7 +105,7 @@ hủy gesture đang chờ bật.
 | POST | `/api/system/reboot` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue và reboot OS |
 | POST | `/api/system/shutdown` | Cần admin auth: trả ACK, rồi yêu cầu HAL phát cue, release servo và shutdown OS |
 | POST | `/api/system/software-update/:target` | Cần admin auth: cài ngay bản đã publish của một component qua bootstrap `POST 127.0.0.1:8080/force-update/<target>` (`agent` được phân giải sang key của runtime đang cấu hình). Giới hạn tần suất theo từng target |
-| POST | `/api/system/factory-reset` | Admin hoặc loopback: soft factory reset (xoá config/key/enrollment/thông tin WiFi, reset agent backend đang chạy) rồi reboot vào AP setup. Trả `202`; `409` nếu đang chạy, `429` trong thời gian cooldown |
+| POST | `/api/system/factory-reset` | Admin hoặc loopback: soft factory reset (xoá config/key/enrollment/thông tin WiFi, file `config.json.corrupt` đã bị dời sang bên, các máy Mac Buddy đã ghép cặp `buddies.json`, nhật ký kênh `local/external-history` và log lượt Flow Monitor `local/flow_events_*.jsonl`; reset agent backend đang chạy) rồi reboot vào AP setup. Trả `202`; `409` nếu đang chạy, `429` trong thời gian cooldown |
 | POST | `/api/system/exec` | Chỉ loopback: chạy `{cmd}` bằng `sh -c` (timeout 30 giây), trả `{stdout, stderr, exit_code}` |
 | GET | `/api/system/shell` | WebSocket cần admin auth: PTY `/bin/bash` cho terminal xterm.js trên web |
 | POST | `/api/system/restart/:target` | Cần admin auth, chỉ restart service `hal` hoặc `os-server`. Trả `202` với `{target, scheduled: true}` khi systemd nhận lịch restart; target không hỗ trợ trả `400`, lỗi đặt lịch trả `500`. |
@@ -340,7 +352,7 @@ Nhãn `Unknown Speaker:` là metadata định danh, không phải điều kiện
 | GET | `/api/agent/status` | Trạng thái kết nối WS; gồm `uptime` (uptime WS phía OS server) và `agentUptime` (uptime tiến trình OpenClaw, không reset khi OS server restart) |
 | GET | `/api/agent/events` | SSE stream events real-time |
 | GET | `/api/agent/recent` | 500 flow event cuối, đọc từ JSONL của ngày hiện tại (`local/flow_events_<date>.jsonl`) |
-| POST | `/api/agent/speech/cancel` | Cử chỉ huỷ vật lý (single click, do HAL gọi — auth loopback-only để nút vẫn chạy khi chưa login). Bịt miệng mọi turn đang chạy và dừng playback ở HAL (`StopTTS`, đồng thời xoá luôn hàng đợi speak đã pre-synth). **Không** abort turn: turn vẫn chạy tiếp, tool vẫn fire, text vẫn về web chat và history — chỉ mất quyền dùng loa. Cài đặt bằng một watermark unix-ms đơn điệu (`speechWatermarkMs`): `deliverTTS` bỏ mọi câu trả lời thuộc turn được tạo tại hoặc trước mốc, kèm flow event `tts_cancelled`. Tuổi của turn đọc từ runID — id thiết bị kết thúc bằng timestamp tạo (`device-chat-7-<unix-ms>`, 13 chữ số), id kênh (`tg-<messageID>`) không có nên fallback về thời điểm đầu tiên run đó xin nói. Vì turn mới luôn nằm phía sau mốc, user click xong nói ngay được trong khi backlog cũ chạy nốt trong im lặng; watermark không bao giờ cần xoá. Cùng cái mốc đó cũng chặn luôn marker `[HW:]` của turn tại `fireHWCall` — servo và LED dừng theo, vì thiết bị vẫn cựa quậy sau khi bị bảo dừng thì user đọc là "nó phớt lờ mình". runID được đưa qua `resolveRunID` trước: đường TTS đã cầm id thiết bị trong khi đường HW có thể còn cầm UUID gốc của backend cho CÙNG một turn, và phán riêng lẻ thì câu trả lời bị bịt trong khi marker vẫn fire. Riêng `/dm`, `/broadcast`, `/speak` được miễn (cổng chặn đặt sau chúng): click nghĩa là "đừng nói với tôi", không được nuốt câu trả lời gửi cho user Telegram. Một watermark **thứ hai** (`autoSpeechWatermarkMs`) hoạt động y hệt nhưng do hệ thống đóng mốc: nó tiến lên mỗi khi HAL báo `voice_agent_handled` — realtime voice agent vừa trả lời thành tiếng một câu MỚI hơn — nên turn agent chính còn đang xử lý câu trước đó mất loa thay vì trả lời muộn bằng một giọng khác. `deliverTTS` bỏ câu trả lời cũ hơn **bất kỳ** mốc nào trong hai; `fireHWCall` **chỉ** xét mốc của cú click, vì phán đoán do máy đưa ra không được phép âm thầm huỷ hành động user đã yêu cầu. Opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong `/opt/hal/.env` của body. Mặc định TẮT, nên body chưa từng biết tới switch này không bị ảnh hưởng. Cú click cũng gọi `FillerManager.CancelAllActive()`. Filler nói thẳng xuống HAL, không đi qua `deliverTTS`, nên watermark một mình không với tới được — mà turn bị bịt tiếng thì vẫn chạy tiếp, nên mỗi lần nó xong một tool là lại re-arm thêm một câu "một giây nhé" cho một câu trả lời user vừa huỷ. Mọi run đang giữ trạng thái filler tại thời điểm đó đều nằm phía cũ của mốc nên bị bỏ hết; filler Opening của câu user nói TIẾP THEO được arm sau đó nên không bị ảnh hưởng. Câu trả lời bị bỏ vẫn được POST sang `POST /voice/realtime/history` của HAL: cú click lấy đi cái loa chứ không lấy đi câu trả lời, mà bản ghi của realtime về những gì agent chính đã đáp vốn treo ở lúc TTS phát xong (xem `docs/realtime-voice.md`). |
+| POST | `/api/agent/speech/cancel` | Cử chỉ huỷ vật lý (single click, do HAL gọi — auth loopback-only để nút vẫn chạy khi chưa login). Bịt miệng mọi turn đang chạy và dừng playback ở HAL (`StopTTS`, đồng thời xoá luôn hàng đợi speak đã pre-synth). **Không** abort turn: turn vẫn chạy tiếp, tool vẫn fire, text vẫn về web chat và history — chỉ mất quyền dùng loa. Cài đặt bằng một watermark unix-ms đơn điệu (`speechWatermarkMs`): `deliverTTS` bỏ mọi câu trả lời thuộc turn được tạo tại hoặc trước mốc, kèm flow event `tts_cancelled`. Tuổi của turn đọc từ runID — id thiết bị kết thúc bằng timestamp tạo (`device-chat-7-<unix-ms>`, 13 chữ số), id kênh (`tg-<messageID>`) không có nên fallback về thời điểm đầu tiên run đó xin nói. Vì turn mới luôn nằm phía sau mốc, user click xong nói ngay được trong khi backlog cũ chạy nốt trong im lặng; watermark không bao giờ cần xoá. Cùng cái mốc đó cũng chặn luôn marker `[HW:]` của turn tại `fireHWCall` — servo và LED dừng theo, vì thiết bị vẫn cựa quậy sau khi bị bảo dừng thì user đọc là "nó phớt lờ mình". runID được đưa qua `resolveRunID` trước: đường TTS đã cầm id thiết bị trong khi đường HW có thể còn cầm UUID gốc của backend cho CÙNG một turn, và phán riêng lẻ thì câu trả lời bị bịt trong khi marker vẫn fire. Riêng `/dm`, `/broadcast`, `/speak` được miễn (cổng chặn đặt sau chúng): click nghĩa là "đừng nói với tôi", không được nuốt câu trả lời gửi cho user Telegram. Một watermark **thứ hai** (`autoSpeechWatermarkMs`) hoạt động y hệt nhưng do hệ thống đóng mốc: nó tiến lên mỗi khi HAL báo `voice_agent_handled` — realtime voice agent vừa trả lời thành tiếng một câu MỚI hơn — nên turn agent chính còn đang xử lý câu trước đó mất loa thay vì trả lời muộn bằng một giọng khác. `deliverTTS` bỏ câu trả lời cũ hơn **bất kỳ** mốc nào trong hai; `fireHWCall` **chỉ** xét mốc của cú click, vì phán đoán do máy đưa ra không được phép âm thầm huỷ hành động user đã yêu cầu. Mốc auto cũng chừa run mà model realtime đã delegate sang main agent (`FillerManager.IsTaskRun`, do `MarkDelegatedVoiceRun` ghi): user vẫn đang chờ việc đó, nên câu trả lời lẫn filler của nó đều được giữ — `CancelSpeechForNewerTurn` huỷ filler bằng `CancelAllExceptTasks()` thay vì `CancelAllActive()`. Opt-in theo từng body: đặt `OS_REALTIME_SUPERSEDES_MAIN_REPLY=1` trong `/opt/hal/.env` của body. Mặc định TẮT, nên body chưa từng biết tới switch này không bị ảnh hưởng. Cú click cũng gọi `FillerManager.CancelAllActive()`. Filler nói thẳng xuống HAL, không đi qua `deliverTTS`, nên watermark một mình không với tới được — mà turn bị bịt tiếng thì vẫn chạy tiếp, nên mỗi lần nó xong một tool là lại re-arm thêm một câu "một giây nhé" cho một câu trả lời user vừa huỷ. Mọi run đang giữ trạng thái filler tại thời điểm đó đều nằm phía cũ của mốc nên bị bỏ hết; filler Opening của câu user nói TIẾP THEO được arm sau đó nên không bị ảnh hưởng. Câu trả lời bị bỏ vẫn được POST sang `POST /voice/realtime/history` của HAL: cú click lấy đi cái loa chứ không lấy đi câu trả lời, mà bản ghi của realtime về những gì agent chính đã đáp vốn treo ở lúc TTS phát xong (xem `docs/realtime-voice.md`). |
 | POST | `/api/agent/restart` | Recovery "start + enable + restart" cho runtime đang active. Các bước: (1) best-effort `systemctl enable <unit>` — `<unit>` lấy từ map runtime→unit (`openclaw`, `hermes-gateway`, `picoclaw`, `codex`, `claudecode`, `opencode`) — để fix vẫn còn sau reboot; (2) `agentGateway.RestartAgent()` gọi `systemctl restart <unit>` — tự START service ngay cả khi đang stopped. Response `{backend, enabled}`. Dùng bởi card Agent Gateway ở Overview để phục hồi gateway đã stopped+disabled, không cần SSH. Các caller restart nội bộ (config refresh, migration) vẫn bỏ qua bước enable. |
 | POST | `/api/agent/memory/reset` | Admin. Recovery không cần SSH cho memory bị tự đầu độc (#421): với **mọi** runtime đã cài, copy `USER.md`, `MEMORY.md`, `KNOWLEDGE.md` và `realtime/{summary.md,device_summary.md,memory.jsonl,memory_raw.jsonl}` vào `<workspace>/.memory-reset-<stamp>-<rand>/`, reset `USER.md` về form trống (Hermes thì làm rỗng) và xoá phần còn lại, rồi chạy lại onboarding để `KNOWLEDGE.md` được seed lại. Trả về `{backup_dirs, cleared, skipped}`. Chỉ đụng file — lịch sử phiên (session OpenClaw, `state.db` của Hermes) không bị đụng; làm tiếp `/new`. Phát flow event `memory_reset`. |
 
@@ -349,7 +361,7 @@ Nhãn `Unknown Speaker:` là metadata định danh, không phải điều kiện
 
 | Method | Endpoint | Mô tả |
 |--------|----------|-------|
-| POST | `/api/login` | `{password}` → kiểm tra bcrypt với `admin_password_hash` rồi đặt session cookie đã ký; mọi lỗi đều trả `401` |
+| POST | `/api/login` | `{password}` → kiểm tra bcrypt với `admin_password_hash` rồi đặt session cookie đã ký; sai mật khẩu trả `401`. Bị giới hạn trên toàn thiết bị: sau 10 lần sai trong cửa sổ trượt 10 phút, endpoint trả `429` kèm header `Retry-After` và thông báo "too many failed attempts, try again in N min" (kể cả khi mật khẩu đúng) cho tới khi lần sai cũ nhất hết hạn; đăng nhập thành công sẽ xoá bộ đếm |
 | POST | `/api/logout` | Xoá session cookie |
 | POST | `/api/login/exchange` | Cần admin auth (Bearer): cấp session cookie trên origin hiện tại (redirect AP → `.local` sau setup) |
 
@@ -651,6 +663,13 @@ lượt kế tiếp (`gemini-voice-change`). Câu trả lời delegate vẫn đ�
 TTS. Native audio phát ở 1.0×; tốc độ TTS đã lưu chỉ áp dụng cho TTS. Provider
 TTS khác thì native audio giữ nguyên như cấu hình.
 
+Đây là giọng xuất xưởng của Lamp: `robots/lamp/ROBOT.md` khai báo
+`voice.tts_provider: gemini`, và os-server seed giá trị này vào `config.json`
+chưa có key `tts_provider` (xem trình tự khởi động bên dưới), nên ngay khi
+mở hộp các lượt realtime phát native audio của Gemini Live và text của main
+agent được đọc bằng Gemini TTS (`gemini-3.8-flash-tts`, voice Kore).
+ElevenLabs, OpenAI và Piper vẫn chọn được trong Settings → Voice.
+
 ### Piper — TTS chạy trên thiết bị
 
 Provider TTS thứ ba bên cạnh `openai` và `elevenlabs`, chọn bằng
@@ -876,8 +895,9 @@ HAL (Python): FastAPI standard JSON responses.
 
 1. OS Server khởi động Gin trên :5000
 2. Đọc `config/config.json`
+   - Không có file → ghi giá trị mặc định. Có file nhưng không parse được → dời sang `config/config.json.corrupt` và os-server chạy từ giá trị mặc định (chưa cấu hình, nên thiết bị quay lại setup) thay vì panic rồi crash loop. Mọi lần lưu đều atomic (file tạm + fsync + rename), nên mất điện hay đầy đĩa chỉ để lại file cũ hoặc file mới, không bao giờ là file bị cắt dở
    - Seed `device_type` từ device class đã resolve (env `DEVICE_TYPE`, không có thì lấy key sẵn có) để config.json mang giá trị này cho các bên đọc không có env — wake word của HAL và `software-update`. Provisioning chỉ ghi env, nên không có seed này thì key không bao giờ tồn tại trên máy đã provision. Chỉ ghi khi giá trị đang lưu khác giá trị resolve
-   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel); khi là `gemini` thì chọn `Kore`
+   - Seed `tts_provider` + `tts_voice` từ block `voice:` trong ROBOT.md khi user chưa chọn (ghi một lần; lựa chọn đã lưu của user luôn thắng; provider vắng/không hợp lệ → `openai`). Khi provider seed là `elevenlabs` mà không khai báo voice, chọn default theo ngôn ngữ (`vi`→Ngan, `zh`→Amy, còn lại Rachel); khi là `gemini` thì chọn `Kore`. ROBOT.md của Lamp khai báo `gemini`, của Intern v2 khai báo `elevenlabs`
 3. Nếu `SetUpCompleted`:
    - Kết nối OpenClaw WebSocket
    - Kết nối MQTT

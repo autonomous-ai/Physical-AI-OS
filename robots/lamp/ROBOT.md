@@ -10,8 +10,11 @@ gateway:
   default: hermes
   protocol: websocket
 voice:
-  tts_provider: elevenlabs
-  #tts_voice: Rachel      # optional
+  # Google's voice end to end: realtime turns play Gemini Live's native audio
+  # (no second synthesis), and the main agent's text is spoken by Gemini TTS in
+  # the same voice. Adopted while config.json has no tts_provider key.
+  tts_provider: gemini
+  #tts_voice: Kore        # optional (Gemini voice name)
   # Out-of-the-box wake-word gate: a lamp sits in a shared room and hears every
   # conversation in it, so it waits to be addressed ("hey lamp" / "hey
   # autonomous" / "hey <agent name>") instead of answering ambient speech.

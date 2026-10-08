@@ -12,9 +12,11 @@ const (
 	PhraseReconnect Phrase = "openclaw.reconnect"
 
 	// Single strings and format templates, consumed via One.
-	PhraseBrainRestart  Phrase = "sensing.brain_restart"
-	PhraseCompactNotice Phrase = "openclaw.compact_notice"
-	PhraseTrackFailFmt  Phrase = "tracking.track_fail_fmt"
+	PhraseBrainRestart Phrase = "sensing.brain_restart"
+	// Spoken when a voice turn's agent run fails, so the user is not left waiting.
+	PhraseVoiceTurnFailed Phrase = "agent.voice_turn_failed"
+	PhraseCompactNotice   Phrase = "openclaw.compact_notice"
+	PhraseTrackFailFmt    Phrase = "tracking.track_fail_fmt"
 	// Plan-limit notice; spoken via hal.SpeakCached so it plays even when TTS is rate-limited.
 	PhraseLLMLimit Phrase = "agent.llm_limit"
 
@@ -137,6 +139,13 @@ var phrases = map[Phrase]map[string][]string{
 		LangVI:   {"[sigh] Đợi chút nhé, đầu mình đang tỉnh lại."},
 		LangZhCN: {"[sigh] 稍等一下，我脑子还在回过神。"},
 		LangZhTW: {"[sigh] 稍等一下，我腦子還在回過神。"},
+	},
+	PhraseVoiceTurnFailed: {
+		LangJA:   {"ごめん、それはうまくできなかった。"},
+		LangEN:   {"Sorry, I couldn't finish that one."},
+		LangVI:   {"Xin lỗi, mình chưa làm xong việc đó."},
+		LangZhCN: {"抱歉，这个我没能完成。"},
+		LangZhTW: {"抱歉，這個我沒能完成。"},
 	},
 	PhraseCompactNotice: {
 		LangJA:   {"ちょっと待ってね、少し整理してるよ。"},

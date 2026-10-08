@@ -119,6 +119,8 @@ HAL_WEBRTCVAD_ENABLED = false   # secondary gate, recommended true for low-thres
 HAL_SILERO_ENABLED = false      # tertiary gate (ONNX); webrtcvad usually enough
 ```
 
+These are the code defaults. The shipped lamp profile (`robots/lamp/rootfs/opt/hal/.env`) overrides the two silence clocks to `HAL_SILENCE_TIMEOUT=1.0` and `HAL_ENDPOINT_SILENCE_S=0.6` — end of turn after 1.0 s of silence, or 0.6 s after an STT final; Smart Turn can still hold a hesitation (see *Two silence clocks* in `docs/realtime-voice.md`).
+
 **How pre-roll works:** Every mic frame goes into a rolling `deque(maxlen=PRE_ROLL_FRAMES)` regardless of VAD state. When VAD finally triggers, the pre-trigger history (frames that fell under `RMS_THRESHOLD` — e.g. quiet stop consonants like "b", "k", "t", "p") gets prepended to the audio stream sent to STT. This eliminates the need for the user to say "Uhm..." as a warmup before their actual phrase.
 
 **Tuning:**

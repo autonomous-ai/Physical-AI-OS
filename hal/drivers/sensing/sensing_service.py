@@ -15,6 +15,7 @@ from typing import TYPE_CHECKING, Any, Callable
 import requests
 
 import hal.config as config
+from hal.drivers.voice._internal.prewarm import prewarm_realtime
 from hal.drivers.camera.video_capture_device import VideoCaptureDeviceBase
 from hal.drivers.motors.animation_service import AnimationService
 from hal.drivers.rgb.rgb_service import RGBService
@@ -262,6 +263,8 @@ class SensingService:
                 return
 
         if event_type == "presence.enter":
+            # Someone just arrived: connect the realtime session before they speak.
+            prewarm_realtime("presence.enter")
             self._grant_wakeword_focus_for_presence(message)
 
         frames = images or []

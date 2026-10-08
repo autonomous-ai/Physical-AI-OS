@@ -358,7 +358,9 @@ không thể phát ra câu trả lời cũ, nên không tính là thứ mà biê
   Body nào tắt thì mẫu số rỗng và lát cắt đó là **N/A**, không phải 100 %.
 - Suppression đúng (`observation_complete = true`, `stale_observed = false`) là **đạt**, không phải "mất câu
   trả lời". Hành động phần cứng của turn bị auto-supersede vẫn hợp lệ theo
-  thiết kế; chỉ speech và filler bị bỏ.
+  thiết kế; chỉ speech và filler bị bỏ — và không bao giờ bỏ của run mà model
+  realtime đã delegate sang main agent (`FillerManager.IsTaskRun`): câu trả lời
+  và filler của nó vượt qua mốc auto, vì user vẫn đang chờ việc đó.
 - Không có mẫu đủ điều kiện ⇒ **N/A**. Không bao giờ báo 0 % hay 100 % từ tập rỗng.
 
 ## KPI-3: chạy xong, không đánh giá làm đúng
@@ -764,6 +766,15 @@ trong cửa sổ quan sát. Có transcript không đồng nghĩa với đủ đi
 wake-word hoặc model realtime vẫn có thể loại lượt không hướng tới thiết bị.
 Transcript chỉ nằm trong log voice local sẵn có, không được thêm vào payload
 telemetry.
+
+HAL còn ghi cho mỗi giai đoạn của một lượt realtime một dòng
+`[turn-timing] interaction=<id> …` — `speech_end_to_commit_ms`,
+`commit_to_first_output_ms` và `speech_end_to_first_speech_ms`
+(`realtime_turn.py`, đo từ `voice_metrics.speech_end_at`).
+`python3 scripts/bench/voice_turns.py server.log` ghép chúng với các dòng
+`[voice-metrics] speech end` / `ack` / `answer`, `[turn] route=` và
+`[admission]` thành bảng theo từng câu nói với p50/p95 mỗi giai đoạn (`--json`
+để in mỗi lượt một dòng); xem [benchmarks](../benchmarks.md).
 
 ## Cấu hình
 

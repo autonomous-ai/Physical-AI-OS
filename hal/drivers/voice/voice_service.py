@@ -42,7 +42,7 @@ from hal.drivers.voice._internal.realtime_turn import (
     split_realtime_first_chunk,
     _WaitFiller,
     ROUTE_DELEGATED,
-    ROUTE_NOISE_DROPPED,
+    ROUTE_NOISE_DROPPED, ROUTE_NOT_ADDRESSED,
     split_first_chunk,
     split_completed_prefix,
     SENTENCE_ENDS,
@@ -71,7 +71,11 @@ from hal.drivers.voice._internal.input_policy import (
 from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
 from hal.drivers.voice._internal.main_followup import note_main_reply
 from hal.drivers.voice._internal.sensing_sender import SensingSender
-from hal.drivers.voice._internal.session_finalize import finalize_session
+from hal.drivers.voice._internal.session_finalize import finalize_session, recent_spoken_text
+from hal.drivers.voice._internal.turn_admission import (
+    addressed_hint, confident_partial, facing_evidence, register_tts, short_answer_expected,
+    strict_addressed_gate,
+)
 from hal.drivers.voice._internal.speaker_decorate import (
     SpeakerDecorator,
     merge_stt_hypothesis,
@@ -222,6 +226,7 @@ class VoiceService:
         # loud audio in the room is PEOPLE TALKING, not noise.
         self._last_transcript_ts = 0.0
         self._tts = tts_service
+        register_tts(tts_service)
         self._music = music_service
         self._device_rate: Optional[int] = None
 
@@ -346,6 +351,7 @@ class VoiceService:
         """Keep active device capture guarded while output service is replaced."""
         def install(tts):
             self._tts = tts
+            register_tts(tts)
             self._device_pipeline.tts = tts
             if self._backchannel:
                 self._backchannel._tts = tts
@@ -2355,6 +2361,7 @@ class VoiceService:
         endpoint_ts = 0.0
         early_realtime_result = None
         interaction_id = None
+        session_start = time.time()
         followup_ids = set() if followup_ids is None else followup_ids
 
         def hold_followup():
@@ -2401,6 +2408,40 @@ class VoiceService:
                 wakeword_followup_active,
                 self._wakeword_focus.is_active(),
             )
+
+        # Gaze is read once, at speech start: the pre-speech window is the evidence.
+        facing_at_start = facing_evidence()
+
+        def addressed_evidence() -> bool:
+            """Whether anything beyond the audio says this speech was for the device."""
+            return bool(
+                wake_word_detected.is_set()
+                or wakeword_followup_active or self._wakeword_focus.is_active()
+                or short_answer_expected()
+                or facing_at_start
+                or turn_speaker_display
+            )
+
+        def turn_context() -> str:
+            """The per-turn context, with what the device knows about who is talking to it."""
+            hint = addressed_hint(
+                wake_word=wake_word_detected.is_set(),
+                window=bool(wakeword_followup_active or self._wakeword_focus.is_active()),
+                question=short_answer_expected(),
+                facing=facing_at_start,
+                known_voice=turn_speaker_display or "",
+            )
+            logger.info("[admission] evidence: %s", hint)
+            if hal_config.ADDRESSED_GATE == "off":
+                return build_turn_context(turn_speaker_display)
+            return build_turn_context(turn_speaker_display, addressed=hint)
+
+        # Strict gate: hands-free speech with no evidence never reaches a model.
+        # Only when the wake word is off (with it on, the wake gate already decides).
+        strict_gate = (
+            strict_addressed_gate() and not hal_config.WAKEWORD_ENABLED
+            and input_policy.automatic and not harness_listening and manual_capture is None
+        )
 
         def fire_listening_cue() -> None:
             """Show the listening cue, once per session, only when this turn is
@@ -2550,7 +2591,7 @@ class VoiceService:
                     return False
                 try:
                     audio_turn = self._realtime.bind_audio_turn()
-                    self._realtime.send_text(build_turn_context(turn_speaker_display))
+                    self._realtime.send_text(turn_context())
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
@@ -2585,7 +2626,7 @@ class VoiceService:
             if not realtime_deferred and self._realtime.available:
                 try:
                     audio_turn = self._realtime.bind_audio_turn()
-                    self._realtime.send_text(build_turn_context(turn_speaker_display))
+                    self._realtime.send_text(turn_context())
                     sent_turn_speaker = turn_speaker_display
                     turn_context_sent = True
                     for audio_f32 in rt_audio_buffer:
@@ -2889,7 +2930,8 @@ class VoiceService:
             # A confirmed transcript can arrive before CloseStream drains. For
             # already-authorized input, overlap that drain with the model reply.
             # Do not use a provisional partial to bypass the existing noise gate.
-            capture_spoken_text = getattr(self._tts, "last_spoken_text", "") if self._tts else ""
+            # Only a reply that just ended can leak into this capture as an echo prefix.
+            capture_spoken_text = recent_spoken_text(self._tts, now=session_start)
             early_words, early_duration = "", 0.0
             if realtime_allowed and hal_config.REALTIME_ENABLED and manual_capture is None:
                 early_words, _, early_duration = finalize_session(
@@ -2936,7 +2978,10 @@ class VoiceService:
                     last_final_snapshot = None
                     while self._running:
                         stt_final_changed.clear()
-                        final_snapshot = tuple(final_segments)
+                        # A long partial is the user's words, not an STT fabrication
+                        # over noise: commit on it instead of waiting for the final.
+                        partial_words = last_partial[0] if not final_segments and confident_partial(last_partial[0]) else ""
+                        final_snapshot = (tuple(final_segments), partial_words)
                         if final_snapshot == last_final_snapshot:
                             if drain_finished.is_set():
                                 break
@@ -2944,7 +2989,7 @@ class VoiceService:
                             continue
                         last_final_snapshot = final_snapshot
                         early_words, _, early_duration = finalize_session(
-                            list(audio_buffer), [""], list(final_snapshot), last_speech_idx,
+                            list(audio_buffer), [partial_words], list(final_snapshot[0]), last_speech_idx,
                             capture_spoken_text,
                         )
                         early_speech = True
@@ -2956,7 +3001,8 @@ class VoiceService:
                                 )
                             except Exception as e:
                                 logger.warning("Early realtime speech check failed: %s", e)
-                        if early_words and not is_noise_turn(early_words, early_duration, early_speech):
+                        if (early_words and not is_noise_turn(early_words, early_duration, early_speech)
+                                and not (strict_gate and not addressed_evidence())):
                             interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
                             hold_followup()
                             start_realtime_turn()
@@ -3180,7 +3226,27 @@ class VoiceService:
                     not speaker_prepass_thread.is_alive(),
                 )
 
-            if is_noise_turn(combined, buf_duration, rt_audio_is_speech):
+            strict_rejected = bool(
+                strict_gate and combined
+                and not is_noise_turn(combined, buf_duration, rt_audio_is_speech)
+                and not addressed_evidence()
+            )
+            if strict_rejected:
+                logger.info(
+                    "[admission] strict gate: no evidence the speech was for the device "
+                    "(stt=%r) — not sent to any model", combined[:60],
+                )
+                if realtime_turn_started and hal_config.REALTIME_ENABLED:
+                    try:
+                        self._realtime.discard_open_activity("not-addressed")
+                    except Exception:
+                        logger.exception("[admission] discard after strict rejection failed")
+                if post_capture_wait_filler is not None:
+                    post_capture_wait_filler.cancel()
+                    post_capture_wait_filler = None
+            if strict_rejected:
+                pass
+            elif is_noise_turn(combined, buf_duration, rt_audio_is_speech):
                 if not realtime_turn_started:
                     logger.info(
                         "[realtime] Noise turn — not opening realtime turn after capture "
@@ -3221,7 +3287,7 @@ class VoiceService:
                 if self._realtime.wait_until_available():
                     try:
                         audio_turn = self._realtime.bind_audio_turn()
-                        self._realtime.send_text(build_turn_context(turn_speaker_display))
+                        self._realtime.send_text(turn_context())
                         sent_turn_speaker = turn_speaker_display
                         turn_context_sent = True
                         for audio_f32 in rt_audio_buffer:
@@ -3306,6 +3372,8 @@ class VoiceService:
                     self._realtime.save_turn(
                         user_text=combined or "(audio only)", agent_text=rt.transcript or "(audio only)",
                     )
+            elif strict_rejected:
+                rt = RealtimeTurnResult(route=ROUTE_NOT_ADDRESSED)
             elif realtime_turn_started:
                 rt = VoiceService._run_automatic_realtime_turn(self, reply_stop,
                     self._realtime,

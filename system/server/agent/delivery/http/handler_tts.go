@@ -101,8 +101,13 @@ func (h *AgentHandler) olderThanWatermark(runID string, mark int64) bool {
 
 // isSpeechCancelled reports whether runID predates the click or realtime-supersede watermark.
 func (h *AgentHandler) isSpeechCancelled(runID string) bool {
-	return h.olderThanWatermark(runID, h.speechWatermarkMs.Load()) ||
-		h.olderThanWatermark(runID, h.autoSpeechWatermarkMs.Load())
+	if h.olderThanWatermark(runID, h.speechWatermarkMs.Load()) {
+		return true
+	}
+	// Realtime answering a newer utterance mutes a stale chit-chat reply, never a
+	// task the user asked for and is still waiting on.
+	return h.olderThanWatermark(runID, h.autoSpeechWatermarkMs.Load()) &&
+		!sensinghttp.DefaultFillerManager.IsTaskRun(h.resolveRunID(runID))
 }
 
 // isHWCancelled reports whether runID's HW markers are dropped. Only the user click
@@ -173,7 +178,7 @@ func (h *AgentHandler) CancelSpeechForNewerTurn() bool {
 	}
 	now := time.Now().UnixMilli()
 	h.autoSpeechWatermarkMs.Store(now)
-	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllActive()
+	cancelledFillers := sensinghttp.DefaultFillerManager.CancelAllExceptTasks()
 	hal.CancelVoiceFollowups(now)
 	slog.Info("speech auto-cancelled -- realtime answered a newer turn",
 		"component", "agent", "watermark_ms", now, "fillers_cancelled", cancelledFillers)

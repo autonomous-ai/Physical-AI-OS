@@ -94,7 +94,7 @@ func TestFillerUnknownToolAndLanguageFallback(t *testing.T) {
 
 func TestFillerRealtimeUsesDedicatedVietnamesePool(t *testing.T) {
 	got := FillerRealtime(LangVI)
-	want := map[string]bool{"Ừm...": true, "Hừm...": true}
+	want := map[string]bool{"Chờ mình chút.": true, "Mình đang nghĩ.": true}
 	if len(got) != len(want) {
 		t.Fatalf("FillerRealtime(%q) = %v, want %d phrases", LangVI, got, len(want))
 	}

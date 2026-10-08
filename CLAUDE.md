@@ -22,6 +22,7 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    | Speech emotion recognition (SER) | `docs/speech-emotion.md` | `docs/vi/speech-emotion_vi.md` |
    | Laptop simulator (`make sim` / `os-dev` / `web-dev`, off-device env, config seeding) | `docs/simulator.md` | `docs/vi/simulator_vi.md` |
    | Realtime voice agent (HAL `realtime`, Gemini Live / OpenAI Realtime, delegate) | `docs/realtime-voice.md` | `docs/vi/realtime-voice_vi.md` |
+   | Voice interaction design (latency budgets, turn admission, commit path, task narration, measurement) | `docs/voice-interaction.md` | `docs/vi/voice-interaction_vi.md` |
    | Perception service (cloud DL inference), load balancer, encryption, models | `docs/perception-service.md` | `docs/vi/perception-service_vi.md` |
    | Hermes agent backend (`agent_runtime`, runtimes/hermes) | `docs/agentic/hermes.md` | `docs/vi/agentic/hermes_vi.md` |
    | PicoClaw agent backend (`agent_runtime`, runtimes/picoclaw, WebSocket) | `docs/agentic/picoclaw.md` | `docs/vi/agentic/picoclaw_vi.md` |

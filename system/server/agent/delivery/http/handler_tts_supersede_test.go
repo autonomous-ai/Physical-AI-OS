@@ -8,6 +8,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	sensinghttp "go.autonomous.ai/os/system/server/sensing/delivery/http"
 )
 
 func TestDelayedCaptureCancelOnlyMutesOlderSpeech(t *testing.T) {
@@ -38,5 +40,37 @@ func TestScopedCancelHandlerDoesNotCallGlobalStop(t *testing.T) {
 	h.CancelSpeechHandler(c)
 	if w.Code != http.StatusOK {
 		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+// Realtime answering a newer utterance mutes a stale chit-chat reply but never
+// the answer to a task the user is still waiting on.
+func TestRealtimeSupersedeKeepsDelegatedTaskReplies(t *testing.T) {
+	t.Setenv("OS_REALTIME_SUPERSEDES_MAIN_REPLY", "1")
+	h := newCancelTestHandler()
+	// A fresh filler manager: earlier tests leave supersede cutoffs on the shared one.
+	origFM := sensinghttp.DefaultFillerManager
+	sensinghttp.DefaultFillerManager = sensinghttp.NewFillerManager()
+	defer func() { sensinghttp.DefaultFillerManager = origFM }()
+	stale := deviceRunID(11, time.Now().Add(-5*time.Second))
+	task := deviceRunID(12, time.Now().Add(-4*time.Second))
+	sensinghttp.DefaultFillerManager.MarkVoiceRun(stale, "vi-stale")
+	sensinghttp.DefaultFillerManager.MarkDelegatedVoiceRun(task, "vi-task")
+	defer sensinghttp.DefaultFillerManager.Cancel(stale)
+	defer sensinghttp.DefaultFillerManager.Cancel(task)
+
+	if !h.CancelSpeechForNewerTurn() {
+		t.Fatal("supersede should be armed by the environment flag")
+	}
+	if !h.isSpeechCancelled(stale) {
+		t.Fatal("the stale chit-chat reply should be muted")
+	}
+	if h.isSpeechCancelled(task) {
+		t.Fatal("the delegated task's reply must still be spoken")
+	}
+	// The task mark survives the filler cancel that precedes every TTS send.
+	sensinghttp.DefaultFillerManager.Cancel(task)
+	if h.isSpeechCancelled(task) {
+		t.Fatal("the task mark must outlive the filler state")
 	}
 }

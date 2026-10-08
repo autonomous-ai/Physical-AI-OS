@@ -12,6 +12,28 @@ from typing import Any
 
 import hal.config as app_config
 from hal.realtime.constants import RESOURCES_DIR
+
+# Appended when HAL_REALTIME_DELEGATE_PREAMBLE is on. It supersedes the silent
+# handoff rule above: a person says what they are about to do.
+DELEGATE_PREAMBLE_PROMPT = (
+    "# TASK ACKNOWLEDGEMENT (overrides the silent-handoff rule)\n\n"
+    "When a request needs `delegate_to_main`, first say ONE short spoken line "
+    "that names what you are about to do, in the user's language, with no "
+    "promise of the result (\"Let me check your calendar.\", \"I'll look for it.\"), "
+    "then call `delegate_to_main` in the SAME turn. Never end the turn after the "
+    "line alone, never say the task is done, and keep the line under six words. "
+    "`reject_turn` still gets no speech."
+)
+
+# Appended when the session has no Google Search tool: the prompt above tells the
+# model to look fresh facts up itself, which it then cannot do.
+NO_SEARCH_PROMPT = (
+    "# NO LIVE LOOKUPS IN THIS SESSION\n\n"
+    "Google Search is not available here. Weather, news, scores, prices, sunset "
+    "times and any other fresh public fact are NOT direct answers in this "
+    "session: call `delegate_to_main` with the user's words and no spoken answer. "
+    "Never answer them from memory or guess a current value."
+)
 from hal.realtime.summarizer import RealtimeSummarizer
 
 logger = logging.getLogger(__name__)
@@ -390,6 +412,10 @@ class ContextManagerBase(ABC):
             # Restate routing after memory so Gemini makes the function call instead of a promise-only answer.
             add("routing", (RESOURCES_DIR / "routing_prompt_gemini.md").read_text(
                 encoding="utf-8").strip())
+            if not app_config.REALTIME_GEMINI_GOOGLE_SEARCH:
+                add("no_search", NO_SEARCH_PROMPT)
+            if app_config.REALTIME_DELEGATE_PREAMBLE:
+                add("delegate_preamble", DELEGATE_PREAMBLE_PROMPT)
 
         # Last so it supersedes the addressed-speech rules above (ROBOT.md opt-in).
         if _device_answers_overheard_speech():

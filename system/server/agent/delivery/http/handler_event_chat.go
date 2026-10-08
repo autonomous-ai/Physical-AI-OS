@@ -83,6 +83,7 @@ func (h *AgentHandler) handleChatEvent(evt domain.WSEvent) error {
 				Error:   shortError(errMsg),
 				Detail:  map[string]string{"error": shortError(errMsg)},
 			})
+			h.speakVoiceTurnFailure(flowRunID)
 		}
 	}
 

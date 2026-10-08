@@ -198,8 +198,9 @@ def test_normal_reply_cancel_does_not_fall_back_to_main(monkeypatch):
         assert VoiceService.cancel_automatic_reply(state["service"])
         return module.RealtimeTurnResult(route=module.ROUTE_CANCELLED)
 
+    # Three words: the partial waits for the final, so the drain runs before the reply.
     with capture(
-        monkeypatch, [(1, True, "Please explain the result"), (4, False, None)],
+        monkeypatch, [(1, True, "Explain the result"), (4, False, None)],
         realtime=True, transcripts_final=False, on_drain=drain, on_realtime=reply,
     ) as result:
         result.realtime.assert_called_once()

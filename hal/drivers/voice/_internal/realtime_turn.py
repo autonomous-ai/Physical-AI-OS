@@ -23,6 +23,8 @@ from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice.tts.gemini import native_voice
 from hal.drivers.voice._internal.cot_leak_filter import CoTLeakFilter, clean_transcript
 from hal.drivers.voice._internal.main_followup import pending_main_question, take_main_followup
+from hal.drivers.voice._internal.turn_admission import short_answer_expected
+from hal.telemetry import voice_metrics
 
 logger = logging.getLogger("hal.voice")
 
@@ -169,6 +171,7 @@ ROUTE_NO_OUTPUT = "realtime_no_output"
 ROUTE_ERROR = "realtime_error"
 ROUTE_UNAVAILABLE = "realtime_unavailable"
 ROUTE_NOISE_DROPPED = "noise_dropped"       # never committed — noise guard rejected it
+ROUTE_NOT_ADDRESSED = "not_addressed"       # never committed — no evidence the speech was for us
 ROUTE_FOREIGN_DROPPED = "foreign_dropped"
 ROUTE_NOT_STARTED = "realtime_not_started"
 ROUTE_CANCELLED = "realtime_cancelled"
@@ -270,10 +273,11 @@ def _thinking_cue_clear() -> None:
         logger.warning("[realtime] thinking cue clear failed: %s", e)
 
 
-def build_turn_context(speaker: Optional[str] = None) -> str:
+def build_turn_context(speaker: Optional[str] = None, addressed: Optional[str] = None) -> str:
     """Build per-turn context for the realtime model.
 
-    The caller must send this before streaming audio for the turn.
+    The caller must send this before streaming audio for the turn. ``addressed``
+    is the device's own evidence line (see ``turn_admission.addressed_hint``).
     """
     turn_ctx: list[str] = [
         f"Time: {device_now().strftime('%Y-%m-%d %H:%M:%S %A')}",
@@ -322,6 +326,8 @@ def build_turn_context(speaker: Optional[str] = None) -> str:
             "(names spelled as you heard them). Do not answer, confirm or claim "
             "the task is done yourself"
         )
+    if addressed:
+        turn_ctx.append(addressed)
     return "[TURN CONTEXT] " + " | ".join(turn_ctx)
 
 
@@ -359,7 +365,7 @@ def should_drop_realtime_rejection(rt: RealtimeTurnResult) -> bool:
 def should_drop_downstream_turn(rt: RealtimeTurnResult) -> bool:
     """Return whether a terminal guard/model decision must stop OS dispatch."""
     return (
-        rt.route in (ROUTE_NOISE_DROPPED, ROUTE_FOREIGN_DROPPED, ROUTE_CANCELLED)
+        rt.route in (ROUTE_NOISE_DROPPED, ROUTE_FOREIGN_DROPPED, ROUTE_CANCELLED, ROUTE_NOT_ADDRESSED)
         or should_drop_realtime_rejection(rt)
     )
 
@@ -431,11 +437,20 @@ def reply_is_foreign_script(text: str, reply_language: str) -> bool:
 
 
 def is_noise_turn(
-    combined: str, buf_duration: float, audio_is_speech: bool = True
+    combined: str, buf_duration: float, audio_is_speech: bool = True,
+    *, short_answer_ok: Optional[bool] = None,
 ) -> bool:
-    """Return whether this capture must not be committed to the realtime model."""
+    """Return whether this capture must not be committed to the realtime model.
+
+    A backchannel-only transcript ("yeah", "okay") is dropped unless the device
+    or the main agent just asked a question, in which case it is the answer.
+    """
     if is_nonactionable_transcript(combined):
-        return True
+        if short_answer_ok is None:
+            short_answer_ok = short_answer_expected()
+        if not short_answer_ok:
+            return True
+        logger.info("[admission] short answer %r admitted: a question is pending", combined)
     # A short transcript that Silero judged non-speech is an STT fabrication over noise,
     # not a short command — drop it whatever REQUIRE_TRANSCRIPT says.
     if not audio_is_speech and combined and needs_noise_guard(combined):
@@ -555,6 +570,12 @@ def run_realtime_turn(
         if not suppress_visual_feedback:
             _thinking_cue_clear()
 
+    def note_first_speech() -> None:
+        speech_end_at: float = voice_metrics.speech_end_at(interaction_id)
+        if speech_end_at > 0.0:
+            logger.info("[turn-timing] interaction=%s speech_end_to_first_speech_ms=%d",
+                        interaction_id, (time.monotonic() - speech_end_at) * 1000)
+
     def cancelled_result():
         nonlocal native_started
         try:
@@ -666,6 +687,10 @@ def run_realtime_turn(
                     leak_filter = CoTLeakFilter(reply_lang)
 
                 t_commit: float = time.monotonic()
+                speech_end_at: float = voice_metrics.speech_end_at(interaction_id)
+                if speech_end_at > 0.0:
+                    logger.info("[turn-timing] interaction=%s speech_end_to_commit_ms=%d",
+                                interaction_id, (t_commit - speech_end_at) * 1000)
                 first_output_logged: bool = False
 
                 execution_completed = False
@@ -694,6 +719,8 @@ def run_realtime_turn(
                             time.monotonic() - t_commit,
                             type(output).__name__,
                         )
+                        logger.info("[turn-timing] interaction=%s commit_to_first_output_ms=%d",
+                                    interaction_id, (time.monotonic() - t_commit) * 1000)
                     if isinstance(output, LookReplaySignal):
                         look_replay = True
                         continue
@@ -739,6 +766,7 @@ def run_realtime_turn(
                                     _check_turn_active(stop_event)
                                     tts.speak_queue(speech, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
+                                note_first_speech()
                                 clear_thinking_cue()
                         continue
                     if native and isinstance(output, RTAudioOutput):
@@ -759,6 +787,7 @@ def run_realtime_turn(
                                     "(+%.2fs after commit)",
                                     time.monotonic() - t_commit,
                                 )
+                                note_first_speech()
                                 clear_thinking_cue()
                                 wait_filler.cancel()
                         if native_started:
@@ -815,6 +844,7 @@ def run_realtime_turn(
                                     _check_turn_active(stop_event)
                                     tts.speak_queue(head, turn_id=interaction_id, realtime_reply=True)
                                 first_sentence_sent = True
+                                note_first_speech()
                                 clear_thinking_cue()
                                 sentence_buf = rest
                         sentence = realtime_visible_text(sentence_buf, tts, strip_markers)
@@ -841,6 +871,7 @@ def run_realtime_turn(
                                         _check_turn_active(stop_event)
                                         tts.speak_queue(sentence, turn_id=interaction_id, realtime_reply=True)
                                     first_sentence_sent = True
+                                    note_first_speech()
                                     clear_thinking_cue()
                                 else:
                                     logger.info(
@@ -946,6 +977,7 @@ def run_realtime_turn(
                             _check_turn_active(stop_event)
                             tts.speak_queue(remaining, turn_id=interaction_id, realtime_reply=True)
                         first_sentence_sent = True
+                        note_first_speech()
                         clear_thinking_cue()
                     else:
                         logger.info(

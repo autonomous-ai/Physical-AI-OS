@@ -1,12 +1,51 @@
 """End-of-turn finalization for VoiceService._stream_session."""
 
 import logging
+import os
+import time
 
 from hal.drivers.voice._internal import config as voice_cfg
 
 logger = logging.getLogger("hal.voice")
 
 _MIN_SOLO_ECHO_WORD = 4
+
+# How long after playback ends the device's own words can still open a capture
+# (room reverb and the AEC tail). Beyond this the user's own words are not an echo.
+ECHO_PREFIX_WINDOW_S = float(os.environ.get("HAL_ECHO_PREFIX_WINDOW_S", "4.0"))
+
+
+def last_spoken(tts) -> tuple[str, float]:
+    """``(text, finished_at)`` of the device's last reply; empty when unknown.
+
+    Tolerates a speaker that exposes neither value (or exposes stand-ins in tests).
+    """
+    if tts is None:
+        return "", 0.0
+    text = getattr(tts, "last_spoken_text", "")
+    if not isinstance(text, str):
+        return "", 0.0
+    try:
+        spoken_at = float(getattr(tts, "last_spoken_time", 0.0) or 0.0)
+    except (TypeError, ValueError):
+        return "", 0.0
+    return text, spoken_at
+
+
+def recent_spoken_text(tts, now=None, window_s=None) -> str:
+    """The device's last reply, only while its echo can still be in a capture.
+
+    ``now`` is the capture start; an utterance that began long after playback
+    ended keeps every word, even ones the device also said earlier.
+    """
+    text, spoken_at = last_spoken(tts)
+    if not text or spoken_at <= 0.0:
+        return ""
+    window = ECHO_PREFIX_WINDOW_S if window_s is None else window_s
+    now = time.time() if now is None else now
+    if now - spoken_at > window:
+        return ""
+    return text
 
 
 def _words(text):

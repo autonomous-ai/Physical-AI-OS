@@ -188,6 +188,7 @@ func PrewarmFillers() {
 		all = append(all, i18n.FillerForTool(lang, pool)...)
 	}
 	all = append(all, intent.CacheableReplies...)
+	all = append(all, i18n.One(i18n.PhraseVoiceTurnFailed))
 	seen := make(map[string]struct{}, len(all))
 	unique := make([]string, 0, len(all))
 	for _, p := range all {
@@ -314,6 +315,14 @@ type FillerManager struct {
 	// after the device agent finishes. Keep only a bounded set of recent runs.
 	suppressed      map[string]bool
 	suppressedOrder []string
+	// spokenRuns and taskRuns outlive cancel(): a reply or an error can arrive
+	// after the filler state is gone, and the agent handler still has to know
+	// whether the turn was spoken (failure notice) or a delegated task whose
+	// answer is owed however long it takes (never superseded). Bounded sets.
+	spokenRuns  map[string]bool
+	spokenOrder []string
+	taskRuns    map[string]bool
+	taskOrder   []string
 }
 
 // NewFillerManager constructs an empty FillerManager. Language is read at
@@ -325,7 +334,22 @@ func NewFillerManager() *FillerManager {
 		delegated:    make(map[string]bool),
 		interactions: make(map[string]string),
 		suppressed:   make(map[string]bool),
+		spokenRuns:   make(map[string]bool),
+		taskRuns:     make(map[string]bool),
 	}
+}
+
+// rememberLocked adds runID to a bounded set; caller holds fm.mu.
+func rememberLocked(set map[string]bool, order *[]string, runID string) {
+	if set[runID] {
+		return
+	}
+	if len(*order) >= maxSuppressedFillerRuns {
+		delete(set, (*order)[0])
+		*order = (*order)[1:]
+	}
+	set[runID] = true
+	*order = append(*order, runID)
 }
 
 // DefaultFillerManager is the process-wide singleton shared by the sensing
@@ -361,6 +385,7 @@ func (fm *FillerManager) MarkVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
+	rememberLocked(fm.spokenRuns, &fm.spokenOrder, runID)
 	if fm.suppressed[runID] {
 		fm.mu.Unlock()
 		return
@@ -380,10 +405,26 @@ func (fm *FillerManager) MarkDelegatedVoiceRun(runID, interactionID string) {
 		return
 	}
 	fm.mu.Lock()
+	rememberLocked(fm.taskRuns, &fm.taskOrder, runID)
 	if !fm.suppressed[runID] {
 		fm.delegated[runID] = true
 	}
 	fm.mu.Unlock()
+}
+
+// IsVoiceRun reports whether runID was ever marked as a spoken voice turn.
+func (fm *FillerManager) IsVoiceRun(runID string) bool {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	return fm.spokenRuns[runID]
+}
+
+// IsTaskRun reports whether runID is a voice turn the realtime model handed
+// off to the main agent: the user asked for work and is waiting on its result.
+func (fm *FillerManager) IsTaskRun(runID string) bool {
+	fm.mu.Lock()
+	defer fm.mu.Unlock()
+	return fm.taskRuns[runID]
 }
 
 // fillerOwner is the tag HAL attributes played filler audio to: the
@@ -547,6 +588,12 @@ func (fm *FillerManager) cancel(runID string, stopPlayback bool) {
 // reports how many there were. Called by the physical cancel gesture.
 func (fm *FillerManager) CancelAllActive() int {
 	return fm.cancelMatching(func(string) bool { return true }, true)
+}
+
+// CancelAllExceptTasks is CancelAllActive for the realtime supersede: a
+// delegated task keeps its fillers, since its answer is still coming.
+func (fm *FillerManager) CancelAllExceptTasks() int {
+	return fm.cancelMatching(func(runID string) bool { return !fm.IsTaskRun(runID) }, true)
 }
 
 // cancelMatching invokes the predicate outside fm.mu.

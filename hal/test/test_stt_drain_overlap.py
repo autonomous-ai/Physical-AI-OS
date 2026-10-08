@@ -75,7 +75,8 @@ def test_confirmed_speech_replies_while_stt_drains(monkeypatch, wake_enabled, in
         assert result.dispatch.call_args.args[2] == "Please check my memory and include yesterday"
 
 
-def test_partial_only_input_keeps_transcript_gate(monkeypatch):
+def test_short_partial_only_input_keeps_transcript_gate(monkeypatch):
+    """Under HAL_EARLY_COMMIT_MIN_WORDS the noise guard still needs the final."""
     closed = threading.Event()
 
     def realtime(*args, **kwargs):
@@ -84,10 +85,35 @@ def test_partial_only_input_keeps_transcript_gate(monkeypatch):
         return RealtimeTurnResult()
 
     with capture(
-        monkeypatch, [(1, True, "Please check my memory"), (4, False, None)],
+        monkeypatch, [(1, True, "Check my memory"), (4, False, None)],
         realtime=True, transcripts_final=False, on_close=closed.set, on_realtime=realtime,
     ) as result:
         result.realtime.assert_called_once()
+
+
+def test_confident_partial_commits_before_the_final_drains(monkeypatch):
+    """A partial of HAL_EARLY_COMMIT_MIN_WORDS words is the user's request, not noise."""
+    closed = threading.Event()
+    replied = threading.Event()
+
+    def close():
+        closed.set()
+        assert replied.wait(2), "realtime waited on STT close despite a confident partial"
+
+    def realtime(*args, **kwargs):
+        # The close runs concurrently; what matters is that it cannot finish first.
+        assert kwargs["save_history"] is False
+        assert args[3] == "Please check my memory"
+        replied.set()
+        return RealtimeTurnResult(handled=True, transcript="Done.")
+
+    with capture(
+        monkeypatch, [(1, True, "Please check my memory"), (4, False, None)],
+        realtime=True, transcripts_final=False, on_close=close, on_realtime=realtime,
+    ) as result:
+        assert closed.is_set() and replied.is_set()
+        result.realtime.assert_called_once()
+        result.stt.close.assert_called_once()
 
 
 def test_closed_wake_window_does_not_commit_confirmed_words(monkeypatch):
@@ -189,8 +215,9 @@ def test_stop_during_stt_drain_does_not_commit_or_dispatch(monkeypatch):
         service._running = False
         stt._on_transcript_cb("Please check my memory", True)
 
+    # A short partial never commits on its own, so the stop lands before any reply.
     with capture(
-        monkeypatch, [(1, True, "Please check my memory"), (4, False, None)],
+        monkeypatch, [(1, True, "Check my memory"), (4, False, None)],
         realtime=True, transcripts_final=False, on_drain=drain, pending_cue="pending-test",
     ) as result:
         clear_cue.assert_called_once_with("pending-test")
@@ -205,7 +232,7 @@ def test_close_error_releases_capture_without_committing_partial(monkeypatch):
 
     with pytest.raises(RuntimeError, match="STT drain failed"):
         with capture(
-            monkeypatch, [(1, True, "Please check my memory"), (4, False, None)],
+            monkeypatch, [(1, True, "Check my memory"), (4, False, None)],
             realtime=True, transcripts_final=False, on_drain=drain,
         ):
             pass

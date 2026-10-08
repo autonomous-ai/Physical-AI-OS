@@ -33,6 +33,43 @@ no model, no network) and how long a turn through the brain takes
 These are real turns, not synthetic ones — the sample is however many turns that
 robot actually had, and the report says so.
 
+## Voice turn stages
+
+`make latency` reads os-server's flow log. The realtime voice path is timed in
+HAL instead: per utterance it logs one `[turn-timing] interaction=<id> …` line
+per stage — `speech_end_to_commit_ms` (the user stopped talking → audio
+committed to the realtime model), `commit_to_first_output_ms` (→ the model's
+first output) and `speech_end_to_first_speech_ms` (→ the first sentence handed
+to TTS, or the first native audio frame). Copy the HAL log off the robot and
+run:
+
+```bash
+python3 scripts/bench/voice_turns.py server.log          # table + p50/p95 per stage
+python3 scripts/bench/voice_turns.py server.log --json   # one row per utterance
+```
+
+It reads only lines HAL already writes — `[voice-metrics] speech end`,
+`[turn-timing]`, `[voice-metrics] ack/answer`, `[turn] route=` and
+`[admission]` — so nothing on the device changes.
+
+Timing and threshold changes are measured on recorded audio before they ship.
+Record the room (`HAL_AEC_DUMP_DIR` or `HAL_LIVE_UPLINK_DUMP_DIR` on the robot,
+or any 16-bit WAV) and replay it through the lamp's own entry gate, silence
+clock and noise guard:
+
+```bash
+python3 scripts/bench/voice_replay.py room.wav                      # the shipping Lamp values
+python3 scripts/bench/voice_replay.py room.wav --silence 0.8 --rms 400
+python3 scripts/bench/voice_replay.py room.wav --json
+```
+
+It prints every utterance the gate would have opened, when the silence clock
+would have ended it (`decided`), the earliest decision if an STT final had
+landed at the end of speech (`earliest`), and the noise guard's verdict with the
+voiced ratio and voiced milliseconds behind it. Change one flag per run on the
+same file. No STT or model runs, so transcript-dependent gates (the ≤3-word
+rule, the addressed-evidence gate) are not simulated.
+
 ## What is still not covered
 
 - **Time to first spoken word.** The flow log records when TTS was sent, not

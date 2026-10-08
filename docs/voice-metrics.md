@@ -375,7 +375,10 @@ something the boundary had to suppress.
   is **N/A**, not 100 %.
 - Correct suppression (`observation_complete = true`, `stale_observed = false`) is a **pass**, not a missing
   response. Hardware actions of an auto-superseded turn remain valid by
-  design; only speech and fillers are dropped.
+  design; only speech and fillers are dropped — and never those of a run the
+  realtime model delegated to the main agent (`FillerManager.IsTaskRun`): its
+  reply and fillers survive the auto mark, since the user is still waiting on
+  that work.
 - No eligible samples ⇒ **N/A**. Never report 0 % or 100 % from an empty set.
 
 ## KPI-3: execution completion, not correctness
@@ -785,6 +788,14 @@ inside the observation window. A nonempty transcript alone does not establish
 eligibility: the wake-word gate or realtime non-user rejection can still
 exclude it. Transcript text stays in the existing local voice logs and is
 never added to telemetry payloads.
+
+HAL also writes one `[turn-timing] interaction=<id> …` line per stage of a
+realtime turn — `speech_end_to_commit_ms`, `commit_to_first_output_ms` and
+`speech_end_to_first_speech_ms` (`realtime_turn.py`, measured from
+`voice_metrics.speech_end_at`). `python3 scripts/bench/voice_turns.py server.log`
+joins them with the `[voice-metrics] speech end` / `ack` / `answer`,
+`[turn] route=` and `[admission]` lines into a per-utterance table with p50/p95
+per stage (`--json` for one row per turn); see [benchmarks](benchmarks.md).
 
 ## Configuration
 

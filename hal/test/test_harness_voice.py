@@ -1,5 +1,6 @@
 """Harness direct voice ownership, payload and duplicate-delivery regressions."""
 
+import threading
 from unittest.mock import Mock, patch
 
 import pytest
@@ -109,6 +110,7 @@ def test_capture_never_opens_or_streams_realtime_for_direct_or_unknown_mode(snap
     from hal.drivers.voice import voice_service
 
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
     service._running = False
     service._tts = None
     service._decorator.classify_wake_word.return_value = ("fix the tests", "voice")
@@ -197,6 +199,7 @@ def test_harness_capture_bypasses_wake_gate_without_extending_focus(
     from hal.drivers.voice import voice_service
 
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
     service._running = False
     service._tts = None
     service._wakeword_focus.is_active.return_value = focus
