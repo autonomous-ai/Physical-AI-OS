@@ -24,7 +24,7 @@ def tap(monkeypatch):
     for name in ("_sleeping", "_mic_muted", "_speaker_muted", "_enrolling", "_hw_mic_switch_muted"):
         monkeypatch.setattr(state, name, False)
     for name in ("_stop_active_tracking", "_cancel_agent_speech", "_wake_if_sleepy",
-                 "_grant_wakeword_focus", "announce_listening_cue"):
+                 "_grant_wakeword_focus", "announce_listening_cue", "play_ack_chime"):
         monkeypatch.setattr(button_actions, name, mock.Mock())
     from hal.routes import music, voice as routes
     for module, names in ((music, ("audio_stop", "unmute_speaker")),
@@ -44,6 +44,7 @@ def test_taps_start_then_finish_without_spoken_cue_or_focus(tap):
     voice.device_input.finish.assert_called_once_with()
     button_actions.announce_listening_cue.assert_not_called()
     button_actions._grant_wakeword_focus.assert_not_called()
+    button_actions.play_ack_chime.assert_not_called()
     button_actions._cancel_agent_speech.assert_not_called()
 
 
@@ -79,6 +80,7 @@ def test_privacy_enrollment_and_sleep_do_not_start_capture(tap, monkeypatch, blo
     voice.device_input.finish.assert_not_called()
     routes.unmute_mic.assert_not_called()
     assert button_actions._wake_if_sleepy.call_count == int(blocked == "_sleeping")
+    assert button_actions.play_ack_chime.call_count == int(blocked == "_sleeping")
 
 
 def test_software_muted_mic_can_start(tap, monkeypatch):
@@ -203,3 +205,38 @@ def test_qualified_chord_handoff_within_debounce_stays_one_swipe(monkeypatch):
 def test_touch_after_stationary_chord_commit_starts_new_tap(monkeypatch):
     actions = spatial_trace(monkeypatch, [(.1, 7), (.2, 0), (.25, 7), (.35, 0)])
     assert [kind for _, kind in actions] == ["single", "single"]
+
+
+@pytest.mark.parametrize("action", ["wake", "interrupt"])
+def test_ack_follows_wake_or_stop_without_starting_capture(tap, monkeypatch, action):
+    voice, routes = tap
+    events = []
+    if action == "wake":
+        monkeypatch.setattr(state, "_sleeping", True)
+        monkeypatch.setattr(state, "_speaker_muted", True)
+
+        def wake(source):
+            events.append("wake")
+            state._sleeping = False
+            state._speaker_muted = False
+
+        button_actions._wake_if_sleepy.side_effect = wake
+    else:
+        state.tts_service.speaking = True
+        routes.stop_tts.side_effect = lambda: events.append("stop")
+
+    def ack(source):
+        assert source == "MPR121"
+        assert not state._speaker_muted
+        events.append("ack")
+
+    button_actions.play_ack_chime.side_effect = ack
+    device_tap_actions.physical_short_tap("MPR121")
+    assert events == ["wake" if action == "wake" else "stop", "ack"]
+    voice.device_input.start.assert_not_called()
+    voice.device_input.finish.assert_not_called()
+    # The next tap starts capture, whose own ready cue must not get an extra ping.
+    state.tts_service.speaking = False
+    device_tap_actions.physical_short_tap("MPR121")
+    voice.device_input.start.assert_called_once_with()
+    button_actions.play_ack_chime.assert_called_once_with("MPR121")
