@@ -97,7 +97,7 @@ User nói "Lamp, nhìn xem" / "look at me" / "camera on" → agent gọi `[HW:/c
 
 ### 7. Telegram/web chat cần visual context
 
-Agent cần snapshot (camera skill) → một lệnh shell kiểm `GET /camera` trước: `disabled` → agent trả lời "camera đang tắt" rồi dừng (không tự bật, không chụp); `has_frame: false` → "camera không hoạt động" rồi dừng; còn lại `POST /api/vision/look` chụp và mô tả. Bước kiểm nằm chung tool call nên không thêm vòng model.
+Agent cần snapshot (camera skill) → một lệnh shell kiểm `GET /camera` trước: `disabled` → agent trả lời "camera đang tắt" rồi dừng (không tự bật, không chụp); `has_frame: false` → "camera không hoạt động" rồi dừng; còn lại `POST /api/vision/look` chụp và mô tả. Bước kiểm nằm chung tool call nên không thêm vòng model. Ở lượt voice, `/api/vision/look` nói một câu ngắn trước khi chụp ("Để mình nhìn thử.") và một câu khi đã chụp xong ("Chụp xong rồi, đợi mình chút nha."), để người dùng biết lúc nào ảnh đã chụp trong khoảng chờ mô tả khá lâu.
 
 ## Manual Override
 

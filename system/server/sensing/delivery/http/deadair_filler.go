@@ -293,6 +293,9 @@ func PlayPoolFillerNow(pool, owner string) {
 	}
 }
 
+// speakCue plays a SayInVoiceRun cue; a var so tests can capture it.
+var speakCue = hal.SpeakCachedInterruptibleForTurn
+
 // FillerManager schedules and cancels dead-air fillers driven by OpenClaw
 // agent events. Safe for concurrent use; all exported methods are idempotent.
 type FillerManager struct {
@@ -547,6 +550,47 @@ func (fm *FillerManager) CancelAllActive() int {
 		fm.Cancel(runID)
 	}
 	return len(runIDs)
+}
+
+// SayInVoiceRun speaks one phrase from pool for the voice turn in progress and
+// pushes that turn's dead-air filler back by its cooldown, so a generic "Hmm..."
+// does not land on top of the cue. It is silent and returns false when no voice
+// turn is running (Telegram, web chat, cron) or the reply is already streaming.
+// The cue does not count toward MaxFillersPerTurn.
+func (fm *FillerManager) SayInVoiceRun(pool string) bool {
+	phrases := toolPoolForLang(i18n.Lang(), pool)
+	if len(phrases) == 0 {
+		return false
+	}
+	fm.mu.Lock()
+	var runID string
+	var run *fillerRun
+	for id, r := range fm.runs {
+		if !r.ended && !r.suspended {
+			runID, run = id, r
+			break
+		}
+	}
+	if run == nil {
+		fm.mu.Unlock()
+		return false
+	}
+	if run.timer != nil {
+		run.timer.Stop()
+		run.timer = nil
+		run.generation++
+	}
+	run.lastActivityAt = time.Now()
+	fm.armLocked(runID, run, fillerRearmDelay(run))
+	owner := fillerOwner(fm.interactions[runID], runID)
+	fm.mu.Unlock()
+
+	filler := pickFrom(phrases, "")
+	slog.Info("voice cue firing", "component", "sensing", "run_id", runID, "pool", pool, "filler", filler, "owner", owner)
+	if err := speakCue(filler, owner); err != nil {
+		slog.Warn("voice cue failed", "component", "sensing", "pool", pool, "error", err)
+	}
+	return true
 }
 
 // HasActiveRun reports whether runID still holds filler state. Exported for
