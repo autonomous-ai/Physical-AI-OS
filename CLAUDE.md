@@ -79,6 +79,21 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    reporting the change ready to commit or push; report exact commands and
    any failures or skipped checks. Device tests do not replace local gates.
 
+7. **Design and verify latency when implementing features** - Treat response
+   time as part of functional correctness, especially for touch, buttons, voice,
+   and other direct interactions. Before implementation, identify the path from
+   user action to feedback and readiness, set a concrete latency target, and
+   inspect blocking I/O, network calls, polling, debounce, and cold initialization.
+   Keep immediate feedback and input handling independent of slow work where
+   possible, without signaling readiness before the system can accept input.
+   When adding asynchronous work, preserve ordering, cancellation, and bounded
+   resource usage. Before declaring an interactive feature complete, measure
+   latency as well as functional behavior: cover first use, repeated actions,
+   and slow dependencies on the target hardware when authorized. For latency
+   fixes, report comparable before/after measurements, their exact boundaries,
+   and any unverified device or end-to-end behavior. Passing functional tests
+   alone does not demonstrate responsive UX.
+
 See `docs/DEV-MULTI-IDE.md` for full conventions.
 
 ## Subagent Usage

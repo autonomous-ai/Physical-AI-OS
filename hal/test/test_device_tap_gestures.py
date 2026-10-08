@@ -44,6 +44,7 @@ def test_taps_start_then_finish_without_spoken_cue_or_focus(tap):
     voice.device_input.finish.assert_called_once_with()
     button_actions.announce_listening_cue.assert_not_called()
     button_actions._grant_wakeword_focus.assert_not_called()
+    button_actions._cancel_agent_speech.assert_not_called()
 
 
 def test_speaking_tap_only_stops_then_next_records(tap):
@@ -52,10 +53,21 @@ def test_speaking_tap_only_stops_then_next_records(tap):
     device_tap_actions.physical_short_tap()
     voice.device_input.cancel.assert_called_once_with()
     routes.stop_tts.assert_called_once_with()
+    button_actions._cancel_agent_speech.assert_called_once_with("button")
     voice.device_input.start.assert_not_called()
     state.tts_service.speaking = False
     device_tap_actions.physical_short_tap()
     voice.device_input.start.assert_called_once_with()
+    button_actions._cancel_agent_speech.assert_called_once_with("button")
+
+
+@pytest.mark.parametrize("playing", [False, True])
+def test_start_only_resets_music_when_playing(tap, monkeypatch, playing):
+    from hal.routes import music
+    monkeypatch.setattr(state, "_music_playing", playing)
+    monkeypatch.setattr(state, "music_service", SimpleNamespace(playing=playing))
+    device_tap_actions.physical_short_tap()
+    assert music.audio_stop.call_count == int(playing)
 
 
 @pytest.mark.parametrize("blocked", ["_hw_mic_switch_muted", "_enrolling", "_sleeping"])
@@ -124,3 +136,70 @@ def test_gpio_rapid_taps_do_not_arm_triple_click(tap):
     assert handler._click_timer is None
     triple.assert_not_called()
     cue.assert_not_called()
+
+
+def spatial_trace(monkeypatch, samples, *, mode="tap_to_talk", harness=False):
+    monkeypatch.setattr(config, "VOICE_INPUT_MODE", mode)
+    handler = MPR121Handler(MPR121Config(
+        bus=0, swipe_axis=tuple(range(12)), tap_min_electrodes=3,
+    ))
+    handler._harness_gestures = SimpleNamespace(snapshot={"enabled": harness, "generation": 1})
+    detector = handler._new_detector()
+    detector.update(0, 0)
+    actions = []
+    index, mask = 0, 0
+    for tick in range(1, int((samples[-1][0] + .2) * 1000)):
+        now = tick / 1000
+        while index < len(samples) and samples[index][0] <= now:
+            mask = samples[index][1]
+            index += 1
+        actions.extend((now, event.kind) for event in detector.update(mask, now)
+                       if event.kind in {"single", "swipe", "hold"})
+    return actions
+
+
+@pytest.mark.parametrize("mode,harness,delay", [
+    ("tap_to_talk", False, .030), ("automatic", False, .120), ("tap_to_talk", True, .120),
+])
+def test_stationary_chord_release_is_fast_only_for_device(monkeypatch, mode, harness, delay):
+    actions = spatial_trace(monkeypatch, [(.1, 7), (.2, 0)], mode=mode, harness=harness)
+    assert len(actions) == 1 and actions[0][1] == "single"
+    assert .2 + delay <= actions[0][0] <= .2 + delay + .002
+
+
+def test_stationary_chord_release_bounce_does_not_duplicate_tap(monkeypatch):
+    actions = spatial_trace(monkeypatch, [(.1, 7), (.2, 0), (.22, 7), (.3, 0)])
+    assert len(actions) == 1 and actions[0][1] == "single"
+    assert actions[0][0] >= .33
+
+
+def test_swipe_handoff_gap_keeps_full_window(monkeypatch):
+    actions = spatial_trace(monkeypatch, [
+        (.1, 1), (.15, 0), (.21, 2), (.25, 4), (.29, 8), (.33, 16), (.38, 0),
+    ])
+    assert len(actions) == 1 and actions[0][1] == "swipe"
+    assert actions[0][0] >= .50
+
+
+def test_qualified_chord_motion_retains_swipe_handoff_window(monkeypatch):
+    actions = spatial_trace(monkeypatch, [
+        (.1, 7), (.2, 14), (.25, 0), (.31, 28), (.36, 56), (.42, 0),
+    ])
+    assert len(actions) == 1 and actions[0][1] == "swipe"
+    assert actions[0][0] >= .54
+
+
+def test_unqualified_short_third_electrode_does_not_commit_fast_tap(monkeypatch):
+    assert spatial_trace(monkeypatch, [(.1, 3), (.16, 7), (.17, 3), (.22, 0)]) == []
+
+
+def test_qualified_chord_handoff_within_debounce_stays_one_swipe(monkeypatch):
+    actions = spatial_trace(monkeypatch, [
+        (.1, 7), (.2, 0), (.22, 14), (.26, 28), (.3, 56), (.35, 0),
+    ])
+    assert len(actions) == 1 and actions[0][1] == "swipe"
+
+
+def test_touch_after_stationary_chord_commit_starts_new_tap(monkeypatch):
+    actions = spatial_trace(monkeypatch, [(.1, 7), (.2, 0), (.25, 7), (.35, 0)])
+    assert [kind for _, kind in actions] == ["single", "single"]

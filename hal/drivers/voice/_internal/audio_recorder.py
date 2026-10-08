@@ -6,7 +6,8 @@ import subprocess
 class ArecordStream:
     """Drop-in replacement for sd.InputStream using arecord subprocess."""
 
-    def __init__(self, alsa_device: str, rate: int, channels: int, blocksize: int, np):
+    def __init__(self, alsa_device: str, rate: int, channels: int, blocksize: int, np,
+                 *, low_latency: bool = False):
         self._device = alsa_device
         self._rate = rate
         self._channels = channels
@@ -14,6 +15,7 @@ class ArecordStream:
         self._np = np
         self._proc = None
         self._bytes_per_frame = 2 * channels
+        self._low_latency = low_latency
 
     def __enter__(self):
         # Capture stderr (don't DEVNULL it): when arecord dies, its ALSA error
@@ -22,7 +24,7 @@ class ArecordStream:
         self._proc = subprocess.Popen(
             ["arecord", "-D", self._device, "-f", "S16_LE",
              "-r", str(self._rate), "-c", str(self._channels),
-             "-t", "raw", "-q"],
+             "-t", "raw", "-q", *(["--period-time=10000"] if self._low_latency else [])],
             stdout=subprocess.PIPE, stderr=subprocess.PIPE,
         )
         return self
@@ -35,7 +37,9 @@ class ArecordStream:
         if proc.poll() is None:
             proc.terminate()
         try:
-            proc.wait(timeout=2)
+            # After a manual finish, the unread pipe can fill while STT drains.
+            # Bound TERM grace without closing stdout under a concurrent read.
+            proc.wait(timeout=0.1 if self._low_latency else 2)
         except subprocess.TimeoutExpired:
             proc.kill()
             proc.wait(timeout=2)
