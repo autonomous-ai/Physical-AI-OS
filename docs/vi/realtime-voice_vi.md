@@ -851,10 +851,11 @@ Silero **riêng** — cái thứ ba, bên cạnh gate đầu vào và noise guar
 phiên. Nó fail-open: model lỗi thì coi như có tiếng nói, nên thiết bị không bao
 giờ cắt lời ai.
 
-### Filler tự động chỉ ở lượt mở hội thoại trên lamp standard
+### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
 
-Lamp standard bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` (HAL mặc định `false`;
-overlay `pro`, `pro-xvf3800` và `pro-respeaker-lite` tắt tùy chọn này).
+Lamp Standard và Pro cùng bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` vì dùng
+cùng mic (HAL mặc định `false`; overlay `pro-xvf3800` và `pro-respeaker-lite`
+vẫn tắt tùy chọn này).
 Chỉ áp dụng khi Automatic, Live tắt và wake gate bật. Khi VAD bắt đầu nhận lời
 nói, HAL chốt wake window đã mở hay chưa, **trước khi** gaze có thể mở hoặc gia
 hạn cửa sổ cho lần thu đó:
@@ -3365,7 +3366,7 @@ trong `config.json`:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Thời gian yên lặng sau bất kỳ lời nói hay transcript người dùng nào trước snapshot tiếp theo. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Văn bản Harness đưa cho bộ diễn đạt bị cắt tới độ dài này. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Giới hạn thời gian của summarizer fallback trước khi đọc văn bản đã làm sạch thay thế. |
-| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp standard bật; các overlay Pro tắt. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | Với Automatic, Live tắt và wake gate bật, chặn filler/backchannel tự động nếu wake window đã mở khi bắt đầu thu. Lamp Standard và Pro bật; pro-xvf3800 và pro-respeaker-lite tắt. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Số giây idle của cửa sổ focus sau lệnh. Mỗi `voice_command` hoặc `voice_followup` được nhận sẽ refresh cửa sổ. `0` tắt follow-up và buộc mỗi phiên mic phải có wake phrase. Bị bỏ qua khi `wakeword` là false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Thời gian im lặng từ lúc STT final về, chỉ áp dụng khi `final_ts >= last_confirmed_speech`. Nếu có tiếng nói được xác nhận sau final đó, quay lại ngưỡng dự phòng 2.5s tới khi có final mới. `0` tắt đồng hồ ngắn, chỉ dùng `HAL_SILENCE_TIMEOUT`. Khi bật gate dùng chung, đây chỉ là đề xuất kết thúc; `HAL_TURN_END_*` quyết định đóng lượt. |
 | `HAL_TURN_END_ENABLED` | `true` | Gate kết thúc lượt tạm thời dùng chung cho thu hands-free khi Live tắt, trước commit; không đổi Live hoặc thu thủ công. `false` khôi phục đồng hồ im lặng và trần phiên cũ. |

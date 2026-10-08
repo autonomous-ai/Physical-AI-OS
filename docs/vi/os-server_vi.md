@@ -11,13 +11,13 @@ trễ opening.
 Mỗi lượt có tối đa một continuation tự động; các tool sau đó không phát thêm.
 Đã xoá bộ câu opening và continuation cũ. Filler chờ tự động không chọn câu theo tool. Cue realtime/tool được gọi riêng không đổi.
 
-Với follow-up Automatic của lamp standard, HAL có thể gửi metadata sensing tùy
+Với follow-up Automatic của lamp Standard và Pro, HAL có thể gửi metadata sensing tùy
 chọn `suppress_auto_fillers: true`. OS bỏ opening và continuation filler tự động
 được lên lịch cho run đó, kể cả khi resume sau delegate; trạng thái này được giữ
 với giới hạn 4096 run. Câu trả lời thực, cue tool tường minh và thực thi tool
 không đổi. HAL chốt chính sách theo wake window lúc bắt đầu thu, không dựa vào
 final transcript có wake phrase hay không. Xem
-[filler chỉ ở lượt mở hội thoại](realtime-voice_vi.md#filler-tự-động-chỉ-ở-lượt-mở-hội-thoại-trên-lamp-standard).
+[filler chỉ ở lượt mở hội thoại](realtime-voice_vi.md#filler-tự-động-chỉ-ở-lượt-mở-hội-thoại-trên-lamp-standard-và-pro).
 
 Pool tool nội bộ chỉ giữ một câu ngắn cho mỗi ngôn ngữ. Câu tìm/đọc/tạo nội dung
 chỉ mô tả hành động chung của các alias; các pool rộng hoặc gom nhiều thao tác

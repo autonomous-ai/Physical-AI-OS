@@ -875,10 +875,11 @@ so the other paths' LSTM state stays clean, and it resets that state at the
 start of every session. It fails open: a model error counts as speech, so the
 device never cuts anyone off.
 
-### Opening-only automatic fillers on standard lamp
+### Opening-only automatic fillers on Standard and Pro lamps
 
-The standard lamp enables `HAL_VOICE_OPENING_FILLERS_ONLY=true` (HAL default
-`false`; the `pro`, `pro-xvf3800` and `pro-respeaker-lite` overlays disable it).
+Standard and Pro lamps enable `HAL_VOICE_OPENING_FILLERS_ONLY=true` because
+they share the microphone (HAL default `false`; the `pro-xvf3800` and
+`pro-respeaker-lite` overlays keep the option disabled).
 It applies only to Automatic, non-Live capture with the wake gate enabled.
 At VAD speech start, HAL snapshots whether the wake window was already open,
 **before** gaze can open or refresh it for that capture:
@@ -3438,7 +3439,7 @@ is a top-level `config.json` flag:
 | `HAL_HARNESS_ANNOUNCE_GRACE_S` | `1.5` | Quiet time after any speech or user transcript before the next snapshot. |
 | `HAL_HARNESS_ANNOUNCE_CONTENT_MAX_CHARS` | `4000` | Harness text handed to the renderer is cut to this length. |
 | `HAL_HARNESS_ANNOUNCE_SUMMARIZER_TIMEOUT_S` | `12` | Fallback summarizer bound before sanitized text is spoken instead. |
-| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard lamp enables it; Pro overlays disable it. |
+| `HAL_VOICE_OPENING_FILLERS_ONLY` | `false` | With Automatic non-Live wake gating, suppress automatic filler/backchannel on captures that start with an already-open wake window. Standard and Pro enable it; pro-xvf3800 and pro-respeaker-lite disable it. |
 | `HAL_WAKEWORD_FOLLOWUP_TIMEOUT_S` | `20` | Idle seconds for the short post-command focus window. Each accepted `voice_command` or `voice_followup` refreshes it. `0` disables follow-ups and requires a wake phrase for every mic session. Ignored when `wakeword` is false. |
 | `HAL_ENDPOINT_SILENCE_S` | `0.8` | Silence needed after STT final arrival, only while `final_ts >= last_confirmed_speech`. Continued confirmed speech after that final restores the 2.5s fallback until a new final arrives. `0` disables the short clock, leaving `HAL_SILENCE_TIMEOUT`. With the shared gate enabled this only proposes an endpoint; `HAL_TURN_END_*` decides closure. |
 | `HAL_TURN_END_ENABLED` | `true` | Shared provisional endpoint gate for non-Live hands-free capture before commit; no change to Live or manual capture. `false` restores legacy silence clocks and session ceiling. |
