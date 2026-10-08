@@ -14,8 +14,11 @@ are unchanged.
 For Standard and Pro lamp Automatic follow-ups, HAL may send optional sensing metadata
 `suppress_auto_fillers: true`. OS skips opening feedback and scheduled automatic
 continuation fillers for that run, including delegated resumes; it retains this
-policy for a bounded 4096 runs. Actual replies, explicit tool cues and tool
-execution are unaffected. HAL sets the policy from wake-window state at capture
+policy for a bounded 4096 runs. Actual replies and tool execution are
+unaffected. Explicit action cues (`SayInVoiceRun`, e.g. the `/api/vision/look`
+"Taking a look." / "Got it — give me a sec.") still play: a suppressed turn gets
+a cue-only record when it starts, which never arms automatic fillers, stays quiet
+while the reply streams, and ends with the turn. HAL sets the policy from wake-window state at capture
 start, not from whether the final transcript contains a wake phrase. See
 [opening-only automatic fillers](realtime-voice.md#opening-only-automatic-fillers-on-standard-and-pro-lamps).
 

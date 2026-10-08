@@ -14,8 +14,11 @@ Mỗi lượt có tối đa một continuation tự động; các tool sau đó 
 Với follow-up Automatic của lamp Standard và Pro, HAL có thể gửi metadata sensing tùy
 chọn `suppress_auto_fillers: true`. OS bỏ opening và continuation filler tự động
 được lên lịch cho run đó, kể cả khi resume sau delegate; trạng thái này được giữ
-với giới hạn 4096 run. Câu trả lời thực, cue tool tường minh và thực thi tool
-không đổi. HAL chốt chính sách theo wake window lúc bắt đầu thu, không dựa vào
+với giới hạn 4096 run. Câu trả lời thực và thực thi tool không đổi. Cue hành động
+tường minh (`SayInVoiceRun`, ví dụ "Taking a look." / "Got it — give me a sec." của
+`/api/vision/look`) vẫn phát: lượt bị suppress có một bản ghi chỉ-cue khi bắt đầu,
+không bao giờ lên lịch filler tự động, im lặng khi câu trả lời đang stream và kết
+thúc cùng lượt. HAL chốt chính sách theo wake window lúc bắt đầu thu, không dựa vào
 final transcript có wake phrase hay không. Xem
 [filler chỉ ở lượt mở hội thoại](realtime-voice_vi.md#filler-tự-động-chỉ-ở-lượt-mở-hội-thoại-trên-lamp-standard-và-pro).
 
