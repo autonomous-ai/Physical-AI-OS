@@ -865,8 +865,11 @@ hướng tới thiết bị.
 ### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
 
 Tạm tắt phát opening filler của main agent: `PlayOpeningFillerNow` return sớm
-trước khi chọn hoặc gửi audio. Giữ nguyên phần triển khai để có thể bật lại.
-Việc tạm tắt này ưu tiên hơn điều kiện cho phép filler ở lượt mở bên dưới.
+trước khi chọn hoặc gửi audio. Timer continuation của main cũng xóa timer đang
+chờ và return trước khi chọn hoặc phát filler. Giữ nguyên cả hai phần triển khai
+để có thể bật lại. Việc tạm tắt ưu tiên hơn điều kiện filler ở lượt mở bên dưới.
+Pool opening được giữ lại có cùng nội dung với continuation ở mọi ngôn ngữ hỗ trợ
+(tiếng Anh: `Hmm...`).
 
 Wait filler realtime tự động chỉ được bật sau khi chuẩn bị session và mở lượt
 thành công, kể cả nhánh STT đang drain. Khi session không khả dụng/hết quota

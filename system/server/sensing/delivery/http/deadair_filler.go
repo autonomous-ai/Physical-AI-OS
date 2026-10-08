@@ -611,6 +611,13 @@ func (fm *FillerManager) fire(runID string, expectedRun *fillerRun, generation u
 		fm.mu.Unlock()
 		return
 	}
+	// Temporarily pause continuation audio; retain the timer lifecycle and playback code.
+	const continuationFillerPaused = true
+	if continuationFillerPaused {
+		run.timer = nil
+		fm.mu.Unlock()
+		return
+	}
 	filler := pickFiller(run.fired, run.lastSpoken)
 	if filler == "" {
 		run.timer = nil

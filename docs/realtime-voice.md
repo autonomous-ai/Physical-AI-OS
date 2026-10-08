@@ -889,8 +889,11 @@ from speech addressed to the device.
 ### Opening-only automatic fillers on Standard and Pro lamps
 
 Main-agent opening filler playback is temporarily paused: `PlayOpeningFillerNow`
-returns before choosing or sending any audio. Its implementation is retained for
-re-enabling. This pause takes precedence over opening-turn eligibility below.
+returns before choosing or sending any audio. The main-agent continuation timer
+also clears its pending timer and returns before selecting or playing a filler.
+Both playback implementations are retained for re-enabling. These pauses take
+precedence over opening-turn eligibility below. The retained opening pool matches
+the continuation pool in every supported language (English: `Hmm...`).
 
 Automatic realtime wait fillers are armed only after session preparation and
 turn admission succeed, including the early-STT drain path. Unavailable/quota
