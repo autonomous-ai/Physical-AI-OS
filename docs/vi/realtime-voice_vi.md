@@ -853,6 +853,12 @@ giờ cắt lời ai.
 
 ### Filler tự động chỉ ở lượt mở hội thoại trên lamp Standard và Pro
 
+Wait filler realtime tự động chỉ được bật sau khi chuẩn bị session và mở lượt
+thành công, kể cả nhánh STT đang drain. Khi session không khả dụng/hết quota
+hoặc mở lượt thất bại, fallback không bật filler realtime trước khi dispatch
+sang main. Timer filler hiện có bắt đầu sau khi mở lượt; không thêm chờ mạng.
+Lượt bị hoãn để luồng realtime bật filler khi session đã sẵn sàng.
+
 Lamp Standard và Pro cùng bật `HAL_VOICE_OPENING_FILLERS_ONLY=true` vì dùng
 cùng mic (HAL mặc định `false`; overlay `pro-xvf3800` và `pro-respeaker-lite`
 vẫn tắt tùy chọn này).

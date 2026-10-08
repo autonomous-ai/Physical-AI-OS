@@ -2935,11 +2935,14 @@ class VoiceService:
                         if early_words and not is_noise_turn(early_words, early_duration, early_speech):
                             interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
                             hold_followup()
-                            post_capture_wait_filler = _WaitFiller(owner=interaction_id)
-                            if not suppress_auto_fillers and should_arm_realtime_wait_filler(early_words):
-                                post_capture_wait_filler.arm()
                             start_realtime_turn()
                             if realtime_turn_started and not realtime_deferred and self._running:
+                                # Preparation may fail or outlast the filler timer.
+                                # Only acknowledge a turn admitted to realtime.
+                                if turn_context_sent and self._realtime.available:
+                                    post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                                    if not suppress_auto_fillers and should_arm_realtime_wait_filler(early_words):
+                                        post_capture_wait_filler.arm()
                                 logger.info("[realtime] Processing confirmed speech while STT final drain runs")
                                 early_realtime_result = VoiceService._run_automatic_realtime_turn(self, reply_stop,
                                     self._realtime, self._tts, self.strip_rt_markers,
@@ -3165,12 +3168,14 @@ class VoiceService:
             else:
                 if not voice_cfg.LIVE_MODE:
                     hold_followup()
-                if (realtime_allowed and not voice_cfg.LIVE_MODE
+                start_realtime_turn()
+                if (realtime_allowed and realtime_turn_started and turn_context_sent
+                        and not realtime_deferred and self._realtime.available
+                        and not voice_cfg.LIVE_MODE
                         and early_realtime_result is None and post_capture_wait_filler is None):
                     post_capture_wait_filler = _WaitFiller(owner=interaction_id)
                     if not suppress_auto_fillers and should_arm_realtime_wait_filler(combined):
                         post_capture_wait_filler.arm()
-                start_realtime_turn()
                 if not realtime_turn_started and post_capture_wait_filler is not None:
                     post_capture_wait_filler.cancel()
                     post_capture_wait_filler = None

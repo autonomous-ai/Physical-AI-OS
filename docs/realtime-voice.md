@@ -877,6 +877,12 @@ device never cuts anyone off.
 
 ### Opening-only automatic fillers on Standard and Pro lamps
 
+Automatic realtime wait fillers are armed only after session preparation and
+turn admission succeed, including the early-STT drain path. Unavailable/quota
+or failed-start fallback does not arm a realtime filler before main-agent
+dispatch. The existing filler delay starts after admission; no extra network
+wait is added. Deferred turns leave arming to the realtime flow once available.
+
 Standard and Pro lamps enable `HAL_VOICE_OPENING_FILLERS_ONLY=true` because
 they share the microphone (HAL default `false`; the `pro-xvf3800` and
 `pro-respeaker-lite` overlays keep the option disabled).
