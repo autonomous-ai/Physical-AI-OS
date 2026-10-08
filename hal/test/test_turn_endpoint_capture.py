@@ -12,7 +12,7 @@ import pytest
 def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None, legacy_limit=20,
             tts=None, on_read=None, on_close=None, on_connect=None, on_realtime=None,
             wake_enabled=False, focus=None, transcripts_final=True, close_transcript=None,
-            on_prepare=None, on_drain=None, pending_cue=None):
+            on_prepare=None, on_drain=None, pending_cue=None, realtime_available=True):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -32,7 +32,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
         service._tts_is_speaking.side_effect = lambda: tts.speaking
     service._music_is_playing.return_value = False
     service._turn_detector = detector
-    service._realtime.available = True
+    service._realtime.available = realtime_available
     service._realtime.rebuilding = False
     service._realtime.sample_rate = 16000
     if on_prepare is not None:
@@ -109,7 +109,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
                       return_value=module.RealtimeTurnResult()) as rt, \
          patch.object(module, "voice_metrics") as metrics, \
          patch.object(module, "build_turn_context", return_value="test context"), \
-         patch.object(module, "_WaitFiller"), \
+         patch.object(module, "_WaitFiller") as wait_filler, \
          patch.object(module.requests, "post"), \
          patch("hal.drivers.tracking.gaze.on_speech_end"):
         module.VoiceService._stream_session(
@@ -118,7 +118,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
             pending_listening_cue_id=pending_cue,
         )
         yield SimpleNamespace(service=service, stt=stt, dispatch=dispatch,
-                              realtime=rt, metrics=metrics, consumed=consumed)
+                              realtime=rt, metrics=metrics, consumed=consumed,
+                              wait_filler=wait_filler)
 
 
 def test_incomplete_pause_keeps_one_session_and_merges_final_segments(monkeypatch):
