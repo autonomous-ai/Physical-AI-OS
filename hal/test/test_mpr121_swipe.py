@@ -43,6 +43,43 @@ class TestTapFootprint(unittest.TestCase):
     def test_short_third_pad_spike_does_not_qualify(self):
         self.assertEqual(kinds(replay([(1, 3), (1.05, 7), (1.06, 3), (1.12, 0)], tap_min_electrodes=3)), [])
 
+    def test_irregular_poll_qualifies_elapsed_chord_on_falling_edge(self):
+        for falling_edge, expected in ((1.074, ["single", "cue"]), (1.069, [])):
+            with self.subTest(falling_edge=falling_edge):
+                detector = _SpatialGestureRecognizer(MPR121Config(
+                    bus=0, swipe_axis=tuple(range(12)), tap_min_electrodes=3,
+                ))
+                samples = [(0, 0), (1, 0x800), (1.020, 0xe00),
+                           (1.040, 0xe00), (1.060, 0xe00),
+                           (falling_edge, 0xa00), (1.10, 0),
+                           (1.12, 0), (1.23, 0), (2, 0)]
+                events = [event for now, mask in samples for event in detector.update(mask, now)]
+                self.assertEqual(kinds(events), expected)
+
+    def test_short_qualification_intervals_do_not_accumulate(self):
+        detector = _SpatialGestureRecognizer(MPR121Config(
+            bus=0, swipe_axis=tuple(range(12)), tap_min_electrodes=3,
+        ))
+        samples = [(0, 0), (1, 0x800), (1.020, 0xe00), (1.040, 0xe00),
+                   (1.060, 0x800), (1.070, 0x800), (1.080, 0xe00), (1.090, 0xe00),
+                   (1.110, 0x800), (1.13, 0), (1.15, 0), (1.26, 0), (2, 0)]
+        events = [event for now, mask in samples for event in detector.update(mask, now)]
+        self.assertEqual(kinds(events), [])
+
+    def test_stationary_growth_into_three_pad_contact_is_a_tap(self):
+        samples = [(1, 1), (1.06, 7), (1.18, 0)]
+        self.assertEqual(kinds(replay(samples, tap_min_electrodes=3)), ["single", "cue"])
+
+    def test_anchored_growth_and_shrinking_release_do_not_swipe(self):
+        growth = [(1, 1), (1.06, 7), (1.10, 31), (1.14, 127)]
+        for release in ([(1.22, 0)], [(1.20, 126), (1.22, 124), (1.24, 120), (1.26, 0)]):
+            self.assertEqual(kinds(replay(growth + release, tap_min_electrodes=3)), ["single", "cue"])
+
+    def test_expanding_footprint_can_then_travel_as_a_swipe(self):
+        samples = [(1, 1), (1.06, 7), (1.10, 14), (1.14, 28),
+                   (1.18, 56), (1.22, 112), (1.28, 0)]
+        self.assertEqual(kinds(replay(samples, tap_min_electrodes=3)), ["swipe"])
+
     def test_qualification_does_not_leak_to_next_contact(self):
         events = replay([(1, 7), (1.1, 0), (2, 1), (2.1, 0)], tap_min_electrodes=3)
         self.assertEqual(kinds(events), ["single", "cue"])
