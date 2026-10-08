@@ -13,6 +13,7 @@ import (
 
 	"go.autonomous.ai/os/system/device"
 	"go.autonomous.ai/os/system/domain"
+	"go.autonomous.ai/os/system/skills"
 )
 
 // knowledgeFS holds the KNOWLEDGE.md skeleton, embedded so a fresh picoclaw-only
@@ -372,12 +373,18 @@ func (s *PicoclawService) pruneUnsupportedSkills() {
 	for _, n := range s.supportedSkills() {
 		keep[n] = true
 	}
+	// Only platform-catalog skills are gated; Store, uploaded and
+	// user-authored skills share this dir and must survive every boot.
+	catalog := map[string]bool{}
+	for _, n := range skills.Catalog {
+		catalog[n] = true
+	}
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
 		name := e.Name()
-		if keep[name] || picoclawBuiltinSkills[name] {
+		if !catalog[name] || keep[name] || picoclawBuiltinSkills[name] {
 			continue
 		}
 		if err := os.RemoveAll(filepath.Join(skillsDir, name)); err != nil {

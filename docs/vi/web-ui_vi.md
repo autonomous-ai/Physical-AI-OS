@@ -75,6 +75,12 @@ Chỉ dùng với link tin cậy và tồn tại ngắn: mật khẩu trong URL 
 link được sao chép, lịch sử trình duyệt, hoặc log server/proxy trước khi trang
 xóa nó.
 
+Đăng nhập sai bị giới hạn trên toàn thiết bị, dù gõ tay hay đi từ link: sau 10
+lần sai trong cửa sổ trượt 10 phút, `POST /api/login` trả HTTP 429 kèm header
+`Retry-After` và thông báo "too many failed attempts, try again in N min", được
+hiển thị trên trang Login. Kể cả mật khẩu đúng cũng bị từ chối cho tới khi lần
+sai cũ nhất hết hạn; đăng nhập thành công sẽ xoá bộ đếm.
+
 ---
 
 ## 2. Cấu Trúc Thư Mục

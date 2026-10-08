@@ -163,7 +163,8 @@ make ota-keygen
 It writes an Ed25519 private PEM outside the repository by default, at
 `~/.config/autonomous/ota/ota-YYYYMMDD.pem`, and prints three export lines. Keep
 `OTA_SIGNING_PRIVATE_KEY` private; use it with `OTA_SIGNING_KEY_ID` for
-`make upload-*`. Provision the printed `OTA_SIGNING_PUBLIC_KEY` into new devices.
+`make upload-*`. Provision the printed `OTA_SIGNING_PUBLIC_KEY` into new devices
+(`setup.sh`, or `make -C scripts/imager build OTA_SIGNING_PUBLIC_KEY=...` for golden images).
 Override the path or ID when needed:
 
 ```bash
@@ -336,8 +337,12 @@ file is loaded as an overlay on operational defaults (`httpPort` 8080,
 and a missing file yields defaults with an empty URL.
 
 When supplied, `setup.sh` and golden-image builders persist
-`OTA_SIGNING_PUBLIC_KEY` as `signing_public_key`. Bootstrap then verifies the
-envelope before reading any component; the provisioned updater verifies it
+`OTA_SIGNING_PUBLIC_KEY` as `signing_public_key`. `make -C scripts/imager build`
+forwards `OTA_SIGNING_PUBLIC_KEY` into the build container (it used to drop it, so
+every golden image silently shipped in legacy mode); when it is empty,
+`build-preflight` prints `WARNING: OTA_SIGNING_PUBLIC_KEY is empty — this image
+will accept unsigned OTA metadata` and the build continues. With the key pinned,
+Bootstrap verifies the envelope before reading any component; the provisioned updater verifies it
 again and hashes every ZIP before extraction. When a release operator supplies
 `OTA_SIGNING_PRIVATE_KEY` and `OTA_SIGNING_KEY_ID`, release writers re-sign the
 envelope; without them they retain the legacy unsigned format. For the two self-contained
@@ -464,7 +469,7 @@ not change the machine's hardware-profile selection.
 For new images, select the assembly at build time:
 
 ```bash
-make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=... OTA_SIGNING_PUBLIC_KEY=...
 ```
 
 `VARIANT` is the only build input for hardware selection. The overlay stage writes
@@ -560,7 +565,8 @@ so it has to be retired. The rollout:
 1. **Publish signed** (done). Release writers add the `signed` envelope whenever
    `OTA_SIGNING_PRIVATE_KEY` and `OTA_SIGNING_KEY_ID` are set. Devices ignore it
    until a key is pinned.
-2. **Provision keys.** New devices get `OTA_SIGNING_PUBLIC_KEY` at setup; the
+2. **Provision keys.** New devices get `OTA_SIGNING_PUBLIC_KEY` at setup or
+   image build (`make -C scripts/imager build OTA_SIGNING_PUBLIC_KEY=...`); the
    existing fleet gets it written into `/root/config/bootstrap.json`. No
    redeploy is needed — the worker reads the key on the next config load.
 3. **Confirm the fleet.** Poll `GET /api/system/ota-security` and require

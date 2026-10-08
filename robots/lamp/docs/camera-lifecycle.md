@@ -270,5 +270,6 @@ Both ISP watchdogs (freeze and color corruption) share one escalation ladder via
 - **Guard mode + camera off**: ✅ Done — guard SKILL.md step 1: `[HW:/camera/enable:{}]` before enabling guard. Overrides manual disable.
 - **Face enroll while camera off**: `/face/enroll` uses uploaded image, not live camera. No conflict.
 - **Snapshot request while camera manually disabled or privacy-locked**: Return 409. Automatic pauses still allow temporary snapshots; concurrent snapshot requests serialize capture so their temporary stops cannot interrupt each other.
+- **Realtime `look` while camera manually disabled or privacy-locked**: Same rule (`_camera_off_by_user()` in `hal/realtime/orchestrator.py`) — no aim, no capture; the tool call is answered with an error telling the model the user turned the camera off. A camera paused automatically may still be woken for the look.
 - **Multiple rapid triggers**: Debounce camera start/stop — don't restart if already starting. `camera_capture.start()` already handles "already started" case.
 - **Sound spike false positive loop**: After sound spike auto-on, if no face detected within 30s → auto-off again. Prevents camera staying on from random noise.

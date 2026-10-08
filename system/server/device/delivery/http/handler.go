@@ -82,7 +82,7 @@ func (h *DeviceHandler) Setup(c *gin.Context) {
 		}
 		req.AdminPassword = mac[dash+1:]
 		slog.Info("admin_password defaulted to device suffix", "component", "device",
-			"suffix", req.AdminPassword, "suffix_len", len(req.AdminPassword))
+			"suffix_len", len(req.AdminPassword))
 	} else {
 		slog.Info("admin_password default skipped", "component", "device",
 			"has_admin_password_in_req", req.AdminPassword != "",

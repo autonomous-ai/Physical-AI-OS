@@ -175,9 +175,11 @@ func isInvalidGrantResponse(statusCode int, body []byte) bool {
 func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, refreshToken string) (oauthRefreshResult, error) {
 	var out oauthRefreshResult
 
-	base := strings.TrimRight(strings.TrimSpace(h.config.LLMBaseURL), "/")
-	if base == "" {
-		return out, errors.New("LLMBaseURL not configured")
+	// The refresh token only ever goes to our own backend, never to a
+	// user-chosen LLM provider.
+	base, key, ok := h.config.AutonomousBackend()
+	if !ok {
+		return out, errors.New("no Autonomous backend configured")
 	}
 	base = strings.TrimSuffix(base, "/v1")
 
@@ -190,9 +192,7 @@ func (h *DeviceMQTTHandler) requestTokenRefresh(ctx context.Context, provider, r
 	if err != nil {
 		return out, fmt.Errorf("new request: %w", err)
 	}
-	if key := strings.TrimSpace(h.config.LLMAPIKey); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
+	req.Header.Set("Authorization", "Bearer "+key)
 	if id := strings.TrimSpace(h.config.DeviceID); id != "" {
 		req.Header.Set("X-Device-ID", id)
 	}

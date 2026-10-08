@@ -30,6 +30,11 @@ BUILD_SCRIPT := $(BUILD_SCRIPT_$(TARGET))
 # /root/config/bootstrap.json. Empty → build fails in preflight.
 OTA_METADATA_URL ?=
 
+# Base64 Ed25519 public key that authorizes OTA metadata, baked into the image's
+# /root/config/bootstrap.json as signing_public_key. Without it the image ships
+# in legacy (unsigned) OTA mode. Provide it the same way as OTA_METADATA_URL.
+OTA_SIGNING_PUBLIC_KEY ?=
+
 # Device class baked into this golden image — one image per device type (3 device
 # types = 3 golden images). Forwarded into the build container; the build script
 # bakes it into os-server.service + /opt/hal/.env and stages only robots/<type>/
@@ -105,6 +110,7 @@ build-preflight:
 	@[ -n "$(DEVICE_TYPE)" ] || { echo "ERROR: DEVICE_TYPE is required — e.g. make build DEVICE_TYPE=lamp"; exit 1; }
 	@echo "    OTA metadata URL: $(OTA_METADATA_URL)"
 	@echo "    Device type:      $(DEVICE_TYPE)"
+	@[ -n "$(OTA_SIGNING_PUBLIC_KEY)" ] || echo "WARNING: OTA_SIGNING_PUBLIC_KEY is empty — this image will accept unsigned OTA metadata"
 	@command -v docker >/dev/null 2>&1 || { echo "ERROR: Docker not installed"; exit 1; }
 	@docker info >/dev/null 2>&1 || { echo "ERROR: Docker daemon not running (start Docker Desktop)"; exit 1; }
 	@DOCKER_MEM_GB=$$(docker info --format '{{.MemTotal}}' | awk '{printf "%.1f", $$1/1024/1024/1024}'); \
@@ -146,6 +152,7 @@ build: build-preflight
 	-e BUILD_SCRIPT=$(BUILD_SCRIPT) \
 	-e RPI_MODEL=$(RPI_MODEL) \
 	-e OTA_METADATA_URL=$(OTA_METADATA_URL) \
+	-e OTA_SIGNING_PUBLIC_KEY=$(OTA_SIGNING_PUBLIC_KEY) \
 	-e DEVICE_TYPE=$(DEVICE_TYPE) \
 	-e DEFAULT_AGENT=$(DEFAULT_AGENT) \
 	-e VARIANT=$(VARIANT) \

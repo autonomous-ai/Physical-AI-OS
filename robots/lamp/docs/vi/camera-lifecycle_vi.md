@@ -260,5 +260,6 @@ Cả hai watchdog ISP (freeze và loạn màu) dùng chung một thang leo qua `
 - **Guard mode + camera off**: ✅ Done — guard SKILL.md bước 1: `[HW:/camera/enable:{}]` trước khi enable guard. Override manual disable.
 - **Face enroll khi camera off**: `/face/enroll` dùng uploaded image, không dùng live camera. Không conflict.
 - **Snapshot khi camera bị tắt thủ công hoặc khóa riêng tư**: Trả 409. Camera tạm dừng tự động vẫn cho phép chụp tạm; các request snapshot đồng thời được xử lý tuần tự để không dừng camera của nhau.
+- **Realtime `look` khi camera bị tắt thủ công hoặc khóa riêng tư**: Cùng quy tắc (`_camera_off_by_user()` trong `hal/realtime/orchestrator.py`) — không ngắm, không chụp; tool call được trả lỗi báo model rằng người dùng đã tắt camera. Camera tạm dừng tự động vẫn có thể được đánh thức để look.
 - **Nhiều trigger liên tiếp**: Debounce camera start/stop. `camera_capture.start()` đã handle "already started".
 - **Sound spike false positive loop**: Sau auto-on, nếu không detect face trong 30s → auto-off lại.

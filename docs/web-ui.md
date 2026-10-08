@@ -75,6 +75,12 @@ Use this only with trusted, short-lived links: a password carried in a URL can
 be exposed through copied links, browser history, and server/proxy logs before
 the page removes it.
 
+Failed logins are throttled device-wide, whether typed or from a link: after 10
+failures within a sliding 10-minute window, `POST /api/login` returns HTTP 429
+with a `Retry-After` header and "too many failed attempts, try again in N min",
+which the Login page shows. Even the correct password is refused until the
+oldest failure ages out; a successful login clears the count.
+
 ---
 
 ## 2. Directory Structure

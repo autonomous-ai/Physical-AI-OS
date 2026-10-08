@@ -5,6 +5,7 @@ import (
 	"log"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -20,12 +21,20 @@ import (
 
 var deviceWipePaths = []string{
 	"/root/config/config.json",                      // os-server config; bootstrap.json in the same dir is intentionally kept
+	"/root/config/config.json.corrupt",              // unparseable config moved aside at boot; still holds the owner's keys
 	"/root/config/agent_state.json",                 // MUST wipe with config.json, or a spurious persona migration runs on next boot
+	"/root/config/buddies.json",                     // paired Mac companions; the previous owner's pairing must not survive
 	"/root/local/users",                             // face + voice enrollments (owner)
 	"/root/local/strangers",                         // face + voice enrollments (stranger)
+	"/root/local/external-history",                  // channel journal replayed into the agent at boot
 	"/var/lib/hal/snapshots",                        // persistent camera snapshots (sensing_face / motion / emotion, 72h TTL)
 	"/etc/wpa_supplicant/wpa_supplicant-wlan0.conf", // home WiFi credentials → forces AP mode on next boot
 	syspath.GELFSpoolDir(),                          // unshipped logs (may hold speech) must not ship with the next owner's key
+}
+
+// deviceWipeGlobs are per-day files wiped by pattern.
+var deviceWipeGlobs = []string{
+	"/root/local/flow_events_*.jsonl", // Flow Monitor turn logs, including what was said
 }
 
 // FactoryResetMinInterval is the minimum gap between two factory-reset
@@ -88,6 +97,16 @@ func wipeDeviceState() {
 	log.Printf("[factory-reset] wiping %d device paths", len(deviceWipePaths))
 	for _, p := range deviceWipePaths {
 		osreset.WipePath("[factory-reset]", p)
+	}
+	for _, pattern := range deviceWipeGlobs {
+		matches, err := filepath.Glob(pattern)
+		if err != nil {
+			log.Printf("[factory-reset] glob %s: %v (non-fatal)", pattern, err)
+			continue
+		}
+		for _, p := range matches {
+			osreset.WipePath("[factory-reset]", p)
+		}
 	}
 	wipeInactivePersonas()
 }

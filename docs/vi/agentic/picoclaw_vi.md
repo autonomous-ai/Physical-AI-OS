@@ -120,12 +120,14 @@ tự-heal sau factory reset, giống presync của hermes):
     mail client riêng), và `HEARTBEAT.md` (`ensureHeartbeatMDBlock`, synthesis
     hằng ngày) — mirror openclaw nhưng lược nội dung chỉ-openclaw, giữ các block cập
     nhật qua OTA os-server thường;
-  - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill device
-    không dùng được — skill được giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y
-    như openclaw) **hoặc** là built-in của picoclaw (`picoclawBuiltinSkills`:
-    `agent-browser`, `github`, `hardware`, `skill-creator`, `summarize`, `tmux`,
-    `weather`); còn lại trong `workspace/skills` thì xoá. Fail-open khi ROBOT.md không
-    khai cap. Không reload (skill đọc per-turn); sau đó tải lại mọi skill được hỗ trợ
+  - **capability-gate skills** (`pruneUnsupportedSkills`): xoá thư mục skill thuộc
+    catalog nền tảng (`skills.Catalog`) mà device không dùng được — skill catalog được
+    giữ nếu được `skills.Supported(caps)` hỗ trợ (gate y như openclaw) **hoặc** là
+    built-in của picoclaw (`picoclawBuiltinSkills`: `agent-browser`, `github`,
+    `hardware`, `skill-creator`, `summarize`, `tmux`, `weather`); các skill catalog còn
+    lại trong `workspace/skills` thì xoá. Skill cài từ Store, upload hoặc do người dùng
+    tự viết (không thuộc catalog) không bao giờ bị prune — cùng quy tắc với Codex.
+    Fail-open khi ROBOT.md không khai cap. Không reload (skill đọc per-turn); sau đó tải lại mọi skill được hỗ trợ
     từ CDN, nên skill local đã cũ trước khi watcher chạy sẽ tự phục hồi ở lần
     boot/config reconciliation. Nếu nội dung skill đổi, agent được báo sau khi gateway
     có thể đã restart để đọc lại các file `SKILL.md` mới;

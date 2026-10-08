@@ -356,7 +356,7 @@ before synthesis; valid requests acknowledge `starting`, then `success` or
 | `wakeword.gate` | Set the top-level wake-word gate (async; acks `starting`) | `enabled` (required boolean) |
 | `voice.input_mode` | Select voice input behavior (async ack) | `mode`: `automatic` or `tap_to_talk` |
 | `timezone.set` | Apply the device's IANA timezone (async; acks `starting`) | `timezone` (required, e.g. `Asia/Ho_Chi_Minh`) |
-| `oauth.set` | Store/replace an OAuth token for a provider | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
+| `oauth.set` | Store/replace an OAuth token for a provider; its `refresh_token` is rotated via the backend `/oauth/refresh`, Autonomous hosts only (see [Connectors](#connectors) **Refresh**) | `provider`, `access_token`, optional `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Delete the stored OAuth token for a provider | `provider` |
 | `connector.set.<code>` | Store/replace credentials for a connector (async; acks `starting`) | `connector`, `auth_type`, optional `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
 | `connector.remove.<code>` | Delete a connector's credentials (async; acks `starting`) | `connector` |
@@ -671,6 +671,16 @@ expired an hour after it was stored.
 carrying BOTH a `refresh_token` AND `refresh:true` (the backend owns refresh
 eligibility via the `refresh` flag) once it is within 10 minutes of expiry, via the
 backend `/connector/refresh-token` endpoint.
+
+**Refresh target:** this loop and the `oauth.set` token refresh (`/oauth/refresh`)
+send a refresh token only to an Autonomous host. `Config.AutonomousBackend()`
+(`system/server/config/gelf_relay.go`) picks the first complete base/key pair whose
+host is `*.autonomous.ai` / `*.autonomousdev.xyz` (`urlnorm.IsAutonomousHost`): the
+backend channel (`backend_base_url`/`backend_api_key`), then the shipped
+`autonomous_defaults`, then the live `llm_base_url`/`llm_api_key`. When none does
+(e.g. a bring-your-own OpenAI/OpenRouter key with no shipped defaults), the refresh
+fails with `no Autonomous backend configured` and the token is never sent to a third
+party.
 
 #### `channel.refresh_config`
 

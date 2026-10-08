@@ -147,7 +147,7 @@ hal-install:
 
 $(HAL_DIR)/.venv: $(HAL_DIR)/uv.lock $(HAL_DIR)/pyproject.toml
 	@command -v uv >/dev/null || { echo "uv not found — install: https://docs.astral.sh/uv/getting-started/installation/"; exit 1; }
-	cd $(HAL_DIR) && uv sync --inexact
+	cd $(HAL_DIR) && uv sync --inexact --extra dev
 	@touch $(HAL_DIR)/.venv
 
 hal-dev: $(HAL_DIR)/.venv

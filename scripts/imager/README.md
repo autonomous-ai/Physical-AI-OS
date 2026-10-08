@@ -188,6 +188,7 @@ identifies the cause of an initramfs/ext4 failure.
 | `DEVICE_TYPE` | **(required)** | `lamp`, `intern-v2`, … — one image per device class |
 | `DEFAULT_AGENT` | *(unset)* | Bakes `/root/config/f_r_default_agent` (survives factory reset, wins over `ROBOT.md` `gateway.default`) and gates SSH for `intern-v2`. Unset = unchanged behavior |
 | `OTA_METADATA_URL` | **(required)** | Baked into `/root/config/bootstrap.json` |
+| `OTA_SIGNING_PUBLIC_KEY` | *(unset)* | Base64 Ed25519 OTA metadata key, baked into `/root/config/bootstrap.json` as `signing_public_key`. Unset = preflight prints a WARNING and the image accepts unsigned (legacy-mode) OTA metadata |
 | `OUT_IMG_SIZE` | `14G` | OPi partition size after expansion |
 | `COMPRESS` | `1` | `0` skips the `.xz` step; flash the raw `.img` with `make sd-card-flash-raw` |
 | `OPI_FILE_ID` | `1CYfOaY6f5DozJBNvPJ0Gx1jBIFlGe8fn` | Google Drive ID for stock OPi .7z |

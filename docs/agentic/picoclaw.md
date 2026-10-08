@@ -122,12 +122,14 @@ self-heals after a factory reset, mirroring hermes' presync):
     so the agent never installs its own mail client), and `HEARTBEAT.md` (`ensureHeartbeatMDBlock`,
     daily knowledge-synthesis) — mirroring openclaw but stripped of OpenClaw-only
     content, so the blocks stay current on a plain os-server OTA;
-  - **capability-gates skills** (`pruneUnsupportedSkills`): removes skill dirs the
-    device can't use — a skill survives if it is supported by `skills.Supported(caps)`
-    (the same gate openclaw uses) **or** is a picoclaw built-in
-    (`picoclawBuiltinSkills`: `agent-browser`, `github`, `hardware`, `skill-creator`,
-    `summarize`, `tmux`, `weather`); everything else under `workspace/skills` is
-    deleted. Fail-open when ROBOT.md declares no caps. No reload (skills read per-turn);
+  - **capability-gates skills** (`pruneUnsupportedSkills`): removes platform-catalog
+    skill dirs (`skills.Catalog`) the device can't use — a catalog skill survives if
+    it is supported by `skills.Supported(caps)` (the same gate openclaw uses) **or**
+    is a picoclaw built-in (`picoclawBuiltinSkills`: `agent-browser`, `github`,
+    `hardware`, `skill-creator`, `summarize`, `tmux`, `weather`); other catalog
+    skills under `workspace/skills` are deleted. Store-installed, uploaded and
+    user-authored skills (not in the catalog) are never pruned — same rule as
+    Codex. Fail-open when ROBOT.md declares no caps. No reload (skills read per-turn);
     then refreshes every supported skill from the CDN, so a local skill that was
     stale before the watcher started self-heals on boot/config reconciliation. If
     any skill content changed, it notifies the agent after a possible gateway restart

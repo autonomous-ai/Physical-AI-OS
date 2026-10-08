@@ -54,6 +54,21 @@ from hal.realtime.summarizer import RealtimeSummarizer
 from hal.realtime.voice_agent.base import AudioTurnSessionChanged, VoiceAgentBase
 
 
+def _camera_off_by_user() -> bool:
+    """True when the privacy switch or the user's own camera toggle has the camera off.
+
+    Same rule /camera/snapshot enforces: a camera idled by the OS may be woken for a
+    look, a camera the user switched off may not.
+    """
+    import hal.app_state as state
+    from hal import privacy
+
+    return bool(
+        privacy.camera_muted
+        or (getattr(state, "_camera_disabled", False) and getattr(state, "_camera_manual_override", False))
+    )
+
+
 @dataclass(frozen=True)
 class AudioTurnBinding:
     """One capture's agent and provider socket; never follows a reconnect."""
@@ -1713,6 +1728,19 @@ class RealtimeOrchestrator:
         from hal.drivers.tracking import look_debug
 
         look_debug.start()
+        if _camera_off_by_user():
+            # Do not aim or capture: the user (or the privacy switch) turned the camera off.
+            logger.info("[realtime] look: camera is off by the user — not capturing")
+            look_debug.abandon("camera_off_by_user")
+            self._agent.send(
+                [
+                    FunctionCallResultInput(
+                        call_id=output.call_id,
+                        output='{"error": "the camera is turned off by the user; say so and do not describe the scene"}',
+                    )
+                ]
+            )
+            return False
         now: float = time.monotonic()
         # Cost guard (also the replay-turn path): no new image within the interval or twice per turn.
         min_interval: float = config.REALTIME_GEMINI_VISION_MIN_INTERVAL_S
@@ -1871,10 +1899,10 @@ class RealtimeOrchestrator:
             from hal.drivers.camera.video_capture_device import capture_still
         except Exception:
             return None
-        from hal import privacy
         cap = getattr(state, "camera_capture", None)
-        if cap is None or privacy.camera_muted:
+        if cap is None or _camera_off_by_user():
             return None
+        from hal import privacy
         was_disabled: bool = bool(getattr(state, "_camera_disabled", False))
         try:
             if was_disabled:

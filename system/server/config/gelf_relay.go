@@ -21,6 +21,25 @@ func (c *Config) GELFRelayCredentials() (baseURL, apiKey string) {
 	return "", ""
 }
 
+// AutonomousBackend returns the Autonomous cloud API base URL and device key
+// for calls that carry account secrets (OAuth and connector refresh tokens):
+// the backend channel, then the shipped defaults, then the active LLM pair,
+// whichever first points at our own gateway. ok is false when none does, so a
+// user-chosen LLM provider never receives those secrets.
+func (c *Config) AutonomousBackend() (baseURL, apiKey string, ok bool) {
+	pairs := [][2]string{{c.BackendBaseURL, c.BackendAPIKey}}
+	if d := c.AutonomousDefaults; d != nil {
+		pairs = append(pairs, [2]string{d.BaseURL, d.APIKey})
+	}
+	pairs = append(pairs, [2]string{c.LLMBaseURL, c.LLMAPIKey})
+	for _, p := range pairs {
+		if base, key, ok := autonomousRelayTarget(p[0], p[1]); ok {
+			return base, key, true
+		}
+	}
+	return "", "", false
+}
+
 // autonomousRelayTarget normalizes one base/key pair and reports whether it is
 // complete and points at our own gateway.
 func autonomousRelayTarget(rawBase, rawKey string) (base, key string, ok bool) {

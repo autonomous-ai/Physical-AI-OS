@@ -156,9 +156,11 @@ func firstNonEmpty(a, b string) string {
 func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, connector, refreshToken string) (connectorRefreshResult, error) {
 	var out connectorRefreshResult
 
-	base := strings.TrimRight(strings.TrimSpace(h.config.LLMBaseURL), "/")
-	if base == "" {
-		return out, errors.New("LLMBaseURL not configured")
+	// The refresh token only ever goes to our own backend, never to a
+	// user-chosen LLM provider.
+	base, key, ok := h.config.AutonomousBackend()
+	if !ok {
+		return out, errors.New("no Autonomous backend configured")
 	}
 	base = strings.TrimSuffix(base, "/v1")
 
@@ -171,9 +173,7 @@ func (h *DeviceMQTTHandler) requestConnectorTokenRefresh(ctx context.Context, co
 	if err != nil {
 		return out, fmt.Errorf("new request: %w", err)
 	}
-	if key := strings.TrimSpace(h.config.LLMAPIKey); key != "" {
-		req.Header.Set("Authorization", "Bearer "+key)
-	}
+	req.Header.Set("Authorization", "Bearer "+key)
 	if id := strings.TrimSpace(h.config.DeviceID); id != "" {
 		req.Header.Set("X-Device-ID", id)
 	}

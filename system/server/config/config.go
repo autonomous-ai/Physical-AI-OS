@@ -377,7 +377,20 @@ func ProvideConfig() *Config {
 
 	var cfg Config
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		panic(fmt.Errorf("parse config %s: %w", configPath, err))
+		// A corrupt config must not crash-loop os-server: no OTA could repair
+		// that, since every new build would panic here too. Keep the bad file
+		// for diagnosis and boot unconfigured, which re-opens setup.
+		slog.Error("config unreadable — moving it aside and starting setup again",
+			"component", "config", "path", configPath, "error", err)
+		if mvErr := os.Rename(configPath, configPath+corruptSuffix); mvErr != nil {
+			slog.Error("move corrupt config failed", "component", "config", "error", mvErr)
+		}
+		c := Default()
+		if err := c.Save(); err != nil {
+			slog.Error("save config failed", "component", "config", "error", err)
+		}
+		c.OTAMetadataURL = otaMetadataURLFromBootstrap()
+		return &c
 	}
 	cfg.notify = make(chan bool, 1)
 
@@ -442,7 +455,7 @@ func (c *Config) WithLockSave(fn func(*Config)) error {
 		c.mu.Unlock()
 		return fmt.Errorf("create config dir: %w", mkErr)
 	}
-	writeErr := os.WriteFile(configPath, data, 0600)
+	writeErr := writeFileAtomic(configPath, data, 0600)
 	c.mu.Unlock() // release before notify so listeners are not blocked
 	if writeErr != nil {
 		return fmt.Errorf("write config %s: %w", configPath, writeErr)
@@ -460,6 +473,50 @@ func (c *Config) WithLockSave(fn func(*Config)) error {
 // Prefer WithLockSave for any path that also mutates fields.
 func (c *Config) Save() error {
 	return c.WithLockSave(func(*Config) {})
+}
+
+// corruptSuffix names the copy of an unparseable config.json kept for
+// diagnosis; factory reset wipes it with config.json.
+const corruptSuffix = ".corrupt"
+
+// writeFileAtomic replaces path via temp file + fsync + rename, so a power cut
+// or a full disk leaves either the old or the new config.json, never a
+// truncated one.
+func writeFileAtomic(path string, data []byte, perm os.FileMode) error {
+	dir := filepath.Dir(path)
+	tmp, err := os.CreateTemp(dir, ".config-*.tmp")
+	if err != nil {
+		return fmt.Errorf("create temp: %w", err)
+	}
+	tmpPath := tmp.Name()
+	if _, err := tmp.Write(data); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("write temp: %w", err)
+	}
+	if err := tmp.Sync(); err != nil {
+		tmp.Close()
+		os.Remove(tmpPath)
+		return fmt.Errorf("sync temp: %w", err)
+	}
+	if err := tmp.Close(); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("close temp: %w", err)
+	}
+	if err := os.Chmod(tmpPath, perm); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("chmod temp: %w", err)
+	}
+	if err := os.Rename(tmpPath, path); err != nil {
+		os.Remove(tmpPath)
+		return fmt.Errorf("rename temp → %s: %w", path, err)
+	}
+	// Persist the rename itself; best effort, the data is already synced.
+	if d, err := os.Open(dir); err == nil {
+		_ = d.Sync()
+		d.Close()
+	}
+	return nil
 }
 
 // halConfigHashPath stores a hash of config.json captured when HAL was last

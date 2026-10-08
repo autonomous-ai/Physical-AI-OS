@@ -345,7 +345,7 @@ nhận HAL nhận yêu cầu phát, không đảm bảo audio đã phát xong.
 | `wakeword.gate` | Bật/tắt wake-word gate top-level (bất đồng bộ; ack `starting`) | `enabled` (boolean bắt buộc) |
 | `voice.input_mode` | Chọn cách nhập giọng nói (ack bất đồng bộ) | `mode`: `automatic` hoặc `tap_to_talk` |
 | `timezone.set` | Áp dụng múi giờ IANA của device (bất đồng bộ; ack `starting`) | `timezone` (bắt buộc, ví dụ `Asia/Ho_Chi_Minh`) |
-| `oauth.set` | Lưu/thay token OAuth cho một provider | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
+| `oauth.set` | Lưu/thay token OAuth cho một provider; `refresh_token` được xoay vòng qua backend `/oauth/refresh`, chỉ tới host Autonomous (xem [Connectors](#connectors) **Refresh**) | `provider`, `access_token`, tùy chọn `refresh_token`/`token_type`/`expires_at`/`scopes`/`user_email`/`client_id` |
 | `oauth.remove` | Xóa token OAuth đã lưu của provider | `provider` |
 | `connector.set.<code>` | Lưu/thay credentials cho một connector (bất đồng bộ; ack `starting`) | `connector`, `auth_type`, tùy chọn `access_token`/`refresh_token`/`api_key`/`expires_in`/`expires_at`/`scopes`/`credentials`/`refresh` |
 | `connector.remove.<code>` | Xóa credentials của một connector (bất đồng bộ; ack `starting`) | `connector` |
@@ -651,6 +651,15 @@ sau một tiếng kể từ lúc lưu.
 writer đặc biệt, và chủ động xoay vòng entry nào có CẢ `refresh_token` LẪN
 `refresh:true` (backend sở hữu quyền quyết định refresh qua cờ `refresh`) khi còn dưới
 10 phút là hết hạn, qua endpoint backend `/connector/refresh-token`.
+
+**Đích refresh:** loop này và việc refresh token `oauth.set` (`/oauth/refresh`) chỉ
+gửi refresh token tới host Autonomous. `Config.AutonomousBackend()`
+(`system/server/config/gelf_relay.go`) chọn cặp base/key đầy đủ đầu tiên có host là
+`*.autonomous.ai` / `*.autonomousdev.xyz` (`urlnorm.IsAutonomousHost`): kênh backend
+(`backend_base_url`/`backend_api_key`), rồi `autonomous_defaults` đi kèm máy, rồi cặp
+`llm_base_url`/`llm_api_key` đang dùng. Nếu không cặp nào thỏa (vd key OpenAI/OpenRouter
+tự mang và không có defaults đi kèm), refresh thất bại với `no Autonomous backend
+configured` và token không bao giờ bị gửi cho bên thứ ba.
 
 #### `channel.refresh_config`
 

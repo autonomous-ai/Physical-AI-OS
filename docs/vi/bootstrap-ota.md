@@ -161,7 +161,8 @@ make ota-keygen
 Mặc định lệnh tạo private PEM Ed25519 ở ngoài repo, tại
 `~/.config/autonomous/ota/ota-YYYYMMDD.pem`, rồi in ba dòng `export`. Giữ kín
 `OTA_SIGNING_PRIVATE_KEY`; dùng nó cùng `OTA_SIGNING_KEY_ID` khi chạy
-`make upload-*`. Provision `OTA_SIGNING_PUBLIC_KEY` được in ra cho device mới.
+`make upload-*`. Provision `OTA_SIGNING_PUBLIC_KEY` được in ra cho device mới
+(`setup.sh`, hoặc `make -C scripts/imager build OTA_SIGNING_PUBLIC_KEY=...` cho golden image).
 Có thể đổi thư mục hoặc ID:
 
 ```bash
@@ -331,7 +332,11 @@ nhưng nằm cùng thư mục `/root/config/`.
 file thiếu thì dùng default với URL rỗng.
 
 Khi được truyền vào, `setup.sh` và image builder lưu `OTA_SIGNING_PUBLIC_KEY`
-thành `signing_public_key`. Khi đó Bootstrap xác thực envelope trước khi đọc
+thành `signing_public_key`. `make -C scripts/imager build` chuyển
+`OTA_SIGNING_PUBLIC_KEY` vào build container (trước đây nó bị bỏ rơi, nên mọi
+golden image âm thầm ra lò ở legacy mode); khi biến này rỗng, `build-preflight` in
+`WARNING: OTA_SIGNING_PUBLIC_KEY is empty — this image will accept unsigned OTA metadata`
+và build vẫn tiếp tục. Khi đã pin key, Bootstrap xác thực envelope trước khi đọc
 component; updater được provision xác thực lần nữa và hash mọi ZIP trước khi
 giải nén. Khi release operator truyền `OTA_SIGNING_PRIVATE_KEY` và
 `OTA_SIGNING_KEY_ID`, release writer ký lại envelope; thiếu chúng thì vẫn giữ
@@ -453,7 +458,7 @@ rootfs thực tế. Rollback không đổi lựa chọn hardware-profile của m
 Với image mới, chọn phần cứng lúc build:
 
 ```bash
-make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=...
+make -C scripts/imager build TARGET=opi DEVICE_TYPE=lamp VARIANT=pro OTA_METADATA_URL=... OTA_SIGNING_PUBLIC_KEY=...
 ```
 
 `VARIANT` là input build duy nhất để chọn phần cứng. Bước overlay ghi
@@ -544,7 +549,8 @@ phải gỡ. Lộ trình:
 1. **Publish có ký** (đã xong). Release writer thêm envelope `signed` mỗi khi có
    `OTA_SIGNING_PRIVATE_KEY` và `OTA_SIGNING_KEY_ID`. Device bỏ qua nó tới khi
    được pin key.
-2. **Provision key.** Device mới nhận `OTA_SIGNING_PUBLIC_KEY` lúc setup; fleet
+2. **Provision key.** Device mới nhận `OTA_SIGNING_PUBLIC_KEY` lúc setup hoặc lúc
+   build image (`make -C scripts/imager build OTA_SIGNING_PUBLIC_KEY=...`); fleet
    hiện có thì ghi vào `/root/config/bootstrap.json`. Không cần redeploy —
    worker đọc key ở lần load config kế tiếp.
 3. **Xác nhận toàn fleet.** Poll `GET /api/system/ota-security` và yêu cầu
