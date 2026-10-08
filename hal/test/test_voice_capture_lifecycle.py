@@ -14,6 +14,11 @@ from hal.drivers.voice import voice_service as module
 
 def service(monkeypatch):
     s = object.__new__(module.VoiceService)
+    s._automatic_reply_lock = threading.Lock()
+    s._automatic_reply_stop = None
+    s._automatic_reply_cancelled_at = None
+    s._stt_drain_worker = None
+    s._stt_drain_future = None
     s._lifecycle_lock = threading.Lock()
     s._lifecycle_revision = 0
     s._mic_lock = threading.Lock()

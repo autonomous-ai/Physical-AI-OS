@@ -1,3 +1,4 @@
+import threading
 """A trigger the live noise-guard rejects must not erase the pre-roll."""
 
 from unittest.mock import Mock, patch
@@ -19,7 +20,12 @@ def test_pre_roll_after_skipped_trigger_keeps_the_rejected_frames(monkeypatch, f
     mic.read.side_effect = lambda _: (next(frames), False)
 
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
     service._running = True
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._np = np
     service._tts_is_speaking.return_value = False
     service._music_is_playing.return_value = False

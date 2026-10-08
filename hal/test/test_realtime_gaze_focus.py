@@ -1,4 +1,6 @@
 """A gaze focus grant at speech end belongs to the captured realtime turn."""
+import threading
+
 
 from unittest.mock import Mock, patch
 
@@ -19,6 +21,11 @@ def test_speech_end_focus_controls_same_capture(
         monkeypatch, initial_focus, end_focus, noise, expected):
     request = 'How are you doing today?'
     service = Mock()
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
     service._running = False
     service._tts = None
     service._wakeword_focus.is_active.return_value = initial_focus

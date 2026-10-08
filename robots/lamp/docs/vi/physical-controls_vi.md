@@ -753,3 +753,9 @@ Lệnh mute speaker thủ công trong lúc sleep chuyển quyền giữ mute t�
 Âm báo thu giọng Harness dùng hai nốt đi lên khi bắt đầu và hai nốt đi xuống khi kết thúc, riêng biệt với ping gesture thường. Âm kết thúc báo đã đóng thu giọng, không phải xác nhận agent từ xa đã nhận hoặc làm xong task. Tap ngắt TTS giữ tiếng ping xác nhận cũ và không mở thu giọng.
 
 Khi Harness mode duy trì ON, watcher mode MPR121 giữ LED thở lime nhẹ từ `button_led.harness_on` trong preset thiết bị. OFF nháy nhẹ một lần theo `harness_off`. Đèn báo nhường sleep, riêng tư và phản hồi voice/nhạc, trở lại qua luồng restore LED, không thay đổi cài đặt đèn người dùng đã lưu. Thiết bị không có RGB bỏ qua phản hồi LED.
+
+Khi Live tắt, chạm dừng/nghe cũng hủy phần chờ realtime đang trả lời automatic,
+không chỉ TTS. Bỏ output đến muộn và fallback main của lượt đã hủy; reconnect
+provider chạy nền để không giữ vòng mic. Xem
+[hủy trả lời automatic](../../../../docs/vi/realtime-voice_vi.md#dừng-loa-giải-phóng-lượt-trả-lời-automatic)
+về giới hạn phép đo latency và log chẩn đoán.

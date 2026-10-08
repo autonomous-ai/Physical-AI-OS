@@ -265,6 +265,11 @@ class VoiceService:
         self._rt_noise_vad: SileroVADFilter | None = None
         self._silence_vad: SileroVADFilter | None = None
         self._turn_detector = None
+        self._automatic_reply_lock = threading.Lock()
+        self._automatic_reply_stop = None
+        self._automatic_reply_cancelled_at = None
+        self._stt_drain_worker = None
+        self._stt_drain_future = None
 
         # Speaker decoration (wake-word + speaker recognizer + SER). Runtime rename
         # updates must never replace the permanent aliases.
@@ -540,6 +545,9 @@ class VoiceService:
     def close(self):
         """Permanently dispose this pipeline; mute/unmute uses stop/start."""
         self.stop()
+        worker = self._stt_drain_worker
+        if worker is not None:
+            worker.shutdown(wait=False, cancel_futures=True)
         queue = getattr(self, "_device_turn_queue", None)
         if queue is not None and not queue.shutdown(timeout=1):
             if self._device_dispose_thread is None:
@@ -555,6 +563,7 @@ class VoiceService:
             self._decorator.close()
 
     def stop(self, *, background=False):
+        self.cancel_automatic_reply()
         self._lifecycle_lock.acquire()
         self._lifecycle_revision += 1
         self._running = False
@@ -1215,7 +1224,14 @@ class VoiceService:
                         lookback.clear()
                     self._silero_reset_state()
                     logger.info("VAD resumed — mic active, waiting for next speech")
-                    time.sleep(voice_cfg.SESSION_COOLDOWN_S)
+                    with self._automatic_reply_lock:
+                        cancelled_at = self._automatic_reply_cancelled_at
+                        self._automatic_reply_cancelled_at = None
+                    if cancelled_at is None:
+                        time.sleep(voice_cfg.SESSION_COOLDOWN_S)
+                    else:
+                        logger.info("[automic-stop] receive released; VAD resumed after %.1fms",
+                                    (time.monotonic() - cancelled_at) * 1000)
                     if stt_keepalive_on and self._running and not self._tts_is_speaking():
                         keepalive_session = self._stt.create_session()
                         if not keepalive_session.start(lambda text, is_final: None):
@@ -2179,6 +2195,25 @@ class VoiceService:
             self._uplink_resampler = rs
         return rs.process(audio_f32)
 
+    def cancel_automatic_reply(self):
+        """Release the turn-based receive loop when the user takes the floor."""
+        with self._automatic_reply_lock:
+            stop = self._automatic_reply_stop
+            if stop is None:
+                return False
+            if not stop.is_set():
+                self._automatic_reply_cancelled_at = time.monotonic()
+                stop.set()
+                logger.info("[automic-stop] reply cancellation requested")
+            return True
+
+    def _run_automatic_realtime_turn(self, reply_stop, *args, **kwargs):
+        with self._automatic_reply_lock:
+            self._automatic_reply_stop = reply_stop
+        return run_realtime_turn(
+            *args, **kwargs, stop_event=reply_stop, background_cancel_recovery=True,
+        )
+
     def _stream_session(
         self, mic, frame_size: int, device_rate: int,
         preconnected_session=None, speech_pre_buffer=None,
@@ -2194,17 +2229,25 @@ class VoiceService:
                 tts.end_input_capture(token)
 
         followup_ids = set()
+        reply_stop = threading.Event()
         try:
             return VoiceService._stream_session_impl(
                 self, mic, frame_size, device_rate, preconnected_session,
                 speech_pre_buffer, pending_listening_cue_id, harness_voice,
                 manual_capture, release_input, followup_ids,
-                wake_focus_at_entry,
+                wake_focus_at_entry, reply_stop,
             )
         finally:
+            with self._automatic_reply_lock:
+                if self._automatic_reply_stop is reply_stop:
+                    self._automatic_reply_stop = None
             release_input()
             for iid in followup_ids:
-                self._wakeword_focus.finish(iid)
+                self._wakeword_focus.finish(iid, cancelled=reply_stop.is_set())
+            if reply_stop.is_set():
+                from hal import app_state
+
+                app_state.clear_listening_cue()
             # A capture dropped as noise (or routed without a realtime reply) never
             # reaches stream_output, which is what normally ends the realtime turn.
             realtime = getattr(self, "_realtime", None)
@@ -2224,6 +2267,7 @@ class VoiceService:
         release_input=lambda: None,
         followup_ids=None,
         wake_focus_at_entry=None,
+        reply_stop=None,
     ):
         """Stream audio to STT provider until silence or TTS interrupts."""
         harness_voice = read_voice_mode() if harness_voice is None else harness_voice
@@ -2378,6 +2422,8 @@ class VoiceService:
                 logger.info("Wake-word gate confirmed by STT final: '%s'", candidate)
 
         def on_transcript(text: str, is_final: bool):
+            if reply_stop is not None and reply_stop.is_set():
+                return
             if text.strip():
                 self._last_transcript_ts = time.time()
             if not is_final:
@@ -2841,11 +2887,12 @@ class VoiceService:
             overlap_drain = (
                 realtime_allowed and hal_config.REALTIME_ENABLED and self._running
                 and manual_capture is None and early_authorized
+                and (self._stt_drain_future is None or self._stt_drain_future.done())
                 and not harness_followup_active()
                 and endpoint_method in {"smart_turn", "turn_fallback", "turn_pause_limit", "silence_clock"}
             )
             if overlap_drain:
-                from concurrent.futures import ThreadPoolExecutor
+                from concurrent.futures import ThreadPoolExecutor, TimeoutError as DrainTimeout
 
                 capture_complete.set()
                 drain_finished = threading.Event()
@@ -2857,60 +2904,69 @@ class VoiceService:
                         drain_finished.set()
                         stt_final_changed.set()
 
-                with ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain") as worker:
-                    final_drain = worker.submit(close_stt)
-                    try:
-                        last_final_snapshot = None
-                        while self._running:
-                            stt_final_changed.clear()
-                            final_snapshot = tuple(final_segments)
-                            if final_snapshot == last_final_snapshot:
-                                if drain_finished.is_set():
-                                    break
-                                stt_final_changed.wait(timeout=0.1)
-                                continue
-                            last_final_snapshot = final_snapshot
-                            early_words, _, early_duration = finalize_session(
-                                list(audio_buffer), [""], list(final_snapshot), last_speech_idx,
-                                capture_spoken_text,
-                            )
-                            early_speech = True
-                            if (early_words and needs_noise_guard(early_words)
-                                    and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
-                                try:
-                                    early_speech = self._rt_noise_is_speech(
-                                        self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
-                                    )
-                                except Exception as e:
-                                    logger.warning("Early realtime speech check failed: %s", e)
-                            if early_words and not is_noise_turn(early_words, early_duration, early_speech):
-                                interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
-                                hold_followup()
-                                post_capture_wait_filler = _WaitFiller(owner=interaction_id)
-                                if not suppress_auto_fillers and should_arm_realtime_wait_filler(early_words):
-                                    post_capture_wait_filler.arm()
-                                start_realtime_turn()
-                                if realtime_turn_started and not realtime_deferred and self._running:
-                                    logger.info("[realtime] Processing confirmed speech while STT final drain runs")
-                                    early_realtime_result = run_realtime_turn(
-                                        self._realtime, self._tts, self.strip_rt_markers,
-                                        early_words, rt_audio_buffer, early_duration, early_speech,
-                                        interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
-                                        harness_followup=False, wait_filler=post_capture_wait_filler,
-                                        suppress_auto_fillers=suppress_auto_fillers,
-                                    )
-                                break
+                if self._stt_drain_worker is None:
+                    self._stt_drain_worker = ThreadPoolExecutor(max_workers=1, thread_name_prefix="stt-final-drain")
+                final_drain = self._stt_drain_worker.submit(close_stt)
+                self._stt_drain_future = final_drain
+                try:
+                    last_final_snapshot = None
+                    while self._running:
+                        stt_final_changed.clear()
+                        final_snapshot = tuple(final_segments)
+                        if final_snapshot == last_final_snapshot:
                             if drain_finished.is_set():
                                 break
                             stt_final_changed.wait(timeout=0.1)
-                    finally:
-                        try:
-                            final_drain.result()
-                        except Exception:
-                            if post_capture_wait_filler is not None:
-                                post_capture_wait_filler.cancel()
-                            raise
-                if not self._running:
+                            continue
+                        last_final_snapshot = final_snapshot
+                        early_words, _, early_duration = finalize_session(
+                            list(audio_buffer), [""], list(final_snapshot), last_speech_idx,
+                            capture_spoken_text,
+                        )
+                        early_speech = True
+                        if (early_words and needs_noise_guard(early_words)
+                                and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT and audio_buffer):
+                            try:
+                                early_speech = self._rt_noise_is_speech(
+                                    self._np.frombuffer(b"".join(audio_buffer), dtype=self._np.int16)
+                                )
+                            except Exception as e:
+                                logger.warning("Early realtime speech check failed: %s", e)
+                        if early_words and not is_noise_turn(early_words, early_duration, early_speech):
+                            interaction_id = voice_metrics.speech_end(endpoint_method, at=endpoint_ts)
+                            hold_followup()
+                            post_capture_wait_filler = _WaitFiller(owner=interaction_id)
+                            if not suppress_auto_fillers and should_arm_realtime_wait_filler(early_words):
+                                post_capture_wait_filler.arm()
+                            start_realtime_turn()
+                            if realtime_turn_started and not realtime_deferred and self._running:
+                                logger.info("[realtime] Processing confirmed speech while STT final drain runs")
+                                early_realtime_result = VoiceService._run_automatic_realtime_turn(self, reply_stop,
+                                    self._realtime, self._tts, self.strip_rt_markers,
+                                    early_words, rt_audio_buffer, early_duration, early_speech,
+                                    interaction_id=interaction_id, save_history=False, audio_turn=audio_turn,
+                                    harness_followup=False, wait_filler=post_capture_wait_filler,
+                                    suppress_auto_fillers=suppress_auto_fillers,
+                                )
+                            break
+                        if drain_finished.is_set():
+                            break
+                        stt_final_changed.wait(timeout=0.1)
+                finally:
+                    try:
+                        while not reply_stop.is_set():
+                            try:
+                                final_drain.result(timeout=0.1)
+                                break
+                            except DrainTimeout:
+                                if final_drain.done():
+                                    raise
+                                continue
+                    except Exception:
+                        if post_capture_wait_filler is not None:
+                            post_capture_wait_filler.cancel()
+                        raise
+                if not self._running or reply_stop.is_set():
                     if post_capture_wait_filler is not None:
                         post_capture_wait_filler.cancel()
                     if pending_listening_cue_id is not None:
@@ -3001,6 +3057,9 @@ class VoiceService:
                     gaze.release_reacquire_hold_if_pending()
                 except Exception as e:
                     logger.debug("gaze reacquire release skipped: %s", e)
+            if reply_stop is not None and reply_stop.is_set():
+                self._wakeword_focus.finish(interaction_id, cancelled=True)
+                return False
             wakeword_followup_active = (
                 wakeword_followup_active
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
@@ -3209,6 +3268,9 @@ class VoiceService:
                 except Exception as e:
                     logger.warning("[realtime] speaker correction send failed: %s", e)
 
+            if reply_stop is not None and reply_stop.is_set():
+                self._wakeword_focus.finish(interaction_id, cancelled=True)
+                return False
             if early_realtime_result is not None:
                 rt = early_realtime_result
                 if rt.handled and (combined or rt.transcript):
@@ -3216,7 +3278,7 @@ class VoiceService:
                         user_text=combined or "(audio only)", agent_text=rt.transcript or "(audio only)",
                     )
             elif realtime_turn_started:
-                rt = run_realtime_turn(
+                rt = VoiceService._run_automatic_realtime_turn(self, reply_stop,
                     self._realtime,
                     self._tts,
                     self.strip_rt_markers,
@@ -3241,6 +3303,9 @@ class VoiceService:
                     )
                 )
 
+            if reply_stop is not None and reply_stop.is_set():
+                self._wakeword_focus.finish(interaction_id, cancelled=True)
+                return False
             wakeword_followup_active = (
                 wakeword_followup_active
                 or (hal_config.WAKEWORD_ENABLED and self._wakeword_focus.is_active())
@@ -3269,6 +3334,9 @@ class VoiceService:
                 or not same_capture_target(harness_voice, read_voice_mode())
             ):
                 dispatch_to_main = False
+            if reply_stop is not None and reply_stop.is_set():
+                self._wakeword_focus.finish(interaction_id, cancelled=True)
+                return False
             if dispatch_to_main and not live_opener_consumed:
                 if combined and not downstream_dropped:
                     hold_followup()

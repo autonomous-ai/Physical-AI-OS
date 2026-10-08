@@ -778,3 +778,9 @@ An explicit speaker-mute request during sleep takes ownership from sleep and is 
 Harness recording feedback uses a dedicated rising two-note cue to start and a falling two-note cue to finish; neither uses the normal gesture ping. The finish cue confirms recording has ended, not that the remote agent accepted or completed the task. The tap that interrupts TTS retains the normal acknowledgment ping and does not open capture.
 
 While Harness mode stays ON, the MPR121 mode watcher maintains a dim lime breathing indicator from `button_led.harness_on` in the device presets. OFF uses one brief dim blink from `harness_off`. The indicator yields to sleep, privacy and active voice/music feedback, returns on normal LED restore, and never changes saved user light settings. Devices without RGB skip LED feedback.
+
+With Live off, the stop/listen tap also cancels an active automatic realtime reply
+wait, not only TTS. Late reply output and main fallback are discarded; provider
+reconnection happens in the background so it does not hold the mic loop. See
+[automatic reply cancellation](../../../docs/realtime-voice.md#stop-playback-releases-automatic-reply-capture)
+for latency boundaries and diagnostic logs.

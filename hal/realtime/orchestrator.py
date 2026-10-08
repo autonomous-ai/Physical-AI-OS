@@ -721,6 +721,17 @@ class RealtimeOrchestrator:
             reason, "rt-noise-rebuild", discard_old_on_failure=True
         )
 
+    def recover_cancelled_turn(self) -> bool:
+        """Retire the cancelled provider before reconnecting off the mic thread."""
+        with self._lifecycle_lock:
+            old = self._agent
+            self._agent = None
+        if old is not None:
+            self._disconnect_in_background(old, "automatic-reply-cancelled")
+        return self._rebuild_in_background(
+            "automatic-reply-cancelled", "rt-cancel-rebuild", discard_old_on_failure=True,
+        )
+
     def recover_session(self, reason: str, *, discard_old_on_failure: bool = False) -> bool:
         """Reconnect for replay, or discard a cancelled session even if reconnect fails."""
         if discard_old_on_failure:

@@ -19,6 +19,11 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
     clock = [1000.0]
     service = Mock()
     service._running = True
+    service._stt_drain_worker = None
+    service._stt_drain_future = None
+    service._automatic_reply_lock = threading.Lock()
+    service._automatic_reply_stop = None
+    service._automatic_reply_cancelled_at = None
     service._np = np
     service._tts = Mock(last_spoken_text="")
     service._tts_is_speaking.return_value = False
