@@ -22,6 +22,7 @@ from hal.models import (
     StatusResponse,
     TTSConfigRequest,
     VoiceConfigRequest,
+    VoiceInputModeRequest,
     VoiceStartRequest,
     VoiceStatusResponse,
 )
@@ -182,6 +183,19 @@ def update_voice_config(req: VoiceConfigRequest):
     if not state.voice_service:
         return {"status": "ok"}
     state.voice_service.set_wake_words(req.wake_words)
+    return {"status": "ok"}
+
+
+@router.post("/voice/input-mode", response_model=StatusResponse)
+def update_voice_input_mode(req: VoiceInputModeRequest):
+    """Quiesce capture and apply input policy without restarting HAL."""
+    from hal.drivers.voice._internal.input_mode import set_input_mode
+
+    try:
+        set_input_mode(req.mode, req.wakeword)
+    except Exception as error:
+        state.logger.exception("Voice input mode transition failed")
+        raise HTTPException(503, f"Failed to apply voice input mode: {error}") from error
     return {"status": "ok"}
 
 
