@@ -591,10 +591,13 @@ class RealtimeOrchestrator:
 
     def _begin_rebuild(self) -> bool:
         """Reserve the rebuild slot before a synchronous or background rebuild."""
-        if not self._rebuild_lock.acquire(blocking=False):
-            return False
-        self._rebuild_done.clear()
-        return True
+        with self._lifecycle_lock:
+            if not self._started.is_set():
+                return False
+            if not self._rebuild_lock.acquire(blocking=False):
+                return False
+            self._rebuild_done.clear()
+            return True
 
     def _finish_rebuild(self) -> None:
         """Publish that the current rebuild has completed, successfully or not."""
@@ -1014,8 +1017,8 @@ class RealtimeOrchestrator:
         except Exception:
             logger.exception("[realtime] Failed to catch up on memory summarization")
 
-    def stop(self) -> None:
-        """Disconnect the agent and summarize unsummarized memory."""
+    def stop(self, *, summarize=True) -> None:
+        """Disconnect; mode transitions defer memory summaries to next startup."""
         self._connect_retry_stop.set()
         self._idle_park_stop.set()
         self._idle_parked = False
@@ -1023,11 +1026,24 @@ class RealtimeOrchestrator:
             self._started.clear()
             agent = self._agent
             self._agent = None
-        try:
-            self._context.summarize_device_memory()
-            self._context.summarize_realtime_memory()
-        except Exception:
-            logger.exception("[realtime] Failed to summarize memory on shutdown")
+        # VoiceService runs stop on its bounded teardown worker. Do not let a
+        # subsequent start clear these stop events while a previous retry,
+        # idle watchdog or background replacement can still mutate this instance.
+        for worker in (getattr(self, "_connect_retry_thread", None),
+                       getattr(self, "_idle_park_thread", None)):
+            if worker is not None and worker is not threading.current_thread():
+                worker.join()
+        rebuild_lock = getattr(self, "_rebuild_lock", None)
+        if rebuild_lock is not None:
+            with rebuild_lock:
+                pass
+        self._idle_parked = False
+        if summarize:
+            try:
+                self._context.summarize_device_memory()
+                self._context.summarize_realtime_memory()
+            except Exception:
+                logger.exception("[realtime] Failed to summarize memory on shutdown")
 
         if agent is not None:
             try:

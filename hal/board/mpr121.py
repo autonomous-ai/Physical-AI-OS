@@ -1,7 +1,8 @@
 """Device-owned MPR121 wiring; absent declarations preserve existing inputs."""
 
 import json
-from dataclasses import dataclass, fields
+import math
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Optional
 
@@ -30,7 +31,19 @@ class MPR121Config:
     swipe_axis: tuple[int, ...] | None = None
     tap_min_electrodes: int = 1
 
+    gesture_actions: dict[str, str] = field(default_factory=dict)
+    hold_action_s: float = 2.0
+
     def __post_init__(self):
+        if (type(self.hold_action_s) not in (int, float)
+                or not math.isfinite(self.hold_action_s) or not 0.5 <= self.hold_action_s <= 10):
+            raise ValueError("hold_action_s must be a finite number in 0.5..10")
+        if (not isinstance(self.gesture_actions, dict)
+                or any(key not in {"hold", "swipe_left", "swipe_right"}
+                       or value != "toggle_voice_input_mode"
+                       for key, value in self.gesture_actions.items())):
+            raise ValueError("gesture_actions supports hold/swipe_left/swipe_right -> toggle_voice_input_mode")
+        object.__setattr__(self, "gesture_actions", dict(self.gesture_actions))
         for name in ("bus", "address", "touch_threshold", "release_threshold", "poll_ms", "debounce_ms",
                      "chip_debounce"):
             if type(getattr(self, name)) is not int:
@@ -65,7 +78,7 @@ class MPR121Config:
             if (not isinstance(axis, (list, tuple)) or not 2 <= len(axis) <= 12
                     or any(type(i) is not int or i not in self.electrodes for i in axis)
                     or len(set(axis)) != len(axis)):
-                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical left-to-right order")
+                raise ValueError("swipe_axis must contain 2..12 distinct selected electrodes in physical right-to-left order")
             object.__setattr__(self, "swipe_axis", tuple(axis))
 
 

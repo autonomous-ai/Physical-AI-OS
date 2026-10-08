@@ -78,9 +78,10 @@ class _GestureEvent:
 class _GestureRecognizer:
     """Poll-clock recognition independent of action execution and electrode count."""
 
-    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True, hold_on_threshold=False):
+    def __init__(self, debounce_ms, *, hold_thresholds=None, multi_click=True, hold_on_threshold=False, qualified_hold=False):
         # Touch pads never factory-reset: that tier stays on the mechanical button.
         self._hold_thresholds = hold_thresholds or (SLEEP_HOLD_DURATION, LONG_PRESS_DURATION)
+        self._qualified_hold = qualified_hold
         self._multi_click = multi_click
         self._hold_on_threshold = hold_on_threshold
         self._delay = debounce_ms / 1000
@@ -140,7 +141,8 @@ class _GestureRecognizer:
                         self._click_count = 0
                         self._deadline = None
                         events.append(_GestureEvent("invalidate", self._gesture_id))
-                        events.append(_GestureEvent("hold", self._gesture_id, held_s=held))
+                        if not self._qualified_hold or tap_allowed:
+                            events.append(_GestureEvent("hold", self._gesture_id, held_s=held))
                     elif not tap_allowed:
                         # Reject this contact before it can contribute to any tap burst.
                         self._click_count = 0
@@ -160,7 +162,7 @@ class _GestureRecognizer:
         if self._press_start is not None:
             held = (now if touched else self._since) - self._press_start
             tier = sum(held >= threshold for threshold in self._hold_thresholds)
-            if tier > self._hold_tier:
+            if tier > self._hold_tier and (not self._qualified_hold or tap_allowed):
                 self._hold_tier = tier
                 events.append(_GestureEvent("hold_tier", self._gesture_id, tier, held))
                 if self._hold_on_threshold:
@@ -382,7 +384,7 @@ class _SpatialGestureRecognizer:
                 edge_time = self._contact_since if self._button._press_start is None else now
                 if not active:
                     edge_time = max(since for value, since in self._raw.values() if not value)
-                button_events = self._button.update(True, edge_time)
+                button_events = self._button.update(True, edge_time, tap_allowed=self._tap_qualified)
                 events.extend(button_events)
                 if any(event.kind == "hold" for event in button_events):
                     self.cancel()
@@ -433,6 +435,8 @@ class MPR121Handler:
         self._action_thread = None
         self._harness_gestures = None
         self._mode_key = None
+        from hal import config as hal_config
+        self._voice_mode_key = getattr(hal_config, "VOICE_INPUT_MODE", "automatic")
         self._detector = self._new_detector()
         self._last_raw_mask = None
         self._generation = 0
@@ -440,12 +444,18 @@ class MPR121Handler:
         self._action_busy = False
         self._gesture_lock = threading.Lock()
         self._hold_led = None
+        self._mode_toggle = None
 
     def _new_detector(self):
         factory = _GestureRecognizer
         if self._harness_gestures and self._harness_gestures.snapshot.get("enabled"):
             from hal.drivers.harness.gestures import harness_button_recognizer
             factory = harness_button_recognizer
+        elif "hold" in self._config.gesture_actions:
+            factory = lambda debounce_ms: _GestureRecognizer(
+                debounce_ms, hold_thresholds=(self._config.hold_action_s,),
+                multi_click=not self._device_tap_mode(), qualified_hold=True,
+            )
         elif self._device_tap_mode():
             factory = lambda debounce_ms: _GestureRecognizer(debounce_ms, multi_click=False)
         if self._config.swipe_axis is not None or self._config.tap_min_electrodes > 1:
@@ -467,9 +477,9 @@ class MPR121Handler:
     def _feedback(self):
         with self._gesture_lock:
             if self._hold_led is None:
-                from hal.drivers.button_actions import HoldLEDFeedback
+                from hal.drivers.voice_mode_gesture import ModeHoldFeedback
 
-                self._hold_led = HoldLEDFeedback()
+                self._hold_led = ModeHoldFeedback()
             if self._stop.is_set():
                 self._hold_led.stop()
             return self._hold_led
@@ -527,7 +537,8 @@ class MPR121Handler:
         return bool(raw_mask & self._mask)
 
     def start(self):
-        if any(thread and thread.is_alive() for thread in (self._poll_thread, self._action_thread)):
+        toggle_thread = self._mode_toggle._thread if self._mode_toggle is not None else None
+        if any(thread and thread.is_alive() for thread in (self._poll_thread, self._action_thread, toggle_thread)):
             raise RuntimeError("MPR121 handler already running or stopping")
         logger.info(
             "MPR121 event=start bus=%d address=0x%02x electrodes=%s touch_threshold=%d release_threshold=%d autoconfig=%s poll_ms=%d debounce_ms=%d ffi=%d sfi=%d esi_ms=%d tap_min_electrodes=%d settle_ms=100 pending_capacity=2",
@@ -606,6 +617,16 @@ class MPR121Handler:
                 self._pending.put_nowait(pending)
 
     def _process_touch(self, touched, now):
+        from hal import config as hal_config
+        voice_mode = getattr(hal_config, "VOICE_INPUT_MODE", "automatic")
+        if voice_mode != self._voice_mode_key:
+            self._voice_mode_key = voice_mode
+            self._invalidate_pending("voice_input_mode_changed")
+            if self._hold_led is not None:
+                self._hold_led.release()
+            self._detector = self._new_detector()
+            self._detector.update(touched, now)
+            return
         if self._harness_gestures:
             key = self._harness_gestures.mode_key()
             if key != self._mode_key:
@@ -625,10 +646,11 @@ class MPR121Handler:
             if event.kind == "invalidate":
                 self._invalidate_pending("new_touch_or_hold", preserve_singles=self._device_tap_mode())
             elif event.kind == "hold_tier":
-                # Sleep/shutdown holds are disabled; do not show arming LEDs.
-                # if not (self._harness_gestures and self._harness_gestures.snapshot.get("enabled")):
-                #     self._feedback().set_tier(event.count)
-                pass
+                if "hold" in self._config.gesture_actions:
+                    from hal.drivers.voice_mode_gesture import action_allowed
+                    snapshot = self._harness_gestures.snapshot if self._harness_gestures else None
+                    if action_allowed(snapshot):
+                        self._feedback().set_tier(1)
             elif event.kind == "release":
                 if self._hold_led is not None:
                     self._hold_led.release()
@@ -664,7 +686,7 @@ class MPR121Handler:
             logger.info("MPR121 event=worker_stopped worker=poll")
 
     def _execute_swipe(self, direction):
-        """The declared axis runs left to right; route one resolved swipe."""
+        """The declared axis runs right to left; route one resolved swipe."""
         if self._hold_led is not None and self._hold_led.commit(0) is False:
             return
         if direction == 1:
@@ -682,6 +704,21 @@ class MPR121Handler:
             if self._harness_gestures.snapshot.get("enabled"):
                 self._harness_gestures.execute(event)
                 return
+        from hal import config as hal_config
+        if getattr(hal_config, "VOICE_INPUT_MODE", "automatic") != self._voice_mode_key:
+            return
+        # Lamp's declared E11..E0 axis travels physically right to left.
+        action_key = ({1: "swipe_left", -1: "swipe_right"}.get(event.direction)
+                      if event.kind == "swipe" else event.kind)
+        if action_key in self._config.gesture_actions:
+            from hal.drivers.voice_mode_gesture import ModeToggleWorker
+            if self._mode_toggle is None:
+                self._mode_toggle = ModeToggleWorker(
+                    lambda: self._harness_gestures.snapshot if self._harness_gestures else None,
+                    self._stop,
+                )
+            self._mode_toggle.submit()
+            return
         if event.kind == "single":
             single_click_action(source="MPR121", announce=False)
         elif event.kind == "cue":

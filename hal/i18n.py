@@ -29,6 +29,8 @@ PHRASE_HARNESS_NO_AGENTS = "harness_voice_no_agents"
 PHRASE_HARNESS_FAILED = "harness_voice_failed"
 PHRASE_HARNESS_FOCUS = "harness_voice_focus"
 PHRASE_HARNESS_FOCUS_FAILED = "harness_voice_focus_failed"
+PHRASE_VOICE_TAP_TO_TALK = "voice_tap_to_talk"
+PHRASE_VOICE_AUTOMATIC = "voice_automatic"
 PHRASE_LISTENING = "listening"
 PHRASE_REBOOT = "reboot"
 PHRASE_SLEEP = "sleep"
@@ -42,6 +44,14 @@ PHRASE_RATE_LIMIT = "rate_limit"
 
 # reboot/shutdown stay literal in every language so the user knows which destructive action fired.
 PHRASES_BY_LANG = {
+    PHRASE_VOICE_TAP_TO_TALK: {
+        LANG_EN: "Tap to talk.", LANG_VI: "Chạm để nói.", LANG_JA: "タップして話すモード。",
+        LANG_ZH_CN: "轻触说话。", LANG_ZH_TW: "輕觸說話。",
+    },
+    PHRASE_VOICE_AUTOMATIC: {
+        LANG_EN: "Automatic.", LANG_VI: "Tự động.", LANG_JA: "自動モード。",
+        LANG_ZH_CN: "自动模式。", LANG_ZH_TW: "自動模式。",
+    },
     PHRASE_HARNESS_FOCUS: {
         LANG_JA: "エージェントを切り替えました。",
         LANG_EN: "Agent switched.", LANG_VI: "Đã chuyển agent.",
