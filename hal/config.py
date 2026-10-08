@@ -45,6 +45,8 @@ if _sensing_device_env:
         AUDIO_SENSING_DEVICE = _sensing_device_env
 # 1.0 = normal, max 4.0.
 TTS_SPEED: float = float(os.environ.get("HAL_TTS_SPEED", "1.2"))
+# Physical sleep gesture: allow the announcement to play before sleepy mutes audio.
+SLEEP_ANNOUNCEMENT_DELAY_S = max(0.0, float(os.environ.get("HAL_SLEEP_ANNOUNCEMENT_DELAY_S", "2.0")))
 TTS_VOICE: str = os.environ.get("TTS_VOICE", "nova")
 TTS_INSTRUCTIONS: str = os.environ.get("HAL_TTS_INSTRUCTIONS", "Friendly")
 # ElevenLabs WebSocket stream-input instead of HTTP chunked streaming.

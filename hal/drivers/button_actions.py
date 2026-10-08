@@ -9,6 +9,7 @@ import time
 import requests
 
 import hal.app_state as state
+from hal import config
 from hal.i18n import (
     HEAD_PAT_PHRASES_BY_LANG,
     MIC_MUTED_PHRASES_BY_LANG,
@@ -427,7 +428,7 @@ def sleep_action(source: str = "button"):
     logger.info("%s sleep hold -- announcing sleepy emotion", source)
     if _tts_available():
         state.tts_service.speak_cached(_phrase(PHRASE_SLEEP))
-        time.sleep(5)
+        time.sleep(config.SLEEP_ANNOUNCEMENT_DELAY_S)
 
     try:
         from hal.models import EmotionRequest
