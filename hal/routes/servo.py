@@ -385,6 +385,8 @@ def aim_servo(req: ServoAimRequest):
     """Aim the device head to a named direction."""
     if _sleep_servo_locked():
         raise HTTPException(409, "Device is sleeping; motion was not started")
+    # An aim owns the body: a still emotion's pending idle resume must not swing it back.
+    state.cancel_still_idle_timer()
     svc = _svc_connected()
     try:
         current = svc.get_positions()
