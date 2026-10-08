@@ -21,6 +21,9 @@ _canceller = None
 _reference = None
 _unavailable_logged = False
 _playback_rate = None
+_prepare_lock = threading.Lock()
+_prepare_thread = None
+_prepare_pending = None
 
 
 class EchoReference:
@@ -415,6 +418,52 @@ def prepare_playback(rate: int) -> None:
     global _playback_rate
     _playback_rate = rate
     prepare_reference(rate)
+
+
+def prepare_reference_background(dst_rate: int):
+    """Warm filter imports while muted, without opening or configuring a mic.
+
+    One worker handles the latest requested ratio; active AEC/reference state
+    stays untouched. Normal preparation remains the fallback for a new route.
+    """
+    global _prepare_thread, _prepare_pending
+    from hal.drivers.voice._internal import config as voice_cfg
+
+    source_rate = _playback_rate
+    if (not voice_cfg.AEC_ENABLED or source_rate is None
+            or source_rate == dst_rate or dst_rate not in SUPPORTED_RATES):
+        return None
+    with _prepare_lock:
+        _prepare_pending = (source_rate, dst_rate)
+        if _prepare_thread is not None:
+            return _prepare_thread
+        _prepare_thread = threading.Thread(
+            target=_prepare_reference_worker, name="aec-reference-prepare", daemon=True,
+        )
+        _prepare_thread.start()
+        return _prepare_thread
+
+
+def _prepare_reference_worker():
+    global _prepare_thread, _prepare_pending
+    while True:
+        with _prepare_lock:
+            pair, _prepare_pending = _prepare_pending, None
+            if pair is None:
+                _prepare_thread = None
+                return
+        try:
+            import numpy as np
+
+            source, destination = pair
+            started = time.monotonic()
+            common = gcd(source, destination)
+            _reference_resample_filter(destination // common, source // common,
+                                       np.dtype(np.float32).str)
+            logger.info("AEC background reference ready: source_rate=%d target_rate=%d elapsed_ms=%.1f",
+                        source, destination, (time.monotonic() - started) * 1000)
+        except Exception:
+            logger.debug("AEC background reference preparation unavailable", exc_info=True)
 
 
 def prepare_reference(rate: int) -> None:

@@ -22,6 +22,7 @@ class Capture:
     finished: threading.Event = field(default_factory=threading.Event)
     cancelled: threading.Event = field(default_factory=threading.Event)
     claimed: bool = False
+    reservation: object = None
 
 
 class HarnessCapture:
@@ -35,11 +36,13 @@ class HarnessCapture:
         with self._lock:
             return self._capture is not None
 
-    def start(self, snapshot):
+    def start(self, snapshot, *, reservation=None):
         with self._lock:
             if self._capture is not None or not self._target_matches(snapshot, snapshot):
                 return False
-            self._capture = Capture(dict(snapshot))
+            self._capture = Capture(dict(snapshot), reservation=reservation)
+            if reservation is not None:
+                self._capture.cancelled = reservation.cancelled
             return True
 
     def finish(self):

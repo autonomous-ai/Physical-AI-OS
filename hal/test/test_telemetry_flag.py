@@ -62,7 +62,7 @@ def test_every_tts_construction_site_wires_the_playback_hooks():
     sites = 0
     for path in (HAL_ROOT / "runtime.py", HAL_ROOT / "routes" / "voice.py"):
         src = path.read_text()
-        for match in re.finditer(r"=\s*TTSService\((.*?)\n\s*\)", src, re.S):
+        for match in re.finditer(r"(?:=|\breturn)\s*TTSService\((.*?)\n\s*\)", src, re.S):
             body = match.group(1)
             sites += 1
             assert "on_playback_audio=tts_hooks.on_playback_audio" in body, path

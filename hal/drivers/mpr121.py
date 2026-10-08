@@ -187,7 +187,8 @@ SWIPE_MIN_TRAVEL_S = 0.030
 class _SpatialGestureRecognizer:
     """Debounce electrode footprints before resolving travel versus a button."""
 
-    def __init__(self, config, button_factory=None):
+    def __init__(self, config, button_factory=None, *, fast_stationary_tap=False):
+        self._fast_stationary_tap = fast_stationary_tap
         self._button_factory = button_factory or _GestureRecognizer
         self._axis = config.swipe_axis or ()
         self._tap_min_electrodes = config.tap_min_electrodes
@@ -230,6 +231,15 @@ class _SpatialGestureRecognizer:
         self._button.cancel()
         self._clear_cycle()
         self._armed = False
+
+    def _release_delay(self, active):
+        # A qualified stationary palm tap can commit after contact debounce.
+        # Unqualified contacts and moving swipes keep the full handoff window.
+        if (self._fast_stationary_tap and self._tap_min_electrodes >= 3
+                and self._tap_qualified and not self._moving and not self._invalid
+                and not active):
+            return min(SWIPE_RELEASE_S, max(0.030, self._contact_delay))
+        return SWIPE_RELEASE_S
 
     def _finish(self, now, active=False):
         events = []
@@ -288,7 +298,7 @@ class _SpatialGestureRecognizer:
         # Resolve an old contact before looking at the next one. Raw contact
         # blocks release only inside the handoff grace, never indefinitely.
         if self._cycle and self._release_at is not None:
-            if now - self._release_at >= SWIPE_RELEASE_S:
+            if now - self._release_at >= self._release_delay(active):
                 events.extend(self._finish(now, bool(active)))
             elif stable:
                 positions = {self._axis.index(i) for i in stable if i in self._axis}
@@ -427,7 +437,9 @@ class MPR121Handler:
         elif self._device_tap_mode():
             factory = lambda debounce_ms: _GestureRecognizer(debounce_ms, multi_click=False)
         if self._config.swipe_axis is not None or self._config.tap_min_electrodes > 1:
-            return _SpatialGestureRecognizer(self._config, factory)
+            return _SpatialGestureRecognizer(
+                self._config, factory, fast_stationary_tap=self._device_tap_mode(),
+            )
         return factory(self._config.debounce_ms)
 
     def _device_tap_mode(self):

@@ -58,11 +58,13 @@ from hal.drivers.voice._internal.realtime_turn import (
     should_defer_speaker_id_prepass,
     should_dispatch_to_main,
 )
-from hal.drivers.voice._internal.device_input import DeviceTapInput
+from hal.drivers.voice._internal.device_input import DeviceInputLease, DeviceTapInput
+from hal.drivers.voice._internal.device_turn_queue import DeviceTurnQueue
+from hal.drivers.voice._internal.device_voice_pipeline import DeviceVoicePipeline
 from hal.drivers.voice._internal.harness_capture import HarnessCapture
 from hal.drivers.voice._internal.input_policy import (
     InputPolicy,
-    requires_manual_capture, same_capture_target,
+    device_manual_mode, requires_manual_capture, same_capture_target,
 )
 from hal.drivers.voice._internal.harness_voice import bypass_realtime, read_voice_mode
 from hal.drivers.voice._internal.main_followup import note_main_reply
@@ -173,7 +175,14 @@ class VoiceService:
         enable_expression: bool = False,
     ):
         self._harness_capture = HarnessCapture(target_matches=same_capture_target)
-        self.device_input = DeviceTapInput(self._harness_capture, self.start_harness_capture)
+        self._device_turn_queue = DeviceTurnQueue()
+        self._device_dispose_thread = None
+        self.device_input = DeviceTapInput(
+            self._harness_capture, self.start_harness_capture,
+            turn_queue=self._device_turn_queue,
+            begin_input=lambda: DeviceInputLease.begin(self._tts),
+            end_input=lambda lease: lease.close(),
+        )
         self._stt = stt_provider
         self._input_device = input_device
         self._lifecycle_revision = 0
@@ -298,6 +307,51 @@ class VoiceService:
             nudge_cooldown_s=voice_cfg.ENROLL_NUDGE_COOLDOWN_S,
             enable_people_perception=enable_people_perception,
         )
+        self._device_pipeline = DeviceVoicePipeline(
+            self._device_turn_queue, create_session=self._stt.create_session,
+            convert=lambda data, rate: resample_to_stt(data, rate, voice_cfg.STT_RATE, self._np),
+            valid=self._device_capture_valid, set_capturing=self._set_device_capturing,
+            capture_valid=lambda snapshot: (self._device_capture_valid(snapshot)
+                                            and not self._music_is_playing()),
+            tts=self._tts, decorator=self._decorator, sensing_sender=self._sensing_sender,
+            noise_is_speech=lambda pcm: self._rt_noise_is_speech(
+                self._np.frombuffer(pcm, dtype=self._np.int16)),
+            on_frame=self._device_mic_frame, on_transcript=self._device_transcript,
+        )
+        if getattr(hal_config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk":
+            # The pipeline is constructed even while muted/sleeping. Warm only
+            # filter code now, so the first wake does not pay SciPy's cold import.
+            aec.prepare_reference_background(voice_cfg.STT_RATE)
+
+    def _device_capture_valid(self, snapshot):
+        from hal import app_state
+
+        return (self._running and not app_state._mic_muted
+                and app_state._hw_mic_switch_muted is not True and not app_state._sleeping
+                and same_capture_target(snapshot, read_voice_mode()))
+
+    def replace_tts_service(self, factory):
+        """Keep active device capture guarded while output service is replaced."""
+        def install(tts):
+            self._tts = tts
+            self._device_pipeline.tts = tts
+            if self._backchannel:
+                self._backchannel._tts = tts
+
+        return self.device_input.replace_input(factory, install)
+
+    def _set_device_capturing(self, active):
+        self._listening = active
+        InputPolicy(True, True, False, False).set_capturing(active, self._set_emotion_local)
+
+    def _device_mic_frame(self, data):
+        self._mic_level = rms(data, self._np)
+        self._mic_level_ts = time.time()
+        return self._mic_level >= voice_cfg.RMS_THRESHOLD
+
+    def _device_transcript(self, text, final):
+        self._last_transcript_ts = time.time()
+        logger.info("STT %s: %r", "final segment" if final else "partial", text)
 
     def feed_realtime_history(self, text: str, spoken: bool = True,
                               interrupted: bool = False) -> bool:
@@ -461,25 +515,37 @@ class VoiceService:
         """The realtime orchestrator, for device-initiated announcements."""
         return self._realtime
 
-    def start_harness_capture(self, snapshot: dict) -> bool:
+    def start_harness_capture(self, snapshot: dict, *, reservation=None) -> bool:
         from hal import app_state
 
         if app_state._hw_mic_switch_muted is True or app_state._mic_muted or app_state._sleeping:
             return False
         if not self._running or self._tts_is_speaking() or self._music_is_playing():
             return False
-        return self._harness_capture.start(snapshot)
+        return self._harness_capture.start(snapshot, reservation=reservation)
 
     def finish_harness_capture(self) -> bool:
         return self._harness_capture.finish()
 
     def cancel_harness_capture(self) -> None:
-        self._harness_capture.cancel()
+        self.device_input.cancel()
 
     def close(self):
         """Permanently dispose this pipeline; mute/unmute uses stop/start."""
-        self._decorator.close()
         self.stop()
+        queue = getattr(self, "_device_turn_queue", None)
+        if queue is not None and not queue.shutdown(timeout=1):
+            if self._device_dispose_thread is None:
+                def dispose_after_finalizer():
+                    queue.shutdown(timeout=None)
+                    self._decorator.close()
+
+                self._device_dispose_thread = threading.Thread(
+                    target=dispose_after_finalizer, daemon=True, name="device-voice-dispose",
+                )
+                self._device_dispose_thread.start()
+        else:
+            self._decorator.close()
 
     def stop(self, *, background=False):
         self._lifecycle_lock.acquire()
@@ -774,7 +840,9 @@ class VoiceService:
                 target=self._realtime.start, daemon=True, name="realtime-start"
             ).start()
 
-        time.sleep(0.5)
+        if (getattr(hal_config, "VOICE_INPUT_MODE", "automatic") != "tap_to_talk"
+                or not device_manual_mode(read_voice_mode())):
+            time.sleep(0.5)
 
         # Use arecord only when explicitly configured via HAL_AUDIO_INPUT_ALSA.
         if self._alsa_device is not None:
@@ -794,14 +862,24 @@ class VoiceService:
 
         frame_size = int(device_rate * voice_cfg.FRAME_DURATION_MS / 1000)
         self._device_rate = device_rate
+        if getattr(hal_config, "VOICE_INPUT_MODE", "automatic") == "tap_to_talk":
+            # Prepare echo-reference filters while idle, without opening the mic.
+            # Otherwise the first explicit tap pays SciPy's cold import cost.
+            aec.configure(device_rate)
 
         while self._running:
             mode = read_voice_mode()
             self.device_input.observe(mode)
             manual_capture = self._harness_capture.claim(mode)
+            if manual_capture is not None and manual_capture.reservation is not None:
+                self._run_device_capture(manual_capture, frame_size, device_rate)
+                continue
             if requires_manual_capture(mode) and manual_capture is None:
                 # Manual input owns capture: no ambient VAD/recorder while idle.
-                time.sleep(0.1)
+                if device_manual_mode(mode):
+                    self.device_input.wait_for_capture()
+                else:
+                    time.sleep(0.1)
                 continue
             self._wait_for_tts()
             if self._music_is_playing():
@@ -874,6 +952,43 @@ class VoiceService:
                 if self._running:
                     logger.warning("Voice loop error: %s", e)
                     time.sleep(3)
+
+    def _run_device_capture(self, capture, frame_size, device_rate):
+        """Keep admission guard until mic close; finalization owns only PCM."""
+        handed_off = False
+        try:
+            if (not self.device_input.claim(capture)
+                    or not self._device_capture_valid(capture.snapshot)
+                    or self._music_is_playing()):
+                return
+            if self._live_running:
+                capture.cancelled.set()
+                return
+            if self._alsa_device is not None:
+                backend = ArecordStream(
+                    alsa_device=self._alsa_device, rate=device_rate,
+                    channels=voice_cfg.CHANNELS, blocksize=frame_size,
+                    np=self._np, low_latency=True,
+                )
+            else:
+                backend = self._sd.InputStream(
+                    samplerate=device_rate, channels=voice_cfg.CHANNELS,
+                    dtype="int16", blocksize=frame_size, device=self._input_device,
+                )
+            with self._capture(backend, device_rate) as mic:
+                self._device_pipeline.run_capture(
+                    mic, frame_size, device_rate, capture, capture.reservation,
+                    tts=self.device_input.input_lease(capture),
+                )
+                handed_off = True
+        except Exception:
+            capture.cancelled.set()
+            logger.exception("Device capture failed")
+        finally:
+            if not handed_off:
+                self._device_turn_queue.release(capture.reservation)
+            self._harness_capture.release(capture)
+            self.device_input.release(capture)
 
     def _vad_loop(self, mic, frame_size: int, device_rate: int):
         """Monitor mic with local VAD, connect STT when speech detected.
