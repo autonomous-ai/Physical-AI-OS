@@ -885,6 +885,17 @@ def test_the_deadline_stops_counting_while_the_sweep_runs():
     )
 
 
+def test_the_look_aim_fallback_is_a_silent_glance():
+    """Not seeing the user on a look ends in a glance, not the 18-look room sweep."""
+    from hal.drivers.tracking import search
+
+    with mock.patch.object(search, "search_for_subject",
+                           return_value=search.SearchResult(False, "no person found")) as s:
+        _REAL_SWEEP()
+    assert s.call_args.kwargs.get("glance") is True
+    assert s.call_args.kwargs.get("on_progress") is not None, "the midpoint line would speak"
+
+
 def test_a_sweep_that_cannot_run_does_not_sink_the_aim():
     """A sweep that cannot run still yields an aim result."""
     from hal.drivers.tracking import search

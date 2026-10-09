@@ -27,7 +27,7 @@ For a standalone `presence.enter` with a stranger outside guard mode, use the fi
 For `current_language=en`, copy this entire reply exactly:
 
 ```text
-[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}] Hi, I don't think we've met.
+[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"],"max_duration_s":3}] Hi, I don't think we've met.
 ```
 
 For `current_language=vi`, keep the same HW markers and use exactly `Chào bạn, hình như mình chưa gặp nhau.` For another language, translate only that greeting. This fixed reply overrides optional proactive care for this stranger event. Guard events and explicit user requests in the same input retain their own routing.
@@ -66,16 +66,16 @@ If one of those arrives, stop and switch — don't improvise here.
 Type them at the very start of your reply. They are NOT tool calls. The system reads and strips them before TTS.
 
 ```
-[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}] Welcome back!
+[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"],"max_duration_s":3}] Welcome back!
 ```
 
 ## Event → response matrix
 
 | Event | Image? | HW markers | Voice |
 |---|---|---|---|
-| `presence.enter` (friend) | Yes | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — warm personal greeting by name. **If the injected `[presence_context: ...]` block flags a long absence, swap to the return-after-long-absence phrasing — see section below.** |
-| `presence.enter` (stranger, text contains `already present: <name> (friend)`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.6}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — one light aside **to `<name>`**, not to the stranger. See "Someone joins the user" below. |
-| `presence.enter` (stranger, no `already present:`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"]}]` | YES — exact greeting from **Stranger arrival: exact reply**, with no preamble |
+| `presence.enter` (friend) | Yes | `[HW:/emotion:{"emotion":"greeting","intensity":0.9}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"],"max_duration_s":3}]` | YES — warm personal greeting by name. **If the injected `[presence_context: ...]` block flags a long absence, swap to the return-after-long-absence phrasing — see section below.** |
+| `presence.enter` (stranger, text contains `already present: <name> (friend)`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.6}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"],"max_duration_s":3}]` | YES — one light aside **to `<name>`**, not to the stranger. See "Someone joins the user" below. |
+| `presence.enter` (stranger, no `already present:`) | Yes | `[HW:/emotion:{"emotion":"curious","intensity":0.8}][HW:/servo/aim:{"direction":"user"}][HW:/servo/track:{"target":["face"],"max_duration_s":3}]` | YES — exact greeting from **Stranger arrival: exact reply**, with no preamble |
 | `presence.leave` | No | `[HW:/emotion:{"emotion":"idle","intensity":0.4}][HW:/servo/track/stop:{}]` | NO (`NO_REPLY`) — always silent |
 | `presence.away` | No | `[HW:/emotion:{"emotion":"sleepy","intensity":0.8}][HW:/servo/track/stop:{}]` | YES — brief "going to sleep" line |
 | `sound` 1st occurrence | No | `[HW:/emotion:{"emotion":"curious","intensity":0.6}]` | NO (`NO_REPLY`) |
