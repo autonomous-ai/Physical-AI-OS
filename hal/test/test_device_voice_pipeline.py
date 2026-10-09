@@ -394,3 +394,37 @@ def test_speaker_identity_failure_keeps_transcript(setup_pipeline):
     ticket, _, _ = capture_turn(setup, [b"pcm"])
     assert ticket.done.wait(1)
     assert setup.dispatches[0][3]["identity"] == ("Please keep this valid request", None, None)
+
+
+@pytest.mark.parametrize("pending", ["stt", "realtime"])
+def test_new_tap_cancels_pending_A_and_only_B_dispatches(setup_pipeline, pending):
+    setup = setup_pipeline
+    gate = threading.Event()
+    entered = threading.Event()
+    session = Session("Old sentence", connect=gate if pending == "stt" else None)
+    setup.sessions.append(session)
+    if pending == "realtime":
+        def realtime(**kwargs):
+            entered.set()
+            assert gate.wait(2)
+            return module.RealtimeTurnResult()
+        setup.pipeline.realtime_turn = realtime
+    first, _, accepted = capture_turn(setup, [b"aaaa" * 1000])
+    try:
+        assert accepted
+        assert (session.started if pending == "stt" else entered).wait(1)
+        started = time.monotonic()
+        setup.queue.cancel_all()
+        setup.sessions.append(Session("New sentence"))
+        second, _, accepted = capture_turn(setup, [b"bbbb" * 1000])
+        assert accepted and not second.cancelled.is_set()
+        elapsed = time.monotonic() - started
+        assert elapsed < 0.2
+        print(f"{pending}: cancel A + synthetic B capture/finish {elapsed * 1000:.3f} ms")
+        assert first.cancelled.is_set()
+        gate.set()
+        assert second.done.wait(2)
+        assert [item[0] for item in setup.dispatches] == ["New sentence"]
+        assert session.closed == 1
+    finally:
+        gate.set()

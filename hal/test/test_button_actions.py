@@ -313,3 +313,33 @@ def test_sleep_without_tts_has_no_announcement_delay():
         button_actions.sleep_action("test")
     wait.assert_not_called()
     assert express.call_args.args[0].emotion == "sleepy"
+
+
+def test_scoped_cancel_does_not_wait_for_os(monkeypatch):
+    import threading
+    import time
+
+    entered = threading.Event()
+    release = threading.Event()
+    completed = threading.Event()
+    sent = []
+
+    def post(url, *, json, timeout):
+        sent.append(json)
+        entered.set()
+        assert release.wait(2)
+        completed.set()
+
+    monkeypatch.setattr(button_actions.requests, "post", post)
+    started = time.monotonic()
+    try:
+        button_actions._cancel_agent_speech("test", before_ms=1791400000000)
+        elapsed = time.monotonic() - started
+        assert entered.wait(1)
+        assert not completed.is_set()
+        assert elapsed < 0.05
+        print(f"scoped cancellation returned in {elapsed * 1000:.3f} ms while OS was blocked")
+        assert sent == [{"before_ms": 1791400000000}]
+    finally:
+        release.set()
+        assert completed.wait(1)

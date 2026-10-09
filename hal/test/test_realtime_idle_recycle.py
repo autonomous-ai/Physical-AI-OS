@@ -111,6 +111,7 @@ def test_rebuild_stamps_the_session_connect_time(monkeypatch):
     o._started.set()
     o._rebuild_lock = threading.Lock()
     o._rebuild_lock.acquire()
+    o._rebuild_generation = 0
     o._rebuild_done = threading.Event()
     o._session_connected_monotonic = 0.0
     before = time.monotonic()
