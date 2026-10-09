@@ -1159,8 +1159,13 @@ class VoiceService:
                     speech_pre_buffer = [data]
                 else:
                     speech_pre_buffer.append(data)
-                held_s = (sum(len(frame) for frame in speech_pre_buffer) / device_rate
-                          if aec_live_entry else time.time() - speech_start)
+                # Measure speech on the audio clock, not thread scheduling time.
+                # Normal entry starts at the first qualifying frame, preserving
+                # the existing frame count when capture reads arrive in real time.
+                held_samples = sum(len(frame) for frame in speech_pre_buffer)
+                if not aec_live_entry:
+                    held_samples -= len(speech_pre_buffer[0])
+                held_s = held_samples / device_rate
                 if held_s >= (0.16 if aec_live_entry else voice_cfg.SPEECH_HOLDOFF_S):
                     if not aec_live_entry and self._silero_vad is not None:
                         combined = self._np.concatenate(speech_pre_buffer)
@@ -3382,9 +3387,12 @@ class VoiceService:
                     ser_audio_buffer,
                     rt,
                     interaction_id=interaction_id,
-                    event_type_override=input_policy.event_type_override(
-                        followup=wakeword_followup_active and not wake_word_confirmed.is_set(),
-                    ),
+                    # Keep the admitted wake even if STT rewrote the name in its final.
+                    # Reclassifying only the final text would label this turn ambient.
+                    event_type_override=("voice_command" if wake_word_confirmed.is_set()
+                                         else input_policy.event_type_override(
+                                             followup=wakeword_followup_active,
+                                         )),
                     identity=turn_identity,
                     harness_voice=harness_voice,
                     suppress_auto_fillers=suppress_auto_fillers,

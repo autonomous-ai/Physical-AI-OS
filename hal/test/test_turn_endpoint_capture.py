@@ -13,7 +13,7 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
             tts=None, on_read=None, on_close=None, on_connect=None, on_realtime=None,
             wake_enabled=False, focus=None, transcripts_final=True, close_transcript=None,
             on_prepare=None, on_drain=None, pending_cue=None, realtime_available=True,
-            silence_vad=False, speech_windows=None):
+            silence_vad=False, speech_windows=None, configure_service=None):
     """Feed (elapsed seconds, speech energy, final transcript) without hardware."""
     from hal.drivers.voice import voice_service as module
 
@@ -76,6 +76,8 @@ def capture(monkeypatch, frames, *, realtime=False, enabled=True, detector=None,
                 return False
 
         monkeypatch.setattr(module, "threading", SimpleNamespace(Thread=ConnectWorker, Event=threading.Event))
+    if configure_service is not None:
+        configure_service(service)
     remaining = iter(frames)
     consumed = []
 
@@ -271,3 +273,35 @@ def test_noise_endpoint_latency_is_bounded_by_existing_classifier_window(monkeyp
     # last speech = 192ms; quiet endpoints at 2752ms, noise at 2880ms.
     assert endpoints == pytest.approx([2.752, 2.880])
     assert 0 <= endpoints[1] - endpoints[0] <= 3 * 0.064
+
+
+@pytest.mark.parametrize("followup", [False, True])
+def test_confirmed_partial_wake_survives_final_name_correction(monkeypatch, followup):
+    """An admitted Lamp -> lamb correction must not become ambient at dispatch."""
+    words = "Hello lamb, what is two plus two?"
+
+    def configure(service):
+        service._decorator.starts_with_wake_word.side_effect = lambda text: text.lower().startswith("hello lamp")
+        service._decorator.matches_wake_word_loosely.return_value = True
+
+    frames = [(1, True, ("Hello Lamp", False)),
+              (2, True, (words, True)), (5, False, None)]
+    with capture(monkeypatch, frames, wake_enabled=True, focus=lambda: followup,
+                 configure_service=configure) as result:
+        result.dispatch.assert_called_once()
+        assert result.dispatch.call_args.args[2] == words
+        assert result.dispatch.call_args.kwargs["event_type_override"] == "voice_command"
+
+
+@pytest.mark.parametrize("partial,loose", [(None, True), ("Hello Lamp", False)])
+def test_unconfirmed_name_does_not_gain_command_route(monkeypatch, partial, loose):
+    def configure(service):
+        service._decorator.starts_with_wake_word.side_effect = lambda text: text.lower().startswith("hello lamp")
+        service._decorator.matches_wake_word_loosely.return_value = loose
+
+    frames = [(1, True, (partial, False) if partial else None),
+              (2, True, ("Hello Laura, what is two plus two?", True)),
+              (5, False, None)]
+    with capture(monkeypatch, frames, wake_enabled=True,
+                 configure_service=configure) as result:
+        result.dispatch.assert_not_called()
