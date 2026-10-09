@@ -11,6 +11,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
@@ -203,6 +204,7 @@ func (s *OpenCodeService) drainPendingEvents() {
 		} else {
 			reqID, runID = s.NextChatRunID()
 		}
+		hal.RegisterTurnSpeechPolicy(runID, speakergate.WaitsForSpeaker(ev.eventType))
 		flow.SetTrace(runID)
 		startPayload := map[string]any{"type": ev.eventType, "message": ev.msg}
 		if !ev.queuedAt.IsZero() {

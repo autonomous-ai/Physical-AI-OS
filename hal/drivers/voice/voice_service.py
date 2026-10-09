@@ -8,7 +8,6 @@ import threading
 import time
 from collections import deque
 from contextlib import contextmanager
-from difflib import SequenceMatcher
 from typing import Optional
 
 import requests
@@ -95,8 +94,6 @@ from hal.drivers.voice.backchannel import Backchannel
 from hal.drivers.voice.stt import STTProvider
 
 logger = logging.getLogger("hal.voice")
-
-_TRANSCRIPT_MIN_SIMILARITY = 0.5
 
 
 def _is_normal_ws_close(error: Exception) -> bool:
@@ -2469,19 +2466,10 @@ class VoiceService:
             logger.info("STT final segment: '%s'", text)
             if hal_config.WAKEWORD_ENABLED:
                 confirm_wake_word_gate(wake_final_candidate(text))
-            prev = last_partial[0]
-            if (
-                prev
-                and len(text) < len(prev)
-                and SequenceMatcher(None, prev.lower(), text.lower()).ratio()
-                < _TRANSCRIPT_MIN_SIMILARITY
-            ):
-                segments = [prev, text]
-            else:
-                segments = [text]
-            for seg in segments:
-                if seg:
-                    final_segments.append(seg)
+            # A final replaces the current provisional hypothesis, including
+            # shorter numeric normalization and corrections of earlier words.
+            if text:
+                final_segments.append(text)
             last_partial[0] = ""
             final_sent[0] = True
             final_ts[0] = time.time()

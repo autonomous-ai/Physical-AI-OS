@@ -230,7 +230,9 @@ func (h *AgentHandler) deliverTTSUnless(cancelled func(string) bool, send func(s
 		// SpeakCached: not fed into realtime history, and replays from WAV cache
 		// when the TTS provider shares the exhausted quota.
 		text = i18n.One(i18n.PhraseLLMLimit)
-		send = hal.SpeakCached
+		send = func(text string) error {
+			return hal.SpeakCachedForTurn(text, h.resolveRunID(flowRunID))
+		}
 	}
 	finishAdmission := hal.BeginVoiceFollowupSpeech(flowRunID)
 	dispatchAt := time.Now()
@@ -247,6 +249,11 @@ func (h *AgentHandler) deliverTTSUnless(cancelled func(string) bool, send func(s
 		if err == nil {
 			return
 		}
+		if errors.Is(err, hal.ErrCaptureActive) {
+			slog.Info("TTS suppressed -- automatic user capture active", "component", "agent", "run_id", flowRunID)
+			flow.Log("tts_cancelled", map[string]any{"run_id": flowRunID, "text": text, "source": "input_capture"}, flowRunID)
+			return
+		}
 		if errors.Is(err, hal.ErrSpeakerMuted) {
 			slog.Info("TTS muted -- speaker muted on device", "component", "agent", "run_id", flowRunID, "text", text[:min(len(text), 80)])
 			flow.Log("tts_muted", map[string]any{"run_id": flowRunID, "text": text}, flowRunID)
@@ -254,6 +261,15 @@ func (h *AgentHandler) deliverTTSUnless(cancelled func(string) bool, send func(s
 		}
 		slog.Error(errCtx, "component", "agent", "error", err)
 	}()
+}
+
+// deliverToolTTS preserves passive sensing admission for explicit agent TTS tools.
+func (h *AgentHandler) deliverToolTTS(text, flowRunID, errCtx string) {
+	if hal.PassiveSensingTurn(h.resolveRunID(flowRunID)) {
+		h.deliverTTSQueue(text, h.resolveRunID(flowRunID), errCtx)
+		return
+	}
+	h.deliverTTS(h.agentGateway.SendToHALTTS, text, flowRunID, errCtx)
 }
 
 // deliverTTSQueue sends a reply via the turn-aware TTS queue, falling back to the plain queue.

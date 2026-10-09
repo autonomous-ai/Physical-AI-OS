@@ -1,6 +1,7 @@
 """Voice route handlers: /voice/*, /tts/* (strangers live in hal.routes.speaker)."""
 
 import asyncio
+from functools import wraps
 import json
 import threading
 import time
@@ -14,6 +15,7 @@ from fastapi.responses import StreamingResponse
 
 import hal.app_state as state
 from hal.telemetry import tts_hooks
+from hal.drivers.voice.tts.device_input_gate import PassiveSpeechSuppressed
 from hal.config import AUDIO_INPUT_ALSA, get_tts_speed, TTS_VOICE, TTS_INSTRUCTIONS
 from hal.models import (
     HarnessUpdateRequest,
@@ -279,7 +281,19 @@ def get_voices(provider: Optional[str] = None, lang: Optional[str] = None):
     return {"provider": provider, "voices": ["alloy", "ash", "coral", "echo", "fable", "onyx", "nova", "sage", "shimmer"]}
 
 
+def _capture_suppression_response(endpoint):
+    """A deliberate passive drop is not an unavailable TTS backend."""
+    @wraps(endpoint)
+    def wrapped(req: SpeakRequest):
+        try:
+            return endpoint(req)
+        except PassiveSpeechSuppressed:
+            return {"status": "suppressed_capture"}
+    return wrapped
+
+
 @router.post("/voice/speak", response_model=StatusResponse)
+@_capture_suppression_response
 def speak_text(req: SpeakRequest):
     """Synthesize text to speech and play through the speaker."""
     if req.harness_result and (req.cached or req.prerender):
@@ -358,6 +372,7 @@ def speak_text(req: SpeakRequest):
             req.text,
             interruptible=req.interruptible,
             prerender=req.prerender,
+            **({"passive_sensing": True} if req.passive_sensing else {}),
             realtime_feedback=req.realtime_feedback,
             # Metrics ownership only; turn_seq gating stays exclusive to /voice/speak-queue.
             turn_id=req.turn_id,
@@ -373,6 +388,7 @@ def speak_text(req: SpeakRequest):
         interruptible=req.interruptible,
         realtime_feedback=req.realtime_feedback,
         turn_id=req.turn_id,
+        **({"passive_sensing": True} if req.passive_sensing else {}),
         **({"speed": req.speed} if req.speed is not None else {}),
         **({"harness_result": True} if req.harness_result else {}),
         **({"preview": preview} if preview is not None else {}),
@@ -409,6 +425,7 @@ def realtime_history(req: RealtimeHistoryRequest):
 
 
 @router.post("/voice/speak-queue", response_model=StatusResponse)
+@_capture_suppression_response
 def speak_queue_text(req: SpeakRequest):
     """Speak text, queueing seamlessly behind current speech (409 while music plays, 503 without TTS)."""
     if not state.tts_service:
@@ -431,7 +448,7 @@ def speak_queue_text(req: SpeakRequest):
         req.interruptible,
     )
     # Evaluate ownership inside TTS admission, not at an earlier HTTP snapshot.
-    queue_options = {}
+    queue_options = {"passive_sensing": True} if req.passive_sensing else {}
     if getattr(state.voice_service, "live_active", False):
         queue_options["defer_preemption"] = lambda: state.voice_service.live_speaker_busy
     ok = state.tts_service.speak_queue(

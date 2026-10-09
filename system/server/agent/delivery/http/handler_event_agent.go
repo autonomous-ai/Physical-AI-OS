@@ -558,7 +558,7 @@ func (h *AgentHandler) handleAgentStreamEvent(evt domain.WSEvent) error {
 					flow.Log("tts_send", map[string]any{"run_id": flowRunID, "text": ttsText, "source": "tts_tool_intercept"}, flowRunID)
 					if !isChannelRun && !isWebChat && !isSilent {
 						sensinghttp.DefaultFillerManager.Cancel(flowRunID)
-						h.deliverTTS(h.agentGateway.SendToHALTTS, ttsText, flowRunID, "TTS intercept delivery failed")
+						h.deliverToolTTS(ttsText, flowRunID, "TTS intercept delivery failed")
 					}
 					// Mark spoken so lifecycle end doesn't double-speak.
 					h.suppressTTS(payload.RunID, "already_spoken")

@@ -332,6 +332,7 @@ class SpeakRequest(BaseModel):
     speed: Optional[float] = Field(None, ge=0.25, le=4.0, description="Speed override for this uncached utterance only")
     voice: str = Field("", description="Override TTS voice for this request (e.g. 'Rachel', 'Brian')")
     interruptible: bool = Field(False, description="If True, can be interrupted by next speech")
+    passive_sensing: bool = Field(False, description="Passive sensing output must yield to an active user capture")
     harness_result: bool = Field(False, description="Play a short source cue before a Harness reply")
     provider: Optional[str] = Field(None, description="Override TTS provider: 'openai', 'elevenlabs', 'gemini' or 'piper'")
     tts_api_key: Optional[str] = Field(None, description="API key for provider override")

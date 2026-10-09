@@ -1794,3 +1794,18 @@ minh subscription còn hợp lệ hay model gọi thành công. Mở terminal m�
 `POST /api/device/voice-input-mode/toggle` không có body, đổi mode đã lưu nguyên tử dưới cùng khóa apply. Caller loopback không cần admin auth; caller remote cần auth. Thành công trả `{"status":1,"data":{"mode":"tap_to_talk"},"message":null}` (hoặc `automatic`) sau khi HAL áp dụng. Đây là thao tác gesture không idempotent: không tự retry khi timeout; gửi mode tường minh để retry trạng thái mong muốn.
 
 `POST /api/agent/speech/cancel` giữ hành vi cũ khi body rỗng (ngắt toàn bộ bằng thao tác vật lý). Body tùy chọn `{ "before_ms": <Unix milliseconds> }` chặn lời nói/filler của lượt cũ, không gọi HAL stop toàn bộ khi đến muộn và không hủy hành động phần cứng. HAL lấy mốc trên cùng device trước khi nhận bản ghi thay thế. Sensing của device có thể gửi `captured_at_ms` cùng snapshot Harness OFF; lượt voice-command/handled hợp lệ giữ thời điểm thu trong run ID duy nhất để dispatch đến muộn vẫn bị chặn đúng.
+
+### Admission TTS cho sensing thụ động
+
+Trước dispatch sensing và replay của runtime, `RegisterTurnSpeechPolicy` giữ
+chính sách admission gốc theo run ID. Cả sáu runtime tích hợp truyền chính sách
+vào TTS có run ID. Lần đăng ký đầu tiên được giữ qua retry nội bộ; lookup không
+xóa entry nên các đoạn streaming vẫn giữ nguồn event. Registry nằm trong RAM,
+giới hạn 4096 run và một giờ. Run không xác định/hết hạn và TTS cũ không có run ID
+giữ hành vi admission hiện có.
+
+HAL nhận `passive_sensing` tùy chọn tại `/voice/speak` và `/voice/speak-queue`.
+Khi đang thu automatic, HAL trả `suppressed_capture` cho speech thụ động; OS coi
+đây là hủy chủ động, không phải lỗi TTS. Thông báo quota cached và tool TTS được
+intercept giữ chính sách của run. Voice/chat và fire-hazard được miễn theo
+`speakergate.WaitsForSpeaker`. Xem [admission khi capture](realtime-voice_vi.md#lời-nhắc-sensing-nhường-lượt-thu-automatic).

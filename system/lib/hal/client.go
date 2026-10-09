@@ -20,6 +20,9 @@ import (
 // ErrSpeakerMuted reports that HAL accepted a speak request but suppressed it (speaker muted).
 var ErrSpeakerMuted = errors.New("speaker muted")
 
+// ErrCaptureActive reports intentional passive speech suppression during user input.
+var ErrCaptureActive = errors.New("automatic user capture active")
+
 const BaseURL = "http://127.0.0.1:5001"
 
 var httpClient = &http.Client{Timeout: 5 * time.Second}
@@ -259,6 +262,7 @@ func SpeakQueueReplyForTurn(text, turnID string, turnSeq uint64) error {
 		"realtime_feedback": true,
 		"turn_id":           turnID,
 		"turn_seq":          turnSeq,
+		"passive_sensing":   PassiveSensingTurn(turnID),
 	})
 	return postSpeak("/voice/speak-queue", body)
 }
@@ -274,7 +278,7 @@ func SpeakCached(text string) error {
 	return SpeakCachedForTurn(text, "")
 }
 
-// SpeakCachedForTurn is SpeakCached with turnID for metrics attribution only.
+// SpeakCachedForTurn is SpeakCached with turn ownership and passive admission policy.
 func SpeakCachedForTurn(text, turnID string) error {
 	payload := map[string]any{
 		"text":   text,
@@ -282,9 +286,10 @@ func SpeakCachedForTurn(text, turnID string) error {
 	}
 	if turnID != "" {
 		payload["turn_id"] = turnID
+		payload["passive_sensing"] = PassiveSensingTurn(turnID)
 	}
 	body, _ := json.Marshal(payload)
-	return post("/voice/speak", body)
+	return postSpeak("/voice/speak", body)
 }
 
 // SpeakCachedInterruptible plays text via the WAV cache; a real reply may cut it short.
@@ -660,7 +665,7 @@ func post(path string, body []byte) error {
 	return nil
 }
 
-// postSpeak is post for /voice/speak*, returning ErrSpeakerMuted when HAL suppressed the speech.
+// postSpeak distinguishes mute/capture suppression from accepted speech.
 func postSpeak(path string, body []byte) (err error) {
 	var timing struct {
 		Text   string `json:"text"`
@@ -691,8 +696,13 @@ func postSpeak(path string, body []byte) (err error) {
 	var r struct {
 		Status string `json:"status"`
 	}
-	if err := json.NewDecoder(resp.Body).Decode(&r); err == nil && r.Status == "suppressed" {
-		return ErrSpeakerMuted
+	if err := json.NewDecoder(resp.Body).Decode(&r); err == nil {
+		switch r.Status {
+		case "suppressed":
+			return ErrSpeakerMuted
+		case "suppressed_capture":
+			return ErrCaptureActive
+		}
 	}
 	return nil
 }
