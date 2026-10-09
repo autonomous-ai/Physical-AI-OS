@@ -1020,7 +1020,7 @@ def test_no_handback_when_the_sweep_never_took_the_body():
 _NEAR = config.GAZE_BEARING_MIN_FACE_HEIGHT_FRAC + 0.05
 
 
-def _user_run(tracks_at_look, target="person"):
+def _user_run(tracks_at_look, target="person", glance=False):
     """tracks_at_look: {1-based look number: [FaceTrack, ...]}; other looks see no face.
 
     A body is in view at every look, so only the user check can end the sweep.
@@ -1053,7 +1053,7 @@ def _user_run(tracks_at_look, target="person"):
         mock.patch("hal.drivers.tracking.user_bearing.read_estimate", return_value=None),
     ):
         res = search.search_for_subject(target=target, detector=det,
-                                        for_user=(target == "person"))
+                                        for_user=(target == "person"), glance=glance)
     return res, obs, centred, svc
 
 
@@ -1140,6 +1140,15 @@ def test_the_user_sweep_looks_up_never_down():
 def test_the_user_sweep_keeps_six_looks_per_stop():
     res, _obs, _centred, _svc = _user_run({})
     assert res.looks_visited == 3 * search.HALF_LOOKS
+
+
+def test_a_glance_looks_left_and_right_without_turning_the_base():
+    """The unasked look-around is a glance, not an 18-look room scan."""
+    res, _obs, _centred, svc = _user_run({}, glance=True)
+    assert res.looks_visited == len(search.GLANCE_LOOKS) == 2
+    assert res.bearings_visited == 1
+    yaws = {h["base_yaw.pos"] for h in svc.holds if "base_yaw.pos" in h and "wrist_roll.pos" in h}
+    assert len(yaws) <= 1, f"the base turned during a glance: {yaws}"
 
 
 def test_the_other_sweeps_still_look_down_at_the_desk():
