@@ -406,7 +406,7 @@ Four conditions are enforced today; setup-incomplete is reserved.
       no cut-off, and a malformed file fails boot. It is not a `SAFETY.md` field. No
       current sensor is needed: a monitor thread reads every joint's `Present_Load`
       (STS3215 register 60, the drive duty in 0.1 % units) every 100 ms. A joint at or
-      above `load` (Lamp: `800` = 80 %) for `hold_s` (Lamp: `1.0` s) trips the pure
+      above `load` (Lamp: `900` = 90 %) for `hold_s` (Lamp: `1.5` s) trips the pure
       `OverloadGuard` (`hal/drivers/motors/overload.py`). On
       trip the driver halts motion in flight and writes `Torque_Enable=0` to all servos
       with **no park move** (the arm is blocked, so it goes limp where it is); the
@@ -425,9 +425,8 @@ Four conditions are enforced today; setup-incomplete is reserved.
       released (asleep) or zero-posed meanwhile it stays limp until the next resume.
       Still blocked → it trips again. A failed load read never trips. Surfaced at
       `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `cut_complete`,
-      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
-      yet measured on hardware**; compare `peak` during normal animation with the
-      threshold before relying on it. Only Lamp ships the file.
+      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). Lamp's 90 % / 1.5 s comes from lamp-52e6 (2026-10-09): over 19 free-running recordings the highest load was 87 % (`base_pitch` in `shock`) for under 0.3 s, while a hand holding `base_yaw` or `elbow_pitch` drove it to 94-100 %. A recording that grinds a joint into the desk on a mis-calibrated unit (`goodbye` on lamp-52e6, 100 % for 1.2 s) stays under the hold. Only
+      Lamp ships the file.
 - [x] **Unit:** `thermal_over` trips at/above `max_temp_c`, holds through hysteresis
       above `resume_temp_c`, clears at/below it, and is False with no policy / no thermal
       section / unreadable temp; `read_soc_temp_c` parses millidegrees → °C and returns

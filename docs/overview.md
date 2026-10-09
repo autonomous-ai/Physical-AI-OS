@@ -175,7 +175,7 @@ Servo overload thresholds are device-owned too, in `robots/lamp/servo_overload.j
 `hal/board/servo_overload.py`. A joint at or above `load` for `hold_s` makes the
 feetech driver cut torque on every servo, chime and refuse motion for `retry_s`
 before resuming; no file, no board entry or `enabled: false` means no cut-off, and
-a malformed file rejects startup. Lamp ships 80 % / 1 s / 120 s (provisional). See
+a malformed file rejects startup. Lamp ships 90 % / 1.5 s / 120 s, measured on lamp-52e6. See
 the fail-safe section of [safety](safety.md).
 
 ## Principles

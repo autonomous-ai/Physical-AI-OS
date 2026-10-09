@@ -389,7 +389,7 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       file sai định dạng làm boot thất bại. Đây không phải field của `SAFETY.md`. Không
       cần cảm biến dòng: một thread monitor đọc `Present_Load` của mọi khớp (register 60
       của STS3215, duty điều khiển theo đơn vị 0,1 %) mỗi 100 ms. Khớp nào ở mức `load`
-      trở lên (Lamp: `800` = 80 %) trong `hold_s` (Lamp: `1.0` s) sẽ trip
+      trở lên (Lamp: `900` = 90 %) trong `hold_s` (Lamp: `1.5` s) sẽ trip
       `OverloadGuard` thuần (`hal/drivers/motors/overload.py`). Khi trip, driver dừng chuyển động đang
       chạy và ghi `Torque_Enable=0` cho mọi servo, **không có bước park** (tay đang bị
       chặn nên thả lỏng tại chỗ); runtime sau đó phát ack chime và dừng vision tracker.
@@ -406,8 +406,7 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       release (ngủ) hoặc zero-pose thì vẫn thả lỏng tới lần resume kế tiếp. Vẫn bị chặn
       → trip lại. Đọc load lỗi không bao giờ trip. Lộ ra ở `GET /health.servo_overload`
       (`active`, `retry_in_s`, `trips`, `cut_complete`, `pending_off`, `last_trip`, cùng
-      `load` / `peak` theo từng khớp để tinh chỉnh). **Giá trị 80 % / 1 s của Lamp là tạm thời — chưa đo trên phần
-      cứng**; so `peak` khi chạy animation bình thường với ngưỡng trước khi tin dùng.
+      `load` / `peak` theo từng khớp để tinh chỉnh). Giá trị 90 % / 1.5 s của Lamp lấy từ lamp-52e6 (2026-10-09): qua 19 recording chạy tự do, load cao nhất là 87 % (`base_pitch` trong `shock`) trong chưa tới 0.3 s, còn tay giữ `base_yaw` hoặc `elbow_pitch` đẩy lên 94-100 %. Recording ép một khớp vào mặt bàn trên máy calibration lệch (`goodbye` trên lamp-52e6, 100 % trong 1.2 s) vẫn dưới thời gian giữ.
       Chỉ Lamp kèm file này.
 - [x] **Unit:** `thermal_over` trip tại/trên `max_temp_c`, giữ qua hysteresis khi còn
       trên `resume_temp_c`, clear tại/dưới nó, và là False khi không có policy / không có

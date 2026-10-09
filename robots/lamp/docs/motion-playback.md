@@ -101,7 +101,7 @@ clips is not. Re-derive the constant if the body's mass distribution changes.
 Playback is also where a blocked arm shows up: the trajectory keeps advancing while a
 joint cannot follow, and the servo pushes at full drive. `AnimationService` therefore
 samples every joint's `Present_Load` at 10 Hz (`hal/drivers/motors/overload.py`). A joint
-at 80 % or more for 1 s cuts torque on all servos, plays the ack chime and blocks every
+at 90 % or more for 1.5 s cuts torque on all servos, plays the ack chime and blocks every
 goal write for 120 s; recording frames sent during that window are dropped, not queued.
 Afterwards the body resumes into idle from wherever the arm ended up. The thresholds
 (`load`, `hold_s`, `retry_s`) are device-owned in `robots/lamp/servo_overload.json`;

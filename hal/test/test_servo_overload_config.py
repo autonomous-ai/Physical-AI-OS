@@ -30,7 +30,7 @@ class TestServoOverloadConfig(unittest.TestCase):
     def test_lamp_declares_the_cut_off(self):
         root = Path(__file__).resolve().parents[2] / "robots"
         config = load_servo_overload_config(root / "lamp", "orangepi_sun60")
-        self.assertEqual(config, ServoOverloadConfig(800, 1.0, 120.0))
+        self.assertEqual(config, ServoOverloadConfig(900, 1.5, 120.0))
         self.assertIsNone(load_servo_overload_config(root / "intern-v2", "orangepi_sun60"))
 
     def test_malformed_configuration_is_rejected(self):

@@ -99,8 +99,8 @@ clip thì không. Phải tính lại hằng số này nếu phân bố khối l�
 
 Playback cũng là nơi lộ ra việc tay đèn bị chặn: quỹ đạo vẫn tiến trong khi một khớp
 không theo kịp, và servo đẩy hết mức. Vì vậy `AnimationService` lấy mẫu `Present_Load`
-của mọi khớp ở 10 Hz (`hal/drivers/motors/overload.py`). Khớp nào ở mức 80 % trở lên
-trong 1 s sẽ làm cắt torque mọi servo, phát ack chime và chặn mọi lệnh ghi goal trong
+của mọi khớp ở 10 Hz (`hal/drivers/motors/overload.py`). Khớp nào ở mức 90 % trở lên
+trong 1.5 s sẽ làm cắt torque mọi servo, phát ack chime và chặn mọi lệnh ghi goal trong
 120 s; frame recording gửi trong khoảng đó bị bỏ, không xếp hàng lại. Sau đó thân máy
 resume vào idle từ vị trí tay đang nằm. Ngưỡng (`load`, `hold_s`, `retry_s`) do
 device quản lý trong `robots/lamp/servo_overload.json`; hành vi đầy đủ nằm ở phần

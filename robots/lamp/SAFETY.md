@@ -95,7 +95,7 @@ spirit of "what isn't enforced isn't claimed as enforced").
 | Board / driver fault | Disable the faulting capability, keep the rest, report health | **yes** — per-capability `503` isolation in HAL routes + `/health` |
 | Setup incomplete | Setup / identity reflexes only | reserved — not gated in the runtime yet |
 | Thermal (SoC over-temp) | At SoC temp ≥ `thermal.max_temp_c`: health event on `/health` + stop discretionary tracking; clears on cool-down to `resume_temp_c` (hysteresis). Idle stays alive | **yes** (when `thermal` declared) — background monitor reads `/sys/class/thermal` |
-| Servo overload (stall) | A joint at ≥ 80 % drive load for 1 s: halt motion, cut torque on all servos (arm goes limp, no park move), stop tracking, play the ack chime; no motion for 120 s, then resume into idle. Surfaced on `/health` | **yes** — feetech driver reads each servo's own `Present_Load` over the bus (no current sensor); thresholds in `robots/lamp/servo_overload.json`. Provisional, not yet measured on hardware |
+| Servo overload (stall) | A joint at ≥ 90 % drive load for 1.5 s: halt motion, cut torque on all servos (arm goes limp, no park move), stop tracking, play the ack chime; no motion for 120 s, then resume into idle. Surfaced on `/health` | **yes** — feetech driver reads each servo's own `Present_Load` over the bus (no current sensor); thresholds in `robots/lamp/servo_overload.json`. Measured on lamp-52e6: free motion peaks at 87 % for under 0.3 s, a hand holding a joint 94-100 % |
 
 Idle animation is local and self-contained, so the device stays "alive" (breathing,
 emoting) when the cloud is gone rather than freezing — only *agent-driven* tracking and
