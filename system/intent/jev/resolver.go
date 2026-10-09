@@ -69,6 +69,9 @@ func (r *Resolver) Resolve(ctx context.Context, text string, candidates []Candid
 	if text == "" || len(text) > maxInputBytes {
 		return skip("invalid_input")
 	}
+	if !r.harness && !MayBeDeviceCommand(text) {
+		return skip("no_device_keyword")
+	}
 	if len(candidates) == 0 {
 		return skip("no_candidates")
 	}

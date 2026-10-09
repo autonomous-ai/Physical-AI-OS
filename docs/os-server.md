@@ -1149,6 +1149,18 @@ Core inference code lives in `system/intent/jev/` (`client`, `resolver`, and
 `catalog`). `system/intent/semantic.go` connects it to local rules and execution,
 keeping the model decision separate from HAL side effects.
 
+A local keyword pre-filter (`MayBeDeviceCommand` in `catalog.go`) runs before the
+Jev request. Text that is pure ASCII and shares no word prefix with the catalog
+vocabulary (light, lamp, bright, dim, volume, loud, colors, scene/mode names,
+music, stop, speak, time, follow, track, camera, ...) makes no Jev call and goes
+straight to the main runtime, saving the ~1-2 s decision that would only abstain.
+It logs `intent Jev decision outcome=skipped reason=no_device_keyword`. Any
+non-ASCII text (for example Vietnamese) always reaches Jev. A paraphrase using none
+of these words is still served by the main runtime. When adding a catalog intent,
+extend `jevKeywordStems`; `TestMayBeDeviceCommandKeepsLiveCorpus` fails if a
+positive live-corpus example would be filtered out. Harness session selection does
+not use this filter.
+
 The decision budget defaults to **3,000 ms**, capped at **3,000 ms** (nonpositive
 values use the default). Each decision makes one request without retries. A
 concurrent decision is skipped immediately, without queueing. Errors, timeout,

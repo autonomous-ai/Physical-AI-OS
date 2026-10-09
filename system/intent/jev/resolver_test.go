@@ -134,3 +134,33 @@ func TestJevResolverRejectsInvalidSelectedArguments(t *testing.T) {
 		}
 	}
 }
+
+// The pre-filter may only skip Jev for text no catalog intent could accept.
+func TestMayBeDeviceCommandKeepsLiveCorpus(t *testing.T) {
+	for _, tc := range liveIntentCases() {
+		if tc.want != "" && !MayBeDeviceCommand(tc.text) {
+			t.Errorf("positive example %q filtered out before Jev", tc.text)
+		}
+	}
+	for _, text := range []string{"Let me turn on the light.", "too bright", "I don't want to listen to music. Stop it.", "Mấy giờ rồi"} {
+		if !MayBeDeviceCommand(text) {
+			t.Errorf("%q filtered out before Jev", text)
+		}
+	}
+	calls := 0
+	r := &Resolver{client: fakeJevDecider(func(context.Context, string, string, []Candidate) (Selection, error) {
+		calls++
+		return Selection{}, nil
+	})}
+	opts := Options{Enabled: true, Endpoint: testJevEndpoint, APIKey: "test"}
+	for _, text := range []string{"What is two plus two?", "Unknown Speaker: [voice:v1] How are you today? (audio saved at /tmp/x.wav)", "Send text to my Notion"} {
+		r.Resolve(context.Background(), text, Candidates(), opts)
+	}
+	if calls != 0 {
+		t.Fatalf("Jev called %d times for text without device vocabulary", calls)
+	}
+	r.Resolve(context.Background(), "Please switch this light on.", Candidates(), opts)
+	if calls != 1 {
+		t.Fatal("device command did not reach Jev")
+	}
+}
