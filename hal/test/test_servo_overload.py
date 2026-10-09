@@ -833,3 +833,9 @@ def test_off_playback_floors_stay_out_of_a_playing_recording(contact_rig):
         svc._overload_tick()
         contact_rig.clock.advance(0.05)
     assert not svc.contact_active
+
+
+def test_a_contact_stop_uses_its_own_handler_when_given(contact_rig):
+    contact_rig.svc._on_contact = lambda joint, load: contact_rig.fired.append(("contact", joint))
+    _hit(contact_rig)
+    assert contact_rig.fired == [("contact", "base_yaw")]

@@ -37,15 +37,15 @@ class TestServoOverloadConfig(unittest.TestCase):
         self.assertEqual(
             config,
             ServoOverloadConfig(
-                800, 1.0, 120.0,
-                ContactStopConfig({"base_yaw": 650, "wrist_roll": 750, "wrist_pitch": 650},
-                                  0.05, 3.0, 80, 25, {
-                                      "base_pitch": 560, "elbow_pitch": 400,
-                                      "lag:base_yaw": 70, "lag:base_pitch": 100,
-                                      "lag:elbow_pitch": 70, "lag:wrist_roll": 40,
-                                      "lag:wrist_pitch": 90,
+                800, 1.5, 120.0,
+                ContactStopConfig({"base_yaw": 550, "wrist_roll": 750, "wrist_pitch": 650},
+                                  0.05, 3.0, 120, 35, {
+                                      "base_pitch": 570, "elbow_pitch": 520,
+                                      "lag:base_yaw": 100, "lag:base_pitch": 140,
+                                      "lag:elbow_pitch": 120, "lag:wrist_roll": 90,
+                                      "lag:wrist_pitch": 120,
                                   }),
-                {"base_pitch": 700, "elbow_pitch": 700},
+                {"base_yaw": 600, "base_pitch": 600, "elbow_pitch": 600},
             ),
         )
         self.assertIsNone(load_servo_overload_config(root / "intern-v2", "orangepi_sun60"))

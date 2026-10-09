@@ -343,6 +343,7 @@ async def lifespan(app: FastAPI):
                         _servo_overload_config.torque_limit if _servo_overload_config else None
                     ),
                     contact_profile=_contact_profile(),
+                    on_contact=_on_servo_contact,
                     contact_off_playback=(
                         _servo_overload_config.contact.off_playback
                         if _servo_overload_config and _servo_overload_config.contact else None
@@ -1104,6 +1105,20 @@ def _contact_profile():
         os.path.join(_device_dir, "contact_profile.json"),
         contact.lag_margin,
     )
+
+
+def _on_servo_contact(joint: str, load: int) -> None:
+    """Contact stop fired: the "uh-oh" chime, and the tracker stops driving the arm."""
+    try:
+        if state.tts_service is not None:
+            state.tts_service.play_contact_chime()
+    except Exception as e:
+        logger.warning("[contact] chime failed: %s", e)
+    try:
+        if state.tracker_service and state.tracker_service.is_tracking:
+            state.tracker_service.stop()
+    except Exception as e:
+        logger.warning("[contact] stop tracking failed: %s", e)
 
 
 def _servo_overload_view():

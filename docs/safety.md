@@ -399,17 +399,20 @@ Six conditions are enforced today; setup-incomplete is reserved.
 - [ ] **Setup incomplete → reserved.** Not gated in the runtime yet (setup/identity
       reflexes only is declared intent, not enforced).
 - [x] **Servo contact → halt in place, chime, short pause.** Stops the arm when it
-      hits something while moving. It shares the monitor thread, the `Present_Load`
-      read and the `on_overload` handler with the overload cut-off below, and is set in
+      hits something while moving. It shares the monitor thread and the `Present_Load`
+      read with the overload cut-off below (its own `on_contact` handler, falling back
+      to `on_overload` when unset), and is set in
       the same file: an optional `contact` object (`load`, `hold_s`, `pause_s`, exactly
-      those keys) in the board entry; no `contact` means no contact stop. `load` is one
+      those keys, plus the optional `profile_margin`, `lag_margin` and `off_playback`
+      below) in the board entry; no `contact` means no contact stop. `load` is one
       floor for every joint or a `{joint: floor}` map, and a joint left out of the map
-      is not watched. A watched joint at or above its floor (Lamp: `base_yaw` `650`,
+      is not watched. A watched joint at or above its floor (Lamp: `base_yaw` `550`,
       `wrist_roll` `750`, `wrist_pitch` `650`, in 0.1 % of full drive) for
       `contact.hold_s` (Lamp: `0.05` s, about two 50 ms samples) halts motion in flight,
       and so does any joint above its **learned envelope** while a learned recording
       plays (see the next paragraph), pins the current pose and keeps **torque on**, so the arm
-      does not drop; the runtime plays the ack chime and stops the vision tracker. For
+      does not drop; the runtime plays its own soft falling "uh-oh" chime (G5 then E5,
+      two 90 ms notes, `play_contact_chime`) and stops the vision tracker. For
       `contact.pause_s` (Lamp: `3` s) goal writes are blocked so nothing drives back
       into the obstacle, and `/servo/move`, `/servo/aim`, `/servo/nudge` fail with
       "Servo contact stop active". Then the state is re-read from hardware and idle
@@ -423,29 +426,44 @@ Six conditions are enforced today; setup-incomplete is reserved.
       reach 83-100 % in free motion, while a hand blocking them read only 36-74 %, so a
       fixed floor cannot tell the two apart.
       **Learned envelope (an elevator door's learn run).** What a free run loads at each
-      frame of a recording repeats, so with `contact.profile_margin` set (Lamp: `150` =
-      15 %) the driver keeps a per-unit envelope at `/var/lib/hal/contact_profile.json`
-      (`HAL_CONTACT_PROFILE_PATH`): `{recording: {joint: [max load per frame]}}`.
+      frame of a recording repeats, so with `contact.profile_margin` set (Lamp: `120` =
+      12 %) the driver keeps a per-unit envelope at `/var/lib/hal/contact_profile.json`
+      (`HAL_CONTACT_PROFILE_PATH`, falling back to `robots/<device>/contact_profile.json`
+      when the unit has not learned one): `{recording: {joint: [max load per frame],
+      "lag:<joint>": [max |goal - present| per frame, 0.1 deg]}}`. The lag entries
+      matter where load cannot help: a joint at its torque cap, or a soft one a hand
+      simply slows, falls behind its goal. With `contact.lag_margin` set (Lamp: `35` =
+      3.5°) a joint trailing its learned lag by that much is a hit too.
       `POST /servo/contact/learn` (`{"recordings": [...], "runs": 2}`; default every
       recording except `music_*`) plays each recording free `runs` times in the
       background and saves the per-frame max; the area around the arm must be clear,
       since whatever it touches is learned as normal. While a learned recording plays
       its own frames, every joint's floor is the envelope (max over ±3 frames) plus the
       margin, and that includes `base_pitch` and `elbow_pitch`. The ramp into a
-      recording, holds, tracking and `/servo/move` have no envelope and keep the fixed
-      floors. Re-learn after recalibrating the arm or changing `torque_limit`.
+      recording has no envelope and keeps the fixed floors. While no recording owns the
+      body (gaze turns, tracking, `/servo/move`, holds) the optional
+      `contact.off_playback` map applies instead: load floors by joint name and lag
+      floors as `lag:<joint>` in 0.1 deg (Lamp: `base_pitch` 57 %, `elbow_pitch` 52 %;
+      lag `base_yaw` 10°, `base_pitch` 14°, `elbow_pitch` 12°, `wrist_roll` 9°,
+      `wrist_pitch` 12°). Joints lag more under the 60 % torque cap: floors taken from
+      70 %-cap data tripped falsely 5 times during a learn run on lamp-52e6, these gave
+      no false trip over ~3 min (6 recordings + 90 s idle). On
+      lamp-52e6 the gaze cut most recordings short within a second whenever someone
+      sat in front of it, so this is where a hand usually meets the arm. Re-learn after recalibrating the arm or changing `torque_limit`.
       `GET /health.servo_overload.contact.profile` shows `margin`, how many recordings
       are learned and which one a learn run is on.
       **Limits:** nothing is seen before the touch, and a light object the arm can
-      simply push, such as a cup, may never load a joint enough to trip.
+      simply push, such as a cup or a photo frame, may never load a joint enough to trip.
 - [x] **Servo torque cap → a softer arm.** An optional `torque_limit` map
       (`{joint: limit}`, 0.1 % of full drive) in the same board entry is written to
       each servo's `Torque_Limit` (STS3215 register 48) at every configure, so that
       joint pushes at most that hard into a hand or an object. `Present_Load` then
       tops out at the limit, so a load floor above it (the cut-off's 80 %) never trips
-      on that joint. Lamp caps `base_pitch` and `elbow_pitch` at `700` (70 %): over the
-      19 recordings on lamp-52e6 the worst tracking lag went from 17° to 18° (`shock`),
-      while 50 % stretched it to 24°.
+      on that joint. Lamp caps `base_yaw`, `base_pitch` and `elbow_pitch` at `600` (60 %):
+      over the 19 recordings on lamp-52e6 a 70 % cap moved the worst tracking lag from
+      17° to 18° (`shock`) and 50 % stretched it to 24°; 60 % trades a little lag for a
+      gentler push. The cut-off's 80 % therefore never trips on these three joints (the
+      cap itself bounds their drive); it still guards `wrist_roll` and `wrist_pitch`.
 - [x] **Servo overload (stall) → cut torque, chime, timed retry.** Gear protection for
       a blocked or forced arm. Driver-level and feetech-only (`AnimationService`),
       device-owned: thresholds come from `robots/<device>/servo_overload.json` (a
@@ -454,7 +472,7 @@ Six conditions are enforced today; setup-incomplete is reserved.
       no cut-off, and a malformed file fails boot. It is not a `SAFETY.md` field. No
       current sensor is needed: a monitor thread reads every joint's `Present_Load`
       (STS3215 register 60, the drive duty in 0.1 % units) every 50 ms. A joint at or
-      above `load` (Lamp: `800` = 80 %) for `hold_s` (Lamp: `1.0` s) trips the pure
+      above `load` (Lamp: `800` = 80 %) for `hold_s` (Lamp: `1.5` s) trips the pure
       `OverloadGuard` (`hal/drivers/motors/overload.py`). On
       trip the driver halts motion in flight and writes `Torque_Enable=0` to all servos
       with **no park move** (the arm is blocked, so it goes limp where it is); the
@@ -473,9 +491,12 @@ Six conditions are enforced today; setup-incomplete is reserved.
       released (asleep) or zero-posed meanwhile it stays limp until the next resume.
       Still blocked → it trips again. A failed load read never trips. Surfaced at
       `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `cut_complete`,
-      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
-      yet measured on hardware**; compare `peak` during normal animation with the
-      threshold before relying on it. Only Lamp ships the file.
+      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). Lamp's
+      80 % / 1.5 s was measured on lamp-52e6 (2026-10-09) at full torque: free-motion
+      peaks reached 87 % (`base_pitch` in `shock`) for under 0.3 s, a hand holding
+      `base_yaw` or `elbow_pitch` read 94-100 %, and the mis-calibrated `goodbye`
+      grinding the desk (100 % for 1.2 s) stays under the 1.5 s hold. Only Lamp ships
+      the file.
 - [x] **Unit:** `thermal_over` trips at/above `max_temp_c`, holds through hysteresis
       above `resume_temp_c`, clears at/below it, and is False with no policy / no thermal
       section / unreadable temp; `read_soc_temp_c` parses millidegrees → °C and returns

@@ -84,7 +84,8 @@ class AnimationService:
                  contact_guard: Optional[OverloadGuard] = None,
                  torque_limits: Optional[Dict[str, int]] = None,
                  contact_profile: Optional[ContactProfile] = None,
-                 contact_off_playback: Optional[Dict[str, int]] = None):
+                 contact_off_playback: Optional[Dict[str, int]] = None,
+                 on_contact: Optional[Callable[[str, int], None]] = None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
@@ -186,6 +187,9 @@ class AnimationService:
         # holds): {joint or "lag:<joint>": floor}. Those moves have no envelope, and
         # without these the weight-bearing joints are not watched there at all.
         self._contact_off_playback = dict(contact_off_playback or {})
+        # on_contact(joint, load) runs after a contact stop (its own chime); without
+        # it the contact stop falls back to on_overload.
+        self._on_contact = on_contact
         self._overload_stop = threading.Event()
         self._overload_thread: Optional[threading.Thread] = None
         self._overload_read_ok = True
@@ -1331,11 +1335,12 @@ class AnimationService:
             joint, load / 10.0, unit, (self._contact.last_floor or 0) / 10.0,
             self._contact.hold_s, self._contact.retry_s,
         )
-        if self._on_overload is not None:
+        handler = self._on_contact or self._on_overload
+        if handler is not None:
             try:
-                self._on_overload(joint, load)
+                handler(joint, load)
             except Exception as e:
-                logger.warning("[contact] on_overload handler failed: %s", e)
+                logger.warning("[contact] handler failed: %s", e)
 
     def _contact_recover(self) -> None:
         """Pause over: allow goal writes again and ease back into idle from where it stopped."""
