@@ -32,7 +32,7 @@ from hal.presets import (
 )
 
 # Background emotions skip the LED so the user's color stays visible.
-_BACKGROUND_EMOTIONS = {EMO_IDLE, EMO_THINKING}
+_BACKGROUND_EMOTIONS = {EMO_IDLE}
 from hal.drivers.rgb.effects import run_effect as _run_effect
 
 logger = logging.getLogger("hal.server")
@@ -1132,6 +1132,10 @@ def _on_tts_speak_start():
         return
 
     color = _get_current_led_color()
+    if not any(color):
+        # Off is an ambient preference, not a request to hide active speech.
+        # Reuse the device's dim listening color without saving a new preference.
+        color = tuple(EMOTION_PRESETS[EMO_LISTENING]["color"])
     logger.info("TTS speaking LED start: color=%s", color)
 
     _tts_speaking = True
@@ -1264,7 +1268,7 @@ def _apply_emotion_led_display(
 ) -> Optional[list]:
     """Apply LED effect + display for an emotion; returns the scaled LED color or None.
 
-    force_led bypasses only the background-emotion guard (realtime thinking cue).
+    force_led bypasses only the idle background-emotion guard, never sleep.
     """
     preset = EMOTION_PRESETS.get(emotion)
     if not preset:

@@ -80,6 +80,45 @@ STT_KEEPALIVE = os.environ.get("HAL_STT_KEEPALIVE", "false").lower() == "true"
 # empty transcripts on short/quiet utterances).
 STT_KEEPALIVE_PING_S = float(os.environ.get("HAL_STT_KEEPALIVE_PING_S", "3"))
 
+# Spoken language identification (active only when config.json `stt_languages`
+# lists two or more languages). STT opens in the predicted language and is
+# replaced when identification confidently disagrees; see stt/lang_switch.py.
+_VOICE_RESOURCES = Path(__file__).resolve().parent.parent / "resources"
+LANG_ID_MODEL_PATH = Path(os.environ.get("HAL_LANG_ID_MODEL_PATH", str(_VOICE_RESOURCES / "ambernet.onnx")))
+LANG_ID_LABELS_PATH = Path(os.environ.get("HAL_LANG_ID_LABELS_PATH", str(_VOICE_RESOURCES / "ambernet.labels.json")))
+# Re-identify every HOP_S of an utterance's speech from START_S; the check at MAX_S is final.
+LANG_ID_START_S = float(os.environ.get("HAL_LANG_ID_START_S", "1.0"))
+LANG_ID_HOP_S = float(os.environ.get("HAL_LANG_ID_HOP_S", "1.0"))
+LANG_ID_MAX_S = float(os.environ.get("HAL_LANG_ID_MAX_S", "10.0"))
+# Probability needed to switch before MAX_S, and at MAX_S (0 = trust the top guess).
+LANG_ID_SWITCH_PROB = float(os.environ.get("HAL_LANG_ID_SWITCH_PROB", "0.85"))
+LANG_ID_FINAL_PROB = float(os.environ.get("HAL_LANG_ID_FINAL_PROB", "0.0"))
+# How long a confidently identified language stays the prediction for new turns.
+LANG_ID_STICKY_S = float(os.environ.get("HAL_LANG_ID_STICKY_S", "120"))
+# Only frames at or above this int16 RMS count as speech for identification
+# (post-AEC uplink: silence ~5, speech in the thousands).
+LANG_ID_SPEECH_RMS = float(os.environ.get("HAL_LANG_ID_SPEECH_RMS", "300"))
+# A non-speech gap this long starts a new utterance; identification restarts, so a
+# long-lived (live mode) STT session follows each utterance's language.
+LANG_ID_UTTERANCE_GAP_S = float(os.environ.get("HAL_LANG_ID_UTTERANCE_GAP_S", "1.0"))
+# Below this share of the full 107-language softmax the audio is treated as out of
+# set (another language or noise) and never causes a switch.
+LANG_ID_MIN_IN_SET = float(os.environ.get("HAL_LANG_ID_MIN_IN_SET", "0.5"))
+# Classify at most the latest N seconds of speech (inference cost grows linearly).
+LANG_ID_WINDOW_S = float(os.environ.get("HAL_LANG_ID_WINDOW_S", "4.0"))
+LANG_ID_THREADS = int(os.environ.get("HAL_LANG_ID_THREADS", "2"))
+
+
+def lang_id_checkpoints_s() -> list[float]:
+    """Audio lengths (seconds) at which identification runs, ending at MAX_S."""
+    points: list[float] = []
+    t = LANG_ID_START_S
+    while t < LANG_ID_MAX_S - 1e-6:
+        points.append(round(t, 3))
+        t += max(LANG_ID_HOP_S, 0.1)
+    points.append(LANG_ID_MAX_S)
+    return points
+
 SPEAKER_PREPASS_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_JOIN_S", "2.0"))
 SPEAKER_PREPASS_COMMIT_JOIN_S = float(os.environ.get("HAL_SPEAKER_PREPASS_COMMIT_JOIN_S", "0.2"))
 

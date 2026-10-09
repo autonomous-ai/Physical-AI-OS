@@ -90,3 +90,33 @@ func TestDescribeDesktopRejectsCancellationAndMissingConfiguration(t *testing.T)
 		t.Fatal("missing credentials accepted")
 	}
 }
+
+func TestLookDisablesThinkingUnlessReadingText(t *testing.T) {
+	seedDesktopTestCatalog(t)
+	requests := make(chan map[string]any, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		requests <- body
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"content":[{"type":"text","text":"A desk."}]}`))
+	}))
+	defer server.Close()
+	cfg := &config.Config{LLMBaseURL: server.URL + "/v1", LLMAPIKey: "test-key"}
+	for _, readText := range []bool{false, true} {
+		if got, err := LookWithRetry(cfg, "jpeg-base64", "What is this?", readText); err != nil || got != "A desk." {
+			t.Fatalf("readText=%v result=%q err=%v", readText, got, err)
+		}
+		body := <-requests
+		thinking, set := body["thinking"].(map[string]any)
+		if readText == set || (set && thinking["type"] != "disabled") {
+			t.Fatalf("readText=%v thinking=%v", readText, body["thinking"])
+		}
+		prompt := body["messages"].([]any)[0].(map[string]any)["content"].([]any)[1].(map[string]any)["text"].(string)
+		if !strings.Contains(prompt, "What is this?") || strings.Contains(prompt, "readable text") {
+			t.Fatalf("invalid look prompt: %s", prompt)
+		}
+	}
+}

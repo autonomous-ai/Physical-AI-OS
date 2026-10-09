@@ -107,6 +107,8 @@ class SensingSender:
                 "enabled": harness_voice["enabled"],
                 "generation": harness_voice["generation"],
             }
+        if harness_voice and not harness_voice.get("enabled") and harness_voice.get("capturedAtMs"):
+            payload["captured_at_ms"] = harness_voice["capturedAtMs"]
         if interaction_id:
             payload["interaction_id"] = interaction_id
         try:

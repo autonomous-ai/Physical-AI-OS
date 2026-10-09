@@ -38,8 +38,13 @@ class STTProvider(ABC):
     """Factory that creates STT sessions. One provider instance per VoiceService."""
 
     @abstractmethod
-    def create_session(self) -> STTSession:
-        """Create a new streaming session."""
+    def create_session(self, language: Optional[str] = None) -> STTSession:
+        """Create a new streaming session.
+
+        Args:
+            language: app language code (e.g. "ja") for this session only; None
+                uses the provider's configured language.
+        """
 
     @property
     @abstractmethod

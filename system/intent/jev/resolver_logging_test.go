@@ -10,7 +10,7 @@ import (
 )
 
 func TestResolverSkippedReasonsExcludeInputAndCredentials(t *testing.T) {
-	for _, reason := range []string{"disabled", "missing_config", "invalid_input", "no_candidates", "cooldown", "busy", "cancelled"} {
+	for _, reason := range []string{"disabled", "missing_config", "invalid_input", "no_device_keyword", "no_candidates", "cooldown", "busy", "cancelled"} {
 		t.Run(reason, func(t *testing.T) {
 			var logs bytes.Buffer
 			previous := slog.Default()
@@ -18,7 +18,7 @@ func TestResolverSkippedReasonsExcludeInputAndCredentials(t *testing.T) {
 			defer slog.SetDefault(previous)
 			r := NewResolver()
 			o := Options{Enabled: true, Endpoint: "https://proxy.test", APIKey: "secret-key"}
-			input := "private-utterance"
+			input := "private-utterance light"
 			candidates := Candidates()
 			ctx := context.Background()
 			switch reason {
@@ -28,6 +28,8 @@ func TestResolverSkippedReasonsExcludeInputAndCredentials(t *testing.T) {
 				o.Endpoint = ""
 			case "invalid_input":
 				input = ""
+			case "no_device_keyword":
+				input = "private-utterance"
 			case "no_candidates":
 				candidates = nil
 			case "cooldown":

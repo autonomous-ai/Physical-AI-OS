@@ -472,9 +472,15 @@ class VoiceService:
             return 0.0
         return self._mic_level
 
+    def set_input_mode(self, mode, wakeword):
+        from hal.drivers.voice._internal.input_mode import apply_to_service
+
+        apply_to_service(self, mode, wakeword)
+
     def start(self):
         with self._lifecycle_lock:
             self._lifecycle_revision += 1
+            self._input_mode_resume_pending = False
             self._start_locked()
 
     def _start_locked(self):
@@ -506,6 +512,8 @@ class VoiceService:
         self._running = True
         if voice_cfg.TURN_END_ENABLED and not voice_cfg.LIVE_MODE:
             self._turn_detector = SmartTurnDetector()
+        if hal_config.REALTIME_ENABLED:
+            self._realtime.start()
         self._thread = threading.Thread(target=self._loop, daemon=True, name="voice")
         self._thread.start()
         logger.info("VoiceService started (local VAD + %s)", self._stt.name)
@@ -515,7 +523,11 @@ class VoiceService:
             if worker is not None:
                 worker.join()
         with self._lifecycle_lock:
-            if revision == self._lifecycle_revision:
+            from hal import app_state
+
+            if (revision == self._lifecycle_revision
+                    and not app_state.privacy.mic_locked() and not app_state._mic_muted
+                    and not app_state._sleeping and not app_state._enrolling):
                 self._start_locked()
 
     @property
@@ -566,6 +578,7 @@ class VoiceService:
         self.cancel_automatic_reply()
         self._lifecycle_lock.acquire()
         self._lifecycle_revision += 1
+        self._input_mode_resume_pending = False
         self._running = False
         if background:
             try:
@@ -583,7 +596,7 @@ class VoiceService:
         finally:
             self._lifecycle_lock.release()
 
-    def _stop_locked(self):
+    def _stop_locked(self, *, summarize=True):
         with self._mic_lock:
             if self._active_mic is not None:
                 try:
@@ -598,8 +611,14 @@ class VoiceService:
             # summarize_realtime_memory() which fire LLM requests.
             rt_thread = self._realtime_stop_thread
             if rt_thread is None or not rt_thread.is_alive():
+                def stop_realtime():
+                    if summarize:
+                        self._realtime.stop()
+                    else:
+                        self._realtime.stop(summarize=False)
+
                 rt_thread = threading.Thread(
-                    target=self._realtime.stop,
+                    target=stop_realtime,
                     daemon=True,
                     name="voice-realtime-teardown",
                 )
@@ -858,10 +877,6 @@ class VoiceService:
         """Main loop: local VAD → STT on speech → disconnect on silence."""
         # Before arecord starts, so the mic child inherits the fast cores too.
         cpu_affinity.pin_current_thread(cpu_affinity.FAST)
-        if hal_config.REALTIME_ENABLED:
-            threading.Thread(
-                target=self._realtime.start, daemon=True, name="realtime-start"
-            ).start()
 
         if (getattr(hal_config, "VOICE_INPUT_MODE", "automatic") != "tap_to_talk"
                 or not device_manual_mode(read_voice_mode())):
@@ -889,6 +904,10 @@ class VoiceService:
             # Prepare echo-reference filters while idle, without opening the mic.
             # Otherwise the first explicit tap pays SciPy's cold import cost.
             aec.configure(device_rate)
+
+        ready = getattr(self, "_input_mode_ready", None)
+        if ready is not None:
+            ready.set()
 
         while self._running:
             mode = read_voice_mode()
@@ -2463,6 +2482,24 @@ class VoiceService:
             final_ts[0] = time.time()
             stt_final_changed.set()
 
+        def on_language_switch(old: str, new: str) -> None:
+            # The replacement STT session re-transcribes the whole turn; drop
+            # what the wrong-language session produced so far.
+            logger.info("STT language switched %s -> %s; transcript state reset", old, new)
+            last_partial[0] = ""
+            final_segments.clear()
+            final_sent[0] = False
+            final_ts[0] = 0.0
+            wake_partial_hypothesis[0] = ""
+            wake_final_hypothesis[0] = ""
+
+        def bind_language_switch(session) -> None:
+            set_listener = getattr(session, "set_switch_listener", None)
+            if set_listener is not None:
+                set_listener(on_language_switch)
+
+        bind_language_switch(stt_session)
+
         rt_audio_buffer: list = []
         realtime_deferred = False
         realtime_turn_started = False
@@ -2677,6 +2714,7 @@ class VoiceService:
                     except Exception:
                         pass
                     stt_session = self._stt.create_session()
+                    bind_language_switch(stt_session)
                     if not stt_session.start(on_transcript):
                         raise RuntimeError("fresh STT session failed to connect") from e
                     _send_pre_roll()

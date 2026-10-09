@@ -751,6 +751,16 @@ phân giải ra rỗng đơn giản là một cái đèn không nói gì.
 
 ## Canh khung gaze — giữ user trong khung hình
 
+Gaze tạm ngừng lấy mẫu khi chuyển vào idle và trong 350 ms sau frame playback
+idle đầu tiên. Sau đó gaze lấy mẫu ngay trong **vòng idle đầu tiên**, không chờ
+chạy hết recording. Trước đây `_idle_settled` chỉ thành true khi hết vòng đầu,
+nên các lệnh servo idle lặp lại có thể chặn gaze cả vòng dù tư thế không đổi.
+Timestamp playback riêng không đổi cờ tiếng ồn motor, ngưỡng chấp nhận gaze,
+hay điều kiện không xoay tìm lại khi đã thấy mặt. Với cấu hình 6 mẫu/s, gaze
+có thể lấy mẫu ở vòng watcher kế tiếp sau khoảng 350 ms; vẫn có thêm thời gian
+camera/xử lý thực tế. Ranh giới này đã có test playback xác định, chưa có số đo
+latency mới trên device.
+
 Mọi thứ ở trên đều là do được yêu cầu: một lệnh nhìn, một phiên track, một lần tìm. Phần này là
 watcher trong `hal/drivers/tracking/gaze.py` tự làm những việc đó mà không ai bảo, để đến lúc user
 thực sự cất tiếng thì camera đã hướng về chỗ có ích. Toàn bộ nằm dưới `HAL_GAZE_WAKE` (xem

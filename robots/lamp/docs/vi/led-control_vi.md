@@ -445,8 +445,13 @@ HAL trong cùng lần boot; reboot xóa state boot-scoped và dùng mặc địn
 Sidecar cũ `{"type":"off"}` vẫn được đổi thành không có state.
 
 `led_should_stay_dark()` nhận cả solid đen do user chọn lẫn default tối, để
-TTS/music wave và presence restore tôn trọng tắt đèn. Status và mic-privacy giữ
-ưu tiên hiện tại. Intent `light on` vẫn dùng trắng ấm [255, 220, 180], không lấy
+music wave và presence restore tôn trọng tắt đèn. Trạng thái voice đang hoạt
+động vẫn hiển thị: listening và thinking dùng preset emotion của device dù đã
+lưu tùy chọn tắt đèn; TTS dùng màu listening mờ nếu màu nền là đen. Các luồng
+restore cue/kết thúc/hủy hiện có trả về tùy chọn mới nhất, kể cả off. Không ghi
+đè tùy chọn, không thêm network request hoặc thời gian chờ. Sleep vẫn chặn
+các cue này; mic privacy giữ ưu tiên indicator lúc nghỉ hiện có. Chưa có
+tùy chọn full-blackout riêng. Intent `light on` vẫn dùng trắng ấm [255, 220, 180], không lấy
 preset ambient mờ.
 
 ## LED Trong Emotion

@@ -35,6 +35,11 @@ c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
 esac
 ```
 
+Add `"read_text":true` to the JSON only when the user asks you to read text,
+a label, a sign, a screen, or a brand/model name (e.g. "what does it say",
+"what brand is this phone"). It takes a sharper photo and lets the vision model
+think, so it is about 3x slower; leave it out for everything else.
+
 Read the output:
 
 - `CAMERA_OFF` → the user turned the camera off (privacy). Say so in one

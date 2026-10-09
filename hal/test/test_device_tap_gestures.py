@@ -15,6 +15,8 @@ from hal.drivers.voice._internal import harness_voice
 
 @pytest.fixture
 def tap(monkeypatch):
+    from hal.drivers.voice.tts import turn_supersession
+    monkeypatch.setattr(turn_supersession, "suppress_before", mock.Mock())
     monkeypatch.setattr(config, "VOICE_INPUT_MODE", "tap_to_talk", raising=False)
     voice = SimpleNamespace(device_input=mock.Mock(
         spec=["active", "enabled", "start", "finish", "cancel"], active=False, enabled=True,
@@ -38,14 +40,14 @@ def tap(monkeypatch):
 def test_taps_start_then_finish_without_spoken_cue_or_focus(tap):
     voice, _ = tap
     device_tap_actions.physical_short_tap()
-    voice.device_input.start.assert_called_once_with()
+    voice.device_input.start.assert_called_once_with(after_ms=mock.ANY)
     voice.device_input.active = True
     device_tap_actions.physical_short_tap()
     voice.device_input.finish.assert_called_once_with()
     button_actions.announce_listening_cue.assert_not_called()
     button_actions._grant_wakeword_focus.assert_not_called()
     button_actions.play_ack_chime.assert_not_called()
-    button_actions._cancel_agent_speech.assert_not_called()
+    button_actions._cancel_agent_speech.assert_called_once_with("button", before_ms=mock.ANY)
 
 
 def test_speaking_tap_only_stops_then_next_records(tap):
@@ -58,8 +60,9 @@ def test_speaking_tap_only_stops_then_next_records(tap):
     voice.device_input.start.assert_not_called()
     state.tts_service.speaking = False
     device_tap_actions.physical_short_tap()
-    voice.device_input.start.assert_called_once_with()
-    button_actions._cancel_agent_speech.assert_called_once_with("button")
+    voice.device_input.start.assert_called_once_with(after_ms=mock.ANY)
+    assert button_actions._cancel_agent_speech.call_count == 2
+    button_actions._cancel_agent_speech.assert_called_with("button", before_ms=mock.ANY)
 
 
 @pytest.mark.parametrize("playing", [False, True])
@@ -88,7 +91,7 @@ def test_software_muted_mic_can_start(tap, monkeypatch):
     monkeypatch.setattr(state, "_mic_muted", True)
     device_tap_actions.physical_short_tap()
     routes.unmute_mic.assert_called_once_with()
-    voice.device_input.start.assert_called_once_with()
+    voice.device_input.start.assert_called_once_with(after_ms=mock.ANY)
 
 
 def test_unknown_harness_mode_fails_closed(tap):
@@ -238,5 +241,18 @@ def test_ack_follows_wake_or_stop_without_starting_capture(tap, monkeypatch, act
     # The next tap starts capture, whose own ready cue must not get an extra ping.
     state.tts_service.speaking = False
     device_tap_actions.physical_short_tap("MPR121")
-    voice.device_input.start.assert_called_once_with()
+    voice.device_input.start.assert_called_once_with(after_ms=mock.ANY)
     button_actions.play_ack_chime.assert_called_once_with("MPR121")
+
+
+def test_next_recording_cancels_pending_turn_before_admission(tap):
+    voice, routes = tap
+    sequence = mock.Mock()
+    sequence.attach_mock(voice.device_input.cancel, "cancel")
+    sequence.attach_mock(routes.stop_tts, "stop")
+    sequence.attach_mock(voice.device_input.start, "start")
+    device_tap_actions.physical_short_tap()
+    assert sequence.mock_calls == [mock.call.cancel(), mock.call.stop(),
+                                   mock.call.start(after_ms=mock.ANY)]
+    cutoff = voice.device_input.start.call_args.kwargs["after_ms"]
+    button_actions._cancel_agent_speech.assert_called_once_with("button", before_ms=cutoff)

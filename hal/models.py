@@ -782,5 +782,10 @@ class TTSConfigRequest(BaseModel):
     speed: Optional[float] = None
 
 
+class VoiceInputModeRequest(BaseModel):
+    mode: Literal["automatic", "tap_to_talk"]
+    wakeword: bool
+
+
 class VoiceConfigRequest(BaseModel):
     wake_words: list[str] = Field(..., min_length=1, description="Wake word list (lowercase matched)")
