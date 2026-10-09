@@ -819,10 +819,15 @@ class TTSService:
     def _owner_suppressed(owner: str) -> bool:
         """Refuse audio for a turn the user explicitly stopped.
 
-        voice_metrics owns the boundary; unowned audio is never refused.
+        Local capture cutoffs cover delayed OS requests before telemetry knows
+        their run; unowned audio is never refused.
         """
         if not owner:
             return False
+        from hal.drivers.voice.tts.turn_supersession import owner_superseded
+
+        if owner_superseded(owner):
+            return True
         try:
             from hal.telemetry import voice_metrics
             return voice_metrics.is_suppressed(owner)
@@ -1932,11 +1937,13 @@ class TTSService:
             PHRASE_SERVICE_RESTART,
             PHRASE_SHUTDOWN,
             PHRASE_SLEEP,
+            PHRASE_VOICE_RETRY,
             localized_phrase,
         )
 
         warmed = 0
-        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN, PHRASE_SLEEP):
+        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN,
+                    PHRASE_SLEEP, PHRASE_VOICE_RETRY):
             text = localized_phrase(key)
             if not text:
                 continue

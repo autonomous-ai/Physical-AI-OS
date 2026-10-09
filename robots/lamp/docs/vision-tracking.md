@@ -531,7 +531,8 @@ lamp decides for itself. A sweep is entered when:
   that, and charging the sweep against a budget it cannot fit in would mean never sweeping at all.
 - **the gaze watcher has been alone too long** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) with nobody seen, or
   a repoint that turned to the bearing and found nobody there. Nobody asked for this one, which is
-  why it is the only entry with a cooldown — see *Looking around on its own*.
+  why it is the only entry with a cooldown and why it is only a **glance**, not this sweep — see
+  *Looking around on its own*.
 
 `POST /servo/search` — sweeps for a subject. Body (all optional): `{"target": "cup", "exhaustive": true}`.
 
@@ -634,7 +635,7 @@ cocked 45° over, facing a wall. Found → the head is straightened by turning t
 head was turned, so the camera keeps pointing at the subject with the head level.
 
 **When the gaze watcher sweeps, it looks for the user, not for anybody (#545).** `gaze._maybe_sweep`
-calls `search_for_subject(for_user=True)`. Every other caller keeps today's behaviour:
+calls `search_for_subject(for_user=True, glance=True)`. Every other caller keeps today's behaviour:
 `POST /servo/search` (objects, `exhaustive`) and look-aim's own fallback sweep. At each look it
 watches the faces in view for about 1.5 s (`user_check.observe_faces`, 6 frames; it skips the dwell
 when the first frame has no face) and stops only on a face that passes `user_check.adopts_bearing`:
@@ -996,8 +997,14 @@ prints once a minute rather than once a pass.
 
 ### Looking around on its own
 
-If a repoint is scored a miss (nobody, or only a body too small to be at the desk), `_verify_repoint` calls the same `/servo/search` sweep documented above
-with `confirmed_miss=True`. Since the repoint above is speech-driven, so is the sweep: the lamp
+If a repoint is scored a miss (nobody, or only a body too small to be at the desk), `_verify_repoint` calls `_maybe_sweep`
+with `confirmed_miss=True`, which **glances** rather than sweeps: `glance=True` keeps the base on the
+seed bearing and walks only `GLANCE_LOOKS` — the head left 45°, then right 45° — so 2 looks, about
+4 s, with no `look_still_searching` line. Then it returns to the starting pose and lets it go. The
+rule is *does a living thing do this?*: one that turns to a voice and finds nobody glances about; it
+does not quarter the room at 3 bearings × 6 looks like a security camera, which is what the full
+18-look sweep looked like when it ran unasked. The full sweep stays for searches somebody asked for
+(`/servo/search`, look-aim's fallback). Since the repoint above is speech-driven, so is the sweep: the lamp
 searches because somebody spoke and it could not find them, never because a room merely looks empty.
 An absence trigger (`HAL_GAZE_SWEEP_AFTER_S`) still exists in `_maybe_sweep` but nothing reaches it —
 the watcher loop no longer calls the sweep at all. The cooldowns still apply, and the two exist because
@@ -1019,8 +1026,8 @@ count as repoint evidence only if seen after the turn.
 
 | Knob | Default | Meaning |
 |---|---|---|
-| `HAL_GAZE_SWEEP` | `true` | Autonomous look-around on/off. |
-| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~20 s sweep stays the escalation, not the reflex. |
+| `HAL_GAZE_SWEEP` | `true` | Autonomous look-around (the glance) on/off. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Nobody seen for this long. Longer than `HAL_GAZE_REPOINT_AFTER_S` (12 s) so the cheap move is always tried first and the ~4 s glance stays the escalation, not the reflex. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Between sweeps when a bearing exists. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Between sweeps when there is no bearing at all. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Facing share needed to adopt a new bearing. Lower than the wake gate's 0.6: a still user measured 50%. Not 0.3: the window holds 2–3 samples, so that is one glance. |

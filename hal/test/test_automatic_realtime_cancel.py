@@ -140,6 +140,8 @@ def test_recovery_retires_old_agent_before_slow_connect_finishes(failed):
 
 def test_existing_rebuild_cannot_keep_cancelled_agent_available():
     orchestrator = object.__new__(RealtimeOrchestrator)
+    orchestrator._started = threading.Event()
+    orchestrator._started.set()
     old = Mock()
     orchestrator._agent = old
     orchestrator._lifecycle_lock = threading.Lock()

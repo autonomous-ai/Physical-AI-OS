@@ -94,6 +94,17 @@ This repo is developed in both **Cursor** and **Claude Code**. The following rul
    and any unverified device or end-to-end behavior. Passing functional tests
    alone does not demonstrate responsive UX.
 
+8. **Robot behavior must read as a living thing, not a machine** - Before
+   shipping any autonomous motion, sound, light, or speech, ask: does the lamp
+   act like a human, or like a living thing? Would a person or a pet do this
+   here? Judge what the user sees, not whether the algorithm reaches its goal.
+   Unprompted behavior stays small and natural: a lamp that turns to a voice
+   and finds nobody glances left and right and lets it go; it does not scan
+   the room at 18 positions like a WiFi camera. Exhaustive, mechanical
+   behavior is only for when the user explicitly asks for it (e.g. "look
+   around for my keys"). When a design passes its tests but would look odd,
+   awkward, or robotic to someone in the room, it is not done.
+
 See `docs/DEV-MULTI-IDE.md` for full conventions.
 
 ## Subagent Usage

@@ -226,7 +226,6 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 	prevBoot := bootFields(c)
 	prevTTS := ttsFields(c)
 	prevWakeWord := c.WakeWordEnabled()
-	prevInputMode := c.GetVoiceInputMode()
 	prevChannel := channelFields(c)
 	ch.prevLang = c.STTLanguage
 
@@ -252,7 +251,7 @@ func applyUpdate(c *config.Config, data domain.UpdateConfigRequest, adminHash st
 		c.AdminPasswordHash = adminHash
 	}
 
-	ch.halBoot = bootFields(c) != prevBoot || c.WakeWordEnabled() != prevWakeWord || c.GetVoiceInputMode() != prevInputMode
+	ch.halBoot = bootFields(c) != prevBoot || c.WakeWordEnabled() != prevWakeWord
 	ch.tts = ttsFields(c) != prevTTS
 	ch.channel = channelFields(c) != prevChannel
 	// Use full post-save values, not just the delta.
@@ -525,7 +524,12 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 		previousWake := c.WakeWordEnabled()
 		previousMode := c.GetVoiceInputMode()
 		ch = applyUpdate(c, data, adminHash)
-		s.wakeApply.pending = s.wakeApply.pending || c.WakeWordEnabled() != previousWake || c.GetVoiceInputMode() != previousMode
+		s.wakeApply.pending = s.wakeApply.pending || c.WakeWordEnabled() != previousWake
+		s.wakeApply.modePending = s.wakeApply.modePending || c.GetVoiceInputMode() != previousMode
+		// A mixed update must apply the entire saved boot configuration once.
+		if s.wakeApply.modePending && (ch.halBoot || ch.lang || ch.realtime) {
+			s.wakeApply.pending = true
+		}
 	}); err != nil {
 		s.wakeApply.mu.Unlock()
 		return fmt.Errorf("save config: %w", err)
@@ -533,7 +537,7 @@ func (s *Service) UpdateConfig(data domain.UpdateConfigRequest) error {
 	slog.Info("config updated", "component", "device")
 	wakeApply := s.wakeApply.pending
 	var wakeErr error
-	if wakeApply {
+	if wakeApply || s.wakeApply.modePending {
 		wakeErr = s.applyPendingWakeWord()
 	}
 	s.wakeApply.mu.Unlock()

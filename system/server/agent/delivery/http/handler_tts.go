@@ -145,6 +145,19 @@ func (h *AgentHandler) CancelSpeech() {
 	}
 }
 
+// cancelSpeechBefore suppresses older voice replies without aborting agent work.
+// The cutoff comes from HAL on the same device, before admitting the new capture.
+func (h *AgentHandler) cancelSpeechBefore(beforeMS int64) {
+	for {
+		old := h.autoSpeechWatermarkMs.Load()
+		if old >= beforeMS || h.autoSpeechWatermarkMs.CompareAndSwap(old, beforeMS) {
+			break
+		}
+	}
+	sensinghttp.DefaultFillerManager.CancelBefore(beforeMS)
+	hal.CancelVoiceFollowups(beforeMS)
+}
+
 // RealtimeSupersedesMainReply reports whether OS_REALTIME_SUPERSEDES_MAIN_REPLY is set
 // ("1"/"true"). Default off; gates CancelSpeechForNewerTurn.
 func RealtimeSupersedesMainReply() bool {

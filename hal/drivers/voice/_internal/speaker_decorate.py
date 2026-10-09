@@ -377,27 +377,33 @@ class SpeakerDecorator:
     ) -> tuple[str, Optional[str], Optional[str]]:
         """Run speaker recognition; return (OS server message, SER user, display)."""
         logger.info("Identify and decorate transcript: raw transcript is: '%s'", transcript)
+        return self.decorate(transcript, self.recognize_speaker(audio_buffer, in_followup))
+
+    def recognize_speaker(self, audio_buffer: list[bytes], in_followup: bool = False,
+                          *, accept=None):
+        """Audio-only half of identify_and_decorate; needs no transcript.
+
+        Returns an opaque recognition for decorate(), or None when speaker ID is
+        skipped. Caller-visible state (identity cache, enroll-nudge cooldown) is
+        only touched by decorate(), so a discarded recognition leaves it as is.
+        """
         cached = self._cached_identity(in_followup)
         if cached is not None:
-            name, display = cached
-            if name != UNKNOWN_LABEL:
-                return f"Speaker - {display}: {transcript}", name, display
-            return transcript, UNKNOWN_LABEL, None
+            return ("cached", cached)
         if self._speaker is None:
             logger.info(
                 "Skip speaker ID: recognizer not initialized "
                 "(HAL_SPEAKER_RECOGNITION_ENABLED or init failure)",
             )
-            return transcript, None, None
+            return None
         if not audio_buffer:
             logger.warning("Skip speaker ID: audio buffer is empty (no frames captured this session)")
-            return transcript, None, None
+            return None
         try:
-            from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
             from hal.drivers.voice.speaker_recognizer.speaker_recognizer import pcm16_bytes_to_wav
         except Exception as e:
             logger.warning("Skip speaker ID: helper import failed: %s", e)
-            return transcript, None, None
+            return None
 
         total_bytes = sum(len(b) for b in audio_buffer)
         duration_s = total_bytes / (STT_RATE * 2)
@@ -406,18 +412,36 @@ class SpeakerDecorator:
                 "Skip speaker ID: only %.2fs of audio buffered (<%.2fs)",
                 duration_s, SPEAKER_MIN_AUDIO_S,
             )
-            return transcript, None, None
+            return None
 
         try:
             wav_bytes = pcm16_bytes_to_wav(b"".join(audio_buffer), STT_RATE)
             import base64 as _b64
             audio_b64 = _b64.b64encode(wav_bytes).decode("ascii")
-            result = self._speaker.recognize(audio_b64, source_type="base64")
+            kwargs = {"accept": accept} if accept is not None else {}
+            result = self._speaker.recognize(audio_b64, source_type="base64", **kwargs)
         except Exception as e:
             logger.warning("Speaker recognize failed: %s", e)
-            return transcript, None, None
+            return None
 
         logger.info("Speaker recognize result: %r", result)
+        return ("result", (result, duration_s))
+
+    def decorate(
+        self, transcript: str, recognition,
+    ) -> tuple[str, Optional[str], Optional[str]]:
+        """Format a recognize_speaker() outcome into (message, SER user, display)."""
+        if recognition is None:
+            return transcript, None, None
+        kind, value = recognition
+        if kind == "cached":
+            name, display = value
+            if name != UNKNOWN_LABEL:
+                return f"Speaker - {display}: {transcript}", name, display
+            return transcript, UNKNOWN_LABEL, None
+        from hal.drivers.voice.speech_emotion.constants import UNKNOWN_USER_LABEL
+
+        result, duration_s = value
         err = result.get("error")
         audio_path = result.get("unknown_audio_path", "")
         vp_hash = result.get("voiceprint_hash")

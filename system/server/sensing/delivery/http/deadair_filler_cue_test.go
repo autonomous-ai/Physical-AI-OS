@@ -139,3 +139,33 @@ func TestCancelAllActiveSilencesSuppressedFollowUpCues(t *testing.T) {
 		t.Fatal("the physical cancel must silence cues on a suppressed follow-up")
 	}
 }
+
+func TestCancelBeforeDropsOnlySupersededCueTurns(t *testing.T) {
+	stubCueSpeech(t)
+	fm := NewFillerManager()
+	before, after := "voice-1700000000000", "voice-1700000005000"
+	for _, id := range []string{before, after} {
+		fm.SuppressRun(id)
+		fm.OnTurnStart(id)
+	}
+	fm.CancelBefore(1700000001000)
+	fm.mu.Lock()
+	_, beforeKept := fm.cueRuns[before]
+	_, afterKept := fm.cueRuns[after]
+	fm.mu.Unlock()
+	if beforeKept || !afterKept {
+		t.Fatalf("a tap cancel drops only cue turns that started before it: before=%v after=%v", beforeKept, afterKept)
+	}
+}
+
+func TestSupersededSuppressedTurnGetsNoCue(t *testing.T) {
+	stubCueSpeech(t)
+	fm := NewFillerManager()
+	fm.CancelBefore(1700000001000)
+	id := "voice-1700000000000"
+	fm.SuppressRun(id)
+	fm.OnTurnStart(id)
+	if fm.SayInVoiceRun("look_capturing_main") {
+		t.Fatal("a turn the tap already cancelled must not speak a cue")
+	}
+}

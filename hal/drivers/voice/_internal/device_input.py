@@ -2,6 +2,7 @@
 
 import threading
 import logging
+import time
 from contextlib import ExitStack
 
 from hal.drivers.voice._internal.harness_voice import read_voice_mode
@@ -84,13 +85,14 @@ class DeviceTapInput:
     def active(self):
         return self._capture.active
 
-    def start(self):
+    def start(self, *, after_ms=0):
         # Never authorize a new recording from the cached hardware-edge state.
         mode = self._read_mode()
         self.observe(mode)
         if not device_manual_mode(mode):
             return False
         snapshot = device_snapshot(mode)
+        snapshot["capturedAtMs"] = max(int(time.time() * 1000), after_ms + 1)
         if self._turn_queue is None:
             accepted = self._start_capture(snapshot)
         else:

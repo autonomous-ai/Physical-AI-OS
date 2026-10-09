@@ -106,6 +106,8 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     decorator = Mock()
     decorator.classify_wake_word.return_value = ("please fix the tests", "voice")
     decorator.identify_and_decorate.return_value = ("please fix the tests", None, None)
+    decorator.recognize_speaker.return_value = None
+    decorator.decorate.return_value = ("please fix the tests", None, None)
     sender = Mock()
     stt = Mock()
     stt.is_closed.return_value = False
@@ -214,6 +216,8 @@ def test_config_default_and_effective_wake(mode, expected, tmp_path):
 
 
 def test_device_start_finish_cancel_api(monkeypatch):
+    from hal.drivers.voice._internal import device_input
+    monkeypatch.setattr(device_input.time, "time", lambda: 1791400000.123)
     from hal import app_state
     from hal.drivers.voice import voice_service as module
     service = Mock()
@@ -233,7 +237,7 @@ def test_device_start_finish_cancel_api(monkeypatch):
         assert service.device_input.active
         assert not service.device_input.start()
     capture = service._harness_capture.claim(LOCAL)
-    assert capture.snapshot == device_snapshot(LOCAL)
+    assert capture.snapshot == dict(device_snapshot(LOCAL), capturedAtMs=1791400000123)
     assert service.device_input.finish()
     assert capture.finished.is_set()
     service.device_input.cancel()
