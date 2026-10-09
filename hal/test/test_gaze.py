@@ -1921,6 +1921,30 @@ def test_speaking_twice_gets_two_looks(body, monkeypatch):
     assert len(body.moves) > moves_after_first or True
 
 
+def test_speech_after_a_missed_repoint_waits_out_the_cooldown(body):
+    """Chatter from an empty bearing gets one turn, not one per sentence."""
+    now = gaze.time.monotonic()
+    _absent_for(config.GAZE_REPOINT_AFTER_S + 1)
+    assert gaze._maybe_repoint(now, force=True)
+    gaze._last_repoint_missed = True  # what _score_repoint(False, ...) leaves behind
+
+    assert not gaze._maybe_repoint(now + 5.0, force=True), (
+        "voice turned the lamp again toward a bearing that just came up empty"
+    )
+    assert gaze._maybe_repoint(now + config.GAZE_REPOINT_COOLDOWN_S + 1.0, force=True)
+
+
+def test_scoring_a_repoint_records_whether_it_missed(monkeypatch):
+    from hal.drivers.tracking import user_bearing
+
+    monkeypatch.setattr(user_bearing, "record_prediction", lambda hit: False)
+    monkeypatch.setattr(gaze, "_maybe_sweep", lambda *a, **kw: None)
+    gaze._score_repoint(False, "nobody", gaze.time.monotonic())
+    assert gaze._last_repoint_missed is True
+    gaze._score_repoint(True, "found them", gaze.time.monotonic())
+    assert gaze._last_repoint_missed is False
+
+
 def test_the_automatic_repoint_still_waits_out_its_cooldown(body):
     """Unchanged: nobody asked for that one, so it stays rate-limited."""
     now = gaze.time.monotonic()
