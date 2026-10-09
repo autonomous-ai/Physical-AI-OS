@@ -52,6 +52,12 @@ type lookRequest struct {
 	ReadText bool `json:"read_text"`
 }
 
+// lookFailedHint leads the describe-failure error: the agent reads the tool
+// output when it picks its next step, and a skill rule alone did not stop it from
+// re-snapshotting into vision_analyze (same vision model, +22-88 s on lamp-52e6).
+const lookFailedHint = "The vision model could not answer in time. Tell the user you couldn't see it this time and stop: " +
+	"do not take another snapshot or call vision_analyze or any other image tool, they use the same model. "
+
 // lookAndDescribe captures a frame and hands back text the agent can actually
 // read — one call, no branching for the agent to get wrong.
 func (s *Server) lookAndDescribe(c *gin.Context) {
@@ -104,7 +110,7 @@ func (s *Server) lookAndDescribe(c *gin.Context) {
 	}
 	desc, err := vision.LookWithRetry(s.config, base64.StdEncoding.EncodeToString(data), req.Question, req.ReadText)
 	if err != nil {
-		c.JSON(http.StatusBadGateway, serializers.ResponseError("describe failed: "+err.Error()))
+		c.JSON(http.StatusBadGateway, serializers.ResponseError(lookFailedHint+"describe failed: "+err.Error()))
 		return
 	}
 	c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"path": path, "description": desc}))
