@@ -171,12 +171,19 @@ See [physical controls](../robots/lamp/docs/physical-controls.md) for configurat
 and gesture details.
 
 Servo overload thresholds are device-owned too, in `robots/lamp/servo_overload.json`
-(`boards` map: `load`, `hold_s`, `retry_s`, optional `enabled`), read by
-`hal/board/servo_overload.py`. A joint at or above `load` for `hold_s` makes the
-feetech driver cut torque on every servo, chime and refuse motion for `retry_s`
-before resuming; no file, no board entry or `enabled: false` means no cut-off, and
-a malformed file rejects startup. Lamp ships 90 % / 1.5 s / 120 s, measured on lamp-52e6. See
-the fail-safe section of [safety](safety.md).
+(`boards` map: `load`, `hold_s`, `retry_s`, optional `enabled`, `contact` and
+`torque_limit`), read by `hal/board/servo_overload.py`. A watched joint at or above its
+`contact.load` floor for `contact.hold_s` makes the feetech driver halt in place (torque
+stays on), chime and hold still for `contact.pause_s` before easing back into idle. A
+joint at or above `load` for `hold_s` cuts torque on every servo, chimes and refuses
+motion for `retry_s` before resuming. `torque_limit` caps how hard a joint can push. No
+file, no board entry or `enabled: false` means none of these, and a malformed file
+rejects startup. Lamp watches `base_yaw` 65 %, `wrist_roll` 75 %, `wrist_pitch` 65 %
+for 0.05 s with a 3 s pause, and while a recording plays every joint is held to its
+learned per-frame load envelope + 15 % (`contact.profile_margin`, learned per unit by
+`POST /servo/contact/learn`), caps `base_pitch` and `elbow_pitch` at 70 % torque, and
+keeps the cut-off at 80 % / 1 s / 120 s (provisional). See the fail-safe section of
+[safety](safety.md).
 
 ## Principles
 

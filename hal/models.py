@@ -11,6 +11,15 @@ class ServoRequest(BaseModel):
     model_config = {"json_schema_extra": {"examples": [{"recording": "curious"}]}}
 
 
+class ServoContactLearnRequest(BaseModel):
+    """Learn run for the contact stop's per-frame load envelope (arm must move free)."""
+
+    recordings: Optional[list[str]] = Field(
+        None, description="Recordings to learn; default every recording except music_*."
+    )
+    runs: int = Field(2, ge=1, le=5, description="Free plays per recording; the envelope keeps the max.")
+
+
 class ServoStateResponse(BaseModel):
     available_recordings: list[str]
     current: Optional[str]

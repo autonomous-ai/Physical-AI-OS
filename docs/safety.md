@@ -77,7 +77,7 @@ pass-through.
 | 2 | `quiet_hours` (light + audio) | `active_max_brightness` (time-aware) + `audio_quiet_now` | LED gate + music route | **enforced (v1)** |
 | 3 | `motion.max_speed` (presence-driven) | `min_move_duration` | servo route | **enforced (v1)** (`max_accel` reserved) |
 | 3b | `motion.stop_always` | — | — | **declared / structurally guaranteed** — no route-level gate consumes this field (see below) |
-| 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; servo overload → torque cut-off + chime + timed retry; setup reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) + overload guard (`OverloadGuard`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` + `animation_service.py` `_overload_tick` | **partially enforced (v1)** (setup reserved) |
+| 4 | fail-safe states (network/gateway loss → stop tracking; board fault → 503 isolation; `thermal.max_temp_c` → SoC over-temp health event + stop tracking; servo contact → halt in place + chime + short pause; servo torque cap on the weight-bearing joints; servo overload → torque cut-off + chime + timed retry; setup reserved) | WS-disconnect hook + per-capability `503` + thermal monitor (`thermal_over`/`read_soc_temp_c`) + contact + overload guards (`OverloadGuard`) | `services` on WS disconnect + HAL routes/`/health` + `server.py` `_thermal_monitor` + `animation_service.py` `_overload_tick` | **partially enforced (v1)** (setup reserved) |
 | 5 | `audio.max_volume` ceiling | `clamp_volume` | `/audio/volume` route, above the speaker/BT-sink split | **enforced (v1)** |
 | 6 | `motion.max_cog_offset_mm` (presence-driven) | whole-body centre-of-gravity score per frame (`recording_stability.py`) | recording load (`resample_recording`), physical + mock drivers | **enforced (v1)** |
 
@@ -376,7 +376,7 @@ the body.
 
 Fail-safe is **state-driven** rather than per-request clamping: when the device loses a
 critical dependency it falls into a safe posture deterministically, below the agent.
-Four conditions are enforced today; setup-incomplete is reserved.
+Six conditions are enforced today; setup-incomplete is reserved.
 
 - [x] **Network / gateway loss → stop agent-driven tracking.** On gateway WebSocket
       disconnect, `runtimes/openclaw/service_ws.go` calls
@@ -398,6 +398,54 @@ Four conditions are enforced today; setup-incomplete is reserved.
       Threshold is SoC-specific — read the board's own critical trip, not a generic guess.
 - [ ] **Setup incomplete → reserved.** Not gated in the runtime yet (setup/identity
       reflexes only is declared intent, not enforced).
+- [x] **Servo contact → halt in place, chime, short pause.** Stops the arm when it
+      hits something while moving. It shares the monitor thread, the `Present_Load`
+      read and the `on_overload` handler with the overload cut-off below, and is set in
+      the same file: an optional `contact` object (`load`, `hold_s`, `pause_s`, exactly
+      those keys) in the board entry; no `contact` means no contact stop. `load` is one
+      floor for every joint or a `{joint: floor}` map, and a joint left out of the map
+      is not watched. A watched joint at or above its floor (Lamp: `base_yaw` `650`,
+      `wrist_roll` `750`, `wrist_pitch` `650`, in 0.1 % of full drive) for
+      `contact.hold_s` (Lamp: `0.05` s, about two 50 ms samples) halts motion in flight,
+      and so does any joint above its **learned envelope** while a learned recording
+      plays (see the next paragraph), pins the current pose and keeps **torque on**, so the arm
+      does not drop; the runtime plays the ack chime and stops the vision tracker. For
+      `contact.pause_s` (Lamp: `3` s) goal writes are blocked so nothing drives back
+      into the obstacle, and `/servo/move`, `/servo/aim`, `/servo/nudge` fail with
+      "Servo contact stop active". Then the state is re-read from hardware and idle
+      resumes; a body parked meanwhile stays put. It is checked before the cut-off, and
+      an arm still forced while held trips the cut-off as before. Surfaced at
+      `GET /health.servo_overload.contact` (`active`, `resume_in_s`, `trips`,
+      `last_trip`, thresholds). Lamp's floors come from lamp-52e6 (2026-10-09): over
+      19 recordings the free-motion peaks were `base_yaw` 46 %, `wrist_roll` 52 %,
+      `wrist_pitch` 43 %, while a hand blocking `base_yaw` drove it to 94-100 %.
+      `base_pitch` and `elbow_pitch` get no fixed floor: carrying the arm's weight they
+      reach 83-100 % in free motion, while a hand blocking them read only 36-74 %, so a
+      fixed floor cannot tell the two apart.
+      **Learned envelope (an elevator door's learn run).** What a free run loads at each
+      frame of a recording repeats, so with `contact.profile_margin` set (Lamp: `150` =
+      15 %) the driver keeps a per-unit envelope at `/var/lib/hal/contact_profile.json`
+      (`HAL_CONTACT_PROFILE_PATH`): `{recording: {joint: [max load per frame]}}`.
+      `POST /servo/contact/learn` (`{"recordings": [...], "runs": 2}`; default every
+      recording except `music_*`) plays each recording free `runs` times in the
+      background and saves the per-frame max; the area around the arm must be clear,
+      since whatever it touches is learned as normal. While a learned recording plays
+      its own frames, every joint's floor is the envelope (max over ±3 frames) plus the
+      margin, and that includes `base_pitch` and `elbow_pitch`. The ramp into a
+      recording, holds, tracking and `/servo/move` have no envelope and keep the fixed
+      floors. Re-learn after recalibrating the arm or changing `torque_limit`.
+      `GET /health.servo_overload.contact.profile` shows `margin`, how many recordings
+      are learned and which one a learn run is on.
+      **Limits:** nothing is seen before the touch, and a light object the arm can
+      simply push, such as a cup, may never load a joint enough to trip.
+- [x] **Servo torque cap → a softer arm.** An optional `torque_limit` map
+      (`{joint: limit}`, 0.1 % of full drive) in the same board entry is written to
+      each servo's `Torque_Limit` (STS3215 register 48) at every configure, so that
+      joint pushes at most that hard into a hand or an object. `Present_Load` then
+      tops out at the limit, so a load floor above it (the cut-off's 80 %) never trips
+      on that joint. Lamp caps `base_pitch` and `elbow_pitch` at `700` (70 %): over the
+      19 recordings on lamp-52e6 the worst tracking lag went from 17° to 18° (`shock`),
+      while 50 % stretched it to 24°.
 - [x] **Servo overload (stall) → cut torque, chime, timed retry.** Gear protection for
       a blocked or forced arm. Driver-level and feetech-only (`AnimationService`),
       device-owned: thresholds come from `robots/<device>/servo_overload.json` (a
@@ -405,13 +453,13 @@ Four conditions are enforced today; setup-incomplete is reserved.
       `hal/board/servo_overload.py`; no file, no board entry or `enabled: false` means
       no cut-off, and a malformed file fails boot. It is not a `SAFETY.md` field. No
       current sensor is needed: a monitor thread reads every joint's `Present_Load`
-      (STS3215 register 60, the drive duty in 0.1 % units) every 100 ms. A joint at or
-      above `load` (Lamp: `900` = 90 %) for `hold_s` (Lamp: `1.5` s) trips the pure
+      (STS3215 register 60, the drive duty in 0.1 % units) every 50 ms. A joint at or
+      above `load` (Lamp: `800` = 80 %) for `hold_s` (Lamp: `1.0` s) trips the pure
       `OverloadGuard` (`hal/drivers/motors/overload.py`). On
       trip the driver halts motion in flight and writes `Torque_Enable=0` to all servos
       with **no park move** (the arm is blocked, so it goes limp where it is); the
       runtime then plays the ack chime and stops the vision tracker. A joint whose
-      torque-off write failed (dropped packet) is retried every 100 ms until confirmed;
+      torque-off write failed (dropped packet) is retried every 50 ms until confirmed;
       until then `/health` reports `cut_complete: false` with the joints in
       `pending_off`. For `retry_s` (Lamp: `120` s) no goal reaches the bus, because a
       goal write re-engages torque on these servos: playback and tracker frames are
@@ -425,8 +473,9 @@ Four conditions are enforced today; setup-incomplete is reserved.
       released (asleep) or zero-posed meanwhile it stays limp until the next resume.
       Still blocked → it trips again. A failed load read never trips. Surfaced at
       `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `cut_complete`,
-      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). Lamp's 90 % / 1.5 s comes from lamp-52e6 (2026-10-09): over 19 free-running recordings the highest load was 87 % (`base_pitch` in `shock`) for under 0.3 s, while a hand holding `base_yaw` or `elbow_pitch` drove it to 94-100 %. A recording that grinds a joint into the desk on a mis-calibrated unit (`goodbye` on lamp-52e6, 100 % for 1.2 s) stays under the hold. Only
-      Lamp ships the file.
+      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
+      yet measured on hardware**; compare `peak` during normal animation with the
+      threshold before relying on it. Only Lamp ships the file.
 - [x] **Unit:** `thermal_over` trips at/above `max_temp_c`, holds through hysteresis
       above `resume_temp_c`, clears at/below it, and is False with no policy / no thermal
       section / unreadable temp; `read_soc_temp_c` parses millidegrees → °C and returns

@@ -172,12 +172,17 @@ Xem [điều khiển vật lý](../../robots/lamp/docs/vi/physical-controls_vi.m
 biết cấu hình và chi tiết cử chỉ.
 
 Ngưỡng quá tải servo cũng do device quản lý, trong `robots/lamp/servo_overload.json`
-(map `boards`: `load`, `hold_s`, `retry_s`, `enabled` tùy chọn), đọc bởi
-`hal/board/servo_overload.py`. Khớp nào ở mức `load` trở lên trong `hold_s` sẽ làm
-driver feetech cắt torque mọi servo, phát chime và từ chối chuyển động trong `retry_s`
-rồi mới resume; không có file, không có entry board hoặc `enabled: false` nghĩa là
-không có cut-off, còn file sai định dạng bị từ chối khi startup. Lamp kèm 90 % / 1.5 s /
-120 s, đo trên lamp-52e6. Xem phần fail-safe của [an toàn](safety_vi.md).
+(map `boards`: `load`, `hold_s`, `retry_s`, cùng `enabled`, `contact` và `torque_limit`
+tùy chọn), đọc bởi `hal/board/servo_overload.py`. Khớp được theo dõi ở mức sàn
+`contact.load` của nó trở lên trong `contact.hold_s` làm driver feetech dừng tại chỗ
+(torque vẫn bật), phát chime và đứng yên trong `contact.pause_s` rồi mới chạy tiếp vào
+idle. Khớp nào ở mức `load` trở lên trong `hold_s` sẽ cắt torque mọi servo, phát chime và
+từ chối chuyển động trong `retry_s` rồi mới resume. `torque_limit` giới hạn lực đẩy tối đa
+của một khớp. Không có file, không có entry board hoặc `enabled: false` nghĩa là không có
+cơ chế nào trong số này, còn file sai định dạng bị từ chối khi startup. Lamp theo dõi
+`base_yaw` 65 %, `wrist_roll` 75 %, `wrist_pitch` 65 % trong 0.05 s với pause 3 s, giới
+hạn `base_pitch` và `elbow_pitch` ở 70 % torque, và giữ cut-off ở 80 % / 1 s / 120 s (tạm
+thời). Xem phần fail-safe của [an toàn](safety_vi.md).
 
 ## Nguyên Tắc
 

@@ -6,6 +6,7 @@ import threading
 from typing import Any, Callable, Dict, List, Optional, Set
 from hal.follower import LeLampFollowerConfig, LeLampFollower
 from hal.presets import EMO_SLEEPY, SERVO_CMD_PLAY, SERVO_CMD_MUSIC_START, SERVO_CMD_MUSIC_STOP, SERVO_IDLE, SERVO_MUSIC_GROOVE
+from hal.drivers.motors.contact_profile import LAG_PREFIX, ContactProfile
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
 from hal.drivers.motors.tracking_wedge import TrackingWedgeWatchdog
 
@@ -44,8 +45,13 @@ REST_RAW = {
 
 STARTUP_MOVE_DURATION = 5.0
 
-# How often the overload cut-off samples Present_Load.
-OVERLOAD_POLL_S = 0.1
+# Plays per recording a learn run allows before giving up on a full pass.
+LEARN_ATTEMPTS = 3
+
+# How often the contact stop and overload cut-off sample Present_Load. A sync_read of
+# five servos takes ~2.5 ms on the Lamp bus, so 20 Hz costs little and keeps the
+# contact stop's detection delay near its hold time.
+OVERLOAD_POLL_S = 0.05
 
 from hal.drivers.motors.recording_timing import (  # noqa: E402
     RECORDING_TIME_COLUMN,
@@ -74,7 +80,11 @@ def _motor_positions_from_bus(robot: LeLampFollower) -> Dict[str, float]:
 class AnimationService:
     def __init__(self, port: str, lamp_id: str, fps: int = 30, duration: float = 5.0, idle_recording: str = SERVO_IDLE, hold_s: float = 0.0, safety_policy=None, geometry=None,
                  overload_guard: Optional[OverloadGuard] = None,
-                 on_overload: Optional[Callable[[str, int], None]] = None):
+                 on_overload: Optional[Callable[[str, int], None]] = None,
+                 contact_guard: Optional[OverloadGuard] = None,
+                 torque_limits: Optional[Dict[str, int]] = None,
+                 contact_profile: Optional[ContactProfile] = None,
+                 contact_off_playback: Optional[Dict[str, int]] = None):
         self.port = port
         self.lamp_id = lamp_id
         self.fps = fps
@@ -156,6 +166,26 @@ class AnimationService:
         # (tracker, chime).
         self._overload = overload_guard
         self._on_overload = on_overload
+        # Contact stop: a joint saturated for a moment means the arm hit something or
+        # is being forced.
+        # Same guard type, tighter numbers; it halts and holds (torque ON) instead of
+        # cutting torque, and on_overload runs for it too. None leaves it off.
+        self._contact = contact_guard
+        # Per-joint Torque_Limit (0.1 % of full drive), written at every configure.
+        # Caps how hard a joint can push into a hand or an object; Present_Load then
+        # tops out at this value, so load floors above it never trip on that joint.
+        self._torque_limits = dict(torque_limits or {})
+        # Learned per-frame load envelope: while a learned recording plays, each
+        # joint's contact floor is that envelope plus the profile margin. None keeps
+        # the fixed floors everywhere.
+        self._contact_profile = contact_profile
+        self._learning: Optional[Set[str]] = None
+        self._learn_current: Optional[str] = None
+        self._learn_thread: Optional[threading.Thread] = None
+        # Floors while no recording owns the body (gaze, tracking, explicit moves,
+        # holds): {joint or "lag:<joint>": floor}. Those moves have no envelope, and
+        # without these the weight-bearing joints are not watched there at all.
+        self._contact_off_playback = dict(contact_off_playback or {})
         self._overload_stop = threading.Event()
         self._overload_thread: Optional[threading.Thread] = None
         self._overload_read_ok = True
@@ -173,6 +203,7 @@ class AnimationService:
         self._tracking_flag = bool(value)
 
     _GOAL_SPEED_REG = 46
+    _TORQUE_LIMIT_REG = 48
     # Unwritten servos read 0 but run ~16 deg/s; writing 0 lifts the cap entirely, so
     # restoring needs ~175 (0.062 deg/s per unit, device-measured).
     @property
@@ -248,11 +279,15 @@ class AnimationService:
                 # See _SERVO_REST_SPEED: clears a cap a killed sweep left behind.
                 if rest_speed is not None:
                     pk.write2ByteTxRx(ph, sid, self._GOAL_SPEED_REG, rest_speed)
+                torque_limit = self._torque_limits.get(motor_name)
+                if torque_limit is not None:
+                    pk.write2ByteTxRx(ph, sid, self._TORQUE_LIMIT_REG, torque_limit)
                 if energize:
                     pk.write1ByteTxRx(ph, sid, 40, 1)   # Torque_Enable = 1
                 logger.info(
                     f"{motor_name} (ID {sid}): P={pgain}, I={igain}"
                     + (f", speed={rest_speed}" if rest_speed is not None else "")
+                    + (f", torque_limit={torque_limit}" if torque_limit is not None else "")
                     + f", torque {'ON' if energize else 'OFF (overload cut-off)' if locked_out else 'OFF (asleep)'}"
                 )
 
@@ -286,6 +321,11 @@ class AnimationService:
                 "Overload cut-off armed: load >= %.1f%% for %.1fs cuts torque, retry after %.0fs",
                 self._overload.threshold / 10.0, self._overload.hold_s, self._overload.retry_s,
             )
+            if self._contact is not None and self._contact.enabled:
+                logger.info(
+                    "Contact stop armed: load >= %s (0.1 %%) for %.2fs halts in place, resume after %.0fs",
+                    self._contact.threshold, self._contact.hold_s, self._contact.retry_s,
+                )
         if skip_wake:
             logger.info("Servo startup move + idle skipped -- device was asleep")
             return
@@ -1000,10 +1040,19 @@ class AnimationService:
         """True while the overload cut-off holds the servos limp."""
         return self._overload is not None and self._overload.locked
 
+    @property
+    def contact_active(self) -> bool:
+        """True while the contact stop holds the arm still after a hit."""
+        return self._contact is not None and self._contact.locked
+
     def _refuse_if_overloaded(self) -> None:
         if self.overload_active:
             raise RuntimeError(
                 "Servo overload cut-off active; retrying in %.0fs" % self._overload.retry_in_s()
+            )
+        if self.contact_active:
+            raise RuntimeError(
+                "Servo contact stop active; resuming in %.0fs" % self._contact.retry_in_s()
             )
 
     def overload_status(self) -> Optional[Dict[str, Any]]:
@@ -1024,6 +1073,27 @@ class AnimationService:
             "last_trip": {"joint": last[0], "load": last[1]} if last else None,
             "load": dict(guard.load),
             "peak": dict(guard.peak),
+            "contact": self._contact_status(),
+        }
+
+    def _contact_status(self) -> Optional[Dict[str, Any]]:
+        guard = self._contact
+        if guard is None or not guard.enabled:
+            return None
+        last = guard.last_trip
+        return {
+            "active": guard.locked,
+            "resume_in_s": round(guard.retry_in_s(), 1),
+            "threshold": guard.threshold,
+            "hold_s": guard.hold_s,
+            "pause_s": guard.retry_s,
+            "trips": guard.trips,
+            "last_trip": {"joint": last[0], "load": last[1]} if last else None,
+            "profile": None if self._contact_profile is None else {
+                "margin": self._contact_profile.margin,
+                "recordings": len(self._contact_profile.recordings()),
+                "learning": self._learn_current,
+            },
         }
 
     def _overload_loop(self):
@@ -1034,7 +1104,12 @@ class AnimationService:
                 logger.warning("[overload] monitor tick failed: %s", e)
 
     def _overload_tick(self) -> None:
-        """One pass: end a finished lockout, otherwise sample load and cut if it stalled."""
+        """One pass: end a finished lockout or pause, otherwise sample load and react.
+
+        The contact stop is checked first: it fires within a tenth of a second, long
+        before the cut-off's hold runs out, and once the arm is held still the load
+        drops. A joint still pushed against while held trips the cut-off as before.
+        """
         guard = self._overload
         if guard.locked:
             if self._overload_pending_off:
@@ -1042,7 +1117,17 @@ class AnimationService:
             if guard.retry_due():
                 self._overload_recover()
             return
-        tripped = guard.observe(self._read_loads())
+        contact = self._contact
+        if contact is not None and contact.locked and contact.retry_due():
+            self._contact_recover()
+        loads = self._read_loads()
+        if contact is not None:
+            samples, floors = self._contact_samples(loads)
+            hit = contact.observe(samples, floors)
+            if hit:
+                self._contact_stop(*hit)
+                return
+        tripped = guard.observe(loads)
         if tripped:
             self._overload_cut(*tripped)
 
@@ -1101,6 +1186,171 @@ class AnimationService:
             self._overload_pending_off = self._write_torque_off(sorted(self._overload_pending_off))
         if not self._overload_pending_off:
             logger.warning("[overload] torque-off now confirmed on every joint")
+
+    def _playback_position(self):
+        """(recording, frame) while a recording plays its own frames, else None.
+
+        The ramp into a recording, holds and halts have no learned envelope.
+        """
+        rec = self._current_recording
+        if (
+            rec is None
+            or self._interpolation_frames > 0
+            or self._halt.is_set()
+            or self._current_frame_index >= len(self._current_actions)
+        ):
+            return None
+        return rec, self._current_frame_index
+
+    def _contact_samples(self, loads: Optional[Dict[str, int]]):
+        """(samples, floors) for the contact guard.
+
+        While a recording plays, the samples gain each joint's lag (`lag:<joint>`) and
+        the floors come from the learned envelope; during a learn run the sample is
+        folded into the envelope instead. Elsewhere: the loads and the fixed floors.
+        """
+        if not loads:
+            return loads, None
+        off = self._contact_off_playback
+        if off and (self._current_recording is None or self._idle_settled):
+            samples = dict(loads)
+            lags = self._read_lags()
+            if lags:
+                samples.update(lags)
+            return samples, off
+        profile = self._contact_profile
+        if profile is None:
+            return loads, None
+        position = self._playback_position()
+        if position is None:
+            return loads, None
+        samples = dict(loads)
+        lags = self._read_lags()
+        if lags:
+            samples.update(lags)
+        learning = self._learning
+        if learning is not None:
+            if position[0] in learning:
+                profile.learn(position[0], position[1], samples)
+            return loads, None
+        return samples, profile.floors(*position)
+
+    def _read_lags(self) -> Optional[Dict[str, int]]:
+        """Per-joint |goal - present| in 0.1 deg, or None when the bus read fails."""
+        try:
+            with self.bus_lock:
+                goal = self.robot.bus.sync_read("Goal_Position")
+                present = self.robot.bus.sync_read("Present_Position")
+        except Exception as e:
+            logger.debug("[contact] lag read failed: %s", e)
+            return None
+        return {
+            LAG_PREFIX + motor: int(round(abs(goal[motor] - present[motor]) * 10))
+            for motor in goal if motor in present
+        }
+
+    def learn_contact_profile(self, recordings: List[str], runs: int = 2) -> None:
+        """Start a learn run: play each recording `runs` times free, then save."""
+        if self._contact_profile is None:
+            raise RuntimeError("No contact profile configured for this device")
+        if self._learn_thread is not None and self._learn_thread.is_alive():
+            raise RuntimeError("Contact profile learn run already in progress")
+        if not recordings:
+            raise RuntimeError("No recordings to learn")
+        self._learn_thread = threading.Thread(
+            target=self._learn_loop, args=(list(recordings), runs), daemon=True,
+            name="contact-learn",
+        )
+        self._learn_thread.start()
+
+    def _learn_loop(self, recordings: List[str], runs: int) -> None:
+        profile = self._contact_profile
+        for rec in recordings:
+            profile.forget(rec)
+        self._learning = set(recordings)
+        logger.info("[contact] learn run: %d recordings x %d", len(recordings), runs)
+        try:
+            for _ in range(runs):
+                for rec in recordings:
+                    if not self._running.is_set():
+                        logger.warning("[contact] learn run aborted — body stopped")
+                        return
+                    self._learn_current = rec
+                    # Gaze, tracking or a direct move can cut a recording short; play
+                    # it again until it runs to its last frame.
+                    for _attempt in range(LEARN_ATTEMPTS):
+                        self.dispatch(SERVO_CMD_PLAY, rec)
+                        if self._wait_recording_done(rec):
+                            break
+                    else:
+                        logger.warning("[contact] learn: %s never played through", rec)
+            profile.save()
+            logger.info("[contact] learn run saved %s", profile.path)
+        except Exception as e:
+            logger.warning("[contact] learn run failed: %s", e)
+        finally:
+            self._learning = None
+            self._learn_current = None
+
+    def _wait_recording_done(self, rec: str, timeout: float = 90.0) -> bool:
+        """Block until `rec` started and then ended (or settled, for idle).
+
+        True when it reached its last frame, False when something cut it short.
+        """
+        deadline = time.monotonic() + timeout
+        started = False
+        reached = 0
+        while time.monotonic() < deadline and self._running.is_set():
+            current = self._current_recording
+            if current == rec and not self._idle_settled:
+                started = True
+                reached = max(reached, self._current_frame_index)
+                total = len(self._current_actions)
+            elif started:
+                return reached >= total - 1
+            time.sleep(0.05)
+        return False
+
+    def _contact_stop(self, joint: str, load: int) -> None:
+        """Stop where the arm is and keep it there (torque ON) for the pause."""
+        self._halt.set()
+        # Pin the pose and block goal writes under one lock hold, so no playback or
+        # tracker frame lands in between and drives back into the obstacle.
+        with self.bus_lock:
+            try:
+                current = _motor_positions_from_bus(self.robot)
+                if current:
+                    self.robot.send_action(current)
+            except Exception as e:
+                logger.warning("[contact] could not pin current position: %s", e)
+            self.robot.goal_writes_blocked = True
+        # Logged after the stop: nothing here may delay or skip it.
+        unit = "deg behind" if joint.startswith(LAG_PREFIX) else "% load"
+        logger.warning(
+            "[contact] %s %.1f%s >= %.1f for %.2fs — halted in place, resume in %.0fs",
+            joint, load / 10.0, unit, (self._contact.last_floor or 0) / 10.0,
+            self._contact.hold_s, self._contact.retry_s,
+        )
+        if self._on_overload is not None:
+            try:
+                self._on_overload(joint, load)
+            except Exception as e:
+                logger.warning("[contact] on_overload handler failed: %s", e)
+
+    def _contact_recover(self) -> None:
+        """Pause over: allow goal writes again and ease back into idle from where it stopped."""
+        if self.overload_active:
+            # The cut-off took over meanwhile; its own recovery unblocks the goals.
+            return
+        with self.bus_lock:
+            if self.robot:
+                self.robot.goal_writes_blocked = False
+        if not self._running.is_set():
+            logger.info("[contact] pause over — body is parked, staying put")
+            return
+        logger.info("[contact] pause over — back to idle")
+        self._sync_state_from_hardware()
+        self.dispatch(SERVO_CMD_PLAY, self.idle_recording)
 
     def _overload_recover(self) -> None:
         """Lockout over: allow goal writes again and bring the body back like a resume."""

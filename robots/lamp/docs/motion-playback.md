@@ -100,11 +100,30 @@ clips is not. Re-derive the constant if the body's mass distribution changes.
 
 Playback is also where a blocked arm shows up: the trajectory keeps advancing while a
 joint cannot follow, and the servo pushes at full drive. `AnimationService` therefore
-samples every joint's `Present_Load` at 10 Hz (`hal/drivers/motors/overload.py`). A joint
-at 90 % or more for 1.5 s cuts torque on all servos, plays the ack chime and blocks every
-goal write for 120 s; recording frames sent during that window are dropped, not queued.
-Afterwards the body resumes into idle from wherever the arm ended up. The thresholds
-(`load`, `hold_s`, `retry_s`) are device-owned in `robots/lamp/servo_overload.json`;
+samples every joint's `Present_Load` at 20 Hz (`hal/drivers/motors/overload.py`).
+
+- **Contact stop.** `base_yaw` at 65 %, `wrist_roll` at 75 % or `wrist_pitch` at 65 %
+  for 0.05 s halts the recording where it is, pins the pose with torque on (the arm
+  does not drop), plays the ack chime and blocks goal writes for 3 s. Then it eases back
+  into idle from the pose it stopped at. On lamp-52e6 these joints peak at 52 % in free
+  motion and a hand on `base_yaw` drives it to 94-100 %. `base_pitch` and `elbow_pitch`
+  carry the arm's weight and reach 83-100 % in free motion, so they get no fixed floor;
+  they are capped at 70 % torque (`torque_limit`), which cost the worst recording
+  (`shock`) 1° of extra lag.
+- **Learned envelope.** During playback every joint, the weight-bearing ones included,
+  is held to what a free run loaded at that frame plus 15 % (`contact.profile_margin`).
+  The envelope is learned per unit by `POST /servo/contact/learn` (each recording
+  played free twice, the per-frame max kept, saved to
+  `/var/lib/hal/contact_profile.json`). The frame index it looks up is the playback
+  frame, so the envelope follows the recording after speed-cap resampling; re-learn
+  after recalibration, a `torque_limit` change or new recordings.
+- **Overload cut-off.** A joint at 80 % or more for 1 s (the arm is still forced while
+  held) cuts torque on all servos, plays the chime and blocks every goal write for
+  120 s. Afterwards the body resumes into idle from wherever the arm ended up.
+
+Recording frames sent while goals are blocked are dropped, not queued. The thresholds
+(`contact.load`/`hold_s`/`pause_s`, `load`, `hold_s`, `retry_s`, `torque_limit`) are device-owned in
+`robots/lamp/servo_overload.json`;
 the full behaviour is in the fail-safe section of
 [`docs/safety.md`](../../../docs/safety.md).
 

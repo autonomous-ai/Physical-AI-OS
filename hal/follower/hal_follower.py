@@ -71,9 +71,10 @@ class LeLampFollower(Robot):
         # AnimationService.move_to_raw stamps it too (bypasses send_action).
         self.last_write_monotonic: float = 0.0
 
-        # Set by AnimationService while its overload cut-off holds the servos limp.
-        # A Goal_Position write re-engages torque on these servos, so send_action
-        # drops goals instead of writing them.
+        # Set by AnimationService while its overload cut-off holds the servos limp
+        # (a Goal_Position write re-engages torque on these servos) or its contact
+        # stop holds the arm still after a hit, so send_action drops goals instead of
+        # writing them.
         self.goal_writes_blocked: bool = False
 
     @property
