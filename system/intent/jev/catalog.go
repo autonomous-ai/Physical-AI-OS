@@ -63,6 +63,42 @@ func Candidates() []Candidate {
 	return candidates
 }
 
+// jevKeywordStems are word prefixes covering every catalog intent's vocabulary.
+// Keep them in sync with jevActionDescriptions; TestMayBeDeviceCommandKeepsLiveCorpus
+// fails when a positive live example would be filtered out.
+var jevKeywordStems = []string{
+	"light", "lamp", "turn", "switch", "off", "bright", "dim", "dark", "glare", "harsh", "soft", "glow", "eye",
+	"volume", "loud", "quiet", "hear", "color", "colour",
+	"yellow", "red", "green", "blue", "cyan", "purple", "violet", "orange", "pink", "white", "warm",
+	"scene", "mode", "preset", "read", "book", "focus", "concentrat", "work", "study", "relax", "movie", "film",
+	"night", "sleep", "energ", "mute", "unmute", "speaker", "sound", "silen", "music", "song", "audio", "play",
+	"stop", "talk", "speak", "spok", "voice", "shut", "time", "clock", "hour",
+	"follow", "track", "camera", "watch", "look",
+	// Short stop/comfort phrasings that name no device word.
+	"paus", "shh", "hush", "halt", "enough", "blind", "lower", "bed", "cozy", "chill", "crank",
+}
+
+// MayBeDeviceCommand is a local pre-filter in front of the Jev call. It is false only
+// for ASCII text sharing no word prefix with any catalog intent; such text goes
+// straight to the agent instead of waiting ~1-2 s for a certain abstention.
+// ponytail: keyword gate; a paraphrase using none of these words skips Jev and is
+// still served by the agent (slower). Non-ASCII text (e.g. Vietnamese) always passes.
+func MayBeDeviceCommand(text string) bool {
+	for _, r := range text {
+		if r > 127 {
+			return true
+		}
+	}
+	for _, word := range strings.FieldsFunc(strings.ToLower(text), func(r rune) bool { return r < 'a' || r > 'z' }) {
+		for _, stem := range jevKeywordStems {
+			if strings.HasPrefix(word, stem) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 const (
 	instructionMarker = "[voice-instruction]"
 	transcriptMarker  = "[transcript]"

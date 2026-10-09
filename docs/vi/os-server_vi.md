@@ -1129,6 +1129,17 @@ Code suy luận cốt lõi nằm trong `system/intent/jev/` (`client`, `resolver
 `catalog`). `system/intent/semantic.go` nối phần này với rule local và thực thi,
 tách quyết định của model khỏi tác động lên HAL.
 
+Bộ lọc từ khoá local (`MayBeDeviceCommand` trong `catalog.go`) chạy trước request
+Jev. Text chỉ gồm ký tự ASCII và không có từ nào bắt đầu bằng từ vựng của catalog
+(light, lamp, bright, dim, volume, loud, tên màu, tên scene/mode, music, stop,
+speak, time, follow, track, camera, ...) sẽ không gọi Jev mà đi thẳng xuống main
+runtime, tiết kiệm ~1-2 s quyết định vốn chỉ để từ chối. Log ghi
+`intent Jev decision outcome=skipped reason=no_device_keyword`. Text có ký tự
+non-ASCII (ví dụ tiếng Việt) luôn đi qua Jev. Câu diễn đạt không dùng từ nào trong
+danh sách vẫn được main runtime xử lý. Khi thêm intent vào catalog, bổ sung
+`jevKeywordStems`; `TestMayBeDeviceCommandKeepsLiveCorpus` fail nếu một ví dụ
+dương trong live corpus bị lọc mất. Chọn session Harness không dùng bộ lọc này.
+
 Ngân sách quyết định mặc định **3.000 ms**, giới hạn **3.000 ms** (giá trị không
 dương dùng mặc định). Mỗi quyết định gọi một request, không retry. Nếu đang có
 quyết định khác thì bỏ qua ngay, không xếp hàng. Lỗi, timeout, status non-2xx hoặc response sai
