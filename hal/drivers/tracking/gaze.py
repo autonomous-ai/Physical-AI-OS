@@ -25,6 +25,9 @@ _last_grant_t: float = 0.0
 _last_face_t: float = 0.0
 _last_subject_t: float = 0.0
 _last_repoint_t: float = 0.0
+# The last scored repoint found nobody. Voice then waits out the cooldown too: room
+# chatter must not turn the lamp toward an empty chair on every sentence.
+_last_repoint_missed: bool = False
 _last_dy_frac: Optional[float] = None
 _last_dy_from_face: bool = False
 _last_pitch_t: float = 0.0
@@ -1191,8 +1194,11 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
             f"near body seen {now - _last_near_body_t:.1f}s ago",
         )
         return False
-    # Voice may bypass the long *absence* delay, but never the movement cooldown.
-    if not force and (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S:
+    # Voice bypasses the absence delay, and the movement cooldown too unless the last
+    # repoint found nobody: a second sentence from the user gets a second look, but
+    # chatter from an empty bearing gets one turn and is then let go.
+    if ((not force or _last_repoint_missed)
+            and (now - _last_repoint_t) < config.GAZE_REPOINT_COOLDOWN_S):
         _repoint_quiet(
             "cooling down", now,
             f"{now - _last_repoint_t:.0f}s of {config.GAZE_REPOINT_COOLDOWN_S:.0f}s",
@@ -1276,6 +1282,8 @@ def _maybe_repoint(now: float, *, force: bool = False) -> bool:
 
 def _score_repoint(hit: bool, why: str, now: float) -> None:
     """Hand the bearing one verdict, and look around after a miss."""
+    global _last_repoint_missed
+    _last_repoint_missed = not hit
     try:
         from hal.drivers.tracking import user_bearing
 
@@ -1547,6 +1555,7 @@ def reset_for_test() -> None:
     _last_grant_t = 0.0
     _last_face_t = 0.0
     _last_repoint_t = 0.0
+    globals()["_last_repoint_missed"] = False
     globals()["_repoint_pending_t"] = 0.0
     globals()["_repoint_subject_t_before"] = 0.0
     globals()["_last_near_face_t"] = 0.0

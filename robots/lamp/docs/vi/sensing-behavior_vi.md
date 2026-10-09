@@ -73,12 +73,12 @@ Với event sound độc lập ngoài guard mode, `skills/sensing/SKILL.md` yêu
 | Lần 1 | `... — occurrence 1` | `/emotion curious` (0.6), im lặng |
 | Lần 2 | **không có gì** — chỉ đếm ở tracker, không forward | không tốn turn agent |
 | Lần 3+ | `... — persistent (occurrence 3)` | `/emotion shock` (0.9), nói 1 lần |
-| Sau khi nói | Python drop (suppress 3 phút) | Không có gì đến agent |
-| Im lặng 2 phút | Window reset | Trở về lần 1 |
+| Sau khi nói | Python drop (đã quen) | Không có gì đến agent chừng nào tiếng ồn còn |
+| Im lặng 2 phút | Reset quen + window | Trở về lần 1 |
 
 Các lần giữa (2 .. persistent−1) chỉ tăng counter chứ không forward: mỗi forward là một turn LLM đầy đủ, mà "vẫn còn ồn" giữa lúc chuyển trạng thái (lần 1) và lúc leo thang (persistent) không cho agent thông tin gì để hành động — khi ồn kéo dài, số turn mỗi chu kỳ giảm từ 3 xuống 2.
 
-Ví dụ: một con chó nghe tiếng động — nó nhìn lên (lần 1), tiếp tục theo dõi trong im lặng (lần 2, không báo), rồi sủa một lần nếu tiếng ồn kéo dài (lần 3+). Sau khi sủa thì không sủa tiếp.
+Ví dụ: một con chó nghe tiếng động — nó nhìn lên (lần 1), tiếp tục theo dõi trong im lặng (lần 2, không báo), rồi sủa một lần nếu tiếng ồn kéo dài (lần 3+). Sau khi sủa thì không sủa tiếp: nó quen với tiếng đó. Cơ chế quen (`_habituated` trong `sound.py`) drop mọi mẫu sau đó của cùng tiếng ồn cho tới khi im được `_WINDOW_DURATION_S`, nên máy hút bụi chạy 30 phút chỉ làm đèn giật mình một lần, không phải mỗi ~3,5 phút như khi chỉ có suppress 3 phút.
 
 ### Hằng số (`sound.py`)
 
@@ -86,7 +86,7 @@ Ví dụ: một con chó nghe tiếng động — nó nhìn lên (lần 1), ti�
 _DEDUPE_INTERVAL_S    = 15.0   # tối đa 1 event forwarded mỗi 15s
 _WINDOW_DURATION_S    = 120.0  # im lặng lâu hơn thế này thì reset counter
 _PERSISTENT_AFTER     = 3      # nói sau bao nhiêu lần
-_SUPPRESS_DURATION_S  = 180.0  # suppress sau khi đã nói (3 phút)
+_SUPPRESS_DURATION_S  = 180.0  # suppress sau khi đã nói (3 phút); cơ chế quen kéo dài nó khi tiếng ồn còn
 ```
 
 ### Điều chỉnh (Tuning)
