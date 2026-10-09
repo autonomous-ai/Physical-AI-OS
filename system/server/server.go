@@ -403,6 +403,7 @@ func (s *Server) Serve(closeFn func()) error {
 	// Authorization: Bearer <llm_api_key>.
 	device.GET("config", adminAuthMiddleware(s.config), s.deviceHandler.GetConfig)
 	device.PUT("config", adminAuthMiddleware(s.config), s.deviceHandler.UpdateConfig)
+	device.POST("voice-input-mode/toggle", adminOrLoopbackAuth(s.config), s.deviceHandler.ToggleVoiceInputMode)
 	device.POST("restore-defaults", adminAuthMiddleware(s.config), s.deviceHandler.RestoreDefaults)
 	device.GET("voices", s.deviceHandler.GetVoices)
 	device.GET("tts-providers", s.deviceHandler.GetTTSProviders)

@@ -104,6 +104,24 @@ func (h *AgentHandler) StopTTS(c *gin.Context) {
 // CancelSpeechHandler silences in-flight turns and cuts current playback (physical cancel gesture).
 // Both halves are needed: StopTTS clears HAL's playing+queued audio; the watermark mutes not-yet-generated sentences.
 func (h *AgentHandler) CancelSpeechHandler(c *gin.Context) {
+	var req struct {
+		BeforeMS *int64 `json:"before_ms"`
+	}
+	if err := c.ShouldBindJSON(&req); err != nil && !errors.Is(err, io.EOF) {
+		c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid speech cancel request"))
+		return
+	}
+	if req.BeforeMS != nil {
+		if *req.BeforeMS <= 0 || *req.BeforeMS > time.Now().UnixMilli() {
+			c.JSON(http.StatusBadRequest, serializers.ResponseError("invalid speech cancel cutoff"))
+			return
+		}
+		h.cancelSpeechBefore(*req.BeforeMS)
+		// HAL already stopped local audio before opening the new recording.
+		// A delayed global StopTTS here could interrupt that newer turn.
+		c.JSON(http.StatusOK, serializers.ResponseSuccess(nil))
+		return
+	}
 	h.CancelSpeech()
 	if err := h.agentGateway.StopTTS(); err != nil {
 		// Watermark already applied; report the HAL failure without failing the request.

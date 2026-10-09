@@ -16,9 +16,11 @@ import (
 
 // lookWidth/lookQuality shrink the JPEG (~50-80 KB instead of ~300-500 KB at
 // full 1920x1080) so the vision model uploads and tokenizes faster.
+// A read_text look uses lookReadWidth: at 768 px small labels are illegible.
 const (
-	lookWidth   = 768
-	lookQuality = 75
+	lookWidth     = 768
+	lookReadWidth = 1280
+	lookQuality   = 75
 )
 
 // The spoken cue before the photo is a cached phrase of about a second; these
@@ -39,6 +41,9 @@ type lookRequest struct {
 	// Question is what the user asked, so the vision model answers it instead
 	// of narrating the frame generically. Optional.
 	Question string `json:"question"`
+	// ReadText asks to read text, labels or a brand: a sharper frame and the
+	// vision model's thinking, ~3x slower. Optional.
+	ReadText bool `json:"read_text"`
 }
 
 // lookAndDescribe captures a frame and hands back text the agent can actually
@@ -52,7 +57,11 @@ func (s *Server) lookAndDescribe(c *gin.Context) {
 	if sensinghttp.DefaultFillerManager.SayInVoiceRun("look_capturing_main") {
 		waitForCue(cueMaxWait, cueStartGrace)
 	}
-	path, err := hal.Snapshot(lookWidth, lookQuality)
+	width := lookWidth
+	if req.ReadText {
+		width = lookReadWidth
+	}
+	path, err := hal.Snapshot(width, lookQuality)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("snapshot failed: "+err.Error()))
 		return
@@ -67,7 +76,7 @@ func (s *Server) lookAndDescribe(c *gin.Context) {
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("snapshot not readable"))
 		return
 	}
-	desc, err := vision.DescribeWithRetry(s.config, base64.StdEncoding.EncodeToString(data), req.Question)
+	desc, err := vision.LookWithRetry(s.config, base64.StdEncoding.EncodeToString(data), req.Question, req.ReadText)
 	if err != nil {
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("describe failed: "+err.Error()))
 		return

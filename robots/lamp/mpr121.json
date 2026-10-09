@@ -41,7 +41,11 @@
         2,
         1,
         0
-      ]
+      ],
+      "gesture_actions": {
+        "hold": "toggle_voice_input_mode"
+      },
+      "hold_action_s": 2
     }
   }
 }

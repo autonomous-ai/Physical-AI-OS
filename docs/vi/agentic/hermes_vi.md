@@ -655,6 +655,12 @@ làm 3 việc theo thứ tự:
      mọi cache marker; gateway bỏ qua trường này thì cache âm thầm giữ 5m, nên
      thiết lập vô hại ở nơi chưa hỗ trợ. Mức 1h tính 2x giá input khi ghi cache
      (5m là 1.25x); đọc đều 0.1x.
+   - `.custom_providers[0].models.Auto-AI.context_length = 256000` — cùng điều
+     kiện chỉ-khi-ở-proxy. `/models` của campaign-api không có context window, nên
+     thiếu giá trị tường minh thì Hermes dò `/models` và Ollama `/api/show` (~0.4s
+     mỗi cái từ đèn) **trước mỗi lượt**, ghi log `Could not detect context length …
+     (probe-down)` rồi vẫn rơi về 256K. Ghim đúng 256K bỏ được cả hai round trip mà
+     không đổi ngưỡng compression.
    - `.auxiliary.vision` (**ghi đè trọn node**) → `provider: custom:autonomous`,
      `model: qwen/qwen3.6-plus`, `timeout: 120`, `download_timeout: 30`, `extra_body: {}`
      — model hiểu ảnh, định tuyến qua cùng custom provider autonomous.

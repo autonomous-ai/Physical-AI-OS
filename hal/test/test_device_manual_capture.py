@@ -214,6 +214,8 @@ def test_config_default_and_effective_wake(mode, expected, tmp_path):
 
 
 def test_device_start_finish_cancel_api(monkeypatch):
+    from hal.drivers.voice._internal import device_input
+    monkeypatch.setattr(device_input.time, "time", lambda: 1791400000.123)
     from hal import app_state
     from hal.drivers.voice import voice_service as module
     service = Mock()
@@ -233,7 +235,7 @@ def test_device_start_finish_cancel_api(monkeypatch):
         assert service.device_input.active
         assert not service.device_input.start()
     capture = service._harness_capture.claim(LOCAL)
-    assert capture.snapshot == device_snapshot(LOCAL)
+    assert capture.snapshot == dict(device_snapshot(LOCAL), capturedAtMs=1791400000123)
     assert service.device_input.finish()
     assert capture.finished.is_set()
     service.device_input.cancel()
