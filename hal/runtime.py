@@ -333,6 +333,20 @@ async def lifespan(app: FastAPI):
                         if _servo_overload_config else None
                     ),
                     on_overload=_on_servo_overload,
+                    contact_guard=(
+                        OverloadGuard(_servo_overload_config.contact.load,
+                                      _servo_overload_config.contact.hold_s,
+                                      _servo_overload_config.contact.pause_s)
+                        if _servo_overload_config and _servo_overload_config.contact else None
+                    ),
+                    torque_limits=(
+                        _servo_overload_config.torque_limit if _servo_overload_config else None
+                    ),
+                    contact_profile=_contact_profile(),
+                    contact_off_playback=(
+                        _servo_overload_config.contact.off_playback
+                        if _servo_overload_config and _servo_overload_config.contact else None
+                    ),
                 )
             else:
                 # SDK backends carry the safety policy themselves.
@@ -1062,7 +1076,7 @@ def _thermal_monitor(policy, interval: float = 10.0):
 
 
 def _on_servo_overload(joint: str, load: int) -> None:
-    """Servo overload cut-off fired: sound the ack chime and stop the tracker."""
+    """Servo contact stop or overload cut-off fired: sound the ack chime and stop the tracker."""
     # Chime first: stopping the tracker joins its thread and can take a moment.
     try:
         if state.tts_service is not None:
@@ -1074,6 +1088,22 @@ def _on_servo_overload(joint: str, load: int) -> None:
             state.tracker_service.stop()
     except Exception as e:
         logger.warning("[overload] stop tracking failed: %s", e)
+
+
+def _contact_profile():
+    """The learned contact envelope when the device sets contact.profile_margin."""
+    contact = _servo_overload_config.contact if _servo_overload_config else None
+    if contact is None or contact.profile_margin is None:
+        return None
+    from hal.config import CONTACT_PROFILE_PATH
+    from hal.drivers.motors.contact_profile import ContactProfile
+    # The device ships a default envelope learned on a reference unit; a learn run on
+    # this unit writes CONTACT_PROFILE_PATH, which then takes precedence.
+    return ContactProfile.load(
+        CONTACT_PROFILE_PATH, contact.profile_margin,
+        os.path.join(_device_dir, "contact_profile.json"),
+        contact.lag_margin,
+    )
 
 
 def _servo_overload_view():
@@ -1119,7 +1149,7 @@ _mpr121_config = (
 
 from hal.board.servo_overload import load_servo_overload_config
 
-# Servo overload cut-off thresholds (feetech driver only); no file or entry = off.
+# Servo contact stop + overload cut-off thresholds (feetech driver only); no file or entry = off.
 _servo_overload_config = (
     None if _board_id in {"sim", "host"} else load_servo_overload_config(_device_dir, _board_id)
 )

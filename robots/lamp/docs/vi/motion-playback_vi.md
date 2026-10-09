@@ -95,14 +95,26 @@ clip thì không. Phải tính lại hằng số này nếu phân bố khối l�
 
 [#271]: https://github.com/autonomous-ai/autonomous-os/issues/271
 
-## Cắt torque khi quá tải
+## Dừng khi chạm và cắt torque khi quá tải
 
 Playback cũng là nơi lộ ra việc tay đèn bị chặn: quỹ đạo vẫn tiến trong khi một khớp
 không theo kịp, và servo đẩy hết mức. Vì vậy `AnimationService` lấy mẫu `Present_Load`
-của mọi khớp ở 10 Hz (`hal/drivers/motors/overload.py`). Khớp nào ở mức 80 % trở lên
-trong 1 s sẽ làm cắt torque mọi servo, phát ack chime và chặn mọi lệnh ghi goal trong
-120 s; frame recording gửi trong khoảng đó bị bỏ, không xếp hàng lại. Sau đó thân máy
-resume vào idle từ vị trí tay đang nằm. Ngưỡng (`load`, `hold_s`, `retry_s`) do
+của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
+
+- **Dừng khi chạm.** `base_yaw` ở 65 %, `wrist_roll` ở 75 % hoặc `wrist_pitch` ở 65 %
+  trong 0.05 s làm recording dừng tại chỗ, ghim tư thế với torque bật (tay không rơi),
+  phát ack chime và chặn lệnh ghi goal trong 3 s. Sau đó chạy tiếp vào idle từ tư thế
+  đã dừng. Trên lamp-52e6 các khớp này đạt đỉnh 52 % khi chuyển động tự do, và lấy tay
+  chặn `base_yaw` đẩy nó lên 94-100 %. `base_pitch` và `elbow_pitch` gánh trọng lượng
+  tay đèn và lên 83-100 % khi chuyển động tự do, nên không được theo dõi; thay vào đó
+  chúng bị giới hạn ở 70 % torque (`torque_limit`), làm recording tệ nhất (`shock`) trễ
+  thêm 1°.
+- **Cắt torque khi quá tải.** Khớp nào ở mức 80 % trở lên trong 1 s (tay đang giữ vẫn bị
+  ép) sẽ cắt torque mọi servo, phát chime và chặn mọi lệnh ghi goal trong 120 s. Sau đó
+  thân máy resume vào idle từ vị trí tay đang nằm.
+
+Frame recording gửi trong lúc goal bị chặn sẽ bị bỏ, không xếp hàng lại. Ngưỡng
+(`contact.load`/`hold_s`/`pause_s`, `load`, `hold_s`, `retry_s`, `torque_limit`) do
 device quản lý trong `robots/lamp/servo_overload.json`; hành vi đầy đủ nằm ở phần
 fail-safe của [`docs/vi/safety_vi.md`](../../../../docs/vi/safety_vi.md).
 

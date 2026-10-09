@@ -6,7 +6,9 @@ from unittest import mock
 
 import pytest
 
+from hal.drivers.motors.contact_profile import ContactProfile
 from hal.drivers.motors.overload import OverloadGuard, load_magnitude
+from hal.presets import SERVO_CMD_PLAY
 
 JOINTS = ("base_yaw", "base_pitch", "elbow_pitch", "wrist_roll", "wrist_pitch")
 IDLE = {joint: 120 for joint in JOINTS}
@@ -151,6 +153,22 @@ def test_threshold_zero_disables_the_guard():
     assert not guard.locked
 
 
+def test_a_per_joint_map_sets_each_floor_and_skips_joints_left_out():
+    clock = _Clock()
+    guard = OverloadGuard({"base_yaw": 650, "elbow_pitch": 950}, 0.05, 3.0, clock=clock)
+    assert guard.enabled
+    # 900 on base_pitch is not watched; 900 on elbow is under its floor.
+    heavy = {**IDLE, "base_pitch": 1000, "elbow_pitch": 900}
+    for _ in range(5):
+        assert guard.observe(heavy) is None
+        clock.advance(0.05)
+    blocked_yaw = {**heavy, "base_yaw": 700}
+    assert guard.observe(blocked_yaw) is None
+    clock.advance(0.06)
+    assert guard.observe(blocked_yaw) == ("base_yaw", 700)
+    assert guard.threshold_for("wrist_roll") is None
+
+
 def test_latest_and_peak_load_are_kept_for_tuning():
     guard, clock = _guard()
     guard.observe({**IDLE, "base_yaw": 400})
@@ -168,6 +186,8 @@ class _FakeBus:
     def __init__(self):
         self.motors = {joint: types.SimpleNamespace(id=i + 1) for i, joint in enumerate(JOINTS)}
         self.loads = dict(IDLE)
+        self.positions = {joint: 10.0 for joint in JOINTS}
+        self.goals = dict(self.positions)
         self.fail_read = False
         self.writes = []
         self.raw_writes = []
@@ -175,9 +195,13 @@ class _FakeBus:
         self.packet_handler = self
 
     def sync_read(self, name, normalize=True):
-        assert (name, normalize) == ("Present_Load", False)
         if self.fail_read:
             raise ConnectionError("no status packet")
+        if name == "Present_Position":
+            return dict(self.positions)
+        if name == "Goal_Position":
+            return dict(self.goals)
+        assert (name, normalize) == ("Present_Load", False)
         return dict(self.loads)
 
     def write(self, name, motor, value):
@@ -431,6 +455,17 @@ def test_configure_still_energizes_outside_a_lockout(rig):
     ]
 
 
+def test_configure_writes_each_declared_torque_limit():
+    svc = _animation_service_cls()(
+        port="/dev/null", lamp_id="test", torque_limits={"base_pitch": 700, "elbow_pitch": 700},
+    )
+    svc.robot = _FakeRobot()
+    with mock.patch.dict(sys.modules, {"scservo_sdk": types.SimpleNamespace(COMM_SUCCESS=0)}):
+        svc._configure_servos_raw(energize=True)
+    # Torque_Limit is register 48; base_pitch is ID 2 and elbow_pitch ID 3.
+    assert [w for w in svc.robot.bus.raw_writes if w[1] == 48] == [(2, 48, 700), (3, 48, 700)]
+
+
 def test_the_lockout_ends_after_the_retry_delay_with_a_resume(rig):
     _stall(rig)
     rig.clock.advance(119.0)
@@ -499,3 +534,302 @@ def test_the_follower_drops_goals_while_blocked():
     robot.goal_writes_blocked = False
     LeLampFollower.send_action(robot, {"base_yaw.pos": 5.0})
     robot.bus.sync_write.assert_called_once_with("Goal_Position", {"base_yaw": 5.0})
+
+
+# --- Contact stop (halt in place on a short hit) --------------------------------
+
+
+@pytest.fixture
+def contact_rig():
+    """The rig plus a contact guard: 95 % for 0.1 s halts, 3 s pause."""
+    guard, clock = _guard()
+    contact = OverloadGuard(950, 0.1, 3.0, clock=clock)
+    fired = []
+    svc = _animation_service_cls()(
+        port="/dev/null", lamp_id="test",
+        overload_guard=guard, contact_guard=contact,
+        on_overload=lambda joint, load: fired.append((joint, load)),
+    )
+    svc.robot = _FakeRobot()
+    svc._running.set()
+    svc.resume = mock.Mock()
+    svc.dispatch = mock.Mock()
+    return types.SimpleNamespace(
+        svc=svc, guard=guard, contact=contact, clock=clock, fired=fired, bus=svc.robot.bus,
+    )
+
+
+def _hit(rig, joint="base_yaw", load=1000):
+    """Saturate one joint past the contact stop's 0.1 s hold, sampled every 50 ms."""
+    rig.bus.loads = _stalled(joint, load)
+    for _ in range(4):
+        rig.svc._overload_tick()
+        rig.clock.advance(0.05)
+
+
+def test_a_hit_halts_in_place_and_keeps_torque_on(contact_rig):
+    contact_rig.bus.positions = {joint: float(i) for i, joint in enumerate(JOINTS)}
+    _hit(contact_rig)
+    svc = contact_rig.svc
+    assert svc.contact_active and not svc.overload_active
+    assert svc._halt.is_set()
+    # The pose it stopped at is pinned, then no further goal gets through.
+    assert svc.robot.sent == [{f"{joint}.pos": float(i) for i, joint in enumerate(JOINTS)}]
+    assert svc.robot.goal_writes_blocked is True
+    assert contact_rig.bus.writes == []          # no Torque_Enable write at all
+    assert contact_rig.fired == [("base_yaw", 1000)]
+
+
+def test_free_motion_peaks_do_not_stop_the_arm(contact_rig):
+    # Highest free-motion loads measured on lamp-52e6 (shock, acknowledge), held long.
+    contact_rig.bus.loads = {**IDLE, "base_pitch": 872, "elbow_pitch": 736}
+    for _ in range(10):
+        contact_rig.svc._overload_tick()
+        contact_rig.clock.advance(0.05)
+    assert not contact_rig.svc.contact_active
+    assert contact_rig.fired == []
+
+
+def test_a_single_saturated_sample_does_not_stop_the_arm(contact_rig):
+    contact_rig.bus.loads = _stalled("base_yaw", 1000)
+    contact_rig.svc._overload_tick()
+    contact_rig.clock.advance(0.05)
+    contact_rig.bus.loads = dict(IDLE)
+    contact_rig.svc._overload_tick()
+    assert not contact_rig.svc.contact_active
+
+
+def test_commanded_moves_are_refused_during_the_pause(contact_rig):
+    _hit(contact_rig)
+    with pytest.raises(RuntimeError, match="contact stop active"):
+        contact_rig.svc.move_and_hold({"base_yaw.pos": 10.0}, duration=0)
+
+
+def test_the_pause_ends_back_in_idle(contact_rig):
+    _hit(contact_rig)
+    contact_rig.bus.loads = dict(IDLE)
+    contact_rig.clock.advance(2.0)
+    contact_rig.svc._overload_tick()
+    assert contact_rig.svc.contact_active
+    contact_rig.clock.advance(1.0)
+    contact_rig.svc._overload_tick()
+    svc = contact_rig.svc
+    assert not svc.contact_active
+    assert svc.robot.goal_writes_blocked is False
+    svc.dispatch.assert_called_once_with(SERVO_CMD_PLAY, svc.idle_recording)
+    svc.resume.assert_not_called()               # torque never went off
+
+
+def test_a_parked_body_stays_put_after_the_pause(contact_rig):
+    _hit(contact_rig)
+    contact_rig.bus.loads = dict(IDLE)
+    contact_rig.svc._running.clear()
+    contact_rig.clock.advance(3.0)
+    contact_rig.svc._overload_tick()
+    assert contact_rig.svc.robot.goal_writes_blocked is False
+    contact_rig.svc.dispatch.assert_not_called()
+
+
+def test_still_forced_while_held_falls_through_to_the_cut_off(contact_rig):
+    _hit(contact_rig, "elbow_pitch", 1000)
+    # Someone keeps forcing the held arm: the cut-off still watches and cuts torque.
+    for _ in range(25):
+        contact_rig.svc._overload_tick()
+        contact_rig.clock.advance(0.05)
+    assert contact_rig.svc.overload_active
+    assert contact_rig.bus.writes == [("Torque_Enable", joint, 0) for joint in JOINTS]
+    # The contact pause ending must not reopen goal writes under the cut-off.
+    contact_rig.svc._contact_recover()
+    assert contact_rig.svc.robot.goal_writes_blocked is True
+
+
+def test_status_reports_the_contact_stop(contact_rig):
+    assert contact_rig.svc.overload_status()["contact"]["trips"] == 0
+    _hit(contact_rig)
+    contact = contact_rig.svc.overload_status()["contact"]
+    assert contact["active"] is True
+    assert contact["last_trip"] == {"joint": "base_yaw", "load": 1000}
+    assert (contact["threshold"], contact["hold_s"], contact["pause_s"]) == (950, 0.1, 3.0)
+
+
+def test_without_a_contact_guard_status_has_none(rig):
+    assert rig.svc.overload_status()["contact"] is None
+
+
+# --- Learned contact envelope -------------------------------------------------
+
+
+def test_profile_keeps_the_max_per_frame_and_adds_the_margin(tmp_path):
+    profile = ContactProfile(str(tmp_path / "p.json"), margin=150)
+    profile.learn("stretching", 10, {"base_pitch": 300, "elbow_pitch": 200})
+    profile.learn("stretching", 10, {"base_pitch": 340, "elbow_pitch": 180})
+    profile.learn("stretching", 12, {"base_pitch": 600})
+    assert profile.floors("stretching", 10) == {"base_pitch": 750, "elbow_pitch": 350}
+    # The window reaches three frames either side; far from anything learned, nothing.
+    assert profile.floors("stretching", 15)["base_pitch"] == 750
+    assert profile.floors("stretching", 40) is None
+    assert profile.floors("shock", 10) is None
+
+
+def test_profile_round_trips_through_its_file(tmp_path):
+    path = str(tmp_path / "sub" / "p.json")
+    profile = ContactProfile(path, margin=150)
+    profile.learn("nod", 3, {"base_yaw": 120})
+    profile.save()
+    again = ContactProfile.load(path, margin=100)
+    assert again.recordings() == ["nod"]
+    assert again.floors("nod", 3) == {"base_yaw": 220}
+    (tmp_path / "bad.json").write_text("{")
+    assert ContactProfile.load(str(tmp_path / "bad.json"), 150).recordings() == []
+    assert ContactProfile.load(str(tmp_path / "none.json"), 150).recordings() == []
+
+
+def test_this_units_profile_wins_over_the_device_default(tmp_path):
+    default = tmp_path / "default.json"
+    default.write_text('{"nod": {"base_yaw": [100]}}')
+    unit = str(tmp_path / "unit.json")
+    profile = ContactProfile.load(unit, 150, str(default))
+    assert profile.floors("nod", 0) == {"base_yaw": 250}
+    assert profile.path == unit                      # a learn run saves per unit
+    (tmp_path / "unit.json").write_text('{"nod": {"base_yaw": [300]}}')
+    assert ContactProfile.load(unit, 150, str(default)).floors("nod", 0) == {"base_yaw": 450}
+
+
+def test_per_sample_floors_override_the_configured_ones():
+    clock = _Clock()
+    guard = OverloadGuard({"base_yaw": 650}, 0.05, 3.0, clock=clock)
+    pushed = {**IDLE, "base_pitch": 500}
+    # base_pitch has no fixed floor; the learned one (350) makes 500 a hit.
+    for _ in range(2):
+        hit = guard.observe(pushed, {"base_pitch": 350})
+        clock.advance(0.06)
+    assert hit == ("base_pitch", 500)
+
+
+@pytest.fixture
+def profile_rig(contact_rig, tmp_path):
+    profile = ContactProfile(str(tmp_path / "p.json"), margin=150)
+    svc = contact_rig.svc
+    svc._contact_profile = profile
+    svc._current_recording = "stretching"
+    svc._current_actions = [{}] * 100
+    svc._current_frame_index = 20
+    svc._interpolation_frames = 0
+    contact_rig.profile = profile
+    return contact_rig
+
+
+def test_a_push_above_the_envelope_stops_a_weight_bearing_joint(profile_rig):
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "base_pitch": 300})
+    profile_rig.bus.loads = {**IDLE, "base_pitch": 500}   # far under any fixed floor
+    for _ in range(4):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert profile_rig.svc.contact_active
+    assert profile_rig.fired == [("base_pitch", 500)]
+
+
+def test_an_envelope_hit_on_a_joint_without_a_fixed_floor_still_halts(profile_rig, tmp_path):
+    # Lamp's real shape: base_pitch has no fixed floor, only the learned one.
+    svc = profile_rig.svc
+    svc._contact = OverloadGuard({"base_yaw": 650}, 0.05, 3.0, clock=profile_rig.clock)
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "base_pitch": 300})
+    profile_rig.bus.loads = {**IDLE, "base_pitch": 500}
+    for _ in range(3):
+        svc._overload_tick()
+        profile_rig.clock.advance(0.06)
+    assert svc.contact_active
+    assert svc._halt.is_set() and svc.robot.goal_writes_blocked is True
+    assert profile_rig.fired == [("base_pitch", 500)]
+    assert svc._contact.last_floor == 450
+
+
+def test_free_motion_within_the_envelope_does_not_stop(profile_rig):
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "base_pitch": 700})
+    profile_rig.bus.loads = {**IDLE, "base_pitch": 820}
+    for _ in range(5):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert not profile_rig.svc.contact_active
+
+
+def test_the_ramp_into_a_recording_has_no_envelope(profile_rig):
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "base_pitch": 300})
+    profile_rig.svc._interpolation_frames = 10
+    profile_rig.bus.loads = {**IDLE, "base_pitch": 500}
+    for _ in range(5):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert not profile_rig.svc.contact_active
+
+
+def test_a_learn_run_records_instead_of_stopping(profile_rig):
+    profile_rig.svc._learning = {"stretching"}
+    profile_rig.bus.loads = {**IDLE, "base_pitch": 500}
+    for _ in range(5):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert not profile_rig.svc.contact_active
+    assert profile_rig.profile.floors("stretching", 20)["base_pitch"] == 650
+
+
+def test_learning_needs_a_profile(contact_rig):
+    with pytest.raises(RuntimeError, match="No contact profile"):
+        contact_rig.svc.learn_contact_profile(["nod"])
+
+
+def test_a_joint_trailing_its_learned_lag_stops_even_at_the_torque_cap(profile_rig):
+    profile_rig.profile.lag_margin = 40
+    # Learned: base_pitch at the 70 % cap here already, 3 deg behind its goal.
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "base_pitch": 700, "lag:base_pitch": 30})
+    bus = profile_rig.bus
+    bus.loads = {**IDLE, "base_pitch": 700}               # no load headroom left
+    bus.goals = {**bus.positions, "base_pitch": 10.0 + 9.0}  # a hand holds it 9 deg back
+    for _ in range(4):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert profile_rig.svc.contact_active
+    assert profile_rig.fired == [("lag:base_pitch", 90)]
+
+
+def test_learned_lag_is_ignored_without_a_lag_margin(profile_rig):
+    profile_rig.profile.learn("stretching", 20, {**IDLE, "lag:base_pitch": 30})
+    profile_rig.bus.goals = {**profile_rig.bus.positions, "base_pitch": 30.0}
+    for _ in range(4):
+        profile_rig.svc._overload_tick()
+        profile_rig.clock.advance(0.05)
+    assert not profile_rig.svc.contact_active
+
+
+def test_a_learn_run_records_the_lag_too(profile_rig):
+    profile_rig.profile.lag_margin = 40
+    profile_rig.svc._learning = {"stretching"}
+    profile_rig.bus.goals = {**profile_rig.bus.positions, "elbow_pitch": 12.5}
+    profile_rig.svc._overload_tick()
+    assert profile_rig.profile.floors("stretching", 20)["lag:elbow_pitch"] == 25 + 40
+
+
+def test_off_playback_floors_watch_gaze_moves_and_holds(contact_rig):
+    svc = contact_rig.svc
+    svc._contact = OverloadGuard({"base_yaw": 650}, 0.05, 3.0, clock=contact_rig.clock)
+    svc._contact_off_playback = {"base_pitch": 620, "lag:base_pitch": 120}
+    svc._current_recording = None                      # a gaze move owns the body
+    bus = contact_rig.bus
+    bus.goals = {**bus.positions, "base_pitch": 10.0 + 13.0}   # held 13 deg back
+    for _ in range(3):
+        svc._overload_tick()
+        contact_rig.clock.advance(0.06)
+    assert svc.contact_active
+    assert contact_rig.fired == [("lag:base_pitch", 130)]
+
+
+def test_off_playback_floors_stay_out_of_a_playing_recording(contact_rig):
+    svc = contact_rig.svc
+    svc._contact_off_playback = {"lag:base_pitch": 120}
+    svc._current_recording = "shock"
+    svc._idle_settled = False
+    contact_rig.bus.goals = {**contact_rig.bus.positions, "base_pitch": 30.0}
+    for _ in range(4):
+        svc._overload_tick()
+        contact_rig.clock.advance(0.05)
+    assert not svc.contact_active
