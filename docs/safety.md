@@ -410,17 +410,22 @@ Four conditions are enforced today; setup-incomplete is reserved.
       `OverloadGuard` (`hal/drivers/motors/overload.py`). On
       trip the driver halts motion in flight and writes `Torque_Enable=0` to all servos
       with **no park move** (the arm is blocked, so it goes limp where it is); the
-      runtime then plays the ack chime and stops the vision tracker. For `retry_s`
-      (Lamp: `120` s) no goal reaches the bus, because a goal
-      write re-engages torque on these servos: playback and tracker frames are dropped,
-      `/servo/move`, `/servo/aim` and `/servo/nudge` fail with "Servo overload cut-off
-      active", and startup / zero / park moves and torque-on are skipped. After the
+      runtime then plays the ack chime and stops the vision tracker. A joint whose
+      torque-off write failed (dropped packet) is retried every 100 ms until confirmed;
+      until then `/health` reports `cut_complete: false` with the joints in
+      `pending_off`. For `retry_s` (Lamp: `120` s) no goal reaches the bus, because a
+      goal write re-engages torque on these servos: playback and tracker frames are
+      dropped, `/servo/move`, `/servo/aim` and `/servo/nudge` fail with "Servo overload
+      cut-off active", a raw move already in flight (startup / zero / park) aborts at
+      its next frame, new ones are skipped, and torque-on is skipped. Every one of
+      these checks runs under the bus lock the cut-off itself takes, so a cut cannot
+      land between a check and its write. After the
       delay the body comes back through the normal `resume()` path (torque on, state
       re-read from hardware, ramp into idle; an earlier hold is dropped). If it was
       released (asleep) or zero-posed meanwhile it stays limp until the next resume.
       Still blocked → it trips again. A failed load read never trips. Surfaced at
-      `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `last_trip`, and
-      per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
+      `GET /health.servo_overload` (`active`, `retry_in_s`, `trips`, `cut_complete`,
+      `pending_off`, `last_trip`, and per-joint `load` / `peak` for tuning). **Lamp's 80 % / 1 s is provisional — not
       yet measured on hardware**; compare `peak` during normal animation with the
       threshold before relying on it. Only Lamp ships the file.
 - [x] **Unit:** `thermal_over` trips at/above `max_temp_c`, holds through hysteresis

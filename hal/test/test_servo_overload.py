@@ -331,6 +331,98 @@ def test_no_goal_or_torque_on_write_reaches_the_bus_during_the_lockout(rig):
     assert goal_or_torque_on == []
 
 
+def _trip_now(rig):
+    """Cut immediately, the way observe() + _overload_cut() do, from inside a bus call."""
+    rig.guard._locked_until = rig.clock() + rig.guard.retry_s
+    rig.svc._overload_cut("elbow_pitch", 950)
+
+
+def test_a_cut_mid_raw_move_stops_its_remaining_goal_writes(rig):
+    """Startup / zero / park moves must not keep re-engaging torque after the cut."""
+    rig.svc.fps = 100
+    goals_before_cut = []
+    real = rig.bus.write2ByteTxRx
+
+    def write2(ph, sid, reg, value):
+        real(ph, sid, reg, value)
+        # Trips on the last write of frame 2's batch: a real cut needs the bus lock, so it
+        # can only land between batches.
+        if reg == 42 and len(goals_before_cut) == 0 and len(rig.bus.raw_writes) >= 4:
+            goals_before_cut.append(len([w for w in rig.bus.raw_writes if w[1] == 42]))
+            _trip_now(rig)
+
+    rig.bus.write2ByteTxRx = write2
+    rig.svc.move_to_raw({"base_yaw": 2048, "base_pitch": 2048}, duration=0.05)
+    goals_total = len([w for w in rig.bus.raw_writes if w[1] == 42])
+    assert goals_before_cut and goals_total == goals_before_cut[0]
+    assert rig.svc.overload_active
+
+
+def test_a_cut_landing_before_configure_takes_the_lock_still_wins(rig):
+    """The torque-on decision is made under the bus lock, not before it."""
+    real_lock = rig.svc.bus_lock
+    tripped = []
+
+    class Lock:
+        def __enter__(self):
+            if not tripped:
+                tripped.append(True)
+                _trip_now(rig)
+            return real_lock.__enter__()
+
+        def __exit__(self, *exc):
+            return real_lock.__exit__(*exc)
+
+    rig.svc.bus_lock = Lock()
+    with mock.patch.dict(sys.modules, {"scservo_sdk": types.SimpleNamespace(COMM_SUCCESS=0)}):
+        rig.svc._configure_servos_raw(energize=True)
+    assert [w for w in rig.bus.raw_writes if w[1] == 40 and w[2] == 1] == []
+
+
+def test_a_failed_torque_off_is_retried_until_confirmed(rig):
+    failing = {"wrist_pitch"}
+    real = rig.bus.write
+
+    def flaky(name, motor, value):
+        if motor in failing:
+            raise ConnectionError("no status packet")
+        real(name, motor, value)
+
+    rig.bus.write = flaky
+    _stall(rig)
+    status = rig.svc.overload_status()
+    assert status["active"] and status["cut_complete"] is False
+    assert status["pending_off"] == ["wrist_pitch"]
+    assert rig.svc.robot.goal_writes_blocked is True
+    # Still failing: retried every tick, still pending.
+    rig.clock.advance(0.1)
+    rig.svc._overload_tick()
+    assert rig.svc.overload_status()["pending_off"] == ["wrist_pitch"]
+    # Bus recovers: the next tick confirms it.
+    failing.clear()
+    rig.clock.advance(0.1)
+    rig.svc._overload_tick()
+    status = rig.svc.overload_status()
+    assert status["cut_complete"] is True and status["pending_off"] == []
+    assert ("Torque_Enable", "wrist_pitch", 0) in rig.bus.writes
+    assert rig.svc.overload_active
+
+
+def test_a_torque_off_that_never_confirms_is_dropped_at_recovery(rig):
+    rig.bus.write = mock.Mock(side_effect=ConnectionError("bus down"))
+    _stall(rig)
+    assert rig.svc.overload_status()["pending_off"] == sorted(JOINTS)
+    for _ in range(5):
+        rig.clock.advance(0.1)
+        rig.svc._overload_tick()
+    assert rig.bus.write.call_count == len(JOINTS) * 6
+    rig.clock.advance(120.0)
+    rig.svc._overload_tick()
+    assert not rig.svc.overload_active
+    assert rig.svc.overload_status()["pending_off"] == []
+    rig.svc.resume.assert_called_once_with()
+
+
 def test_configure_still_energizes_outside_a_lockout(rig):
     with mock.patch.dict(sys.modules, {"scservo_sdk": types.SimpleNamespace(COMM_SUCCESS=0)}):
         rig.svc._configure_servos_raw(energize=True)

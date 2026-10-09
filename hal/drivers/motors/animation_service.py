@@ -157,6 +157,9 @@ class AnimationService:
         self._overload_stop = threading.Event()
         self._overload_thread: Optional[threading.Thread] = None
         self._overload_read_ok = True
+        # Joints whose Torque_Enable=0 write failed at the cut; retried every tick until
+        # confirmed, so a dropped packet cannot leave one joint pushing for the lockout.
+        self._overload_pending_off: Set[str] = set()
 
     @property
     def _tracking_active(self) -> bool:
@@ -217,10 +220,12 @@ class AnimationService:
 
     def _configure_servos_raw(self, energize: bool = True):
         """Configure servos directly via scservo_sdk, bypassing lerobot."""
-        locked_out = energize and self.overload_active
-        if locked_out:
-            energize = False
         with self.bus_lock:
+            # Checked under the lock: the cut-off takes the same lock, so it cannot land
+            # between this check and the torque-on writes below.
+            locked_out = energize and self.overload_active
+            if locked_out:
+                energize = False
             ph = self.robot.bus.port_handler
             pk = self.robot.bus.packet_handler
             from scservo_sdk import COMM_SUCCESS
@@ -811,6 +816,11 @@ class AnimationService:
             progress = frame / total_frames
 
             with self.bus_lock:
+                # Under the lock, every batch: a goal write re-engages torque, so a cut
+                # that lands mid-move must stop the move here.
+                if self.overload_active:
+                    logger.info("move_to_raw aborted at frame %d/%d — overload cut-off", frame, total_frames)
+                    return
                 for motor_name, target in target_raw.items():
                     cur = current_raw.get(motor_name, target)
                     raw = max(0, min(4095, int(cur + (target - cur) * progress)))
@@ -825,6 +835,9 @@ class AnimationService:
                 time.sleep(sleep_time)
 
         with self.bus_lock:
+            if self.overload_active:
+                logger.info("move_to_raw final write skipped — overload cut-off")
+                return
             for motor_name, raw in target_raw.items():
                 motor_obj = self.robot.bus.motors.get(motor_name)
                 if motor_obj:
@@ -1000,6 +1013,8 @@ class AnimationService:
             "hold_s": guard.hold_s,
             "retry_s": guard.retry_s,
             "trips": guard.trips,
+            "cut_complete": not self._overload_pending_off,
+            "pending_off": sorted(self._overload_pending_off),
             "last_trip": {"joint": last[0], "load": last[1]} if last else None,
             "load": dict(guard.load),
             "peak": dict(guard.peak),
@@ -1016,6 +1031,8 @@ class AnimationService:
         """One pass: end a finished lockout, otherwise sample load and cut if it stalled."""
         guard = self._overload
         if guard.locked:
+            if self._overload_pending_off:
+                self._retry_torque_off()
             if guard.retry_due():
                 self._overload_recover()
             return
@@ -1046,26 +1063,47 @@ class AnimationService:
             joint, load / 10.0, guard.threshold / 10.0, guard.hold_s, guard.retry_s,
         )
         self._halt.set()
-        errors: Dict[str, str] = {}
         # Block and cut under one lock hold, so no goal write can land in between and
         # re-engage torque.
         with self.bus_lock:
             self.robot.goal_writes_blocked = True
-            for motor_name in self.robot.bus.motors:
-                try:
-                    self.robot.bus.write("Torque_Enable", motor_name, 0)
-                except Exception as e:
-                    errors[motor_name] = str(e)
-        if errors:
-            logger.warning("[overload] torque-off errors (offline?): %s", errors)
+            self._overload_pending_off = self._write_torque_off(list(self.robot.bus.motors))
+        if self._overload_pending_off:
+            logger.warning(
+                "[overload] torque-off not confirmed on %s — retrying every %.0fms",
+                sorted(self._overload_pending_off), OVERLOAD_POLL_S * 1000,
+            )
         if self._on_overload is not None:
             try:
                 self._on_overload(joint, load)
             except Exception as e:
                 logger.warning("[overload] on_overload handler failed: %s", e)
 
+    def _write_torque_off(self, motors: List[str]) -> Set[str]:
+        """Torque_Enable=0 on each motor; returns the ones whose write failed. Lock held by caller."""
+        failed: Set[str] = set()
+        for motor_name in motors:
+            try:
+                self.robot.bus.write("Torque_Enable", motor_name, 0)
+            except Exception as e:
+                failed.add(motor_name)
+                logger.debug("[overload] torque-off %s failed: %s", motor_name, e)
+        return failed
+
+    def _retry_torque_off(self) -> None:
+        with self.bus_lock:
+            self._overload_pending_off = self._write_torque_off(sorted(self._overload_pending_off))
+        if not self._overload_pending_off:
+            logger.warning("[overload] torque-off now confirmed on every joint")
+
     def _overload_recover(self) -> None:
         """Lockout over: allow goal writes again and bring the body back like a resume."""
+        if self._overload_pending_off:
+            logger.warning(
+                "[overload] lockout over with torque-off never confirmed on %s",
+                sorted(self._overload_pending_off),
+            )
+            self._overload_pending_off = set()
         with self.bus_lock:
             if self.robot:
                 self.robot.goal_writes_blocked = False

@@ -614,7 +614,7 @@ class HealthResponse(BaseModel):
     # null when no `thermal` bound is declared; else {over, temp_c, max_temp_c}.
     thermal: Optional[dict] = None
     # null when the motion driver has no overload cut-off; else {active, retry_in_s,
-    # threshold, hold_s, retry_s, trips, last_trip, load, peak}.
+    # threshold, hold_s, retry_s, trips, cut_complete, pending_off, last_trip, load, peak}.
     servo_overload: Optional[dict] = None
 
 

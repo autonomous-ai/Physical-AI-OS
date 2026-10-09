@@ -393,16 +393,20 @@ kiện đã thực thi; setup-incomplete còn dự trữ.
       `OverloadGuard` thuần (`hal/drivers/motors/overload.py`). Khi trip, driver dừng chuyển động đang
       chạy và ghi `Torque_Enable=0` cho mọi servo, **không có bước park** (tay đang bị
       chặn nên thả lỏng tại chỗ); runtime sau đó phát ack chime và dừng vision tracker.
-      Trong `retry_s` (Lamp: `120` s) không goal nào tới được bus, vì ghi
+      Khớp nào ghi tắt torque thất bại (rớt gói) được thử lại mỗi 100 ms tới khi xác
+      nhận; trước đó `/health` báo `cut_complete: false` kèm các khớp trong
+      `pending_off`. Trong `retry_s` (Lamp: `120` s) không goal nào tới được bus, vì ghi
       goal sẽ bật lại torque trên loại servo này: frame của playback và tracker bị bỏ,
       `/servo/move`, `/servo/aim` và `/servo/nudge` lỗi với "Servo overload cut-off
-      active", còn các bước startup / zero / park và bật torque bị bỏ qua. Hết thời gian
+      active", một raw move đang chạy (startup / zero / park) dừng ở frame kế tiếp, move
+      mới bị bỏ qua, và bật torque bị bỏ qua. Mọi kiểm tra này chạy dưới chính bus lock
+      mà cut-off dùng, nên cut không thể chen vào giữa lần kiểm tra và lần ghi. Hết thời gian
       chờ, thân máy trở lại qua đường `resume()` bình thường (bật torque, đọc lại trạng
       thái từ phần cứng, ramp vào idle; hold trước đó bị bỏ). Nếu trong lúc đó nó đã được
       release (ngủ) hoặc zero-pose thì vẫn thả lỏng tới lần resume kế tiếp. Vẫn bị chặn
       → trip lại. Đọc load lỗi không bao giờ trip. Lộ ra ở `GET /health.servo_overload`
-      (`active`, `retry_in_s`, `trips`, `last_trip`, cùng `load` / `peak` theo từng khớp
-      để tinh chỉnh). **Giá trị 80 % / 1 s của Lamp là tạm thời — chưa đo trên phần
+      (`active`, `retry_in_s`, `trips`, `cut_complete`, `pending_off`, `last_trip`, cùng
+      `load` / `peak` theo từng khớp để tinh chỉnh). **Giá trị 80 % / 1 s của Lamp là tạm thời — chưa đo trên phần
       cứng**; so `peak` khi chạy animation bình thường với ngưỡng trước khi tin dùng.
       Chỉ Lamp kèm file này.
 - [x] **Unit:** `thermal_over` trip tại/trên `max_temp_c`, giữ qua hysteresis khi còn
