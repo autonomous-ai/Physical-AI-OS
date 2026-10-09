@@ -89,6 +89,10 @@ case "$LLM_BASE_URL" in
     # 1h TTL outlives typical 10-20 min gaps between voice turns (Hermes accepts only "5m" | "1h").
     yq -i '.prompt_caching.cache_ttl = "1h"' "$CONFIG_YAML"
     log "prompt_caching.cache_ttl = 1h"
+    # campaign-api reports no context window, so without this Hermes probes /models + /api/show
+    # (~0.8s on the network) at the start of EVERY turn, then falls back to 256K anyway.
+    yq -i '.custom_providers[0].models["Auto-AI"].context_length = 256000' "$CONFIG_YAML"
+    log "custom_providers[0].models.Auto-AI.context_length = 256000 (skips per-turn probe)"
     ;;
   *)
     if [ -n "$LLM_MODEL" ]; then

@@ -28,6 +28,8 @@ func TestPresyncOwnsConfigStructure(t *testing.T) {
 		"AUTONOMOUS_API_KEY",
 		`.custom_providers[0].models["Auto-AI"].prompt_caching = true`,
 		`.prompt_caching.cache_ttl = "1h"`,
+		// Without it Hermes probes campaign-api for the window before every turn (~0.8s).
+		`.custom_providers[0].models["Auto-AI"].context_length = 256000`,
 	} {
 		if !strings.Contains(s, want) {
 			t.Errorf("presync.sh missing %q — config structure/sync incomplete", want)
