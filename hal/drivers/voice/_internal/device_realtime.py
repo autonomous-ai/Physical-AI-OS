@@ -7,7 +7,7 @@ from hal import config
 from hal.drivers.voice._internal import config as voice_config
 from hal.drivers.voice._internal.realtime_turn import (
     ROUTE_CANCELLED, ROUTE_ERROR, ROUTE_NOISE_DROPPED, ROUTE_UNAVAILABLE,
-    RealtimeTurnResult, build_turn_context, is_noise_turn, run_realtime_turn,
+    RealtimeTurnResult, build_turn_context, run_realtime_turn,
     should_drop_downstream_turn,
 )
 from hal.realtime.utils import StreamingResampler, pcm16_bytes_to_float32
@@ -173,6 +173,7 @@ class DeviceRealtimeTurn:
                 metadata["speech"], interaction_id=metadata["interaction_id"],
                 audio_turn=binding, stop_event=cancelled, harness_followup=False,
                 suppress_visual_feedback=True, explicit_capture=True,
+                suppress_auto_fillers=True,
                 capture_finished_at=metadata.get("finished_at"),
             )
             # The generic noise path cannot clear every provider's buffered
@@ -220,7 +221,9 @@ class DeviceRealtimeTurn:
 
         if not active():
             return RealtimeTurnResult(route=ROUTE_CANCELLED)
-        if is_noise_turn(combined, duration, speech):
+        # A finish tap authorizes voiced audio even if the separate STT result
+        # is empty, matching the manual streaming path.
+        if duration <= 0 or not speech:
             return RealtimeTurnResult(route=ROUTE_NOISE_DROPPED)
         if not config.REALTIME_ENABLED or not audio:
             return RealtimeTurnResult()
@@ -265,6 +268,7 @@ class DeviceRealtimeTurn:
                 realtime, output, self._strip_markers, combined, frames, duration, speech,
                 interaction_id=interaction_id, audio_turn=binding,
                 stop_event=cancelled, harness_followup=False, suppress_visual_feedback=True,
+                suppress_auto_fillers=True, explicit_capture=True,
             )
             handed_off = True
             if not active():

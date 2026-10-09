@@ -232,7 +232,9 @@ def _sweep_for_subject() -> bool:
     try:
         from hal.drivers.tracking.search import search_for_subject
 
-        res = search_for_subject()
+        # A glance, not the 18-look sweep: asked to look and not seeing anyone, a
+        # living thing glances about; it does not quarter the room.
+        res = search_for_subject(glance=True, on_progress=lambda _v, _t: None)
         logger.info("[look-aim] looked around: %s after %d look(s)",
                     res.reason, res.looks_visited)
         return bool(res.found)

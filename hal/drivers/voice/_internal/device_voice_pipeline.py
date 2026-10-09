@@ -14,6 +14,7 @@ import time
 from hal import config as hal_config
 from hal.drivers.voice._internal import config as voice_cfg
 from hal.drivers.voice._internal.device_capture import DeviceCapture
+from hal.drivers.voice._internal.device_retry_feedback import maybe_emit_retry
 from hal.drivers.voice._internal.realtime_turn import (
     RealtimeTurnResult, ROUTE_NOISE_DROPPED, ROUTE_NOT_STARTED,
     is_noise_turn, needs_noise_guard,
@@ -58,6 +59,10 @@ class _RecordedTurn:
         self.last_speech_idx = -1
         self.interaction_id = None
         self.on_transcript = on_transcript
+        self.speaker_gate = threading.Event()
+        self.speaker_keep = False
+        self.speaker_worker = None
+        self.speaker_result = None
 
     def transcript(self, text, final):
         with self.condition:
@@ -344,6 +349,10 @@ class DeviceVoicePipeline:
                 turn.upload_done.set()
 
     def _cleanup(self, turn):
+        # Release speculative recognition even when finalization raised/cancelled.
+        turn.speaker_gate.set()
+        if turn.speaker_worker is not None:
+            turn.speaker_worker.join()
         # Never free capacity while its uploader/session still owns resources.
         # Provider start/send/close must retain their network timeout contracts.
         turn.capture_done.wait()
@@ -353,52 +362,109 @@ class DeviceVoicePipeline:
             turn.session.close()
         turn.audio.clear()
 
+    def _start_speaker_id(self, turn):
+        """Overlap embedding with STT drain; persist only after transcript admission.
+
+        The FIFO finalizer starts at most one recognition worker. Its reservation
+        is held until cleanup joins it, including cancellation and failed STT.
+        """
+        if not self._valid(turn.capture) or turn.last_speech_idx < 0:
+            return
+        recognize = getattr(self.decorator, "recognize_speaker", None)
+        if not callable(recognize):
+            return
+
+        # Match finalization's speaker-only tail without mutating audio that
+        # Realtime may still be uploading. Snapshot before scheduling the worker.
+        tail_frames = int(200 / voice_cfg.FRAME_DURATION_MS) + 1
+        trim_end = min(turn.last_speech_idx + tail_frames + 1, len(turn.audio))
+        speaker_audio = list(turn.audio[:trim_end])
+
+        def accept():
+            while not turn.speaker_gate.wait(0.05):
+                if not self._valid(turn.capture):
+                    return False
+            return turn.speaker_keep and self._valid(turn.capture)
+
+        def run():
+            try:
+                turn.speaker_result = recognize(speaker_audio, accept=accept)
+            except Exception:
+                logger.exception("Device speculative speaker identification failed")
+
+        worker = threading.Thread(target=run, daemon=True, name="device-speaker-id")
+        try:
+            worker.start()
+        except Exception:
+            logger.exception("Device speaker worker could not start")
+            return
+        turn.speaker_worker = worker
+
     def _finalize(self, turn):
         turn.capture_done.wait()
-        turn.realtime_done.wait()
+        self._start_speaker_id(turn)
         turn.upload_done.wait()
         capture = turn.capture
         if ((not turn.upload_ok and self.stream_realtime is None)
                 or turn.finished_at is None or not self._valid(capture)):
             return
+        raw_stt_empty = not any(text.strip() for text in [*turn.finals, turn.partial[0]])
+        # Realtime may still be consuming the original capture. Trimming for
+        # speaker identity must not remove frames from its upload buffer.
+        finalized_audio = list(turn.audio)
         combined, ser_audio, duration = finalize_session(
-            turn.audio, turn.partial, turn.finals, turn.last_speech_idx,
+            finalized_audio, list(turn.partial), list(turn.finals), turn.last_speech_idx,
             turn.spoken_text,
         )
         interaction_id = turn.interaction_id
         speech = True
-        if (needs_noise_guard(combined) and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT
-                and turn.audio):
+        speech_confirmed = None
+        if (turn.audio and (raw_stt_empty or (needs_noise_guard(combined)
+                and hal_config.REALTIME_REQUIRE_SPEECH_ON_EMPTY_STT))):
             try:
-                speech = self.noise_is_speech(b"".join(turn.audio))
+                speech = speech_confirmed = bool(self.noise_is_speech(b"".join(turn.audio)))
             except Exception:
                 logger.exception("Device speech guard failed")
         noise = is_noise_turn(combined, duration, speech)
+        turn.realtime_done.wait()
+        turn.audio = finalized_audio
+        if not self._valid(capture):
+            return
+        empty_speech = raw_stt_empty and speech_confirmed is True
+        result = RealtimeTurnResult(
+            route=ROUTE_NOISE_DROPPED if noise and not empty_speech else ROUTE_NOT_STARTED,
+        )
+        if self.stream_realtime is not None:
+            result = turn.realtime_result
+            if (noise and not empty_speech and not result.handled
+                    and not (result.delegated and result.delegate_msg)
+                    and not should_drop_downstream_turn(result)):
+                result = RealtimeTurnResult(route=ROUTE_NOISE_DROPPED)
+        elif (not noise or empty_speech) and self.realtime_turn is not None:
+            result = self.realtime_turn(
+                audio=turn.audio, combined=combined, duration=duration, speech=speech,
+                interaction_id=interaction_id, speaker=None,
+                cancelled=capture.cancelled, valid=lambda: self._valid(capture),
+            )
+        turn.speaker_keep = bool(combined and not noise
+                                 and not should_drop_downstream_turn(result))
+        turn.speaker_gate.set()
+        if not self._valid(capture):
+            return
         identity = None
-        if combined and not noise:
+        if turn.speaker_keep:
             text, _ = self.decorator.classify_wake_word(combined)
             try:
-                identity = self.decorator.identify_and_decorate(text, turn.audio)
+                if turn.speaker_worker is not None:
+                    turn.speaker_worker.join()
+                    identity = self.decorator.decorate(text, turn.speaker_result)
+                else:
+                    identity = self.decorator.identify_and_decorate(text, turn.audio)
             except Exception:
                 logger.exception("Device speaker identification failed; retaining transcript")
                 identity = (text, None, None)
-        # Identity can perform remote inference; recheck route/privacy after it.
-        if not self._valid(capture):
-            return
-        result = RealtimeTurnResult(route=ROUTE_NOISE_DROPPED if noise else ROUTE_NOT_STARTED)
-        if self.stream_realtime is not None:
-            result = turn.realtime_result
-            if (noise and not result.handled and not (result.delegated and result.delegate_msg)
-                    and not should_drop_downstream_turn(result)):
-                result = RealtimeTurnResult(route=ROUTE_NOISE_DROPPED)
-        elif not noise and self.realtime_turn is not None:
-            result = self.realtime_turn(
-                audio=turn.audio, combined=combined, duration=duration, speech=speech,
-                interaction_id=interaction_id, speaker=identity[2] if identity else None,
-                cancelled=capture.cancelled, valid=lambda: self._valid(capture),
-            )
-        # Realtime can wait on a provider or on playback admission while a newer
-        # recording owns the mic. Never hand off a cancelled or rerouted turn.
+        # Realtime and identity may wait on remote work while a newer capture
+        # takes ownership. Never hand off a cancelled or rerouted turn.
         if not self._valid(capture):
             return
         if (self.stream_realtime is not None and self.record_handoff is not None
@@ -406,6 +472,11 @@ class DeviceVoicePipeline:
             self.record_handoff(combined)
         logger.info("Device session END — bytes=%d transcript=%r interaction_id=%s",
                     turn.byte_count, combined or "(empty)", interaction_id)
+        if raw_stt_empty:
+            maybe_emit_retry(
+                self.tts, capture, combined, speech_confirmed, result,
+                lambda: self._valid(capture),
+            )
         dispatch_turn(
             self.decorator, self.sensing_sender, combined, turn.audio, ser_audio,
             result,

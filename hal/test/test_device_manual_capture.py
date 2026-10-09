@@ -106,6 +106,8 @@ def test_manual_stream_only_finish_dispatches_once(reason, live, monkeypatch):
     decorator = Mock()
     decorator.classify_wake_word.return_value = ("please fix the tests", "voice")
     decorator.identify_and_decorate.return_value = ("please fix the tests", None, None)
+    decorator.recognize_speaker.return_value = None
+    decorator.decorate.return_value = ("please fix the tests", None, None)
     sender = Mock()
     stt = Mock()
     stt.is_closed.return_value = False
