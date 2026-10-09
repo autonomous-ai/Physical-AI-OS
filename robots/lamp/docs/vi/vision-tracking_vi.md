@@ -528,7 +528,7 @@ trường hợp đèn tự quyết định. Pha quét được vào khi:
   chuyện đó rồi, và tính pha quét vào một ngân sách nó không thể vừa nghĩa là không bao giờ được quét.
 - **watcher gaze ở một mình quá lâu** — `HAL_GAZE_SWEEP_AFTER_S` (30 s) không thấy ai, hoặc một lần
   repoint đã quay về bearing mà không thấy ai ở đó. Đường này không ai yêu cầu, nên nó là đường duy
-  nhất có cooldown — xem *Tự quay quanh tìm*.
+  nhất có cooldown và chỉ là một cái **liếc**, không phải pha quét này — xem *Tự quay quanh tìm*.
 
 `POST /servo/search` — quét tìm một đối tượng. Body (tất cả đều tuỳ chọn): `{"target": "cup", "exhaustive": true}`.
 
@@ -632,7 +632,7 @@ tâm trông như bồn chồn khi đầu đèn cũng đang ngó quanh ở từng
 góc đầu đang nghiêng, nên camera vẫn hướng vào đối tượng mà đầu thì ngay ngắn.
 
 **Khi gaze watcher tự quét, nó tìm user chứ không tìm bất kỳ ai (#545).** `gaze._maybe_sweep`
-gọi `search_for_subject(for_user=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
+gọi `search_for_subject(for_user=True, glance=True)`. Mọi nơi gọi khác giữ nguyên hành vi hiện tại:
 `POST /servo/search` (đồ vật, `exhaustive`) và pha quét dự phòng riêng của look-aim. Ở mỗi lần nhìn,
 nó quan sát các khuôn mặt trong khung khoảng 1.5 s (`user_check.observe_faces`, 6 frame; bỏ qua bước
 chờ này khi frame đầu không có mặt nào) và chỉ dừng ở một cái mặt qua được
@@ -995,8 +995,14 @@ ra mỗi phút một lần thay vì mỗi vòng một lần.
 
 ### Tự quay quanh tìm
 
-Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có thân người quá nhỏ để đang ngồi ở bàn), `_verify_repoint` gọi chính pha quét `/servo/search` mô tả ở trên với
-`confirmed_miss=True`. Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
+Nếu một lần repoint bị chấm trượt (không có ai, hoặc chỉ có thân người quá nhỏ để đang ngồi ở bàn), `_verify_repoint` gọi `_maybe_sweep` với
+`confirmed_miss=True`, và nó chỉ **liếc** chứ không quét: `glance=True` giữ đế ở bearing gốc và chỉ đi
+qua `GLANCE_LOOKS` — đầu liếc trái 45°, rồi phải 45° — tức 2 lần nhìn, khoảng 4 s, không nói câu
+`look_still_searching`. Xong thì về lại tư thế ban đầu và thôi. Nguyên tắc là *một sinh vật có làm vậy
+không?*: quay về phía tiếng gọi mà không thấy ai thì liếc quanh một chút; không ai đi quét phòng
+3 hướng × 6 lần nhìn như camera an ninh — đó chính là cảm giác khi pha quét đủ 18 lần nhìn tự chạy
+mà không ai yêu cầu. Pha quét đầy đủ chỉ còn cho lúc có người yêu cầu tìm (`/servo/search`, pha quét
+dự phòng của look-aim). Vì repoint ở trên do speech kích hoạt, pha quét cũng vậy: đèn đi tìm vì có người
 đã nói mà nó không tìm ra họ, chứ không bao giờ vì một căn phòng trông có vẻ trống. Cò kích hoạt theo
 vắng mặt (`HAL_GAZE_SWEEP_AFTER_S`) vẫn còn trong `_maybe_sweep` nhưng không còn gì với tới nó — vòng
 lặp watcher không còn gọi pha quét nữa. Các cooldown vẫn áp dụng, và có tới hai vì hai tình huống không
@@ -1018,8 +1024,8 @@ nhìn thấy hai lần. Mặt chỉ được tính là bằng chứng cho repoin
 
 | Tham số | Mặc định | Ý nghĩa |
 |---|---|---|
-| `HAL_GAZE_SWEEP` | `true` | Bật/tắt tự quay quanh tìm. |
-| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và pha quét ~20 s vẫn là bước leo thang chứ không phải phản xạ. |
+| `HAL_GAZE_SWEEP` | `true` | Bật/tắt tự liếc quanh tìm. |
+| `HAL_GAZE_SWEEP_AFTER_S` | 30 | Không thấy ai trong bao lâu. Dài hơn `HAL_GAZE_REPOINT_AFTER_S` (12 s) để nước đi rẻ luôn được thử trước và cái liếc ~4 s vẫn là bước leo thang chứ không phải phản xạ. |
 | `HAL_GAZE_SWEEP_COOLDOWN_S` | 900 | Giữa hai pha quét khi đã có bearing. |
 | `HAL_GAZE_SWEEP_COOLDOWN_LOST_S` | 120 | Giữa hai pha quét khi chưa có bearing nào. |
 | `HAL_GAZE_BEARING_MIN_FACING_RATIO` | 0.4 | Tỉ lệ mẫu nhìn về đèn cần có để nhận một bearing mới. Thấp hơn mức 0.6 của cổng wake: một user ngồi yên đo được 50%. Không phải 0.3: cửa sổ chỉ có 2–3 mẫu, nên 0.3 nghĩa là chỉ cần liếc một cái. |

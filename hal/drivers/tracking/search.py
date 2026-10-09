@@ -61,6 +61,10 @@ HALF_LOOKS: int = 6
 # above the seated view the sweep starts from; the down looks point at desks, and a
 # standing user was missed through all 18 looks. Object searches keep looking down.
 USER_LOOK_CIRCLE = tuple((roll, -dp) for roll, dp in LOOK_CIRCLE[:HALF_LOOKS])
+# The gaze watcher's unasked look-around: a glance left and right at the bearing it
+# already checked, no base turn. A living thing that turns to a voice and finds nobody
+# glances about and lets it go; it does not quarter the room like a security camera.
+GLANCE_LOOKS = ((-ROLL_LOOK_DEG, 0.0), (+ROLL_LOOK_DEG, 0.0))
 
 # Margin held off the wrist_pitch soft stop. Device-measured 2026-09-09 on lamp-ac82:
 # wrist_pitch reached -89.55 going up (stopped by WRIST_PITCH_MIN, not by the joint) and
@@ -421,11 +425,13 @@ def _say_at_the_midpoint() -> Callable[[int, int], None]:
 
 def search_for_subject(target: str = "person", detector: Any = None,
                        on_progress: Optional[Callable[[int, int], None]] = None,
-                       exhaustive: bool = False, for_user: bool = False) -> SearchResult:
+                       exhaustive: bool = False, for_user: bool = False,
+                       glance: bool = False) -> SearchResult:
     """Sweep for a subject, stopping at the first one seen.
 
     `for_user`: the subject is the lamp's user, not anybody (#545). Each look must
     turn up a face that passes user_check.adopts_bearing; a body alone never ends it.
+    `glance`: GLANCE_LOOKS at the seed bearing only, for a look-around nobody asked for.
     """
     _abort_evt.clear()
 
@@ -463,7 +469,8 @@ def search_for_subject(target: str = "person", detector: Any = None,
     with aim.servo_ownership():
         capped = svc.set_joint_speed("base_yaw", SWEEP_YAW_SPEED)
         try:
-            res = _sweep(svc, cap, detector, target, on_progress, exhaustive, for_user)
+            res = _sweep(svc, cap, detector, target, on_progress, exhaustive, for_user,
+                         glance)
         finally:
             if capped:
                 svc.set_joint_speed(
@@ -477,7 +484,7 @@ def search_for_subject(target: str = "person", detector: Any = None,
 
 
 def _look_list(seed_pose: Optional[dict], exhaustive: bool,
-               for_user: bool = False) -> list:
+               for_user: bool = False, glance: bool = False) -> list:
     """Absolute (roll, wrist_pitch) for every look at one bearing."""
     base_wp = None
     if seed_pose:
@@ -485,7 +492,9 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool,
             base_wp = float(seed_pose["wrist_pitch.pos"])
         except (KeyError, TypeError, ValueError):
             base_wp = None
-    if for_user:
+    if glance:
+        pattern = GLANCE_LOOKS
+    elif for_user:
         pattern = USER_LOOK_CIRCLE
     else:
         pattern = LOOK_CIRCLE if exhaustive else LOOK_CIRCLE[:HALF_LOOKS]
@@ -500,17 +509,20 @@ def _look_list(seed_pose: Optional[dict], exhaustive: bool,
 
 def _sweep(svc: Any, cap: Any, detector: Any, target: str,
            on_progress: Optional[Callable[[int, int], None]] = None,
-           exhaustive: bool = False, for_user: bool = False) -> SearchResult:
+           exhaustive: bool = False, for_user: bool = False,
+           glance: bool = False) -> SearchResult:
     """The sweep itself, with the body already owned."""
     from hal.drivers.tracking import aim
 
     stops = _stop_list(_seed_yaw(svc))
+    if glance:
+        stops = stops[:1]
     try:
         seed_pose = {j: float(v) for j, v in svc.get_positions().items()
                      if j.endswith('.pos')}
     except Exception:
         seed_pose = None
-    looks = _look_list(seed_pose, exhaustive, for_user)
+    looks = _look_list(seed_pose, exhaustive, for_user, glance)
     total_looks = len(stops) * len(looks)
     logger.info("[search] sweeping %d bearings x %d looks (%d total) for '%s': %s",
                 len(stops), len(looks), total_looks, target,
