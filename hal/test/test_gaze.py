@@ -1727,6 +1727,7 @@ def sweeper(monkeypatch):
 def test_the_gaze_sweep_looks_for_the_user(sweeper):
     gaze._maybe_sweep(gaze.time.monotonic(), confirmed_miss=True)
     assert sweeper and sweeper[0].get("for_user") is True
+    assert sweeper[0].get("glance") is True, "an unasked look-around must be a glance"
 
 
 def test_a_repoint_that_finds_nobody_looks_around(sweeper):
