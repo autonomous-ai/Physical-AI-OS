@@ -213,6 +213,8 @@ thành một nhãn phân loại — đây là một chỉ dẫn prompt, không p
 code. `test_turn_routing_log.py` ghim cách ghép message; không gì ghim được việc
 model có tuân thủ hay không.
 
+Wake đã được xác nhận trong lượt thu hiện tại được giữ là `voice_command` khi gửi main agent, kể cả khi STT sửa tên từ partial sang final đã được chấp nhận (ví dụ “Lamp” thành “lamb”). Không phân loại lại lượt đã xác nhận thành ambient chỉ dựa vào transcript cuối. Giữ nguyên điều kiện xác nhận wake; tên gần giống đứng riêng không đủ để cho phép lượt. Không thêm I/O hay thời gian chờ.
+
 ### Chế độ nhập giọng nói trên thiết bị
 
 Cấu hình top-level `voice_input_mode` chọn `automatic` (mặc định, kể cả config cũ thiếu trường) hoặc `tap_to_talk` khi Harness voice-only OFF. Automatic giữ nguyên VAD, realtime và wake enable/disable hiện tại. Tap đầu mở recorder và upload lời nói song song tới STT và realtime. Tap thứ hai công bố endpoint trước tone kết thúc để realtime commit mà không chờ transcript STT cuối hay nhận diện người nói. Realtime trả lời hoặc delegate đến main agent; nếu realtime tắt/không khả dụng, transcript STT sẵn có đi qua route OS hiện có dưới dạng `voice_command` (lời nói trực tiếp của user, không phải `voice` ambient). Capture không chuyển vào live, tự kết thúc câu hay phát lời backchannel. Cả nhánh realtime streaming và gửi audio đã thu trên device đều chặn timer wait filler tự động của HAL, nên lúc chờ realtime trả lời không yêu cầu OS phát “Ừm…”. Chime bắt đầu/kết thúc vẫn giữ nguyên; thay đổi này không lọc lời do model sinh ra và không đổi filler của main agent sau khi delegate. Gemini và OpenAI hỗ trợ streaming với commit thủ công này. Pipecat cũng stream audio nhưng giữ bước `finalize_stt` nội bộ. GPT Live không có manual commit nên giữ audio trong buffer tới tap kết thúc; đây là ngoại lệ đối với streaming trong lúc thu.
@@ -3267,14 +3269,20 @@ từng chọn, còn máy đã chọn thì giữ. Muốn bỏ pin thì xoá `pinn
 lúc import, đổi config phải **restart HAL** mới ăn. Sửa lúc đang chạy thì restart
 liền (`restartHAL` trong `system/device/service.go`).
 
+Giới hạn ký tự của chế độ chia mệnh đề đầu tiên chỉ tính lời nói ngoài tag điều khiển/giọng đọc trong ngoặc vuông. Tag emotion dài không làm cắt lời sớm hoặc vô hiệu hóa việc chia tại ranh giới từ.
+
+Thời lượng giữ ngưỡng bắt đầu nói của VAD được tính theo audio đã thu, không theo thời gian xử lý thực. Đọc nhanh các frame đã đệm không làm bỏ lỡ lời nói hợp lệ; tác vụ bị treo ngắn cũng không biến âm thanh ngắn thành lời nói kéo dài. Nhánh thường tính thời lượng audio sau frame hợp lệ đầu tiên để giữ số frame cần thiết khi thu đều; nhánh live có AEC phần cứng vẫn tính toàn bộ buffer như trước. Không thêm lời gọi mạng hay thời gian chờ.
+
 ### Model và ngôn ngữ STT
 
-`stt_language` chọn `stt_model` được lưu: English dùng `flux-general-en`; tiếng
-Việt và các ngôn ngữ không phải English được hỗ trợ dùng `nova-3-general` với mã
-BCP-47 đã chọn. Cặp đó được truyền cho proxy AutonomousSTT, kể cả lúc healthwatch
-khởi động lại voice pipeline. Vì vậy cấu hình tiếng Việt đã lưu vẫn có hiệu lực
-sau khi proxy restart; điều này không có nghĩa một model duy nhất xử lý chính xác
-mọi trường hợp code-switching Việt–Anh.
+`stt_language` chọn `nova-3-general` cho tiếng Anh và các ngôn ngữ được hỗ trợ,
+với mã BCP-47 đã chọn. AutonomousSTT cũng mặc định Nova-3 tiếng Anh khi không có
+model/ngôn ngữ. Lưu lại tiếng Anh trên cấu hình Flux sẽ chuyển model đã lưu sang
+Nova và restart HAL mà không reset hội thoại agent; lưu lại cấu hình Nova giống
+hiện tại không gây restart. Model đã lưu vẫn được dùng cho tới khi lưu lại lựa
+chọn ngôn ngữ. Thay đổi này áp dụng cho STT, gồm fallback sang main agent khi
+realtime hết quota; không đổi model realtime và không đảm bảo loại bỏ lời nói
+bằng ngôn ngữ khác.
 
 **Chỉ restart khi config thực sự đổi.** os-server *không* restart HAL mỗi lần
 os-server restart — làm vậy sẽ rớt voice pipeline vô ích. Thay vào đó nó hash

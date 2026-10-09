@@ -209,6 +209,8 @@ words rather than renaming the request into a category — a prompt instruction,
 not a code guarantee. `test_turn_routing_log.py` pins the composition; nothing
 can pin the model's compliance.
 
+A wake confirmed for the current capture remains `voice_command` at main-agent dispatch, including an accepted partial-to-final name correction (for example, “Lamp” to “lamb”). The dispatcher must not reclassify that admitted turn as ambient using only the final transcript. This preserves existing wake validation; a fuzzy name alone does not authorize a turn. No additional I/O or delay is introduced.
+
 ### Device voice input mode
 
 Mode-only HTTP/MQTT updates are applied without restarting either process. OS saves config.json, then calls HAL `POST /voice/input-mode` with `{ "mode": "automatic" | "tap_to_talk", "wakeword": true | false }`. HAL serializes the transition, cancels pending input, reconfigures the voice worker and realtime session, and preserves sleep/privacy. Other hardware services stay running. The success response confirms local application, not cloud connectivity. Initial cloud connection runs in one background worker with one replaceable pending request, so an immediate reverse toggle does not wait for the previous handshake. Stop retires that startup generation and its retry event; a late connection or replacement is disconnected without becoming the active session. Repeated toggles coalesce to the newest connection request. `hal/realtime/startup.py` owns this bounded startup scheduling. A failed apply is reported and remains retryable with the same explicit mode. Updates that also change boot-only fields may still require a HAL restart.
@@ -3328,14 +3330,21 @@ HAL reads `config.json` at import, a config change needs a **HAL restart** to ta
 effect. A live edit triggers that restart immediately (`restartHAL` in
 `system/device/service.go`).
 
+The optional first-clause character limit counts spoken text outside bracketed control/delivery tags. Long emotion tags cannot trigger a premature word cut or prevent the word-break fallback.
+
+VAD entry holdoff uses captured audio duration rather than wall-clock processing time. Reading buffered frames quickly cannot erase a valid speech onset, and a scheduling stall cannot turn a brief sound into sustained speech. Normal entry measures elapsed audio after the first qualifying frame, preserving its steady-capture frame count; hardware-AEC live entry retains its existing full-buffer duration rule. No additional network call or waiting period is added.
+
 ### STT model and language
 
-`stt_language` selects the persisted `stt_model`: English uses
-`flux-general-en`; Vietnamese and the other supported non-English languages use
-`nova-3-general` with the selected BCP-47 language code. That pair is passed to
-the AutonomousSTT proxy, including a healthwatch voice-pipeline restart. This
-makes a saved Vietnamese configuration effective after a proxy restart; it does
-not claim that one model provides arbitrary Vietnamese-English code-switching.
+`stt_language` selects `nova-3-general` for English and the other supported
+languages, with the selected BCP-47 language code. AutonomousSTT also defaults to
+Nova-3 English when no model/language is supplied. Saving English on an existing
+Flux configuration switches its persisted model to Nova and restarts HAL without
+resetting the agent conversation; saving the same Nova configuration is a no-op.
+Explicitly stored models remain in use until the language setting is saved.
+This changes STT, including the main-agent fallback after realtime quota is
+exhausted; it does not change the realtime model or guarantee rejection of speech
+in another language.
 
 **Restart only when the config changed.** os-server does *not* restart HAL on
 every os-server restart — that would needlessly drop the voice pipeline. Instead

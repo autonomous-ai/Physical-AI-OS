@@ -127,11 +127,11 @@ def split_first_chunk(buf: str) -> tuple[str, str]:
             if char in CLAUSE_ENDS and not (i and buf[i - 1].isdigit()):
                 if char not in (":", "：") or (i + 1 < len(buf) and buf[i + 1].isspace()):
                     clauses.append(i)
-            if char.isspace() and i < cap:
+            if char.isspace() and visible <= cap:
                 spaces.append(i)
     cut = clauses[-1] if clauses else -1
     if cut < 0:
-        if len(buf) < cap or not spaces:
+        if visible < cap or not spaces:
             return "", buf
         cut = spaces[-1]
     head: str = buf[: cut + 1].strip()
