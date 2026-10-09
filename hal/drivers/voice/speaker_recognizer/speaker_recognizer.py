@@ -2409,8 +2409,14 @@ class SpeakerRecognizer:
         self,
         wav_source: str,
         source_type: str = "base64",
+        *, accept=None,
     ) -> dict[str, Any]:
-        """Recognize a speaker from a single WAV audio."""
+        """Recognize audio, optionally awaiting acceptance before persistent writes.
+
+        ``accept`` is called after speculative embedding and before saving audio,
+        clustering, enrolled-bank maintenance, or debug output. False discards
+        the speculative result. Existing callers retain immediate persistence.
+        """
         if source_type not in ("base64", "filepath"):
             raise SpeakerRecognizerError(
                 f"invalid source_type {source_type!r}"
@@ -2442,10 +2448,25 @@ class SpeakerRecognizer:
         self._debug_stranger = None
         self._debug_preproc = None
 
-        with self._debug_stage("save_input_wav"):
-            saved_path = self._save_incoming_audio(wav_bytes)
+        saved_path = ""
+        if accept is None:
+            with self._debug_stage("save_input_wav"):
+                saved_path = self._save_incoming_audio(wav_bytes)
+
+        def retain_audio():
+            nonlocal saved_path
+            if accept is not None and not accept():
+                return False
+            if accept is not None:
+                with self._debug_stage("save_input_wav"):
+                    saved_path = self._save_incoming_audio(wav_bytes)
+            return True
+
+        discarded = {"name": "unknown", "match": False, "discarded": True}
 
         if not self.available:
+            if not retain_audio():
+                return discarded
             logger.warning("Embedding server not configured — set SPEAKER_EMBEDDING_API_URL or DL_BACKEND_URL")
             if self._debug.enabled:
                 self._debug.record(
@@ -2473,6 +2494,8 @@ class SpeakerRecognizer:
                 payload, use_sliding_window=True
             )
         except SpeakerRecognizerError as e:
+            if not retain_audio():
+                return discarded
             logger.warning(
                 "Recognize: embedding failed for %s — %s", saved_path, e,
             )
@@ -2512,6 +2535,9 @@ class SpeakerRecognizer:
                 "candidates": [],
                 "error": str(e),
             }
+
+        if not retain_audio():
+            return discarded
 
         logger.info(
             "Recognize: query embedding chunks=%d dim=%d saved=%s",
