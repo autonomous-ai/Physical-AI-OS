@@ -4,31 +4,7 @@
       "enabled": true,
       "load": 800,
       "hold_s": 1.0,
-      "retry_s": 120,
-      "contact": {
-        "load": {
-          "base_yaw": 650,
-          "wrist_roll": 750,
-          "wrist_pitch": 650
-        },
-        "hold_s": 0.05,
-        "pause_s": 3,
-        "profile_margin": 80,
-        "lag_margin": 25,
-        "off_playback": {
-          "base_pitch": 560,
-          "elbow_pitch": 400,
-          "lag:base_yaw": 70,
-          "lag:base_pitch": 100,
-          "lag:elbow_pitch": 70,
-          "lag:wrist_roll": 40,
-          "lag:wrist_pitch": 90
-        }
-      },
-      "torque_limit": {
-        "base_pitch": 700,
-        "elbow_pitch": 700
-      }
+      "retry_s": 120
     }
   }
 }
