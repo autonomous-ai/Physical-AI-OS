@@ -1937,11 +1937,13 @@ class TTSService:
             PHRASE_SERVICE_RESTART,
             PHRASE_SHUTDOWN,
             PHRASE_SLEEP,
+            PHRASE_VOICE_RETRY,
             localized_phrase,
         )
 
         warmed = 0
-        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN, PHRASE_SLEEP):
+        for key in (PHRASE_SERVICE_RESTART, PHRASE_REBOOT, PHRASE_SHUTDOWN,
+                    PHRASE_SLEEP, PHRASE_VOICE_RETRY):
             text = localized_phrase(key)
             if not text:
                 continue

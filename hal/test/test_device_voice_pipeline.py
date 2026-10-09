@@ -428,3 +428,177 @@ def test_new_tap_cancels_pending_A_and_only_B_dispatches(setup_pipeline, pending
         assert session.closed == 1
     finally:
         gate.set()
+
+
+@pytest.mark.parametrize("transcript, keep", [
+    ("Please tell me the weather tomorrow", True),
+    ("", False),
+    ("...", False),
+])
+def test_speaker_embedding_overlaps_drain_but_persistence_waits_for_final_text(
+        setup_pipeline, transcript, keep):
+    setup = setup_pipeline
+    embedded = threading.Event()
+    release_stt = threading.Event()
+    persisted = []
+    session = Session(transcript)
+    original_close = session.close
+
+    def close():
+        assert release_stt.wait(2)
+        original_close()
+
+    def recognize(audio, *, accept):
+        embedded.set()
+        if accept():
+            persisted.append(audio)
+        return "recognition"
+
+    session.close = close
+    setup.sessions.append(session)
+    setup.pipeline.decorator.recognize_speaker = recognize
+    setup.pipeline.decorator.decorate = lambda text, result: (text, "known-user", "User")
+    ticket, capture, accepted = capture_turn(setup, [b"\x01\x00" * 16000])
+    try:
+        assert accepted and embedded.wait(1)
+        assert not persisted
+        assert not ticket.done.is_set()
+        release_stt.set()
+        assert ticket.done.wait(2)
+        assert bool(persisted) is keep
+    finally:
+        release_stt.set()
+
+
+def test_cancelled_speculative_speaker_never_persists_and_releases_worker(setup_pipeline):
+    setup = setup_pipeline
+    embedded = threading.Event()
+    release_stt = threading.Event()
+    outcomes = []
+    session = Session("Please tell me the weather tomorrow")
+    original_close = session.close
+
+    def close():
+        assert release_stt.wait(2)
+        original_close()
+
+    def recognize(audio, *, accept):
+        embedded.set()
+        outcomes.append(accept())
+
+    session.close = close
+    setup.sessions.append(session)
+    setup.pipeline.decorator.recognize_speaker = recognize
+    ticket, capture, _ = capture_turn(setup, [b"\x01\x00" * 16000])
+    try:
+        assert embedded.wait(1)
+        capture.cancelled.set()
+        release_stt.set()
+        assert ticket.done.wait(2)
+        assert outcomes == [False]
+    finally:
+        release_stt.set()
+
+
+@pytest.mark.parametrize("outcome,speech,text,retry", [
+    ({"route": "realtime_unavailable"}, True, "", True),
+    ({"route": "realtime_error"}, True, "", True),
+    ({"route": "realtime_no_output"}, True, "", True),
+    ({"route": "realtime_not_started"}, True, "", True),
+    ({"route": "realtime_handled", "handled": True}, True, "", False),
+    ({"route": "realtime_delegated", "delegated": True, "delegate_msg": "Three plus three"}, True, "", False),
+    ({"route": "noise_dropped"}, True, "", False),
+    ({"route": "realtime_ai_rejected", "rejected": True}, True, "", False),
+    ({"route": "realtime_cancelled"}, True, "", False),
+    ({"route": "realtime_unavailable"}, False, "", False),
+    ({"route": "realtime_unavailable"}, RuntimeError("VAD unavailable"), "", False),
+    ({"route": "realtime_unavailable"}, True, "...", False),
+    ({"route": "realtime_unavailable"}, True, "Please tell me the time", False),
+])
+def test_empty_tap_feedback_waits_for_original_realtime_outcome(setup_pipeline, outcome, speech, text, retry):
+    from hal.drivers.voice._internal.realtime_turn import RealtimeTurnResult
+
+    setup = setup_pipeline
+    setup.pipeline.tts = Mock(speak_cached=Mock(return_value=True))
+    setup.pipeline.stream_realtime = Mock()
+    setup.pipeline.noise_is_speech = Mock(
+        side_effect=speech if isinstance(speech, Exception) else None,
+        return_value=speech,
+    )
+    capture = Capture({"enabled": False, "generation": 1, "deviceInputMode": "tap_to_talk",
+                       "capturedAtMs": 1791500000001})
+    turn = module._RecordedTurn(capture)
+    turn.audio = [b'\x01\x00' * 16000]
+    turn.byte_count = 32000
+    turn.finals = [text]
+    turn.finished_at = time.monotonic()
+    turn.interaction_id = "retry-test"
+    turn.upload_ok = True
+    turn.realtime_result = RealtimeTurnResult(**outcome)
+    turn.capture_done.set()
+    turn.upload_done.set()
+    worker = threading.Thread(target=setup.pipeline._finalize, args=(turn,))
+    worker.start()
+    try:
+        setup.pipeline.tts.speak_cached.assert_not_called()
+        turn.realtime_done.set()
+        worker.join(2)
+        assert not worker.is_alive()
+        assert setup.pipeline.tts.speak_cached.call_count == int(retry)
+        if retry:
+            assert setup.pipeline.tts.speak_cached.call_args.kwargs['turn_id'] == 'tap-retry-1791500000001'
+    finally:
+        turn.realtime_done.set()
+        worker.join(2)
+
+
+def test_speaker_snapshot_trims_tail_without_truncating_pending_realtime(setup_pipeline):
+    setup = setup_pipeline
+    ticket = setup.queue.reserve({"enabled": False, "generation": 1})
+    capture = Capture(ticket.snapshot, cancelled=ticket.cancelled)
+    turn = module._RecordedTurn(capture)
+    frames = [bytes([i]) * 2048 for i in range(20)]
+    turn.audio = list(frames)
+    turn.byte_count = sum(map(len, frames))
+    turn.last_speech_idx = 2
+    turn.finals = ["Please tell me the weather tomorrow"]
+    turn.finished_at = 1.0
+    turn.upload_ok = True
+    turn.capture_done.set()
+    turn.upload_done.set()
+    embedded = threading.Event()
+    observed = []
+
+    def recognize(audio, *, accept):
+        observed.append(audio)
+        embedded.set()
+        return accept()
+
+    setup.pipeline.decorator.recognize_speaker = recognize
+    setup.pipeline.decorator.decorate = lambda text, result: (text, None, None)
+    setup.pipeline.stream_realtime = lambda *args, **kwargs: None
+    assert setup.queue.submit(ticket, lambda cancelled: setup.pipeline._finalize(turn),
+                              lambda: setup.pipeline._cleanup(turn))
+    try:
+        assert embedded.wait(1)
+        assert turn.audio == frames
+        assert observed == [frames[:7]]
+        assert not ticket.done.is_set()
+        turn.realtime_done.set()
+        assert ticket.done.wait(2)
+    finally:
+        turn.realtime_done.set()
+
+
+def test_realtime_rejection_never_accepts_speculative_speaker(setup_pipeline, monkeypatch):
+    from hal.drivers.voice._internal.realtime_turn import ROUTE_AI_REJECTED
+
+    setup = setup_pipeline
+    outcomes = []
+    monkeypatch.setattr(module.hal_config, "REALTIME_AI_REJECT_FILTER", True)
+    setup.sessions.append(Session("Please tell me the weather tomorrow"))
+    setup.pipeline.decorator.recognize_speaker = lambda audio, accept: outcomes.append(accept())
+    setup.pipeline.realtime_turn = lambda **kwargs: module.RealtimeTurnResult(route=ROUTE_AI_REJECTED, rejected=True)
+    ticket, _, _ = capture_turn(setup, [b"\x01\x00" * 16000])
+    assert ticket.done.wait(2)
+    assert outcomes == [False]
