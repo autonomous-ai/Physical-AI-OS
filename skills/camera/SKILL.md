@@ -80,8 +80,9 @@ When the request combines a movement and a visual question ("turn right and
 tell me what you see"), put the aim **inside the Capture Protocol command**,
 after the camera check and before `/api/vision/look`, as one bash call. The
 `servo-control` skill has the exact command. A camera that is off then means no
-movement. Add `POST /servo/hold` after the aim **only** when the user asked to
-hold the position; otherwise the head returns to idle by itself after the photo.
+movement. Never add `POST /servo/hold`: in a turn-and-look, "hold it there"
+means keep still for the photo, which `/api/vision/look` already does, and the
+head returns to idle by itself afterwards.
 `[HW:...]` markers are executed only after your reply is composed, so a
 marker-based aim would move the device *after* the photo — you would describe
 the old view.

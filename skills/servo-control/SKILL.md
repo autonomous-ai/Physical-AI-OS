@@ -54,7 +54,7 @@ Controls the device's servo motors for directional aiming and physical animation
 **Output:** `[HW:/servo/aim:{"direction":"right"}][HW:/servo/hold:{}]` Turned right and holding.
 → Compound movement: emit **one marker per clause**, in order. They fire sequentially before TTS. Dropping the `hold` half means the device drifts back — never confirm a step you did not fire.
 
-**Input:** "Turn right and tell me what you see" / "Look left, what's there?"
+**Input:** "Turn right and tell me what you see" / "Look left, what's there?" / "Turn right, hold it there, and tell me what you see"
 **Output:** ONE bash call — camera check, aim, look — then reply from the result:
 ```bash
 c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
@@ -64,23 +64,11 @@ c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
      curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: application/json' -d '{"question":"What do you see to the right?"}' ;;
 esac
 ```
-→ **No `/servo/hold`.** The user did not ask to hold: the look keeps the head still for the photo by itself, and the head returns to idle afterwards. `CAMERA_OFF` / `CAMERA_UNAVAILABLE` → say so and stop; the head did not move. Answer from the returned `description`, or open `path` with an image tool when only a path comes back. On error, do not guess.
+→ **No `/servo/hold`.** The look keeps the head still for the photo by itself, and the head returns to idle afterwards. `CAMERA_OFF` / `CAMERA_UNAVAILABLE` → say so and stop; the head did not move. Answer from the returned `description`, or open `path` with an image tool when only a path comes back. On error, do not guess.
 
-**Input:** "Turn right, hold it there, and tell me what you see"
-**Output:** the same single bash call with the hold after the aim:
-```bash
-c=$(curl -s http://127.0.0.1:5001/camera); case "$c" in
-  *'"disabled":true'*) echo "CAMERA_OFF" ;;
-  *'"has_frame":false'*) echo "CAMERA_UNAVAILABLE" ;;
-  *) curl -sX POST http://127.0.0.1:5001/servo/aim -H 'Content-Type: application/json' -d '{"direction":"right"}' >/dev/null
-     curl -sX POST http://127.0.0.1:5001/servo/hold -d '{}' >/dev/null
-     curl -sX POST http://127.0.0.1:5000/api/vision/look -H 'Content-Type: application/json' -d '{"question":"What do you see to the right?"}' ;;
-esac
-```
-→ The hold stays until the user says "back to normal" (`/servo/resume`).
-
-Rules for both:
-- Call `/servo/hold` **only** when the user asks to hold, stay, freeze or keep the position.
+Rules:
+- In a turn-and-look, "hold it there" / "stay there" / "keep it still" means keep still **for the photo**, which `/api/vision/look` already does. Never add `/servo/hold` to a turn-and-look; the head returns to idle after the photo.
+- `/servo/hold` is only for a pose request **without** a look ("turn right and hold that position", "stay there", "freeze").
 - Keep the camera check, the aim and the look in **one** bash call. A separate call costs a model round (~5 s); the turned pose lasts only about 5 s, so the photo would show idle.
 - Do **not** use `[HW:...]` markers for these movements. Markers fire only *after* your reply is written, so the photo would show the OLD position. See the Camera skill.
 
