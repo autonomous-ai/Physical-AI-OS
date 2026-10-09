@@ -134,6 +134,15 @@ def voice_user() -> tuple[str, str, float]:
         return _voice_user, _voice_user_display or _voice_user, age
 
 
+def cancel_still_idle_timer() -> None:
+    """Drop a pending still-emotion idle resume: a newer emotion or an aim owns the body."""
+    global _still_idle_timer, _still_idle_deferred
+    if _still_idle_timer is not None:
+        _still_idle_timer.cancel()
+        _still_idle_timer = None
+    _still_idle_deferred = None
+
+
 def face_user() -> tuple[str, float]:
     """Return (label, age_s) for the face-derived user; ("", 0.0) for nobody.
 
@@ -233,6 +242,8 @@ _SLEEPY_DRAIN_POLL_S = 0.1
 _scene_drain_cancel: Optional[threading.Event] = None
 # Resume idle after a still emotion halted the loop.
 _still_idle_timer: Optional[threading.Timer] = None
+# Still emotion whose idle resume found the body held; replayed when the look hold releases.
+_still_idle_deferred: Optional[str] = None
 # Last-resort net: idle after `thinking` is held too long.
 _thinking_reset_timer: Optional[threading.Timer] = None
 # LED-only cue bridging VAD confirmation and the first STT partial (1.5-2.5s).
