@@ -1455,6 +1455,10 @@ class AnimationService:
                     self._current_actions = [hold_pos]
                     self._current_frame_index = 0
                     self._hold_until = time.time() + 5.0
+                    # Drop a blend left from before the aim (e.g. idle resuming): the loop
+                    # runs it before any frame, swinging the head away and back mid-hold.
+                    self._interpolation_frames = 0
+                    self._interpolation_target = None
                 self._running.set()
                 self._event_thread = threading.Thread(
                     target=self._event_loop, daemon=True,

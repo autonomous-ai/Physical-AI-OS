@@ -6,6 +6,7 @@ from fastapi import APIRouter
 
 import hal.app_state as state
 from hal import config
+from hal.drivers.motors import hold
 from hal.models import EmotionRequest, EmotionResponse
 from hal.presets import (
     EMOTION_PRESETS,
@@ -64,6 +65,39 @@ def harness_blocks_sleep() -> bool:
     from hal.drivers.voice._internal.harness_voice import read_voice_mode
     snapshot = read_voice_mode()
     return bool(snapshot.get("enabled") or snapshot.get("unavailable"))
+
+
+def _resume_idle_after_still(svc, held: str) -> None:
+    """Idle resume for a still emotion nothing replaced. A held body stays put; the
+    resume is parked and replayed when the look hold releases."""
+    # Any newer emotion already owns the body.
+    if state._current_emotion != held:
+        return
+    owner = hold.holder(svc)
+    if owner:
+        state._still_idle_deferred = held
+        state.logger.info("Still emotion %s: idle resume deferred -- servo held by %s", held, owner)
+        return
+    try:
+        svc.ensure_running()
+        svc.dispatch(SERVO_CMD_PLAY, SERVO_IDLE)
+        state.logger.info("Still emotion %s held >= %.1fs -- idle resumed",
+                          held, STILL_IDLE_RESUME_SECONDS)
+    except Exception as e:
+        state.logger.warning("Still-emotion idle resume failed: %s", e)
+
+
+def resume_deferred_still_idle(svc) -> bool:
+    """Replay a parked still-emotion idle resume once nothing holds the body. True if it ran."""
+    held = state._still_idle_deferred
+    if held is None:
+        return False
+    state._still_idle_deferred = None
+    # A user's explicit hold keeps the arm; /servo/resume plays idle when it ends.
+    if state._current_emotion != held or hold.holder(svc):
+        return False
+    _resume_idle_after_still(svc, held)
+    return True
 
 
 @router.post("/emotion", response_model=EmotionResponse)
@@ -128,9 +162,7 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
         # Every wake restarts the presence countdown, not only a face on camera.
         state.note_presence_wake()
 
-    if state._still_idle_timer is not None:
-        state._still_idle_timer.cancel()
-        state._still_idle_timer = None
+    state.cancel_still_idle_timer()
 
     # Stuck-thinking net: fall back to idle after a continuous hold.
     if state._thinking_reset_timer is not None:
@@ -231,21 +263,8 @@ def express_emotion(req: EmotionRequest, source: str = "api"):
                 state.logger.info("POST /emotion: still emotion (%s) -- body halted, idle in %.1fs",
                                   req.emotion, STILL_IDLE_RESUME_SECONDS)
 
-                def _resume_idle_after_still(held=req.emotion):
-                    # Only resume if the device is still in the same still
-                    # emotion: any newer emotion already owns the body.
-                    if state._current_emotion != held:
-                        return
-                    try:
-                        svc.ensure_running()
-                        svc.dispatch(SERVO_CMD_PLAY, SERVO_IDLE)
-                        state.logger.info("Still emotion %s held >= %.1fs -- idle resumed",
-                                          held, STILL_IDLE_RESUME_SECONDS)
-                    except Exception as e:
-                        state.logger.warning("Still-emotion idle resume failed: %s", e)
-
                 state._still_idle_timer = threading.Timer(
-                    STILL_IDLE_RESUME_SECONDS, _resume_idle_after_still
+                    STILL_IDLE_RESUME_SECONDS, _resume_idle_after_still, args=(svc, req.emotion)
                 )
                 state._still_idle_timer.daemon = True
                 state._still_idle_timer.start()

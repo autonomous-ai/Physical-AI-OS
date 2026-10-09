@@ -108,6 +108,17 @@ func Snapshot(width, quality int) (string, error) {
 	return result.Path, nil
 }
 
+// ClaimLookHold holds the body still for os-server's look, under HAL's `look`
+// owner, so releasing it never drops a user's explicit hold.
+func ClaimLookHold() error {
+	return post("/servo/hold/claim", []byte(`{"owner":"look"}`))
+}
+
+// ReleaseLookHold drops only the `look` owner's hold.
+func ReleaseLookHold() error {
+	return post("/servo/hold/release", []byte(`{"owner":"look"}`))
+}
+
 // SetEffect replaces any running effect with a transient one that never overwrites the user's saved LED state.
 func SetEffect(effect string, r, g, b int, speed float64) {
 	postSilent("/led/effect/stop", "{}")

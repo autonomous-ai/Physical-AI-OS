@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/base64"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -32,8 +33,13 @@ const (
 
 // Seams for tests.
 var (
-	cueSpeakerBusy = hal.SpeakerBusy
-	cuePoll        = 100 * time.Millisecond
+	cueSpeakerBusy      = hal.SpeakerBusy
+	cuePoll             = 100 * time.Millisecond
+	lookClaimHold       = hal.ClaimLookHold
+	lookReleaseHold     = hal.ReleaseLookHold
+	lookSnapshot        = hal.Snapshot
+	lookSayCue          = sensinghttp.DefaultFillerManager.SayInVoiceRun
+	lookModelSeesImages = vision.ModelSupportsVision
 )
 
 // lookRequest is the body of POST /api/vision/look.
@@ -58,22 +64,42 @@ func (s *Server) lookAndDescribe(c *gin.Context) {
 	var req lookRequest
 	_ = c.ShouldBindJSON(&req)
 
+	// Hold the pose from the cue through the shutter, so an idle or still-emotion
+	// timer cannot swing the head mid-photo. Best effort: an older HAL has no look
+	// owner, and the look then runs unheld as before.
+	held := true
+	if err := lookClaimHold(); err != nil {
+		held = false
+		slog.Info("look hold unavailable, capturing unheld", "component", "vision", "error", err)
+	}
+	release := func() {
+		if !held {
+			return
+		}
+		if err := lookReleaseHold(); err != nil {
+			slog.Warn("look hold release failed", "component", "vision", "error", err)
+		}
+	}
+
 	// On a voice turn, say that a photo is coming and let the line finish before
 	// the shutter; then say it was taken, since describing it takes far longer.
-	if sensinghttp.DefaultFillerManager.SayInVoiceRun("look_capturing_main") {
+	if lookSayCue("look_capturing_main") {
 		waitForCue(cueMaxWait, cueStartGrace)
 	}
 	width := lookWidth
 	if req.ReadText {
 		width = lookReadWidth
 	}
-	path, err := hal.Snapshot(width, lookQuality)
+	path, err := lookSnapshot(width, lookQuality)
 	if err != nil {
+		release()
 		c.JSON(http.StatusBadGateway, serializers.ResponseError("snapshot failed: "+err.Error()))
 		return
 	}
-	sensinghttp.DefaultFillerManager.SayInVoiceRun("look_analyzing")
-	if vision.ModelSupportsVision(s.config) {
+	lookSayCue("look_analyzing")
+	// Idle or the due animation resumes while the photo is described.
+	release()
+	if lookModelSeesImages(s.config) {
 		c.JSON(http.StatusOK, serializers.ResponseSuccess(gin.H{"path": path}))
 		return
 	}

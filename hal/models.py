@@ -465,6 +465,12 @@ class ServoDemoResponse(BaseModel):
     reason: str = ""
 
 
+class ServoHoldOwnerRequest(BaseModel):
+    owner: Literal["look"] = Field(
+        ..., description="Internal hold owner. Only os-server's look sequence uses it; agents call /servo/hold."
+    )
+
+
 class ServoAimRequest(BaseModel):
     direction: str = Field(
         ...,

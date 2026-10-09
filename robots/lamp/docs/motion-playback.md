@@ -130,6 +130,18 @@ Recording frames sent while goals are blocked are dropped, not queued. The thres
 the full behaviour is in the fail-safe section of
 [`docs/safety.md`](../../../docs/safety.md).
 
+## Aim hold
+
+`POST /servo/aim` stops the playback loop, moves the head, and restarts the loop on a
+one-frame recording, `__aim_hold__`: the turned pose, kept for 5 s (`_hold_until`)
+before idle resumes (longer while a servo hold is active). The aim also drops any blend
+left from before it (`_interpolation_frames` / `_interpolation_target`). The loop runs a
+pending blend before any recording frame and does not check the hold while blending, so
+an idle blend started just before the aim (e.g. idle resuming after a voice capture)
+used to swing the head back toward idle and then snap it to the turned pose, about 1.5 s
+into the hold; a turn-and-look photo taken in that window showed the front instead of
+the requested side. `move_and_hold` and `halt` already drop the blend the same way.
+
 ## The range demo — computed, not recorded
 
 `POST /servo/demo` (`hal/drivers/motors/range_demo.py`) performs a narrated tour

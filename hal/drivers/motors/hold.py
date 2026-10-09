@@ -15,9 +15,11 @@ logger = logging.getLogger(__name__)
 SCENE = "scene"
 TRACKING = "tracking"
 EXPLICIT = "explicit"
+# os-server's /api/vision/look: held from its first cue through the photo.
+LOOK = "look"
 
 # Most specific first: this is the reason the skip logs name.
-_PRIORITY = (EXPLICIT, SCENE, TRACKING)
+_PRIORITY = (EXPLICIT, SCENE, TRACKING, LOOK)
 
 _lock = threading.Lock()
 

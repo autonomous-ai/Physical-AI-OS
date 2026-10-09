@@ -445,3 +445,15 @@ func TestApplyUpdateWithoutClearKeepsTTSAPIKey(t *testing.T) {
 		t.Fatalf("TTSAPIKey = %q, want it untouched", c.TTSAPIKey)
 	}
 }
+
+func TestEnglishSTTSelectionMigratesModelWithoutResettingConversation(t *testing.T) {
+	c := baseConfig() // Existing English installation using Flux.
+	ch := applyUpdate(c, domain.UpdateConfigRequest{STTLanguage: "en"}, "")
+	if c.STTModel != "nova-3-general" || !ch.halBoot || ch.lang {
+		t.Fatalf("English model migration must restart HAL without language reset: model=%s changes=%+v", c.STTModel, ch)
+	}
+	ch = applyUpdate(c, domain.UpdateConfigRequest{STTLanguage: "en"}, "")
+	if ch.halBoot || ch.lang {
+		t.Fatalf("saving Nova English again must not restart: %+v", ch)
+	}
+}

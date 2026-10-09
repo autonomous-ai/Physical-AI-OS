@@ -107,8 +107,8 @@ của mọi khớp ở 20 Hz (`hal/drivers/motors/overload.py`).
   goal trong 3 s. Sau đó chạy tiếp vào idle từ tư thế
   đã dừng. Trên lamp-52e6 các khớp này đạt đỉnh 52 % khi chuyển động tự do, và lấy tay
   chặn `base_yaw` đẩy nó lên 94-100 %. `base_pitch` và `elbow_pitch` gánh trọng lượng
-  tay đèn và lên 83-100 % khi chuyển động tự do, nên không được theo dõi; thay vào đó
-  chúng (cùng `base_yaw`) bị giới hạn ở 60 % torque (`torque_limit`): trên lamp-52e6
+  tay đèn và lên 83-100 % khi chuyển động tự do, nên không có sàn cố định; chúng
+  (cùng `base_yaw`) bị giới hạn ở 60 % torque (`torque_limit`): trên lamp-52e6
   trần 70 % làm recording tệ nhất (`shock`) trễ từ 17° lên 18°, 50 % lên 24°; 60 % cho
   lực đẩy nhẹ hơn.
 - **Envelope đã học.** Trong playback mọi khớp, kể cả các khớp gánh trọng lượng, bị giữ
@@ -130,6 +130,18 @@ Frame recording gửi trong lúc goal bị chặn sẽ bị bỏ, không xếp h
 (`contact.load`/`hold_s`/`pause_s`, `load`, `hold_s`, `retry_s`, `torque_limit`) do
 device quản lý trong `robots/lamp/servo_overload.json`; hành vi đầy đủ nằm ở phần
 fail-safe của [`docs/vi/safety_vi.md`](../../../../docs/vi/safety_vi.md).
+
+## Giữ tư thế sau aim
+
+`POST /servo/aim` dừng vòng lặp phát, xoay đầu, rồi khởi động lại vòng lặp với một
+recording một khung, `__aim_hold__`: tư thế vừa xoay tới, giữ 5 s (`_hold_until`) rồi
+mới quay về idle (lâu hơn nếu đang có servo hold). Lệnh aim cũng bỏ mọi đoạn blend còn
+sót từ trước đó (`_interpolation_frames` / `_interpolation_target`). Vòng lặp chạy blend
+đang dở trước mọi khung của recording và không kiểm hold trong lúc blend, nên một blend
+về idle bắt đầu ngay trước aim (ví dụ idle chạy lại sau một lượt thu giọng) từng kéo đầu
+quay về phía idle rồi giật lại tư thế đã xoay, khoảng 1,5 s sau khi hold; ảnh của lượt
+quay-rồi-nhìn chụp trong khoảng đó ra phía trước thay vì phía được yêu cầu.
+`move_and_hold` và `halt` vốn đã bỏ blend theo cùng cách.
 
 ## Demo tầm chuyển động — tính ra, không thu sẵn
 
