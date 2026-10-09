@@ -149,11 +149,25 @@ Defined at `.lm-root` in `index.css`:
 
 ### 3.4 Settings (`/setting`) — shared shell
 
-**LLM ownership (Settings → Runtime).** `llm_config_mode` is device-wide: missing/empty retains legacy behavior (including Codex/Claude Code subscription detection), `os` explicitly uses saved OS LLM settings, and `runtime` preserves native settings. AI Brain becomes read-only in runtime mode; its saved key/base URL remain available to voice/backend services. Native mode preserves existing model/provider selection, so use the runtime's own CLI/config to log in **and select the provider/model**, then restart the service and open a new terminal. Each runtime needs its own native configuration; credentials do not migrate when switching runtimes.
+**LLM ownership (Settings → Runtime).** `llm_config_mode` is device-wide: missing/empty retains legacy behavior (including Codex/Claude Code subscription detection), `os` explicitly uses saved OS LLM settings, and `runtime` preserves native settings. AI Brain becomes read-only in runtime mode; its saved key/base URL remain available to voice/backend services. Each runtime needs its own account/configuration; credentials do not migrate when switching runtimes.
 
-The Runtime section presents two ordered steps: choose a runtime and use its Switch button, then configure AI for the active runtime. AI configuration is disabled while another runtime is selected or a switch is in progress. Unsaved or pending LLM changes lock the runtime selector until Save Changes succeeds. Step 2 shows both LLM choices as radio options and includes its own Save Changes button, using the existing settings form; the Runtime page has no header Save button. Native mode shows the terminal link only after saving, with instructions to sign in, choose a model, restart the runtime, and return to Chat.
+The Runtime section presents two ordered steps: choose a runtime and use its Switch button, then configure AI for the active runtime. AI configuration is disabled while another runtime is selected or a switch is in progress. Both LLM choices are visible radio options. **Use OS AI Brain** uses the local **Save Changes** button. **Use my own account** shows **Connect account** for supported runtimes: selecting the radio does not save runtime mode or disconnect the current OS provider. Users open the provider's HTTPS sign-in link, enter its device code if shown, or paste the returned code/callback URL into Settings. Passwords are entered on the provider's website, not in Settings.
 
-Restoring AI Brain defaults explicitly selects `os` and forces apply even if the saved values are unchanged. An apply error is shown after the mode has been saved; resolve the cause and retry applying. Success confirms application of configuration, not account validity. Real subscription login/device testing is still pending.
+| Runtime | Web account sign-in |
+|---|---|
+| Claude Code | Claude account |
+| Codex | ChatGPT account |
+| Hermes | Claude or ChatGPT account |
+| OpenClaw | Claude or ChatGPT account |
+
+The backend runs native login in an isolated temporary home, verifies the new credentials, then selects runtime mode, installs the account/provider configuration, and restarts the runtime. The saved mode stays unchanged during authentication. Sign-in expires after **15 minutes**; users can cancel before activation. An authentication failure leaves the previous live configuration untouched. Activation failures attempt to restore credentials/configuration and the previous mode; a failed restoration is reported explicitly. Native login depends on the installed CLI version, its provider plugins and authentication commands; OpenClaw's Claude flow also requires Claude Code. A listed provider is an integration option, not a guarantee that the installed version or subscription supports it.
+
+Hermes selects `claude-sonnet-4-6` for Claude or `gpt-5.6-sol` for ChatGPT; OpenClaw uses the model recommended by its native login command. Codex switches to its built-in OpenAI provider and removes an OS proxy model override, preserving unrelated settings.
+
+The admin HTTP API is `GET /api/device/runtime-login` (providers and current session), `POST /api/device/runtime-login` (`runtime`, `provider`), `POST /api/device/runtime-login/code` (`id`, `code`), and `DELETE /api/device/runtime-login/:id`. The browser polls active sessions every two seconds, resumes an active session after reload, and stops polling at a terminal state. A historical success describes that completed attempt; it does not revalidate account access on reload. Runtime/mode changes and Settings saves are locked during sign-in. Completion updates only the LLM mode baseline, preserving other unsaved form values. Unsaved or pending LLM changes still lock runtime switching.
+
+The supported runtimes also expose **Use existing runtime configuration** under an advanced disclosure, for an account/model already configured locally. This selects the existing runtime mode through the normal Save Changes flow without another login or an account-access claim. Other runtimes retain the manual Terminal flow: configure account and model first, confirm that configuration in Settings, then save runtime mode. Restoring AI Brain defaults explicitly selects `os` and forces apply even if saved values are unchanged. An apply error is shown after mode has been saved; resolve the cause and retry applying. Configuration success and runtime readiness do not prove subscription entitlement; verify an actual chat separately.
+
 
 **Remote MCP Tools** (`/setting#mcp`). Finish onboarding the selected runtime,
 then sign in to the device's admin UI. Enter a unique **Name**, the remote MCP

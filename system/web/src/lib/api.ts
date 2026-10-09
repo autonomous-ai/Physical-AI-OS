@@ -362,6 +362,43 @@ export interface AgentRuntimeStatus {
   remote_token?: string;
 }
 
+export interface RuntimeLoginSession {
+  id: string;
+  runtime: string;
+  provider: string;
+  status: "starting" | "waiting" | "applying" | "success" | "error" | "cancelled";
+  login_url?: string;
+  user_code?: string;
+  input_required?: boolean;
+  error?: string;
+}
+
+export interface RuntimeLoginState {
+  runtime: string;
+  providers: { id: string; label: string }[];
+  session?: RuntimeLoginSession;
+}
+
+export function getRuntimeLogin(signal?: AbortSignal): Promise<RuntimeLoginState> {
+  return apiRequest(`${API_BASE}/api/device/runtime-login`, { signal, cache: "no-store" });
+}
+
+export function startRuntimeLogin(runtime: string, provider: string, signal?: AbortSignal): Promise<RuntimeLoginSession> {
+  return apiRequest(`${API_BASE}/api/device/runtime-login`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ runtime, provider }), signal,
+  });
+}
+
+export function submitRuntimeLoginCode(id: string, code: string, signal?: AbortSignal): Promise<RuntimeLoginSession> {
+  return apiRequest(`${API_BASE}/api/device/runtime-login/code`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ id, code }), signal,
+  });
+}
+
+export function cancelRuntimeLogin(id: string, signal?: AbortSignal): Promise<RuntimeLoginSession> {
+  return apiRequest(`${API_BASE}/api/device/runtime-login/${encodeURIComponent(id)}`, { method: "DELETE", signal });
+}
+
 export async function getAgentRuntime(): Promise<AgentRuntimeStatus> {
   return apiRequest<AgentRuntimeStatus>(`${API_BASE}/api/device/agent-runtime`);
 }

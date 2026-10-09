@@ -1773,6 +1773,46 @@ khi đã lưu chế độ, cho phép gửi lại cùng lựa chọn để thử 
 minh subscription còn hợp lệ hay model gọi thành công. Mở terminal mới sau khi
 đổi chế độ; shell đang mở vẫn giữ biến môi trường cũ.
 
+### Đăng nhập tài khoản runtime qua HTTP
+
+Package `system/runtimeauth/` thuộc OS, chạy lệnh login native và chuẩn bị file tài khoản; `system/device/runtime_login.go` quản lý phiên đăng nhập và áp dụng cấu hình. `runtimes/` giữ vai trò chứa các agent backend.
+
+Settings → Runtime dùng các endpoint yêu cầu xác thực admin dưới đây. Phản hồi
+dùng envelope chuẩn của OS và `Cache-Control: no-store`:
+
+| Method | Endpoint | Request / kết quả |
+|--------|----------|-------------------|
+| GET | `/api/device/runtime-login` | Trả `{runtime, providers: [{id, label}], session?}` cho runtime đang chạy |
+| POST | `/api/device/runtime-login` | `{runtime, provider}` bắt đầu đăng nhập native và trả phiên đăng nhập |
+| POST | `/api/device/runtime-login/code` | `{id, code}` gửi đầy đủ mã xác nhận hoặc URL callback mà phiên yêu cầu |
+| DELETE | `/api/device/runtime-login/:id` | Hủy phiên đang chờ; không cho hủy khi đã bắt đầu áp dụng |
+
+Phiên chứa `id`, `runtime`, `provider`, `status` và các trường tùy chọn
+`login_url`, `user_code`, `input_required`, `error`. Trạng thái đi qua
+`starting`, `waiting`, `applying`, rồi kết thúc bằng `success`, `error` hoặc
+`cancelled`. `login_url` mở trang đăng nhập của nhà cung cấp. `user_code` là mã
+device nhập trên trang đó; ngược lại, `input_required` yêu cầu lấy mã/callback
+để gửi về OS. Đây là hai chiều nhập khác nhau. Request không hợp lệ trả HTTP
+400; thao tác xung đột, ID phiên không còn hiệu lực hoặc không thể nhập mã/hủy
+ở trạng thái hiện tại trả 409.
+
+Phiên đăng nhập lưu trong bộ nhớ, có thời hạn đăng nhập 15 phút và không tồn
+tại sau khi OS-server restart. Mỗi phiên giữ khóa đổi runtime, ngăn đổi runtime
+hoặc cấu hình LLM đồng thời. Cấu hình AI đang chạy tiếp tục phục vụ chat trong
+khi CLI native đăng nhập trong home tạm cô lập. Các biến môi trường auth/provider
+của CLI được loại bỏ. HTTP chỉ trả link provider trong danh sách cho phép, mã
+device ngắn và trạng thái đã lọc; không trả output CLI thô hay access/refresh
+token đã lưu. Hủy/hết hạn sẽ dừng nhóm tiến trình login và xóa thư mục tạm.
+
+Chỉ sau khi xác minh auth native, OS mới vào `applying`: lưu chế độ runtime tự
+quản lý, cài credential/provider native từ thư mục tạm, restart runtime và chờ
+gateway sẵn sàng ổn định. Nếu áp dụng lỗi, khôi phục file native và chế độ trước
+đó; lỗi khôi phục được báo rõ thay vì báo thành công. Web OS không thu mật khẩu
+tài khoản. `success` xác nhận login và gateway sẵn sàng, không xác nhận model đã
+trả lời hay subscription còn quota. Hoàn tất login thật với provider và một lượt
+chat vẫn cần kiểm chứng bằng tài khoản/device; test tiến trình cô lập không có
+nghĩa các bước kiểm chứng thực tế đó đã thành công.
+
 ### Cách nhập giọng nói
 
 `GET /api/device/config` trả `voice_input_mode`: `automatic` (mặc định khi trường thiếu) hoặc `tap_to_talk`. `PUT /api/device/config` nhận trường tùy chọn cùng tên; chuỗi rỗng/giá trị khác bị từ chối trước khi thay đổi config. Bỏ qua trường nghĩa là giữ nguyên. `automatic` dùng cờ `wakeword` hiện có; `tap_to_talk` bỏ qua wake và giữ lại cờ đã lưu để chuyển về Tự động. MQTT `voice.input_mode` dùng chung logic lưu/apply. Đổi riêng mode gọi HAL `POST /voice/input-mode` với timeout 30 giây, không restart hai tiến trình. HAL hủy capture đang chờ và cấu hình lại voice worker/session, giữ privacy và sleep. Lỗi lưu/apply cho phép retry cùng giá trị. Request đổi thêm trường cần restart vẫn chỉ restart HAL một lần. Phản hồi cấu hình và BE ping báo mode đã cấu hình; lỗi apply vẫn trả lỗi thay vì báo thành công.
