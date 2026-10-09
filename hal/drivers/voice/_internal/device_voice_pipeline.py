@@ -6,7 +6,6 @@ single finalizer preserves dispatch order. No runtime/wake/listening cleanup is
 performed by a finalizer after a subsequent recording may have started.
 """
 
-from difflib import SequenceMatcher
 import logging
 import threading
 import time
@@ -73,12 +72,8 @@ class _RecordedTurn:
             if not final:
                 self.partial[0] = text
                 return
-            previous = self.partial[0]
-            # Preserve an earlier segment when a provider's final belongs to a
-            # later short phrase, matching the shared STT transcript policy.
-            if (previous and len(text) < len(previous)
-                    and SequenceMatcher(None, previous.lower(), text.lower()).ratio() < 0.5):
-                self.finals.append(previous)
+            # Final segments replace their interim hypothesis; only finalized
+            # segments accumulate, with any unfinished tail kept in partial.
             if text:
                 self.finals.append(text)
             self.partial[0] = ""

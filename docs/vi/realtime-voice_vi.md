@@ -3673,3 +3673,40 @@ lúc trở lại vòng VAD. Mục tiêu dưới 500 ms khi provider im lặng v�
 đây chưa phải phép đo sẵn sàng nghe về âm học. Timing thiết bị thu, chống echo sau
 phát và STT keepalive tùy chọn vẫn có thể ảnh hưởng thời điểm nhận câu tiếp theo.
 Cần đo riêng phần đó trên phần cứng.
+
+### Lời nhắc sensing nhường lượt thu automatic
+
+Lời nhắc thụ động từ agent (ví dụ phản hồi `environment.update`) không được giành
+loa khi HAL đang thu lời người dùng. OS giữ nguồn event theo run ID và gửi
+`passive_sensing: true` trên từng đoạn TTS có run ID, gồm thông báo cached và
+lệnh TTS được intercept. Phân loại dùng `speakergate.WaitsForSpeaker` hiện có:
+voice/chat và `fire_hazard.detected` được miễn. Đây là nguồn event, không phải
+bộ nhận diện lời nói xung quanh có hướng tới thiết bị hay không.
+
+HAL kiểm tra trước khi ngắt loa hoặc thay sequence, kiểm tra lại lúc nhận quyền
+phát, và bỏ đoạn passive đang chờ nếu capture bắt đầu trước playback. Đoạn bỏ
+được ghi là chưa phát khi có yêu cầu realtime feedback. HTTP 200 với
+`status: "suppressed_capture"` được ánh xạ thành `ErrCaptureActive`; OS ghi
+`tts_cancelled` với `source: "input_capture"`, không retry audio hoặc phát câu
+fallback. Giữ chính sách FIFO của thao tác nhập trực tiếp trên device, phản hồi
+người dùng thông thường, quyền sở hữu LIVE và preemption khi không capture.
+
+Quyết định admission không thêm request provider hoặc khoảng chờ chủ động.
+Không giữ khóa capture khi ghi history hoặc chờ tổng hợp; worker tổng hợp đoạn
+đã hủy thoát được kể cả khi frame queue đầy. Mục tiêu regression local là capture
+mới vẫn lấy được reservation khi callback ghi history chưa phát đang bị chặn,
+không phải chờ callback đó. Latency phản hồi âm thanh và độ sẵn sàng của mic cần
+đo riêng trên device; test local không chứng minh các kết quả đó. Bản sửa này
+không cải thiện độ chính xác STT hoặc nhận diện ngôn ngữ.
+
+### STT final thay thế nội dung tạm thời
+
+Capture automatic và thao tác nhập trên device chỉ thêm mỗi segment final một
+lần, rồi xóa partial tương ứng. Final ngắn hơn hoặc đổi định dạng không làm
+partial cũ quay lại: `Forty six plus six.` rồi final `46 plus 6.` chỉ tạo
+`46 plus 6.`. Các segment final riêng vẫn nối đúng thứ tự; giữ fallback hiện có
+cho partial cuối chưa có final. Xác nhận wake từ partial trước đó vẫn được giữ
+độc lập với cách viết của final.
+Quy tắc theo [ngữ nghĩa interim/final của Deepgram](https://developers.deepgram.com/docs/understand-endpointing-interim-results),
+không thêm khoảng chờ hoặc request provider. Bản sửa ngăn giả thuyết cũ/lặp đi
+vào agent, nhưng không sửa được một bản STT final vốn đã nhận sai.

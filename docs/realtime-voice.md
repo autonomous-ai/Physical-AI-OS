@@ -3738,3 +3738,41 @@ return to the VAD loop. Target: under 500 ms with a silent provider and slow
 reconnect; this is not an acoustic readiness measurement. Capture device timing,
 post-playback echo suppression and optional STT keepalive can still affect actual
 next-speech acceptance. Hardware validation must measure that separately.
+
+### Passive sensing speech yields to automatic capture
+
+A passive agent announcement (for example, an `environment.update` reply) must
+not take the speaker while HAL is recording a user turn. OS preserves the event
+origin by run ID and sends `passive_sensing: true` on every turn-aware TTS segment,
+including cached notices and intercepted TTS tools. It uses the existing
+`speakergate.WaitsForSpeaker` classification: voice/chat and
+`fire_hazard.detected` remain exempt. This is event provenance, not a classifier
+for whether nearby speech addresses the device.
+
+HAL checks admission before preemption or sequence changes, checks again when
+claiming playback, and drops queued passive segments if capture starts before
+playback. A dropped segment is recorded as unspoken when realtime feedback was
+requested. HTTP 200 with `status: "suppressed_capture"` maps to `ErrCaptureActive`;
+OS records `tts_cancelled` with `source: "input_capture"` without retrying audio
+or playing a fallback. Explicit device-input FIFO, ordinary user replies,
+LIVE ownership, and idle-time preemption retain their existing policies.
+
+The admission decision adds no provider request or intentional wait. Capture
+locks exclude history I/O and synthesis waits; cancelled queued synthesis exits
+even with a full frame queue. The local regression target is for a new capture
+to acquire its reservation while an unspoken-history callback is blocked,
+without waiting for that callback. Acoustic response latency and microphone
+readiness require separate device measurement; local tests do not establish
+those results. This fix does not improve STT accuracy or language detection.
+
+### Final STT corrections replace provisional text
+
+Automatic and device-input capture append each finalized STT segment once and
+clear the corresponding partial. A shorter or differently formatted final does
+not resurrect the preceding partial: `Forty six plus six.` followed by final
+`46 plus 6.` yields only `46 plus 6.`. Distinct finalized segments still join in
+order; the existing fallback for an unfinished trailing partial remains. Wake
+confirmation from earlier partials stays latched independently of final wording.
+This follows [Deepgram interim/final semantics](https://developers.deepgram.com/docs/understand-endpointing-interim-results)
+and adds no wait or provider call. It prevents duplicate/discarded hypotheses
+reaching the agent, but does not correct an inaccurate final transcription.

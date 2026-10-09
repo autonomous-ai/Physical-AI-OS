@@ -1834,3 +1834,19 @@ already-open shell retains its old environment.
 `POST /api/device/voice-input-mode/toggle` takes no body and atomically toggles the saved mode under the same apply lock. Loopback callers bypass admin authentication; remote callers require it. Success returns `{"status":1,"data":{"mode":"tap_to_talk"},"message":null}` (or `automatic`) after HAL application. It is a non-idempotent physical-gesture operation: do not automatically retry on timeout; use an explicit mode set to retry a known desired state.
 
 `POST /api/agent/speech/cancel` keeps its empty-body behavior (global physical stop). Optional `{ "before_ms": <Unix milliseconds> }` suppresses speech/fillers from older turns without a delayed global HAL stop or cancelling hardware actions. HAL uses this same-device cutoff before admitting a replacement manual recording. Device sensing may include `captured_at_ms` alongside a Harness-off snapshot; validated voice-command/handled turns retain that capture age in their unique run ID so delayed dispatch cannot escape suppression.
+
+### Passive sensing TTS admission
+
+Before sensing dispatch and runtime replay, `RegisterTurnSpeechPolicy` retains
+the original event admission policy by run ID. All six built-in runtimes carry
+it into turn-aware TTS. First registration wins across internal retries; lookups
+do not consume the entry, so streamed segments retain their origin. The registry
+is in-memory, limited to 4096 runs and one hour. Unknown/expired runs and legacy
+non-turn-aware TTS retain existing admission behavior.
+
+HAL accepts optional `passive_sensing` on `/voice/speak` and `/voice/speak-queue`.
+During automatic user capture it returns `suppressed_capture` for passive speech;
+OS handles this as intentional cancellation rather than a TTS failure. Cached
+quota notices and intercepted agent TTS tools retain the run policy. Voice/chat
+and fire-hazard events remain exempt according to `speakergate.WaitsForSpeaker`.
+See [capture admission](realtime-voice.md#passive-sensing-speech-yields-to-automatic-capture).

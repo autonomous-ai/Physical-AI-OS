@@ -612,6 +612,7 @@ func (h *SensingHandler) PostEvent(c *gin.Context) {
 
 	reqID, runID := h.agentGateway.NextChatRunID()
 	runID = manualCaptureRunID(runID, req, time.Now())
+	hal.RegisterTurnSpeechPolicy(runID, speakergate.WaitsForSpeaker(req.Type))
 	req.InteractionID = telemetry.ReportTaskStarted(req.Type, req.InteractionID, runID)
 	startPayload["interaction_id"] = req.InteractionID
 	flow.SetTrace(runID)

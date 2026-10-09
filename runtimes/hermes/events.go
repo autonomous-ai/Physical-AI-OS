@@ -10,6 +10,7 @@ import (
 
 	"go.autonomous.ai/os/system/domain"
 	"go.autonomous.ai/os/system/lib/flow"
+	"go.autonomous.ai/os/system/lib/hal"
 	"go.autonomous.ai/os/system/lib/sensingmsg"
 	"go.autonomous.ai/os/system/lib/speakergate"
 	"go.autonomous.ai/os/system/skillcontext/mood"
@@ -233,6 +234,7 @@ func (s *HermesService) sendOnePending(ev pendingEvent) {
 	} else {
 		reqID, runID = s.NextChatRunID()
 	}
+	hal.RegisterTurnSpeechPolicy(runID, speakergate.WaitsForSpeaker(ev.eventType))
 	flow.SetTrace(runID)
 	startPayload := map[string]any{"type": ev.eventType, "message": ev.msg}
 	if !ev.queuedAt.IsZero() {
@@ -315,6 +317,14 @@ func (s *HermesService) sendMergedPending(evs []pendingEvent) {
 		RunID:   runID,
 	})
 
+	passive := true
+	for _, eventType := range types {
+		if !speakergate.WaitsForSpeaker(eventType) {
+			passive = false
+			break
+		}
+	}
+	hal.RegisterTurnSpeechPolicy(runID, passive)
 	_, err := s.SendChatMessageWithRun(merged, reqID, runID)
 	if !errors.Is(err, errHermesNotReady) {
 		telemetry.ReportTaskStarted("sensing_drain_merged", "", runID)

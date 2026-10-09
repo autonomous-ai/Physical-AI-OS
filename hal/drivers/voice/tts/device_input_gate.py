@@ -10,6 +10,12 @@ import threading
 logger = logging.getLogger("hal.tts")
 
 
+class PassiveSpeechSuppressed(RuntimeError):
+    """A passive announcement lost admission to an active user capture."""
+
+    reported = False
+
+
 def device_speech(*, defer=True):
     """Reserve admission around existing entry points without changing idle policy."""
     def decorate(method):
@@ -24,7 +30,18 @@ def device_speech(*, defer=True):
                     # This turn was accepted and later cancelled. Consume its
                     # deferred item without speech or an unspoken-main fallback.
                     return True
-                return method(self, *args, **kwargs)
+                try:
+                    return method(self, *args, **kwargs)
+                except PassiveSpeechSuppressed as error:
+                    # Nested cache admission and deferred replay must report once,
+                    # after the method has released its capture/queue locks.
+                    if not error.reported:
+                        error.reported = True
+                        values = signature.bind(self, *args, **kwargs).arguments
+                        logger.info("TTS passive speech suppressed -- user capture active")
+                        self._report_unspoken_reply(values.get("text", ""),
+                                                    values.get("realtime_feedback", False))
+                    raise
 
             gate = getattr(self, "_device_input_gate", None)
             if gate is None:
@@ -189,6 +206,9 @@ class DeviceInputGate:
                 if invoke():
                     return
                 logger.warning("Deferred device speech could not start at replay")
+            except PassiveSpeechSuppressed:
+                # invoke already reported this as unspoken, not a transport error.
+                return
             except Exception:
                 logger.exception("Deferred device speech replay failed")
             report()
