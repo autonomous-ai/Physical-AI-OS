@@ -376,6 +376,8 @@ Admin-gated. Create/update/delete do not write `schedules.json` directly: each q
 | PATCH | `/api/schedule/:id` | Propose an update |
 | DELETE | `/api/schedule/:id` | Propose a delete |
 
+**Agent access (`schedule` skill).** The agent does not call these admin endpoints. The built-in `schedule` skill (`skills/schedule/`) reads `schedules.json` and `schedule-intents.json` (siblings of `config.json`) directly, read-only and without a credential: `schedule.py list` prints the timezone, the count, and each task's cadence, connectors, last run and next run (jitter included); `schedule.py show <id>` prints one task. Every runtime's onboarding block (**Scheduled tasks (MANDATORY)**) makes the agent run `list` in the same turn before it states a count, a time or a status. Jobs the agent creates with its runtime's own cron are a separate store: they are not in `schedules.json`, do not show in the app and are wiped by a factory reset, so the skill's list is never presented as a total.
+
 ### Plugins
 
 Admin-gated. `GET /api/plugin/browse` is parked (commented out in `system/server/server.go`).

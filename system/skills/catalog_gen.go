@@ -28,6 +28,7 @@ var Catalog = []string{
 	"music",
 	"music-suggestion",
 	"scene",
+	"schedule",
 	"sensing",
 	"sensing-track",
 	"servo-control",
