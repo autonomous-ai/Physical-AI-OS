@@ -1161,6 +1161,25 @@ có một worker; đang bận thì bỏ qua ngay. Worker timeout có thể hoàn
 fallback và cooldown 30 giây như các lỗi khác; thay đổi nạp trước không thêm
 log nội dung lỗi provider hay chẩn đoán `Retry-After`.
 
+Lượt sự kiện máy dùng lại quyết định theo loại sự kiện. Khi tin nhắn bắt đầu bằng
+header chữ thường như `[sensing:sound]` hay `[environment:update]` (mọi header trừ
+`[user]`), quyết định hợp lệ đầu tiên (preload hoặc abstain) được ghi nhớ theo header
+đó cộng tập skill đủ điều kiện hiện tại; các lượt sau cùng loại bỏ qua request proxy,
+vẫn kiểm tra lại và nạp skill qua API gốc, và log `cached=1` không có `request_ms`.
+Catalog đổi hoặc plugin khởi động lại sẽ xoá phần dùng lại; lỗi và timeout không
+bao giờ được ghi nhớ; bộ nhớ tối đa 64 mục và được xoá khi đầy. Văn bản người dùng gõ
+luôn hỏi proxy. Lý do: trên lamp-52e6
+(2026-10-06..09) mọi quyết định hợp lệ cho cùng loại sự kiện đều giống nhau
+(`sensing:sound`, `environment:update` và `activity` luôn preload cùng một skill;
+`sensing:presence.*` enter/away luôn abstain) trong khi mỗi request chặn lượt ~1,5 giây.
+
+Lượt giọng nói (có `[via:voice]` trong tin nhắn) bỏ qua quyết định và log
+`outcome=skipped reason=voice_turn`. Trên lamp-52e6 plugin chặn mọi lượt giọng nói
+trung vị 1,47 giây (n=300) trong khi chỉ ~11% lượt được preload và mỗi lần preload
+chỉ tiết kiệm tối đa một vòng `skill_view` (~2,5 giây). A/B cùng binary (11 lượt giọng
+nói mỗi bên) giảm câu trả lời không dùng tool từ 3,4-7,0 giây xuống 2,2-2,6 giây và
+không làm phát sinh thêm vòng `skill_view`.
+
 Log có cấu trúc phân biệt lựa chọn được chấp nhận, quyết định hợp lệ nhưng từ chối chọn,
 và lỗi, thay vì gộp chung thành `deferred`:
 

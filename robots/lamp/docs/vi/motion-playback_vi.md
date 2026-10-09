@@ -95,6 +95,18 @@ clip thì không. Phải tính lại hằng số này nếu phân bố khối l�
 
 [#271]: https://github.com/autonomous-ai/autonomous-os/issues/271
 
+## Giữ tư thế sau aim
+
+`POST /servo/aim` dừng vòng lặp phát, xoay đầu, rồi khởi động lại vòng lặp với một
+recording một khung, `__aim_hold__`: tư thế vừa xoay tới, giữ 5 s (`_hold_until`) rồi
+mới quay về idle (lâu hơn nếu đang có servo hold). Lệnh aim cũng bỏ mọi đoạn blend còn
+sót từ trước đó (`_interpolation_frames` / `_interpolation_target`). Vòng lặp chạy blend
+đang dở trước mọi khung của recording và không kiểm hold trong lúc blend, nên một blend
+về idle bắt đầu ngay trước aim (ví dụ idle chạy lại sau một lượt thu giọng) từng kéo đầu
+quay về phía idle rồi giật lại tư thế đã xoay, khoảng 1,5 s sau khi hold; ảnh của lượt
+quay-rồi-nhìn chụp trong khoảng đó ra phía trước thay vì phía được yêu cầu.
+`move_and_hold` và `halt` vốn đã bỏ blend theo cùng cách.
+
 ## Demo tầm chuyển động — tính ra, không thu sẵn
 
 `POST /servo/demo` (`hal/drivers/motors/range_demo.py`) trình diễn một vòng dạo

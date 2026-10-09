@@ -55,9 +55,10 @@ Read the output:
 
 Keeping the check inside the same shell command costs no extra tool round: a
 separate `GET /camera` turn would add one more model call (~5s) for every look.
-The server handles servo freeze, frame wait, and image sizing. No preparatory
-aim or sleep is needed unless the user explicitly requested a movement (see Move
-first, then snapshot).
+The server keeps the body still from its "taking a look" cue through the photo,
+waits for a frame, and sizes the image. No preparatory aim, hold or sleep is
+needed unless the user explicitly requested a movement (see Move first, then
+snapshot).
 
 For raw-frame export rather than a visual answer, use
 `GET http://127.0.0.1:5001/camera/snapshot?save=true&width=768&quality=75`
@@ -75,11 +76,16 @@ take one; never invent.
 
 ## Move first, then snapshot
 
-When the request combines a movement and a visual question ("turn right, hold
-it there, and tell me what you see"), fire the servo calls **with curl during
-the turn** (`POST /servo/aim`, `POST /servo/hold`), *then* call `/api/vision/look`. `[HW:...]`
-markers are executed only after your reply is composed, so a marker-based aim
-would move the device *after* the photo — you would describe the old view.
+When the request combines a movement and a visual question ("turn right and
+tell me what you see"), put the aim **inside the Capture Protocol command**,
+after the camera check and before `/api/vision/look`, as one bash call. The
+`servo-control` skill has the exact command. A camera that is off then means no
+movement. Never add `POST /servo/hold`: in a turn-and-look, "hold it there"
+means keep still for the photo, which `/api/vision/look` already does, and the
+head returns to idle by itself afterwards.
+`[HW:...]` markers are executed only after your reply is composed, so a
+marker-based aim would move the device *after* the photo — you would describe
+the old view.
 
 ## Workflow
 1. Run the Capture Protocol command (the `/camera` check and the `look` are one shell call). `CAMERA_OFF` / `CAMERA_UNAVAILABLE` → answer from that word and stop.
@@ -195,7 +201,7 @@ A camera that is off (privacy) or has no frame (hardware) is a complete answer b
 
 ## Error Handling
 - If capture fails, report the returned error without describing an unseen frame. `/api/vision/look` reports capture/description failures as errors; a raw `/camera/snapshot` request can return 503 when the camera is unavailable.
-- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
+- **One failed `/api/vision/look` is final for this turn.** Do NOT "try once more" and do NOT fall back to `GET /camera/snapshot` — it is the same capture path and fails the same way, costing another tool round. A `describe failed` error means the vision model was too slow or unavailable: do NOT take your own snapshot and pass it to `vision_analyze` or any other image tool — they call the same vision model and only add another wait (measured: 53 s more before the reply). Tell the user you couldn't see it this time and stop. An error mentioning "not delivering frames" / "not connected or not detected" means the camera hardware is absent: tell the user the camera is not connected, and stop.
 - If the API is unreachable, inform the user that the camera is temporarily unavailable.
 - **Never spend a separate tool round on `GET /camera`** — the Capture Protocol command checks it in the same shell call as the look. Skip the call entirely when a current image/description was already supplied.
 - If a sensing event already included an image, do not call the camera API again.
